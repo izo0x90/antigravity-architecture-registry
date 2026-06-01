@@ -1,0 +1,13 @@
+i think you are confused on what i asked you to consider, the feature we building for our pulgin is being able to describe some code changes, refactoring, or building new ... in
+  a more abstract/compressed.
+
+  - Stage 1: Developer works with llm agent on design and llm captures using the tools and abstractions we give it.
+  - Stage 2: Tool oranized order of operations that need to take place based on a topological sort of the usage tree, LLM goes over each componet in this topo order and breaks
+  down the work in to small implemention tasks, that build only small componentes or even block of logic, these descibe the work in way that captuers all the key requirements,
+  incariats etc.
+  - Stage 3: Task are executed in order by the implemention LLM (this must aling with anti gravity 2.0 way of using sub agent implmentors) ... where the correct context is given
+  to the imlementor evertything it needs aobut the system to get the specific task done but not more than that so that attention binding is not wasted
+
+  what we are trying to understand is how to best capture the devs intent aoubt a new funcitonlay or feature in a way that we can also provide to teh llm when is breaking down the
+  work in small implementable tasks where it will bias the mdoel correctly to do the thing the user wants. we just caem up with a pretty good design for new features that is
+  pretty expressive and yet structued ... the questionis now does this work for refacors vs. new logic.
