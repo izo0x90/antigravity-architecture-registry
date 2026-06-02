@@ -255,3 +255,194 @@ class Visualizer:
                 lines.append(f"  class {comp.id} dat;")
                 
         return lines
+
+    @classmethod
+    def render_review_markdown(
+        cls,
+        tree_name: str,
+        target_node: UsageNode,
+        components: ComponentRegistryMap,
+        component_types: ComponentTypesMap
+    ) -> LinesList:
+        """Generates a complete, high-fidelity Markdown document reviewing the given usage tree and all its components."""
+        lines: LinesList = []
+        import datetime
+        timestamp = datetime.datetime.now().isoformat()
+
+        # 1. Header
+        lines.append(f"# 📋 Architecture & Workflow Review: {tree_name}")
+        lines.append("")
+        lines.append("## 1. Executive Summary")
+        
+        # 2. Run dynamic tree validation
+        errors = ArchitectureValidator.validate_usage_node(
+            target_node, components, component_types
+        )
+        if not errors:
+            status_str = "🟢 PASSED (No interface, parenting, or capability mismatches detected)"
+        else:
+            status_str = f"🔴 FAILED ({len(errors)} interface/integration error(s) detected)"
+            
+        lines.append(f"- **Target Workflow Tree**: `{tree_name}`")
+        lines.append(f"- **Validation Status**: `{status_str}`")
+        lines.append(f"- **Generated At**: `{timestamp}`")
+        lines.append("")
+
+        if errors:
+            lines.append("> [!WARNING]")
+            lines.append("> **CRITICAL COMPATIBILITY ERRORS DETECTED:**")
+            for err in errors:
+                lines.append(f"> - Node `{err.node_id}` calling `{err.component_id}`: {err.details}")
+            lines.append("")
+
+        lines.append("> [!NOTE]")
+        lines.append("> This is a native AG2.0 review card.")
+        lines.append("> To comment on any parameter, schema, step, or invariant:")
+        lines.append("> 1. Position your cursor on that specific line.")
+        lines.append("> 2. Press `c` to open the comment buffer.")
+        lines.append("> 3. Type your instructions and press `Esc` to save.")
+        lines.append("> 4. Submit your turn once you are finished to send comments back to the agent!")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+        # 3. Workflow Visualization
+        lines.append("## 2. Workflow Visualization")
+        lines.append("### 2.1 Dependency Flow Diagram")
+        lines.append("```mermaid")
+        lines.extend(cls.render_tree_mermaid(target_node, components, component_types, verbose="detailed"))
+        lines.append("```")
+        lines.append("")
+        lines.append("### 2.2 ASCII Dependency Tree")
+        lines.append("```")
+        lines.extend(cls.render_tree_text(target_node, components, component_types, verbose="summary"))
+        lines.append("```")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+        # 4. Collect referenced components recursively
+        collected_ids: List[str] = []
+        def collect(node: UsageNode) -> None:
+            if node.component_id and node.component_id not in collected_ids:
+                collected_ids.append(node.component_id)
+                comp = components.get(node.component_id)
+                if comp and comp.implements_id and comp.implements_id not in collected_ids:
+                    collected_ids.append(comp.implements_id)
+            for child in node.dependencies:
+                collect(child)
+
+        collect(target_node)
+
+        # 5. Component Specifications Rendering
+        lines.append("## 3. Referenced Component Contracts")
+        lines.append("")
+        
+        for idx, comp_id in enumerate(collected_ids, 1):
+            comp = components.get(comp_id)
+            if not comp:
+                lines.append(f"### 3.{idx} Component: `{comp_id}` (MISSING)")
+                lines.append(f"> [!WARNING]")
+                lines.append(f"> Component `{comp_id}` is referenced in the tree but is not registered in the registry.")
+                lines.append("")
+                continue
+
+            lines.append(f"### 3.{idx} Component: `{comp.id}`")
+            lines.append(f"* **Name**: {comp.name}")
+            lines.append(f"* **Type**: `{comp.type}` | **Status**: `{comp.status}` | **Stage**: `{comp.stage}`")
+            lines.append(f"* **Logical Parent**: `{comp.parent_id or 'None (Root Module)'}`")
+            lines.append(f"* **Implements Contract**: `{comp.implements_id or 'None (Direct Contract)'}`")
+            lines.append("")
+
+            # 📋 Interfaces & Schemas
+            lines.append("#### 📋 Interface & Data Schemas")
+            
+            # Helper to get signature or implements
+            actual_inputs, actual_outputs = resolve_implements_signature(comp, components)
+            
+            if actual_inputs is not None:
+                lines.append("* **Inputs DSL/Schema**:")
+                lines.append("```json")
+                lines.append(json.dumps(actual_inputs, indent=2))
+                lines.append("```")
+            else:
+                lines.append("* **Inputs DSL/Schema**: `None`")
+
+            if actual_outputs is not None:
+                lines.append("* **Outputs DSL/Schema**:")
+                lines.append("```json")
+                lines.append(json.dumps(actual_outputs, indent=2))
+                lines.append("```")
+            else:
+                lines.append("* **Outputs DSL/Schema**: `None`")
+
+            if comp.properties is not None:
+                lines.append("* **State/Properties DSL/Schema**:")
+                lines.append("```json")
+                lines.append(json.dumps(comp.properties, indent=2))
+                lines.append("```")
+            else:
+                lines.append("* **State/Properties DSL/Schema**: `None`")
+
+            if comp.side_effects:
+                lines.append("* **Declared Side Effects**:")
+                for se in comp.side_effects:
+                    lines.append(f"  - `{se.target}`: {se.description}")
+            else:
+                lines.append("* **Declared Side Effects**: `None (Pure Calculation)`")
+            lines.append("")
+
+            # ⚙️ Implementation Specification
+            lines.append("#### ⚙️ Implementation Specification (Work Plan)")
+            spec = comp.implementation_spec
+            if spec:
+                if spec.pattern_or_system:
+                    lines.append(f"* **Overarching Pattern**: `{spec.pattern_or_system}`")
+                else:
+                    lines.append("* **Overarching Pattern**: `None declared`")
+                    
+                if spec.invariants:
+                    lines.append("* **System Invariants**:")
+                    for inv in spec.invariants:
+                        lines.append(f"  - `[{inv.name}]` ({inv.type}): {inv.description}")
+                else:
+                    lines.append("* **System Invariants**: `None declared`")
+                    
+                if spec.logic_steps:
+                    lines.append("* **Logical Steps**:")
+                    # Sort logic steps by sequence
+                    sorted_steps = sorted(spec.logic_steps, key=lambda s: s.sequence)
+                    for step in sorted_steps:
+                        alg_suffix = f" (Algorithm: {step.algorithm})" if step.algorithm else ""
+                        comp_suffix = f" [Complexity: {step.complexity}]" if step.complexity else ""
+                        lines.append(f"  {step.sequence}. **{step.name}**: {step.description}{alg_suffix}{comp_suffix}")
+                else:
+                    lines.append("* **Logical Steps**: `None declared`")
+                    
+                if spec.validation:
+                    lines.append("* **Verification & Tool Rules**:")
+                    for val in spec.validation:
+                        args_suffix = f" with overrides: {val.args}" if val.args else " with default args"
+                        lines.append(f"  - Run tool `{val.tool_id}` on targets: `{val.targets}`{args_suffix}")
+                else:
+                    lines.append("* **Verification & Tool Rules**: `None declared`")
+            else:
+                lines.append("*No implementation specification designed yet.*")
+            lines.append("")
+
+            # 💬 Reviewer Feedback & Comments
+            lines.append("#### 💬 Reviewer Feedback & Comments")
+            lines.append("> [!IMPORTANT]")
+            lines.append(f"> **Use the checklist and comments section below to leave feedback for `{comp.id}`.**")
+            lines.append("")
+            lines.append("- [ ] Approved")
+            lines.append("- [ ] Request Changes")
+            lines.append("- [ ] Pending")
+            lines.append("- **Comments & Instructions**:")
+            lines.append("  - *Leave your comments, corrections, or implementation directions here.*")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+        return lines
+

@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Dict, Union, Any
+from typing import Dict, Union, Any, List
 from pydantic import ValidationError
 
 from .exceptions import RegistryError, ComponentNotFoundError, DuplicateComponentError
@@ -257,7 +257,7 @@ class RegistryEngine:
 
     def update_component(
         self, component_id: ComponentID, updates: ComponentUpdateFields
-    ) -> None:
+    ) -> List[str]:
         """Updates specific attributes of an existing component.
 
         Raises:
@@ -299,7 +299,21 @@ class RegistryEngine:
         ArchitectureValidator.verify_capabilities(updated_comp, self.registry.component_types)
         ArchitectureValidator.verify_parenting(updated_comp, self.registry.components, self.registry.component_types)
         
+        # Check if interface/signature schemas differ
+        interface_changed = (
+            comp.inputs != updated_comp.inputs or
+            comp.outputs != updated_comp.outputs or
+            comp.properties != updated_comp.properties
+        )
+        
         self.registry.components[component_id] = updated_comp
+        
+        downgraded = []
+        if interface_changed:
+            from .validator import cascade_invalidate_component
+            downgraded = cascade_invalidate_component(self.registry, component_id)
+            
+        return downgraded
 
     def delete_component(self, component_id: ComponentID) -> None:
         """Removes a component.

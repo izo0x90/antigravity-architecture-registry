@@ -421,12 +421,15 @@ async def update_component(
             return f"Error parsing/validating implementation spec: {str(exc)}"
 
     try:
-        engine.update_component(id, updates)
+        downgraded = engine.update_component(id, updates)
         engine.save()
     except Exception as exc:
         return f"Error: {str(exc)}"
 
-    return f"Component '{id}' updated successfully in '{engine.file_path}'."
+    msg = f"Component '{id}' updated successfully in '{engine.file_path}'."
+    if downgraded:
+        msg += f"\nCascade invalidation triggered. Downstream components downgraded: {', '.join(downgraded)}"
+    return msg
 
 
 @mcp.tool()
@@ -518,6 +521,94 @@ async def add_usage_node(
 
 
 @mcp.tool()
+async def update_usage_node(
+    tree_name: str,
+    node_id: str,
+    caller_id: Optional[str] = None,
+    component_id: Optional[str] = None,
+    description: Optional[str] = None,
+    expected_inputs_dsl: Optional[str] = None,
+    expected_outputs_dsl: Optional[str] = None,
+    expected_side_effects_csv: Optional[str] = None,
+    ctx: Context = None,
+) -> ToolResponseText:
+    """Updates specific fields of an existing usage node in a designated workflow dependency tree.
+
+    Args:
+        tree_name: Identifier for the flow containing the node (e.g. 'user_sign_up_flow').
+        node_id: Unique identifier of the node to update.
+        caller_id: Optional updated ID of the calling component.
+        component_id: Optional updated ID of the target component being called.
+        description: Optional updated text description.
+        expected_inputs_dsl: Optional shorthand DSL string of updated input expectations.
+        expected_outputs_dsl: Optional shorthand DSL string of updated output expectations.
+        expected_side_effects_csv: Optional comma-separated list of updated expected side-effects.
+    """
+    if ctx is None:
+        return "Error: Context parameter is required."
+        
+    engine = await get_isolated_engine(ctx)
+    updates = {}
+    
+    if caller_id is not None:
+        updates["caller_id"] = caller_id
+    if component_id is not None:
+        updates["component_id"] = component_id
+    if description is not None:
+        updates["description"] = description
+        
+    if expected_inputs_dsl is not None:
+        try:
+            parsed_inputs = parse_shorthand_str(expected_inputs_dsl)
+            updates["expected_inputs"] = DSLCompiler.compile_shorthand(parsed_inputs)
+        except Exception as exc:
+            return f"Error compiling expected inputs DSL: {str(exc)}"
+            
+    if expected_outputs_dsl is not None:
+        try:
+            parsed_outputs = parse_shorthand_str(expected_outputs_dsl)
+            updates["expected_outputs"] = DSLCompiler.compile_shorthand(parsed_outputs)
+        except Exception as exc:
+            return f"Error compiling expected outputs DSL: {str(exc)}"
+            
+    if expected_side_effects_csv is not None:
+        updates["expected_side_effects"] = parse_side_effects(expected_side_effects_csv)
+
+    try:
+        engine.update_usage_node(tree_name, node_id, updates)
+        engine.save()
+    except Exception as exc:
+        return f"Error updating usage node: {str(exc)}"
+
+    return f"Usage node '{node_id}' successfully updated in tree '{tree_name}'."
+
+
+@mcp.tool()
+async def delete_usage_node(
+    tree_name: str,
+    node_id: str,
+    ctx: Context = None,
+) -> ToolResponseText:
+    """Deletes a usage node and all its nested sub-calls from the tree.
+
+    Args:
+        tree_name: Identifier for the flow tree containing the node.
+        node_id: Unique identifier of the node to delete.
+    """
+    if ctx is None:
+        return "Error: Context parameter is required."
+        
+    engine = await get_isolated_engine(ctx)
+    try:
+        engine.delete_usage_node(tree_name, node_id)
+        engine.save()
+    except Exception as exc:
+        return f"Error deleting usage node: {str(exc)}"
+
+    return f"Usage node '{node_id}' successfully deleted from tree '{tree_name}'."
+
+
+@mcp.tool()
 async def check_compatibility(ctx: Context = None) -> ToolResponseText:
     """Runs strict semantic interface and global registry-wide invariant checks."""
     if ctx is None:
@@ -551,6 +642,7 @@ async def visualize_architecture(
     node_id: Optional[str] = None,
     format: str = "text",
     verbose: str = "summary",
+    to_artifact_dir: Optional[str] = None,
     ctx: Context = None
 ) -> ToolResponseText:
     """Generates ASCII hierarchy trees, rich flowchart diagrams, or structural component registry graphs.
@@ -558,8 +650,9 @@ async def visualize_architecture(
     Args:
         tree_name: Name of a specific usage tree (e.g. 'auth_flow'). If omitted, all trees or the structural view is rendered.
         node_id: Specific starting node ID to visualize a subtree.
-        format: Output format: 'text' (ASCII tree), 'mermaid' (Mermaid flowchart of workflows), or 'mermaid_components' (structural component architecture map). Default: 'text'.
+        format: Output format: 'text' (ASCII tree), 'mermaid' (Mermaid flowchart of workflows), 'mermaid_components' (structural component architecture map), or 'review_markdown' (detailed reviews). Default: 'text'.
         verbose: Information level: 'summary', 'detailed', or 'full'. Default: 'summary'.
+        to_artifact_dir: Optional path to write review markdown and metadata sidecars directly to the artifact directory.
         ctx: Context parameter for session tracking.
     """
     if ctx is None:
@@ -585,6 +678,44 @@ async def visualize_architecture(
     if not trees_to_render:
         return f"No workflow usage trees registered in '{engine.file_path}'."
 
+    if to_artifact_dir:
+        if format != "review_markdown":
+            return "Error: to_artifact_dir can only be used with format 'review_markdown'."
+        
+        import datetime
+        artifact_path = Path(to_artifact_dir)
+        if not artifact_path.exists():
+            artifact_path.mkdir(parents=True, exist_ok=True)
+            
+        for t_name, root_node in trees_to_render.items():
+            target_node = root_node
+            if node_id:
+                found = Visualizer.find_node(root_node, node_id)
+                if not found:
+                    continue
+                target_node = found
+                
+            rendered_lines = Visualizer.render_review_markdown(
+                t_name, target_node, engine.registry.components, engine.registry.component_types
+            )
+            
+            md_file_path = artifact_path / f"{t_name}_review.md"
+            meta_file_path = artifact_path / f"{t_name}_review.md.metadata.json"
+            
+            # Write Markdown
+            md_file_path.write_text("\n".join(rendered_lines), encoding="utf-8")
+            
+            # Write Sidecar Metadata
+            metadata = {
+                "artifactType": "ARTIFACT_TYPE_OTHER",
+                "summary": f"Architectural contract review of the '{t_name}' workflow and all referenced component definitions (schemas, side-effects, status, and implementation specifications).",
+                "updatedAt": datetime.datetime.now().isoformat() + "Z",
+                "requestFeedback": True
+            }
+            meta_file_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            
+        return f"SUCCESS: Active review artifact generated at: file://{artifact_path.resolve()}. Open the artifact tab to review and annotate."
+
     output_blocks = []
     for t_name, root_node in trees_to_render.items():
         target_node = root_node
@@ -602,6 +733,11 @@ async def visualize_architecture(
                 target_node, engine.registry.components, engine.registry.component_types, verbose=verbose
             )
             output_blocks.append("```mermaid\n" + "\n".join(rendered) + "\n```")
+        elif format == "review_markdown":
+            rendered = Visualizer.render_review_markdown(
+                t_name, target_node, engine.registry.components, engine.registry.component_types
+            )
+            output_blocks.append("\n".join(rendered))
         else:
             rendered = Visualizer.render_tree_text(
                 target_node, engine.registry.components, engine.registry.component_types, verbose=verbose
@@ -609,6 +745,189 @@ async def visualize_architecture(
             output_blocks.append("```\n" + "\n".join(rendered) + "\n```")
 
     return "\n\n".join(output_blocks)
+
+
+@mcp.tool()
+async def compile_component_contract(id: str, ctx: Context = None) -> ToolResponseText:
+    """Compiles a complete, stateful, and authoritative architectural contract for a component.
+
+    This recursively resolves implemented interfaces, inlines custom type schemas, synthesizes
+    invariants, and resolves process-level validation command arrays.
+
+    Args:
+        id: Unique component identifier.
+        ctx: Context parameter for session tracking.
+    """
+    if ctx is None:
+        return "Error: Context parameter is required."
+
+    engine = await get_isolated_engine(ctx)
+    comp = engine.registry.components.get(id)
+    if not comp:
+        return f"Error: Component '{id}' does not exist in registry."
+
+    from engine.validator import compile_contract_markdown
+    return compile_contract_markdown(comp, engine.registry)
+
+
+@mcp.tool()
+async def approve_arch(id: str, ctx: Context = None) -> ToolResponseText:
+    """Approve the architecture interface of a component.
+
+    Args:
+        id: Unique component identifier.
+        ctx: Context parameter for session tracking.
+    """
+    if ctx is None:
+        return "Error: Context parameter is required."
+
+    engine = await get_isolated_engine(ctx)
+    comp = engine.registry.components.get(id)
+    if not comp:
+        return f"Error: Component '{id}' does not exist in registry."
+
+    # 1. Programmatic Gate
+    from engine.validator import check_component_compatibility
+    errors = check_component_compatibility(engine.registry, id)
+    if errors:
+        return f"Programmatic architecture check failed for '{id}':\n" + "\n".join(f"- {err}" for err in errors)
+
+    # 2. Result
+    from engine.models import LifecycleStage
+    comp.stage = LifecycleStage.ARCH_APPROVED
+    engine.save()
+    return f"Success: Component '{id}' architecture interface approved! Stage set to ARCH_APPROVED."
+
+
+@mcp.tool()
+async def plan_component(id: str, ctx: Context = None) -> ToolResponseText:
+    """Validate and approve the sequential work plan and specification for a component.
+
+    Args:
+        id: Unique component identifier.
+        ctx: Context parameter for session tracking.
+    """
+    if ctx is None:
+        return "Error: Context parameter is required."
+
+    engine = await get_isolated_engine(ctx)
+    comp = engine.registry.components.get(id)
+    if not comp:
+        return f"Error: Component '{id}' does not exist in registry."
+
+    # 1. Prerequisite Check
+    from engine.models import LifecycleStage
+    if comp.stage != LifecycleStage.ARCH_APPROVED:
+        return f"Error: Component '{id}' must be in ARCH_APPROVED stage before planning. Current stage: {comp.stage.upper()}."
+
+    # 2. Topological Guard
+    from engine.validator import get_component_dependencies
+    visited = set()
+    queue = get_component_dependencies(comp)
+    declared_deps = []
+    while queue:
+        curr = queue.pop(0)
+        if curr in visited:
+            continue
+        visited.add(curr)
+        dep_comp = engine.registry.components.get(curr)
+        if dep_comp:
+            if dep_comp.stage == LifecycleStage.DECLARED:
+                declared_deps.append(curr)
+            for dep in get_component_dependencies(dep_comp):
+                if dep not in visited:
+                    queue.append(dep)
+
+    if declared_deps:
+        err_msg = f"Error: Topological guard block. The following dependencies of '{id}' are still in DECLARED stage. Please run approve-arch on them first:\n"
+        err_msg += "\n".join(f"- {dep}" for dep in declared_deps)
+        return err_msg
+
+    # 3. Programmatic Gate (contiguous steps, overridden invariants)
+    from engine.validator import check_component_compatibility
+    errors = check_component_compatibility(engine.registry, id)
+    if errors:
+        return f"Programmatic work plan check failed for '{id}':\n" + "\n".join(f"- {err}" for err in errors)
+
+    # 4. Result
+    comp.stage = LifecycleStage.PLAN_APPROVED
+    engine.save()
+    return f"Success: Work plan approved for '{id}'! Stage set to PLAN_APPROVED."
+
+
+@mcp.tool()
+async def implement_component(id: str, ctx: Context = None) -> ToolResponseText:
+    """Run programmatic validation checks on the implementation of a component and mark it as IMPLEMENTED.
+
+    Args:
+        id: Unique component identifier.
+        ctx: Context parameter for session tracking.
+    """
+    if ctx is None:
+        return "Error: Context parameter is required."
+
+    engine = await get_isolated_engine(ctx)
+    comp = engine.registry.components.get(id)
+    if not comp:
+        return f"Error: Component '{id}' does not exist in registry."
+
+    # 1. Prerequisite Check
+    from engine.models import LifecycleStage
+    if comp.stage != LifecycleStage.PLAN_APPROVED:
+        return f"Error: Component '{id}' must be in PLAN_APPROVED stage before implementing. Current stage: {comp.stage.upper()}."
+
+    # 2. Topological Guard
+    from engine.validator import get_component_dependencies
+    direct_deps = get_component_dependencies(comp)
+    non_implemented_deps = []
+    for dep in direct_deps:
+        dep_comp = engine.registry.components.get(dep)
+        if dep_comp and dep_comp.stage != LifecycleStage.IMPLEMENTED:
+            non_implemented_deps.append((dep, dep_comp.stage))
+
+    if non_implemented_deps:
+        err_msg = f"Error: Topological guard block. Direct dependencies of '{id}' must be in IMPLEMENTED stage before implementation can proceed. Missing direct dependencies:\n"
+        err_msg += "\n".join(f"- {dep} (Current Stage: {stage.upper()})" for dep, stage in non_implemented_deps)
+        return err_msg
+
+    # 3. Programmatic Gate
+    from engine.validator import run_component_validations
+    success, logs = run_component_validations(comp, engine.registry)
+
+    result_msg = f"Validation Logs:\n{logs}\n"
+    if not success:
+        result_msg += f"Error: Programmatic verification failed for component '{id}'. Validation tools returned non-zero exit codes."
+        return result_msg
+
+    # 4. Result
+    comp.stage = LifecycleStage.IMPLEMENTED
+    engine.save()
+    result_msg += f"Success: Component '{id}' implementation verified! Stage set to IMPLEMENTED."
+    return result_msg
+
+
+@mcp.tool()
+async def get_next_actionable_components(action_type: str, ctx: Context = None) -> ToolResponseText:
+    """Returns a list of component IDs ready for planning or implementation bottom-up.
+
+    Args:
+        action_type: Type of action, either "plan" (find declared components ready for planning spec) or "implement" (find plan-approved components ready for coding).
+        ctx: Context parameter for session tracking.
+    """
+    if ctx is None:
+        return "Error: Context parameter is required."
+
+    if action_type not in ("plan", "implement"):
+        return "Error: action_type must be either 'plan' or 'implement'."
+
+    engine = await get_isolated_engine(ctx)
+    from engine.validator import get_next_actionable_components as engine_get_next
+    try:
+        actionable_ids = engine_get_next(engine.registry, action_type)
+        import json
+        return json.dumps(actionable_ids)
+    except Exception as exc:
+        return f"Error computing next actionable components: {exc}"
 
 
 if __name__ == "__main__":

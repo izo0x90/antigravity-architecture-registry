@@ -1,4 +1,6 @@
 {
+  "name": "architecture-registry",
+  "version": "1.0.0",
   "mcpServers": {
     "architecture_registry": {
       "command": "uv",
@@ -6,9 +8,8 @@
         "run",
         "mcp_server.py"
       ],
-      "cwd": "architecture_registry",
+      "cwd": "${extensionPath}",
       "env": {}
     }
   }
 }
-

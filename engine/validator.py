@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Union, Tuple, Optional
-from .models import UsageNode, Component, ComponentRegistryMap, ComponentTypesMap, SideEffectList, SystemRegistry
+from .models import UsageNode, Component, ComponentRegistryMap, ComponentTypesMap, SideEffectList, SystemRegistry, LifecycleStage
 from .exceptions import CompatibilityError
 
 ErrorMessagesList = List[str]
@@ -388,6 +388,18 @@ class ArchitectureValidator:
                                         )
                                     )
 
+            # 11. Validation Tools Verification
+            if comp.implementation_spec is not None and comp.implementation_spec.validation:
+                for ref in comp.implementation_spec.validation:
+                    if ref.tool_id not in registry.validation_tools:
+                        errors.append(
+                            CompatibilityError(
+                                node_id="",
+                                component_id=comp_id,
+                                details=f"Component '{comp_id}' references unregistered validation tool ID '{ref.tool_id}'."
+                            )
+                        )
+
         return errors
 
     @staticmethod
@@ -562,3 +574,437 @@ class ArchitectureValidator:
             errors.extend(cls.validate_usage_node(child, components, component_types))
             
         return errors
+
+
+def get_component_dependencies(comp: Component) -> List[str]:
+    """Extracts all explicit and implicit signature/parent dependencies of a component."""
+    deps = []
+    if comp.implements_id:
+        deps.append(comp.implements_id)
+    if comp.parent_id:
+        deps.append(comp.parent_id)
+    
+    # Traverse schemas for titles (custom object references)
+    def extract_titles(schema: Any) -> List[str]:
+        titles = []
+        if isinstance(schema, dict):
+            title = schema.get("title")
+            if title:
+                titles.append(title)
+            for v in schema.values():
+                titles.extend(extract_titles(v))
+        elif isinstance(schema, list):
+            for item in schema:
+                titles.extend(extract_titles(item))
+        return titles
+
+    for schema in [comp.properties, comp.inputs, comp.outputs]:
+        if schema:
+            deps.extend(extract_titles(schema))
+            
+    # Deduplicate and filter out self-references
+    return list(set([d for d in deps if d != comp.id]))
+
+
+def topological_sort_components(components: Dict[str, Component]) -> List[str]:
+    """Returns a list of component IDs in topological order (bottom-up dependencies first)."""
+    adj = {cid: [] for cid in components}
+    in_degree = {cid: 0 for cid in components}
+    
+    for cid, comp in components.items():
+        deps = get_component_dependencies(comp)
+        for dep in deps:
+            if dep in components:
+                adj[dep].append(cid)
+                in_degree[cid] += 1
+                
+    # Queue of nodes with in_degree 0
+    queue = [cid for cid, deg in in_degree.items() if deg == 0]
+    order = []
+    
+    while queue:
+        # Sort queue to ensure deterministic ordering
+        queue.sort()
+        curr = queue.pop(0)
+        order.append(curr)
+        for neighbor in adj[curr]:
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                queue.append(neighbor)
+                
+    # If there's a cycle, ensure we don't lose any nodes
+    if len(order) < len(components):
+        remaining = [cid for cid in components if cid not in order]
+        order.extend(remaining)
+        
+    return order
+
+
+def get_next_actionable_components(registry: SystemRegistry, action_type: str) -> List[str]:
+    """Returns a list of component IDs ready for the specified action_type.
+    
+    action_type must be "plan" or "implement".
+    """
+    if action_type not in ("plan", "implement"):
+        raise ValueError("action_type must be either 'plan' or 'implement'")
+        
+    topo_order = topological_sort_components(registry.components)
+    actionable = []
+    
+    if action_type == "plan":
+        # Ready to plan if current stage is DECLARED, and ALL transitive dependencies are at least ARCH_APPROVED (not DECLARED)
+        for cid in topo_order:
+            comp = registry.components.get(cid)
+            if not comp or comp.stage != LifecycleStage.DECLARED:
+                continue
+                
+            # Scan transitive dependencies to make sure none are in DECLARED
+            visited = set()
+            queue = get_component_dependencies(comp)
+            has_declared_dep = False
+            while queue:
+                curr = queue.pop(0)
+                if curr in visited:
+                    continue
+                visited.add(curr)
+                dep_comp = registry.components.get(curr)
+                if dep_comp:
+                    if dep_comp.stage == LifecycleStage.DECLARED:
+                        has_declared_dep = True
+                        break
+                    for dep in get_component_dependencies(dep_comp):
+                        if dep not in visited:
+                            queue.append(dep)
+            
+            if not has_declared_dep:
+                actionable.append(cid)
+                
+    elif action_type == "implement":
+        # Ready to implement if current stage is PLAN_APPROVED, and ALL direct dependencies are IMPLEMENTED
+        for cid in topo_order:
+            comp = registry.components.get(cid)
+            if not comp or comp.stage != LifecycleStage.PLAN_APPROVED:
+                continue
+                
+            # Direct dependencies check
+            direct_deps = get_component_dependencies(comp)
+            has_non_implemented_dep = False
+            for dep in direct_deps:
+                dep_comp = registry.components.get(dep)
+                if dep_comp and dep_comp.stage != LifecycleStage.IMPLEMENTED:
+                    has_non_implemented_dep = True
+                    break
+                    
+            if not has_non_implemented_dep:
+                actionable.append(cid)
+                
+    return actionable
+
+
+def cascade_invalidate_component(registry: SystemRegistry, component_id: str) -> List[str]:
+    """Runs the cascading invalidation wave starting from a modified component_id.
+    
+    Returns a list of downgraded/resetted component IDs.
+    """
+    # Build dependent mapping: cid -> list of cids that directly depend on it
+    dependents_map = {cid: [] for cid in registry.components}
+    
+    # 1. Map schema, implements, parent dependencies
+    for cid, comp in registry.components.items():
+        deps = get_component_dependencies(comp)
+        for dep in deps:
+            if dep in dependents_map:
+                dependents_map[dep].append(cid)
+                
+    # 2. Map usage tree dependencies (caller depends on callee)
+    def walk_usage_tree(node: UsageNode):
+        caller_id = node.caller_id
+        callee_id = node.component_id
+        if callee_id in dependents_map and caller_id in dependents_map:
+            if caller_id not in dependents_map[callee_id]:
+                dependents_map[callee_id].append(caller_id)
+        for child in node.dependencies:
+            walk_usage_tree(child)
+            
+    for tree in registry.usage_trees.values():
+        walk_usage_tree(tree)
+        
+    # Queue for BFS cascade
+    queue = [component_id]
+    visited = set()
+    downgraded = []
+    
+    while queue:
+        curr_id = queue.pop(0)
+        if curr_id in visited:
+            continue
+        visited.add(curr_id)
+        
+        comp = registry.components.get(curr_id)
+        if not comp:
+            continue
+            
+        # Perform stage resets
+        if curr_id == component_id:
+            if comp.stage != LifecycleStage.DECLARED:
+                comp.stage = LifecycleStage.DECLARED
+                downgraded.append(curr_id)
+        else:
+            # Upstream dependent
+            if comp.stage == LifecycleStage.IMPLEMENTED:
+                comp.stage = LifecycleStage.PLAN_APPROVED
+                downgraded.append(curr_id)
+            elif comp.stage == LifecycleStage.PLAN_APPROVED:
+                comp.stage = LifecycleStage.ARCH_APPROVED
+                downgraded.append(curr_id)
+                
+        # Add its direct dependents to queue
+        for dep in dependents_map.get(curr_id, []):
+            if dep not in visited:
+                queue.append(dep)
+                
+    return downgraded
+
+
+def check_component_compatibility(registry: SystemRegistry, component_id: str) -> List[str]:
+    """Runs all static analysis and usage node validations for a single component.
+    
+    Returns a list of error detail strings.
+    """
+    errors = []
+    
+    # 1. Check registry-wide errors
+    global_errors = ArchitectureValidator.validate_registry(registry)
+    for err in global_errors:
+        if err.component_id == component_id or (err.details and component_id in err.details):
+            errors.append(f"Registry: {err.details}")
+            
+    # 2. Check usage trees errors
+    for tree_name, root_node in registry.usage_trees.items():
+        tree_errors = ArchitectureValidator.validate_usage_node(
+            root_node, registry.components, registry.component_types
+        )
+        for err in tree_errors:
+            if err.component_id == component_id or (err.details and component_id in err.details):
+                errors.append(f"Tree '{tree_name}': {err.details} (Node: '{err.node_id}')")
+                
+    return errors
+
+
+def compile_contract_markdown(comp: Component, registry: SystemRegistry) -> str:
+    """Compiles a complete, stateful, and authoritative architectural contract for a component.
+
+    This recursively resolves implemented interfaces, inlines custom type schemas, synthesizes
+    invariants, and resolves process-level validation command arrays.
+    """
+    import json
+    # 1. Resolve Interfaces recursively
+    resolved_inputs, resolved_outputs = resolve_implements_signature(comp, registry.components)
+    resolved_properties = comp.properties
+
+    # 2. Inline Custom Schemas recursively
+    try:
+        resolved_inputs = resolve_refs(resolved_inputs, registry.components, registry.component_types)
+        resolved_outputs = resolve_refs(resolved_outputs, registry.components, registry.component_types)
+        resolved_properties = resolve_refs(resolved_properties, registry.components, registry.component_types)
+    except Exception as exc:
+        return f"Error resolving custom schema references: {str(exc)}"
+
+    # 3. Synthesize Invariants (local and inherited)
+    all_invariants = []
+    if comp.implementation_spec:
+        for inv in comp.implementation_spec.invariants:
+            all_invariants.append({
+                "name": inv.name,
+                "type": inv.type,
+                "description": inv.description,
+                "source": "Local"
+            })
+
+    # Resolve inherited interface chain
+    def resolve_interface_chain(component_id: str, visited=None) -> list:
+        if visited is None:
+            visited = set()
+        if component_id in visited:
+            return []
+        visited.add(component_id)
+        c = registry.components.get(component_id)
+        if not c:
+            return []
+        chain = []
+        if c.implements_id:
+            parent_comp = registry.components.get(c.implements_id)
+            if parent_comp:
+                chain.append(parent_comp)
+                chain.extend(resolve_interface_chain(c.implements_id, visited))
+        return chain
+
+    for parent_comp in resolve_interface_chain(comp.id):
+        if parent_comp.implementation_spec:
+            for inv in parent_comp.implementation_spec.invariants:
+                if not any(x["name"] == inv.name for x in all_invariants):
+                    all_invariants.append({
+                        "name": inv.name,
+                        "type": inv.type,
+                        "description": inv.description,
+                        "source": f"Inherited from '{parent_comp.id}'"
+                    })
+
+    # Gathers local logic steps
+    logic_steps = []
+    if comp.implementation_spec:
+        # Sort steps by sequence just in case
+        sorted_steps = sorted(comp.implementation_spec.logic_steps, key=lambda x: x.sequence)
+        for step in sorted_steps:
+            alg_str = f" (Algorithm: {step.algorithm})" if step.algorithm else ""
+            comp_str = f" [Complexity: {step.complexity}]" if step.complexity else ""
+            logic_steps.append(f"{step.sequence}. **{step.name}**{alg_str}{comp_str}: {step.description}")
+
+    # 4. Format Validations
+    validation_commands = []
+    if comp.implementation_spec and comp.implementation_spec.validation:
+        for ref in comp.implementation_spec.validation:
+            tool = registry.validation_tools.get(ref.tool_id)
+            if not tool:
+                validation_commands.append(
+                    f"- **{ref.tool_id}** [ERROR]: Registered definition for tool ID '{ref.tool_id}' not found."
+                )
+                continue
+
+            base_args = ref.args if ref.args is not None else tool.default_args
+            
+            # List-based placeholder expansion
+            resolved_args = []
+            for arg in base_args:
+                if arg == "{targets}":
+                    resolved_args.extend(ref.targets)
+                elif "{targets}" in arg:
+                    resolved_args.append(arg.replace("{targets}", ",".join(ref.targets)))
+                else:
+                    resolved_args.append(arg)
+
+            validation_commands.append(
+                f"- **{ref.tool_id}**:\n"
+                f"  - Executable: `{tool.executable}`\n"
+                f"  - Resolved Arguments: `{resolved_args}`\n"
+                f"  - Target Paths: `{ref.targets}`"
+            )
+
+    # 5. Format Output Markdown
+    doc = []
+    doc.append(f"# Component Contract: {comp.id}")
+    doc.append(f"**Name**: {comp.name}")
+    doc.append(f"**Type**: {comp.type.upper()}")
+    doc.append(f"**Status**: {comp.status.upper()}")
+    doc.append(f"**Description**: {comp.description}")
+    
+    if comp.parent_id:
+        doc.append(f"**Parent Namespace**: '{comp.parent_id}'")
+    if comp.implements_id:
+        doc.append(f"**Implements Interface**: '{comp.implements_id}'")
+    if comp.location:
+        loc_str = f"{comp.location.file_path}"
+        if comp.location.line_range:
+            loc_str += f"#L{comp.location.line_range[0]}-L{comp.location.line_range[1]}"
+        doc.append(f"**Location**: `{loc_str}`")
+
+    doc.append("\n## Properties (State Schema)")
+    if resolved_properties:
+        doc.append("```json\n" + json.dumps(resolved_properties, indent=2) + "\n```")
+    else:
+        doc.append("*None defined.*")
+
+    doc.append("\n## Input Contract (Arguments Schema)")
+    if resolved_inputs:
+        doc.append("```json\n" + json.dumps(resolved_inputs, indent=2) + "\n```")
+    else:
+        doc.append("*None defined or inherited.*")
+
+    doc.append("\n## Output Contract (Return Schema)")
+    if resolved_outputs:
+        doc.append("```json\n" + json.dumps(resolved_outputs, indent=2) + "\n```")
+    else:
+        doc.append("*None defined or inherited.*")
+
+    doc.append("\n## Side Effects")
+    if comp.side_effects:
+        for se in comp.side_effects:
+            doc.append(f"- **{se.target}**: {se.description}")
+    else:
+        doc.append("*None defined.*")
+
+    doc.append("\n## Invariants & Safety Constraints")
+    if all_invariants:
+        for inv in all_invariants:
+            doc.append(f"- **{inv['name']}** [{inv['type'].upper()}] ({inv['source']}): {inv['description']}")
+    else:
+        doc.append("*No invariants specified.*")
+
+    doc.append("\n## Sequential Logic Steps")
+    if logic_steps:
+        for step in logic_steps:
+            doc.append(step)
+    else:
+        doc.append("*No logic steps specified.*")
+
+    doc.append("\n## Resolved Verification Commands")
+    if validation_commands:
+        doc.extend(validation_commands)
+    else:
+        doc.append("*No validation commands defined.*")
+
+    return "\n".join(doc)
+
+
+def run_component_validations(comp: Component, registry: SystemRegistry) -> Tuple[bool, str]:
+    """Runs all validation tools configured for the component.
+    
+    Returns (success, log_output).
+    """
+    import subprocess
+    if not comp.implementation_spec or not comp.implementation_spec.validation:
+        return True, "No validation tools defined."
+        
+    logs = []
+    success = True
+    
+    for ref in comp.implementation_spec.validation:
+        tool = registry.validation_tools.get(ref.tool_id)
+        if not tool:
+            logs.append(f"Tool '{ref.tool_id}': [FAIL] definition not found.")
+            success = False
+            continue
+            
+        base_args = ref.args if ref.args is not None else tool.default_args
+        
+        # Expand placeholders
+        resolved_args = []
+        for arg in base_args:
+            if arg == "{targets}":
+                resolved_args.extend(ref.targets)
+            elif "{targets}" in arg:
+                resolved_args.append(arg.replace("{targets}", ",".join(ref.targets)))
+            else:
+                resolved_args.append(arg)
+                
+        cmd = [tool.executable] + resolved_args
+        cmd_str = " ".join(cmd)
+        logs.append(f"Running command: {cmd_str}")
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            logs.append(f"STDOUT:\n{result.stdout}")
+            if result.stderr:
+                logs.append(f"STDERR:\n{result.stderr}")
+            logs.append(f"Exit code: {result.returncode}")
+            
+            if result.returncode != 0:
+                success = False
+                logs.append(f"Tool '{ref.tool_id}': [FAIL] returned non-zero exit code.")
+            else:
+                logs.append(f"Tool '{ref.tool_id}': [PASS]")
+        except Exception as exc:
+            success = False
+            logs.append(f"Tool '{ref.tool_id}': [ERROR] failed to execute: {exc}")
+            
+    return success, "\n".join(logs)

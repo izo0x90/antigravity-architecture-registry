@@ -76,15 +76,72 @@ def create_parser() -> argparse.ArgumentParser:
     add_node.add_argument("--expected-outputs-dsl", help="Shorthand expected outputs schema")
     add_node.add_argument("--expected-side-effects", help="Comma-separated expected side effects")
 
+    # 4a. update-node command
+    up_node = subparsers.add_parser("update-node", help="Update specific fields of an existing usage node.")
+    up_node.add_argument("--tree", required=True, help="Designated workflow tree name")
+    up_node.add_argument("--node-id", required=True, help="ID of the node to update")
+    up_node.add_argument("--caller-id", help="New calling component ID")
+    up_node.add_argument("--component-id", help="New target component ID")
+    up_node.add_argument("--description", help="New description")
+    up_node.add_argument("--expected-inputs-dsl", help="New shorthand expected inputs schema")
+    up_node.add_argument("--expected-outputs-dsl", help="New shorthand expected outputs schema")
+    up_node.add_argument("--expected-side-effects", help="New comma-separated expected side effects")
+
+    # 4b. delete-node command
+    del_node = subparsers.add_parser("delete-node", help="Delete a usage node and all its nested children.")
+    del_node.add_argument("--tree", required=True, help="Designated workflow tree name")
+    del_node.add_argument("--node-id", required=True, help="ID of the node to delete")
+
     # 5. validate command
     subparsers.add_parser("validate", help="Run compatibility checks on all workflow usage trees.")
+
+    # 5a. approve-arch command
+    approve_arch = subparsers.add_parser("approve-arch", help="Approve the architecture interface of a component.")
+    approve_arch.add_argument("id", help="Unique component identifier")
+    approve_arch.add_argument("--yes", "-y", action="store_true", help="Auto-approve without human-in-the-loop confirmation prompt")
+
+    # 5b. plan-component command
+    plan_comp = subparsers.add_parser("plan-component", help="Approve the work plan/implementation spec of a component.")
+    plan_comp.add_argument("id", help="Unique component identifier")
+    plan_comp.add_argument("--yes", "-y", action="store_true", help="Auto-approve without human-in-the-loop confirmation prompt")
+
+    # 5c. implement-component command
+    implement_comp = subparsers.add_parser("implement-component", help="Validate and approve merging implementation for a component.")
+    implement_comp.add_argument("id", help="Unique component identifier")
+    implement_comp.add_argument("--yes", "-y", action="store_true", help="Auto-approve without human-in-the-loop confirmation prompt")
 
     # 6. visualize command
     vis = subparsers.add_parser("visualize", help="Visualize a registered workflow usage tree or components layout.")
     vis.add_argument("--tree", help="The name of the workflow usage tree to visualize. If omitted, all trees or the structural view is visualized.")
     vis.add_argument("--node-id", help="The specific node ID to start the visualization from (visualizes a subtree).")
-    vis.add_argument("--format", default="text", choices=["text", "mermaid", "mermaid_components"], help="Output visualization format (default: text).")
+    vis.add_argument("--format", default="text", choices=["text", "mermaid", "mermaid_components", "review_markdown"], help="Output visualization format (default: text).")
     vis.add_argument("--verbose", default="summary", choices=["summary", "detailed", "full"], help="Level of metadata verbosity (default: summary).")
+    vis.add_argument("--to-artifact-dir", help="Optional path to write review markdown and metadata sidecars directly to the artifact directory.")
+
+    # 7. register-tool command
+    reg_tool = subparsers.add_parser("register-tool", help="Register a global validation tool definition.")
+    reg_tool.add_argument("--id", required=True, help="Unique tool identifier (e.g. 'ruff')")
+    reg_tool.add_argument("--executable", required=True, help="Path/binary name (e.g. 'ruff', 'mypy')")
+    reg_tool.add_argument("--default-args", nargs="*", default=[], help="Default process arguments (e.g. 'check', '{targets}')")
+
+    # 8. list-tools command
+    subparsers.add_parser("list-tools", help="List all registered global validation tools.")
+
+    # 9. update-component command
+    update_comp = subparsers.add_parser("update-component", help="Update an existing component's metadata.")
+    update_comp.add_argument("--id", required=True, help="Unique component identifier to update")
+    update_comp.add_argument("--name", help="Updated human-readable name")
+    update_comp.add_argument("--type", help="Updated component type corresponding to registry rules (e.g., 'class', 'function')")
+    update_comp.add_argument("--parent-id", "--parent", help="Updated logical parent component ID (or empty string to remove)")
+    update_comp.add_argument("--implements-id", "--implements", help="Updated abstract component ID this component implements (or empty string to remove)")
+    update_comp.add_argument("--description", help="Updated description")
+    update_comp.add_argument("--status", choices=["new", "existing", "modifying", "deprecated"], help="Updated implementation status")
+    update_comp.add_argument("--properties-dsl", "--properties", help="Updated properties/state schema in JSON shorthand format")
+    update_comp.add_argument("--inputs-dsl", "--inputs", help="Updated inputs schema in JSON shorthand format")
+    update_comp.add_argument("--outputs-dsl", "--outputs", help="Updated outputs schema in JSON shorthand format")
+    update_comp.add_argument("--side-effects", help="Comma-separated side effect targets (or empty string to remove)")
+    update_comp.add_argument("--spec-json", help="Updated implementation specification as a raw JSON string")
+    update_comp.add_argument("--spec-file", help="Path to a JSON file containing the updated implementation specification")
 
     return parser
 
@@ -132,6 +189,11 @@ def main(argv: OptionalCLIArgumentList = None) -> int:
         print(f"Total Components: {len(engine.registry.components)}")
         for comp_id, comp in engine.registry.components.items():
             print(f"  - [{comp.type.upper()}] {comp_id}: {comp.name}")
+            if comp.implementation_spec and comp.implementation_spec.validation:
+                print("    Active Validation Tools:")
+                for ref in comp.implementation_spec.validation:
+                    args_str = f", args={ref.args}" if ref.args is not None else ""
+                    print(f"      * {ref.tool_id}: targets={ref.targets}{args_str}")
         print(f"Total Usage Trees: {len(engine.registry.usage_trees)}")
         for tree_name in engine.registry.usage_trees:
             print(f"  - {tree_name}")
@@ -313,6 +375,67 @@ def main(argv: OptionalCLIArgumentList = None) -> int:
             return 1
         return 0
 
+    elif args.command == "update-node":
+        updates = {}
+        if args.caller_id is not None:
+            updates["caller_id"] = args.caller_id
+        if args.component_id is not None:
+            updates["component_id"] = args.component_id
+        if args.description is not None:
+            updates["description"] = args.description
+
+        if args.expected_inputs_dsl is not None:
+            try:
+                try:
+                    parsed = json.loads(args.expected_inputs_dsl)
+                except ValueError:
+                    parsed = {}
+                    for item in args.expected_inputs_dsl.split(","):
+                        if ":" in item:
+                            k, v = item.split(":", 1)
+                            parsed[k.strip()] = v.strip()
+                updates["expected_inputs"] = DSLCompiler.compile_shorthand(parsed)
+            except Exception as exc:
+                print(f"Error parsing expected inputs DSL: {exc}", file=sys.stderr)
+                return 1
+
+        if args.expected_outputs_dsl is not None:
+            try:
+                try:
+                    parsed = json.loads(args.expected_outputs_dsl)
+                except ValueError:
+                    parsed = {}
+                    for item in args.expected_outputs_dsl.split(","):
+                        if ":" in item:
+                            k, v = item.split(":", 1)
+                            parsed[k.strip()] = v.strip()
+                updates["expected_outputs"] = DSLCompiler.compile_shorthand(parsed)
+            except Exception as exc:
+                print(f"Error parsing expected outputs DSL: {exc}", file=sys.stderr)
+                return 1
+
+        if args.expected_side_effects is not None:
+            updates["expected_side_effects"] = parse_side_effects(args.expected_side_effects)
+
+        try:
+            engine.update_usage_node(args.tree, args.node_id, updates)
+            engine.save()
+            print(f"Usage node '{args.node_id}' updated successfully.")
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    elif args.command == "delete-node":
+        try:
+            engine.delete_usage_node(args.tree, args.node_id)
+            engine.save()
+            print(f"Usage node '{args.node_id}' deleted successfully.")
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
     elif args.command == "validate":
         all_errors = []
         
@@ -362,6 +485,46 @@ def main(argv: OptionalCLIArgumentList = None) -> int:
             print("No workflow usage trees registered.", file=sys.stderr)
             return 0
 
+        if args.to_artifact_dir:
+            if args.format != "review_markdown":
+                print("Error: --to-artifact-dir can only be used with --format review_markdown.", file=sys.stderr)
+                return 1
+            
+            import datetime
+            artifact_path = Path(args.to_artifact_dir)
+            if not artifact_path.exists():
+                artifact_path.mkdir(parents=True, exist_ok=True)
+                
+            for tree_name, root_node in trees_to_render.items():
+                target_node = root_node
+                if args.node_id:
+                    found = Visualizer.find_node(root_node, args.node_id)
+                    if not found:
+                        continue
+                    target_node = found
+                
+                rendered_lines = Visualizer.render_review_markdown(
+                    tree_name, target_node, engine.registry.components, engine.registry.component_types
+                )
+                
+                md_file_path = artifact_path / f"{tree_name}_review.md"
+                meta_file_path = artifact_path / f"{tree_name}_review.md.metadata.json"
+                
+                # Write Markdown
+                md_file_path.write_text("\n".join(rendered_lines), encoding="utf-8")
+                
+                # Write Sidecar Metadata
+                metadata = {
+                    "artifactType": "ARTIFACT_TYPE_OTHER",
+                    "summary": f"Architectural contract review of the '{tree_name}' workflow and all referenced component definitions (schemas, side-effects, status, and implementation specifications).",
+                    "updatedAt": datetime.datetime.now().isoformat() + "Z",
+                    "requestFeedback": True
+                }
+                meta_file_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+                print(f"SUCCESS: Created review artifact {tree_name}_review.md inside {args.to_artifact_dir}.")
+                
+            return 0
+
         for tree_name, root_node in trees_to_render.items():
             target_node = root_node
             if args.node_id:
@@ -379,6 +542,11 @@ def main(argv: OptionalCLIArgumentList = None) -> int:
                     target_node, engine.registry.components, engine.registry.component_types, verbose=args.verbose
                 )
                 print("\n".join(rendered_lines))
+            elif args.format == "review_markdown":
+                rendered_lines = Visualizer.render_review_markdown(
+                    tree_name, target_node, engine.registry.components, engine.registry.component_types
+                )
+                print("\n".join(rendered_lines))
             else:
                 rendered_lines = Visualizer.render_tree_text(
                     target_node, engine.registry.components, engine.registry.component_types, verbose=args.verbose
@@ -386,6 +554,291 @@ def main(argv: OptionalCLIArgumentList = None) -> int:
                 print("\n".join(rendered_lines))
 
         return 0
+
+    elif args.command == "approve-arch":
+        comp_id = args.id
+        comp = engine.registry.components.get(comp_id)
+        if not comp:
+            print(f"Error: Component '{comp_id}' does not exist in registry.", file=sys.stderr)
+            return 1
+            
+        # 1. Programmatic Gate
+        from engine.validator import check_component_compatibility, compile_contract_markdown
+        errors = check_component_compatibility(engine.registry, comp_id)
+        if errors:
+            print(f"Programmatic architecture check failed for '{comp_id}':", file=sys.stderr)
+            for err in errors:
+                print(f"- {err}", file=sys.stderr)
+            return 1
+            
+        # 2. Human Gate
+        print("\n--- Compiled Architectural Contract ---")
+        contract = compile_contract_markdown(comp, engine.registry)
+        print(contract)
+        print("---------------------------------------\n")
+        
+        if not args.yes:
+            resp = input(f"Do you approve the architecture interface for '{comp_id}'? (y/n): ")
+            if resp.strip().lower() not in ("y", "yes"):
+                print("Architecture approval cancelled by user.")
+                return 1
+                
+        # 3. Result
+        from engine.models import LifecycleStage
+        comp.stage = LifecycleStage.ARCH_APPROVED
+        engine.save()
+        print(f"Success: Component '{comp_id}' architecture interface approved! Stage set to ARCH_APPROVED.")
+        return 0
+
+    elif args.command == "plan-component":
+        comp_id = args.id
+        comp = engine.registry.components.get(comp_id)
+        if not comp:
+            print(f"Error: Component '{comp_id}' does not exist in registry.", file=sys.stderr)
+            return 1
+            
+        # 1. Prerequisite Check
+        from engine.models import LifecycleStage
+        if comp.stage != LifecycleStage.ARCH_APPROVED:
+            print(f"Error: Component '{comp_id}' must be in ARCH_APPROVED stage before planning. Current stage: {comp.stage.upper()}.", file=sys.stderr)
+            return 1
+            
+        # 2. Topological Guard
+        from engine.validator import get_component_dependencies
+        visited = set()
+        queue = get_component_dependencies(comp)
+        declared_deps = []
+        while queue:
+            curr = queue.pop(0)
+            if curr in visited:
+                continue
+            visited.add(curr)
+            dep_comp = engine.registry.components.get(curr)
+            if dep_comp:
+                if dep_comp.stage == LifecycleStage.DECLARED:
+                    declared_deps.append(curr)
+                for dep in get_component_dependencies(dep_comp):
+                    if dep not in visited:
+                        queue.append(dep)
+                        
+        if declared_deps:
+            print(f"Error: Topological guard block. The following dependencies of '{comp_id}' are still in DECLARED stage. Please run approve-arch on them first:", file=sys.stderr)
+            for dep in declared_deps:
+                print(f"- {dep}", file=sys.stderr)
+            return 1
+            
+        # 3. Programmatic Gate (contiguous steps, overridden invariants)
+        from engine.validator import check_component_compatibility, compile_contract_markdown
+        errors = check_component_compatibility(engine.registry, comp_id)
+        if errors:
+            print(f"Programmatic work plan check failed for '{comp_id}':", file=sys.stderr)
+            for err in errors:
+                print(f"- {err}", file=sys.stderr)
+            return 1
+            
+        # 4. Human Gate
+        print("\n--- Compiled Work Plan Contract ---")
+        contract = compile_contract_markdown(comp, engine.registry)
+        print(contract)
+        print("------------------------------------\n")
+        
+        if not args.yes:
+            resp = input(f"Do you approve the work plan for '{comp_id}'? (y/n): ")
+            if resp.strip().lower() not in ("y", "yes"):
+                print("Work plan approval cancelled by user.")
+                return 1
+                
+        # 5. Result
+        comp.stage = LifecycleStage.PLAN_APPROVED
+        engine.save()
+        print(f"Success: Work plan approved for '{comp_id}'! Stage set to PLAN_APPROVED.")
+        return 0
+
+    elif args.command == "implement-component":
+        comp_id = args.id
+        comp = engine.registry.components.get(comp_id)
+        if not comp:
+            print(f"Error: Component '{comp_id}' does not exist in registry.", file=sys.stderr)
+            return 1
+            
+        # 1. Prerequisite Check
+        from engine.models import LifecycleStage
+        if comp.stage != LifecycleStage.PLAN_APPROVED:
+            print(f"Error: Component '{comp_id}' must be in PLAN_APPROVED stage before implementing. Current stage: {comp.stage.upper()}.", file=sys.stderr)
+            return 1
+            
+        # 2. Topological Guard
+        from engine.validator import get_component_dependencies
+        direct_deps = get_component_dependencies(comp)
+        non_implemented_deps = []
+        for dep in direct_deps:
+            dep_comp = engine.registry.components.get(dep)
+            if dep_comp and dep_comp.stage != LifecycleStage.IMPLEMENTED:
+                non_implemented_deps.append((dep, dep_comp.stage))
+                
+        if non_implemented_deps:
+            print(f"Error: Topological guard block. Direct dependencies of '{comp_id}' must be in IMPLEMENTED stage before implementation can proceed. Missing direct dependencies:", file=sys.stderr)
+            for dep, stage in non_implemented_deps:
+                print(f"- {dep} (Current Stage: {stage.upper()})", file=sys.stderr)
+            return 1
+            
+        # 3. Programmatic Gate
+        from engine.validator import run_component_validations
+        success, logs = run_component_validations(comp, engine.registry)
+        print("\n--- Validation Logs ---")
+        print(logs)
+        print("------------------------\n")
+        
+        if not success:
+            print(f"Error: Programmatic verification failed for component '{comp_id}'. Validation tools returned non-zero exit codes.", file=sys.stderr)
+            return 1
+            
+        # 4. Human Gate
+        if not args.yes:
+            resp = input(f"Do you approve merging the implementation for '{comp_id}'? (y/n): ")
+            if resp.strip().lower() not in ("y", "yes"):
+                print("Implementation merge cancelled by user.")
+                return 1
+                
+        # 5. Result
+        comp.stage = LifecycleStage.IMPLEMENTED
+        engine.save()
+        print(f"Success: Component '{comp_id}' implementation verified and merged! Stage set to IMPLEMENTED.")
+        return 0
+
+    elif args.command == "register-tool":
+        try:
+            from engine.models import ValidationToolDefinition
+            tool = ValidationToolDefinition(
+                id=args.id,
+                executable=args.executable,
+                default_args=args.default_args
+            )
+            engine.registry.validation_tools[args.id] = tool
+            engine.save()
+            print(f"Validation tool '{args.id}' registered successfully.")
+            return 0
+        except Exception as exc:
+            print(f"Error registering validation tool: {exc}", file=sys.stderr)
+            return 1
+
+    elif args.command == "list-tools":
+        if not engine.registry.validation_tools:
+            print("No validation tools registered.")
+            return 0
+        print("\n--- Registered Validation Tools ---")
+        for tool_id, tool in engine.registry.validation_tools.items():
+            print(f"- {tool_id}: executable='{tool.executable}', default_args={tool.default_args}")
+        return 0
+
+    elif args.command == "update-component":
+        updates = {}
+        if args.name is not None:
+            updates["name"] = args.name
+        if args.type is not None:
+            updates["type"] = args.type
+        if args.parent_id is not None:
+            updates["parent_id"] = None if args.parent_id == "" else args.parent_id
+        if args.implements_id is not None:
+            updates["implements_id"] = None if args.implements_id == "" else args.implements_id
+        if args.description is not None:
+            updates["description"] = args.description
+        if args.status is not None:
+            updates["status"] = args.status
+        if args.side_effects is not None:
+            updates["side_effects"] = [] if args.side_effects == "" else parse_side_effects(args.side_effects)
+
+        if args.properties_dsl is not None:
+            if args.properties_dsl == "":
+                updates["properties"] = None
+            else:
+                try:
+                    try:
+                        parsed = json.loads(args.properties_dsl)
+                    except ValueError:
+                        parsed = {}
+                        for item in args.properties_dsl.split(","):
+                            if ":" in item:
+                                k, v = item.split(":", 1)
+                                parsed[k.strip()] = v.strip()
+                    updates["properties"] = DSLCompiler.compile_shorthand(parsed)
+                except Exception as exc:
+                    print(f"Error parsing properties DSL: {exc}", file=sys.stderr)
+                    return 1
+
+        if args.inputs_dsl is not None:
+            if args.inputs_dsl == "":
+                updates["inputs"] = None
+            else:
+                try:
+                    try:
+                        parsed = json.loads(args.inputs_dsl)
+                    except ValueError:
+                        parsed = {}
+                        for item in args.inputs_dsl.split(","):
+                            if ":" in item:
+                                k, v = item.split(":", 1)
+                                parsed[k.strip()] = v.strip()
+                    updates["inputs"] = DSLCompiler.compile_shorthand(parsed)
+                except Exception as exc:
+                    print(f"Error parsing inputs DSL: {exc}", file=sys.stderr)
+                    return 1
+
+        if args.outputs_dsl is not None:
+            if args.outputs_dsl == "":
+                updates["outputs"] = None
+            else:
+                try:
+                    try:
+                        parsed = json.loads(args.outputs_dsl)
+                    except ValueError:
+                        parsed = {}
+                        for item in args.outputs_dsl.split(","):
+                            if ":" in item:
+                                k, v = item.split(":", 1)
+                                parsed[k.strip()] = v.strip()
+                    updates["outputs"] = DSLCompiler.compile_shorthand(parsed)
+                except Exception as exc:
+                    print(f"Error parsing outputs DSL: {exc}", file=sys.stderr)
+                    return 1
+
+        if args.spec_json is not None:
+            if args.spec_json == "":
+                updates["implementation_spec"] = None
+            else:
+                try:
+                    spec_dict = json.loads(args.spec_json)
+                    from engine.models import ImplementationSpec
+                    updates["implementation_spec"] = ImplementationSpec.model_validate(spec_dict)
+                except Exception as exc:
+                    print(f"Error parsing --spec-json: {exc}", file=sys.stderr)
+                    return 1
+        elif args.spec_file is not None:
+            if args.spec_file == "":
+                updates["implementation_spec"] = None
+            else:
+                try:
+                    spec_path = Path(args.spec_file).resolve()
+                    with open(spec_path, "r", encoding="utf-8") as f:
+                        spec_dict = json.load(f)
+                    from engine.models import ImplementationSpec
+                    updates["implementation_spec"] = ImplementationSpec.model_validate(spec_dict)
+                except Exception as exc:
+                    print(f"Error reading/parsing --spec-file: {exc}", file=sys.stderr)
+                    return 1
+
+        try:
+            downgraded = engine.update_component(args.id, updates)
+            engine.save()
+            print(f"Component '{args.id}' updated and saved successfully.")
+            if downgraded:
+                print("Cascading invalidation downgraded the following components to DECLARED stage:")
+                for cid in downgraded:
+                    print(f"  - {cid}")
+            return 0
+        except Exception as exc:
+            print(f"Error updating component '{args.id}': {exc}", file=sys.stderr)
+            return 1
 
     return 0
 

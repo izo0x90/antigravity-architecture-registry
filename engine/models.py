@@ -23,6 +23,13 @@ class ComponentStatus(StrEnum):
     DEPRECATED = "deprecated"
 
 
+class LifecycleStage(StrEnum):
+    DECLARED = "declared"
+    ARCH_APPROVED = "arch_approved"
+    PLAN_APPROVED = "plan_approved"
+    IMPLEMENTED = "implemented"
+
+
 # ==========================================
 # 2. Composite Named Structures & Unions
 # ==========================================
@@ -140,6 +147,38 @@ class LogicStep(BaseModel):
     )
 
 
+class ValidationToolDefinition(BaseModel):
+    """A project-wide validation tool template (e.g., custom linter, type-checker, test runner)."""
+    id: str = Field(
+        ...,
+        description="Unique identifier for the tool (e.g., 'ruff', 'cargo-clippy', 'tsc')."
+    )
+    executable: str = Field(
+        ...,
+        description="The physical binary/program to execute on the system path (e.g., 'ruff', 'mypy', 'cargo')."
+    )
+    default_args: List[str] = Field(
+        default_factory=list,
+        description="Default ordered arguments passed to the executable (e.g., ['check', '{targets}'])."
+    )
+
+
+class ComponentValidationRef(BaseModel):
+    """Specifies how a component binds to and executes a system validation tool."""
+    tool_id: str = Field(
+        ...,
+        description="Must match a registered ValidationToolDefinition.id."
+    )
+    targets: List[str] = Field(
+        ...,
+        description="Specific target files, directories, or modules to validate. Replaces the '{targets}' placeholder."
+    )
+    args: Optional[List[str]] = Field(
+        default=None,
+        description="If provided, completely overrides default_args list to prevent argument/flag conflicts."
+    )
+
+
 class ImplementationSpec(BaseModel):
     pattern_or_system: Optional[str] = Field(
         default=None,
@@ -152,6 +191,10 @@ class ImplementationSpec(BaseModel):
     logic_steps: List[LogicStep] = Field(
         default_factory=list,
         description="Sequential sequence of operations detailing the implementation logic."
+    )
+    validation: List[ComponentValidationRef] = Field(
+        default_factory=list,
+        description="Sequential list of declarative verification validations to execute."
     )
 
 
@@ -188,6 +231,10 @@ class Component(BaseModel):
     status: ComponentStatus = Field(
         default=ComponentStatus.NEW,
         description="Implementation or design lifecycle status."
+    )
+    stage: LifecycleStage = Field(
+        default=LifecycleStage.DECLARED,
+        description="The current state/stage in the development lifecycle."
     )
     location: OptionalLocation = Field(
         default=None,
@@ -280,6 +327,10 @@ class SystemRegistry(BaseModel):
     component_types: ComponentTypesMap = Field(
         default_factory=dict,
         description="Dynamic mapping of component types to their structural capability rules."
+    )
+    validation_tools: Dict[str, ValidationToolDefinition] = Field(
+        default_factory=dict,
+        description="Global registry of available validation tools."
     )
 
 

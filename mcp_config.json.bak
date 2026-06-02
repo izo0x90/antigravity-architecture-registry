@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "architecture_registry": {
+      "command": "uv",
+      "args": [
+        "run",
+        "mcp_server.py"
+      ],
+      "cwd": "${extensionPath}",
+      "env": {}
+    }
+  }
+}
+
