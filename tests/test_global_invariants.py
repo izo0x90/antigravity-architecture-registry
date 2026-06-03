@@ -177,5 +177,57 @@ class TestGlobalInvariants(unittest.TestCase):
         
         self.assertTrue(any("Circular reference loop detected" in e.details for e in errors), "Expected schema reference cycle error")
 
+    def test_class_implementation_spec_disallowed(self):
+        from engine.models import ImplementationSpec
+        engine = RegistryEngine(self.temp_file)
+        engine.seed_component_types()
+        
+        comp = Component(
+            id="class_comp",
+            name="Class Component",
+            type="class",
+            description="A class component defining an implementation spec",
+            implementation_spec=ImplementationSpec(
+                logic_steps=[],
+                invariants=[]
+            )
+        )
+        engine.registry.components[comp.id] = comp
+        
+        errors = ArchitectureValidator.validate_registry(engine.registry)
+        self.assertTrue(any("does not permit implementation specifications" in e.details for e in errors), "Expected capability spec error for class type")
+
+    def test_class_as_usage_node_caller_disallowed(self):
+        from engine.models import UsageNode
+        engine = RegistryEngine(self.temp_file)
+        engine.seed_component_types()
+        
+        # 1. Register caller class and callee function
+        caller = Component(
+            id="my_class",
+            name="My Class",
+            type="class",
+            description="Class"
+        )
+        callee = Component(
+            id="my_func",
+            name="My Function",
+            type="function",
+            description="Function"
+        )
+        engine.registry.components[caller.id] = caller
+        engine.registry.components[callee.id] = callee
+        
+        # 2. Add usage tree with class as caller
+        node = UsageNode(
+            node_id="test_node",
+            caller_id="my_class",
+            component_id="my_func",
+            description="Class calling function"
+        )
+        
+        errors = ArchitectureValidator.validate_usage_node(node, engine.registry.components, engine.registry.component_types)
+        self.assertTrue(any("is a container/namespace and cannot directly execute dependencies" in e.details for e in errors), "Expected callsite error for class caller")
+
 if __name__ == "__main__":
     unittest.main()

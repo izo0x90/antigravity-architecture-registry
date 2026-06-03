@@ -174,6 +174,39 @@ class TestCompiledContract(unittest.TestCase):
         self.assertIn("Inherited from 'base_interface'", contract)
         self.assertIn("Local", contract)
 
+    def test_modification_tasks_included_in_contract(self):
+        """Verify that modification tasks are formatted and included in compiled contract output."""
+        from engine.models import ModificationTask
+        registry = SystemRegistry(
+            component_types=self.component_types,
+            components={
+                "comp1": Component(
+                    id="comp1",
+                    name="Component 1",
+                    type="function",
+                    description="Test component",
+                    status="new",
+                    modification_tasks=[
+                        ModificationTask(task="Write helper modules", completed=True),
+                        ModificationTask(task="Fix bugs", completed=False)
+                    ]
+                )
+            }
+        )
+        
+        engine = RegistryEngine(Path("fake_path.json"))
+        engine.registry = registry
+        ctx = MockContext()
+        ctx.session.active_engine_instance = engine
+        
+        contract = self.run_async(compile_component_contract("comp1", ctx=ctx))
+        
+        # Verify that Planned Modification Tasks header exists
+        self.assertIn("## Planned Modification Tasks", contract)
+        # Verify both tasks and their statuses are present
+        self.assertIn("1. [COMPLETED] Write helper modules", contract)
+        self.assertIn("2. [PENDING] Fix bugs", contract)
+
 
 if __name__ == "__main__":
     unittest.main()

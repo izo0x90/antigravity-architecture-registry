@@ -53,6 +53,14 @@ class ComponentTypeRule(BaseModel):
         default=True,
         description="True if components of this type are permitted to define executable signatures (inputs, outputs)."
     )
+    allows_implementation_spec: bool = Field(
+        default=True,
+        description="True if components of this type can define an algorithm specification (logic steps/invariants)."
+    )
+    is_executable_caller: bool = Field(
+        default=True,
+        description="True if components of this type can act as the caller initiating downstream dependencies."
+    )
     allowed_parent_types: Optional[List[str]] = Field(
         default=None,
         description="Optional list of component types that are permitted to parent components of this type. If None, any parent type is allowed."

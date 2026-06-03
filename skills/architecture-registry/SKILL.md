@@ -122,19 +122,20 @@ The validator (`check_compatibility` or automated internal triggers) strictly va
 To ensure non-negotiable architectural compliance and keep your main context light, this plugin bundles two pre-configured, native subagents inside its `agents/` directory:
 
 1. **`ComponentPlanner`**
-   * **Role**: Analyzes target components, recursively resolves interface dependencies, and designs precise logic steps and invariants.
+   * **Role**: Analyzes the target component's contract and abstract `implementation_spec` (logic steps and invariants) to design the concrete, itemized development tasks (`modification_tasks`) required to implement it.
    * **Permissions**: Access to MCP registry tools (`enable_mcp_tools: true`); write access to code sandbox files disabled.
-   * **Mandatory First Step**: Must invoke `compile_component_contract` at startup to obtain the component’s authoritative design context before proposing specifications.
+   * **Mandatory First Step**: Must invoke `compile_component_contract` at startup to obtain the component’s authoritative design context before proposing and registering the `modification_tasks` list.
+   * **Promotion**: Once the `modification_tasks` are registered and approved, it invokes `plan_component` to promote the component to the `PLAN_APPROVED` stage.
 
 2. **`ComponentImplementer`**
-   * **Role**: Sandboxed coder. Implements code first via Test-Driven Development (TDD) and executes strict, local validation commands.
+   * **Role**: Sandboxed coder. Executes the planned `modification_tasks` itemized in the component's registry. Implements code first via Test-Driven Development (TDD), marks tasks as `completed: true`, and executes local validation commands.
    * **Permissions**: Access to both MCP registry tools (`enable_mcp_tools: true`) and full sandboxed filesystem/terminal capabilities (`enable_write_tools: true`).
-   * **Mandatory First Step**: Must invoke `compile_component_contract` at startup to obtain the component's authorized contract and list of required validation tools.
+   * **Mandatory First Step**: Must invoke `compile_component_contract` at startup to obtain the component's authorized contract, list of pending `modification_tasks`, and required validation tools.
 
 #### Choreography & Execution Loop:
-* **Task Spawning**: The parent agent invokes a subagent by passing its unique `TypeName` (`ComponentPlanner` or `ComponentImplementer`) to the `invoke_subagent` tool along with the target Component ID as the prompt (e.g. `Implement component "user_repository"`).
-* **Direct Contract Retrieval**: The subagent boots up and immediately runs the `compile_component_contract` tool to fetch its authoritative, fully resolved specification in Markdown. This completely avoids bloat in the parent's main context.
-* **Testing & Validation**: The implementer subagent creates its unit tests first, writes compliant core code, and runs the declarative verification commands (e.g. `mypy`, `ruff`, `unittest`) listed under the contract's validations section. Once passing, it reports its verification logs back to the orchestrator.
+* **Task Spawning**: The parent agent invokes a subagent by passing its unique `TypeName` (`ComponentPlanner` or `ComponentImplementer`) to the `invoke_subagent` tool along with the target Component ID as the prompt (e.g. `Plan modification tasks for component "user_repository"`).
+* **Direct Contract Retrieval**: The subagent boots up and immediately runs the `compile_component_contract` tool to fetch its authoritative, fully resolved specification and tasks in Markdown. This completely avoids bloat in the parent's main context.
+* **Testing & Validation**: The implementer subagent creates its unit tests first, writes compliant core code, satisfies all pending `modification_tasks`, and runs the declarative verification commands (e.g. `mypy`, `ruff`, `unittest`) listed under the contract's validations section. Once passing, it reports its verification logs back to the orchestrator.
 
 ---
 
@@ -239,14 +240,34 @@ To maintain a clean, separated development lifecycle, developers and calling age
    * **Exit Criteria**: Run compatibility checks on all active call sites, compile contracts, obtain explicit developer sign-off, and promote all components to `ARCH_APPROVED` stage.
 
 2. **Phase 2: Work Planning**
-   * **Goal**: Propose and specify algorithm logic steps and strict invariants for every component bottom-up.
-   * **Orchestration**: Call `get_next_actionable_components(action_type="plan")` to find which components are structurally ready to be planned (those with no unapproved transitive dependencies).
-   * **Exit Criteria**: Propose the `implementation_spec` for each ready component sequentially, compile contracts, obtain human developer approval, and call `plan_component` to promote them to `PLAN_APPROVED`.
+   * **Goal**: Analyze the abstract interface and `implementation_spec` (logic steps/invariants) to plan the concrete, itemized development tasks (`modification_tasks`) required to implement the spec.
+   * **Orchestration**: Call `get_next_actionable_components(action_type="plan")` to find which components are structurally ready to be planned.
+   
+   > [!IMPORTANT]
+   > **Mandatory Parent Pre-flight Check (Planning)**
+   > The parent coordinator MUST call `get_next_actionable_components(action_type="plan")` first. If the target component is not returned in the ready list, you are strictly forbidden from spawning `ComponentPlanner`. You must resolve the architectural prerequisites at the parent level first.
+   
+   > [!IMPORTANT]
+   > **Strict Work Planning Delegation Rule:**
+   > * **Do NOT Invoke `plan_component` Directly**: The parent coordinator/architect agent must **never** call `plan_component` or directly write/modify `modification_tasks` themselves.
+   > * **Mandatory Subagent Delegation**: Once a component is ready for work planning, you **must** delegate the task by spawning a `ComponentPlanner` subagent.
+   > * **Subagent Responsibility**: The `ComponentPlanner` is the sole entity authorized to compile the component's contract, analyze downstream/upstream dependencies, design precise code `modification_tasks` representing the work plan, obtain explicit human sign-off on the tasks list, and invoke `plan_component` to finalize.
+   > * **Hard Programmatic Gate**: The `plan_component` tool strictly rejects any component that is not returned as ready by `get_next_actionable_components(action_type="plan")`. There is zero manual override for this gate.
 
 3. **Phase 3: Verification & Implementation**
    * **Goal**: Implement high-quality physical code using Test-Driven Development (TDD) and run validation suites.
-   * **Orchestration**: Call `get_next_actionable_components(action_type="implement")` to retrieve the list of components ready for coding bottom-up (those whose direct dependencies are fully implemented).
-   * **Exit Criteria**: Write code, run local verification tools, compile the contract, prompt the user for merge approval, and call `implement_component` to transition to `IMPLEMENTED`.
+   * **Orchestration**: Call `get_next_actionable_components(action_type="implement")` to retrieve the list of components ready for coding bottom-up.
+   
+   > [!IMPORTANT]
+   > **Mandatory Parent Pre-flight Check (Implementation)**
+   > The parent coordinator MUST call `get_next_actionable_components(action_type="implement")` first. If the target component is not returned in the ready list, you are strictly forbidden from spawning `ComponentImplementer`. You must wait for all dependencies to be implemented first.
+   
+   > [!IMPORTANT]
+   > **Strict Division of Labor & Delegation Rule:**
+   > * **Do NOT Invoke `implement_component` Directly**: The parent coordinator/planner agent must **never** call `implement_component` directly themselves (even if it's a simple container class, skeleton-only, or namespace component).
+   > * **Mandatory Subagent Delegation**: Once a component is ready for implementation, you **must** delegate the task by spawning a `ComponentImplementer` subagent.
+   > * **Subagent Responsibility**: The `ComponentImplementer` is the sole entity authorized to write physical files/skeletons on disk, execute TDD validation commands, and call `implement_component` as its final step to verify and promote the component in the registry.
+   > * **Hard Programmatic Gate**: The `implement_component` tool strictly rejects any component that is not returned as ready by `get_next_actionable_components(action_type="implement")`. There is zero manual override for this gate.
 
 ### C. Strict ReAct (Reason-Act) Orchestration Protocol
 

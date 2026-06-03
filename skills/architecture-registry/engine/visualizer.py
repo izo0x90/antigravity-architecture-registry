@@ -254,6 +254,202 @@ class Visualizer:
             else:
                 lines.append(f"  class {comp.id} dat;")
                 
+    @classmethod
+    def _find_referenced_titles(cls, schema: Any) -> List[str]:
+        titles = []
+        if isinstance(schema, dict):
+            title = schema.get("title")
+            if title:
+                titles.append(title)
+            for val in schema.values():
+                titles.extend(cls._find_referenced_titles(val))
+        elif isinstance(schema, list):
+            for item in schema:
+                titles.extend(cls._find_referenced_titles(item))
+        return titles
+
+    @classmethod
+    def _format_schema_pseudocode(cls, schema: Any, level: int = 0) -> List[str]:
+        if not isinstance(schema, dict):
+            return [str(schema)]
+        
+        json_schema_keywords = {"type", "properties", "items", "enum", "oneOf", "anyOf", "allOf", "title", "required"}
+        has_schema_keywords = any(k in schema for k in json_schema_keywords)
+        
+        title = schema.get("title")
+        if title:
+            return [title]
+
+        if not has_schema_keywords and schema:
+            lines = ["{"]
+            indent = "  " * (level + 1)
+            for k, v in schema.items():
+                val_lines = cls._format_schema_pseudocode(v, level + 1)
+                if len(val_lines) == 1:
+                    lines.append(f"{indent}{k}: {val_lines[0]}")
+                else:
+                    lines.append(f"{indent}{k}: {val_lines[0]}")
+                    for vl in val_lines[1:]:
+                        lines.append(f"{indent}{vl}")
+            lines.append("  " * level + "}")
+            return lines
+
+        type_str = schema.get("type", "any")
+        
+        if type_str == "object":
+            properties = schema.get("properties", {})
+            required = schema.get("required", [])
+            if not properties:
+                return ["{}"]
+            lines = ["{"]
+            indent = "  " * (level + 1)
+            for prop_name, prop_schema in properties.items():
+                is_req = prop_name in required
+                req_suffix = "" if is_req else "?"
+                prop_lines = cls._format_schema_pseudocode(prop_schema, level + 1)
+                if len(prop_lines) == 1:
+                    lines.append(f"{indent}{prop_name}{req_suffix}: {prop_lines[0]}")
+                else:
+                    lines.append(f"{indent}{prop_name}{req_suffix}: {prop_lines[0]}")
+                    for pl in prop_lines[1:]:
+                        lines.append(f"{indent}{pl}")
+            lines.append("  " * level + "}")
+            return lines
+            
+        elif type_str == "array":
+            items = schema.get("items")
+            if items:
+                item_lines = cls._format_schema_pseudocode(items, level)
+                if len(item_lines) == 1:
+                    return [f"{item_lines[0]}[]"]
+                else:
+                    return ["[", *[f"  {l}" for l in item_lines], "]"]
+            return ["array"]
+            
+        elif type_str == "enum":
+            enum_vals = schema.get("enum", [])
+            if enum_vals:
+                return [f"enum ({' | '.join(map(str, enum_vals))})"]
+            return ["enum"]
+            
+        return [type_str]
+
+    @classmethod
+    def _compile_component_to_pseudocode(
+        cls,
+        comp: Component,
+        components: ComponentRegistryMap,
+        component_types: ComponentTypesMap
+    ) -> List[str]:
+        # 1. Fetch dynamic component type rule or fallback to a default
+        rule = component_types.get(comp.type)
+        if not rule:
+            from .models import ComponentTypeRule
+            rule = ComponentTypeRule(allows_properties=True, allows_signature=True)
+
+        # 2. Build docstring/comments
+        lines = ["/**"]
+        desc = comp.description or "No description provided."
+        lines.append(f" * {comp.name} — {desc}")
+        lines.append(" * ")
+        lines.append(f" * @type {comp.type} | @status {comp.status} | @stage {comp.stage}")
+        if comp.parent_id:
+            lines.append(f" * @parent {comp.parent_id}")
+        if comp.implements_id:
+            lines.append(f" * @implements {comp.implements_id}")
+        if comp.side_effects:
+            lines.append(" * @side_effects")
+            for se in comp.side_effects:
+                lines.append(f" *   - {se.target}: {se.description}")
+        lines.append(" */")
+
+        # 3. Resolve signature if supported
+        inputs = None
+        outputs = None
+        if rule.allows_signature:
+            inputs, outputs = resolve_implements_signature(comp, components)
+
+        # 4. Format inputs
+        inputs_str = ""
+        if rule.allows_signature:
+            if inputs:
+                props = None
+                if isinstance(inputs, dict):
+                    if "properties" in inputs:
+                        props = inputs.get("properties", {})
+                    elif not any(k in inputs for k in {"type", "items", "enum"}):
+                        props = inputs
+                
+                if props:
+                    params = []
+                    for p_name, p_schema in props.items():
+                        p_type = cls._format_schema_pseudocode(p_schema)[0]
+                        params.append(f"{p_name}: {p_type}")
+                    inputs_str = ", ".join(params)
+                else:
+                    inputs_str = cls._format_schema_pseudocode(inputs)[0]
+
+        # 5. Format outputs
+        outputs_str = "void"
+        if rule.allows_signature:
+            if outputs:
+                props = None
+                if isinstance(outputs, dict):
+                    if "properties" in outputs:
+                        props = outputs.get("properties", {})
+                    elif not any(k in outputs for k in {"type", "items", "enum"}):
+                        props = outputs
+                
+                if props:
+                    if len(props) == 1:
+                        outputs_str = cls._format_schema_pseudocode(list(props.values())[0])[0]
+                    else:
+                        params = []
+                        for p_name, p_schema in props.items():
+                            p_type = cls._format_schema_pseudocode(p_schema)[0]
+                            params.append(f"{p_name}: {p_type}")
+                        outputs_str = f"{{ {', '.join(params)} }}"
+                else:
+                    outputs_str = cls._format_schema_pseudocode(outputs)[0]
+
+        # 6. Format properties/state
+        prop_lines = []
+        if rule.allows_properties and comp.properties:
+            prop_lines = cls._format_schema_pseudocode(comp.properties)
+
+        # 7. Render dynamic code construct based purely on capability rules
+        if rule.allows_signature and not rule.allows_properties:
+            lines.append(f"function {comp.id}({inputs_str}): {outputs_str}")
+            
+        elif rule.allows_properties and not rule.allows_signature:
+            if prop_lines and prop_lines[0] == "{":
+                lines.append(f"interface {comp.id} {{")
+                for pl in prop_lines[1:]:
+                    lines.append(f"  {pl}" if pl != "}" else "}")
+            else:
+                lines.append(f"interface {comp.id} {{")
+                for pl in prop_lines:
+                    lines.append(f"  {pl}")
+                lines.append("}")
+                
+        elif rule.allows_signature and rule.allows_properties:
+            lines.append(f"class {comp.id} {{")
+            if prop_lines:
+                lines.append("  // State/Properties")
+                if prop_lines[0] == "{":
+                    for pl in prop_lines[1:-1]:
+                        lines.append(f"  {pl}")
+                else:
+                    for pl in prop_lines:
+                        lines.append(f"  {pl}")
+                lines.append("")
+            lines.append("  // Call Interface")
+            lines.append(f"  call({inputs_str}): {outputs_str}")
+            lines.append("}")
+            
+        else:
+            lines.append(f"namespace {comp.id} {{}}")
+
         return lines
 
     @classmethod
@@ -321,18 +517,61 @@ class Visualizer:
         lines.append("---")
         lines.append("")
 
-        # 4. Collect referenced components recursively
+        # 4. Collect direct components recursively (including callers, parents, and implemented contracts)
         collected_ids: List[str] = []
         def collect(node: UsageNode) -> None:
+            if node.caller_id and node.caller_id in components and node.caller_id not in collected_ids:
+                collected_ids.append(node.caller_id)
+                caller_comp = components.get(node.caller_id)
+                if caller_comp and caller_comp.parent_id and caller_comp.parent_id in components and caller_comp.parent_id not in collected_ids:
+                    collected_ids.append(caller_comp.parent_id)
             if node.component_id and node.component_id not in collected_ids:
                 collected_ids.append(node.component_id)
                 comp = components.get(node.component_id)
-                if comp and comp.implements_id and comp.implements_id not in collected_ids:
-                    collected_ids.append(comp.implements_id)
+                if comp:
+                    if comp.implements_id and comp.implements_id not in collected_ids:
+                        collected_ids.append(comp.implements_id)
+                    if comp.parent_id and comp.parent_id in components and comp.parent_id not in collected_ids:
+                        collected_ids.append(comp.parent_id)
             for child in node.dependencies:
                 collect(child)
 
         collect(target_node)
+
+        # 4b. Collect transitively referenced custom data objects/enums recursively
+        referenced_ids: List[str] = []
+        visited_schemas: List[str] = []
+
+        def collect_schemas(schema: Any) -> None:
+            if not schema:
+                return
+            titles = cls._find_referenced_titles(schema)
+            for title in titles:
+                if title not in collected_ids and title not in referenced_ids:
+                    referenced_ids.append(title)
+                    ref_comp = components.get(title)
+                    if ref_comp and ref_comp.id not in visited_schemas:
+                        visited_schemas.append(ref_comp.id)
+                        if ref_comp.properties:
+                            collect_schemas(ref_comp.properties)
+                        # Resolve interfaces to find nested types inside them
+                        actual_in, actual_out = resolve_implements_signature(ref_comp, components)
+                        if actual_in:
+                            collect_schemas(actual_in)
+                        if actual_out:
+                            collect_schemas(actual_out)
+
+        # Tracing from all direct components
+        for cid in collected_ids:
+            comp = components.get(cid)
+            if comp:
+                actual_in, actual_out = resolve_implements_signature(comp, components)
+                if actual_in:
+                    collect_schemas(actual_in)
+                if actual_out:
+                    collect_schemas(actual_out)
+                if comp.properties:
+                    collect_schemas(comp.properties)
 
         # 5. Component Specifications Rendering
         lines.append("## 3. Referenced Component Contracts")
@@ -354,42 +593,11 @@ class Visualizer:
             lines.append(f"* **Implements Contract**: `{comp.implements_id or 'None (Direct Contract)'}`")
             lines.append("")
 
-            # 📋 Interfaces & Schemas
-            lines.append("#### 📋 Interface & Data Schemas")
-            
-            # Helper to get signature or implements
-            actual_inputs, actual_outputs = resolve_implements_signature(comp, components)
-            
-            if actual_inputs is not None:
-                lines.append("* **Inputs DSL/Schema**:")
-                lines.append("```json")
-                lines.append(json.dumps(actual_inputs, indent=2))
-                lines.append("```")
-            else:
-                lines.append("* **Inputs DSL/Schema**: `None`")
-
-            if actual_outputs is not None:
-                lines.append("* **Outputs DSL/Schema**:")
-                lines.append("```json")
-                lines.append(json.dumps(actual_outputs, indent=2))
-                lines.append("```")
-            else:
-                lines.append("* **Outputs DSL/Schema**: `None`")
-
-            if comp.properties is not None:
-                lines.append("* **State/Properties DSL/Schema**:")
-                lines.append("```json")
-                lines.append(json.dumps(comp.properties, indent=2))
-                lines.append("```")
-            else:
-                lines.append("* **State/Properties DSL/Schema**: `None`")
-
-            if comp.side_effects:
-                lines.append("* **Declared Side Effects**:")
-                for se in comp.side_effects:
-                    lines.append(f"  - `{se.target}`: {se.description}")
-            else:
-                lines.append("* **Declared Side Effects**: `None (Pure Calculation)`")
+            # 📋 TypeScript-like Contract Representation
+            lines.append("#### 📋 TypeScript-like Contract Representation")
+            lines.append("```typescript")
+            lines.extend(cls._compile_component_to_pseudocode(comp, components, component_types))
+            lines.append("```")
             lines.append("")
 
             # ⚙️ Implementation Specification
@@ -443,6 +651,98 @@ class Visualizer:
             lines.append("")
             lines.append("---")
             lines.append("")
+
+        # 6. Referenced Data Types & Enums (Section 4)
+        lines.append("## 4. Referenced Data Types & Enums")
+        lines.append("")
+        if not referenced_ids:
+            lines.append("*No referenced custom data types or enums detected.*")
+            lines.append("")
+        else:
+            # Separate referenced components into those subject to change and those that are stable
+            changing_comps: List[Tuple[str, Component]] = []
+            stable_comps: List[Tuple[str, Component]] = []
+            missing_ids: List[str] = []
+
+            for ref_id in referenced_ids:
+                ref_comp = components.get(ref_id)
+                if not ref_comp:
+                    missing_ids.append(ref_id)
+                elif ref_comp.status in ("new", "modifying", "modified") or ref_comp.stage == "declared":
+                    changing_comps.append((ref_id, ref_comp))
+                else:
+                    stable_comps.append((ref_id, ref_comp))
+
+            if missing_ids:
+                lines.append("### 4.1 Missing/Unregistered Types")
+                lines.append("> [!WARNING]")
+                lines.append("> The following referenced types are not defined in the registry:")
+                for m_id in missing_ids:
+                    lines.append(f"> - `{m_id}`")
+                lines.append("")
+
+            if changing_comps:
+                lines.append("### 4.1 Data Types & Enums Subject to Change")
+                lines.append("The following data structures and enumerations are subject to change. Please review their definitions below:")
+                lines.append("")
+                for ref_id, ref_comp in changing_comps:
+                    lines.append(f"#### `{ref_id}`")
+                    lines.append(f"* **Type**: `{ref_comp.type}` | **Status**: `{ref_comp.status}` | **Stage**: `{ref_comp.stage}`")
+                    if ref_comp.description:
+                        lines.append(f"* **Description**: {ref_comp.description}")
+                    lines.append("")
+                    lines.append("```typescript")
+                    lines.extend(cls._compile_component_to_pseudocode(ref_comp, components, component_types))
+                    lines.append("```")
+                    lines.append("")
+                    # Feedback checklist for types
+                    lines.append("##### 💬 Feedback on Type Structure")
+                    lines.append("- [ ] Approved")
+                    lines.append("- [ ] Request Changes")
+                    lines.append("- **Comments & Instructions**:")
+                    lines.append("  - *Leave your comments, corrections, or design feedback for this type structure here.*")
+                    lines.append("")
+                    lines.append("---")
+                    lines.append("")
+
+            if stable_comps:
+                lines.append("### 4.2 Stable / Unchanged References")
+                lines.append("The following referenced types are existing and stable, so their structures are omitted from full detail but referenced here for context:")
+                for ref_id, ref_comp in stable_comps:
+                    desc_suffix = f" — {ref_comp.description}" if ref_comp.description else ""
+                    lines.append(f"- `{ref_id}` (`{ref_comp.type}` / stage: `{ref_comp.stage}` / status: `{ref_comp.status}`){desc_suffix}")
+                lines.append("")
+
+        # 7. Unreferenced Components in Registry (Section 5)
+        unreferenced_comps = [
+            comp for comp in components.values()
+            if comp.id not in collected_ids and comp.id not in referenced_ids
+        ]
+
+        if unreferenced_comps:
+            lines.append("## 5. Other Unreferenced Components in Registry")
+            lines.append("")
+            lines.append("The following components are defined in the registry but are not actively called or transitively referenced in this specific workflow tree:")
+            lines.append("")
+            for idx, ref_comp in enumerate(unreferenced_comps, 1):
+                lines.append(f"### 5.{idx} Component: `{ref_comp.id}`")
+                lines.append(f"* **Name**: {ref_comp.name}")
+                lines.append(f"* **Type**: `{ref_comp.type}` | **Status**: `{ref_comp.status}` | **Stage**: `{ref_comp.stage}`")
+                if ref_comp.description:
+                    lines.append(f"* **Description**: {ref_comp.description}")
+                lines.append("")
+                lines.append("```typescript")
+                lines.extend(cls._compile_component_to_pseudocode(ref_comp, components, component_types))
+                lines.append("```")
+                lines.append("")
+                lines.append("##### 💬 Feedback on Component Structure")
+                lines.append("- [ ] Approved")
+                lines.append("- [ ] Request Changes")
+                lines.append("- **Comments & Instructions**:")
+                lines.append("  - *Leave your comments, corrections, or design feedback for this component structure here.*")
+                lines.append("")
+                lines.append("---")
+                lines.append("")
 
         return lines
 

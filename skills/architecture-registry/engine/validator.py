@@ -432,6 +432,13 @@ class ArchitectureValidator:
                 details=f"Type '{comp.type}' does not permit executable signatures on component '{comp.id}'"
             )
 
+        if not rule.allows_implementation_spec and comp.implementation_spec is not None:
+            raise CompatibilityError(
+                node_id="",
+                component_id=comp.id,
+                details=f"Type '{comp.type}' does not permit implementation specifications on component '{comp.id}'"
+            )
+
     @classmethod
     def verify_parenting(
         cls,
@@ -530,6 +537,16 @@ class ArchitectureValidator:
                     details=f"Caller component '{node.caller_id}' is referenced but not registered in the system."
                 )
             )
+        else:
+            caller_rule = component_types.get(caller.type)
+            if caller_rule and not caller_rule.is_executable_caller:
+                errors.append(
+                    CompatibilityError(
+                        node_id=node.node_id,
+                        component_id=node.caller_id,
+                        details=f"Caller component '{node.caller_id}' of type '{caller.type}' is a container/namespace and cannot directly execute dependencies."
+                    )
+                )
             
         # 2. Fetch and verify target (callee) component
         callee = components.get(node.component_id)
@@ -652,10 +669,10 @@ def get_next_actionable_components(registry: SystemRegistry, action_type: str) -
     actionable = []
     
     if action_type == "plan":
-        # Ready to plan if current stage is DECLARED, and ALL transitive dependencies are at least ARCH_APPROVED (not DECLARED)
+        # Ready to plan if current stage is ARCH_APPROVED, and ALL transitive dependencies are at least ARCH_APPROVED (not DECLARED)
         for cid in topo_order:
             comp = registry.components.get(cid)
-            if not comp or comp.stage != LifecycleStage.DECLARED:
+            if not comp or comp.stage != LifecycleStage.ARCH_APPROVED:
                 continue
                 
             # Scan transitive dependencies to make sure none are in DECLARED
@@ -946,6 +963,14 @@ def compile_contract_markdown(comp: Component, registry: SystemRegistry) -> str:
             doc.append(step)
     else:
         doc.append("*No logic steps specified.*")
+
+    doc.append("\n## Planned Modification Tasks")
+    if comp.modification_tasks:
+        for idx, task_obj in enumerate(comp.modification_tasks, 1):
+            status_str = "[COMPLETED]" if task_obj.completed else "[PENDING]"
+            doc.append(f"{idx}. {status_str} {task_obj.task}")
+    else:
+        doc.append("*No modification tasks registered.*")
 
     doc.append("\n## Resolved Verification Commands")
     if validation_commands:

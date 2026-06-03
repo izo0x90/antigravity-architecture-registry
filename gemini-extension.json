@@ -6,9 +6,9 @@
       "command": "uv",
       "args": [
         "run",
-        "mcp_server.py"
+        "/Users/izo/code/antigravity_architecture_registry/skills/architecture-registry/mcp_server.py"
       ],
-      "cwd": "${extensionPath}",
+      "cwd": "/Users/izo/code/antigravity_architecture_registry",
       "env": {}
     }
   }

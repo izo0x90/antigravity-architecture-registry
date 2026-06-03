@@ -8,9 +8,17 @@
 # ///
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Optional, Union, List
 from mcp.server.fastmcp import FastMCP, Context
+
+# Ensure the directory containing this script is in sys.path so engine can be imported
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+if _script_dir not in sys.path:
+    sys.path.insert(0, _script_dir)
+
 
 from engine.engine import RegistryEngine
 from engine.models import Component, UsageNode, SideEffect
@@ -74,6 +82,24 @@ def parse_implementation_spec(spec_arg: Optional[Union[str, dict]]) -> Optional[
         except Exception as exc:
             raise ValueError(f"Failed to parse implementation spec JSON string: {str(exc)}")
     return None
+
+
+def parse_modification_tasks(tasks_arg: Optional[Union[str, list]]) -> Optional[list]:
+    """Helper to parse raw JSON string or list representing modification tasks."""
+    if not tasks_arg:
+        return None
+    if isinstance(tasks_arg, list):
+        return tasks_arg
+    if isinstance(tasks_arg, str):
+        tasks_arg = tasks_arg.strip()
+        if not tasks_arg:
+            return None
+        try:
+            return json.loads(tasks_arg)
+        except Exception as exc:
+            raise ValueError(f"Failed to parse modification tasks JSON string: {str(exc)}")
+    return None
+
 
 
 def parse_shorthand_str(shorthand_str: Optional[str]) -> Optional[Union[str, dict]]:
@@ -316,6 +342,7 @@ async def update_component(
     outputs_dsl: Optional[str] = None,
     side_effects_csv: Optional[str] = None,
     implementation_spec: Optional[Union[str, dict]] = None,
+    modification_tasks: Optional[Union[str, list]] = None,
     category: Optional[str] = None,  # Backward-compatibility fallback
     ctx: Context = None,
 ) -> ToolResponseText:
@@ -354,6 +381,10 @@ async def update_component(
             CRITICAL RULES:
               1. Logic steps sequence must be exactly unique and contiguous starting from 1 to N (e.g., [1, 2, 3]). Missing, duplicate, or out-of-order sequence indices fail validation.
               2. Overridden invariants (inheriting from parent 'implements_id' interfaces with matching name) must strictly preserve their invariant type (e.g., a pre_condition cannot be overridden as a post_condition).
+        modification_tasks: Optional updated list of planned/completed modification tasks.
+            Can be a JSON string or a list containing:
+              - A string (e.g., "Implement function body") which will default to an uncompleted task, or
+              - A dictionary with schema: {"task": "str (Description)", "completed": bool}
         category: Backward compatibility parameter, mapped to 'type' if type is omitted.
     """
     if ctx is None:
@@ -419,6 +450,25 @@ async def update_component(
                 updates["implementation_spec"] = None
         except Exception as exc:
             return f"Error parsing/validating implementation spec: {str(exc)}"
+
+    if modification_tasks is not None:
+        try:
+            tasks_list = parse_modification_tasks(modification_tasks)
+            if tasks_list:
+                from engine.models import ModificationTask
+                parsed_tasks = []
+                for item in tasks_list:
+                    if isinstance(item, str):
+                        parsed_tasks.append(ModificationTask(task=item, completed=False))
+                    elif isinstance(item, dict):
+                        parsed_tasks.append(ModificationTask.model_validate(item))
+                    else:
+                        raise ValueError(f"Invalid item type in modification tasks list: {item.__class__.__name__}")
+                updates["modification_tasks"] = [t.model_dump() for t in parsed_tasks]
+            else:
+                updates["modification_tasks"] = []
+        except Exception as exc:
+            return f"Error parsing/validating modification tasks: {str(exc)}"
 
     try:
         downgraded = engine.update_component(id, updates)
@@ -815,41 +865,26 @@ async def plan_component(id: str, ctx: Context = None) -> ToolResponseText:
     if not comp:
         return f"Error: Component '{id}' does not exist in registry."
 
-    # 1. Prerequisite Check
-    from engine.models import LifecycleStage
-    if comp.stage != LifecycleStage.ARCH_APPROVED:
-        return f"Error: Component '{id}' must be in ARCH_APPROVED stage before planning. Current stage: {comp.stage.upper()}."
+    # 1. Hard State-Machine Gate
+    from engine.validator import get_next_actionable_components as engine_get_next
+    actionable = engine_get_next(engine.registry, "plan")
+    if id not in actionable:
+        from engine.models import LifecycleStage
+        return (
+            f"Error: Hard State-Machine Gate. Component '{id}' is not ready for planning.\n"
+            f"Requirements:\n"
+            f"- It must be in ARCH_APPROVED stage (Current Stage: {comp.stage.upper()}).\n"
+            f"- All of its transitive dependencies must be approved (stage >= ARCH_APPROVED, no DECLARED dependencies)."
+        )
 
-    # 2. Topological Guard
-    from engine.validator import get_component_dependencies
-    visited = set()
-    queue = get_component_dependencies(comp)
-    declared_deps = []
-    while queue:
-        curr = queue.pop(0)
-        if curr in visited:
-            continue
-        visited.add(curr)
-        dep_comp = engine.registry.components.get(curr)
-        if dep_comp:
-            if dep_comp.stage == LifecycleStage.DECLARED:
-                declared_deps.append(curr)
-            for dep in get_component_dependencies(dep_comp):
-                if dep not in visited:
-                    queue.append(dep)
-
-    if declared_deps:
-        err_msg = f"Error: Topological guard block. The following dependencies of '{id}' are still in DECLARED stage. Please run approve-arch on them first:\n"
-        err_msg += "\n".join(f"- {dep}" for dep in declared_deps)
-        return err_msg
-
-    # 3. Programmatic Gate (contiguous steps, overridden invariants)
+    # 2. Programmatic Gate (contiguous steps, overridden invariants)
     from engine.validator import check_component_compatibility
     errors = check_component_compatibility(engine.registry, id)
     if errors:
         return f"Programmatic work plan check failed for '{id}':\n" + "\n".join(f"- {err}" for err in errors)
 
-    # 4. Result
+    # 3. Result
+    from engine.models import LifecycleStage
     comp.stage = LifecycleStage.PLAN_APPROVED
     engine.save()
     return f"Success: Work plan approved for '{id}'! Stage set to PLAN_APPROVED."
@@ -871,26 +906,19 @@ async def implement_component(id: str, ctx: Context = None) -> ToolResponseText:
     if not comp:
         return f"Error: Component '{id}' does not exist in registry."
 
-    # 1. Prerequisite Check
-    from engine.models import LifecycleStage
-    if comp.stage != LifecycleStage.PLAN_APPROVED:
-        return f"Error: Component '{id}' must be in PLAN_APPROVED stage before implementing. Current stage: {comp.stage.upper()}."
+    # 1. Hard State-Machine Gate
+    from engine.validator import get_next_actionable_components as engine_get_next
+    actionable = engine_get_next(engine.registry, "implement")
+    if id not in actionable:
+        from engine.models import LifecycleStage
+        return (
+            f"Error: Hard State-Machine Gate. Component '{id}' is not ready for implementation.\n"
+            f"Requirements:\n"
+            f"- It must be in PLAN_APPROVED stage (Current Stage: {comp.stage.upper()}).\n"
+            f"- All of its direct dependencies must be fully IMPLEMENTED."
+        )
 
-    # 2. Topological Guard
-    from engine.validator import get_component_dependencies
-    direct_deps = get_component_dependencies(comp)
-    non_implemented_deps = []
-    for dep in direct_deps:
-        dep_comp = engine.registry.components.get(dep)
-        if dep_comp and dep_comp.stage != LifecycleStage.IMPLEMENTED:
-            non_implemented_deps.append((dep, dep_comp.stage))
-
-    if non_implemented_deps:
-        err_msg = f"Error: Topological guard block. Direct dependencies of '{id}' must be in IMPLEMENTED stage before implementation can proceed. Missing direct dependencies:\n"
-        err_msg += "\n".join(f"- {dep} (Current Stage: {stage.upper()})" for dep, stage in non_implemented_deps)
-        return err_msg
-
-    # 3. Programmatic Gate
+    # 2. Programmatic Gate
     from engine.validator import run_component_validations
     success, logs = run_component_validations(comp, engine.registry)
 
@@ -899,10 +927,17 @@ async def implement_component(id: str, ctx: Context = None) -> ToolResponseText:
         result_msg += f"Error: Programmatic verification failed for component '{id}'. Validation tools returned non-zero exit codes."
         return result_msg
 
-    # 4. Result
+    # 3. Result
+    from engine.models import LifecycleStage
     comp.stage = LifecycleStage.IMPLEMENTED
+    
+    # Programmatically mark all planned tasks as completed
+    if comp.modification_tasks:
+        for task in comp.modification_tasks:
+            task.completed = True
+
     engine.save()
-    result_msg += f"Success: Component '{id}' implementation verified! Stage set to IMPLEMENTED."
+    result_msg += f"Success: Component '{id}' implementation verified! Stage set to IMPLEMENTED and all planned tasks marked as completed."
     return result_msg
 
 

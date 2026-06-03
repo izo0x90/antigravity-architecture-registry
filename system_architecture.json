@@ -1,0 +1,932 @@
+{
+  "components": {
+    "operation_type": {
+      "id": "operation_type",
+      "name": "Operation Type Enum",
+      "type": "enum",
+      "parent_id": null,
+      "implements_id": null,
+      "description": "Enumeration of allowed mathematical operations",
+      "status": "new",
+      "stage": "implemented",
+      "location": null,
+      "properties": {
+        "type": "object",
+        "properties": {
+          "add": {
+            "type": "string"
+          },
+          "subtract": {
+            "type": "string"
+          },
+          "multiply": {
+            "type": "string"
+          },
+          "divide": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "add",
+          "subtract",
+          "multiply",
+          "divide"
+        ]
+      },
+      "inputs": null,
+      "outputs": null,
+      "side_effects": [],
+      "implementation_spec": null,
+      "modification_tasks": [
+        {
+          "task": "Create the directory structure 'calculator/' if it does not exist, and initialize with '__init__.py'.",
+          "completed": true
+        },
+        {
+          "task": "In 'calculator/models.py', import standard 'enum' module.",
+          "completed": true
+        },
+        {
+          "task": "Define the 'OperationType' enum class, deriving from 'str' and 'enum.Enum'.",
+          "completed": true
+        },
+        {
+          "task": "Declare enum members: 'add' with value 'add', 'subtract' with value 'subtract', 'multiply' with value 'multiply', and 'divide' with value 'divide' to match the system properties.",
+          "completed": true
+        },
+        {
+          "task": "Create unit tests in 'tests/test_models.py' using standard 'unittest' framework to verify 'OperationType' members and values.",
+          "completed": true
+        },
+        {
+          "task": "Execute local verification via 'python -m unittest tests/test_models.py' and verify that code compiles cleanly and passes type checking.",
+          "completed": true
+        }
+      ]
+    },
+    "calculation_request": {
+      "id": "calculation_request",
+      "name": "Calculation Request DTO",
+      "type": "data_object",
+      "parent_id": null,
+      "implements_id": null,
+      "description": "Data transfer object containing operands and operation type",
+      "status": "new",
+      "stage": "implemented",
+      "location": null,
+      "properties": {
+        "type": "object",
+        "properties": {
+          "operand_a": {
+            "type": "number"
+          },
+          "operand_b": {
+            "type": "number"
+          },
+          "operation": {
+            "type": "object",
+            "title": "operation_type"
+          }
+        },
+        "required": [
+          "operand_a",
+          "operand_b",
+          "operation"
+        ]
+      },
+      "inputs": null,
+      "outputs": null,
+      "side_effects": [],
+      "implementation_spec": null,
+      "modification_tasks": [
+        {
+          "task": "Ensure 'calculator/models.py' exists and import 'dataclass' from 'dataclasses', and 'OperationType' from '.models'.",
+          "completed": true
+        },
+        {
+          "task": "Define the 'CalculationRequest' class with the '@dataclass' decorator.",
+          "completed": true
+        },
+        {
+          "task": "Declare attributes 'operand_a' as float, 'operand_b' as float, and 'operation' as 'OperationType'.",
+          "completed": true
+        },
+        {
+          "task": "Add unit tests in 'tests/test_models.py' using the 'unittest' framework to verify 'CalculationRequest' can be instantiated with valid floats and 'OperationType' values.",
+          "completed": true
+        },
+        {
+          "task": "Verify code compilation, type safety, and linting of 'CalculationRequest' using local validation tools (pytest, mypy, ruff).",
+          "completed": true
+        }
+      ]
+    },
+    "calculation_result": {
+      "id": "calculation_result",
+      "name": "Calculation Result DTO",
+      "type": "data_object",
+      "parent_id": null,
+      "implements_id": null,
+      "description": "Data transfer object containing calculation result and metadata",
+      "status": "new",
+      "stage": "implemented",
+      "location": null,
+      "properties": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "number"
+          },
+          "request": {
+            "type": "object",
+            "title": "calculation_request"
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result",
+          "request",
+          "timestamp"
+        ]
+      },
+      "inputs": null,
+      "outputs": null,
+      "side_effects": [],
+      "implementation_spec": null,
+      "modification_tasks": [
+        {
+          "task": "Ensure 'calculator/models.py' exists and import 'dataclass' from 'dataclasses', and 'CalculationRequest' from '.models'.",
+          "completed": true
+        },
+        {
+          "task": "Define the 'CalculationResult' class with the '@dataclass' decorator.",
+          "completed": true
+        },
+        {
+          "task": "Declare attributes 'result' as float, 'request' as 'CalculationRequest', and 'timestamp' as str.",
+          "completed": true
+        },
+        {
+          "task": "Add unit tests in 'tests/test_models.py' using the 'unittest' framework to verify 'CalculationResult' instantiates properly with correct field types.",
+          "completed": true
+        },
+        {
+          "task": "Verify code compliance, type safety, and linting of 'CalculationResult' using local validation tools (pytest, mypy, ruff).",
+          "completed": true
+        }
+      ]
+    },
+    "math_validator": {
+      "id": "math_validator",
+      "name": "Math Validator Class",
+      "type": "class",
+      "parent_id": null,
+      "implements_id": null,
+      "description": "Validates math calculations",
+      "status": "new",
+      "stage": "implemented",
+      "location": null,
+      "properties": null,
+      "inputs": null,
+      "outputs": null,
+      "side_effects": [],
+      "implementation_spec": null,
+      "modification_tasks": [
+        {
+          "task": "Create 'calculator/validator.py' file if it does not exist, and import required type hints.",
+          "completed": true
+        },
+        {
+          "task": "Declare the 'MathValidator' class skeleton to act as the namespace holder for calculation validation methods.",
+          "completed": true
+        },
+        {
+          "task": "Expose 'MathValidator' class from the 'calculator' package in 'calculator/__init__.py' to support clean package-level imports.",
+          "completed": true
+        },
+        {
+          "task": "Add unit tests in 'tests/test_math_validator.py' using the 'unittest' framework to verify that 'MathValidator' class is importable and instantiable.",
+          "completed": true
+        },
+        {
+          "task": "Verify implementation using local linting, type-checking, and testing commands.",
+          "completed": true
+        }
+      ]
+    },
+    "math_validator_validate": {
+      "id": "math_validator_validate",
+      "name": "Validate Request Method",
+      "type": "function",
+      "parent_id": "math_validator",
+      "implements_id": null,
+      "description": "Ensures calculation request is mathematically valid",
+      "status": "modifying",
+      "stage": "implemented",
+      "location": null,
+      "properties": null,
+      "inputs": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "title": "calculation_request"
+          }
+        },
+        "required": [
+          "request"
+        ]
+      },
+      "outputs": null,
+      "side_effects": [],
+      "implementation_spec": {
+        "pattern_or_system": null,
+        "invariants": [
+          {
+            "name": "input_type_is_dto",
+            "type": "pre_condition",
+            "description": "The parameter 'request' must be an instance of the concrete CalculationRequest class."
+          },
+          {
+            "name": "non_zero_divisor",
+            "type": "state_invariant",
+            "description": "If operation is OperationType.DIVIDE, the divisor 'operand_b' must not be 0.0."
+          }
+        ],
+        "logic_steps": [
+          {
+            "sequence": 1,
+            "name": "Receive CalculationRequest",
+            "description": "Extract operands and operator from the strongly-typed request object.",
+            "algorithm": null,
+            "complexity": null
+          },
+          {
+            "sequence": 2,
+            "name": "Check for division by zero",
+            "description": "If request.operation is DIVIDE and request.operand_b is 0.0, throw a custom DivisionByZeroError.",
+            "algorithm": null,
+            "complexity": null
+          }
+        ],
+        "validation": []
+      },
+      "modification_tasks": [
+        {
+          "task": "Create calculator package directory 'calculator/' and initialize it with an empty '__init__.py' file to support package imports.",
+          "completed": true
+        },
+        {
+          "task": "Implement the 'OperationType' string enumeration in 'calculator/models.py' containing values: 'add', 'subtract', 'multiply', and 'divide'.",
+          "completed": true
+        },
+        {
+          "task": "Implement the 'CalculationRequest' data class in 'calculator/models.py' representing a request with 'operand_a' (float), 'operand_b' (float), and 'operation' (OperationType).",
+          "completed": true
+        },
+        {
+          "task": "Implement the 'DivisionByZeroError' custom exception class in 'calculator/models.py' inheriting from standard ValueError (or base Exception).",
+          "completed": true
+        },
+        {
+          "task": "Create 'calculator/validator.py' and implement the 'MathValidator' class with a 'validate(self, request: CalculationRequest) -> None' method.",
+          "completed": true
+        },
+        {
+          "task": "In 'validate()', enforce the 'input_type_is_dto' precondition: check that 'request' is an instance of 'CalculationRequest' and raise 'TypeError' if not.",
+          "completed": true
+        },
+        {
+          "task": "In 'validate()', enforce the 'non_zero_divisor' invariant: check if 'request.operation' is DIVIDE and 'request.operand_b == 0.0', and raise a custom 'DivisionByZeroError' if so.",
+          "completed": true
+        },
+        {
+          "task": "Create a unit test file 'tests/test_math_validator.py' using the 'unittest' framework to verify validation of correct requests, division-by-zero errors, and invalid types.",
+          "completed": true
+        },
+        {
+          "task": "Execute local tests via 'python -m unittest tests/test_math_validator.py' to verify the implementation meets all spec requirements.",
+          "completed": true
+        }
+      ]
+    },
+    "audit_logger": {
+      "id": "audit_logger",
+      "name": "Audit Logger Class",
+      "type": "class",
+      "parent_id": null,
+      "implements_id": null,
+      "description": "Handles execution audit logs",
+      "status": "new",
+      "stage": "implemented",
+      "location": null,
+      "properties": null,
+      "inputs": null,
+      "outputs": null,
+      "side_effects": [],
+      "implementation_spec": null,
+      "modification_tasks": [
+        {
+          "task": "Create 'calculator/logger.py' file if it does not exist, and import required libraries and type annotations.",
+          "completed": true
+        },
+        {
+          "task": "Declare the 'AuditLogger' class skeleton to manage math execution logging.",
+          "completed": true
+        },
+        {
+          "task": "Implement '__init__' constructor taking 'log_filepath: str' and storing it as 'self.log_filepath'.",
+          "completed": true
+        },
+        {
+          "task": "Expose 'AuditLogger' class from 'calculator' package in 'calculator/__init__.py' to support package-level imports.",
+          "completed": true
+        },
+        {
+          "task": "Add unit tests in 'tests/test_audit_logger.py' using the 'unittest' framework to verify that 'AuditLogger' class can be instantiated with a file path.",
+          "completed": true
+        },
+        {
+          "task": "Verify implementation using local type-checking, linting, and testing commands.",
+          "completed": true
+        }
+      ]
+    },
+    "audit_logger_log": {
+      "id": "audit_logger_log",
+      "name": "Log Calculation Method",
+      "type": "function",
+      "parent_id": "audit_logger",
+      "implements_id": null,
+      "description": "Logs result of math calculation to a file",
+      "status": "new",
+      "stage": "implemented",
+      "location": null,
+      "properties": null,
+      "inputs": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "object",
+            "title": "calculation_result"
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "outputs": null,
+      "side_effects": [
+        {
+          "target": "fs",
+          "description": "Appends to calc_history.log"
+        }
+      ],
+      "implementation_spec": {
+        "pattern_or_system": null,
+        "invariants": [
+          {
+            "name": "input_type_is_result_dto",
+            "type": "pre_condition",
+            "description": "The parameter 'result' must be an instance of the concrete CalculationResult class."
+          },
+          {
+            "name": "safe_file_handles",
+            "type": "state_invariant",
+            "description": "All filesystem write operations must be enclosed inside a language-native context manager (with-block) to prevent handle leaks."
+          }
+        ],
+        "logic_steps": [
+          {
+            "sequence": 1,
+            "name": "Serialize CalculationResult",
+            "description": "Extract result fields and format them as an ISO UTC single-line string '[TIMESTAMP] OPERAND_A OPERATION OPERAND_B = RESULT'.",
+            "algorithm": null,
+            "complexity": null
+          },
+          {
+            "sequence": 2,
+            "name": "Append log line safely",
+            "description": "Open the injected log filepath in append mode inside a language-native with open context block, write the line, and close.",
+            "algorithm": null,
+            "complexity": null
+          }
+        ],
+        "validation": []
+      },
+      "modification_tasks": [
+        {
+          "task": "Create the 'calculator' directory if it does not exist, and create the source file 'calculator/logger.py' with appropriate header docstrings and typing imports.",
+          "completed": true
+        },
+        {
+          "task": "Declare the 'AuditLogger' class and define its '__init__' constructor taking a 'log_filepath: str' argument and storing it as 'self.log_filepath'.",
+          "completed": true
+        },
+        {
+          "task": "Implement the 'log(self, result: CalculationResult) -> None' method signature, importing 'CalculationResult' from 'calculator.models'.",
+          "completed": true
+        },
+        {
+          "task": "Enforce the 'input_type_is_result_dto' pre-condition invariant inside 'log()' by validating 'isinstance(result, CalculationResult)' and raising a 'TypeError' if the check fails.",
+          "completed": true
+        },
+        {
+          "task": "Implement 'Serialize CalculationResult' logic step: extract timestamp, request.operand_a, request.operation, request.operand_b, and result value from the DTO, and format them as an ISO UTC single-line string '[TIMESTAMP] OPERAND_A OPERATION OPERAND_B = RESULT\\n' (with OPERATION in uppercase).",
+          "completed": true
+        },
+        {
+          "task": "Implement 'Append log line safely' logic step: open 'self.log_filepath' in append ('a') mode inside a native 'with open' context block, ensuring the file is safely closed after writing, satisfying the 'safe_file_handles' state invariant.",
+          "completed": true
+        },
+        {
+          "task": "Create unit tests in 'tests/test_audit_logger.py' using pytest/unittest to verify the log format, pre-condition checks, and safe context-managed file appending.",
+          "completed": true
+        },
+        {
+          "task": "Verify clean compilation, type checking, and linting of the logger using local tools (pytest, mypy, ruff).",
+          "completed": true
+        }
+      ]
+    },
+    "calculator_service": {
+      "id": "calculator_service",
+      "name": "Calculator Service Class",
+      "type": "class",
+      "parent_id": null,
+      "implements_id": null,
+      "description": "Orchestrates and performs mathematical calculations",
+      "status": "new",
+      "stage": "implemented",
+      "location": null,
+      "properties": null,
+      "inputs": null,
+      "outputs": null,
+      "side_effects": [],
+      "implementation_spec": null,
+      "modification_tasks": [
+        {
+          "task": "Ensure the package directory 'calculator/' exists. Create 'calculator/service.py' with appropriate module docstrings and typing imports.",
+          "completed": true
+        },
+        {
+          "task": "Import 'MathValidator' from 'calculator.validator', 'AuditLogger' from 'calculator.logger', and 'datetime', 'Optional', 'Callable' from standard library.",
+          "completed": true
+        },
+        {
+          "task": "Declare the 'CalculatorService' class representing the orchestration layer of the calculator system.",
+          "completed": true
+        },
+        {
+          "task": "Implement the '__init__' constructor for 'CalculatorService' accepting 'math_validator: MathValidator', 'audit_logger: AuditLogger', and 'clock: Optional[Callable[[], datetime]] = None' (defaulting to a lambda returning UTC datetime) as injected dependencies, storing them as attributes.",
+          "completed": true
+        },
+        {
+          "task": "Validate that the service class definition and typing satisfy static analysis (mypy, ruff).",
+          "completed": true
+        }
+      ]
+    },
+    "calculator_service_calculate": {
+      "id": "calculator_service_calculate",
+      "name": "Calculate Method",
+      "type": "function",
+      "parent_id": "calculator_service",
+      "implements_id": null,
+      "description": "Performs calculation, validates, and logs",
+      "status": "new",
+      "stage": "implemented",
+      "location": null,
+      "properties": null,
+      "inputs": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "title": "calculation_request"
+          }
+        },
+        "required": [
+          "request"
+        ]
+      },
+      "outputs": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "object",
+            "title": "calculation_result"
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "side_effects": [
+        {
+          "target": "fs",
+          "description": "Writes log entries via audit_logger"
+        }
+      ],
+      "implementation_spec": {
+        "pattern_or_system": null,
+        "invariants": [
+          {
+            "name": "input_validation_pass",
+            "type": "pre_condition",
+            "description": "The request parameter must be a valid CalculationRequest instance."
+          },
+          {
+            "name": "output_is_finite",
+            "type": "post_condition",
+            "description": "The returned result must contain a finite floating-point value."
+          },
+          {
+            "name": "centralized_operator_evaluation",
+            "type": "state_invariant",
+            "description": "Operator evaluation must occur through a centralized mapping of OperationType members to math lambdas/functions, with zero inline string evaluations."
+          }
+        ],
+        "logic_steps": [
+          {
+            "sequence": 1,
+            "name": "Validate request payload",
+            "description": "Invoke math_validator.validate_request(request) to perform pre-execution validation checks.",
+            "algorithm": null,
+            "complexity": null
+          },
+          {
+            "sequence": 2,
+            "name": "Compute arithmetic value",
+            "description": "Look up the operation function corresponding to request.operation in the centralized operators map and perform calculation.",
+            "algorithm": null,
+            "complexity": null
+          },
+          {
+            "sequence": 3,
+            "name": "Validate computed float result",
+            "description": "Ensure result is a finite floating point value. Throw custom ArithmeticOverflowError if infinite or NaN.",
+            "algorithm": null,
+            "complexity": null
+          },
+          {
+            "sequence": 4,
+            "name": "Construct and persist result",
+            "description": "Retrieve current ISO UTC time from injected clock provider, build CalculationResult, and call audit_logger.log_calculation(result).",
+            "algorithm": null,
+            "complexity": null
+          }
+        ],
+        "validation": []
+      },
+      "modification_tasks": [
+        {
+          "task": "Implement 'ArithmeticOverflowError' custom exception class in 'calculator/models.py' inheriting from standard ValueError (or base Exception) if not already defined.",
+          "completed": true
+        },
+        {
+          "task": "In 'calculator/service.py', import 'CalculationRequest', 'CalculationResult', and 'ArithmeticOverflowError' from 'calculator.models', and the standard 'math' module.",
+          "completed": true
+        },
+        {
+          "task": "Declare the 'calculate(self, request: CalculationRequest) -> CalculationResult' method on 'CalculatorService' class.",
+          "completed": true
+        },
+        {
+          "task": "Enforce precondition 'input_validation_pass': check if 'request' is an instance of 'CalculationRequest' and raise 'TypeError' if not.",
+          "completed": true
+        },
+        {
+          "task": "Implement Logic Step 1: Invoke 'self.math_validator.validate(request)' to validate the request payload (raising DivisionByZeroError if divisor is zero).",
+          "completed": true
+        },
+        {
+          "task": "Enforce state invariant 'centralized_operator_evaluation': create a centralized dictionary mapping 'OperationType' values to corresponding math functions/lambdas, with zero inline string evaluations.",
+          "completed": true
+        },
+        {
+          "task": "Implement Logic Step 2: Look up the math operation function corresponding to 'request.operation' in the operators map and compute the raw floating point result.",
+          "completed": true
+        },
+        {
+          "task": "Implement Logic Step 3 and Postcondition 'output_is_finite': verify that the computed result is a finite float using 'math.isfinite()', and raise 'ArithmeticOverflowError' if the result is infinite (overflow) or NaN.",
+          "completed": true
+        },
+        {
+          "task": "Implement Logic Step 4: Call the injected clock provider 'self.clock()' to retrieve the current datetime, format it to an ISO UTC string, construct 'CalculationResult', and write it using 'self.audit_logger.log(result)'.",
+          "completed": true
+        },
+        {
+          "task": "Return the fully constructed 'CalculationResult' DTO instance.",
+          "completed": true
+        },
+        {
+          "task": "Create unit test suite 'tests/test_calculator_service.py' verifying all calculations, clock mock validation, precondition TypeError, postcondition ArithmeticOverflowError, and validator/logger integration.",
+          "completed": true
+        },
+        {
+          "task": "Execute local verification using 'pytest' (or python -m unittest), 'mypy' for type checking, and 'ruff' for linting 'calculator/service.py'.",
+          "completed": true
+        }
+      ]
+    },
+    "calculator_client": {
+      "id": "calculator_client",
+      "name": "Calculator Client",
+      "type": "class",
+      "parent_id": null,
+      "implements_id": null,
+      "description": "Client interface (CLI or UI) initiating calculations",
+      "status": "new",
+      "stage": "implemented",
+      "location": null,
+      "properties": null,
+      "inputs": null,
+      "outputs": null,
+      "side_effects": [],
+      "implementation_spec": null,
+      "modification_tasks": []
+    },
+    "calculator_client_run": {
+      "id": "calculator_client_run",
+      "name": "Calculator CLI Client Executor",
+      "type": "function",
+      "parent_id": "calculator_client",
+      "implements_id": null,
+      "description": "Parses user CLI arguments, boots services, and executes the math operation context.",
+      "status": "modifying",
+      "stage": "implemented",
+      "location": null,
+      "properties": null,
+      "inputs": null,
+      "outputs": null,
+      "side_effects": [],
+      "implementation_spec": {
+        "pattern_or_system": null,
+        "invariants": [
+          {
+            "name": "top_level_config_origin",
+            "type": "state_invariant",
+            "description": "Default configuration values (e.g. log file path) must only originate at this top-most layer and be injected downward."
+          },
+          {
+            "name": "crash_and_traceback_safety",
+            "type": "state_invariant",
+            "description": "Low-level tracebacks must be intercepted and formatted into a clean terminal response; raw interpreter stack dumps are strictly prohibited."
+          },
+          {
+            "name": "empty_or_malformed_input_help_guard",
+            "type": "state_invariant",
+            "description": "If no arguments are supplied or if parameters are incorrect on CLI initialization, the client must print a clear usage/help menu rather than crashing or waiting indefinitely."
+          }
+        ],
+        "logic_steps": [
+          {
+            "sequence": 1,
+            "name": "Bootstrap application context",
+            "description": "Instantiate AuditLogger injecting 'calc_history.log', instantiate MathValidator, and construct CalculatorService.",
+            "algorithm": null,
+            "complexity": null
+          },
+          {
+            "sequence": 2,
+            "name": "Gather and parse CLI/UI inputs",
+            "description": "Gather operand_a, operand_b, and operation from user prompts or CLI arguments. If no inputs are supplied, or if the inputs are malformed or incomplete, display a helpful, structured CLI help/usage message detailing the required arguments and format, then exit gracefully.",
+            "algorithm": null,
+            "complexity": null
+          },
+          {
+            "sequence": 3,
+            "name": "Execute calculation with exception safety",
+            "description": "Call calculator_service.calculate(request) within a try-except block, catching all custom errors (like DivisionByZeroError).",
+            "algorithm": null,
+            "complexity": null
+          },
+          {
+            "sequence": 4,
+            "name": "Output result or format error gracefully",
+            "description": "If success, print output cleanly. If failure, intercept the custom error, display it with rich context, and exit with a non-zero code.",
+            "algorithm": null,
+            "complexity": null
+          }
+        ],
+        "validation": []
+      },
+      "modification_tasks": [
+        {
+          "task": "Create or verify 'calculator/client.py' file and import sys, typing, models (OperationType, CalculationRequest, CalculationResult, DivisionByZeroError), logger (AuditLogger), validator (MathValidator), and service (CalculatorService).",
+          "completed": true
+        },
+        {
+          "task": "Declare the 'CalculatorClient' class representing the 'calculator_client' component.",
+          "completed": true
+        },
+        {
+          "task": "Implement the 'run(self, args: list[str] | None = None) -> None' method corresponding to the 'calculator_client_run' component.",
+          "completed": true
+        },
+        {
+          "task": "In 'run()', satisfy the 'Bootstrap application context' step and 'top_level_config_origin' invariant: instantiate 'AuditLogger' injecting the default 'calc_history.log' filename, instantiate 'MathValidator', and instantiate 'CalculatorService' injecting both.",
+          "completed": true
+        },
+        {
+          "task": "In 'run()', satisfy the 'Gather and parse CLI/UI inputs' step and 'empty_or_malformed_input_help_guard' invariant: extract arguments from 'args' (or 'sys.argv[1:]' if None). If no arguments are supplied, or if the arguments are malformed/incomplete (not exactly 3 inputs, or operands cannot be parsed as float, or operation is invalid), print a clear usage/help menu and exit gracefully with code 0.",
+          "completed": true
+        },
+        {
+          "task": "In 'run()', satisfy the 'Execute calculation with exception safety' step and 'crash_and_traceback_safety' invariant: construct a 'CalculationRequest' with the parsed arguments, and execute 'calculator_service.calculate(request)' inside a try-except block.",
+          "completed": true
+        },
+        {
+          "task": "In 'run()', satisfy the 'Output result or format error gracefully' step: on success, print the clean result value; on failure, catch all custom exceptions (like DivisionByZeroError) or unexpected exceptions, display a user-friendly error message without raw interpreter tracebacks, and exit with a non-zero status code.",
+          "completed": true
+        },
+        {
+          "task": "Add a standard Python '__main__' entrypoint to 'calculator/client.py' so it can be run directly from the command line using 'python -m calculator.client'.",
+          "completed": true
+        },
+        {
+          "task": "Create unit tests in 'tests/test_calculator_client.py' to verify: help menu on empty/incorrect inputs, successful calculations, division by zero errors, and traceback safety (verifying no tracebacks are output and exit codes are correct) using mock inputs and stdout/exit patching.",
+          "completed": true
+        },
+        {
+          "task": "Execute local tests via 'python -m unittest tests/test_calculator_client.py' and verify clean type-checking/linting with 'mypy' and 'ruff'.",
+          "completed": true
+        }
+      ]
+    }
+  },
+  "usage_trees": {
+    "calculation_flow": {
+      "node_id": "user_calls_calculate",
+      "caller_id": "calculator_client_run",
+      "component_id": "calculator_service_calculate",
+      "description": "Client invokes the calculate method on the Calculator Service",
+      "expected_inputs": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "title": "calculation_request"
+          }
+        },
+        "required": [
+          "request"
+        ]
+      },
+      "expected_outputs": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "object",
+            "title": "calculation_result"
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "expected_side_effects": [
+        {
+          "target": "fs",
+          "description": "Writes log entries via audit_logger"
+        }
+      ],
+      "dependencies": [
+        {
+          "node_id": "calculate_calls_validator",
+          "caller_id": "calculator_service_calculate",
+          "component_id": "math_validator_validate",
+          "description": "Service validates the calculation request inputs",
+          "expected_inputs": {
+            "type": "object",
+            "properties": {
+              "request": {
+                "type": "object",
+                "title": "calculation_request"
+              }
+            },
+            "required": [
+              "request"
+            ]
+          },
+          "expected_outputs": null,
+          "expected_side_effects": [],
+          "dependencies": []
+        },
+        {
+          "node_id": "calculate_calls_logger",
+          "caller_id": "calculator_service_calculate",
+          "component_id": "audit_logger_log",
+          "description": "Service logs the math calculation result",
+          "expected_inputs": {
+            "type": "object",
+            "properties": {
+              "result": {
+                "type": "object",
+                "title": "calculation_result"
+              }
+            },
+            "required": [
+              "result"
+            ]
+          },
+          "expected_outputs": null,
+          "expected_side_effects": [
+            {
+              "target": "fs",
+              "description": "Appends to calc_history.log"
+            }
+          ],
+          "dependencies": []
+        }
+      ]
+    }
+  },
+  "component_types": {
+    "module": {
+      "allows_properties": false,
+      "allows_signature": false,
+      "allows_implementation_spec": true,
+      "is_executable_caller": true,
+      "allowed_parent_types": [
+        "module"
+      ]
+    },
+    "class": {
+      "allows_properties": true,
+      "allows_signature": false,
+      "allows_implementation_spec": false,
+      "is_executable_caller": false,
+      "allowed_parent_types": [
+        "module"
+      ]
+    },
+    "interface": {
+      "allows_properties": false,
+      "allows_signature": false,
+      "allows_implementation_spec": false,
+      "is_executable_caller": false,
+      "allowed_parent_types": [
+        "module"
+      ]
+    },
+    "function": {
+      "allows_properties": false,
+      "allows_signature": true,
+      "allows_implementation_spec": true,
+      "is_executable_caller": true,
+      "allowed_parent_types": [
+        "module",
+        "class"
+      ]
+    },
+    "operation": {
+      "allows_properties": false,
+      "allows_signature": true,
+      "allows_implementation_spec": true,
+      "is_executable_caller": true,
+      "allowed_parent_types": [
+        "interface",
+        "module"
+      ]
+    },
+    "data_object": {
+      "allows_properties": true,
+      "allows_signature": false,
+      "allows_implementation_spec": false,
+      "is_executable_caller": false,
+      "allowed_parent_types": [
+        "module",
+        "class"
+      ]
+    },
+    "enum": {
+      "allows_properties": true,
+      "allows_signature": false,
+      "allows_implementation_spec": false,
+      "is_executable_caller": false,
+      "allowed_parent_types": [
+        "module",
+        "class"
+      ]
+    },
+    "actor": {
+      "allows_properties": false,
+      "allows_signature": false,
+      "allows_implementation_spec": false,
+      "is_executable_caller": true,
+      "allowed_parent_types": []
+    },
+    "system_trigger": {
+      "allows_properties": false,
+      "allows_signature": false,
+      "allows_implementation_spec": false,
+      "is_executable_caller": true,
+      "allowed_parent_types": []
+    }
+  },
+  "validation_tools": {}
+}

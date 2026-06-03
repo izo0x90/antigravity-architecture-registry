@@ -91,46 +91,64 @@ class RegistryEngine:
             "module": ComponentTypeRule(
                 allows_properties=False,
                 allows_signature=False,
+                allows_implementation_spec=True,
+                is_executable_caller=True,
                 allowed_parent_types=["module"]
             ),
             "class": ComponentTypeRule(
                 allows_properties=True,
                 allows_signature=False,
+                allows_implementation_spec=False,
+                is_executable_caller=False,
                 allowed_parent_types=["module"]
             ),
             "interface": ComponentTypeRule(
                 allows_properties=False,
                 allows_signature=False,
+                allows_implementation_spec=False,
+                is_executable_caller=False,
                 allowed_parent_types=["module"]
             ),
             "function": ComponentTypeRule(
                 allows_properties=False,
                 allows_signature=True,
+                allows_implementation_spec=True,
+                is_executable_caller=True,
                 allowed_parent_types=["module", "class"]
             ),
             "operation": ComponentTypeRule(
                 allows_properties=False,
                 allows_signature=True,
+                allows_implementation_spec=True,
+                is_executable_caller=True,
                 allowed_parent_types=["interface", "module"]
             ),
             "data_object": ComponentTypeRule(
                 allows_properties=True,
                 allows_signature=False,
+                allows_implementation_spec=False,
+                is_executable_caller=False,
                 allowed_parent_types=["module", "class"]
             ),
             "enum": ComponentTypeRule(
                 allows_properties=True,
                 allows_signature=False,
+                allows_implementation_spec=False,
+                is_executable_caller=False,
                 allowed_parent_types=["module", "class"]
             ),
             "actor": ComponentTypeRule(
                 allows_properties=False,
                 allows_signature=False,
+                allows_implementation_spec=False,
+                is_executable_caller=True,
                 allowed_parent_types=[]
             ),
             "system_trigger": ComponentTypeRule(
                 allows_properties=False,
                 allows_signature=False,
+                allows_implementation_spec=False,
+                is_executable_caller=True,
                 allowed_parent_types=[]
             ),
         }

@@ -30,7 +30,7 @@ class TestUsageNodeCRUD(unittest.TestCase):
         self.engine.add_component(Component(
             id="auth_service",
             name="Auth Service",
-            type="class",
+            type="function",
             description="Service for authentication"
         ))
         self.engine.add_component(Component(

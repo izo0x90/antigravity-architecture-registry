@@ -325,7 +325,7 @@ class TestLifecycleAndInvalidation(unittest.TestCase):
         )
         self.engine.add_component(comp_m)
 
-        # C is DECLARED, B is DECLARED and depends on C, A is DECLARED and depends on B
+        # C is ARCH_APPROVED, B is DECLARED and depends on C, A is DECLARED and depends on B
         comp_c = Component(
             id="db_driver",
             name="DB Driver",
@@ -333,7 +333,7 @@ class TestLifecycleAndInvalidation(unittest.TestCase):
             parent_id="app_module",
             description="Low level DB driver",
             status="new",
-            stage=LifecycleStage.DECLARED,
+            stage=LifecycleStage.ARCH_APPROVED,
         )
         comp_b = Component(
             id="db_read",
@@ -362,17 +362,18 @@ class TestLifecycleAndInvalidation(unittest.TestCase):
 
         # Phase 1: Plan ready-list
         # Under action_type="plan":
-        # - db_driver is DECLARED and has no dependencies (or only app_module which is IMPLEMENTED). Ready to plan.
-        # - db_read depends on db_driver which is DECLARED. NOT ready to plan.
-        # - user_service depends on db_read which is DECLARED. NOT ready to plan.
+        # - db_driver is ARCH_APPROVED and has no dependencies (or only app_module which is IMPLEMENTED). Ready to plan.
+        # - db_read is DECLARED. NOT ready to plan.
+        # - user_service is DECLARED. NOT ready to plan.
         ready_plan = get_next_actionable_components(self.engine.registry, "plan")
         self.assertEqual(ready_plan, ["db_driver"])
 
-        # Let's advance db_driver to ARCH_APPROVED (which is > DECLARED)
-        comp_c.stage = LifecycleStage.ARCH_APPROVED
+        # Let's advance db_driver to PLAN_APPROVED (which is > ARCH_APPROVED) and promote db_read to ARCH_APPROVED
+        comp_c.stage = LifecycleStage.PLAN_APPROVED
+        comp_b.stage = LifecycleStage.ARCH_APPROVED
         self.engine.save()
 
-        # Now, db_read's dependencies are all ARCH_APPROVED or higher. db_read should be ready to plan.
+        # Now, db_read's stage is ARCH_APPROVED and its dependencies are all >= ARCH_APPROVED. db_read should be ready to plan.
         ready_plan = get_next_actionable_components(self.engine.registry, "plan")
         self.assertEqual(sorted(ready_plan), sorted(["db_read"]))
 

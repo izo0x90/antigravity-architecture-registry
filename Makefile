@@ -8,7 +8,7 @@ start:
 		echo "MCP Server is already running (PID: $$(cat $(PID_FILE)))"; \
 	else \
 		echo "Starting MCP Server in background..."; \
-		tail -f /dev/null | uv run mcp_server.py > $(LOG_FILE) 2>&1 & echo $$! > $(PID_FILE); \
+		tail -f /dev/null | uv run skills/architecture-registry/mcp_server.py > $(LOG_FILE) 2>&1 & echo $$! > $(PID_FILE); \
 		sleep 1; \
 		if kill -0 $$(cat $(PID_FILE)) 2>/dev/null; then \
 			echo "MCP Server started successfully (PID: $$(cat $(PID_FILE)))"; \
