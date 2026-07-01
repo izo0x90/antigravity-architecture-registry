@@ -1,5 +1,7 @@
 # Antigravity Architecture Registry
 
+NOTE: THIS IS AN EARLY PROTOTYPE, A FEW UNFINISED/NOT FULLY WIRED THINGS AND AGENT/SKILL DIRECTION NEED A BIT OF TUNING (Right now you might have to remind it to stick to workflows every once in a while)
+
 The Antigravity Architecture Registry is a strictly-typed, unified registry plugin designed to model, manage, and validate software component interfaces and call/dependency trees. By defining system interfaces, side-effects, and internal contracts up-front, the registry prevents design-to-implementation drift and coordinates developer agents across the lifecycle of a codebase.
 
 ---
