@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "antigravity-architecture-registry"
+version = "1.0.0"
+description = "Strictly-typed unified registry plugin to model, manage, and validate software component interfaces."
+authors = [
+    { name = "Hristo I. Gueorguiev", email = "53634432+izo0x90@users.noreply.github.com" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0.0",
+    "jsonschema>=4.0.0",
+    "mcp>=0.1.0",
+]
+
+[project.scripts]
+architecture-registry = "mcp_server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["skills/architecture-registry/engine", "skills/architecture-registry/mcp_server.py"]
+sources = { "skills/architecture-registry" = "" }

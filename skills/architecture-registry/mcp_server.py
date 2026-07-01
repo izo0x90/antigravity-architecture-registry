@@ -965,5 +965,10 @@ async def get_next_actionable_components(action_type: str, ctx: Context = None) 
         return f"Error computing next actionable components: {exc}"
 
 
-if __name__ == "__main__":
+def main():
+    """Entry point for standard Python packaging console_scripts."""
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

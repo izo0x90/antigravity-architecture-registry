@@ -1,13 +1,12 @@
 {
   "name": "architecture-registry",
   "version": "1.0.0",
-  "description": "Structured architecture and dependency registry to prevent development drift and track module interfaces.",
+  "description": "Strictly-typed unified registry plugin to model, manage, and validate software component interfaces.",
   "author": {
-    "name": "Antigravity Pair"
+    "name": "Hristo I. Gueorguiev"
   },
   "license": "Apache-2.0",
   "keywords": [
-    "antigravity",
     "architecture",
     "registry",
     "mcp",

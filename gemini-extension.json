@@ -6,7 +6,9 @@
       "command": "uv",
       "args": [
         "run",
-        "${pluginPath}/skills/architecture-registry/mcp_server.py"
+        "--project",
+        "${pluginPath}",
+        "architecture-registry"
       ],
       "env": {}
     }
