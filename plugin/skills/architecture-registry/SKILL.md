@@ -300,48 +300,43 @@ When an interface signature (inputs, outputs, or implements) is updated (`update
 
 ---
 
-## 8. Native AG2.0 Review & Artifact Generation (Zero-Token Feedback Loop)
+## 8. Monospace Visualizations and Workspace Reviews
 
-To review complex, multi-tiered component integrations without loading thousands of markdown lines (token bloat) into the chat session, the registry supports direct-to-disk generation of interactive review artifacts and their corresponding metadata sidecars.
+To inspect complex, multi-tiered component integrations without loading thousands of lines of code into your context window, the registry supports rendering architectural structures as text-based ASCII trees, Mermaid flowcharts, or a comprehensive Markdown review file written directly to the workspace.
 
-### A. Core Workflow & Zero-Token Objective
-When a user or agent requests a visual architectural contract review of a workflow tree:
-1. **Never dump the raw markdown report into the tool output**.
-2. **Instead, export it directly to the local AG2.0 artifact directory**.
-3. AG2.0's runtime host will automatically detect the file and sidecar, activate the native artifact visualizer tab, and prompt the human reviewer to leave precise line-annotations using the built-in comments interface.
-4. When the human reviewer completes their review, the AG2.0 host system serializes these annotations and provides them to the agent as a clean, structured turn message.
+### A. Core Workflow & Workspace Reviews
+When visualizing an active workflow tree or component map:
+1. **Inline Visualizations**: ASCII trees and Mermaid flowcharts render directly in your chat session for quick, inline inspection.
+2. **Workspace Markdown File**: For deeper contract reviews, the tool can generate a standalone, comprehensive Markdown review report (e.g., `auth_flow_review.md`) directly in the root of your active workspace.
+3. **Review Loop**: You can open and read this generated Markdown file in your editor of choice, then supply any adjustments, feedback, or corrections directly back to the agent in the chat. No companion sidecars or metadata files are created.
 
 ### B. Tooling Parameters & Execution
 
 #### 1. CLI Usage (`cli.py visualize`)
-To generate a review artifact from the CLI:
+To render or generate visualizations directly:
 ```bash
-uv run cli.py visualize --tree <tree_name> [--node-id <node_id>] --format review_markdown --to-artifact-dir <path_to_artifact_dir>
+# Render ASCII tree to stdout
+uv run cli.py visualize --tree <tree_name> [--node-id <node_id>] --format text
+
+# Render Mermaid flowchart markdown to stdout
+uv run cli.py visualize --tree <tree_name> --format mermaid
+
+# Generate a detailed Markdown review file in the workspace root
+uv run cli.py visualize --tree <tree_name> --format review_markdown --to-artifact-dir .
 ```
 
 #### 2. MCP Server Usage (`visualize_architecture`)
-When calling this tool via MCP, supply the `to_artifact_dir` and set `format` to `"review_markdown"`.
-* **Example Arguments**:
+When calling this tool via MCP inside opencode, set `format` to `"text"` (ASCII tree), `"mermaid"` (Mermaid flowchart), or `"review_markdown"` (Markdown review file).
+* **Workspace Markdown Review Generation**:
+  To write a review file directly to the workspace, set `format` to `"review_markdown"` and pass the workspace root (e.g. `"."`) in the `to_artifact_dir` parameter.
   ```json
   {
     "tree_name": "auth_flow",
     "format": "review_markdown",
-    "to_artifact_dir": "/Users/izo/.gemini/antigravity-cli/brain/6b65bfbc-68b6-4a9c-aecf-0a5973fd408f"
+    "to_artifact_dir": "."
   }
   ```
 * **Expected Tool Response**:
-  The tool returns a minimal status string with the file URI:
-  `"SUCCESS: Active review artifact generated at: file:///absolute/path/to/artifact/auth_flow_review.md. Open the artifact tab to review and annotate."`
-
-### C. Sidecar Metadata Specifications
-Writing a review artifact requires writing a companion sidecar metadata file with the exact filename `{file_name}.metadata.json` containing:
-```json
-{
-  "artifactType": "ARTIFACT_TYPE_OTHER",
-  "summary": "Architectural contract review of the '{tree_name}' workflow and all referenced component definitions.",
-  "updatedAt": "2026-06-02T10:00:00Z",
-  "requestFeedback": true
-}
-```
-Setting `"requestFeedback": true` tells the AG2.0 host UI to prompt the user to comment and annotate lines, which are then passed back to the agent in subsequent turns to resolve feedback.
+  The tool writes the file directly to the workspace root and returns a minimal confirmation message:
+  `"SUCCESS: Active review artifact generated at: auth_flow_review.md. You can open and review this file in your workspace, and provide adjustments or feedback here."`
 

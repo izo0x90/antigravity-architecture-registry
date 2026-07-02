@@ -2,7 +2,6 @@
 name: ComponentPlanner
 description: Analyzes registered components, decomposes their internal requirements bottom-up, and designs precise logic steps and invariants inside the Architecture Registry.
 mode: subagent
-model: google/gemini-3.5-flash
 permission:
   edit: deny
   bash: ask

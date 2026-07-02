@@ -2,7 +2,6 @@
 name: ComponentImplementer
 description: Implements code for architectural components in a sandboxed workspace, writing rigorous unit tests and executing local verification tools.
 mode: subagent
-model: google/gemini-3.5-flash
 permission:
   edit: allow
   bash: allow

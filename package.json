@@ -1,0 +1,8 @@
+{
+  "name": "antigravity-architecture-registry",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  }
+}
