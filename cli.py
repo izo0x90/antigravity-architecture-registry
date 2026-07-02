@@ -143,6 +143,12 @@ def create_parser() -> argparse.ArgumentParser:
     update_comp.add_argument("--spec-json", help="Updated implementation specification as a raw JSON string")
     update_comp.add_argument("--spec-file", help="Path to a JSON file containing the updated implementation specification")
 
+    # 10. setup command
+    subparsers.add_parser("setup", help="Automatically configure the Architecture Registry globally for opencode.")
+
+    # 11. serve command
+    subparsers.add_parser("serve", help="Start the Model Context Protocol (MCP) server.")
+
     return parser
 
 
@@ -163,6 +169,20 @@ def parse_side_effects(se_csv: str | None) -> list:
 def main(argv: OptionalCLIArgumentList = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
+
+    # Handle serve command cleanly
+    if args.command == "serve":
+        from mcp_server import main as run_server
+        run_server()
+        return 0
+
+    # Handle setup command cleanly
+    elif args.command == "setup":
+        from engine.installer import SetupManager
+        package_root = Path(__file__).resolve().parent
+        manager = SetupManager(package_root)
+        success = manager.run_setup()
+        return 0 if success else 1
 
     # Initialize Engine
     file_path = Path(args.file).resolve()

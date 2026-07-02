@@ -18,8 +18,15 @@ dependencies = [
 ]
 
 [project.scripts]
-architecture-registry = "mcp_server:main"
+architecture-registry = "cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["skills/architecture-registry/engine", "skills/architecture-registry/mcp_server.py"]
+packages = [
+    "skills/architecture-registry/engine",
+    "skills/architecture-registry/mcp_server.py",
+    "cli.py"
+]
 sources = { "skills/architecture-registry" = "" }
+
+[tool.hatch.build.targets.wheel.force-include]
+"plugin" = "plugin"
