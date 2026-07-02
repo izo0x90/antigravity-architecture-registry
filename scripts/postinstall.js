@@ -1,8 +1,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
-const sourceDir = process.cwd(); // Root of our installed/cloned package
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const sourceDir = path.resolve(__dirname, '..'); // Resolves to the root of the package regardless of CWD!
 const globalDir = path.join(os.homedir(), '.config', 'opencode');
 
 console.log(`[ArchitectureRegistry] Copying global assets to: ${globalDir}`);
