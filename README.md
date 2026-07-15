@@ -1,14 +1,34 @@
 # Antigravity Architecture Registry
 
-NOTE: THIS IS AN EARLY PROTOTYPE, A FEW UNFINISED/NOT FULLY WIRED THINGS AND AGENT/SKILL DIRECTION NEED A BIT OF TUNING (Right now you might have to remind it to stick to workflows every once in a while)
+NOTE: THIS IS AN EARLY PROTOTYPE, A FEW UNFINISED/NOT FULLY WIRED THINGS AND AGENT/SKILL DIRECTION NEED A BIT OF TUNING, (Right now you might have to remind it to stick to workflows every once in a while), that being said it works pretty well already!
 
 The Antigravity Architecture Registry is a strictly-typed, unified registry plugin designed to model, manage, and validate software component interfaces and call/dependency trees. By defining system interfaces, side-effects, and internal contracts up-front, the registry prevents design-to-implementation drift and coordinates developer agents across the lifecycle of a codebase.
+
+It defines an programatically driven process for the agent:
+- Intial Planning
+    - Capture existing touch points in code where new functiontly will integrate
+    - Capture new/ update functionlity as structured components with explicit:
+        - Schemas/api
+        - Specs for algos, logic or other details
+        - Invariants for non negotiables for the implmention
+        - Validatiors to check correcteness/ compleness
+    - Capture use sites tree for components
+    - Compiler "style" validation with schema/ type checks
+    - Merkle Tree invalidation propages to sub components on changes
+- Implementation Planning
+  - Component implmention is planned one at a time, bottom - up, in topolocial order
+  - Using subagent for very focused context, and parallel execution where possible
+- Implementation
+  - Component implmention bottom - up, in topolocial order
+      - Parent comps. have access to the fully implmented building blocks they depnd on
+  - Using subagent for very focused context, and parallel execution where possible
+  - Implemention subagents use componenet programmatic valiations to assess "DONE" 
 
 ---
 
 ## 1. Installation & Global Setup
 
-The Architecture Registry is fully compatible with both **opencode** (as a global plugin with custom subagents and skills) and **Antigravity 2.0 (AG2.0)**. 
+The Architecture Registry is fully compatible with both **Opencode** (as a global plugin with custom subagents and skills) and **Antigravity 2.0 (AG2.0)**. 
 
 ### A. Global Setup for opencode
 
