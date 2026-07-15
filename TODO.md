@@ -15,3 +15,15 @@ the contract details to you and obtain your explicit sign- off first.
 
 - Need to have a way to prevent the planning and impl. agents from needed to go over existing
 components that are not going to be changing, skip existing components with no change to implemented
+
+
+- Right now model can wonder off the workflow defined in the skill, use skill to only bootstrap 
+make tools provide continues guidance
+
+
+- The requirement to capture further detail as specs seems unclear to model sometimes, stronger prompting
+and some sort of programmatic gates needed
+
+
+- On occasion model doesn't by itself get that it needs to capture the existing code "touch points" where new
+functionality will integrate into existing
