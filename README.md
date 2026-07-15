@@ -6,29 +6,42 @@ The Antigravity Architecture Registry is a strictly-typed, unified registry plug
 
 ---
 
-## 1. Installation
+## 1. Installation & Global Setup
 
-The plugin can be installed either directly from GitHub or manually from a local clone. Both options require running the configuration patch script post-install to resolve absolute execution paths without hardcoding the Current Working Directory (CWD).
+The Architecture Registry is fully compatible with both **opencode** (as a global plugin with custom subagents and skills) and **Antigravity 2.0 (AG2.0)**. 
 
-### Option A: Direct Installation
-Install directly via the `agy` CLI/TUI:
+### A. Global Setup for opencode
+
+To configure the custom skills, model-agnostic agent prompts, and the local MCP server globally, use the standard, pure-Python CLI installer:
+
+#### Step 1: Install the package globally via Git/GitHub
+Using your preferred Python package tool (`uv` or `pipx`):
 ```bash
-agy plugin install https://github.com/hgueorguiev/antigravity-architecture-registry
+uv tool install git+https://github.com/izo0x90/antigravity-architecture-registry.git
 ```
 
-### Option B: Manual Installation (From Clone)
-If you are developing or inspecting the plugin locally, clone and install using the `--force` flag:
+#### Step 2: Run the automated setup
+This command programmatically copies the shared skills and agents to `~/.config/opencode/` and registers the global MCP server inside `opencode.json`:
 ```bash
-git clone https://github.com/hgueorguiev/antigravity-architecture-registry
+architecture-registry setup
+```
+
+That's it! When you boot up `opencode`, the skills and agents will be auto-discovered and active in any session.
+
+---
+
+### B. Global Setup for Antigravity 2.0 (AG2.0)
+
+For AG2.0, the extension and agent JSON/Markdown definitions are located under `gemini-extension.json` and `agents/` at the repository root.
+
+#### Step 1: Clone the repository
+```bash
+git clone https://github.com/izo0x90/antigravity-architecture-registry.git
 cd antigravity-architecture-registry
-agy plugin install . --force
 ```
 
-### Post-Install Path Patching
-After completing either installation method, execute the patch script in the repository root. This updates the compiled plugin configuration (`mcp_config.json`) with the absolute path of the installed script, while leaving the execution CWD unset so it dynamically inherits the directory where the `agy` CLI/TUI is running.
-```bash
-./patch_config
-```
+#### Step 2: Load the Extension
+Point your AG2.0 runtime to the `gemini-extension.json` at the root of the cloned directory. The extension is configured to execute our console script natively using the standard `uv run --project` workspace flag.
 
 ---
 
