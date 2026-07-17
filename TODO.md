@@ -1,3 +1,10 @@
+
+- Explicit review subagents implementers spawn, separate ones per category (NEED THIS ASAP bro)
+    - How faithfully is the design implemented (Critical one, even sub agents invent on non common use cases)
+    - Anti patterns, also possibly using AST grep for global patterns?
+    - Logic correctness
+    - Custom linting one based on AST grep or similar tooling with custom rules built for design
+
 - Missing location field on mcp
 ```
 
@@ -27,3 +34,5 @@ and some sort of programmatic gates needed
 
 - On occasion model doesn't by itself get that it needs to capture the existing code "touch points" where new
 functionality will integrate into existing
+
+- When oh when do we trigger auto-compaction does opencode expose this or do we need to wait to v2
