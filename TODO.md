@@ -36,3 +36,14 @@ and some sort of programmatic gates needed
 functionality will integrate into existing
 
 - When oh when do we trigger auto-compaction does opencode expose this or do we need to wait to v2
+
+- Arch Planning stage
+    - Implement logic blocks as independent testible scripts
+    - Have a path for visual design, do wireframes in .html artifacts for approval
+
+- Arch review stage
+    - Review planned arch. in visual navigator that is driven by chat ui
+
+- Implementation stage
+    - Build skeleton of components and allow for a user check gate on just those changes and APIs before 
+      fully implementing functionality 
