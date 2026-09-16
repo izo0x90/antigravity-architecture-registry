@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Reference files (third-party upstream source code)
+reference/
+**/reference/

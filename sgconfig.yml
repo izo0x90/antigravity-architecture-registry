@@ -1,0 +1,6 @@
+ruleDirs:
+  - rules/ast-grep
+ignoreGlobs:
+  - "**/reference/**"
+  - "**/target/**"
+

@@ -1,7 +1,19 @@
-.PHONY: start stop status clean restart log
+.PHONY: start stop status clean restart log lint check
 
+AST_GREP ?= $(shell which ast-grep 2>/dev/null || echo "$$HOME/.local/share/cargo/bin/ast-grep")
 PID_FILE = mcp_server.pid
 LOG_FILE = mcp_server.log
+
+lint:
+	@echo "==> Running Cargo Clippy in meta-harness..."
+	cd meta-harness && cargo clippy --all-targets -- -D warnings
+	@echo "==> Running ast-grep structural checks..."
+	$(AST_GREP) scan
+
+check: lint
+	@echo "==> Running Cargo Test in meta-harness..."
+	cd meta-harness && cargo test
+
 
 start:
 	@if [ -f $(PID_FILE) ] && kill -0 $$(cat $(PID_FILE)) 2>/dev/null; then \
