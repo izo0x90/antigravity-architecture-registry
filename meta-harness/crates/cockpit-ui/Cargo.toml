@@ -1,0 +1,27 @@
+[package]
+name = "cockpit-ui"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "web_screen_reader"] }
+egui = "0.33.3"
+egui_commonmark = "0.22.0"
+egui_extras = "0.33.3"
+ehttp = "0.5.0"
+ewebsock = "0.8.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+urlencoding = "2.1"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "Location", "console"] }
+js-sys = "0.3"
+harness-protocol = { path = "../harness-protocol" }
+petgraph = "0.6"
+egui_graphs = "0.29.0"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+egui-phosphor = "0.11.0"

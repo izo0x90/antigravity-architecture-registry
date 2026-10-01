@@ -14,6 +14,11 @@ check: lint
 	@echo "==> Running Cargo Test in meta-harness..."
 	cd meta-harness && cargo test
 
+ui:
+	@echo "==> Building Cockpit UI WASM..."
+	cd meta-harness && cargo build -p cockpit-ui --target wasm32-unknown-unknown --release
+	cd meta-harness && wasm-bindgen target/wasm32-unknown-unknown/release/cockpit_ui.wasm --out-dir static/wasm --target web
+
 
 start:
 	@if [ -f $(PID_FILE) ] && kill -0 $$(cat $(PID_FILE)) 2>/dev/null; then \

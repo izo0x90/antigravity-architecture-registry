@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Antigravity Meta-Harness Cockpit (Pure Rust WASM)</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #0b0e14;
+    }
+    #the_canvas_id {
+      width: 100%;
+      height: 100%;
+      display: block;
+      outline: none;
+    }
+    #loading_indicator {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #58a6ff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 0.5px;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading_indicator">⚡ Initializing Antigravity Pure-Rust WASM Cockpit...</div>
+  <canvas id="the_canvas_id"></canvas>
+
+  <script type="module">
+    async function run() {
+      try {
+        const ts = Date.now();
+        const { default: init, WebHandle } = await import(`/wasm/cockpit_ui.js?v=${ts}`);
+        await init({ module_or_path: `/wasm/cockpit_ui_bg.wasm?v=${ts}` });
+        document.getElementById("loading_indicator")?.remove();
+        const handle = new WebHandle();
+        await handle.start("the_canvas_id");
+      } catch (err) {
+        console.error("Failed to start Cockpit WASM:", err);
+        const indicator = document.getElementById("loading_indicator");
+        if (indicator) {
+          indicator.innerText = "Error initializing WebAssembly: " + err;
+          indicator.style.color = "#f85149";
+        }
+      }
+    }
+
+    run();
+  </script>
+</body>
+</html>
