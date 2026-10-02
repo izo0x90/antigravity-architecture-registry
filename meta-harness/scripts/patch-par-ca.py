@@ -20,6 +20,7 @@ import zlib
 
 BUNDLES = (
     "google3/third_party/py/certifi/cacert.pem",
+    "google3/third_party/py/httplib2/cacerts.txt",  # googleapiclient's transport
     "google3/net/grpc/python/_cython/_credentials/roots.pem",
     "google3/third_party/py/grpc/_cython/_credentials/roots.pem",
 )
