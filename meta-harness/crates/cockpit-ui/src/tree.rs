@@ -17,10 +17,6 @@ impl Default for ArchitectureTreeState {
 }
 
 impl ArchitectureTreeState {
-    pub fn handle_input(&mut self, _i: &egui::InputState, _keymap: &crate::keymap::TreeKeymap) {
-        // Tree-specific shortcuts
-    }
-
     pub fn render(
         &mut self,
         ui: &mut egui::Ui,
@@ -132,4 +128,12 @@ impl ArchitectureTreeState {
             feedback.register_inspectable(ui, &format!("slot_{}:tree:tasks", slot_idx + 1), tree_res.inner_rect);
         });
     }
+}
+
+impl crate::actions::ActionProvider for ArchitectureTreeState {
+    fn actions(&self) -> Vec<crate::actions::Action> {
+        Vec::new()
+    }
+
+    fn run(&mut self, _action: &crate::actions::Action, _value: Option<String>, _cx: &mut crate::actions::RunCx<'_>) {}
 }

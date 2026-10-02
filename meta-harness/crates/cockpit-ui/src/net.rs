@@ -34,6 +34,11 @@ struct ThreadOpened {
 }
 
 #[derive(serde::Deserialize)]
+struct UiConfigFile {
+    text: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 struct AuthChallenge {
     instructions: String,
 }
@@ -229,6 +234,11 @@ impl NetClient {
     ) {
         let json = serde_json::to_value(response).unwrap_or_default();
         self.call::<()>("POST", &format!("/api/threads/{thread}/requests/{request}"), Some(json), ctx, on_done);
+    }
+
+    /// The user's UI config file (TOML), if the server has one.
+    pub fn ui_config(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<Option<String>>) + Send + 'static) {
+        self.call::<UiConfigFile>("GET", "/api/ui/config", None, ctx, move |r| on_done(r.map(|f| f.text)));
     }
 
     // ---- instances ----

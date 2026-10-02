@@ -1,353 +1,328 @@
+//! Input modes and the keymap. Bindings come from config (see
+//! `config/default.toml`); actions never carry keys themselves.
+
+use std::collections::BTreeMap;
+
 use egui::Key;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+
+use crate::actions::{Action, Bound, Origin};
 
 /// High-level application input mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum InputMode {
-    /// Modal navigation: single keys execute navigation and panel commands.
+    /// Modal navigation: direct keys run actions.
+    #[default]
     Normal,
-    /// Leader mode: Which-Key HUD is visible, awaiting menu keys (path kept by the app).
+    /// Leader menu open, awaiting menu keys (path kept by the app).
     Leader,
     /// The command palette owns the keyboard.
     Palette,
-    /// Insert mode: keystrokes flow into text fields in the specified slot.
+    /// Keystrokes flow into the text field of this slot.
     Insert { slot: usize },
 }
 
-impl Default for InputMode {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
-
-/// Gesture tracker for Space tap vs Space hold+drag.
+/// Tells a leader tap from a leader hold (holding Space pans the graph).
 #[derive(Default, Debug, Clone, Copy)]
-pub struct SpaceGestureTracker {
-    pub is_space_down: bool,
-    pub drag_occurred: bool,
+pub struct TapTracker {
+    down: bool,
+    dragged: bool,
 }
 
-impl SpaceGestureTracker {
-    pub fn on_space_pressed(&mut self) {
-        self.is_space_down = true;
-        self.drag_occurred = false;
+impl TapTracker {
+    pub fn press(&mut self) {
+        self.down = true;
+        self.dragged = false;
     }
 
-    pub fn on_drag(&mut self) {
-        if self.is_space_down {
-            self.drag_occurred = true;
+    pub fn drag(&mut self) {
+        if self.down {
+            self.dragged = true;
         }
     }
 
-    pub fn on_space_released(&mut self) -> bool {
-        let was_down = self.is_space_down;
-        let dragged = self.drag_occurred;
-        self.is_space_down = false;
-        self.drag_occurred = false;
-        was_down && !dragged
+    /// True when the key went up without a drag in between.
+    pub fn release(&mut self) -> bool {
+        let tapped = self.down && !self.dragged;
+        self.down = false;
+        self.dragged = false;
+        tapped
     }
 }
 
-/// Decoupled global application actions.
-#[derive(Clone, Debug, PartialEq)]
-pub enum GlobalAction {
-    FocusSlot(usize),
-    CycleSlot(i32),
-    SwitchBuffer { slot: usize, kind: crate::app::BufferKind },
-    SetLayout(usize),
-    ToggleInspector,
-    ToggleIssues,
-    CloseActiveDrawer,
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ChordKey {
+    /// Matched against typed text, so it follows the keyboard layout.
+    Text(String),
+    Key(Key),
 }
 
-/// Decoupled graph actions.
-#[derive(Clone, Debug, PartialEq)]
-pub enum GraphAction {
-    ZoomIn,
-    ZoomOut,
-    ResetLayout,
-    CycleDisplayMode,
-    CloseInspector,
+/// One key, possibly with modifiers: "y", "Y", ":", "Tab", "shift+Tab", "ctrl+shift+c".
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct Chord {
+    key: ChordKey,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
 }
 
-/// Decoupled chat actions.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ChatAction {
-    EnterInsert,
-    ClearPrompt,
+fn named_key(name: &str) -> Option<Key> {
+    Key::from_name(name).or_else(|| {
+        let mut chars = name.chars();
+        let first = chars.next()?;
+        Key::from_name(&format!("{}{}", first.to_uppercase(), chars.as_str()))
+    })
 }
 
-/// A configurable single key or key combination.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeyBinding {
-    pub key: String,
-    #[serde(default)]
-    pub alt: bool,
-    #[serde(default)]
-    pub ctrl: bool,
-    #[serde(default)]
-    pub shift: bool,
-    #[serde(default)]
-    pub command: bool,
-}
+impl TryFrom<String> for Chord {
+    type Error = String;
 
-impl KeyBinding {
-    pub fn single(key: &str) -> Self {
-        Self {
-            key: key.to_string(),
-            alt: false,
-            ctrl: false,
-            shift: false,
-            command: false,
-        }
-    }
-
-    pub fn alt(key: &str) -> Self {
-        Self {
-            key: key.to_string(),
-            alt: true,
-            ctrl: false,
-            shift: false,
-            command: false,
-        }
-    }
-
-    pub fn shift(key: &str) -> Self {
-        Self {
-            key: key.to_string(),
-            alt: false,
-            ctrl: false,
-            shift: true,
-            command: false,
-        }
-    }
-
-    pub fn ctrl_shift(key: &str) -> Self {
-        Self {
-            key: key.to_string(),
-            alt: false,
-            ctrl: true,
-            shift: true,
-            command: false,
-        }
-    }
-
-    pub fn to_egui_key(&self) -> Option<Key> {
-        match self.key.to_lowercase().as_str() {
-            "0" | "num0" => Some(Key::Num0),
-            "1" | "num1" => Some(Key::Num1),
-            "2" | "num2" => Some(Key::Num2),
-            "3" | "num3" => Some(Key::Num3),
-            "4" | "num4" => Some(Key::Num4),
-            "5" | "num5" => Some(Key::Num5),
-            "6" | "num6" => Some(Key::Num6),
-            "7" | "num7" => Some(Key::Num7),
-            "8" | "num8" => Some(Key::Num8),
-            "9" | "num9" => Some(Key::Num9),
-            "a" => Some(Key::A),
-            "b" => Some(Key::B),
-            "c" => Some(Key::C),
-            "d" => Some(Key::D),
-            "e" => Some(Key::E),
-            "f" => Some(Key::F),
-            "g" => Some(Key::G),
-            "h" => Some(Key::H),
-            "i" => Some(Key::I),
-            "j" => Some(Key::J),
-            "k" => Some(Key::K),
-            "l" => Some(Key::L),
-            "m" => Some(Key::M),
-            "n" => Some(Key::N),
-            "o" => Some(Key::O),
-            "p" => Some(Key::P),
-            "q" => Some(Key::Q),
-            "r" => Some(Key::R),
-            "s" => Some(Key::S),
-            "t" => Some(Key::T),
-            "u" => Some(Key::U),
-            "v" => Some(Key::V),
-            "w" => Some(Key::W),
-            "x" => Some(Key::X),
-            "y" => Some(Key::Y),
-            "z" => Some(Key::Z),
-            "escape" | "esc" => Some(Key::Escape),
-            "tab" => Some(Key::Tab),
-            "space" | " " => Some(Key::Space),
-            "enter" | "return" => Some(Key::Enter),
-            "=" | "+" | "equals" => Some(Key::Equals),
-            "-" | "_" | "minus" => Some(Key::Minus),
-            "/" | "slash" => Some(Key::Slash),
-            "f1" => Some(Key::F1),
-            "f2" => Some(Key::F2),
-            "arrowup" | "up" => Some(Key::ArrowUp),
-            "arrowdown" | "down" => Some(Key::ArrowDown),
-            "arrowleft" | "left" => Some(Key::ArrowLeft),
-            "arrowright" | "right" => Some(Key::ArrowRight),
-            _ => None,
-        }
-    }
-
-    /// Evaluates if this binding is currently triggered in egui input state.
-    pub fn is_pressed(&self, input: &egui::InputState) -> bool {
-        let Some(target_key) = self.to_egui_key() else {
-            return false;
+    fn try_from(spec: String) -> Result<Self, String> {
+        let (mods, key) = match spec.strip_suffix("++") {
+            Some(mods) => (mods, "+"),
+            None => match spec.rsplit_once('+') {
+                Some((mods, key)) if !key.is_empty() => (mods, key),
+                _ => ("", spec.as_str()),
+            },
         };
-
-        if !input.key_pressed(target_key) {
-            return false;
+        let (mut ctrl, mut alt, mut shift) = (false, false, false);
+        for m in mods.split('+').filter(|m| !m.is_empty()) {
+            match m.to_lowercase().as_str() {
+                "ctrl" | "control" | "cmd" | "command" | "super" | "meta" => ctrl = true,
+                "alt" | "option" | "opt" => alt = true,
+                "shift" => shift = true,
+                other => return Err(format!("unknown modifier `{other}` in `{spec}`")),
+            }
         }
-
-        // Modifiers match (support Mac command or ctrl interchangeably when ctrl requested)
-        if self.alt != input.modifiers.alt {
-            return false;
-        }
-        let effective_ctrl = input.modifiers.ctrl || (input.modifiers.command && !self.command);
-        if self.ctrl != effective_ctrl {
-            return false;
-        }
-        if self.shift != input.modifiers.shift {
-            return false;
-        }
-        if self.command && !input.modifiers.command {
-            return false;
-        }
-
-        true
+        let single_char = key.chars().count() == 1;
+        let key = if single_char && !ctrl && !alt && !shift {
+            ChordKey::Text(key.to_owned())
+        } else {
+            ChordKey::Key(named_key(key).ok_or_else(|| format!("unknown key `{key}` in `{spec}`"))?)
+        };
+        Ok(Self { key, ctrl, alt, shift })
     }
 }
 
-/// Global application navigation keybindings.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GlobalKeymap {
-    pub focus_slot_1: KeyBinding,
-    pub focus_slot_2: KeyBinding,
-    pub focus_slot_3: KeyBinding,
-    pub next_slot: KeyBinding,
-    pub prev_slot: KeyBinding,
+impl Chord {
+    pub fn pressed(&self, input: &egui::InputState) -> bool {
+        match &self.key {
+            ChordKey::Text(text) => input.events.iter().any(|e| matches!(e, egui::Event::Text(t) if t == text)),
+            ChordKey::Key(key) => {
+                let m = input.modifiers;
+                input.key_pressed(*key) && m.alt == self.alt && m.shift == self.shift && (m.ctrl || m.command) == self.ctrl
+            }
+        }
+    }
 
-    pub switch_chat: KeyBinding,
-    pub switch_code: KeyBinding,
-    pub switch_graph: KeyBinding,
-    pub switch_tree: KeyBinding,
+    pub fn released(&self, input: &egui::InputState) -> bool {
+        match &self.key {
+            ChordKey::Key(key) => input.key_released(*key),
+            ChordKey::Text(_) => false,
+        }
+    }
 
-    pub enter_insert: KeyBinding,
-    pub exit_insert: KeyBinding,
+    pub fn key_down(&self, input: &egui::InputState) -> bool {
+        matches!(&self.key, ChordKey::Key(key) if input.key_down(*key))
+    }
 
-    pub toggle_inspector: KeyBinding,
-    pub toggle_issues: KeyBinding,
-
-    pub layout_1: KeyBinding,
-    pub layout_2: KeyBinding,
-    pub layout_3: KeyBinding,
+    pub fn label(&self) -> String {
+        let key = match &self.key {
+            ChordKey::Text(t) => t.clone(),
+            ChordKey::Key(k) => k.name().to_owned(),
+        };
+        let mods = [(self.ctrl, "ctrl+"), (self.alt, "alt+"), (self.shift, "shift+")];
+        mods.iter().filter(|(on, _)| *on).map(|(_, m)| *m).collect::<String>() + &key
+    }
 }
 
-impl Default for GlobalKeymap {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeaderKey {
+    Char(char),
+    /// The next free key in this menu.
+    Auto,
+}
+
+/// Leader path, e.g. "s n" or "m #".
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct LeaderPath(Vec<LeaderKey>);
+
+impl TryFrom<String> for LeaderPath {
+    type Error = String;
+
+    fn try_from(spec: String) -> Result<Self, String> {
+        let mut keys = Vec::new();
+        for token in spec.split_whitespace() {
+            let mut chars = token.chars();
+            match (chars.next(), chars.next()) {
+                (Some('#'), None) => keys.push(LeaderKey::Auto),
+                (Some(c), None) => keys.push(LeaderKey::Char(c)),
+                _ => return Err(format!("leader keys are single characters separated by spaces, got `{spec}`")),
+            }
+        }
+        if keys.iter().rev().skip(1).any(|k| *k == LeaderKey::Auto) {
+            return Err(format!("`#` can only be the last leader key, got `{spec}`"));
+        }
+        Ok(Self(keys))
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Binding {
+    #[serde(default)]
+    pub leader: Option<LeaderPath>,
+    #[serde(default)]
+    pub keys: Vec<Chord>,
+}
+
+/// Without a config: Space leader, Escape back, nothing bound.
+impl Default for KeymapConfig {
     fn default() -> Self {
-        Self {
-            focus_slot_1: KeyBinding::single("1"),
-            focus_slot_2: KeyBinding::single("2"),
-            focus_slot_3: KeyBinding::single("3"),
-            next_slot: KeyBinding::single("Tab"),
-            prev_slot: KeyBinding::shift("Tab"),
-
-            switch_chat: KeyBinding::single("c"),
-            switch_code: KeyBinding::single("v"),
-            switch_graph: KeyBinding::single("g"),
-            switch_tree: KeyBinding::single("t"),
-
-            enter_insert: KeyBinding::single("i"),
-            exit_insert: KeyBinding::single("Escape"),
-
-            toggle_inspector: KeyBinding::ctrl_shift("c"),
-            toggle_issues: KeyBinding::single("F2"),
-
-            layout_1: KeyBinding::alt("1"),
-            layout_2: KeyBinding::alt("2"),
-            layout_3: KeyBinding::alt("3"),
-        }
+        let key = |key| Chord { key: ChordKey::Key(key), ctrl: false, alt: false, shift: false };
+        Self { leader: key(Key::Space), back: key(Key::Escape), groups: BTreeMap::new(), bind: BTreeMap::new() }
     }
 }
 
-/// Graph view keybindings.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct GraphKeymap {
-    pub zoom_in: KeyBinding,
-    pub zoom_out: KeyBinding,
-    pub reset_layout: KeyBinding,
-    pub cycle_mode: KeyBinding,
-    pub close_drawer: KeyBinding,
-    pub search: KeyBinding,
-}
-
-impl Default for GraphKeymap {
-    fn default() -> Self {
-        Self {
-            zoom_in: KeyBinding::single("="),
-            zoom_out: KeyBinding::single("-"),
-            reset_layout: KeyBinding::single("r"),
-            cycle_mode: KeyBinding::single("m"),
-            close_drawer: KeyBinding::single("x"),
-            search: KeyBinding::single("/"),
-        }
-    }
-}
-
-/// Chat view keybindings.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ChatKeymap {
-    pub enter_prompt: KeyBinding,
-    pub clear_prompt: KeyBinding,
-}
-
-impl Default for ChatKeymap {
-    fn default() -> Self {
-        Self {
-            enter_prompt: KeyBinding::single("i"),
-            clear_prompt: KeyBinding::single("x"),
-        }
-    }
-}
-
-/// Code view keybindings.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CodeKeymap {
-    pub scroll_down: KeyBinding,
-    pub scroll_up: KeyBinding,
-}
-
-impl Default for CodeKeymap {
-    fn default() -> Self {
-        Self {
-            scroll_down: KeyBinding::single("j"),
-            scroll_up: KeyBinding::single("k"),
-        }
-    }
-}
-
-/// Tree view keybindings.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TreeKeymap {
-    pub next_item: KeyBinding,
-    pub prev_item: KeyBinding,
-    pub toggle: KeyBinding,
-}
-
-impl Default for TreeKeymap {
-    fn default() -> Self {
-        Self {
-            next_item: KeyBinding::single("j"),
-            prev_item: KeyBinding::single("k"),
-            toggle: KeyBinding::single("Space"),
-        }
-    }
-}
-
-/// Root keymap configuration grouping all global and view-specific keymaps.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct KeymapConfig {
-    pub global: GlobalKeymap,
-    pub graph: GraphKeymap,
-    pub chat: ChatKeymap,
-    pub code: CodeKeymap,
-    pub tree: TreeKeymap,
+    pub leader: Chord,
+    pub back: Chord,
+    /// Leader submenu labels by key path ("s" -> "Session").
+    #[serde(default)]
+    pub groups: BTreeMap<String, String>,
+    #[serde(default)]
+    pub bind: BTreeMap<String, Binding>,
+}
+
+/// Keys handed out to `#` entries, in order.
+const AUTO_KEYS: &str = "123456789abcdefghijklmnopqrstuvwxyz";
+
+impl KeymapConfig {
+    pub fn group_label(&self, path: &[char]) -> Option<&str> {
+        let key: Vec<String> = path.iter().map(char::to_string).collect();
+        self.groups.get(&key.join(" ")).or_else(|| self.groups.get(&key.concat())).map(String::as_str)
+    }
+
+    /// The binding for an action: by id, then aliases, then the closest wildcard.
+    fn binding_for(&self, action: &Action) -> Option<&Binding> {
+        let names: Vec<&str> = std::iter::once(action.id.as_str()).chain(action.aliases.iter().map(String::as_str)).collect();
+        if let Some(found) = names.iter().find_map(|n| self.bind.get(*n)) {
+            return Some(found);
+        }
+        names.iter().find_map(|name| {
+            let mut prefix = *name;
+            while let Some((head, _)) = prefix.rsplit_once('.') {
+                if let Some(found) = self.bind.get(&format!("{head}.*")) {
+                    return Some(found);
+                }
+                prefix = head;
+            }
+            None
+        })
+    }
+
+    /// Resolves every action's leader path and direct keys. Fixed paths win;
+    /// a path already taken, and every `#`, gets the next free key in its menu.
+    pub fn bind(&self, actions: Vec<(Origin, Action)>) -> Vec<Bound> {
+        let specs: Vec<Option<&Binding>> = actions.iter().map(|(_, a)| self.binding_for(a)).collect();
+        let mut taken: Vec<Vec<char>> = Vec::new();
+        let mut leaders: Vec<Option<Vec<char>>> = vec![None; actions.len()];
+        let mut pending: Vec<(usize, Vec<char>)> = Vec::new();
+
+        for (index, spec) in specs.iter().enumerate() {
+            let Some(path) = spec.and_then(|b| b.leader.as_ref()) else { continue };
+            let fixed: Vec<char> = path.0.iter().filter_map(|k| if let LeaderKey::Char(c) = k { Some(*c) } else { None }).collect();
+            let auto = path.0.last() == Some(&LeaderKey::Auto);
+            if fixed.is_empty() && !auto {
+                continue;
+            }
+            if auto || taken.contains(&fixed) {
+                let parent = if auto { fixed } else { fixed[..fixed.len() - 1].to_vec() };
+                pending.push((index, parent));
+            } else {
+                taken.push(fixed.clone());
+                leaders[index] = Some(fixed);
+            }
+        }
+        for (index, parent) in pending {
+            let free = AUTO_KEYS.chars().find(|c| {
+                let mut candidate = parent.clone();
+                candidate.push(*c);
+                !taken.iter().any(|t| t.starts_with(&candidate) || candidate.starts_with(t))
+            });
+            if let Some(c) = free {
+                let mut path = parent;
+                path.push(c);
+                taken.push(path.clone());
+                leaders[index] = Some(path);
+            }
+        }
+
+        actions
+            .into_iter()
+            .zip(specs)
+            .zip(leaders)
+            .map(|(((origin, action), spec), leader)| Bound { keys: spec.map(|b| b.keys.clone()).unwrap_or_default(), action, origin, leader })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::actions::Action;
+
+    fn keymap(toml: &str) -> KeymapConfig {
+        toml::from_str(toml).unwrap()
+    }
+
+    fn act(id: &str) -> (Origin, Action) {
+        (Origin::Shell, Action::new(id, id, ()))
+    }
+
+    #[test]
+    fn chords_parse_text_and_named_keys() {
+        let text = Chord::try_from("Y".to_owned()).unwrap();
+        assert_eq!(text.key, ChordKey::Text("Y".into()));
+        let combo = Chord::try_from("ctrl+shift+c".to_owned()).unwrap();
+        assert_eq!((combo.key.clone(), combo.ctrl, combo.shift), (ChordKey::Key(Key::C), true, true));
+        assert_eq!(Chord::try_from("shift+tab".to_owned()).unwrap().key, ChordKey::Key(Key::Tab));
+        assert!(Chord::try_from("hyper+x".to_owned()).is_err());
+    }
+
+    #[test]
+    fn bindings_resolve_by_id_alias_then_wildcard() {
+        let km = keymap(
+            r##"
+            leader = "Space"
+            back = "Escape"
+            [bind]
+            "session.new" = { leader = "s n" }
+            "config.category.model" = { leader = "m m" }
+            "config.*" = { leader = "m #" }
+            "##,
+        );
+        let mut model = act("config.model_id");
+        model.1.aliases.push("config.category.model".into());
+        let bound = km.bind(vec![act("session.new"), model, act("config.effort"), act("config.speed"), act("unbound")]);
+        let paths: Vec<Option<String>> = bound.iter().map(|b| b.leader.as_ref().map(|p| p.iter().collect())).collect();
+        assert_eq!(paths, vec![Some("sn".into()), Some("mm".into()), Some("m1".into()), Some("m2".into()), None]);
+    }
+
+    #[test]
+    fn a_taken_path_falls_back_to_the_next_free_key() {
+        let km = keymap(
+            r##"
+            leader = "Space"
+            back = "Escape"
+            [bind]
+            "a" = { leader = "r y" }
+            "b" = { leader = "r y" }
+            "##,
+        );
+        let bound = km.bind(vec![act("a"), act("b")]);
+        assert_eq!(bound[1].leader, Some(vec!['r', '1']));
+    }
 }

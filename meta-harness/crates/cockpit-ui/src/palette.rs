@@ -4,13 +4,14 @@
 
 use egui::{Color32, Frame, Margin, RichText, Stroke};
 
-use crate::actions::{Action, Choice, Invocation, Param, fuzzy_score, group_label};
+use crate::actions::{Bound, Choice, Invocation, Param, fuzzy_score};
+use crate::keymap::KeymapConfig;
 
 #[derive(Clone, Debug)]
 enum Stage {
     Actions,
-    Choose { action: Action, from_list: bool },
-    Text { action: Action, from_list: bool },
+    Choose { action: Box<Bound>, from_list: bool },
+    Text { action: Box<Bound>, from_list: bool },
 }
 
 pub struct Palette {
@@ -28,14 +29,6 @@ impl Default for Palette {
     }
 }
 
-fn leader_hint(action: &Action) -> String {
-    if action.leader.is_empty() {
-        return String::new();
-    }
-    let keys: Vec<String> = action.leader.iter().map(char::to_string).collect();
-    format!("SPC {}", keys.join(" "))
-}
-
 impl Palette {
     pub fn is_open(&self) -> bool {
         self.open
@@ -46,7 +39,7 @@ impl Palette {
     }
 
     /// Opens straight at an action's parameter (e.g. from a leader key).
-    pub fn open_for(&mut self, action: &Action) {
+    pub fn open_for(&mut self, action: &Bound) {
         self.open();
         self.enter(action.clone(), false);
     }
@@ -55,10 +48,11 @@ impl Palette {
         self.open = false;
     }
 
-    fn enter(&mut self, action: Action, from_list: bool) {
+    fn enter(&mut self, action: Bound, from_list: bool) {
         self.filter.clear();
         self.selected = 0;
-        self.stage = match &action.param {
+        let action = Box::new(action);
+        self.stage = match &action.action.param {
             Param::Text { .. } => Stage::Text { action, from_list },
             _ => Stage::Choose { action, from_list },
         };
@@ -76,7 +70,7 @@ impl Palette {
     }
 
     /// Renders the palette; returns an invocation when the user picks something.
-    pub fn render(&mut self, ctx: &egui::Context, actions: &[Action]) -> Option<Invocation> {
+    pub fn render(&mut self, ctx: &egui::Context, actions: &[Bound], keymap: &KeymapConfig) -> Option<Invocation> {
         if !self.open {
             return None;
         }
@@ -96,7 +90,7 @@ impl Palette {
                 i.key_pressed(egui::Key::ArrowUp) || (ctrl && i.key_pressed(egui::Key::P)),
                 i.key_pressed(egui::Key::ArrowDown) || (ctrl && i.key_pressed(egui::Key::N)),
                 i.key_pressed(egui::Key::Enter),
-                i.key_pressed(egui::Key::Escape),
+                keymap.back.pressed(i),
             )
         });
         if escape {
@@ -105,7 +99,7 @@ impl Palette {
         }
 
         let mut picked: Option<Invocation> = None;
-        let mut next_stage: Option<(Action, bool)> = None;
+        let mut next_stage: Option<(Bound, bool)> = None;
         let stage = self.stage.clone();
 
         egui::Area::new(egui::Id::new("command_palette"))
@@ -121,11 +115,11 @@ impl Palette {
                         ui.set_width(width - 20.0);
                         let title = match &stage {
                             Stage::Actions => "Run an action".to_owned(),
-                            Stage::Choose { action, .. } | Stage::Text { action, .. } => action.label.clone(),
+                            Stage::Choose { action, .. } | Stage::Text { action, .. } => action.action.label.clone(),
                         };
                         ui.label(RichText::new(title).strong().size(12.0).color(Color32::from_rgb(90, 200, 255)));
                         let hint = match &stage {
-                            Stage::Text { action, .. } => match &action.param {
+                            Stage::Text { action, .. } => match &action.action.param {
                                 Param::Text { hint } => hint.clone(),
                                 _ => String::new(),
                             },
@@ -140,24 +134,24 @@ impl Palette {
 
                         match &stage {
                             Stage::Actions => {
-                                let mut ranked: Vec<(i32, &Action)> = actions
+                                let mut ranked: Vec<(i32, &Bound)> = actions
                                     .iter()
-                                    .filter_map(|a| {
-                                        let group = if a.leader.len() > 1 { group_label(&a.leader[..1]).unwrap_or("") } else { "" };
-                                        let haystack = format!("{} {} {group}", a.label, a.id);
-                                        fuzzy_score(&self.filter, &haystack).map(|s| (s, a))
+                                    .filter_map(|b| {
+                                        let group = b.leader.as_ref().filter(|l| l.len() > 1).and_then(|l| keymap.group_label(&l[..1])).unwrap_or("");
+                                        let haystack = format!("{} {} {group}", b.action.label, b.action.id);
+                                        fuzzy_score(&self.filter, &haystack).map(|s| (s, b))
                                     })
                                     .collect();
-                                ranked.sort_by_key(|(s, a)| (-s, a.label.clone()));
+                                ranked.sort_by_key(|(s, b)| (-s, b.action.label.clone()));
                                 self.move_selection(up, down, ranked.len());
                                 egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
-                                    for (row, (_, action)) in ranked.iter().enumerate() {
+                                    for (row, (_, bound)) in ranked.iter().enumerate() {
                                         let selected = row == self.selected;
-                                        let clicked = palette_row(ui, selected, self.scroll, &action.label, action.detail.as_deref(), &leader_hint(action));
+                                        let clicked = palette_row(ui, selected, self.scroll, &bound.action.label, bound.action.detail.as_deref(), &bound.key_hint());
                                         if clicked || (selected && enter) {
-                                            match action.param {
-                                                Param::None => picked = Some(Invocation::of(action, None)),
-                                                _ => next_stage = Some(((*action).clone(), true)),
+                                            match bound.action.param {
+                                                Param::None => picked = Some(invocation(bound, None)),
+                                                _ => next_stage = Some(((*bound).clone(), true)),
                                             }
                                         }
                                     }
@@ -167,10 +161,7 @@ impl Palette {
                                 });
                             }
                             Stage::Choose { action, .. } => {
-                                let choices: &[Choice] = match &action.param {
-                                    Param::Choice(c) => c,
-                                    _ => &[],
-                                };
+                                let choices: Vec<Choice> = action.action.param.choices();
                                 let mut ranked: Vec<(i32, &Choice)> = choices
                                     .iter()
                                     .filter_map(|c| fuzzy_score(&self.filter, &format!("{} {}", c.label, c.value)).map(|s| (s, c)))
@@ -183,7 +174,7 @@ impl Palette {
                                         let label = if choice.current { format!("{} {}", egui_phosphor::regular::CHECK, choice.label) } else { choice.label.clone() };
                                         let clicked = palette_row(ui, selected, self.scroll, &label, choice.detail.as_deref(), "");
                                         if clicked || (selected && enter) {
-                                            picked = Some(Invocation::of(action, Some(choice.value.clone())));
+                                            picked = Some(invocation(action, Some(choice.value.clone())));
                                         }
                                     }
                                     if ranked.is_empty() {
@@ -193,7 +184,7 @@ impl Palette {
                             }
                             Stage::Text { action, .. } => {
                                 if enter && !self.filter.trim().is_empty() {
-                                    picked = Some(Invocation::of(action, Some(self.filter.trim().to_owned())));
+                                    picked = Some(invocation(action, Some(self.filter.trim().to_owned())));
                                 }
                                 ui.label(RichText::new("Enter to submit • Esc to go back").size(10.0).color(Color32::GRAY));
                             }
@@ -224,6 +215,10 @@ impl Palette {
         }
         self.selected = self.selected.min(len - 1);
     }
+}
+
+fn invocation(bound: &Bound, value: Option<String>) -> Invocation {
+    Invocation { action: bound.action.clone(), origin: bound.origin, value }
 }
 
 /// One tappable row; returns true when clicked.

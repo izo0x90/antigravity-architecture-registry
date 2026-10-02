@@ -1,0 +1,94 @@
+# NAH UI defaults. A user file served by the server (~/.config/nah/ui.toml, or
+# $NAH_UI_CONFIG) is merged over this one: tables merge key by key, anything
+# else replaces the default.
+
+[brand]
+name = "NAH"
+tagline = "not a harness"
+
+[keymap]
+# Tap to open the leader menu (holding it still pans the graph).
+leader = "Space"
+# Leaves insert mode, steps back out of leader menus and the palette.
+back = "Escape"
+
+# Leader submenus, by key path.
+[keymap.groups]
+b = "Buffer"
+l = "Layout"
+s = "Session"
+m = "Model & config"
+o = "Mode"
+p = "MCP servers"
+h = "Harness commands"
+a = "Account"
+r = "Requests"
+g = "Graph"
+
+# Bindings, by action id. Keys:
+#   leader: keys after the leader, space separated; "#" is the next free key in
+#           that menu.
+#   keys:   direct keys in normal mode. A single character matches what is typed
+#           ("Y" is shift+y); otherwise modifiers+key, e.g. "ctrl+shift+c", "alt+1".
+# Actions are looked up by id, then by their aliases, then by wildcard
+# ("config.*" covers every id starting with "config.").
+[keymap.bind]
+"palette.open" = { leader = "/", keys = [":"] }
+"slot.focus.1" = { leader = "1", keys = ["1"] }
+"slot.focus.2" = { leader = "2", keys = ["2"] }
+"slot.focus.3" = { leader = "3", keys = ["3"] }
+"slot.next" = { keys = ["Tab"] }
+"slot.prev" = { keys = ["shift+Tab"] }
+"buffer.chat" = { leader = "b c", keys = ["c"] }
+"buffer.code" = { leader = "b v", keys = ["v"] }
+"buffer.graph" = { leader = "b g", keys = ["g"] }
+"buffer.tree" = { leader = "b t", keys = ["t"] }
+"layout.1" = { leader = "l 1", keys = ["alt+1"] }
+"layout.2" = { leader = "l 2", keys = ["alt+2"] }
+"layout.3" = { leader = "l 3", keys = ["alt+3"] }
+"inspector.toggle" = { leader = "i", keys = ["ctrl+shift+c"] }
+"issues.toggle" = { leader = "d", keys = ["F2"] }
+"drawer.close" = { leader = "x" }
+
+"chat.insert" = { keys = ["i"] }
+"chat.clear" = { keys = ["x"] }
+
+"session.new" = { leader = "s n" }
+"session.resume" = { leader = "s r" }
+"session.delete" = { leader = "s d" }
+"session.switch" = { leader = "s t" }
+"session.stop" = { leader = "s s" }
+"session.close" = { leader = "s c" }
+"instance.select" = { leader = "s i" }
+
+"config.category.model" = { leader = "m m" }
+"config.category.mode" = { leader = "o o" }
+"config.*" = { leader = "m #" }
+"model.next" = { leader = "m m" }
+"mode.native" = { leader = "o o" }
+"mode.runtime" = { leader = "o o" }
+
+"mcp.list" = { leader = "p l" }
+"mcp.add" = { leader = "p a" }
+"mcp.remove" = { leader = "p r" }
+
+"command.*" = { leader = "h #" }
+
+"auth.login" = { leader = "a l" }
+"auth.complete" = { leader = "a c" }
+"auth.logout" = { leader = "a o" }
+
+"request.accept" = { leader = "r y", keys = ["y"] }
+"request.accept_for_session" = { leader = "r a", keys = ["Y"] }
+"request.accept_always" = { leader = "r a", keys = ["Y"] }
+"request.decline" = { leader = "r n", keys = ["n"] }
+"request.cancel" = { leader = "r c" }
+
+"graph.zoom_in" = { leader = "g i", keys = ["="] }
+"graph.zoom_out" = { leader = "g o", keys = ["-"] }
+"graph.reset" = { leader = "g r", keys = ["r"] }
+"graph.display" = { leader = "g m", keys = ["m"] }
+"graph.close_inspector" = { leader = "g x", keys = ["x", "Escape"] }
+
+"code.down" = { keys = ["j"] }
+"code.up" = { keys = ["k"] }

@@ -56,17 +56,6 @@ impl CodeViewerState {
         self.is_loading = false;
     }
 
-    pub fn handle_input(&mut self, i: &egui::InputState, keymap: &crate::keymap::CodeKeymap) {
-        if keymap.scroll_down.is_pressed(i) {
-            let next = self.target_line.unwrap_or(1) + 5;
-            self.target_line = Some(next.min(self.lines.len().max(1)));
-        }
-        if keymap.scroll_up.is_pressed(i) {
-            let prev = self.target_line.unwrap_or(1).saturating_sub(5);
-            self.target_line = Some(prev.max(1));
-        }
-    }
-
     pub fn render(&mut self, ui: &mut egui::Ui, net: &NetClient, feedback: &mut FeedbackInspectorState, slot_idx: usize) {
         // Drain any incoming file contents from background fetch
         let incoming = self.pending_result.lock().ok().and_then(|mut l| l.take());
@@ -196,5 +185,30 @@ impl CodeViewerState {
                 });
             feedback.register_inspectable(ui, &format!("slot_{}:code:viewer", slot_idx + 1), viewer_res.inner_rect);
         });
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodeCommand {
+    Down,
+    Up,
+}
+
+impl crate::actions::ActionProvider for CodeViewerState {
+    fn actions(&self) -> Vec<crate::actions::Action> {
+        use crate::actions::Action;
+        vec![
+            Action::new("code.down", "Scroll down", CodeCommand::Down).focused(),
+            Action::new("code.up", "Scroll up", CodeCommand::Up).focused(),
+        ]
+    }
+
+    fn run(&mut self, action: &crate::actions::Action, _value: Option<String>, _cx: &mut crate::actions::RunCx<'_>) {
+        let line = self.target_line.unwrap_or(1);
+        match action.command::<CodeCommand>() {
+            Some(CodeCommand::Down) => self.target_line = Some((line + 5).min(self.lines.len().max(1))),
+            Some(CodeCommand::Up) => self.target_line = Some(line.saturating_sub(5).max(1)),
+            None => {}
+        }
     }
 }

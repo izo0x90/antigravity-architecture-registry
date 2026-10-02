@@ -2,6 +2,7 @@ pub mod actions;
 pub mod app;
 pub mod chat;
 pub mod code;
+pub mod config;
 pub mod feedback;
 pub mod graph;
 pub mod graph_draw;

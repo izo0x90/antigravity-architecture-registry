@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Antigravity Meta-Harness Cockpit (Pure Rust WASM)</title>
+  <title>NAH</title>
   <style>
     html, body {
       margin: 0;
@@ -33,7 +33,7 @@
   </style>
 </head>
 <body>
-  <div id="loading_indicator">⚡ Initializing Antigravity Pure-Rust WASM Cockpit...</div>
+  <div id="loading_indicator">NAH · not a harness</div>
   <canvas id="the_canvas_id"></canvas>
 
   <script type="module">
@@ -46,7 +46,7 @@
         const handle = new WebHandle();
         await handle.start("the_canvas_id");
       } catch (err) {
-        console.error("Failed to start Cockpit WASM:", err);
+        console.error("Failed to start the UI:", err);
         const indicator = document.getElementById("loading_indicator");
         if (indicator) {
           indicator.innerText = "Error initializing WebAssembly: " + err;

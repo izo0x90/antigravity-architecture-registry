@@ -212,6 +212,7 @@ impl ArchitectureGraphState {
         ui: &mut egui::Ui,
         feedback: &mut FeedbackInspectorState,
         slot_idx: usize,
+        pan_held: bool,
     ) {
         // 1. Process asynchronous file fetch
         let incoming = self.pending_load.lock().ok().and_then(|mut l| l.take());
@@ -494,14 +495,14 @@ impl ArchitectureGraphState {
                 }
             }
 
-            let is_space_down = ui.input(|i| i.key_down(egui::Key::Space));
-            if is_space_down {
+            // Holding the leader key pans (a tap opens the leader menu instead).
+            if pan_held {
                 ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
             }
 
             // Canvas dragging (panning vs node dragging)
             if response.dragged() {
-                if is_space_down {
+                if pan_held {
                     // Holding space down forces canvas panning regardless of what was clicked
                     self.pan += response.drag_delta();
                 } else if let Some(dragged_id) = &self.dragging_node_id {
@@ -590,7 +591,7 @@ impl ArchitectureGraphState {
             let mouse_pressed = ui.input(|i| i.pointer.primary_pressed());
 
             // Node dragging start: on primary_pressed, find which node is under hover (unless space is held)
-            if !is_space_down && mouse_pressed && self.dragging_node_id.is_none() {
+            if !pan_held && mouse_pressed && self.dragging_node_id.is_none() {
                 if let Some(mouse_pos) = response.hover_pos() {
                     for (id, _) in &self.graph.nodes {
                         if let Some(&node_rect) = screen_rects.get(id) {
@@ -658,71 +659,8 @@ impl ArchitectureGraphState {
         });
     }
 
-    /// Graph actions for the registry (shown while a graph slot is focused).
-    pub fn actions(&self) -> Vec<crate::actions::Action> {
-        use crate::actions::{Action, Owner};
-        vec![
-            Action::new(Owner::Graph, "graph.zoom_in", "Zoom in").keys("gi"),
-            Action::new(Owner::Graph, "graph.zoom_out", "Zoom out").keys("go"),
-            Action::new(Owner::Graph, "graph.reset", "Reset layout").keys("gr"),
-            Action::new(Owner::Graph, "graph.display", "Cycle display mode").keys("gm"),
-            Action::new(Owner::Graph, "graph.close_inspector", "Close node inspector").keys("gx"),
-        ]
-    }
-
-    pub fn invoke(&mut self, id: &str) {
-        let action = match id {
-            "graph.zoom_in" => crate::keymap::GraphAction::ZoomIn,
-            "graph.zoom_out" => crate::keymap::GraphAction::ZoomOut,
-            "graph.reset" => crate::keymap::GraphAction::ResetLayout,
-            "graph.display" => crate::keymap::GraphAction::CycleDisplayMode,
-            "graph.close_inspector" => crate::keymap::GraphAction::CloseInspector,
-            _ => return,
-        };
-        self.execute_action(action);
-    }
-
-    pub fn execute_action(&mut self, action: crate::keymap::GraphAction) {
-        match action {
-            crate::keymap::GraphAction::ZoomIn => {
-                self.zoom = (self.zoom * 1.15).clamp(0.3, 2.5);
-            }
-            crate::keymap::GraphAction::ZoomOut => {
-                self.zoom = (self.zoom / 1.15).clamp(0.3, 2.5);
-            }
-            crate::keymap::GraphAction::ResetLayout => {
-                self.recalculate_layout();
-            }
-            crate::keymap::GraphAction::CycleDisplayMode => {
-                self.display_mode = match self.display_mode {
-                    DisplayMode::Detailed => DisplayMode::Compact,
-                    DisplayMode::Compact => DisplayMode::AlignmentDiff,
-                    DisplayMode::AlignmentDiff => DisplayMode::Detailed,
-                };
-                self.recalculate_layout();
-            }
-            crate::keymap::GraphAction::CloseInspector => {
-                self.selected_node_id = None;
-            }
-        }
-    }
-
-    pub fn handle_input(&mut self, i: &egui::InputState, keymap: &crate::keymap::GraphKeymap) {
-        if keymap.zoom_in.is_pressed(i) {
-            self.execute_action(crate::keymap::GraphAction::ZoomIn);
-        }
-        if keymap.zoom_out.is_pressed(i) {
-            self.execute_action(crate::keymap::GraphAction::ZoomOut);
-        }
-        if keymap.reset_layout.is_pressed(i) {
-            self.execute_action(crate::keymap::GraphAction::ResetLayout);
-        }
-        if keymap.cycle_mode.is_pressed(i) {
-            self.execute_action(crate::keymap::GraphAction::CycleDisplayMode);
-        }
-        if keymap.close_drawer.is_pressed(i) || i.key_pressed(egui::Key::Escape) {
-            self.execute_action(crate::keymap::GraphAction::CloseInspector);
-        }
+    pub fn close_inspector(&mut self) {
+        self.selected_node_id = None;
     }
 
     fn render_inspector_drawer(&self, ui: &mut egui::Ui, painter: &egui::Painter, canvas_rect: Rect, node: &GraphNode) -> bool {
@@ -958,5 +896,48 @@ mod tests {
         assert_eq!(scale_sem, 1.0);
         let sem_scaled_dims = egui::Vec2::new(dims.width * scale_sem, dims.height * scale_sem);
         assert_eq!(sem_scaled_dims, egui::Vec2::new(230.0, 105.0));
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GraphCommand {
+    ZoomIn,
+    ZoomOut,
+    ResetLayout,
+    CycleDisplayMode,
+    CloseInspector,
+}
+
+impl crate::actions::ActionProvider for ArchitectureGraphState {
+    fn actions(&self) -> Vec<crate::actions::Action> {
+        use crate::actions::Action;
+        [
+            ("graph.zoom_in", "Zoom in", GraphCommand::ZoomIn),
+            ("graph.zoom_out", "Zoom out", GraphCommand::ZoomOut),
+            ("graph.reset", "Reset layout", GraphCommand::ResetLayout),
+            ("graph.display", "Cycle display mode", GraphCommand::CycleDisplayMode),
+            ("graph.close_inspector", "Close node inspector", GraphCommand::CloseInspector),
+        ]
+        .into_iter()
+        .map(|(id, label, command)| Action::new(id, label, command).focused())
+        .collect()
+    }
+
+    fn run(&mut self, action: &crate::actions::Action, _value: Option<String>, _cx: &mut crate::actions::RunCx<'_>) {
+        let Some(command) = action.command::<GraphCommand>() else { return };
+        match command {
+            GraphCommand::ZoomIn => self.zoom = (self.zoom * 1.15).clamp(0.3, 2.5),
+            GraphCommand::ZoomOut => self.zoom = (self.zoom / 1.15).clamp(0.3, 2.5),
+            GraphCommand::ResetLayout => self.recalculate_layout(),
+            GraphCommand::CycleDisplayMode => {
+                self.display_mode = match self.display_mode {
+                    DisplayMode::Detailed => DisplayMode::Compact,
+                    DisplayMode::Compact => DisplayMode::AlignmentDiff,
+                    DisplayMode::AlignmentDiff => DisplayMode::Detailed,
+                };
+                self.recalculate_layout();
+            }
+            GraphCommand::CloseInspector => self.close_inspector(),
+        }
     }
 }

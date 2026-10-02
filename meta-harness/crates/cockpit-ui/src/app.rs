@@ -1,16 +1,19 @@
 use egui::{Color32, Frame, Margin, RichText, Stroke};
 
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
-use crate::actions::{Action, Invocation, LeaderEntry, Owner, Param, group_label, leader_entries};
+use crate::actions::{Action, ActionProvider, Bound, Invocation, LeaderEntry, Origin, Param, RunCx, Scope, leader_entries};
 use crate::chat::{ChatStreamState, SessionStatus};
 use crate::code::CodeViewerState;
+use crate::config::UiConfig;
 use crate::feedback::FeedbackInspectorState;
 use crate::graph::ArchitectureGraphState;
-use crate::net::{NetClient, WsState};
+use crate::keymap::{InputMode, TapTracker};
+use crate::net::{NetClient, NetResult, WsState};
 use crate::tree::ArchitectureTreeState;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferKind {
     Chat,
     Code,
@@ -19,12 +22,24 @@ pub enum BufferKind {
 }
 
 impl BufferKind {
+    pub const ALL: [Self; 4] = [Self::Chat, Self::Code, Self::Graph, Self::Tree];
+
     pub fn title(&self) -> &'static str {
         match self {
             Self::Chat => "CHAT",
             Self::Code => "CODE",
             Self::Graph => "GRAPH",
             Self::Tree => "TREE",
+        }
+    }
+
+    /// Lowercase name used in action ids ("buffer.chat").
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Code => "code",
+            Self::Graph => "graph",
+            Self::Tree => "tree",
         }
     }
 
@@ -36,11 +51,22 @@ impl BufferKind {
             Self::Tree => egui_phosphor::regular::TREE_STRUCTURE,
         }
     }
-
-    pub fn supports_insert_mode(&self) -> bool {
-        matches!(self, Self::Chat)
-    }
 }
+
+/// What the shell itself can do: slots, layout and overlays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShellCommand {
+    FocusSlot(usize),
+    CycleSlot(i32),
+    ShowBuffer(BufferKind),
+    SetLayout(usize),
+    ToggleInspector,
+    ToggleIssues,
+    CloseDrawer,
+    OpenPalette,
+}
+
+const MAX_SLOTS: usize = 3;
 
 pub struct CockpitApp {
     pub net: NetClient,
@@ -52,17 +78,19 @@ pub struct CockpitApp {
 
     // Layout configuration
     pub column_count: usize, // 1, 2, or 3
-    pub slot_buffers: [BufferKind; 3],
+    pub slot_buffers: [BufferKind; MAX_SLOTS],
     pub focused_slot: usize,
     pub initialized: bool,
 
-    // Modal Input & Configurable Keybindings
-    pub keymap: crate::keymap::KeymapConfig,
-    pub input_mode: crate::keymap::InputMode,
-    pub gesture_tracker: crate::keymap::SpaceGestureTracker,
-    /// Keys typed so far in leader mode (after Space).
-    pub leader_path: Vec<char>,
-    pub palette: crate::palette::Palette,
+    pub config: UiConfig,
+    /// Why the user's UI config was not applied, if it wasn't.
+    config_error: Option<String>,
+    config_reply: Arc<Mutex<Option<NetResult<Option<String>>>>>,
+    pub input_mode: InputMode,
+    leader_tap: TapTracker,
+    /// Keys typed so far in leader mode (after the leader).
+    leader_path: Vec<char>,
+    palette: crate::palette::Palette,
 
     // Top-bar status LEDs
     pub srv_led: ActivityLed,
@@ -110,6 +138,10 @@ impl ActivityLed {
 
 impl CockpitApp {
     pub fn new(host_origin: &str) -> Self {
+        let (config, config_error) = match UiConfig::with_overrides("") {
+            Ok(config) => (config, None),
+            Err(err) => (UiConfig::default(), Some(format!("built-in defaults: {err}"))),
+        };
         Self {
             net: NetClient::new(host_origin),
             chat: ChatStreamState::default(),
@@ -123,9 +155,11 @@ impl CockpitApp {
             focused_slot: 0,
             initialized: false,
 
-            keymap: crate::keymap::KeymapConfig::default(),
-            input_mode: crate::keymap::InputMode::Normal,
-            gesture_tracker: crate::keymap::SpaceGestureTracker::default(),
+            config,
+            config_error,
+            config_reply: Arc::default(),
+            input_mode: InputMode::Normal,
+            leader_tap: TapTracker::default(),
             leader_path: Vec::new(),
             palette: crate::palette::Palette::default(),
 
@@ -146,6 +180,13 @@ impl CockpitApp {
 
             self.net.connect_ws(ctx.clone());
 
+            let reply = self.config_reply.clone();
+            self.net.ui_config(ctx.clone(), move |r| {
+                if let Ok(mut slot) = reply.lock() {
+                    *slot = Some(r);
+                }
+            });
+
             // Auto-load the registry architecture into graph
             let ctx_arch = ctx.clone();
             self.graph.load_architecture(&self.net, ctx_arch);
@@ -159,6 +200,8 @@ impl CockpitApp {
             let ctx_feedback = ctx.clone();
             self.feedback.load_issues(&self.net, ctx_feedback);
         }
+
+        self.apply_user_config();
 
         // Poll WebSocket messages
         self.net.poll_ws();
@@ -193,205 +236,204 @@ impl CockpitApp {
             }
         }
 
-        // Handle global keyboard shortcuts
-        self.handle_keyboard_shortcuts(ctx);
+        self.handle_keys(ctx);
     }
 
-    /// Global actions: slots, buffers, layout, inspector, the palette itself.
-    fn app_actions(&self) -> Vec<Action> {
+    /// Merges the user's UI config over the defaults once the server answers.
+    fn apply_user_config(&mut self) {
+        let reply = self.config_reply.lock().ok().and_then(|mut r| r.take());
+        match reply {
+            Some(Ok(Some(text))) => match UiConfig::with_overrides(&text) {
+                Ok(config) => self.config = config,
+                Err(err) => self.config_error = Some(err),
+            },
+            Some(Err(err)) => self.config_error = Some(format!("ui config: {err}")),
+            Some(Ok(None)) | None => {}
+        }
+    }
+
+    fn provider(&self, kind: BufferKind) -> &dyn ActionProvider {
+        match kind {
+            BufferKind::Chat => &self.chat,
+            BufferKind::Code => &self.code,
+            BufferKind::Graph => &self.graph,
+            BufferKind::Tree => &self.tree,
+        }
+    }
+
+    /// A view's provider plus what its actions may touch (disjoint fields).
+    fn provider_cx(&mut self, kind: BufferKind) -> (&mut dyn ActionProvider, &NetClient, &mut InputMode) {
+        let provider: &mut dyn ActionProvider = match kind {
+            BufferKind::Chat => &mut self.chat,
+            BufferKind::Code => &mut self.code,
+            BufferKind::Graph => &mut self.graph,
+            BufferKind::Tree => &mut self.tree,
+        };
+        (provider, &self.net, &mut self.input_mode)
+    }
+
+    fn shell_actions(&self) -> Vec<Action> {
+        use ShellCommand as S;
         let mut actions = Vec::new();
-        for slot in 1..=3 {
-            actions.push(Action::new(Owner::App, format!("slot.{slot}"), format!("Focus slot {slot}")).keys(&slot.to_string()));
+        for slot in 0..MAX_SLOTS {
+            actions.push(Action::new(format!("slot.focus.{}", slot + 1), format!("Focus slot {}", slot + 1), S::FocusSlot(slot)));
         }
-        for (key, kind) in [("c", BufferKind::Chat), ("v", BufferKind::Code), ("g", BufferKind::Graph), ("t", BufferKind::Tree)] {
-            let title = kind.title();
-            actions.push(Action::new(Owner::App, format!("buffer.{}", title.to_lowercase()), format!("Show {title} in this slot")).keys(&format!("b{key}")));
+        actions.push(Action::new("slot.next", "Next slot", S::CycleSlot(1)));
+        actions.push(Action::new("slot.prev", "Previous slot", S::CycleSlot(-1)));
+        for kind in BufferKind::ALL {
+            actions.push(Action::new(format!("buffer.{}", kind.name()), format!("Show {} in this slot", kind.title()), S::ShowBuffer(kind)));
         }
-        for cols in 1..=3 {
-            actions.push(Action::new(Owner::App, format!("layout.{cols}"), format!("{cols}-column layout")).keys(&format!("l{cols}")));
+        for cols in 1..=MAX_SLOTS {
+            actions.push(Action::new(format!("layout.{cols}"), format!("{cols}-column layout"), S::SetLayout(cols)));
         }
-        actions.push(Action::new(Owner::App, "inspector", "Toggle element inspector").keys("i"));
-        actions.push(Action::new(Owner::App, "issues", "Toggle issues window").keys("d"));
-        actions.push(Action::new(Owner::App, "drawer.close", "Close side drawer").keys("x"));
-        actions.push(Action::new(Owner::App, "palette", "Command palette").keys("/"));
+        actions.push(Action::new("inspector.toggle", "Toggle element inspector", S::ToggleInspector));
+        actions.push(Action::new("issues.toggle", "Toggle issues window", S::ToggleIssues));
+        actions.push(Action::new("drawer.close", "Close side drawer", S::CloseDrawer));
+        actions.push(Action::new("palette.open", "Command palette", S::OpenPalette));
         actions
     }
 
-    /// Everything invokable right now: global, the agent (always), and the
-    /// focused view's own actions.
-    pub fn collect_actions(&self) -> Vec<Action> {
-        let mut actions = self.app_actions();
-        actions.extend(self.chat.actions());
-        if self.slot_buffers[self.focused_slot] == BufferKind::Graph {
-            actions.extend(self.graph.actions());
+    /// Everything invokable right now, bound to its keys: the focused view's
+    /// actions first (they win key conflicts), then the shell, then the global
+    /// actions of every other view.
+    fn bound_actions(&self) -> Vec<Bound> {
+        let focused = self.slot_buffers[self.focused_slot];
+        let view = |kind: BufferKind, all: bool| {
+            self.provider(kind).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(kind), a))
+        };
+        let mut actions: Vec<(Origin, Action)> = view(focused, true).collect();
+        actions.extend(self.shell_actions().into_iter().map(|a| (Origin::Shell, a)));
+        for kind in BufferKind::ALL.into_iter().filter(|k| *k != focused) {
+            actions.extend(view(kind, false));
         }
-        actions
+        self.config.keymap.bind(actions)
     }
 
     pub fn invoke(&mut self, invocation: Invocation, ctx: &egui::Context) {
-        match invocation.owner {
-            Owner::Chat => self.chat.invoke(&invocation, &self.net, ctx),
-            Owner::Graph => self.graph.invoke(&invocation.id),
-            Owner::App => {
-                let id = invocation.id.as_str();
-                let global = if let Some(n) = id.strip_prefix("slot.") {
-                    n.parse::<usize>().ok().map(|n| crate::keymap::GlobalAction::FocusSlot(n - 1))
-                } else if let Some(n) = id.strip_prefix("layout.") {
-                    n.parse::<usize>().ok().map(crate::keymap::GlobalAction::SetLayout)
-                } else if let Some(name) = id.strip_prefix("buffer.") {
-                    [BufferKind::Chat, BufferKind::Code, BufferKind::Graph, BufferKind::Tree]
-                        .into_iter()
-                        .find(|k| k.title().to_lowercase() == name)
-                        .map(|kind| crate::keymap::GlobalAction::SwitchBuffer { slot: self.focused_slot, kind })
-                } else {
-                    match id {
-                        "inspector" => Some(crate::keymap::GlobalAction::ToggleInspector),
-                        "issues" => Some(crate::keymap::GlobalAction::ToggleIssues),
-                        "drawer.close" => Some(crate::keymap::GlobalAction::CloseActiveDrawer),
-                        "palette" => {
-                            self.open_palette(None);
-                            None
-                        }
-                        _ => None,
-                    }
-                };
-                if let Some(action) = global {
-                    self.execute_global_action(action, ctx);
+        let Invocation { action, origin, value } = invocation;
+        match origin {
+            Origin::Shell => {
+                if let Some(command) = action.command::<ShellCommand>() {
+                    self.run_shell(*command, ctx);
                 }
+            }
+            Origin::View(kind) => {
+                let slot = self.focused_slot;
+                let (provider, net, input_mode) = self.provider_cx(kind);
+                provider.run(&action, value, &mut RunCx { net, ctx, input_mode, slot });
             }
         }
     }
 
     /// Opens the palette (at an action's parameter, if given) and gives it the keyboard.
-    fn open_palette(&mut self, action: Option<&Action>) {
+    fn open_palette(&mut self, action: Option<&Bound>) {
         match action {
             Some(action) => self.palette.open_for(action),
             None => self.palette.open(),
         }
-        self.input_mode = crate::keymap::InputMode::Palette;
+        self.input_mode = InputMode::Palette;
     }
 
     /// Runs an action, or opens the palette at its parameter if it needs one.
-    fn run_action(&mut self, action: &Action, ctx: &egui::Context) {
-        if action.param == Param::None {
-            self.invoke(Invocation::of(action, None), ctx);
+    fn run_bound(&mut self, bound: &Bound, ctx: &egui::Context) {
+        if bound.action.param == Param::None {
+            self.invoke(Invocation { action: bound.action.clone(), origin: bound.origin, value: None }, ctx);
         } else {
-            self.open_palette(Some(action));
+            self.open_palette(Some(bound));
         }
     }
 
-    pub fn execute_global_action(&mut self, action: crate::keymap::GlobalAction, ctx: &egui::Context) {
-        match action {
-            crate::keymap::GlobalAction::FocusSlot(slot) => {
+    fn run_shell(&mut self, command: ShellCommand, ctx: &egui::Context) {
+        match command {
+            ShellCommand::FocusSlot(slot) => {
                 if slot < self.column_count {
                     self.focused_slot = slot;
                 }
             }
-            crate::keymap::GlobalAction::CycleSlot(dir) => {
-                if self.column_count > 0 {
-                    if dir > 0 {
-                        self.focused_slot = (self.focused_slot + 1) % self.column_count;
-                    } else {
-                        self.focused_slot = if self.focused_slot == 0 {
-                            self.column_count - 1
-                        } else {
-                            self.focused_slot - 1
-                        };
-                    }
-                }
+            ShellCommand::CycleSlot(dir) => {
+                let n = self.column_count as i32;
+                self.focused_slot = (self.focused_slot as i32 + dir).rem_euclid(n) as usize;
             }
-            crate::keymap::GlobalAction::SwitchBuffer { slot, kind } => {
-                if slot < self.slot_buffers.len() {
-                    self.slot_buffers[slot] = kind;
-                }
+            ShellCommand::ShowBuffer(kind) => self.slot_buffers[self.focused_slot] = kind,
+            ShellCommand::SetLayout(cols) => {
+                self.column_count = cols.clamp(1, MAX_SLOTS);
+                self.focused_slot = self.focused_slot.min(self.column_count - 1);
             }
-            crate::keymap::GlobalAction::SetLayout(cols) => {
-                self.column_count = cols.clamp(1, 3);
-                if self.focused_slot >= self.column_count {
-                    self.focused_slot = self.column_count - 1;
-                }
-            }
-            crate::keymap::GlobalAction::ToggleInspector => {
-                self.feedback.toggle_inspection();
-            }
-            crate::keymap::GlobalAction::ToggleIssues => {
+            ShellCommand::ToggleInspector => self.feedback.toggle_inspection(),
+            ShellCommand::ToggleIssues => {
                 self.feedback.is_issues_window_open = !self.feedback.is_issues_window_open;
                 if self.feedback.is_issues_window_open {
                     self.feedback.load_issues(&self.net, ctx.clone());
                 }
             }
-            crate::keymap::GlobalAction::CloseActiveDrawer => {
-                self.graph.execute_action(crate::keymap::GraphAction::CloseInspector);
-            }
+            ShellCommand::CloseDrawer => self.graph.close_inspector(),
+            ShellCommand::OpenPalette => self.open_palette(None),
         }
     }
 
     /// Applies one leader key; returns true when the leader menu is done.
     fn leader_key(&mut self, key: char, ctx: &egui::Context) -> bool {
-        let actions = self.collect_actions();
-        let entry = leader_entries(&actions, &self.leader_path).into_iter().find(|e| e.key() == key);
+        let bound = self.bound_actions();
+        let entry = leader_entries(&bound, &self.leader_path).into_iter().find(|e| e.key() == key);
         match entry {
-            Some(LeaderEntry::Group { key, .. }) => {
+            Some(LeaderEntry::Group { key }) => {
                 self.leader_path.push(key);
                 false
             }
             Some(LeaderEntry::Action { index, .. }) => {
                 self.leader_path.clear();
-                self.input_mode = crate::keymap::InputMode::Normal;
-                let action = actions[index].clone();
-                self.run_action(&action, ctx);
+                self.input_mode = InputMode::Normal;
+                self.run_bound(&bound[index], ctx);
                 true
             }
             None => false,
         }
     }
 
-    fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        // Step 1: Space Tap-vs-Drag Gesture Tracking
-        let (space_pressed, space_released, pointer_dragged) = ctx.input(|i| {
-            let pressed = i.key_pressed(egui::Key::Space);
-            let released = i.key_released(egui::Key::Space);
+    fn handle_keys(&mut self, ctx: &egui::Context) {
+        let keymap = &self.config.keymap;
+        let (leader_pressed, leader_released, dragged, back) = ctx.input(|i| {
             let dragged = i.pointer.primary_down() && (i.pointer.delta().length_sq() > 2.0 || i.pointer.is_decidedly_dragging());
-            (pressed, released, dragged)
+            (keymap.leader.pressed(i), keymap.leader.released(i), dragged, keymap.back.pressed(i))
         });
-
-        if space_pressed {
-            self.gesture_tracker.on_space_pressed();
+        if leader_pressed {
+            self.leader_tap.press();
         }
-        if pointer_dragged {
-            self.gesture_tracker.on_drag();
+        if dragged {
+            self.leader_tap.drag();
         }
-        let space_tapped = space_released && self.gesture_tracker.on_space_released();
+        let leader_tapped = leader_released && self.leader_tap.release();
 
-        // Step 2: Handle Mode-Specific Key Event Dispatching
         match self.input_mode {
-            crate::keymap::InputMode::Insert { .. } => {
-                let exit_pressed = ctx.input(|i| self.keymap.global.exit_insert.is_pressed(i) || i.key_pressed(egui::Key::Escape));
-                if exit_pressed {
-                    self.input_mode = crate::keymap::InputMode::Normal;
+            InputMode::Insert { .. } => {
+                if back {
+                    self.input_mode = InputMode::Normal;
                     ctx.memory_mut(|m| {
                         if let Some(id) = m.focused() {
                             m.surrender_focus(id);
                         }
                     });
                 }
-                // In insert mode, all other keys flow into the text inputs.
+                // Everything else flows into the text field.
             }
 
-            crate::keymap::InputMode::Palette => {
-                // The palette reads its own keys while open.
-            }
+            // The palette reads its own keys while open.
+            InputMode::Palette => {}
 
-            crate::keymap::InputMode::Leader => {
-                // Space again dismisses the menu.
-                if space_tapped {
+            InputMode::Leader => {
+                if leader_tapped {
                     self.leader_path.clear();
-                    self.input_mode = crate::keymap::InputMode::Normal;
+                    self.input_mode = InputMode::Normal;
                     return;
                 }
-                let (typed, escape) = ctx.input(|i| {
-                    let typed: Vec<char> = i
-                        .events
+                if back {
+                    if self.leader_path.pop().is_none() {
+                        self.input_mode = InputMode::Normal;
+                    }
+                    return;
+                }
+                let typed: Vec<char> = ctx.input(|i| {
+                    i.events
                         .iter()
                         .filter_map(|e| match e {
                             egui::Event::Text(t) => Some(t.chars().collect::<Vec<_>>()),
@@ -399,15 +441,8 @@ impl CockpitApp {
                         })
                         .flatten()
                         .filter(|c| !c.is_whitespace())
-                        .collect();
-                    (typed, i.key_pressed(egui::Key::Escape))
+                        .collect()
                 });
-                if escape {
-                    if self.leader_path.pop().is_none() {
-                        self.input_mode = crate::keymap::InputMode::Normal;
-                    }
-                    return;
-                }
                 for key in typed {
                     if self.leader_key(key, ctx) {
                         break;
@@ -415,131 +450,19 @@ impl CockpitApp {
                 }
             }
 
-            crate::keymap::InputMode::Normal => {
-                // Space tap opens Which-Key Leader HUD
-                if space_tapped {
+            // A focused text field (e.g. a search box) gets its keys.
+            InputMode::Normal if ctx.wants_keyboard_input() => {}
+
+            InputMode::Normal => {
+                if leader_tapped {
                     self.leader_path.clear();
-                    self.input_mode = crate::keymap::InputMode::Leader;
+                    self.input_mode = InputMode::Leader;
                     return;
                 }
-                // ':' opens the palette (vim-style command line).
-                if ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(t) if t == ":"))) {
-                    self.open_palette(None);
-                    return;
-                }
-
-                let mut action_to_execute = None;
-                let mut mode_to_set = None;
-
-                ctx.input(|i| {
-                    // 1. Global Inspector / Issues toggles
-                    if self.keymap.global.toggle_inspector.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::ToggleInspector);
-                        return;
-                    }
-                    if self.keymap.global.toggle_issues.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::ToggleIssues);
-                        return;
-                    }
-
-                    // 2. Layout shortcuts (Alt+1, Alt+2, Alt+3)
-                    if self.keymap.global.layout_1.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::SetLayout(1));
-                        return;
-                    }
-                    if self.keymap.global.layout_2.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::SetLayout(2));
-                        return;
-                    }
-                    if self.keymap.global.layout_3.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::SetLayout(3));
-                        return;
-                    }
-
-                    // 3. Slot Navigation (1, 2, 3, Tab, Shift+Tab)
-                    if self.keymap.global.focus_slot_1.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::FocusSlot(0));
-                        return;
-                    }
-                    if self.keymap.global.focus_slot_2.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::FocusSlot(1));
-                        return;
-                    }
-                    if self.keymap.global.focus_slot_3.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::FocusSlot(2));
-                        return;
-                    }
-                    if self.keymap.global.next_slot.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::CycleSlot(1));
-                        return;
-                    }
-                    if self.keymap.global.prev_slot.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::CycleSlot(-1));
-                        return;
-                    }
-
-                    // 4. Buffer switching for focused slot (c, v, g, t)
-                    if self.keymap.global.switch_chat.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::SwitchBuffer {
-                            slot: self.focused_slot,
-                            kind: BufferKind::Chat,
-                        });
-                        return;
-                    }
-                    if self.keymap.global.switch_code.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::SwitchBuffer {
-                            slot: self.focused_slot,
-                            kind: BufferKind::Code,
-                        });
-                        return;
-                    }
-                    if self.keymap.global.switch_graph.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::SwitchBuffer {
-                            slot: self.focused_slot,
-                            kind: BufferKind::Graph,
-                        });
-                        return;
-                    }
-                    if self.keymap.global.switch_tree.is_pressed(i) {
-                        action_to_execute = Some(crate::keymap::GlobalAction::SwitchBuffer {
-                            slot: self.focused_slot,
-                            kind: BufferKind::Tree,
-                        });
-                        return;
-                    }
-
-                    // 5. Enter Insert mode on focused slot ('i') ONLY if buffer supports insert mode
-                    if self.keymap.global.enter_insert.is_pressed(i) {
-                        let current_buf = self.slot_buffers[self.focused_slot];
-                        if current_buf.supports_insert_mode() {
-                            mode_to_set = Some(crate::keymap::InputMode::Insert { slot: self.focused_slot });
-                        }
-                        return;
-                    }
-
-                    // 6. View-Specific Input Routing for Focused Slot
-                    let focused_buffer = self.slot_buffers[self.focused_slot];
-                    match focused_buffer {
-                        BufferKind::Graph => {
-                            self.graph.handle_input(i, &self.keymap.graph);
-                        }
-                        BufferKind::Chat => {
-                            self.chat.handle_input(i, &self.keymap.chat, &mut self.input_mode, self.focused_slot);
-                        }
-                        BufferKind::Code => {
-                            self.code.handle_input(i, &self.keymap.code);
-                        }
-                        BufferKind::Tree => {
-                            self.tree.handle_input(i, &self.keymap.tree);
-                        }
-                    }
-                });
-
-                if let Some(action) = action_to_execute {
-                    self.execute_global_action(action, ctx);
-                }
-                if let Some(mode) = mode_to_set {
-                    self.input_mode = mode;
+                let bound = self.bound_actions();
+                let hit = ctx.input(|i| bound.iter().find(|b| b.keys.iter().any(|k| k.pressed(i))).cloned());
+                if let Some(b) = hit {
+                    self.run_bound(&b, ctx);
                 }
             }
         }
@@ -555,8 +478,9 @@ impl CockpitApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let brand_res = ui.horizontal(|ui| {
-                        ui.label(RichText::new("ANTIGRAVITY COCKPIT").strong().size(13.0).color(Color32::WHITE));
-                        ui.label(RichText::new("v2.0").monospace().size(10.0).color(Color32::from_rgb(100, 160, 240)));
+                        let brand = &self.config.brand;
+                        ui.label(RichText::new(&brand.name).strong().size(13.0).color(Color32::WHITE));
+                        ui.label(RichText::new(&brand.tagline).monospace().size(10.0).color(Color32::from_rgb(100, 160, 240)));
                     });
                     self.feedback.register_inspectable(ui, "top_bar:brand", brand_res.response.rect);
 
@@ -588,22 +512,22 @@ impl CockpitApp {
 
                     // Input Mode Indicator (NORMAL vs LEADER vs INSERT)
                     let (mode_label, mode_color, mode_bg) = match self.input_mode {
-                        crate::keymap::InputMode::Normal => (
+                        InputMode::Normal => (
                             "NORMAL".to_string(),
                             Color32::from_rgb(140, 190, 255),
                             Color32::from_rgb(20, 30, 48),
                         ),
-                        crate::keymap::InputMode::Leader => (
+                        InputMode::Leader => (
                             self.leader_title("LEADER"),
                             Color32::from_rgb(255, 205, 50),
                             Color32::from_rgb(48, 40, 15),
                         ),
-                        crate::keymap::InputMode::Palette => (
+                        InputMode::Palette => (
                             "PALETTE".to_string(),
                             Color32::from_rgb(90, 200, 255),
                             Color32::from_rgb(18, 34, 52),
                         ),
-                        crate::keymap::InputMode::Insert { slot } => (
+                        InputMode::Insert { slot } => (
                             format!("INSERT [S{}]", slot + 1),
                             Color32::from_rgb(100, 240, 150),
                             Color32::from_rgb(20, 48, 30),
@@ -618,6 +542,11 @@ impl CockpitApp {
                         .show(ui, |ui| {
                             ui.label(RichText::new(mode_label).monospace().strong().size(10.5).color(mode_color));
                         });
+
+                    if let Some(err) = &self.config_error {
+                        ui.label(RichText::new(format!("{} config", egui_phosphor::regular::WARNING)).size(11.0).color(LED_BUSY))
+                            .on_hover_text(format!("Your UI config was not applied (using defaults):\n{err}"));
+                    }
 
                     // Right-aligned controls group (Inspector, Issues, Layout)
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -756,7 +685,8 @@ impl CockpitApp {
                             self.code.render(ui, &self.net, &mut self.feedback, slot_idx);
                         }
                         BufferKind::Graph => {
-                            self.graph.render(ui, &mut self.feedback, slot_idx);
+                            let pan_held = ui.input(|i| self.config.keymap.leader.key_down(i));
+                            self.graph.render(ui, &mut self.feedback, slot_idx, pan_held);
                         }
                         BufferKind::Tree => {
                             self.tree.render(ui, &self.graph.components, &mut self.feedback, slot_idx);
@@ -780,7 +710,10 @@ impl CockpitApp {
     fn leader_title(&self, root: &str) -> String {
         let mut title = root.to_owned();
         for depth in 1..=self.leader_path.len() {
-            let label = group_label(&self.leader_path[..depth]).map(str::to_uppercase).unwrap_or_else(|| self.leader_path[depth - 1].to_string());
+            let label = match self.config.keymap.group_label(&self.leader_path[..depth]) {
+                Some(label) => label.to_uppercase(),
+                None => self.leader_path[depth - 1].to_string(),
+            };
             title.push_str(" > ");
             title.push_str(&label);
         }
@@ -790,11 +723,11 @@ impl CockpitApp {
     /// Which-key HUD, generated from the actions available at the current path.
     /// Every entry is also tappable.
     pub fn render_which_key_hud(&mut self, ctx: &egui::Context) {
-        if self.input_mode != crate::keymap::InputMode::Leader {
+        if self.input_mode != InputMode::Leader {
             return;
         }
-        let actions = self.collect_actions();
-        let entries = leader_entries(&actions, &self.leader_path);
+        let bound = self.bound_actions();
+        let entries = leader_entries(&bound, &self.leader_path);
         let screen_rect = ctx.content_rect();
         let hud_w = (screen_rect.width() - 32.0).min(760.0);
         let mut tapped: Option<char> = None;
@@ -813,8 +746,8 @@ impl CockpitApp {
                     .inner_margin(Margin::symmetric(14, 6))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.colored_label(Color32::from_rgb(90, 200, 255), RichText::new(self.leader_title("SPACE")).strong().monospace().size(11.0));
-                            let esc = egui::Button::new(RichText::new("Esc").color(Color32::from_rgb(255, 215, 0)).monospace().size(11.0)).corner_radius(4);
+                            ui.colored_label(Color32::from_rgb(90, 200, 255), RichText::new(self.leader_title(&self.config.keymap.leader.label().to_uppercase())).strong().monospace().size(11.0));
+                            let esc = egui::Button::new(RichText::new(self.config.keymap.back.label()).color(Color32::from_rgb(255, 215, 0)).monospace().size(11.0)).corner_radius(4);
                             if ui.add(esc).clicked() {
                                 back = true;
                             }
@@ -826,8 +759,12 @@ impl CockpitApp {
                             ui.horizontal(|ui| {
                                 for entry in row {
                                     let (key, label) = match entry {
-                                        LeaderEntry::Group { key, label } => (*key, format!("{label}…")),
-                                        LeaderEntry::Action { key, index } => (*key, actions[*index].label.clone()),
+                                        LeaderEntry::Group { key } => {
+                                            let mut path = self.leader_path.clone();
+                                            path.push(*key);
+                                            (*key, format!("{}…", self.config.keymap.group_label(&path).unwrap_or("more")))
+                                        }
+                                        LeaderEntry::Action { key, index } => (*key, bound[*index].action.label.clone()),
                                     };
                                     ui.allocate_ui(egui::vec2(200.0, 22.0), |ui| {
                                         ui.horizontal(|ui| {
@@ -850,7 +787,7 @@ impl CockpitApp {
         if let Some(key) = tapped {
             self.leader_key(key, ctx);
         } else if back && self.leader_path.pop().is_none() {
-            self.input_mode = crate::keymap::InputMode::Normal;
+            self.input_mode = InputMode::Normal;
         }
     }
 
@@ -863,30 +800,39 @@ impl CockpitApp {
                 let button = egui::Button::new(RichText::new(format!("{} Actions", egui_phosphor::regular::COMMAND)).size(13.0))
                     .fill(Color32::from_rgba_premultiplied(30, 44, 66, 235))
                     .corner_radius(16);
-                if ui.add(button).on_hover_text("Command palette (Space /, or :)").clicked() {
+                if ui.add(button).on_hover_text("Command palette").clicked() {
                     self.open_palette(None);
                 }
             });
 
-        let actions = self.collect_actions();
-        // A view asked for its action's picker (e.g. Resume once sessions loaded).
-        if let Some(id) = self.chat.pending_palette.take()
-            && let Some(action) = actions.iter().find(|a| a.id == id).cloned()
-        {
-            self.open_palette(Some(&action));
+        let bound = self.bound_actions();
+        // A view asked for an action's picker (e.g. Resume once sessions loaded).
+        for kind in BufferKind::ALL {
+            if let Some(id) = self.provider_cx(kind).0.take_palette_request()
+                && let Some(action) = bound.iter().find(|b| b.action.id == id)
+            {
+                self.open_palette(Some(action));
+            }
         }
-        if let Some(invocation) = self.palette.render(ctx, &actions) {
-            self.input_mode = crate::keymap::InputMode::Normal;
+        if let Some(invocation) = self.palette.render(ctx, &bound, &self.config.keymap) {
+            self.input_mode = InputMode::Normal;
             self.invoke(invocation, ctx);
         }
-        if self.input_mode == crate::keymap::InputMode::Palette && !self.palette.is_open() {
-            self.input_mode = crate::keymap::InputMode::Normal;
+        if self.input_mode == InputMode::Palette && !self.palette.is_open() {
+            self.input_mode = InputMode::Normal;
         }
     }
 }
 
 impl eframe::App for CockpitApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.frame(ctx);
+    }
+}
+
+impl CockpitApp {
+    /// One UI frame.
+    pub fn frame(&mut self, ctx: &egui::Context) {
         self.update_lifecycle(ctx);
         self.feedback.begin_frame();
 

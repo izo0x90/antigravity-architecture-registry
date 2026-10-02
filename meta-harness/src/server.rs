@@ -92,6 +92,7 @@ pub fn create_router(state: AppState) -> Router {
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string());
     let mut router = Router::new()
         .route("/health", get(health_check))
+        .route("/api/ui/config", get(ui_config_handler))
         .route("/api/instances", get(list_instances))
         .route("/api/instances/{id}/refresh", post(refresh_instance))
         .route("/api/instances/{id}/sessions", get(list_saved_sessions))
@@ -326,6 +327,27 @@ async fn health_check() -> impl IntoResponse {
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION")
     }))
+}
+
+/// The user's UI config file: `$NAH_UI_CONFIG`, else `~/.config/nah/ui.toml`.
+fn ui_config_path() -> Option<std::path::PathBuf> {
+    match std::env::var_os("NAH_UI_CONFIG") {
+        Some(path) => Some(path.into()),
+        None => std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".config/nah/ui.toml")),
+    }
+}
+
+/// Serves the user's UI config text (merged over the UI's defaults client-side);
+/// `text` is null when there is none.
+async fn ui_config_handler() -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let Some(path) = ui_config_path() else {
+        return Ok(Json(serde_json::json!({ "text": null })));
+    };
+    match tokio::fs::read_to_string(&path).await {
+        Ok(text) => Ok(Json(serde_json::json!({ "text": text }))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Json(serde_json::json!({ "text": null }))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("{}: {e}", path.display()) })))),
+    }
 }
 
 /// Serves the registry's live architecture (the same state the MCP tools read and write).

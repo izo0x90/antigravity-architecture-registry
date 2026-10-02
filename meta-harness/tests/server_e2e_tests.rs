@@ -107,6 +107,15 @@ async fn static_index_boots_the_wasm_bundle() {
     let (addr, _) = app().await;
     let (status, body) = http(addr, "GET", "/index.html", None).await;
     assert_eq!(status, 200);
-    assert!(body.contains("Antigravity Meta-Harness Cockpit"));
+    assert!(body.contains("<title>NAH</title>"));
     assert!(body.contains("/wasm/cockpit_ui.js"));
+}
+
+#[tokio::test]
+async fn ui_config_endpoint_answers_with_the_user_file_or_null() {
+    let (addr, _) = app().await;
+    let (status, body) = http(addr, "GET", "/api/ui/config", None).await;
+    assert_eq!(status, 200);
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(value["text"].is_null() || value["text"].is_string());
 }
