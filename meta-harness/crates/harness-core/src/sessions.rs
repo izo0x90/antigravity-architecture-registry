@@ -18,6 +18,8 @@ pub struct OpenThread {
     pub policy: RuntimePolicy,
     pub model: Option<ModelSelection>,
     pub resume: Option<NativeId>,
+    /// Added to the manager's shared MCP servers for this thread.
+    pub extra_mcp_servers: Vec<McpServer>,
 }
 
 pub struct SessionManager {
@@ -41,7 +43,7 @@ impl SessionManager {
             policy: request.policy,
             model: request.model,
             resume: request.resume,
-            mcp_servers: self.mcp_servers.clone(),
+            mcp_servers: self.mcp_servers.iter().cloned().chain(request.extra_mcp_servers).collect(),
         };
         let session: Arc<dyn SessionRuntime> = instance.adapter().open_session(config).await?.into();
 

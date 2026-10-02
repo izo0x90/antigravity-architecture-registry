@@ -106,6 +106,8 @@ impl ProviderAdapter for FakeAdapter {
             status: ThreadStatus::Idle,
             policy: config.policy,
             model: config.model,
+            controls: Default::default(),
+            mcp_servers: Vec::new(),
         };
         let (events, _) = broadcast::channel(64);
         let session = FakeSession { thread: thread.clone(), events, log: Arc::default() };

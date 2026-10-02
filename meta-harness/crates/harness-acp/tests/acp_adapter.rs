@@ -85,10 +85,26 @@ impl AcpLauncher for MockLauncher {
                 )
                 .on_receive_request(
                     async move |_req: acp::NewSessionRequest, responder, _cx| {
-                        responder.respond(acp::NewSessionResponse::new("s1").modes(acp::SessionModeState::new(
-                            "default",
-                            vec![acp::SessionMode::new("default", "Default"), acp::SessionMode::new("yolo", "YOLO")],
-                        )))
+                        responder.respond(
+                            acp::NewSessionResponse::new("s1")
+                                .modes(acp::SessionModeState::new(
+                                    "default",
+                                    vec![acp::SessionMode::new("default", "Default"), acp::SessionMode::new("yolo", "YOLO")],
+                                ))
+                                .config_options(vec![
+                                    acp::SessionConfigOption::select(
+                                        "model",
+                                        "Model",
+                                        "flash",
+                                        vec![
+                                            acp::SessionConfigSelectOption::new("flash", "Flash"),
+                                            acp::SessionConfigSelectOption::new("pro", "Pro"),
+                                        ],
+                                    )
+                                    .category(acp::SessionConfigOptionCategory::Model),
+                                    acp::SessionConfigOption::boolean("verbose", "Verbose", false),
+                                ]),
+                        )
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -98,6 +114,12 @@ impl AcpLauncher for MockLauncher {
                         responder.respond(acp::ListSessionsResponse::new(vec![
                             acp::SessionInfo::new("old-1", cwd).title("Earlier work".to_string()),
                         ]))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_req: acp::SetSessionConfigOptionRequest, responder, _cx| {
+                        responder.respond(acp::SetSessionConfigOptionResponse::new(Vec::new()))
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -269,4 +291,43 @@ async fn catalog_lists_saved_sessions() {
     assert_eq!(page.sessions[0].native_id.as_str(), "old-1");
     assert_eq!(page.sessions[0].title.as_deref(), Some("Earlier work"));
     assert_eq!(page.sessions[0].cwd.as_deref(), Some("/work"));
+}
+
+fn controls_of(seen: &[AdapterEvent]) -> SessionControls {
+    seen.iter()
+        .rev()
+        .find_map(|e| match e { AdapterEvent::ThreadUpdated { thread } => Some(thread.controls.clone()), _ => None })
+        .unwrap()
+}
+
+#[tokio::test]
+async fn session_controls_expose_and_steer_every_config_option() {
+    let (session, _) = open(RuntimeMode::ApprovalRequired).await;
+    let mut events = session.events();
+    let mut replay = Vec::new();
+    collect_until(&mut events, &mut replay, |e| matches!(e, AdapterEvent::CatalogUpdated { update } if update.models.is_some())).await;
+
+    let controls = controls_of(&replay);
+    assert_eq!(controls.modes.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["default", "yolo"]);
+    assert_eq!(controls.current_mode.as_deref(), Some("default"));
+    let model = controls.model_control().expect("model control");
+    assert!(matches!(&model.kind, ConfigKind::Select { choices, current } if choices.len() == 2 && current == "flash"));
+    assert!(controls.config.iter().any(|c| c.id == "verbose" && c.kind == ConfigKind::Boolean { current: false }));
+    assert!(replay.iter().any(|e| matches!(e, AdapterEvent::CatalogUpdated { update }
+        if update.models.as_ref().is_some_and(|m| m.iter().map(|x| x.id.as_str()).collect::<Vec<_>>() == vec!["flash", "pro"]))));
+
+    session
+        .steer(SteerInput {
+            model: Some(ModelSelection { instance_id: InstanceId::new("mock"), model: "pro".into(), options: Vec::new() }),
+            config: vec![OptionValue { id: "verbose".into(), value: serde_json::Value::Bool(true) }],
+            mode: Some("yolo".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut seen = Vec::new();
+    collect_until(&mut events, &mut seen, |e| matches!(e, AdapterEvent::ThreadUpdated { thread } if thread.controls.current_mode.as_deref() == Some("yolo"))).await;
+    let controls = controls_of(&seen);
+    assert!(matches!(&controls.model_control().unwrap().kind, ConfigKind::Select { current, .. } if current == "pro"));
+    assert!(controls.config.iter().any(|c| c.id == "verbose" && c.kind == ConfigKind::Boolean { current: true }));
 }

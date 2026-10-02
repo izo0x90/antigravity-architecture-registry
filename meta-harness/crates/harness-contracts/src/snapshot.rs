@@ -59,38 +59,13 @@ pub struct AuthMethod {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelOption {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
     pub is_default: bool,
-    /// Per-model settings (effort, thinking, ...) the client renders generically.
-    pub options: Vec<OptionDescriptor>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OptionDescriptor {
-    pub id: String,
-    pub label: String,
-    pub description: Option<String>,
-    pub kind: OptionKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
-pub enum OptionKind {
-    Select { choices: Vec<OptionChoice>, current: Option<String> },
-    Boolean { current: Option<bool> },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OptionChoice {
-    pub value: String,
-    pub label: String,
 }
 
 /// A command invoked by sending `/name args` as a prompt.

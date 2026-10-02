@@ -2,8 +2,8 @@
 
 use agent_client_protocol::schema::v1 as acp;
 use harness_contracts::{
-    ApprovalDecision, ApprovalOption, ContentBlock, Diff, FileLocation, ItemStatus, PlanStep,
-    SlashCommand, StepStatus, ToolKind, TurnStatus, Usage,
+    ApprovalDecision, ApprovalOption, ConfigCategory, ConfigChoice, ConfigControl, ConfigKind, ContentBlock, Diff,
+    FileLocation, ItemStatus, ModeOption, ModelOption, PlanStep, SlashCommand, StepStatus, ToolKind, TurnStatus, Usage,
 };
 
 pub fn content_block(block: &acp::ContentBlock) -> ContentBlock {
@@ -117,6 +117,82 @@ pub fn approval_option(option: &acp::PermissionOption) -> ApprovalOption {
         _ => ApprovalDecision::Decline,
     };
     ApprovalOption { id: option.option_id.to_string(), decision, label: option.name.clone(), warning: None }
+}
+
+pub fn modes(state: &acp::SessionModeState) -> (Vec<ModeOption>, Option<String>) {
+    let modes = state
+        .available_modes
+        .iter()
+        .map(|m| ModeOption { id: m.id.to_string(), name: m.name.clone(), description: m.description.clone() })
+        .collect();
+    (modes, Some(state.current_mode_id.to_string()))
+}
+
+fn category(category: Option<&acp::SessionConfigOptionCategory>) -> ConfigCategory {
+    match category {
+        Some(acp::SessionConfigOptionCategory::Mode) => ConfigCategory::Mode,
+        Some(acp::SessionConfigOptionCategory::Model) => ConfigCategory::Model,
+        Some(acp::SessionConfigOptionCategory::ModelConfig) => ConfigCategory::ModelConfig,
+        Some(acp::SessionConfigOptionCategory::ThoughtLevel) => ConfigCategory::ThoughtLevel,
+        _ => ConfigCategory::Other,
+    }
+}
+
+fn choice(option: &acp::SessionConfigSelectOption, group: Option<&str>) -> ConfigChoice {
+    ConfigChoice {
+        value: option.value.to_string(),
+        name: option.name.clone(),
+        description: option.description.clone(),
+        group: group.map(str::to_owned),
+    }
+}
+
+pub fn config_controls(options: &[acp::SessionConfigOption]) -> Vec<ConfigControl> {
+    options
+        .iter()
+        .filter_map(|o| {
+            let kind = match &o.kind {
+                acp::SessionConfigKind::Select(select) => {
+                    let choices = match &select.options {
+                        acp::SessionConfigSelectOptions::Ungrouped(list) => list.iter().map(|c| choice(c, None)).collect(),
+                        acp::SessionConfigSelectOptions::Grouped(groups) => groups
+                            .iter()
+                            .flat_map(|g| g.options.iter().map(|c| choice(c, Some(&g.name))))
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                    ConfigKind::Select { choices, current: select.current_value.to_string() }
+                }
+                acp::SessionConfigKind::Boolean(b) => ConfigKind::Boolean { current: b.current_value },
+                _ => return None,
+            };
+            Some(ConfigControl {
+                id: o.id.to_string(),
+                name: o.name.clone(),
+                description: o.description.clone(),
+                category: category(o.category.as_ref()),
+                kind,
+            })
+        })
+        .collect()
+}
+
+/// The model catalog implied by the model-category config option.
+pub fn models_from_controls(controls: &[ConfigControl]) -> Option<Vec<ModelOption>> {
+    controls.iter().find(|c| c.category == ConfigCategory::Model).and_then(|c| match &c.kind {
+        ConfigKind::Select { choices, current } => Some(
+            choices
+                .iter()
+                .map(|ch| ModelOption {
+                    id: ch.value.clone(),
+                    name: ch.name.clone(),
+                    description: ch.description.clone(),
+                    is_default: &ch.value == current,
+                })
+                .collect(),
+        ),
+        ConfigKind::Boolean { .. } => None,
+    })
 }
 
 #[cfg(test)]

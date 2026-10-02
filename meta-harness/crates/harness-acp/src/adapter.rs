@@ -15,6 +15,7 @@ use harness_contracts::{
 };
 use harness_core::{HarnessError, ProviderAdapter, Result, SessionRuntime};
 
+use crate::convert;
 use crate::flavor::{AcpFlavor, ClientFs};
 use crate::launch::AcpLauncher;
 use crate::session::{AcpSession, Shared, acp_error, lock};
@@ -38,7 +39,7 @@ pub fn acp_base_capabilities() -> Capabilities {
         sessions: SessionCapabilities { runtime_mode_switch_in_session: true, ..Default::default() },
         turns: TurnCapabilities { interrupt: true, ..Default::default() },
         streaming: StreamingCapabilities { assistant_text: true, reasoning: true, tool_output: true },
-        tools: ToolCapabilities { mcp_tools: true, ..Default::default() },
+        tools: ToolCapabilities { mcp_http: true, ..Default::default() },
         approvals: ApprovalCapabilities { command_approval: true, file_change_approval: true, live_only: true },
         planning: PlanningCapabilities { todo_list: true, ..Default::default() },
         ..Default::default()
@@ -184,6 +185,8 @@ impl ProviderAdapter for AcpAdapter {
             status: ThreadStatus::Starting,
             policy: config.policy.clone(),
             model: config.model.clone(),
+            controls: Default::default(),
+            mcp_servers: Vec::new(),
         };
         let shared = Arc::new(Shared {
             state: Mutex::new(SessionState::new(thread)),
@@ -203,15 +206,18 @@ impl ProviderAdapter for AcpAdapter {
         if advertise_fs {
             client = client.fs(acp::FileSystemCapabilities::new().read_text_file(true).write_text_file(true));
         }
-        cx.send_request(acp::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client))
+        let init = cx
+            .send_request(acp::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client))
             .block_task()
             .await
             .map_err(acp_error)?;
+        let agent = &init.agent_capabilities;
 
         let cwd = PathBuf::from(config.policy.cwd.clone().unwrap_or_else(|| ".".into()));
         let mcp: Vec<acp::McpServer> = config.mcp_servers.iter().map(mcp_server).collect();
         let (native_id, modes, config_options) = match &config.resume {
-            Some(id) => {
+            // Prefer load: it replays the history into the stream.
+            Some(id) if agent.load_session => {
                 let native = acp::SessionId::new(id.as_str().to_owned());
                 let loaded = cx
                     .send_request(acp::LoadSessionRequest::new(native.clone(), cwd).mcp_servers(mcp))
@@ -220,6 +226,16 @@ impl ProviderAdapter for AcpAdapter {
                     .map_err(acp_error)?;
                 (native, loaded.modes, loaded.config_options)
             }
+            Some(id) if agent.session_capabilities.resume.is_some() => {
+                let native = acp::SessionId::new(id.as_str().to_owned());
+                let resumed = cx
+                    .send_request(acp::ResumeSessionRequest::new(native.clone(), cwd).mcp_servers(mcp))
+                    .block_task()
+                    .await
+                    .map_err(acp_error)?;
+                (native, resumed.modes, resumed.config_options)
+            }
+            Some(_) => return Err(HarnessError::Unsupported { operation: "resuming sessions" }),
             None => {
                 let created = cx
                     .send_request(acp::NewSessionRequest::new(cwd).mcp_servers(mcp))
@@ -230,29 +246,35 @@ impl ProviderAdapter for AcpAdapter {
             }
         };
 
-        let modes: Vec<String> = modes.map(|m| m.available_modes.iter().map(|x| x.id.to_string()).collect()).unwrap_or_default();
-        let model_option = config_options
-            .unwrap_or_default()
-            .iter()
-            .find(|o| matches!(o.category, Some(acp::SessionConfigOptionCategory::Model)))
-            .map(|o| o.id.clone());
-
-        lock(&shared.state).set_thread(|t| {
-            t.native_id = Some(NativeId::new(native_id.to_string()));
-            t.status = ThreadStatus::Idle;
-        });
+        {
+            let mut state = lock(&shared.state);
+            if let Some(controls) = config_options.as_deref() {
+                state.set_config(convert::config_controls(controls));
+            }
+            let (modes, current_mode) = modes.as_ref().map(convert::modes).unwrap_or_default();
+            state.set_thread(|t| {
+                t.native_id = Some(NativeId::new(native_id.to_string()));
+                t.status = ThreadStatus::Idle;
+                t.controls.modes = modes;
+                t.controls.current_mode = current_mode;
+                t.mcp_servers = config.mcp_servers.clone();
+            });
+        }
 
         let session = AcpSession {
             thread_id: config.thread_id.clone(),
             native_id,
             cx,
             shared,
-            modes,
-            model_option,
+            supports_close: agent.session_capabilities.close.is_some(),
             connection,
             _guard: transport.guard,
         };
         session.apply_policy(config.policy).await?;
+        if let Some(model) = config.model {
+            let options = model.options.clone();
+            session.steer(harness_contracts::SteerInput { model: Some(model), config: options, ..Default::default() }).await?;
+        }
         Ok(Box::new(session))
     }
 }

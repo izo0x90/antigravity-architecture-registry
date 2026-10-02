@@ -15,6 +15,74 @@ pub struct Thread {
     pub status: ThreadStatus,
     pub policy: RuntimePolicy,
     pub model: Option<ModelSelection>,
+    /// What this session lets you change, as the harness reports it.
+    #[serde(default)]
+    pub controls: SessionControls,
+    /// Tool servers this session was started with.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServer>,
+}
+
+/// The session's native modes and every config option the harness exposes
+/// (model, thought level, ...), with current values. Rendered generically.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionControls {
+    pub modes: Vec<ModeOption>,
+    pub current_mode: Option<String>,
+    pub config: Vec<ConfigControl>,
+}
+
+impl SessionControls {
+    /// The config option that selects the model, if any.
+    pub fn model_control(&self) -> Option<&ConfigControl> {
+        self.config.iter().find(|c| c.category == ConfigCategory::Model)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModeOption {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigControl {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub category: ConfigCategory,
+    pub kind: ConfigKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigCategory {
+    Mode,
+    Model,
+    ModelConfig,
+    ThoughtLevel,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
+pub enum ConfigKind {
+    Select { choices: Vec<ConfigChoice>, current: String },
+    Boolean { current: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigChoice {
+    pub value: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// Display group, when the harness groups its choices.
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,4 +228,10 @@ pub enum Attachment {
 pub struct SteerInput {
     pub policy: Option<RuntimePolicy>,
     pub model: Option<ModelSelection>,
+    /// Native mode id from `SessionControls::modes`.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Values for `SessionControls::config` entries (string for selects, bool for booleans).
+    #[serde(default)]
+    pub config: Vec<crate::policy::OptionValue>,
 }

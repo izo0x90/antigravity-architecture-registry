@@ -18,8 +18,7 @@ pub struct AntigravityFlavor;
 
 impl AcpFlavor for AntigravityFlavor {
     fn capabilities(&self, mut base: Capabilities) -> Capabilities {
-        base.sessions.resume = true;
-        base.sessions.list_saved = true;
+        // Session/prompt/MCP flags come from `initialize` (see the instance probe).
         base.sessions.model_switch_in_session = true;
         base.tools.client_file_system = true;
         base

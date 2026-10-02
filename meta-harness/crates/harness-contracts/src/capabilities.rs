@@ -14,7 +14,17 @@ pub struct Capabilities {
     pub approvals: ApprovalCapabilities,
     pub planning: PlanningCapabilities,
     pub subagents: SubagentCapabilities,
+    pub prompts: PromptCapabilities,
     pub runtime_policy: RuntimePolicyCapabilities,
+}
+
+/// Content a prompt may carry besides text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptCapabilities {
+    pub images: bool,
+    pub audio: bool,
+    pub embedded_context: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +36,10 @@ pub struct SessionCapabilities {
     pub resume: bool,
     /// Can list the harness's saved sessions (`SessionCatalog`).
     pub list_saved: bool,
+    /// Can delete a saved session.
+    pub delete_saved: bool,
+    /// Ends sessions explicitly (rather than by dropping the connection).
+    pub close: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +69,9 @@ pub struct StreamingCapabilities {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCapabilities {
-    pub mcp_tools: bool,
+    /// Accepts MCP servers over HTTP / SSE.
+    pub mcp_http: bool,
+    pub mcp_sse: bool,
     pub client_file_system: bool,
 }
 

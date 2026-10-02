@@ -87,6 +87,33 @@ impl SessionState {
         let _ = self.events.send(event);
     }
 
+    /// Replaces the session's config controls; a model option also refreshes the
+    /// instance's model catalog.
+    pub fn set_config(&mut self, controls: Vec<harness_contracts::ConfigControl>) {
+        if let Some(models) = convert::models_from_controls(&controls) {
+            self.catalog.models = Some(models.clone());
+            self.emit(AdapterEvent::CatalogUpdated { update: CatalogUpdate { commands: None, models: Some(models) } });
+        }
+        self.set_thread(|t| t.controls.config = controls);
+    }
+
+    /// Sets a control's current value locally after the harness accepted it.
+    pub fn set_config_value(&mut self, id: &str, value: &serde_json::Value) {
+        self.set_thread(|t| {
+            if let Some(control) = t.controls.config.iter_mut().find(|c| c.id == id) {
+                match (&mut control.kind, value) {
+                    (harness_contracts::ConfigKind::Select { current, .. }, serde_json::Value::String(v)) => *current = v.clone(),
+                    (harness_contracts::ConfigKind::Boolean { current }, serde_json::Value::Bool(v)) => *current = *v,
+                    _ => {}
+                }
+            }
+        });
+    }
+
+    pub fn controls(&self) -> &harness_contracts::SessionControls {
+        &self.thread.controls
+    }
+
     pub fn set_thread(&mut self, update: impl FnOnce(&mut Thread)) {
         update(&mut self.thread);
         self.emit(AdapterEvent::ThreadUpdated { thread: self.thread.clone() });
@@ -221,8 +248,12 @@ impl SessionState {
                 self.catalog.commands = Some(convert::commands(update));
                 self.emit(AdapterEvent::CatalogUpdated { update: CatalogUpdate { commands: self.catalog.commands.clone(), models: None } });
             }
-            // Needs the flavor's native -> app mode mapping; handled by the session.
-            acp::SessionUpdate::CurrentModeUpdate(_) => {}
+            // The app-level runtime mode is mapped by the session (it needs the flavor).
+            acp::SessionUpdate::CurrentModeUpdate(update) => {
+                let mode = update.current_mode_id.to_string();
+                self.set_thread(|t| t.controls.current_mode = Some(mode));
+            }
+            acp::SessionUpdate::ConfigOptionUpdate(update) => self.set_config(convert::config_controls(&update.config_options)),
             acp::SessionUpdate::SessionInfoUpdate(info) => {
                 if let agent_client_protocol::schema::MaybeUndefined::Value(title) = info.title.clone() {
                     self.set_thread(|t| t.title = Some(title));
@@ -494,6 +525,8 @@ mod tests {
             status: ThreadStatus::Idle,
             policy: RuntimePolicy::default(),
             model: None,
+            controls: Default::default(),
+            mcp_servers: Vec::new(),
         })
     }
 

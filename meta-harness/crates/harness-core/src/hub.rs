@@ -114,6 +114,8 @@ mod tests {
                     status,
                     policy: RuntimePolicy::default(),
                     model: None,
+                    controls: Default::default(),
+                    mcp_servers: Vec::new(),
                 },
             },
         }

@@ -202,6 +202,9 @@ pub struct OpenThreadRequest {
     pub policy: RuntimePolicy,
     pub model: Option<ModelSelection>,
     pub resume: Option<NativeId>,
+    /// Tool servers to add for this thread, on top of the built-in ones.
+    #[serde(default)]
+    pub mcp_servers: Vec<harness_contracts::McpServer>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -223,7 +226,13 @@ async fn open_thread(State(state): State<AppState>, Json(body): Json<OpenThreadR
     }
     let thread_id = state
         .sessions
-        .open(OpenThread { instance_id: body.instance_id, policy, model: body.model, resume: body.resume })
+        .open(OpenThread {
+            instance_id: body.instance_id,
+            policy,
+            model: body.model,
+            resume: body.resume,
+            extra_mcp_servers: body.mcp_servers,
+        })
         .await?;
     Ok(Json(ThreadOpened { thread_id }))
 }

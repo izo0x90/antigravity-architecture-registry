@@ -371,7 +371,7 @@ impl ChatStreamState {
                     });
                     if self.model != previous && caps.sessions.model_switch_in_session {
                         let model = self.model_selection();
-                        self.steer(net, &ctx, SteerInput { model, policy: None });
+                        self.steer(net, &ctx, SteerInput { model, ..Default::default() });
                     }
                 }
                 if !snapshot.runtime_modes.is_empty() {
@@ -384,7 +384,7 @@ impl ChatStreamState {
                     });
                     if self.runtime_mode != previous && caps.sessions.runtime_mode_switch_in_session {
                         let policy = Some(self.policy());
-                        self.steer(net, &ctx, SteerInput { model: None, policy });
+                        self.steer(net, &ctx, SteerInput { policy, ..Default::default() });
                     }
                 }
             }

@@ -111,8 +111,7 @@ impl ProviderInstance for AntigravityInstance {
             Ok(info) => self.snapshot.send_modify(|s| {
                 s.status = ProviderStatus::Ready;
                 s.auth.methods = info.auth_methods;
-                s.capabilities.sessions.resume = info.load_session;
-                s.capabilities.sessions.list_saved = info.list_sessions;
+                info.capabilities.apply(&mut s.capabilities);
                 s.skills = skills;
             }),
             Err(err) => self.snapshot.send_modify(|s| s.status = ProviderStatus::Error { message: err.to_string() }),

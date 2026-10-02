@@ -47,22 +47,41 @@ pub struct AcpSession {
     pub(crate) native_id: acp::SessionId,
     pub(crate) cx: ConnectionTo<Agent>,
     pub(crate) shared: Arc<Shared>,
-    /// Native mode ids the session offers.
-    pub(crate) modes: Vec<String>,
-    /// Config option id that selects the model, if the agent exposes one.
-    pub(crate) model_option: Option<acp::SessionConfigId>,
+    /// The agent ends sessions via `session/close`.
+    pub(crate) supports_close: bool,
     pub(crate) connection: tokio::task::JoinHandle<()>,
     pub(crate) _guard: Box<dyn Send + Sync>,
 }
 
 impl AcpSession {
+    async fn set_mode(&self, mode: String) -> Result<()> {
+        self.cx
+            .send_request(acp::SetSessionModeRequest::new(self.native_id.clone(), mode.clone()))
+            .block_task()
+            .await
+            .map_err(acp_error)?;
+        lock(&self.shared.state).set_thread(|t| t.controls.current_mode = Some(mode));
+        Ok(())
+    }
+
+    async fn set_config(&self, id: &str, value: &serde_json::Value) -> Result<()> {
+        let value: acp::SessionConfigOptionValue = match value {
+            serde_json::Value::Bool(b) => (*b).into(),
+            serde_json::Value::String(s) => s.as_str().into(),
+            other => return Err(HarnessError::InvalidConfig { reason: format!("unsupported value for {id}: {other}") }),
+        };
+        self.cx
+            .send_request(acp::SetSessionConfigOptionRequest::new(self.native_id.clone(), id.to_owned(), value))
+            .block_task()
+            .await
+            .map_err(acp_error)?;
+        Ok(())
+    }
+
     pub(crate) async fn apply_policy(&self, policy: RuntimePolicy) -> Result<()> {
-        if let Some(mode) = self.shared.flavor.native_mode(&policy, &self.modes) {
-            self.cx
-                .send_request(acp::SetSessionModeRequest::new(self.native_id.clone(), mode))
-                .block_task()
-                .await
-                .map_err(acp_error)?;
+        let modes: Vec<String> = lock(&self.shared.state).controls().modes.iter().map(|m| m.id.clone()).collect();
+        if let Some(mode) = self.shared.flavor.native_mode(&policy, &modes) {
+            self.set_mode(mode).await?;
         }
         *lock(&self.shared.policy) = policy.clone();
         lock(&self.shared.state).set_thread(|t| t.policy = policy);
@@ -129,15 +148,22 @@ impl SessionRuntime for AcpSession {
 
     async fn steer(&self, input: SteerInput) -> Result<()> {
         if let Some(model) = input.model {
-            let Some(option) = self.model_option.clone() else {
+            let control = lock(&self.shared.state).controls().model_control().map(|c| c.id.clone());
+            let Some(control) = control else {
                 return Err(HarnessError::Unsupported { operation: "model switch" });
             };
-            self.cx
-                .send_request(acp::SetSessionConfigOptionRequest::new(self.native_id.clone(), option, model.model.as_str()))
-                .block_task()
-                .await
-                .map_err(acp_error)?;
-            lock(&self.shared.state).set_thread(|t| t.model = Some(model));
+            let value = serde_json::Value::String(model.model.clone());
+            self.set_config(&control, &value).await?;
+            let mut state = lock(&self.shared.state);
+            state.set_config_value(&control, &value);
+            state.set_thread(|t| t.model = Some(model));
+        }
+        for option in &input.config {
+            self.set_config(&option.id, &option.value).await?;
+            lock(&self.shared.state).set_config_value(&option.id, &option.value);
+        }
+        if let Some(mode) = input.mode {
+            self.set_mode(mode).await?;
         }
         if let Some(policy) = input.policy {
             self.apply_policy(policy).await?;
@@ -173,6 +199,12 @@ impl SessionRuntime for AcpSession {
     }
 
     async fn close(&self) -> Result<()> {
+        if self.supports_close {
+            let request = acp::CloseSessionRequest::new(self.native_id.clone());
+            if let Err(err) = self.cx.send_request(request).block_task().await {
+                tracing::debug!(target: "harness_acp", "session/close failed: {}", acp_error(err));
+            }
+        }
         self.connection.abort();
         Ok(())
     }

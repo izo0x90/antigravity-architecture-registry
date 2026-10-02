@@ -49,8 +49,38 @@ pub struct AcpProbe {
     pub agent_name: Option<String>,
     pub agent_version: Option<String>,
     pub auth_methods: Vec<AuthMethod>,
+    /// Capabilities the agent declares, mapped onto the contracts.
+    pub capabilities: AcpDeclaredCapabilities,
+}
+
+/// The parts of `Capabilities` an agent declares in `initialize`.
+#[derive(Debug, Clone, Default)]
+pub struct AcpDeclaredCapabilities {
     pub load_session: bool,
+    pub resume_session: bool,
     pub list_sessions: bool,
+    pub delete_sessions: bool,
+    pub close_sessions: bool,
+    pub prompt_images: bool,
+    pub prompt_audio: bool,
+    pub prompt_embedded_context: bool,
+    pub mcp_http: bool,
+    pub mcp_sse: bool,
+}
+
+impl AcpDeclaredCapabilities {
+    /// Overwrites the declared fields of `caps`, leaving the rest as configured.
+    pub fn apply(&self, caps: &mut harness_contracts::Capabilities) {
+        caps.sessions.resume = self.load_session || self.resume_session;
+        caps.sessions.list_saved = self.list_sessions;
+        caps.sessions.delete_saved = self.delete_sessions;
+        caps.sessions.close = self.close_sessions;
+        caps.prompts.images = self.prompt_images;
+        caps.prompts.audio = self.prompt_audio;
+        caps.prompts.embedded_context = self.prompt_embedded_context;
+        caps.tools.mcp_http = self.mcp_http;
+        caps.tools.mcp_sse = self.mcp_sse;
+    }
 }
 
 pub async fn probe(launcher: &Arc<dyn AcpLauncher>) -> Result<AcpProbe> {
@@ -66,12 +96,23 @@ pub async fn probe(launcher: &Arc<dyn AcpLauncher>) -> Result<AcpProbe> {
             })
             .collect();
         let caps = &init.agent_capabilities;
+        let sessions = &caps.session_capabilities;
         Ok(AcpProbe {
             agent_name: init.agent_info.as_ref().map(|i| i.name.clone()),
             agent_version: init.agent_info.as_ref().map(|i| i.version.clone()),
             auth_methods,
-            load_session: caps.load_session,
-            list_sessions: caps.session_capabilities.list.is_some(),
+            capabilities: AcpDeclaredCapabilities {
+                load_session: caps.load_session,
+                resume_session: sessions.resume.is_some(),
+                list_sessions: sessions.list.is_some(),
+                delete_sessions: sessions.delete.is_some(),
+                close_sessions: sessions.close.is_some(),
+                prompt_images: caps.prompt_capabilities.image,
+                prompt_audio: caps.prompt_capabilities.audio,
+                prompt_embedded_context: caps.prompt_capabilities.embedded_context,
+                mcp_http: caps.mcp_capabilities.http,
+                mcp_sse: caps.mcp_capabilities.sse,
+            },
         })
     })
     .await
