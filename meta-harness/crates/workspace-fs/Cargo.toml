@@ -1,0 +1,12 @@
+[package]
+name = "workspace-fs"
+version = "0.1.0"
+edition = "2024"
+description = "Text file access confined to a set of workspace roots"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0.20"
+
+[dev-dependencies]
+tempfile = "3.27.0"

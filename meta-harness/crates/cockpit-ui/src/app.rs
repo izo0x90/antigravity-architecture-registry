@@ -139,7 +139,6 @@ impl CockpitApp {
             ctx.set_fonts(fonts);
 
             self.net.connect_ws(ctx.clone());
-            self.net.fetch_models(ctx.clone());
 
             // Auto-load the registry architecture into graph
             let ctx_arch = ctx.clone();
@@ -160,7 +159,7 @@ impl CockpitApp {
 
         // Process incoming events
         let events = {
-            if let Ok(mut lock) = self.net.incoming_events.lock() {
+            if let Ok(mut lock) = self.net.incoming.lock() {
                 let drained: Vec<_> = lock.drain(..).collect();
                 drained
             } else {
@@ -464,13 +463,13 @@ impl CockpitApp {
                     self.feedback.register_inspectable(ui, "top_bar:connection_status", srv_res.rect);
 
                     ui.add_space(6.0);
-                    let (agent_color, agent_hint) = match &self.chat.session {
+                    let (agent_color, agent_hint) = match &self.chat.session_status() {
                         SessionStatus::Idle => (LED_IDLE, "Agent: not connected".to_string()),
                         SessionStatus::Connecting => (LED_BUSY, "Agent: connecting…".to_string()),
                         SessionStatus::Connected(tid) => (LED_OK, format!("Agent: connected [{}]", tid)),
                         SessionStatus::Failed(err) => (LED_FAIL, format!("Agent: failed — {}", err)),
                     };
-                    let agent_res = self.agent_led.show(ui, "AGENT", agent_color, self.chat.agent_activity, &agent_hint);
+                    let agent_res = self.agent_led.show(ui, "AGENT", agent_color, self.chat.agent_activity(), &agent_hint);
                     self.feedback.register_inspectable(ui, "top_bar:agent_status", agent_res.rect);
 
                     ui.add_space(8.0);
@@ -629,13 +628,11 @@ impl CockpitApp {
                     ui.separator();
 
                     // Render the active buffer content
-                    let dynamic_models = self.net.models.lock().map(|m| m.clone()).unwrap_or_default();
                     match self.slot_buffers[slot_idx] {
                         BufferKind::Chat => {
                             self.chat.render(
                                 ui,
                                 &self.net,
-                                &dynamic_models,
                                 &mut self.feedback,
                                 slot_idx,
                                 is_focused,

@@ -1,23 +1,14 @@
+mod common;
+
 use std::sync::Arc;
-use tokio::sync::broadcast;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use architecture_model::{ComponentSpec, SystemArchitecture, UsageNode};
-use harness_protocol::ProviderRuntimeEvent;
 
-use meta_harness::provider::antigravity::adapter::AntigravityAdapter;
-use meta_harness::provider::antigravity::driver::{
-    AntigravityDriver, AntigravityDriverConfig, AuthMethod, DriverCreateOptions,
-    ProcessLaunchRecord,
-};
-use meta_harness::injector::{AgyToolInjector, HarnessToolInjector};
-use meta_harness::provider::antigravity::installation::{AntigravityInstallation, AntigravityInstallationOptions};
 use meta_harness::mcp::protocol::JsonRpcRequest;
 use meta_harness::mcp::{McpServerState, McpService};
-use meta_harness::provider::antigravity::process::TokioProcessSpawner;
 use meta_harness::registry::{FsJsonRepository, RegistryService};
-use meta_harness::server::{create_router, AppState};
 
 fn sample_test_architecture() -> SystemArchitecture {
     let mut arch = SystemArchitecture::default();
@@ -76,15 +67,14 @@ fn sample_test_architecture() -> SystemArchitecture {
 }
 
 #[tokio::test]
-async fn test_mcp_service_tools_and_events() {
+async fn test_mcp_service_tools() {
     let temp_file = tempfile::NamedTempFile::new().unwrap();
     let repo = Arc::new(FsJsonRepository::from_architecture(
         sample_test_architecture(),
         temp_file.path(),
     ));
     let registry = Arc::new(RegistryService::new(repo));
-    let (event_tx, mut event_rx) = broadcast::channel::<ProviderRuntimeEvent>(32);
-    let mcp = McpService::new(registry, Some(event_tx));
+    let mcp = McpService::new(registry);
 
     // 1. Test initialize
     let init_req = JsonRpcRequest {
@@ -155,22 +145,6 @@ async fn test_mcp_service_tools_and_events() {
         .to_string();
     assert!(tree_text.contains("auth_service"));
 
-    // Verify ProviderRuntimeEvent::ArchitectureFocused was emitted
-    let ev = event_rx.recv().await.unwrap();
-    match ev {
-        ProviderRuntimeEvent::ArchitectureFocused {
-            root_id,
-            depth,
-            direction: _,
-            affected_components,
-        } => {
-            assert_eq!(root_id, "auth_service");
-            assert_eq!(depth, 2);
-            assert!(affected_components.contains(&"auth_service".to_string()));
-        }
-        other => panic!("Expected ArchitectureFocused, got {:?}", other),
-    }
-
     // 5. Test tools/call approve_component
     let approve_req = JsonRpcRequest {
         jsonrpc: "2.0".to_string(),
@@ -183,59 +157,11 @@ async fn test_mcp_service_tools_and_events() {
     };
     let approve_resp = mcp.handle_request(approve_req).await;
     assert!(approve_resp.error.is_none());
-
-    // Verify ProviderRuntimeEvent::ArchitectureUpdated was emitted
-    let ev = event_rx.recv().await.unwrap();
-    match ev {
-        ProviderRuntimeEvent::ArchitectureUpdated {
-            component_id,
-            status,
-        } => {
-            assert_eq!(component_id, "auth_service");
-            assert_eq!(status, "arch_approved");
-        }
-        other => panic!("Expected ArchitectureUpdated, got {:?}", other),
-    }
 }
 
-#[test]
-fn test_agy_tool_injector_zero_config() {
-    let injector = AgyToolInjector::default();
-    let profile_temp = tempfile::tempdir().unwrap();
-    let mut record = ProcessLaunchRecord {
-        command: "agy".to_string(),
-        args: vec![],
-        cwd: Some("/test/dir".to_string()),
-        extend_env: true,
-        profile_directory: Some(profile_temp.path().to_string_lossy().to_string()),
-        harness_path: None,
-        force_file_storage: None,
-        credential_keys: vec![],
-        gemini_api_key: None,
-        temp_directory: None,
-        env: vec![],
-    };
-
-    let base_url = "http://127.0.0.1:49876";
-
-    // 1. Prepare launch does not touch the filesystem or pollute the profile directory
-    injector.prepare_launch(base_url, &mut record).unwrap();
-    assert_eq!(std::fs::read_dir(profile_temp.path()).unwrap().count(), 0);
-
-    // 2. Dynamic MCP server entries are constructed in-memory for the ACP wire handshake
-    let servers = injector.session_mcp_servers(base_url);
-    assert_eq!(servers.len(), 1);
-    assert_eq!(servers[0]["type"], "http");
-    assert_eq!(servers[0]["name"], "architecture-registry");
-    assert_eq!(servers[0]["url"], "http://127.0.0.1:49876/api/mcp/sse");
-    assert_eq!(servers[0]["headers"], serde_json::json!([]));
-}
 
 #[tokio::test]
 async fn test_mcp_sse_http_server_flow() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
     let temp_file = tempfile::NamedTempFile::new().unwrap();
     let repo = Arc::new(FsJsonRepository::from_architecture(
         sample_test_architecture(),
@@ -243,41 +169,10 @@ async fn test_mcp_sse_http_server_flow() {
     ));
     let registry = Arc::new(RegistryService::new(repo));
 
-    let (event_tx, _) = broadcast::channel(32);
-    let mcp_service = Arc::new(McpService::new(registry, Some(event_tx)));
+    let mcp_service = Arc::new(McpService::new(registry));
     let mcp_state = McpServerState::new(mcp_service);
 
-    let spawner = Arc::new(TokioProcessSpawner::new());
-    let profile_dir = tempfile::tempdir().unwrap();
-    let installation = Arc::new(
-        AntigravityInstallation::new(AntigravityInstallationOptions {
-            base_dir: profile_dir.path().to_path_buf(),
-            ..Default::default()
-        })
-        .unwrap(),
-    );
-    let driver = AntigravityDriver::create(DriverCreateOptions {
-        instance_id: "test-driver".to_string(),
-        display_name: "Test Driver".to_string(),
-        enabled: true,
-        config: AntigravityDriverConfig {
-            auth_method: AuthMethod::OAuthPersonal,
-            api_key: None,
-        },
-        environment: vec![],
-        profile_directory: profile_dir.path().to_path_buf(),
-        installation,
-        spawner,
-    })
-    .unwrap();
-
-    let adapter = Arc::new(AntigravityAdapter::new());
-    let state = AppState::with_mcp_state(adapter, Arc::new(tokio::sync::Mutex::new(driver)), mcp_state);
-    let app = create_router(state);
-
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let (addr, _state) = common::spawn_app(mcp_state).await;
 
     // 1. Connect to GET /api/mcp/sse
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -360,49 +255,16 @@ async fn test_mcp_sse_http_server_flow() {
 
 #[tokio::test]
 async fn test_mcp_streamable_http_direct_post() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
     let temp_file = tempfile::NamedTempFile::new().unwrap();
     let repo = Arc::new(FsJsonRepository::from_architecture(
         sample_test_architecture(),
         temp_file.path(),
     ));
     let registry = Arc::new(RegistryService::new(repo));
-    let mcp_service = Arc::new(McpService::new(registry, None));
+    let mcp_service = Arc::new(McpService::new(registry));
     let mcp_state = McpServerState::new(mcp_service);
 
-    let spawner = Arc::new(TokioProcessSpawner::new());
-    let profile_dir = tempfile::tempdir().unwrap();
-    let installation = Arc::new(
-        AntigravityInstallation::new(AntigravityInstallationOptions {
-            base_dir: profile_dir.path().to_path_buf(),
-            ..Default::default()
-        })
-        .unwrap(),
-    );
-    let driver = AntigravityDriver::create(DriverCreateOptions {
-        instance_id: "test-driver-http".to_string(),
-        display_name: "Test Driver HTTP".to_string(),
-        enabled: true,
-        config: AntigravityDriverConfig {
-            auth_method: AuthMethod::OAuthPersonal,
-            api_key: None,
-        },
-        environment: vec![],
-        profile_directory: profile_dir.path().to_path_buf(),
-        installation,
-        spawner,
-    })
-    .unwrap();
-
-    let adapter = Arc::new(AntigravityAdapter::new());
-    let state = AppState::with_mcp_state(adapter, Arc::new(tokio::sync::Mutex::new(driver)), mcp_state);
-    let app = create_router(state);
-
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let (addr, _state) = common::spawn_app(mcp_state).await;
 
     // 1. Direct POST to /api/mcp/sse with 'initialize'
     let mut stream1 = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -451,49 +313,16 @@ async fn test_mcp_streamable_http_direct_post() {
 
 #[tokio::test]
 async fn test_registry_architecture_endpoint_serves_registry_state() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
     let temp_file = tempfile::NamedTempFile::new().unwrap();
     let repo = Arc::new(FsJsonRepository::from_architecture(
         sample_test_architecture(),
         temp_file.path(),
     ));
     let registry = Arc::new(RegistryService::new(repo));
-    let mcp_service = Arc::new(McpService::new(registry, None));
+    let mcp_service = Arc::new(McpService::new(registry));
     let mcp_state = McpServerState::new(mcp_service);
 
-    let spawner = Arc::new(TokioProcessSpawner::new());
-    let profile_dir = tempfile::tempdir().unwrap();
-    let installation = Arc::new(
-        AntigravityInstallation::new(AntigravityInstallationOptions {
-            base_dir: profile_dir.path().to_path_buf(),
-            ..Default::default()
-        })
-        .unwrap(),
-    );
-    let driver = AntigravityDriver::create(DriverCreateOptions {
-        instance_id: "test-driver".to_string(),
-        display_name: "Test Driver".to_string(),
-        enabled: true,
-        config: AntigravityDriverConfig {
-            auth_method: AuthMethod::OAuthPersonal,
-            api_key: None,
-        },
-        environment: vec![],
-        profile_directory: profile_dir.path().to_path_buf(),
-        installation,
-        spawner,
-    })
-    .unwrap();
-
-    let adapter = Arc::new(AntigravityAdapter::new());
-    let state = AppState::with_mcp_state(adapter, Arc::new(tokio::sync::Mutex::new(driver)), mcp_state);
-    let app = create_router(state);
-
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let (addr, _state) = common::spawn_app(mcp_state).await;
 
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
     stream

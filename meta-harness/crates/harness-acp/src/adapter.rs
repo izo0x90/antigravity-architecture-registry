@@ -15,7 +15,7 @@ use harness_contracts::{
 };
 use harness_core::{HarnessError, ProviderAdapter, Result, SessionRuntime};
 
-use crate::flavor::AcpFlavor;
+use crate::flavor::{AcpFlavor, ClientFs};
 use crate::launch::AcpLauncher;
 use crate::session::{AcpSession, Shared, acp_error, lock};
 use crate::state::{SessionState, request_kind};
@@ -68,12 +68,13 @@ fn selected(option_id: String) -> acp::RequestPermissionResponse {
 async fn run_connection(
     transport: ByteStreams<Box<dyn futures::AsyncWrite + Send + Unpin>, Box<dyn futures::AsyncRead + Send + Unpin>>,
     shared: Arc<Shared>,
+    client_fs: Option<Arc<dyn ClientFs>>,
     handle_tx: tokio::sync::oneshot::Sender<ConnectionTo<Agent>>,
 ) {
     let on_update = shared.clone();
     let on_permission = shared.clone();
-    let on_read = shared.flavor.client_fs();
-    let on_write = shared.flavor.client_fs();
+    let on_read = client_fs.clone();
+    let on_write = client_fs;
     let result = agent_client_protocol::Client
         .builder()
         .name("meta-harness")
@@ -191,13 +192,15 @@ impl ProviderAdapter for AcpAdapter {
             flavor: self.flavor.clone(),
         });
 
+        let client_fs = self.flavor.client_fs(&config);
+        let advertise_fs = client_fs.is_some();
         let (handle_tx, handle_rx) = tokio::sync::oneshot::channel();
         let streams = ByteStreams::new(transport.writer, transport.reader);
-        let connection = tokio::spawn(run_connection(streams, shared.clone(), handle_tx));
+        let connection = tokio::spawn(run_connection(streams, shared.clone(), client_fs, handle_tx));
         let cx = handle_rx.await.map_err(|_| HarnessError::Provider { reason: "agent connection failed to start".into() })?;
 
         let mut client = acp::ClientCapabilities::new();
-        if self.flavor.client_fs().is_some() {
+        if advertise_fs {
             client = client.fs(acp::FileSystemCapabilities::new().read_text_file(true).write_text_file(true));
         }
         cx.send_request(acp::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client))

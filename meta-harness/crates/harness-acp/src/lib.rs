@@ -16,7 +16,7 @@ pub use adapter::{AcpAdapter, acp_base_capabilities};
 pub use auth::{AcpAuthController, AuthChanged};
 pub use catalog::AcpSessionCatalog;
 pub use control::{AcpProbe, probe};
-pub use flavor::{AcpFlavor, ClientFs, default_auto_approve};
+pub use flavor::{AcpFlavor, ClientFs, default_approval_options, default_auto_approve};
 pub use launch::{AcpLauncher, AcpTransport, ProcessLauncher};
 pub use session::AcpSession;
 

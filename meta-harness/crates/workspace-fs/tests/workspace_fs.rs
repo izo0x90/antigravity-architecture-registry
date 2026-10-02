@@ -1,7 +1,7 @@
 use std::fs;
 use tempfile::tempdir;
 
-use meta_harness::fs_proxy::{
+use workspace_fs::{
     read_client_text_file, write_client_text_file, ReadTextFileRequest, WriteTextFileRequest,
 };
 

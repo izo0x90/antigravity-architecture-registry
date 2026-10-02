@@ -8,45 +8,36 @@ default-run = "meta-harness"
 members = [
     ".",
     "crates/cockpit-ui",
-    "crates/harness-protocol",
     "crates/architecture-model",
     "crates/harness-contracts",
     "crates/harness-core",
     "crates/harness-acp",
+    "crates/workspace-fs",
+    "crates/provider-antigravity",
 ]
 
 [lib]
 crate-type = ["rlib"]
 
 [dependencies]
-harness-protocol = { path = "crates/harness-protocol" }
+harness-contracts = { path = "crates/harness-contracts" }
+harness-core = { path = "crates/harness-core" }
+provider-antigravity = { path = "crates/provider-antigravity" }
 architecture-model = { path = "crates/architecture-model" }
 async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["ws"] }
 futures = "0.3.34"
-libc = "0.2"
-regex = "1.11.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-serde_yaml = "0.9.34"
-tempfile = "3.27.0"
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["full"] }
-tokio-util = { version = "0.7.19", features = ["codec"] }
 tower-http = { version = "0.7.1", features = ["fs", "cors", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
-url = "2.5.8"
 uuid = { version = "1.26.1", features = ["v4", "serde"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 
-[features]
-# Exposes meta_harness::testing (mock ACP runtime + adapter harness) for integration tests.
-testing = []
-
 [dev-dependencies]
-# Self dev-dependency so `cargo test` enables the testing feature automatically.
-meta-harness = { path = ".", features = ["testing"] }
 ast-grep-config = "0.45.3"
 ast-grep-core = "0.45.3"
 tempfile = "3.27.0"

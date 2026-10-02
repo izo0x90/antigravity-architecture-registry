@@ -8,6 +8,7 @@ pub mod graph_layout;
 pub mod keymap;
 pub mod net;
 pub mod samples;
+pub mod store;
 pub mod tree;
 
 #[cfg(target_arch = "wasm32")]

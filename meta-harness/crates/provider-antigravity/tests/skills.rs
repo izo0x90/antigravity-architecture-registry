@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-use meta_harness::provider::antigravity::skills::{
+use provider_antigravity::skills::{
     discover_antigravity_skills, resolve_antigravity_user_home, AntigravitySkillsProbeError,
     DiscoverSkillsInput, ServerProviderSkill,
 };

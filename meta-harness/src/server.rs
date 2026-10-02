@@ -1,81 +1,60 @@
+//! HTTP/WebSocket API. Harness routes address instances and threads by id and never
+//! know which harness is behind them; everything else (files, feedback, the
+//! architecture registry and its MCP endpoint) is app-level.
+
 use std::sync::Arc;
+
 use axum::{
+    Json, Router,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::StatusCode,
-    response::IntoResponse,
-    routing::{get, post},
-    Json, Router,
+    response::{IntoResponse, Response},
+    routing::{delete, get, post},
 };
 use futures::{SinkExt, StreamExt};
+use harness_contracts::{
+    InstanceId, ModelSelection, NativeId, RequestId, RequestResponse, RuntimePolicy, SteerInput, ThreadId, TurnInput,
+};
+use harness_core::{EventHub, HarnessError, InstanceRegistry, OpenThread, SessionManager};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
-use crate::provider::antigravity::adapter::AntigravityAdapter;
-use crate::provider::antigravity::driver::AntigravityDriver;
-use crate::protocol::*;
-
 #[derive(Clone)]
 pub struct AppState {
-    pub adapter: Arc<AntigravityAdapter>,
-    pub driver: Arc<tokio::sync::Mutex<AntigravityDriver>>,
+    pub registry: Arc<InstanceRegistry>,
+    pub sessions: Arc<SessionManager>,
+    pub hub: Arc<EventHub>,
     pub mcp_state: crate::mcp::McpServerState,
 }
 
-impl AppState {
-    pub fn new(
-        adapter: Arc<AntigravityAdapter>,
-        driver: Arc<tokio::sync::Mutex<AntigravityDriver>>,
-    ) -> Self {
-        let repo = Arc::new(crate::registry::FsJsonRepository::from_architecture(
-            architecture_model::SystemArchitecture::default(),
-            "test_architecture.json",
-        ));
-        let registry = Arc::new(crate::registry::RegistryService::new(repo));
-        let mcp_service = Arc::new(crate::mcp::McpService::new(
-            registry,
-            Some(adapter.event_sender().clone()),
-        ));
-        let mcp_state = crate::mcp::McpServerState::new(mcp_service);
-        Self {
-            adapter,
-            driver,
-            mcp_state,
-        }
-    }
+/// `HarnessError` as an HTTP response: `{ "error": "..." }` with a matching status.
+pub struct ApiError(HarnessError);
 
-    pub fn with_mcp_state(
-        adapter: Arc<AntigravityAdapter>,
-        driver: Arc<tokio::sync::Mutex<AntigravityDriver>>,
-        mcp_state: crate::mcp::McpServerState,
-    ) -> Self {
-        Self {
-            adapter,
-            driver,
-            mcp_state,
-        }
+impl From<HarnessError> for ApiError {
+    fn from(err: HarnessError) -> Self {
+        Self(err)
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SendTurnRequest {
-    pub prompt: String,
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let status = match &self.0 {
+            HarnessError::NotFound { .. } => StatusCode::NOT_FOUND,
+            HarnessError::InvalidConfig { .. } => StatusCode::BAD_REQUEST,
+            HarnessError::Unsupported { .. } => StatusCode::NOT_IMPLEMENTED,
+            HarnessError::AuthRequired { .. } => StatusCode::UNAUTHORIZED,
+            HarnessError::Provider { .. } | HarnessError::Io(_) => StatusCode::BAD_GATEWAY,
+        };
+        (status, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SteerRequest {
-    pub runtime_mode: Option<String>,
-    pub model: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ApprovalRequest {
-    pub decision: String,
-}
+type ApiResult<T> = Result<T, ApiError>;
 
 #[derive(Debug, Deserialize)]
 pub struct FsReadQuery {
@@ -108,19 +87,24 @@ pub struct DevFeedbackItem {
     pub context: Option<serde_json::Value>,
 }
 
+
 pub fn create_router(state: AppState) -> Router {
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string());
     let mut router = Router::new()
         .route("/health", get(health_check))
-        .route("/api/driver/snapshot", get(get_driver_snapshot))
-        .route("/api/driver/refresh_models", post(refresh_models))
-        .route("/api/sessions/start", post(start_session))
-        .route("/api/sessions/{thread_id}/turn", post(send_turn))
-        .route("/api/sessions/{thread_id}/steer", post(steer_session))
-        .route("/api/sessions/{thread_id}/cancel", post(cancel_session))
-        .route("/api/sessions/{thread_id}/stop", post(stop_session))
-        .route("/api/sessions/{thread_id}/approvals/{request_id}", post(resolve_approval))
-        .route("/api/sessions/{thread_id}/requests/{request_id}/respond", post(resolve_approval))
+        .route("/api/instances", get(list_instances))
+        .route("/api/instances/{id}/refresh", post(refresh_instance))
+        .route("/api/instances/{id}/sessions", get(list_saved_sessions))
+        .route("/api/instances/{id}/sessions/{native_id}", delete(delete_saved_session))
+        .route("/api/instances/{id}/auth/{method}", post(begin_auth))
+        .route("/api/instances/{id}/auth/complete", post(complete_auth))
+        .route("/api/instances/{id}/auth/logout", post(logout))
+        .route("/api/threads", post(open_thread))
+        .route("/api/threads/{thread}", delete(close_thread))
+        .route("/api/threads/{thread}/turns", post(start_turn))
+        .route("/api/threads/{thread}/steer", post(steer))
+        .route("/api/threads/{thread}/interrupt", post(interrupt))
+        .route("/api/threads/{thread}/requests/{request}", post(respond_request))
         .route("/api/fs/read", get(fs_read_handler))
         .route("/api/registry/architecture", get(get_architecture_handler))
         .route("/api/dev/feedback", get(get_dev_feedback_handler).post(dev_feedback_handler).put(update_dev_feedback_handler))
@@ -137,6 +121,182 @@ pub fn create_router(state: AppState) -> Router {
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
+
+// ---- instances ----
+
+async fn list_instances(State(state): State<AppState>) -> Json<Vec<harness_contracts::ProviderSnapshot>> {
+    Json(state.registry.snapshots())
+}
+
+async fn refresh_instance(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+    state.registry.get(&InstanceId::new(id))?.refresh().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SavedSessionsQuery {
+    pub cwd: String,
+    pub cursor: Option<String>,
+}
+
+async fn list_saved_sessions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<SavedSessionsQuery>,
+) -> ApiResult<Json<harness_contracts::SavedSessionPage>> {
+    let catalog = state.registry.get(&InstanceId::new(id))?.sessions().ok_or(HarnessError::Unsupported { operation: "saved sessions" })?;
+    Ok(Json(catalog.list(&query.cwd, query.cursor.as_deref()).await?))
+}
+
+async fn delete_saved_session(
+    State(state): State<AppState>,
+    Path((id, native_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let catalog = state.registry.get(&InstanceId::new(id))?.sessions().ok_or(HarnessError::Unsupported { operation: "saved sessions" })?;
+    catalog.delete(&NativeId::new(native_id)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthChallengeResponse {
+    pub url: Option<String>,
+    pub instructions: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CompleteAuthRequest {
+    pub response: String,
+}
+
+fn auth_controller(state: &AppState, id: String) -> ApiResult<Arc<dyn harness_core::AuthController>> {
+    Ok(state.registry.get(&InstanceId::new(id))?.auth().ok_or(HarnessError::Unsupported { operation: "login" })?)
+}
+
+async fn begin_auth(State(state): State<AppState>, Path((id, method)): Path<(String, String)>) -> ApiResult<Json<AuthChallengeResponse>> {
+    let challenge = auth_controller(&state, id)?.begin(&method).await?;
+    Ok(Json(AuthChallengeResponse { url: challenge.url, instructions: challenge.instructions }))
+}
+
+async fn complete_auth(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<CompleteAuthRequest>,
+) -> ApiResult<StatusCode> {
+    auth_controller(&state, id)?.complete(&body.response).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn logout(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+    auth_controller(&state, id)?.logout().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---- threads ----
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenThreadRequest {
+    pub instance_id: InstanceId,
+    #[serde(default)]
+    pub policy: RuntimePolicy,
+    pub model: Option<ModelSelection>,
+    pub resume: Option<NativeId>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadOpened {
+    pub thread_id: ThreadId,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnStarted {
+    pub turn_id: harness_contracts::TurnId,
+}
+
+async fn open_thread(State(state): State<AppState>, Json(body): Json<OpenThreadRequest>) -> ApiResult<Json<ThreadOpened>> {
+    let mut policy = body.policy;
+    if policy.cwd.is_none() {
+        policy.cwd = std::env::current_dir().ok().map(|p| p.display().to_string());
+    }
+    let thread_id = state
+        .sessions
+        .open(OpenThread { instance_id: body.instance_id, policy, model: body.model, resume: body.resume })
+        .await?;
+    Ok(Json(ThreadOpened { thread_id }))
+}
+
+async fn close_thread(State(state): State<AppState>, Path(thread): Path<String>) -> ApiResult<StatusCode> {
+    state.sessions.close(&ThreadId::new(thread)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn start_turn(
+    State(state): State<AppState>,
+    Path(thread): Path<String>,
+    Json(input): Json<TurnInput>,
+) -> ApiResult<Json<TurnStarted>> {
+    let turn_id = state.sessions.get(&ThreadId::new(thread))?.start_turn(input).await?;
+    Ok(Json(TurnStarted { turn_id }))
+}
+
+async fn steer(State(state): State<AppState>, Path(thread): Path<String>, Json(input): Json<SteerInput>) -> ApiResult<StatusCode> {
+    state.sessions.get(&ThreadId::new(thread))?.steer(input).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn interrupt(State(state): State<AppState>, Path(thread): Path<String>) -> ApiResult<StatusCode> {
+    state.sessions.get(&ThreadId::new(thread))?.interrupt().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn respond_request(
+    State(state): State<AppState>,
+    Path((thread, request)): Path<(String, String)>,
+    Json(response): Json<RequestResponse>,
+) -> ApiResult<StatusCode> {
+    state.sessions.get(&ThreadId::new(thread))?.respond(&RequestId::new(request), response).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---- event stream ----
+
+async fn ws_events_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| stream_events(socket, state.hub))
+}
+
+/// Replays current state, then streams `ClientEvent`s as JSON text frames.
+async fn stream_events(socket: WebSocket, hub: Arc<EventHub>) {
+    let (mut sink, mut incoming) = socket.split();
+    let (replay, mut live) = hub.subscribe();
+    for event in replay {
+        let Ok(text) = serde_json::to_string(&event) else { continue };
+        if sink.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
+    }
+    loop {
+        tokio::select! {
+            event = live.recv() => match event {
+                Ok(event) => {
+                    let Ok(text) = serde_json::to_string(&event) else { continue };
+                    if sink.send(Message::Text(text.into())).await.is_err() {
+                        return;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => return,
+            },
+            msg = incoming.next() => if matches!(msg, None | Some(Err(_)) | Some(Ok(Message::Close(_)))) {
+                return;
+            },
+        }
+    }
+}
+
+// ---- app-level: MCP, files, feedback ----
 
 async fn mcp_sse_proxy(
     State(state): State<AppState>,
@@ -173,166 +333,6 @@ async fn get_architecture_handler(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
-async fn get_driver_snapshot(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let driver = state.driver.lock().await;
-    let mut snap = driver.get_snapshot();
-    if snap.models.is_empty() {
-        snap.models = crate::provider::antigravity::driver::official_antigravity_models();
-    }
-    if snap.slash_commands.is_empty() {
-        snap.slash_commands = crate::provider::antigravity::driver::official_antigravity_commands();
-    }
-    Ok(Json(snap))
-}
-
-async fn refresh_models(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let mut driver = state.driver.lock().await;
-    driver.refresh_models().map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-    })?;
-    let mut snap = driver.get_snapshot();
-    if snap.models.is_empty() {
-        snap.models = crate::provider::antigravity::driver::official_antigravity_models();
-    }
-    if snap.slash_commands.is_empty() {
-        snap.slash_commands = crate::provider::antigravity::driver::official_antigravity_commands();
-    }
-    Ok(Json(snap))
-}
-
-async fn start_session(
-    State(state): State<AppState>,
-    Json(input): Json<StartSessionInput>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let session = state.adapter.start_session(input).await.map_err(|e| {
-        tracing::error!("start_session failed: {}", e);
-        (StatusCode::BAD_REQUEST, e.to_string())
-    })?;
-    Ok(Json(session))
-}
-
-async fn send_turn(
-    State(state): State<AppState>,
-    Path(thread_id): Path<String>,
-    Json(req): Json<SendTurnRequest>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let result = state
-        .adapter
-        .send_turn(SendTurnInput {
-            thread_id: thread_id.clone(),
-            input: req.prompt,
-            model: None,
-        })
-        .await
-        .map_err(|e| {
-            tracing::error!("send_turn failed for thread {}: {}", thread_id, e);
-            let code = match &e {
-                crate::error::HarnessError::Validation(_) => StatusCode::NOT_FOUND,
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            (code, e.to_string())
-        })?;
-    Ok(Json(result))
-}
-
-async fn steer_session(
-    State(state): State<AppState>,
-    Path(thread_id): Path<String>,
-    Json(req): Json<SteerRequest>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let result = state
-        .adapter
-        .steer_session(&thread_id, req.model, req.runtime_mode)
-        .await
-        .map_err(|e| {
-            tracing::error!("steer_session failed for thread {}: {}", thread_id, e);
-            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-        })?;
-    Ok(Json(result))
-}
-
-async fn cancel_session(
-    State(state): State<AppState>,
-    Path(thread_id): Path<String>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    state
-        .adapter
-        .interrupt_turn(&thread_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("cancel_session failed for thread {}: {}", thread_id, e);
-            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-        })?;
-    Ok(Json(serde_json::json!({ "status": "cancelled" })))
-}
-
-async fn stop_session(
-    State(state): State<AppState>,
-    Path(thread_id): Path<String>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    state.adapter.stop_session(&thread_id).await.map_err(|e| {
-        tracing::error!("stop_session failed for thread {}: {}", thread_id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-    })?;
-    Ok(Json(serde_json::json!({ "status": "stopped" })))
-}
-
-async fn resolve_approval(
-    State(state): State<AppState>,
-    Path((thread_id, request_id)): Path<(String, String)>,
-    Json(req): Json<ApprovalRequest>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    state
-        .adapter
-        .respond_to_request(&thread_id, &request_id, &req.decision)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "status": "resolved" })))
-}
-
-async fn ws_events_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_ws_events(socket, state.adapter))
-}
-
-async fn handle_ws_events(socket: WebSocket, adapter: Arc<AntigravityAdapter>) {
-    let (mut ws_sender, mut ws_receiver) = socket.split();
-    let mut rx = adapter.subscribe();
-
-    // Spawn task to forward broadcast runtime events to websocket client
-    let mut send_task = tokio::spawn(async move {
-        while let Ok(event) = rx.recv().await {
-            let Ok(json_str) = serde_json::to_string(&event) else {
-                continue;
-            };
-            if ws_sender.send(Message::Text(json_str.into())).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    // Handle incoming client messages (e.g. ping/pong, heartbeats)
-    let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_receiver.next().await {
-            match msg {
-                Message::Close(_) => break,
-                Message::Ping(_) => (),
-                _ => (),
-            }
-        }
-    });
-
-    tokio::select! {
-        _ = (&mut send_task) => recv_task.abort(),
-        _ = (&mut recv_task) => send_task.abort(),
-    }
-}
 
 async fn fs_read_handler(
     Query(query): Query<FsReadQuery>,

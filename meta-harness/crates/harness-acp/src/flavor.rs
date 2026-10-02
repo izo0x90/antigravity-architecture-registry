@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use agent_client_protocol::schema::v1 as acp;
 use async_trait::async_trait;
-use harness_contracts::{ApprovalOption, Capabilities, RuntimeMode, RuntimePolicy, ToolKind};
+use harness_contracts::{ApprovalOption, Capabilities, RuntimeMode, RuntimePolicy, SessionConfig, ToolKind};
 use harness_core::Result;
 
 use crate::convert;
@@ -28,7 +28,7 @@ pub trait AcpFlavor: Send + Sync + 'static {
 
     /// Options shown to the user for a permission request.
     fn approval_options(&self, native: &[acp::PermissionOption]) -> Vec<ApprovalOption> {
-        native.iter().map(convert::approval_option).collect()
+        default_approval_options(native)
     }
 
     /// Option to select without asking, per the runtime policy.
@@ -36,10 +36,16 @@ pub trait AcpFlavor: Send + Sync + 'static {
         default_auto_approve(policy, kind, native)
     }
 
-    /// File system access offered to the agent; `None` means not advertised.
-    fn client_fs(&self) -> Option<Arc<dyn ClientFs>> {
+    /// File system access offered to the agent for this session; `None` means not
+    /// advertised.
+    fn client_fs(&self, _config: &SessionConfig) -> Option<Arc<dyn ClientFs>> {
         None
     }
+}
+
+/// The agent's own options, mapped by kind (allow once/always, reject).
+pub fn default_approval_options(native: &[acp::PermissionOption]) -> Vec<ApprovalOption> {
+    native.iter().map(convert::approval_option).collect()
 }
 
 /// Selects the agent's "allow once" option when the runtime mode permits the tool.

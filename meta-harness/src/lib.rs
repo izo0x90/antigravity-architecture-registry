@@ -1,10 +1,3 @@
-pub mod error;
-pub mod fs_proxy;
-pub mod provider;
-pub mod protocol;
-pub mod server;
-#[cfg(feature = "testing")]
-pub mod testing;
-pub mod registry;
 pub mod mcp;
-pub mod injector;
+pub mod registry;
+pub mod server;

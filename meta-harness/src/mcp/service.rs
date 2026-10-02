@@ -1,7 +1,5 @@
 use std::sync::Arc;
-use tokio::sync::broadcast;
 use serde_json::{json, Value};
-use harness_protocol::ProviderRuntimeEvent;
 use architecture_model::{
     ComponentFilter, GraphPerspective, SubtreeQuery, TaskSpec,
 };
@@ -9,24 +7,15 @@ use crate::registry::service::RegistryService;
 use crate::mcp::protocol::{JsonRpcRequest, JsonRpcResponse, McpToolResult};
 use crate::mcp::tools::list_registry_tools;
 
-/// In-process MCP server executing against RegistryService and dispatching
-/// architecture lifecycle and focus events to the UI.
+/// In-process MCP server executing against RegistryService.
 #[derive(Clone)]
 pub struct McpService {
     registry: Arc<RegistryService>,
-    event_tx: Option<broadcast::Sender<ProviderRuntimeEvent>>,
 }
 
 impl McpService {
-    pub fn new(
-        registry: Arc<RegistryService>,
-        event_tx: Option<broadcast::Sender<ProviderRuntimeEvent>>,
-    ) -> Self {
-        Self { registry, event_tx }
-    }
-
-    pub fn event_sender(&self) -> Option<&broadcast::Sender<ProviderRuntimeEvent>> {
-        self.event_tx.as_ref()
+    pub fn new(registry: Arc<RegistryService>) -> Self {
+        Self { registry }
     }
 
     pub fn registry(&self) -> &Arc<RegistryService> {
@@ -166,18 +155,6 @@ impl McpService {
 
                 match self.registry.get_subtree(&query).await {
                     Ok((sub_graph, textual_tree)) => {
-                        let affected_components: Vec<String> = sub_graph.nodes.keys().cloned().collect();
-
-                        // Emit ArchitectureFocused event to the shared event bus
-                        if let Some(ref tx) = self.event_tx {
-                            let _ = tx.send(ProviderRuntimeEvent::ArchitectureFocused {
-                                root_id: root_id.clone(),
-                                depth,
-                                direction: format!("{:?}", perspective),
-                                affected_components,
-                            });
-                        }
-
                         let response_text = format!(
                             "{}\n\n[Subtree slice extracted: {} nodes, {} edges]",
                             textual_tree,
@@ -197,12 +174,6 @@ impl McpService {
 
                 match self.registry.approve_architecture(comp_id).await {
                     Ok(comp) => {
-                        if let Some(ref tx) = self.event_tx {
-                            let _ = tx.send(ProviderRuntimeEvent::ArchitectureUpdated {
-                                component_id: comp.id.clone(),
-                                status: comp.stage.clone(),
-                            });
-                        }
                         McpToolResult::text(format!(
                             "Component '{}' approved successfully (stage: '{}').",
                             comp.id, comp.stage
@@ -237,12 +208,6 @@ impl McpService {
 
                 match self.registry.plan_component(comp_id, plan, tasks).await {
                     Ok(comp) => {
-                        if let Some(ref tx) = self.event_tx {
-                            let _ = tx.send(ProviderRuntimeEvent::ArchitectureUpdated {
-                                component_id: comp.id.clone(),
-                                status: comp.stage.clone(),
-                            });
-                        }
                         McpToolResult::text(format!(
                             "Plan recorded for component '{}' (stage: '{}').",
                             comp.id, comp.stage
@@ -259,12 +224,6 @@ impl McpService {
 
                 match self.registry.implement_component(comp_id).await {
                     Ok(comp) => {
-                        if let Some(ref tx) = self.event_tx {
-                            let _ = tx.send(ProviderRuntimeEvent::ArchitectureUpdated {
-                                component_id: comp.id.clone(),
-                                status: comp.stage.clone(),
-                            });
-                        }
                         McpToolResult::text(format!(
                             "Component '{}' successfully marked as implemented (stage: '{}').",
                             comp.id, comp.stage

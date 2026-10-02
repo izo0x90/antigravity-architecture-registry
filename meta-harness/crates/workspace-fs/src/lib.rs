@@ -1,7 +1,17 @@
+//! Text file access confined to workspace roots: paths are resolved, canonicalized
+//! and rejected if they (or a symlink they follow) escape every root.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::error::HarnessError;
+/// Errors from workspace file access.
+#[derive(Debug, thiserror::Error)]
+pub enum WorkspaceFsError {
+    #[error("{reason}")]
+    Rejected { reason: String },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
 
 pub const CLIENT_FILE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -35,7 +45,7 @@ pub fn is_inside_root(root: &Path, candidate: &Path) -> bool {
 pub fn resolve_client_file_path(
     allowed_roots: &[PathBuf],
     request_path: &str,
-) -> Result<PathBuf, HarnessError> {
+) -> Result<PathBuf, WorkspaceFsError> {
     let raw_path = Path::new(request_path);
     let resolved = if raw_path.is_absolute() {
         raw_path.to_path_buf()
@@ -54,10 +64,10 @@ pub fn resolve_client_file_path(
 
     let inside = canonical_roots.iter().any(|root| is_inside_root(root, &real));
     if !inside {
-        return Err(HarnessError::Validation(format!(
+        return Err(WorkspaceFsError::Rejected { reason: format!(
             "Path '{}' is outside the session workspace.",
             request_path
-        )));
+        ) });
     }
 
     Ok(real)
@@ -86,21 +96,21 @@ fn canonicalize_ancestor(path: &Path) -> PathBuf {
 pub fn read_client_text_file(
     allowed_roots: &[PathBuf],
     request: &ReadTextFileRequest,
-) -> Result<ReadTextFileResponse, HarnessError> {
+) -> Result<ReadTextFileResponse, WorkspaceFsError> {
     let file_path = resolve_client_file_path(allowed_roots, &request.path)?;
     let meta = fs::metadata(&file_path).map_err(|_| {
-        HarnessError::Validation(format!("File '{}' not found.", request.path))
+        WorkspaceFsError::Rejected { reason: format!("File '{}' not found.", request.path) }
     })?;
 
     if !meta.is_file() || meta.len() > CLIENT_FILE_MAX_BYTES {
-        return Err(HarnessError::Validation(format!(
+        return Err(WorkspaceFsError::Rejected { reason: format!(
             "File '{}' is not a readable text file under {} bytes.",
             request.path, CLIENT_FILE_MAX_BYTES
-        )));
+        ) });
     }
 
     let text = fs::read_to_string(&file_path).map_err(|e| {
-        HarnessError::Validation(format!("Could not read '{}': {}", request.path, e))
+        WorkspaceFsError::Rejected { reason: format!("Could not read '{}': {}", request.path, e) }
     })?;
 
     if request.line.is_none() && request.limit.is_none() {
@@ -125,12 +135,12 @@ pub fn read_client_text_file(
 pub fn write_client_text_file(
     allowed_roots: &[PathBuf],
     request: &WriteTextFileRequest,
-) -> Result<WriteTextFileResponse, HarnessError> {
+) -> Result<WriteTextFileResponse, WorkspaceFsError> {
     if request.content.len() as u64 > CLIENT_FILE_MAX_BYTES {
-        return Err(HarnessError::Validation(format!(
+        return Err(WorkspaceFsError::Rejected { reason: format!(
             "Payload for file '{}' exceeds maximum allowed size of {} bytes.",
             request.path, CLIENT_FILE_MAX_BYTES
-        )));
+        ) });
     }
 
     let file_path = resolve_client_file_path(allowed_roots, &request.path)?;
@@ -145,16 +155,16 @@ pub fn write_client_text_file(
             .map(|r| fs::canonicalize(r).unwrap_or_else(|_| r.clone()))
             .collect();
         if !canonical_roots.iter().any(|r| is_inside_root(r, &target)) {
-            return Err(HarnessError::Validation(format!(
+            return Err(WorkspaceFsError::Rejected { reason: format!(
                 "Symlink target for '{}' escapes session workspace.",
                 request.path
-            )));
+            ) });
         }
     }
 
     if let Some(parent) = file_path.parent() {
-        fs::create_dir_all(parent).map_err(HarnessError::Io)?;
+        fs::create_dir_all(parent).map_err(WorkspaceFsError::Io)?;
     }
-    fs::write(&file_path, &request.content).map_err(HarnessError::Io)?;
+    fs::write(&file_path, &request.content).map_err(WorkspaceFsError::Io)?;
     Ok(WriteTextFileResponse {})
 }

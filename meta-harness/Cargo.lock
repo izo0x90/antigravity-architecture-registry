@@ -675,7 +675,7 @@ dependencies = [
  "ehttp",
  "ewebsock",
  "getrandom 0.3.4",
- "harness-protocol",
+ "harness-contracts",
  "js-sys",
  "petgraph 0.6.5",
  "serde",
@@ -1730,14 +1730,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2312,22 +2304,18 @@ dependencies = [
  "async-trait",
  "axum",
  "futures",
- "harness-protocol",
- "libc",
- "meta-harness",
- "regex",
+ "harness-contracts",
+ "harness-core",
+ "provider-antigravity",
  "serde",
  "serde_json",
- "serde_yaml",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
- "tokio-util",
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "url",
  "uuid",
 ]
 
@@ -3044,6 +3032,24 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+
+[[package]]
+name = "provider-antigravity"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "harness-acp",
+ "harness-contracts",
+ "harness-core",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "workspace-fs",
+]
 
 [[package]]
 name = "pulldown-cmark"
@@ -4011,7 +4017,6 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
- "libc",
  "pin-project-lite",
  "tokio",
 ]
@@ -5013,6 +5018,15 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "workspace-fs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tempfile",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "writeable"

@@ -1,19 +1,13 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
 use ewebsock::{WsEvent, WsMessage, WsReceiver, WsSender};
-use serde::{Deserialize, Serialize};
-
-pub use harness_protocol::{
-    ContentDeltaPayload, DriverSnapshot, ModelSnapshot, ProviderRuntimeEvent, SessionState,
-    StartSessionInput, SendTurnInput, SendTurnResult, StreamKind, TaskPayload, TurnCompletedPayload,
-    TurnStartedPayload, TurnState,
+use harness_contracts::{
+    ClientEvent, InstanceId, ModelSelection, NativeId, RequestId, RequestResponse, RuntimePolicy, SavedSessionPage,
+    SteerInput, ThreadId, TurnInput,
 };
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionStartResponse {
-    pub thread_id: String,
-    pub status: String,
-}
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 /// Event WebSocket to the meta-harness server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,17 +17,50 @@ pub enum WsState {
     Closed,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenThreadBody {
+    pub instance_id: InstanceId,
+    pub policy: RuntimePolicy,
+    pub model: Option<ModelSelection>,
+    pub resume: Option<NativeId>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadOpened {
+    thread_id: ThreadId,
+}
+
+#[derive(serde::Deserialize)]
+struct AuthChallenge {
+    instructions: String,
+}
+
+pub type NetResult<T> = Result<T, String>;
+
 pub struct NetClient {
     base_url: String,
     ws_url: String,
     ws_sender: Option<WsSender>,
     ws_receiver: Option<WsReceiver>,
-    pub incoming_events: Arc<Mutex<Vec<ProviderRuntimeEvent>>>,
-    pub models: Arc<Mutex<Vec<ModelSnapshot>>>,
+    /// Server events received since the last drain.
+    pub incoming: Arc<Mutex<Vec<ClientEvent>>>,
     pub ws_state: Arc<Mutex<WsState>>,
     /// Bumped on every HTTP request/response and WebSocket message (drives the activity LED).
     pub activity: Arc<AtomicU64>,
     pub last_error: Arc<Mutex<Option<String>>>,
+}
+
+/// Error text from a non-2xx response: the server's `{"error": ...}` or the status.
+fn http_error(response: &ehttp::Response) -> String {
+    let server_message = serde_json::from_slice::<serde_json::Value>(&response.bytes)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned));
+    match server_message {
+        Some(message) => message,
+        None => format!("HTTP {}", response.status),
+    }
 }
 
 impl NetClient {
@@ -50,8 +77,7 @@ impl NetClient {
             ws_url,
             ws_sender: None,
             ws_receiver: None,
-            incoming_events: Arc::new(Mutex::new(Vec::new())),
-            models: Arc::new(Mutex::new(Vec::new())),
+            incoming: Arc::new(Mutex::new(Vec::new())),
             ws_state: Arc::new(Mutex::new(WsState::Closed)),
             activity: Arc::new(AtomicU64::new(0)),
             last_error: Arc::new(Mutex::new(None)),
@@ -71,6 +97,45 @@ impl NetClient {
         ehttp::fetch(request, move |result| {
             activity.fetch_add(1, Ordering::Relaxed);
             on_done(result);
+        });
+    }
+
+    /// Sends JSON (or no body for GET) and decodes a JSON reply into `T`
+    /// (`()` accepts any 2xx with no body).
+    fn call<T: DeserializeOwned + Send + 'static>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<T>) + Send + 'static,
+    ) {
+        let url = format!("{}{}", self.base_url, path);
+        let mut request = match body {
+            Some(json) => {
+                let mut r = ehttp::Request::post(&url, serde_json::to_vec(&json).unwrap_or_default());
+                r.method = method.to_owned();
+                r.headers.insert("Content-Type", "application/json");
+                r
+            }
+            None => {
+                let mut r = ehttp::Request::get(&url);
+                r.method = method.to_owned();
+                r
+            }
+        };
+        request.headers.insert("Accept", "application/json");
+        self.fetch(request, move |result| {
+            let outcome = match result {
+                Ok(resp) if resp.ok => {
+                    let bytes: &[u8] = if resp.bytes.is_empty() { b"null" } else { &resp.bytes };
+                    serde_json::from_slice::<T>(bytes).map_err(|e| format!("Bad response: {e}"))
+                }
+                Ok(resp) => Err(http_error(&resp)),
+                Err(e) => Err(format!("Network error: {e}")),
+            };
+            on_done(outcome);
+            ctx.request_repaint();
         });
     }
 
@@ -100,17 +165,17 @@ impl NetClient {
                 match event {
                     WsEvent::Message(WsMessage::Text(text)) => {
                         self.activity.fetch_add(1, Ordering::Relaxed);
-                        match serde_json::from_str::<ProviderRuntimeEvent>(&text) {
+                        match serde_json::from_str::<ClientEvent>(&text) {
                             Ok(parsed) => {
-                                if let Ok(mut events) = self.incoming_events.lock() {
+                                if let Ok(mut events) = self.incoming.lock() {
                                     events.push(parsed);
                                 }
                             }
                             Err(err) => {
                                 #[cfg(target_arch = "wasm32")]
-                                web_sys::console::warn_1(&format!("Failed to parse ProviderRuntimeEvent: {} | text: {}", err, text).into());
+                                web_sys::console::warn_1(&format!("Unreadable server event: {err} | {text}").into());
                                 #[cfg(not(target_arch = "wasm32"))]
-                                eprintln!("Failed to parse ProviderRuntimeEvent: {} | text: {}", err, text);
+                                eprintln!("Unreadable server event: {err} | {text}");
                             }
                         }
                     }
@@ -128,124 +193,67 @@ impl NetClient {
         }
     }
 
-    pub fn fetch_models(&self, ctx: egui::Context) {
-        let url = format!("{}/api/driver/snapshot", self.base_url);
-        let request = ehttp::Request::get(&url);
-        let models_arc = self.models.clone();
-        let last_error_arc = self.last_error.clone();
+    // ---- threads ----
 
-        self.fetch(request, move |result| {
-            match result {
-                Ok(response) => {
-                    if response.ok {
-                        if let Ok(snapshot) = serde_json::from_slice::<DriverSnapshot>(&response.bytes) {
-                            if let Ok(mut list) = models_arc.lock() {
-                                *list = snapshot.models;
-                            }
-                        }
-                    } else {
-                        if let Ok(mut err) = last_error_arc.lock() {
-                            *err = Some(format!("Failed to load models: HTTP {}", response.status));
-                        }
-                    }
-                }
-                Err(e) => {
-                    if let Ok(mut err) = last_error_arc.lock() {
-                        *err = Some(format!("Failed to fetch models: {}", e));
-                    }
-                }
-            }
-            ctx.request_repaint();
-        });
+    pub fn open_thread(&self, body: &OpenThreadBody, ctx: egui::Context, on_done: impl FnOnce(NetResult<ThreadId>) + Send + 'static) {
+        let json = serde_json::to_value(body).unwrap_or_default();
+        self.call::<ThreadOpened>("POST", "/api/threads", Some(json), ctx, move |r| on_done(r.map(|o| o.thread_id)));
     }
 
-    pub fn start_session<F>(&self, thread_id: Option<String>, ctx: egui::Context, on_done: F)
-    where
-        F: FnOnce(Result<String, String>) + Send + 'static,
-    {
-        let tid = thread_id.unwrap_or_else(|| {
-            let now = js_sys::Date::now() as u64;
-            format!("sess-{:x}", now & 0xffffff)
-        });
-        let url = format!("{}/api/sessions/start", self.base_url);
-        let payload = serde_json::json!({
-            "thread_id": tid,
-            "cwd": ".",
-            "runtime_mode": "auto-accept-edits"
-        });
-        let body = serde_json::to_vec(&payload).unwrap_or_default();
-        let mut request = ehttp::Request::post(&url, body);
-        request.headers.insert("Content-Type", "application/json");
-
-        let ret_tid = tid.clone();
-        self.fetch(request, move |result| {
-            match result {
-                Ok(response) => {
-                    if response.ok {
-                        on_done(Ok(ret_tid));
-                    } else {
-                        let err_text = String::from_utf8_lossy(&response.bytes);
-                        on_done(Err(format!("HTTP Error {}: {}", response.status, err_text)));
-                    }
-                }
-                Err(e) => on_done(Err(format!("Network error: {}", e))),
-            }
-            ctx.request_repaint();
-        });
+    pub fn start_turn(&self, thread: &ThreadId, input: &TurnInput, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        let json = serde_json::to_value(input).unwrap_or_default();
+        self.call::<serde_json::Value>("POST", &format!("/api/threads/{thread}/turns"), Some(json), ctx, move |r| on_done(r.map(|_| ())));
     }
 
-    pub fn send_turn<F>(&self, thread_id: &str, prompt: &str, model: &str, effort: &str, on_done: F)
-    where
-        F: FnOnce(Result<(), String>) + Send + 'static,
-    {
-        let url = format!("{}/api/sessions/{}/turn", self.base_url, thread_id);
-        let payload = serde_json::json!({
-            "prompt": prompt,
-            "model": model,
-            "effort": effort,
-        });
-        let body = serde_json::to_vec(&payload).unwrap_or_default();
-        let mut request = ehttp::Request::post(&url, body);
-        request.headers.insert("Content-Type", "application/json");
-
-        self.fetch(request, move |result| {
-            match result {
-                Ok(resp) => {
-                    if resp.ok {
-                        on_done(Ok(()));
-                    } else {
-                        on_done(Err(format!("Turn failed: HTTP {}", resp.status)));
-                    }
-                }
-                Err(e) => on_done(Err(format!("Turn network error: {}", e))),
-            }
-        });
+    pub fn steer(&self, thread: &ThreadId, input: &SteerInput, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        let json = serde_json::to_value(input).unwrap_or_default();
+        self.call::<()>("POST", &format!("/api/threads/{thread}/steer"), Some(json), ctx, on_done);
     }
 
-    pub fn steer_session(&self, thread_id: &str, model: &str, mode: &str) {
-        let url = format!("{}/api/sessions/{}/steer", self.base_url, thread_id);
-        let payload = serde_json::json!({
-            "model": model,
-            "mode": mode,
-        });
-        let body = serde_json::to_vec(&payload).unwrap_or_default();
-        let mut request = ehttp::Request::post(&url, body);
-        request.headers.insert("Content-Type", "application/json");
-
-        self.fetch(request, |_| {});
+    pub fn interrupt(&self, thread: &ThreadId, ctx: egui::Context) {
+        self.call::<()>("POST", &format!("/api/threads/{thread}/interrupt"), Some(serde_json::json!({})), ctx, |_| {});
     }
 
-    pub fn respond_request(&self, thread_id: &str, request_id: &str, decision: &str) {
-        let url = format!("{}/api/sessions/{}/requests/{}/respond", self.base_url, thread_id, request_id);
-        let payload = serde_json::json!({
-            "decision": decision,
-        });
-        let body = serde_json::to_vec(&payload).unwrap_or_default();
-        let mut request = ehttp::Request::post(&url, body);
-        request.headers.insert("Content-Type", "application/json");
-
-        self.fetch(request, |_| {});
+    pub fn close_thread(&self, thread: &ThreadId, ctx: egui::Context) {
+        self.call::<()>("DELETE", &format!("/api/threads/{thread}"), None, ctx, |_| {});
     }
+
+    pub fn respond(
+        &self,
+        thread: &ThreadId,
+        request: &RequestId,
+        response: &RequestResponse,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<()>) + Send + 'static,
+    ) {
+        let json = serde_json::to_value(response).unwrap_or_default();
+        self.call::<()>("POST", &format!("/api/threads/{thread}/requests/{request}"), Some(json), ctx, on_done);
+    }
+
+    // ---- instances ----
+
+    pub fn list_saved_sessions(
+        &self,
+        instance: &InstanceId,
+        cwd: &str,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<SavedSessionPage>) + Send + 'static,
+    ) {
+        let path = format!("/api/instances/{instance}/sessions?cwd={}", urlencoding::encode(cwd));
+        self.call("GET", &path, None, ctx, on_done);
+    }
+
+    pub fn begin_auth(&self, instance: &InstanceId, method: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<String>) + Send + 'static) {
+        let path = format!("/api/instances/{instance}/auth/{}", urlencoding::encode(method));
+        self.call::<AuthChallenge>("POST", &path, Some(serde_json::json!({})), ctx, move |r| on_done(r.map(|c| c.instructions)));
+    }
+
+    pub fn complete_auth(&self, instance: &InstanceId, response: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        let path = format!("/api/instances/{instance}/auth/complete");
+        self.call::<()>("POST", &path, Some(serde_json::json!({ "response": response })), ctx, on_done);
+    }
+
+    // ---- app-level ----
 
     pub fn fetch_file<F>(&self, path: &str, ctx: egui::Context, on_done: F)
     where
