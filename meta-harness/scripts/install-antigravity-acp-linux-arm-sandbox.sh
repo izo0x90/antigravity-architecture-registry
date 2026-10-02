@@ -85,6 +85,25 @@ fetch_binary() { # <arch> <file> <expected e_machine>
 fetch_binary x86_64 agy_acp_server.par 62
 fetch_binary arm64 localharness_external 183
 
+# 4b. Trust the sandbox proxy's TLS CA. The proxy re-signs HTTPS and the server checks
+# some calls only against CA bundles packed in the .par, so add the CA to those.
+proxy_ca="${TMP}/sbx-proxy-ca.pem"
+python3 - "${proxy_ca}" <<'PY'
+import re, subprocess, sys
+pem = open("/etc/ssl/certs/ca-certificates.crt").read()
+for cert in re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----\n?", pem, re.S):
+    subject = subprocess.run(["openssl", "x509", "-noout", "-subject"], input=cert,
+                             capture_output=True, text=True).stdout
+    if "Docker Sandboxes Proxy CA" in subject:
+        open(sys.argv[1], "w").write(cert if cert.endswith("\n") else cert + "\n")
+PY
+if [[ -s "${proxy_ca}" ]]; then
+  say "Adding sandbox proxy CA to the server's bundled CA lists"
+  python3 "$(dirname "$0")/patch-par-ca.py" "${TARGET_DIR}/libexec/agy_acp_server.par" "${proxy_ca}"
+else
+  say "No Docker Sandboxes proxy CA in the system store; skipping CA patch"
+fi
+
 # 5. Wrapper at the path the meta-harness server looks up.
 say "Writing wrapper ${TARGET_DIR}/agy_acp_server.par"
 cat > "${TARGET_DIR}/agy_acp_server.par" <<EOF
