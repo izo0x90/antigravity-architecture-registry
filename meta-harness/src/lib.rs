@@ -10,7 +10,6 @@ pub mod server;
 pub mod skills;
 pub mod testing;
 pub mod transport;
-pub mod cockpit;
 pub mod registry;
 pub mod mcp;
 pub mod injector;

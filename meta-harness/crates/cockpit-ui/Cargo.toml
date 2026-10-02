@@ -25,3 +25,7 @@ petgraph = "0.6"
 egui_graphs = "0.29.0"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 egui-phosphor = "0.11.0"
+
+# Native (non-wasm) builds, e.g. unit tests on Linux, need a winit windowing backend.
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.33.3", default-features = false, features = ["x11", "wayland"] }

@@ -358,17 +358,8 @@ async fn test_server_static_file_serving() {
     assert!(response.contains("HTTP/1.1 200 OK"));
     assert!(response.contains("Antigravity Meta-Harness Cockpit"));
 
-    // Request app.js
-    let mut stream_js = tokio::net::TcpStream::connect(addr).await.unwrap();
-    stream_js
-        .write_all(b"GET /app.js HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .await
-        .unwrap();
-
-    let mut response_js = String::new();
-    stream_js.read_to_string(&mut response_js).await.unwrap();
-    assert!(response_js.contains("HTTP/1.1 200 OK"));
-    assert!(response_js.contains("Antigravity Meta-Harness Cockpit Frontend Controller"));
+    // index.html must boot the WASM cockpit bundle
+    assert!(response.contains("/wasm/cockpit_ui.js"));
 }
 
 
