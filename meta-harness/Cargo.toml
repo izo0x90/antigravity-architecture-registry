@@ -35,7 +35,13 @@ url = "2.5.8"
 uuid = { version = "1.26.1", features = ["v4", "serde"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 
+[features]
+# Exposes meta_harness::testing (mock ACP runtime + adapter harness) for integration tests.
+testing = []
+
 [dev-dependencies]
+# Self dev-dependency so `cargo test` enables the testing feature automatically.
+meta-harness = { path = ".", features = ["testing"] }
 ast-grep-config = "0.45.3"
 ast-grep-core = "0.45.3"
 tempfile = "3.27.0"
