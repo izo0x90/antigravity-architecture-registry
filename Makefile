@@ -1,6 +1,9 @@
-.PHONY: start stop status clean restart log lint check
+.PHONY: start stop status clean restart log lint check ui sandbox-dev
 
 AST_GREP ?= $(shell which ast-grep 2>/dev/null || echo "$$HOME/.local/share/cargo/bin/ast-grep")
+# Relative to meta-harness/ (cargo's default); overridden by sandbox-dev.
+CARGO_TARGET_DIR ?= target
+export CARGO_TARGET_DIR
 PID_FILE = mcp_server.pid
 LOG_FILE = mcp_server.log
 
@@ -17,7 +20,20 @@ check: lint
 ui:
 	@echo "==> Building Cockpit UI WASM..."
 	cd meta-harness && cargo build -p cockpit-ui --target wasm32-unknown-unknown --release
-	cd meta-harness && wasm-bindgen target/wasm32-unknown-unknown/release/cockpit_ui.wasm --out-dir static/wasm --target web
+	cd meta-harness && wasm-bindgen $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/cockpit_ui.wasm --out-dir static/wasm --target web
+
+# --- Sandbox only -------------------------------------------------------------
+# For the agent sandbox (Linux), not your Mac. Builds into a sandbox-local target
+# dir (meta-harness/target holds host artifacts), starts sbx-app-bridge, and runs the
+# server on 127.0.0.1:8080. Open http://sandbox.localhost:8080 in the host Chrome.
+SANDBOX_TARGET_DIR ?= $(HOME)/.cache/meta-harness-sandbox-target
+
+sandbox-dev:
+	$(MAKE) ui CARGO_TARGET_DIR=$(SANDBOX_TARGET_DIR)
+	sbx-app-bridge start
+	cd meta-harness && CARGO_TARGET_DIR=$(SANDBOX_TARGET_DIR) \
+		STATIC_DIR=static ARCHITECTURE_REGISTRY_PATH=../system_architecture.json \
+		HOST=127.0.0.1 PORT=8080 cargo run --bin meta-harness
 
 
 start:
