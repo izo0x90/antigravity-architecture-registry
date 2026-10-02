@@ -448,3 +448,64 @@ async fn test_mcp_streamable_http_direct_post() {
     assert!(resp2.contains("HTTP/1.1 200 OK"));
     assert!(resp2.contains("\"tools\":["));
 }
+
+#[tokio::test]
+async fn test_registry_architecture_endpoint_serves_registry_state() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let temp_file = tempfile::NamedTempFile::new().unwrap();
+    let repo = Arc::new(FsJsonRepository::from_architecture(
+        sample_test_architecture(),
+        temp_file.path(),
+    ));
+    let registry = Arc::new(RegistryService::new(repo));
+    let mcp_service = Arc::new(McpService::new(registry, None));
+    let mcp_state = McpServerState::new(mcp_service);
+
+    let spawner = Arc::new(TokioProcessSpawner::new());
+    let profile_dir = tempfile::tempdir().unwrap();
+    let installation = Arc::new(
+        AntigravityInstallation::new(AntigravityInstallationOptions {
+            base_dir: profile_dir.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let driver = AntigravityDriver::create(DriverCreateOptions {
+        instance_id: "test-driver".to_string(),
+        display_name: "Test Driver".to_string(),
+        enabled: true,
+        config: AntigravityDriverConfig {
+            auth_method: AuthMethod::OAuthPersonal,
+            api_key: None,
+        },
+        environment: vec![],
+        profile_directory: profile_dir.path().to_path_buf(),
+        installation,
+        spawner,
+    })
+    .unwrap();
+
+    let adapter = Arc::new(AntigravityAdapter::new());
+    let state = AppState::with_mcp_state(adapter, Arc::new(tokio::sync::Mutex::new(driver)), mcp_state);
+    let app = create_router(state);
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"GET /api/registry/architecture HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    assert!(response.contains("HTTP/1.1 200 OK"));
+
+    let body = response.split("\r\n\r\n").nth(1).unwrap();
+    let arch: SystemArchitecture = serde_json::from_str(body).unwrap();
+    assert_eq!(arch, sample_test_architecture());
+}

@@ -66,7 +66,7 @@ impl ArchitectureTreeState {
             if components.is_empty() {
                 ui.vertical_centered(|ui| {
                     ui.add_space(30.0);
-                    ui.label(RichText::new("No components loaded from system_architecture.json").color(Color32::GRAY).size(12.0));
+                    ui.label(RichText::new("No components loaded from the registry").color(Color32::GRAY).size(12.0));
                 });
                 return;
             }

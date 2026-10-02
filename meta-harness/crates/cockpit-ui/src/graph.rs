@@ -109,7 +109,7 @@ impl ArchitectureGraphState {
         self.load_error = None;
         let pending = self.pending_load.clone();
         let ctx_clone = ctx.clone();
-        net.fetch_file("system_architecture.json", ctx_clone, move |result| {
+        net.fetch_architecture(ctx_clone, move |result| {
             if let Ok(mut lock) = pending.lock() {
                 *lock = Some(result);
             }
@@ -128,7 +128,7 @@ impl ArchitectureGraphState {
                 Ok(())
             }
             Err(e) => {
-                let err = format!("Failed to parse system_architecture.json: {}", e);
+                let err = format!("Failed to parse registry architecture: {}", e);
                 self.load_error = Some(err.clone());
                 Err(err)
             }

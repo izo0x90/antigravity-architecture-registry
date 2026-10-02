@@ -258,6 +258,25 @@ impl NetClient {
         });
     }
 
+    /// Fetches the registry's architecture as raw JSON text.
+    pub fn fetch_architecture<F>(&self, ctx: egui::Context, on_done: F)
+    where
+        F: FnOnce(Result<String, String>) + Send + 'static,
+    {
+        let url = format!("{}/api/registry/architecture", self.base_url);
+        ehttp::fetch(ehttp::Request::get(&url), move |result| {
+            match result {
+                Ok(resp) if resp.ok => match resp.text() {
+                    Some(text) => on_done(Ok(text.to_string())),
+                    None => on_done(Err("Architecture response was not valid UTF-8".into())),
+                },
+                Ok(resp) => on_done(Err(format!("Architecture HTTP error {}", resp.status))),
+                Err(e) => on_done(Err(format!("Network error: {}", e))),
+            }
+            ctx.request_repaint();
+        });
+    }
+
     pub fn submit_feedback<F>(&self, feedback_json: serde_json::Value, ctx: egui::Context, on_done: F)
     where
         F: FnOnce(Result<String, String>) + Send + 'static,

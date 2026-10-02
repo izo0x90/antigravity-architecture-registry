@@ -29,6 +29,10 @@ impl McpService {
         self.event_tx.as_ref()
     }
 
+    pub fn registry(&self) -> &Arc<RegistryService> {
+        &self.registry
+    }
+
     pub async fn handle_request(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         let req_id = req.id.clone();
 

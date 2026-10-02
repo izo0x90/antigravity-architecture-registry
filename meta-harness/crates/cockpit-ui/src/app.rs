@@ -97,7 +97,7 @@ impl CockpitApp {
             let ctx_chat = ctx.clone();
             self.chat.start_session(&self.net, ctx_chat);
 
-            // Auto-load system_architecture.json into graph
+            // Auto-load the registry architecture into graph
             let ctx_arch = ctx.clone();
             self.graph.load_architecture(&self.net, ctx_arch);
 

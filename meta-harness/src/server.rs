@@ -122,6 +122,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sessions/{thread_id}/approvals/{request_id}", post(resolve_approval))
         .route("/api/sessions/{thread_id}/requests/{request_id}/respond", post(resolve_approval))
         .route("/api/fs/read", get(fs_read_handler))
+        .route("/api/registry/architecture", get(get_architecture_handler))
         .route("/api/dev/feedback", get(get_dev_feedback_handler).post(dev_feedback_handler).put(update_dev_feedback_handler))
         .route("/api/mcp/sse", get(mcp_sse_proxy).post(mcp_messages_proxy))
         .route("/api/mcp/messages", post(mcp_messages_proxy))
@@ -156,6 +157,20 @@ async fn health_check() -> impl IntoResponse {
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION")
     }))
+}
+
+/// Serves the registry's live architecture (the same state the MCP tools read and write).
+async fn get_architecture_handler(
+    State(state): State<AppState>,
+) -> Result<Json<harness_protocol::arch::SystemArchitecture>, (StatusCode, String)> {
+    state
+        .mcp_state
+        .service
+        .registry()
+        .load_full()
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 async fn get_driver_snapshot(
