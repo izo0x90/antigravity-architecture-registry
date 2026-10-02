@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{ThreadId, TurnId};
+use crate::snapshot::ProviderSnapshot;
 use crate::items::TurnItem;
 use crate::plan::PlanArtifact;
 use crate::requests::RuntimeRequest;
@@ -30,4 +31,13 @@ pub enum AdapterEvent {
 pub struct CatalogUpdate {
     pub commands: Option<Vec<SlashCommand>>,
     pub models: Option<Vec<ModelOption>>,
+}
+
+/// What the server streams to clients: instance snapshots plus session events.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
+pub enum ClientEvent {
+    InstanceUpdated { snapshot: ProviderSnapshot },
+    Session { event: AdapterEvent },
+    ThreadClosed { thread_id: ThreadId },
 }

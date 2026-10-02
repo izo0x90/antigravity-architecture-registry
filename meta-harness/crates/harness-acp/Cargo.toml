@@ -11,7 +11,7 @@ agent-client-protocol = "2.2.0"
 async-trait = "0.1.92"
 futures = "0.3.34"
 serde_json = "1.0"
-tokio = { version = "1.53.1", features = ["sync", "process", "rt", "time", "io-util", "macros"] }
+tokio = { version = "1.53.1", features = ["sync", "process", "rt", "time", "io-util", "macros", "net"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 tokio-util = { version = "0.7.19", features = ["compat"] }
 tracing = "0.1.44"

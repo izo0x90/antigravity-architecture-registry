@@ -11,15 +11,21 @@
 //! [`harness_contracts::Capabilities`]; it never matches on a driver kind.
 
 mod error;
+mod hub;
+mod registry;
+mod sessions;
 
 pub use error::HarnessError;
+pub use hub::EventHub;
+pub use registry::{InstanceConfig, InstanceRegistry};
+pub use sessions::{OpenThread, SessionManager};
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use harness_contracts::{
-    Capabilities, DriverKind, InstanceId, NativeId, ProviderSnapshot, RequestId,
+    CatalogUpdate, Capabilities, DriverKind, InstanceId, NativeId, ProviderSnapshot, RequestId,
     RequestResponse, SavedSessionPage, SessionConfig, SteerInput, ThreadId, TurnId, TurnInput,
 };
 use tokio::sync::watch;
@@ -62,6 +68,10 @@ pub trait ProviderInstance: Send + Sync {
     fn auth(&self) -> Option<Arc<dyn AuthController>>;
 
     fn adapter(&self) -> Arc<dyn ProviderAdapter>;
+
+    /// Folds a catalog change reported by one of this instance's sessions into
+    /// the snapshot.
+    fn apply_catalog(&self, update: &CatalogUpdate);
 
     /// Present when the harness keeps its own saved sessions (the way back into
     /// earlier work; the harness layer itself persists nothing).
