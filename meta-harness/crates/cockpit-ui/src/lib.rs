@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod app;
 pub mod chat;
 pub mod code;
@@ -7,6 +8,7 @@ pub mod graph_draw;
 pub mod graph_layout;
 pub mod keymap;
 pub mod net;
+pub mod palette;
 pub mod samples;
 pub mod store;
 pub mod tree;

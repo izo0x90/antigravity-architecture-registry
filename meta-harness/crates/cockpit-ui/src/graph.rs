@@ -658,6 +658,30 @@ impl ArchitectureGraphState {
         });
     }
 
+    /// Graph actions for the registry (shown while a graph slot is focused).
+    pub fn actions(&self) -> Vec<crate::actions::Action> {
+        use crate::actions::{Action, Owner};
+        vec![
+            Action::new(Owner::Graph, "graph.zoom_in", "Zoom in").keys("gi"),
+            Action::new(Owner::Graph, "graph.zoom_out", "Zoom out").keys("go"),
+            Action::new(Owner::Graph, "graph.reset", "Reset layout").keys("gr"),
+            Action::new(Owner::Graph, "graph.display", "Cycle display mode").keys("gm"),
+            Action::new(Owner::Graph, "graph.close_inspector", "Close node inspector").keys("gx"),
+        ]
+    }
+
+    pub fn invoke(&mut self, id: &str) {
+        let action = match id {
+            "graph.zoom_in" => crate::keymap::GraphAction::ZoomIn,
+            "graph.zoom_out" => crate::keymap::GraphAction::ZoomOut,
+            "graph.reset" => crate::keymap::GraphAction::ResetLayout,
+            "graph.display" => crate::keymap::GraphAction::CycleDisplayMode,
+            "graph.close_inspector" => crate::keymap::GraphAction::CloseInspector,
+            _ => return,
+        };
+        self.execute_action(action);
+    }
+
     pub fn execute_action(&mut self, action: crate::keymap::GraphAction) {
         match action {
             crate::keymap::GraphAction::ZoomIn => {

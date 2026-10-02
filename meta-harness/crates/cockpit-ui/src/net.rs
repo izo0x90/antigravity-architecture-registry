@@ -24,6 +24,7 @@ pub struct OpenThreadBody {
     pub policy: RuntimePolicy,
     pub model: Option<ModelSelection>,
     pub resume: Option<NativeId>,
+    pub mcp_servers: Vec<harness_contracts::McpServer>,
 }
 
 #[derive(serde::Deserialize)]
@@ -241,6 +242,19 @@ impl NetClient {
     ) {
         let path = format!("/api/instances/{instance}/sessions?cwd={}", urlencoding::encode(cwd));
         self.call("GET", &path, None, ctx, on_done);
+    }
+
+    pub fn delete_saved_session(&self, instance: &InstanceId, native: &NativeId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        let path = format!("/api/instances/{instance}/sessions/{}", urlencoding::encode(native.as_str()));
+        self.call::<()>("DELETE", &path, None, ctx, on_done);
+    }
+
+    pub fn refresh_instance(&self, instance: &InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<()>("POST", &format!("/api/instances/{instance}/refresh"), Some(serde_json::json!({})), ctx, on_done);
+    }
+
+    pub fn logout(&self, instance: &InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<()>("POST", &format!("/api/instances/{instance}/auth/logout"), Some(serde_json::json!({})), ctx, on_done);
     }
 
     pub fn begin_auth(&self, instance: &InstanceId, method: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<String>) + Send + 'static) {

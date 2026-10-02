@@ -1,21 +1,15 @@
 use egui::Key;
 use serde::{Deserialize, Serialize};
 
-/// High-level leader menu prefix for Which-Key navigation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LeaderPrefix {
-    Root,
-    Buffer,
-    Layout,
-}
-
 /// High-level application input mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputMode {
     /// Modal navigation: single keys execute navigation and panel commands.
     Normal,
-    /// Leader mode: Which-Key HUD is visible, awaiting menu chords.
-    Leader(LeaderPrefix),
+    /// Leader mode: Which-Key HUD is visible, awaiting menu keys (path kept by the app).
+    Leader,
+    /// The command palette owns the keyboard.
+    Palette,
     /// Insert mode: keystrokes flow into text fields in the specified slot.
     Insert { slot: usize },
 }
@@ -81,90 +75,6 @@ pub enum GraphAction {
 pub enum ChatAction {
     EnterInsert,
     ClearPrompt,
-}
-
-/// Outcome of processing a leader keystroke.
-#[derive(Clone, Debug, PartialEq)]
-pub enum LeaderResult {
-    Navigate(LeaderPrefix),
-    Execute(GlobalAction),
-    Dismiss,
-    None,
-}
-
-pub fn resolve_leader_key(
-    prefix: LeaderPrefix,
-    key: Key,
-    focused_slot: usize,
-) -> LeaderResult {
-    match prefix {
-        LeaderPrefix::Root => match key {
-            Key::Num1 => LeaderResult::Execute(GlobalAction::FocusSlot(0)),
-            Key::Num2 => LeaderResult::Execute(GlobalAction::FocusSlot(1)),
-            Key::Num3 => LeaderResult::Execute(GlobalAction::FocusSlot(2)),
-            Key::B => LeaderResult::Navigate(LeaderPrefix::Buffer),
-            Key::L => LeaderResult::Navigate(LeaderPrefix::Layout),
-            Key::I => LeaderResult::Execute(GlobalAction::ToggleInspector),
-            Key::D => LeaderResult::Execute(GlobalAction::ToggleIssues),
-            Key::X => LeaderResult::Execute(GlobalAction::CloseActiveDrawer),
-            Key::Escape => LeaderResult::Dismiss,
-            _ => LeaderResult::None,
-        },
-        LeaderPrefix::Buffer => match key {
-            Key::C => LeaderResult::Execute(GlobalAction::SwitchBuffer {
-                slot: focused_slot,
-                kind: crate::app::BufferKind::Chat,
-            }),
-            Key::V => LeaderResult::Execute(GlobalAction::SwitchBuffer {
-                slot: focused_slot,
-                kind: crate::app::BufferKind::Code,
-            }),
-            Key::G => LeaderResult::Execute(GlobalAction::SwitchBuffer {
-                slot: focused_slot,
-                kind: crate::app::BufferKind::Graph,
-            }),
-            Key::T => LeaderResult::Execute(GlobalAction::SwitchBuffer {
-                slot: focused_slot,
-                kind: crate::app::BufferKind::Tree,
-            }),
-            Key::Escape => LeaderResult::Navigate(LeaderPrefix::Root),
-            _ => LeaderResult::None,
-        },
-        LeaderPrefix::Layout => match key {
-            Key::Num1 => LeaderResult::Execute(GlobalAction::SetLayout(1)),
-            Key::Num2 => LeaderResult::Execute(GlobalAction::SetLayout(2)),
-            Key::Num3 => LeaderResult::Execute(GlobalAction::SetLayout(3)),
-            Key::Escape => LeaderResult::Navigate(LeaderPrefix::Root),
-            _ => LeaderResult::None,
-        },
-    }
-}
-
-pub fn which_key_entries(prefix: LeaderPrefix) -> &'static [(&'static str, &'static str)] {
-    match prefix {
-        LeaderPrefix::Root => &[
-            ("1..3", "Slot"),
-            ("b", "Buffer..."),
-            ("l", "Layout..."),
-            ("i", "Inspector"),
-            ("d", "Issues"),
-            ("x", "Close Drawer"),
-            ("Esc", "Close"),
-        ],
-        LeaderPrefix::Buffer => &[
-            ("c", "Chat"),
-            ("v", "Code"),
-            ("g", "Graph"),
-            ("t", "Tree"),
-            ("Esc", "Back"),
-        ],
-        LeaderPrefix::Layout => &[
-            ("1", "1 Col"),
-            ("2", "2 Cols"),
-            ("3", "3 Cols"),
-            ("Esc", "Back"),
-        ],
-    }
 }
 
 /// A configurable single key or key combination.
