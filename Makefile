@@ -27,6 +27,9 @@ ui:
 # dir (meta-harness/target holds host artifacts), starts sbx-app-bridge, and runs the
 # server on 127.0.0.1:8080. Open http://sandbox.localhost:8080 in the host Chrome.
 SANDBOX_TARGET_DIR ?= $(HOME)/.cache/meta-harness-sandbox-target
+# The sandbox disk is small: skip debug info and incremental caches (~1/3 the size).
+sandbox-dev: export CARGO_PROFILE_DEV_DEBUG = 0
+sandbox-dev: export CARGO_INCREMENTAL = 0
 
 sandbox-dev:
 	$(MAKE) ui CARGO_TARGET_DIR=$(SANDBOX_TARGET_DIR)
