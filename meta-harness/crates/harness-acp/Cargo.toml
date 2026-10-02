@@ -1,0 +1,22 @@
+[package]
+name = "harness-acp"
+version = "0.1.0"
+edition = "2024"
+description = "Generic ACP (Agent Client Protocol) adapter; harness specifics plug in as an AcpFlavor"
+
+[dependencies]
+harness-contracts = { path = "../harness-contracts" }
+harness-core = { path = "../harness-core" }
+agent-client-protocol = "2.2.0"
+async-trait = "0.1.92"
+futures = "0.3.34"
+serde_json = "1.0"
+tokio = { version = "1.53.1", features = ["sync", "process", "rt", "time", "io-util", "macros"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+tokio-util = { version = "0.7.19", features = ["compat"] }
+tracing = "0.1.44"
+uuid = { version = "1.26.1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-util = { version = "0.7.19", features = ["compat"] }

@@ -12,6 +12,7 @@ members = [
     "crates/architecture-model",
     "crates/harness-contracts",
     "crates/harness-core",
+    "crates/harness-acp",
 ]
 
 [lib]
