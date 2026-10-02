@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use harness_protocol::arch::{ComponentFilter, ComponentSpec, SystemArchitecture, UsageNode};
+use architecture_model::{ComponentFilter, ComponentSpec, SystemArchitecture, UsageNode};
 use crate::registry::error::RegistryError;
 
 /// Storage-agnostic abstraction for Architecture Registry persistence.

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use async_trait::async_trait;
-use harness_protocol::arch::{ComponentFilter, ComponentSpec, SystemArchitecture, UsageNode};
+use architecture_model::{ComponentFilter, ComponentSpec, SystemArchitecture, UsageNode};
 use tokio::sync::RwLock;
 
 use crate::registry::error::RegistryError;

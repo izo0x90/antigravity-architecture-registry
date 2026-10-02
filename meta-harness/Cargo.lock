@@ -103,6 +103,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "architecture-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -469,6 +477,7 @@ dependencies = [
 name = "cockpit-ui"
 version = "0.1.0"
 dependencies = [
+ "architecture-model",
  "eframe",
  "egui",
  "egui-phosphor",
@@ -1804,6 +1813,7 @@ dependencies = [
 name = "meta-harness"
 version = "0.1.0"
 dependencies = [
+ "architecture-model",
  "ast-grep-config",
  "ast-grep-core",
  "async-trait",

@@ -32,7 +32,7 @@ impl AppState {
         driver: Arc<tokio::sync::Mutex<AntigravityDriver>>,
     ) -> Self {
         let repo = Arc::new(crate::registry::FsJsonRepository::from_architecture(
-            harness_protocol::arch::SystemArchitecture::default(),
+            architecture_model::SystemArchitecture::default(),
             "test_architecture.json",
         ));
         let registry = Arc::new(crate::registry::RegistryService::new(repo));
@@ -162,7 +162,7 @@ async fn health_check() -> impl IntoResponse {
 /// Serves the registry's live architecture (the same state the MCP tools read and write).
 async fn get_architecture_handler(
     State(state): State<AppState>,
-) -> Result<Json<harness_protocol::arch::SystemArchitecture>, (StatusCode, String)> {
+) -> Result<Json<architecture_model::SystemArchitecture>, (StatusCode, String)> {
     state
         .mcp_state
         .service

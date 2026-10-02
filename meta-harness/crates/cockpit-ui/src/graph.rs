@@ -1,7 +1,7 @@
 use egui::{
     Color32, CornerRadius, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2,
 };
-use harness_protocol::arch::{
+use architecture_model::{
     AlignmentStatus, ComponentSpec, GraphNode, GraphPerspective, NodeKind, SystemArchitecture,
     UnifiedArchitectureGraph,
 };
@@ -14,8 +14,8 @@ use crate::graph_layout::{self, LayoutDirection, LayoutSettings};
 use crate::samples;
 
 // Re-export ComponentSpec as ArchComponent for tree.rs backwards-compatibility
-pub use harness_protocol::arch::ComponentSpec as ArchComponent;
-pub use harness_protocol::arch::TaskSpec as ArchTask;
+pub use architecture_model::ComponentSpec as ArchComponent;
+pub use architecture_model::TaskSpec as ArchTask;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GraphPreset {

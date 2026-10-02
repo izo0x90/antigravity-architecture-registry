@@ -2,7 +2,7 @@ use egui::{
     epaint::CubicBezierShape, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, StrokeKind,
     Vec2,
 };
-use harness_protocol::arch::{
+use architecture_model::{
     AlignmentStatus, ComponentSpec, EdgeKind, GraphEdge, GraphNode, NodeKind, TaskSpec, UsageNode,
 };
 

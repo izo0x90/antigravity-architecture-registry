@@ -21,6 +21,7 @@ wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "Location", "console"] }
 js-sys = "0.3"
 harness-protocol = { path = "../harness-protocol" }
+architecture-model = { path = "../architecture-model" }
 petgraph = "0.6"
 egui_graphs = "0.29.0"
 getrandom = { version = "0.3", features = ["wasm_js"] }

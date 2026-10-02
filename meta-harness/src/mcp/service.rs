@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use serde_json::{json, Value};
 use harness_protocol::ProviderRuntimeEvent;
-use harness_protocol::arch::{
+use architecture_model::{
     ComponentFilter, GraphPerspective, SubtreeQuery, TaskSpec,
 };
 use crate::registry::service::RegistryService;

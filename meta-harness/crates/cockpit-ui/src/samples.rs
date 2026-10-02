@@ -1,4 +1,4 @@
-use harness_protocol::arch::{
+use architecture_model::{
     AlignmentStatus, CodeLocation, ComponentSpec, EdgeKind, GraphEdge, GraphNode, NodeKind,
     SideEffectSpec, TaskSpec, UnifiedArchitectureGraph, UsageNode,
 };

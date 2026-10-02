@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use harness_protocol::arch::{
+use architecture_model::{
     ArchitectureSummary, ComponentFilter, ComponentSpec, ComponentSummary,
     SubtreeQuery, SystemArchitecture, TaskSpec, UnifiedArchitectureGraph,
 };

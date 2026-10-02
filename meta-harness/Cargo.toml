@@ -9,6 +9,7 @@ members = [
     ".",
     "crates/cockpit-ui",
     "crates/harness-protocol",
+    "crates/architecture-model",
 ]
 
 [lib]
@@ -16,6 +17,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 harness-protocol = { path = "crates/harness-protocol" }
+architecture-model = { path = "crates/architecture-model" }
 async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["ws"] }
 futures = "0.3.34"

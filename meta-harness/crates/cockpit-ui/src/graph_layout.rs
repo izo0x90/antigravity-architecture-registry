@@ -1,5 +1,5 @@
 use egui::Pos2;
-use harness_protocol::arch::UnifiedArchitectureGraph;
+use architecture_model::UnifiedArchitectureGraph;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -237,7 +237,7 @@ fn compute_barycenter(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_protocol::arch::{GraphPerspective, SystemArchitecture};
+    use architecture_model::{GraphPerspective, SystemArchitecture};
 
     #[test]
     fn test_longest_path_layering_no_backward_edges() {

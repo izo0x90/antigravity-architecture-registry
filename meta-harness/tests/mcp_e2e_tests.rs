@@ -3,7 +3,7 @@ use tokio::sync::broadcast;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
-use harness_protocol::arch::{ComponentSpec, SystemArchitecture, UsageNode};
+use architecture_model::{ComponentSpec, SystemArchitecture, UsageNode};
 use harness_protocol::ProviderRuntimeEvent;
 
 use meta_harness::provider::antigravity::adapter::AntigravityAdapter;
