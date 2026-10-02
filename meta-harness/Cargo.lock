@@ -1352,6 +1352,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-contracts"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "harness-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "harness-contracts",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "harness-protocol"
 version = "0.1.0"
 dependencies = [

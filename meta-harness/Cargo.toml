@@ -10,6 +10,8 @@ members = [
     "crates/cockpit-ui",
     "crates/harness-protocol",
     "crates/architecture-model",
+    "crates/harness-contracts",
+    "crates/harness-core",
 ]
 
 [lib]

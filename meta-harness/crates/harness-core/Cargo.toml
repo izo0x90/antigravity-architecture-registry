@@ -1,0 +1,13 @@
+[package]
+name = "harness-core"
+version = "0.1.0"
+edition = "2024"
+description = "Traits every harness provider implements: driver, instance, adapter, session runtime"
+
+[dependencies]
+harness-contracts = { path = "../harness-contracts" }
+async-trait = "0.1.92"
+futures = "0.3.34"
+serde_json = "1.0"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["sync"] }
