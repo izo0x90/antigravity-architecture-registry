@@ -94,6 +94,24 @@ pub enum SubagentStatus {
     Cancelled,
 }
 
+/// A session the harness saved itself; reopen it via `SessionConfig::resume`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSession {
+    pub native_id: NativeId,
+    pub title: Option<String>,
+    pub cwd: Option<String>,
+    /// RFC 3339 timestamp as reported by the harness.
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSessionPage {
+    pub sessions: Vec<SavedSession>,
+    pub next_cursor: Option<String>,
+}
+
 /// Everything needed to open a session on an adapter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

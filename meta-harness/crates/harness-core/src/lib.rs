@@ -19,8 +19,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use harness_contracts::{
-    Capabilities, DriverKind, InstanceId, ProviderSnapshot, RequestId, RequestResponse,
-    SessionConfig, SteerInput, ThreadId, TurnId, TurnInput,
+    Capabilities, DriverKind, InstanceId, NativeId, ProviderSnapshot, RequestId,
+    RequestResponse, SavedSessionPage, SessionConfig, SteerInput, ThreadId, TurnId, TurnInput,
 };
 use tokio::sync::watch;
 
@@ -62,6 +62,18 @@ pub trait ProviderInstance: Send + Sync {
     fn auth(&self) -> Option<Arc<dyn AuthController>>;
 
     fn adapter(&self) -> Arc<dyn ProviderAdapter>;
+
+    /// Present when the harness keeps its own saved sessions (the way back into
+    /// earlier work; the harness layer itself persists nothing).
+    fn sessions(&self) -> Option<Arc<dyn SessionCatalog>>;
+}
+
+/// The harness's own saved sessions.
+#[async_trait]
+pub trait SessionCatalog: Send + Sync {
+    async fn list(&self, cwd: &str, cursor: Option<&str>) -> Result<SavedSessionPage>;
+
+    async fn delete(&self, id: &NativeId) -> Result<()>;
 }
 
 /// Interactive login for an instance.

@@ -22,7 +22,10 @@ pub struct Capabilities {
 pub struct SessionCapabilities {
     pub model_switch_in_session: bool,
     pub runtime_mode_switch_in_session: bool,
+    /// Can reopen a saved native session (`SessionConfig::resume`).
     pub resume: bool,
+    /// Can list the harness's saved sessions (`SessionCatalog`).
+    pub list_saved: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
