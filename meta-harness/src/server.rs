@@ -15,8 +15,8 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
-use crate::adapter::AntigravityAdapter;
-use crate::driver::AntigravityDriver;
+use crate::provider::antigravity::adapter::AntigravityAdapter;
+use crate::provider::antigravity::driver::AntigravityDriver;
 use crate::protocol::*;
 
 #[derive(Clone)]
@@ -164,10 +164,10 @@ async fn get_driver_snapshot(
     let driver = state.driver.lock().await;
     let mut snap = driver.get_snapshot();
     if snap.models.is_empty() {
-        snap.models = crate::driver::official_antigravity_models();
+        snap.models = crate::provider::antigravity::driver::official_antigravity_models();
     }
     if snap.slash_commands.is_empty() {
-        snap.slash_commands = crate::driver::official_antigravity_commands();
+        snap.slash_commands = crate::provider::antigravity::driver::official_antigravity_commands();
     }
     Ok(Json(snap))
 }
@@ -181,10 +181,10 @@ async fn refresh_models(
     })?;
     let mut snap = driver.get_snapshot();
     if snap.models.is_empty() {
-        snap.models = crate::driver::official_antigravity_models();
+        snap.models = crate::provider::antigravity::driver::official_antigravity_models();
     }
     if snap.slash_commands.is_empty() {
-        snap.slash_commands = crate::driver::official_antigravity_commands();
+        snap.slash_commands = crate::provider::antigravity::driver::official_antigravity_commands();
     }
     Ok(Json(snap))
 }

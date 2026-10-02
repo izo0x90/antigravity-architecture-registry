@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use crate::driver::ProcessLaunchRecord;
+use crate::provider::antigravity::driver::ProcessLaunchRecord;
 use crate::error::HarnessError;
 
 /// Scaffolding trait for injecting in-process or remote tooling into agent harnesses.

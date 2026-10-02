@@ -7,7 +7,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, ChildStderr};
 use tokio::sync::{broadcast, oneshot, Mutex};
 
-use crate::adapter::AcpRuntime;
+use crate::provider::antigravity::adapter::AcpRuntime;
 use crate::error::HarnessError;
 use crate::fs_proxy::{
     read_client_text_file, write_client_text_file, ReadTextFileRequest, WriteTextFileRequest,
@@ -80,7 +80,7 @@ impl JsonRpcTransport {
                     tracing::debug!(target: "subprocess_stdout_raw", "{}", trimmed);
                     // Check if stdout line contains an auth URL before discarding
                     if let Some(ref auth_cb) = auth_cb_for_stdout
-                        && let Some(url) = crate::driver::detect_auth_url(trimmed)
+                        && let Some(url) = crate::provider::antigravity::driver::detect_auth_url(trimmed)
                     {
                         auth_cb(url);
                     }
@@ -336,7 +336,7 @@ impl JsonRpcTransport {
                             if !trimmed.is_empty() {
                                 tracing::warn!(target: "subprocess_stderr", "{}", trimmed);
                                 if let Some(ref auth_cb) = auth_cb_for_stderr
-                                    && let Some(url) = crate::driver::detect_auth_url(trimmed)
+                                    && let Some(url) = crate::provider::antigravity::driver::detect_auth_url(trimmed)
                                 {
                                     auth_cb(url);
                                 }

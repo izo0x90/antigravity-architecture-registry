@@ -4,7 +4,7 @@ use futures::future::BoxFuture;
 use tokio::sync::{broadcast, oneshot, Mutex};
 use uuid::Uuid;
 
-use crate::driver::AuthMethod;
+use crate::provider::antigravity::driver::AuthMethod;
 use crate::error::HarnessError;
 use crate::protocol::*;
 
@@ -176,8 +176,8 @@ impl AntigravityAdapter {
         auth_method: AuthMethod,
         api_key: Option<String>,
     ) -> Self {
-        let spawner = Arc::new(crate::process::TokioProcessSpawner::new());
-        let factory = crate::process::make_native_runtime_factory(
+        let spawner = Arc::new(crate::provider::antigravity::process::TokioProcessSpawner::new());
+        let factory = crate::provider::antigravity::process::make_native_runtime_factory(
             spawner,
             command,
             args,
@@ -223,8 +223,8 @@ impl AntigravityAdapter {
             Some(factory) => factory(&session_input)?,
             None => {
                 if let Some(bin_path) = find_antigravity_binary() {
-                    let spawner = Arc::new(crate::process::TokioProcessSpawner::new());
-                    let factory = crate::process::make_native_runtime_factory(
+                    let spawner = Arc::new(crate::provider::antigravity::process::TokioProcessSpawner::new());
+                    let factory = crate::provider::antigravity::process::make_native_runtime_factory(
                         spawner,
                         bin_path.to_string_lossy().to_string(),
                         vec![],

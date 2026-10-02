@@ -1,15 +1,9 @@
-pub mod adapter;
-pub mod auth;
-pub mod driver;
 pub mod error;
 pub mod fs_proxy;
-pub mod installation;
-pub mod process;
+pub mod provider;
 pub mod protocol;
 pub mod server;
-pub mod skills;
 pub mod testing;
-pub mod transport;
 pub mod registry;
 pub mod mcp;
 pub mod injector;

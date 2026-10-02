@@ -3,14 +3,14 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 use tracing::info;
 
-use meta_harness::adapter::{find_antigravity_binary, AntigravityAdapter};
-use meta_harness::driver::{
+use meta_harness::provider::antigravity::adapter::{find_antigravity_binary, AntigravityAdapter};
+use meta_harness::provider::antigravity::driver::{
     AntigravityDriver, AntigravityDriverConfig, AuthMethod, DriverCreateOptions,
 };
 use meta_harness::injector::AgyToolInjector;
-use meta_harness::installation::{AntigravityInstallation, AntigravityInstallationOptions};
+use meta_harness::provider::antigravity::installation::{AntigravityInstallation, AntigravityInstallationOptions};
 use meta_harness::mcp::{McpServerState, McpService};
-use meta_harness::process::{make_native_runtime_factory_with_injector, TokioProcessSpawner};
+use meta_harness::provider::antigravity::process::{make_native_runtime_factory_with_injector, TokioProcessSpawner};
 use meta_harness::registry::{FsJsonRepository, RegistryService};
 use meta_harness::server::{create_router, AppState};
 

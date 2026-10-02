@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
 
-pub use crate::driver::{AntigravityExecutable, AntigravityExecutableLease, InstallationProvider};
+pub use crate::provider::antigravity::driver::{AntigravityExecutable, AntigravityExecutableLease, InstallationProvider};
 use crate::error::HarnessError;
 
 pub const RECORD_MAX_BYTES: u64 = 8 * 1024;

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use meta_harness::error::HarnessError;
-use meta_harness::installation::{
+use meta_harness::provider::antigravity::installation::{
     executable_names_for_platform, host_platform, write_release, AntigravityInstallation,
     AntigravityInstallationOptions,
 };
@@ -35,7 +35,7 @@ fn make_harness(
         .join(format!("{plat}-x64"));
 
     if previous {
-        write_release(meta_harness::installation::MockReleaseSpec {
+        write_release(meta_harness::provider::antigravity::installation::MockReleaseSpec {
             managed_directory: &managed_directory,
             release_id: PREVIOUS_RELEASE_ID,
             version: PREVIOUS_VERSION,

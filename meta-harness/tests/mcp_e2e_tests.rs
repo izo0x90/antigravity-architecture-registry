@@ -6,16 +6,16 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use harness_protocol::arch::{ComponentSpec, SystemArchitecture, UsageNode};
 use harness_protocol::ProviderRuntimeEvent;
 
-use meta_harness::adapter::AntigravityAdapter;
-use meta_harness::driver::{
+use meta_harness::provider::antigravity::adapter::AntigravityAdapter;
+use meta_harness::provider::antigravity::driver::{
     AntigravityDriver, AntigravityDriverConfig, AuthMethod, DriverCreateOptions,
     ProcessLaunchRecord,
 };
 use meta_harness::injector::{AgyToolInjector, HarnessToolInjector};
-use meta_harness::installation::{AntigravityInstallation, AntigravityInstallationOptions};
+use meta_harness::provider::antigravity::installation::{AntigravityInstallation, AntigravityInstallationOptions};
 use meta_harness::mcp::protocol::JsonRpcRequest;
 use meta_harness::mcp::{McpServerState, McpService};
-use meta_harness::process::TokioProcessSpawner;
+use meta_harness::provider::antigravity::process::TokioProcessSpawner;
 use meta_harness::registry::{FsJsonRepository, RegistryService};
 use meta_harness::server::{create_router, AppState};
 

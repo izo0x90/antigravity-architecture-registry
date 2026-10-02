@@ -3,12 +3,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
-use meta_harness::adapter::AntigravityAdapter;
-use meta_harness::driver::{
+use meta_harness::provider::antigravity::adapter::AntigravityAdapter;
+use meta_harness::provider::antigravity::driver::{
     AntigravityDriver, AntigravityDriverConfig, AuthMethod, DriverCreateOptions,
 };
-use meta_harness::installation::{AntigravityInstallation, AntigravityInstallationOptions};
-use meta_harness::process::TokioProcessSpawner;
+use meta_harness::provider::antigravity::installation::{AntigravityInstallation, AntigravityInstallationOptions};
+use meta_harness::provider::antigravity::process::TokioProcessSpawner;
 use meta_harness::server::{create_router, AppState};
 
 #[tokio::test]
@@ -81,7 +81,7 @@ async fn test_server_http_session_lifecycle() {
     let addr = listener.local_addr().unwrap();
 
     let spawner = Arc::new(TokioProcessSpawner::new());
-    let runtime_factory = meta_harness::process::make_native_runtime_factory(
+    let runtime_factory = meta_harness::provider::antigravity::process::make_native_runtime_factory(
         spawner.clone(),
         mock_server_bin.to_string(),
         vec![],

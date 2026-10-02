@@ -5,8 +5,8 @@ use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::process::Command;
 
-use meta_harness::process::TokioProcessSpawner;
-use meta_harness::transport::JsonRpcTransport;
+use meta_harness::provider::antigravity::process::TokioProcessSpawner;
+use meta_harness::provider::antigravity::transport::JsonRpcTransport;
 
 #[tokio::test]
 async fn test_json_rpc_transport_and_reverse_rpc() {
@@ -44,7 +44,7 @@ async fn test_json_rpc_transport_and_reverse_rpc() {
 
 #[tokio::test]
 async fn test_tokio_process_spawner_real_execution() {
-    use meta_harness::driver::{DriverProcessSpawner, ProcessLaunchRecord};
+    use meta_harness::provider::antigravity::driver::{DriverProcessSpawner, ProcessLaunchRecord};
 
     let spawner = TokioProcessSpawner::new();
     let record = ProcessLaunchRecord {
@@ -119,9 +119,9 @@ async fn test_error_null_accepted_as_success() {
 
 #[tokio::test]
 async fn test_vertical_native_runtime_end_to_end() {
-    use meta_harness::adapter::AntigravityAdapter;
-    use meta_harness::driver::AuthMethod;
-    use meta_harness::process::make_native_runtime_factory;
+    use meta_harness::provider::antigravity::adapter::AntigravityAdapter;
+    use meta_harness::provider::antigravity::driver::AuthMethod;
+    use meta_harness::provider::antigravity::process::make_native_runtime_factory;
     use meta_harness::protocol::StartSessionInput;
 
     let tmp = tempdir().unwrap();
@@ -177,10 +177,10 @@ async fn test_vertical_native_runtime_end_to_end() {
 
 #[tokio::test]
 async fn test_vertical_native_runtime_with_injector_mcp_servers() {
-    use meta_harness::adapter::AntigravityAdapter;
-    use meta_harness::driver::AuthMethod;
+    use meta_harness::provider::antigravity::adapter::AntigravityAdapter;
+    use meta_harness::provider::antigravity::driver::AuthMethod;
     use meta_harness::injector::AgyToolInjector;
-    use meta_harness::process::make_native_runtime_factory_with_injector;
+    use meta_harness::provider::antigravity::process::make_native_runtime_factory_with_injector;
     use meta_harness::protocol::StartSessionInput;
 
     let tmp = tempdir().unwrap();

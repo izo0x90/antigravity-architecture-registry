@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex, Notify};
 
-use crate::adapter::{AcpRuntime, AntigravityAdapter};
+use crate::provider::antigravity::adapter::{AcpRuntime, AntigravityAdapter};
 use crate::error::HarnessError;
 use crate::protocol::*;
 

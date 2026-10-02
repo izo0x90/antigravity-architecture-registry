@@ -1,4 +1,4 @@
-use meta_harness::auth::{
+use meta_harness::provider::antigravity::auth::{
     forward_antigravity_callback, is_logout_prompt, parse_antigravity_authorization_url,
     AntigravityAuth, AntigravityAuthRuntime, ProviderAuthState,
 };

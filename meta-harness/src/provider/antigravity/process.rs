@@ -3,13 +3,13 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 
-use crate::adapter::{AcpRuntime, RuntimeFactory};
+use crate::provider::antigravity::adapter::{AcpRuntime, RuntimeFactory};
 use crate::protocol::StartSessionInput;
-use crate::driver::{
+use crate::provider::antigravity::driver::{
     AuthMethod, DriverProcessHandle, DriverProcessSpawner, ProcessLaunchRecord, RpcRequestRecord,
 };
 use crate::error::HarnessError;
-use crate::transport::{JsonRpcTransport, NativeAcpRuntime};
+use crate::provider::antigravity::transport::{JsonRpcTransport, NativeAcpRuntime};
 
 pub struct TokioProcessHandle {
     child: Arc<Mutex<Option<Child>>>,
