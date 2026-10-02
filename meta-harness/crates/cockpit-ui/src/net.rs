@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use ewebsock::{WsEvent, WsMessage, WsReceiver, WsSender};
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,14 @@ pub struct SessionStartResponse {
     pub status: String,
 }
 
+/// Event WebSocket to the meta-harness server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WsState {
+    Connecting,
+    Open,
+    Closed,
+}
+
 pub struct NetClient {
     base_url: String,
     ws_url: String,
@@ -21,7 +30,9 @@ pub struct NetClient {
     ws_receiver: Option<WsReceiver>,
     pub incoming_events: Arc<Mutex<Vec<ProviderRuntimeEvent>>>,
     pub models: Arc<Mutex<Vec<ModelSnapshot>>>,
-    pub is_connected: Arc<Mutex<bool>>,
+    pub ws_state: Arc<Mutex<WsState>>,
+    /// Bumped on every HTTP request/response and WebSocket message (drives the activity LED).
+    pub activity: Arc<AtomicU64>,
     pub last_error: Arc<Mutex<Option<String>>>,
 }
 
@@ -41,9 +52,26 @@ impl NetClient {
             ws_receiver: None,
             incoming_events: Arc::new(Mutex::new(Vec::new())),
             models: Arc::new(Mutex::new(Vec::new())),
-            is_connected: Arc::new(Mutex::new(false)),
+            ws_state: Arc::new(Mutex::new(WsState::Closed)),
+            activity: Arc::new(AtomicU64::new(0)),
             last_error: Arc::new(Mutex::new(None)),
         }
+    }
+
+    fn set_ws_state(&self, state: WsState) {
+        if let Ok(mut s) = self.ws_state.lock() {
+            *s = state;
+        }
+    }
+
+    /// All HTTP goes through here so the activity LED sees requests and responses.
+    fn fetch(&self, request: ehttp::Request, on_done: impl 'static + Send + FnOnce(ehttp::Result<ehttp::Response>)) {
+        self.activity.fetch_add(1, Ordering::Relaxed);
+        let activity = self.activity.clone();
+        ehttp::fetch(request, move |result| {
+            activity.fetch_add(1, Ordering::Relaxed);
+            on_done(result);
+        });
     }
 
     pub fn connect_ws(&mut self, ctx: egui::Context) {
@@ -56,9 +84,7 @@ impl NetClient {
             Ok((sender, receiver)) => {
                 self.ws_sender = Some(sender);
                 self.ws_receiver = Some(receiver);
-                if let Ok(mut c) = self.is_connected.lock() {
-                    *c = true;
-                }
+                self.set_ws_state(WsState::Connecting);
             }
             Err(e) => {
                 if let Ok(mut err) = self.last_error.lock() {
@@ -73,6 +99,7 @@ impl NetClient {
             while let Some(event) = receiver.try_recv() {
                 match event {
                     WsEvent::Message(WsMessage::Text(text)) => {
+                        self.activity.fetch_add(1, Ordering::Relaxed);
                         match serde_json::from_str::<ProviderRuntimeEvent>(&text) {
                             Ok(parsed) => {
                                 if let Ok(mut events) = self.incoming_events.lock() {
@@ -87,17 +114,10 @@ impl NetClient {
                             }
                         }
                     }
-                    WsEvent::Opened => {
-                        if let Ok(mut c) = self.is_connected.lock() {
-                            *c = true;
-                        }
-                    }
-                    WsEvent::Closed => {
-                        if let Ok(mut c) = self.is_connected.lock() {
-                            *c = false;
-                        }
-                    }
+                    WsEvent::Opened => self.set_ws_state(WsState::Open),
+                    WsEvent::Closed => self.set_ws_state(WsState::Closed),
                     WsEvent::Error(err) => {
+                        self.set_ws_state(WsState::Closed);
                         if let Ok(mut e) = self.last_error.lock() {
                             *e = Some(format!("WS Error: {}", err));
                         }
@@ -114,7 +134,7 @@ impl NetClient {
         let models_arc = self.models.clone();
         let last_error_arc = self.last_error.clone();
 
-        ehttp::fetch(request, move |result| {
+        self.fetch(request, move |result| {
             match result {
                 Ok(response) => {
                     if response.ok {
@@ -158,7 +178,7 @@ impl NetClient {
         request.headers.insert("Content-Type", "application/json");
 
         let ret_tid = tid.clone();
-        ehttp::fetch(request, move |result| {
+        self.fetch(request, move |result| {
             match result {
                 Ok(response) => {
                     if response.ok {
@@ -188,7 +208,7 @@ impl NetClient {
         let mut request = ehttp::Request::post(&url, body);
         request.headers.insert("Content-Type", "application/json");
 
-        ehttp::fetch(request, move |result| {
+        self.fetch(request, move |result| {
             match result {
                 Ok(resp) => {
                     if resp.ok {
@@ -212,7 +232,7 @@ impl NetClient {
         let mut request = ehttp::Request::post(&url, body);
         request.headers.insert("Content-Type", "application/json");
 
-        ehttp::fetch(request, |_| {});
+        self.fetch(request, |_| {});
     }
 
     pub fn respond_request(&self, thread_id: &str, request_id: &str, decision: &str) {
@@ -224,7 +244,7 @@ impl NetClient {
         let mut request = ehttp::Request::post(&url, body);
         request.headers.insert("Content-Type", "application/json");
 
-        ehttp::fetch(request, |_| {});
+        self.fetch(request, |_| {});
     }
 
     pub fn fetch_file<F>(&self, path: &str, ctx: egui::Context, on_done: F)
@@ -235,7 +255,7 @@ impl NetClient {
         let url = format!("{}/api/fs/read?path={}", self.base_url, encoded_path);
         let request = ehttp::Request::get(&url);
 
-        ehttp::fetch(request, move |result| {
+        self.fetch(request, move |result| {
             match result {
                 Ok(resp) => {
                     if resp.ok {
@@ -264,7 +284,7 @@ impl NetClient {
         F: FnOnce(Result<String, String>) + Send + 'static,
     {
         let url = format!("{}/api/registry/architecture", self.base_url);
-        ehttp::fetch(ehttp::Request::get(&url), move |result| {
+        self.fetch(ehttp::Request::get(&url), move |result| {
             match result {
                 Ok(resp) if resp.ok => match resp.text() {
                     Some(text) => on_done(Ok(text.to_string())),
@@ -286,7 +306,7 @@ impl NetClient {
         let mut request = ehttp::Request::post(&url, body);
         request.headers.insert("Content-Type", "application/json");
 
-        ehttp::fetch(request, move |result| {
+        self.fetch(request, move |result| {
             match result {
                 Ok(resp) => {
                     if resp.ok {
@@ -308,7 +328,7 @@ impl NetClient {
         let url = format!("{}/api/dev/feedback", self.base_url);
         let request = ehttp::Request::get(&url);
 
-        ehttp::fetch(request, move |result| {
+        self.fetch(request, move |result| {
             match result {
                 Ok(resp) => {
                     if resp.ok {
@@ -336,7 +356,7 @@ impl NetClient {
         request.method = "PUT".to_string();
         request.headers.insert("Content-Type", "application/json");
 
-        ehttp::fetch(request, move |result| {
+        self.fetch(request, move |result| {
             match result {
                 Ok(resp) => {
                     if resp.ok {

@@ -1,10 +1,12 @@
 use egui::{Color32, Frame, Margin, Pos2, RichText, Stroke};
 
-use crate::chat::ChatStreamState;
+use std::sync::atomic::Ordering;
+
+use crate::chat::{ChatStreamState, SessionStatus};
 use crate::code::CodeViewerState;
 use crate::feedback::FeedbackInspectorState;
 use crate::graph::ArchitectureGraphState;
-use crate::net::NetClient;
+use crate::net::{NetClient, WsState};
 use crate::tree::ArchitectureTreeState;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,6 +59,49 @@ pub struct CockpitApp {
     pub keymap: crate::keymap::KeymapConfig,
     pub input_mode: crate::keymap::InputMode,
     pub gesture_tracker: crate::keymap::SpaceGestureTracker,
+
+    // Top-bar status LEDs
+    pub srv_led: ActivityLed,
+    pub agent_led: ActivityLed,
+}
+
+const LED_IDLE: Color32 = Color32::from_rgb(90, 90, 100);
+const LED_BUSY: Color32 = Color32::from_rgb(250, 180, 50);
+const LED_OK: Color32 = Color32::from_rgb(80, 200, 120);
+const LED_FAIL: Color32 = Color32::from_rgb(220, 80, 80);
+
+/// Status LED that flickers on traffic, like a drive or router activity light.
+#[derive(Default)]
+pub struct ActivityLed {
+    last_count: u64,
+    last_activity: f64,
+}
+
+impl ActivityLed {
+    fn show(&mut self, ui: &mut egui::Ui, label: &str, color: Color32, count: u64, hover: &str) -> egui::Response {
+        let now = ui.input(|i| i.time);
+        if count != self.last_count {
+            self.last_count = count;
+            self.last_activity = now;
+        }
+        let active = now - self.last_activity < 0.25;
+        let lit = !active || ((now * 16.0) as i64) % 2 == 0;
+        if active {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(30));
+        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+            let fill = if lit { color } else { color.gamma_multiply(0.25) };
+            ui.painter().circle_filled(rect.center(), 4.0, fill);
+            if lit && color != LED_IDLE {
+                ui.painter().circle_stroke(rect.center(), 5.5, Stroke::new(1.0, color.gamma_multiply(0.35)));
+            }
+            ui.label(RichText::new(label).monospace().size(10.0).color(Color32::from_gray(150)));
+        })
+        .response
+        .on_hover_text(hover)
+    }
 }
 
 impl CockpitApp {
@@ -77,6 +122,9 @@ impl CockpitApp {
             keymap: crate::keymap::KeymapConfig::default(),
             input_mode: crate::keymap::InputMode::Normal,
             gesture_tracker: crate::keymap::SpaceGestureTracker::default(),
+
+            srv_led: ActivityLed::default(),
+            agent_led: ActivityLed::default(),
         }
     }
 
@@ -92,10 +140,6 @@ impl CockpitApp {
 
             self.net.connect_ws(ctx.clone());
             self.net.fetch_models(ctx.clone());
-
-            // Auto-start active harness session
-            let ctx_chat = ctx.clone();
-            self.chat.start_session(&self.net, ctx_chat);
 
             // Auto-load the registry architecture into graph
             let ctx_arch = ctx.clone();
@@ -407,15 +451,27 @@ impl CockpitApp {
 
                     ui.add_space(8.0);
 
-                    // Connection status
-                    let is_conn = self.net.is_connected.lock().map(|c| *c).unwrap_or(false);
-                    let (status_text, status_color) = if is_conn {
-                        ("●", Color32::from_rgb(80, 200, 120))
-                    } else {
-                        ("○", Color32::from_rgb(220, 80, 80))
+                    // Status LEDs: SRV = event WebSocket to the meta-harness server,
+                    // AGENT = the agent session behind it. Both flicker on traffic.
+                    let ws = self.net.ws_state.lock().map(|s| *s).unwrap_or(WsState::Closed);
+                    let (srv_color, srv_hint) = match ws {
+                        WsState::Open => (LED_OK, "Meta-harness server: connected"),
+                        WsState::Connecting => (LED_BUSY, "Meta-harness server: connecting…"),
+                        WsState::Closed => (LED_FAIL, "Meta-harness server: disconnected"),
                     };
-                    let conn_res = ui.label(RichText::new(status_text).monospace().size(11.0).strong().color(status_color));
-                    self.feedback.register_inspectable(ui, "top_bar:connection_status", conn_res.rect);
+                    let srv_count = self.net.activity.load(Ordering::Relaxed);
+                    let srv_res = self.srv_led.show(ui, "SRV", srv_color, srv_count, srv_hint);
+                    self.feedback.register_inspectable(ui, "top_bar:connection_status", srv_res.rect);
+
+                    ui.add_space(6.0);
+                    let (agent_color, agent_hint) = match &self.chat.session {
+                        SessionStatus::Idle => (LED_IDLE, "Agent: not connected".to_string()),
+                        SessionStatus::Connecting => (LED_BUSY, "Agent: connecting…".to_string()),
+                        SessionStatus::Connected(tid) => (LED_OK, format!("Agent: connected [{}]", tid)),
+                        SessionStatus::Failed(err) => (LED_FAIL, format!("Agent: failed — {}", err)),
+                    };
+                    let agent_res = self.agent_led.show(ui, "AGENT", agent_color, self.chat.agent_activity, &agent_hint);
+                    self.feedback.register_inspectable(ui, "top_bar:agent_status", agent_res.rect);
 
                     ui.add_space(8.0);
 

@@ -41,8 +41,20 @@ pub struct TrajectoryTurn {
     pub is_streaming: bool,
 }
 
+/// Agent session lifecycle. Every connect attempt (button, first prompt, retry) moves
+/// through this one state, so failures surface the same way regardless of origin.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionStatus {
+    Idle,
+    Connecting,
+    Connected(String),
+    Failed(String),
+}
+
 pub struct ChatStreamState {
-    pub thread_id: Option<String>,
+    pub session: SessionStatus,
+    /// Bumped on agent traffic (events received, prompts sent); drives the AGENT LED.
+    pub agent_activity: u64,
     pub turns: Vec<TrajectoryTurn>,
     pub input_buffer: String,
     pub selected_model: String,
@@ -52,14 +64,14 @@ pub struct ChatStreamState {
     pub thoughts_collapsed: bool,
     pub requested_file_jump: Option<(String, Option<usize>)>,
     pub pending_session_start: Arc<Mutex<Option<Result<String, String>>>>,
-    pub is_starting_session: bool,
     pub queued_prompt: Option<String>,
 }
 
 impl Default for ChatStreamState {
     fn default() -> Self {
         Self {
-            thread_id: None,
+            session: SessionStatus::Idle,
+            agent_activity: 0,
             turns: Vec::new(),
             input_buffer: String::new(),
             selected_model: "gemini-3.7-flash-high".to_string(),
@@ -69,18 +81,24 @@ impl Default for ChatStreamState {
             thoughts_collapsed: false,
             requested_file_jump: None,
             pending_session_start: Arc::new(Mutex::new(None)),
-            is_starting_session: false,
             queued_prompt: None,
         }
     }
 }
 
 impl ChatStreamState {
+    pub fn thread_id(&self) -> Option<&str> {
+        match &self.session {
+            SessionStatus::Connected(tid) => Some(tid),
+            _ => None,
+        }
+    }
+
     pub fn start_session(&mut self, net: &NetClient, ctx: egui::Context) {
-        if self.is_starting_session {
+        if matches!(self.session, SessionStatus::Connecting | SessionStatus::Connected(_)) {
             return;
         }
-        self.is_starting_session = true;
+        self.session = SessionStatus::Connecting;
         let mailbox = self.pending_session_start.clone();
         net.start_session(None, ctx, move |res| {
             if let Ok(mut lock) = mailbox.lock() {
@@ -97,7 +115,30 @@ impl ChatStreamState {
         }
     }
 
+    /// The single place a session start result lands.
+    fn on_session_result(&mut self, res: Result<String, String>, net: &NetClient) {
+        match res {
+            Ok(tid) => {
+                if let Some(prompt) = self.queued_prompt.take() {
+                    self.agent_activity += 1;
+                    net.send_turn(&tid, &prompt, &self.selected_model, &self.selected_effort, |_| {});
+                }
+                self.session = SessionStatus::Connected(tid);
+            }
+            Err(e) => {
+                // Keep any queued prompt so Retry can send it; stop its spinner meanwhile.
+                if self.queued_prompt.is_some() {
+                    if let Some(turn) = self.turns.last_mut() {
+                        turn.is_streaming = false;
+                    }
+                }
+                self.session = SessionStatus::Failed(e);
+            }
+        }
+    }
+
     pub fn process_event(&mut self, event: ProviderRuntimeEvent) {
+        self.agent_activity += 1;
         match event {
             ProviderRuntimeEvent::TurnStarted { turn_id, payload: _ } => {
                 if let Some(last) = self.turns.last_mut() {
@@ -254,24 +295,9 @@ impl ChatStreamState {
         input_mode: &mut crate::keymap::InputMode,
     ) {
         // Drain pending session start
-        if let Ok(mut lock) = self.pending_session_start.lock() {
-            if let Some(res) = lock.take() {
-                self.is_starting_session = false;
-                match res {
-                    Ok(tid) => {
-                        self.thread_id = Some(tid.clone());
-                        if let Some(prompt) = self.queued_prompt.take() {
-                            net.send_turn(&tid, &prompt, &self.selected_model, &self.selected_effort, |_| {});
-                        }
-                    }
-                    Err(e) => {
-                        if let Some(turn) = self.turns.last_mut() {
-                            turn.assistant_text = format!("❌ Failed to connect session: {}", e);
-                            turn.is_streaming = false;
-                        }
-                    }
-                }
-            }
+        let pending = self.pending_session_start.lock().ok().and_then(|mut lock| lock.take());
+        if let Some(res) = pending {
+            self.on_session_result(res, net);
         }
 
         ui.vertical(|ui| {
@@ -284,6 +310,34 @@ impl ChatStreamState {
             let controls_rect = Rect::from_min_size(Pos2::new(start_x, start_y), Vec2::new(w, (end_y - start_y).max(24.0)));
             feedback.register_inspectable(ui, &format!("slot_{}:chat:controls", slot_idx + 1), controls_rect);
             ui.separator();
+
+            // Session failure banner: the one place connect errors are shown.
+            if let SessionStatus::Failed(err) = &self.session {
+                let err = err.clone();
+                let mut retry = false;
+                Frame::NONE
+                    .fill(Color32::from_rgb(60, 20, 24))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(220, 80, 80)))
+                    .corner_radius(4.0)
+                    .inner_margin(Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("❌ Couldn't connect to the agent:").strong().size(12.0).color(Color32::from_rgb(255, 140, 140)));
+                            ui.label(RichText::new(&err).size(12.0).color(Color32::from_rgb(240, 200, 200)));
+                            retry = ui.button("↻ Retry").clicked();
+                        });
+                    });
+                if retry {
+                    self.session = SessionStatus::Idle;
+                    if let Some(turn) = self.turns.last_mut() {
+                        if self.queued_prompt.is_some() {
+                            turn.is_streaming = true;
+                        }
+                    }
+                    self.start_session(net, ui.ctx().clone());
+                }
+                ui.add_space(4.0);
+            }
 
             // 2. Trajectory Stream (Harness Trajectory Document)
             let input_reserve = 105.0;
@@ -298,9 +352,9 @@ impl ChatStreamState {
                         ui.vertical_centered(|ui| {
                             ui.label(RichText::new("Meta-Harness Trajectory Stream").strong().size(15.0).color(Color32::from_rgb(100, 160, 240)));
                             ui.add_space(4.0);
-                            let status_hint = if let Some(tid) = &self.thread_id {
+                            let status_hint = if let Some(tid) = self.thread_id() {
                                 format!("Active Session [{}] • Antigravity Agent Ready", tid)
-                            } else if self.is_starting_session {
+                            } else if self.session == SessionStatus::Connecting {
                                 "Connecting to Antigravity session...".to_string()
                             } else {
                                 "Ready to execute. Enter instructions below to start session.".to_string()
@@ -310,7 +364,8 @@ impl ChatStreamState {
                         ui.add_space(20.0);
                     }
 
-                    let active_thread_id = self.thread_id.as_deref();
+                    let active_thread_id = self.thread_id().map(str::to_owned);
+                    let active_thread_id = active_thread_id.as_deref();
                     for turn in &mut self.turns {
                         Self::render_turn(turn, ui, net, &mut self.markdown_cache, &mut self.thoughts_collapsed, &mut self.requested_file_jump, active_thread_id);
                         ui.add_space(10.0);
@@ -364,9 +419,9 @@ impl ChatStreamState {
                     });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(tid) = &self.thread_id {
+                    if let Some(tid) = self.thread_id() {
                         ui.label(RichText::new(format!("[{}]", &tid[..8.min(tid.len())])).monospace().size(10.0).color(Color32::from_rgb(140, 200, 255)));
-                    } else if self.is_starting_session {
+                    } else if self.session == SessionStatus::Connecting {
                         ui.label(RichText::new("⏳ Connecting...").size(10.0).color(Color32::from_rgb(250, 180, 50)));
                     } else {
                         if ui.button("⚡ Connect").clicked() {
@@ -417,7 +472,7 @@ impl ChatStreamState {
                     });
 
                 if prev_mode != self.selected_mode {
-                    if let Some(tid) = &self.thread_id {
+                    if let Some(tid) = self.thread_id() {
                         net.steer_session(tid, &self.selected_model, &self.selected_mode);
                     }
                 }
@@ -635,8 +690,9 @@ impl ChatStreamState {
                     is_streaming: true,
                 });
 
-                if let Some(tid) = &self.thread_id {
-                    net.send_turn(tid, &prompt, &self.selected_model, &self.selected_effort, |_| {});
+                if let Some(tid) = self.thread_id().map(str::to_owned) {
+                    self.agent_activity += 1;
+                    net.send_turn(&tid, &prompt, &self.selected_model, &self.selected_effort, |_| {});
                 } else {
                     self.queued_prompt = Some(prompt);
                     self.start_session(net, ui.ctx().clone());
