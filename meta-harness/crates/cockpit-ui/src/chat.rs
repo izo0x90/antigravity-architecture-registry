@@ -127,10 +127,10 @@ impl ChatStreamState {
             }
             Err(e) => {
                 // Keep any queued prompt so Retry can send it; stop its spinner meanwhile.
-                if self.queued_prompt.is_some() {
-                    if let Some(turn) = self.turns.last_mut() {
-                        turn.is_streaming = false;
-                    }
+                if self.queued_prompt.is_some()
+                    && let Some(turn) = self.turns.last_mut()
+                {
+                    turn.is_streaming = false;
                 }
                 self.session = SessionStatus::Failed(e);
             }
@@ -329,10 +329,10 @@ impl ChatStreamState {
                     });
                 if retry {
                     self.session = SessionStatus::Idle;
-                    if let Some(turn) = self.turns.last_mut() {
-                        if self.queued_prompt.is_some() {
-                            turn.is_streaming = true;
-                        }
+                    if self.queued_prompt.is_some()
+                        && let Some(turn) = self.turns.last_mut()
+                    {
+                        turn.is_streaming = true;
                     }
                     self.start_session(net, ui.ctx().clone());
                 }
