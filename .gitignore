@@ -222,3 +222,6 @@ __marimo__/
 # Reference files (third-party upstream source code)
 reference/
 **/reference/
+# Claude Code personal settings and NAH local caches
+.claude/settings.local.json
+meta-harness/.nah/req_status.json

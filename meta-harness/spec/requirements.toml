@@ -1,0 +1,750 @@
+# NAH architecture graph: requirements as data.
+#
+# Every requirement has an id (matching the task list), the slice it ships in,
+# a title and one testable acceptance sentence.
+#
+# Proof: a test tagged with the id, directly above the test function:
+#   Rust:   // req: P5.3            (several: // req: P5.3, P5.4)
+#   Python: # req: P5.3
+# A requirement is VERIFIED when at least one tagged test exists and all its
+# tagged tests pass; OPEN with no tagged test; FAILING otherwise.
+# `manual = true` requirements (audits, review gates, decisions) are proven by
+# a `done = "<date>: <evidence>"` field instead of tests.
+#
+# Slices ship end to end in order: S0 guardrails, S1 thin vertical slice
+# (one language, containment + calls, ingest -> plan -> skeleton -> verify ->
+# graph/spec/hints), S2 widen (all rules, languages, review loop), S3
+# orchestration and full UI, S4 live run and final audit.
+# Status: `python3 scripts/req_status.py --full` (from meta-harness/).
+
+# ---- S0: guardrails ----
+[[req]]
+id = "P0.1"
+slice = "S0"
+title = "Requirements data file"
+acceptance = "requirements.toml parses and the checker lists every requirement with its slice."
+
+[[req]]
+id = "P0.2"
+slice = "S0"
+title = "Test tagging convention"
+acceptance = "The checker maps `// req:` / `# req:` tags above test functions to requirement ids."
+
+[[req]]
+id = "P0.3"
+slice = "S0"
+title = "Requirement status checker"
+acceptance = "The checker computes OPEN/FAILING/VERIFIED from tags and test results, with --brief, --full, --gate and --cached modes."
+
+[[req]]
+id = "P0.4"
+slice = "S0"
+title = "Current slice marker"
+acceptance = "spec/current_slice sets the default gate; a missing marker is a clear error."
+
+[[req]]
+id = "P0.5"
+slice = "S0"
+title = "Claude Code hooks drafted"
+manual = true
+done = "2026-10-03: formats confirmed against the Claude Code hooks reference; config in .claude/settings.local.json"
+acceptance = "Hook config for SessionStart, UserPromptSubmit and Stop matches the documented formats."
+
+[[req]]
+id = "P0.6"
+slice = "S0"
+title = "Hooks installed and proven"
+acceptance = "Each hook command produces the right output for sample hook input, including Stop blocking and loop avoidance."
+
+[[req]]
+id = "P0.7"
+slice = "S0"
+title = "Memory pointer"
+manual = true
+done = "2026-10-03: memory nah-requirements-tracking.md indexed in MEMORY.md"
+acceptance = "A memory points future sessions at the spec, marker and checker."
+
+# ---- S1: audits (captured as requirements below) ----
+[[req]]
+id = "P1.1"
+slice = "S1"
+title = "Python models + TODO wish list audited"
+manual = true
+acceptance = "Every Python model field and TODO/planning item has a keep/change/drop/new decision in this file."
+
+[[req]]
+id = "P1.2"
+slice = "S1"
+title = "Python validator rules audited"
+manual = true
+acceptance = "Every Python validator rule maps to a requirement or a documented drop."
+
+[[req]]
+id = "P1.3"
+slice = "S1"
+title = "Python lifecycle audited"
+manual = true
+acceptance = "Stage gates, next-actionable and cascade are captured as requirements."
+
+[[req]]
+id = "P1.4"
+slice = "S1"
+title = "Contract/visualizer/DSL audited"
+manual = true
+acceptance = "Contract compilation, review markdown, DSL and visualizer have decisions."
+
+[[req]]
+id = "P1.5"
+slice = "S1"
+title = "MCP surface audited"
+manual = true
+acceptance = "Every old Python and Rust tool maps to a new tool or a documented drop."
+
+[[req]]
+id = "P1.6"
+slice = "S1"
+title = "Python tests mapped"
+manual = true
+acceptance = "All 33 Python tests map to a requirement or a documented drop."
+
+[[req]]
+id = "P1.7"
+slice = "S1"
+title = "Current Rust code audited"
+manual = true
+acceptance = "Each current registry/graph module is marked replaced, reused or deleted."
+
+[[req]]
+id = "P1.8"
+slice = "S1"
+title = "User review gate"
+manual = true
+acceptance = "The user approved the spec or explicitly waived the gate."
+
+# ---- domain model ----
+[[req]]
+id = "P2.1"
+slice = "S1"
+title = "Generic type system with specialization"
+acceptance = "Default generic types load from config; a specialized type inherits and overrides its base's rules; unknown types and inheritance cycles are errors."
+
+[[req]]
+id = "P2.2"
+slice = "S1"
+title = "Typed status and stage with transition table"
+acceptance = "Status/stage are enums with serde names; the transition table allows Skeleton from ArchApproved and PlanApproved and rejects illegal moves."
+
+[[req]]
+id = "P2.3"
+slice = "S1"
+title = "CodeAnchor and ProposedLocation"
+acceptance = "Anchors identify by symbol path, not span; paths outside the repo or absolute are rejected."
+
+[[req]]
+id = "P2.4"
+slice = "S1"
+title = "Location invariants on components"
+acceptance = "Implemented without a verified anchor and PlanApproved/Skeleton without a proposed location (or anchor) are rejected."
+
+[[req]]
+id = "P2.5"
+slice = "S2"
+title = "Signatures and schemas with refs and DSL"
+acceptance = "Shorthand DSL compiles to JSON Schema; $refs resolve by title; ref cycles are reported."
+
+[[req]]
+id = "P2.6"
+slice = "S1"
+title = "Relations with kind and provenance"
+acceptance = "Contains/Implements/Calls/DataFlow relations carry planned/observed provenance that merges to Both."
+
+[[req]]
+id = "P2.7"
+slice = "S2"
+title = "Specs, invariants and minimal tasks"
+acceptance = "Implementation specs with invariants and logic steps round-trip; invariants resolve through the implements chain."
+
+[[req]]
+id = "P2.8"
+slice = "S2"
+title = "Workflows from ordered calls"
+acceptance = "A workflow's call chain derives from ordered Calls relations; cycles are reported."
+
+[[req]]
+id = "P2.9"
+slice = "S1"
+title = "Graph aggregate and merge"
+acceptance = "Merging observed and planned data yields one graph with indices and derived alignment for every case."
+
+[[req]]
+id = "P2.10"
+slice = "S1"
+title = "Versioned persisted formats"
+acceptance = "Persisted documents carry schema_version; unknown majors are rejected; golden files round-trip."
+
+[[req]]
+id = "P2.11"
+slice = "S2"
+title = "Superseded domain types deleted"
+acceptance = "Old ComponentSpec/UsageNode/graph IR types no longer exist and nothing references them."
+
+[[req]]
+id = "P2.12"
+slice = "S2"
+title = "Domain model audit"
+manual = true
+acceptance = "An independent audit found no missing or partial domain requirements."
+
+# ---- repositories ----
+[[req]]
+id = "P3.1"
+slice = "S1"
+title = "PlanRepository trait"
+acceptance = "Plans get/list/save/delete through a storage-agnostic trait."
+
+[[req]]
+id = "P3.2"
+slice = "S1"
+title = "CodeIndexStore trait"
+acceptance = "Observed index entries are keyed by file content hash and can be invalidated."
+
+[[req]]
+id = "P3.3"
+slice = "S1"
+title = "File-based plans"
+acceptance = "Plans persist under .nah/plans with atomic writes and clear errors on corrupt files."
+
+[[req]]
+id = "P3.4"
+slice = "S1"
+title = "File-based index cache"
+acceptance = "Index entries persist under .nah/cache, hit by hash, miss after content changes."
+
+[[req]]
+id = "P3.5"
+slice = "S1"
+title = "Architecture service"
+acceptance = "The service merges index and plans; mutations go to plans only; changes are notified."
+
+[[req]]
+id = "P3.6"
+slice = "S2"
+title = "Old JSON importer"
+acceptance = "The repo's system_architecture.json imports into a plan; unmappable items are reported."
+
+[[req]]
+id = "P3.7"
+slice = "S2"
+title = "Old registry layer deleted"
+acceptance = "ArchitectureRepository, FsJsonRepository and RegistryService are gone; the server uses the new service."
+
+[[req]]
+id = "P3.8"
+slice = "S2"
+title = "Repository audit"
+manual = true
+acceptance = "An independent audit found no missing or partial repository requirements."
+
+# ---- ingestion ----
+[[req]]
+id = "P4.1"
+slice = "S1"
+title = "ast-grep integration decided"
+manual = true
+acceptance = "The in-process vs CLI decision is recorded with measurements."
+
+[[req]]
+id = "P4.2"
+slice = "S1"
+title = "Language-generic engine and pack format"
+acceptance = "Packs are data; a pack defined only in a test directory ingests its files with no engine changes; malformed packs are rejected."
+
+[[req]]
+id = "P4.3"
+slice = "S1"
+title = "Rust pack"
+acceptance = "Ingesting the Rust fixture yields exactly the expected components and relations."
+
+[[req]]
+id = "P4.4"
+slice = "S2"
+title = "Python pack"
+acceptance = "Ingesting the Python fixture yields exactly the expected components and relations."
+
+[[req]]
+id = "P4.5"
+slice = "S2"
+title = "TypeScript pack"
+acceptance = "Ingesting the TypeScript fixture yields exactly the expected components and relations."
+
+[[req]]
+id = "P4.6"
+slice = "S1"
+title = "Symbol table and call resolution"
+acceptance = "Calls resolve through scope and imports/aliases; unresolved and ambiguous calls are recorded with candidates, never guessed."
+
+[[req]]
+id = "P4.7"
+slice = "S1"
+title = "Scoped incremental ingestion"
+acceptance = "Re-ingest parses only changed files; deleted files leave the index; .gitignore is honored."
+
+[[req]]
+id = "P4.8"
+slice = "S2"
+title = "Observed data flow"
+acceptance = "Typed call chains in fixtures yield observed DataFlow relations; untyped ones are reported, not invented."
+
+[[req]]
+id = "P4.9"
+slice = "S1"
+title = "Fixtures with exact expected graphs"
+acceptance = "Fixture repos carry hand-written expected graphs compared exactly by tests."
+
+[[req]]
+id = "P4.10"
+slice = "S2"
+title = "Dogfood ingest of this repo"
+acceptance = "Ingesting meta-harness succeeds and known components/calls are present; the second run is fully cached."
+
+[[req]]
+id = "P4.11"
+slice = "S1"
+title = "Pull existing components into a plan"
+acceptance = "Referencing an existing component (optionally a subtree by kinds and depth) keeps it Existing/Implemented with its real anchor."
+
+[[req]]
+id = "P4.12"
+slice = "S2"
+title = "Ingestion audit"
+manual = true
+acceptance = "An independent audit found no missing or partial ingestion requirements."
+
+[[req]]
+id = "P4.13"
+slice = "S2"
+title = "Fourth language purely as data"
+acceptance = "A pack for a language with no engine code ingests its fixture exactly."
+
+# ---- plan checks ----
+[[req]]
+id = "P5.1"
+slice = "S1"
+title = "Plan operations"
+acceptance = "Add/modify/reference/relate/remove operations validate inputs and reject bad ones."
+
+[[req]]
+id = "P5.2"
+slice = "S2"
+title = "Type rule validation"
+acceptance = "Unregistered types, disallowed fields, disallowed parents and non-executable callers are findings."
+
+[[req]]
+id = "P5.3"
+slice = "S1"
+title = "Reference validation"
+acceptance = "Dangling parents, implements targets and relation endpoints are findings naming the id and referrer."
+
+[[req]]
+id = "P5.4"
+slice = "S2"
+title = "Cycle detection"
+acceptance = "Containment, implements and schema-ref cycles are reported with their loop path."
+
+[[req]]
+id = "P5.5"
+slice = "S2"
+title = "Schema compatibility"
+acceptance = "Type, required, nested, array and anyOf mismatches are reported for implements, calls and data flow."
+
+[[req]]
+id = "P5.6"
+slice = "S2"
+title = "Planned calls vs real signatures"
+acceptance = "Arity, name and type mismatches between a planned call and the observed callee signature are findings."
+
+[[req]]
+id = "P5.7"
+slice = "S1"
+title = "Proposed location validation"
+acceptance = "Out-of-repo files, language/extension mismatch, wrong parent file and name collisions are findings."
+
+[[req]]
+id = "P5.8"
+slice = "S2"
+title = "Implementation-spec rules"
+acceptance = "Logic step order, invariant inheritance, tool refs and side effects are validated."
+
+[[req]]
+id = "P5.9"
+slice = "S2"
+title = "Lifecycle gates"
+acceptance = "Stage transitions enforce validation, location and dependency preconditions."
+
+[[req]]
+id = "P5.10"
+slice = "S2"
+title = "Next actionable and cascade"
+acceptance = "Actionable components come in topological order; modifying a component downgrades its dependents in waves."
+
+[[req]]
+id = "P5.11"
+slice = "S2"
+title = "Contract compilation"
+acceptance = "Contracts include location, signature, interface chain, invariants, logic steps and real callee signatures."
+
+[[req]]
+id = "P5.12"
+slice = "S1"
+title = "Structured validation report"
+acceptance = "All checks emit findings with stable codes, severity, target and message."
+
+[[req]]
+id = "P5.13"
+slice = "S2"
+title = "Plan checks audit"
+manual = true
+acceptance = "An independent audit found no missing or partial plan-check requirements."
+
+[[req]]
+id = "P5.14"
+slice = "S1"
+title = "Approvals only in the cockpit"
+acceptance = "Agent tools cannot approve; the cockpit approval endpoint can, and records who and when."
+
+[[req]]
+id = "P5.15"
+slice = "S2"
+title = "Spec completeness gates"
+acceptance = "Missing required details per type block approval with a precise list."
+
+[[req]]
+id = "P5.16"
+slice = "S1"
+title = "Touch points required"
+acceptance = "A plan with new components and no touch point to existing code is flagged unless marked greenfield."
+
+[[req]]
+id = "P5.17"
+slice = "S1"
+title = "Narrow contract slice"
+acceptance = "A component's contract slice contains its spec, location, touch points with real signatures, neighbors and open placeholders."
+
+[[req]]
+id = "P5.18"
+slice = "S2"
+title = "Testable logic blocks"
+acceptance = "Logic-step check scripts run during validation and record pass/fail."
+
+# ---- implementation checks ----
+[[req]]
+id = "P6.1"
+slice = "S1"
+title = "Locate implemented components"
+acceptance = "A planned component is found at its proposed location, reported Moved when elsewhere, MissingSymbol when absent."
+
+[[req]]
+id = "P6.2"
+slice = "S1"
+title = "Planned calls inside the caller's body"
+acceptance = "Planned calls are confirmed with call-site anchors; missing or wrong-target calls are findings."
+
+[[req]]
+id = "P6.3"
+slice = "S1"
+title = "Signature verification"
+acceptance = "Observed parameters and return types are compared with the plan; differences are findings with a diff."
+
+[[req]]
+id = "P6.4"
+slice = "S2"
+title = "Planned data flow verification"
+acceptance = "Planned flows are confirmed, missing, or explicitly unverifiable."
+
+[[req]]
+id = "P6.5"
+slice = "S2"
+title = "Call chain re-validation"
+acceptance = "Breaking one hop of a chain in code reports exactly that hop."
+
+[[req]]
+id = "P6.6"
+slice = "S2"
+title = "Implemented requires verification"
+acceptance = "Only a clean verification moves a component to Implemented."
+
+[[req]]
+id = "P6.7"
+slice = "S2"
+title = "Validation tools runner"
+acceptance = "Tool definitions with {targets} and per-component overrides run and report."
+
+[[req]]
+id = "P6.8"
+slice = "S2"
+title = "Re-validation on change"
+acceptance = "Changing a file re-verifies only the components it affects."
+
+[[req]]
+id = "P6.9"
+slice = "S2"
+title = "Implementation checks audit"
+manual = true
+acceptance = "An independent audit, including attempts to fool the verifier, found no gaps."
+
+[[req]]
+id = "P6.10"
+slice = "S1"
+title = "Skeleton stage with tracked placeholders"
+acceptance = "A skeleton verifies its structure with placeholder bodies; Implemented is blocked while a placeholder remains."
+
+[[req]]
+id = "P6.11"
+slice = "S2"
+title = "Review sessions per category"
+acceptance = "Rule-based reviewers produce findings; session reviewers run via the provider and block on blocking findings."
+
+[[req]]
+id = "P6.12"
+slice = "S2"
+title = "Custom ast-grep rules per project/type"
+acceptance = "Forbidden and required patterns scoped to types produce findings."
+
+# ---- views ----
+[[req]]
+id = "P7.1"
+slice = "S1"
+title = "View specs and named views from config"
+acceptance = "Named views load from config and user overrides merge."
+
+[[req]]
+id = "P7.2"
+slice = "S1"
+title = "View query engine"
+acceptance = "Kinds, direction, depth and filters select a deterministic subgraph with truncation markers."
+
+[[req]]
+id = "P7.3"
+slice = "S1"
+title = "Layouts per view"
+acceptance = "Layouts have no overlaps, respect edge direction, nest children and are stable."
+
+[[req]]
+id = "P7.4"
+slice = "S2"
+title = "Styling by kind, provenance and alignment"
+acceptance = "Every kind x provenance x alignment combination has a style from theme tokens."
+
+[[req]]
+id = "P7.5"
+slice = "S1"
+title = "Text views for the agent"
+acceptance = "Each view renders as text with anchors, stage, provenance, alignment and an explanation of the view."
+
+[[req]]
+id = "P7.6"
+slice = "S2"
+title = "Views audit"
+manual = true
+acceptance = "An independent audit found no missing or partial view requirements."
+
+# ---- server and agent tools ----
+[[req]]
+id = "P8.1"
+slice = "S1"
+title = "Architecture REST API"
+acceptance = "View, component, plan, ingest, validate and approval endpoints work end to end on fixtures."
+
+[[req]]
+id = "P8.2"
+slice = "S1"
+title = "Live architecture events"
+acceptance = "Mutations emit ArchitectureChanged/ValidationUpdated; navigation emits ViewRequested on /ws/events."
+
+[[req]]
+id = "P8.3"
+slice = "S1"
+title = "Agent MCP tools"
+acceptance = "Ingest, search, inspect, view, plan ops, validate, contract, verify and navigate tools work; no approval tools exist."
+
+[[req]]
+id = "P8.4"
+slice = "S1"
+title = "MCP end-to-end tests"
+acceptance = "Every tool's success and failure path is tested through the real MCP endpoint."
+
+[[req]]
+id = "P8.5"
+slice = "S2"
+title = "Old MCP surface removed"
+acceptance = "Old tool names and /api/registry/architecture are gone, including from docs and agent files."
+
+[[req]]
+id = "P8.6"
+slice = "S2"
+title = "Server audit"
+manual = true
+acceptance = "An independent audit of REST, MCP and events found no gaps."
+
+[[req]]
+id = "P8.7"
+slice = "S1"
+title = "Next steps in tool results"
+acceptance = "Tool results end with next steps derived from the component's state."
+
+[[req]]
+id = "P8.8"
+slice = "S3"
+title = "Workflow orchestrator"
+acceptance = "The queue runs components in dependency order, one session each, pauses for approvals and re-queues on failures."
+
+[[req]]
+id = "P8.9"
+slice = "S3"
+title = "Session briefs per job"
+acceptance = "Each job type opens its session with a brief built from config templates."
+
+# ---- UI ----
+[[req]]
+id = "P9.1"
+slice = "S1"
+title = "Graph from server views"
+acceptance = "The graph renders server views; samples are gone; empty/loading/error states exist."
+
+[[req]]
+id = "P9.2"
+slice = "S1"
+title = "Live graph refresh"
+acceptance = "Architecture events refresh the view while keeping selection and camera."
+
+[[req]]
+id = "P9.3"
+slice = "S1"
+title = "Navigation state and history"
+acceptance = "One reducer handles view, focus, selection, depth, overlays and back/forward."
+
+[[req]]
+id = "P9.4"
+slice = "S1"
+title = "Graph commands as actions"
+acceptance = "Spatial moves, edge following, focus, expand, depth, view switching, back/forward and open-in-code are typed actions."
+
+[[req]]
+id = "P9.5"
+slice = "S1"
+title = "Vim-style graph keymap"
+acceptance = "Default graph bindings drive the reducer and appear in which-key; all rebindable."
+
+[[req]]
+id = "P9.6"
+slice = "S3"
+title = "Touch controls"
+acceptance = "Tap, double-tap, long-press, pinch, two-finger pan, swipe back and on-screen chips work at phone size."
+
+[[req]]
+id = "P9.7"
+slice = "S3"
+title = "Agent-driven navigation"
+acceptance = "ViewRequested from the agent moves the view, marks it, and back returns."
+
+[[req]]
+id = "P9.8"
+slice = "S1"
+title = "Compact inspector summary"
+acceptance = "The drawer shows a navigable summary linking to the spec view and code."
+
+[[req]]
+id = "P9.10"
+slice = "S3"
+title = "Renderer styles and legend"
+acceptance = "Edges and nodes draw kind/provenance/alignment styles with a legend."
+
+[[req]]
+id = "P9.11"
+slice = "S3"
+title = "UI audit"
+manual = true
+acceptance = "An independent audit driving the UI found no gaps."
+
+[[req]]
+id = "P9.12"
+slice = "S3"
+title = "Workflow panel"
+acceptance = "Queue, running sessions, approvals and findings are visible and actionable."
+
+[[req]]
+id = "P9.13"
+slice = "S1"
+title = "Hint-mode targeting"
+acceptance = "f labels on-screen nodes with unique minimal home-row hints; typing a hint runs the chosen action on that node."
+
+[[req]]
+id = "P9.14"
+slice = "S3"
+title = "Search, marks and counts"
+acceptance = "/ search with n/N, marks, counts and gg/G work through the reducer."
+
+[[req]]
+id = "P9.15"
+slice = "S1"
+title = "Graph and code linked both ways"
+acceptance = "Open-in-code lands on the symbol span; reveal-in-graph selects the enclosing component; follow mode syncs both."
+
+[[req]]
+id = "P9.16"
+slice = "S1"
+title = "Spec view buffer"
+acceptance = "A Spec buffer shows the full spec (signature, logic steps, invariants, relations, code, placeholders, findings) with section navigation."
+
+[[req]]
+id = "P9.17"
+slice = "S3"
+title = "Semantic zoom"
+acceptance = "Node cards show more detail at closer zoom, per config thresholds."
+
+# ---- review loop ----
+[[req]]
+id = "R.1"
+slice = "S2"
+title = "Comments and change requests"
+acceptance = "Comments on nodes/sections persist with the plan and reach the agent session as structured feedback."
+
+[[req]]
+id = "R.2"
+slice = "S2"
+title = "Diff since last review"
+acceptance = "Plan changes since the last review snapshot are computed and highlighted."
+
+[[req]]
+id = "R.3"
+slice = "S2"
+title = "Agent answers each point"
+acceptance = "Agents resolve comments with linked changes; unaddressed comments block approval."
+
+# ---- end to end ----
+[[req]]
+id = "P10.1"
+slice = "S3"
+title = "End-to-end flow test"
+acceptance = "Ingest, plan, validate, skeleton, implement, verify, break, detect runs automatically on a fixture copy."
+
+[[req]]
+id = "P10.2"
+slice = "S4"
+title = "Live run with the real agent"
+manual = true
+acceptance = "The agent ingests, plans, validates and drives views in the browser; issues found were fixed."
+
+[[req]]
+id = "P10.3"
+slice = "S4"
+title = "Final audit and docs"
+manual = true
+acceptance = "All requirements verified; docs updated; deferred items listed."
+
+[[req]]
+id = "P10.4"
+slice = "S4"
+title = "Revisit spec workflow with the user"
+manual = true
+acceptance = "Decisions on specs/invariants workflow, task breakdown and wireframes are recorded."
