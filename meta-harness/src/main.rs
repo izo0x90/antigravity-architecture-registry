@@ -86,7 +86,7 @@ fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>
     }
     let mut types = TypeSystem::defaults()?;
     if let Ok(text) = std::fs::read_to_string(nah.join("types.toml")) {
-        types.extend_with(TypeSystem::from_toml(&text)?)?;
+        types.extend_from_toml(&text)?;
     }
     let mut views = ViewCatalog::defaults()?;
     if let Ok(text) = std::fs::read_to_string(nah.join("views.toml")) {

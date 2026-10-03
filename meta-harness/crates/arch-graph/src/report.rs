@@ -49,6 +49,37 @@ pub enum FindingCode {
     UnknownTool,
     ReviewFinding,
     ReviewerUnavailable,
+    /// A component has a field its type doesn't allow.
+    DisallowedField,
+    /// A component sits in a container its type doesn't allow.
+    DisallowedParent,
+    /// A planned call starts from something that can't execute.
+    NotExecutable,
+    /// A containment, implements or schema-reference loop.
+    Cycle,
+    /// A schema references a data type that doesn't exist.
+    MissingSchemaRef,
+    /// Two schemas that must fit together don't.
+    SchemaMismatch,
+    /// A planned call doesn't fit the callee's real signature.
+    CallMismatch,
+    /// Logic steps aren't numbered 1..n without gaps or repeats.
+    LogicStepOrder,
+    /// An invariant redefines an inherited one with a different kind.
+    InvariantMismatch,
+    /// A side effect the interface (or the caller) doesn't declare.
+    UndeclaredSideEffect,
+    /// Details the component's type requires are missing.
+    SpecIncomplete,
+    /// Something this component depends on isn't far enough along.
+    DependencyNotReady,
+    /// A logic step's check ran.
+    LogicCheckPassed,
+    LogicCheckFailed,
+    /// A planned data flow isn't in the code.
+    DataFlowMissing,
+    /// A planned data flow can't be confirmed from the code (no types).
+    DataFlowUnverifiable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +103,10 @@ pub struct Finding {
 impl Finding {
     pub fn error(code: FindingCode, target: Target, message: impl Into<String>) -> Self {
         Self { code, severity: Severity::Error, target, message: message.into(), at: None, suggestion: None }
+    }
+
+    pub fn info(code: FindingCode, target: Target, message: impl Into<String>) -> Self {
+        Self { code, severity: Severity::Info, target, message: message.into(), at: None, suggestion: None }
     }
 
     pub fn warning(code: FindingCode, target: Target, message: impl Into<String>) -> Self {

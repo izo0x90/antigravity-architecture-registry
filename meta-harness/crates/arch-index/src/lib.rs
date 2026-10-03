@@ -8,6 +8,7 @@ mod extract;
 mod pack;
 mod resolve;
 mod rules;
+pub mod typing;
 mod walk;
 
 use std::path::Path;

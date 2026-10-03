@@ -47,7 +47,7 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     let (status, body) = http(addr, "POST", "/api/arch/plans", Some(r#"{"id":"val","title":"Validate input"}"#)).await;
     assert_eq!(status, 200, "{body}");
     let ops = json!({ "ops": [
-        { "op": "add_component", "name": "validate", "type": "function", "parent": "rust:sample",
+        { "op": "add_component", "name": "validate", "type": "function", "parent": "rust:sample", "description": "Rejects empty input.",
           "signature": { "params": [{ "name": "input", "ty": "&str" }], "returns": "bool" } },
         { "op": "relate", "kind": "calls", "source": "rust:sample::run", "target": "rust:sample::validate" }
     ]})

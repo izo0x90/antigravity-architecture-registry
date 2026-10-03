@@ -176,6 +176,10 @@ impl ArchitectureService {
         &self.reviewers
     }
 
+    fn check_cx(&self) -> checks::CheckCx<'_> {
+        checks::CheckCx { root: &self.root, packs: &self.packs, types: &self.types, tools: &self.tools }
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -408,7 +412,7 @@ impl ArchitectureService {
     pub fn validate(&self, plan_id: &PlanId) -> Result<Report, ServiceError> {
         let plan = self.plan(plan_id)?;
         let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
-        let mut report = checks::check_plan(&plan, &graph, &self.root, &self.packs, &self.types);
+        let mut report = checks::check_plan(&plan, &graph, &self.check_cx());
         // Code rules over the plan's scope as it exists in code.
         let scope = self.scope(plan_id)?;
         report.findings.extend(self.rules.check(scope.iter().filter_map(|id| graph.component(id)), &graph, &self.root, &self.packs, &self.types));
@@ -440,7 +444,7 @@ impl ArchitectureService {
             c.stage = to;
         }
         let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
-        let report = checks::check_plan(&plan, &graph, &self.root, &self.packs, &self.types);
+        let report = checks::check_plan(&plan, &graph, &self.check_cx());
         let blocking: Vec<String> = report.errors_for(id).map(|f| f.message.clone()).collect();
         if !blocking.is_empty() {
             return Err(ServiceError::InvalidOp(format!("{id} can't be approved yet: {}", blocking.join("; "))));
@@ -479,6 +483,10 @@ impl ArchitectureService {
         }
         let observed = self.observed()?;
         let mut report = self.check(&plan, &planned, &observed, goal, goal == Stage::Implemented)?;
+        let merged = Graph::merge(observed.clone(), std::slice::from_ref(&plan));
+        for f in checks::stage_gate(&plan, &merged, &self.types, id, goal) {
+            report.push(f);
+        }
         let mut advanced_to = None;
         if !report.has_errors() {
             if planned.stage == goal {

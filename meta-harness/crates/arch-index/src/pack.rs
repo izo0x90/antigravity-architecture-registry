@@ -53,6 +53,15 @@ pub struct LanguageSpec {
     /// Groups of type names that carry the same data (e.g. String and str).
     #[serde(default)]
     pub compatible_types: Vec<Vec<String>>,
+    /// JSON Schema type -> the written types that carry it.
+    #[serde(default)]
+    pub schema_types: std::collections::BTreeMap<String, Vec<String>>,
+    /// Words in written types that don't describe the data (e.g. mut, dyn).
+    #[serde(default)]
+    pub type_noise: Vec<String>,
+    /// Wrappers that make a value optional (e.g. Option, Optional).
+    #[serde(default)]
+    pub nullable_wrappers: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -97,7 +97,7 @@ fn add_validate(r: &Repo, plan: &str) {
 }
 
 fn relate(r: &Repo, plan: &str, kind: RelationKind, a: &str, b: &str) {
-    r.service.apply(&pid(plan), PlanOp::Relate { kind, source: id(a), target: id(b), order: None, ports: None, note: None }).unwrap();
+    r.service.apply(&pid(plan), PlanOp::Relate { kind, source: id(a), target: id(b), order: None, ports: None, note: None, expects: None }).unwrap();
 }
 
 fn write(r: &Repo, file: &str, text: &str) {
@@ -202,8 +202,8 @@ fn plan_operations_validate_inputs_and_reject_bad_ones() {
     reject(add("m", "module", Some("sample::run"), None), "can't contain");
     reject(add("x", "function", None, None), "parent or a file");
     reject(add("x", "function", None, Some("notes/readme.md")), "no language pack");
-    reject(PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::Upper"), target: id("sample::log"), order: None, ports: None, note: None }, "can't call");
-    reject(PlanOp::Relate { kind: RelationKind::DataFlow, source: id("sample::run"), target: id("sample::log"), order: None, ports: None, note: None }, "ports");
+    reject(PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::Upper"), target: id("sample::log"), order: None, ports: None, note: None, expects: None }, "can't call");
+    reject(PlanOp::Relate { kind: RelationKind::DataFlow, source: id("sample::run"), target: id("sample::log"), order: None, ports: None, note: None, expects: None }, "ports");
     reject(PlanOp::Unrelate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::later") }, "no calls relation");
     reject(PlanOp::Remove { id: id("sample::run") }, "isn't part of this plan");
 
@@ -227,12 +227,12 @@ fn planned(symbol: &str, file: &str, parent: Option<&str>) -> arch_graph::Compon
         id: id(symbol),
         name: symbol.rsplit("::").next().unwrap().into(),
         type_name: "function".into(),
-        description: String::new(),
+        description: format!("Does {symbol}."),
         status: Status::New,
         stage: Stage::Declared,
         anchor: None,
         proposed: Some(ProposedLocation { language: "rust".into(), file: RepoPath::new(file).unwrap(), parent: parent.map(id), symbol: symbol.into() }),
-        signature: None,
+        signature: Some(Signature::default()),
         schemas: Default::default(),
         spec: None,
         placeholders: vec![],
@@ -537,8 +537,9 @@ fn implemented_chain(r: &Repo, plan: &str) {
     relate(r, plan, RelationKind::Calls, "sample::run", "sample::validate");
     relate(r, plan, RelationKind::Calls, "sample::validate", "sample::check_all");
     relate(r, plan, RelationKind::Calls, "sample::check_all", "sample::store::Store::new");
-    approve_both(r, plan, "sample::validate");
+    // Dependencies first: validate calls check_all.
     approve_both(r, plan, "sample::check_all");
+    approve_both(r, plan, "sample::validate");
     append(r, "src/lib.rs", "\npub fn validate(input: &str) -> bool {\n    check_all(input)\n}\n\npub fn check_all(input: &str) -> bool {\n    crate::store::Store::new();\n    !input.is_empty()\n}\n");
     for symbol in ["sample::check_all", "sample::validate"] {
         let v = r.service.verify(&pid(plan), &id(symbol), Stage::Implemented).unwrap();

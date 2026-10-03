@@ -16,6 +16,13 @@ self_names = ["self", "Self"]
 relative_prefixes = ["crate", "super", "self", "Self"]
 # Owned and borrowed forms carry the same data.
 compatible_types = [["String", "str"], ["PathBuf", "Path"]]
+# Which written types carry each JSON Schema type (planned calls are checked
+# against real signatures with this).
+schema_types = { string = ["String", "str", "char", "PathBuf", "Path"], integer = ["i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize"], number = ["f32", "f64"], boolean = ["bool"], array = ["Vec", "VecDeque", "HashSet", "BTreeSet"], object = ["HashMap", "BTreeMap"] }
+# Words in written types that say nothing about the data, and wrappers that
+# make a value optional.
+type_noise = ["mut", "dyn", "impl", "const"]
+nullable_wrappers = ["Option"]
 
 [[definitions]]
 type = "function"

@@ -213,6 +213,26 @@ impl Graph {
         }
     }
 
+    /// What `id` needs to exist before it can be built: what it calls and
+    /// implements, its container, the sources of data flowing into it, and the
+    /// data types its schemas reference (`is_data_type` picks which components
+    /// can be referenced by title).
+    pub fn dependencies(&self, id: &ComponentId, is_data_type: impl Fn(&Component) -> bool) -> BTreeSet<ComponentId> {
+        let mut deps: BTreeSet<ComponentId> = BTreeSet::new();
+        deps.extend(self.outgoing(id, Some(RelationKind::Calls)).map(|r| r.target.clone()));
+        deps.extend(self.outgoing(id, Some(RelationKind::Implements)).map(|r| r.target.clone()));
+        deps.extend(self.incoming(id, Some(RelationKind::DataFlow)).map(|r| r.source.clone()));
+        deps.extend(self.parent(id).cloned());
+        if let Some(c) = self.components.get(id) {
+            let schemas = [&c.schemas.properties, &c.schemas.inputs, &c.schemas.outputs];
+            for title in schemas.into_iter().flatten().flat_map(crate::schema::refs) {
+                deps.extend(self.named(&title).filter(|d| is_data_type(d)).map(|d| d.id.clone()));
+            }
+        }
+        deps.remove(id);
+        deps
+    }
+
     /// Loops along one relation kind (e.g. containment or implements), each
     /// once, as a path back to its smallest member.
     pub fn cycles(&self, kind: RelationKind) -> Vec<Vec<ComponentId>> {

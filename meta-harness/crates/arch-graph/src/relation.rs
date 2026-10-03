@@ -78,11 +78,15 @@ pub struct Relation {
     pub ports: Option<(String, String)>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// Calls: what the caller expects to pass (inputs), get back (outputs)
+    /// and have changed (side effects), as JSON Schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expects: Option<crate::Schemas>,
 }
 
 impl Relation {
     pub fn new(kind: RelationKind, source: ComponentId, target: ComponentId, provenance: Provenance) -> Self {
-        Self { kind, source, target, provenance, order: None, sites: Vec::new(), ports: None, note: String::new() }
+        Self { kind, source, target, provenance, order: None, sites: Vec::new(), ports: None, note: String::new(), expects: None }
     }
 
     /// One relation per kind and endpoint pair (data flows also per port pair).
@@ -108,6 +112,9 @@ impl Relation {
         }
         if self.note.is_empty() {
             self.note = other.note.clone();
+        }
+        if self.expects.is_none() {
+            self.expects = other.expects.clone();
         }
     }
 }

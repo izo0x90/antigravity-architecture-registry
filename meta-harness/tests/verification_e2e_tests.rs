@@ -56,7 +56,7 @@ fn implemented_validate(arch: &ArchitectureService, body: &str) {
         },
     )
     .unwrap();
-    arch.apply(&plan, PlanOp::Relate { kind: arch_graph::RelationKind::Calls, source: id("sample::validate"), target: id("sample::store::Store::new"), order: None, ports: None, note: None }).unwrap();
+    arch.apply(&plan, PlanOp::Relate { kind: arch_graph::RelationKind::Calls, source: id("sample::validate"), target: id("sample::store::Store::new"), order: None, ports: None, note: None, expects: None }).unwrap();
     for to in [Stage::ArchApproved, Stage::PlanApproved] {
         arch.approve(&plan, &id("sample::validate"), to, &Actor::User { name: "izo".into() }).unwrap();
     }

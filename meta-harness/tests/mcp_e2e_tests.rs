@@ -59,7 +59,7 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     assert!(err, "duplicate plan");
 
     let ops = json!([
-        { "op": "add_component", "name": "validate", "type": "function", "parent": "rust:sample",
+        { "op": "add_component", "name": "validate", "type": "function", "parent": "rust:sample", "description": "Rejects empty input.",
           "signature": { "params": [{ "name": "input", "ty": "&str" }], "returns": "bool" } }
     ]);
     let (err, text) = mcp.tool("plan_edit", json!({ "plan": "val", "ops": ops })).await;

@@ -9,6 +9,8 @@ separator = "."
 call_separators = ["."]
 index_files = ["__init__.py"]
 self_names = ["self", "cls"]
+schema_types = { string = ["str"], integer = ["int"], number = ["float"], boolean = ["bool"], array = ["list", "tuple", "set", "List", "Tuple", "Set"], object = ["dict", "Dict"], null = ["None"] }
+nullable_wrappers = ["Optional"]
 
 [[definitions]]
 type = "function"

@@ -65,6 +65,10 @@ pub enum PlanOp {
         ports: Option<(String, String)>,
         #[serde(default)]
         note: Option<String>,
+        /// Calls: what the caller passes, gets back and expects changed
+        /// (schema DSL or JSON Schema).
+        #[serde(default)]
+        expects: Option<Schemas>,
     },
     Unrelate { kind: RelationKind, source: ComponentId, target: ComponentId },
     /// Remove a component this plan added (or its planned changes).
@@ -188,7 +192,7 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
             plan.references.push(Reference { id: id.clone(), kinds, depth });
             Ok(vec![id])
         }
-        PlanOp::Relate { kind, source, target, order, ports, note } => {
+        PlanOp::Relate { kind, source, target, order, ports, note, expects } => {
             for end in [&source, &target] {
                 if graph.component(end).is_none() {
                     return Err(invalid(format!("{end} doesn't exist")));
@@ -210,6 +214,10 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
             relation.order = order;
             relation.ports = ports;
             relation.note = note.unwrap_or_default();
+            if expects.is_some() && kind != RelationKind::Calls {
+                return Err(invalid("only calls carry expectations"));
+            }
+            relation.expects = expects.map(|e| compile(e, dsl)).transpose()?;
             let rid = relation.id();
             plan.relations.retain(|r| r.id() != rid);
             plan.relations.push(relation);

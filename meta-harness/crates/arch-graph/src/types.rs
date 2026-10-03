@@ -70,6 +70,13 @@ impl TypeSystem {
         Ok(system)
     }
 
+    /// Adds or replaces types from TOML that may extend the types already
+    /// here (a project's `.nah/types.toml`); checked as a whole.
+    pub fn extend_from_toml(&mut self, text: &str) -> Result<(), ModelError> {
+        let other: TypeSystem = toml::from_str(text).map_err(|e| ModelError::Config(e.to_string()))?;
+        self.extend_with(other)
+    }
+
     /// Adds or replaces types (a project's own types or specializations).
     pub fn extend_with(&mut self, other: TypeSystem) -> Result<(), ModelError> {
         self.types.extend(other.types);

@@ -10,6 +10,7 @@ call_separators = ["."]
 source_roots = ["src"]
 index_files = ["index.ts"]
 self_names = ["this"]
+schema_types = { string = ["string"], integer = ["number"], number = ["number"], boolean = ["boolean"], array = ["Array"], object = ["Record", "object"], null = ["null", "undefined"] }
 # `: string` annotations wrap the type itself.
 type_wrappers = ["type_annotation"]
 

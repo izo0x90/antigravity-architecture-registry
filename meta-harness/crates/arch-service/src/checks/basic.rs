@@ -1,20 +1,15 @@
-//! Plan checks that run before any code is written: references resolve,
-//! locations are sound, the location rules hold, and new work is tied into
-//! the existing code.
+//! References resolve, locations are sound, the location rules hold, and
+//! new work is tied into the existing code.
 
 use std::path::Path;
 
 use arch_graph::{Finding, FindingCode, Graph, Plan, RelationKind, Report, Status, Target, TypeSystem};
 use arch_index::{PackSet, module_symbol};
 
-fn component(id: &arch_graph::ComponentId) -> Target {
-    Target::Component { id: id.clone() }
-}
+use super::component;
 
-/// Checks `plan` against `graph` (the code merged with this plan).
-pub fn check_plan(plan: &Plan, graph: &Graph, root: &Path, packs: &PackSet, types: &TypeSystem) -> Report {
-    let mut report = Report::default();
-    references(plan, graph, &mut report);
+/// Unknown types and the location rules, per planned component.
+pub(super) fn components(plan: &Plan, graph: &Graph, root: &Path, packs: &PackSet, types: &TypeSystem, report: &mut Report) {
     for planned in &plan.components {
         let Some(merged) = graph.component(&planned.id) else { continue };
         if !types.contains(&merged.type_name) {
@@ -24,14 +19,12 @@ pub fn check_plan(plan: &Plan, graph: &Graph, root: &Path, packs: &PackSet, type
             report.push(Finding::error(FindingCode::LocationRule, component(&merged.id), err.to_string()));
         }
         if planned.status == Status::New {
-            location(planned, graph, root, packs, &mut report);
+            location(planned, graph, root, packs, report);
         }
     }
-    touch_points(plan, graph, &mut report);
-    report.sorted()
 }
 
-fn references(plan: &Plan, graph: &Graph, report: &mut Report) {
+pub(super) fn references(plan: &Plan, graph: &Graph, report: &mut Report) {
     for c in &plan.components {
         if let Some(parent) = c.proposed.as_ref().and_then(|p| p.parent.as_ref())
             && graph.component(parent).is_none()
@@ -109,7 +102,7 @@ fn location(c: &arch_graph::Component, graph: &Graph, root: &Path, packs: &PackS
 /// New components must connect to existing code (calls, data flow or
 /// implements, in either direction) unless the plan is greenfield; a plan
 /// that modifies existing components is tied in by definition.
-fn touch_points(plan: &Plan, graph: &Graph, report: &mut Report) {
+pub(super) fn touch_points(plan: &Plan, graph: &Graph, report: &mut Report) {
     let new: Vec<_> = plan.components.iter().filter(|c| c.status == Status::New).map(|c| &c.id).collect();
     if new.is_empty() || plan.greenfield || plan.components.iter().any(|c| c.status == Status::Modifying) {
         return;
