@@ -30,7 +30,7 @@ async fn the_old_registry_imports_through_rest_and_mcp() {
     let (err, text) = mcp.tool("plan_import", json!({ "id": "calc2", "language": "rust" })).await;
     assert!(!err, "{text}");
     assert!(text.starts_with("Imported plan calc2: 11 components (0 matched to code)"), "{text}");
-    assert!(text.contains("Not carried over as is:") && text.contains("- usage node user_calls_calculate expected_inputs"), "{text}");
+    assert!(text.contains("Not carried over as is:") && text.contains("- component audit_logger_log stage"), "{text}");
     let (err, text) = mcp.tool("plan_import", json!({ "id": "calc2" })).await;
     assert!(err && text.contains("already exists"), "{text}");
 }

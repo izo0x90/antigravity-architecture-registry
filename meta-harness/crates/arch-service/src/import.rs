@@ -250,6 +250,32 @@ fn parent_order(components: &BTreeMap<String, OldComponent>, unmapped: &mut Vec<
     (order, broken)
 }
 
+/// The type in `types` whose rules carry the same kind of thing as an old
+/// type: executable or declared behavior (by signature and whether it can
+/// call), or data (properties without a signature). Among those, the one
+/// agreeing on most rules, then the most general, then by name. Old types
+/// with neither (no signature, no properties) carry nothing to map by.
+fn closest_type(types: &TypeSystem, rule: &OldTypeRule) -> Option<String> {
+    let mut candidates: Vec<(u8, usize, String)> = types
+        .types
+        .keys()
+        .filter_map(|name| types.resolve(name).ok())
+        .filter(|t| {
+            if rule.allows_signature {
+                t.allows_signature && t.executable == rule.is_executable_caller
+            } else {
+                rule.allows_properties && t.allows_properties && !t.allows_signature
+            }
+        })
+        .map(|t| {
+            let agree = [t.allows_signature == rule.allows_signature, t.executable == rule.is_executable_caller, t.allows_properties == rule.allows_properties];
+            (agree.iter().filter(|a| **a).count() as u8, t.lineage.len(), t.name)
+        })
+        .collect();
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
+    candidates.into_iter().next().map(|(_, _, name)| name)
+}
+
 pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &PackSet, types: &TypeSystem) -> Result<(Plan, ImportReport), ServiceError> {
     let old: OldRegistry = serde_json::from_str(input.json).map_err(|e| ServiceError::InvalidOp(format!("not an old registry document: {e}")))?;
     let mut plan = Plan::new(input.plan.0.as_str(), &input.title);
@@ -264,21 +290,16 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
             type_map.insert(name.clone(), name.clone());
             continue;
         }
-        let generic = match (rule.allows_signature, rule.is_executable_caller, rule.allows_properties) {
-            (true, true, _) => Some("function"),
-            (true, false, _) => Some("operation"),
-            (false, _, true) => Some("class"),
-            _ => None,
-        };
+        let generic = closest_type(types, rule);
         match (generic, used.contains(name.as_str())) {
             (Some(g), true) => {
                 report.unmapped.push(Unmapped { item: format!("type {name}"), reason: format!("not a known type; its components are imported as '{g}' (add a specialization to keep the name)") });
-                type_map.insert(name.clone(), g.to_owned());
+                type_map.insert(name.clone(), g);
             }
             (Some(_), false) => report.unmapped.push(Unmapped { item: format!("type {name}"), reason: "not a known type and unused; its rules aren't imported".into() }),
             (None, used_here) => report.unmapped.push(Unmapped {
                 item: format!("type {name}"),
-                reason: format!("no generic type has its rules (no signature, no properties){}", if used_here { "; its components aren't imported" } else { "" }),
+                reason: format!("no type here has its rules (signature/executable or properties){}", if used_here { "; its components aren't imported" } else { "" }),
             }),
         }
     }
@@ -397,7 +418,13 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
         let old_status = c.status.as_deref().unwrap_or("new");
         let pending = c.modification_tasks.iter().any(|t| !t.completed);
         let (status, stage) = if place.matched {
-            if old_status == "modifying" || pending { (Status::Modifying, Stage::Declared) } else { (Status::Existing, observed.component(&place.id).map_or(Stage::Implemented, |code| code.stage)) }
+            let code_stage = observed.component(&place.id).map_or(Stage::Implemented, |code| code.stage);
+            match old_status {
+                "modifying" => (Status::Modifying, Stage::Declared),
+                _ if pending => (Status::Modifying, Stage::Declared),
+                "deprecated" => (Status::Deprecated, code_stage),
+                _ => (Status::Existing, code_stage),
+            }
         } else {
             if old_status != "new" {
                 report.unmapped.push(Unmapped { item: format!("component {old_id} status"), reason: format!("was '{old_status}' but no matching code was found; imported as new") });
@@ -446,7 +473,7 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
     }
 
     // Usage trees: ordered calls, and each root becomes a workflow.
-    let lookup = Lookup { placed: &placed, components: &old.components, type_map: &type_map, types };
+    let lookup = Lookup { placed: &placed, names: &names, components: &old.components, type_map: &type_map, types };
     for (tree, root_node) in &old.usage_trees {
         let entry = placed.get(&root_node.caller_id).map(|p| p.id.clone());
         match entry {
@@ -470,6 +497,8 @@ pub fn import(input: ImportInput<'_>, observed: &Graph, root: &Path, packs: &Pac
 /// What usage nodes are resolved against.
 struct Lookup<'a> {
     placed: &'a BTreeMap<String, Placed>,
+    /// Old ids -> imported names (for `title` references in expectations).
+    names: &'a BTreeMap<String, String>,
     components: &'a BTreeMap<String, OldComponent>,
     type_map: &'a BTreeMap<String, String>,
     types: &'a TypeSystem,
@@ -486,6 +515,15 @@ fn calls(node: &OldUsageNode, order: u32, cx: &Lookup<'_>, plan: &mut Plan, unma
                 let mut call = Relation::new(RelationKind::Calls, caller.id.clone(), callee.id.clone(), Provenance::PLANNED);
                 call.order = Some(order);
                 call.note = node.description.clone().unwrap_or_default();
+                // What the call site expects travels with the call.
+                let mut schema = |value: &Option<Value>, what: &str| value.as_ref().map(|v| convert_refs(v, cx.names, &format!("{item} {what}"), unmapped));
+                let expects = Schemas {
+                    properties: None,
+                    inputs: schema(&node.expected_inputs, "expected_inputs"),
+                    outputs: schema(&node.expected_outputs, "expected_outputs"),
+                    side_effects: node.expected_side_effects.iter().map(|s| SideEffect { target: s.target.clone(), description: s.description.clone() }).collect(),
+                };
+                call.expects = (!expects.is_empty()).then_some(expects);
                 plan.relations.push(call);
             } else {
                 unmapped.push(Unmapped { item: item.clone(), reason: format!("{} can't call anything (not executable)", caller.id) });
@@ -494,12 +532,6 @@ fn calls(node: &OldUsageNode, order: u32, cx: &Lookup<'_>, plan: &mut Plan, unma
         (caller, callee) => {
             let missing: Vec<&str> = [(caller.is_none(), node.caller_id.as_str()), (callee.is_none(), node.component_id.as_str())].into_iter().filter(|(gone, _)| *gone).map(|(_, id)| id).collect();
             unmapped.push(Unmapped { item: item.clone(), reason: format!("{} wasn't imported", missing.join(" and ")) });
-        }
-    }
-    // Call-site expectations: NAH checks calls against the callee's own schemas.
-    for (what, present) in [("expected_inputs", node.expected_inputs.is_some()), ("expected_outputs", node.expected_outputs.is_some()), ("expected_side_effects", !node.expected_side_effects.is_empty())] {
-        if present {
-            unmapped.push(Unmapped { item: format!("{item} {what}"), reason: "call-site expectations aren't stored; calls are checked against the callee's schemas".into() });
         }
     }
     for (i, child) in node.dependencies.iter().enumerate() {
@@ -559,5 +591,68 @@ fn convert_refs(schema: &Value, names: &BTreeMap<String, String>, at: &str, unma
         }
         Value::Array(items) => Value::Array(items.iter().map(|v| convert_refs(v, names, at, unmapped)).collect()),
         other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // req: P3.6
+    #[test]
+    fn old_types_map_onto_whatever_types_the_project_defines() {
+        // A type system with none of the default names: the importer must pick
+        // by rules, not by name.
+        let types = TypeSystem::from_toml(
+            r#"
+    [types.pkg]
+    allowed_parents = ["pkg"]
+    executable = true
+    allows_signature = false
+    allows_properties = false
+    allows_implementation_spec = true
+    [types.routine]
+    allowed_parents = ["pkg", "record"]
+    executable = true
+    allows_signature = true
+    allows_properties = false
+    allows_implementation_spec = true
+    [types.contract_op]
+    allowed_parents = ["pkg"]
+    executable = false
+    allows_signature = true
+    allows_properties = false
+    allows_implementation_spec = false
+    [types.record]
+    allowed_parents = ["pkg"]
+    executable = false
+    allows_signature = false
+    allows_properties = true
+    allows_implementation_spec = false
+    [types.fancy_record]
+    extends = "record"
+    "#,
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let old = serde_json::json!({
+            "components": {
+                "act": {"id": "act", "name": "act", "type": "function", "description": "Does it."},
+                "spec_op": {"id": "spec_op", "name": "spec_op", "type": "operation", "description": "Declared."},
+                "dto": {"id": "dto", "name": "Dto", "type": "data_object", "description": "Data."}
+            },
+            "component_types": {
+                "function": {"allows_properties": false, "allows_signature": true, "is_executable_caller": true},
+                "operation": {"allows_properties": false, "allows_signature": true, "is_executable_caller": false},
+                "data_object": {"allows_properties": true, "allows_signature": false, "is_executable_caller": false}
+            }
+        })
+        .to_string();
+        let input = ImportInput { plan: PlanId::new("mapped").unwrap(), title: "Mapped".into(), json: &old, language: Some("rust".into()) };
+        let (plan, report) = import(input, &Graph::new(), dir.path(), &PackSet::built_in().unwrap(), &types).unwrap();
+        let type_of = |old: &str| plan.component(&report.components.iter().find(|c| c.old_id == old).unwrap().id).unwrap().type_name.clone();
+        assert_eq!((type_of("act"), type_of("spec_op"), type_of("dto")), ("routine".to_owned(), "contract_op".to_owned(), "record".to_owned()), "the most general type with the same rules");
+        let reasons: Vec<String> = report.unmapped.iter().map(|u| format!("{}: {}", u.item, u.reason)).collect();
+        assert!(reasons.iter().any(|r| r.starts_with("type function:") && r.contains("'routine'")), "each mapping is reported: {reasons:#?}");
     }
 }
