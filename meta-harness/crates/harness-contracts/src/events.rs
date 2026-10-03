@@ -40,4 +40,7 @@ pub enum ClientEvent {
     InstanceUpdated { snapshot: ProviderSnapshot },
     Session { event: AdapterEvent },
     ThreadClosed { thread_id: ThreadId },
+    /// The architecture graph changed, was checked, or someone asked the UI to
+    /// show part of it.
+    Architecture { event: arch_graph::ArchEvent },
 }

@@ -1,6 +1,6 @@
 //! HTTP/WebSocket API. Harness routes address instances and threads by id and never
 //! know which harness is behind them; everything else (files, feedback, the
-//! architecture registry and its MCP endpoint) is app-level.
+//! architecture graph and its MCP endpoint) is app-level.
 
 use std::sync::Arc;
 
@@ -30,6 +30,7 @@ pub struct AppState {
     pub sessions: Arc<SessionManager>,
     pub hub: Arc<EventHub>,
     pub mcp_state: crate::mcp::McpServerState,
+    pub arch: Arc<arch_service::ArchitectureService>,
 }
 
 /// `HarnessError` as an HTTP response: `{ "error": "..." }` with a matching status.
@@ -88,6 +89,12 @@ pub struct DevFeedbackItem {
 }
 
 
+/// Forwards the architecture service's events to every connected client.
+pub fn bridge_architecture_events(arch: &arch_service::ArchitectureService, hub: &Arc<EventHub>) {
+    let hub = hub.clone();
+    arch.subscribe(move |event| hub.publish(harness_contracts::ClientEvent::Architecture { event: event.clone() }));
+}
+
 pub fn create_router(state: AppState) -> Router {
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string());
     let mut router = Router::new()
@@ -107,11 +114,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/threads/{thread}/interrupt", post(interrupt))
         .route("/api/threads/{thread}/requests/{request}", post(respond_request))
         .route("/api/fs/read", get(fs_read_handler))
-        .route("/api/registry/architecture", get(get_architecture_handler))
         .route("/api/dev/feedback", get(get_dev_feedback_handler).post(dev_feedback_handler).put(update_dev_feedback_handler))
         .route("/api/mcp/sse", get(mcp_sse_proxy).post(mcp_messages_proxy))
         .route("/api/mcp/messages", post(mcp_messages_proxy))
-        .route("/ws/events", get(ws_events_handler));
+        .route("/ws/events", get(ws_events_handler))
+        .merge(crate::arch::routes());
 
     if std::path::Path::new(&static_dir).exists() {
         router = router.fallback_service(ServeDir::new(static_dir));
@@ -350,19 +357,6 @@ async fn ui_config_handler() -> Result<Json<serde_json::Value>, (StatusCode, Jso
     }
 }
 
-/// Serves the registry's live architecture (the same state the MCP tools read and write).
-async fn get_architecture_handler(
-    State(state): State<AppState>,
-) -> Result<Json<architecture_model::SystemArchitecture>, (StatusCode, String)> {
-    state
-        .mcp_state
-        .service
-        .registry()
-        .load_full()
-        .await
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-}
 
 
 async fn fs_read_handler(

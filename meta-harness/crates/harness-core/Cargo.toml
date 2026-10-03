@@ -5,6 +5,7 @@ edition = "2024"
 description = "Traits every harness provider implements: driver, instance, adapter, session runtime"
 
 [dependencies]
+arch-graph = { path = "../arch-graph" }
 harness-contracts = { path = "../harness-contracts" }
 async-trait = "0.1.92"
 futures = "0.3.34"

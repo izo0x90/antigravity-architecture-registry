@@ -13,6 +13,7 @@ mod relation;
 mod report;
 mod types;
 pub mod view;
+mod wire;
 
 pub use anchor::{CodeAnchor, ProposedLocation, RepoPath, Span};
 pub use events::{ArchEvent, ChangeReason, Requester, ViewRequest};
@@ -24,6 +25,7 @@ pub use relation::{Provenance, Relation, RelationId, RelationKind};
 pub use report::{CodeRef, Finding, FindingCode, Report, Severity, Target};
 pub use types::{ResolvedType, TypeDef, TypeSystem};
 pub use view::{View, ViewCatalog, ViewSpec};
+pub use wire::{ComponentDetail, ViewResult};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ModelError {

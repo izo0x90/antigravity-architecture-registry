@@ -1,340 +1,179 @@
+//! The agent's architecture tools through the real MCP endpoint (SSE stream +
+//! message posts), on a copy of the Rust fixture repo.
+
 mod common;
 
-use std::sync::Arc;
-use serde_json::json;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use std::net::SocketAddr;
 
-use architecture_model::{ComponentSpec, SystemArchitecture, UsageNode};
+use common::spawn_app;
+use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
 
-use meta_harness::mcp::protocol::JsonRpcRequest;
-use meta_harness::mcp::{McpServerState, McpService};
-use meta_harness::registry::{FsJsonRepository, RegistryService};
-
-fn sample_test_architecture() -> SystemArchitecture {
-    let mut arch = SystemArchitecture::default();
-
-    let auth = ComponentSpec {
-        id: "auth_service".to_string(),
-        name: "Authentication Service".to_string(),
-        comp_type: "service".to_string(),
-        description: "Handles user authentication".to_string(),
-        status: "active".to_string(),
-        stage: "draft".to_string(),
-        parent_id: None,
-        implements_id: None,
-        location: None,
-        inputs: Some(json!({"credentials": "UserCredentials"})),
-        outputs: Some(json!({"jwt": "JwtToken"})),
-        properties: Some(json!({"tags": ["security"]})),
-        side_effects: vec![],
-        implementation_spec: None,
-        modification_tasks: vec![],
-    };
-
-    let token = ComponentSpec {
-        id: "token_service".to_string(),
-        name: "Token Service".to_string(),
-        comp_type: "service".to_string(),
-        description: "Mints and signs JWT tokens".to_string(),
-        status: "implemented".to_string(),
-        stage: "arch_approved".to_string(),
-        parent_id: None,
-        implements_id: None,
-        location: None,
-        inputs: None,
-        outputs: None,
-        properties: Some(json!({"tags": ["crypto"]})),
-        side_effects: vec![],
-        implementation_spec: None,
-        modification_tasks: vec![],
-    };
-
-    let usage = UsageNode {
-        node_id: "root_usage".to_string(),
-        caller_id: "auth_service".to_string(),
-        component_id: "token_service".to_string(),
-        description: "Auth calls token service to mint JWT".to_string(),
-        expected_inputs: None,
-        expected_outputs: None,
-        expected_side_effects: vec![],
-        dependencies: vec![],
-    };
-
-    arch.components.insert("auth_service".to_string(), auth);
-    arch.components.insert("token_service".to_string(), token);
-    arch.usage_trees.insert("auth_flow".to_string(), usage);
-    arch
+struct Mcp {
+    addr: SocketAddr,
+    endpoint: String,
+    events: BufReader<TcpStream>,
+    next_id: u64,
 }
 
-#[tokio::test]
-async fn test_mcp_service_tools() {
-    let temp_file = tempfile::NamedTempFile::new().unwrap();
-    let repo = Arc::new(FsJsonRepository::from_architecture(
-        sample_test_architecture(),
-        temp_file.path(),
-    ));
-    let registry = Arc::new(RegistryService::new(repo));
-    let mcp = McpService::new(registry);
-
-    // 1. Test initialize
-    let init_req = JsonRpcRequest {
-        jsonrpc: "2.0".to_string(),
-        id: Some(json!(1)),
-        method: "initialize".to_string(),
-        params: None,
-    };
-    let init_resp = mcp.handle_request(init_req).await;
-    assert!(init_resp.error.is_none());
-    assert_eq!(
-        init_resp.result.unwrap()["serverInfo"]["name"],
-        "architecture-registry"
-    );
-
-    // 2. Test tools/list
-    let list_req = JsonRpcRequest {
-        jsonrpc: "2.0".to_string(),
-        id: Some(json!(2)),
-        method: "tools/list".to_string(),
-        params: None,
-    };
-    let list_resp = mcp.handle_request(list_req).await;
-    let tools = list_resp.result.unwrap()["tools"]
-        .as_array()
-        .unwrap()
-        .clone();
-    assert_eq!(tools.len(), 7);
-    assert!(tools.iter().any(|t| t["name"] == "focus_architecture"));
-    assert!(tools.iter().any(|t| t["name"] == "search_components"));
-
-    // 3. Test tools/call search_components
-    let search_req = JsonRpcRequest {
-        jsonrpc: "2.0".to_string(),
-        id: Some(json!(3)),
-        method: "tools/call".to_string(),
-        params: Some(json!({
-            "name": "search_components",
-            "arguments": { "query": "auth" }
-        })),
-    };
-    let search_resp = mcp.handle_request(search_req).await;
-    let text = search_resp.result.unwrap()["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(text.contains("auth_service"));
-
-    // 4. Test tools/call focus_architecture
-    let focus_req = JsonRpcRequest {
-        jsonrpc: "2.0".to_string(),
-        id: Some(json!(4)),
-        method: "tools/call".to_string(),
-        params: Some(json!({
-            "name": "focus_architecture",
-            "arguments": {
-                "root_id": "auth_service",
-                "perspective": "call_flow",
-                "depth": 2
+impl Mcp {
+    async fn connect(addr: SocketAddr) -> Self {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET /api/mcp/sse HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n").await.unwrap();
+        let mut events = BufReader::new(stream);
+        let endpoint = loop {
+            let mut line = String::new();
+            events.read_line(&mut line).await.unwrap();
+            if let Some(url) = line.strip_prefix("data: /api/mcp/messages") {
+                break format!("/api/mcp/messages{}", url.trim());
             }
-        })),
-    };
-    let focus_resp = mcp.handle_request(focus_req).await;
-    assert!(focus_resp.error.is_none());
-    let tree_text = focus_resp.result.unwrap()["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(tree_text.contains("auth_service"));
+        };
+        Self { addr, endpoint, events, next_id: 1 }
+    }
 
-    // 5. Test tools/call approve_component
-    let approve_req = JsonRpcRequest {
-        jsonrpc: "2.0".to_string(),
-        id: Some(json!(5)),
-        method: "tools/call".to_string(),
-        params: Some(json!({
-            "name": "approve_component",
-            "arguments": { "component_id": "auth_service" }
-        })),
-    };
-    let approve_resp = mcp.handle_request(approve_req).await;
-    assert!(approve_resp.error.is_none());
-}
-
-
-#[tokio::test]
-async fn test_mcp_sse_http_server_flow() {
-    let temp_file = tempfile::NamedTempFile::new().unwrap();
-    let repo = Arc::new(FsJsonRepository::from_architecture(
-        sample_test_architecture(),
-        temp_file.path(),
-    ));
-    let registry = Arc::new(RegistryService::new(repo));
-
-    let mcp_service = Arc::new(McpService::new(registry));
-    let mcp_state = McpServerState::new(mcp_service);
-
-    let (addr, _state) = common::spawn_app(mcp_state).await;
-
-    // 1. Connect to GET /api/mcp/sse
-    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    stream
-        .write_all(b"GET /api/mcp/sse HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n")
-        .await
-        .unwrap();
-
-    let mut reader = BufReader::new(stream);
-
-    // Read headers until \r\n\r\n
-    loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).await.unwrap();
-        if line == "\r\n" {
-            break;
+    async fn rpc(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string();
+        let (status, _) = common::http(self.addr, "POST", &self.endpoint, Some(&body)).await;
+        assert_eq!(status, 200);
+        // The response also arrives on the SSE stream.
+        loop {
+            let mut line = String::new();
+            self.events.read_line(&mut line).await.unwrap();
+            if let Some(data) = line.strip_prefix("data: ")
+                && let Ok(v) = serde_json::from_str::<Value>(data.trim())
+                && v["id"] == id
+            {
+                return v;
+            }
         }
     }
 
-    let endpoint_url = loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).await.unwrap();
-        if line.starts_with("data: /api/mcp/messages?session_id=") {
-            break line.trim_start_matches("data: ").trim().to_string();
-        }
-    };
-
-    assert!(!endpoint_url.is_empty(), "Failed to receive endpoint event");
-    assert!(endpoint_url.contains("session_id="));
-
-    // 2. Post a JSON-RPC request to the received endpoint
-    let rpc_body = json!({
-        "jsonrpc": "2.0",
-        "id": 100,
-        "method": "tools/call",
-        "params": {
-            "name": "get_architecture_summary",
-            "arguments": {}
-        }
-    })
-    .to_string();
-
-    let mut post_stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let post_req = format!(
-        "POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        endpoint_url,
-        rpc_body.len(),
-        rpc_body
-    );
-    post_stream.write_all(post_req.as_bytes()).await.unwrap();
-
-    // Read POST response (should be 202 Accepted)
-    let mut post_reader = BufReader::new(post_stream);
-    let mut status_line = String::new();
-    post_reader.read_line(&mut status_line).await.unwrap();
-    assert!(
-        status_line.contains("202 Accepted") || status_line.contains("200 OK"),
-        "Unexpected status: {}",
-        status_line
-    );
-
-    // 3. Read the JSON-RPC response from the SSE stream
-    let response_data = loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).await.unwrap();
-        if line.starts_with("data: ") {
-            let data = line.trim_start_matches("data: ").trim();
-            if data.contains("\"jsonrpc\":\"2.0\"") || data.contains("\"result\"") {
-                break data.to_string();
-            }
-        }
-    };
-
-    assert!(!response_data.is_empty(), "Expected response over SSE stream");
-    let parsed: serde_json::Value = serde_json::from_str(&response_data).unwrap();
-    assert_eq!(parsed["id"], 100);
-    let text = parsed["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("total_components"));
+    /// Calls a tool; returns (is_error, text).
+    async fn tool(&mut self, name: &str, args: Value) -> (bool, String) {
+        let v = self.rpc("tools/call", json!({ "name": name, "arguments": args })).await;
+        let result = &v["result"];
+        (result["isError"].as_bool().unwrap_or(false), result["content"][0]["text"].as_str().unwrap_or_default().to_owned())
+    }
 }
 
+// req: P8.3, P8.4
 #[tokio::test]
-async fn test_mcp_streamable_http_direct_post() {
-    let temp_file = tempfile::NamedTempFile::new().unwrap();
-    let repo = Arc::new(FsJsonRepository::from_architecture(
-        sample_test_architecture(),
-        temp_file.path(),
-    ));
-    let registry = Arc::new(RegistryService::new(repo));
-    let mcp_service = Arc::new(McpService::new(registry));
-    let mcp_state = McpServerState::new(mcp_service);
+async fn every_tool_works_through_the_mcp_endpoint() {
+    let (addr, state) = spawn_app().await;
+    let mut mcp = Mcp::connect(addr).await;
+    let init = mcp.rpc("initialize", json!({})).await;
+    assert_eq!(init["result"]["serverInfo"]["name"], "nah-architecture");
+    let tools = mcp.rpc("tools/list", json!({})).await;
+    let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    for expected in ["ingest", "list_types", "search", "inspect", "view", "navigate", "plan_list", "plan_create", "plan_edit", "plan_validate", "contract", "verify"] {
+        assert!(names.contains(&expected), "{expected} in {names:?}");
+    }
+    assert!(!names.iter().any(|n| n.contains("approve")), "agents can't approve");
 
-    let (addr, _state) = common::spawn_app(mcp_state).await;
+    let (err, text) = mcp.tool("ingest", json!({})).await;
+    assert!(!err && text.contains("3 files"), "{text}");
+    let (err, _) = mcp.tool("ingest", json!({ "scope": "/etc" })).await;
+    assert!(err, "absolute scopes are rejected");
 
-    // 1. Direct POST to /api/mcp/sse with 'initialize'
-    let mut stream1 = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let body1 = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": { "name": "test-client", "version": "1.0.0" }
-        }
-    }).to_string();
-    let req1 = format!(
-        "POST /api/mcp/sse HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body1.len(),
-        body1
-    );
-    stream1.write_all(req1.as_bytes()).await.unwrap();
+    let (err, text) = mcp.tool("list_types", json!({})).await;
+    assert!(!err && text.contains("\"function\""));
 
-    let mut resp1 = String::new();
-    stream1.read_to_string(&mut resp1).await.unwrap();
-    assert!(resp1.contains("HTTP/1.1 200 OK"));
-    assert!(resp1.contains("\"name\":\"architecture-registry\""));
+    let (err, text) = mcp.tool("search", json!({ "query": "save" })).await;
+    assert!(!err && text.contains("rust:sample::store::Store::save [function Existing/Implemented] src/store.rs:10"), "{text}");
+    let (err, text) = mcp.tool("search", json!({ "query": "zzz" })).await;
+    assert!(!err && text.contains("No matches"));
 
-    // 2. Direct POST to /api/mcp/sse with 'tools/list'
-    let mut stream2 = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let body2 = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/list",
-        "params": {}
-    }).to_string();
-    let req2 = format!(
-        "POST /api/mcp/sse HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body2.len(),
-        body2
-    );
-    stream2.write_all(req2.as_bytes()).await.unwrap();
+    let (err, text) = mcp.tool("inspect", json!({ "id": "rust:sample::run" })).await;
+    assert!(!err && text.contains("Store::new()"), "includes source: {text}");
+    let (err, _) = mcp.tool("inspect", json!({ "id": "rust:nope" })).await;
+    assert!(err);
 
-    let mut resp2 = String::new();
-    stream2.read_to_string(&mut resp2).await.unwrap();
-    assert!(resp2.contains("HTTP/1.1 200 OK"));
-    assert!(resp2.contains("\"tools\":["));
+    let (err, text) = mcp.tool("view", json!({ "name": "structure", "roots": ["rust:sample::store"] })).await;
+    assert!(!err && text.contains("View 'structure'") && text.contains("Store [class"), "{text}");
+    let (err, _) = mcp.tool("view", json!({ "name": "teleport" })).await;
+    assert!(err);
+
+    let (mut events, _) = (state.hub.subscribe().1, ());
+    let (err, _) = mcp.tool("navigate", json!({ "view": "calls", "focus": "rust:sample::run" })).await;
+    assert!(!err);
+    let event = events.recv().await.unwrap();
+    assert!(matches!(event, harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::ViewRequested { by: arch_graph::Requester::Agent, .. } }));
+    let (err, _) = mcp.tool("navigate", json!({ "focus": "rust:ghost" })).await;
+    assert!(err);
+
+    let (err, text) = mcp.tool("plan_list", json!({})).await;
+    assert!(!err && text.contains("No plans yet"));
+    let (err, text) = mcp.tool("plan_create", json!({ "id": "val", "title": "Validate input" })).await;
+    assert!(!err && text.contains("Next:"), "{text}");
+    let (err, _) = mcp.tool("plan_create", json!({ "id": "val", "title": "again" })).await;
+    assert!(err, "duplicate plan");
+
+    let ops = json!([
+        { "op": "add_component", "name": "validate", "type": "function", "parent": "rust:sample",
+          "signature": { "params": [{ "name": "input", "ty": "&str" }], "returns": "bool" } }
+    ]);
+    let (err, text) = mcp.tool("plan_edit", json!({ "plan": "val", "ops": ops })).await;
+    assert!(!err && text.contains("rust:sample::validate (Declared): write its spec"), "next steps: {text}");
+    let (err, text) = mcp.tool("plan_validate", json!({ "plan": "val" })).await;
+    assert!(!err && text.contains("ERROR [missing_touch_point]"), "{text}");
+    let (err, text) = mcp.tool("plan_edit", json!({ "plan": "val", "ops": [{ "op": "relate", "kind": "calls", "source": "rust:sample::run", "target": "rust:sample::validate" }, { "op": "remove", "id": "rust:sample::log" }] })).await;
+    assert!(err && text.contains("op 2 failed"), "{text}");
+    let (err, text) = mcp.tool("plan_validate", json!({ "plan": "val" })).await;
+    assert!(!err && text.contains("The plan checks out"), "op 1 stuck: {text}");
+
+    let (err, text) = mcp.tool("contract", json!({ "plan": "val", "id": "rust:sample::validate" })).await;
+    assert!(!err && text.contains("## Called by") && text.contains("`run`"), "{text}");
+    let (err, _) = mcp.tool("contract", json!({ "plan": "val", "id": "rust:sample::run" })).await;
+    assert!(err, "not a plan component");
+
+    // The user approves in the cockpit; then the agent lays a skeleton and verifies.
+    state.arch.approve(&arch_graph::PlanId::new("val").unwrap(), &arch_graph::ComponentId::new("rust:sample::validate"), arch_graph::Stage::ArchApproved, &arch_service::Actor::User { name: "izo".into() }).unwrap();
+    let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "skeleton" })).await;
+    assert!(!err && text.contains("Not yet") && text.contains("isn't in the code"), "{text}");
+    let lib = state.arch.root().join("src/lib.rs");
+    let mut code = std::fs::read_to_string(&lib).unwrap();
+    code.push_str("\npub fn validate(input: &str) -> bool {\n    todo!()\n}\n");
+    std::fs::write(&lib, &code).unwrap();
+    let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "skeleton" })).await;
+    assert!(!err && text.contains("is now Skeleton") && text.contains("replace the placeholder bodies"), "{text}");
+    std::fs::write(&lib, code.replace("    todo!()\n", "    !input.is_empty()\n")).unwrap();
+    let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "implemented" })).await;
+    assert!(!err && text.contains("is now Implemented") && text.contains("nothing pending"), "{text}");
+    let (err, _) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "declared" })).await;
+    assert!(err);
+    let (err, _) = mcp.tool("teleport", json!({})).await;
+    assert!(err);
 }
 
+// req: P8.7
 #[tokio::test]
-async fn test_registry_architecture_endpoint_serves_registry_state() {
-    let temp_file = tempfile::NamedTempFile::new().unwrap();
-    let repo = Arc::new(FsJsonRepository::from_architecture(
-        sample_test_architecture(),
-        temp_file.path(),
-    ));
-    let registry = Arc::new(RegistryService::new(repo));
-    let mcp_service = Arc::new(McpService::new(registry));
-    let mcp_state = McpServerState::new(mcp_service);
-
-    let (addr, _state) = common::spawn_app(mcp_state).await;
-
-    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    stream
-        .write_all(b"GET /api/registry/architecture HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .await
-        .unwrap();
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).await.unwrap();
-    assert!(response.contains("HTTP/1.1 200 OK"));
-
-    let body = response.split("\r\n\r\n").nth(1).unwrap();
-    let arch: SystemArchitecture = serde_json::from_str(body).unwrap();
-    assert_eq!(arch, sample_test_architecture());
+async fn tool_results_end_with_stage_specific_next_steps() {
+    use arch_graph::{Component, ComponentId, Plan, ProposedLocation, RepoPath, Stage, Status};
+    let mut plan = Plan::new("p", "P");
+    for (name, stage) in [("a", Stage::Declared), ("b", Stage::ArchApproved), ("c", Stage::PlanApproved), ("d", Stage::Skeleton), ("e", Stage::Implemented)] {
+        plan.components.push(Component {
+            id: ComponentId::new(format!("rust:x::{name}")),
+            name: name.into(),
+            type_name: "function".into(),
+            description: String::new(),
+            status: Status::New,
+            stage,
+            anchor: None,
+            proposed: Some(ProposedLocation { language: "rust".into(), file: RepoPath::new("src/x.rs").unwrap(), parent: None, symbol: format!("x::{name}") }),
+            signature: None,
+            spec: None,
+            placeholders: vec![],
+        });
+    }
+    let text = meta_harness::mcp::service::next_steps(&plan, None);
+    assert!(text.contains("rust:x::a (Declared): write its spec") && text.contains("let the user approve the architecture in the cockpit"));
+    assert!(text.contains("rust:x::b (ArchApproved): either lay the skeleton in src/x.rs"));
+    assert!(text.contains("rust:x::c (PlanApproved): implement it in src/x.rs"));
+    assert!(text.contains("rust:x::d (Skeleton): replace the placeholder bodies in src/x.rs"));
+    assert!(!text.contains("rust:x::e"), "nothing to do for implemented");
+    let only = meta_harness::mcp::service::next_steps(&plan, Some(&ComponentId::new("rust:x::e")));
+    assert!(only.contains("nothing pending"));
 }

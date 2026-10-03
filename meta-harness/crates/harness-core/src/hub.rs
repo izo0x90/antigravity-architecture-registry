@@ -17,6 +17,8 @@ enum Key {
     Plan(String),
     Subagent(String),
     Usage(ThreadId),
+    /// The latest request to show part of the architecture graph.
+    ArchitectureView,
 }
 
 struct Entry {
@@ -39,6 +41,12 @@ impl Cache {
                 self.entries.retain(|_, e| e.thread.as_ref() != Some(thread_id));
                 return;
             }
+            ClientEvent::Architecture { event } => match event {
+                // A late client should land where the agent last pointed.
+                arch_graph::ArchEvent::ViewRequested { .. } => (Key::ArchitectureView, None),
+                // Changes and checks are notifications; clients fetch current state.
+                _ => return,
+            },
             ClientEvent::Session { event } => match event {
                 AdapterEvent::ThreadUpdated { thread } => (Key::Thread(thread.id.clone()), Some(thread.id.clone())),
                 AdapterEvent::TurnUpdated { turn } => (Key::Turn(turn.id.to_string()), Some(turn.thread_id.clone())),

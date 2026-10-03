@@ -9,9 +9,9 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use harness_contracts::*;
 use harness_core::*;
+use arch_service::{ArchitectureService, FsIndex, FsPlans};
 use meta_harness::mcp::{McpServerState, McpService};
-use meta_harness::registry::{FsJsonRepository, RegistryService};
-use meta_harness::server::{AppState, create_router};
+use meta_harness::server::{AppState, bridge_architecture_events, create_router};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, watch};
 
@@ -192,23 +192,48 @@ impl ProviderDriver for FakeDriver {
     }
 }
 
-pub fn mcp_state(registry: Arc<RegistryService>) -> McpServerState {
-    McpServerState::new(Arc::new(McpService::new(registry)))
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
 }
 
-pub async fn empty_registry_service() -> Arc<RegistryService> {
-    let file = tempfile::NamedTempFile::new().unwrap();
-    let repo = FsJsonRepository::from_architecture(architecture_model::SystemArchitecture::default(), file.path());
-    Arc::new(RegistryService::new(Arc::new(repo)))
+/// The architecture service over a fresh copy of the Rust fixture repo
+/// (`sample`: lib.rs, store.rs, util.rs), already ingested. The copy lives
+/// for the rest of the test process.
+pub fn fixture_architecture() -> Arc<ArchitectureService> {
+    let root = tempfile::tempdir().unwrap().keep().join("sample");
+    copy_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/arch-index/tests/fixtures/rust/sample"), &root);
+    let arch = ArchitectureService::open(
+        &root,
+        arch_index::PackSet::built_in().unwrap(),
+        arch_graph::TypeSystem::defaults().unwrap(),
+        arch_graph::ViewCatalog::defaults().unwrap(),
+        Box::new(FsPlans::new(&root).unwrap()),
+        Box::new(FsIndex::new(&root).unwrap()),
+    )
+    .unwrap();
+    arch.ingest(&root).unwrap();
+    Arc::new(arch)
 }
 
 /// Serves the app with the fake provider configured as instance "fake".
-pub async fn spawn_app(mcp: McpServerState) -> (SocketAddr, AppState) {
+pub async fn spawn_app() -> (SocketAddr, AppState) {
     let hub = Arc::new(EventHub::default());
+    let arch = fixture_architecture();
+    bridge_architecture_events(&arch, &hub);
+    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone())));
     let registry = Arc::new(InstanceRegistry::new(vec![Arc::new(FakeDriver)], hub.clone()));
     registry.configure(registry.default_configs()).await.unwrap();
     let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone(), Vec::new()));
-    let state = AppState { registry, sessions, hub, mcp_state: mcp };
+    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = create_router(state.clone());

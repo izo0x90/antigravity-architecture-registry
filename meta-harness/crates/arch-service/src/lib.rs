@@ -11,7 +11,8 @@ mod verify;
 
 pub use contract::{ContractSlice, Neighbor};
 pub use ops::PlanOp;
-pub use service::{Actor, ArchitectureService, ComponentDetail, IngestReport, Verification, ViewResult};
+pub use arch_graph::{ComponentDetail, ViewResult};
+pub use service::{Actor, ArchitectureService, IngestReport, Verification};
 pub use store::{CodeIndexStore, FsIndex, FsPlans, MemoryIndex, MemoryPlans, PlanRepository};
 pub use verify::signature_diff;
 

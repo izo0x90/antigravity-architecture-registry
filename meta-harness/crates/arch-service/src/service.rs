@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use arch_graph::view::{Layout, layout, query, render_text};
+use arch_graph::view::{layout, query, render_text};
 use arch_graph::{
-    Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Relation, Report, Requester,
-    Severity, Stage, Target, TypeSystem, View, ViewCatalog, ViewRequest, ViewSpec, can_transition,
+    Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
+    Severity, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult,
 };
 use arch_index::{AmbiguousCall, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk};
 use serde::{Deserialize, Serialize};
@@ -39,24 +39,6 @@ pub struct IngestReport {
     pub ambiguous: usize,
     pub external: usize,
     pub millis: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ViewResult {
-    pub view: View,
-    pub layout: Layout,
-    pub text: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ComponentDetail {
-    pub component: Component,
-    pub alignment: Alignment,
-    pub outgoing: Vec<Relation>,
-    pub incoming: Vec<Relation>,
-    /// The component's source text (from its anchor), if it's in the code.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -369,7 +351,8 @@ impl ArchitectureService {
         let view = query(&graph, spec);
         let layout = layout(&view);
         let text = render_text(&graph, &view);
-        Ok(ViewResult { view, layout, text })
+        let components = view.nodes.iter().filter_map(|n| graph.component(&n.id).map(|c| (n.id.clone(), c.clone()))).collect();
+        Ok(ViewResult { view, layout, text, components })
     }
 
     pub fn named_view(&self, name: &str, plan: Option<&PlanId>, roots: Vec<ComponentId>, depth: Option<u32>) -> Result<ViewResult, ServiceError> {
@@ -426,6 +409,12 @@ impl ArchitectureService {
             .collect();
         hits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.id.cmp(&b.1.id)));
         Ok(hits.into_iter().take(limit).map(|(_, c)| c).collect())
+    }
+
+    /// The innermost component whose code contains `line` of `file`.
+    pub fn component_at(&self, file: &str, line: u32, plan: Option<&PlanId>) -> Result<Component, ServiceError> {
+        let graph = self.graph(plan)?;
+        graph.enclosing(file, line).cloned().ok_or_else(|| ServiceError::NotFound(format!("no component at {file}:{line}")))
     }
 
     /// Asks clients to show something (the agent driving the user's view).

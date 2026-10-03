@@ -2,12 +2,12 @@ mod common;
 
 use std::time::Duration;
 
-use common::{FAKE, empty_registry_service, http, mcp_state, spawn_app};
+use common::{FAKE, http, spawn_app};
 use harness_contracts::{AdapterEvent, ClientEvent, ContentBlock, ItemBody, ProviderSnapshot};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn app() -> (std::net::SocketAddr, meta_harness::server::AppState) {
-    spawn_app(mcp_state(empty_registry_service().await)).await
+    spawn_app().await
 }
 
 #[tokio::test]

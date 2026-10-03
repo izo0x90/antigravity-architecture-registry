@@ -435,4 +435,8 @@ fn view_requests_are_checked_and_announced() {
     assert_eq!(top, vec![id("sample::store"), id("sample::store::Store")], "exact name matches first, ties by id");
     let detail = r.service.component(&id("sample::log"), None).unwrap();
     assert!(detail.code.unwrap().contains("println!"));
+    assert!(view.components.contains_key(&id("sample::run")), "views carry their components");
+    assert_eq!(r.service.component_at("src/store.rs", 11, None).unwrap().id, id("sample::store::Store::save"));
+    assert_eq!(r.service.component_at("src/store.rs", 2, None).unwrap().id, id("sample::store::Store"));
+    assert!(r.service.component_at("src/none.rs", 1, None).is_err());
 }
