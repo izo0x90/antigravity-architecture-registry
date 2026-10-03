@@ -1,0 +1,54 @@
+# A Python pack that exists only in this test directory: proves a language
+# can be added as data, with no engine changes.
+
+[language]
+name = "python"
+ast_grep = "python"
+extensions = ["py"]
+separator = "."
+call_separators = ["."]
+index_files = ["__init__.py"]
+self_names = ["self", "cls"]
+
+[[definitions]]
+type = "function"
+rule = { kind = "function_definition" }
+name_field = "name"
+params_field = "parameters"
+return_field = "return_type"
+
+[[definitions]]
+type = "class"
+rule = { kind = "class_definition" }
+name_field = "name"
+bases_field = "superclasses"
+
+[[params]]
+kind = "identifier"
+
+[[params]]
+kind = "typed_parameter"
+name_child_kind = "identifier"
+type_field = "type"
+
+[[params]]
+kind = "default_parameter"
+name_field = "name"
+
+[[params]]
+kind = "typed_default_parameter"
+name_field = "name"
+type_field = "type"
+
+[[calls]]
+rule = { kind = "call" }
+callee_field = "function"
+
+[[imports]]
+rule = { any = [{ kind = "import_statement" }, { kind = "import_from_statement" }] }
+
+[[placeholders]]
+rule = { pattern = "raise NotImplementedError" }
+
+[[placeholders]]
+rule = { pattern = "raise NotImplementedError($$$ARGS)" }

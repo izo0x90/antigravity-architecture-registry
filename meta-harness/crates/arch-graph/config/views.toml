@@ -1,0 +1,46 @@
+# Named views. Each is a lens on the same graph: which relation kinds to walk,
+# from where, how far, and how to lay it out. Projects can add or override
+# views with the same fields.
+#
+#   kinds            relation kinds walked from the roots
+#   direction        out (follow source -> target), in (reverse), both
+#   depth            how many hops from the roots
+#   layout           nested (containment boxes) or layered (left to right)
+#   overlays         extra relation kinds drawn between nodes already shown
+#   include_ancestors  keep the containers of shown nodes for context
+
+[views.structure]
+description = "Static structure: what contains what, and what implements which interface. Read it as the shape of the code."
+kinds = ["contains", "implements"]
+direction = "out"
+depth = 3
+layout = "nested"
+overlays = []
+include_ancestors = false
+
+[views.calls]
+description = "Dynamic behavior: who calls whom, left to right in call order. Read it as what happens at runtime."
+kinds = ["calls"]
+direction = "out"
+depth = 4
+layout = "layered"
+overlays = []
+include_ancestors = false
+
+[views.data_flow]
+description = "Data movement: which outputs feed which inputs. Read it as where data goes and in what shape."
+kinds = ["data_flow"]
+direction = "out"
+depth = 4
+layout = "layered"
+overlays = []
+include_ancestors = false
+
+[views.combined]
+description = "Calls as the backbone, with structure and data flow drawn on top: how runtime behavior maps onto the code's shape."
+kinds = ["calls"]
+direction = "out"
+depth = 3
+layout = "layered"
+overlays = ["contains", "implements", "data_flow"]
+include_ancestors = true

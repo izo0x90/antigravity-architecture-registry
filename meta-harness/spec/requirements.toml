@@ -70,6 +70,7 @@ id = "P1.1"
 slice = "S1"
 title = "Python models + TODO wish list audited"
 manual = true
+done = "2026-10-03: spec/audit.toml (models + TODO + planning_requirements items)"
 acceptance = "Every Python model field and TODO/planning item has a keep/change/drop/new decision in this file."
 
 [[req]]
@@ -77,6 +78,7 @@ id = "P1.2"
 slice = "S1"
 title = "Python validator rules audited"
 manual = true
+done = "2026-10-03: spec/audit.toml validator section"
 acceptance = "Every Python validator rule maps to a requirement or a documented drop."
 
 [[req]]
@@ -84,6 +86,7 @@ id = "P1.3"
 slice = "S1"
 title = "Python lifecycle audited"
 manual = true
+done = "2026-10-03: spec/audit.toml lifecycle section"
 acceptance = "Stage gates, next-actionable and cascade are captured as requirements."
 
 [[req]]
@@ -91,6 +94,7 @@ id = "P1.4"
 slice = "S1"
 title = "Contract/visualizer/DSL audited"
 manual = true
+done = "2026-10-03: spec/audit.toml contract section"
 acceptance = "Contract compilation, review markdown, DSL and visualizer have decisions."
 
 [[req]]
@@ -98,6 +102,7 @@ id = "P1.5"
 slice = "S1"
 title = "MCP surface audited"
 manual = true
+done = "2026-10-03: spec/audit.toml MCP section"
 acceptance = "Every old Python and Rust tool maps to a new tool or a documented drop."
 
 [[req]]
@@ -105,6 +110,7 @@ id = "P1.6"
 slice = "S1"
 title = "Python tests mapped"
 manual = true
+done = "2026-10-03: spec/audit.toml tests section (all 33)"
 acceptance = "All 33 Python tests map to a requirement or a documented drop."
 
 [[req]]
@@ -112,6 +118,7 @@ id = "P1.7"
 slice = "S1"
 title = "Current Rust code audited"
 manual = true
+done = "2026-10-03: spec/audit.toml Rust section"
 acceptance = "Each current registry/graph module is marked replaced, reused or deleted."
 
 [[req]]
@@ -119,6 +126,7 @@ id = "P1.8"
 slice = "S1"
 title = "User review gate"
 manual = true
+done = '2026-10-03: user said to proceed without the gate ("do whatever you feel like ... implemented today")'
 acceptance = "The user approved the spec or explicitly waived the gate."
 
 # ---- domain model ----
@@ -251,6 +259,7 @@ id = "P4.1"
 slice = "S1"
 title = "ast-grep integration decided"
 manual = true
+done = "2026-10-03: in-process ast-grep-core/language/config 0.45.3; parses all 75 .rs files (566 KB) of this repo in 53 ms vs subprocess + JSON per run for the CLI; full ast-grep rule syntax available as data via SerializableRuleCore"
 acceptance = "The in-process vs CLI decision is recorded with measurements."
 
 [[req]]

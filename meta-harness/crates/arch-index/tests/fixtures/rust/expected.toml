@@ -1,0 +1,52 @@
+# Exactly what ingesting tests/fixtures/rust/sample must produce.
+components = [
+  ["sample", "module"],
+  ["sample::store", "module"],
+  ["sample::util", "module"],
+  ["sample::Step", "interface"],
+  ["sample::Step::apply", "operation"],
+  ["sample::Upper", "class"],
+  ["sample::Upper::apply", "function"],
+  ["sample::run", "function"],
+  ["sample::log", "function"],
+  ["sample::later", "function"],
+  ["sample::ambiguous", "function"],
+  ["sample::store::Store", "class"],
+  ["sample::store::Store::new", "function"],
+  ["sample::store::Store::save", "function"],
+  ["sample::store::Store::check", "function"],
+  ["sample::store::helper", "function"],
+  ["sample::util::shout", "function"],
+  ["sample::util::helper", "function"],
+]
+relations = [
+  ["contains", "sample", "sample::store"],
+  ["contains", "sample", "sample::util"],
+  ["contains", "sample", "sample::Step"],
+  ["contains", "sample", "sample::Upper"],
+  ["contains", "sample", "sample::run"],
+  ["contains", "sample", "sample::log"],
+  ["contains", "sample", "sample::later"],
+  ["contains", "sample", "sample::ambiguous"],
+  ["contains", "sample::Step", "sample::Step::apply"],
+  ["contains", "sample::Upper", "sample::Upper::apply"],
+  ["contains", "sample::store", "sample::store::Store"],
+  ["contains", "sample::store", "sample::store::helper"],
+  ["contains", "sample::store::Store", "sample::store::Store::new"],
+  ["contains", "sample::store::Store", "sample::store::Store::save"],
+  ["contains", "sample::store::Store", "sample::store::Store::check"],
+  ["contains", "sample::util", "sample::util::shout"],
+  ["contains", "sample::util", "sample::util::helper"],
+  ["implements", "sample::Upper", "sample::Step"],
+  ["calls", "sample::Upper::apply", "sample::util::shout"],
+  ["calls", "sample::run", "sample::store::Store::new"],
+  ["calls", "sample::run", "sample::Upper::apply"],
+  ["calls", "sample::run", "sample::store::Store::save"],
+  ["calls", "sample::run", "sample::log"],
+  ["calls", "sample::store::Store::save", "sample::store::Store::check"],
+]
+# Calls that could mean more than one component: [caller, callee text, candidates...]
+ambiguous = [
+  ["sample::ambiguous", "helper", "sample::store::helper", "sample::util::helper"],
+]
+placeholders = ["sample::later"]

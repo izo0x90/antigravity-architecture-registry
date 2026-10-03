@@ -1,0 +1,435 @@
+# Audit of the Python engine (skills/architecture-registry), its TODO wish list,
+# and the current Rust registry code. Each item: what it was, decision
+# (keep | change | drop | new), and where it lands (requirement ids).
+
+# ---- P1.1 models ----
+[[item]]
+source = "models.ComponentStatus new/existing/modifying/deprecated"
+decision = "keep"
+lands = ["P2.2"]
+note = "Typed enum; existing code ingests as Existing."
+
+[[item]]
+source = "models.LifecycleStage declared/arch_approved/plan_approved/implemented"
+decision = "change"
+lands = ["P2.2", "P6.10"]
+note = "Adds Skeleton (structure-first, tracked placeholders) reachable from ArchApproved or PlanApproved."
+
+[[item]]
+source = "models.ComponentTypeRule + seeded types (module, class, interface, function, operation)"
+decision = "change"
+lands = ["P2.1"]
+note = "Same defaults, now config with specialization (extends) and required_fields."
+
+[[item]]
+source = "models.Location file_path + optional line_range"
+decision = "change"
+lands = ["P2.3", "P2.4"]
+note = "Symbol-path anchor (span is a cached hint); implemented requires a verified anchor; planned requires a proposed location."
+
+[[item]]
+source = "models.Component properties/inputs/outputs JSON Schema"
+decision = "keep"
+lands = ["P2.5"]
+
+[[item]]
+source = "models.SideEffect"
+decision = "keep"
+lands = ["P2.5", "P5.8"]
+
+[[item]]
+source = "models.ModificationTask"
+decision = "change"
+lands = ["P2.7"]
+note = "Minimal tasks; specs and invariants are primary. Revisit in P10.4."
+
+[[item]]
+source = "models.InvariantRule / InvariantType"
+decision = "keep"
+lands = ["P2.7", "P5.8"]
+
+[[item]]
+source = "models.LogicStep"
+decision = "keep"
+lands = ["P2.7", "P5.8", "P5.18"]
+
+[[item]]
+source = "models.ValidationToolDefinition / ComponentValidationRef"
+decision = "keep"
+lands = ["P6.7"]
+
+[[item]]
+source = "models.ImplementationSpec"
+decision = "keep"
+lands = ["P2.7"]
+
+[[item]]
+source = "models.UsageNode nested dependency trees"
+decision = "change"
+lands = ["P2.6", "P2.8"]
+note = "Flat Calls relations with order; workflows derive chains. Fixes the unhashable-dict crash and nested-tree traversal bugs."
+
+[[item]]
+source = "models.SystemRegistry single JSON document"
+decision = "change"
+lands = ["P3.1", "P3.2", "P3.5"]
+note = "Code is the source of truth (index cache); only small plans persist."
+
+# ---- TODO.md and planning_requirements.md ----
+[[item]]
+source = "TODO: review subagents per category (faithfulness, anti-patterns, logic, custom lint)"
+decision = "change"
+lands = ["P6.11", "P6.12"]
+note = "NAH runs reviewer sessions itself, on any harness."
+
+[[item]]
+source = "TODO: unhashable dict / nested usage trees bug"
+decision = "drop"
+lands = ["P2.6"]
+note = "Impossible with flat relations."
+
+[[item]]
+source = "TODO: location missing from MCP tools"
+decision = "change"
+lands = ["P2.4", "P8.3"]
+
+[[item]]
+source = "TODO: agent must never approve without the user"
+decision = "change"
+lands = ["P5.14"]
+note = "Agents have no approval tools; approvals only in the cockpit."
+
+[[item]]
+source = "TODO: skip unchanged existing components"
+decision = "keep"
+lands = ["P5.17"]
+
+[[item]]
+source = "TODO: tools give continuous guidance instead of the skill"
+decision = "change"
+lands = ["P8.7", "P8.8"]
+note = "NAH drives the workflow; tools add next steps."
+
+[[item]]
+source = "TODO: spec detail capture needs programmatic gates"
+decision = "new"
+lands = ["P5.15"]
+
+[[item]]
+source = "TODO: capture existing code touch points"
+decision = "new"
+lands = ["P5.16", "P4.11"]
+
+[[item]]
+source = "TODO: auto-compaction triggering"
+decision = "drop"
+note = "Harness behavior; NAH runs short per-component sessions."
+
+[[item]]
+source = "TODO: logic blocks as independently testable scripts"
+decision = "keep"
+lands = ["P5.18"]
+
+[[item]]
+source = "TODO: HTML wireframes for visual design approval"
+decision = "drop"
+lands = ["P10.4"]
+note = "Postponed by the user; revisit where UI design fits."
+
+[[item]]
+source = "TODO: review planned architecture in a chat-driven visual navigator"
+decision = "keep"
+lands = ["P9.7", "P9.13", "P9.16"]
+
+[[item]]
+source = "TODO: skeleton first, user gate on APIs before full implementation"
+decision = "change"
+lands = ["P6.10", "P5.14"]
+
+[[item]]
+source = "planning_requirements: incremental one-component planning"
+decision = "change"
+lands = ["P8.8", "P5.17"]
+note = "Enforced by the orchestrator queue (one session per component)."
+
+[[item]]
+source = "planning_requirements: registry only through tools"
+decision = "change"
+lands = ["P8.3"]
+note = "Plans written through NAH; code is the truth."
+
+[[item]]
+source = "planning_requirements: narrow context per planner"
+decision = "keep"
+lands = ["P5.17", "P8.9"]
+
+[[item]]
+source = "planning_requirements: topological follow-through"
+decision = "keep"
+lands = ["P5.10", "P8.8"]
+
+# ---- P1.2 validator rules ----
+[[item]]
+source = "validator: unregistered component type"
+decision = "keep"
+lands = ["P5.2"]
+
+[[item]]
+source = "validator: missing parent / missing implements target"
+decision = "keep"
+lands = ["P5.3"]
+
+[[item]]
+source = "validator: parenting cycle / implements cycle"
+decision = "keep"
+lands = ["P5.4"]
+
+[[item]]
+source = "validator: interface input/output schema mismatch (compare_schemas: type, required, nested, arrays, anyOf)"
+decision = "keep"
+lands = ["P5.5"]
+
+[[item]]
+source = "validator: undeclared side-effect target vs interface"
+decision = "keep"
+lands = ["P5.8"]
+
+[[item]]
+source = "validator: schema $ref not found / ref cycle"
+decision = "keep"
+lands = ["P2.5", "P5.4"]
+
+[[item]]
+source = "validator: logic steps unique and contiguous from 1"
+decision = "keep"
+lands = ["P5.8"]
+
+[[item]]
+source = "validator: invariant type matches parent interface"
+decision = "keep"
+lands = ["P5.8"]
+
+[[item]]
+source = "validator: unregistered validation tool"
+decision = "keep"
+lands = ["P5.8", "P6.7"]
+
+[[item]]
+source = "validator: type permits properties/signature/implementation spec"
+decision = "keep"
+lands = ["P5.2"]
+
+[[item]]
+source = "validator: allowed parent types"
+decision = "keep"
+lands = ["P5.2"]
+
+[[item]]
+source = "validator: usage caller registered / executable / target registered / I-O compatibility"
+decision = "change"
+lands = ["P5.2", "P5.3", "P5.5", "P5.6"]
+note = "Applies to Calls relations, and to observed callee signatures."
+
+# ---- P1.3 lifecycle ----
+[[item]]
+source = "engine: stage transitions"
+decision = "change"
+lands = ["P2.2", "P5.9", "P5.14"]
+
+[[item]]
+source = "validator: topological guardrails (plan needs deps >= arch_approved; implement needs deps implemented)"
+decision = "keep"
+lands = ["P5.9"]
+
+[[item]]
+source = "validator.get_next_actionable_components"
+decision = "keep"
+lands = ["P5.10", "P8.8"]
+
+[[item]]
+source = "validator.cascade_invalidate_component"
+decision = "change"
+lands = ["P5.10"]
+note = "Also cascades from modified existing (observed) components."
+
+# ---- P1.4 contract / visualizer / DSL ----
+[[item]]
+source = "validator.compile_contract_markdown (interface chain, invariants, tasks)"
+decision = "change"
+lands = ["P5.11", "P5.17"]
+note = "Adds real callee signatures and anchors from the code."
+
+[[item]]
+source = "visualizer.render_review_markdown"
+decision = "change"
+lands = ["P9.16"]
+note = "Review happens in the spec view; text form via P7.5."
+
+[[item]]
+source = "dsl_compiler shorthand types -> JSON Schema"
+decision = "keep"
+lands = ["P2.5"]
+
+[[item]]
+source = "visualizer text tree / mermaid / pseudocode"
+decision = "change"
+lands = ["P7.5"]
+note = "Text views for agents; mermaid dropped (the cockpit renders graphs)."
+
+# ---- P1.5 MCP surface ----
+[[item]]
+source = "py tools: load_registry / init_registry / check_active_registry"
+decision = "drop"
+note = "The server targets a repo root; no registry file to load."
+
+[[item]]
+source = "py tools: add/update/delete_component"
+decision = "change"
+lands = ["P5.1", "P8.3"]
+
+[[item]]
+source = "py tools: add/update/delete_usage_node"
+decision = "change"
+lands = ["P5.1", "P8.3"]
+note = "Relation ops."
+
+[[item]]
+source = "py tools: check_compatibility"
+decision = "change"
+lands = ["P8.3"]
+note = "validate_plan."
+
+[[item]]
+source = "py tools: visualize_architecture"
+decision = "change"
+lands = ["P7.5", "P8.3"]
+note = "view tool."
+
+[[item]]
+source = "py tools: compile_component_contract"
+decision = "keep"
+lands = ["P5.11", "P8.3"]
+
+[[item]]
+source = "py tools: approve_arch / plan_component / implement_component"
+decision = "change"
+lands = ["P5.14", "P6.6"]
+note = "Approvals move to the cockpit; implemented only via verification."
+
+[[item]]
+source = "py tools: get_next_actionable_components"
+decision = "keep"
+lands = ["P5.10"]
+
+[[item]]
+source = "rust tools: search_components / inspect_component / get_architecture_summary / focus_architecture"
+decision = "change"
+lands = ["P8.3"]
+note = "search / inspect / view."
+
+[[item]]
+source = "rust tools: approve_component / plan_component / implement_component"
+decision = "change"
+lands = ["P5.14", "P6.6"]
+
+# ---- P1.6 Python tests ----
+[[item]]
+source = "tests: unregistered_type, class_implementation_spec_disallowed, class_as_usage_node_caller_disallowed"
+decision = "keep"
+lands = ["P5.2"]
+
+[[item]]
+source = "tests: missing_parent"
+decision = "keep"
+lands = ["P5.3"]
+
+[[item]]
+source = "tests: parenting_cycle, implements_cycle, schema_reference_cycle"
+decision = "keep"
+lands = ["P5.4"]
+
+[[item]]
+source = "tests: contract_mismatches"
+decision = "keep"
+lands = ["P5.5"]
+
+[[item]]
+source = "tests: lifecycle_stage_transitions_success, topological_guardrails_plan_blocked, topological_guardrails_implementation_blocked"
+decision = "keep"
+lands = ["P5.9"]
+
+[[item]]
+source = "tests: cascade_invalidation_waves, get_next_actionable_components"
+decision = "keep"
+lands = ["P5.10"]
+
+[[item]]
+source = "tests: logic_steps_valid_contiguous, invalid_non_contiguous, invalid_duplicates, not_starting_from_one"
+decision = "keep"
+lands = ["P5.8"]
+
+[[item]]
+source = "tests: invariant_inheritance_type_mismatch, invariant_inheritance_type_match"
+decision = "keep"
+lands = ["P5.8"]
+
+[[item]]
+source = "tests: generate_review_markdown_and_export_cli, recursive_interface_and_invariants_resolution, modification_tasks_included_in_contract"
+decision = "change"
+lands = ["P5.11"]
+
+[[item]]
+source = "tests: global_tool_resolution_and_placeholder_replacement, argument_overrides"
+decision = "keep"
+lands = ["P6.7"]
+
+[[item]]
+source = "tests: engine_update_usage_node_success/not_found/invalid_component, delete_usage_node_child/root"
+decision = "change"
+lands = ["P5.1"]
+note = "Relation ops on flat relations."
+
+[[item]]
+source = "tests: cli_update_component, cli_update_node_success, cli_update_node_invalid_inputs_dsl, cli_delete_node_success"
+decision = "drop"
+note = "The Python CLI is not carried over; same behavior covered through MCP/REST tests (P8.4)."
+
+# ---- P1.7 current Rust code ----
+[[item]]
+source = "architecture-model crate (ComponentSpec, UsageNode, GraphNode/Edge IR, perspectives, textual tree, subtree)"
+decision = "drop"
+lands = ["P2.11"]
+note = "Replaced by arch-graph; deleted once callers move."
+
+[[item]]
+source = "src/registry (ArchitectureRepository, FsJsonRepository, RegistryService)"
+decision = "drop"
+lands = ["P3.7"]
+note = "Replaced by arch-service."
+
+[[item]]
+source = "src/mcp protocol/sse plumbing"
+decision = "keep"
+lands = ["P8.3"]
+note = "Transport stays; tools are rewritten."
+
+[[item]]
+source = "src/mcp 7 tools"
+decision = "drop"
+lands = ["P8.5"]
+
+[[item]]
+source = "cockpit graph: presets + samples.rs"
+decision = "drop"
+lands = ["P9.1"]
+
+[[item]]
+source = "cockpit graph: compute_hierarchical_layout"
+decision = "change"
+lands = ["P7.3"]
+note = "Layered layout moves into arch-graph so server and UI share it."
+
+[[item]]
+source = "cockpit graph: drawing, pan/zoom, node cards, inspector drawer"
+decision = "change"
+lands = ["P9.1", "P9.8", "P9.17"]

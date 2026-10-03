@@ -1,0 +1,56 @@
+# Default component types: generic concepts that exist across languages.
+# Language packs map their syntax onto these. Projects can replace them or add
+# specialized types with `extends` (inheriting every rule, overriding some).
+#
+# Rules:
+#   allowed_parents            types this one may be contained in ([] = top level only)
+#   executable                 may be the caller of a Calls relation
+#   allows_signature           has inputs/outputs
+#   allows_properties          has a properties schema (fields/attributes)
+#   allows_implementation_spec has logic steps and invariants
+#   required_fields            spec details required before approval
+
+[types.module]
+description = "A unit of code organization: package, crate, module or file."
+allowed_parents = ["module"]
+executable = true
+allows_signature = false
+allows_properties = false
+allows_implementation_spec = true
+required_fields = ["description"]
+
+[types.class]
+description = "A data type with fields and behavior: struct, class, record, enum."
+allowed_parents = ["module", "class", "function"]
+executable = false
+allows_signature = false
+allows_properties = true
+allows_implementation_spec = false
+required_fields = ["description"]
+
+[types.interface]
+description = "A contract others implement: trait, interface, protocol, abstract base."
+allowed_parents = ["module", "class"]
+executable = false
+allows_signature = false
+allows_properties = false
+allows_implementation_spec = false
+required_fields = ["description"]
+
+[types.function]
+description = "Executable behavior: function, method, closure bound to a name."
+allowed_parents = ["module", "class", "interface", "function"]
+executable = true
+allows_signature = true
+allows_properties = false
+allows_implementation_spec = true
+required_fields = ["description", "signature"]
+
+[types.operation]
+description = "A declared operation without a body: interface method, abstract method."
+allowed_parents = ["interface", "module", "class"]
+executable = false
+allows_signature = true
+allows_properties = false
+allows_implementation_spec = false
+required_fields = ["description", "signature"]

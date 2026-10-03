@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "id": "add-validation",
+  "title": "Validate input before running",
+  "description": "Adds a validation step called from the existing runner.",
+  "greenfield": false,
+  "components": [
+    {
+      "id": "rust:app::run",
+      "name": "run",
+      "type": "function",
+      "description": "Runs the app; now validates first.",
+      "status": "modifying",
+      "stage": "arch_approved",
+      "anchor": {
+        "language": "rust",
+        "file": "src/lib.rs",
+        "symbol": "app::run",
+        "syntax_kind": "function_item",
+        "span": { "start_line": 3, "end_line": 9, "start_byte": 20, "end_byte": 140 },
+        "content_hash": "0f3a"
+      }
+    },
+    {
+      "id": "rust:app::validate",
+      "name": "validate",
+      "type": "function",
+      "description": "Checks the input.",
+      "status": "new",
+      "stage": "plan_approved",
+      "proposed": { "language": "rust", "file": "src/lib.rs", "parent": "rust:app", "symbol": "app::validate" },
+      "signature": { "params": [{ "name": "input", "ty": "&str" }], "returns": "Result<(), Error>" },
+      "spec": {
+        "logic_steps": [{ "sequence": 1, "name": "reject empty", "description": "Empty input is an error." }],
+        "invariants": [{ "name": "pure", "kind": "side_effects", "description": "No I/O." }]
+      }
+    }
+  ],
+  "references": [{ "id": "rust:app::run", "kinds": ["calls"], "depth": 1 }],
+  "relations": [
+    { "kind": "calls", "source": "rust:app::run", "target": "rust:app::validate", "provenance": { "planned": true, "observed": false }, "order": 0 }
+  ],
+  "approvals": [
+    { "component": "rust:app::validate", "from": "arch_approved", "to": "plan_approved", "by": "user", "at": "2026-10-03T10:00:00Z" }
+  ]
+}

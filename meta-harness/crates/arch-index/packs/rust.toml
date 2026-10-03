@@ -1,0 +1,70 @@
+# Rust language pack: ast-grep rules mapping Rust syntax onto the generic
+# component types. Pure data; the engine has no Rust-specific code.
+
+[language]
+name = "rust"
+ast_grep = "rust"
+extensions = ["rs"]
+separator = "::"
+call_separators = ["::", "."]
+package_manifest = "Cargo.toml"
+package_name_replace = [["-", "_"]]
+source_roots = ["src"]
+index_files = ["lib.rs", "mod.rs"]
+self_names = ["self", "Self"]
+# Leading path segments that mean "relative to here" in qualified calls.
+relative_prefixes = ["crate", "super", "self", "Self"]
+
+[[definitions]]
+type = "function"
+rule = { kind = "function_item" }
+name_field = "name"
+params_field = "parameters"
+return_field = "return_type"
+
+[[definitions]]
+type = "operation"
+rule = { kind = "function_signature_item" }
+name_field = "name"
+params_field = "parameters"
+return_field = "return_type"
+
+[[definitions]]
+type = "class"
+rule = { any = [{ kind = "struct_item" }, { kind = "enum_item" }, { kind = "union_item" }] }
+name_field = "name"
+
+[[definitions]]
+type = "interface"
+rule = { kind = "trait_item" }
+name_field = "name"
+
+[[definitions]]
+type = "module"
+# Inline `mod x { ... }` only; `mod x;` declares a file module.
+rule = { kind = "mod_item", has = { field = "body", kind = "declaration_list" } }
+name_field = "name"
+
+# `impl Trait for Type { ... }`: methods belong to Type; Type implements Trait.
+[[scopes]]
+rule = { kind = "impl_item" }
+target_field = "type"
+implements_field = "trait"
+
+[[params]]
+kind = "parameter"
+name_field = "pattern"
+type_field = "type"
+
+[[params]]
+kind = "self_parameter"
+
+[[calls]]
+rule = { kind = "call_expression" }
+callee_field = "function"
+
+[[imports]]
+rule = { kind = "use_declaration" }
+
+[[placeholders]]
+rule = { kind = "macro_invocation", has = { field = "macro", regex = "^(todo|unimplemented)$" } }

@@ -1,0 +1,25 @@
+components = [
+  ["app", "module"],
+  ["helpers", "module"],
+  ["app.Greeter", "class"],
+  ["app.Greeter.greet", "function"],
+  ["app.Greeter.format", "function"],
+  ["app.main", "function"],
+  ["helpers.Base", "class"],
+  ["helpers.clean", "function"],
+]
+relations = [
+  ["contains", "app", "app.Greeter"],
+  ["contains", "app", "app.main"],
+  ["contains", "app.Greeter", "app.Greeter.greet"],
+  ["contains", "app.Greeter", "app.Greeter.format"],
+  ["contains", "helpers", "helpers.Base"],
+  ["contains", "helpers", "helpers.clean"],
+  ["implements", "app.Greeter", "helpers.Base"],
+  ["calls", "app.Greeter.greet", "app.Greeter.format"],
+  ["calls", "app.Greeter.greet", "helpers.clean"],
+  ["calls", "app.main", "app.Greeter"],
+  ["calls", "app.main", "app.Greeter.greet"],
+]
+ambiguous = []
+placeholders = ["app.Greeter.format"]

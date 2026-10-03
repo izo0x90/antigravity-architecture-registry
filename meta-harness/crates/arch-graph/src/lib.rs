@@ -1,0 +1,43 @@
+//! The architecture graph's domain model: a language-generic type system,
+//! components anchored to code, relations by kind with provenance, plans laid
+//! over the code, validation reports, and views. Pure data and logic: no I/O,
+//! so the server and the WASM cockpit share it.
+
+mod anchor;
+mod component;
+mod graph;
+mod lifecycle;
+mod plan;
+mod relation;
+mod report;
+mod types;
+pub mod view;
+
+pub use anchor::{CodeAnchor, ProposedLocation, RepoPath, Span};
+pub use component::{Component, ComponentId, ImplementationSpec, Invariant, LogicStep, Param, Signature};
+pub use graph::{Alignment, Graph};
+pub use lifecycle::{Stage, Status, can_transition};
+pub use plan::{Approval, Plan, PlanId, Reference, SCHEMA_VERSION, check_schema_version};
+pub use relation::{Provenance, Relation, RelationId, RelationKind};
+pub use report::{CodeRef, Finding, FindingCode, Report, Severity, Target};
+pub use types::{ResolvedType, TypeDef, TypeSystem};
+
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum ModelError {
+    #[error("config: {0}")]
+    Config(String),
+    #[error("unknown type '{name}' ({context})")]
+    UnknownType { name: String, context: String },
+    #[error("type inheritance cycle: {0}")]
+    TypeCycle(String),
+    #[error("invalid repository path '{0}' (must be relative, inside the repo)")]
+    InvalidPath(String),
+    #[error("invalid id '{0}'")]
+    InvalidId(String),
+    #[error("component {id}: {reason}")]
+    Location { id: ComponentId, reason: String },
+    #[error("{what} has schema version {found}; this build reads version {supported}")]
+    SchemaVersion { what: String, found: u32, supported: u32 },
+    #[error("format: {0}")]
+    Format(String),
+}

@@ -14,6 +14,9 @@ members = [
     "crates/harness-acp",
     "crates/workspace-fs",
     "crates/provider-antigravity",
+    "crates/arch-graph",
+    "crates/arch-index",
+    "crates/arch-service",
 ]
 
 [lib]
