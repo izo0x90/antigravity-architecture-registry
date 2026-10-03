@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Component, ComponentId, Plan, Provenance, Relation, RelationId, RelationKind};
+use crate::{Component, ComponentId, Invariant, Plan, Provenance, Relation, RelationId, RelationKind};
 
 /// How plan and code line up for one element (derived, never stored).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -19,6 +19,26 @@ pub enum Alignment {
     Missing,
     /// In both plan and code.
     Present,
+}
+
+/// One call in a workflow's chain.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChainStep {
+    pub caller: ComponentId,
+    pub callee: ComponentId,
+    /// Position among the caller's calls, when known.
+    pub order: Option<u32>,
+    /// 1 for calls made by the entry, 2 for theirs, ...
+    pub depth: u32,
+}
+
+/// A call chain walked from an entry in call order. Recursion is not
+/// followed; each loop is reported once as a path that returns to its start.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallChain {
+    pub entry: ComponentId,
+    pub steps: Vec<ChainStep>,
+    pub cycles: Vec<Vec<ComponentId>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -134,6 +154,74 @@ impl Graph {
     /// The component's container (via Contains), if any.
     pub fn parent(&self, id: &ComponentId) -> Option<&ComponentId> {
         self.incoming(id, Some(RelationKind::Contains)).map(|r| &r.source).next()
+    }
+
+    /// What `id` implements, transitively, nearest first (loops are cut).
+    pub fn interface_chain(&self, id: &ComponentId) -> Vec<ComponentId> {
+        let mut chain: Vec<ComponentId> = Vec::new();
+        let mut frontier = vec![id.clone()];
+        while let Some(current) = frontier.pop() {
+            let mut next: Vec<ComponentId> =
+                self.outgoing(&current, Some(RelationKind::Implements)).map(|r| r.target.clone()).filter(|t| t != id && !chain.contains(t)).collect();
+            next.sort();
+            chain.extend(next.iter().cloned());
+            frontier.extend(next.into_iter().rev());
+        }
+        chain
+    }
+
+    /// The invariants that hold for `id`: its own, then those it inherits
+    /// through what it implements (nearest first; a nearer one with the same
+    /// name overrides). Each comes with the component that declares it.
+    pub fn invariants(&self, id: &ComponentId) -> Vec<(ComponentId, Invariant)> {
+        let mut out: Vec<(ComponentId, Invariant)> = Vec::new();
+        for source in std::iter::once(id.clone()).chain(self.interface_chain(id)) {
+            let declared = self.components.get(&source).and_then(|c| c.spec.as_ref()).map(|s| s.invariants.clone()).unwrap_or_default();
+            for inv in declared {
+                if !out.iter().any(|(_, o)| o.name == inv.name) {
+                    out.push((source.clone(), inv));
+                }
+            }
+        }
+        out
+    }
+
+    /// The calls made from `entry`, depth first in call order.
+    pub fn call_chain(&self, entry: &ComponentId) -> CallChain {
+        let mut chain = CallChain { entry: entry.clone(), steps: Vec::new(), cycles: Vec::new() };
+        let mut found: BTreeSet<Vec<ComponentId>> = BTreeSet::new();
+        let mut expanded: BTreeSet<ComponentId> = BTreeSet::new();
+        self.walk_calls(entry, &mut vec![entry.clone()], &mut expanded, &mut chain.steps, &mut found);
+        chain.cycles = found.into_iter().collect();
+        chain
+    }
+
+    fn walk_calls(&self, caller: &ComponentId, path: &mut Vec<ComponentId>, expanded: &mut BTreeSet<ComponentId>, steps: &mut Vec<ChainStep>, cycles: &mut BTreeSet<Vec<ComponentId>>) {
+        let mut calls: Vec<&Relation> = self.outgoing(caller, Some(RelationKind::Calls)).collect();
+        calls.sort_by(|a, b| a.order.unwrap_or(u32::MAX).cmp(&b.order.unwrap_or(u32::MAX)).then_with(|| a.target.cmp(&b.target)));
+        for call in calls {
+            steps.push(ChainStep { caller: caller.clone(), callee: call.target.clone(), order: call.order, depth: path.len() as u32 });
+            if let Some(at) = path.iter().position(|p| p == &call.target) {
+                let mut cycle = path[at..].to_vec();
+                cycle.push(call.target.clone());
+                cycles.insert(cycle);
+            } else if expanded.insert(call.target.clone()) {
+                path.push(call.target.clone());
+                self.walk_calls(&call.target, path, expanded, steps, cycles);
+                path.pop();
+            }
+        }
+    }
+
+    /// Loops along one relation kind (e.g. containment or implements), each
+    /// once, as a path back to its smallest member.
+    pub fn cycles(&self, kind: RelationKind) -> Vec<Vec<ComponentId>> {
+        let mut edges: BTreeMap<ComponentId, Vec<ComponentId>> = BTreeMap::new();
+        for r in self.relations.values().filter(|r| r.kind == kind) {
+            edges.entry(r.source.clone()).or_default().push(r.target.clone());
+            edges.entry(r.target.clone()).or_default();
+        }
+        crate::cycles::loops(&edges)
     }
 
     /// The innermost component whose code span contains `line` in `file`.
@@ -273,5 +361,98 @@ mod tests {
         g2.upsert_component(inner, Provenance::OBSERVED);
         assert_eq!(g2.enclosing("src/lib.rs", 15).unwrap().id, id("m::f"));
         assert_eq!(g2.enclosing("src/lib.rs", 50).unwrap().id, id("m"));
+    }
+
+    // req: P2.7
+    #[test]
+    fn specs_round_trip_and_invariants_resolve_through_implements() {
+        use crate::{ImplementationSpec, InvariantKind, LogicStep, Task, ToolRef};
+        let id = |s: &str| ComponentId::new(format!("rust:{s}"));
+        let inv = |name: &str, kind: InvariantKind| Invariant { name: name.into(), kind, description: format!("{name} holds") };
+        let with_spec = |symbol: &str, invariants: Vec<Invariant>| {
+            let mut c = planned(&format!("rust:{symbol}"), Stage::Declared);
+            c.spec = Some(ImplementationSpec { invariants, ..ImplementationSpec::default() });
+            c
+        };
+        let mut g = Graph::new();
+        g.upsert_component(with_spec("Store", vec![inv("durable", InvariantKind::PostCondition), inv("bounded", InvariantKind::Complexity)]), Provenance::PLANNED);
+        g.upsert_component(with_spec("CachedStore", vec![inv("bounded", InvariantKind::StateInvariant), inv("fresh", InvariantKind::StateInvariant)]), Provenance::PLANNED);
+        let mut file = with_spec("FileStore", vec![inv("atomic", InvariantKind::PostCondition)]);
+        let spec = file.spec.as_mut().unwrap();
+        spec.pattern = Some("write-then-rename".into());
+        spec.logic_steps = vec![
+            LogicStep { sequence: 1, name: "write".into(), description: "Write to a temp file.".into(), algorithm: None, complexity: Some("O(n)".into()), check: Some("test -d .".into()) },
+            LogicStep { sequence: 2, name: "rename".into(), description: "Rename over the target.".into(), algorithm: Some("atomic rename".into()), complexity: None, check: None },
+        ];
+        spec.tasks = vec![Task { text: "fsync the directory".into(), done: false }];
+        spec.validation = vec![ToolRef { tool: "clippy".into(), targets: vec!["src/store.rs".into()], args: None }];
+        g.upsert_component(file.clone(), Provenance::PLANNED);
+        g.upsert_relation(Relation::new(RelationKind::Implements, id("FileStore"), id("CachedStore"), Provenance::PLANNED));
+        g.upsert_relation(Relation::new(RelationKind::Implements, id("CachedStore"), id("Store"), Provenance::PLANNED));
+        // A loop in implements doesn't hang resolution.
+        g.upsert_relation(Relation::new(RelationKind::Implements, id("Store"), id("FileStore"), Provenance::PLANNED));
+
+        let json = serde_json::to_string(&file).unwrap();
+        assert_eq!(serde_json::from_str::<Component>(&json).unwrap(), file, "specs round-trip");
+        assert!(json.contains("\"kind\":\"post_condition\""));
+
+        assert_eq!(g.interface_chain(&id("FileStore")), vec![id("CachedStore"), id("Store")]);
+        let resolved: Vec<(String, String, InvariantKind)> = g.invariants(&id("FileStore")).into_iter().map(|(from, i)| (from.0, i.name, i.kind)).collect();
+        assert_eq!(
+            resolved,
+            vec![
+                ("rust:FileStore".into(), "atomic".into(), InvariantKind::PostCondition),
+                ("rust:CachedStore".into(), "bounded".into(), InvariantKind::StateInvariant),
+                ("rust:CachedStore".into(), "fresh".into(), InvariantKind::StateInvariant),
+                ("rust:Store".into(), "durable".into(), InvariantKind::PostCondition),
+            ],
+            "own first, then nearest interface; nearer overrides by name"
+        );
+    }
+
+    // req: P2.8
+    #[test]
+    fn workflow_chains_follow_ordered_calls_and_report_cycles() {
+        let id = |s: &str| ComponentId::new(format!("rust:{s}"));
+        let mut g = Graph::new();
+        for s in ["main", "load", "parse", "save", "retry"] {
+            g.upsert_component(observed(s), Provenance::OBSERVED);
+        }
+        let call = |a: &str, b: &str, order: Option<u32>, prov: Provenance| {
+            let mut r = Relation::new(RelationKind::Calls, id(a), id(b), prov);
+            r.order = order;
+            r
+        };
+        // Planned and observed calls both count; order decides, not insertion.
+        g.upsert_relation(call("main", "save", Some(1), Provenance::PLANNED));
+        g.upsert_relation(call("main", "load", Some(0), Provenance::OBSERVED));
+        g.upsert_relation(call("load", "parse", Some(0), Provenance::OBSERVED));
+        g.upsert_relation(call("save", "retry", Some(0), Provenance::PLANNED));
+        g.upsert_relation(call("retry", "save", Some(0), Provenance::PLANNED));
+        let chain = g.call_chain(&id("main"));
+        let steps: Vec<(String, String, u32)> = chain.steps.iter().map(|s| (s.caller.0.clone(), s.callee.0.clone(), s.depth)).collect();
+        assert_eq!(
+            steps,
+            vec![
+                ("rust:main".into(), "rust:load".into(), 1),
+                ("rust:load".into(), "rust:parse".into(), 2),
+                ("rust:main".into(), "rust:save".into(), 1),
+                ("rust:save".into(), "rust:retry".into(), 2),
+                ("rust:retry".into(), "rust:save".into(), 3),
+            ]
+        );
+        assert_eq!(chain.cycles, vec![vec![id("save"), id("retry"), id("save")]]);
+        let mut plan = Plan::new("p", "P");
+        plan.workflows.push(crate::Workflow { name: "checkout".into(), entry: id("main"), description: String::new() });
+        assert_eq!(Plan::from_json(&plan.to_json().unwrap()).unwrap(), plan, "workflows persist by entry only");
+    }
+
+    #[test]
+    fn cycles_along_one_kind_come_with_their_loop() {
+        let id = |s: &str| ComponentId::new(format!("rust:{s}"));
+        let mut g = code();
+        g.upsert_relation(Relation::new(RelationKind::Contains, id("app::run"), id("app"), Provenance::PLANNED));
+        assert_eq!(g.cycles(RelationKind::Contains), vec![vec![id("app"), id("app::run"), id("app")]]);
+        assert!(g.cycles(RelationKind::Implements).is_empty());
     }
 }

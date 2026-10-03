@@ -54,6 +54,16 @@ pub struct Approval {
     pub at: String,
 }
 
+/// A named end-to-end behavior: the call chain from `entry`, derived from
+/// ordered Calls relations (planned and observed), never stored as a tree.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Workflow {
+    pub name: String,
+    pub entry: ComponentId,
+    #[serde(default)]
+    pub description: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Plan {
     pub schema_version: u32,
@@ -74,6 +84,8 @@ pub struct Plan {
     pub relations: Vec<Relation>,
     #[serde(default)]
     pub approvals: Vec<Approval>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflows: Vec<Workflow>,
 }
 
 impl Plan {
@@ -88,6 +100,7 @@ impl Plan {
             references: Vec::new(),
             relations: Vec::new(),
             approvals: Vec::new(),
+            workflows: Vec::new(),
         }
     }
 

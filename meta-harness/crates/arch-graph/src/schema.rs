@@ -193,27 +193,8 @@ impl SchemaSet {
     /// Every reference loop among the named types, each once, as a path that
     /// starts and ends at the same title (smallest title first).
     pub fn cycles(&self) -> Vec<Vec<String>> {
-        let edges: BTreeMap<&str, Vec<String>> = self.named.iter().map(|(t, s)| (t.as_str(), refs(s))).collect();
-        let mut found: BTreeSet<Vec<String>> = BTreeSet::new();
-        for start in self.named.keys() {
-            // DFS for paths that come back to `start` through larger titles only,
-            // so each loop is found once, from its smallest member.
-            let mut stack: Vec<(String, Vec<String>)> = vec![(start.clone(), vec![start.clone()])];
-            while let Some((node, path)) = stack.pop() {
-                for next in edges.get(node.as_str()).into_iter().flatten() {
-                    if next == start {
-                        let mut cycle = path.clone();
-                        cycle.push(start.clone());
-                        found.insert(cycle);
-                    } else if next > start && !path.contains(next) && self.named.contains_key(next) {
-                        let mut longer = path.clone();
-                        longer.push(next.clone());
-                        stack.push((next.clone(), longer));
-                    }
-                }
-            }
-        }
-        found.into_iter().collect()
+        let edges: BTreeMap<String, Vec<String>> = self.named.iter().map(|(t, s)| (t.clone(), refs(s))).collect();
+        crate::cycles::loops(&edges)
     }
 
     /// `schema` with every `$ref` replaced by the named type it points at.

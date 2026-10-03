@@ -5,6 +5,7 @@
 
 mod anchor;
 mod component;
+mod cycles;
 mod events;
 mod graph;
 mod lifecycle;
@@ -19,9 +20,9 @@ mod wire;
 pub use anchor::{CodeAnchor, ProposedLocation, RepoPath, Span};
 pub use events::{ArchEvent, ChangeReason, Requester, ViewRequest};
 pub use component::{Component, ComponentId, ImplementationSpec, Invariant, InvariantKind, LogicStep, Param, Schemas, SideEffect, Signature, Task, ToolRef};
-pub use graph::{Alignment, Graph};
+pub use graph::{Alignment, CallChain, ChainStep, Graph};
 pub use lifecycle::{Stage, Status, can_transition};
-pub use plan::{Approval, Plan, PlanId, Reference, SCHEMA_VERSION, check_schema_version};
+pub use plan::{Approval, Plan, PlanId, Reference, SCHEMA_VERSION, Workflow, check_schema_version};
 pub use relation::{Provenance, Relation, RelationId, RelationKind};
 pub use schema::{Dsl, RefError, SchemaSet};
 pub use report::{CodeRef, Finding, FindingCode, Report, Severity, Target};
