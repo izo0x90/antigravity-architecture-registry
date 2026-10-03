@@ -83,12 +83,21 @@ async fn websocket_upgrade_and_replay() {
 }
 
 #[tokio::test]
-async fn fs_read_endpoint() {
-    let (addr, _) = app().await;
+async fn fs_read_endpoint_reads_only_inside_the_repository() {
+    let (addr, state) = app().await;
     let (status, body) = http(addr, "GET", "/api/fs/read?path=Cargo.toml", None).await;
     assert_eq!(status, 200);
-    assert!(body.contains("meta-harness"));
+    assert!(body.contains("sample"), "the repository's own manifest: {body}");
     assert!(body.contains("\"lines\":"));
+    let absolute = state.arch.root().join("src/lib.rs");
+    let (status, _) = http(addr, "GET", &format!("/api/fs/read?path={}", absolute.display()), None).await;
+    assert_eq!(status, 200, "absolute paths inside the repo are fine");
+    for outside in ["/etc/passwd", "../../../../etc/passwd", "../sample/../../outside.txt"] {
+        let (status, _) = http(addr, "GET", &format!("/api/fs/read?path={outside}"), None).await;
+        assert!(status == 403 || status == 404, "{outside}: {status}");
+    }
+    let (status, body) = http(addr, "GET", "/api/fs/read?path=/etc/hostname", None).await;
+    assert_eq!(status, 403, "{body}");
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@ mod common;
 
 use arch_graph::{ComponentId, PlanId, RelationKind};
 use arch_service::PlanOp;
-use common::{Mcp, fixture_architecture, http, spawn_app_with};
+use common::{Mcp, fixture_architecture, http, http_cockpit, spawn_app_with};
 use serde_json::{Value, json};
 
 fn parse(body: &str) -> Value {
@@ -41,10 +41,10 @@ async fn comments_reach_the_agent_and_answers_come_back_for_the_user() {
     let (addr, _state) = spawn_app_with(arch.clone()).await;
 
     // The user reviews, then raises a change request on a spec section.
-    let (status, body) = http(addr, "POST", "/api/arch/plans/v/reviewed", Some(r#"{"by":"izo"}"#)).await;
+    let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/v/reviewed", Some(r#"{"by":"izo"}"#)).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(parse(&body)["by"], "izo");
-    let (status, body) = http(
+    let (status, body) = http_cockpit(
         addr,
         "POST",
         "/api/arch/plans/v/comments",
@@ -53,13 +53,13 @@ async fn comments_reach_the_agent_and_answers_come_back_for_the_user() {
     .await;
     assert_eq!(status, 200, "{body}");
     assert_eq!((parse(&body)["id"].as_str(), parse(&body)["status"].as_str()), (Some("c1"), Some("open")));
-    let (status, _) = http(addr, "POST", "/api/arch/plans/v/comments", Some(r#"{"anchor":{"on":"plan"},"text":"x","by":" "}"#)).await;
+    let (status, _) = http_cockpit(addr, "POST", "/api/arch/plans/v/comments", Some(r#"{"anchor":{"on":"plan"},"text":"x","by":" "}"#)).await;
     assert_eq!(status, 400, "who's commenting is required");
     let (status, body) = http(addr, "GET", "/api/arch/plans/v/comments", None).await;
     assert_eq!((status, parse(&body).as_array().map(Vec::len)), (200, Some(1)));
 
     // Approval waits on it.
-    let (status, body) = http(addr, "POST", "/api/arch/plans/v/components/rust:sample::validate/approve", Some(r#"{"to":"arch_approved","by":"izo"}"#)).await;
+    let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/v/components/rust:sample::validate/approve", Some(r#"{"to":"arch_approved","by":"izo"}"#)).await;
     assert_eq!(status, 400);
     assert!(body.contains("unaddressed review comments") && body.contains("c1"), "{body}");
 
@@ -105,15 +105,15 @@ async fn comments_reach_the_agent_and_answers_come_back_for_the_user() {
     let (_, body) = http(addr, "GET", "/api/arch/plans/v/comments", None).await;
     let c1 = &parse(&body)[0];
     assert_eq!((c1["status"].as_str(), c1["answer"]["changes"][0]["fields"][0].as_str()), (Some("answered"), Some("description")));
-    let (status, body) = http(addr, "POST", "/api/arch/plans/v/comments/c1/reopen", Some(r#"{"text":"And whitespace?","by":"izo"}"#)).await;
+    let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/v/comments/c1/reopen", Some(r#"{"text":"And whitespace?","by":"izo"}"#)).await;
     assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("open")));
     let (err, _) = mcp.tool("answer_comment", json!({ "plan": "v", "comment": "c1", "answer": "Whitespace counts as empty.", "changes": ["rust:sample::validate"] })).await;
     assert!(!err);
-    let (status, body) = http(addr, "POST", "/api/arch/plans/v/comments/c1/accept", Some(r#"{"by":"izo"}"#)).await;
+    let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/v/comments/c1/accept", Some(r#"{"by":"izo"}"#)).await;
     assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("resolved")), "{body}");
     let (status, body) = http(addr, "POST", "/api/arch/plans/v/comments/c1/replies", Some(r#"{"text":"Thanks.","by":"izo"}"#)).await;
     assert_eq!(status, 200, "{body}");
-    let (status, body) = http(addr, "POST", "/api/arch/plans/v/components/rust:sample::validate/approve", Some(r#"{"to":"arch_approved","by":"izo"}"#)).await;
+    let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/v/components/rust:sample::validate/approve", Some(r#"{"to":"arch_approved","by":"izo"}"#)).await;
     assert_eq!(status, 200, "{body}");
     let (_, body) = http(addr, "GET", "/api/arch/plans/v/comments", None).await;
     assert_eq!(parse(&body), json!([]), "resolved points drop out of the open list");

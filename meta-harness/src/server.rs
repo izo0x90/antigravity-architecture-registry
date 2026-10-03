@@ -20,7 +20,6 @@ use harness_contracts::{
 };
 use harness_core::{EventHub, HarnessError, InstanceRegistry, OpenThread, SessionManager};
 use serde::{Deserialize, Serialize};
-use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
@@ -31,6 +30,13 @@ pub struct AppState {
     pub hub: Arc<EventHub>,
     pub mcp_state: crate::mcp::McpServerState,
     pub arch: Arc<arch_service::ArchitectureService>,
+    pub cockpit: crate::cockpit::CockpitAuth,
+}
+
+impl axum::extract::FromRef<AppState> for crate::cockpit::CockpitAuth {
+    fn from_ref(state: &AppState) -> Self {
+        state.cockpit.clone()
+    }
 }
 
 /// `HarnessError` as an HTTP response: `{ "error": "..." }` with a matching status.
@@ -99,7 +105,10 @@ pub fn create_router(state: AppState) -> Router {
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string());
     let mut router = Router::new()
         .route("/health", get(health_check))
-        .route("/api/ui/config", get(ui_config_handler))
+        .route(
+            "/api/ui/config",
+            get(ui_config_handler).route_layer(axum::middleware::from_fn_with_state(state.cockpit.clone(), crate::cockpit::issue)),
+        )
         .route("/api/instances", get(list_instances))
         .route("/api/instances/{id}/refresh", post(refresh_instance))
         .route("/api/instances/{id}/sessions", get(list_saved_sessions))
@@ -121,13 +130,32 @@ pub fn create_router(state: AppState) -> Router {
         .merge(crate::arch::routes());
 
     if std::path::Path::new(&static_dir).exists() {
-        router = router.fallback_service(ServeDir::new(static_dir));
+        // The cockpit's page carries its session cookie.
+        let cockpit = tower::ServiceBuilder::new()
+            .layer(axum::middleware::from_fn_with_state(state.cockpit.clone(), crate::cockpit::issue))
+            .service(ServeDir::new(static_dir));
+        router = router.fallback_service(cockpit);
     }
 
-    router
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+    // Same-origin only: no CORS layer, so other sites can't call the API.
+    router.layer(axum::middleware::map_response(json_errors)).layer(TraceLayer::new_for_http()).with_state(state)
+}
+
+/// Errors from extractors (bad JSON, bad paths) come back as plain text;
+/// every API error is `{ "error": "..." }`.
+async fn json_errors(response: Response) -> Response {
+    let status = response.status();
+    let is_json = response.headers().get(axum::http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("application/json"));
+    if !(status.is_client_error() || status.is_server_error()) || is_json {
+        return response;
+    }
+    let bytes = match axum::body::to_bytes(response.into_body(), 64 * 1024).await {
+        Ok(b) => b,
+        Err(e) => return (status, Json(serde_json::json!({ "error": format!("unreadable error body: {e}") }))).into_response(),
+    };
+    let text = String::from_utf8_lossy(&bytes).trim().to_owned();
+    let message = if text.is_empty() { status.canonical_reason().unwrap_or("error").to_owned() } else { text };
+    (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
 // ---- instances ----
@@ -360,41 +388,25 @@ async fn ui_config_handler() -> Result<Json<serde_json::Value>, (StatusCode, Jso
 
 
 async fn fs_read_handler(
+    State(state): State<AppState>,
     Query(query): Query<FsReadQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    // Only files inside the repository NAH works on, however they're named.
+    let root = state.arch.root().canonicalize().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("repository root: {e}")))?;
     let clean_path = query.path.trim().trim_start_matches("file://");
     let target = std::path::Path::new(clean_path);
-    let resolved = if target.is_absolute() {
-        target.to_path_buf()
-    } else {
-        let cur = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let direct = cur.join(target);
-        if direct.exists() {
-            direct
-        } else if let Some(parent) = cur.parent() {
-            let parent_target = parent.join(target);
-            if parent_target.exists() {
-                parent_target
-            } else {
-                direct
-            }
-        } else {
-            direct
-        }
-    };
-
+    let resolved = if target.is_absolute() { target.to_path_buf() } else { root.join(target) };
     let canonical = match resolved.canonicalize() {
         Ok(c) => c,
         Err(e) => return Err((StatusCode::NOT_FOUND, format!("Path not found: {e}"))),
     };
-
+    if !canonical.starts_with(&root) {
+        return Err((StatusCode::FORBIDDEN, "Only files inside the repository can be read".to_string()));
+    }
     if !canonical.is_file() {
         return Err((StatusCode::BAD_REQUEST, "Target is not a regular file".to_string()));
     }
-
-    let content = tokio::fs::read_to_string(&canonical).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read file: {e}"))
-    })?;
+    let content = tokio::fs::read_to_string(&canonical).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read file: {e}")))?;
 
     let lines = content.lines().count();
     Ok(Json(FsReadResponse {

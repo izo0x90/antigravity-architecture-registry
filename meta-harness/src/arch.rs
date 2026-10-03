@@ -1,6 +1,7 @@
 //! REST API for the architecture service (the cockpit's side; agents use the
 //! MCP tools). Approvals live here, never in the agent tools.
 
+use crate::cockpit::CockpitUser;
 use std::sync::Arc;
 
 use arch_graph::{Comment, CommentId, ComponentId, PlanId, Requester, Stage, ViewRequest, ViewSpec};
@@ -262,7 +263,7 @@ async fn get_plan(State(state): State<AppState>, Path(plan): Path<String>) -> Ar
     Ok(Json(blocking(&state.arch, move |a| a.plan(&plan)).await?))
 }
 
-async fn delete_plan(State(state): State<AppState>, Path(plan): Path<String>) -> Result<StatusCode, ArchError> {
+async fn delete_plan(_: CockpitUser, State(state): State<AppState>, Path(plan): Path<String>) -> Result<StatusCode, ArchError> {
     let plan = plan_id(&plan)?;
     blocking(&state.arch, move |a| a.delete_plan(&plan)).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -328,7 +329,7 @@ struct ApproveBody {
 }
 
 /// The cockpit's approval button. Agents have no equivalent tool.
-async fn approve(State(state): State<AppState>, Path((plan, id)): Path<(String, String)>, Json(body): Json<ApproveBody>) -> ArchResult<arch_graph::Approval> {
+async fn approve(_: CockpitUser, State(state): State<AppState>, Path((plan, id)): Path<(String, String)>, Json(body): Json<ApproveBody>) -> ArchResult<arch_graph::Approval> {
     let plan = plan_id(&plan)?;
     let actor = user(&body.by)?;
     Ok(Json(blocking(&state.arch, move |a| a.approve(&plan, &ComponentId::new(id), body.to, &actor)).await?))
@@ -404,7 +405,7 @@ struct NewCommentBody {
     by: String,
 }
 
-async fn add_comment(State(state): State<AppState>, Path(plan): Path<String>, Json(body): Json<NewCommentBody>) -> ArchResult<Comment> {
+async fn add_comment(_: CockpitUser, State(state): State<AppState>, Path(plan): Path<String>, Json(body): Json<NewCommentBody>) -> ArchResult<Comment> {
     let plan = plan_id(&plan)?;
     let actor = user(&body.by)?;
     Ok(Json(blocking(&state.arch, move |a| a.add_comment(&plan, body.comment, &actor)).await?))
@@ -428,19 +429,19 @@ struct ByBody {
     by: String,
 }
 
-async fn accept_comment(State(state): State<AppState>, Path((plan, comment)): Path<(String, String)>, Json(body): Json<ByBody>) -> ArchResult<Comment> {
+async fn accept_comment(_: CockpitUser, State(state): State<AppState>, Path((plan, comment)): Path<(String, String)>, Json(body): Json<ByBody>) -> ArchResult<Comment> {
     let plan = plan_id(&plan)?;
     let actor = user(&body.by)?;
     Ok(Json(blocking(&state.arch, move |a| a.accept_comment(&plan, &CommentId(comment), &actor)).await?))
 }
 
-async fn reopen_comment(State(state): State<AppState>, Path((plan, comment)): Path<(String, String)>, Json(body): Json<TextBody>) -> ArchResult<Comment> {
+async fn reopen_comment(_: CockpitUser, State(state): State<AppState>, Path((plan, comment)): Path<(String, String)>, Json(body): Json<TextBody>) -> ArchResult<Comment> {
     let plan = plan_id(&plan)?;
     let actor = user(&body.by)?;
     Ok(Json(blocking(&state.arch, move |a| a.reopen_comment(&plan, &CommentId(comment), &body.text, &actor)).await?))
 }
 
-async fn mark_reviewed(State(state): State<AppState>, Path(plan): Path<String>, Json(body): Json<ByBody>) -> ArchResult<arch_graph::ReviewSnapshot> {
+async fn mark_reviewed(_: CockpitUser, State(state): State<AppState>, Path(plan): Path<String>, Json(body): Json<ByBody>) -> ArchResult<arch_graph::ReviewSnapshot> {
     let plan = plan_id(&plan)?;
     let actor = user(&body.by)?;
     Ok(Json(blocking(&state.arch, move |a| a.mark_reviewed(&plan, &actor)).await?))

@@ -6,7 +6,7 @@ mod common;
 use std::time::Duration;
 
 use arch_graph::{ArchEvent, ChangeReason, Requester};
-use common::{http, spawn_app};
+use common::{http, http_cockpit, spawn_app};
 use futures::StreamExt;
 use harness_contracts::ClientEvent;
 use serde_json::{Value, json};
@@ -67,9 +67,17 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     assert!(parse(&body)["markdown"].as_str().unwrap().contains("Put it in src/lib.rs"));
 
     let approve = |to: &str, by: &str| json!({ "to": to, "by": by }).to_string();
-    let (status, _) = http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", ""))).await;
-    assert_eq!(status, 400, "a user name is required");
+    // Without the cockpit's session (an agent with a shell, another site), no approval.
     let (status, body) = http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", "izo"))).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(body.contains("only the user, in the cockpit"));
+    for (method, path) in [("DELETE", "/api/arch/plans/val"), ("POST", "/api/arch/plans/val/reviewed")] {
+        let (status, _) = http(addr, method, path, Some(r#"{"by":"izo"}"#)).await;
+        assert_eq!(status, 403, "{method} {path}");
+    }
+    let (status, _) = http_cockpit(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", ""))).await;
+    assert_eq!(status, 400, "a user name is required");
+    let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", "izo"))).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(parse(&body)["by"], "izo");
 

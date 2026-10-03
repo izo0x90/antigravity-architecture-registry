@@ -246,7 +246,7 @@ pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppS
     let registry = Arc::new(InstanceRegistry::new(vec![Arc::new(FakeDriver)], hub.clone()));
     registry.configure(registry.default_configs()).await.unwrap();
     let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone(), Vec::new()));
-    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch };
+    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::random() };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = create_router(state.clone());
@@ -256,10 +256,14 @@ pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppS
 
 /// One HTTP/1.1 request; returns (status code, body).
 pub async fn http(addr: SocketAddr, method: &str, path: &str, body: Option<&str>) -> (u16, String) {
+    request(addr, method, path, body, "").await
+}
+
+async fn request(addr: SocketAddr, method: &str, path: &str, body: Option<&str>, extra_headers: &str) -> (u16, String) {
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
     let body = body.unwrap_or("");
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra_headers}Connection: close\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -268,6 +272,22 @@ pub async fn http(addr: SocketAddr, method: &str, path: &str, body: Option<&str>
     let status = response.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
     let body = response.split_once("\r\n\r\n").map(|(_, b)| b.to_owned()).unwrap_or_default();
     (status, body)
+}
+
+/// The cockpit's session cookie, as the cockpit gets it when it loads.
+pub async fn cockpit_cookie(addr: SocketAddr) -> String {
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream.write_all(b"GET /api/ui/config HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    let line = response.lines().find(|l| l.to_ascii_lowercase().starts_with("set-cookie:")).expect("the cockpit gets a cookie");
+    line.split_once(':').map(|(_, v)| v.trim()).unwrap_or_default().split(';').next().unwrap_or_default().to_owned()
+}
+
+/// Like `http`, from the cockpit (with its session cookie): what only the user may do.
+pub async fn http_cockpit(addr: SocketAddr, method: &str, path: &str, body: Option<&str>) -> (u16, String) {
+    let cookie = cockpit_cookie(addr).await;
+    request(addr, method, path, body, &format!("Cookie: {cookie}\r\n")).await
 }
 
 /// An MCP client over the real endpoint (SSE stream + message posts).

@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }];
     let sessions = Arc::new(SessionManager::new(instances.clone(), hub.clone(), mcp_servers));
 
-    let app = create_router(AppState { registry: instances, sessions, hub, mcp_state, arch });
+    let app = create_router(AppState { registry: instances, sessions, hub, mcp_state, arch, cockpit: meta_harness::cockpit::CockpitAuth::random() });
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");
     axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
     info!("Meta-harness stopped.");
