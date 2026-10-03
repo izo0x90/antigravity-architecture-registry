@@ -5,6 +5,7 @@ pub mod code;
 pub mod config;
 pub mod feedback;
 pub mod graph;
+pub mod graph_style;
 pub mod keymap;
 pub mod net;
 pub mod palette;

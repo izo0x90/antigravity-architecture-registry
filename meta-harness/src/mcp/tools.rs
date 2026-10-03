@@ -82,6 +82,16 @@ pub fn list_tools(views: &ViewCatalog) -> Vec<McpTool> {
             json!({ "type": "object", "properties": { "id": { "type": "string", "description": "letters, digits, - and _" }, "title": { "type": "string" }, "description": { "type": "string" } }, "required": ["id", "title"] }),
         ),
         tool(
+            "plan_import",
+            "Create a plan from the old registry document (system_architecture.json): components are matched to the code where possible, everything else is reported. Approvals aren't carried over.",
+            json!({ "type": "object", "properties": {
+                "id": { "type": "string", "description": "new plan id" },
+                "title": { "type": "string" },
+                "file": { "type": "string", "description": "repo-relative path (default system_architecture.json)" },
+                "language": { "type": "string", "description": "language for components with no location and no code to match" }
+            }, "required": ["id"] }),
+        ),
+        tool(
             "plan_edit",
             "Apply operations to a plan, in order (stops at the first that fails). Add new components under a real parent (they get a proposed location), modify existing ones, reference existing code you build on, and relate components (calls, data flow, implements). New work must connect to existing code.",
             json!({ "type": "object", "properties": { "plan": plan, "ops": { "type": "array", "items": op } }, "required": ["plan", "ops"] }),

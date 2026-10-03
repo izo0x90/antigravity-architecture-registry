@@ -14,6 +14,7 @@ use crate::actions::{Action, ActionProvider, Choice, Param, RunCx, ToolbarStyle,
 use crate::feedback::FeedbackInspectorState;
 use crate::keymap::InputMode;
 use crate::net::{NetClient, NetResult};
+use crate::graph_style::{provenance_of, style};
 use crate::theme::colors;
 
 /// Where the graph is looking: which view, laid over which plan, rooted where,
@@ -717,14 +718,8 @@ impl GraphState {
                 continue; // drawn as nesting
             }
             let (ra, rb) = (self.to_screen(a), self.to_screen(b));
-            let color = match edge.kind {
-                RelationKind::Calls => colors().accent,
-                RelationKind::Contains => colors().faint,
-                RelationKind::Implements => colors().special,
-                RelationKind::DataFlow => colors().info,
-            };
-            let color = if edge.alignment == Alignment::Missing { colors().error } else { color };
-            let stroke = Stroke::new(if edge.overlay { 1.0 } else { 1.6 }, color.gamma_multiply(if edge.overlay { 0.6 } else { 1.0 }));
+            let line = style().edge(&colors(), edge.kind, provenance_of(edge.alignment), edge.alignment, edge.overlay);
+            let (color, stroke) = (line.color, Stroke::new(line.width, line.color));
             let (from, to) = if rb.left() > ra.right() { (ra.right_center(), rb.left_center()) } else { (ra.center_bottom(), rb.center_top()) };
             let mid = (to.x - from.x).abs().max(40.0) * 0.5;
             let (c1, c2) = if rb.left() > ra.right() { (from + Vec2::new(mid, 0.0), to - Vec2::new(mid, 0.0)) } else { (from + Vec2::new(0.0, mid), to - Vec2::new(0.0, mid)) };
@@ -738,7 +733,7 @@ impl GraphState {
                     )
                 })
                 .collect();
-            if matches!(edge.alignment, Alignment::Planned | Alignment::Missing) {
+            if line.dashed {
                 painter.extend(Shape::dashed_line(&points, stroke, 6.0, 4.0));
             } else {
                 painter.add(Shape::line(points.clone(), stroke));
@@ -773,15 +768,12 @@ impl GraphState {
     fn draw_node(&self, painter: &egui::Painter, rect: Rect, c: &Component, alignment: Alignment, truncated: bool) {
         let z = self.camera.zoom;
         let selected = self.selection.as_ref() == Some(&c.id);
-        let border = match alignment {
-            Alignment::Present => colors().ok,
-            Alignment::Missing => colors().error,
-            Alignment::Planned => colors().warn,
-            Alignment::Observed => colors().border_strong,
-        };
-        painter.rect_filled(rect, 6.0, if selected { colors().card_selected } else { colors().card });
-        let stroke = Stroke::new(if selected { 2.5 } else { 1.2 }, if selected { colors().focus } else { border });
-        if alignment == Alignment::Planned {
+        let (theme, style) = (colors(), style());
+        let border = style.node_outline(&theme, alignment, false).color;
+        let outline = style.node_outline(&theme, alignment, selected);
+        painter.rect_filled(rect, 6.0, style.node_fill(&theme, selected));
+        let stroke = Stroke::new(outline.width, outline.color);
+        if outline.dashed {
             let corners = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom(), rect.left_top()];
             painter.extend(Shape::dashed_line(&corners, stroke, 6.0, 4.0));
         } else {

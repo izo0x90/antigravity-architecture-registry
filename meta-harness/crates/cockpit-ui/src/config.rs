@@ -3,6 +3,7 @@
 
 use serde::Deserialize;
 
+use crate::graph_style::GraphStyle;
 use crate::keymap::KeymapConfig;
 use crate::theme::Theme;
 
@@ -19,6 +20,7 @@ pub struct UiConfig {
     pub brand: Brand,
     pub keymap: KeymapConfig,
     pub theme: Theme,
+    pub graph_style: GraphStyle,
 }
 
 /// Tables merge key by key; any other value replaces the base.
@@ -39,7 +41,9 @@ impl UiConfig {
         let mut table: toml::Table = DEFAULTS.parse().map_err(|e: toml::de::Error| e.to_string())?;
         let user: toml::Table = user.parse().map_err(|e: toml::de::Error| format!("ui config: {e}"))?;
         merge(&mut table, user);
-        toml::Value::Table(table).try_into().map_err(|e: toml::de::Error| format!("ui config: {e}"))
+        let config: Self = toml::Value::Table(table).try_into().map_err(|e: toml::de::Error| format!("ui config: {e}"))?;
+        config.graph_style.check(&config.theme).map_err(|e| format!("ui config: {e}"))?;
+        Ok(config)
     }
 }
 

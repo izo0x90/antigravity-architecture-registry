@@ -5,6 +5,7 @@
 mod chain;
 mod checks;
 mod contract;
+mod import;
 mod ops;
 mod progress;
 mod review;
@@ -14,6 +15,7 @@ mod tools;
 mod verify;
 
 pub use contract::{ContractSlice, HeldInvariant, Neighbor};
+pub use import::{ImportReport, ImportedComponent, Unmapped};
 pub use ops::PlanOp;
 pub use progress::{Action, Downgrade, cascade, next_actionable, topological};
 pub use arch_graph::{ComponentDetail, ViewResult};
