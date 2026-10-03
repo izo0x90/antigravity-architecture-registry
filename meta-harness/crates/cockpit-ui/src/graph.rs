@@ -1072,6 +1072,7 @@ pub(crate) mod tests {
             anchor: None,
             proposed: None,
             signature: None,
+            schemas: Default::default(),
             spec: None,
             placeholders: vec![],
         };

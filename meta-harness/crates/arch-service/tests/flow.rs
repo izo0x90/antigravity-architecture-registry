@@ -74,6 +74,7 @@ fn add_validate(r: &Repo, plan: &str) {
                 parent: Some(id("sample")),
                 file: None,
                 signature: Some(Signature { params: vec![Param { name: "input".into(), ty: Some("&str".into()) }], returns: Some("bool".into()) }),
+                schemas: None,
                 spec: None,
             },
         )
@@ -176,6 +177,7 @@ fn plan_operations_validate_inputs_and_reject_bad_ones() {
         parent: parent.map(id),
         file: file.map(str::to_owned),
         signature: None,
+        schemas: None,
         spec: None,
     };
     reject(add("x", "gizmo", Some("sample"), None), "unknown type");
@@ -190,7 +192,7 @@ fn plan_operations_validate_inputs_and_reject_bad_ones() {
     reject(PlanOp::Unrelate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::later") }, "no calls relation");
     reject(PlanOp::Remove { id: id("sample::run") }, "isn't part of this plan");
 
-    r.service.apply(&pid("p"), PlanOp::Modify { id: id("sample::run"), description: Some("now validates".into()), signature: None, spec: None }).unwrap();
+    r.service.apply(&pid("p"), PlanOp::Modify { id: id("sample::run"), description: Some("now validates".into()), signature: None, schemas: None, spec: None }).unwrap();
     let plan = r.service.plan(&pid("p")).unwrap();
     let run = plan.component(&id("sample::run")).unwrap();
     assert_eq!((run.status, run.stage, run.description.as_str()), (Status::Modifying, Stage::Declared, "now validates"));
@@ -216,6 +218,7 @@ fn planned(symbol: &str, file: &str, parent: Option<&str>) -> arch_graph::Compon
         anchor: None,
         proposed: Some(ProposedLocation { language: "rust".into(), file: RepoPath::new(file).unwrap(), parent: parent.map(id), symbol: symbol.into() }),
         signature: None,
+        schemas: Default::default(),
         spec: None,
         placeholders: vec![],
     }

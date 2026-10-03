@@ -416,10 +416,12 @@ mod tests {
                 anchor: None,
                 proposed: Some(arch_graph::ProposedLocation { language: "rust".into(), file: arch_graph::RepoPath::new("src/a.rs").unwrap(), parent: None, symbol: "a::step".into() }),
                 signature: None,
+                schemas: Default::default(),
                 spec: Some(ImplementationSpec {
                     pattern: None,
-                    logic_steps: vec![LogicStep { sequence: 1, name: "read".into(), description: "Read the input.".into() }],
-                    invariants: vec![Invariant { name: "pure".into(), kind: "side_effects".into(), description: "No I/O.".into() }],
+                    logic_steps: vec![LogicStep { sequence: 1, name: "read".into(), description: "Read the input.".into(), algorithm: None, complexity: None, check: None }],
+                    invariants: vec![Invariant { name: "pure".into(), kind: arch_graph::InvariantKind::PostCondition, description: "No I/O.".into() }],
+                    ..Default::default()
                 }),
                 placeholders: vec![],
             },

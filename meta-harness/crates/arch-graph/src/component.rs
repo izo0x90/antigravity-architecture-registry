@@ -47,21 +47,107 @@ pub struct Signature {
     pub returns: Option<String>,
 }
 
+/// The shape of the data a component holds and takes/returns, as JSON
+/// Schema (written in the shorthand DSL or as full schema), and what it
+/// touches outside itself.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Schemas {
+    /// Fields/attributes (data types).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<serde_json::Value>,
+    /// What it takes (an object schema, one property per parameter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<serde_json::Value>,
+    /// What it returns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub side_effects: Vec<SideEffect>,
+}
+
+impl Schemas {
+    pub fn is_empty(&self) -> bool {
+        self == &Schemas::default()
+    }
+}
+
+/// Something outside the component it changes (a tag like `db`, `fs`, `network`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SideEffect {
+    pub target: String,
+    #[serde(default)]
+    pub description: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogicStep {
     pub sequence: u32,
     pub name: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complexity: Option<String>,
+    /// A shell snippet that checks this step on its own (run from the repo
+    /// root during validation; exit 0 = pass).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvariantKind {
+    PreCondition,
+    PostCondition,
+    #[default]
+    StateInvariant,
+    Complexity,
+}
+
+impl InvariantKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::PreCondition => "pre_condition",
+            Self::PostCondition => "post_condition",
+            Self::StateInvariant => "state_invariant",
+            Self::Complexity => "complexity",
+        }
+    }
+}
+
+impl std::fmt::Display for InvariantKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Invariant {
     pub name: String,
     #[serde(default)]
-    pub kind: String,
+    pub kind: InvariantKind,
     #[serde(default)]
     pub description: String,
+}
+
+/// A small piece of work attached to a spec (specs and invariants come first).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Task {
+    pub text: String,
+    #[serde(default)]
+    pub done: bool,
+}
+
+/// A project validation tool bound to a component.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolRef {
+    pub tool: String,
+    #[serde(default)]
+    pub targets: Vec<String>,
+    /// Replaces the tool's default arguments entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
 }
 
 /// How a component should work: the primary planning artifact.
@@ -73,6 +159,10 @@ pub struct ImplementationSpec {
     pub logic_steps: Vec<LogicStep>,
     #[serde(default)]
     pub invariants: Vec<Invariant>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<Task>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validation: Vec<ToolRef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -93,6 +183,8 @@ pub struct Component {
     pub proposed: Option<ProposedLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<Signature>,
+    #[serde(default, skip_serializing_if = "Schemas::is_empty")]
+    pub schemas: Schemas,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec: Option<ImplementationSpec>,
     /// Placeholder bodies found in its code (skeleton stage).
@@ -146,6 +238,7 @@ pub(crate) mod tests {
             anchor: None,
             proposed: None,
             signature: None,
+            schemas: Schemas::default(),
             spec: None,
             placeholders: Vec::new(),
         }

@@ -197,6 +197,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                 }),
                 proposed: None,
                 signature,
+                schemas: Default::default(),
                 spec: None,
                 placeholders,
             },

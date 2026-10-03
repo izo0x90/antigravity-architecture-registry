@@ -164,6 +164,7 @@ async fn tool_results_end_with_stage_specific_next_steps() {
             anchor: None,
             proposed: Some(ProposedLocation { language: "rust".into(), file: RepoPath::new("src/x.rs").unwrap(), parent: None, symbol: format!("x::{name}") }),
             signature: None,
+            schemas: Default::default(),
             spec: None,
             placeholders: vec![],
         });

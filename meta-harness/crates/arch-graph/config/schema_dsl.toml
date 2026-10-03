@@ -1,0 +1,23 @@
+# Shorthand type names for the schema DSL, mapped to JSON Schema types.
+# Projects can add aliases. Any other identifier is a reference ($ref) to a
+# named data type (a component whose type has properties and no signature).
+#
+#   "int"        -> {"type": "integer"}
+#   "string[]"   -> {"type": "array", "items": {"type": "string"}}
+#   "User?"      -> {"anyOf": [{"$ref": "User"}, {"type": "null"}]}
+#   {id = "int", note = "string?"} -> object; fields without `?` are required
+
+[primitives]
+string = "string"
+str = "string"
+text = "string"
+integer = "integer"
+int = "integer"
+number = "number"
+float = "number"
+double = "number"
+boolean = "boolean"
+bool = "boolean"
+object = "object"
+any = "any"
+null = "null"

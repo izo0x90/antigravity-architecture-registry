@@ -10,7 +10,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use arch_graph::view::{layout, query, render_text};
 use arch_graph::{
     Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
-    Severity, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult,
+    Severity, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult, schema::Dsl,
 };
 use arch_index::{AmbiguousCall, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk};
 use serde::{Deserialize, Serialize};
@@ -62,6 +62,7 @@ pub struct ArchitectureService {
     root: PathBuf,
     packs: PackSet,
     types: TypeSystem,
+    dsl: Dsl,
     views: ViewCatalog,
     plans: Box<dyn PlanRepository>,
     index: Box<dyn CodeIndexStore>,
@@ -92,6 +93,7 @@ impl ArchitectureService {
             root: root.to_path_buf(),
             packs,
             types,
+            dsl: Dsl::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in schema DSL: {e}")))?,
             views,
             plans,
             index,
@@ -100,6 +102,16 @@ impl ArchitectureService {
         };
         service.rebuild_observed()?;
         Ok(service)
+    }
+
+    /// Replaces the schema DSL's aliases (a project's own shorthand types).
+    pub fn with_dsl(mut self, dsl: Dsl) -> Self {
+        self.dsl = dsl;
+        self
+    }
+
+    pub fn dsl(&self) -> &Dsl {
+        &self.dsl
     }
 
     pub fn root(&self) -> &Path {
@@ -223,7 +235,7 @@ impl ArchitectureService {
     pub fn apply(&self, plan_id: &PlanId, op: PlanOp) -> Result<Plan, ServiceError> {
         let mut plan = self.plan(plan_id)?;
         let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
-        let touched = apply(&mut plan, op, &graph, &self.root, &self.packs, &self.types)?;
+        let touched = apply(&mut plan, op, &graph, &self.root, &self.packs, &self.types, &self.dsl)?;
         self.plans.save(&plan)?;
         self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id.clone()], components: touched });
         Ok(plan)

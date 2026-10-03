@@ -3,7 +3,8 @@
 
 use arch_graph::{
     Component, ComponentId, Graph, ImplementationSpec, Plan, Provenance, ProposedLocation, Reference, Relation, RelationKind, RepoPath,
-    Signature, Stage, Status, TypeSystem,
+    Schemas, Signature, Stage, Status, TypeSystem,
+    schema::Dsl,
 };
 use arch_index::{PackSet, module_symbol};
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,9 @@ pub enum PlanOp {
         file: Option<String>,
         #[serde(default)]
         signature: Option<Signature>,
+        /// Data shapes, in the schema DSL or as JSON Schema.
+        #[serde(default)]
+        schemas: Option<Schemas>,
         #[serde(default)]
         spec: Option<ImplementationSpec>,
     },
@@ -37,6 +41,9 @@ pub enum PlanOp {
         description: Option<String>,
         #[serde(default)]
         signature: Option<Signature>,
+        /// Data shapes, in the schema DSL or as JSON Schema.
+        #[serde(default)]
+        schemas: Option<Schemas>,
         #[serde(default)]
         spec: Option<ImplementationSpec>,
     },
@@ -76,9 +83,16 @@ fn invalid(msg: impl Into<String>) -> ServiceError {
 }
 
 /// Applies `op` to `plan`. `graph` is the code merged with this plan.
-pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path, packs: &PackSet, types: &TypeSystem) -> Result<Vec<ComponentId>, ServiceError> {
+/// Schemas are stored compiled: the DSL is only an input format.
+fn compile(schemas: Schemas, dsl: &Dsl) -> Result<Schemas, ServiceError> {
+    let one = |s: Option<serde_json::Value>, what: &str| s.map(|v| dsl.compile(&v).map_err(|e| invalid(format!("{what}: {e}")))).transpose();
+    Ok(Schemas { properties: one(schemas.properties, "properties")?, inputs: one(schemas.inputs, "inputs")?, outputs: one(schemas.outputs, "outputs")?, side_effects: schemas.side_effects })
+}
+
+pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path, packs: &PackSet, types: &TypeSystem, dsl: &Dsl) -> Result<Vec<ComponentId>, ServiceError> {
     match op {
-        PlanOp::AddComponent { name, type_name, description, parent, file, signature, spec } => {
+        PlanOp::AddComponent { name, type_name, description, parent, file, signature, schemas, spec } => {
+            let schemas = compile(schemas.unwrap_or_default(), dsl)?;
             if name.trim().is_empty() || name.contains(char::is_whitespace) {
                 return Err(invalid(format!("component name '{name}' must be a single identifier")));
             }
@@ -127,6 +141,7 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
                 anchor: None,
                 proposed: Some(ProposedLocation { language, file, parent: parent.clone(), symbol }),
                 signature,
+                schemas,
                 spec,
                 placeholders: Vec::new(),
             });
@@ -135,7 +150,8 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
             }
             Ok(vec![id])
         }
-        PlanOp::Modify { id, description, signature, spec } => {
+        PlanOp::Modify { id, description, signature, schemas, spec } => {
+            let schemas = schemas.map(|s| compile(s, dsl)).transpose()?;
             let code = graph.component(&id).ok_or_else(|| invalid(format!("{id} doesn't exist")))?;
             if code.anchor.is_none() {
                 return Err(invalid(format!("{id} isn't in the code yet; edit it with add_component's fields instead")));
@@ -154,6 +170,9 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
             }
             if let Some(s) = signature {
                 planned.signature = Some(s);
+            }
+            if let Some(s) = schemas {
+                planned.schemas = s;
             }
             if let Some(s) = spec {
                 planned.spec = Some(s);
