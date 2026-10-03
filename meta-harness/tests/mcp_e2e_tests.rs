@@ -116,12 +116,50 @@ async fn tool_results_end_with_stage_specific_next_steps() {
             placeholders: vec![],
         });
     }
-    let text = meta_harness::mcp::service::next_steps(&plan, None);
+    let types = arch_graph::TypeSystem::defaults().unwrap();
+    let steps = |plan: &Plan, only: Option<&ComponentId>| meta_harness::mcp::service::next_steps(plan, &arch_graph::Graph::merge(arch_graph::Graph::new(), std::slice::from_ref(plan)), &types, only);
+    let text = steps(&plan, None);
     assert!(text.contains("rust:x::a (Declared): write its spec") && text.contains("let the user approve the architecture in the cockpit"));
     assert!(text.contains("rust:x::b (ArchApproved): either lay the skeleton in src/x.rs"));
     assert!(text.contains("rust:x::c (PlanApproved): implement it in src/x.rs"));
     assert!(text.contains("rust:x::d (Skeleton): replace the placeholder bodies in src/x.rs"));
     assert!(!text.contains("rust:x::e"), "nothing to do for implemented");
-    let only = meta_harness::mcp::service::next_steps(&plan, Some(&ComponentId::new("rust:x::e")));
+    let only = steps(&plan, Some(&ComponentId::new("rust:x::e")));
     assert!(only.contains("nothing pending"));
+    // Dependencies first; work that depends on unfinished parts waits.
+    plan.relations.push(arch_graph::Relation::new(arch_graph::RelationKind::Calls, ComponentId::new("rust:x::c"), ComponentId::new("rust:x::a"), arch_graph::Provenance::PLANNED));
+    let text = steps(&plan, None);
+    assert!(text.contains("rust:x::c (PlanApproved): waits: Implemented needs rust:x::a at Skeleton or later; it is Declared"), "{text}");
+    assert!(text.find("rust:x::a").unwrap() < text.find("rust:x::c").unwrap(), "what c calls comes first");
+}
+
+// req: P8.4
+#[tokio::test]
+async fn tools_report_failures_as_errors_the_agent_can_act_on() {
+    let (addr, _) = spawn_app().await;
+    let mut mcp = Mcp::connect(addr).await;
+    for (tool, args, expected) in [
+        ("run_tools", json!({ "plan": "nope" }), "not found"),
+        ("review", json!({ "plan": "nope", "id": "rust:sample::run" }), "not found"),
+        ("review_comments", json!({ "plan": "nope" }), "not found"),
+        ("answer_comment", json!({ "plan": "nope", "comment": "c1", "answer": "x" }), "not found"),
+        ("reply_comment", json!({ "plan": "nope", "comment": "c1", "text": "x" }), "not found"),
+        ("plan_edit", json!({ "plan": "../x", "ops": [] }), "invalid"),
+        ("inspect", json!({ "id": "rust:nothing::here" }), "not found"),
+    ] {
+        let (err, text) = mcp.tool(tool, args).await;
+        assert!(err && text.to_lowercase().contains(expected), "{tool}: {text}");
+    }
+    // A real plan, but a comment that doesn't exist.
+    let (err, _) = mcp.tool("plan_create", json!({ "id": "p", "title": "P" })).await;
+    assert!(!err);
+    let (err, text) = mcp.tool("answer_comment", json!({ "plan": "p", "comment": "c9", "answer": "x" })).await;
+    assert!(err && text.contains("c9"), "{text}");
+    let (err, text) = mcp.tool("reply_comment", json!({ "plan": "p", "comment": "c9", "text": "x" })).await;
+    assert!(err && text.contains("c9"), "{text}");
+    // Ready work over REST, in dependency order.
+    let (status, body) = common::http(addr, "GET", "/api/arch/plans/p/next?action=build", None).await;
+    assert_eq!((status, body.as_str()), (200, "[]"));
+    let (status, _) = common::http(addr, "GET", "/api/arch/plans/p/next?action=dance", None).await;
+    assert_eq!(status, 400);
 }

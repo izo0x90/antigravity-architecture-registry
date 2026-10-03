@@ -99,9 +99,9 @@ async fn tools_reviews_and_refresh_over_rest_and_mcp() {
     // Through the agent's tools.
     let mut mcp = Mcp::connect(addr).await;
     let (err, text) = mcp.tool("run_tools", json!({ "plan": "v" })).await;
-    assert!(!err && text.contains("PASS mentions on rust:sample::validate") && text.contains("Next: verify"), "{text}");
+    assert!(!err && text.contains("PASS mentions on rust:sample::validate") && text.contains("Next:") && text.contains("rust:sample::validate ("), "{text}");
     let (err, text) = mcp.tool("review", json!({ "plan": "v", "id": "rust:sample::validate" })).await;
-    assert!(!err && text.contains("tiny (anti_patterns): 1 points") && text.contains("ERROR (src/lib.rs:") && text.contains("address the blocking points"), "{text}");
+    assert!(!err && text.contains("tiny (anti_patterns): 1 points") && text.contains("ERROR (src/lib.rs:") && text.contains("Address the blocking points"), "{text}");
     let (err, text) = mcp.tool("verify", json!({ "plan": "v", "id": "rust:sample::validate", "goal": "implemented" })).await;
     assert!(!err && text.contains("Not yet") && text.contains("[anti_patterns/tiny]"), "the blocking review blocks: {text}");
     let (err, _) = mcp.tool("review", json!({ "plan": "v", "id": "rust:ghost" })).await;

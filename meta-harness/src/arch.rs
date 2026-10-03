@@ -67,6 +67,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/arch/plans/{plan}/ops", post(apply_ops))
         .route("/api/arch/plans/{plan}/scope", get(scope))
         .route("/api/arch/plans/{plan}/validate", post(validate))
+        .route("/api/arch/plans/{plan}/next", get(next_actionable))
         .route("/api/arch/plans/{plan}/components/{id}/contract", get(contract))
         .route("/api/arch/plans/{plan}/components/{id}/verify", post(verify))
         .route("/api/arch/plans/{plan}/components/{id}/approve", post(approve))
@@ -297,6 +298,24 @@ async fn scope(State(state): State<AppState>, Path(plan): Path<String>) -> ArchR
 async fn validate(State(state): State<AppState>, Path(plan): Path<String>) -> ArchResult<arch_graph::Report> {
     let plan = plan_id(&plan)?;
     Ok(Json(blocking(&state.arch, move |a| a.validate(&plan)).await?))
+}
+
+#[derive(Deserialize)]
+struct NextQuery {
+    action: arch_service::Action,
+}
+
+/// Components ready for detailed design (`plan`) or for code (`build`), in dependency order.
+async fn next_actionable(State(state): State<AppState>, Path(plan): Path<String>, Query(q): Query<NextQuery>) -> ArchResult<Vec<ComponentId>> {
+    let plan = plan_id(&plan)?;
+    Ok(Json(
+        blocking(&state.arch, move |a| {
+            let current = a.plan(&plan)?;
+            let graph = a.graph(Some(&plan))?;
+            Ok(arch_service::next_actionable(&current, &graph, a.types(), q.action))
+        })
+        .await?,
+    ))
 }
 
 #[derive(serde::Serialize)]

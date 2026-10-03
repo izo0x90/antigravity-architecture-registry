@@ -5,7 +5,7 @@
 use std::fmt::Write;
 use std::sync::Arc;
 
-use arch_graph::{Comment, CommentId, CommentKind, CommentStatus, ComponentId, Plan, PlanId, Requester, Severity, Stage, ViewRequest};
+use arch_graph::{Comment, CommentId, CommentKind, CommentStatus, ComponentId, Graph, Plan, PlanId, Requester, Severity, Stage, TypeSystem, ViewRequest};
 use arch_service::{Actor, ArchitectureService, PlanOp, ServiceError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -28,17 +28,32 @@ fn pretty(value: &impl serde::Serialize) -> Result<String, ServiceError> {
 }
 
 /// What the workflow expects next for each component in a plan.
-pub fn next_steps(plan: &Plan, only: Option<&ComponentId>) -> String {
+pub fn next_steps(plan: &Plan, graph: &Graph, types: &TypeSystem, only: Option<&ComponentId>) -> String {
     let mut out = String::from("\n\nNext:");
     let mut any = false;
-    for c in plan.components.iter().filter(|c| only.is_none_or(|id| &c.id == id)) {
+    // Dependency order: what others build on comes first.
+    for id in arch_service::topological(plan, graph, types).iter().filter(|id| only.is_none_or(|o| o == *id)) {
+        let Some(c) = plan.component(id) else { continue };
         let file = c.proposed.as_ref().map(|p| p.file.to_string()).unwrap_or_else(|| "its file".into());
-        let step = match c.stage {
-            Stage::Declared => "write its spec (plan_edit), relate it to the code it touches, plan_validate; then stop and let the user approve the architecture in the cockpit".to_owned(),
-            Stage::ArchApproved => format!("either lay the skeleton in {file} (structure with placeholder bodies) and verify goal=skeleton, or detail the spec for the user's plan approval"),
-            Stage::PlanApproved => format!("implement it in {file} (see contract), then verify goal=implemented (or skeleton first)"),
-            Stage::Skeleton => format!("replace the placeholder bodies in {file}, then verify goal=implemented"),
+        let goal = match c.stage {
+            Stage::Declared => None,
+            Stage::ArchApproved => Some(Stage::PlanApproved),
+            Stage::PlanApproved | Stage::Skeleton => Some(Stage::Implemented),
             Stage::Implemented => continue,
+        };
+        let waiting: Vec<String> = goal
+            .map(|g| arch_service::stage_gate(plan, graph, types, id, g).into_iter().map(|f| f.message).collect())
+            .unwrap_or_default();
+        let step = if !waiting.is_empty() {
+            format!("waits: {}", waiting.join("; "))
+        } else {
+            match c.stage {
+                Stage::Declared => "write its spec (plan_edit), relate it to the code it touches, plan_validate; then stop and let the user approve the architecture in the cockpit".to_owned(),
+                Stage::ArchApproved => format!("either lay the skeleton in {file} (structure with placeholder bodies) and verify goal=skeleton, or detail the spec for the user's plan approval"),
+                Stage::PlanApproved => format!("implement it in {file} (see contract), then verify goal=implemented (or skeleton first)"),
+                Stage::Skeleton => format!("replace the placeholder bodies in {file}, then verify goal=implemented"),
+                Stage::Implemented => continue,
+            }
         };
         any = true;
         let _ = write!(out, "\n- {} ({:?}): {step}", c.id, c.stage);
@@ -275,6 +290,16 @@ impl McpService {
         }
     }
 
+    /// The next steps for `plan` (or one component of it), from its current state.
+    async fn steps(&self, plan: PlanId, only: Option<ComponentId>) -> Result<String, ServiceError> {
+        blocking(&self.arch, move |s| {
+            let current = s.plan(&plan)?;
+            let graph = s.graph(Some(&plan))?;
+            Ok(next_steps(&current, &graph, s.types(), only.as_ref()))
+        })
+        .await
+    }
+
     /// Runs a tool; the text is what the agent sees.
     pub async fn call(&self, name: &str, args: Value) -> Result<String, ServiceError> {
         match name {
@@ -293,7 +318,10 @@ impl McpService {
                     report.files, report.parsed, report.cached, report.removed, report.millis, report.components, report.relations, report.ambiguous, report.external
                 ))
             }
-            "list_types" => pretty(self.arch.types()),
+            "list_types" => Ok(format!(
+                "{}\n\nNext: use these type names in plan_edit add_component; a type's required_fields must be filled before the user can approve.",
+                pretty(self.arch.types())?
+            )),
             "search" => {
                 let a: SearchArgs = parse(args)?;
                 let plan = opt_plan(&a.plan)?;
@@ -312,14 +340,27 @@ impl McpService {
             "inspect" => {
                 let a: IdArgs = parse(args)?;
                 let plan = opt_plan(&a.plan)?;
-                let detail = blocking(&self.arch, move |s| s.component(&ComponentId::new(a.id), plan.as_ref())).await?;
-                pretty(&detail)
+                let cid = ComponentId::new(a.id);
+                let (p, c) = (plan.clone(), cid.clone());
+                let detail = blocking(&self.arch, move |s| s.component(&c, p.as_ref())).await?;
+                let mut out = pretty(&detail)?;
+                match plan.filter(|_| detail.component.status != arch_graph::Status::Existing || detail.alignment != arch_graph::Alignment::Observed) {
+                    Some(plan) => out.push_str(&self.steps(plan, Some(cid)).await?),
+                    None => out.push_str("\n\nNext: view its neighborhood (view name=calls roots=[id]), or reference it in a plan you're writing (plan_edit op=reference)."),
+                }
+                Ok(out)
             }
             "view" => {
                 let a: ViewArgs = parse(args)?;
                 let plan = opt_plan(&a.plan)?;
-                let result = blocking(&self.arch, move |s| s.named_view(&a.name, plan.as_ref(), a.roots.into_iter().map(ComponentId::new).collect(), a.depth)).await?;
-                Ok(result.text)
+                let p = plan.clone();
+                let result = blocking(&self.arch, move |s| s.named_view(&a.name, p.as_ref(), a.roots.into_iter().map(ComponentId::new).collect(), a.depth)).await?;
+                let mut out = result.text;
+                match plan {
+                    Some(plan) => out.push_str(&self.steps(plan, None).await?),
+                    None => out.push_str("\nNext: inspect a node, widen with depth, or navigate to show the user the same view."),
+                }
+                Ok(out)
             }
             "navigate" => {
                 let a: NavigateArgs = parse(args)?;
@@ -332,7 +373,7 @@ impl McpService {
                     focus: a.focus.map(ComponentId::new),
                 };
                 blocking(&self.arch, move |s| s.request_view(request, Requester::Agent)).await?;
-                Ok("The user's graph now shows it (they can go back).".into())
+                Ok("The user's graph now shows it (they can go back).\n\nNext: explain what they're looking at, or continue with the plan.".into())
             }
             "plan_list" => {
                 let plans = blocking(&self.arch, |s| s.plans()).await?;
@@ -344,7 +385,11 @@ impl McpService {
                     }
                 }
                 if plans.is_empty() {
-                    out.push_str("No plans yet. plan_create starts one.");
+                    out.push_str("No plans yet.\n\nNext: plan_create starts one (or plan_import brings in system_architecture.json).");
+                }
+                for p in &plans {
+                    let _ = write!(out, "\n[{}]", p.id);
+                    out.push_str(&self.steps(p.id.clone(), None).await?);
                 }
                 Ok(out)
             }
@@ -384,7 +429,7 @@ impl McpService {
                 if !report.tools.tools.is_empty() {
                     text.push_str(&format!("\n\nOld validation tools (add to .nah/tools.toml):\n{}", pretty(&report.tools)?));
                 }
-                text.push_str(&next_steps(&plan, None));
+                text.push_str(&self.steps(plan.id.clone(), None).await?);
                 Ok(text)
             }
             "plan_edit" => {
@@ -398,12 +443,14 @@ impl McpService {
                     Ok(current)
                 })
                 .await?;
-                Ok(format!("Plan {} now has {} components, {} relations.{}", plan.id, plan.components.len(), plan.relations.len(), next_steps(&plan, None)))
+                let steps = self.steps(plan.id.clone(), None).await?;
+                Ok(format!("Plan {} now has {} components, {} relations.{steps}", plan.id, plan.components.len(), plan.relations.len()))
             }
             "plan_validate" => {
                 let a: PlanArgs = parse(args)?;
                 let id = plan_id(&a.plan)?;
-                let (report, plan) = blocking(&self.arch, move |s| Ok((s.validate(&id)?, s.plan(&id)?))).await?;
+                let plan = id.clone();
+                let report = blocking(&self.arch, move |s| s.validate(&id)).await?;
                 let mut out = String::new();
                 if report.findings.is_empty() {
                     out.push_str("The plan checks out.");
@@ -416,21 +463,24 @@ impl McpService {
                     };
                     let _ = writeln!(out, "{sev} [{}] {}{}", serde_json::to_value(f.code).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default(), f.message, f.suggestion.as_ref().map(|s| format!(" — {s}")).unwrap_or_default());
                 }
-                out.push_str(&next_steps(&plan, None));
+                out.push_str(&self.steps(plan, None).await?);
                 Ok(out)
             }
             "contract" => {
                 let a: ComponentArgs = parse(args)?;
                 let plan = plan_id(&a.plan)?;
-                let slice = blocking(&self.arch, move |s| s.contract(&plan, &ComponentId::new(a.id))).await?;
-                Ok(slice.to_markdown())
+                let cid = ComponentId::new(a.id);
+                let (p, c) = (plan.clone(), cid.clone());
+                let slice = blocking(&self.arch, move |s| s.contract(&p, &c)).await?;
+                Ok(format!("{}{}", slice.to_markdown(), self.steps(plan, Some(cid)).await?))
             }
             "verify" => {
                 let a: VerifyArgs = parse(args)?;
                 let plan = plan_id(&a.plan)?;
                 let cid = ComponentId::new(a.id);
                 let target = cid.clone();
-                let (v, current) = blocking(&self.arch, move |s| Ok((s.verify(&plan, &target, a.goal)?, s.plan(&plan)?))).await?;
+                let p = plan.clone();
+                let v = blocking(&self.arch, move |s| s.verify(&p, &target, a.goal)).await?;
                 let mut out = match v.advanced_to {
                     Some(stage) => format!("Verified: {cid} is now {stage:?}.\n"),
                     None => format!("Not yet: {cid} doesn't match the plan.\n"),
@@ -439,14 +489,15 @@ impl McpService {
                     let at = f.at.as_ref().map(|c| format!(" ({}:{})", c.file, c.span.start_line)).unwrap_or_default();
                     let _ = writeln!(out, "- {}{at}{}", f.message, f.suggestion.as_ref().map(|s| format!(" — {s}")).unwrap_or_default());
                 }
-                out.push_str(&next_steps(&current, Some(&cid)));
+                out.push_str(&self.steps(plan, Some(cid)).await?);
                 Ok(out)
             }
             "run_tools" => {
                 let a: ToolsArgs = parse(args)?;
                 let plan = plan_id(&a.plan)?;
                 let only = a.id.map(ComponentId::new);
-                let report = blocking(&self.arch, move |s| s.run_tools(&plan, only.as_ref())).await?;
+                let (p, o) = (plan.clone(), only.clone());
+                let report = blocking(&self.arch, move |s| s.run_tools(&p, o.as_ref())).await?;
                 let mut out = String::new();
                 for run in &report.runs {
                     let _ = writeln!(out, "{} {} on {}: `{} {}`", if run.passed { "PASS" } else { "FAIL" }, run.invocation.tool, run.invocation.component, run.invocation.program, run.invocation.args.join(" "));
@@ -455,14 +506,18 @@ impl McpService {
                     out.push_str("No tools apply (define them in .nah/tools.toml, bind them in a component's spec `validation`).\n");
                 }
                 out.push_str(&findings_text(&report.report));
-                out.push_str(if report.report.has_errors() { "\nNext: fix what failed, run_tools again, then verify." } else { "\nNext: verify goal=implemented." });
+                if report.report.has_errors() {
+                    out.push_str("\nFix what failed and run_tools again before verifying.");
+                }
+                out.push_str(&self.steps(plan, only).await?);
                 Ok(out)
             }
             "review" => {
                 let a: ComponentArgs = parse(args)?;
                 let plan = plan_id(&a.plan)?;
                 let cid = ComponentId::new(a.id);
-                let reviews = blocking(&self.arch, move |s| s.review(&plan, &cid)).await?;
+                let (p, c) = (plan.clone(), cid.clone());
+                let reviews = blocking(&self.arch, move |s| s.review(&p, &c)).await?;
                 let mut out = String::new();
                 for run in &reviews.runs {
                     let _ = writeln!(out, "{} ({}): {}", run.reviewer, run.category, if run.ran { format!("{} points", run.findings) } else { "didn't run".to_owned() });
@@ -471,31 +526,32 @@ impl McpService {
                     out.push_str("No reviewers apply to this component.\n");
                 }
                 out.push_str(&findings_text(&reviews.report));
-                out.push_str(if reviews.report.has_errors() { "\nNext: address the blocking points (ERROR), then review again." } else { "\nNext: verify goal=implemented." });
+                if reviews.report.has_errors() {
+                    out.push_str("\nAddress the blocking points (ERROR) and review again before verifying.");
+                }
+                out.push_str(&self.steps(plan, Some(cid)).await?);
                 Ok(out)
             }
             "review_comments" => {
                 let a: CommentsArgs = parse(args)?;
                 let plan = plan_id(&a.plan)?;
-                let (comments, diff, current) = blocking(&self.arch, move |s| Ok((s.comments(&plan, a.all)?, s.review_diff(&plan)?, s.plan(&plan)?))).await?;
+                let p = plan.clone();
+                let (comments, diff) = blocking(&self.arch, move |s| Ok((s.comments(&p, a.all)?, s.review_diff(&p)?))).await?;
                 let mut out = comments_text(&comments, &diff);
-                out.push_str(&next_steps(&current, None));
+                out.push_str(&self.steps(plan, None).await?);
                 Ok(out)
             }
             "answer_comment" => {
                 let a: AnswerArgs = parse(args)?;
                 let plan = plan_id(&a.plan)?;
                 let changes: Vec<ComponentId> = a.changes.into_iter().map(ComponentId::new).collect();
-                let (comment, current) = blocking(&self.arch, move |s| {
-                    let c = s.answer_comment(&plan, &CommentId(a.comment), &a.answer, &changes, &agent())?;
-                    Ok((c, s.plan(&plan)?))
-                })
-                .await?;
+                let p = plan.clone();
+                let comment = blocking(&self.arch, move |s| s.answer_comment(&p, &CommentId(a.comment), &a.answer, &changes, &agent())).await?;
                 let mut out = format!("Answered {}; the user will accept it or reopen it.\n", comment.id);
                 for ch in comment.answer.iter().flat_map(|a| &a.changes) {
                     let _ = writeln!(out, "- linked: {}", ch.describe());
                 }
-                out.push_str(&next_steps(&current, None));
+                out.push_str(&self.steps(plan, None).await?);
                 Ok(out)
             }
             "reply_comment" => {
