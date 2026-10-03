@@ -379,6 +379,39 @@ impl NetClient {
         self.call("POST", &format!("/api/arch/plans/{}/validate", urlencoding::encode(&plan.0)), Some(serde_json::json!({})), ctx, on_done);
     }
 
+    /// A plan's review comments (unaddressed only, unless `all`).
+    pub fn arch_comments(&self, plan: &arch_graph::PlanId, all: bool, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<arch_graph::Comment>>) + Send + 'static) {
+        self.call("GET", &format!("/api/arch/plans/{}/comments?all={all}", urlencoding::encode(&plan.0)), None, ctx, on_done);
+    }
+
+    /// Raises a comment or change request: `body` is `{anchor, kind, text, by}`.
+    pub fn arch_add_comment(&self, plan: &arch_graph::PlanId, body: serde_json::Value, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::Comment>) + Send + 'static) {
+        self.call("POST", &format!("/api/arch/plans/{}/comments", urlencoding::encode(&plan.0)), Some(body), ctx, on_done);
+    }
+
+    /// `action` is `replies`, `accept` or `reopen`; `body` is `{text?, by}`.
+    pub fn arch_comment_action(
+        &self,
+        plan: &arch_graph::PlanId,
+        comment: &arch_graph::CommentId,
+        action: &str,
+        body: serde_json::Value,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::Comment>) + Send + 'static,
+    ) {
+        let path = format!("/api/arch/plans/{}/comments/{}/{action}", urlencoding::encode(&plan.0), urlencoding::encode(&comment.0));
+        self.call("POST", &path, Some(body), ctx, on_done);
+    }
+
+    pub fn arch_mark_reviewed(&self, plan: &arch_graph::PlanId, by: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::ReviewSnapshot>) + Send + 'static) {
+        self.call("POST", &format!("/api/arch/plans/{}/reviewed", urlencoding::encode(&plan.0)), Some(serde_json::json!({ "by": by })), ctx, on_done);
+    }
+
+    /// What changed in the plan since the user last reviewed it.
+    pub fn arch_review_diff(&self, plan: &arch_graph::PlanId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::PlanDiff>) + Send + 'static) {
+        self.call("GET", &format!("/api/arch/plans/{}/diff", urlencoding::encode(&plan.0)), None, ctx, on_done);
+    }
+
     pub fn submit_feedback<F>(&self, feedback_json: serde_json::Value, ctx: egui::Context, on_done: F)
     where
         F: FnOnce(Result<String, String>) + Send + 'static,

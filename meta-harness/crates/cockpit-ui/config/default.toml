@@ -6,6 +6,10 @@
 name = "NAH"
 tagline = "not a harness"
 
+[user]
+# Your name on review comments, reviews and approvals.
+name = "user"
+
 [keymap]
 # Tap to open the leader menu (holding it still pans the graph).
 leader = "Space"
@@ -126,6 +130,14 @@ e = "Code links"
 "spec.pin" = { keys = ["p"] }
 "spec.open_code" = { keys = ["g d"] }
 "spec.show_in_graph" = { keys = ["g g"] }
+# Review: comment on (or ask for a change to) the current section, mark the
+# plan reviewed, accept or reopen the answer to the point under review.
+"spec.comment" = { keys = ["c"] }
+"spec.request_change" = { keys = ["C"] }
+"spec.mark_reviewed" = { keys = ["g m"] }
+"spec.next_point" = { keys = ["] c"] }
+"spec.accept" = { keys = ["a"] }
+"spec.reopen" = { keys = ["o"] }
 
 # Code links: code view <-> graph.
 "code.reveal" = { leader = "e r", keys = ["g r"] }

@@ -16,7 +16,7 @@ pub use contract::{ContractSlice, Neighbor};
 pub use ops::PlanOp;
 pub use arch_graph::{ComponentDetail, ViewResult};
 pub use review::{ReviewNote, ReviewProvider, ReviewRequest, ReviewRun, ReviewerCatalog, ReviewerDef, ReviewerKind, ReviewsReport, Rule};
-pub use service::{Actor, ArchitectureService, IngestReport, Refresh, Reverified, Verification, affected};
+pub use service::{Actor, ArchitectureService, IngestReport, NewComment, Refresh, Reverified, Verification, affected, approval_blocker};
 pub use tools::{Invocation, ProcessRunner, ToolCatalog, ToolDef, ToolOutput, ToolRun, ToolRunner, ToolsReport};
 pub use store::{CodeIndexStore, FsIndex, FsPlans, MemoryIndex, MemoryPlans, PlanRepository};
 pub use chain::chain;

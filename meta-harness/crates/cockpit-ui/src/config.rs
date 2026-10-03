@@ -14,9 +14,17 @@ pub struct Brand {
     pub tagline: String,
 }
 
+/// Who is at the cockpit: the author of their comments, reviews and approvals.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct User {
+    pub name: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct UiConfig {
     pub brand: Brand,
+    #[serde(default)]
+    pub user: User,
     pub keymap: KeymapConfig,
     pub theme: Theme,
 }

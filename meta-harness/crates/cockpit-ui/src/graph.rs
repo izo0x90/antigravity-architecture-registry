@@ -3,7 +3,7 @@
 //! a compact inspector. Everything shown comes from the server's views; the
 //! graph refreshes itself when the architecture changes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use arch_graph::view::Rect as WorldRect;
@@ -211,6 +211,8 @@ pub struct GraphState {
     pub result: Option<ViewResult>,
     /// Ids drawn inside some container (hidden when containers collapse).
     nested: BTreeSet<ComponentId>,
+    /// Review badges: changed since the last review, unaddressed comments.
+    pub marks: BTreeMap<ComponentId, crate::review::NodeMark>,
     load: Load,
     stale: bool,
     generation: u64,
@@ -238,6 +240,7 @@ impl Default for GraphState {
             nav: Navigator::new("structure"),
             result: None,
             nested: BTreeSet::new(),
+            marks: BTreeMap::new(),
             load: Load::Idle,
             stale: true,
             generation: 0,
@@ -787,6 +790,7 @@ impl GraphState {
         } else {
             painter.rect_stroke(rect, 6.0, stroke, StrokeKind::Inside);
         }
+        self.draw_marks(painter, rect, &c.id);
         // Too small to read: the card's color and outline carry it.
         if rect.height() < 9.0 {
             return;
@@ -810,6 +814,24 @@ impl GraphState {
         }
     }
 
+    /// Review badges at the card's top right: a dot when it changed since the
+    /// last review, a count of unaddressed comments.
+    fn draw_marks(&self, painter: &egui::Painter, rect: Rect, id: &ComponentId) {
+        let Some(mark) = self.marks.get(id) else { return };
+        let z = self.camera.zoom.max(0.4);
+        let mut at = rect.right_top() + Vec2::new(-8.0, 8.0) * z;
+        if mark.open > 0 {
+            let galley = painter.layout_no_wrap(format!("{}", mark.open), FontId::proportional(10.0 * z), colors().on_bright);
+            let chip = Rect::from_center_size(at, galley.size() + Vec2::new(8.0, 2.0) * z);
+            painter.rect_filled(chip, chip.height() / 2.0, colors().warn);
+            painter.galley(chip.center() - galley.size() / 2.0, galley, colors().on_bright);
+            at.x = chip.left() - 6.0 * z;
+        }
+        if mark.changed {
+            painter.circle_filled(at, 4.0 * z, colors().info);
+        }
+    }
+
     /// The compact inspector: a navigable summary of the selection.
     fn render_drawer(&mut self, ui: &mut egui::Ui) {
         let Some(c) = self.selected().cloned() else { return };
@@ -827,6 +849,16 @@ impl GraphState {
                 });
                 ui.label(RichText::new(c.id.as_str()).monospace().size(10.0).color(colors().muted));
                 ui.label(RichText::new(format!("{} · {:?} · {:?}{}", c.type_name, c.status, c.stage, alignment.map(|a| format!(" · {a:?}")).unwrap_or_default())).size(11.0));
+                if let Some(mark) = self.marks.get(&c.id) {
+                    ui.horizontal_wrapped(|ui| {
+                        if mark.changed {
+                            ui.label(RichText::new("changed since review").size(11.0).color(colors().info));
+                        }
+                        if mark.open > 0 {
+                            ui.label(RichText::new(format!("{} open review points", mark.open)).size(11.0).color(colors().warn));
+                        }
+                    });
+                }
                 match (&c.anchor, &c.proposed) {
                     (Some(a), _) => ui.label(RichText::new(format!("{} {}:{}–{}", egui_phosphor::regular::FILE_CODE, a.file, a.span.start_line, a.span.end_line)).monospace().size(11.0)),
                     (None, Some(p)) => ui.label(RichText::new(format!("{} planned in {}", egui_phosphor::regular::FILE_DASHED, p.file)).monospace().size(11.0).color(colors().warn)),

@@ -86,6 +86,12 @@ pub struct Plan {
     pub approvals: Vec<Approval>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<Workflow>,
+    /// Review comments and change requests, with their answers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<crate::Comment>,
+    /// The plan as the user last reviewed it (what the review diff is against).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_review: Option<crate::ReviewSnapshot>,
 }
 
 impl Plan {
@@ -101,6 +107,8 @@ impl Plan {
             relations: Vec::new(),
             approvals: Vec::new(),
             workflows: Vec::new(),
+            comments: Vec::new(),
+            last_review: None,
         }
     }
 
