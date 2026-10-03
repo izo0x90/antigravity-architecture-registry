@@ -34,7 +34,7 @@ pub enum PlanOp {
         #[serde(default)]
         spec: Option<ImplementationSpec>,
     },
-    /// Plan changes to a component that exists in the code.
+    /// Edit a component this plan has, or plan changes to one in the code.
     Modify {
         id: ComponentId,
         #[serde(default)]
@@ -172,8 +172,10 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
         PlanOp::Modify { id, description, signature, schemas, spec } => {
             let schemas = schemas.map(|s| compile(s, dsl)).transpose()?;
             let code = graph.component(&id).ok_or_else(|| invalid(format!("{id} doesn't exist")))?;
-            if code.anchor.is_none() {
-                return Err(invalid(format!("{id} isn't in the code yet; edit it with add_component's fields instead")));
+            // Anything this plan already has can be edited; otherwise only
+            // code can be brought in for changes.
+            if plan.component(&id).is_none() && code.anchor.is_none() {
+                return Err(invalid(format!("{id} isn't in the code or in this plan")));
             }
             if plan.component(&id).is_none() {
                 let mut planned = code.clone();

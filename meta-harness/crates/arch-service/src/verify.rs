@@ -119,3 +119,39 @@ pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal
     }
     report.sorted()
 }
+
+/// Each planned data flow into or out of `id` ends up confirmed (the code
+/// hands the source's output to the target's input: no finding), missing
+/// (both ends are in the code but it doesn't), or unverifiable (the hand-off
+/// is there but types can't confirm it). Flows with an end not in the code
+/// yet wait for that end's own verification.
+pub fn planned_flows(plan: &Plan, id: &ComponentId, observed: &Graph, unverified: &[arch_index::UnverifiedFlow]) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for flow in plan.relations.iter().filter(|r| r.kind == RelationKind::DataFlow && (&r.source == id || &r.target == id)) {
+        let in_code = |c: &ComponentId| observed.component(c).is_some_and(|c| c.anchor.is_some());
+        if !in_code(&flow.source) || !in_code(&flow.target) {
+            continue;
+        }
+        let wanted_port = flow.ports.as_ref().map(|(_, to)| to.as_str());
+        let confirmed = observed
+            .outgoing(&flow.source, Some(RelationKind::DataFlow))
+            .any(|r| r.target == flow.target && (wanted_port.is_none() || r.ports.as_ref().map(|(_, to)| to.as_str()) == wanted_port));
+        if confirmed {
+            continue;
+        }
+        let ports = flow.ports.as_ref().map(|(from, to)| format!(" ({from} -> {to})")).unwrap_or_default();
+        let target = Target::Relation { id: flow.id() };
+        match unverified.iter().find(|u| u.source == flow.source && u.target == flow.target) {
+            Some(u) => out.push(
+                Finding::warning(FindingCode::DataFlowUnverifiable, target, format!("{} -> {}{ports} is handed over but can't be confirmed: {}", flow.source, flow.target, u.reason))
+                    .at(u.file.clone(), u.span)
+                    .suggest("declare the types involved so the flow can be checked"),
+            ),
+            None => out.push(
+                Finding::error(FindingCode::DataFlowMissing, target, format!("the code doesn't pass {}'s output into {}{ports}", flow.source, flow.target))
+                    .suggest("call the target with the source's result, or update the plan"),
+            ),
+        }
+    }
+    out
+}

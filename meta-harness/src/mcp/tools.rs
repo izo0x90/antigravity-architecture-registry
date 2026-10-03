@@ -30,18 +30,31 @@ pub fn list_tools(views: &ViewCatalog) -> Vec<McpTool> {
         "description": "How it works: the primary planning artifact.",
         "properties": {
             "pattern": { "type": "string" },
-            "logic_steps": { "type": "array", "items": { "type": "object", "properties": { "sequence": { "type": "integer" }, "name": { "type": "string" }, "description": { "type": "string" } }, "required": ["sequence", "name"] } },
-            "invariants": { "type": "array", "items": { "type": "object", "properties": { "name": { "type": "string" }, "kind": { "type": "string" }, "description": { "type": "string" } }, "required": ["name"] } }
+            "logic_steps": { "type": "array", "description": "Numbered 1..n.", "items": { "type": "object", "properties": {
+                "sequence": { "type": "integer" }, "name": { "type": "string" }, "description": { "type": "string" },
+                "algorithm": { "type": "string" }, "complexity": { "type": "string" },
+                "check": { "type": "string", "description": "Shell snippet run from the repo root during validation; exit 0 = the step holds" }
+            }, "required": ["sequence", "name"] } },
+            "invariants": { "type": "array", "items": { "type": "object", "properties": { "name": { "type": "string" }, "kind": { "type": "string", "enum": ["pre_condition", "post_condition", "state_invariant", "complexity"] }, "description": { "type": "string" } }, "required": ["name"] } },
+            "tasks": { "type": "array", "items": { "type": "object", "properties": { "text": { "type": "string" }, "done": { "type": "boolean" } }, "required": ["text"] } },
+            "validation": { "type": "array", "description": "Project tools to run on it (see .nah/tools.toml)", "items": { "type": "object", "properties": { "tool": { "type": "string" }, "targets": { "type": "array", "items": { "type": "string" } }, "args": { "type": "array", "items": { "type": "string" } } }, "required": ["tool"] } }
         }
+    });
+    let shape = json!({ "description": "JSON Schema, or shorthand: a type string (\"int\", \"str[]\", \"User?\" where User is a data type) or a map of field -> type (fields ending in ? are optional)." });
+    let effects = json!({ "type": "array", "items": { "type": "object", "properties": { "target": { "type": "string", "description": "What it changes: db, fs, network..." }, "description": { "type": "string" } }, "required": ["target"] } });
+    let schemas = json!({
+        "type": "object",
+        "description": "Data shapes: properties (data types), inputs (one field per parameter), outputs, and side effects.",
+        "properties": { "properties": shape, "inputs": shape, "outputs": shape, "side_effects": effects }
     });
     let op = json!({
         "type": "object",
         "description": "One plan operation, selected by `op`.",
         "oneOf": [
-            { "properties": { "op": { "const": "add_component" }, "name": { "type": "string" }, "type": { "type": "string", "description": "A component type (see list_types)" }, "description": { "type": "string" }, "parent": id, "file": { "type": "string", "description": "Repo-relative file; defaults to the parent's file" }, "signature": signature, "spec": spec }, "required": ["op", "name", "type"] },
-            { "properties": { "op": { "const": "modify" }, "id": id, "description": { "type": "string" }, "signature": signature, "spec": spec }, "required": ["op", "id"] },
+            { "properties": { "op": { "const": "add_component" }, "name": { "type": "string" }, "type": { "type": "string", "description": "A component type (see list_types)" }, "description": { "type": "string" }, "parent": id, "file": { "type": "string", "description": "Repo-relative file; defaults to the parent's file" }, "signature": signature, "schemas": schemas, "spec": spec }, "required": ["op", "name", "type"] },
+            { "properties": { "op": { "const": "modify" }, "id": id, "description": { "type": "string" }, "signature": signature, "schemas": schemas, "spec": spec }, "required": ["op", "id"] },
             { "properties": { "op": { "const": "reference" }, "id": id, "kinds": { "type": "array", "items": kind }, "depth": { "type": "integer" } }, "required": ["op", "id"] },
-            { "properties": { "op": { "const": "relate" }, "kind": kind, "source": id, "target": id, "order": { "type": "integer" }, "ports": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 }, "note": { "type": "string" } }, "required": ["op", "kind", "source", "target"] },
+            { "properties": { "op": { "const": "relate" }, "kind": kind, "source": id, "target": id, "order": { "type": "integer" }, "ports": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 }, "note": { "type": "string" }, "expects": { "description": "Calls only: what the caller passes (inputs), gets back (outputs) and expects changed (side_effects); checked against the callee's real signature.", "type": "object", "properties": { "inputs": shape, "outputs": shape, "side_effects": effects } } }, "required": ["op", "kind", "source", "target"] },
             { "properties": { "op": { "const": "unrelate" }, "kind": kind, "source": id, "target": id }, "required": ["op", "kind", "source", "target"] },
             { "properties": { "op": { "const": "remove" }, "id": id }, "required": ["op", "id"] },
             { "properties": { "op": { "const": "set_greenfield" }, "greenfield": { "type": "boolean" } }, "required": ["op", "greenfield"] },
@@ -93,12 +106,12 @@ pub fn list_tools(views: &ViewCatalog) -> Vec<McpTool> {
         ),
         tool(
             "plan_edit",
-            "Apply operations to a plan, in order (stops at the first that fails). Add new components under a real parent (they get a proposed location), modify existing ones, reference existing code you build on, and relate components (calls, data flow, implements). New work must connect to existing code.",
+            "Apply operations to a plan, in order (stops at the first that fails). Add new components under a real parent (they get a proposed location), modify planned or existing ones, reference existing code you build on, and relate components (calls with expectations, data flow, implements). New work must connect to existing code. Changing an approved component's design sends it, and what depends on it, back for approval.",
             json!({ "type": "object", "properties": { "plan": plan, "ops": { "type": "array", "items": op } }, "required": ["plan", "ops"] }),
         ),
         tool(
             "plan_validate",
-            "Check a plan before any code is written: references, proposed locations, location rules, and touch points with existing code.",
+            "Check a plan before any code is written: references, proposed locations, type rules, loops, schema fit (also against existing code's real signatures), spec rules, required details per type, dependency gates and touch points; runs logic-step checks.",
             json!({ "type": "object", "properties": { "plan": plan }, "required": ["plan"] }),
         ),
         tool(

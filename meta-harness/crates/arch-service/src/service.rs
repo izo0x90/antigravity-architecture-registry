@@ -12,7 +12,7 @@ use arch_graph::{
     Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
     RepoPath, Severity, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult, schema::Dsl,
 };
-use arch_index::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk};
+use arch_index::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk, UnverifiedFlow};
 use serde::{Deserialize, Serialize};
 
 use crate::progress::{Downgrade, cascade};
@@ -83,6 +83,8 @@ struct Observed {
     graph: Graph,
     ambiguous: Vec<AmbiguousCall>,
     external: Vec<ExternalCall>,
+    /// Data handed from one call to another that types couldn't confirm.
+    unverified: Vec<UnverifiedFlow>,
 }
 
 type Listener = Arc<dyn Fn(&ArchEvent) + Send + Sync>;
@@ -216,7 +218,7 @@ impl ArchitectureService {
         let extracts: Vec<FileExtract> = self.index.all()?;
         let resolved = resolve(&extracts, &self.packs, &self.types);
         let mut observed = self.observed.write().map_err(ServiceError::poisoned)?;
-        *observed = Observed { graph: resolved.graph, ambiguous: resolved.ambiguous, external: resolved.external };
+        *observed = Observed { graph: resolved.graph, ambiguous: resolved.ambiguous, external: resolved.external, unverified: resolved.unverified_flows };
         Ok(())
     }
 
@@ -581,6 +583,8 @@ impl ArchitectureService {
         let mut report = verify::verify_component(plan, planned, observed, goal);
         report.findings.extend(self.rules.check(observed.component(&planned.id), observed, &self.root, &self.packs, &self.types));
         report.extend(chain::recheck(plan, &planned.id, observed));
+        let unverified = self.observed.read().map_err(ServiceError::poisoned)?.unverified.clone();
+        report.findings.extend(verify::planned_flows(plan, &planned.id, observed, &unverified));
         if deep && !report.has_errors() {
             let merged = Graph::merge(observed.clone(), std::slice::from_ref(plan));
             let component = merged.component(&planned.id).unwrap_or(planned);

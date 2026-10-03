@@ -531,3 +531,45 @@ fn logic_step_checks_run_during_validation_and_record_pass_or_fail() {
     assert_eq!(catalog.logic_checks.shell, vec!["bash", "-c"]);
     assert!(arch_service::ToolCatalog::from_toml("[logic_checks]\nshell = []\ntimeout_secs = 5").is_err());
 }
+
+// req: P6.4
+#[test]
+fn planned_data_flows_are_confirmed_missing_or_explicitly_unverifiable() {
+    let r = repo();
+    let mut plan = Plan::new("flows", "Flows");
+    for name in ["produce", "opaque", "consume", "sink", "pipeline"] {
+        plan.components.push(comp(&format!("sample::{name}"), "function"));
+        plan.relations.push(rel(RelationKind::Contains, "sample", &format!("sample::{name}")));
+    }
+    let flow = |a: &str, b: &str, to: &str| {
+        let mut f = rel(RelationKind::DataFlow, a, b);
+        f.ports = Some(("return".into(), to.into()));
+        f
+    };
+    plan.relations.push(flow("sample::produce", "sample::consume", "text"));
+    plan.relations.push(flow("sample::opaque", "sample::sink", "x"));
+    plan.relations.push(flow("sample::produce", "sample::sink", "x"));
+    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    let lib = r.root.join("src/lib.rs");
+    std::fs::write(
+        &lib,
+        std::fs::read_to_string(&lib).unwrap()
+            + "\npub fn produce() -> String {\n    String::new()\n}\n\npub fn opaque() {\n}\n\npub fn consume(text: &str) {\n    let _ = text;\n}\n\npub fn sink(x: &str) {\n    let _ = x;\n}\n\npub fn pipeline() {\n    let s = produce();\n    consume(&s);\n    let v = opaque();\n    sink(v);\n}\n",
+    )
+    .unwrap();
+    let flows = |symbol: &str| -> Vec<(FindingCode, String)> {
+        let v = r.service.verify(&pid("flows"), &id(symbol), Stage::Implemented).unwrap();
+        v.report.findings.into_iter().filter(|f| matches!(f.code, FindingCode::DataFlowMissing | FindingCode::DataFlowUnverifiable)).map(|f| (f.code, f.message)).collect()
+    };
+    assert!(flows("sample::consume").is_empty(), "produce -> consume is in the code: confirmed");
+    let sink = flows("sample::sink");
+    assert_eq!(
+        sink,
+        vec![
+            (FindingCode::DataFlowMissing, "the code doesn't pass rust:sample::produce's output into rust:sample::sink (return -> x)".to_owned()),
+            (FindingCode::DataFlowUnverifiable, "rust:sample::opaque -> rust:sample::sink (return -> x) is handed over but can't be confirmed: sample::opaque declares no return type".to_owned()),
+        ]
+    );
+    // Seen from the source's side, the same three outcomes.
+    assert_eq!(flows("sample::produce").len(), 1, "produce -> sink missing; produce -> consume confirmed");
+}
