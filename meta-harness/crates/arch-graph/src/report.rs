@@ -41,6 +41,10 @@ pub enum FindingCode {
     UnresolvedCall,
     IllegalTransition,
     ApprovalRequired,
+    ToolFailed,
+    UnknownTool,
+    ReviewFinding,
+    ReviewerUnavailable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

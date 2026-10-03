@@ -17,7 +17,7 @@ mod wire;
 
 pub use anchor::{CodeAnchor, ProposedLocation, RepoPath, Span};
 pub use events::{ArchEvent, ChangeReason, Requester, ViewRequest};
-pub use component::{Component, ComponentId, ImplementationSpec, Invariant, LogicStep, Param, Signature};
+pub use component::{Component, ComponentId, ImplementationSpec, Invariant, LogicStep, Param, Signature, ToolRef};
 pub use graph::{Alignment, Graph};
 pub use lifecycle::{Stage, Status, can_transition};
 pub use plan::{Approval, Plan, PlanId, Reference, SCHEMA_VERSION, check_schema_version};

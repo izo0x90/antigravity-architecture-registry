@@ -122,6 +122,27 @@ struct ComponentArgs {
 }
 
 #[derive(Deserialize)]
+struct ToolsArgs {
+    plan: String,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+fn findings_text(report: &arch_graph::Report) -> String {
+    let mut out = String::new();
+    for f in &report.findings {
+        let sev = match f.severity {
+            Severity::Error => "ERROR",
+            Severity::Warning => "warning",
+            Severity::Info => "info",
+        };
+        let at = f.at.as_ref().map(|c| format!(" ({}:{})", c.file, c.span.start_line)).unwrap_or_default();
+        let _ = writeln!(out, "{sev}{at} {}{}", f.message, f.suggestion.as_ref().map(|s| format!(" — {s}")).unwrap_or_default());
+    }
+    out
+}
+
+#[derive(Deserialize)]
 struct VerifyArgs {
     plan: String,
     id: String,
@@ -305,6 +326,38 @@ impl McpService {
                     let _ = writeln!(out, "- {}{at}{}", f.message, f.suggestion.as_ref().map(|s| format!(" — {s}")).unwrap_or_default());
                 }
                 out.push_str(&next_steps(&current, Some(&cid)));
+                Ok(out)
+            }
+            "run_tools" => {
+                let a: ToolsArgs = parse(args)?;
+                let plan = plan_id(&a.plan)?;
+                let only = a.id.map(ComponentId::new);
+                let report = blocking(&self.arch, move |s| s.run_tools(&plan, only.as_ref())).await?;
+                let mut out = String::new();
+                for run in &report.runs {
+                    let _ = writeln!(out, "{} {} on {}: `{} {}`", if run.passed { "PASS" } else { "FAIL" }, run.invocation.tool, run.invocation.component, run.invocation.program, run.invocation.args.join(" "));
+                }
+                if report.runs.is_empty() {
+                    out.push_str("No tools apply (define them in .nah/tools.toml, bind them in a component's spec `validation`).\n");
+                }
+                out.push_str(&findings_text(&report.report));
+                out.push_str(if report.report.has_errors() { "\nNext: fix what failed, run_tools again, then verify." } else { "\nNext: verify goal=implemented." });
+                Ok(out)
+            }
+            "review" => {
+                let a: ComponentArgs = parse(args)?;
+                let plan = plan_id(&a.plan)?;
+                let cid = ComponentId::new(a.id);
+                let reviews = blocking(&self.arch, move |s| s.review(&plan, &cid)).await?;
+                let mut out = String::new();
+                for run in &reviews.runs {
+                    let _ = writeln!(out, "{} ({}): {}", run.reviewer, run.category, if run.ran { format!("{} points", run.findings) } else { "didn't run".to_owned() });
+                }
+                if reviews.runs.is_empty() {
+                    out.push_str("No reviewers apply to this component.\n");
+                }
+                out.push_str(&findings_text(&reviews.report));
+                out.push_str(if reviews.report.has_errors() { "\nNext: address the blocking points (ERROR), then review again." } else { "\nNext: verify goal=implemented." });
                 Ok(out)
             }
             other => Err(ServiceError::NotFound(format!("tool '{other}'"))),

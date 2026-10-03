@@ -101,5 +101,15 @@ pub fn list_tools(views: &ViewCatalog) -> Vec<McpTool> {
             "Check the code against the plan for one component and, when it passes, move it to the goal stage. goal=skeleton accepts placeholder bodies (todo!(), raise NotImplementedError...); goal=implemented requires them gone.",
             json!({ "type": "object", "properties": { "plan": plan, "id": id, "goal": { "type": "string", "enum": ["skeleton", "implemented"] } }, "required": ["plan", "id", "goal"] }),
         ),
+        tool(
+            "run_tools",
+            "Run the project's validation tools (linters, type checkers, tests) on one planned component, or on every planned component already in the code. Shows each command, whether it passed, and the end of its output.",
+            json!({ "type": "object", "properties": { "plan": plan, "id": id }, "required": ["plan"] }),
+        ),
+        tool(
+            "review",
+            "Run the reviewers that apply to one planned component (faithfulness to the plan, anti-patterns, logic...). Blocking points must be fixed before it can be verified as implemented.",
+            json!({ "type": "object", "properties": { "plan": plan, "id": id }, "required": ["plan", "id"] }),
+        ),
     ]
 }

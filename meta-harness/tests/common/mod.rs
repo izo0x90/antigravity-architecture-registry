@@ -12,7 +12,9 @@ use harness_core::*;
 use arch_service::{ArchitectureService, FsIndex, FsPlans};
 use meta_harness::mcp::{McpServerState, McpService};
 use meta_harness::server::{AppState, bridge_architecture_events, create_router};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::sync::{broadcast, watch};
 
 pub const FAKE: &str = "fake";
@@ -209,6 +211,12 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
 /// (`sample`: lib.rs, store.rs, util.rs), already ingested. The copy lives
 /// for the rest of the test process.
 pub fn fixture_architecture() -> Arc<ArchitectureService> {
+    fixture_architecture_with(|a| a)
+}
+
+/// The fixture repo's service, set up further (tools, reviewers) before the
+/// first ingest.
+pub fn fixture_architecture_with(setup: impl FnOnce(ArchitectureService) -> ArchitectureService) -> Arc<ArchitectureService> {
     let root = tempfile::tempdir().unwrap().keep().join("sample");
     copy_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/arch-index/tests/fixtures/rust/sample"), &root);
     let arch = ArchitectureService::open(
@@ -220,14 +228,19 @@ pub fn fixture_architecture() -> Arc<ArchitectureService> {
         Box::new(FsIndex::new(&root).unwrap()),
     )
     .unwrap();
+    let arch = setup(arch);
     arch.ingest(&root).unwrap();
     Arc::new(arch)
 }
 
 /// Serves the app with the fake provider configured as instance "fake".
 pub async fn spawn_app() -> (SocketAddr, AppState) {
+    spawn_app_with(fixture_architecture()).await
+}
+
+/// Serves the app over a given architecture service.
+pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppState) {
     let hub = Arc::new(EventHub::default());
-    let arch = fixture_architecture();
     bridge_architecture_events(&arch, &hub);
     let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone())));
     let registry = Arc::new(InstanceRegistry::new(vec![Arc::new(FakeDriver)], hub.clone()));
@@ -255,4 +268,54 @@ pub async fn http(addr: SocketAddr, method: &str, path: &str, body: Option<&str>
     let status = response.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
     let body = response.split_once("\r\n\r\n").map(|(_, b)| b.to_owned()).unwrap_or_default();
     (status, body)
+}
+
+/// An MCP client over the real endpoint (SSE stream + message posts).
+pub struct Mcp {
+    addr: SocketAddr,
+    endpoint: String,
+    events: BufReader<TcpStream>,
+    next_id: u64,
+}
+
+impl Mcp {
+    pub async fn connect(addr: SocketAddr) -> Self {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"GET /api/mcp/sse HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n").await.unwrap();
+        let mut events = BufReader::new(stream);
+        let endpoint = loop {
+            let mut line = String::new();
+            events.read_line(&mut line).await.unwrap();
+            if let Some(url) = line.strip_prefix("data: /api/mcp/messages") {
+                break format!("/api/mcp/messages{}", url.trim());
+            }
+        };
+        Self { addr, endpoint, events, next_id: 1 }
+    }
+
+    pub async fn rpc(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string();
+        let (status, _) = http(self.addr, "POST", &self.endpoint, Some(&body)).await;
+        assert_eq!(status, 200);
+        // The response also arrives on the SSE stream.
+        loop {
+            let mut line = String::new();
+            self.events.read_line(&mut line).await.unwrap();
+            if let Some(data) = line.strip_prefix("data: ")
+                && let Ok(v) = serde_json::from_str::<Value>(data.trim())
+                && v["id"] == id
+            {
+                return v;
+            }
+        }
+    }
+
+    /// Calls a tool; returns (is_error, text).
+    pub async fn tool(&mut self, name: &str, args: Value) -> (bool, String) {
+        let v = self.rpc("tools/call", json!({ "name": name, "arguments": args })).await;
+        let result = &v["result"];
+        (result["isError"].as_bool().unwrap_or(false), result["content"][0]["text"].as_str().unwrap_or_default().to_owned())
+    }
 }

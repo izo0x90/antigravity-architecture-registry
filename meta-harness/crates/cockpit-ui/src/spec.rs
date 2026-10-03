@@ -420,6 +420,7 @@ mod tests {
                     pattern: None,
                     logic_steps: vec![LogicStep { sequence: 1, name: "read".into(), description: "Read the input.".into() }],
                     invariants: vec![Invariant { name: "pure".into(), kind: "side_effects".into(), description: "No I/O.".into() }],
+                    validation: vec![],
                 }),
                 placeholders: vec![],
             },

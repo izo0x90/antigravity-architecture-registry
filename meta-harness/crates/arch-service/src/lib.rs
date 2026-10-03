@@ -2,18 +2,24 @@
 //! index storage, incremental ingestion, plan operations and checks,
 //! user-only approvals, contract slices, and implementation verification.
 
+mod chain;
 mod checks;
 mod contract;
 mod ops;
+mod review;
 mod service;
 mod store;
+mod tools;
 mod verify;
 
 pub use contract::{ContractSlice, Neighbor};
 pub use ops::PlanOp;
 pub use arch_graph::{ComponentDetail, ViewResult};
-pub use service::{Actor, ArchitectureService, IngestReport, Verification};
+pub use review::{ReviewNote, ReviewProvider, ReviewRequest, ReviewRun, ReviewerCatalog, ReviewerDef, ReviewerKind, ReviewsReport, Rule};
+pub use service::{Actor, ArchitectureService, IngestReport, Refresh, Reverified, Verification, affected};
+pub use tools::{Invocation, ProcessRunner, ToolCatalog, ToolDef, ToolOutput, ToolRun, ToolRunner, ToolsReport};
 pub use store::{CodeIndexStore, FsIndex, FsPlans, MemoryIndex, MemoryPlans, PlanRepository};
+pub use chain::chain;
 pub use verify::signature_diff;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

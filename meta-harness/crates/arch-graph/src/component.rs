@@ -73,6 +73,21 @@ pub struct ImplementationSpec {
     pub logic_steps: Vec<LogicStep>,
     #[serde(default)]
     pub invariants: Vec<Invariant>,
+    /// Validation tools this component binds to (by tool name).
+    #[serde(default)]
+    pub validation: Vec<ToolRef>,
+}
+
+/// A component's use of a project validation tool: which targets to check
+/// (default: the component's file) and, optionally, args replacing the
+/// tool's defaults.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolRef {
+    pub tool: String,
+    #[serde(default)]
+    pub targets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

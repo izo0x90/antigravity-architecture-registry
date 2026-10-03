@@ -3,7 +3,7 @@
 //! planned calls happen inside its body, compares its signature with the
 //! plan, and tracks placeholder bodies for the skeleton stage.
 
-use arch_graph::{Component, ComponentId, Finding, FindingCode, Graph, Plan, RelationKind, Report, Signature, Stage, Target};
+use arch_graph::{Component, ComponentId, Finding, FindingCode, Graph, Plan, Relation, RelationKind, Report, Signature, Stage, Target};
 
 fn target(id: &ComponentId) -> Target {
     Target::Component { id: id.clone() }
@@ -40,6 +40,25 @@ pub fn signature_diff(planned: &Signature, observed: &Signature) -> Vec<String> 
     diff
 }
 
+/// Does the code make this planned call? None when it does; otherwise a
+/// MissingCallSite, or WrongCallTarget when it calls something of the same
+/// name instead.
+pub(crate) fn check_planned_call(relation: &Relation, observed: &Graph) -> Option<Finding> {
+    let observed_calls: Vec<_> = observed.outgoing(&relation.source, Some(RelationKind::Calls)).collect();
+    if observed_calls.iter().any(|r| r.target == relation.target) {
+        return None;
+    }
+    let last = |id: &ComponentId| id.as_str().rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("").to_owned();
+    let target_name = last(&relation.target);
+    let similar: Vec<String> = observed_calls.iter().filter(|r| last(&r.target) == target_name).map(|r| r.target.to_string()).collect();
+    let (source, target) = (&relation.source, &relation.target);
+    Some(if similar.is_empty() {
+        Finding::error(FindingCode::MissingCallSite, Target::Relation { id: relation.id() }, format!("{source} doesn't call {target}"))
+    } else {
+        Finding::error(FindingCode::WrongCallTarget, Target::Relation { id: relation.id() }, format!("{source} calls {} instead of {target}", similar.join(", ")))
+    })
+}
+
 /// Verifies one planned component against the observed code, for reaching
 /// `goal` (Skeleton tolerates placeholder bodies; Implemented doesn't).
 pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal: Stage) -> Report {
@@ -72,22 +91,9 @@ pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal
 
     // Planned calls from this component must happen inside its body.
     for relation in plan.relations.iter().filter(|r| r.kind == RelationKind::Calls && &r.source == id) {
-        let observed_calls: Vec<_> = observed.outgoing(id, Some(RelationKind::Calls)).collect();
-        if observed_calls.iter().any(|r| r.target == relation.target) {
-            continue;
+        if let Some(finding) = check_planned_call(relation, observed) {
+            report.push(at(finding));
         }
-        let target_name = relation.target.as_str().rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("");
-        let similar: Vec<String> = observed_calls
-            .iter()
-            .filter(|r| r.target.as_str().rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next() == Some(target_name))
-            .map(|r| r.target.to_string())
-            .collect();
-        let finding = if similar.is_empty() {
-            Finding::error(FindingCode::MissingCallSite, Target::Relation { id: relation.id() }, format!("{id} doesn't call {}", relation.target))
-        } else {
-            Finding::error(FindingCode::WrongCallTarget, Target::Relation { id: relation.id() }, format!("{id} calls {} instead of {}", similar.join(", "), relation.target))
-        };
-        report.push(at(finding));
     }
 
     if let (Some(planned_sig), Some(code_sig)) = (&planned.signature, &code.signature) {

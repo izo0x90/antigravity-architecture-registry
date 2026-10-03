@@ -3,61 +3,8 @@
 
 mod common;
 
-use std::net::SocketAddr;
-
-use common::spawn_app;
-use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
-
-struct Mcp {
-    addr: SocketAddr,
-    endpoint: String,
-    events: BufReader<TcpStream>,
-    next_id: u64,
-}
-
-impl Mcp {
-    async fn connect(addr: SocketAddr) -> Self {
-        let mut stream = TcpStream::connect(addr).await.unwrap();
-        stream.write_all(b"GET /api/mcp/sse HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n").await.unwrap();
-        let mut events = BufReader::new(stream);
-        let endpoint = loop {
-            let mut line = String::new();
-            events.read_line(&mut line).await.unwrap();
-            if let Some(url) = line.strip_prefix("data: /api/mcp/messages") {
-                break format!("/api/mcp/messages{}", url.trim());
-            }
-        };
-        Self { addr, endpoint, events, next_id: 1 }
-    }
-
-    async fn rpc(&mut self, method: &str, params: Value) -> Value {
-        let id = self.next_id;
-        self.next_id += 1;
-        let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string();
-        let (status, _) = common::http(self.addr, "POST", &self.endpoint, Some(&body)).await;
-        assert_eq!(status, 200);
-        // The response also arrives on the SSE stream.
-        loop {
-            let mut line = String::new();
-            self.events.read_line(&mut line).await.unwrap();
-            if let Some(data) = line.strip_prefix("data: ")
-                && let Ok(v) = serde_json::from_str::<Value>(data.trim())
-                && v["id"] == id
-            {
-                return v;
-            }
-        }
-    }
-
-    /// Calls a tool; returns (is_error, text).
-    async fn tool(&mut self, name: &str, args: Value) -> (bool, String) {
-        let v = self.rpc("tools/call", json!({ "name": name, "arguments": args })).await;
-        let result = &v["result"];
-        (result["isError"].as_bool().unwrap_or(false), result["content"][0]["text"].as_str().unwrap_or_default().to_owned())
-    }
-}
+use common::{Mcp, spawn_app};
+use serde_json::json;
 
 // req: P8.3, P8.4
 #[tokio::test]
@@ -68,7 +15,7 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     assert_eq!(init["result"]["serverInfo"]["name"], "nah-architecture");
     let tools = mcp.rpc("tools/list", json!({})).await;
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for expected in ["ingest", "list_types", "search", "inspect", "view", "navigate", "plan_list", "plan_create", "plan_edit", "plan_validate", "contract", "verify"] {
+    for expected in ["ingest", "list_types", "search", "inspect", "view", "navigate", "plan_list", "plan_create", "plan_edit", "plan_validate", "contract", "verify", "run_tools", "review"] {
         assert!(names.contains(&expected), "{expected} in {names:?}");
     }
     assert!(!names.iter().any(|n| n.contains("approve")), "agents can't approve");
