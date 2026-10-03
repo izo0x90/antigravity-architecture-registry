@@ -5,6 +5,7 @@
 
 mod anchor;
 mod component;
+mod events;
 mod graph;
 mod lifecycle;
 mod plan;
@@ -14,6 +15,7 @@ mod types;
 pub mod view;
 
 pub use anchor::{CodeAnchor, ProposedLocation, RepoPath, Span};
+pub use events::{ArchEvent, ChangeReason, Requester, ViewRequest};
 pub use component::{Component, ComponentId, ImplementationSpec, Invariant, LogicStep, Param, Signature};
 pub use graph::{Alignment, Graph};
 pub use lifecycle::{Stage, Status, can_transition};
@@ -21,6 +23,7 @@ pub use plan::{Approval, Plan, PlanId, Reference, SCHEMA_VERSION, check_schema_v
 pub use relation::{Provenance, Relation, RelationId, RelationKind};
 pub use report::{CodeRef, Finding, FindingCode, Report, Severity, Target};
 pub use types::{ResolvedType, TypeDef, TypeSystem};
+pub use view::{View, ViewCatalog, ViewSpec};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ModelError {

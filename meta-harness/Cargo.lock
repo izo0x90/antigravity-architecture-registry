@@ -196,6 +196,14 @@ dependencies = [
 [[package]]
 name = "arch-service"
 version = "0.1.0"
+dependencies = [
+ "arch-graph",
+ "arch-index",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "architecture-model"

@@ -2,5 +2,14 @@
 name = "arch-service"
 version = "0.1.0"
 edition = "2024"
+description = "The architecture service: plan and index storage, incremental ingestion, plan operations and checks, approvals, contracts and implementation verification."
 
 [dependencies]
+arch-graph = { path = "../arch-graph" }
+arch-index = { path = "../arch-index" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,446 @@
+//! The architecture service: the code (observed, from the index) with plans
+//! laid over it. Plans change only through operations; the observed graph
+//! changes only through ingestion. Every change is announced to listeners.
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use arch_graph::view::{Layout, layout, query, render_text};
+use arch_graph::{
+    Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Relation, Report, Requester,
+    Severity, Stage, Target, TypeSystem, View, ViewCatalog, ViewRequest, ViewSpec, can_transition,
+};
+use arch_index::{AmbiguousCall, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk};
+use serde::{Deserialize, Serialize};
+
+use crate::contract::{ContractSlice, slice};
+use crate::ops::{PlanOp, apply};
+use crate::store::{CodeIndexStore, PlanRepository};
+use crate::{ServiceError, checks, verify};
+
+/// Who is asking. Approvals are for users only.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Actor {
+    User { name: String },
+    Agent { session: String },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct IngestReport {
+    pub files: usize,
+    pub parsed: usize,
+    pub cached: usize,
+    pub removed: usize,
+    pub components: usize,
+    pub relations: usize,
+    pub ambiguous: usize,
+    pub external: usize,
+    pub millis: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ViewResult {
+    pub view: View,
+    pub layout: Layout,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ComponentDetail {
+    pub component: Component,
+    pub alignment: Alignment,
+    pub outgoing: Vec<Relation>,
+    pub incoming: Vec<Relation>,
+    /// The component's source text (from its anchor), if it's in the code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Verification {
+    pub report: Report,
+    /// The stage it moved to, when verification passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advanced_to: Option<Stage>,
+}
+
+#[derive(Default)]
+struct Observed {
+    graph: Graph,
+    ambiguous: Vec<AmbiguousCall>,
+    external: Vec<ExternalCall>,
+}
+
+type Listener = Arc<dyn Fn(&ArchEvent) + Send + Sync>;
+
+pub struct ArchitectureService {
+    root: PathBuf,
+    packs: PackSet,
+    types: TypeSystem,
+    views: ViewCatalog,
+    plans: Box<dyn PlanRepository>,
+    index: Box<dyn CodeIndexStore>,
+    observed: RwLock<Observed>,
+    listeners: RwLock<Vec<Listener>>,
+}
+
+fn now_rfc3339() -> String {
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+impl ArchitectureService {
+    /// Opens the service over `root`, loading the cached index (no parsing).
+    pub fn open(root: &Path, packs: PackSet, types: TypeSystem, views: ViewCatalog, plans: Box<dyn PlanRepository>, index: Box<dyn CodeIndexStore>) -> Result<Self, ServiceError> {
+        let service = Self {
+            root: root.to_path_buf(),
+            packs,
+            types,
+            views,
+            plans,
+            index,
+            observed: RwLock::new(Observed::default()),
+            listeners: RwLock::new(Vec::new()),
+        };
+        service.rebuild_observed()?;
+        Ok(service)
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn types(&self) -> &TypeSystem {
+        &self.types
+    }
+
+    pub fn views(&self) -> &ViewCatalog {
+        &self.views
+    }
+
+    pub fn subscribe(&self, listener: impl Fn(&ArchEvent) + Send + Sync + 'static) {
+        if let Ok(mut l) = self.listeners.write() {
+            l.push(Arc::new(listener));
+        }
+    }
+
+    fn emit(&self, event: ArchEvent) {
+        let listeners: Vec<Listener> = self.listeners.read().map(|l| l.clone()).unwrap_or_default();
+        for listener in listeners {
+            listener(&event);
+        }
+    }
+
+    fn rebuild_observed(&self) -> Result<(), ServiceError> {
+        let extracts: Vec<FileExtract> = self.index.all()?;
+        let resolved = resolve(&extracts, &self.packs, &self.types);
+        let mut observed = self.observed.write().map_err(ServiceError::poisoned)?;
+        *observed = Observed { graph: resolved.graph, ambiguous: resolved.ambiguous, external: resolved.external };
+        Ok(())
+    }
+
+    /// Re-reads `scope` (a path inside the repo): parses changed files, drops
+    /// deleted ones, then re-resolves the whole graph.
+    pub fn ingest(&self, scope: &Path) -> Result<IngestReport, ServiceError> {
+        let started = Instant::now();
+        let files = walk(&self.root, scope, &self.packs).map_err(|e| ServiceError::Index(e.to_string()))?;
+        let mut report = IngestReport { files: files.len(), ..IngestReport::default() };
+        let mut seen = BTreeSet::new();
+        for file in &files {
+            let Some(pack) = self.packs.by_name(&file.language) else { continue };
+            let content = std::fs::read_to_string(&file.absolute).map_err(|e| ServiceError::Io(format!("{}: {e}", file.path)))?;
+            let hash = content_hash(&content);
+            seen.insert(file.path.clone());
+            if let Some(cached) = self.index.get(&file.path, &hash)?
+                && cached.module == file.module
+            {
+                report.cached += 1;
+                continue;
+            }
+            self.index.put(&extract_file(pack, file.path.clone(), file.module.clone(), &content))?;
+            report.parsed += 1;
+        }
+        // Files under the scope that are gone (or now ignored) leave the index.
+        let prefix = scope.strip_prefix(&self.root).unwrap_or(scope).to_string_lossy().trim_start_matches("./").trim_start_matches('.').to_owned();
+        for extract in self.index.all()? {
+            let under = prefix.is_empty() || extract.file.as_str() == prefix || extract.file.as_str().starts_with(&format!("{}/", prefix.trim_end_matches('/')));
+            if under && !seen.contains(&extract.file) {
+                self.index.remove(&extract.file)?;
+                report.removed += 1;
+            }
+        }
+        self.rebuild_observed()?;
+        let observed = self.observed.read().map_err(ServiceError::poisoned)?;
+        (report.components, report.relations) = observed.graph.len();
+        report.ambiguous = observed.ambiguous.len();
+        report.external = observed.external.len();
+        report.millis = started.elapsed().as_millis() as u64;
+        drop(observed);
+        self.emit(ArchEvent::Changed { reason: ChangeReason::Ingested, plans: Vec::new(), components: Vec::new() });
+        Ok(report)
+    }
+
+    pub fn observed(&self) -> Result<Graph, ServiceError> {
+        Ok(self.observed.read().map_err(ServiceError::poisoned)?.graph.clone())
+    }
+
+    pub fn ambiguous_calls(&self) -> Result<Vec<AmbiguousCall>, ServiceError> {
+        Ok(self.observed.read().map_err(ServiceError::poisoned)?.ambiguous.clone())
+    }
+
+    /// The code with one plan (or all plans) laid over it.
+    pub fn graph(&self, plan: Option<&PlanId>) -> Result<Graph, ServiceError> {
+        let plans: Vec<Plan> = match plan {
+            Some(id) => vec![self.plan(id)?],
+            None => self.plans()?,
+        };
+        Ok(Graph::merge(self.observed()?, &plans))
+    }
+
+    pub fn plans(&self) -> Result<Vec<Plan>, ServiceError> {
+        self.plans.list()?.iter().filter_map(|id| self.plans.get(id).transpose()).collect()
+    }
+
+    pub fn plan(&self, id: &PlanId) -> Result<Plan, ServiceError> {
+        self.plans.get(id)?.ok_or_else(|| ServiceError::NotFound(format!("plan {id}")))
+    }
+
+    pub fn create_plan(&self, id: &str, title: &str, description: &str) -> Result<Plan, ServiceError> {
+        let plan_id = PlanId::new(id).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
+        if self.plans.get(&plan_id)?.is_some() {
+            return Err(ServiceError::InvalidOp(format!("plan {id} already exists")));
+        }
+        let mut plan = Plan::new(id, title);
+        plan.description = description.to_owned();
+        self.plans.save(&plan)?;
+        self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id], components: Vec::new() });
+        Ok(plan)
+    }
+
+    pub fn delete_plan(&self, id: &PlanId) -> Result<(), ServiceError> {
+        self.plans.delete(id)?;
+        self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![id.clone()], components: Vec::new() });
+        Ok(())
+    }
+
+    /// Applies one operation to a plan.
+    pub fn apply(&self, plan_id: &PlanId, op: PlanOp) -> Result<Plan, ServiceError> {
+        let mut plan = self.plan(plan_id)?;
+        let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let touched = apply(&mut plan, op, &graph, &self.root, &self.packs, &self.types)?;
+        self.plans.save(&plan)?;
+        self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id.clone()], components: touched });
+        Ok(plan)
+    }
+
+    /// The components a plan covers: its own plus referenced neighborhoods.
+    pub fn scope(&self, plan_id: &PlanId) -> Result<Vec<ComponentId>, ServiceError> {
+        let plan = self.plan(plan_id)?;
+        let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let mut ids: BTreeSet<ComponentId> = plan.components.iter().map(|c| c.id.clone()).collect();
+        for reference in &plan.references {
+            ids.insert(reference.id.clone());
+            if reference.depth > 0 && !reference.kinds.is_empty() {
+                let spec = ViewSpec {
+                    name: String::new(),
+                    description: String::new(),
+                    kinds: reference.kinds.clone(),
+                    direction: arch_graph::view::Direction::Out,
+                    depth: reference.depth,
+                    layout: arch_graph::view::LayoutKind::Layered,
+                    overlays: Vec::new(),
+                    include_ancestors: false,
+                    roots: vec![reference.id.clone()],
+                    filters: Default::default(),
+                };
+                ids.extend(query(&graph, &spec).nodes.into_iter().map(|n| n.id));
+            }
+        }
+        Ok(ids.into_iter().collect())
+    }
+
+    /// Plan checks (before any code is written).
+    pub fn validate(&self, plan_id: &PlanId) -> Result<Report, ServiceError> {
+        let plan = self.plan(plan_id)?;
+        let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let report = checks::check_plan(&plan, &graph, &self.root, &self.packs, &self.types);
+        self.emit_validated(plan_id, None, &report);
+        Ok(report)
+    }
+
+    fn emit_validated(&self, plan: &PlanId, component: Option<&ComponentId>, report: &Report) {
+        let count = |s: Severity| report.findings.iter().filter(|f| f.severity == s).count();
+        self.emit(ArchEvent::Validated { plan: plan.clone(), component: component.cloned(), errors: count(Severity::Error), warnings: count(Severity::Warning) });
+    }
+
+    /// Design approvals (ArchApproved, PlanApproved). Only a user can approve,
+    /// and only a component whose checks pass.
+    pub fn approve(&self, plan_id: &PlanId, id: &ComponentId, to: Stage, actor: &Actor) -> Result<Approval, ServiceError> {
+        let Actor::User { name } = actor else {
+            return Err(ServiceError::Forbidden("approvals come from the user in the cockpit; present the contract and wait".into()));
+        };
+        if !matches!(to, Stage::ArchApproved | Stage::PlanApproved) {
+            return Err(ServiceError::InvalidOp(format!("{to:?} is reached by verification, not approval")));
+        }
+        let mut plan = self.plan(plan_id)?;
+        let from = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?.stage;
+        if !can_transition(from, to) {
+            return Err(ServiceError::InvalidOp(format!("can't go from {from:?} to {to:?}")));
+        }
+        // Check as if approved (location rules depend on the stage).
+        if let Some(c) = plan.component_mut(id) {
+            c.stage = to;
+        }
+        let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let report = checks::check_plan(&plan, &graph, &self.root, &self.packs, &self.types);
+        let blocking: Vec<String> = report.errors_for(id).map(|f| f.message.clone()).collect();
+        if !blocking.is_empty() {
+            return Err(ServiceError::InvalidOp(format!("{id} can't be approved yet: {}", blocking.join("; "))));
+        }
+        let approval = Approval { component: id.clone(), from, to, by: name.clone(), at: now_rfc3339() };
+        plan.approvals.push(approval.clone());
+        self.plans.save(&plan)?;
+        self.emit(ArchEvent::Changed { reason: ChangeReason::Approved, plans: vec![plan_id.clone()], components: vec![id.clone()] });
+        Ok(approval)
+    }
+
+    pub fn contract(&self, plan_id: &PlanId, id: &ComponentId) -> Result<ContractSlice, ServiceError> {
+        let plan = self.plan(plan_id)?;
+        let planned = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?;
+        let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        Ok(slice(&plan, planned, &graph))
+    }
+
+    /// Re-reads the component's file, verifies it for `goal` (Skeleton or
+    /// Implemented) and, when clean, moves it there.
+    pub fn verify(&self, plan_id: &PlanId, id: &ComponentId, goal: Stage) -> Result<Verification, ServiceError> {
+        if !matches!(goal, Stage::Skeleton | Stage::Implemented) {
+            return Err(ServiceError::InvalidOp(format!("verification targets Skeleton or Implemented, not {goal:?}")));
+        }
+        let mut plan = self.plan(plan_id)?;
+        let planned = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?.clone();
+        if let Some(file) = planned.file() {
+            let path = self.root.join(file.as_str());
+            if path.exists() {
+                self.ingest(&path)?;
+            }
+        }
+        let observed = self.observed()?;
+        let mut report = verify::verify_component(&plan, &planned, &observed, goal);
+        let mut advanced_to = None;
+        if !report.has_errors() {
+            if planned.stage == goal {
+                advanced_to = Some(goal);
+            } else if can_transition(planned.stage, goal) {
+                if let Some(c) = plan.component_mut(id) {
+                    c.stage = goal;
+                }
+                self.plans.save(&plan)?;
+                advanced_to = Some(goal);
+                self.emit(ArchEvent::Changed { reason: ChangeReason::StageChanged, plans: vec![plan_id.clone()], components: vec![id.clone()] });
+            } else {
+                report.push(Finding::error(
+                    FindingCode::IllegalTransition,
+                    Target::Component { id: id.clone() },
+                    format!("verified, but {:?} can't move to {goal:?} (approve the design first)", planned.stage),
+                ));
+            }
+        }
+        self.emit_validated(plan_id, Some(id), &report);
+        Ok(Verification { report, advanced_to })
+    }
+
+    pub fn view(&self, spec: &ViewSpec, plan: Option<&PlanId>) -> Result<ViewResult, ServiceError> {
+        let graph = self.graph(plan)?;
+        let view = query(&graph, spec);
+        let layout = layout(&view);
+        let text = render_text(&graph, &view);
+        Ok(ViewResult { view, layout, text })
+    }
+
+    pub fn named_view(&self, name: &str, plan: Option<&PlanId>, roots: Vec<ComponentId>, depth: Option<u32>) -> Result<ViewResult, ServiceError> {
+        let mut spec = self.views.get(name).cloned().ok_or_else(|| ServiceError::NotFound(format!("view '{name}'")))?;
+        if !roots.is_empty() {
+            spec.roots = roots;
+        }
+        if let Some(depth) = depth {
+            spec.depth = depth;
+        }
+        self.view(&spec, plan)
+    }
+
+    pub fn component(&self, id: &ComponentId, plan: Option<&PlanId>) -> Result<ComponentDetail, ServiceError> {
+        let graph = self.graph(plan)?;
+        let component = graph.component(id).cloned().ok_or_else(|| ServiceError::NotFound(id.to_string()))?;
+        let code = component.anchor.as_ref().and_then(|a| {
+            let text = std::fs::read_to_string(self.root.join(a.file.as_str())).ok()?;
+            let lines: Vec<&str> = text.lines().collect();
+            let (start, end) = (a.span.start_line.saturating_sub(1) as usize, (a.span.end_line as usize).min(lines.len()));
+            (start < end).then(|| lines[start..end].join("\n"))
+        });
+        Ok(ComponentDetail {
+            alignment: graph.alignment(id).unwrap_or(Alignment::Observed),
+            outgoing: graph.outgoing(id, None).cloned().collect(),
+            incoming: graph.incoming(id, None).cloned().collect(),
+            component,
+            code,
+        })
+    }
+
+    /// Components whose name, symbol or file matches `query` (case-insensitive).
+    pub fn search(&self, query: &str, plan: Option<&PlanId>, limit: usize) -> Result<Vec<Component>, ServiceError> {
+        let graph = self.graph(plan)?;
+        let q = query.to_lowercase();
+        let mut hits: Vec<(usize, Component)> = graph
+            .components()
+            .filter_map(|c| {
+                let symbol = c.anchor.as_ref().map(|a| a.symbol.clone()).or(c.proposed.as_ref().map(|p| p.symbol.clone())).unwrap_or_default();
+                let file = c.file().map(|f| f.as_str().to_owned()).unwrap_or_default();
+                let rank = if c.name.to_lowercase() == q {
+                    0
+                } else if c.name.to_lowercase().contains(&q) {
+                    1
+                } else if symbol.to_lowercase().contains(&q) {
+                    2
+                } else if file.to_lowercase().contains(&q) {
+                    3
+                } else {
+                    return None;
+                };
+                Some((rank, c.clone()))
+            })
+            .collect();
+        hits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.id.cmp(&b.1.id)));
+        Ok(hits.into_iter().take(limit).map(|(_, c)| c).collect())
+    }
+
+    /// Asks clients to show something (the agent driving the user's view).
+    pub fn request_view(&self, request: ViewRequest, by: Requester) -> Result<(), ServiceError> {
+        if let Some(name) = &request.view
+            && self.views.get(name).is_none()
+        {
+            return Err(ServiceError::NotFound(format!("view '{name}'")));
+        }
+        if let Some(focus) = &request.focus
+            && self.graph(request.plan.as_ref())?.component(focus).is_none()
+        {
+            return Err(ServiceError::NotFound(focus.to_string()));
+        }
+        self.emit(ArchEvent::ViewRequested { request, by });
+        Ok(())
+    }
+}
