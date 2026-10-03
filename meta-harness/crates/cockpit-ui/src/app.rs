@@ -12,6 +12,7 @@ use crate::graph::ArchitectureGraphState;
 use crate::keymap::{InputMode, TapTracker};
 use crate::net::{NetClient, NetResult, WsState};
 use crate::tree::ArchitectureTreeState;
+use crate::theme::colors;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferKind {
@@ -86,6 +87,8 @@ pub struct CockpitApp {
     /// Why the user's UI config was not applied, if it wasn't.
     config_error: Option<String>,
     config_reply: Arc<Mutex<Option<NetResult<Option<String>>>>>,
+    /// The config changed and its theme still needs applying.
+    theme_dirty: bool,
     pub input_mode: InputMode,
     leader_tap: TapTracker,
     /// Keys typed so far in leader mode (after the leader).
@@ -96,11 +99,6 @@ pub struct CockpitApp {
     pub srv_led: ActivityLed,
     pub agent_led: ActivityLed,
 }
-
-const LED_IDLE: Color32 = Color32::from_rgb(90, 90, 100);
-const LED_BUSY: Color32 = Color32::from_rgb(250, 180, 50);
-const LED_OK: Color32 = Color32::from_rgb(80, 200, 120);
-const LED_FAIL: Color32 = Color32::from_rgb(220, 80, 80);
 
 /// Status LED that flickers on traffic, like a drive or router activity light.
 #[derive(Default)]
@@ -126,10 +124,10 @@ impl ActivityLed {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
             let fill = if lit { color } else { color.gamma_multiply(0.25) };
             ui.painter().circle_filled(rect.center(), 4.0, fill);
-            if lit && color != LED_IDLE {
+            if lit && color != colors().faint {
                 ui.painter().circle_stroke(rect.center(), 5.5, Stroke::new(1.0, color.gamma_multiply(0.35)));
             }
-            ui.label(RichText::new(label).monospace().size(10.0).color(Color32::from_gray(150)));
+            ui.label(RichText::new(label).monospace().size(10.0).color(colors().muted));
         })
         .response
         .on_hover_text(hover)
@@ -158,6 +156,7 @@ impl CockpitApp {
             config,
             config_error,
             config_reply: Arc::default(),
+            theme_dirty: true,
             input_mode: InputMode::Normal,
             leader_tap: TapTracker::default(),
             leader_path: Vec::new(),
@@ -202,6 +201,9 @@ impl CockpitApp {
         }
 
         self.apply_user_config();
+        if std::mem::take(&mut self.theme_dirty) {
+            crate::theme::set(self.config.theme.clone(), ctx);
+        }
 
         // Poll WebSocket messages
         self.net.poll_ws();
@@ -244,7 +246,10 @@ impl CockpitApp {
         let reply = self.config_reply.lock().ok().and_then(|mut r| r.take());
         match reply {
             Some(Ok(Some(text))) => match UiConfig::with_overrides(&text) {
-                Ok(config) => self.config = config,
+                Ok(config) => {
+                    self.config = config;
+                    self.theme_dirty = true;
+                }
                 Err(err) => self.config_error = Some(err),
             },
             Some(Err(err)) => self.config_error = Some(format!("ui config: {err}")),
@@ -473,14 +478,14 @@ impl CockpitApp {
         self.feedback.register_inspectable(ui, "top_bar", top_rect);
 
         Frame::NONE
-            .fill(Color32::from_rgb(14, 17, 23))
+            .fill(colors().panel)
             .inner_margin(Margin::symmetric(12, 6))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let brand_res = ui.horizontal(|ui| {
                         let brand = &self.config.brand;
-                        ui.label(RichText::new(&brand.name).strong().size(13.0).color(Color32::WHITE));
-                        ui.label(RichText::new(&brand.tagline).monospace().size(10.0).color(Color32::from_rgb(100, 160, 240)));
+                        ui.label(RichText::new(&brand.name).strong().size(13.0).color(colors().text_strong));
+                        ui.label(RichText::new(&brand.tagline).monospace().size(10.0).color(colors().accent));
                     });
                     self.feedback.register_inspectable(ui, "top_bar:brand", brand_res.response.rect);
 
@@ -490,9 +495,9 @@ impl CockpitApp {
                     // AGENT = the agent session behind it. Both flicker on traffic.
                     let ws = self.net.ws_state.lock().map(|s| *s).unwrap_or(WsState::Closed);
                     let (srv_color, srv_hint) = match ws {
-                        WsState::Open => (LED_OK, "Meta-harness server: connected"),
-                        WsState::Connecting => (LED_BUSY, "Meta-harness server: connecting…"),
-                        WsState::Closed => (LED_FAIL, "Meta-harness server: disconnected"),
+                        WsState::Open => (colors().ok, "Meta-harness server: connected"),
+                        WsState::Connecting => (colors().warn, "Meta-harness server: connecting…"),
+                        WsState::Closed => (colors().error, "Meta-harness server: disconnected"),
                     };
                     let srv_count = self.net.activity.load(Ordering::Relaxed);
                     let srv_res = self.srv_led.show(ui, "SRV", srv_color, srv_count, srv_hint);
@@ -500,10 +505,10 @@ impl CockpitApp {
 
                     ui.add_space(6.0);
                     let (agent_color, agent_hint) = match &self.chat.session_status() {
-                        SessionStatus::Idle => (LED_IDLE, "Agent: not connected".to_string()),
-                        SessionStatus::Connecting => (LED_BUSY, "Agent: connecting…".to_string()),
-                        SessionStatus::Connected(tid) => (LED_OK, format!("Agent: connected [{}]", tid)),
-                        SessionStatus::Failed(err) => (LED_FAIL, format!("Agent: failed — {}", err)),
+                        SessionStatus::Idle => (colors().faint, "Agent: not connected".to_string()),
+                        SessionStatus::Connecting => (colors().warn, "Agent: connecting…".to_string()),
+                        SessionStatus::Connected(tid) => (colors().ok, format!("Agent: connected [{}]", tid)),
+                        SessionStatus::Failed(err) => (colors().error, format!("Agent: failed — {}", err)),
                     };
                     let agent_res = self.agent_led.show(ui, "AGENT", agent_color, self.chat.agent_activity(), &agent_hint);
                     self.feedback.register_inspectable(ui, "top_bar:agent_status", agent_res.rect);
@@ -514,23 +519,23 @@ impl CockpitApp {
                     let (mode_label, mode_color, mode_bg) = match self.input_mode {
                         InputMode::Normal => (
                             "NORMAL".to_string(),
-                            Color32::from_rgb(140, 190, 255),
-                            Color32::from_rgb(20, 30, 48),
+                            colors().info,
+                            colors().info_bg,
                         ),
                         InputMode::Leader => (
                             self.leader_title("LEADER"),
-                            Color32::from_rgb(255, 205, 50),
-                            Color32::from_rgb(48, 40, 15),
+                            colors().key,
+                            colors().warn_bg,
                         ),
                         InputMode::Palette => (
                             "PALETTE".to_string(),
-                            Color32::from_rgb(90, 200, 255),
-                            Color32::from_rgb(18, 34, 52),
+                            colors().info,
+                            colors().info_bg,
                         ),
                         InputMode::Insert { slot } => (
                             format!("INSERT [S{}]", slot + 1),
-                            Color32::from_rgb(100, 240, 150),
-                            Color32::from_rgb(20, 48, 30),
+                            colors().ok,
+                            colors().ok_bg,
                         ),
                     };
 
@@ -544,7 +549,7 @@ impl CockpitApp {
                         });
 
                     if let Some(err) = &self.config_error {
-                        ui.label(RichText::new(format!("{} config", egui_phosphor::regular::WARNING)).size(11.0).color(LED_BUSY))
+                        ui.label(RichText::new(format!("{} config", egui_phosphor::regular::WARNING)).size(11.0).color(colors().warn))
                             .on_hover_text(format!("Your UI config was not applied (using defaults):\n{err}"));
                     }
 
@@ -552,9 +557,9 @@ impl CockpitApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Inspector button
                         let (pencil_label, pencil_color) = if self.feedback.is_inspecting {
-                            (format!("{} ACTIVE", egui_phosphor::regular::CROSSHAIR), Color32::from_rgb(250, 180, 50))
+                            (format!("{} ACTIVE", egui_phosphor::regular::CROSSHAIR), colors().warn)
                         } else {
-                            (format!("{} Inspector", egui_phosphor::regular::PENCIL_SIMPLE), Color32::WHITE)
+                            (format!("{} Inspector", egui_phosphor::regular::PENCIL_SIMPLE), colors().text_strong)
                         };
 
                         let insp_btn = ui.button(RichText::new(&pencil_label).strong().color(pencil_color));
@@ -569,7 +574,7 @@ impl CockpitApp {
                         } else {
                             format!("{} Issues ({})", egui_phosphor::regular::WARNING_CIRCLE, self.feedback.issues.len())
                         };
-                        let issues_btn = ui.button(RichText::new(&issues_label).color(Color32::from_rgb(140, 200, 255)));
+                        let issues_btn = ui.button(RichText::new(&issues_label).color(colors().info));
                         if issues_btn.clicked() {
                             self.feedback.is_issues_window_open = !self.feedback.is_issues_window_open;
                             if self.feedback.is_issues_window_open {
@@ -582,7 +587,7 @@ impl CockpitApp {
 
                         // Layout Mode Selector (1, 2, 3 cols)
                         let layout_res = ui.horizontal(|ui| {
-                            ui.label(RichText::new("Layout:").size(11.0).color(Color32::GRAY));
+                            ui.label(RichText::new("Layout:").size(11.0).color(colors().muted));
                             ui.selectable_value(&mut self.column_count, 1, "1");
                             ui.selectable_value(&mut self.column_count, 2, "2");
                             ui.selectable_value(&mut self.column_count, 3, "3");
@@ -596,16 +601,16 @@ impl CockpitApp {
     pub fn render_slot(&mut self, slot_idx: usize, ui: &mut egui::Ui) {
         let is_focused = self.focused_slot == slot_idx;
         let border_color = if is_focused {
-            Color32::from_rgb(80, 140, 220)
+            colors().focus
         } else {
-            Color32::from_rgb(30, 36, 48)
+            colors().border
         };
 
         let slot_id = format!("slot_{}", slot_idx + 1);
         self.feedback.register_inspectable(ui, &slot_id, ui.available_rect_before_wrap());
 
         Frame::NONE
-            .fill(Color32::from_rgb(12, 14, 18))
+            .fill(colors().bg)
             .stroke(Stroke::new(1.0, border_color))
             .corner_radius(4)
             .inner_margin(Margin::same(8))
@@ -740,14 +745,14 @@ impl CockpitApp {
             .show(ctx, |ui| {
                 ui.set_max_width(hud_w);
                 Frame::NONE
-                    .fill(Color32::from_rgba_premultiplied(16, 21, 32, 245))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(56, 120, 210)))
+                    .fill(colors().overlay)
+                    .stroke(Stroke::new(1.0, colors().focus))
                     .corner_radius(8)
                     .inner_margin(Margin::symmetric(14, 6))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.colored_label(Color32::from_rgb(90, 200, 255), RichText::new(self.leader_title(&self.config.keymap.leader.label().to_uppercase())).strong().monospace().size(11.0));
-                            let esc = egui::Button::new(RichText::new(self.config.keymap.back.label()).color(Color32::from_rgb(255, 215, 0)).monospace().size(11.0)).corner_radius(4);
+                            ui.colored_label(colors().info, RichText::new(self.leader_title(&self.config.keymap.leader.label().to_uppercase())).strong().monospace().size(11.0));
+                            let esc = egui::Button::new(RichText::new(self.config.keymap.back.label()).color(colors().key).monospace().size(11.0)).corner_radius(4);
                             if ui.add(esc).clicked() {
                                 back = true;
                             }
@@ -769,13 +774,13 @@ impl CockpitApp {
                                     ui.allocate_ui(egui::vec2(200.0, 22.0), |ui| {
                                         ui.horizontal(|ui| {
                                             ui.spacing_mut().item_spacing.x = 4.0;
-                                            let btn = egui::Button::new(RichText::new(key.to_string()).color(Color32::from_rgb(255, 215, 0)).monospace().strong().size(11.0))
-                                                .fill(Color32::from_rgba_premultiplied(35, 48, 68, 220))
+                                            let btn = egui::Button::new(RichText::new(key.to_string()).color(colors().key).monospace().strong().size(11.0))
+                                                .fill(colors().overlay_raised)
                                                 .corner_radius(4);
                                             if ui.add(btn).clicked() {
                                                 tapped = Some(key);
                                             }
-                                            ui.add(egui::Label::new(RichText::new(label).size(11.0).color(Color32::from_rgb(200, 215, 230))).truncate());
+                                            ui.add(egui::Label::new(RichText::new(label).size(11.0).color(colors().text)).truncate());
                                         });
                                     });
                                 }
@@ -798,7 +803,7 @@ impl CockpitApp {
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 let button = egui::Button::new(RichText::new(format!("{} Actions", egui_phosphor::regular::COMMAND)).size(13.0))
-                    .fill(Color32::from_rgba_premultiplied(30, 44, 66, 235))
+                    .fill(colors().overlay_raised)
                     .corner_radius(16);
                 if ui.add(button).on_hover_text("Command palette").clicked() {
                     self.open_palette(None);

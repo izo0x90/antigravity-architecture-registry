@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::net::NetClient;
+use crate::theme::colors;
 
 fn default_status() -> String {
     "open".to_string()
@@ -70,11 +71,11 @@ impl FeedbackCategory {
 
     pub fn color(&self) -> Color32 {
         match self {
-            Self::Bug => Color32::from_rgb(240, 80, 80),
-            Self::UxFriction => Color32::from_rgb(230, 150, 40),
-            Self::MissingInfo => Color32::from_rgb(80, 160, 240),
-            Self::ModelReasoning => Color32::from_rgb(180, 100, 240),
-            Self::LayoutVisual => Color32::from_rgb(80, 200, 140),
+            Self::Bug => colors().error,
+            Self::UxFriction => colors().warn,
+            Self::MissingInfo => colors().accent,
+            Self::ModelReasoning => colors().special,
+            Self::LayoutVisual => colors().ok,
         }
     }
 }
@@ -194,18 +195,18 @@ impl FeedbackInspectorState {
 
         if let Some((ref target_id, rect)) = self.hovered_target {
             // Draw translucent amber box
-            painter.rect_filled(rect, 4.0, Color32::from_rgba_unmultiplied(250, 180, 50, 35));
-            painter.rect_stroke(rect, 4.0, Stroke::new(2.0, Color32::from_rgb(250, 180, 50)), StrokeKind::Outside);
+            painter.rect_filled(rect, 4.0, colors().highlight);
+            painter.rect_stroke(rect, 4.0, Stroke::new(2.0, colors().warn), StrokeKind::Outside);
 
             // Draw floating target label badge
             let badge_pos = Pos2::new(rect.min.x.max(8.0), (rect.min.y - 22.0).max(8.0));
             let badge_text = format!("🎯 Target: {}", target_id);
             let font = egui::FontId::monospace(11.0);
-            let text_rect = painter.text(badge_pos, egui::Align2::LEFT_TOP, badge_text, font, Color32::BLACK);
+            let text_rect = painter.text(badge_pos, egui::Align2::LEFT_TOP, badge_text, font, colors().on_bright);
 
             let padded_badge = text_rect.expand2(Vec2::new(6.0, 3.0));
             let bg_painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("inspector_overlay_bg")));
-            bg_painter.rect_filled(padded_badge, 3.0, Color32::from_rgb(250, 180, 50));
+            bg_painter.rect_filled(padded_badge, 3.0, colors().warn);
         }
 
         // Intercept primary click to lock onto element and open modal
@@ -228,7 +229,7 @@ impl FeedbackInspectorState {
         let mut is_open = self.is_modal_open;
         let mut close_modal = false;
 
-        egui::Window::new(RichText::new("🎯 Developer Feedback on Targeted Element").strong().color(Color32::from_rgb(250, 180, 50)))
+        egui::Window::new(RichText::new("🎯 Developer Feedback on Targeted Element").strong().color(colors().warn))
             .open(&mut is_open)
             .collapsible(false)
             .resizable(true)
@@ -240,12 +241,12 @@ impl FeedbackInspectorState {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Target Element:").strong().size(12.0));
                         Frame::NONE
-                            .fill(Color32::from_rgb(20, 26, 36))
-                            .stroke(Stroke::new(1.0, Color32::from_rgb(45, 60, 85)))
+                            .fill(colors().surface)
+                            .stroke(Stroke::new(1.0, colors().selection))
                             .corner_radius(4)
                             .inner_margin(Margin::symmetric(8, 4))
                             .show(ui, |ui| {
-                                ui.label(RichText::new(&self.target_id).monospace().size(12.0).color(Color32::from_rgb(140, 205, 255)));
+                                ui.label(RichText::new(&self.target_id).monospace().size(12.0).color(colors().info));
                             });
                     });
                     ui.add_space(8.0);
@@ -254,7 +255,7 @@ impl FeedbackInspectorState {
                         ui.label(RichText::new("Category:").strong().size(12.0));
                         for cat in FeedbackCategory::all() {
                             let is_selected = &self.selected_category == cat;
-                            let color = if is_selected { cat.color() } else { Color32::GRAY };
+                            let color = if is_selected { cat.color() } else { colors().muted };
                             if ui.selectable_label(is_selected, RichText::new(cat.as_str()).color(color).strong()).clicked() {
                                 self.selected_category = cat.clone();
                             }
@@ -277,7 +278,7 @@ impl FeedbackInspectorState {
                     ui.add_space(12.0);
 
                     ui.horizontal(|ui| {
-                        if ui.button(RichText::new("🚀 Submit Feedback").strong().color(Color32::GREEN)).clicked() {
+                        if ui.button(RichText::new("🚀 Submit Feedback").strong().color(colors().ok)).clicked() {
                             if !self.comment.trim().is_empty() {
                                 let payload = json!({
                                     "target": { "id": self.target_id },
@@ -372,7 +373,7 @@ impl FeedbackInspectorState {
         }
 
         let mut is_open = self.is_issues_window_open;
-        egui::Window::new(RichText::new(format!("{} Issues & Feedback Explorer", egui_phosphor::regular::WARNING_CIRCLE)).strong().color(Color32::from_rgb(100, 180, 255)))
+        egui::Window::new(RichText::new(format!("{} Issues & Feedback Explorer", egui_phosphor::regular::WARNING_CIRCLE)).strong().color(colors().accent))
             .open(&mut is_open)
             .collapsible(false)
             .resizable(true)
@@ -422,7 +423,7 @@ impl FeedbackInspectorState {
 
                                 if filtered.is_empty() {
                                     ui.add_space(20.0);
-                                    ui.label(RichText::new("No issues match current filter.").italics().color(Color32::GRAY));
+                                    ui.label(RichText::new("No issues match current filter.").italics().color(colors().muted));
                                 } else if self.selected_issue_id.is_none() {
                                     if let Some(first) = filtered.first() {
                                         self.selected_issue_id = Some(first.id.clone());
@@ -438,28 +439,28 @@ impl FeedbackInspectorState {
                                     let cat = FeedbackCategory::from_str_lossy(&issue.category);
 
                                     let bg = if is_selected {
-                                        Color32::from_rgb(30, 45, 65)
+                                        colors().raised
                                     } else {
-                                        Color32::from_rgb(18, 22, 28)
+                                        colors().surface
                                     };
 
                                     let card_res = Frame::NONE
                                         .fill(bg)
-                                        .stroke(Stroke::new(1.0, if is_selected { Color32::from_rgb(80, 160, 240) } else { Color32::from_rgb(35, 42, 52) }))
+                                        .stroke(Stroke::new(1.0, if is_selected { colors().accent } else { colors().raised }))
                                         .corner_radius(4)
                                         .inner_margin(Margin::same(8))
                                         .show(ui, |ui| {
                                             ui.horizontal(|ui| {
                                                 ui.label(RichText::new(cat.as_str()).size(10.0).color(cat.color()).strong());
-                                                ui.label(RichText::new(&issue.status).size(10.0).color(Color32::LIGHT_GRAY));
+                                                ui.label(RichText::new(&issue.status).size(10.0).color(colors().text));
                                             });
-                                            ui.label(RichText::new(target_id_str).monospace().size(11.0).color(Color32::WHITE));
+                                            ui.label(RichText::new(target_id_str).monospace().size(11.0).color(colors().text_strong));
                                             let snippet = if issue.comment.len() > 45 {
                                                 format!("{}...", &issue.comment[..45])
                                             } else {
                                                 issue.comment.clone()
                                             };
-                                            ui.label(RichText::new(snippet).size(10.0).color(Color32::GRAY));
+                                            ui.label(RichText::new(snippet).size(10.0).color(colors().muted));
                                         });
 
                                     let card_interact = ui.interact(card_res.response.rect, ui.id().with(&issue.id), egui::Sense::click());
@@ -494,7 +495,7 @@ impl FeedbackInspectorState {
 
                                     ui.horizontal(|ui| {
                                         ui.label(RichText::new("Target:").strong().size(11.0));
-                                        ui.label(RichText::new(&target_id_str).monospace().size(11.0).color(Color32::from_rgb(140, 205, 255)));
+                                        ui.label(RichText::new(&target_id_str).monospace().size(11.0).color(colors().info));
                                     });
                                     ui.add_space(6.0);
 
@@ -538,13 +539,13 @@ impl FeedbackInspectorState {
                                     if let Some(ctx_val) = &issue.context {
                                         ui.collapsing("System Context Metadata", |ui| {
                                             let pretty = serde_json::to_string_pretty(ctx_val).unwrap_or_default();
-                                            ui.label(RichText::new(pretty).monospace().size(10.0).color(Color32::GRAY));
+                                            ui.label(RichText::new(pretty).monospace().size(10.0).color(colors().muted));
                                         });
                                         ui.add_space(10.0);
                                     }
 
                                     ui.horizontal(|ui| {
-                                        if ui.button(RichText::new(format!("{} Save Changes", egui_phosphor::regular::FLOPPY_DISK)).strong().color(Color32::from_rgb(100, 220, 140))).clicked() {
+                                        if ui.button(RichText::new(format!("{} Save Changes", egui_phosphor::regular::FLOPPY_DISK)).strong().color(colors().ok)).clicked() {
                                             let updated_item = FeedbackIssue {
                                                 id: issue.id.clone(),
                                                 timestamp: issue.timestamp.clone(),
@@ -570,7 +571,7 @@ impl FeedbackInspectorState {
                             } else {
                                 ui.vertical_centered(|ui| {
                                     ui.add_space(50.0);
-                                    ui.label(RichText::new("Select an issue from the list to view or edit.").italics().color(Color32::GRAY));
+                                    ui.label(RichText::new("Select an issue from the list to view or edit.").italics().color(colors().muted));
                                 });
                             }
                         },
@@ -589,12 +590,12 @@ impl FeedbackInspectorState {
                     .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-20.0, -20.0))
                     .show(ctx, |ui| {
                         Frame::NONE
-                            .fill(Color32::from_rgb(25, 45, 30))
-                            .stroke(Stroke::new(1.0, Color32::GREEN))
+                            .fill(colors().ok_bg)
+                            .stroke(Stroke::new(1.0, colors().ok))
                             .corner_radius(6)
                             .inner_margin(Margin::same(10))
                             .show(ui, |ui| {
-                                ui.label(RichText::new(msg).color(Color32::WHITE).size(12.0));
+                                ui.label(RichText::new(msg).color(colors().text_strong).size(12.0));
                             });
                     });
             } else {

@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex};
-use egui::{Color32, Frame, Margin, Pos2, Rect, RichText, Stroke, Vec2};
+use egui::{Frame, Margin, Pos2, Rect, RichText, Stroke, Vec2};
 
 use crate::feedback::FeedbackInspectorState;
 use crate::net::NetClient;
+use crate::theme::colors;
 
 pub struct CodeViewerState {
     pub current_file: String,
@@ -93,7 +94,7 @@ impl CodeViewerState {
                 }
 
                 if let Some(target) = self.target_line {
-                    ui.label(RichText::new(format!(":{}", target)).monospace().strong().size(11.0).color(Color32::from_rgb(250, 180, 50)));
+                    ui.label(RichText::new(format!(":{}", target)).monospace().strong().size(11.0).color(colors().warn));
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -107,7 +108,7 @@ impl CodeViewerState {
                         self.load_file(&path, target, net, ctx);
                     }
                     if self.is_loading {
-                        ui.label(RichText::new("●").size(10.0).color(Color32::YELLOW));
+                        ui.label(RichText::new("●").size(10.0).color(colors().warn));
                     }
                 });
             });
@@ -118,12 +119,12 @@ impl CodeViewerState {
 
             if let Some(err) = &self.error_message {
                 Frame::NONE
-                    .fill(Color32::from_rgb(40, 20, 20))
-                    .stroke(Stroke::new(1.0, Color32::RED))
+                    .fill(colors().error_bg)
+                    .stroke(Stroke::new(1.0, colors().error))
                     .corner_radius(4)
                     .inner_margin(Margin::same(8))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(format!("Error: {}", err)).color(Color32::from_rgb(255, 120, 120)).size(11.0));
+                        ui.label(RichText::new(format!("Error: {}", err)).color(colors().error).size(11.0));
                     });
                 return;
             }
@@ -131,7 +132,7 @@ impl CodeViewerState {
             if self.lines.is_empty() && !self.is_loading {
                 ui.vertical_centered(|ui| {
                     ui.add_space(30.0);
-                    ui.label(RichText::new("No file content loaded.").size(12.0).color(Color32::GRAY));
+                    ui.label(RichText::new("No file content loaded.").size(12.0).color(colors().muted));
                     if ui.button("Load Cargo.toml").clicked() {
                         let ctx = ui.ctx().clone();
                         self.load_file("Cargo.toml", None, net, ctx);
@@ -151,9 +152,9 @@ impl CodeViewerState {
                                 let line_no = idx + 1;
                                 let is_target = self.target_line == Some(line_no);
                                 let (color, text) = if is_target {
-                                    (Color32::from_rgb(250, 180, 50), RichText::new(format!("{:>4} ▶", line_no)).strong())
+                                    (colors().warn, RichText::new(format!("{:>4} ▶", line_no)).strong())
                                 } else {
-                                    (Color32::from_rgb(80, 90, 110), RichText::new(format!("{:>4}  ", line_no)))
+                                    (colors().faint, RichText::new(format!("{:>4}  ", line_no)))
                                 };
                                 ui.label(text.monospace().size(11.0).color(color));
                             }
@@ -170,14 +171,14 @@ impl CodeViewerState {
                                 let is_target = self.target_line == Some(line_no);
                                 if is_target {
                                     Frame::NONE
-                                        .fill(Color32::from_rgb(45, 40, 25))
+                                        .fill(colors().warn_bg)
                                         .corner_radius(2)
                                         .inner_margin(Margin::symmetric(2, 1))
                                         .show(ui, |ui| {
-                                            ui.label(RichText::new(line).monospace().size(11.0).color(Color32::from_rgb(255, 230, 150)));
+                                            ui.label(RichText::new(line).monospace().size(11.0).color(colors().warn));
                                         });
                                 } else {
-                                    ui.label(RichText::new(line).monospace().size(11.0).color(Color32::from_rgb(220, 225, 235)));
+                                    ui.label(RichText::new(line).monospace().size(11.0).color(colors().text));
                                 }
                             }
                         });

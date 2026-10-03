@@ -7,6 +7,7 @@ use architecture_model::{
 };
 
 use crate::graph_layout::LayoutDirection;
+use crate::theme::colors;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DisplayMode {
@@ -101,14 +102,14 @@ fn render_compact_pill(
     card_scale: f32,
 ) {
     let bg = if is_selected {
-        Color32::from_rgb(28, 42, 60)
+        colors().raised
     } else {
-        Color32::from_rgb(18, 22, 30)
+        colors().surface
     };
     let stroke = if is_selected {
-        Stroke::new((1.5 * card_scale).max(1.0), Color32::from_rgb(100, 180, 255))
+        Stroke::new((1.5 * card_scale).max(1.0), colors().accent)
     } else {
-        Stroke::new((1.0 * card_scale).max(0.5), Color32::from_rgb(45, 55, 75))
+        Stroke::new((1.0 * card_scale).max(0.5), colors().border_strong)
     };
 
     let corner_radius = ((12.0 * card_scale) as u8).max(3);
@@ -117,10 +118,10 @@ fn render_compact_pill(
 
     // Indicator Dot
     let dot_color = match &node.alignment {
-        AlignmentStatus::VerifiedInCode { .. } => Color32::from_rgb(80, 200, 120),
-        AlignmentStatus::SignatureMismatch { .. } => Color32::from_rgb(250, 90, 80),
-        AlignmentStatus::MissingCallSite { .. } => Color32::from_rgb(250, 180, 50),
-        AlignmentStatus::PlannedOnly => Color32::from_rgb(100, 160, 240),
+        AlignmentStatus::VerifiedInCode { .. } => colors().ok,
+        AlignmentStatus::SignatureMismatch { .. } => colors().error,
+        AlignmentStatus::MissingCallSite { .. } => colors().warn,
+        AlignmentStatus::PlannedOnly => colors().accent,
     };
     let dot_radius = (4.0 * card_scale).clamp(1.5, 8.0);
     painter.circle_filled(
@@ -141,14 +142,14 @@ fn render_compact_pill(
         egui::Align2::LEFT_CENTER,
         label,
         FontId::proportional(font_size),
-        Color32::WHITE,
+        colors().text_strong,
     );
 
     draw_node_pins(
         painter,
         rect,
-        Color32::from_rgb(80, 180, 255),
-        Color32::from_rgb(250, 180, 50),
+        colors().accent,
+        colors().warn,
         direction,
         card_scale,
     );
@@ -166,14 +167,14 @@ fn render_component_card(
     enable_lod: bool,
 ) {
     let bg = if is_selected {
-        Color32::from_rgb(24, 34, 48)
+        colors().card_selected
     } else {
-        Color32::from_rgb(18, 22, 30)
+        colors().card
     };
     let border_stroke = if is_selected {
-        Stroke::new((1.5 * card_scale).max(1.0), Color32::from_rgb(100, 180, 255))
+        Stroke::new((1.5 * card_scale).max(1.0), colors().accent)
     } else {
-        Stroke::new((1.0 * card_scale).max(0.5), Color32::from_rgb(45, 55, 75))
+        Stroke::new((1.0 * card_scale).max(0.5), colors().border_strong)
     };
 
     let corner_radius = ((6.0 * card_scale) as u8).max(2);
@@ -186,7 +187,7 @@ fn render_component_card(
     painter.rect_filled(
         accent_rect,
         CornerRadius::same(1),
-        Color32::from_rgb(80, 180, 255),
+        colors().accent,
     );
 
     // Title
@@ -201,16 +202,16 @@ fn render_component_card(
         egui::Align2::LEFT_TOP,
         title,
         FontId::proportional(title_font_size),
-        Color32::WHITE,
+        colors().text_strong,
     );
 
     let show_details = !enable_lod || card_scale >= 0.65;
     if show_details {
         // Badges: Type & Stage
         let (stage_icon, stage_color) = match comp.stage.as_str() {
-            "implemented" => (egui_phosphor::regular::CHECK, Color32::from_rgb(80, 200, 120)),
-            "in_progress" => (egui_phosphor::regular::LIGHTNING, Color32::from_rgb(100, 160, 240)),
-            _ => (egui_phosphor::regular::CIRCLE, Color32::GRAY),
+            "implemented" => (egui_phosphor::regular::CHECK, colors().ok),
+            "in_progress" => (egui_phosphor::regular::LIGHTNING, colors().accent),
+            _ => (egui_phosphor::regular::CIRCLE, colors().muted),
         };
         let badge_font_size = (9.5 * card_scale).max(4.5);
         painter.text(
@@ -233,7 +234,7 @@ fn render_component_card(
             egui::Align2::LEFT_TOP,
             desc,
             FontId::proportional(desc_font_size),
-            Color32::from_rgb(160, 165, 175),
+            colors().muted,
         );
 
         // Footer / Alignment
@@ -244,8 +245,8 @@ fn render_component_card(
     draw_node_pins(
         painter,
         rect,
-        Color32::from_rgb(80, 180, 255),
-        Color32::from_rgb(250, 180, 50),
+        colors().accent,
+        colors().warn,
         direction,
         card_scale,
     );
@@ -263,14 +264,14 @@ fn render_usage_call_card(
     enable_lod: bool,
 ) {
     let bg = if is_selected {
-        Color32::from_rgb(32, 28, 48)
+        colors().card_special_selected
     } else {
-        Color32::from_rgb(22, 19, 32)
+        colors().card_special
     };
     let border_stroke = if is_selected {
-        Stroke::new((1.5 * card_scale).max(1.0), Color32::from_rgb(180, 120, 255))
+        Stroke::new((1.5 * card_scale).max(1.0), colors().special)
     } else {
-        Stroke::new((1.0 * card_scale).max(0.5), Color32::from_rgb(70, 55, 95))
+        Stroke::new((1.0 * card_scale).max(0.5), colors().special_bg)
     };
 
     let corner_radius = ((6.0 * card_scale) as u8).max(2);
@@ -283,7 +284,7 @@ fn render_usage_call_card(
     painter.rect_filled(
         accent_rect,
         CornerRadius::same(1),
-        Color32::from_rgb(180, 120, 255),
+        colors().special,
     );
 
     // Header: CALL
@@ -293,7 +294,7 @@ fn render_usage_call_card(
         egui::Align2::LEFT_TOP,
         format!("CALL: {}", call.node_id),
         FontId::monospace(header_font_size),
-        Color32::from_rgb(200, 160, 255),
+        colors().special,
     );
 
     let show_details = !enable_lod || card_scale >= 0.65;
@@ -305,7 +306,7 @@ fn render_usage_call_card(
             egui::Align2::LEFT_TOP,
             format!("→ {}", call.component_id),
             FontId::monospace(callee_font_size),
-            Color32::from_rgb(140, 200, 255),
+            colors().info,
         );
 
         // Description snippet
@@ -320,7 +321,7 @@ fn render_usage_call_card(
             egui::Align2::LEFT_TOP,
             desc,
             FontId::proportional(desc_font_size),
-            Color32::from_rgb(160, 165, 175),
+            colors().muted,
         );
 
         render_alignment_footer(painter, &node.alignment, rect, mode, card_scale);
@@ -330,8 +331,8 @@ fn render_usage_call_card(
     draw_node_pins(
         painter,
         rect,
-        Color32::from_rgb(180, 120, 255),
-        Color32::from_rgb(250, 180, 50),
+        colors().special,
+        colors().warn,
         direction,
         card_scale,
     );
@@ -349,14 +350,14 @@ fn render_plan_step_card(
     enable_lod: bool,
 ) {
     let bg = if is_selected {
-        Color32::from_rgb(26, 36, 30)
+        colors().card_ok_selected
     } else {
-        Color32::from_rgb(18, 26, 22)
+        colors().card_ok
     };
     let border_stroke = if is_selected {
-        Stroke::new((1.5 * card_scale).max(1.0), Color32::from_rgb(80, 220, 140))
+        Stroke::new((1.5 * card_scale).max(1.0), colors().ok)
     } else {
-        Stroke::new((1.0 * card_scale).max(0.5), Color32::from_rgb(40, 65, 50))
+        Stroke::new((1.0 * card_scale).max(0.5), colors().ok_bg)
     };
 
     let corner_radius = ((6.0 * card_scale) as u8).max(2);
@@ -365,13 +366,13 @@ fn render_plan_step_card(
 
     let accent_height = (3.0 * card_scale).clamp(1.0, 6.0);
     let accent_rect = Rect::from_min_size(rect.min, Vec2::new(rect.width(), accent_height));
-    painter.rect_filled(accent_rect, CornerRadius::same(1), Color32::from_rgb(80, 200, 120));
+    painter.rect_filled(accent_rect, CornerRadius::same(1), colors().ok);
 
     let check_icon = if step.completed { "[✓] DONE" } else { "[ ] PENDING" };
     let check_color = if step.completed {
-        Color32::from_rgb(80, 200, 120)
+        colors().ok
     } else {
-        Color32::from_rgb(250, 180, 50)
+        colors().warn
     };
 
     let check_font_size = (11.0 * card_scale).max(5.0);
@@ -396,7 +397,7 @@ fn render_plan_step_card(
             egui::Align2::LEFT_TOP,
             task_label,
             FontId::proportional(task_font_size),
-            Color32::WHITE,
+            colors().text_strong,
         );
 
         render_alignment_footer(painter, &node.alignment, rect, mode, card_scale);
@@ -406,8 +407,8 @@ fn render_plan_step_card(
     draw_node_pins(
         painter,
         rect,
-        Color32::from_rgb(80, 200, 120),
-        Color32::from_rgb(80, 200, 120),
+        colors().ok,
+        colors().ok,
         direction,
         card_scale,
     );
@@ -426,28 +427,28 @@ fn render_alignment_footer(
         Pos2::new(rect.min.x + 8.0 * card_scale, footer_y - 2.0 * card_scale),
         Vec2::new(rect.width() - 16.0 * card_scale, (1.0 * card_scale).max(0.5)),
     );
-    painter.rect_filled(footer_line, CornerRadius::ZERO, Color32::from_rgb(32, 40, 54));
+    painter.rect_filled(footer_line, CornerRadius::ZERO, colors().raised);
 
     let (icon, label, color) = match alignment {
         AlignmentStatus::VerifiedInCode { location } => (
             egui_phosphor::regular::CHECK,
             format!("Code: {}:{}", location.file_path, location.start_line),
-            Color32::from_rgb(80, 200, 120),
+            colors().ok,
         ),
         AlignmentStatus::SignatureMismatch { diff, .. } => (
             egui_phosphor::regular::WARNING,
             format!("Mismatch: {}", diff),
-            Color32::from_rgb(250, 90, 80),
+            colors().error,
         ),
         AlignmentStatus::MissingCallSite { expected_in } => (
             egui_phosphor::regular::WARNING_CIRCLE,
             format!("Missing in: {}", expected_in),
-            Color32::from_rgb(250, 180, 50),
+            colors().warn,
         ),
         AlignmentStatus::PlannedOnly => (
             egui_phosphor::regular::CIRCLE,
             "Plan spec only".to_string(),
-            Color32::from_rgb(100, 160, 240),
+            colors().accent,
         ),
     };
 
@@ -516,9 +517,9 @@ pub fn draw_edge(
     };
 
     let (color, base_stroke_width) = match &edge.kind {
-        EdgeKind::CallSite { .. } => (Color32::from_rgb(80, 180, 255), 1.5),
-        EdgeKind::DataFlow { .. } => (Color32::from_rgb(250, 180, 50), 2.0),
-        EdgeKind::Decomposition => (Color32::from_rgb(180, 120, 240), 1.5),
+        EdgeKind::CallSite { .. } => (colors().accent, 1.5),
+        EdgeKind::DataFlow { .. } => (colors().warn, 2.0),
+        EdgeKind::Decomposition => (colors().special, 1.5),
     };
     let stroke_width = (base_stroke_width * card_scale).clamp(0.8, 5.0);
 

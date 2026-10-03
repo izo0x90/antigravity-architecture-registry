@@ -12,6 +12,7 @@ pub mod net;
 pub mod palette;
 pub mod samples;
 pub mod store;
+pub mod theme;
 pub mod tree;
 
 #[cfg(target_arch = "wasm32")]

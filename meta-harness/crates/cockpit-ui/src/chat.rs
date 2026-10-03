@@ -18,6 +18,7 @@ use crate::actions::{Action, ActionProvider, Choice, Param, RunCx, ToolbarStyle,
 use crate::feedback::FeedbackInspectorState;
 use crate::net::{NetClient, NetResult, OpenThreadBody};
 use crate::store::{Store, ThreadView};
+use crate::theme::colors;
 
 /// Agent connection as the status LED and banner see it.
 #[derive(Debug, Clone, PartialEq)]
@@ -120,11 +121,11 @@ fn tool_icon(kind: &ToolKind) -> &'static str {
 
 fn status_tag(status: ItemStatus) -> (&'static str, Color32) {
     match status {
-        ItemStatus::Pending => ("[..]", Color32::from_rgb(140, 150, 165)),
-        ItemStatus::InProgress => ("[RUN]", Color32::from_rgb(250, 180, 50)),
-        ItemStatus::Completed => ("[OK]", Color32::from_rgb(80, 200, 120)),
-        ItemStatus::Failed => ("[FAIL]", Color32::from_rgb(240, 80, 80)),
-        ItemStatus::Cancelled => ("[--]", Color32::from_rgb(140, 150, 165)),
+        ItemStatus::Pending => ("[..]", colors().muted),
+        ItemStatus::InProgress => ("[RUN]", colors().warn),
+        ItemStatus::Completed => ("[OK]", colors().ok),
+        ItemStatus::Failed => ("[FAIL]", colors().error),
+        ItemStatus::Cancelled => ("[--]", colors().muted),
     }
 }
 
@@ -329,9 +330,9 @@ impl ChatStreamState {
                 }
                 if let Some(thread) = &self.active_thread {
                     let short: String = thread.as_str().chars().take(8).collect();
-                    ui.label(RichText::new(format!("[{short}]")).monospace().size(10.0).color(Color32::from_rgb(140, 200, 255)));
+                    ui.label(RichText::new(format!("[{short}]")).monospace().size(10.0).color(colors().info));
                 } else if self.opening {
-                    ui.label(RichText::new(format!("{} Connecting…", icon::HOURGLASS)).size(10.0).color(Color32::from_rgb(250, 180, 50)));
+                    ui.label(RichText::new(format!("{} Connecting…", icon::HOURGLASS)).size(10.0).color(colors().warn));
                 }
             });
         });
@@ -346,13 +347,13 @@ impl ChatStreamState {
                 && !thread.mcp_servers.is_empty()
             {
                 let names: Vec<String> = thread.mcp_servers.iter().map(mcp_label).collect();
-                ui.label(RichText::new(format!("{} MCP {}", icon::PLUGS_CONNECTED, thread.mcp_servers.len())).size(10.0).color(Color32::GRAY))
+                ui.label(RichText::new(format!("{} MCP {}", icon::PLUGS_CONNECTED, thread.mcp_servers.len())).size(10.0).color(colors().muted))
                     .on_hover_text(names.join("\n"));
             }
             if let Some(usage) = self.thread().and_then(|t| t.usage.clone())
                 && let (Some(used), Some(window)) = (usage.context_used_tokens, usage.context_window_tokens)
             {
-                ui.label(RichText::new(format!("ctx {:.1}k/{:.0}k", used as f64 / 1000.0, window as f64 / 1000.0)).monospace().size(10.0).color(Color32::GRAY));
+                ui.label(RichText::new(format!("ctx {:.1}k/{:.0}k", used as f64 / 1000.0, window as f64 / 1000.0)).monospace().size(10.0).color(colors().muted));
             }
         });
 
@@ -368,9 +369,9 @@ impl ChatStreamState {
         if let Some(err) = self.error.clone() {
             let mut retry = false;
             let mut dismiss = false;
-            banner(ui, Color32::from_rgb(60, 20, 24), Color32::from_rgb(220, 80, 80), |ui| {
-                ui.label(RichText::new(icon::X_CIRCLE).size(12.0).color(Color32::from_rgb(255, 140, 140)));
-                ui.label(RichText::new(&err).size(12.0).color(Color32::from_rgb(240, 200, 200)));
+            banner(ui, colors().error_bg, colors().error, |ui| {
+                ui.label(RichText::new(icon::X_CIRCLE).size(12.0).color(colors().error));
+                ui.label(RichText::new(&err).size(12.0).color(colors().text));
                 if self.active_thread.is_none() {
                     retry = ui.button(format!("{} Retry", icon::ARROW_COUNTER_CLOCKWISE)).clicked();
                 }
@@ -393,7 +394,7 @@ impl ChatStreamState {
             && let Some(snapshot) = self.instance().cloned()
         {
             let instance = snapshot.instance_id.clone();
-            banner(ui, Color32::from_rgb(22, 30, 46), Color32::from_rgb(90, 140, 220), |ui| match self.auth_instructions.clone() {
+            banner(ui, colors().info_bg, colors().focus, |ui| match self.auth_instructions.clone() {
                 None => {
                     ui.label(RichText::new(format!("{} Sign in:", icon::KEY)).strong().size(12.0));
                     for method in &snapshot.auth.methods {
@@ -439,22 +440,22 @@ impl ChatStreamState {
         let Some(view) = self.thread().cloned() else {
             ui.add_space(20.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("No session yet").strong().size(15.0).color(Color32::from_rgb(100, 160, 240)));
+                ui.label(RichText::new("No session yet").strong().size(15.0).color(colors().accent));
                 let hint = match self.instance() {
                     Some(s) => format!("{} • type below or Connect to start a session", s.display_name),
                     None => "Waiting for the server…".into(),
                 };
-                ui.label(RichText::new(hint).size(12.0).color(Color32::GRAY));
+                ui.label(RichText::new(hint).size(12.0).color(colors().muted));
             });
             return;
         };
         for turn in &view.turns {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("Turn {}", turn.ordinal)).monospace().size(10.0).color(Color32::from_rgb(90, 110, 135)));
+                ui.label(RichText::new(format!("Turn {}", turn.ordinal)).monospace().size(10.0).color(colors().faint));
                 if !turn.status.is_terminal() {
-                    ui.label(RichText::new("RUNNING").size(9.0).color(Color32::from_rgb(250, 180, 50)));
+                    ui.label(RichText::new("RUNNING").size(9.0).color(colors().warn));
                 } else if let Some(f) = &turn.failure {
-                    ui.label(RichText::new(format!("failed: {}", f.message)).size(9.0).color(Color32::from_rgb(240, 80, 80)));
+                    ui.label(RichText::new(format!("failed: {}", f.message)).size(9.0).color(colors().error));
                 }
             });
             for item in view.items_of(&turn.id) {
@@ -469,8 +470,8 @@ impl ChatStreamState {
         match &item.body {
             ItemBody::UserMessage { text } => {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(">").monospace().size(14.0).strong().color(Color32::from_rgb(80, 180, 255)));
-                    ui.label(RichText::new(text).size(13.0).strong().color(Color32::WHITE));
+                    ui.label(RichText::new(">").monospace().size(14.0).strong().color(colors().accent));
+                    ui.label(RichText::new(text).size(13.0).strong().color(colors().text_strong));
                 });
             }
             ItemBody::AssistantMessage { content, .. } => {
@@ -479,15 +480,15 @@ impl ChatStreamState {
                     CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &text);
                 }
                 for block in content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })) {
-                    ui.label(RichText::new(block_summary(block)).monospace().size(10.0).color(Color32::GRAY));
+                    ui.label(RichText::new(block_summary(block)).monospace().size(10.0).color(colors().muted));
                 }
             }
             ItemBody::Reasoning { text, streaming } => {
                 let label = if *streaming { format!("{} Thinking… ({} chars)", icon::BRAIN, text.len()) } else { format!("{} Reasoning ({} chars)", icon::BRAIN, text.len()) };
-                egui::CollapsingHeader::new(RichText::new(label).size(11.0).color(Color32::from_rgb(175, 155, 225)))
+                egui::CollapsingHeader::new(RichText::new(label).size(11.0).color(colors().special))
                     .id_salt(item.id.as_str())
                     .show(ui, |ui| {
-                        ui.label(RichText::new(text).monospace().size(11.0).color(Color32::from_rgb(150, 155, 175)));
+                        ui.label(RichText::new(text).monospace().size(11.0).color(colors().muted));
                     });
             }
             ItemBody::ToolCall { kind, name, output, locations, .. } => {
@@ -503,11 +504,11 @@ impl ChatStreamState {
                     }
                 });
                 if !output.is_empty() {
-                    egui::CollapsingHeader::new(RichText::new("output").size(10.0).color(Color32::GRAY))
+                    egui::CollapsingHeader::new(RichText::new("output").size(10.0).color(colors().muted))
                         .id_salt((item.id.as_str(), "out"))
                         .show(ui, |ui| {
                             for block in output {
-                                ui.label(RichText::new(block_detail(block)).monospace().size(10.0).color(Color32::from_rgb(160, 170, 185)));
+                                ui.label(RichText::new(block_detail(block)).monospace().size(10.0).color(colors().muted));
                             }
                         });
                 }
@@ -520,14 +521,14 @@ impl ChatStreamState {
             ItemBody::CommandExecution { command, output, exit_code } => {
                 ui.label(RichText::new(format!("$ {command}")).monospace().size(11.0));
                 if let Some(out) = output {
-                    ui.label(RichText::new(out).monospace().size(10.0).color(Color32::GRAY));
+                    ui.label(RichText::new(out).monospace().size(10.0).color(colors().muted));
                 }
                 if let Some(code) = exit_code {
-                    ui.label(RichText::new(format!("exit {code}")).monospace().size(10.0).color(Color32::GRAY));
+                    ui.label(RichText::new(format!("exit {code}")).monospace().size(10.0).color(colors().muted));
                 }
             }
             ItemBody::ProposedPlan { markdown, .. } => {
-                Frame::NONE.fill(Color32::from_rgb(18, 24, 32)).inner_margin(Margin::same(6)).show(ui, |ui| {
+                Frame::NONE.fill(colors().surface).inner_margin(Margin::same(6)).show(ui, |ui| {
                     ui.label(RichText::new(format!("{} Proposed plan", icon::CLIPBOARD_TEXT)).strong().size(11.0));
                     CommonMarkViewer::new().show(ui, &mut self.markdown_cache, markdown);
                 });
@@ -542,18 +543,18 @@ impl ChatStreamState {
                 ui.label(RichText::new(format!("{} subagent {subagent_id}", icon::ROBOT)).size(11.0));
             }
             ItemBody::Notice { level, text } => {
-                let color = match level { NoticeLevel::Info => Color32::GRAY, NoticeLevel::Warning => Color32::from_rgb(250, 180, 50) };
+                let color = match level { NoticeLevel::Info => colors().muted, NoticeLevel::Warning => colors().warn };
                 ui.label(RichText::new(text).size(11.0).color(color));
             }
             ItemBody::Error { message } => {
-                ui.label(RichText::new(format!("{} {message}", icon::WARNING)).size(11.0).color(Color32::from_rgb(240, 80, 80)));
+                ui.label(RichText::new(format!("{} {message}", icon::WARNING)).size(11.0).color(colors().error));
             }
             ItemBody::Unknown { native_kind, display } => {
                 let shown: String = display.chars().take(300).collect();
-                ui.label(RichText::new(format!("[{native_kind}] {shown}")).monospace().size(10.0).color(Color32::GRAY));
+                ui.label(RichText::new(format!("[{native_kind}] {shown}")).monospace().size(10.0).color(colors().muted));
             }
             ItemBody::Unsupported => {
-                ui.label(RichText::new("(item type not supported by this client)").size(10.0).color(Color32::GRAY));
+                ui.label(RichText::new("(item type not supported by this client)").size(10.0).color(colors().muted));
             }
         }
     }
@@ -988,9 +989,9 @@ impl ActionProvider for ChatStreamState {
 fn render_steps(ui: &mut egui::Ui, steps: &[PlanStep]) {
     for step in steps {
         let (mark, color) = match step.status {
-            StepStatus::Completed => (icon::CHECK_SQUARE, Color32::from_rgb(80, 200, 120)),
-            StepStatus::InProgress => (icon::CIRCLE_HALF, Color32::from_rgb(250, 180, 50)),
-            StepStatus::Pending => (icon::SQUARE, Color32::GRAY),
+            StepStatus::Completed => (icon::CHECK_SQUARE, colors().ok),
+            StepStatus::InProgress => (icon::CIRCLE_HALF, colors().warn),
+            StepStatus::Pending => (icon::SQUARE, colors().muted),
         };
         ui.label(RichText::new(format!("{mark} {}", step.text)).size(11.0).color(color));
     }
@@ -998,23 +999,23 @@ fn render_steps(ui: &mut egui::Ui, steps: &[PlanStep]) {
 
 fn render_request(ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, request: &harness_contracts::RuntimeRequest) {
     Frame::NONE
-        .fill(Color32::from_rgb(36, 30, 18))
-        .stroke(Stroke::new(1.0, Color32::from_rgb(220, 150, 40)))
+        .fill(colors().warn_bg)
+        .stroke(Stroke::new(1.0, colors().warn))
         .corner_radius(4)
         .inner_margin(Margin::same(8))
         .show(ui, |ui| {
-            ui.label(RichText::new(format!("{} PERMISSION REQUIRED", icon::WARNING)).strong().size(11.0).color(Color32::from_rgb(250, 180, 50)));
+            ui.label(RichText::new(format!("{} PERMISSION REQUIRED", icon::WARNING)).strong().size(11.0).color(colors().warn));
             ui.label(RichText::new(&request.title).size(12.0));
             if let Some(detail) = &request.detail {
-                ui.label(RichText::new(detail).size(11.0).color(Color32::GRAY));
+                ui.label(RichText::new(detail).size(11.0).color(colors().muted));
             }
             match request.status {
                 RequestStatus::Pending => {
                     ui.horizontal_wrapped(|ui| {
                         for option in &request.options {
                             let color = match option.decision {
-                                ApprovalDecision::Accept | ApprovalDecision::AcceptForSession | ApprovalDecision::AcceptAlways => Color32::from_rgb(80, 200, 120),
-                                ApprovalDecision::Decline | ApprovalDecision::Cancel => Color32::from_rgb(240, 100, 100),
+                                ApprovalDecision::Accept | ApprovalDecision::AcceptForSession | ApprovalDecision::AcceptAlways => colors().ok,
+                                ApprovalDecision::Decline | ApprovalDecision::Cancel => colors().error,
                             };
                             let button = ui.button(RichText::new(&option.label).color(color));
                             let button = match &option.warning { Some(w) => button.on_hover_text(w), None => button };
@@ -1037,7 +1038,7 @@ fn render_request(ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, request
                         (RequestStatus::Resolved, None) => format!("{} Resolved", icon::CHECK),
                         (other, _) => format!("{other:?}"),
                     };
-                    ui.label(RichText::new(text).size(11.0).color(Color32::from_rgb(140, 200, 140)));
+                    ui.label(RichText::new(text).size(11.0).color(colors().ok));
                 }
             }
         });

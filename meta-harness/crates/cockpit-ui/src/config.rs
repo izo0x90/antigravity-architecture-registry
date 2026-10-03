@@ -1,9 +1,10 @@
-//! UI configuration: branding and keymap. The defaults ship in the binary
+//! UI configuration: branding, keymap and theme. The defaults ship in the binary
 //! (`config/default.toml`); a user file served by the server is merged over them.
 
 use serde::Deserialize;
 
 use crate::keymap::KeymapConfig;
+use crate::theme::Theme;
 
 const DEFAULTS: &str = include_str!("../config/default.toml");
 
@@ -17,6 +18,7 @@ pub struct Brand {
 pub struct UiConfig {
     pub brand: Brand,
     pub keymap: KeymapConfig,
+    pub theme: Theme,
 }
 
 /// Tables merge key by key; any other value replaces the base.
@@ -67,6 +69,14 @@ mod tests {
         let new = config.keymap.bind["session.new"].leader.clone();
         assert_eq!(new, Some(crate::keymap::LeaderPath::try_from("x n".to_owned()).unwrap()));
         assert!(config.keymap.bind.contains_key("session.resume"));
+    }
+
+    #[test]
+    fn theme_colors_come_from_config() {
+        let config = UiConfig::with_overrides("[theme]\nwarn = \"#010203\"").unwrap();
+        assert_eq!(config.theme.warn, egui::Color32::from_rgb(1, 2, 3));
+        assert_eq!(config.theme.ok, egui::Color32::from_rgb(0x50, 0xc8, 0x78));
+        assert!(UiConfig::with_overrides("[theme]\nwarn = \"orange\"").is_err());
     }
 
     #[test]

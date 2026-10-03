@@ -6,6 +6,7 @@ use egui::{Color32, Frame, Margin, RichText, Stroke};
 
 use crate::actions::{Bound, Choice, Invocation, Param, fuzzy_score};
 use crate::keymap::KeymapConfig;
+use crate::theme::colors;
 
 #[derive(Clone, Debug)]
 enum Stage {
@@ -107,8 +108,8 @@ impl Palette {
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 Frame::NONE
-                    .fill(Color32::from_rgba_premultiplied(16, 21, 32, 250))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(56, 120, 210)))
+                    .fill(colors().overlay)
+                    .stroke(Stroke::new(1.0, colors().focus))
                     .corner_radius(8)
                     .inner_margin(Margin::same(10))
                     .show(ui, |ui| {
@@ -117,7 +118,7 @@ impl Palette {
                             Stage::Actions => "Run an action".to_owned(),
                             Stage::Choose { action, .. } | Stage::Text { action, .. } => action.action.label.clone(),
                         };
-                        ui.label(RichText::new(title).strong().size(12.0).color(Color32::from_rgb(90, 200, 255)));
+                        ui.label(RichText::new(title).strong().size(12.0).color(colors().info));
                         let hint = match &stage {
                             Stage::Text { action, .. } => match &action.action.param {
                                 Param::Text { hint } => hint.clone(),
@@ -156,7 +157,7 @@ impl Palette {
                                         }
                                     }
                                     if ranked.is_empty() {
-                                        ui.label(RichText::new("No matching actions").size(11.0).color(Color32::GRAY));
+                                        ui.label(RichText::new("No matching actions").size(11.0).color(colors().muted));
                                     }
                                 });
                             }
@@ -178,7 +179,7 @@ impl Palette {
                                         }
                                     }
                                     if ranked.is_empty() {
-                                        ui.label(RichText::new("Nothing to choose").size(11.0).color(Color32::GRAY));
+                                        ui.label(RichText::new("Nothing to choose").size(11.0).color(colors().muted));
                                     }
                                 });
                             }
@@ -186,7 +187,7 @@ impl Palette {
                                 if enter && !self.filter.trim().is_empty() {
                                     picked = Some(invocation(action, Some(self.filter.trim().to_owned())));
                                 }
-                                ui.label(RichText::new("Enter to submit • Esc to go back").size(10.0).color(Color32::GRAY));
+                                ui.label(RichText::new("Enter to submit • Esc to go back").size(10.0).color(colors().muted));
                             }
                         }
                     });
@@ -223,7 +224,7 @@ fn invocation(bound: &Bound, value: Option<String>) -> Invocation {
 
 /// One tappable row; returns true when clicked.
 fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, detail: Option<&str>, keys: &str) -> bool {
-    let fill = if selected { Color32::from_rgb(35, 55, 85) } else { Color32::TRANSPARENT };
+    let fill = if selected { colors().selection } else { Color32::TRANSPARENT };
     let response = Frame::NONE
         .fill(fill)
         .corner_radius(4)
@@ -231,13 +232,13 @@ fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, det
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(label).size(12.0).color(Color32::WHITE));
+                ui.label(RichText::new(label).size(12.0).color(colors().text_strong));
                 if let Some(detail) = detail {
-                    ui.label(RichText::new(detail).size(10.0).color(Color32::GRAY));
+                    ui.label(RichText::new(detail).size(10.0).color(colors().muted));
                 }
                 if !keys.is_empty() {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(keys).monospace().size(10.0).color(Color32::from_rgb(255, 215, 0)));
+                        ui.label(RichText::new(keys).monospace().size(10.0).color(colors().key));
                     });
                 }
             });

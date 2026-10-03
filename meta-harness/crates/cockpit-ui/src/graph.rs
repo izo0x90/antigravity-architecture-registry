@@ -1,5 +1,5 @@
 use egui::{
-    Color32, CornerRadius, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2,
+    CornerRadius, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2,
 };
 use architecture_model::{
     AlignmentStatus, ComponentSpec, GraphNode, GraphPerspective, NodeKind, SystemArchitecture,
@@ -12,6 +12,7 @@ use crate::feedback::FeedbackInspectorState;
 use crate::graph_draw::{self, DisplayMode};
 use crate::graph_layout::{self, LayoutDirection, LayoutSettings};
 use crate::samples;
+use crate::theme::colors;
 
 // Re-export ComponentSpec as ArchComponent for tree.rs backwards-compatibility
 pub use architecture_model::ComponentSpec as ArchComponent;
@@ -239,7 +240,7 @@ impl ArchitectureGraphState {
                     RichText::new(format!("{} Arch Graph", egui_phosphor::regular::SHARE_NETWORK))
                         .strong()
                         .size(12.0)
-                        .color(Color32::from_rgb(140, 200, 255)),
+                        .color(colors().info),
                 );
 
                 ui.separator();
@@ -416,7 +417,7 @@ impl ArchitectureGraphState {
                     RichText::new(format!("{:.0}%", self.zoom * 100.0))
                         .monospace()
                         .size(11.0)
-                        .color(Color32::from_rgb(200, 220, 240)),
+                        .color(colors().text),
                 );
                 if ui.button(egui_phosphor::regular::PLUS).on_hover_text("Zoom In").clicked() {
                     self.zoom = (self.zoom * 1.2).clamp(0.2, 4.0);
@@ -437,7 +438,7 @@ impl ArchitectureGraphState {
                     RichText::new(format!("{} Nodes • {} Edges", self.graph.nodes.len(), self.graph.edges.len()))
                         .monospace()
                         .size(11.0)
-                        .color(Color32::from_rgb(180, 200, 220)),
+                        .color(colors().muted),
                 );
 
                 // Search Filter Box
@@ -462,7 +463,7 @@ impl ArchitectureGraphState {
 
             // Error notice if failed to load
             if let Some(err) = &self.load_error {
-                ui.label(RichText::new(err).color(Color32::from_rgb(255, 100, 100)).size(11.0));
+                ui.label(RichText::new(err).color(colors().error).size(11.0));
             }
 
             // 3. Interactive Pan & Zoom Canvas
@@ -477,7 +478,7 @@ impl ArchitectureGraphState {
             );
 
             // Background Fill & Subtle Grid
-            painter.rect_filled(canvas_rect, CornerRadius::ZERO, Color32::from_rgb(12, 15, 20));
+            painter.rect_filled(canvas_rect, CornerRadius::ZERO, colors().bg);
 
             // Pan & Zoom input handling
             if response.hovered() {
@@ -530,7 +531,7 @@ impl ArchitectureGraphState {
                 while x < canvas_rect.max.x {
                     painter.line_segment(
                         [Pos2::new(x, canvas_rect.min.y), Pos2::new(x, canvas_rect.max.y)],
-                        Stroke::new(1.0, Color32::from_rgba_premultiplied(25, 32, 45, 60)),
+                        Stroke::new(1.0, colors().grid),
                     );
                     x += grid_step;
                 }
@@ -538,7 +539,7 @@ impl ArchitectureGraphState {
                 while y < canvas_rect.max.y {
                     painter.line_segment(
                         [Pos2::new(canvas_rect.min.x, y), Pos2::new(canvas_rect.max.x, y)],
-                        Stroke::new(1.0, Color32::from_rgba_premultiplied(25, 32, 45, 60)),
+                        Stroke::new(1.0, colors().grid),
                     );
                     y += grid_step;
                 }
@@ -677,7 +678,7 @@ impl ArchitectureGraphState {
         );
         if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
             if close_rect.contains(mouse_pos) {
-                painter.rect_filled(close_rect, CornerRadius::same(3), Color32::from_rgb(45, 55, 75));
+                painter.rect_filled(close_rect, CornerRadius::same(3), colors().border_strong);
                 if ui.input(|i| i.pointer.primary_clicked()) {
                     close_requested = true;
                 }
@@ -688,18 +689,18 @@ impl ArchitectureGraphState {
             egui::Align2::CENTER_CENTER,
             "✕",
             egui::FontId::monospace(11.0),
-            Color32::from_rgb(180, 200, 220),
+            colors().muted,
         );
 
         painter.rect_filled(
             panel_rect,
             CornerRadius::same(6),
-            Color32::from_rgba_premultiplied(16, 20, 26, 245),
+            colors().overlay,
         );
         painter.rect_stroke(
             panel_rect,
             CornerRadius::same(6),
-            Stroke::new(1.0, Color32::from_rgb(60, 80, 110)),
+            Stroke::new(1.0, colors().border_strong),
             StrokeKind::Inside,
         );
 
@@ -711,7 +712,7 @@ impl ArchitectureGraphState {
             egui::Align2::LEFT_TOP,
             "CONTRACT INSPECTOR",
             egui::FontId::proportional(11.0),
-            Color32::from_rgb(250, 180, 50),
+            colors().warn,
         );
         text_y += 20.0;
 
@@ -720,7 +721,7 @@ impl ArchitectureGraphState {
             egui::Align2::LEFT_TOP,
             &node.label,
             egui::FontId::proportional(13.0),
-            Color32::WHITE,
+            colors().text_strong,
         );
         text_y += 18.0;
 
@@ -729,7 +730,7 @@ impl ArchitectureGraphState {
             egui::Align2::LEFT_TOP,
             format!("Node ID: {}", node.id),
             egui::FontId::monospace(10.0),
-            Color32::GRAY,
+            colors().muted,
         );
         text_y += 18.0;
 
@@ -737,17 +738,17 @@ impl ArchitectureGraphState {
         let (status_text, status_color) = match &node.alignment {
             AlignmentStatus::VerifiedInCode { location } => (
                 format!("✓ Verified ({}:{})", location.file_path, location.start_line),
-                Color32::from_rgb(80, 200, 120),
+                colors().ok,
             ),
             AlignmentStatus::SignatureMismatch { diff, .. } => (
                 format!("⚠ Signature Mismatch ({})", diff),
-                Color32::from_rgb(250, 90, 80),
+                colors().error,
             ),
             AlignmentStatus::MissingCallSite { expected_in } => (
                 format!("○ Missing in {}", expected_in),
-                Color32::from_rgb(250, 180, 50),
+                colors().warn,
             ),
-            AlignmentStatus::PlannedOnly => ("○ Planned Only".to_string(), Color32::from_rgb(100, 160, 240)),
+            AlignmentStatus::PlannedOnly => ("○ Planned Only".to_string(), colors().accent),
         };
 
         painter.text(
@@ -767,7 +768,7 @@ impl ArchitectureGraphState {
                     egui::Align2::LEFT_TOP,
                     format!("Type: {} | Stage: {}", comp.comp_type, comp.stage),
                     egui::FontId::monospace(10.5),
-                    Color32::from_rgb(140, 200, 255),
+                    colors().info,
                 );
                 text_y += 20.0;
 
@@ -776,7 +777,7 @@ impl ArchitectureGraphState {
                     egui::Align2::LEFT_TOP,
                     "Description:",
                     egui::FontId::proportional(11.0),
-                    Color32::LIGHT_GRAY,
+                    colors().text,
                 );
                 text_y += 16.0;
 
@@ -786,7 +787,7 @@ impl ArchitectureGraphState {
                     egui::Align2::LEFT_TOP,
                     desc,
                     egui::FontId::proportional(10.5),
-                    Color32::WHITE,
+                    colors().text_strong,
                 );
                 text_y += 35.0;
 
@@ -795,7 +796,7 @@ impl ArchitectureGraphState {
                     egui::Align2::LEFT_TOP,
                     format!("Modification Tasks: {}", comp.modification_tasks.len()),
                     egui::FontId::proportional(11.0),
-                    Color32::from_rgb(180, 220, 255),
+                    colors().info,
                 );
             }
             NodeKind::UsageCall(call) => {
@@ -804,7 +805,7 @@ impl ArchitectureGraphState {
                     egui::Align2::LEFT_TOP,
                     format!("Caller: {}", call.caller_id),
                     egui::FontId::monospace(10.5),
-                    Color32::from_rgb(180, 140, 255),
+                    colors().special,
                 );
                 text_y += 18.0;
 
@@ -813,7 +814,7 @@ impl ArchitectureGraphState {
                     egui::Align2::LEFT_TOP,
                     format!("Callee: {}", call.component_id),
                     egui::FontId::monospace(10.5),
-                    Color32::from_rgb(140, 200, 255),
+                    colors().info,
                 );
                 text_y += 22.0;
 
@@ -822,7 +823,7 @@ impl ArchitectureGraphState {
                     egui::Align2::LEFT_TOP,
                     &call.description,
                     egui::FontId::proportional(10.5),
-                    Color32::WHITE,
+                    colors().text_strong,
                 );
             }
             NodeKind::PlanStep(step) => {
@@ -832,7 +833,7 @@ impl ArchitectureGraphState {
                     egui::Align2::LEFT_TOP,
                     format!("Status: {}", status),
                     egui::FontId::monospace(11.0),
-                    if step.completed { Color32::from_rgb(80, 200, 120) } else { Color32::from_rgb(250, 180, 50) },
+                    if step.completed { colors().ok } else { colors().warn },
                 );
                 text_y += 20.0;
 
@@ -841,7 +842,7 @@ impl ArchitectureGraphState {
                     egui::Align2::LEFT_TOP,
                     &step.task,
                     egui::FontId::proportional(11.0),
-                    Color32::WHITE,
+                    colors().text_strong,
                 );
             }
         }
