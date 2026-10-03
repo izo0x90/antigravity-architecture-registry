@@ -37,6 +37,9 @@ pub struct Param {
     /// The type as written in the language, if declared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ty: Option<String>,
+    /// Callers may leave it out (a default value, an optional marker).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +48,10 @@ pub struct Signature {
     pub params: Vec<Param>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub returns: Option<String>,
+    /// Qualifiers that change how it's called or what it returns (e.g.
+    /// async, unsafe, const), as written.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub qualifiers: Vec<String>,
 }
 
 /// The shape of the data a component holds and takes/returns, as JSON

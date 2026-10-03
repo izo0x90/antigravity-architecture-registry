@@ -310,6 +310,8 @@ impl GraphState {
                 }
             }
             ArchEvent::Validated { .. } => self.stale = true,
+            // Stages show on nodes; the queue panel follows the rest.
+            ArchEvent::QueueUpdated { .. } => {}
             ArchEvent::ViewRequested { request, by } => {
                 if *by == Requester::Agent {
                     self.agent_moved = true;

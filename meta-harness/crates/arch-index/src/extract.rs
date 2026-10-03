@@ -174,10 +174,10 @@ fn signature(pack: &Pack, def: &crate::pack::DefinitionSpec, node: &AstNode<'_>)
             };
             let Some(name) = name else { continue };
             let ty = spec.type_field.as_ref().and_then(|f| type_text(pack, &child, f));
-            params.push(Param { name, ty });
+            params.push(Param { name, ty, optional: false });
         }
     }
-    Some(Signature { params, returns })
+    Some(Signature { params, returns, qualifiers: vec![] })
 }
 
 #[derive(Clone)]

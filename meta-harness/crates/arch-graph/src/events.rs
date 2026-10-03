@@ -60,4 +60,6 @@ pub enum ArchEvent {
     },
     /// Show something in the graph (usually the agent driving the view).
     ViewRequested { request: Box<ViewRequest>, by: Requester },
+    /// The work queue over a plan moved (a job started, finished, waits).
+    QueueUpdated { snapshot: Box<crate::QueueSnapshot> },
 }

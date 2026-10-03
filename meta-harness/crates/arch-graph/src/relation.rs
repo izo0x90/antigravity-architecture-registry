@@ -82,11 +82,15 @@ pub struct Relation {
     /// and have changed (side effects), as JSON Schema.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expects: Option<crate::Schemas>,
+    /// Calls: every observed site is deferred (inside a closure or similar),
+    /// so the call may never run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deferred: bool,
 }
 
 impl Relation {
     pub fn new(kind: RelationKind, source: ComponentId, target: ComponentId, provenance: Provenance) -> Self {
-        Self { kind, source, target, provenance, order: None, sites: Vec::new(), ports: None, note: String::new(), expects: None }
+        Self { kind, source, target, provenance, order: None, sites: Vec::new(), ports: None, note: String::new(), expects: None, deferred: false }
     }
 
     /// One relation per kind and endpoint pair (data flows also per port pair).
@@ -100,6 +104,10 @@ impl Relation {
 
     /// Folds another observation/plan of the same relation into this one.
     pub fn absorb(&mut self, other: &Relation) {
+        // Deferred only if every observation is.
+        if other.provenance.observed {
+            self.deferred = if self.provenance.observed { self.deferred && other.deferred } else { other.deferred };
+        }
         self.provenance = self.provenance.merge(other.provenance);
         self.order = match (self.order, other.order) {
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -117,6 +125,7 @@ impl Relation {
             self.expects = other.expects.clone();
         }
     }
+
 }
 
 #[cfg(test)]

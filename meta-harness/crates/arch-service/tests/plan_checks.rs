@@ -347,7 +347,7 @@ fn missing_required_details_block_approval_with_a_precise_list() {
 fn stage_transitions_enforce_validation_location_and_dependencies() {
     let r = repo();
     r.service.create_plan("life", "Lifecycle", "").unwrap();
-    let sig = || Some(Signature { params: vec![], returns: Some("bool".into()) });
+    let sig = || Some(Signature { params: vec![], returns: Some("bool".into()), qualifiers: vec![] });
     add(&r, "life", "outer", "function", "Calls inner.", sig());
     add(&r, "life", "inner", "function", "Does the work.", sig());
     relate(&r, "life", "sample::run", "sample::outer");
@@ -394,7 +394,7 @@ fn stage(r: &Repo, plan: &str, symbol: &str) -> Stage {
 fn actionable_work_comes_in_dependency_order_and_changes_cascade_in_waves() {
     let r = repo();
     r.service.create_plan("q", "Queue", "").unwrap();
-    let sig = || Some(Signature { params: vec![], returns: Some("bool".into()) });
+    let sig = || Some(Signature { params: vec![], returns: Some("bool".into()), qualifiers: vec![] });
     // Added in reverse: c calls b, b calls a; d builds on existing util::shout.
     for name in ["c", "b", "a", "d"] {
         add(&r, "q", name, "function", "Part of the queue.", sig());
@@ -458,7 +458,7 @@ fn contracts_carry_location_signature_interfaces_invariants_steps_and_real_calle
     let mut base = comp("sample::base_write", "function");
     base.spec = Some(ImplementationSpec { invariants: vec![inv("durable", InvariantKind::PostCondition)], ..ImplementationSpec::default() });
     let mut write = comp("sample::write", "function");
-    write.signature = Some(Signature { params: vec![arch_graph::Param { name: "item".into(), ty: Some("&str".into()) }], returns: Some("bool".into()) });
+    write.signature = Some(Signature { params: vec![arch_graph::Param { name: "item".into(), ty: Some("&str".into()), optional: false }], returns: Some("bool".into()), qualifiers: vec![] });
     write.schemas.inputs = schema(json!({"item": "str"}));
     write.schemas.side_effects = vec![SideEffect { target: "fs".into(), description: "writes the file".into() }];
     write.spec = Some(ImplementationSpec {

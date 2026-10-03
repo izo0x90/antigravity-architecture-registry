@@ -1,0 +1,53 @@
+# How NAH works through a plan: one agent session per component and stage,
+# in dependency order. Projects override any of this in .nah/queue.toml.
+
+[queue]
+# Attempts per job before it waits for the user.
+max_attempts = 3
+# Lay the structure (placeholder bodies) before implementing.
+skeleton_first = true
+# How long one session may run (seconds).
+job_timeout_secs = 3600
+
+# Session briefs, one per job kind. Placeholders:
+#   {plan} {plan_title} {component} {name} {type} {stage} {goal} {attempt}
+#   {max_attempts} {contract} {findings}
+[briefs]
+design = """
+You are designing one component of plan {plan} ({plan_title}): {component}, a {type}.
+
+Write its spec with plan_edit (op "modify"): a description, its signature and data schemas, its invariants and numbered logic steps (with check snippets where a step can be tested on its own), and the calls/data flows it needs (op "relate", with expectations). Then run plan_validate and fix every error that names it. Do not write code and do not try to approve anything: the user reviews and approves the architecture in the cockpit.
+
+Attempt {attempt} of {max_attempts}.
+{findings}
+Current contract:
+
+{contract}
+"""
+plan = """
+The user approved the architecture of {component} ({type}) in plan {plan}. Detail its implementation plan: refine logic steps, invariants, the exact calls in order with their expectations, and where it goes. Use plan_edit and plan_validate until it checks out. No code yet; the user approves the plan in the cockpit.
+
+Attempt {attempt} of {max_attempts}.
+{findings}
+Contract:
+
+{contract}
+"""
+skeleton = """
+Lay the skeleton of {component} ({type}) from plan {plan}: create it at its location with its real signature and calls in order, with placeholder bodies where the logic goes. Then call verify with goal "skeleton" and fix whatever it reports.
+
+Attempt {attempt} of {max_attempts}.
+{findings}
+Contract:
+
+{contract}
+"""
+implement = """
+Implement {component} ({type}) from plan {plan} exactly as the contract says: its signature, the calls in order, its invariants and logic steps, no placeholders left. Run the project's tools (run_tools), then call verify with goal "implemented" and fix whatever it reports.
+
+Attempt {attempt} of {max_attempts}.
+{findings}
+Contract:
+
+{contract}
+"""
