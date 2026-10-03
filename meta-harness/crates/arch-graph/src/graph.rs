@@ -41,6 +41,12 @@ pub struct CallChain {
     pub cycles: Vec<Vec<ComponentId>>,
 }
 
+/// Whether the plan says this component is in the code: it exists already
+/// (or is being changed or retired), or its stage means it was built.
+fn expects_code(c: &Component) -> bool {
+    matches!(c.status, crate::Status::Existing | crate::Status::Modifying | crate::Status::Deprecated) || c.stage.expects_code()
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Graph {
     components: BTreeMap<ComponentId, Component>,
@@ -257,7 +263,7 @@ impl Graph {
         Some(match (prov.planned, prov.observed) {
             (false, _) => Alignment::Observed,
             (true, true) => Alignment::Present,
-            (true, false) if component.stage.expects_code() => Alignment::Missing,
+            (true, false) if expects_code(component) => Alignment::Missing,
             (true, false) => Alignment::Planned,
         })
     }
@@ -267,7 +273,7 @@ impl Graph {
             (false, _) => Alignment::Observed,
             (true, true) => Alignment::Present,
             (true, false) => {
-                let source_in_code = self.components.get(&relation.source).is_some_and(|c| c.stage.expects_code() && c.anchor.is_some());
+                let source_in_code = self.components.get(&relation.source).is_some_and(|c| expects_code(c) && c.anchor.is_some());
                 if source_in_code { Alignment::Missing } else { Alignment::Planned }
             }
         }
@@ -278,7 +284,11 @@ impl Graph {
         let mut graph = observed;
         for plan in plans {
             for component in &plan.components {
-                graph.upsert_component(component.clone(), Provenance::PLANNED);
+                // Where something is in the code comes from the code only.
+                let mut component = component.clone();
+                component.anchor = None;
+                component.placeholders.clear();
+                graph.upsert_component(component, Provenance::PLANNED);
             }
             for relation in &plan.relations {
                 let mut relation = relation.clone();
@@ -474,5 +484,54 @@ mod tests {
         g.upsert_relation(Relation::new(RelationKind::Contains, id("app::run"), id("app"), Provenance::PLANNED));
         assert_eq!(g.cycles(RelationKind::Contains), vec![vec![id("app"), id("app::run"), id("app")]]);
         assert!(g.cycles(RelationKind::Implements).is_empty());
+    }
+
+    // req: P2.9
+    #[test]
+    fn alignment_follows_status_and_covers_every_relation_case() {
+        let id = |s: &str| ComponentId::new(format!("rust:{s}"));
+        let mut plan = Plan::new("p", "P");
+        // Planned changes to code that has since gone: the plan expects code.
+        let mut gone = observed("app::gone");
+        gone.status = Status::Modifying;
+        gone.stage = Stage::Declared;
+        gone.anchor = None;
+        plan.components.push(gone);
+        let mut retired = observed("app::retired");
+        retired.status = Status::Deprecated;
+        retired.stage = Stage::Declared;
+        plan.components.push(retired);
+        plan.components.push(planned("rust:app::new", Stage::Declared));
+        plan.relations.push(Relation::new(RelationKind::Calls, id("app::new"), id("app::step"), Provenance::PLANNED));
+        let g = Graph::merge(code(), &[plan]);
+        assert_eq!(g.alignment(&id("app::gone")), Some(Alignment::Missing));
+        assert_eq!(g.alignment(&id("app::retired")), Some(Alignment::Missing));
+        assert_eq!(g.alignment(&id("app::new")), Some(Alignment::Planned));
+        let observed_call = g.outgoing(&id("app::run"), Some(RelationKind::Calls)).next().unwrap();
+        assert_eq!(g.relation_alignment(observed_call), Alignment::Observed);
+        let planned_call = g.outgoing(&id("app::new"), Some(RelationKind::Calls)).next().unwrap();
+        assert_eq!(g.relation_alignment(planned_call), Alignment::Planned, "its caller isn't in code yet");
+    }
+
+    // req: P2.4
+    #[test]
+    fn anchors_only_come_from_the_code() {
+        let id = |s: &str| ComponentId::new(format!("rust:{s}"));
+        let mut plan = Plan::new("p", "P");
+        // A plan that claims an anchor (hand-edited) for code that isn't there.
+        let mut forged = planned("rust:app::forged", Stage::Implemented);
+        forged.anchor = Some(anchor_for("app::forged"));
+        forged.placeholders.push(crate::Span { start_line: 1, end_line: 1, start_byte: 0, end_byte: 1 });
+        plan.components.push(forged);
+        // A planned change to real code keeps the code's anchor.
+        let mut run = observed("app::run");
+        run.status = Status::Modifying;
+        run.anchor = Some(anchor_for("elsewhere::run"));
+        plan.components.push(run);
+        let g = Graph::merge(code(), &[plan]);
+        let forged = g.component(&id("app::forged")).unwrap();
+        assert!(forged.anchor.is_none() && forged.placeholders.is_empty());
+        assert!(forged.check_location().is_err(), "implemented without code fails the location rule");
+        assert_eq!(g.component(&id("app::run")).unwrap().anchor.as_ref().unwrap().symbol, "app::run", "the code's anchor, not the plan's");
     }
 }

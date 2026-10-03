@@ -2,33 +2,32 @@
 //! approval, and how far along a component's dependencies must be for each
 //! stage.
 
-use arch_graph::{Component, ComponentId, Finding, FindingCode, Graph, Plan, Report, ResolvedType, Stage, TypeSystem};
+use arch_graph::{Component, ComponentId, Finding, FindingCode, Graph, Plan, Report, RequiredField, ResolvedType, Stage, TypeSystem};
 
 use super::{a, component, is_data_type};
 
 /// The details `c`'s type requires that it doesn't have yet.
-pub fn missing_details(c: &Component, ty: &ResolvedType) -> Vec<String> {
+pub fn missing_details(c: &Component, ty: &ResolvedType) -> Vec<RequiredField> {
     let spec = c.spec.as_ref();
     ty.required_fields
         .iter()
+        .copied()
         .filter(|field| {
-            let present = match field.as_str() {
-                "description" => !c.description.trim().is_empty(),
-                "signature" => c.signature.is_some() || c.schemas.inputs.is_some() || c.schemas.outputs.is_some(),
-                "inputs" => c.schemas.inputs.is_some(),
-                "outputs" => c.schemas.outputs.is_some(),
-                "properties" => c.schemas.properties.is_some(),
-                "side_effects" => !c.schemas.side_effects.is_empty(),
-                "spec" => spec.is_some(),
-                "pattern" => spec.is_some_and(|s| s.pattern.is_some()),
-                "logic_steps" => spec.is_some_and(|s| !s.logic_steps.is_empty()),
-                "invariants" => spec.is_some_and(|s| !s.invariants.is_empty()),
-                "validation" => spec.is_some_and(|s| !s.validation.is_empty()),
-                _ => false,
+            let present = match field {
+                RequiredField::Description => !c.description.trim().is_empty(),
+                RequiredField::Signature => c.signature.is_some() || c.schemas.inputs.is_some() || c.schemas.outputs.is_some(),
+                RequiredField::Inputs => c.schemas.inputs.is_some(),
+                RequiredField::Outputs => c.schemas.outputs.is_some(),
+                RequiredField::Properties => c.schemas.properties.is_some(),
+                RequiredField::SideEffects => !c.schemas.side_effects.is_empty(),
+                RequiredField::Spec => spec.is_some(),
+                RequiredField::Pattern => spec.is_some_and(|s| s.pattern.is_some()),
+                RequiredField::LogicSteps => spec.is_some_and(|s| !s.logic_steps.is_empty()),
+                RequiredField::Invariants => spec.is_some_and(|s| !s.invariants.is_empty()),
+                RequiredField::Validation => spec.is_some_and(|s| !s.validation.is_empty()),
             };
             !present
         })
-        .cloned()
         .collect()
 }
 
@@ -65,7 +64,8 @@ pub(super) fn check(plan: &Plan, graph: &Graph, types: &TypeSystem, report: &mut
         if let Ok(ty) = types.resolve(&c.type_name) {
             let missing = missing_details(c, &ty);
             if !missing.is_empty() {
-                let msg = format!("{} needs {} before approval", a(&c.type_name), missing.join(", "));
+                let names: Vec<&str> = missing.iter().map(|f| f.name()).collect();
+                let msg = format!("{} needs {} before approval", a(&c.type_name), names.join(", "));
                 report.push(if c.stage == Stage::Declared {
                     Finding::warning(FindingCode::SpecIncomplete, component(&c.id), msg)
                 } else {

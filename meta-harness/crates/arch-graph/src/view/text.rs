@@ -74,8 +74,12 @@ pub fn render_text(graph: &Graph, view: &View) -> String {
             for node in view.nodes.iter().filter(|n| !has_parent.contains(&n.id)) {
                 walk(graph, view, &node.id, 0, &children, &mut seen, &mut out);
             }
+            // Containment loops leave nodes no top-level walk reaches.
+            for node in &view.nodes {
+                walk(graph, view, &node.id, 0, &children, &mut seen, &mut out);
+            }
             for e in view.edges.iter().filter(|e| e.kind != RelationKind::Contains) {
-                let _ = writeln!(out, "  {} -{}-> {} ({})", short(&e.source), e.kind.name(), short(&e.target), mark(e.alignment));
+                let _ = writeln!(out, "  {} -{}-> {}{} ({})", short(&e.source), e.kind.name(), short(&e.target), ports(graph, e), mark(e.alignment));
             }
         }
         LayoutKind::Layered => {
@@ -86,11 +90,19 @@ pub fn render_text(graph: &Graph, view: &View) -> String {
             out.push_str("Edges:\n");
             for e in &view.edges {
                 let overlay = if e.overlay { " (overlay)" } else { "" };
-                let _ = writeln!(out, "  {} -{}-> {} ({}){overlay}", short(&e.source), e.kind.name(), short(&e.target), mark(e.alignment));
+                let _ = writeln!(out, "  {} -{}-> {}{} ({}){overlay}", short(&e.source), e.kind.name(), short(&e.target), ports(graph, e), mark(e.alignment));
             }
         }
     }
     out
+}
+
+/// ` [out -> in]` for a data flow, so two flows between the same pair differ.
+fn ports(graph: &Graph, e: &super::ViewEdge) -> String {
+    match graph.relation(&e.id).and_then(|r| r.ports.as_ref()) {
+        Some((from, to)) => format!(" [{from} -> {to}]"),
+        None => String::new(),
+    }
 }
 
 fn short(id: &ComponentId) -> &str {
@@ -121,5 +133,60 @@ mod tests {
         let mut empty = catalog.get("data_flow").unwrap().clone();
         empty.roots.clear();
         assert!(render_text(&g, &query(&g, &empty)).contains("nothing to show"));
+    }
+
+    // req: P7.5
+    #[test]
+    fn text_shows_planned_missing_and_present_parts_proposed_places_overlays_and_ports() {
+        use crate::component::tests::planned;
+        use crate::{Plan, Provenance, ProposedLocation, Relation, RepoPath, Stage, Status};
+        let id = |s: &str| ComponentId::new(format!("rust:{s}"));
+        let place = |symbol: &str| Some(ProposedLocation { language: "rust".into(), file: RepoPath::new("src/new.rs").unwrap(), parent: Some(id("app")), symbol: symbol.into() });
+        let mut plan = Plan::new("p", "P");
+        let mut check = planned("rust:app::check", Stage::Declared);
+        check.proposed = place("app::check");
+        let mut ghost = planned("rust:app::ghost", Stage::Skeleton);
+        ghost.proposed = place("app::ghost");
+        let mut step = sample().component(&id("app::step")).unwrap().clone();
+        step.status = Status::Modifying;
+        step.stage = Stage::Declared;
+        plan.components.extend([check, ghost, step]);
+        for target in ["app::check", "app::ghost"] {
+            plan.relations.push(Relation::new(RelationKind::Calls, id("app::run"), id(target), Provenance::PLANNED));
+        }
+        plan.relations.push(Relation::new(RelationKind::Calls, id("app::check"), id("app::log"), Provenance::PLANNED));
+        for port in ["a", "b"] {
+            let mut flow = Relation::new(RelationKind::DataFlow, id("app::step"), id("app::save"), Provenance::PLANNED);
+            flow.ports = Some(("out".into(), port.into()));
+            plan.relations.push(flow);
+        }
+        let g = Graph::merge(sample(), &[plan]);
+        let combined = ViewCatalog::defaults().unwrap().get("combined").unwrap().clone();
+        let text = render_text(&g, &query(&g, &combined));
+        for needle in [
+            "check [function New/Declared planned] -> src/new.rs",
+            "ghost [function New/Skeleton MISSING] -> src/new.rs",
+            "step [function Modifying/Declared planned+code] src/lib.rs:1",
+            "run [function Existing/Implemented code] src/lib.rs:1",
+            "app::run -calls-> app::check (MISSING)",
+            "app::check -calls-> app::log (planned)",
+            "app::step -data_flow-> app::save [out -> a] (MISSING) (overlay)",
+            "app::step -data_flow-> app::save [out -> b] (MISSING) (overlay)",
+            "app -contains-> app::run (code) (overlay)",
+        ] {
+            assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+        }
+        // A containment loop still lists every node.
+        let mut looped = Graph::new();
+        for s in ["x", "y"] {
+            looped.upsert_component(planned(&format!("rust:{s}"), Stage::Declared), Provenance::PLANNED);
+        }
+        looped.upsert_relation(Relation::new(RelationKind::Contains, id("x"), id("y"), Provenance::PLANNED));
+        looped.upsert_relation(Relation::new(RelationKind::Contains, id("y"), id("x"), Provenance::PLANNED));
+        let mut structure = ViewCatalog::defaults().unwrap().get("structure").unwrap().clone();
+        structure.roots = vec![id("x")];
+        structure.depth = 3;
+        let text = render_text(&looped, &query(&looped, &structure));
+        assert!(text.contains("\nx [") && text.contains("\n  y ["), "{text}");
     }
 }

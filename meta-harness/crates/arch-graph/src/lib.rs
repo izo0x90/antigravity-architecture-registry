@@ -30,7 +30,7 @@ pub use relation::{Provenance, Relation, RelationId, RelationKind};
 pub use schema::{Dsl, RefError, SchemaSet};
 pub use review::{Answer, Author, Change, Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, PlanDiff, Reply, ReviewSnapshot};
 pub use report::{CodeRef, Finding, FindingCode, Report, Severity, Target};
-pub use types::{ResolvedType, TypeDef, TypeSystem};
+pub use types::{RequiredField, ResolvedType, TypeDef, TypeSystem};
 pub use view::{View, ViewCatalog, ViewSpec};
 pub use wire::{ComponentDetail, FileView, ViewResult};
 

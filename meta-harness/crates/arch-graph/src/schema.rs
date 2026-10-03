@@ -14,8 +14,18 @@ const DEFAULT_DSL: &str = include_str!("../config/schema_dsl.toml");
 /// JSON Schema type names (what DSL aliases map onto; `any` means open).
 const JSON_TYPES: [&str; 8] = ["string", "integer", "number", "boolean", "object", "array", "null", "any"];
 
-/// Keywords that mark a map as JSON Schema already, not DSL shorthand.
-const SCHEMA_KEYWORDS: [&str; 6] = ["$ref", "anyOf", "oneOf", "allOf", "enum", "const"];
+/// JSON Schema keywords. A map is taken as JSON Schema (not a shorthand
+/// field map) only when every key is one of these and it says what it is
+/// (a type, a reference, or a combinator), so a record with a field called
+/// `type` stays a record.
+const SCHEMA_KEYWORDS: [&str; 32] = [
+    "$schema", "$id", "$ref", "$defs", "$comment", "definitions", "type", "title", "description", "default", "examples", "enum", "const",
+    "anyOf", "oneOf", "allOf", "not", "properties", "required", "additionalProperties", "patternProperties", "items", "prefixItems",
+    "minItems", "maxItems", "uniqueItems", "minimum", "maximum", "minLength", "maxLength", "pattern", "format",
+];
+
+/// Keywords that say what a schema is.
+const SCHEMA_SHAPES: [&str; 6] = ["$ref", "anyOf", "oneOf", "allOf", "enum", "const"];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Dsl {
@@ -120,7 +130,9 @@ impl Dsl {
 }
 
 fn is_schema(map: &Map<String, Value>) -> bool {
-    map.get("type").and_then(Value::as_str).is_some_and(|t| JSON_TYPES.contains(&t)) || SCHEMA_KEYWORDS.iter().any(|k| map.contains_key(*k))
+    let typed = map.get("type").and_then(Value::as_str).is_some_and(|t| JSON_TYPES.contains(&t));
+    let shaped = typed || SCHEMA_SHAPES.iter().any(|k| map.contains_key(*k));
+    shaped && map.keys().all(|k| SCHEMA_KEYWORDS.contains(&k.as_str()))
 }
 
 fn is_identifier(text: &str) -> bool {
@@ -338,6 +350,14 @@ mod tests {
         // Real JSON Schema passes through, with shorthand inside still compiled.
         let mixed = dsl.compile(&json!({"type": "object", "properties": {"n": "int"}})).unwrap();
         assert_eq!(mixed["properties"]["n"], json!({"type": "integer"}));
+        // A record with a field called `type` is still a record.
+        let event = dsl.compile(&json!({"type": "string", "payload": "object", "at": "int?"})).unwrap();
+        assert_eq!(event["type"], "object");
+        assert_eq!(event["properties"]["type"], json!({"type": "string"}));
+        assert_eq!(event["properties"]["payload"], json!({"type": "object"}));
+        let mut required: Vec<&str> = event["required"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        required.sort();
+        assert_eq!(required, ["payload", "type"]);
         assert!(dsl.compile(&json!("not a type!")).is_err());
         assert!(dsl.compile(&json!(3)).is_err());
         // Aliases are data: projects add their own; bad targets are rejected.
