@@ -96,6 +96,8 @@ pub struct Action {
     /// Other keymap names for this action, most specific first.
     pub aliases: Vec<String>,
     pub toolbar: Option<Toolbar>,
+    /// A glyph for compact controls (on-screen chips).
+    pub icon: Option<&'static str>,
     command: Rc<dyn Any>,
 }
 
@@ -115,6 +117,7 @@ impl Action {
             scope: Scope::Global,
             aliases: Vec::new(),
             toolbar: None,
+            icon: None,
             command: Rc::new(command),
         }
     }
@@ -137,6 +140,16 @@ impl Action {
     pub fn alias(mut self, name: impl Into<String>) -> Self {
         self.aliases.push(name.into());
         self
+    }
+
+    pub fn icon(mut self, icon: &'static str) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// The glyph for compact controls: its own, else its toolbar's.
+    pub fn glyph(&self) -> Option<&'static str> {
+        self.icon.or(self.toolbar.as_ref().and_then(|t| t.icon))
     }
 
     pub fn toolbar(mut self, style: ToolbarStyle, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
@@ -215,6 +228,12 @@ pub trait ActionProvider {
     /// Typed keys while this view captures the keyboard (InputMode::Capture,
     /// e.g. hint labels). Returns whether it still wants keys.
     fn on_capture(&mut self, _typed: &[char], _back: bool, _cx: &mut RunCx<'_>) -> bool {
+        false
+    }
+
+    /// Whether digits typed before a key are a count (`3j` runs `j` three
+    /// times) while this view has focus.
+    fn takes_counts(&self) -> bool {
         false
     }
 }

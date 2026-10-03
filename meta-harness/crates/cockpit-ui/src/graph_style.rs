@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use arch_graph::{Alignment, Provenance, RelationKind};
+use arch_graph::{Alignment, Provenance, RelationKind, Stage};
 use egui::Color32;
 use serde::Deserialize;
 
@@ -71,6 +71,28 @@ pub struct OverlayLook {
     pub alpha: f32,
 }
 
+/// A theme token per lifecycle stage (the stripe on a card's left edge).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct StageColors {
+    pub declared: String,
+    pub arch_approved: String,
+    pub plan_approved: String,
+    pub skeleton: String,
+    pub implemented: String,
+}
+
+impl StageColors {
+    fn get(&self, stage: Stage) -> &str {
+        match stage {
+            Stage::Declared => &self.declared,
+            Stage::ArchApproved => &self.arch_approved,
+            Stage::PlanApproved => &self.plan_approved,
+            Stage::Skeleton => &self.skeleton,
+            Stage::Implemented => &self.implemented,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct NodeLooks {
     /// Outline per alignment; `color` is required here.
@@ -79,6 +101,9 @@ pub struct NodeLooks {
     pub selected_width: f32,
     pub fill: String,
     pub selected_fill: String,
+    pub stages: StageColors,
+    /// Ring around the node the agent pointed at.
+    pub agent: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -110,7 +135,8 @@ impl GraphStyle {
                 None => return Err("graph_style.nodes.outline: every alignment needs a color".into()),
             }
         }
-        tokens.extend([("nodes.selected_outline", self.nodes.selected_outline.as_str()), ("nodes.fill", &self.nodes.fill), ("nodes.selected_fill", &self.nodes.selected_fill)]);
+        tokens.extend([("nodes.selected_outline", self.nodes.selected_outline.as_str()), ("nodes.fill", &self.nodes.fill), ("nodes.selected_fill", &self.nodes.selected_fill), ("nodes.agent", &self.nodes.agent)]);
+        tokens.extend(Stage::ALL.into_iter().map(|stage| ("nodes.stages", self.nodes.stages.get(stage))));
         match tokens.into_iter().find(|(_, t)| theme.token(t).is_none()) {
             Some((at, t)) => Err(format!("graph_style.{at}: '{t}' is not a theme color")),
             None => Ok(()),
@@ -154,6 +180,62 @@ impl GraphStyle {
     pub fn node_fill(&self, theme: &Theme, selected: bool) -> Color32 {
         Self::color(theme, if selected { &self.nodes.selected_fill } else { &self.nodes.fill })
     }
+
+    pub fn stage_color(&self, theme: &Theme, stage: Stage) -> Color32 {
+        Self::color(theme, self.nodes.stages.get(stage))
+    }
+
+    pub fn agent_color(&self, theme: &Theme) -> Color32 {
+        Self::color(theme, &self.nodes.agent)
+    }
+
+    /// What every style means, generated from this table (the legend draws
+    /// exactly these).
+    pub fn legend(&self, theme: &Theme) -> Vec<LegendEntry> {
+        let mut out = Vec::new();
+        for kind in RelationKind::ALL {
+            out.push(LegendEntry { section: "Relations", label: kind.name().replace('_', " "), swatch: Swatch::Line(self.edge(theme, kind, Provenance::OBSERVED, Alignment::Observed, false)) });
+        }
+        for alignment in ALIGNMENTS {
+            out.push(LegendEntry { section: "Plan vs code", label: alignment_label(alignment).to_owned(), swatch: Swatch::Line(self.edge(theme, RelationKind::Calls, provenance_of(alignment), alignment, false)) });
+        }
+        out.push(LegendEntry { section: "Plan vs code", label: "overlay (another kind drawn over the view)".to_owned(), swatch: Swatch::Line(self.edge(theme, RelationKind::Calls, Provenance::OBSERVED, Alignment::Observed, true)) });
+        for alignment in ALIGNMENTS {
+            out.push(LegendEntry { section: "Nodes", label: alignment_label(alignment).to_owned(), swatch: Swatch::Outline(self.node_outline(theme, alignment, false)) });
+        }
+        out.push(LegendEntry { section: "Nodes", label: "selected".to_owned(), swatch: Swatch::Outline(self.node_outline(theme, Alignment::Observed, true)) });
+        out.push(LegendEntry { section: "Nodes", label: "the agent pointed here".to_owned(), swatch: Swatch::Outline(Line { color: self.agent_color(theme), width: self.nodes.selected_width, dashed: false }) });
+        for stage in Stage::ALL {
+            out.push(LegendEntry { section: "Stage", label: format!("{stage:?}"), swatch: Swatch::Stripe(self.stage_color(theme, stage)) });
+        }
+        out
+    }
+}
+
+const ALIGNMENTS: [Alignment; 4] = [Alignment::Observed, Alignment::Planned, Alignment::Missing, Alignment::Present];
+
+pub fn alignment_label(alignment: Alignment) -> &'static str {
+    match alignment {
+        Alignment::Observed => "in code (no plan)",
+        Alignment::Planned => "planned, not built yet",
+        Alignment::Missing => "planned, missing in code",
+        Alignment::Present => "planned and in code",
+    }
+}
+
+/// How a legend entry is drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Swatch {
+    Line(Line),
+    Outline(Line),
+    Stripe(Color32),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegendEntry {
+    pub section: &'static str,
+    pub label: String,
+    pub swatch: Swatch,
 }
 
 /// Where a view edge is known from, by how it lines up.

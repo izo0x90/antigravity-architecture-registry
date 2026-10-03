@@ -76,6 +76,8 @@ enum ShellCommand {
 }
 
 const MAX_SLOTS: usize = 3;
+/// Largest count a key takes (`999j`).
+const MAX_COUNT: u32 = 999;
 
 pub struct CockpitApp {
     pub net: NetClient,
@@ -107,6 +109,8 @@ pub struct CockpitApp {
     leader_path: Vec<char>,
     /// The start of a multi-key sequence typed in normal mode (e.g. `g`).
     pub pending_keys: Vec<Chord>,
+    /// Digits typed before a key in a view that takes counts (`3j`).
+    pub pending_count: Option<u32>,
     /// Graph selection and code view follow each other.
     pub follow: bool,
     follow_last: Option<arch_graph::ComponentId>,
@@ -182,6 +186,7 @@ impl CockpitApp {
             leader_tap: TapTracker::default(),
             leader_path: Vec::new(),
             pending_keys: Vec::new(),
+            pending_count: None,
             follow: false,
             follow_last: None,
             reveal_inbox: Arc::default(),
@@ -225,6 +230,7 @@ impl CockpitApp {
         if std::mem::take(&mut self.theme_dirty) {
             crate::theme::set(self.config.theme.clone(), ctx);
             crate::graph_style::set(self.config.graph_style.clone());
+            self.graph.ui = self.config.graph.clone();
         }
 
         // Poll WebSocket messages
@@ -532,11 +538,14 @@ impl CockpitApp {
 
             // The view in this slot reads typed keys (e.g. hint labels).
             InputMode::Capture { slot } => {
+                // Text as typed, plus Enter ('\n') and Backspace ('\u{8}') for prompts.
                 let typed: Vec<char> = ctx.input(|i| {
                     i.events
                         .iter()
                         .filter_map(|e| match e {
                             egui::Event::Text(t) => Some(t.chars().collect::<Vec<_>>()),
+                            egui::Event::Key { key: egui::Key::Enter, pressed: true, .. } => Some(vec!['\n']),
+                            egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } => Some(vec!['\u{8}']),
                             _ => None,
                         })
                         .flatten()
@@ -592,22 +601,45 @@ impl CockpitApp {
                     self.input_mode = InputMode::Leader;
                     return;
                 }
-                if back && !self.pending_keys.is_empty() {
+                if back && (!self.pending_keys.is_empty() || self.pending_count.is_some()) {
                     self.pending_keys.clear();
+                    self.pending_count = None;
                     return;
+                }
+                // Counts: digits before a key, in a view that takes them.
+                let focused = self.slot_buffers[self.focused_slot];
+                if self.pending_keys.is_empty() && self.provider(focused).takes_counts() {
+                    let digits: Vec<u32> = ctx.input(|i| i.events.iter().filter_map(|e| match e {
+                        egui::Event::Text(t) if t.chars().count() == 1 => t.chars().next().and_then(|c| c.to_digit(10)),
+                        _ => None,
+                    }).collect());
+                    if let Some(&d) = digits.first()
+                        && (d != 0 || self.pending_count.is_some())
+                    {
+                        self.pending_count = Some((self.pending_count.unwrap_or(0) * 10 + d).min(MAX_COUNT));
+                        return;
+                    }
                 }
                 let bound = self.bound_actions();
                 match ctx.input(|i| match_sequence(&bound, &self.pending_keys, i)) {
                     SeqMatch::Run(index) => {
                         self.pending_keys.clear();
+                        let count = self.pending_count.take().unwrap_or(1);
                         let b = bound[index].clone();
-                        self.run_bound(&b, ctx);
+                        // A count repeats a view's own action; anything else runs once.
+                        let repeats = if b.origin == Origin::View(focused) && b.action.param == Param::None { count } else { 1 };
+                        for _ in 0..repeats {
+                            self.run_bound(&b, ctx);
+                        }
                     }
                     SeqMatch::Pending(chord) => self.pending_keys.push(chord),
                     SeqMatch::None => {
-                        // Any other key typed abandons a half-typed sequence.
-                        if !self.pending_keys.is_empty() && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Key { pressed: true, .. }))) {
+                        // Any other key typed abandons a half-typed sequence (and its count).
+                        if (!self.pending_keys.is_empty() || self.pending_count.is_some())
+                            && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Key { pressed: true, .. })))
+                        {
                             self.pending_keys.clear();
+                            self.pending_count = None;
                         }
                     }
                 }
@@ -660,10 +692,11 @@ impl CockpitApp {
                     // Input Mode Indicator (NORMAL vs LEADER vs INSERT)
                     let (mode_label, mode_color, mode_bg) = match self.input_mode {
                         InputMode::Normal => (
-                            if self.pending_keys.is_empty() {
-                                "NORMAL".to_string()
-                            } else {
-                                format!("NORMAL {}", self.pending_keys.iter().map(Chord::label).collect::<Vec<_>>().join(" "))
+                            {
+                                let count = self.pending_count.map(|c| c.to_string());
+                                let keys = self.pending_keys.iter().map(Chord::label);
+                                let pending: Vec<String> = count.into_iter().chain(keys).collect();
+                                if pending.is_empty() { "NORMAL".to_string() } else { format!("NORMAL {}", pending.join(" ")) }
                             },
                             colors().info,
                             colors().info_bg,
@@ -684,7 +717,7 @@ impl CockpitApp {
                             colors().ok_bg,
                         ),
                         InputMode::Capture { .. } => (
-                            "HINT".to_string(),
+                            if self.graph.search.is_some() { "SEARCH".to_string() } else { "HINT".to_string() },
                             colors().key,
                             colors().warn_bg,
                         ),
@@ -1176,5 +1209,95 @@ mod tests {
         let marks = crate::code::gutter_marks(&view);
         assert!(matches!(marks[&7][..], [crate::code::Mark::Starts(_, _), crate::code::Mark::MissingCall(_, _)]));
         assert!(matches!(marks[&8][..], [crate::code::Mark::Placeholder(_)]));
+    }
+
+    fn press(key: egui::Key, ctrl: bool) -> Vec<egui::Event> {
+        let modifiers = egui::Modifiers { ctrl, command: ctrl, ..Default::default() };
+        vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }]
+    }
+
+    /// ctrl+key (modifiers are held for the whole frame).
+    fn ctrl(ctx: &egui::Context, app: &mut CockpitApp, key: egui::Key) {
+        let modifiers = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+        let raw = egui::RawInput { events: press(key, true), modifiers, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() };
+        let _ = ctx.run(raw, |ctx| app.frame(ctx));
+    }
+
+    fn selected(app: &CockpitApp) -> &str {
+        app.graph.selection.as_ref().map_or("", |s| s.as_str())
+    }
+
+    // req: P9.14
+    #[test]
+    fn search_marks_counts_and_ends_work_through_the_reducer() {
+        let (ctx, mut app) = app_with_graph();
+        frame(&ctx, &mut app, vec![]);
+        // Counts: 2l moves twice (the first move lands on the root).
+        frame(&ctx, &mut app, key("2"));
+        assert_eq!(app.pending_count, Some(2));
+        assert!(texts(&frame(&ctx, &mut app, vec![])).contains("NORMAL 2"), "the count shows");
+        frame(&ctx, &mut app, key("l"));
+        assert_eq!((selected(&app), app.pending_count), ("rust:a::step", None));
+        // ... and repeats reducer steps: 2+ adds two hops.
+        frame(&ctx, &mut app, key("2"));
+        frame(&ctx, &mut app, key("+"));
+        let base = arch_graph::ViewCatalog::defaults().unwrap().get(&app.graph.nav.current().view).unwrap().depth;
+        assert_eq!(app.graph.nav.current().depth, Some(base + 2));
+        app.graph.navigate(crate::graph::NavChange::Back);
+        app.graph.navigate(crate::graph::NavChange::Back);
+        app.graph.set_result(sample_result());
+        // G / gg: last and first node in view order, as jumps.
+        frame(&ctx, &mut app, key("G"));
+        assert_eq!(selected(&app), "rust:a::log");
+        frame(&ctx, &mut app, key("g"));
+        frame(&ctx, &mut app, key("g"));
+        assert_eq!(selected(&app), "rust:a::run");
+        ctrl(&ctx, &mut app, egui::Key::O);
+        assert_eq!(selected(&app), "rust:a::log", "ctrl+o returns to where the jump left");
+        ctrl(&ctx, &mut app, egui::Key::I);
+        assert_eq!(selected(&app), "rust:a::run", "ctrl+i goes forward again");
+        // / searches incrementally; Enter jumps; Escape gives up.
+        frame(&ctx, &mut app, key("/"));
+        assert_eq!(app.input_mode, InputMode::Capture { slot: 1 });
+        frame(&ctx, &mut app, key("s"));
+        assert_eq!(selected(&app), "rust:a::step", "first match shows while typing");
+        assert!(texts(&frame(&ctx, &mut app, vec![])).contains("/s▏ 2 matches"));
+        frame(&ctx, &mut app, press(egui::Key::Enter, false));
+        assert_eq!((selected(&app), app.input_mode), ("rust:a::step", InputMode::Normal));
+        frame(&ctx, &mut app, key("n"));
+        assert_eq!(selected(&app), "rust:a::save");
+        assert!(texts(&frame(&ctx, &mut app, vec![])).contains("/s 2/2"));
+        frame(&ctx, &mut app, key("n"));
+        assert_eq!(selected(&app), "rust:a::step", "wraps");
+        frame(&ctx, &mut app, key("N"));
+        assert_eq!(selected(&app), "rust:a::save");
+        ctrl(&ctx, &mut app, egui::Key::O);
+        assert_eq!(selected(&app), "rust:a::step", "search jumps are in the history");
+        frame(&ctx, &mut app, key("/"));
+        frame(&ctx, &mut app, key("l"));
+        frame(&ctx, &mut app, key("o"));
+        assert_eq!(selected(&app), "rust:a::log");
+        frame(&ctx, &mut app, press(egui::Key::Backspace, false));
+        frame(&ctx, &mut app, press(egui::Key::Escape, false));
+        assert_eq!((selected(&app), app.input_mode), ("rust:a::step", InputMode::Normal), "Escape restores the selection");
+        // Marks: m<letter> sets, '<letter> jumps back (through the history).
+        frame(&ctx, &mut app, key("m"));
+        frame(&ctx, &mut app, key("a"));
+        frame(&ctx, &mut app, key("G"));
+        assert_eq!(selected(&app), "rust:a::log");
+        frame(&ctx, &mut app, key("'"));
+        frame(&ctx, &mut app, key("a"));
+        assert_eq!(selected(&app), "rust:a::step");
+        ctrl(&ctx, &mut app, egui::Key::O);
+        assert_eq!(selected(&app), "rust:a::log");
+        frame(&ctx, &mut app, key("'"));
+        frame(&ctx, &mut app, key("z"));
+        assert_eq!((selected(&app), app.input_mode), ("rust:a::log", InputMode::Normal), "an unset mark goes nowhere");
+        // Keys come from config.
+        app.config = UiConfig::with_overrides("[keymap.bind]\n\"graph.last\" = { keys = [\"E\"] }\n").unwrap();
+        frame(&ctx, &mut app, key("g"));
+        frame(&ctx, &mut app, key("g"));
+        frame(&ctx, &mut app, key("E"));
+        assert_eq!(selected(&app), "rust:a::log");
     }
 }
