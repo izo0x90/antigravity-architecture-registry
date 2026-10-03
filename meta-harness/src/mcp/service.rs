@@ -105,6 +105,17 @@ struct CreateArgs {
 }
 
 #[derive(Deserialize)]
+struct ImportArgs {
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    language: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct EditArgs {
     plan: String,
     ops: Vec<PlanOp>,
@@ -272,6 +283,37 @@ impl McpService {
                     "Created plan {}.\n\nNext: reference the existing components it builds on, add new components under real parents, relate them to where they integrate, then plan_validate.",
                     plan.id
                 ))
+            }
+            "plan_import" => {
+                let a: ImportArgs = parse(args)?;
+                let (plan, report) = blocking(&self.arch, move |s| {
+                    let file = a.file.clone().unwrap_or_else(|| "system_architecture.json".to_owned());
+                    let title = match &a.title {
+                        Some(t) => t.clone(),
+                        None => format!("Imported from {file}"),
+                    };
+                    s.import_registry_file(&a.id, &title, &file, a.language.as_deref())
+                })
+                .await?;
+                let matched = report.components.iter().filter(|c| c.matched).count();
+                let mut text = format!(
+                    "Imported plan {}: {} components ({matched} matched to code), {} relations, {} workflows.",
+                    plan.id,
+                    report.components.len(),
+                    plan.relations.len(),
+                    plan.workflows.len()
+                );
+                if !report.unmapped.is_empty() {
+                    text.push_str("\n\nNot carried over as is:");
+                    for u in &report.unmapped {
+                        text.push_str(&format!("\n- {}: {}", u.item, u.reason));
+                    }
+                }
+                if !report.tools.tools.is_empty() {
+                    text.push_str(&format!("\n\nOld validation tools (add to .nah/tools.toml):\n{}", pretty(&report.tools)?));
+                }
+                text.push_str(&next_steps(&plan, None));
+                Ok(text)
             }
             "plan_edit" => {
                 let a: EditArgs = parse(args)?;

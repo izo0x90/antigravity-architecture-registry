@@ -5,6 +5,7 @@
 mod chain;
 mod checks;
 mod contract;
+mod import;
 mod ops;
 mod review;
 mod service;
@@ -13,6 +14,7 @@ mod tools;
 mod verify;
 
 pub use contract::{ContractSlice, Neighbor};
+pub use import::{ImportReport, ImportedComponent, Unmapped};
 pub use ops::PlanOp;
 pub use arch_graph::{ComponentDetail, ViewResult};
 pub use review::{ReviewNote, ReviewProvider, ReviewRequest, ReviewRun, ReviewerCatalog, ReviewerDef, ReviewerKind, ReviewsReport, Rule};

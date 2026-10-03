@@ -32,6 +32,19 @@ macro_rules! theme {
         pub struct Theme {
             $($(#[$doc])* #[serde(deserialize_with = "hex")] pub $name: Color32,)*
         }
+
+        impl Theme {
+            /// Every token name, as written in config.
+            pub const TOKENS: &'static [&'static str] = &[$(stringify!($name)),*];
+
+            /// A color by its token name (for config that refers to tokens).
+            pub fn token(&self, name: &str) -> Option<Color32> {
+                match name {
+                    $(stringify!($name) => Some(self.$name),)*
+                    _ => None,
+                }
+            }
+        }
     };
 }
 

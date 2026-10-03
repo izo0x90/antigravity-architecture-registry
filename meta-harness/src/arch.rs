@@ -61,6 +61,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/arch/ambiguous", get(ambiguous))
         .route("/api/arch/navigate", post(navigate))
         .route("/api/arch/plans", get(list_plans).post(create_plan))
+        .route("/api/arch/import", post(import_registry))
         .route("/api/arch/plans/{plan}", get(get_plan).delete(delete_plan))
         .route("/api/arch/plans/{plan}/ops", post(apply_ops))
         .route("/api/arch/plans/{plan}/scope", get(scope))
@@ -213,6 +214,41 @@ struct NewPlan {
 
 async fn create_plan(State(state): State<AppState>, Json(body): Json<NewPlan>) -> ArchResult<arch_graph::Plan> {
     Ok(Json(blocking(&state.arch, move |a| a.create_plan(&body.id, &body.title, &body.description)).await?))
+}
+
+fn old_registry_file() -> String {
+    "system_architecture.json".to_owned()
+}
+
+#[derive(Deserialize)]
+struct Import {
+    plan: String,
+    #[serde(default)]
+    title: Option<String>,
+    /// The old registry document, relative to the repo root.
+    #[serde(default = "old_registry_file")]
+    file: String,
+    #[serde(default)]
+    language: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct Imported {
+    plan: arch_graph::Plan,
+    report: arch_service::ImportReport,
+}
+
+/// Creates a plan from the old registry document.
+async fn import_registry(State(state): State<AppState>, Json(body): Json<Import>) -> ArchResult<Imported> {
+    let (plan, report) = blocking(&state.arch, move |a| {
+        let title = match &body.title {
+            Some(t) => t.clone(),
+            None => format!("Imported from {}", body.file),
+        };
+        a.import_registry_file(&body.plan, &title, &body.file, body.language.as_deref())
+    })
+    .await?;
+    Ok(Json(Imported { plan, report }))
 }
 
 async fn get_plan(State(state): State<AppState>, Path(plan): Path<String>) -> ArchResult<arch_graph::Plan> {

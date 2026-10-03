@@ -15,7 +15,7 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     assert_eq!(init["result"]["serverInfo"]["name"], "nah-architecture");
     let tools = mcp.rpc("tools/list", json!({})).await;
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for expected in ["ingest", "list_types", "search", "inspect", "view", "navigate", "plan_list", "plan_create", "plan_edit", "plan_validate", "contract", "verify", "run_tools", "review"] {
+    for expected in ["ingest", "list_types", "search", "inspect", "view", "navigate", "plan_list", "plan_create", "plan_import", "plan_edit", "plan_validate", "contract", "verify", "run_tools", "review"] {
         assert!(names.contains(&expected), "{expected} in {names:?}");
     }
     assert!(!names.iter().any(|n| n.contains("approve")), "agents can't approve");

@@ -218,6 +218,7 @@ impl CockpitApp {
         self.apply_user_config();
         if std::mem::take(&mut self.theme_dirty) {
             crate::theme::set(self.config.theme.clone(), ctx);
+            crate::graph_style::set(self.config.graph_style.clone());
         }
 
         // Poll WebSocket messages

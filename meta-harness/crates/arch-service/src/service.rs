@@ -15,6 +15,7 @@ use arch_graph::{
 use arch_index::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk};
 use serde::{Deserialize, Serialize};
 
+use crate::import::ImportReport;
 use crate::contract::{ContractSlice, slice};
 use crate::ops::{PlanOp, apply};
 use crate::review::{ReviewProvider, ReviewerCatalog, ReviewsReport, Subject};
@@ -360,6 +361,28 @@ impl ArchitectureService {
         self.plans.save(&plan)?;
         self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id], components: Vec::new() });
         Ok(plan)
+    }
+
+    /// Creates plan `id` from the old registry document (`json`), matched
+    /// against the code. `language` places components that have neither a
+    /// location nor code to match.
+    pub fn import_registry(&self, id: &str, title: &str, json: &str, language: Option<&str>) -> Result<(Plan, ImportReport), ServiceError> {
+        let plan_id = PlanId::new(id).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
+        if self.plans.get(&plan_id)?.is_some() {
+            return Err(ServiceError::InvalidOp(format!("plan {id} already exists")));
+        }
+        let input = crate::import::ImportInput { plan: plan_id.clone(), title: title.to_owned(), json, language: language.map(str::to_owned) };
+        let (plan, report) = crate::import::import(input, &self.observed()?, &self.root, &self.packs, &self.types)?;
+        self.plans.save(&plan)?;
+        self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id], components: plan.components.iter().map(|c| c.id.clone()).collect() });
+        Ok((plan, report))
+    }
+
+    /// `import_registry` from a repo file (relative to the root).
+    pub fn import_registry_file(&self, id: &str, title: &str, file: &str, language: Option<&str>) -> Result<(Plan, ImportReport), ServiceError> {
+        let path = arch_graph::RepoPath::new(file).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
+        let json = std::fs::read_to_string(self.root.join(path.as_str())).map_err(|e| ServiceError::NotFound(format!("{file}: {e}")))?;
+        self.import_registry(id, title, &json, language)
     }
 
     pub fn delete_plan(&self, id: &PlanId) -> Result<(), ServiceError> {
