@@ -7,6 +7,7 @@ components = [
   ["app.main", "function"],
   ["helpers.Base", "class"],
   ["helpers.clean", "function"],
+  ["helpers.load", "function"],
 ]
 relations = [
   ["contains", "app", "app.Greeter"],
@@ -15,11 +16,15 @@ relations = [
   ["contains", "app.Greeter", "app.Greeter.format"],
   ["contains", "helpers", "helpers.Base"],
   ["contains", "helpers", "helpers.clean"],
+  ["contains", "helpers", "helpers.load"],
   ["implements", "app.Greeter", "helpers.Base"],
   ["calls", "app.Greeter.greet", "app.Greeter.format"],
   ["calls", "app.Greeter.greet", "helpers.clean"],
   ["calls", "app.main", "app.Greeter"],
   ["calls", "app.main", "app.Greeter.greet"],
+  ["calls", "app.main", "helpers.load"],
+  # clean() -> str feeds format(text: str). load() is untyped: no flow.
+  ["data_flow", "helpers.clean", "app.Greeter.format"],
 ]
 ambiguous = []
 placeholders = ["app.Greeter.format"]

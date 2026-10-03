@@ -1,0 +1,39 @@
+# Default code rules: ast-grep patterns that must not (forbidden) or must
+# (required) appear in components of the given types, per language. Projects
+# add or override rules (same id) in .nah/rules/*.toml with the same fields:
+#
+#   id        stable rule id (shown in findings; same id replaces a default)
+#   language  language pack name the pattern is written for
+#   types     component types it applies to (specializations included)
+#   kind      forbidden: no match in the component's own code
+#             required:  at least one match anywhere in the component
+#   rule      ast-grep rule (pattern, kind, regex, has, inside, ...)
+#   message   what's wrong and what to do instead
+#   severity  error (blocks approval and verification) or warning
+
+[[rule]]
+id = "no-dbg"
+language = "rust"
+types = ["function"]
+kind = "forbidden"
+rule = { kind = "macro_invocation", has = { field = "macro", regex = "^dbg$" } }
+message = "dbg! is debugging output; remove it before review"
+severity = "warning"
+
+[[rule]]
+id = "no-breakpoint"
+language = "python"
+types = ["function"]
+kind = "forbidden"
+rule = { pattern = "breakpoint()" }
+message = "breakpoint() stops the program; remove it before review"
+severity = "warning"
+
+[[rule]]
+id = "no-debugger"
+language = "typescript"
+types = ["function"]
+kind = "forbidden"
+rule = { kind = "debugger_statement" }
+message = "debugger statements stop the program; remove them before review"
+severity = "warning"

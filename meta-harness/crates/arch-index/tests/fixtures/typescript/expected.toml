@@ -1,0 +1,41 @@
+# Exactly what ingesting tests/fixtures/typescript/app must produce.
+components = [
+  ["app", "module"],
+  ["helpers", "module"],
+  ["app.Greeter", "class"],
+  ["app.Greeter.greet", "function"],
+  ["app.Greeter.format", "function"],
+  ["app.main", "function"],
+  ["app.show", "function"],
+  ["helpers.Formatter", "interface"],
+  ["helpers.Formatter.format", "operation"],
+  ["helpers.Base", "class"],
+  ["helpers.Base.describe", "function"],
+  ["helpers.clean", "function"],
+  ["helpers.load", "function"],
+]
+relations = [
+  ["contains", "app", "app.Greeter"],
+  ["contains", "app", "app.main"],
+  ["contains", "app", "app.show"],
+  ["contains", "app.Greeter", "app.Greeter.greet"],
+  ["contains", "app.Greeter", "app.Greeter.format"],
+  ["contains", "helpers", "helpers.Formatter"],
+  ["contains", "helpers", "helpers.Base"],
+  ["contains", "helpers", "helpers.clean"],
+  ["contains", "helpers", "helpers.load"],
+  ["contains", "helpers.Formatter", "helpers.Formatter.format"],
+  ["contains", "helpers.Base", "helpers.Base.describe"],
+  # extends and implements both count.
+  ["implements", "app.Greeter", "helpers.Base"],
+  ["implements", "app.Greeter", "helpers.Formatter"],
+  ["calls", "app.Greeter.greet", "app.Greeter.format"],
+  ["calls", "app.Greeter.greet", "helpers.clean"],
+  ["calls", "app.main", "helpers.load"],
+  ["calls", "app.main", "app.Greeter"],
+  ["calls", "app.main", "app.Greeter.greet"],
+  ["calls", "app.main", "app.show"],
+  ["data_flow", "helpers.clean", "app.Greeter.format"],
+]
+ambiguous = []
+placeholders = ["app.Greeter.format"]

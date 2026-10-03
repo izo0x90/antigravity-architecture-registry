@@ -1,0 +1,67 @@
+# A Go pack that exists only in this test directory: proves a fourth language
+# is pure data. Go declares methods outside their type (receivers), embeds
+# methods in interfaces, and has no classes; all of it maps onto the generic
+# types without engine code for Go.
+
+[language]
+name = "go"
+ast_grep = "go"
+extensions = ["go"]
+separator = "."
+call_separators = ["."]
+package_manifest = "go.mod"
+
+[[definitions]]
+type = "function"
+rule = { kind = "function_declaration" }
+name_field = "name"
+params_field = "parameters"
+return_field = "result"
+
+# `func (s *Store) Save(...)`: belongs to Store.
+[[definitions]]
+type = "function"
+rule = { kind = "method_declaration" }
+name_field = "name"
+params_field = "parameters"
+return_field = "result"
+owner_field = "receiver"
+owner_kind = "type_identifier"
+
+[[definitions]]
+type = "class"
+rule = { kind = "type_spec", has = { field = "type", kind = "struct_type" } }
+name_field = "name"
+
+[[definitions]]
+type = "interface"
+rule = { kind = "type_spec", has = { field = "type", kind = "interface_type" } }
+name_field = "name"
+
+[[definitions]]
+type = "operation"
+rule = { kind = "method_elem" }
+name_field = "name"
+params_field = "parameters"
+return_field = "result"
+
+[[params]]
+kind = "parameter_declaration"
+name_field = "name"
+type_field = "type"
+
+[[calls]]
+rule = { kind = "call_expression" }
+callee_field = "function"
+args_field = "arguments"
+
+[[bindings]]
+rule = { kind = "short_var_declaration" }
+name_field = "left"
+value_field = "right"
+
+[[imports]]
+rule = { kind = "import_declaration" }
+
+[[placeholders]]
+rule = { kind = "call_expression", regex = "^panic\\(\"(TODO|not implemented)" }

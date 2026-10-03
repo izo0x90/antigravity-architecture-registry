@@ -19,7 +19,8 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-fn packs_with_python() -> PackSet {
+/// Built-ins plus the packs that exist only as test data (tests/packs).
+fn packs_with_test_data() -> PackSet {
     let mut packs = PackSet::built_in().unwrap();
     packs.load_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/packs")).unwrap();
     packs
@@ -104,10 +105,10 @@ fn calls_resolve_by_evidence_with_order_and_sites() {
     assert_eq!(resolved.ambiguous[0].candidates.len(), 2);
 }
 
-// req: P4.2
+// req: P4.4
 #[test]
-fn a_pack_defined_only_as_data_ingests_its_language() {
-    let packs = packs_with_python();
+fn python_fixture_ingests_to_exactly_the_expected_graph() {
+    let packs = PackSet::built_in().unwrap();
     let (_, resolved) = run(&fixtures().join("python/app"), &packs);
     assert_matches("python", &resolved, &fixtures().join("python/expected.toml"));
     let format = resolved.graph.component(&ComponentId::for_symbol("python", "app.Greeter.format")).unwrap();
@@ -115,10 +116,85 @@ fn a_pack_defined_only_as_data_ingests_its_language() {
     assert_eq!(params, [("self".into(), None), ("text".into(), Some("str".into())), ("loud".into(), None)]);
 }
 
+// req: P4.5
+#[test]
+fn typescript_fixture_ingests_to_exactly_the_expected_graph() {
+    let packs = PackSet::built_in().unwrap();
+    let (extracts, resolved) = run(&fixtures().join("typescript/app"), &packs);
+    assert_eq!(extracts.len(), 2);
+    assert_matches("typescript", &resolved, &fixtures().join("typescript/expected.toml"));
+    let greet = resolved.graph.component(&ComponentId::for_symbol("typescript", "app.Greeter.greet")).unwrap();
+    let sig = greet.signature.as_ref().unwrap();
+    assert_eq!(sig.params.iter().map(|p| (p.name.as_str(), p.ty.as_deref())).collect::<Vec<_>>(), [("name", Some("string"))], "annotations unwrap to the type");
+    assert_eq!(sig.returns.as_deref(), Some("string"));
+    let external: BTreeSet<&str> = resolved.external.iter().map(|e| e.callee.as_str()).collect();
+    assert!(external.contains("console.log") && external.contains("Error"), "{external:?}");
+}
+
+// req: P4.2, P4.13
+#[test]
+fn a_pack_defined_only_as_data_ingests_its_language() {
+    // Go has no built-in pack and no engine code: only tests/packs/go.toml.
+    assert!(PackSet::built_in().unwrap().by_name("go").is_none());
+    let packs = packs_with_test_data();
+    let (extracts, resolved) = run(&fixtures().join("go/app"), &packs);
+    assert!(extracts.iter().all(|e| e.language == "go"));
+    assert_matches("go", &resolved, &fixtures().join("go/expected.toml"));
+    let save = resolved.graph.component(&ComponentId::for_symbol("go", "app.store.store.Store.Save")).unwrap();
+    let sig = save.signature.as_ref().unwrap();
+    assert_eq!(sig.params.iter().map(|p| (p.name.as_str(), p.ty.as_deref())).collect::<Vec<_>>(), [("item", Some("string"))]);
+    assert_eq!(sig.returns.as_deref(), Some("error"));
+}
+
+// req: P4.8
+#[test]
+fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
+    let flows = |resolved: &Resolved| -> BTreeSet<(String, String, String, String)> {
+        resolved
+            .graph
+            .relations()
+            .filter(|r| r.kind == RelationKind::DataFlow)
+            .map(|r| {
+                let (from, to) = r.ports.clone().unwrap();
+                assert!(r.provenance.observed && !r.provenance.planned && r.sites.len() == 1);
+                (r.source.to_string(), r.target.to_string(), from, to)
+            })
+            .collect()
+    };
+    let row = |lang: &str, a: &str, b: &str, to: &str| (ComponentId::for_symbol(lang, a).to_string(), ComponentId::for_symbol(lang, b).to_string(), "return".to_owned(), to.to_owned());
+    // Rust: through a local binding and a borrow, String into &str.
+    let (_, rust) = run(&fixtures().join("rust/sample"), &PackSet::built_in().unwrap());
+    assert_eq!(flows(&rust), BTreeSet::from([row("rust", "sample::Upper::apply", "sample::store::Store::save", "item"), row("rust", "sample::Upper::apply", "sample::log", "msg")]));
+    assert!(rust.unverified_flows.is_empty(), "{:?}", rust.unverified_flows);
+    // Python and TypeScript: a nested call is typed; load() has no return type.
+    for (lang, fixture, untyped_targets) in [("python", "python/app", vec!["app.Greeter.greet"]), ("typescript", "typescript/app", vec!["app.Greeter.greet", "app.show"])] {
+        let (_, resolved) = run(&fixtures().join(fixture), &PackSet::built_in().unwrap());
+        assert_eq!(flows(&resolved), BTreeSet::from([row(lang, "helpers.clean", "app.Greeter.format", "text")]), "{lang}");
+        let reported: Vec<(String, String)> = resolved.unverified_flows.iter().map(|u| (u.source.to_string(), u.target.to_string())).collect();
+        let expected: Vec<(String, String)> =
+            untyped_targets.iter().map(|t| (ComponentId::for_symbol(lang, "helpers.load").to_string(), ComponentId::for_symbol(lang, t).to_string())).collect();
+        assert_eq!(reported, expected, "{lang}");
+        assert!(resolved.unverified_flows.iter().all(|u| u.reason.contains("no return type") && u.position == 0 && u.span.start_line > 0));
+    }
+    // Go: a qualified type (*store.Store) matches the producer's Store.
+    let (_, go) = run(&fixtures().join("go/app"), &packs_with_test_data());
+    assert!(flows(&go).contains(&row("go", "app.store.store.New", "app.main.keep", "st")));
+    // A mismatch is reported, not invented: a number passed where a string is expected.
+    let dir = std::env::temp_dir().join(format!("nah-flow-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/app.ts"), "function make(): number { return 1; }\nfunction take(s: string): void {}\nfunction run(): void { take(make()); }\n").unwrap();
+    let (_, mismatch) = run(&dir, &PackSet::built_in().unwrap());
+    assert!(flows(&mismatch).is_empty());
+    assert_eq!(mismatch.unverified_flows.len(), 1);
+    assert!(mismatch.unverified_flows[0].reason.contains("number doesn't match parameter 's': string"), "{:?}", mismatch.unverified_flows);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 // req: P4.2
 #[test]
 fn malformed_packs_are_rejected_with_a_reason() {
-    let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/packs/python.toml")).unwrap();
+    let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("packs/python.toml")).unwrap();
     let cases = [
         (base.replace("ast_grep = \"python\"", "ast_grep = \"klingon\""), "unknown ast-grep language"),
         (base.replace("rule = { kind = \"call\" }", "rule = { kind = \"call\", nonsense = 1 }"), "calls[0]"),

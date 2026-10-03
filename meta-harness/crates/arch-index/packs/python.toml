@@ -1,5 +1,5 @@
-# A Python pack that exists only in this test directory: proves a language
-# can be added as data, with no engine changes.
+# Python language pack: ast-grep rules mapping Python syntax onto the generic
+# component types. Pure data; the engine has no Python-specific code.
 
 [language]
 name = "python"
@@ -43,6 +43,12 @@ type_field = "type"
 [[calls]]
 rule = { kind = "call" }
 callee_field = "function"
+args_field = "arguments"
+
+[[bindings]]
+rule = { kind = "assignment" }
+name_field = "left"
+value_field = "right"
 
 [[imports]]
 rule = { any = [{ kind = "import_statement" }, { kind = "import_from_statement" }] }

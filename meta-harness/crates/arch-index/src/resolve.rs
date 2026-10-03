@@ -27,11 +27,25 @@ pub struct ExternalCall {
     pub callee: String,
 }
 
+/// A value passed from one repo call into another whose types can't confirm
+/// the flow (missing or mismatched types). Reported, never added as a relation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnverifiedFlow {
+    pub source: ComponentId,
+    pub target: ComponentId,
+    /// The target's argument position.
+    pub position: u32,
+    pub file: RepoPath,
+    pub span: Span,
+    pub reason: String,
+}
+
 #[derive(Debug, Default)]
 pub struct Resolved {
     pub graph: Graph,
     pub ambiguous: Vec<AmbiguousCall>,
     pub external: Vec<ExternalCall>,
+    pub unverified_flows: Vec<UnverifiedFlow>,
 }
 
 struct Entry {
@@ -270,6 +284,26 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     *next += 1;
                     relation.sites.push(call.span);
                     out.graph.upsert_relation(relation);
+                    // Outputs of other repo calls passed in as arguments.
+                    for arg in &call.args {
+                        let CallTarget::One(source) = resolve_call(&entries, caller, &arg.producer, &ex.imports, &pack.spec.language) else { continue };
+                        match flow(&entries, extracts, source, target, arg.position, &pack.spec.language) {
+                            Ok(ports) => {
+                                let mut relation = Relation::new(RelationKind::DataFlow, entries[source].id.clone(), entries[target].id.clone(), Provenance::OBSERVED);
+                                relation.ports = Some(ports);
+                                relation.sites.push(call.span);
+                                out.graph.upsert_relation(relation);
+                            }
+                            Err(reason) => out.unverified_flows.push(UnverifiedFlow {
+                                source: entries[source].id.clone(),
+                                target: entries[target].id.clone(),
+                                position: arg.position,
+                                file: ex.file.clone(),
+                                span: call.span,
+                                reason,
+                            }),
+                        }
+                    }
                 }
                 CallTarget::Many(candidates) => out.ambiguous.push(AmbiguousCall {
                     caller: caller_id,
@@ -287,6 +321,33 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
         }
     }
     out
+}
+
+fn signature<'a>(entries: &[Entry], extracts: &'a [FileExtract], entry: usize) -> Option<&'a arch_graph::Signature> {
+    entries[entry].def.and_then(|(fi, di)| extracts[fi].definitions[di].signature.as_ref())
+}
+
+/// Ports for `source`'s output flowing into `target`'s argument `position`,
+/// when both types are written and carry the same data.
+fn flow(entries: &[Entry], extracts: &[FileExtract], source: usize, target: usize, position: u32, lang: &LanguageSpec) -> Result<(String, String), String> {
+    // A type by its last path segment (`store.Store`, `crate::x::Store` -> Store).
+    let base = |t: &str| split(t, &lang.call_separators).pop().unwrap_or_default();
+    let produced = signature(entries, extracts, source).and_then(|s| s.returns.as_deref()).map(|t| {
+        // `Self` (and the like) means the producer's own type.
+        let t = base(t);
+        match self_type(entries, source) {
+            Some(own) if lang.self_names.contains(&t) => entries[own].name.clone(),
+            _ => t,
+        }
+    });
+    let Some(produced) = produced else { return Err(format!("{} declares no return type", entries[source].symbol)) };
+    let params: Vec<&arch_graph::Param> = signature(entries, extracts, target)
+        .map(|s| s.params.iter().filter(|p| !symbol_words(&p.name).iter().any(|w| lang.self_names.iter().any(|n| n == w))).collect())
+        .unwrap_or_default();
+    let Some(param) = params.get(position as usize) else { return Err(format!("{} has no parameter at position {position}", entries[target].symbol)) };
+    let Some(wanted) = param.ty.as_deref().map(base) else { return Err(format!("parameter '{}' of {} has no type", param.name, entries[target].symbol)) };
+    let compatible = produced == wanted || lang.compatible_types.iter().any(|group| group.contains(&produced) && group.contains(&wanted));
+    if compatible { Ok(("return".to_owned(), param.name.clone())) } else { Err(format!("{produced} doesn't match parameter '{}': {wanted}", param.name)) }
 }
 
 /// Finds a type component (one that can own members) by its written name.

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use harness_contracts::{McpServer, McpTransport};
 use harness_core::{EventHub, InstanceRegistry, ProviderDriver, SessionManager};
 use arch_graph::{TypeSystem, ViewCatalog};
-use arch_index::PackSet;
+use arch_index::{CodeRules, PackSet};
 use arch_service::{ArchitectureService, FsIndex, FsPlans};
 use meta_harness::mcp::{McpServerState, McpService};
 use meta_harness::server::{AppState, create_router};
@@ -81,8 +81,12 @@ fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>
     if let Ok(text) = std::fs::read_to_string(nah.join("views.toml")) {
         views.extend_with(ViewCatalog::from_toml(&text)?);
     }
-    info!("Architecture: {} ({} language packs)", root.display(), packs.packs.len());
-    Ok(ArchitectureService::open(&root, packs, types, views, Box::new(FsPlans::new(&root)?), Box::new(FsIndex::new(&root)?))?)
+    let mut rules = CodeRules::defaults(&packs, &types)?;
+    if nah.join("rules").is_dir() {
+        rules.load_dir(&nah.join("rules"), &packs, &types)?;
+    }
+    info!("Architecture: {} ({} language packs, {} code rules)", root.display(), packs.packs.len(), rules.rules.len());
+    Ok(ArchitectureService::open(&root, packs, types, views, Box::new(FsPlans::new(&root)?), Box::new(FsIndex::new(&root)?))?.with_rules(rules))
 }
 
 async fn shutdown_signal() {

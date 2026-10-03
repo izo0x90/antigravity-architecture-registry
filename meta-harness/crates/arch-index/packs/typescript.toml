@@ -1,0 +1,76 @@
+# TypeScript language pack: ast-grep rules mapping TypeScript syntax onto the
+# generic component types. Pure data; the engine has no TypeScript code.
+
+[language]
+name = "typescript"
+ast_grep = "typescript"
+extensions = ["ts", "mts", "cts"]
+separator = "."
+call_separators = ["."]
+source_roots = ["src"]
+index_files = ["index.ts"]
+self_names = ["this"]
+# `: string` annotations wrap the type itself.
+type_wrappers = ["type_annotation"]
+
+[[definitions]]
+type = "function"
+rule = { any = [{ kind = "function_declaration" }, { kind = "method_definition" }] }
+name_field = "name"
+params_field = "parameters"
+return_field = "return_type"
+
+[[definitions]]
+type = "operation"
+rule = { any = [{ kind = "method_signature" }, { kind = "abstract_method_signature" }] }
+name_field = "name"
+params_field = "parameters"
+return_field = "return_type"
+
+[[definitions]]
+type = "class"
+rule = { any = [{ kind = "class_declaration" }, { kind = "abstract_class_declaration" }] }
+name_field = "name"
+# `extends Base implements A, B`: each named type is a base.
+bases_rule = { any = [
+  { kind = "identifier", inside = { kind = "extends_clause" } },
+  { kind = "type_identifier", inside = { kind = "implements_clause" } },
+] }
+
+[[definitions]]
+type = "interface"
+rule = { kind = "interface_declaration" }
+name_field = "name"
+bases_rule = { kind = "type_identifier", inside = { kind = "extends_type_clause" } }
+
+[[params]]
+kind = "required_parameter"
+name_field = "pattern"
+type_field = "type"
+
+[[params]]
+kind = "optional_parameter"
+name_field = "pattern"
+type_field = "type"
+
+[[calls]]
+rule = { kind = "call_expression" }
+callee_field = "function"
+args_field = "arguments"
+
+# `new Greeter()` calls the class (its constructor).
+[[calls]]
+rule = { kind = "new_expression" }
+callee_field = "constructor"
+args_field = "arguments"
+
+[[bindings]]
+rule = { kind = "variable_declarator" }
+name_field = "name"
+value_field = "value"
+
+[[imports]]
+rule = { kind = "import_statement" }
+
+[[placeholders]]
+rule = { kind = "throw_statement", regex = "(?i)(todo|not implemented)" }
