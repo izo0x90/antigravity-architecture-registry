@@ -24,6 +24,9 @@ use crate::store::{CodeIndexStore, PlanRepository};
 use crate::tools::{ProcessRunner, ToolCatalog, ToolRunner, ToolsReport};
 use crate::{ServiceError, chain, checks, review, tools, verify};
 
+mod comments;
+pub use comments::{NewComment, approval_blocker};
+
 /// Who is asking. Approvals are for users only.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -497,6 +500,9 @@ impl ArchitectureService {
         let from = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?.stage;
         if !can_transition(from, to) {
             return Err(ServiceError::InvalidOp(format!("can't go from {from:?} to {to:?}")));
+        }
+        if let Some(blocked) = approval_blocker(&plan, id) {
+            return Err(ServiceError::InvalidOp(blocked));
         }
         // Check as if approved (location rules depend on the stage).
         if let Some(c) = plan.component_mut(id) {

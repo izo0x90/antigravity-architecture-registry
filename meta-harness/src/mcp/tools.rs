@@ -117,6 +117,21 @@ pub fn list_tools(views: &ViewCatalog) -> Vec<McpTool> {
             json!({ "type": "object", "properties": { "plan": plan, "id": id }, "required": ["plan"] }),
         ),
         tool(
+            "review_comments",
+            "The user's review points on a plan: comments and change requests on components, spec sections, relations or the whole plan, with their threads, plus what changed since the user last reviewed it. Answer every open point (answer_comment); approval waits until the user accepts each answer.",
+            json!({ "type": "object", "properties": { "plan": plan, "all": { "type": "boolean", "description": "Include resolved points too" } }, "required": ["plan"] }),
+        ),
+        tool(
+            "answer_comment",
+            "Answer one review point. For a change request, first change the plan (plan_edit), then link the components you changed; the answer carries those changes so the user can check them. Questions can be answered without changes.",
+            json!({ "type": "object", "properties": { "plan": plan, "comment": { "type": "string", "description": "Comment id, e.g. c3" }, "answer": { "type": "string" }, "changes": { "type": "array", "items": id, "description": "Components you changed for it (since the last review)" } }, "required": ["plan", "comment", "answer"] }),
+        ),
+        tool(
+            "reply_comment",
+            "Reply in a review point's thread without answering it (e.g. to ask the user a clarifying question).",
+            json!({ "type": "object", "properties": { "plan": plan, "comment": { "type": "string" }, "text": { "type": "string" } }, "required": ["plan", "comment", "text"] }),
+        ),
+        tool(
             "review",
             "Run the reviewers that apply to one planned component (faithfulness to the plan, anti-patterns, logic...). Blocking points must be fixed before it can be verified as implemented.",
             json!({ "type": "object", "properties": { "plan": plan, "id": id }, "required": ["plan", "id"] }),

@@ -10,6 +10,7 @@ use crate::config::UiConfig;
 use crate::feedback::FeedbackInspectorState;
 use crate::graph::GraphState;
 use crate::keymap::{Chord, InputMode, SeqMatch, TapTracker, match_sequence};
+use crate::review::ReviewState;
 use crate::spec::SpecState;
 use crate::net::{NetClient, NetResult, WsState};
 use crate::tree::ArchitectureTreeState;
@@ -84,6 +85,9 @@ pub struct CockpitApp {
     pub spec: SpecState,
     pub tree: ArchitectureTreeState,
     pub feedback: FeedbackInspectorState,
+    /// The current plan's comments and changes since review.
+    pub review: ReviewState,
+    review_seen: u64,
 
     // Layout configuration
     pub column_count: usize, // 1, 2, or 3
@@ -162,6 +166,8 @@ impl CockpitApp {
             spec: SpecState::default(),
             tree: ArchitectureTreeState::default(),
             feedback: FeedbackInspectorState::default(),
+            review: ReviewState::default(),
+            review_seen: 0,
 
             column_count: 2,
             slot_buffers: [BufferKind::Chat, BufferKind::Graph, BufferKind::Code],
@@ -240,6 +246,7 @@ impl CockpitApp {
                 if !matches!(event, arch_graph::ArchEvent::ViewRequested { .. }) {
                     self.spec.invalidate();
                     self.tree.invalidate();
+                    self.review.invalidate();
                 }
             }
             self.chat.process_event(event);
@@ -270,11 +277,29 @@ impl CockpitApp {
         self.ensure_visible(BufferKind::Code);
     }
 
+    /// The plan's review state feeds the graph's badges and the spec's threads.
+    fn link_review(&mut self, plan: Option<&arch_graph::PlanId>, ctx: &egui::Context) {
+        if std::mem::take(&mut self.spec.requests.review_changed) {
+            self.review.invalidate();
+        }
+        self.review.tick(&self.net, ctx, plan);
+        if self.review.generation != self.review_seen {
+            self.review_seen = self.review.generation;
+            self.graph.marks = self.review.marks();
+            self.spec.comments = self.review.comments.clone();
+            self.spec.diff = self.review.diff.clone();
+        }
+        if self.spec.author != self.config.user.name {
+            self.spec.author = self.config.user.name.clone();
+        }
+    }
+
     /// Carries requests between views: graph ↔ code ↔ spec ↔ outline.
     fn link_views(&mut self, ctx: &egui::Context) {
         self.graph.tick(&self.net, ctx);
         let plan = self.graph.nav.current().plan.clone();
         self.spec.follow(self.graph.selection.as_ref(), plan.as_ref());
+        self.link_review(plan.as_ref(), ctx);
         self.tree.set_plan(plan.as_ref());
         if let Some((file, start, end)) = self.graph.requests.open_code.take() {
             self.show_code(&file, start, end, ctx);

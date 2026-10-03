@@ -9,6 +9,7 @@ pub mod graph_style;
 pub mod keymap;
 pub mod net;
 pub mod palette;
+pub mod review;
 pub mod spec;
 pub mod store;
 pub mod theme;

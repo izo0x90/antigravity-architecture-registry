@@ -5,8 +5,8 @@
 use std::fmt::Write;
 use std::sync::Arc;
 
-use arch_graph::{ComponentId, Plan, PlanId, Requester, Severity, Stage, ViewRequest};
-use arch_service::{ArchitectureService, PlanOp, ServiceError};
+use arch_graph::{Comment, CommentId, CommentKind, CommentStatus, ComponentId, Plan, PlanId, Requester, Severity, Stage, ViewRequest};
+use arch_service::{Actor, ArchitectureService, PlanOp, ServiceError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -45,6 +45,50 @@ pub fn next_steps(plan: &Plan, only: Option<&ComponentId>) -> String {
     }
     if !any {
         out.push_str(" nothing pending in this plan.");
+    }
+    let open: Vec<&Comment> = plan.comments.iter().filter(|c| c.status == CommentStatus::Open && only.is_none_or(|id| c.anchor.touches(id))).collect();
+    if !open.is_empty() {
+        let ids: Vec<&str> = open.iter().map(|c| c.id.0.as_str()).collect();
+        let _ = write!(out, "\n- review: {} open point(s) from the user ({}): read them (review_comments) and answer each (answer_comment); approval waits on them", open.len(), ids.join(", "));
+    }
+    out
+}
+
+/// Review points as the agent reads them: one block per point, with its thread.
+pub fn comments_text(comments: &[Comment], diff: &arch_graph::PlanDiff) -> String {
+    let mut out = String::new();
+    if comments.is_empty() {
+        out.push_str("No review points.\n");
+    }
+    for c in comments {
+        let kind = match c.kind {
+            CommentKind::Comment => "comment",
+            CommentKind::ChangeRequest => "CHANGE REQUEST",
+        };
+        let status = match c.status {
+            CommentStatus::Open => "open",
+            CommentStatus::Answered => "answered, waiting for the user",
+            CommentStatus::Resolved => "resolved",
+        };
+        let _ = writeln!(out, "[{}] {kind} on {} ({status}) by {}: {}", c.id, c.anchor.describe(), c.author, c.text);
+        for r in &c.replies {
+            let _ = writeln!(out, "    {}: {}", r.author, r.text);
+        }
+        if let Some(a) = &c.answer {
+            let _ = writeln!(out, "    answer ({}): {}", a.author, a.text);
+            for ch in &a.changes {
+                let _ = writeln!(out, "      - {}", ch.describe());
+            }
+        }
+    }
+    let since = diff.since.as_deref().map_or_else(|| "since the plan was started".to_owned(), |at| format!("since the user's review at {at}"));
+    if diff.is_empty() {
+        let _ = writeln!(out, "\nNo plan changes {since}.");
+    } else {
+        let _ = writeln!(out, "\nPlan changes {since}:");
+        for ch in &diff.changes {
+            let _ = writeln!(out, "- {}", ch.describe());
+        }
     }
     out
 }
@@ -151,6 +195,34 @@ fn findings_text(report: &arch_graph::Report) -> String {
         let _ = writeln!(out, "{sev}{at} {}{}", f.message, f.suggestion.as_ref().map(|s| format!(" — {s}")).unwrap_or_default());
     }
     out
+}
+
+#[derive(Deserialize)]
+struct CommentsArgs {
+    plan: String,
+    #[serde(default)]
+    all: bool,
+}
+
+#[derive(Deserialize)]
+struct AnswerArgs {
+    plan: String,
+    comment: String,
+    answer: String,
+    #[serde(default)]
+    changes: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ReplyArgs {
+    plan: String,
+    comment: String,
+    text: String,
+}
+
+/// The agent behind the MCP endpoint (one per server; sessions aren't told apart here).
+fn agent() -> Actor {
+    Actor::Agent { session: String::new() }
 }
 
 #[derive(Deserialize)]
@@ -401,6 +473,36 @@ impl McpService {
                 out.push_str(&findings_text(&reviews.report));
                 out.push_str(if reviews.report.has_errors() { "\nNext: address the blocking points (ERROR), then review again." } else { "\nNext: verify goal=implemented." });
                 Ok(out)
+            }
+            "review_comments" => {
+                let a: CommentsArgs = parse(args)?;
+                let plan = plan_id(&a.plan)?;
+                let (comments, diff, current) = blocking(&self.arch, move |s| Ok((s.comments(&plan, a.all)?, s.review_diff(&plan)?, s.plan(&plan)?))).await?;
+                let mut out = comments_text(&comments, &diff);
+                out.push_str(&next_steps(&current, None));
+                Ok(out)
+            }
+            "answer_comment" => {
+                let a: AnswerArgs = parse(args)?;
+                let plan = plan_id(&a.plan)?;
+                let changes: Vec<ComponentId> = a.changes.into_iter().map(ComponentId::new).collect();
+                let (comment, current) = blocking(&self.arch, move |s| {
+                    let c = s.answer_comment(&plan, &CommentId(a.comment), &a.answer, &changes, &agent())?;
+                    Ok((c, s.plan(&plan)?))
+                })
+                .await?;
+                let mut out = format!("Answered {}; the user will accept it or reopen it.\n", comment.id);
+                for ch in comment.answer.iter().flat_map(|a| &a.changes) {
+                    let _ = writeln!(out, "- linked: {}", ch.describe());
+                }
+                out.push_str(&next_steps(&current, None));
+                Ok(out)
+            }
+            "reply_comment" => {
+                let a: ReplyArgs = parse(args)?;
+                let plan = plan_id(&a.plan)?;
+                let comment = blocking(&self.arch, move |s| s.reply(&plan, &CommentId(a.comment), &a.text, &agent())).await?;
+                Ok(format!("Replied in {}'s thread ({} replies). It stays {}; wait for the user, then answer it.", comment.id, comment.replies.len(), if comment.status == CommentStatus::Open { "open" } else { "as it was" }))
             }
             other => Err(ServiceError::NotFound(format!("tool '{other}'"))),
         }
