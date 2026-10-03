@@ -38,17 +38,36 @@ pub struct ToolDef {
     pub timeout_secs: u64,
 }
 
+/// How logic-step checks (shell snippets in specs) run.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogicChecks {
+    /// The program and leading arguments; the snippet comes last.
+    pub shell: Vec<String>,
+    pub timeout_secs: u64,
+}
+
+impl Default for LogicChecks {
+    fn default() -> Self {
+        Self { shell: vec!["sh".into(), "-c".into()], timeout_secs: 60 }
+    }
+}
+
 /// The project's validation tools by name. There are no built-in tools: each
 /// project declares its own (`.nah/tools.toml`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCatalog {
     #[serde(default)]
     pub tools: BTreeMap<String, ToolDef>,
+    #[serde(default)]
+    pub logic_checks: LogicChecks,
 }
 
 impl ToolCatalog {
     pub fn from_toml(text: &str) -> Result<Self, ServiceError> {
         let catalog: Self = toml::from_str(text).map_err(|e| ServiceError::InvalidOp(format!("tools: {e}")))?;
+        if catalog.logic_checks.shell.is_empty() {
+            return Err(ServiceError::InvalidOp("tools: logic_checks.shell needs a program".into()));
+        }
         for (name, tool) in &catalog.tools {
             if tool.executable.trim().is_empty() {
                 return Err(ServiceError::InvalidOp(format!("tool '{name}' has no executable")));
@@ -60,6 +79,7 @@ impl ToolCatalog {
     /// Adds or replaces tools by name.
     pub fn extend_with(&mut self, other: ToolCatalog) {
         self.tools.extend(other.tools);
+        self.logic_checks = other.logic_checks;
     }
 
     pub fn get(&self, name: &str) -> Option<&ToolDef> {
@@ -240,6 +260,28 @@ pub fn run(invocations: Vec<Invocation>, runner: &dyn ToolRunner, root: &Path) -
             );
         }
         out.runs.push(ToolRun { invocation, passed, exit_code, output });
+    }
+    out
+}
+
+/// Runs every logic step's check for `components`: one finding per check,
+/// passed (info) or failed (error, with the output).
+pub fn run_logic_checks<'a>(components: impl Iterator<Item = &'a Component>, config: &LogicChecks, runner: &dyn ToolRunner, root: &Path) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let Some((program, lead)) = config.shell.split_first() else { return out };
+    for c in components {
+        for step in c.spec.iter().flat_map(|s| &s.logic_steps) {
+            let Some(check) = &step.check else { continue };
+            let mut args = lead.to_vec();
+            args.push(check.clone());
+            let target = Target::Component { id: c.id.clone() };
+            let label = format!("logic step {} '{}' check", step.sequence, step.name);
+            out.push(match runner.run(root, program, &args, Duration::from_secs(config.timeout_secs)) {
+                Ok(o) if o.success => Finding::info(FindingCode::LogicCheckPassed, target, format!("{label} passed")),
+                Ok(o) => Finding::error(FindingCode::LogicCheckFailed, target, format!("{label} failed: {}", o.output.trim())),
+                Err(e) => Finding::error(FindingCode::LogicCheckFailed, target, format!("{label} couldn't run: {e}")),
+            });
+        }
     }
     out
 }

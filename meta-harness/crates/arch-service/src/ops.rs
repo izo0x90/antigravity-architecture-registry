@@ -82,6 +82,21 @@ pub enum PlanOp {
     },
 }
 
+impl PlanOp {
+    /// The component whose design this op changes (what depends on it must
+    /// be looked at again), if any.
+    pub fn design_change(&self) -> Option<&ComponentId> {
+        match self {
+            PlanOp::Modify { id, .. } | PlanOp::Remove { id } => Some(id),
+            PlanOp::Relate { kind, source, target, .. } | PlanOp::Unrelate { kind, source, target } => match kind {
+                RelationKind::Calls | RelationKind::Implements => Some(source),
+                RelationKind::DataFlow | RelationKind::Contains => Some(target),
+            },
+            PlanOp::AddComponent { .. } | PlanOp::Reference { .. } | PlanOp::SetGreenfield { .. } | PlanOp::Describe { .. } => None,
+        }
+    }
+}
+
 fn invalid(msg: impl Into<String>) -> ServiceError {
     ServiceError::InvalidOp(msg.into())
 }

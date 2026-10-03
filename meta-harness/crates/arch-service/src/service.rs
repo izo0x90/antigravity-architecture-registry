@@ -15,6 +15,7 @@ use arch_graph::{
 use arch_index::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk};
 use serde::{Deserialize, Serialize};
 
+use crate::progress::{Downgrade, cascade};
 use crate::contract::{ContractSlice, slice};
 use crate::ops::{PlanOp, apply};
 use crate::review::{ReviewProvider, ReviewerCatalog, ReviewsReport, Subject};
@@ -69,6 +70,8 @@ pub struct Reverified {
 pub struct Refresh {
     pub ingest: IngestReport,
     pub reverified: Vec<Reverified>,
+    /// Planned components sent back because code they build on changed shape.
+    pub downgraded: Vec<(PlanId, Downgrade)>,
 }
 
 #[derive(Default)]
@@ -293,8 +296,28 @@ impl ArchitectureService {
         let changed: BTreeSet<&str> = ingest.changed.iter().map(RepoPath::as_str).collect();
         let observed = self.observed()?;
         let mut reverified = Vec::new();
+        let mut downgraded = Vec::new();
         for (plan, before) in plans.iter().zip(&before) {
             let after = Graph::merge(observed.clone(), std::slice::from_ref(plan));
+            // Existing code the plan builds on changed its signature: what
+            // was designed against the old one needs another look.
+            let mut plan = plan.clone();
+            let reshaped: Vec<ComponentId> = observed
+                .components()
+                .filter(|c| plan.component(&c.id).is_none())
+                .filter(|c| before.component(&c.id).is_some_and(|b| b.signature.is_some() && b.signature != c.signature))
+                .map(|c| c.id.clone())
+                .collect();
+            let mut sent_back = Vec::new();
+            for id in &reshaped {
+                sent_back.extend(cascade(&mut plan, &after, &self.types, id));
+            }
+            if !sent_back.is_empty() {
+                self.plans.save(&plan)?;
+                self.emit(ArchEvent::Changed { reason: ChangeReason::StageChanged, plans: vec![plan.id.clone()], components: sent_back.iter().map(|d| d.id.clone()).collect() });
+                downgraded.extend(sent_back.into_iter().map(|d| (plan.id.clone(), d)));
+            }
+            let plan = &plan;
             for id in affected(plan, before, &after, &changed) {
                 let Some(planned) = plan.component(&id) else { continue };
                 let report = self.check(plan, planned, &observed, planned.stage, false)?;
@@ -302,7 +325,7 @@ impl ArchitectureService {
                 reverified.push(Reverified { plan: plan.id.clone(), component: id, stage: planned.stage, report });
             }
         }
-        Ok(Refresh { ingest, reverified })
+        Ok(Refresh { ingest, reverified, downgraded })
     }
 
     /// Whether a changed path is something ingestion reads: a source file a
@@ -375,8 +398,17 @@ impl ArchitectureService {
     /// Applies one operation to a plan.
     pub fn apply(&self, plan_id: &PlanId, op: PlanOp) -> Result<Plan, ServiceError> {
         let mut plan = self.plan(plan_id)?;
-        let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
-        let touched = apply(&mut plan, op, &graph, &self.root, &self.packs, &self.types, &self.dsl)?;
+        let observed = self.observed()?;
+        let graph = Graph::merge(observed.clone(), std::slice::from_ref(&plan));
+        let changed = op.design_change().cloned();
+        let removes = matches!(op, PlanOp::Remove { .. });
+        let mut touched = apply(&mut plan, op, &graph, &self.root, &self.packs, &self.types, &self.dsl)?;
+        // A design change sends it (if approved) and what builds on it back.
+        if let Some(changed) = changed {
+            // A removed component's dependents are only visible before removal.
+            let basis = if removes { graph } else { Graph::merge(observed, std::slice::from_ref(&plan)) };
+            touched.extend(cascade(&mut plan, &basis, &self.types, &changed).into_iter().map(|d| d.id));
+        }
         self.plans.save(&plan)?;
         self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id.clone()], components: touched });
         Ok(plan)
@@ -416,6 +448,10 @@ impl ArchitectureService {
         // Code rules over the plan's scope as it exists in code.
         let scope = self.scope(plan_id)?;
         report.findings.extend(self.rules.check(scope.iter().filter_map(|id| graph.component(id)), &graph, &self.root, &self.packs, &self.types));
+        // Logic blocks are tested on their own.
+        let planned = plan.components.iter().filter_map(|c| graph.component(&c.id));
+        report.findings.extend(tools::run_logic_checks(planned, &self.tools.logic_checks, self.runner.as_ref(), &self.root));
+        let report = report.sorted();
         self.emit_validated(plan_id, None, &report);
         Ok(report)
     }

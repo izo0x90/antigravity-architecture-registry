@@ -3,7 +3,7 @@
 
 use std::fmt::Write;
 
-use arch_graph::{CodeAnchor, Component, ComponentId, Graph, ImplementationSpec, Plan, ProposedLocation, RelationKind, Signature, Span, Stage, Status};
+use arch_graph::{CodeAnchor, Component, ComponentId, Graph, ImplementationSpec, Invariant, Plan, ProposedLocation, RelationKind, Schemas, Signature, Span, Stage, Status};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -20,6 +20,20 @@ pub struct Neighbor {
     pub anchor: Option<CodeAnchor>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// Its data shapes (planned).
+    #[serde(default, skip_serializing_if = "Schemas::is_empty")]
+    pub schemas: Schemas,
+    /// For calls: what this call passes, gets back and expects changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expects: Option<Schemas>,
+}
+
+/// An invariant that holds here, and the component that declares it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HeldInvariant {
+    pub from: ComponentId,
+    #[serde(flatten)]
+    pub invariant: Invariant,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -38,8 +52,14 @@ pub struct ContractSlice {
     pub anchor: Option<CodeAnchor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<Signature>,
+    #[serde(default, skip_serializing_if = "Schemas::is_empty")]
+    pub schemas: Schemas,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec: Option<ImplementationSpec>,
+    /// Every invariant that holds: its own, then inherited through what it
+    /// implements (nearest first).
+    #[serde(default)]
+    pub invariants: Vec<HeldInvariant>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container: Option<Neighbor>,
     /// What it must call, in order (real signatures for existing ones).
@@ -47,6 +67,8 @@ pub struct ContractSlice {
     /// Who calls it.
     pub called_by: Vec<Neighbor>,
     pub implements: Vec<Neighbor>,
+    /// Everything it implements, transitively, nearest first.
+    pub interface_chain: Vec<Neighbor>,
     /// Placeholder bodies still in its code.
     pub open_placeholders: Vec<Span>,
 }
@@ -61,6 +83,8 @@ fn neighbor(graph: &Graph, id: &ComponentId, note: &str) -> Option<Neighbor> {
         signature: c.signature.clone(),
         anchor: c.anchor.clone(),
         note: note.to_owned(),
+        schemas: c.schemas.clone(),
+        expects: None,
     })
 }
 
@@ -70,7 +94,7 @@ pub fn slice(plan: &Plan, planned: &Component, graph: &Graph) -> ContractSlice {
     let merged = graph.component(id).unwrap_or(planned);
     let mut calls: Vec<(u32, Neighbor)> = graph
         .outgoing(id, Some(RelationKind::Calls))
-        .filter_map(|r| neighbor(graph, &r.target, &r.note).map(|n| (r.order.unwrap_or(u32::MAX), n)))
+        .filter_map(|r| neighbor(graph, &r.target, &r.note).map(|n| (r.order.unwrap_or(u32::MAX), Neighbor { expects: r.expects.clone(), ..n })))
         .collect();
     calls.sort_by_key(|(order, n)| (*order, n.id.clone()));
     ContractSlice {
@@ -84,11 +108,14 @@ pub fn slice(plan: &Plan, planned: &Component, graph: &Graph) -> ContractSlice {
         proposed: merged.proposed.clone(),
         anchor: merged.anchor.clone(),
         signature: merged.signature.clone(),
+        schemas: merged.schemas.clone(),
         spec: merged.spec.clone(),
+        invariants: graph.invariants(id).into_iter().map(|(from, invariant)| HeldInvariant { from, invariant }).collect(),
         container: graph.parent(id).and_then(|p| neighbor(graph, p, "")),
         calls: calls.into_iter().map(|(_, n)| n).collect(),
         called_by: graph.incoming(id, Some(RelationKind::Calls)).filter_map(|r| neighbor(graph, &r.source, &r.note)).collect(),
         implements: graph.outgoing(id, Some(RelationKind::Implements)).filter_map(|r| neighbor(graph, &r.target, "")).collect(),
+        interface_chain: graph.interface_chain(id).iter().filter_map(|i| neighbor(graph, i, "")).collect(),
         open_placeholders: merged.placeholders.clone(),
     }
 }
@@ -106,6 +133,21 @@ fn sig(s: &Option<Signature>) -> String {
             }
         }
         None => "(no signature)".to_owned(),
+    }
+}
+
+fn data(out: &mut String, title: &str, schemas: &Schemas) {
+    if schemas.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "\n## {title}");
+    for (what, schema) in [("Properties", &schemas.properties), ("Inputs", &schemas.inputs), ("Outputs", &schemas.outputs)] {
+        if let Some(schema) = schema {
+            let _ = writeln!(out, "- {what}: `{schema}`");
+        }
+    }
+    for e in &schemas.side_effects {
+        let _ = writeln!(out, "- Changes `{}`{}", e.target, if e.description.is_empty() { String::new() } else { format!(": {}", e.description) });
     }
 }
 
@@ -134,6 +176,7 @@ impl ContractSlice {
             (None, None) => out.push_str("Not placed yet.\n"),
         }
         let _ = writeln!(out, "\n## Signature\n`{}`", sig(&self.signature));
+        data(&mut out, "Data", &self.schemas);
         if let Some(spec) = &self.spec {
             if let Some(p) = &spec.pattern {
                 let _ = writeln!(out, "\n## Pattern\n{p}");
@@ -144,11 +187,19 @@ impl ContractSlice {
                     let _ = writeln!(out, "{}. **{}**: {}", s.sequence, s.name, s.description);
                 }
             }
-            if !spec.invariants.is_empty() {
-                out.push_str("\n## Invariants\n");
-                for i in &spec.invariants {
-                    let _ = writeln!(out, "- **{}** ({}): {}", i.name, i.kind, i.description);
+            if !spec.tasks.is_empty() {
+                out.push_str("\n## Tasks\n");
+                for t in &spec.tasks {
+                    let _ = writeln!(out, "- [{}] {}", if t.done { "x" } else { " " }, t.text);
                 }
+            }
+        }
+        if !self.invariants.is_empty() {
+            out.push_str("\n## Invariants\n");
+            for held in &self.invariants {
+                let i = &held.invariant;
+                let from = if held.from == self.id { String::new() } else { format!(" (from {})", held.from) };
+                let _ = writeln!(out, "- **{}** ({}){from}: {}", i.name, i.kind, i.description);
             }
         }
         let section = |out: &mut String, title: &str, list: &[Neighbor]| {
@@ -158,11 +209,20 @@ impl ContractSlice {
             let _ = writeln!(out, "\n## {title}");
             for n in list {
                 let _ = writeln!(out, "- `{}` {} {} — {}{}", n.name, n.type_name, sig(&n.signature), where_(n), if n.note.is_empty() { String::new() } else { format!(" ({})", n.note) });
+                if let Some(expects) = &n.expects {
+                    for (what, schema) in [("passes", &expects.inputs), ("gets back", &expects.outputs)] {
+                        if let Some(schema) = schema {
+                            let _ = writeln!(out, "  - {what} `{schema}`");
+                        }
+                    }
+                }
             }
         };
         section(&mut out, "Must call (in order)", &self.calls);
         section(&mut out, "Called by", &self.called_by);
         section(&mut out, "Implements", &self.implements);
+        let inherited: Vec<Neighbor> = self.interface_chain.iter().filter(|n| !self.implements.iter().any(|d| d.id == n.id)).cloned().collect();
+        section(&mut out, "Through those, also implements", &inherited);
         if let Some(c) = &self.container {
             let _ = writeln!(out, "\n## Inside\n`{}` ({}) — {}", c.name, c.type_name, where_(c));
         }

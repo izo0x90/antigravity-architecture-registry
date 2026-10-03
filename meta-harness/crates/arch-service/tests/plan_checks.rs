@@ -384,3 +384,150 @@ fn stage_transitions_enforce_validation_location_and_dependencies() {
     let err = approve("sample::nowhere", Stage::PlanApproved).unwrap_err().to_string();
     assert!(err.contains("needs a proposed location"), "{err}");
 }
+
+fn stage(r: &Repo, plan: &str, symbol: &str) -> Stage {
+    r.service.plan(&pid(plan)).unwrap().component(&id(symbol)).unwrap().stage
+}
+
+// req: P5.10
+#[test]
+fn actionable_work_comes_in_dependency_order_and_changes_cascade_in_waves() {
+    let r = repo();
+    r.service.create_plan("q", "Queue", "").unwrap();
+    let sig = || Some(Signature { params: vec![], returns: Some("bool".into()) });
+    // Added in reverse: c calls b, b calls a; d builds on existing util::shout.
+    for name in ["c", "b", "a", "d"] {
+        add(&r, "q", name, "function", "Part of the queue.", sig());
+    }
+    relate(&r, "q", "sample::run", "sample::c");
+    relate(&r, "q", "sample::c", "sample::b");
+    relate(&r, "q", "sample::b", "sample::a");
+    relate(&r, "q", "sample::d", "sample::util::shout");
+    let next = |action| {
+        let plan = r.service.plan(&pid("q")).unwrap();
+        let graph = r.service.graph(Some(&pid("q"))).unwrap();
+        arch_service::next_actionable(&plan, &graph, r.service.types(), action).into_iter().map(|i| i.0).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        arch_service::topological(&r.service.plan(&pid("q")).unwrap(), &r.service.graph(Some(&pid("q"))).unwrap(), r.service.types()),
+        vec![id("sample::a"), id("sample::d"), id("sample::b"), id("sample::c")],
+        "dependencies first, ties by id"
+    );
+    for name in ["a", "b", "c", "d"] {
+        r.service.approve(&pid("q"), &id(&format!("sample::{name}")), Stage::ArchApproved, &user()).unwrap();
+    }
+    assert_eq!(next(arch_service::Action::Plan), vec!["rust:sample::a", "rust:sample::d", "rust:sample::b", "rust:sample::c"]);
+    for name in ["a", "b", "c", "d"] {
+        r.service.approve(&pid("q"), &id(&format!("sample::{name}")), Stage::PlanApproved, &user()).unwrap();
+    }
+    assert_eq!(next(arch_service::Action::Build), vec!["rust:sample::a", "rust:sample::d"], "b and c wait for the structure they call");
+    // Changing a's design sends it back for approval and its dependents back a step, in waves.
+    let plan = r.service.plan(&pid("q")).unwrap();
+    let graph = r.service.graph(Some(&pid("q"))).unwrap();
+    let waves: Vec<(String, Stage, Stage, u32)> =
+        arch_service::cascade(&mut plan.clone(), &graph, r.service.types(), &id("sample::a")).into_iter().map(|d| (d.id.0, d.from, d.to, d.wave)).collect();
+    assert_eq!(
+        waves,
+        vec![
+            ("rust:sample::a".into(), Stage::PlanApproved, Stage::Declared, 0),
+            ("rust:sample::b".into(), Stage::PlanApproved, Stage::ArchApproved, 1),
+            ("rust:sample::c".into(), Stage::PlanApproved, Stage::ArchApproved, 2),
+        ]
+    );
+    // The same happens through a plan edit.
+    r.service.apply(&pid("q"), PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::a"), target: id("sample::log"), order: None, ports: None, note: None, expects: None }).unwrap();
+    assert_eq!((stage(&r, "q", "sample::a"), stage(&r, "q", "sample::b"), stage(&r, "q", "sample::c")), (Stage::Declared, Stage::ArchApproved, Stage::ArchApproved));
+    assert_eq!(stage(&r, "q", "sample::d"), Stage::PlanApproved, "unrelated work keeps its approval");
+    // Existing code changing shape cascades too: shout gains a parameter.
+    let util = r.root.join("src/util.rs");
+    std::fs::write(&util, std::fs::read_to_string(&util).unwrap().replace("pub fn shout(s: &str) -> String", "pub fn shout(s: &str, loud: bool) -> String")).unwrap();
+    let refresh = r.service.refresh(std::slice::from_ref(&util)).unwrap();
+    let sent_back: Vec<(String, Stage)> = refresh.downgraded.iter().map(|(_, d)| (d.id.0.clone(), d.to)).collect();
+    assert_eq!(sent_back, vec![("rust:sample::d".to_owned(), Stage::ArchApproved)]);
+    assert_eq!(stage(&r, "q", "sample::d"), Stage::ArchApproved);
+}
+
+// req: P5.11
+#[test]
+fn contracts_carry_location_signature_interfaces_invariants_steps_and_real_callees() {
+    let r = repo();
+    let mut plan = Plan::new("contract", "Contract");
+    let inv = |name: &str, kind| Invariant { name: name.into(), kind, description: format!("{name} holds") };
+    let mut port = comp("sample::Port", "interface");
+    port.spec = None;
+    let mut base = comp("sample::base_write", "function");
+    base.spec = Some(ImplementationSpec { invariants: vec![inv("durable", InvariantKind::PostCondition)], ..ImplementationSpec::default() });
+    let mut write = comp("sample::write", "function");
+    write.signature = Some(Signature { params: vec![arch_graph::Param { name: "item".into(), ty: Some("&str".into()) }], returns: Some("bool".into()) });
+    write.schemas.inputs = schema(json!({"item": "str"}));
+    write.schemas.side_effects = vec![SideEffect { target: "fs".into(), description: "writes the file".into() }];
+    write.spec = Some(ImplementationSpec {
+        pattern: Some("write-then-rename".into()),
+        logic_steps: vec![LogicStep { sequence: 1, name: "shout".into(), description: "Uppercase the item.".into(), algorithm: None, complexity: None, check: None }],
+        invariants: vec![inv("atomic", InvariantKind::PostCondition)],
+        tasks: vec![arch_graph::Task { text: "fsync".into(), done: false }],
+        ..ImplementationSpec::default()
+    });
+    let mut call = rel(RelationKind::Calls, "sample::write", "sample::util::shout");
+    call.expects = Some(Schemas { inputs: schema(json!({"s": "str"})), ..Schemas::default() });
+    plan.components.extend([port, base, write]);
+    plan.relations.extend([rel(RelationKind::Implements, "sample::write", "sample::base_write"), rel(RelationKind::Implements, "sample::base_write", "sample::Port"), call]);
+    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    let slice = r.service.contract(&pid("contract"), &id("sample::write")).unwrap();
+    assert_eq!(slice.interface_chain.iter().map(|n| n.id.0.as_str()).collect::<Vec<_>>(), vec!["rust:sample::base_write", "rust:sample::Port"]);
+    assert_eq!(slice.invariants.iter().map(|h| (h.from.0.as_str(), h.invariant.name.as_str())).collect::<Vec<_>>(), vec![("rust:sample::write", "atomic"), ("rust:sample::base_write", "durable")]);
+    let shout = &slice.calls[0];
+    assert!(shout.anchor.is_some() && shout.signature.is_some(), "real callee from the code");
+    let md = slice.to_markdown();
+    // JSON key order depends on serde_json features; render the same way.
+    let inputs = slice.schemas.inputs.as_ref().unwrap().to_string();
+    let passes = shout.expects.as_ref().unwrap().inputs.as_ref().unwrap().to_string();
+    let data = format!("## Data\n- Inputs: `{inputs}`\n- Changes `fs`: writes the file");
+    let passed = format!("  - passes `{passes}`");
+    for needle in [
+        "## Location\nPut it in src/lib.rs as `sample::write`, inside rust:sample.",
+        "## Signature\n`(item: &str) -> bool`",
+        data.as_str(),
+        "## Pattern\nwrite-then-rename",
+        "## Logic steps\n1. **shout**: Uppercase the item.",
+        "## Tasks\n- [ ] fsync",
+        "## Invariants\n- **atomic** (post_condition): atomic holds\n- **durable** (post_condition) (from rust:sample::base_write): durable holds",
+        "## Must call (in order)\n- `shout` function (s: &str) -> String — src/util.rs:1",
+        passed.as_str(),
+        "## Implements\n- `base_write` function",
+        "## Through those, also implements\n- `Port` interface",
+    ] {
+        assert!(md.contains(needle), "missing {needle:?} in:\n{md}");
+    }
+}
+
+// req: P5.18
+#[test]
+fn logic_step_checks_run_during_validation_and_record_pass_or_fail() {
+    let r = repo();
+    let mut plan = Plan::new("logic", "Logic");
+    let step = |sequence, name: &str, check: Option<&str>| LogicStep {
+        sequence,
+        name: name.into(),
+        description: String::new(),
+        algorithm: None,
+        complexity: None,
+        check: check.map(str::to_owned),
+    };
+    let mut parse = comp("sample::parse", "function");
+    parse.spec = Some(ImplementationSpec {
+        logic_steps: vec![step(1, "read", Some("test -f src/lib.rs")), step(2, "split", Some("echo 'split is broken'; exit 3")), step(3, "free", None)],
+        ..ImplementationSpec::default()
+    });
+    plan.components.push(parse);
+    let report = check(&r, plan);
+    assert_eq!(messages(&report, FindingCode::LogicCheckPassed), vec!["logic step 1 'read' check passed"]);
+    let failed = messages(&report, FindingCode::LogicCheckFailed);
+    assert_eq!(failed, vec!["logic step 2 'split' check failed: split is broken"]);
+    let severity = |code| report.findings.iter().find(|f| f.code == code).unwrap().severity;
+    assert_eq!((severity(FindingCode::LogicCheckPassed), severity(FindingCode::LogicCheckFailed)), (arch_graph::Severity::Info, arch_graph::Severity::Error));
+    // The shell is configurable (tools.toml `[logic_checks]`).
+    let catalog = arch_service::ToolCatalog::from_toml("[logic_checks]\nshell = [\"bash\", \"-c\"]\ntimeout_secs = 5").unwrap();
+    assert_eq!(catalog.logic_checks.shell, vec!["bash", "-c"]);
+    assert!(arch_service::ToolCatalog::from_toml("[logic_checks]\nshell = []\ntimeout_secs = 5").is_err());
+}
