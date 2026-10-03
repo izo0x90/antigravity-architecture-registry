@@ -1,4 +1,4 @@
-from helpers import clean, Base
+from helpers import clean, load, Base
 
 
 class Greeter(Base):
@@ -10,4 +10,5 @@ class Greeter(Base):
 
 
 def main():
-    Greeter().greet("x")
+    data = load()
+    Greeter().greet(data)

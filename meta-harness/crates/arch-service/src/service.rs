@@ -12,7 +12,7 @@ use arch_graph::{
     Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
     Severity, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult,
 };
-use arch_index::{AmbiguousCall, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk};
+use arch_index::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk};
 use serde::{Deserialize, Serialize};
 
 use crate::contract::{ContractSlice, slice};
@@ -63,6 +63,7 @@ pub struct ArchitectureService {
     packs: PackSet,
     types: TypeSystem,
     views: ViewCatalog,
+    rules: CodeRules,
     plans: Box<dyn PlanRepository>,
     index: Box<dyn CodeIndexStore>,
     observed: RwLock<Observed>,
@@ -87,12 +88,15 @@ fn now_rfc3339() -> String {
 
 impl ArchitectureService {
     /// Opens the service over `root`, loading the cached index (no parsing).
+    /// Code rules start as the defaults; see `with_rules`.
     pub fn open(root: &Path, packs: PackSet, types: TypeSystem, views: ViewCatalog, plans: Box<dyn PlanRepository>, index: Box<dyn CodeIndexStore>) -> Result<Self, ServiceError> {
+        let rules = CodeRules::defaults(&packs, &types).map_err(|e| ServiceError::Index(e.to_string()))?;
         let service = Self {
             root: root.to_path_buf(),
             packs,
             types,
             views,
+            rules,
             plans,
             index,
             observed: RwLock::new(Observed::default()),
@@ -100,6 +104,12 @@ impl ArchitectureService {
         };
         service.rebuild_observed()?;
         Ok(service)
+    }
+
+    /// Replaces the code rules (e.g. defaults plus the project's .nah/rules).
+    pub fn with_rules(mut self, rules: CodeRules) -> Self {
+        self.rules = rules;
+        self
     }
 
     pub fn root(&self) -> &Path {
@@ -259,7 +269,10 @@ impl ArchitectureService {
     pub fn validate(&self, plan_id: &PlanId) -> Result<Report, ServiceError> {
         let plan = self.plan(plan_id)?;
         let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
-        let report = checks::check_plan(&plan, &graph, &self.root, &self.packs, &self.types);
+        let mut report = checks::check_plan(&plan, &graph, &self.root, &self.packs, &self.types);
+        // Code rules over the plan's scope as it exists in code.
+        let scope = self.scope(plan_id)?;
+        report.findings.extend(self.rules.check(scope.iter().filter_map(|id| graph.component(id)), &graph, &self.root, &self.packs, &self.types));
         self.emit_validated(plan_id, None, &report);
         Ok(report)
     }
@@ -323,6 +336,7 @@ impl ArchitectureService {
         }
         let observed = self.observed()?;
         let mut report = verify::verify_component(&plan, &planned, &observed, goal);
+        report.findings.extend(self.rules.check(observed.component(id), &observed, &self.root, &self.packs, &self.types));
         let mut advanced_to = None;
         if !report.has_errors() {
             if planned.stage == goal {

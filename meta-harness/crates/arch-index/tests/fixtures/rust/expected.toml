@@ -44,6 +44,9 @@ relations = [
   ["calls", "sample::run", "sample::store::Store::save"],
   ["calls", "sample::run", "sample::log"],
   ["calls", "sample::store::Store::save", "sample::store::Store::check"],
+  # `let out = Upper.apply(input)` then `store.save(&out)` / `log(&out)`: String into &str.
+  ["data_flow", "sample::Upper::apply", "sample::store::Store::save"],
+  ["data_flow", "sample::Upper::apply", "sample::log"],
 ]
 # Calls that could mean more than one component: [caller, callee text, candidates...]
 ambiguous = [

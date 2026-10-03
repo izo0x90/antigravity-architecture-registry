@@ -11,7 +11,11 @@ use serde::Deserialize;
 
 use crate::IndexError;
 
-const BUILT_IN: &[(&str, &str)] = &[("rust.toml", include_str!("../packs/rust.toml"))];
+const BUILT_IN: &[(&str, &str)] = &[
+    ("rust.toml", include_str!("../packs/rust.toml")),
+    ("python.toml", include_str!("../packs/python.toml")),
+    ("typescript.toml", include_str!("../packs/typescript.toml")),
+];
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct LanguageSpec {
@@ -42,6 +46,13 @@ pub struct LanguageSpec {
     /// Leading qualifier segments that are relative markers, not names.
     #[serde(default)]
     pub relative_prefixes: Vec<String>,
+    /// Syntax kinds that wrap a type (e.g. `: string` annotations); the type
+    /// is their first named child.
+    #[serde(default)]
+    pub type_wrappers: Vec<String>,
+    /// Groups of type names that carry the same data (e.g. String and str).
+    #[serde(default)]
+    pub compatible_types: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -58,6 +69,16 @@ pub struct DefinitionSpec {
     /// Base classes/interfaces it extends (each named child becomes Implements).
     #[serde(default)]
     pub bases_field: Option<String>,
+    /// Base classes/interfaces as an ast-grep rule matched inside the
+    /// definition (for syntax where they aren't one field).
+    #[serde(default)]
+    pub bases_rule: Option<toml::Value>,
+    /// The type this definition belongs to, named by the first `owner_kind`
+    /// node under this field (methods declared outside their type).
+    #[serde(default)]
+    pub owner_field: Option<String>,
+    #[serde(default)]
+    pub owner_kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -87,6 +108,18 @@ pub struct ParamSpec {
 pub struct CallSpec {
     pub rule: toml::Value,
     pub callee_field: String,
+    /// The argument list; arguments produced by other calls become data flow.
+    #[serde(default)]
+    pub args_field: Option<String>,
+}
+
+/// A local name bound to a value (`let x = f()`), so `g(x)` shows f's output
+/// flowing into g.
+#[derive(Clone, Debug, Deserialize)]
+pub struct BindingSpec {
+    pub rule: toml::Value,
+    pub name_field: String,
+    pub value_field: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -106,6 +139,8 @@ pub struct PackSpec {
     #[serde(default)]
     pub calls: Vec<CallSpec>,
     #[serde(default)]
+    pub bindings: Vec<BindingSpec>,
+    #[serde(default)]
     pub imports: Vec<RuleSpec>,
     #[serde(default)]
     pub placeholders: Vec<RuleSpec>,
@@ -116,7 +151,10 @@ pub struct Pack {
     pub spec: PackSpec,
     pub lang: SupportLang,
     pub definitions: Vec<RuleCore>,
+    /// Per definition: its compiled `bases_rule`, if any.
+    pub bases: Vec<Option<RuleCore>>,
     pub scopes: Vec<RuleCore>,
+    pub bindings: Vec<RuleCore>,
     pub calls: Vec<RuleCore>,
     pub imports: Vec<RuleCore>,
     pub placeholders: Vec<RuleCore>,
@@ -128,7 +166,7 @@ impl std::fmt::Debug for Pack {
     }
 }
 
-fn compile(lang: SupportLang, rule: &toml::Value, what: &str) -> Result<RuleCore, IndexError> {
+pub(crate) fn compile(lang: SupportLang, rule: &toml::Value, what: &str) -> Result<RuleCore, IndexError> {
     let json = serde_json::json!({ "rule": rule });
     let core: SerializableRuleCore = serde_json::from_value(json).map_err(|e| IndexError::Pack(format!("{what}: {e}")))?;
     core.get_matcher(DeserializeEnv::new(lang)).map_err(|e| IndexError::Pack(format!("{what}: {e}")))
@@ -151,7 +189,14 @@ impl Pack {
         };
         Ok(Self {
             definitions: rules(spec.definitions.iter().map(|d| &d.rule).collect(), "definitions")?,
+            bases: spec
+                .definitions
+                .iter()
+                .enumerate()
+                .map(|(i, d)| d.bases_rule.as_ref().map(|r| compile(lang, r, &format!("pack '{name}' definitions[{i}].bases_rule"))).transpose())
+                .collect::<Result<_, _>>()?,
             scopes: rules(spec.scopes.iter().map(|d| &d.rule).collect(), "scopes")?,
+            bindings: rules(spec.bindings.iter().map(|d| &d.rule).collect(), "bindings")?,
             calls: rules(spec.calls.iter().map(|d| &d.rule).collect(), "calls")?,
             imports: rules(spec.imports.iter().map(|d| &d.rule).collect(), "imports")?,
             placeholders: rules(spec.placeholders.iter().map(|d| &d.rule).collect(), "placeholders")?,

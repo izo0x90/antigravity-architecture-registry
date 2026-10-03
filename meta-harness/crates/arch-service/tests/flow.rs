@@ -8,7 +8,7 @@ use arch_graph::{
     ArchEvent, ChangeReason, ComponentId, FindingCode, Graph, Param, Plan, PlanId, ProposedLocation, Provenance, Relation, RelationKind, RepoPath,
     Requester, Severity, Signature, Stage, Status, TypeSystem, ViewCatalog, ViewRequest,
 };
-use arch_index::PackSet;
+use arch_index::{CodeRules, PackSet};
 use arch_service::{Actor, ArchitectureService, FsIndex, FsPlans, PlanOp, PlanRepository, ServiceError};
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -32,18 +32,27 @@ struct Repo {
 }
 
 fn repo() -> Repo {
+    repo_with_rules("")
+}
+
+/// The fixture repo with project code rules (TOML) on top of the defaults.
+fn repo_with_rules(rules_toml: &str) -> Repo {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("sample");
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample"), &root);
+    let (packs, types) = (PackSet::built_in().unwrap(), TypeSystem::defaults().unwrap());
+    let mut rules = CodeRules::defaults(&packs, &types).unwrap();
+    rules.add_toml(rules_toml, &packs, &types).unwrap();
     let service = ArchitectureService::open(
         &root,
-        PackSet::built_in().unwrap(),
-        TypeSystem::defaults().unwrap(),
+        packs,
+        types,
         ViewCatalog::defaults().unwrap(),
         Box::new(FsPlans::new(&root).unwrap()),
         Box::new(FsIndex::new(&root).unwrap()),
     )
-    .unwrap();
+    .unwrap()
+    .with_rules(rules);
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = events.clone();
     service.subscribe(move |e| sink.lock().unwrap().push(e.clone()));
@@ -368,6 +377,39 @@ fn verification_finds_the_component_or_reports_moved_and_missing() {
     let moved = &v.report.findings[0];
     assert!(moved.message.contains("sample::util::validate"), "{}", moved.message);
     assert_eq!(moved.at.as_ref().unwrap().file.as_str(), "src/util.rs");
+}
+
+// req: P6.12
+#[test]
+fn project_code_rules_report_in_checks_and_block_verification() {
+    let r = repo_with_rules(
+        r#"
+[[rule]]
+id = "no-println"
+language = "rust"
+types = ["function"]
+kind = "forbidden"
+rule = { kind = "macro_invocation", has = { field = "macro", regex = "^println$" } }
+message = "log through the logger"
+"#,
+    );
+    // Plan checks: a referenced component that breaks a rule is a finding at the match.
+    r.service.create_plan("p", "Touch logging", "").unwrap();
+    r.service.apply(&pid("p"), PlanOp::Reference { id: id("sample::log"), kinds: vec![], depth: 0 }).unwrap();
+    let report = r.service.validate(&pid("p")).unwrap();
+    let hit = report.findings.iter().find(|f| f.code == FindingCode::ForbiddenPattern).unwrap();
+    assert_eq!((hit.severity, hit.component()), (Severity::Error, Some(&id("sample::log"))));
+    assert!(hit.message.starts_with("[no-println] log through the logger"), "{}", hit.message);
+    assert_eq!(hit.at.as_ref().map(|a| (a.file.as_str(), a.span.start_line)), Some(("src/lib.rs", 27)));
+    // Verification: the rule blocks Implemented until the code complies.
+    approved_validate(&r, "v");
+    append(&r, "src/lib.rs", "\npub fn validate(input: &str) -> bool { crate::store::Store::new(); println!(\"{input}\"); !input.is_empty() }\n");
+    let v = r.service.verify(&pid("v"), &id("sample::validate"), Stage::Implemented).unwrap();
+    assert_eq!(v.report.codes(), vec![FindingCode::ForbiddenPattern]);
+    assert_eq!(v.advanced_to, None);
+    write(&r, "src/lib.rs", &std::fs::read_to_string(r.root.join("src/lib.rs")).unwrap().replace(" println!(\"{input}\");", ""));
+    let v = r.service.verify(&pid("v"), &id("sample::validate"), Stage::Implemented).unwrap();
+    assert_eq!(v.advanced_to, Some(Stage::Implemented), "{:?}", v.report);
 }
 
 // req: P6.2

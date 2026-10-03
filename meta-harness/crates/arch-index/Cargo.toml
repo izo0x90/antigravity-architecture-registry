@@ -2,7 +2,7 @@
 name = "arch-index"
 version = "0.1.0"
 edition = "2024"
-description = "Language-generic code ingestion: language packs (ast-grep rules as data), extraction, and call resolution into the observed architecture graph."
+description = "Language-generic code ingestion: language packs (ast-grep rules as data), extraction, call and data-flow resolution into the observed architecture graph, and code rules over components."
 
 [dependencies]
 arch-graph = { version = "0.1.0", path = "../arch-graph" }

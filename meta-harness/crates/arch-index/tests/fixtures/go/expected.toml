@@ -1,0 +1,36 @@
+# Exactly what ingesting tests/fixtures/go/app with tests/packs/go.toml must produce.
+components = [
+  ["app.main", "module"],
+  ["app.main.main", "function"],
+  ["app.main.shout", "function"],
+  ["app.main.keep", "function"],
+  ["app.store.store", "module"],
+  ["app.store.store.Saver", "interface"],
+  ["app.store.store.Saver.Save", "operation"],
+  ["app.store.store.Store", "class"],
+  ["app.store.store.Store.Save", "function"],
+  ["app.store.store.Store.check", "function"],
+  ["app.store.store.New", "function"],
+  ["app.store.store.Later", "function"],
+]
+relations = [
+  ["contains", "app.main", "app.main.main"],
+  ["contains", "app.main", "app.main.shout"],
+  ["contains", "app.main", "app.main.keep"],
+  ["contains", "app.store.store", "app.store.store.Saver"],
+  ["contains", "app.store.store", "app.store.store.Store"],
+  ["contains", "app.store.store", "app.store.store.New"],
+  ["contains", "app.store.store", "app.store.store.Later"],
+  ["contains", "app.store.store.Saver", "app.store.store.Saver.Save"],
+  # Methods declared outside their type belong to the receiver's type.
+  ["contains", "app.store.store.Store", "app.store.store.Store.Save"],
+  ["contains", "app.store.store.Store", "app.store.store.Store.check"],
+  ["calls", "app.main.main", "app.store.store.New"],
+  ["calls", "app.main.main", "app.main.shout"],
+  ["calls", "app.main.main", "app.main.keep"],
+  ["calls", "app.store.store.Store.Save", "app.store.store.Store.check"],
+  ["data_flow", "app.store.store.New", "app.main.keep"],
+  ["data_flow", "app.main.shout", "app.main.keep"],
+]
+ambiguous = []
+placeholders = ["app.store.store.Later"]

@@ -47,6 +47,19 @@ pub struct RawCall {
     /// The callee expression as written.
     pub callee: String,
     pub span: Span,
+    /// Arguments produced by another call (directly or through a local name).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<RawArg>,
+}
+
+/// An argument whose value is the output of another call in the same body.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RawArg {
+    /// Position among the call's arguments (0 = first).
+    pub position: u32,
+    /// The producing call's callee expression as written.
+    pub producer: String,
+    pub producer_span: Span,
 }
 
 /// Everything one file contributes, before cross-file resolution.
@@ -101,9 +114,51 @@ fn field_text(node: &AstNode<'_>, field: &str) -> Option<String> {
     node.field(field).map(|n| n.text().trim().to_owned())
 }
 
+/// A type's text, unwrapping annotation nodes (e.g. `: string`) to the type.
+fn type_text(pack: &Pack, node: &AstNode<'_>, field: &str) -> Option<String> {
+    let mut ty = node.field(field)?;
+    while pack.spec.language.type_wrappers.iter().any(|w| *w == ty.kind()) {
+        let inner = ty.named_children().next();
+        ty = inner?;
+    }
+    Some(ty.text().trim().to_owned())
+}
+
+/// The callee and span when `node` is a call (or wraps exactly one).
+fn as_call(pack: &Pack, node: &AstNode<'_>) -> Option<(String, Span)> {
+    let direct = |n: &AstNode<'_>| {
+        pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| n.matches(rule).then(|| field_text(n, &spec.callee_field)).flatten()).map(|c| (c, span(n)))
+    };
+    direct(node).or_else(|| {
+        let mut named = node.named_children();
+        match (named.next(), named.next()) {
+            (Some(only), None) => direct(&only),
+            _ => None,
+        }
+    })
+}
+
+/// A plain local name as written in an argument (`&out`, `mut x` -> name).
+fn local_name(text: &str) -> Option<&str> {
+    let name = text.trim().trim_start_matches(['&', '*']).trim_start_matches("mut ").trim();
+    (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')).then_some(name)
+}
+
+/// Whether `inner` sits directly in `def` (no other definition in between).
+fn directly_in(pack: &Pack, inner: &AstNode<'_>, def: &AstNode<'_>) -> bool {
+    for ancestor in inner.ancestors() {
+        if ancestor.node_id() == def.node_id() {
+            return true;
+        }
+        if pack.definitions.iter().any(|rule| ancestor.matches(rule)) {
+            return false;
+        }
+    }
+    false
+}
 fn signature(pack: &Pack, def: &crate::pack::DefinitionSpec, node: &AstNode<'_>) -> Option<Signature> {
     let params_node = def.params_field.as_ref().and_then(|f| node.field(f));
-    let returns = def.return_field.as_ref().and_then(|f| field_text(node, f));
+    let returns = def.return_field.as_ref().and_then(|f| type_text(pack, node, f));
     if params_node.is_none() && returns.is_none() {
         return None;
     }
@@ -118,7 +173,7 @@ fn signature(pack: &Pack, def: &crate::pack::DefinitionSpec, node: &AstNode<'_>)
                 (None, None) => Some(child.text().trim().to_owned()),
             };
             let Some(name) = name else { continue };
-            let ty = spec.type_field.as_ref().and_then(|f| field_text(&child, f));
+            let ty = spec.type_field.as_ref().and_then(|f| type_text(pack, &child, f));
             params.push(Param { name, ty });
         }
     }
@@ -147,24 +202,38 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
         imports: Vec::new(),
         placeholders: Vec::new(),
     };
+    // Local names bound to a call's output, per enclosing definition.
+    let mut bound: std::collections::HashMap<(Option<usize>, String), (String, Span)> = std::collections::HashMap::new();
     let mut stack: Vec<(AstNode<'_>, Ctx)> = vec![(root.root(), Ctx { parent: None, scope: None })];
     while let Some((node, ctx)) = stack.pop() {
         let mut child_ctx = ctx.clone();
-        if let Some(def) = pack.definitions.iter().zip(&pack.spec.definitions).find_map(|(rule, def)| node.matches(rule).then_some(def)) {
+        if let Some((di, def)) = pack.definitions.iter().zip(&pack.spec.definitions).enumerate().find_map(|(i, (rule, def))| node.matches(rule).then_some((i, def))) {
             if let Some(name) = field_text(&node, &def.name_field) {
-                let bases = def
+                let mut bases: Vec<String> = def
                     .bases_field
                     .as_ref()
                     .and_then(|f| node.field(f))
                     .map(|b| b.children().filter(|c| c.is_named() && !c.kind().contains("comment")).map(|c| c.text().trim().to_owned()).collect())
                     .unwrap_or_default();
+                if let Some(rule) = &pack.bases[di] {
+                    bases.extend(node.find_all(rule).map(|m| m.get_node().clone()).filter(|m| directly_in(pack, m, &node)).map(|m| m.text().trim().to_owned()));
+                }
+                // Declared outside its type (e.g. a method with a receiver).
+                let owner = match (&def.owner_field, &def.owner_kind) {
+                    (Some(field), Some(kind)) => node.field(field).and_then(|f| f.dfs().find(|n| n.kind() == kind.as_str())).map(|n| n.text().trim().to_owned()),
+                    _ => None,
+                };
+                let scope = match owner {
+                    Some(target) => Some(RawScope { target, implements: None }),
+                    None => ctx.scope.clone(),
+                };
                 out.definitions.push(RawDef {
                     name,
                     type_name: def.type_name.clone(),
                     syntax_kind: node.kind().into_owned(),
                     span: span(&node),
                     parent: ctx.parent,
-                    scope: ctx.scope.clone(),
+                    scope,
                     signature: signature(pack, def, &node),
                     bases,
                 });
@@ -176,10 +245,28 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
             let implements = scope.implements_field.as_ref().and_then(|f| field_text(&node, f));
             child_ctx = Ctx { parent: ctx.parent, scope: Some(RawScope { target, implements }) };
         }
+        if let Some(binding) = pack.bindings.iter().zip(&pack.spec.bindings).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
+            && let (Some(name), Some(value)) = (field_text(&node, &binding.name_field), node.field(&binding.value_field))
+            && let Some(name) = local_name(&name)
+        {
+            match as_call(pack, &value) {
+                Some(producer) => bound.insert((ctx.parent, name.to_owned()), producer),
+                None => bound.remove(&(ctx.parent, name.to_owned())),
+            };
+        }
         if let Some(call) = pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
             && let Some(callee) = field_text(&node, &call.callee_field)
         {
-            out.calls.push(RawCall { caller: ctx.parent, callee, span: span(&node) });
+            let mut args = Vec::new();
+            if let Some(list) = call.args_field.as_ref().and_then(|f| node.field(f)) {
+                for (position, arg) in list.named_children().filter(|c| !c.kind().contains("comment")).enumerate() {
+                    let producer = as_call(pack, &arg).or_else(|| local_name(&arg.text()).and_then(|n| bound.get(&(ctx.parent, n.to_owned())).cloned()));
+                    if let Some((producer, producer_span)) = producer {
+                        args.push(RawArg { position: position as u32, producer, producer_span });
+                    }
+                }
+            }
+            out.calls.push(RawCall { caller: ctx.parent, callee, span: span(&node), args });
         }
         // Children in reverse so the stack visits them in source order.
         let children: Vec<_> = node.children().collect();

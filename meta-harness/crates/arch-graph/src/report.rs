@@ -41,6 +41,10 @@ pub enum FindingCode {
     UnresolvedCall,
     IllegalTransition,
     ApprovalRequired,
+    /// A code rule's forbidden pattern appears in the component.
+    ForbiddenPattern,
+    /// A code rule's required pattern is missing from the component.
+    MissingRequiredPattern,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
