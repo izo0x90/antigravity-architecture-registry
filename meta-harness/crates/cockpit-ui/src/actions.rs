@@ -276,6 +276,9 @@ pub enum ToolbarUse {
     OpenPalette,
 }
 
+/// Narrowest a toolbar picker gets before its text is truncated.
+const PICKER_MIN_WIDTH: f32 = 90.0;
+
 /// Draws an action as a toolbar control.
 pub fn toolbar_control(ui: &mut egui::Ui, action: &Action) -> Option<ToolbarUse> {
     let toolbar = action.toolbar.as_ref()?;
@@ -290,21 +293,37 @@ pub fn toolbar_control(ui: &mut egui::Ui, action: &Action) -> Option<ToolbarUse>
             ui.checkbox(&mut value, RichText::new(text).size(11.0)).changed().then(|| ToolbarUse::Run(Some(value.to_string())))
         }
         (Param::Choice(choices), ToolbarStyle::Control) => {
-            ui.label(RichText::new(format!("{text}:")).strong().size(11.0));
+            let caption = RichText::new(format!("{text}:")).strong().size(11.0);
             let shown = choices.iter().find(|c| c.current).map(|c| c.label.clone()).unwrap_or_else(|| "—".into());
+            // Caption and picker stay on one row: wrap first if they won't fit, and
+            // truncate the picker rather than let it push the slot wider.
+            let measure = |ui: &egui::Ui, text: RichText| {
+                egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button).size().x
+            };
+            let spacing = ui.spacing();
+            let gap = spacing.item_spacing.x;
+            let picker = (measure(ui, RichText::new(&shown)) + spacing.icon_width + spacing.icon_spacing + spacing.button_padding.x * 2.0).max(PICKER_MIN_WIDTH);
+            if ui.available_width() < measure(ui, caption.clone()) + gap + picker {
+                ui.end_row();
+            }
+            ui.label(caption);
             let mut picked = None;
-            egui::ComboBox::from_id_salt(("toolbar", action.id.as_str())).width(130.0).selected_text(shown).show_ui(ui, |ui| {
-                for choice in choices {
-                    let item = ui.selectable_label(choice.current, &choice.label);
-                    let item = match &choice.detail {
-                        Some(d) => item.on_hover_text(d),
-                        None => item,
-                    };
-                    if item.clicked() && !choice.current {
-                        picked = Some(choice.value.clone());
+            egui::ComboBox::from_id_salt(("toolbar", action.id.as_str()))
+                .width(PICKER_MIN_WIDTH.min(ui.available_width()))
+                .truncate()
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    for choice in choices {
+                        let item = ui.selectable_label(choice.current, &choice.label);
+                        let item = match &choice.detail {
+                            Some(d) => item.on_hover_text(d),
+                            None => item,
+                        };
+                        if item.clicked() && !choice.current {
+                            picked = Some(choice.value.clone());
+                        }
                     }
-                }
-            });
+                });
             picked.map(|v| ToolbarUse::Run(Some(v)))
         }
         (Param::None, _) => ui.button(text).on_hover_text(&action.label).clicked().then_some(ToolbarUse::Run(None)),

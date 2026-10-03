@@ -347,13 +347,13 @@ impl ChatStreamState {
                 && !thread.mcp_servers.is_empty()
             {
                 let names: Vec<String> = thread.mcp_servers.iter().map(mcp_label).collect();
-                ui.label(RichText::new(format!("{} MCP {}", icon::PLUGS_CONNECTED, thread.mcp_servers.len())).size(10.0).color(colors().muted))
+                ui.add(egui::Label::new(RichText::new(format!("{} MCP {}", icon::PLUGS_CONNECTED, thread.mcp_servers.len())).size(10.0).color(colors().muted)).extend())
                     .on_hover_text(names.join("\n"));
             }
             if let Some(usage) = self.thread().and_then(|t| t.usage.clone())
                 && let (Some(used), Some(window)) = (usage.context_used_tokens, usage.context_window_tokens)
             {
-                ui.label(RichText::new(format!("ctx {:.1}k/{:.0}k", used as f64 / 1000.0, window as f64 / 1000.0)).monospace().size(10.0).color(colors().muted));
+                ui.add(egui::Label::new(RichText::new(format!("ctx {:.1}k/{:.0}k", used as f64 / 1000.0, window as f64 / 1000.0)).monospace().size(10.0).color(colors().muted)).extend());
             }
         });
 
