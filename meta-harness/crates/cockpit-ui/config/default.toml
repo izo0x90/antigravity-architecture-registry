@@ -11,6 +11,8 @@ tagline = "not a harness"
 leader = "Space"
 # Leaves insert mode, steps back out of leader menus and the palette.
 back = "Escape"
+# Hint labels (graph `f`) are made of these, best first.
+hint_chars = "asdfghjkl"
 
 # Leader submenus, by key path.
 [keymap.groups]
@@ -24,6 +26,7 @@ h = "Harness commands"
 a = "Account"
 r = "Requests"
 g = "Graph"
+e = "Code links"
 
 # Bindings, by action id. Keys:
 #   leader: keys after the leader, space separated; "#" is the next free key in
@@ -84,11 +87,49 @@ g = "Graph"
 "request.decline" = { leader = "r n", keys = ["n"] }
 "request.cancel" = { leader = "r c" }
 
-"graph.zoom_in" = { leader = "g i", keys = ["="] }
-"graph.zoom_out" = { leader = "g o", keys = ["-"] }
-"graph.reset" = { leader = "g r", keys = ["r"] }
-"graph.display" = { leader = "g m", keys = ["m"] }
+# Graph (when focused): vim-style movement, g-sequences to follow relations.
+"graph.left" = { keys = ["h"] }
+"graph.down" = { keys = ["j"] }
+"graph.up" = { keys = ["k"] }
+"graph.right" = { keys = ["l"] }
+"graph.callees" = { leader = "g c", keys = ["g c"] }
+"graph.callers" = { leader = "g r", keys = ["g r"] }
+"graph.parent" = { leader = "g p", keys = ["g p"] }
+"graph.children" = { leader = "g n", keys = ["g n"] }
+"graph.implements" = { leader = "g i", keys = ["g i"] }
+"graph.flows_to" = { leader = "g l", keys = ["g l"] }
+"graph.focus" = { leader = "g f", keys = ["Enter"] }
+"graph.unfocus" = { leader = "g u", keys = ["Backspace"] }
+"graph.depth_more" = { leader = "g +", keys = ["+"] }
+"graph.depth_less" = { leader = "g -", keys = ["-"] }
+"graph.view" = { leader = "g v" }
+"graph.next_view" = { keys = ["v"] }
+"graph.plan" = { leader = "g P" }
+"graph.back" = { leader = "g [", keys = ["ctrl+o"] }
+"graph.forward" = { leader = "g ]", keys = ["ctrl+i"] }
+"graph.open_code" = { leader = "g d", keys = ["g d"] }
+"graph.open_spec" = { leader = "g s", keys = ["s"] }
+"graph.hint" = { leader = "g h", keys = ["f"] }
+"graph.hint_focus" = { keys = ["F"] }
+"graph.hint_code" = { keys = ["g o"] }
+"graph.hint_spec" = { keys = ["S"] }
+"graph.zoom_in" = { keys = ["z i"] }
+"graph.zoom_out" = { keys = ["z o"] }
+"graph.fit" = { leader = "g z", keys = ["z z"] }
 "graph.close_inspector" = { leader = "g x", keys = ["x", "Escape"] }
+"graph.refresh" = { leader = "g ." }
+
+# Spec view (when focused).
+"spec.next_section" = { keys = ["] ]", "J"] }
+"spec.prev_section" = { keys = ["[ [", "K"] }
+"spec.fold" = { keys = ["z a"] }
+"spec.pin" = { keys = ["p"] }
+"spec.open_code" = { keys = ["g d"] }
+"spec.show_in_graph" = { keys = ["g g"] }
+
+# Code links: code view <-> graph.
+"code.reveal" = { leader = "e r", keys = ["g r"] }
+"link.follow" = { leader = "e f" }
 
 "code.down" = { keys = ["j"] }
 "code.up" = { keys = ["k"] }

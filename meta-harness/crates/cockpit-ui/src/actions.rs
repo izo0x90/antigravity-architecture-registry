@@ -165,8 +165,8 @@ pub struct Bound {
     pub origin: Origin,
     /// Keys after the leader.
     pub leader: Option<Vec<char>>,
-    /// Direct keys in normal mode.
-    pub keys: Vec<Chord>,
+    /// Direct key sequences in normal mode (most are one chord; `g c` is two).
+    pub keys: Vec<Vec<Chord>>,
 }
 
 impl Bound {
@@ -176,7 +176,7 @@ impl Bound {
                 let keys: Vec<String> = path.iter().map(char::to_string).collect();
                 format!("SPC {}", keys.join(" "))
             }
-            None => self.keys.first().map(Chord::label).unwrap_or_default(),
+            None => self.keys.first().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" ")).unwrap_or_default(),
         }
     }
 }
@@ -196,6 +196,8 @@ pub struct RunCx<'a> {
     pub input_mode: &'a mut InputMode,
     /// The focused slot.
     pub slot: usize,
+    /// Characters hint labels are made of (from the keymap config).
+    pub hint_chars: &'a str,
 }
 
 /// A part of the UI that offers actions: what it can do right now, and running
@@ -208,6 +210,12 @@ pub trait ActionProvider {
     /// An action id to open in the palette (e.g. once its choices have loaded).
     fn take_palette_request(&mut self) -> Option<String> {
         None
+    }
+
+    /// Typed keys while this view captures the keyboard (InputMode::Capture,
+    /// e.g. hint labels). Returns whether it still wants keys.
+    fn on_capture(&mut self, _typed: &[char], _back: bool, _cx: &mut RunCx<'_>) -> bool {
+        false
     }
 }
 

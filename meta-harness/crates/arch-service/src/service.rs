@@ -411,6 +411,22 @@ impl ArchitectureService {
         Ok(hits.into_iter().take(limit).map(|(_, c)| c).collect())
     }
 
+    /// Every component in `file` (in code or planned there) with the relations
+    /// leaving them.
+    pub fn file_view(&self, file: &str, plan: Option<&PlanId>) -> Result<arch_graph::FileView, ServiceError> {
+        let graph = self.graph(plan)?;
+        let components: Vec<(Component, Alignment)> = graph
+            .in_file(file)
+            .map(|c| (c.clone(), graph.alignment(&c.id).unwrap_or(Alignment::Observed)))
+            .collect();
+        let relations = components
+            .iter()
+            .flat_map(|(c, _)| graph.outgoing(&c.id, None))
+            .map(|r| (r.clone(), graph.relation_alignment(r)))
+            .collect();
+        Ok(arch_graph::FileView { file: file.to_owned(), components, relations })
+    }
+
     /// The innermost component whose code contains `line` of `file`.
     pub fn component_at(&self, file: &str, line: u32, plan: Option<&PlanId>) -> Result<Component, ServiceError> {
         let graph = self.graph(plan)?;
@@ -429,7 +445,7 @@ impl ArchitectureService {
         {
             return Err(ServiceError::NotFound(focus.to_string()));
         }
-        self.emit(ArchEvent::ViewRequested { request, by });
+        self.emit(ArchEvent::ViewRequested { request: Box::new(request), by });
         Ok(())
     }
 }

@@ -53,6 +53,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/arch/search", get(search))
         .route("/api/arch/components/{id}", get(component))
         .route("/api/arch/at", get(component_at))
+        .route("/api/arch/file", get(file_view))
         .route("/api/arch/ingest", post(ingest))
         .route("/api/arch/ambiguous", get(ambiguous))
         .route("/api/arch/navigate", post(navigate))
@@ -149,6 +150,18 @@ struct AtQuery {
 async fn component_at(State(state): State<AppState>, Query(q): Query<AtQuery>) -> ArchResult<arch_graph::Component> {
     let plan = plan_param(&q.plan)?;
     Ok(Json(blocking(&state.arch, move |a| a.component_at(&q.file, q.line, plan.as_ref())).await?))
+}
+
+#[derive(Deserialize)]
+struct FileQuery {
+    path: String,
+    #[serde(default)]
+    plan: Option<String>,
+}
+
+async fn file_view(State(state): State<AppState>, Query(q): Query<FileQuery>) -> ArchResult<arch_graph::FileView> {
+    let plan = plan_param(&q.plan)?;
+    Ok(Json(blocking(&state.arch, move |a| a.file_view(&q.path, plan.as_ref())).await?))
 }
 
 #[derive(Deserialize, Default)]

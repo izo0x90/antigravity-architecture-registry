@@ -1,944 +1,1218 @@
-use egui::{
-    CornerRadius, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2,
-};
-use architecture_model::{
-    AlignmentStatus, ComponentSpec, GraphNode, GraphPerspective, NodeKind, SystemArchitecture,
-    UnifiedArchitectureGraph,
-};
-use std::collections::BTreeMap;
+//! The architecture graph: server views drawn with pan and zoom, a navigation
+//! history (view, plan, focus, depth), vim-style commands, hint targeting, and
+//! a compact inspector. Everything shown comes from the server's views; the
+//! graph refreshes itself when the architecture changes.
+
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
+use arch_graph::view::Rect as WorldRect;
+use arch_graph::{Alignment, ArchEvent, ChangeReason, Component, ComponentId, PlanId, RelationKind, Requester, ViewCatalog, ViewRequest, ViewResult};
+use egui::{Align2, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, Vec2};
+
+use crate::actions::{Action, ActionProvider, Choice, Param, RunCx, ToolbarStyle, ToolbarUse, toolbar_control};
 use crate::feedback::FeedbackInspectorState;
-use crate::graph_draw::{self, DisplayMode};
-use crate::graph_layout::{self, LayoutDirection, LayoutSettings};
-use crate::samples;
+use crate::keymap::InputMode;
+use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
 
-// Re-export ComponentSpec as ArchComponent for tree.rs backwards-compatibility
-pub use architecture_model::ComponentSpec as ArchComponent;
-pub use architecture_model::TaskSpec as ArchTask;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum GraphPreset {
-    #[default]
-    LiveSystem,
-    SampleCallGraph,
-    SampleDataFlow,
-    SampleTaskHierarchy,
+/// Where the graph is looking: which view, laid over which plan, rooted where,
+/// how deep. Every change is a step in the history.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Nav {
+    pub view: String,
+    pub plan: Option<PlanId>,
+    pub roots: Vec<ComponentId>,
+    /// None means the view's own depth.
+    pub depth: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ZoomStrategy {
-    #[default]
-    Geometric,
-    Semantic,
+#[derive(Clone, Debug, PartialEq)]
+pub enum NavChange {
+    View(String),
+    Plan(Option<PlanId>),
+    Focus(ComponentId),
+    Unfocus,
+    /// More (+) or fewer (-) hops; `base` is the view's own depth.
+    Depth { delta: i32, base: u32 },
+    Back,
+    Forward,
+    Request(Box<ViewRequest>),
 }
 
-impl ZoomStrategy {
-    /// Returns the effective visual scale factor to apply to card dimensions, fonts, and pins.
-    #[inline]
-    pub fn card_scale(&self, zoom: f32) -> f32 {
-        match self {
-            Self::Geometric => zoom,
-            Self::Semantic => 1.0,
-        }
-    }
-
-    /// Whether this strategy enables Level-of-Detail (LOD) decluttering for small card scales.
-    #[inline]
-    pub fn enables_lod(&self) -> bool {
-        match self {
-            Self::Geometric => true,
-            Self::Semantic => false,
-        }
-    }
+/// The navigation history (a jump list): one reducer for keys, touch,
+/// palette and agent requests alike.
+#[derive(Clone, Debug)]
+pub struct Navigator {
+    history: Vec<Nav>,
+    cursor: usize,
 }
 
-pub struct ArchitectureGraphState {
-    pub raw_architecture: Option<SystemArchitecture>,
-    pub components: BTreeMap<String, ComponentSpec>,
-    pub graph: UnifiedArchitectureGraph,
-    pub node_positions: BTreeMap<String, Pos2>,
-    pub selected_node_id: Option<String>,
-    pub active_preset: GraphPreset,
-    pub perspective: GraphPerspective,
-    pub layout_direction: LayoutDirection,
-    pub display_mode: DisplayMode,
-    pub zoom_strategy: ZoomStrategy,
-    pub search_filter: String,
+const HISTORY: usize = 100;
 
-    // Pan & Zoom Camera
-    pub pan: Vec2,
-    pub zoom: f32,
-    pub dragging_node_id: Option<String>,
-
-    pub is_loaded: bool,
-    pub load_error: Option<String>,
-    pending_load: Arc<Mutex<Option<Result<String, String>>>>,
-}
-
-impl Default for ArchitectureGraphState {
-    fn default() -> Self {
-        let mut state = Self {
-            raw_architecture: None,
-            components: BTreeMap::new(),
-            graph: UnifiedArchitectureGraph::default(),
-            node_positions: BTreeMap::new(),
-            selected_node_id: None,
-            active_preset: GraphPreset::LiveSystem,
-            perspective: GraphPerspective::CallFlow,
-            layout_direction: LayoutDirection::LeftToRight,
-            display_mode: DisplayMode::Detailed,
-            zoom_strategy: ZoomStrategy::Geometric,
-            search_filter: String::new(),
-            pan: Vec2::new(40.0, 40.0),
-            zoom: 1.0,
-            dragging_node_id: None,
-            is_loaded: false,
-            load_error: None,
-            pending_load: Arc::new(Mutex::new(None)),
-        };
-        // Pre-load default topology
-        state.apply_preset(GraphPreset::SampleCallGraph);
-        state
-    }
-}
-
-impl ArchitectureGraphState {
-    pub fn load_architecture(&mut self, net: &crate::net::NetClient, ctx: egui::Context) {
-        self.is_loaded = false;
-        self.load_error = None;
-        let pending = self.pending_load.clone();
-        let ctx_clone = ctx.clone();
-        net.fetch_architecture(ctx_clone, move |result| {
-            if let Ok(mut lock) = pending.lock() {
-                *lock = Some(result);
-            }
-        });
+impl Navigator {
+    pub fn new(view: &str) -> Self {
+        Self { history: vec![Nav { view: view.to_owned(), plan: None, roots: Vec::new(), depth: None }], cursor: 0 }
     }
 
-    pub fn load_from_json(&mut self, json_str: &str) -> Result<(), String> {
-        match serde_json::from_str::<SystemArchitecture>(json_str) {
-            Ok(arch) => {
-                self.graph = arch.to_graph(self.perspective);
-                self.raw_architecture = Some(arch);
-                self.active_preset = GraphPreset::LiveSystem;
-                self.is_loaded = true;
-                self.load_error = None;
-                self.recalculate_layout();
-                Ok(())
-            }
-            Err(e) => {
-                let err = format!("Failed to parse registry architecture: {}", e);
-                self.load_error = Some(err.clone());
-                Err(err)
-            }
-        }
+    pub fn current(&self) -> &Nav {
+        &self.history[self.cursor]
     }
 
-    pub fn set_perspective(&mut self, perspective: GraphPerspective) {
-        self.perspective = perspective;
-        if self.active_preset == GraphPreset::LiveSystem {
-            if let Some(arch) = &self.raw_architecture {
-                self.graph = arch.to_graph(perspective);
-                self.recalculate_layout();
-            }
-        }
+    pub fn can_back(&self) -> bool {
+        self.cursor > 0
     }
 
-    pub fn set_layout_direction(&mut self, direction: LayoutDirection) {
-        self.layout_direction = direction;
-        self.recalculate_layout();
+    pub fn can_forward(&self) -> bool {
+        self.cursor + 1 < self.history.len()
     }
 
-    pub fn apply_preset(&mut self, preset: GraphPreset) {
-        self.active_preset = preset;
-        match preset {
-            GraphPreset::LiveSystem => {
-                if let Some(arch) = &self.raw_architecture {
-                    self.graph = arch.to_graph(self.perspective);
-                    self.recalculate_layout();
+    /// Applies a change; returns whether the view must be fetched again.
+    pub fn apply(&mut self, change: NavChange) -> bool {
+        let mut next = self.current().clone();
+        match change {
+            NavChange::Back => {
+                if !self.can_back() {
+                    return false;
                 }
+                self.cursor -= 1;
+                return true;
             }
-            GraphPreset::SampleCallGraph => {
-                self.graph = samples::sample_calculation_call_graph();
-                self.recalculate_layout();
-            }
-            GraphPreset::SampleDataFlow => {
-                self.graph = samples::sample_dataflow_pipeline();
-                self.recalculate_layout();
-            }
-            GraphPreset::SampleTaskHierarchy => {
-                self.graph = samples::sample_task_hierarchy();
-                self.recalculate_layout();
-            }
-        }
-    }
-
-    pub fn recalculate_layout(&mut self) {
-        let dims = self.display_mode.dimensions();
-        let settings = LayoutSettings {
-            card_width: dims.width,
-            card_height: dims.height,
-            col_gap: 80.0,
-            row_gap: 36.0,
-            origin_x: 60.0,
-            origin_y: 60.0,
-            direction: self.layout_direction,
-        };
-        self.node_positions = graph_layout::compute_hierarchical_layout(&self.graph, &settings);
-        self.components.clear();
-        for (id, node) in &self.graph.nodes {
-            if let NodeKind::Component(c) = &node.kind {
-                self.components.insert(id.clone(), c.clone());
-            }
-        }
-        self.pan = Vec2::new(40.0, 40.0);
-        self.zoom = 1.0;
-    }
-
-
-    // Camera coordinate conversions
-    pub fn world_to_screen(&self, world_pos: Pos2, canvas_rect: Rect) -> Pos2 {
-        canvas_rect.min + self.pan + (world_pos.to_vec2() * self.zoom)
-    }
-
-    pub fn screen_to_world(&self, screen_pos: Pos2, canvas_rect: Rect) -> Pos2 {
-        let rel = screen_pos - canvas_rect.min - self.pan;
-        Pos2::new(rel.x / self.zoom, rel.y / self.zoom)
-    }
-
-    pub fn render(
-        &mut self,
-        ui: &mut egui::Ui,
-        feedback: &mut FeedbackInspectorState,
-        slot_idx: usize,
-        pan_held: bool,
-    ) {
-        // 1. Process asynchronous file fetch
-        let incoming = self.pending_load.lock().ok().and_then(|mut l| l.take());
-        if let Some(res) = incoming {
-            match res {
-                Ok(json_str) => {
-                    let _ = self.load_from_json(&json_str);
+            NavChange::Forward => {
+                if !self.can_forward() {
+                    return false;
                 }
-                Err(e) => {
-                    self.load_error = Some(e);
-                    self.is_loaded = true;
+                self.cursor += 1;
+                return true;
+            }
+            NavChange::View(view) => next.view = view,
+            NavChange::Plan(plan) => next.plan = plan,
+            NavChange::Focus(id) => next.roots = vec![id],
+            NavChange::Unfocus => next.roots.clear(),
+            NavChange::Depth { delta, base } => {
+                let current = next.depth.unwrap_or(base) as i32;
+                next.depth = Some((current + delta).clamp(1, 12) as u32);
+            }
+            NavChange::Request(request) => {
+                let request = *request;
+                if let Some(view) = request.view {
+                    next.view = view;
+                }
+                if request.plan.is_some() {
+                    next.plan = request.plan;
+                }
+                if !request.roots.is_empty() {
+                    next.roots = request.roots;
+                }
+                if request.depth.is_some() {
+                    next.depth = request.depth;
                 }
             }
         }
-
-        ui.vertical(|ui| {
-            // 2. Toolbar Bar
-            let start_y = ui.cursor().min.y;
-            let start_x = ui.cursor().min.x;
-            let toolbar_width = ui.available_width();
-
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(format!("{} Arch Graph", egui_phosphor::regular::SHARE_NETWORK))
-                        .strong()
-                        .size(12.0)
-                        .color(colors().info),
-                );
-
-                ui.separator();
-
-                // Preset selector
-                let mut current_preset = self.active_preset;
-                egui::ComboBox::from_id_salt(format!("slot_{}_graph_preset", slot_idx))
-                    .selected_text(match current_preset {
-                        GraphPreset::LiveSystem => format!("{} Live System", egui_phosphor::regular::GLOBE),
-                        GraphPreset::SampleCallGraph => format!("{} Call Graph", egui_phosphor::regular::PHONE_CALL),
-                        GraphPreset::SampleDataFlow => format!("{} Data Flow", egui_phosphor::regular::WAVES),
-                        GraphPreset::SampleTaskHierarchy => format!("{} Tasks", egui_phosphor::regular::TREE_STRUCTURE),
-                    })
-                    .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_value(
-                                &mut current_preset,
-                                GraphPreset::LiveSystem,
-                                format!("{} Live System", egui_phosphor::regular::GLOBE),
-                            )
-                            .clicked()
-                        {
-                            self.apply_preset(GraphPreset::LiveSystem);
-                        }
-                        if ui
-                            .selectable_value(
-                                &mut current_preset,
-                                GraphPreset::SampleCallGraph,
-                                format!("{} Sample: Call Graph", egui_phosphor::regular::PHONE_CALL),
-                            )
-                            .clicked()
-                        {
-                            self.apply_preset(GraphPreset::SampleCallGraph);
-                        }
-                        if ui
-                            .selectable_value(
-                                &mut current_preset,
-                                GraphPreset::SampleDataFlow,
-                                format!("{} Sample: Data Flow", egui_phosphor::regular::WAVES),
-                            )
-                            .clicked()
-                        {
-                            self.apply_preset(GraphPreset::SampleDataFlow);
-                        }
-                        if ui
-                            .selectable_value(
-                                &mut current_preset,
-                                GraphPreset::SampleTaskHierarchy,
-                                format!("{} Sample: Task Hierarchy", egui_phosphor::regular::TREE_STRUCTURE),
-                            )
-                            .clicked()
-                        {
-                            self.apply_preset(GraphPreset::SampleTaskHierarchy);
-                        }
-                    });
-
-                // Perspective selector (when live architecture exists)
-                if self.raw_architecture.is_some() || self.active_preset == GraphPreset::LiveSystem {
-                    ui.separator();
-                    let mut cur_perspective = self.perspective;
-                    egui::ComboBox::from_id_salt(format!("slot_{}_graph_perspective", slot_idx))
-                        .selected_text(match cur_perspective {
-                            GraphPerspective::CallFlow => format!("{} Call Flow", egui_phosphor::regular::PHONE_CALL),
-                            GraphPerspective::ComponentHierarchy => format!("{} Components", egui_phosphor::regular::PUZZLE_PIECE),
-                            GraphPerspective::DataFlow => format!("{} Data Flow", egui_phosphor::regular::WAVES),
-                            GraphPerspective::Unified => format!("{} Unified", egui_phosphor::regular::SHARE_NETWORK),
-                        })
-                        .show_ui(ui, |ui| {
-                            if ui.selectable_value(&mut cur_perspective, GraphPerspective::CallFlow, format!("{} Call Flow", egui_phosphor::regular::PHONE_CALL)).clicked() {
-                                self.set_perspective(GraphPerspective::CallFlow);
-                            }
-                            if ui.selectable_value(&mut cur_perspective, GraphPerspective::ComponentHierarchy, format!("{} Components", egui_phosphor::regular::PUZZLE_PIECE)).clicked() {
-                                self.set_perspective(GraphPerspective::ComponentHierarchy);
-                            }
-                            if ui.selectable_value(&mut cur_perspective, GraphPerspective::DataFlow, format!("{} Data Flow", egui_phosphor::regular::WAVES)).clicked() {
-                                self.set_perspective(GraphPerspective::DataFlow);
-                            }
-                            if ui.selectable_value(&mut cur_perspective, GraphPerspective::Unified, format!("{} Unified Graph", egui_phosphor::regular::SHARE_NETWORK)).clicked() {
-                                self.set_perspective(GraphPerspective::Unified);
-                            }
-                        });
-                }
-
-                // Layout Direction Toggle Button
-                ui.separator();
-                let (dir_icon, dir_label) = match self.layout_direction {
-                    LayoutDirection::LeftToRight => (egui_phosphor::regular::ARROWS_LEFT_RIGHT, "LR"),
-                    LayoutDirection::TopToBottom => (egui_phosphor::regular::ARROWS_DOWN_UP, "TB"),
-                };
-                if ui.button(format!("{} {}", dir_icon, dir_label))
-                    .on_hover_text("Toggle Layout Direction (Left-to-Right / Top-to-Bottom)")
-                    .clicked()
-                {
-                    let next_dir = match self.layout_direction {
-                        LayoutDirection::LeftToRight => LayoutDirection::TopToBottom,
-                        LayoutDirection::TopToBottom => LayoutDirection::LeftToRight,
-                    };
-                    self.set_layout_direction(next_dir);
-                }
-
-                // Display Mode selector
-                ui.separator();
-                let mut current_mode = self.display_mode;
-                egui::ComboBox::from_id_salt(format!("slot_{}_graph_mode", slot_idx))
-                    .selected_text(match current_mode {
-                        DisplayMode::Detailed => format!("{} Cards", egui_phosphor::regular::CARDS),
-                        DisplayMode::Compact => format!("{} Pills", egui_phosphor::regular::PILL),
-                        DisplayMode::AlignmentDiff => format!("{} Diff", egui_phosphor::regular::GIT_DIFF),
-                    })
-                    .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_value(&mut current_mode, DisplayMode::Detailed, format!("{} Detailed Cards", egui_phosphor::regular::CARDS))
-                            .clicked()
-                        {
-                            self.display_mode = DisplayMode::Detailed;
-                            self.recalculate_layout();
-                        }
-                        if ui
-                            .selectable_value(&mut current_mode, DisplayMode::Compact, format!("{} Compact Pills", egui_phosphor::regular::PILL))
-                            .clicked()
-                        {
-                            self.display_mode = DisplayMode::Compact;
-                            self.recalculate_layout();
-                        }
-                        if ui
-                            .selectable_value(
-                                &mut current_mode,
-                                DisplayMode::AlignmentDiff,
-                                format!("{} AST Alignment Diff", egui_phosphor::regular::GIT_DIFF),
-                            )
-                            .clicked()
-                        {
-                            self.display_mode = DisplayMode::AlignmentDiff;
-                            self.recalculate_layout();
-                        }
-                    });
-
-                // Zoom Strategy Selector
-                ui.separator();
-                let mut cur_zoom_strat = self.zoom_strategy;
-                egui::ComboBox::from_id_salt(format!("slot_{}_zoom_strategy", slot_idx))
-                    .selected_text(match cur_zoom_strat {
-                        ZoomStrategy::Geometric => format!("{} Geometric", egui_phosphor::regular::MAGNIFYING_GLASS_PLUS),
-                        ZoomStrategy::Semantic => format!("{} Semantic", egui_phosphor::regular::FRAME_CORNERS),
-                    })
-                    .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_value(
-                                &mut cur_zoom_strat,
-                                ZoomStrategy::Geometric,
-                                format!("{} Geometric (CAD / Scale)", egui_phosphor::regular::MAGNIFYING_GLASS_PLUS),
-                            )
-                            .clicked()
-                        {
-                            self.zoom_strategy = ZoomStrategy::Geometric;
-                        }
-                        if ui
-                            .selectable_value(
-                                &mut cur_zoom_strat,
-                                ZoomStrategy::Semantic,
-                                format!("{} Semantic (Fixed Cards)", egui_phosphor::regular::FRAME_CORNERS),
-                            )
-                            .clicked()
-                        {
-                            self.zoom_strategy = ZoomStrategy::Semantic;
-                        }
-                    });
-
-                // Zoom Controls (+ / - / Percentage)
-                if ui.button(egui_phosphor::regular::MINUS).on_hover_text("Zoom Out").clicked() {
-                    self.zoom = (self.zoom / 1.2).clamp(0.2, 4.0);
-                }
-                ui.label(
-                    RichText::new(format!("{:.0}%", self.zoom * 100.0))
-                        .monospace()
-                        .size(11.0)
-                        .color(colors().text),
-                );
-                if ui.button(egui_phosphor::regular::PLUS).on_hover_text("Zoom In").clicked() {
-                    self.zoom = (self.zoom * 1.2).clamp(0.2, 4.0);
-                }
-
-                // Layout Reset Button
-                if ui.button(format!("{} Reset", egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE))
-                    .on_hover_text("Reset Layout and Zoom")
-                    .clicked()
-                {
-                    self.zoom = 1.0;
-                    self.pan = Vec2::ZERO;
-                    self.recalculate_layout();
-                }
-
-                // Node Count Badge
-                ui.label(
-                    RichText::new(format!("{} Nodes • {} Edges", self.graph.nodes.len(), self.graph.edges.len()))
-                        .monospace()
-                        .size(11.0)
-                        .color(colors().muted),
-                );
-
-                // Search Filter Box
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.search_filter)
-                        .desired_width(100.0)
-                        .hint_text("Search..."),
-                );
-            });
-
-            let end_y = ui.cursor().min.y;
-            let toolbar_rect = Rect::from_min_size(
-                Pos2::new(start_x, start_y),
-                Vec2::new(toolbar_width, (end_y - start_y).max(22.0)),
-            );
-            feedback.register_inspectable(
-                ui,
-                &format!("slot_{}:graph:toolbar", slot_idx + 1),
-                toolbar_rect,
-            );
-            ui.separator();
-
-            // Error notice if failed to load
-            if let Some(err) = &self.load_error {
-                ui.label(RichText::new(err).color(colors().error).size(11.0));
-            }
-
-            // 3. Interactive Pan & Zoom Canvas
-            let available_size = ui.available_size();
-            let (response, painter) = ui.allocate_painter(available_size, egui::Sense::click_and_drag());
-            let canvas_rect = response.rect;
-
-            feedback.register_inspectable(
-                ui,
-                &format!("slot_{}:graph:canvas", slot_idx + 1),
-                canvas_rect,
-            );
-
-            // Background Fill & Subtle Grid
-            painter.rect_filled(canvas_rect, CornerRadius::ZERO, colors().bg);
-
-            // Pan & Zoom input handling
-            if response.hovered() {
-                let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
-                if scroll_delta.abs() > 0.0 {
-                    let old_zoom = self.zoom;
-                    let zoom_factor = (1.0 + scroll_delta * 0.002).clamp(0.8, 1.25);
-                    self.zoom = (self.zoom * zoom_factor).clamp(0.3, 2.5);
-
-                    // Zoom centering toward pointer
-                    if let Some(mouse_pos) = response.hover_pos() {
-                        let pointer_world = (mouse_pos - canvas_rect.min - self.pan) / old_zoom;
-                        self.pan = mouse_pos - canvas_rect.min - (pointer_world * self.zoom);
-                    }
-                }
-            }
-
-            // Holding the leader key pans (a tap opens the leader menu instead).
-            if pan_held {
-                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
-            }
-
-            // Canvas dragging (panning vs node dragging)
-            if response.dragged() {
-                if pan_held {
-                    // Holding space down forces canvas panning regardless of what was clicked
-                    self.pan += response.drag_delta();
-                } else if let Some(dragged_id) = &self.dragging_node_id {
-                    // Moving a specific node
-                    if let Some(pos) = self.node_positions.get_mut(dragged_id) {
-                        pos.x += response.drag_delta().x / self.zoom;
-                        pos.y += response.drag_delta().y / self.zoom;
-                    }
-                } else {
-                    // Panning entire canvas
-                    self.pan += response.drag_delta();
-                }
-            }
-
-            if response.drag_stopped() {
-                self.dragging_node_id = None;
-            }
-
-            // Paint Subtle 2D Canvas Grid
-            let grid_step = 40.0 * self.zoom;
-            if grid_step > 8.0 {
-                let start_x = canvas_rect.min.x + (self.pan.x % grid_step);
-                let start_y = canvas_rect.min.y + (self.pan.y % grid_step);
-                let mut x = start_x;
-                while x < canvas_rect.max.x {
-                    painter.line_segment(
-                        [Pos2::new(x, canvas_rect.min.y), Pos2::new(x, canvas_rect.max.y)],
-                        Stroke::new(1.0, colors().grid),
-                    );
-                    x += grid_step;
-                }
-                let mut y = start_y;
-                while y < canvas_rect.max.y {
-                    painter.line_segment(
-                        [Pos2::new(canvas_rect.min.x, y), Pos2::new(canvas_rect.max.x, y)],
-                        Stroke::new(1.0, colors().grid),
-                    );
-                    y += grid_step;
-                }
-            }
-
-            // 4. Calculate Screen Positions for all nodes
-            let card_scale = self.zoom_strategy.card_scale(self.zoom);
-            let dims = self.display_mode.dimensions();
-            let scaled_dims = Vec2::new(dims.width * card_scale, dims.height * card_scale);
-            let mut screen_rects = BTreeMap::new();
-
-            for (id, &world_pos) in &self.node_positions {
-                // Apply search filter
-                if !self.search_filter.is_empty() {
-                    let match_id = id.to_lowercase().contains(&self.search_filter.to_lowercase());
-                    let match_label = self
-                        .graph
-                        .nodes
-                        .get(id)
-                        .map(|n| n.label.to_lowercase().contains(&self.search_filter.to_lowercase()))
-                        .unwrap_or(false);
-                    if !match_id && !match_label {
-                        continue;
-                    }
-                }
-
-                let screen_min = self.world_to_screen(world_pos, canvas_rect);
-                let node_screen_rect = Rect::from_min_size(screen_min, scaled_dims);
-                screen_rects.insert(id.clone(), node_screen_rect);
-            }
-
-            // 5. Draw Edges (curves and arrows)
-            for edge in &self.graph.edges {
-                if let (Some(&src_rect), Some(&tgt_rect)) = (
-                    screen_rects.get(&edge.source_id),
-                    screen_rects.get(&edge.target_id),
-                ) {
-                    graph_draw::draw_edge(
-                        &painter,
-                        edge,
-                        src_rect,
-                        tgt_rect,
-                        self.layout_direction,
-                        card_scale,
-                    );
-                }
-            }
-
-            // 6. Draw Nodes
-            let mouse_pressed = ui.input(|i| i.pointer.primary_pressed());
-
-            // Node dragging start: on primary_pressed, find which node is under hover (unless space is held)
-            if !pan_held && mouse_pressed && self.dragging_node_id.is_none() {
-                if let Some(mouse_pos) = response.hover_pos() {
-                    for (id, _) in &self.graph.nodes {
-                        if let Some(&node_rect) = screen_rects.get(id) {
-                            if node_rect.contains(mouse_pos) {
-                                self.dragging_node_id = Some(id.clone());
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            let enable_lod = self.zoom_strategy.enables_lod();
-            for (id, node) in &self.graph.nodes {
-                if let Some(&node_rect) = screen_rects.get(id) {
-                    let is_selected = self.selected_node_id.as_deref() == Some(id.as_str());
-                    graph_draw::render_node(
-                        &painter,
-                        node,
-                        node_rect,
-                        self.display_mode,
-                        is_selected,
-                        self.layout_direction,
-                        card_scale,
-                        enable_lod,
-                    );
-                }
-            }
-
-            // Completed click on canvas
-            if response.clicked() {
-                if let Some(click_pos) = response.hover_pos() {
-                    let panel_w = 280.0;
-                    let panel_rect = Rect::from_min_max(
-                        Pos2::new(canvas_rect.max.x - panel_w, canvas_rect.min.y + 12.0),
-                        Pos2::new(canvas_rect.max.x - 12.0, canvas_rect.max.y - 12.0),
-                    );
-
-                    let mut clicked_node = None;
-                    for (id, _) in &self.graph.nodes {
-                        if let Some(&node_rect) = screen_rects.get(id) {
-                            if node_rect.contains(click_pos) {
-                                clicked_node = Some(id.clone());
-                                break;
-                            }
-                        }
-                    }
-
-                    if let Some(id) = clicked_node {
-                        self.selected_node_id = Some(id);
-                    } else if !panel_rect.contains(click_pos) {
-                        self.selected_node_id = None;
-                    }
-                }
-            }
-
-            // 7. Contract Inspector Drawer (Overlay on right side if a node is selected)
-            if let Some(sel_id) = &self.selected_node_id.clone() {
-                if let Some(node) = self.graph.nodes.get(sel_id) {
-                    if self.render_inspector_drawer(ui, &painter, canvas_rect, node) {
-                        self.selected_node_id = None;
-                    }
-                }
-            }
-        });
-    }
-
-    pub fn close_inspector(&mut self) {
-        self.selected_node_id = None;
-    }
-
-    fn render_inspector_drawer(&self, ui: &mut egui::Ui, painter: &egui::Painter, canvas_rect: Rect, node: &GraphNode) -> bool {
-        let panel_w = 280.0;
-        let panel_rect = Rect::from_min_max(
-            Pos2::new(canvas_rect.max.x - panel_w, canvas_rect.min.y + 12.0),
-            Pos2::new(canvas_rect.max.x - 12.0, canvas_rect.max.y - 12.0),
-        );
-
-        let mut close_requested = false;
-        let close_rect = Rect::from_min_size(
-            Pos2::new(panel_rect.max.x - 26.0, panel_rect.min.y + 10.0),
-            Vec2::new(16.0, 16.0),
-        );
-        if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
-            if close_rect.contains(mouse_pos) {
-                painter.rect_filled(close_rect, CornerRadius::same(3), colors().border_strong);
-                if ui.input(|i| i.pointer.primary_clicked()) {
-                    close_requested = true;
-                }
-            }
+        if &next == self.current() {
+            return false;
         }
-        painter.text(
-            close_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "✕",
-            egui::FontId::monospace(11.0),
-            colors().muted,
-        );
-
-        painter.rect_filled(
-            panel_rect,
-            CornerRadius::same(6),
-            colors().overlay,
-        );
-        painter.rect_stroke(
-            panel_rect,
-            CornerRadius::same(6),
-            Stroke::new(1.0, colors().border_strong),
-            StrokeKind::Inside,
-        );
-
-        let text_x = panel_rect.min.x + 14.0;
-        let mut text_y = panel_rect.min.y + 14.0;
-
-        painter.text(
-            Pos2::new(text_x, text_y),
-            egui::Align2::LEFT_TOP,
-            "CONTRACT INSPECTOR",
-            egui::FontId::proportional(11.0),
-            colors().warn,
-        );
-        text_y += 20.0;
-
-        painter.text(
-            Pos2::new(text_x, text_y),
-            egui::Align2::LEFT_TOP,
-            &node.label,
-            egui::FontId::proportional(13.0),
-            colors().text_strong,
-        );
-        text_y += 18.0;
-
-        painter.text(
-            Pos2::new(text_x, text_y),
-            egui::Align2::LEFT_TOP,
-            format!("Node ID: {}", node.id),
-            egui::FontId::monospace(10.0),
-            colors().muted,
-        );
-        text_y += 18.0;
-
-        // Alignment Pill
-        let (status_text, status_color) = match &node.alignment {
-            AlignmentStatus::VerifiedInCode { location } => (
-                format!("✓ Verified ({}:{})", location.file_path, location.start_line),
-                colors().ok,
-            ),
-            AlignmentStatus::SignatureMismatch { diff, .. } => (
-                format!("⚠ Signature Mismatch ({})", diff),
-                colors().error,
-            ),
-            AlignmentStatus::MissingCallSite { expected_in } => (
-                format!("○ Missing in {}", expected_in),
-                colors().warn,
-            ),
-            AlignmentStatus::PlannedOnly => ("○ Planned Only".to_string(), colors().accent),
-        };
-
-        painter.text(
-            Pos2::new(text_x, text_y),
-            egui::Align2::LEFT_TOP,
-            status_text,
-            egui::FontId::monospace(10.0),
-            status_color,
-        );
-        text_y += 24.0;
-
-        // Kind details
-        match &node.kind {
-            NodeKind::Component(comp) => {
-                painter.text(
-                    Pos2::new(text_x, text_y),
-                    egui::Align2::LEFT_TOP,
-                    format!("Type: {} | Stage: {}", comp.comp_type, comp.stage),
-                    egui::FontId::monospace(10.5),
-                    colors().info,
-                );
-                text_y += 20.0;
-
-                painter.text(
-                    Pos2::new(text_x, text_y),
-                    egui::Align2::LEFT_TOP,
-                    "Description:",
-                    egui::FontId::proportional(11.0),
-                    colors().text,
-                );
-                text_y += 16.0;
-
-                let desc = if comp.description.is_empty() { "No description declared" } else { &comp.description };
-                painter.text(
-                    Pos2::new(text_x, text_y),
-                    egui::Align2::LEFT_TOP,
-                    desc,
-                    egui::FontId::proportional(10.5),
-                    colors().text_strong,
-                );
-                text_y += 35.0;
-
-                painter.text(
-                    Pos2::new(text_x, text_y),
-                    egui::Align2::LEFT_TOP,
-                    format!("Modification Tasks: {}", comp.modification_tasks.len()),
-                    egui::FontId::proportional(11.0),
-                    colors().info,
-                );
-            }
-            NodeKind::UsageCall(call) => {
-                painter.text(
-                    Pos2::new(text_x, text_y),
-                    egui::Align2::LEFT_TOP,
-                    format!("Caller: {}", call.caller_id),
-                    egui::FontId::monospace(10.5),
-                    colors().special,
-                );
-                text_y += 18.0;
-
-                painter.text(
-                    Pos2::new(text_x, text_y),
-                    egui::Align2::LEFT_TOP,
-                    format!("Callee: {}", call.component_id),
-                    egui::FontId::monospace(10.5),
-                    colors().info,
-                );
-                text_y += 22.0;
-
-                painter.text(
-                    Pos2::new(text_x, text_y),
-                    egui::Align2::LEFT_TOP,
-                    &call.description,
-                    egui::FontId::proportional(10.5),
-                    colors().text_strong,
-                );
-            }
-            NodeKind::PlanStep(step) => {
-                let status = if step.completed { "Completed [✓]" } else { "Pending [ ]" };
-                painter.text(
-                    Pos2::new(text_x, text_y),
-                    egui::Align2::LEFT_TOP,
-                    format!("Status: {}", status),
-                    egui::FontId::monospace(11.0),
-                    if step.completed { colors().ok } else { colors().warn },
-                );
-                text_y += 20.0;
-
-                painter.text(
-                    Pos2::new(text_x, text_y),
-                    egui::Align2::LEFT_TOP,
-                    &step.task,
-                    egui::FontId::proportional(11.0),
-                    colors().text_strong,
-                );
-            }
+        self.history.truncate(self.cursor + 1);
+        self.history.push(next);
+        if self.history.len() > HISTORY {
+            self.history.remove(0);
         }
-
-        close_requested
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_zoom_strategy_defaults_and_card_scale() {
-        assert_eq!(ZoomStrategy::default(), ZoomStrategy::Geometric);
-
-        let geo = ZoomStrategy::Geometric;
-        assert_eq!(geo.card_scale(1.0), 1.0);
-        assert_eq!(geo.card_scale(1.75), 1.75);
-        assert_eq!(geo.card_scale(0.5), 0.5);
-        assert!(geo.enables_lod());
-
-        let sem = ZoomStrategy::Semantic;
-        assert_eq!(sem.card_scale(1.0), 1.0);
-        assert_eq!(sem.card_scale(1.75), 1.0);
-        assert_eq!(sem.card_scale(0.5), 1.0);
-        assert!(!sem.enables_lod());
-    }
-
-    #[test]
-    fn test_state_initializes_with_geometric_strategy() {
-        let state = ArchitectureGraphState::default();
-        assert_eq!(state.zoom_strategy, ZoomStrategy::Geometric);
-    }
-
-    #[test]
-    fn test_geometric_vs_semantic_screen_rect_computation() {
-        let mut state = ArchitectureGraphState::default();
-        let dims = state.display_mode.dimensions(); // 230.0 x 105.0
-
-        // In Geometric mode with zoom = 2.0:
-        state.zoom = 2.0;
-        state.zoom_strategy = ZoomStrategy::Geometric;
-        let scale_geo = state.zoom_strategy.card_scale(state.zoom);
-        assert_eq!(scale_geo, 2.0);
-        let geo_scaled_dims = egui::Vec2::new(dims.width * scale_geo, dims.height * scale_geo);
-        assert_eq!(geo_scaled_dims, egui::Vec2::new(460.0, 210.0));
-
-        // In Semantic mode with zoom = 2.0:
-        state.zoom_strategy = ZoomStrategy::Semantic;
-        let scale_sem = state.zoom_strategy.card_scale(state.zoom);
-        assert_eq!(scale_sem, 1.0);
-        let sem_scaled_dims = egui::Vec2::new(dims.width * scale_sem, dims.height * scale_sem);
-        assert_eq!(sem_scaled_dims, egui::Vec2::new(230.0, 105.0));
+        self.cursor = self.history.len() - 1;
+        true
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GraphCommand {
-    ZoomIn,
-    ZoomOut,
-    ResetLayout,
-    CycleDisplayMode,
-    CloseInspector,
+pub enum Dir {
+    Left,
+    Down,
+    Up,
+    Right,
 }
 
-impl crate::actions::ActionProvider for ArchitectureGraphState {
-    fn actions(&self) -> Vec<crate::actions::Action> {
-        use crate::actions::Action;
-        [
-            ("graph.zoom_in", "Zoom in", GraphCommand::ZoomIn),
-            ("graph.zoom_out", "Zoom out", GraphCommand::ZoomOut),
-            ("graph.reset", "Reset layout", GraphCommand::ResetLayout),
-            ("graph.display", "Cycle display mode", GraphCommand::CycleDisplayMode),
-            ("graph.close_inspector", "Close node inspector", GraphCommand::CloseInspector),
-        ]
-        .into_iter()
-        .map(|(id, label, command)| Action::new(id, label, command).focused())
+/// What a hint does to the node it lands on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HintAction {
+    Select,
+    Focus,
+    OpenCode,
+    OpenSpec,
+}
+
+#[derive(Clone, Debug)]
+pub struct Hint {
+    pub action: HintAction,
+    pub typed: String,
+    pub labels: Vec<(String, ComponentId)>,
+}
+
+/// Minimal, unique, prefix-free labels for `n` targets: all the same length,
+/// the shortest that the alphabet allows.
+pub fn hint_labels(n: usize, alphabet: &[char]) -> Vec<String> {
+    let k = alphabet.len().max(1);
+    if n == 0 || alphabet.is_empty() {
+        return Vec::new();
+    }
+    let mut len = 1;
+    while k.pow(len as u32) < n {
+        len += 1;
+    }
+    (0..n)
+        .map(|mut i| {
+            let mut label = vec![alphabet[0]; len];
+            for slot in (0..len).rev() {
+                label[slot] = alphabet[i % k];
+                i /= k;
+            }
+            label.into_iter().collect()
+        })
         .collect()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Camera {
+    pan: Vec2,
+    zoom: f32,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Self { pan: Vec2::new(24.0, 24.0), zoom: 1.0 }
+    }
+}
+
+/// Things the graph asks other parts of the cockpit to do.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GraphRequests {
+    /// Open this file at these lines in the code view.
+    pub open_code: Option<(String, u32, u32)>,
+    pub open_spec: bool,
+}
+
+enum Reply {
+    Catalog(NetResult<ViewCatalog>),
+    Plans(NetResult<Vec<arch_graph::Plan>>),
+    View(u64, Box<NetResult<ViewResult>>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Load {
+    Idle,
+    Loading,
+    Failed(String),
+}
+
+pub struct GraphState {
+    catalog: Option<ViewCatalog>,
+    catalog_requested: bool,
+    plans: Vec<PlanId>,
+    plans_stale: bool,
+    pub nav: Navigator,
+    pub result: Option<ViewResult>,
+    /// Ids drawn inside some container (hidden when containers collapse).
+    nested: BTreeSet<ComponentId>,
+    load: Load,
+    stale: bool,
+    generation: u64,
+    pub selection: Option<ComponentId>,
+    /// Select this once it shows up (agent focus, reveal from code).
+    pending_select: Option<ComponentId>,
+    camera: Camera,
+    fit: bool,
+    pub hint: Option<Hint>,
+    pub drawer_open: bool,
+    /// The agent moved the view (shown until the user navigates).
+    pub agent_moved: bool,
+    pub requests: GraphRequests,
+    canvas: Rect,
+    inbox: Arc<Mutex<Vec<Reply>>>,
+}
+
+impl Default for GraphState {
+    fn default() -> Self {
+        Self {
+            catalog: None,
+            catalog_requested: false,
+            plans: Vec::new(),
+            plans_stale: true,
+            nav: Navigator::new("structure"),
+            result: None,
+            nested: BTreeSet::new(),
+            load: Load::Idle,
+            stale: true,
+            generation: 0,
+            selection: None,
+            pending_select: None,
+            camera: Camera::default(),
+            fit: true,
+            hint: None,
+            drawer_open: true,
+            agent_moved: false,
+            requests: GraphRequests::default(),
+            canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
+            inbox: Arc::default(),
+        }
+    }
+}
+
+impl GraphState {
+    fn base_depth(&self) -> u32 {
+        self.catalog.as_ref().and_then(|c| c.get(&self.nav.current().view)).map_or(3, |v| v.depth)
     }
 
-    fn run(&mut self, action: &crate::actions::Action, _value: Option<String>, _cx: &mut crate::actions::RunCx<'_>) {
-        let Some(command) = action.command::<GraphCommand>() else { return };
-        match command {
-            GraphCommand::ZoomIn => self.zoom = (self.zoom * 1.15).clamp(0.3, 2.5),
-            GraphCommand::ZoomOut => self.zoom = (self.zoom / 1.15).clamp(0.3, 2.5),
-            GraphCommand::ResetLayout => self.recalculate_layout(),
-            GraphCommand::CycleDisplayMode => {
-                self.display_mode = match self.display_mode {
-                    DisplayMode::Detailed => DisplayMode::Compact,
-                    DisplayMode::Compact => DisplayMode::AlignmentDiff,
-                    DisplayMode::AlignmentDiff => DisplayMode::Detailed,
-                };
-                self.recalculate_layout();
-            }
-            GraphCommand::CloseInspector => self.close_inspector(),
+    pub fn component(&self, id: &ComponentId) -> Option<&Component> {
+        self.result.as_ref().and_then(|r| r.components.get(id))
+    }
+
+    pub fn selected(&self) -> Option<&Component> {
+        self.selection.as_ref().and_then(|id| self.component(id))
+    }
+
+    /// Navigates; the view is fetched again when it changed.
+    pub fn navigate(&mut self, change: NavChange) {
+        let user = !matches!(change, NavChange::Request(_));
+        if self.nav.apply(change) {
+            self.stale = true;
+            self.fit = true;
         }
+        if user {
+            self.agent_moved = false;
+        }
+    }
+
+    pub fn select(&mut self, id: Option<ComponentId>) {
+        if id.is_some() {
+            self.drawer_open = true;
+        }
+        self.selection = id;
+    }
+
+    /// Selects `id`, refocusing the view on it when it isn't shown.
+    pub fn reveal(&mut self, id: ComponentId) {
+        if self.component(&id).is_some() {
+            self.select(Some(id));
+        } else {
+            self.pending_select = Some(id.clone());
+            self.navigate(NavChange::Focus(id));
+        }
+    }
+
+    pub fn on_event(&mut self, event: &ArchEvent) {
+        match event {
+            ArchEvent::Changed { reason, .. } => {
+                self.stale = true;
+                if matches!(reason, ChangeReason::PlanEdited) {
+                    self.plans_stale = true;
+                }
+            }
+            ArchEvent::Validated { .. } => self.stale = true,
+            ArchEvent::ViewRequested { request, by } => {
+                if *by == Requester::Agent {
+                    self.agent_moved = true;
+                }
+                self.pending_select = request.focus.clone();
+                self.navigate(NavChange::Request(request.clone()));
+                if let Some(focus) = &request.focus
+                    && self.component(focus).is_some()
+                {
+                    self.select(Some(focus.clone()));
+                }
+            }
+        }
+    }
+
+    /// Applies a fetched view, keeping selection and camera when possible.
+    pub fn set_result(&mut self, result: ViewResult) {
+        if let Some(sel) = &self.selection
+            && !result.components.contains_key(sel)
+        {
+            self.selection = None;
+        }
+        if let Some(pending) = self.pending_select.take() {
+            if result.components.contains_key(&pending) {
+                self.selection = Some(pending);
+                self.drawer_open = true;
+            } else {
+                self.pending_select = Some(pending);
+            }
+        }
+        self.nested = result
+            .layout
+            .containers
+            .iter()
+            .filter_map(|c| result.layout.rects.get(c))
+            .flat_map(|outer| result.layout.rects.iter().filter(move |(_, r)| *r != outer && outer.contains(r)).map(|(id, _)| id.clone()))
+            .collect();
+        self.result = Some(result);
+        self.load = Load::Idle;
+    }
+
+    /// Zoomed out past the point where container headers are legible: each
+    /// top-level container is drawn as one labelled block.
+    fn collapsed(&self) -> bool {
+        arch_graph::view::layout::HEADER * self.camera.zoom < 11.0
+    }
+
+    fn shown(&self, id: &ComponentId) -> bool {
+        !self.collapsed() || !self.nested.contains(id)
+    }
+
+    /// Fetches what's missing or stale and applies replies. Call every frame.
+    pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
+        let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        for reply in replies {
+            match reply {
+                Reply::Catalog(Ok(catalog)) => {
+                    if catalog.get(&self.nav.current().view).is_none()
+                        && let Some(first) = catalog.views.keys().next()
+                    {
+                        self.nav = Navigator::new(first);
+                    }
+                    self.catalog = Some(catalog);
+                }
+                Reply::Catalog(Err(e)) => {
+                    self.catalog_requested = false;
+                    self.load = Load::Failed(e);
+                }
+                Reply::Plans(Ok(plans)) => self.plans = plans.into_iter().map(|p| p.id).collect(),
+                Reply::Plans(Err(_)) => {}
+                Reply::View(generation, result) => {
+                    if generation != self.generation {
+                        continue;
+                    }
+                    match *result {
+                        Ok(result) => self.set_result(result),
+                        Err(e) => self.load = Load::Failed(e),
+                    }
+                }
+            }
+        }
+        if !self.catalog_requested {
+            self.catalog_requested = true;
+            let inbox = self.inbox.clone();
+            net.arch_views(ctx.clone(), move |r| push(&inbox, Reply::Catalog(r)));
+        }
+        if self.plans_stale {
+            self.plans_stale = false;
+            let inbox = self.inbox.clone();
+            net.arch_plans(ctx.clone(), move |r| push(&inbox, Reply::Plans(r)));
+        }
+        if self.stale && self.catalog.is_some() {
+            self.stale = false;
+            self.generation += 1;
+            self.load = Load::Loading;
+            let nav = self.nav.current().clone();
+            let (inbox, generation) = (self.inbox.clone(), self.generation);
+            net.arch_view(&nav.view, nav.plan.as_ref(), &nav.roots, nav.depth, ctx.clone(), move |r| push(&inbox, Reply::View(generation, Box::new(r))));
+        }
+    }
+
+    /// Moves the selection to the nearest node in a direction (on the layout).
+    pub fn move_selection(&mut self, dir: Dir) {
+        let Some(result) = &self.result else { return };
+        let Some(current) = self.selection.as_ref().and_then(|s| result.layout.rects.get(s)) else {
+            let first = result.view.roots.first().or(result.view.nodes.first().map(|n| &n.id)).cloned();
+            self.select(first);
+            return;
+        };
+        let center = |r: &WorldRect| (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        let (cx, cy) = center(current);
+        let best = result
+            .layout
+            .rects
+            .iter()
+            .filter(|(id, _)| Some(*id) != self.selection.as_ref())
+            .filter_map(|(id, r)| {
+                let (x, y) = center(r);
+                let (along, across) = match dir {
+                    Dir::Right => (x - cx, y - cy),
+                    Dir::Left => (cx - x, y - cy),
+                    Dir::Down => (y - cy, x - cx),
+                    Dir::Up => (cy - y, x - cx),
+                };
+                (along > 1.0 && across.abs() <= along * 2.0).then_some((along + 2.0 * across.abs(), id))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, id)| id.clone());
+        if best.is_some() {
+            self.select(best);
+        }
+    }
+
+    /// Neighbors of the selection along `kind` (outgoing or incoming), as shown.
+    pub fn neighbors(&self, kind: RelationKind, outgoing: bool) -> Vec<ComponentId> {
+        let (Some(result), Some(sel)) = (&self.result, &self.selection) else { return Vec::new() };
+        result
+            .view
+            .edges
+            .iter()
+            .filter(|e| e.kind == kind)
+            .filter_map(|e| match outgoing {
+                true if &e.source == sel => Some(e.target.clone()),
+                false if &e.target == sel => Some(e.source.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn to_screen(&self, r: &WorldRect) -> Rect {
+        let z = self.camera.zoom;
+        Rect::from_min_size(self.canvas.min + self.camera.pan + Vec2::new(r.x, r.y) * z, Vec2::new(r.w, r.h) * z)
+    }
+
+    /// Nodes on screen, nearest to the selection (or the canvas center) first.
+    pub fn visible_nodes(&self) -> Vec<ComponentId> {
+        let Some(result) = &self.result else { return Vec::new() };
+        let anchor = self.selection.as_ref().and_then(|s| result.layout.rects.get(s)).map(|r| self.to_screen(r).center()).unwrap_or(self.canvas.center());
+        let mut visible: Vec<(f32, ComponentId)> = result
+            .layout
+            .rects
+            .iter()
+            .filter(|(id, _)| self.shown(id))
+            .map(|(id, r)| (self.to_screen(r), id))
+            .filter(|(rect, _)| rect.intersects(self.canvas))
+            .map(|(rect, id)| (rect.center().distance(anchor), id.clone()))
+            .collect();
+        visible.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        visible.into_iter().map(|(_, id)| id).collect()
+    }
+
+    pub fn start_hint(&mut self, action: HintAction, alphabet: &str) -> bool {
+        let targets = self.visible_nodes();
+        let chars: Vec<char> = alphabet.chars().collect();
+        let labels = hint_labels(targets.len(), &chars);
+        if labels.is_empty() {
+            return false;
+        }
+        self.hint = Some(Hint { action, typed: String::new(), labels: labels.into_iter().zip(targets).collect() });
+        true
+    }
+
+    /// Feeds typed characters to an active hint; returns whether it's still
+    /// waiting for more.
+    pub fn hint_input(&mut self, typed: &[char], back: bool) -> bool {
+        let Some(hint) = self.hint.as_mut() else { return false };
+        if back {
+            self.hint = None;
+            return false;
+        }
+        for c in typed {
+            hint.typed.push(*c);
+            if let Some((_, target)) = hint.labels.iter().find(|(label, _)| *label == hint.typed) {
+                let (action, target) = (hint.action, target.clone());
+                self.hint = None;
+                self.hint_hit(action, target);
+                return false;
+            }
+            if !hint.labels.iter().any(|(label, _)| label.starts_with(&hint.typed)) {
+                self.hint = None;
+                return false;
+            }
+        }
+        true
+    }
+
+    fn hint_hit(&mut self, action: HintAction, target: ComponentId) {
+        self.select(Some(target.clone()));
+        match action {
+            HintAction::Select => {}
+            HintAction::Focus => self.navigate(NavChange::Focus(target)),
+            HintAction::OpenCode => self.request_code(),
+            HintAction::OpenSpec => self.requests.open_spec = true,
+        }
+    }
+
+    fn request_code(&mut self) {
+        if let Some(c) = self.selected() {
+            self.requests.open_code = match (&c.anchor, &c.proposed) {
+                (Some(a), _) => Some((a.file.to_string(), a.span.start_line, a.span.end_line)),
+                (None, Some(p)) => Some((p.file.to_string(), 1, 1)),
+                (None, None) => None,
+            };
+        }
+    }
+
+    fn zoom_by(&mut self, factor: f32, around: Pos2) {
+        let old = self.camera.zoom;
+        let new = (old * factor).clamp(0.03, 3.0);
+        let world = (around - self.canvas.min - self.camera.pan) / old;
+        self.camera.zoom = new;
+        self.camera.pan = around - self.canvas.min - world * new;
+    }
+
+    fn fit_view(&mut self) {
+        let Some(result) = &self.result else { return };
+        let rects: Vec<&WorldRect> = result.layout.rects.values().collect();
+        if rects.is_empty() {
+            return;
+        }
+        let (min_x, min_y) = rects.iter().fold((f32::MAX, f32::MAX), |(x, y), r| (x.min(r.x), y.min(r.y)));
+        let (max_x, max_y) = rects.iter().fold((f32::MIN, f32::MIN), |(x, y), r| (x.max(r.x + r.w), y.max(r.y + r.h)));
+        let (w, h) = ((max_x - min_x).max(1.0), (max_y - min_y).max(1.0));
+        let pad = 32.0;
+        let zoom = ((self.canvas.width() - pad * 2.0) / w).min((self.canvas.height() - pad * 2.0) / h).clamp(0.03, 1.4);
+        self.camera.zoom = zoom;
+        let content = Vec2::new(w, h) * zoom;
+        self.camera.pan = (self.canvas.size() - content) / 2.0 - Vec2::new(min_x, min_y) * zoom;
+    }
+
+    // ---- drawing ----
+
+    pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, slot_idx: usize, pan_held: bool, cx: &mut RunCx<'_>) {
+        self.tick(cx.net, cx.ctx);
+        self.render_toolbar(ui, cx);
+        let area = ui.available_rect_before_wrap();
+        let drawer_w = if self.drawer_open && self.selected().is_some() { (area.width() * 0.38).clamp(220.0, 340.0) } else { 0.0 };
+        let canvas = Rect::from_min_max(area.min, Pos2::new(area.max.x - drawer_w, area.max.y));
+        self.canvas = canvas;
+        feedback.register_inspectable(ui, &format!("slot_{}:graph:canvas", slot_idx + 1), canvas);
+        let response = ui.allocate_rect(canvas, Sense::click_and_drag());
+        let painter = ui.painter_at(canvas);
+        painter.rect_filled(canvas, 0.0, colors().bg);
+
+        if self.fit && self.result.is_some() {
+            self.fit = false;
+            self.fit_view();
+        }
+        // Pan (drag, or hold the leader key) and zoom (wheel, pinch).
+        if response.dragged() {
+            self.camera.pan += response.drag_delta();
+        }
+        if pan_held && response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        if response.hovered() {
+            let (scroll, pinch, pointer) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta(), i.pointer.hover_pos()));
+            let around = pointer.unwrap_or(canvas.center());
+            if pinch != 1.0 {
+                self.zoom_by(pinch, around);
+            } else if scroll != 0.0 {
+                self.zoom_by((1.0 + scroll * 0.0015).clamp(0.8, 1.25), around);
+            }
+        }
+
+        match (&self.result, &self.load) {
+            (_, Load::Failed(err)) if self.result.is_none() => {
+                painter.text(canvas.center(), Align2::CENTER_CENTER, format!("Couldn't load the view: {err}"), FontId::proportional(13.0), colors().error);
+            }
+            (None, _) => {
+                painter.text(canvas.center(), Align2::CENTER_CENTER, "Loading the architecture…", FontId::proportional(13.0), colors().muted);
+            }
+            (Some(result), _) if result.view.nodes.is_empty() => {
+                painter.text(
+                    canvas.center(),
+                    Align2::CENTER_CENTER,
+                    "Nothing to show in this view yet. Ingest the code (Space p… or the agent's ingest tool), or pick another view.",
+                    FontId::proportional(13.0),
+                    colors().muted,
+                );
+            }
+            (Some(_), _) => self.draw_graph(&painter),
+        }
+        if let Load::Failed(err) = &self.load
+            && self.result.is_some()
+        {
+            painter.text(canvas.left_bottom() + Vec2::new(8.0, -8.0), Align2::LEFT_BOTTOM, format!("refresh failed: {err}"), FontId::proportional(11.0), colors().error);
+        }
+
+        // Click selects, double click focuses.
+        if (response.clicked() || response.double_clicked())
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let hit = self.hit(pos);
+            if response.double_clicked()
+                && let Some(id) = hit.clone()
+            {
+                self.navigate(NavChange::Focus(id));
+            }
+            self.select(hit);
+        }
+        if drawer_w > 0.0 {
+            let drawer = Rect::from_min_max(Pos2::new(canvas.max.x, area.min.y), area.max);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(drawer.shrink(6.0)), |ui| self.render_drawer(ui));
+        }
+        if *cx.input_mode == (InputMode::Capture { slot: cx.slot }) && self.hint.is_none() {
+            *cx.input_mode = InputMode::Normal;
+        }
+    }
+
+    fn hit(&self, pos: Pos2) -> Option<ComponentId> {
+        let result = self.result.as_ref()?;
+        // Innermost first: smallest rect containing the point.
+        result
+            .layout
+            .rects
+            .iter()
+            .map(|(id, r)| (self.to_screen(r), id))
+            .filter(|(rect, _)| rect.contains(pos))
+            .min_by(|a, b| a.0.area().total_cmp(&b.0.area()))
+            .map(|(_, id)| id.clone())
+    }
+
+    fn render_toolbar(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
+        let actions = self.actions();
+        let mut used: Option<(Action, ToolbarUse)> = None;
+        ui.horizontal_wrapped(|ui| {
+            for action in actions.iter().filter(|a| a.toolbar.is_some()) {
+                if let Some(u) = toolbar_control(ui, action) {
+                    used = Some((action.clone(), u));
+                }
+            }
+            if self.load == Load::Loading {
+                ui.label(RichText::new(egui_phosphor::regular::HOURGLASS).color(colors().warn));
+            }
+        });
+        // Where we are: plan, focus, depth; and whether the agent moved us.
+        ui.horizontal_wrapped(|ui| {
+            let nav = self.nav.current().clone();
+            let focus = if nav.roots.is_empty() {
+                "entry points".to_owned()
+            } else {
+                nav.roots.iter().map(|r| self.component(r).map_or_else(|| r.to_string(), |c| c.name.clone())).collect::<Vec<_>>().join(", ")
+            };
+            let depth = nav.depth.unwrap_or(self.base_depth());
+            let shown = self.result.as_ref().map_or(0, |r| r.view.nodes.len());
+            ui.label(RichText::new(format!("{} · from {focus} · depth {depth} · {shown} nodes", nav.plan.as_ref().map_or("code".to_owned(), |p| format!("plan {p}")))).size(11.0).color(colors().muted));
+            if self.agent_moved {
+                ui.label(RichText::new(format!("{} agent moved the view (Ctrl-o goes back)", egui_phosphor::regular::ROBOT)).size(11.0).color(colors().special));
+            }
+        });
+        ui.separator();
+        match used {
+            Some((action, ToolbarUse::Run(value))) => self.run(&action, value, cx),
+            Some((_, ToolbarUse::OpenPalette)) | None => {}
+        }
+    }
+
+    fn draw_graph(&self, painter: &egui::Painter) {
+        let Some(result) = &self.result else { return };
+        let z = self.camera.zoom;
+        let collapsed = self.collapsed();
+        // Containers first, then edges, then nodes on top.
+        for id in result.layout.containers.iter().filter(|id| self.shown(id)) {
+            let Some(r) = result.layout.rects.get(id) else { continue };
+            let rect = self.to_screen(r);
+            let selected = self.selection.as_ref() == Some(id);
+            painter.rect_filled(rect, 6.0, colors().surface.gamma_multiply(0.6));
+            painter.rect_stroke(rect, 6.0, Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { colors().focus } else { colors().border_strong }), StrokeKind::Inside);
+            let Some(c) = result.components.get(id) else { continue };
+            if collapsed {
+                // One block per container: its name, as large as fits, and how much is inside.
+                let inner = result.layout.rects.iter().filter(|(_, k)| *k != r && r.contains(k)).count();
+                let size = (rect.width() / (c.name.len().max(4) as f32 * 0.6)).min(rect.height() / 2.6).clamp(8.0, 20.0);
+                let clip = painter.with_clip_rect(rect.expand(2.0));
+                clip.text(rect.center() - Vec2::new(0.0, size * 0.4), Align2::CENTER_CENTER, &c.name, FontId::proportional(size), colors().text_strong);
+                clip.text(rect.center() + Vec2::new(0.0, size * 0.7), Align2::CENTER_CENTER, format!("{} · {inner}", c.type_name), FontId::proportional((size * 0.7).max(8.0)), colors().muted);
+            } else {
+                let size = (12.0 * z).clamp(8.0, 16.0);
+                painter.with_clip_rect(rect).text(rect.min + Vec2::new(10.0 * z, (arch_graph::view::layout::HEADER * z - size) / 2.0), Align2::LEFT_TOP, format!("{} {}", c.name, c.type_name), FontId::proportional(size), colors().muted);
+            }
+        }
+        for edge in &result.view.edges {
+            if !self.shown(&edge.source) || !self.shown(&edge.target) {
+                continue;
+            }
+            let (Some(a), Some(b)) = (result.layout.rects.get(&edge.source), result.layout.rects.get(&edge.target)) else { continue };
+            if edge.kind == RelationKind::Contains && result.layout.containers.contains(&edge.source) {
+                continue; // drawn as nesting
+            }
+            let (ra, rb) = (self.to_screen(a), self.to_screen(b));
+            let color = match edge.kind {
+                RelationKind::Calls => colors().accent,
+                RelationKind::Contains => colors().faint,
+                RelationKind::Implements => colors().special,
+                RelationKind::DataFlow => colors().info,
+            };
+            let color = if edge.alignment == Alignment::Missing { colors().error } else { color };
+            let stroke = Stroke::new(if edge.overlay { 1.0 } else { 1.6 }, color.gamma_multiply(if edge.overlay { 0.6 } else { 1.0 }));
+            let (from, to) = if rb.left() > ra.right() { (ra.right_center(), rb.left_center()) } else { (ra.center_bottom(), rb.center_top()) };
+            let mid = (to.x - from.x).abs().max(40.0) * 0.5;
+            let (c1, c2) = if rb.left() > ra.right() { (from + Vec2::new(mid, 0.0), to - Vec2::new(mid, 0.0)) } else { (from + Vec2::new(0.0, mid), to - Vec2::new(0.0, mid)) };
+            let points: Vec<Pos2> = (0..=16)
+                .map(|i| {
+                    let t = i as f32 / 16.0;
+                    let u = 1.0 - t;
+                    Pos2::new(
+                        u * u * u * from.x + 3.0 * u * u * t * c1.x + 3.0 * u * t * t * c2.x + t * t * t * to.x,
+                        u * u * u * from.y + 3.0 * u * u * t * c1.y + 3.0 * u * t * t * c2.y + t * t * t * to.y,
+                    )
+                })
+                .collect();
+            if matches!(edge.alignment, Alignment::Planned | Alignment::Missing) {
+                painter.extend(Shape::dashed_line(&points, stroke, 6.0, 4.0));
+            } else {
+                painter.add(Shape::line(points.clone(), stroke));
+            }
+            // Arrow head.
+            let dir = (to - points[14]).normalized();
+            let side = Vec2::new(-dir.y, dir.x) * 4.0;
+            painter.add(Shape::convex_polygon(vec![to, to - dir * 8.0 + side, to - dir * 8.0 - side], color, Stroke::NONE));
+        }
+        for node in &result.view.nodes {
+            if result.layout.containers.contains(&node.id) || !self.shown(&node.id) {
+                continue;
+            }
+            let (Some(r), Some(c)) = (result.layout.rects.get(&node.id), result.components.get(&node.id)) else { continue };
+            self.draw_node(painter, self.to_screen(r), c, node.alignment, node.truncated);
+        }
+        if let Some(hint) = &self.hint {
+            for (label, id) in &hint.labels {
+                if !label.starts_with(&hint.typed) {
+                    continue;
+                }
+                let Some(r) = result.layout.rects.get(id) else { continue };
+                let at = self.to_screen(r).left_top() + Vec2::new(-4.0, -4.0);
+                let galley = painter.layout_no_wrap(label.to_uppercase(), FontId::monospace(13.0), colors().on_bright);
+                let chip = Rect::from_min_size(at, galley.size() + Vec2::new(8.0, 4.0));
+                painter.rect_filled(chip, 3.0, colors().key);
+                painter.galley(chip.min + Vec2::new(4.0, 2.0), galley, colors().on_bright);
+            }
+        }
+    }
+
+    fn draw_node(&self, painter: &egui::Painter, rect: Rect, c: &Component, alignment: Alignment, truncated: bool) {
+        let z = self.camera.zoom;
+        let selected = self.selection.as_ref() == Some(&c.id);
+        let border = match alignment {
+            Alignment::Present => colors().ok,
+            Alignment::Missing => colors().error,
+            Alignment::Planned => colors().warn,
+            Alignment::Observed => colors().border_strong,
+        };
+        painter.rect_filled(rect, 6.0, if selected { colors().card_selected } else { colors().card });
+        let stroke = Stroke::new(if selected { 2.5 } else { 1.2 }, if selected { colors().focus } else { border });
+        if alignment == Alignment::Planned {
+            let corners = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom(), rect.left_top()];
+            painter.extend(Shape::dashed_line(&corners, stroke, 6.0, 4.0));
+        } else {
+            painter.rect_stroke(rect, 6.0, stroke, StrokeKind::Inside);
+        }
+        // Too small to read: the card's color and outline carry it.
+        if rect.height() < 9.0 {
+            return;
+        }
+        let clip = painter.with_clip_rect(rect.shrink(2.0));
+        let size = (13.0 * z).clamp(6.0, 18.0).min(rect.height() * 0.45);
+        clip.text(rect.min + Vec2::new(10.0, 8.0) * z, Align2::LEFT_TOP, &c.name, FontId::proportional(size), colors().text_strong);
+        if z > 0.45 {
+            let small = (10.0 * z).clamp(7.0, 13.0);
+            let stage = format!("{} · {:?}{}", c.type_name, c.stage, if c.placeholders.is_empty() { String::new() } else { format!(" · {} placeholders", c.placeholders.len()) });
+            clip.text(rect.min + Vec2::new(10.0, 28.0) * z, Align2::LEFT_TOP, stage, FontId::proportional(small), border);
+            let at = match (&c.anchor, &c.proposed) {
+                (Some(a), _) => format!("{}:{}", a.file, a.span.start_line),
+                (None, Some(p)) => format!("→ {}", p.file),
+                (None, None) => "unplaced".to_owned(),
+            };
+            clip.text(rect.min + Vec2::new(10.0, 44.0) * z, Align2::LEFT_TOP, at, FontId::monospace(small * 0.95), colors().muted);
+        }
+        if truncated {
+            painter.text(rect.right_center() + Vec2::new(4.0, 0.0), Align2::LEFT_CENTER, "…", FontId::proportional(14.0 * z.max(0.6)), colors().muted);
+        }
+    }
+
+    /// The compact inspector: a navigable summary of the selection.
+    fn render_drawer(&mut self, ui: &mut egui::Ui) {
+        let Some(c) = self.selected().cloned() else { return };
+        let alignment = self.result.as_ref().and_then(|r| r.view.node(&c.id)).map(|n| n.alignment);
+        egui::Frame::NONE.fill(colors().surface).stroke(Stroke::new(1.0, colors().border_strong)).corner_radius(6).inner_margin(8).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&c.name).strong().size(14.0).color(colors().text_strong));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button(egui_phosphor::regular::X).on_hover_text("Close (x)").clicked() {
+                            self.drawer_open = false;
+                        }
+                    });
+                });
+                ui.label(RichText::new(c.id.as_str()).monospace().size(10.0).color(colors().muted));
+                ui.label(RichText::new(format!("{} · {:?} · {:?}{}", c.type_name, c.status, c.stage, alignment.map(|a| format!(" · {a:?}")).unwrap_or_default())).size(11.0));
+                match (&c.anchor, &c.proposed) {
+                    (Some(a), _) => ui.label(RichText::new(format!("{} {}:{}–{}", egui_phosphor::regular::FILE_CODE, a.file, a.span.start_line, a.span.end_line)).monospace().size(11.0)),
+                    (None, Some(p)) => ui.label(RichText::new(format!("{} planned in {}", egui_phosphor::regular::FILE_DASHED, p.file)).monospace().size(11.0).color(colors().warn)),
+                    (None, None) => ui.label(RichText::new("not placed yet").size(11.0).color(colors().warn)),
+                };
+                if !c.description.is_empty() {
+                    ui.label(RichText::new(&c.description).size(11.0));
+                }
+                let spec = c.spec.as_ref();
+                ui.label(
+                    RichText::new(format!(
+                        "{} logic steps · {} invariants · {} placeholders",
+                        spec.map_or(0, |s| s.logic_steps.len()),
+                        spec.map_or(0, |s| s.invariants.len()),
+                        c.placeholders.len()
+                    ))
+                    .size(11.0)
+                    .color(colors().muted),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button(format!("{} Spec view", egui_phosphor::regular::ARTICLE)).on_hover_text("s").clicked() {
+                        self.requests.open_spec = true;
+                    }
+                    if ui.button(format!("{} Code", egui_phosphor::regular::CODE)).on_hover_text("g d").clicked() {
+                        self.request_code();
+                    }
+                });
+                ui.separator();
+                let mut go: Option<ComponentId> = None;
+                if let Some(result) = &self.result {
+                    for kind in RelationKind::ALL {
+                        let out: Vec<&ComponentId> = result.view.edges.iter().filter(|e| e.kind == kind && e.source == c.id).map(|e| &e.target).collect();
+                        let inc: Vec<&ComponentId> = result.view.edges.iter().filter(|e| e.kind == kind && e.target == c.id).map(|e| &e.source).collect();
+                        for (label, list) in [(format!("{} →", kind.name()), out), (format!("← {}", kind.name()), inc)] {
+                            if list.is_empty() {
+                                continue;
+                            }
+                            ui.label(RichText::new(label).size(10.0).color(colors().muted));
+                            for id in list.into_iter().take(8) {
+                                let name = result.components.get(id).map_or(id.to_string(), |x| x.name.clone());
+                                if ui.link(RichText::new(name).size(11.0)).clicked() {
+                                    go = Some(id.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(id) = go {
+                    self.select(Some(id));
+                }
+            });
+        });
+    }
+}
+
+fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
+    if let Ok(mut i) = inbox.lock() {
+        i.push(reply);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum GraphCommand {
+    Move(Dir),
+    Follow { kind: RelationKind, outgoing: bool },
+    Focus,
+    Unfocus,
+    Depth(i32),
+    SetView,
+    NextView,
+    SetPlan,
+    Back,
+    Forward,
+    OpenCode,
+    OpenSpec,
+    Hint(HintAction),
+    Zoom(f32),
+    Fit,
+    CloseInspector,
+    Refresh,
+}
+
+impl ActionProvider for GraphState {
+    fn actions(&self) -> Vec<Action> {
+        use GraphCommand as G;
+        use ToolbarStyle::{Button, Control};
+        let mut out = Vec::new();
+        let f = |id: &str, label: &str, c: GraphCommand| Action::new(id, label, c).focused();
+        if let Some(catalog) = &self.catalog {
+            let current = &self.nav.current().view;
+            let choices = catalog.views.iter().map(|(name, v)| Choice::new(name, name).detail(Some(v.description.clone())).current(name == current)).collect();
+            out.push(f("graph.view", "Switch view", G::SetView).param(Param::Choice(choices)).toolbar(Control, "View", Some(egui_phosphor::regular::GRAPH)));
+            out.push(f("graph.next_view", "Next view", G::NextView));
+        }
+        let plan = self.nav.current().plan.clone();
+        let mut plans = vec![Choice::new("", "code only").current(plan.is_none())];
+        plans.extend(self.plans.iter().map(|p| Choice::new(&p.0, &p.0).current(plan.as_ref() == Some(p))));
+        out.push(f("graph.plan", "Lay a plan over the code", G::SetPlan).param(Param::Choice(plans)).toolbar(Control, "Plan", None));
+        out.push(f("graph.back", "Back", G::Back).toolbar(Button, "", Some(egui_phosphor::regular::ARROW_LEFT)));
+        out.push(f("graph.forward", "Forward", G::Forward).toolbar(Button, "", Some(egui_phosphor::regular::ARROW_RIGHT)));
+        out.push(f("graph.depth_less", "Show fewer hops", G::Depth(-1)).toolbar(Button, "", Some(egui_phosphor::regular::MINUS)));
+        out.push(f("graph.depth_more", "Show more hops", G::Depth(1)).toolbar(Button, "", Some(egui_phosphor::regular::PLUS)));
+        if !self.nav.current().roots.is_empty() {
+            out.push(f("graph.unfocus", "Back to the view's entry points", G::Unfocus).toolbar(Button, "All", Some(egui_phosphor::regular::ARROWS_OUT)));
+        }
+        out.push(f("graph.fit", "Fit to screen", G::Fit).toolbar(Button, "", Some(egui_phosphor::regular::CORNERS_OUT)));
+        out.push(f("graph.zoom_in", "Zoom in", G::Zoom(1.2)));
+        out.push(f("graph.zoom_out", "Zoom out", G::Zoom(1.0 / 1.2)));
+        out.push(f("graph.refresh", "Refresh the view", G::Refresh));
+        for (id, label, dir) in [("graph.left", "Select left", Dir::Left), ("graph.down", "Select below", Dir::Down), ("graph.up", "Select above", Dir::Up), ("graph.right", "Select right", Dir::Right)] {
+            out.push(f(id, label, G::Move(dir)));
+        }
+        out.push(f("graph.hint", "Pick a node by hint", G::Hint(HintAction::Select)));
+        out.push(f("graph.hint_focus", "Focus a node by hint", G::Hint(HintAction::Focus)));
+        out.push(f("graph.hint_code", "Open a node's code by hint", G::Hint(HintAction::OpenCode)));
+        out.push(f("graph.hint_spec", "Open a node's spec by hint", G::Hint(HintAction::OpenSpec)));
+        if self.selection.is_some() {
+            out.push(f("graph.focus", "Focus on the selection", G::Focus));
+            out.push(f("graph.open_code", "Open in code", G::OpenCode));
+            out.push(f("graph.open_spec", "Open the spec view", G::OpenSpec));
+            out.push(f("graph.close_inspector", "Close the inspector", G::CloseInspector));
+            for (id, label, kind, outgoing) in [
+                ("graph.callees", "Go to a callee", RelationKind::Calls, true),
+                ("graph.callers", "Go to a caller", RelationKind::Calls, false),
+                ("graph.parent", "Go to the container", RelationKind::Contains, false),
+                ("graph.children", "Go to a member", RelationKind::Contains, true),
+                ("graph.implements", "Go to what it implements", RelationKind::Implements, true),
+                ("graph.flows_to", "Follow data flow", RelationKind::DataFlow, true),
+            ] {
+                let targets = self.neighbors(kind, outgoing);
+                if targets.is_empty() {
+                    continue;
+                }
+                let param = if targets.len() == 1 {
+                    Param::None
+                } else {
+                    Param::Choice(targets.iter().map(|t| Choice::new(t.as_str(), self.component(t).map_or(t.to_string(), |c| c.name.clone())).detail(Some(t.to_string()))).collect())
+                };
+                out.push(f(id, label, G::Follow { kind, outgoing }).param(param));
+            }
+        }
+        out
+    }
+
+    fn run(&mut self, action: &Action, value: Option<String>, cx: &mut RunCx<'_>) {
+        let Some(command) = action.command::<GraphCommand>().cloned() else { return };
+        let base = self.base_depth();
+        match command {
+            GraphCommand::Move(dir) => self.move_selection(dir),
+            GraphCommand::Follow { kind, outgoing } => {
+                let targets = self.neighbors(kind, outgoing);
+                let target = match value {
+                    Some(v) => targets.into_iter().find(|t| t.as_str() == v),
+                    None => targets.into_iter().next(),
+                };
+                if let Some(t) = target {
+                    self.select(Some(t));
+                }
+            }
+            GraphCommand::Focus => {
+                if let Some(id) = self.selection.clone() {
+                    self.navigate(NavChange::Focus(id));
+                }
+            }
+            GraphCommand::Unfocus => self.navigate(NavChange::Unfocus),
+            GraphCommand::Depth(delta) => self.navigate(NavChange::Depth { delta, base }),
+            GraphCommand::SetView => {
+                if let Some(v) = value {
+                    self.navigate(NavChange::View(v));
+                }
+            }
+            GraphCommand::NextView => {
+                if let Some(catalog) = &self.catalog {
+                    let names: Vec<&String> = catalog.views.keys().collect();
+                    let at = names.iter().position(|n| **n == self.nav.current().view).unwrap_or(0);
+                    let next = names[(at + 1) % names.len()].clone();
+                    self.navigate(NavChange::View(next));
+                }
+            }
+            GraphCommand::SetPlan => {
+                let plan = value.filter(|v| !v.is_empty()).and_then(|v| PlanId::new(&v).ok());
+                self.navigate(NavChange::Plan(plan));
+            }
+            GraphCommand::Back => self.navigate(NavChange::Back),
+            GraphCommand::Forward => self.navigate(NavChange::Forward),
+            GraphCommand::OpenCode => self.request_code(),
+            GraphCommand::OpenSpec => self.requests.open_spec = true,
+            GraphCommand::Hint(action) => {
+                if self.start_hint(action, cx.hint_chars) {
+                    *cx.input_mode = InputMode::Capture { slot: cx.slot };
+                }
+            }
+            GraphCommand::Zoom(factor) => {
+                let center = self.canvas.center();
+                self.zoom_by(factor, center);
+            }
+            GraphCommand::Fit => self.fit_view(),
+            GraphCommand::CloseInspector => self.drawer_open = false,
+            GraphCommand::Refresh => {
+                self.stale = true;
+                self.plans_stale = true;
+            }
+        }
+    }
+
+    fn on_capture(&mut self, typed: &[char], back: bool, _cx: &mut RunCx<'_>) -> bool {
+        self.hint_input(typed, back)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use arch_graph::view::{Layout, ViewEdge, ViewNode};
+
+    /// A graph waiting for its first view (nothing in flight, nothing shown).
+    pub(crate) fn loading() -> GraphState {
+        GraphState { catalog: Some(ViewCatalog::defaults().unwrap()), catalog_requested: true, plans_stale: false, stale: false, load: Load::Loading, ..Default::default() }
+    }
+
+    /// A graph already showing `result` (catalog loaded, nothing to fetch).
+    pub(crate) fn showing(result: ViewResult) -> GraphState {
+        GraphState { catalog: Some(ViewCatalog::defaults().unwrap()), catalog_requested: true, plans_stale: false, stale: false, result: Some(result), ..Default::default() }
+    }
+    use arch_graph::{Stage, Status, View, ViewSpec};
+
+    pub(crate) fn sample_result() -> ViewResult {
+        fn id(s: &str) -> ComponentId {
+            ComponentId::new(s)
+        }
+        let ids = ["rust:a::run", "rust:a::step", "rust:a::save", "rust:a::log"];
+        let mut layout = Layout::default();
+        for (i, (x, y)) in [(0.0, 0.0), (300.0, 0.0), (600.0, 0.0), (300.0, 100.0)].into_iter().enumerate() {
+            layout.rects.insert(id(ids[i]), WorldRect { x, y, w: 220.0, h: 64.0 });
+        }
+        let component = |s: &str| Component {
+            id: id(s),
+            name: s.rsplit("::").next().unwrap().into(),
+            type_name: "function".into(),
+            description: String::new(),
+            status: Status::Existing,
+            stage: Stage::Implemented,
+            anchor: None,
+            proposed: None,
+            signature: None,
+            spec: None,
+            placeholders: vec![],
+        };
+        let edge = |a: &str, b: &str| ViewEdge { id: arch_graph::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: id(a), target: id(b), alignment: Alignment::Observed, overlay: false };
+        ViewResult {
+            view: View {
+                spec: ViewSpec { name: "calls".into(), description: String::new(), kinds: vec![RelationKind::Calls], direction: Default::default(), depth: 3, layout: Default::default(), overlays: vec![], include_ancestors: false, roots: vec![], filters: Default::default() },
+                roots: vec![id("rust:a::run")],
+                nodes: ids.iter().map(|s| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed }).collect(),
+                edges: vec![edge("rust:a::run", "rust:a::step"), edge("rust:a::step", "rust:a::save"), edge("rust:a::run", "rust:a::log")],
+            },
+            layout,
+            text: String::new(),
+            components: ids.iter().map(|s| (id(s), component(s))).collect(),
+        }
+    }
+
+    // req: P9.3
+    #[test]
+    fn navigator_is_one_reducer_with_back_and_forward() {
+        let mut nav = Navigator::new("structure");
+        assert!(nav.apply(NavChange::View("calls".into())));
+        assert!(nav.apply(NavChange::Focus(ComponentId::new("rust:a::run"))));
+        assert!(nav.apply(NavChange::Depth { delta: 1, base: 3 }));
+        assert_eq!(nav.current().depth, Some(4));
+        assert!(!nav.apply(NavChange::Focus(ComponentId::new("rust:a::run"))), "no-op changes add no history");
+        assert!(nav.apply(NavChange::Back));
+        assert_eq!(nav.current().depth, None);
+        assert!(nav.apply(NavChange::Back));
+        assert!(nav.current().roots.is_empty());
+        assert!(nav.apply(NavChange::Forward));
+        assert_eq!(nav.current().roots.len(), 1);
+        // A new step after going back drops the forward history.
+        assert!(nav.apply(NavChange::Plan(Some(PlanId::new("p").unwrap()))));
+        assert!(!nav.can_forward());
+        // Agent requests go through the same reducer.
+        assert!(nav.apply(NavChange::Request(Box::new(ViewRequest { view: Some("structure".into()), roots: vec![ComponentId::new("rust:b")], ..Default::default() }))));
+        assert_eq!((nav.current().view.as_str(), nav.current().roots.len(), nav.current().plan.is_some()), ("structure", 1, true));
+        assert!(nav.apply(NavChange::Depth { delta: -50, base: 3 }));
+        assert_eq!(nav.current().depth, Some(1), "clamped");
+    }
+
+    // req: P9.13
+    #[test]
+    fn hint_labels_are_unique_minimal_and_drive_actions() {
+        let home: Vec<char> = "asdfghjkl".chars().collect();
+        assert_eq!(hint_labels(3, &home), ["a", "s", "d"]);
+        let many = hint_labels(20, &home);
+        assert!(many.iter().all(|l| l.len() == 2), "9 < 20 <= 81");
+        let unique: std::collections::BTreeSet<_> = many.iter().collect();
+        assert_eq!(unique.len(), 20);
+        assert!(many.iter().all(|a| many.iter().filter(|b| b.starts_with(a.as_str())).count() == 1), "prefix-free");
+        assert!(hint_labels(0, &home).is_empty());
+
+        let mut g = GraphState { result: Some(sample_result()), canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(2000.0, 1000.0)), ..Default::default() };
+        g.select(Some(ComponentId::new("rust:a::run")));
+        assert!(g.start_hint(HintAction::Focus, "asdfghjkl"));
+        let labels = g.hint.as_ref().unwrap().labels.clone();
+        assert_eq!(labels.len(), 4);
+        assert_eq!(labels[0].1, ComponentId::new("rust:a::run"), "nearest the selection gets the first label");
+        let (label, target) = labels.iter().find(|(_, id)| id.as_str() == "rust:a::save").unwrap().clone();
+        let chars: Vec<char> = label.chars().collect();
+        assert!(!g.hint_input(&chars, false), "done");
+        assert_eq!(g.selection, Some(target.clone()));
+        assert_eq!(g.nav.current().roots, vec![target], "focus hint refocused the view");
+        assert!(g.start_hint(HintAction::Select, "asdfghjkl"));
+        assert!(!g.hint_input(&['z'], false), "no label starts with z: cancelled");
+        assert!(g.hint.is_none());
+    }
+
+    // req: P9.4
+    #[test]
+    fn graph_commands_are_typed_actions_that_move_follow_focus_and_open() {
+        let mut g = GraphState { result: Some(sample_result()), ..Default::default() };
+        let run = |g: &mut GraphState, id: &str, value: Option<&str>| {
+            let action = g.actions().into_iter().find(|a| a.id == id).unwrap_or_else(|| panic!("{id} offered"));
+            let net = NetClient::new("http://127.0.0.1:9");
+            let ctx = egui::Context::default();
+            let mut mode = InputMode::Normal;
+            g.run(&action, value.map(str::to_owned), &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, hint_chars: "asdf" });
+        };
+        assert!(!g.actions().iter().any(|a| a.id == "graph.callees"), "nothing selected yet");
+        run(&mut g, "graph.right", None);
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::run", "first move selects a root");
+        run(&mut g, "graph.right", None);
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::step");
+        run(&mut g, "graph.down", None);
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::log");
+        run(&mut g, "graph.callers", None);
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::run");
+        let callees = g.actions().into_iter().find(|a| a.id == "graph.callees").unwrap();
+        assert!(matches!(callees.param, Param::Choice(ref c) if c.len() == 2), "two callees: a choice");
+        run(&mut g, "graph.callees", Some("rust:a::log"));
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::log");
+        run(&mut g, "graph.focus", None);
+        assert_eq!(g.nav.current().roots[0].as_str(), "rust:a::log");
+        run(&mut g, "graph.back", None);
+        assert!(g.nav.current().roots.is_empty());
+        run(&mut g, "graph.depth_more", None);
+        assert_eq!(g.nav.current().depth, Some(4));
+        run(&mut g, "graph.open_spec", None);
+        assert!(g.requests.open_spec);
+        let mut with_anchor = sample_result();
+        with_anchor.components.get_mut(&ComponentId::new("rust:a::log")).unwrap().anchor = Some(arch_graph::CodeAnchor {
+            language: "rust".into(),
+            file: arch_graph::RepoPath::new("src/a.rs").unwrap(),
+            symbol: "a::log".into(),
+            syntax_kind: "function_item".into(),
+            span: arch_graph::Span { start_line: 7, end_line: 9, start_byte: 0, end_byte: 1 },
+            content_hash: String::new(),
+        });
+        g.set_result(with_anchor);
+        run(&mut g, "graph.open_code", None);
+        assert_eq!(g.requests.open_code, Some(("src/a.rs".into(), 7, 9)));
+        run(&mut g, "graph.plan", Some("p1"));
+        assert_eq!(g.nav.current().plan.as_ref().unwrap().0, "p1");
+        run(&mut g, "graph.plan", Some(""));
+        assert!(g.nav.current().plan.is_none(), "code only");
+    }
+
+    // req: P9.2
+    #[test]
+    fn architecture_events_refresh_and_keep_selection() {
+        let mut g = GraphState { result: Some(sample_result()), stale: false, catalog: Some(ViewCatalog::defaults().unwrap()), ..Default::default() };
+        g.select(Some(ComponentId::new("rust:a::step")));
+        let camera = g.camera;
+        g.on_event(&ArchEvent::Changed { reason: ChangeReason::Ingested, plans: vec![], components: vec![] });
+        assert!(g.stale, "refetch requested");
+        g.set_result(sample_result());
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::step", "selection kept");
+        assert_eq!(g.camera, camera, "camera kept on refresh");
+        let mut gone = sample_result();
+        gone.components.remove(&ComponentId::new("rust:a::step"));
+        g.set_result(gone);
+        assert!(g.selection.is_none(), "selection dropped when the node is gone");
+        g.stale = false;
+        g.on_event(&ArchEvent::ViewRequested { request: Box::new(ViewRequest { view: Some("calls".into()), focus: Some(ComponentId::new("rust:a::save")), ..Default::default() }), by: Requester::Agent });
+        assert!(g.agent_moved && g.stale);
+        g.set_result(sample_result());
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::save", "agent focus selected once shown");
+        g.navigate(NavChange::Back);
+        assert!(!g.agent_moved, "the user took over");
     }
 }

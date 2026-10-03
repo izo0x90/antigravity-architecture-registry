@@ -59,5 +59,5 @@ pub enum ArchEvent {
         warnings: usize,
     },
     /// Show something in the graph (usually the agent driving the view).
-    ViewRequested { request: ViewRequest, by: Requester },
+    ViewRequested { request: Box<ViewRequest>, by: Requester },
 }

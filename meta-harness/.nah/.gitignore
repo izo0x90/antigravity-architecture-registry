@@ -1,0 +1,3 @@
+# Caches are rebuilt from the code; plans are kept.
+cache/
+req_status.json

@@ -13,7 +13,8 @@
 description = "Static structure: what contains what, and what implements which interface. Read it as the shape of the code."
 kinds = ["contains", "implements"]
 direction = "out"
-depth = 3
+# Start shallow: + adds depth, Enter/F focuses a part.
+depth = 1
 layout = "nested"
 overlays = []
 include_ancestors = false

@@ -1,7 +1,7 @@
 //! Views: named lenses on the graph (from config), a query engine that cuts
 //! the subgraph a view shows, layouts, and a text form for agents.
 
-mod layout;
+pub mod layout;
 mod text;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};

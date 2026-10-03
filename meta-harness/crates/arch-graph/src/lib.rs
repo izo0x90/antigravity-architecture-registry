@@ -25,7 +25,7 @@ pub use relation::{Provenance, Relation, RelationId, RelationKind};
 pub use report::{CodeRef, Finding, FindingCode, Report, Severity, Target};
 pub use types::{ResolvedType, TypeDef, TypeSystem};
 pub use view::{View, ViewCatalog, ViewSpec};
-pub use wire::{ComponentDetail, ViewResult};
+pub use wire::{ComponentDetail, FileView, ViewResult};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ModelError {

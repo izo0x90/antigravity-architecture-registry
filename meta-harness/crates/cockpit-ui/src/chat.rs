@@ -273,22 +273,15 @@ impl ChatStreamState {
         }
     }
 
-    pub fn render(
-        &mut self,
-        ui: &mut egui::Ui,
-        net: &NetClient,
-        feedback: &mut FeedbackInspectorState,
-        slot_idx: usize,
-        is_focused: bool,
-        input_mode: &mut crate::keymap::InputMode,
-    ) {
+    pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
+        let (net, slot_idx) = (cx.net, cx.slot);
         let ctx = ui.ctx().clone();
         self.drain_replies(net, &ctx);
 
         ui.vertical(|ui| {
             let start = ui.cursor().min;
             let w = ui.available_width();
-            self.render_controls(ui, &mut RunCx { net, ctx: &ctx, input_mode, slot: slot_idx });
+            self.render_controls(ui, cx);
             let controls = Rect::from_min_size(start, Vec2::new(w, (ui.cursor().min.y - start.y).max(24.0)));
             feedback.register_inspectable(ui, &format!("slot_{}:chat:controls", slot_idx + 1), controls);
             ui.separator();
@@ -307,7 +300,7 @@ impl ChatStreamState {
 
             let start = ui.cursor().min;
             let w = ui.available_width();
-            self.render_input(ui, net, feedback, slot_idx, is_focused, input_mode);
+            self.render_input(ui, net, feedback, slot_idx, is_focused, cx.input_mode);
             let input = Rect::from_min_size(Pos2::new(start.x, start.y), Vec2::new(w, (ui.cursor().min.y - start.y).max(40.0)));
             feedback.register_inspectable(ui, &format!("slot_{}:chat:input_bar", slot_idx + 1), input);
         });

@@ -310,23 +310,73 @@ impl NetClient {
         });
     }
 
-    /// Fetches the registry's architecture as raw JSON text.
-    pub fn fetch_architecture<F>(&self, ctx: egui::Context, on_done: F)
-    where
-        F: FnOnce(Result<String, String>) + Send + 'static,
-    {
-        let url = format!("{}/api/registry/architecture", self.base_url);
-        self.fetch(ehttp::Request::get(&url), move |result| {
-            match result {
-                Ok(resp) if resp.ok => match resp.text() {
-                    Some(text) => on_done(Ok(text.to_string())),
-                    None => on_done(Err("Architecture response was not valid UTF-8".into())),
-                },
-                Ok(resp) => on_done(Err(format!("Architecture HTTP error {}", resp.status))),
-                Err(e) => on_done(Err(format!("Network error: {}", e))),
-            }
-            ctx.request_repaint();
-        });
+    // ---- architecture ----
+
+    pub fn arch_views(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::ViewCatalog>) + Send + 'static) {
+        self.call("GET", "/api/arch/views", None, ctx, on_done);
+    }
+
+    pub fn arch_view(
+        &self,
+        name: &str,
+        plan: Option<&arch_graph::PlanId>,
+        roots: &[arch_graph::ComponentId],
+        depth: Option<u32>,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::ViewResult>) + Send + 'static,
+    ) {
+        let mut path = format!("/api/arch/view?name={}", urlencoding::encode(name));
+        if let Some(plan) = plan {
+            path.push_str(&format!("&plan={}", urlencoding::encode(&plan.0)));
+        }
+        if !roots.is_empty() {
+            let joined: Vec<&str> = roots.iter().map(|r| r.as_str()).collect();
+            path.push_str(&format!("&roots={}", urlencoding::encode(&joined.join(","))));
+        }
+        if let Some(depth) = depth {
+            path.push_str(&format!("&depth={depth}"));
+        }
+        self.call("GET", &path, None, ctx, on_done);
+    }
+
+    pub fn arch_component(
+        &self,
+        id: &arch_graph::ComponentId,
+        plan: Option<&arch_graph::PlanId>,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::ComponentDetail>) + Send + 'static,
+    ) {
+        let mut path = format!("/api/arch/components/{}", urlencoding::encode(id.as_str()));
+        if let Some(plan) = plan {
+            path.push_str(&format!("?plan={}", urlencoding::encode(&plan.0)));
+        }
+        self.call("GET", &path, None, ctx, on_done);
+    }
+
+    /// The component enclosing `file:line`.
+    pub fn arch_at(&self, file: &str, line: usize, plan: Option<&arch_graph::PlanId>, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::Component>) + Send + 'static) {
+        let mut path = format!("/api/arch/at?file={}&line={line}", urlencoding::encode(file));
+        if let Some(plan) = plan {
+            path.push_str(&format!("&plan={}", urlencoding::encode(&plan.0)));
+        }
+        self.call("GET", &path, None, ctx, on_done);
+    }
+
+    /// Components in one file (for the code view's gutter).
+    pub fn arch_file(&self, file: &str, plan: Option<&arch_graph::PlanId>, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::FileView>) + Send + 'static) {
+        let mut path = format!("/api/arch/file?path={}", urlencoding::encode(file));
+        if let Some(plan) = plan {
+            path.push_str(&format!("&plan={}", urlencoding::encode(&plan.0)));
+        }
+        self.call("GET", &path, None, ctx, on_done);
+    }
+
+    pub fn arch_plans(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<arch_graph::Plan>>) + Send + 'static) {
+        self.call("GET", "/api/arch/plans", None, ctx, on_done);
+    }
+
+    pub fn arch_validate(&self, plan: &arch_graph::PlanId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::Report>) + Send + 'static) {
+        self.call("POST", &format!("/api/arch/plans/{}/validate", urlencoding::encode(&plan.0)), Some(serde_json::json!({})), ctx, on_done);
     }
 
     pub fn submit_feedback<F>(&self, feedback_json: serde_json::Value, ctx: egui::Context, on_done: F)

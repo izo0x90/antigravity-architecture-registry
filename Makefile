@@ -35,7 +35,7 @@ sandbox-dev:
 	$(MAKE) ui CARGO_TARGET_DIR=$(SANDBOX_TARGET_DIR)
 	sbx-app-bridge start
 	cd meta-harness && CARGO_TARGET_DIR=$(SANDBOX_TARGET_DIR) \
-		STATIC_DIR=static ARCHITECTURE_REGISTRY_PATH=../system_architecture.json \
+		STATIC_DIR=static NAH_REPO_ROOT=. \
 		HOST=127.0.0.1 PORT=8080 cargo run --bin meta-harness
 
 

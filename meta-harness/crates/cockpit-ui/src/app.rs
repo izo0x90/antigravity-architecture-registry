@@ -8,8 +8,9 @@ use crate::chat::{ChatStreamState, SessionStatus};
 use crate::code::CodeViewerState;
 use crate::config::UiConfig;
 use crate::feedback::FeedbackInspectorState;
-use crate::graph::ArchitectureGraphState;
-use crate::keymap::{InputMode, TapTracker};
+use crate::graph::GraphState;
+use crate::keymap::{Chord, InputMode, SeqMatch, TapTracker, match_sequence};
+use crate::spec::SpecState;
 use crate::net::{NetClient, NetResult, WsState};
 use crate::tree::ArchitectureTreeState;
 use crate::theme::colors;
@@ -20,10 +21,11 @@ pub enum BufferKind {
     Code,
     Graph,
     Tree,
+    Spec,
 }
 
 impl BufferKind {
-    pub const ALL: [Self; 4] = [Self::Chat, Self::Code, Self::Graph, Self::Tree];
+    pub const ALL: [Self; 5] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec];
 
     pub fn title(&self) -> &'static str {
         match self {
@@ -31,6 +33,7 @@ impl BufferKind {
             Self::Code => "CODE",
             Self::Graph => "GRAPH",
             Self::Tree => "TREE",
+            Self::Spec => "SPEC",
         }
     }
 
@@ -41,6 +44,7 @@ impl BufferKind {
             Self::Code => "code",
             Self::Graph => "graph",
             Self::Tree => "tree",
+            Self::Spec => "spec",
         }
     }
 
@@ -50,6 +54,7 @@ impl BufferKind {
             Self::Code => egui_phosphor::regular::CODE,
             Self::Graph => egui_phosphor::regular::GIT_FORK,
             Self::Tree => egui_phosphor::regular::TREE_STRUCTURE,
+            Self::Spec => egui_phosphor::regular::ARTICLE,
         }
     }
 }
@@ -65,6 +70,8 @@ enum ShellCommand {
     ToggleIssues,
     CloseDrawer,
     OpenPalette,
+    /// Graph selection and code view follow each other.
+    ToggleFollow,
 }
 
 const MAX_SLOTS: usize = 3;
@@ -73,7 +80,8 @@ pub struct CockpitApp {
     pub net: NetClient,
     pub chat: ChatStreamState,
     pub code: CodeViewerState,
-    pub graph: ArchitectureGraphState,
+    pub graph: GraphState,
+    pub spec: SpecState,
     pub tree: ArchitectureTreeState,
     pub feedback: FeedbackInspectorState,
 
@@ -93,6 +101,12 @@ pub struct CockpitApp {
     leader_tap: TapTracker,
     /// Keys typed so far in leader mode (after the leader).
     leader_path: Vec<char>,
+    /// The start of a multi-key sequence typed in normal mode (e.g. `g`).
+    pub pending_keys: Vec<Chord>,
+    /// Graph selection and code view follow each other.
+    pub follow: bool,
+    follow_last: Option<arch_graph::ComponentId>,
+    reveal_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
     palette: crate::palette::Palette,
 
     // Top-bar status LEDs
@@ -144,7 +158,8 @@ impl CockpitApp {
             net: NetClient::new(host_origin),
             chat: ChatStreamState::default(),
             code: CodeViewerState::default(),
-            graph: ArchitectureGraphState::default(),
+            graph: GraphState::default(),
+            spec: SpecState::default(),
             tree: ArchitectureTreeState::default(),
             feedback: FeedbackInspectorState::default(),
 
@@ -160,6 +175,10 @@ impl CockpitApp {
             input_mode: InputMode::Normal,
             leader_tap: TapTracker::default(),
             leader_path: Vec::new(),
+            pending_keys: Vec::new(),
+            follow: false,
+            follow_last: None,
+            reveal_inbox: Arc::default(),
             palette: crate::palette::Palette::default(),
 
             srv_led: ActivityLed::default(),
@@ -185,10 +204,6 @@ impl CockpitApp {
                     *slot = Some(r);
                 }
             });
-
-            // Auto-load the registry architecture into graph
-            let ctx_arch = ctx.clone();
-            self.graph.load_architecture(&self.net, ctx_arch);
 
             // Auto-load default file Cargo.toml into code viewer
             let ctx_file = ctx.clone();
@@ -219,26 +234,83 @@ impl CockpitApp {
         };
 
         for event in events {
+            if let harness_contracts::ClientEvent::Architecture { event } = &event {
+                self.graph.on_event(event);
+                if !matches!(event, arch_graph::ArchEvent::ViewRequested { .. }) {
+                    self.spec.invalidate();
+                    self.tree.invalidate();
+                }
+            }
             self.chat.process_event(event);
         }
+        self.link_views(ctx);
 
         // Handle auto-jump requests from chat/tool links
         if let Some((path, line)) = self.chat.requested_file_jump.take() {
-            let ctx_clone = ctx.clone();
-            self.code.load_file(&path, line, &self.net, ctx_clone);
-
-            // If Code buffer is not visible in current slots, swap current slot or set slot to Code
-            let is_code_visible = self.slot_buffers[..self.column_count].contains(&BufferKind::Code);
-            if !is_code_visible {
-                if self.column_count == 1 {
-                    self.slot_buffers[0] = BufferKind::Code;
-                } else {
-                    self.slot_buffers[1] = BufferKind::Code;
-                }
-            }
+            self.code.load_file(&path, line, &self.net, ctx.clone());
+            self.ensure_visible(BufferKind::Code);
         }
 
         self.handle_keys(ctx);
+    }
+
+    /// Shows `kind` in some slot: keeps it where it is, or puts it beside the
+    /// focused slot (or in the only slot) without moving focus.
+    fn ensure_visible(&mut self, kind: BufferKind) {
+        if self.slot_buffers[..self.column_count].contains(&kind) {
+            return;
+        }
+        let slot = if self.column_count == 1 { 0 } else { (self.focused_slot + 1) % self.column_count };
+        self.slot_buffers[slot] = kind;
+    }
+
+    fn show_code(&mut self, file: &str, start: u32, end: u32, ctx: &egui::Context) {
+        self.code.show_span(file, start as usize, end as usize, &self.net, ctx.clone());
+        self.ensure_visible(BufferKind::Code);
+    }
+
+    /// Carries requests between views: graph ↔ code ↔ spec ↔ outline.
+    fn link_views(&mut self, ctx: &egui::Context) {
+        self.graph.tick(&self.net, ctx);
+        let plan = self.graph.nav.current().plan.clone();
+        self.spec.follow(self.graph.selection.as_ref(), plan.as_ref());
+        self.tree.set_plan(plan.as_ref());
+        if let Some((file, start, end)) = self.graph.requests.open_code.take() {
+            self.show_code(&file, start, end, ctx);
+        }
+        if std::mem::take(&mut self.graph.requests.open_spec) {
+            self.ensure_visible(BufferKind::Spec);
+        }
+        if let Some((file, start, end)) = self.spec.requests.open_code.take() {
+            self.show_code(&file, start, end, ctx);
+        }
+        for id in [self.spec.requests.select.take(), self.code.select.take(), self.tree.select.take()].into_iter().flatten() {
+            self.graph.reveal(id);
+            self.ensure_visible(BufferKind::Graph);
+        }
+        if let Some((file, line)) = self.code.reveal.take() {
+            let inbox = self.reveal_inbox.clone();
+            self.net.arch_at(&file, line, plan.as_ref(), ctx.clone(), move |r| {
+                if let Ok(mut i) = inbox.lock() {
+                    i.push(r);
+                }
+            });
+        }
+        let found = std::mem::take(&mut *self.reveal_inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        for component in found.into_iter().flatten() {
+            self.graph.reveal(component.id);
+            self.ensure_visible(BufferKind::Graph);
+        }
+        // Follow mode: the code view tracks the graph selection.
+        if self.follow && self.graph.selection != self.follow_last {
+            self.follow_last = self.graph.selection.clone();
+            if let Some(c) = self.graph.selected()
+                && let Some(a) = &c.anchor
+            {
+                let (file, start, end) = (a.file.to_string(), a.span.start_line, a.span.end_line);
+                self.show_code(&file, start, end, ctx);
+            }
+        }
     }
 
     /// Merges the user's UI config over the defaults once the server answers.
@@ -263,18 +335,20 @@ impl CockpitApp {
             BufferKind::Code => &self.code,
             BufferKind::Graph => &self.graph,
             BufferKind::Tree => &self.tree,
+            BufferKind::Spec => &self.spec,
         }
     }
 
     /// A view's provider plus what its actions may touch (disjoint fields).
-    fn provider_cx(&mut self, kind: BufferKind) -> (&mut dyn ActionProvider, &NetClient, &mut InputMode) {
+    fn provider_cx(&mut self, kind: BufferKind) -> (&mut dyn ActionProvider, &NetClient, &mut InputMode, &str) {
         let provider: &mut dyn ActionProvider = match kind {
             BufferKind::Chat => &mut self.chat,
             BufferKind::Code => &mut self.code,
             BufferKind::Graph => &mut self.graph,
             BufferKind::Tree => &mut self.tree,
+            BufferKind::Spec => &mut self.spec,
         };
-        (provider, &self.net, &mut self.input_mode)
+        (provider, &self.net, &mut self.input_mode, &self.config.keymap.hint_chars)
     }
 
     fn shell_actions(&self) -> Vec<Action> {
@@ -294,6 +368,7 @@ impl CockpitApp {
         actions.push(Action::new("inspector.toggle", "Toggle element inspector", S::ToggleInspector));
         actions.push(Action::new("issues.toggle", "Toggle issues window", S::ToggleIssues));
         actions.push(Action::new("drawer.close", "Close side drawer", S::CloseDrawer));
+        actions.push(Action::new("link.follow", if self.follow { "Stop following (graph and code)" } else { "Follow: code tracks the graph selection" }, S::ToggleFollow));
         actions.push(Action::new("palette.open", "Command palette", S::OpenPalette));
         actions
     }
@@ -301,7 +376,7 @@ impl CockpitApp {
     /// Everything invokable right now, bound to its keys: the focused view's
     /// actions first (they win key conflicts), then the shell, then the global
     /// actions of every other view.
-    fn bound_actions(&self) -> Vec<Bound> {
+    pub(crate) fn bound_actions(&self) -> Vec<Bound> {
         let focused = self.slot_buffers[self.focused_slot];
         let view = |kind: BufferKind, all: bool| {
             self.provider(kind).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(kind), a))
@@ -324,8 +399,8 @@ impl CockpitApp {
             }
             Origin::View(kind) => {
                 let slot = self.focused_slot;
-                let (provider, net, input_mode) = self.provider_cx(kind);
-                provider.run(&action, value, &mut RunCx { net, ctx, input_mode, slot });
+                let (provider, net, input_mode, hint_chars) = self.provider_cx(kind);
+                provider.run(&action, value, &mut RunCx { net, ctx, input_mode, slot, hint_chars });
             }
         }
     }
@@ -371,7 +446,11 @@ impl CockpitApp {
                     self.feedback.load_issues(&self.net, ctx.clone());
                 }
             }
-            ShellCommand::CloseDrawer => self.graph.close_inspector(),
+            ShellCommand::CloseDrawer => self.graph.drawer_open = false,
+            ShellCommand::ToggleFollow => {
+                self.follow = !self.follow;
+                self.follow_last = None;
+            }
             ShellCommand::OpenPalette => self.open_palette(None),
         }
     }
@@ -425,6 +504,29 @@ impl CockpitApp {
             // The palette reads its own keys while open.
             InputMode::Palette => {}
 
+            // The view in this slot reads typed keys (e.g. hint labels).
+            InputMode::Capture { slot } => {
+                let typed: Vec<char> = ctx.input(|i| {
+                    i.events
+                        .iter()
+                        .filter_map(|e| match e {
+                            egui::Event::Text(t) => Some(t.chars().collect::<Vec<_>>()),
+                            _ => None,
+                        })
+                        .flatten()
+                        .collect()
+                });
+                if typed.is_empty() && !back {
+                    return;
+                }
+                let kind = self.slot_buffers[slot];
+                let (provider, net, input_mode, hint_chars) = self.provider_cx(kind);
+                let still = provider.on_capture(&typed, back, &mut RunCx { net, ctx, input_mode, slot, hint_chars });
+                if !still {
+                    self.input_mode = InputMode::Normal;
+                }
+            }
+
             InputMode::Leader => {
                 if leader_tapped {
                     self.leader_path.clear();
@@ -464,10 +566,24 @@ impl CockpitApp {
                     self.input_mode = InputMode::Leader;
                     return;
                 }
+                if back && !self.pending_keys.is_empty() {
+                    self.pending_keys.clear();
+                    return;
+                }
                 let bound = self.bound_actions();
-                let hit = ctx.input(|i| bound.iter().find(|b| b.keys.iter().any(|k| k.pressed(i))).cloned());
-                if let Some(b) = hit {
-                    self.run_bound(&b, ctx);
+                match ctx.input(|i| match_sequence(&bound, &self.pending_keys, i)) {
+                    SeqMatch::Run(index) => {
+                        self.pending_keys.clear();
+                        let b = bound[index].clone();
+                        self.run_bound(&b, ctx);
+                    }
+                    SeqMatch::Pending(chord) => self.pending_keys.push(chord),
+                    SeqMatch::None => {
+                        // Any other key typed abandons a half-typed sequence.
+                        if !self.pending_keys.is_empty() && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Key { pressed: true, .. }))) {
+                            self.pending_keys.clear();
+                        }
+                    }
                 }
             }
         }
@@ -518,7 +634,11 @@ impl CockpitApp {
                     // Input Mode Indicator (NORMAL vs LEADER vs INSERT)
                     let (mode_label, mode_color, mode_bg) = match self.input_mode {
                         InputMode::Normal => (
-                            "NORMAL".to_string(),
+                            if self.pending_keys.is_empty() {
+                                "NORMAL".to_string()
+                            } else {
+                                format!("NORMAL {}", self.pending_keys.iter().map(Chord::label).collect::<Vec<_>>().join(" "))
+                            },
                             colors().info,
                             colors().info_bg,
                         ),
@@ -536,6 +656,11 @@ impl CockpitApp {
                             format!("INSERT [S{}]", slot + 1),
                             colors().ok,
                             colors().ok_bg,
+                        ),
+                        InputMode::Capture { .. } => (
+                            "HINT".to_string(),
+                            colors().key,
+                            colors().warn_bg,
                         ),
                     };
 
@@ -641,35 +766,15 @@ impl CockpitApp {
                         }
 
                         // Buffer tabs for this slot
-                        let (chat_lbl, code_lbl, graph_lbl, tree_lbl) = if is_compact {
-                            (
-                                egui_phosphor::regular::CHAT_TEARDROP_TEXT.to_string(),
-                                egui_phosphor::regular::CODE.to_string(),
-                                egui_phosphor::regular::GIT_FORK.to_string(),
-                                egui_phosphor::regular::TREE_STRUCTURE.to_string(),
-                            )
-                        } else {
-                            (
-                                format!("{} Chat", egui_phosphor::regular::CHAT_TEARDROP_TEXT),
-                                format!("{} Code", egui_phosphor::regular::CODE),
-                                format!("{} Graph", egui_phosphor::regular::GIT_FORK),
-                                format!("{} Tree", egui_phosphor::regular::TREE_STRUCTURE),
-                            )
-                        };
-
-                        let t_chat = ui.selectable_value(&mut self.slot_buffers[slot_idx], BufferKind::Chat, &chat_lbl);
-                        let t_code = ui.selectable_value(&mut self.slot_buffers[slot_idx], BufferKind::Code, &code_lbl);
-                        let t_graph = ui.selectable_value(&mut self.slot_buffers[slot_idx], BufferKind::Graph, &graph_lbl);
-                        let t_tree = ui.selectable_value(&mut self.slot_buffers[slot_idx], BufferKind::Tree, &tree_lbl);
-
-                        if t_chat.clicked() || t_code.clicked() || t_graph.clicked() || t_tree.clicked() {
-                            self.focused_slot = slot_idx;
+                        for kind in BufferKind::ALL {
+                            let title = kind.title();
+                            let label = if is_compact { kind.icon().to_owned() } else { format!("{} {}{}", kind.icon(), &title[..1], title[1..].to_lowercase()) };
+                            let tab = ui.selectable_value(&mut self.slot_buffers[slot_idx], kind, label);
+                            if tab.clicked() {
+                                self.focused_slot = slot_idx;
+                            }
+                            self.feedback.register_inspectable(ui, &format!("slot_{}:tab:{}", slot_idx + 1, kind.name()), tab.rect);
                         }
-
-                        self.feedback.register_inspectable(ui, &format!("slot_{}:tab:chat", slot_idx + 1), t_chat.rect);
-                        self.feedback.register_inspectable(ui, &format!("slot_{}:tab:code", slot_idx + 1), t_code.rect);
-                        self.feedback.register_inspectable(ui, &format!("slot_{}:tab:graph", slot_idx + 1), t_graph.rect);
-                        self.feedback.register_inspectable(ui, &format!("slot_{}:tab:tree", slot_idx + 1), t_tree.rect);
                     });
                     self.feedback.register_inspectable(ui, &format!("slot_{}:header", slot_idx + 1), header_res.response.rect);
                     ui.separator();
@@ -677,24 +782,26 @@ impl CockpitApp {
                     // Render the active buffer content
                     match self.slot_buffers[slot_idx] {
                         BufferKind::Chat => {
-                            self.chat.render(
-                                ui,
-                                &self.net,
-                                &mut self.feedback,
-                                slot_idx,
-                                is_focused,
-                                &mut self.input_mode,
-                            );
+                            let ctx = ui.ctx().clone();
+                            let mut cx = RunCx { net: &self.net, ctx: &ctx, input_mode: &mut self.input_mode, slot: slot_idx, hint_chars: &self.config.keymap.hint_chars };
+                            self.chat.render(ui, &mut self.feedback, is_focused, &mut cx);
                         }
                         BufferKind::Code => {
                             self.code.render(ui, &self.net, &mut self.feedback, slot_idx);
                         }
                         BufferKind::Graph => {
                             let pan_held = ui.input(|i| self.config.keymap.leader.key_down(i));
-                            self.graph.render(ui, &mut self.feedback, slot_idx, pan_held);
+                            let ctx = ui.ctx().clone();
+                            let mut cx = RunCx { net: &self.net, ctx: &ctx, input_mode: &mut self.input_mode, slot: slot_idx, hint_chars: &self.config.keymap.hint_chars };
+                            self.graph.render(ui, &mut self.feedback, slot_idx, pan_held, &mut cx);
                         }
                         BufferKind::Tree => {
-                            self.tree.render(ui, &self.graph.components, &mut self.feedback, slot_idx);
+                            self.tree.render(ui, &self.net, &mut self.feedback, slot_idx);
+                        }
+                        BufferKind::Spec => {
+                            let ctx = ui.ctx().clone();
+                            let mut cx = RunCx { net: &self.net, ctx: &ctx, input_mode: &mut self.input_mode, slot: slot_idx, hint_chars: &self.config.keymap.hint_chars };
+                            self.spec.render(ui, &mut cx);
                         }
                     }
                 });
@@ -873,5 +980,175 @@ impl CockpitApp {
         // Which-Key Leader Overlay HUD
         self.render_which_key_hud(ctx);
         self.render_palette(ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::tests::{loading, sample_result, showing};
+    use arch_graph::{CodeAnchor, ComponentId, RepoPath, Span};
+
+    fn texts(output: &egui::FullOutput) -> String {
+        let mut out = String::new();
+        for clipped in &output.shapes {
+            collect(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    fn collect(shape: &egui::Shape, out: &mut String) {
+        match shape {
+            egui::Shape::Text(t) => {
+                out.push_str(t.galley.text());
+                out.push('\n');
+            }
+            egui::Shape::Vec(list) => list.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+
+    /// An app with the graph in slot 2 (focused) showing the sample view.
+    fn app_with_graph() -> (egui::Context, CockpitApp) {
+        let ctx = egui::Context::default();
+        let mut app = CockpitApp::new("http://127.0.0.1:9");
+        app.initialized = true; // skip network bootstrapping
+        app.graph = showing(sample_result());
+        app.focused_slot = 1;
+        (ctx, app)
+    }
+
+    fn frame(ctx: &egui::Context, app: &mut CockpitApp, events: Vec<egui::Event>) -> egui::FullOutput {
+        ctx.run(egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() }, |ctx| app.frame(ctx))
+    }
+
+    fn key(text: &str) -> Vec<egui::Event> {
+        vec![egui::Event::Text(text.into())]
+    }
+
+    fn anchored(result: &mut arch_graph::ViewResult, symbol: &str, file: &str, start: u32, end: u32) {
+        result.components.get_mut(&ComponentId::new(symbol)).unwrap().anchor = Some(CodeAnchor {
+            language: "rust".into(),
+            file: RepoPath::new(file).unwrap(),
+            symbol: symbol.into(),
+            syntax_kind: "function_item".into(),
+            span: Span { start_line: start, end_line: end, start_byte: 0, end_byte: 1 },
+            content_hash: String::new(),
+        });
+    }
+
+    // req: P9.1
+    #[test]
+    fn graph_draws_server_views_with_loading_and_empty_states() {
+        assert!(!std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/samples.rs").exists(), "sample graphs are gone");
+        let (ctx, mut app) = app_with_graph();
+        let out = frame(&ctx, &mut app, vec![]);
+        let text = texts(&out);
+        for name in ["run", "step", "save", "log"] {
+            assert!(text.contains(name), "node {name} drawn: {text}");
+        }
+        assert!(text.contains("· 4 nodes"), "{text}");
+        app.graph = loading();
+        let text = texts(&frame(&ctx, &mut app, vec![]));
+        assert!(text.contains("Loading the architecture"), "{text}");
+        let mut empty = sample_result();
+        empty.view.nodes.clear();
+        empty.layout.rects.clear();
+        app.graph = showing(empty);
+        let text = texts(&frame(&ctx, &mut app, vec![]));
+        assert!(text.contains("Nothing to show in this view yet"), "{text}");
+    }
+
+    // req: P9.5
+    #[test]
+    fn vim_sequences_and_leader_drive_the_graph_and_are_rebindable() {
+        let (ctx, mut app) = app_with_graph();
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, key("l"));
+        assert_eq!(app.graph.selection.as_ref().unwrap().as_str(), "rust:a::run");
+        frame(&ctx, &mut app, key("g"));
+        assert_eq!(app.pending_keys.len(), 1, "waiting for the second key");
+        frame(&ctx, &mut app, key("c"));
+        assert!(app.pending_keys.is_empty());
+        assert!(app.graph.selection.is_some());
+        // Two callees: the palette asks which.
+        assert_eq!(app.input_mode, InputMode::Palette);
+        frame(&ctx, &mut app, vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+        assert_eq!(app.input_mode, InputMode::Normal, "Escape closes the palette");
+        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        frame(&ctx, &mut app, key("g"));
+        frame(&ctx, &mut app, key("c"));
+        assert_eq!(app.graph.selection.as_ref().unwrap().as_str(), "rust:a::save", "single callee: straight there");
+        frame(&ctx, &mut app, key("g"));
+        frame(&ctx, &mut app, key("q"));
+        assert!(app.pending_keys.is_empty(), "a key that continues nothing drops the sequence");
+        // The leader menu lists them under g (callees exist for run).
+        app.graph.select(Some(ComponentId::new("rust:a::run")));
+        let bound = app.bound_actions();
+        let entries = leader_entries(&bound, &['g']);
+        assert!(entries.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'c', index } if bound[*index].action.id == "graph.callees")));
+        assert!(entries.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'h', index } if bound[*index].action.id == "graph.hint")));
+        // Rebinding from config takes effect.
+        app.config = UiConfig::with_overrides("[keymap.bind]\n\"graph.right\" = { keys = [\"w\"] }\n").unwrap();
+        app.graph.select(Some(ComponentId::new("rust:a::run")));
+        frame(&ctx, &mut app, key("w"));
+        assert_eq!(app.graph.selection.as_ref().unwrap().as_str(), "rust:a::step");
+    }
+
+    // req: P9.8
+    #[test]
+    fn inspector_summarizes_the_selection_and_links_onward() {
+        let (ctx, mut app) = app_with_graph();
+        let mut result = sample_result();
+        anchored(&mut result, "rust:a::step", "src/a.rs", 10, 20);
+        app.graph = showing(result);
+        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        let text = texts(&frame(&ctx, &mut app, vec![]));
+        for expected in ["rust:a::step", "function · Existing · Implemented", "src/a.rs:10–20", "Spec view", "Code", "calls →", "save", "← calls", "run"] {
+            assert!(text.contains(expected), "drawer shows {expected}: {text}");
+        }
+        // x closes it.
+        frame(&ctx, &mut app, key("x"));
+        assert!(!app.graph.drawer_open);
+    }
+
+    // req: P9.15
+    #[test]
+    fn graph_and_code_link_both_ways_and_follow() {
+        let (ctx, mut app) = app_with_graph();
+        let mut result = sample_result();
+        anchored(&mut result, "rust:a::step", "src/a.rs", 10, 20);
+        anchored(&mut result, "rust:a::save", "src/b.rs", 3, 5);
+        app.graph = showing(result);
+        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        frame(&ctx, &mut app, vec![]);
+        // Graph -> code: lands on the symbol's span, and the code view appears.
+        frame(&ctx, &mut app, key("g"));
+        frame(&ctx, &mut app, key("d"));
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!((app.code.current_file.as_str(), app.code.highlight), ("src/a.rs", Some((10, 20))));
+        assert!(app.slot_buffers[..app.column_count].contains(&BufferKind::Code));
+        // Code -> graph: a gutter mark selects its component.
+        app.code.select = Some(ComponentId::new("rust:a::save"));
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.graph.selection.as_ref().unwrap().as_str(), "rust:a::save");
+        // Follow mode: the code view tracks the selection.
+        app.run_shell(ShellCommand::ToggleFollow, &ctx);
+        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.code.current_file, "src/a.rs");
+        app.graph.select(Some(ComponentId::new("rust:a::save")));
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!((app.code.current_file.as_str(), app.code.highlight), ("src/b.rs", Some((3, 5))));
+        // Gutter marks come from the file's components.
+        let mut file_comp = sample_result().components[&ComponentId::new("rust:a::log")].clone();
+        file_comp.anchor = Some(CodeAnchor { language: "rust".into(), file: RepoPath::new("src/b.rs").unwrap(), symbol: "a::log".into(), syntax_kind: "function_item".into(), span: Span { start_line: 7, end_line: 9, start_byte: 70, end_byte: 90 }, content_hash: String::new() });
+        file_comp.placeholders.push(Span { start_line: 8, end_line: 8, start_byte: 80, end_byte: 87 });
+        let mut missing = arch_graph::Relation::new(arch_graph::RelationKind::Calls, ComponentId::new("rust:a::log"), ComponentId::new("rust:a::save"), arch_graph::Provenance::PLANNED);
+        missing.order = Some(0);
+        let view = arch_graph::FileView { file: "src/b.rs".into(), components: vec![(file_comp, arch_graph::Alignment::Present)], relations: vec![(missing, arch_graph::Alignment::Missing)] };
+        let marks = crate::code::gutter_marks(&view);
+        assert!(matches!(marks[&7][..], [crate::code::Mark::Starts(_, _), crate::code::Mark::MissingCall(_, _)]));
+        assert!(matches!(marks[&8][..], [crate::code::Mark::Placeholder(_)]));
     }
 }

@@ -20,6 +20,8 @@ pub enum InputMode {
     Palette,
     /// Keystrokes flow into the text field of this slot.
     Insert { slot: usize },
+    /// The view in this slot reads typed keys itself (e.g. hint labels).
+    Capture { slot: usize },
 }
 
 /// Tells a leader tap from a leader hold (holding Space pans the graph).
@@ -169,19 +171,36 @@ impl TryFrom<String> for LeaderPath {
     }
 }
 
+/// One or more chords pressed in order, written space-separated ("g c").
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct KeySeq(pub Vec<Chord>);
+
+impl TryFrom<String> for KeySeq {
+    type Error = String;
+
+    fn try_from(spec: String) -> Result<Self, String> {
+        let chords: Vec<Chord> = spec.split_whitespace().map(|c| Chord::try_from(c.to_owned())).collect::<Result<_, _>>()?;
+        if chords.is_empty() {
+            return Err("empty key sequence".into());
+        }
+        Ok(Self(chords))
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Binding {
     #[serde(default)]
     pub leader: Option<LeaderPath>,
     #[serde(default)]
-    pub keys: Vec<Chord>,
+    pub keys: Vec<KeySeq>,
 }
 
 /// Without a config: Space leader, Escape back, nothing bound.
 impl Default for KeymapConfig {
     fn default() -> Self {
         let key = |key| Chord { key: ChordKey::Key(key), ctrl: false, alt: false, shift: false };
-        Self { leader: key(Key::Space), back: key(Key::Escape), groups: BTreeMap::new(), bind: BTreeMap::new() }
+        Self { leader: key(Key::Space), back: key(Key::Escape), groups: BTreeMap::new(), bind: BTreeMap::new(), hint_chars: default_hint_chars() }
     }
 }
 
@@ -194,6 +213,13 @@ pub struct KeymapConfig {
     pub groups: BTreeMap<String, String>,
     #[serde(default)]
     pub bind: BTreeMap<String, Binding>,
+    /// Characters hint labels are made of, best first.
+    #[serde(default = "default_hint_chars")]
+    pub hint_chars: String,
+}
+
+fn default_hint_chars() -> String {
+    "asdfghjkl".to_owned()
 }
 
 /// Keys handed out to `#` entries, in order.
@@ -264,8 +290,53 @@ impl KeymapConfig {
             .into_iter()
             .zip(specs)
             .zip(leaders)
-            .map(|(((origin, action), spec), leader)| Bound { keys: spec.map(|b| b.keys.clone()).unwrap_or_default(), action, origin, leader })
+            .map(|(((origin, action), spec), leader)| Bound {
+                keys: spec.map(|b| b.keys.iter().map(|k| k.0.clone()).collect()).unwrap_or_default(),
+                action,
+                origin,
+                leader,
+            })
             .collect()
+    }
+}
+
+/// What pressing a chord means given the chords already pending.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SeqMatch {
+    /// Completes this action's sequence (index into the bound list).
+    Run(usize),
+    /// Starts or continues a longer sequence: keep waiting.
+    Pending(Chord),
+    /// Matches nothing.
+    None,
+}
+
+/// Matches the next pressed chord against every bound sequence, given what's
+/// pending. A complete sequence wins over waiting for a longer one only when
+/// no longer sequence shares the prefix (so `g c` beats a lone `g`).
+pub fn match_sequence(bound: &[Bound], pending: &[Chord], input: &egui::InputState) -> SeqMatch {
+    let mut complete: Option<usize> = None;
+    let mut longer: Option<Chord> = None;
+    for (index, b) in bound.iter().enumerate() {
+        for seq in &b.keys {
+            if seq.len() <= pending.len() || seq[..pending.len()] != *pending {
+                continue;
+            }
+            let next = &seq[pending.len()];
+            if !next.pressed(input) {
+                continue;
+            }
+            if seq.len() == pending.len() + 1 {
+                complete.get_or_insert(index);
+            } else {
+                longer.get_or_insert_with(|| next.clone());
+            }
+        }
+    }
+    match (longer, complete) {
+        (Some(chord), _) => SeqMatch::Pending(chord),
+        (None, Some(index)) => SeqMatch::Run(index),
+        (None, None) => SeqMatch::None,
     }
 }
 

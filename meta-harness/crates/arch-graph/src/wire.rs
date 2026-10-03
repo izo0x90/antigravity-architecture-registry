@@ -28,3 +28,12 @@ pub struct ComponentDetail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
 }
+
+/// The components in one file and the relations leaving them, each with how
+/// plan and code line up (for the code view's gutter).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FileView {
+    pub file: String,
+    pub components: Vec<(Component, Alignment)>,
+    pub relations: Vec<(Relation, Alignment)>,
+}

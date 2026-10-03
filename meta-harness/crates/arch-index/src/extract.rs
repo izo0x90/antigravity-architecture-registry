@@ -170,11 +170,11 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
                 });
                 child_ctx = Ctx { parent: Some(out.definitions.len() - 1), scope: None };
             }
-        } else if let Some(scope) = pack.scopes.iter().zip(&pack.spec.scopes).find_map(|(rule, spec)| node.matches(rule).then_some(spec)) {
-            if let Some(target) = field_text(&node, &scope.target_field) {
-                let implements = scope.implements_field.as_ref().and_then(|f| field_text(&node, f));
-                child_ctx = Ctx { parent: ctx.parent, scope: Some(RawScope { target, implements }) };
-            }
+        } else if let Some(scope) = pack.scopes.iter().zip(&pack.spec.scopes).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
+            && let Some(target) = field_text(&node, &scope.target_field)
+        {
+            let implements = scope.implements_field.as_ref().and_then(|f| field_text(&node, f));
+            child_ctx = Ctx { parent: ctx.parent, scope: Some(RawScope { target, implements }) };
         }
         if let Some(call) = pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
             && let Some(callee) = field_text(&node, &call.callee_field)

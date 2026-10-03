@@ -112,7 +112,9 @@ mod tests {
         assert!(calls.starts_with("View 'calls': Dynamic behavior"));
         assert!(calls.contains("run [function Existing/Implemented code] src/lib.rs:1"));
         assert!(calls.contains("app::run -calls-> app::step (code)"));
-        let structure = render_text(&g, &query(&g, catalog.get("structure").unwrap()));
+        let mut deep = catalog.get("structure").unwrap().clone();
+        deep.depth = 3;
+        let structure = render_text(&g, &query(&g, &deep));
         assert!(structure.contains("\napp [module"), "{structure}");
         assert!(structure.contains("\n  run [function"), "children indented under their container: {structure}");
         assert!(structure.contains("app::step -implements-> lib::Step"));

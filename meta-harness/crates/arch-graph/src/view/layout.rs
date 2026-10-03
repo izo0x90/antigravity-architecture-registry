@@ -14,8 +14,8 @@ pub const GAP_X: f32 = 90.0;
 pub const GAP_Y: f32 = 28.0;
 pub const PAD: f32 = 14.0;
 pub const HEADER: f32 = 30.0;
-/// Children per row inside a container before wrapping.
-pub const ROW: usize = 3;
+/// Most children per row inside a container (rows aim for a square box).
+pub const MAX_ROW: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
@@ -139,8 +139,8 @@ fn layered(view: &View) -> Layout {
     out
 }
 
-/// Containers hold their shown children (via Contains edges) in wrapped rows;
-/// top-level boxes stack vertically.
+/// Containers hold their shown children (via Contains edges) in roughly
+/// square grids; top-level boxes are packed into rows toward a wide aspect.
 fn nested(view: &View) -> Layout {
     let shown: BTreeSet<&ComponentId> = view.nodes.iter().map(|n| &n.id).collect();
     let mut children: BTreeMap<&ComponentId, Vec<&ComponentId>> = BTreeMap::new();
@@ -151,12 +151,27 @@ fn nested(view: &View) -> Layout {
             has_parent.insert(&e.target);
         }
     }
+    // Lay each top-level box out at the origin first to learn its size.
+    let tops: Vec<&ComponentId> = view.nodes.iter().map(|n| &n.id).filter(|id| !has_parent.contains(id)).collect();
+    let mut sized: Vec<(&ComponentId, (f32, f32))> = Vec::new();
+    for top in &tops {
+        let mut scratch = Layout::default();
+        sized.push((top, place(top, 0.0, 0.0, &children, &mut scratch, &mut BTreeSet::new())));
+    }
+    let area: f32 = sized.iter().map(|(_, (w, h))| (w + GAP_X) * (h + GAP_Y)).sum();
+    let widest = sized.iter().map(|(_, (w, _))| *w).fold(NODE_W, f32::max);
+    let row_width = (area.sqrt() * 1.6).max(widest);
     let mut out = Layout::default();
-    let mut y = 0.0;
-    for top in view.nodes.iter().map(|n| &n.id).filter(|id| !has_parent.contains(id)) {
-        let mut visiting = BTreeSet::new();
-        let size = place(top, 0.0, y, &children, &mut out, &mut visiting);
-        y += size.1 + GAP_Y;
+    let (mut x, mut y, mut row_h) = (0.0f32, 0.0f32, 0.0f32);
+    for (top, (w, h)) in sized {
+        if x > 0.0 && x + w > row_width {
+            x = 0.0;
+            y += row_h + GAP_Y;
+            row_h = 0.0;
+        }
+        place(top, x, y, &children, &mut out, &mut BTreeSet::new());
+        x += w + GAP_X;
+        row_h = row_h.max(h);
     }
     out
 }
@@ -177,10 +192,11 @@ fn place<'a>(
     }
     visiting.insert(id);
     out.containers.insert(id.clone());
+    let per_row = ((kids.len() as f32).sqrt().ceil() as usize).clamp(1, MAX_ROW);
     let (mut cx, mut cy) = (x + PAD, y + HEADER);
     let (mut row_h, mut max_w) = (0f32, 0f32);
     for (i, kid) in kids.iter().enumerate() {
-        if i > 0 && i % ROW == 0 {
+        if i > 0 && i % per_row == 0 {
             cx = x + PAD;
             cy += row_h + GAP_Y / 2.0;
             row_h = 0.0;
@@ -248,5 +264,19 @@ mod tests {
         }
         assert!(l.rects[&id("lib")].contains(&l.rects[&id("lib::Step")]));
         assert!(!l.rects[&id("app")].overlaps(&l.rects[&id("lib")]));
+    }
+
+    // req: P7.3
+    #[test]
+    fn nested_layout_packs_many_boxes_into_a_wide_block() {
+        use crate::view::{ViewNode, LayoutKind};
+        let nodes: Vec<ViewNode> = (0..30).map(|i| ViewNode { id: id(&format!("m{i:02}")), depth: Some(0), truncated: false, alignment: crate::Alignment::Observed }).collect();
+        let mut spec = ViewCatalog::defaults().unwrap().get("structure").unwrap().clone();
+        spec.layout = LayoutKind::Nested;
+        let view = crate::View { spec, roots: vec![], nodes, edges: vec![] };
+        let l = layout(&view);
+        no_overlaps_except_nesting(&l);
+        let (w, h) = l.rects.values().fold((0f32, 0f32), |(w, h), r| (w.max(r.x + r.w), h.max(r.y + r.h)));
+        assert!(w / h > 0.8 && w / h < 4.0, "aspect {w}x{h}");
     }
 }

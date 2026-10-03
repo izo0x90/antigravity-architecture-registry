@@ -37,6 +37,9 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     let (status, body) = http(addr, "GET", "/api/arch/at?file=src/store.rs&line=11", None).await;
     assert_eq!(status, 200);
     assert_eq!(parse(&body)["id"], "rust:sample::store::Store::save");
+    let (status, body) = http(addr, "GET", "/api/arch/file?path=src/util.rs", None).await;
+    assert_eq!(status, 200);
+    assert_eq!(parse(&body)["components"].as_array().unwrap().len(), 3);
     let (status, body) = http(addr, "GET", "/api/arch/search?q=shout", None).await;
     assert_eq!(status, 200);
     assert_eq!(parse(&body)[0]["id"], "rust:sample::util::shout");

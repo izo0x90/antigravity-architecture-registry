@@ -8,7 +8,6 @@ default-run = "meta-harness"
 members = [
     ".",
     "crates/cockpit-ui",
-    "crates/architecture-model",
     "crates/harness-contracts",
     "crates/harness-core",
     "crates/harness-acp",
