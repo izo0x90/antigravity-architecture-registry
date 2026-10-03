@@ -32,7 +32,8 @@
       "signature": { "params": [{ "name": "input", "ty": "&str" }], "returns": "Result<(), Error>" },
       "spec": {
         "logic_steps": [{ "sequence": 1, "name": "reject empty", "description": "Empty input is an error." }],
-        "invariants": [{ "name": "pure", "kind": "post_condition", "description": "No I/O." }]
+        "invariants": [{ "name": "pure", "kind": "post_condition", "description": "No I/O." }],
+        "validation": [{ "tool": "clippy", "targets": ["src/app.rs"] }]
       }
     }
   ],

@@ -37,7 +37,7 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
     }
     let calls = |from: &str, to: &str| graph.outgoing(&id(from), Some(RelationKind::Calls)).any(|r| r.target == id(to));
     assert!(calls("arch_service::service::ArchitectureService::validate", "arch_service::checks::check_plan"));
-    assert!(calls("arch_service::service::ArchitectureService::ingest", "arch_index::extract::extract_file"));
+    assert!(calls("arch_service::service::ArchitectureService::index_scope", "arch_index::extract::extract_file"));
     assert!(calls("arch_index::ingest", "arch_index::resolve::resolve"));
     // The Python scripts come in through the Python pack.
     assert!(graph.component(&ComponentId::for_symbol("python", "scripts.req_status")).is_some());

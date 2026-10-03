@@ -3,22 +3,24 @@
 //! changes only through ingestion. Every change is announced to listeners.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component as PathPart, Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use arch_graph::view::{layout, query, render_text};
 use arch_graph::{
     Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
-    Severity, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult, schema::Dsl,
+    RepoPath, Severity, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult, schema::Dsl,
 };
 use arch_index::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk};
 use serde::{Deserialize, Serialize};
 
 use crate::contract::{ContractSlice, slice};
 use crate::ops::{PlanOp, apply};
+use crate::review::{ReviewProvider, ReviewerCatalog, ReviewsReport, Subject};
 use crate::store::{CodeIndexStore, PlanRepository};
-use crate::{ServiceError, checks, verify};
+use crate::tools::{ProcessRunner, ToolCatalog, ToolRunner, ToolsReport};
+use crate::{ServiceError, chain, checks, review, tools, verify};
 
 /// Who is asking. Approvals are for users only.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +41,9 @@ pub struct IngestReport {
     pub ambiguous: usize,
     pub external: usize,
     pub millis: u64,
+    /// Files whose content changed (parsed anew or removed).
+    #[serde(default)]
+    pub changed: Vec<RepoPath>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -47,6 +52,23 @@ pub struct Verification {
     /// The stage it moved to, when verification passed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub advanced_to: Option<Stage>,
+}
+
+/// A component re-verified because code it depends on changed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Reverified {
+    pub plan: PlanId,
+    pub component: ComponentId,
+    /// The stage it was re-verified for (its current one).
+    pub stage: Stage,
+    pub report: Report,
+}
+
+/// What a refresh read and which components it re-verified.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Refresh {
+    pub ingest: IngestReport,
+    pub reverified: Vec<Reverified>,
 }
 
 #[derive(Default)]
@@ -69,6 +91,10 @@ pub struct ArchitectureService {
     index: Box<dyn CodeIndexStore>,
     observed: RwLock<Observed>,
     listeners: RwLock<Vec<Listener>>,
+    tools: ToolCatalog,
+    runner: Arc<dyn ToolRunner>,
+    reviewers: ReviewerCatalog,
+    review_provider: Option<Arc<dyn ReviewProvider>>,
 }
 
 fn now_rfc3339() -> String {
@@ -103,6 +129,10 @@ impl ArchitectureService {
             index,
             observed: RwLock::new(Observed::default()),
             listeners: RwLock::new(Vec::new()),
+            tools: ToolCatalog::default(),
+            runner: Arc::new(ProcessRunner),
+            reviewers: ReviewerCatalog::defaults()?,
+            review_provider: None,
         };
         service.rebuild_observed()?;
         Ok(service)
@@ -122,6 +152,28 @@ impl ArchitectureService {
     pub fn with_rules(mut self, rules: CodeRules) -> Self {
         self.rules = rules;
         self
+    }
+
+    /// The project's validation tools and how they're run.
+    pub fn with_tools(mut self, tools: ToolCatalog, runner: Arc<dyn ToolRunner>) -> Self {
+        self.tools = tools;
+        self.runner = runner;
+        self
+    }
+
+    /// The reviewers and the provider that runs session reviews.
+    pub fn with_reviewers(mut self, reviewers: ReviewerCatalog, provider: Option<Arc<dyn ReviewProvider>>) -> Self {
+        self.reviewers = reviewers;
+        self.review_provider = provider;
+        self
+    }
+
+    pub fn tools(&self) -> &ToolCatalog {
+        &self.tools
+    }
+
+    pub fn reviewers(&self) -> &ReviewerCatalog {
+        &self.reviewers
     }
 
     pub fn root(&self) -> &Path {
@@ -160,9 +212,34 @@ impl ArchitectureService {
     /// Re-reads `scope` (a path inside the repo): parses changed files, drops
     /// deleted ones, then re-resolves the whole graph.
     pub fn ingest(&self, scope: &Path) -> Result<IngestReport, ServiceError> {
+        self.ingest_scopes(&[scope.to_path_buf()])
+    }
+
+    fn ingest_scopes(&self, scopes: &[PathBuf]) -> Result<IngestReport, ServiceError> {
         let started = Instant::now();
-        let files = walk(&self.root, scope, &self.packs).map_err(|e| ServiceError::Index(e.to_string()))?;
-        let mut report = IngestReport { files: files.len(), ..IngestReport::default() };
+        let mut report = IngestReport::default();
+        for scope in scopes {
+            self.index_scope(scope, &mut report)?;
+        }
+        self.rebuild_observed()?;
+        let observed = self.observed.read().map_err(ServiceError::poisoned)?;
+        (report.components, report.relations) = observed.graph.len();
+        report.ambiguous = observed.ambiguous.len();
+        report.external = observed.external.len();
+        report.millis = started.elapsed().as_millis() as u64;
+        drop(observed);
+        self.emit(ArchEvent::Changed { reason: ChangeReason::Ingested, plans: Vec::new(), components: Vec::new() });
+        Ok(report)
+    }
+
+    /// Brings the index up to date for one scope (a scope that no longer
+    /// exists just drops what was indexed under it).
+    fn index_scope(&self, scope: &Path, report: &mut IngestReport) -> Result<(), ServiceError> {
+        let files = match scope.exists() {
+            true => walk(&self.root, scope, &self.packs).map_err(|e| ServiceError::Index(e.to_string()))?,
+            false => Vec::new(),
+        };
+        report.files += files.len();
         let mut seen = BTreeSet::new();
         for file in &files {
             let Some(pack) = self.packs.by_name(&file.language) else { continue };
@@ -177,6 +254,7 @@ impl ArchitectureService {
             }
             self.index.put(&extract_file(pack, file.path.clone(), file.module.clone(), &content))?;
             report.parsed += 1;
+            report.changed.push(file.path.clone());
         }
         // Files under the scope that are gone (or now ignored) leave the index.
         let prefix = scope.strip_prefix(&self.root).unwrap_or(scope).to_string_lossy().trim_start_matches("./").trim_start_matches('.').to_owned();
@@ -185,17 +263,66 @@ impl ArchitectureService {
             if under && !seen.contains(&extract.file) {
                 self.index.remove(&extract.file)?;
                 report.removed += 1;
+                report.changed.push(extract.file.clone());
             }
         }
-        self.rebuild_observed()?;
-        let observed = self.observed.read().map_err(ServiceError::poisoned)?;
-        (report.components, report.relations) = observed.graph.len();
-        report.ambiguous = observed.ambiguous.len();
-        report.external = observed.external.len();
-        report.millis = started.elapsed().as_millis() as u64;
-        drop(observed);
-        self.emit(ArchEvent::Changed { reason: ChangeReason::Ingested, plans: Vec::new(), components: Vec::new() });
-        Ok(report)
+        Ok(())
+    }
+
+    /// Reacts to changed paths (from a file watcher, say): re-reads the ones
+    /// that are source files the walk wouldn't ignore, then re-verifies only
+    /// the planned components (already in the code) that the changed files
+    /// affect: their own file, or the file of something they're planned to
+    /// call. Re-verification checks the code (location, calls, signature,
+    /// call chain); tools and reviewers run on explicit verification only.
+    pub fn refresh(&self, paths: &[PathBuf]) -> Result<Refresh, ServiceError> {
+        let scopes: Vec<PathBuf> = paths.iter().filter(|p| self.watches(p)).cloned().collect();
+        if scopes.is_empty() {
+            return Ok(Refresh::default());
+        }
+        let plans = self.plans()?;
+        let before: Vec<Graph> = {
+            let observed = self.observed()?;
+            plans.iter().map(|p| Graph::merge(observed.clone(), std::slice::from_ref(p))).collect()
+        };
+        let ingest = self.ingest_scopes(&scopes)?;
+        let changed: BTreeSet<&str> = ingest.changed.iter().map(RepoPath::as_str).collect();
+        let observed = self.observed()?;
+        let mut reverified = Vec::new();
+        for (plan, before) in plans.iter().zip(&before) {
+            let after = Graph::merge(observed.clone(), std::slice::from_ref(plan));
+            for id in affected(plan, before, &after, &changed) {
+                let Some(planned) = plan.component(&id) else { continue };
+                let report = self.check(plan, planned, &observed, planned.stage, false)?;
+                self.emit_validated(&plan.id, Some(&id), &report);
+                reverified.push(Reverified { plan: plan.id.clone(), component: id, stage: planned.stage, report });
+            }
+        }
+        Ok(Refresh { ingest, reverified })
+    }
+
+    /// Whether a changed path is something ingestion reads: a source file a
+    /// pack handles (or a vanished one), inside the repo, not hidden and not
+    /// git-ignored.
+    fn watches(&self, path: &Path) -> bool {
+        let Ok(relative) = path.strip_prefix(&self.root) else { return false };
+        if relative.components().any(|c| matches!(c, PathPart::Normal(n) if n.to_string_lossy().starts_with('.'))) {
+            return false;
+        }
+        if path.is_dir() || self.packs.for_path(path).is_none() {
+            return false;
+        }
+        // Every .gitignore from the root down to the file's directory.
+        let mut dir = self.root.clone();
+        let mut dirs = vec![dir.clone()];
+        for part in relative.parent().map(|p| p.components().collect::<Vec<_>>()).unwrap_or_default() {
+            dir.push(part);
+            dirs.push(dir.clone());
+        }
+        !dirs.iter().any(|d| {
+            let file = d.join(".gitignore");
+            file.is_file() && ignore::gitignore::Gitignore::new(&file).0.matched_path_or_any_parents(path, false).is_ignore()
+        })
     }
 
     pub fn observed(&self) -> Result<Graph, ServiceError> {
@@ -332,23 +459,26 @@ impl ArchitectureService {
         Ok(slice(&plan, planned, &graph))
     }
 
-    /// Re-reads the component's file, verifies it for `goal` (Skeleton or
-    /// Implemented) and, when clean, moves it there.
+    /// Re-reads the component's file (and its call chain's), verifies it for
+    /// `goal` (Skeleton or Implemented) and, when clean, moves it there. The
+    /// whole planned call chain through it is re-checked; Implemented also
+    /// runs its validation tools and reviewers. Nothing else moves a
+    /// component to Implemented.
     pub fn verify(&self, plan_id: &PlanId, id: &ComponentId, goal: Stage) -> Result<Verification, ServiceError> {
         if !matches!(goal, Stage::Skeleton | Stage::Implemented) {
             return Err(ServiceError::InvalidOp(format!("verification targets Skeleton or Implemented, not {goal:?}")));
         }
         let mut plan = self.plan(plan_id)?;
         let planned = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?.clone();
-        if let Some(file) = planned.file() {
-            let path = self.root.join(file.as_str());
-            if path.exists() {
-                self.ingest(&path)?;
-            }
+        let merged = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let mut files: BTreeSet<String> = chain::caller_files(&plan, id, &merged);
+        files.extend(planned.file().map(|f| f.as_str().to_owned()));
+        let scopes: Vec<PathBuf> = files.iter().map(|f| self.root.join(f)).filter(|p| p.exists()).collect();
+        if !scopes.is_empty() {
+            self.ingest_scopes(&scopes)?;
         }
         let observed = self.observed()?;
-        let mut report = verify::verify_component(&plan, &planned, &observed, goal);
-        report.findings.extend(self.rules.check(observed.component(id), &observed, &self.root, &self.packs, &self.types));
+        let mut report = self.check(&plan, &planned, &observed, goal, goal == Stage::Implemented)?;
         let mut advanced_to = None;
         if !report.has_errors() {
             if planned.stage == goal {
@@ -370,6 +500,76 @@ impl ArchitectureService {
         }
         self.emit_validated(plan_id, Some(id), &report);
         Ok(Verification { report, advanced_to })
+    }
+
+    /// The code checks for one planned component against `observed`; `deep`
+    /// adds its validation tools and reviewers (once the code checks pass).
+    fn check(&self, plan: &Plan, planned: &Component, observed: &Graph, goal: Stage, deep: bool) -> Result<Report, ServiceError> {
+        let mut report = verify::verify_component(plan, planned, observed, goal);
+        report.findings.extend(self.rules.check(observed.component(&planned.id), observed, &self.root, &self.packs, &self.types));
+        report.extend(chain::recheck(plan, &planned.id, observed));
+        if deep && !report.has_errors() {
+            let merged = Graph::merge(observed.clone(), std::slice::from_ref(plan));
+            let component = merged.component(&planned.id).unwrap_or(planned);
+            report.extend(self.tools_for(component).report);
+            report.extend(self.review_with(plan, component, &merged)?.report);
+        }
+        Ok(report.sorted())
+    }
+
+    fn tools_for(&self, component: &Component) -> ToolsReport {
+        let (invocations, mut problems) = tools::invocations(&self.tools, &self.types, component, &self.root);
+        let mut out = tools::run(invocations, self.runner.as_ref(), &self.root);
+        problems.extend(out.report);
+        out.report = problems;
+        out
+    }
+
+    fn review_with(&self, plan: &Plan, component: &Component, merged: &Graph) -> Result<ReviewsReport, ServiceError> {
+        let contract = plan.component(&component.id).map(|p| slice(plan, p, merged).to_markdown()).unwrap_or_default();
+        let code = self.component(&component.id, Some(&plan.id))?.code;
+        let subject = Subject { plan, component, observed: merged, contract, code };
+        Ok(review::review(&self.reviewers, &self.types, self.review_provider.as_deref(), &subject))
+    }
+
+    /// Runs the validation tools for one planned component, or every planned
+    /// component that's in the code.
+    pub fn run_tools(&self, plan_id: &PlanId, only: Option<&ComponentId>) -> Result<ToolsReport, ServiceError> {
+        let plan = self.plan(plan_id)?;
+        let merged = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let mut out = ToolsReport::default();
+        for planned in plan.components.iter().filter(|c| only.is_none_or(|id| &c.id == id)) {
+            let component = merged.component(&planned.id).unwrap_or(planned);
+            if component.anchor.is_none() {
+                if only.is_some() {
+                    return Err(ServiceError::InvalidOp(format!("{} isn't in the code yet; tools run on code", planned.id)));
+                }
+                continue;
+            }
+            let one = self.tools_for(component);
+            out.runs.extend(one.runs);
+            out.report.extend(one.report);
+        }
+        if let Some(id) = only
+            && plan.component(id).is_none()
+        {
+            return Err(ServiceError::NotFound(format!("{id} in plan {plan_id}")));
+        }
+        out.report = out.report.sorted();
+        self.emit_validated(plan_id, only, &out.report);
+        Ok(out)
+    }
+
+    /// Runs the reviewers that apply to one planned component.
+    pub fn review(&self, plan_id: &PlanId, id: &ComponentId) -> Result<ReviewsReport, ServiceError> {
+        let plan = self.plan(plan_id)?;
+        let planned = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?;
+        let merged = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let component = merged.component(id).unwrap_or(planned);
+        let mut out = self.review_with(&plan, component, &merged)?;
+        out.report = out.report.sorted();
+        self.emit_validated(plan_id, Some(id), &out.report);
+        Ok(out)
     }
 
     pub fn view(&self, spec: &ViewSpec, plan: Option<&PlanId>) -> Result<ViewResult, ServiceError> {
@@ -474,4 +674,20 @@ impl ArchitectureService {
         self.emit(ArchEvent::ViewRequested { request: Box::new(request), by });
         Ok(())
     }
+}
+
+/// Planned components already in the code (Skeleton or Implemented) that a
+/// change to `changed` files affects: they live in one (before or after the
+/// change), or something they're planned to call does.
+pub fn affected(plan: &Plan, before: &Graph, after: &Graph, changed: &BTreeSet<&str>) -> Vec<ComponentId> {
+    let touches = |id: &ComponentId| {
+        let files = [before.component(id).and_then(|c| c.file()), after.component(id).and_then(|c| c.file()), plan.component(id).and_then(|c| c.file())];
+        files.into_iter().flatten().any(|f| changed.contains(f.as_str()))
+    };
+    plan.components
+        .iter()
+        .filter(|c| c.stage.expects_code())
+        .filter(|c| touches(&c.id) || plan.relations.iter().any(|r| r.kind == arch_graph::RelationKind::Calls && r.source == c.id && touches(&r.target)))
+        .map(|c| c.id.clone())
+        .collect()
 }

@@ -55,6 +55,9 @@ pub fn routes() -> Router<AppState> {
         .route("/api/arch/at", get(component_at))
         .route("/api/arch/file", get(file_view))
         .route("/api/arch/ingest", post(ingest))
+        .route("/api/arch/refresh", post(refresh))
+        .route("/api/arch/tools", get(tools))
+        .route("/api/arch/reviewers", get(reviewers))
         .route("/api/arch/ambiguous", get(ambiguous))
         .route("/api/arch/navigate", post(navigate))
         .route("/api/arch/plans", get(list_plans).post(create_plan))
@@ -65,6 +68,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/arch/plans/{plan}/components/{id}/contract", get(contract))
         .route("/api/arch/plans/{plan}/components/{id}/verify", post(verify))
         .route("/api/arch/plans/{plan}/components/{id}/approve", post(approve))
+        .route("/api/arch/plans/{plan}/tools", post(run_tools))
+        .route("/api/arch/plans/{plan}/components/{id}/review", post(review))
 }
 
 fn plan_id(raw: &str) -> Result<PlanId, ArchError> {
@@ -288,4 +293,46 @@ async fn approve(State(state): State<AppState>, Path((plan, id)): Path<(String, 
     }
     let actor = Actor::User { name: body.by };
     Ok(Json(blocking(&state.arch, move |a| a.approve(&plan, &ComponentId::new(id), body.to, &actor)).await?))
+}
+
+#[derive(Deserialize)]
+struct RefreshBody {
+    /// Repo-relative paths that changed.
+    paths: Vec<String>,
+}
+
+/// Re-reads changed files and re-verifies the planned components they affect.
+async fn refresh(State(state): State<AppState>, Json(body): Json<RefreshBody>) -> ArchResult<arch_service::Refresh> {
+    let paths = body
+        .paths
+        .iter()
+        .map(|p| arch_graph::RepoPath::new(p).map(|p| state.arch.root().join(p.as_str())).map_err(|e| ArchError(ServiceError::InvalidOp(e.to_string()))))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json(blocking(&state.arch, move |a| a.refresh(&paths)).await?))
+}
+
+async fn tools(State(state): State<AppState>) -> Json<arch_service::ToolCatalog> {
+    Json(state.arch.tools().clone())
+}
+
+async fn reviewers(State(state): State<AppState>) -> Json<arch_service::ReviewerCatalog> {
+    Json(state.arch.reviewers().clone())
+}
+
+#[derive(Deserialize, Default)]
+struct ToolsBody {
+    /// One component; every planned component in the code when absent.
+    #[serde(default)]
+    component: Option<String>,
+}
+
+async fn run_tools(State(state): State<AppState>, Path(plan): Path<String>, body: Option<Json<ToolsBody>>) -> ArchResult<arch_service::ToolsReport> {
+    let plan = plan_id(&plan)?;
+    let only = body.and_then(|b| b.0.component).map(ComponentId::new);
+    Ok(Json(blocking(&state.arch, move |a| a.run_tools(&plan, only.as_ref())).await?))
+}
+
+async fn review(State(state): State<AppState>, Path((plan, id)): Path<(String, String)>) -> ArchResult<arch_service::ReviewsReport> {
+    let plan = plan_id(&plan)?;
+    Ok(Json(blocking(&state.arch, move |a| a.review(&plan, &ComponentId::new(id))).await?))
 }

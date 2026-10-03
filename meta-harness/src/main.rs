@@ -5,7 +5,7 @@ use harness_contracts::{McpServer, McpTransport};
 use harness_core::{EventHub, InstanceRegistry, ProviderDriver, SessionManager};
 use arch_graph::{TypeSystem, ViewCatalog};
 use arch_index::{CodeRules, PackSet};
-use arch_service::{ArchitectureService, FsIndex, FsPlans};
+use arch_service::{ArchitectureService, FsIndex, FsPlans, ProcessRunner, ReviewerCatalog, ToolCatalog};
 use meta_harness::mcp::{McpServerState, McpService};
 use meta_harness::server::{AppState, create_router};
 use provider_antigravity::AntigravityDriver;
@@ -40,9 +40,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // First read of the code in the background; later reads are incremental.
     {
         let arch = arch.clone();
-        tokio::task::spawn_blocking(move || match arch.ingest(arch.root()) {
-            Ok(r) => info!("Ingested {} files ({} parsed) in {} ms: {} components", r.files, r.parsed, r.millis, r.components),
-            Err(e) => tracing::warn!("Initial ingest failed: {e}"),
+        tokio::task::spawn_blocking(move || {
+            match arch.ingest(arch.root()) {
+                Ok(r) => info!("Ingested {} files ({} parsed) in {} ms: {} components", r.files, r.parsed, r.millis, r.components),
+                Err(e) => tracing::warn!("Initial ingest failed: {e}"),
+            }
+            // Then follow the code: NAH_WATCH_MS is the quiet time before a
+            // burst of changes is read (0 turns watching off).
+            let quiet = std::env::var("NAH_WATCH_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(300);
+            if quiet > 0
+                && let Err(e) = meta_harness::watch::watch(arch.clone(), std::time::Duration::from_millis(quiet))
+            {
+                tracing::warn!("Not watching the repo for changes: {e}");
+            }
         });
     }
     let instances = Arc::new(InstanceRegistry::new(built_in_drivers(), hub.clone()));
@@ -64,7 +74,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// The architecture service over the repo at `NAH_REPO_ROOT` (default: the
 /// working directory). Projects can add language packs (`.nah/packs/*.toml`),
-/// types (`.nah/types.toml`) and views (`.nah/views.toml`).
+/// types (`.nah/types.toml`), views (`.nah/views.toml`), validation tools
+/// (`.nah/tools.toml`) and reviewers (`.nah/reviewers.toml`).
 fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>> {
     let root = std::env::var("NAH_REPO_ROOT").map(PathBuf::from).or_else(|_| std::env::current_dir())?;
     let root = root.canonicalize()?;
@@ -85,8 +96,28 @@ fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>
     if nah.join("rules").is_dir() {
         rules.load_dir(&nah.join("rules"), &packs, &types)?;
     }
-    info!("Architecture: {} ({} language packs, {} code rules)", root.display(), packs.packs.len(), rules.rules.len());
-    Ok(ArchitectureService::open(&root, packs, types, views, Box::new(FsPlans::new(&root)?), Box::new(FsIndex::new(&root)?))?.with_rules(rules))
+    let mut tools = ToolCatalog::default();
+    if let Ok(text) = std::fs::read_to_string(nah.join("tools.toml")) {
+        tools.extend_with(ToolCatalog::from_toml(&text)?);
+    }
+    let mut reviewers = ReviewerCatalog::defaults()?;
+    if let Ok(text) = std::fs::read_to_string(nah.join("reviewers.toml")) {
+        reviewers.extend_with(ReviewerCatalog::from_toml(&text)?);
+    }
+    info!(
+        "Architecture: {} ({} language packs, {} code rules, {} tools, {} reviewers)",
+        root.display(),
+        packs.packs.len(),
+        rules.rules.len(),
+        tools.tools.len(),
+        reviewers.reviewers.len()
+    );
+    // No review session provider here: session reviewers (none by default)
+    // report that they couldn't run.
+    Ok(ArchitectureService::open(&root, packs, types, views, Box::new(FsPlans::new(&root)?), Box::new(FsIndex::new(&root)?))?
+        .with_rules(rules)
+        .with_tools(tools, Arc::new(ProcessRunner))
+        .with_reviewers(reviewers, None))
 }
 
 async fn shutdown_signal() {

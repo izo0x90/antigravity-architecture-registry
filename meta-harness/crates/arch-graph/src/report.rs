@@ -45,6 +45,10 @@ pub enum FindingCode {
     ForbiddenPattern,
     /// A code rule's required pattern is missing from the component.
     MissingRequiredPattern,
+    ToolFailed,
+    UnknownTool,
+    ReviewFinding,
+    ReviewerUnavailable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

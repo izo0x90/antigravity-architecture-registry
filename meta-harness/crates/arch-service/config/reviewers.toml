@@ -1,0 +1,36 @@
+# Default reviewers, run on a component when it is verified as implemented.
+# Projects add or replace reviewers by name in .nah/reviewers.toml.
+#
+#   category    what kind of review (faithfulness, anti_patterns, logic, ...)
+#   kind        rule (checks below, run by NAH) or session (a reviewing agent)
+#   applies_to  types reviewed, by lineage ([] = every type)
+#   blocking    rule reviewers: findings block Implemented;
+#               session reviewers: failing to run blocks (their own findings
+#               say whether they block)
+#   rules       rule reviewers: max_lines {limit}, max_calls {limit},
+#               unplanned_calls, no_placeholders
+#   brief       session reviewers: what the reviewing agent looks for
+#
+# A session reviewer looks like:
+#   [reviewers.logic]
+#   category = "logic"
+#   kind = "session"
+#   applies_to = ["function"]
+#   blocking = true
+#   brief = "Check each logic step and invariant in the contract against the code."
+
+[reviewers.scope]
+category = "faithfulness"
+description = "New code does what the plan says and no more."
+kind = "rule"
+applies_to = ["function"]
+blocking = false
+rules = [{ rule = "unplanned_calls" }]
+
+[reviewers.size]
+category = "anti_patterns"
+description = "Functions small enough to review and test."
+kind = "rule"
+applies_to = ["function"]
+blocking = false
+rules = [{ rule = "max_lines", limit = 80 }, { rule = "max_calls", limit = 12 }]
