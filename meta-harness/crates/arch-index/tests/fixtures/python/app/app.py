@@ -10,6 +10,9 @@ class Greeter(Base):
     def format(self, text: str, loud=False) -> str:
         raise NotImplementedError
 
+    def describe(self) -> str:
+        return super().describe()
+
 
 def main():
     data = load()

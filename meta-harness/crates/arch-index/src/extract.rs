@@ -102,6 +102,9 @@ pub struct FileExtract {
     pub pack_fingerprint: String,
     /// The file's module symbol (from its path and package).
     pub module: String,
+    /// The syntax kind of the file's root node.
+    #[serde(default)]
+    pub root_kind: String,
     pub lines: u32,
     pub bytes: u32,
     pub definitions: Vec<RawDef>,
@@ -181,7 +184,7 @@ fn as_call(pack: &Pack, node: &AstNode<'_>) -> Option<(String, Span)> {
 /// A plain local name as written in an argument (`&out`, `mut x` -> name).
 fn local_name<'a>(pack: &Pack, text: &'a str) -> Option<&'a str> {
     let name = pack.spec.language.strip_references(text);
-    (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')).then_some(name)
+    (!name.is_empty() && name.chars().all(|c| pack.spec.language.is_identifier_char(c))).then_some(name)
 }
 
 /// Whether `inner` sits directly in `def` (no other definition in between).
@@ -197,6 +200,12 @@ fn directly_in(pack: &Pack, inner: &AstNode<'_>, def: &AstNode<'_>) -> bool {
     false
 }
 fn signature(pack: &Pack, def: &crate::pack::DefinitionSpec, node: &AstNode<'_>) -> Option<Signature> {
+    // Parameters and return type may live on a child (`const f = (x) => ...`).
+    let holder = match &def.signature_field {
+        Some(field) => node.field(field)?,
+        None => node.clone(),
+    };
+    let node = &holder;
     let params_node = def.params_field.as_ref().and_then(|f| node.field(f));
     let returns = def.return_field.as_ref().and_then(|f| type_text(pack, node, f));
     if params_node.is_none() && returns.is_none() {
@@ -215,7 +224,7 @@ fn signature(pack: &Pack, def: &crate::pack::DefinitionSpec, node: &AstNode<'_>)
             let Some(name) = name else { continue };
             let ty = spec.type_field.as_ref().and_then(|f| type_text(pack, &child, f));
             let optional = spec.optional || spec.default_field.as_ref().is_some_and(|f| child.field(f).is_some());
-            params.push(Param { name, ty, optional });
+            params.push(Param { name, ty, optional, variadic: spec.variadic });
         }
     }
     Some(Signature { params, returns, qualifiers: qualifiers(pack, node) })
@@ -253,6 +262,9 @@ struct Ctx {
     deferred: bool,
     /// Inside code that never runs.
     dead: bool,
+    /// The node that is the enclosing definition's own body (an arrow
+    /// function bound to a name): not a deferred scope.
+    own_body: Option<usize>,
 }
 
 /// Whether `node` never runs: it matches a dead-code rule whose condition,
@@ -287,6 +299,7 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
         content_hash: content_hash(content),
         pack_fingerprint: pack.fingerprint.clone(),
         module,
+        root_kind: root.root().kind().into_owned(),
         lines: content.lines().count().max(1) as u32,
         bytes: content.len() as u32,
         definitions: Vec::new(),
@@ -300,12 +313,12 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
     let lang = &pack.spec.language;
     // Local names bound to a call's output (or a declared type), per enclosing definition.
     let mut bound: std::collections::HashMap<(Option<usize>, String), Bound> = std::collections::HashMap::new();
-    let mut stack: Vec<(AstNode<'_>, Ctx)> = vec![(root.root(), Ctx { parent: None, scope: None, deferred: false, dead: false })];
+    let mut stack: Vec<(AstNode<'_>, Ctx)> = vec![(root.root(), Ctx { parent: None, scope: None, deferred: false, dead: false, own_body: None })];
     while let Some((node, mut ctx)) = stack.pop() {
         if !ctx.dead && dead(pack, &node) {
             ctx.dead = true;
         }
-        if lang.deferred_scopes.iter().any(|k| *k == node.kind()) {
+        if lang.deferred_scopes.iter().any(|k| *k == node.kind()) && ctx.own_body != Some(node.node_id()) {
             ctx.deferred = true;
         }
         let mut child_ctx = ctx.clone();
@@ -315,7 +328,7 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
                     .bases_field
                     .as_ref()
                     .and_then(|f| node.field(f))
-                    .map(|b| b.children().filter(|c| c.is_named() && !c.kind().contains("comment")).map(|c| c.text().trim().to_owned()).collect())
+                    .map(|b| b.children().filter(|c| c.is_named() && !lang.ignored(&c.kind())).map(|c| c.text().trim().to_owned()).collect())
                     .unwrap_or_default();
                 if let Some(rule) = &pack.bases[di] {
                     bases.extend(node.find_all(rule).map(|m| m.get_node().clone()).filter(|m| directly_in(pack, m, &node)).map(|m| m.text().trim().to_owned()));
@@ -345,7 +358,8 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
                     self_name,
                 });
                 // A definition is its own caller: not deferred by what encloses it.
-                child_ctx = Ctx { parent: Some(out.definitions.len() - 1), scope: None, deferred: false, dead: ctx.dead };
+                let own_body = def.signature_field.as_ref().and_then(|f| node.field(f)).map(|b| b.node_id());
+                child_ctx = Ctx { parent: Some(out.definitions.len() - 1), scope: None, deferred: false, dead: ctx.dead, own_body };
             }
         } else if let Some(scope) = pack.scopes.iter().zip(&pack.spec.scopes).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
             && let Some(target) = field_text(&node, &scope.target_field)
@@ -371,7 +385,7 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
         {
             let mut args = Vec::new();
             if let Some(list) = call.args_field.as_ref().and_then(|f| node.field(f)) {
-                for (position, arg) in list.named_children().filter(|c| !c.kind().contains("comment")).enumerate() {
+                for (position, arg) in list.named_children().filter(|c| !lang.ignored(&c.kind())).enumerate() {
                     let producer =
                         as_call(pack, &arg).or_else(|| local_name(pack, &arg.text()).and_then(|n| bound.get(&(ctx.parent, n.to_owned())).and_then(|b| b.producer.clone())));
                     if let Some((producer, producer_span)) = producer {

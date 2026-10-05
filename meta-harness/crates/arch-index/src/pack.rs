@@ -18,6 +18,7 @@ const BUILT_IN: &[(&str, &str)] = &[
 ];
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LanguageSpec {
     pub name: String,
     /// ast-grep language id (e.g. "rust", "python", "typescript").
@@ -104,9 +105,52 @@ pub struct LanguageSpec {
     pub qualifier_tokens: Vec<String>,
     #[serde(default)]
     pub qualifier_containers: Vec<String>,
+    /// The component type a whole file (module) maps to.
+    pub module_type: String,
+    /// Characters besides letters and digits that identifiers may contain.
+    pub identifier_chars: String,
+    /// Syntax kinds that never mean anything here (comments).
+    #[serde(default)]
+    pub ignored_kinds: Vec<String>,
+    /// Words in an import statement that aren't names (`use`, `from`, `import`).
+    #[serde(default)]
+    pub import_keywords: Vec<String>,
+    /// Receivers meaning "the base of the enclosing type" (`super()`, `super`).
+    #[serde(default)]
+    pub super_receivers: Vec<String>,
+    /// How a written type says "or nothing": union separators and null types
+    /// (`string | null`, `str | None`).
+    #[serde(default)]
+    pub union_separators: Vec<String>,
+    #[serde(default)]
+    pub null_types: Vec<String>,
+    /// The same language under other extensions with another grammar
+    /// (`.tsx`): the same rules, compiled for that grammar.
+    #[serde(default)]
+    pub dialects: Vec<DialectSpec>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DialectSpec {
+    pub ast_grep: String,
+    pub extensions: Vec<String>,
 }
 
 impl LanguageSpec {
+    pub fn is_identifier_char(&self, c: char) -> bool {
+        c.is_alphanumeric() || self.identifier_chars.contains(c)
+    }
+
+    /// The identifier words in `text`, in order.
+    pub fn words<'a>(&self, text: &'a str) -> Vec<&'a str> {
+        text.split(|c: char| !self.is_identifier_char(c)).filter(|w| !w.is_empty()).collect()
+    }
+
+    pub fn ignored(&self, kind: &str) -> bool {
+        self.ignored_kinds.iter().any(|k| k == kind)
+    }
+
     pub fn is_path_separator(&self, sep: &str) -> bool {
         (self.path_separators.is_empty() && self.member_separators.is_empty()) || self.path_separators.iter().any(|s| s == sep)
     }
@@ -164,6 +208,7 @@ impl LanguageSpec {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DefinitionSpec {
     /// The component type it maps to (generic or specialized).
     #[serde(rename = "type")]
@@ -174,6 +219,10 @@ pub struct DefinitionSpec {
     pub params_field: Option<String>,
     #[serde(default)]
     pub return_field: Option<String>,
+    /// Parameters and return type live on this child (`const f = (x) => ...`:
+    /// the arrow function in `value`).
+    #[serde(default)]
+    pub signature_field: Option<String>,
     /// Base classes/interfaces it extends (each named child becomes Implements).
     #[serde(default)]
     pub bases_field: Option<String>,
@@ -195,6 +244,7 @@ pub struct DefinitionSpec {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScopeSpec {
     pub rule: toml::Value,
     /// Definitions inside belong to the component named by this field.
@@ -205,6 +255,7 @@ pub struct ScopeSpec {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ParamSpec {
     /// Syntax kind of a parameter node inside the params field.
     pub kind: String,
@@ -218,12 +269,16 @@ pub struct ParamSpec {
     /// Parameters of this kind may be left out by callers.
     #[serde(default)]
     pub optional: bool,
+    /// Parameters of this kind take any number of arguments (`*args`).
+    #[serde(default)]
+    pub variadic: bool,
     /// A parameter with this field (a default value) may be left out.
     #[serde(default)]
     pub default_field: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CallSpec {
     pub rule: toml::Value,
     pub callee_field: String,
@@ -235,6 +290,7 @@ pub struct CallSpec {
 /// A local name bound to a value (`let x = f()`), so `g(x)` shows f's output
 /// flowing into g.
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BindingSpec {
     pub rule: toml::Value,
     pub name_field: String,
@@ -247,6 +303,7 @@ pub struct BindingSpec {
 /// A local name for something imported (`import helpers as h`,
 /// `use x::shout as yell`).
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AliasSpec {
     pub rule: toml::Value,
     /// The alias: this field, or the first child of `alias_child_kind`.
@@ -454,11 +511,13 @@ fn split_top<'a>(s: &'a str, ops: &[String]) -> Vec<&'a str> {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuleSpec {
     pub rule: toml::Value,
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackSpec {
     pub language: LanguageSpec,
     #[serde(default)]
@@ -511,6 +570,8 @@ pub struct Pack {
     pub package_name_regex: Option<regex::Regex>,
     /// Hash of the pack's text: extracts made with another version are stale.
     pub fingerprint: String,
+    /// The same pack compiled for its other grammars (by extension).
+    pub dialects: Vec<Pack>,
 }
 
 pub struct CompiledMacros {
@@ -535,6 +596,19 @@ pub(crate) fn compile(lang: SupportLang, rule: &toml::Value, what: &str) -> Resu
 impl Pack {
     pub fn from_toml(text: &str) -> Result<Self, IndexError> {
         let spec: PackSpec = toml::from_str(text).map_err(|e| IndexError::Pack(e.to_string()))?;
+        let fingerprint = crate::content_hash(text);
+        let mut base = Self::compile(spec.clone(), &fingerprint)?;
+        for dialect in &spec.language.dialects {
+            let mut variant = spec.clone();
+            variant.language.ast_grep = dialect.ast_grep.clone();
+            variant.language.extensions = dialect.extensions.clone();
+            variant.language.dialects.clear();
+            base.dialects.push(Self::compile(variant, &fingerprint)?);
+        }
+        Ok(base)
+    }
+
+    fn compile(spec: PackSpec, fingerprint: &str) -> Result<Self, IndexError> {
         let name = spec.language.name.clone();
         let lang = SupportLang::from_str(&spec.language.ast_grep)
             .map_err(|_| IndexError::Pack(format!("pack '{name}': unknown ast-grep language '{}'", spec.language.ast_grep)))?;
@@ -614,7 +688,8 @@ impl Pack {
                 .collect::<Result<_, IndexError>>()?,
             references: rules(spec.references.iter().map(|d| &d.rule).collect(), "references")?,
             package_name_regex,
-            fingerprint: crate::content_hash(text),
+            fingerprint: fingerprint.to_owned(),
+            dialects: Vec::new(),
             lang,
             spec,
         })
@@ -626,6 +701,23 @@ impl Pack {
 
     pub fn handles(&self, path: &Path) -> bool {
         path.extension().and_then(|e| e.to_str()).is_some_and(|ext| self.spec.language.extensions.iter().any(|x| x == ext))
+    }
+
+    /// The compiled pack (this one or a dialect) for a file.
+    pub fn for_path(&self, path: &Path) -> Option<&Pack> {
+        if self.handles(path) { Some(self) } else { self.dialects.iter().find(|d| d.handles(path)) }
+    }
+
+    /// Every definition's type must be known to `types`, and so must the
+    /// module type: a pack mapping onto a type that doesn't exist is broken.
+    pub fn check_types(&self, types: &arch_graph::TypeSystem) -> Result<(), IndexError> {
+        let name = self.name();
+        let mut wanted: Vec<&str> = self.spec.definitions.iter().map(|d| d.type_name.as_str()).collect();
+        wanted.push(&self.spec.language.module_type);
+        match wanted.into_iter().find(|t| !types.contains(t)) {
+            Some(t) => Err(IndexError::Pack(format!("pack '{name}' maps onto type '{t}', which the type system doesn't have"))),
+            None => Ok(()),
+        }
     }
 }
 
@@ -663,7 +755,12 @@ impl PackSet {
     }
 
     pub fn for_path(&self, path: &Path) -> Option<&Pack> {
-        self.packs.iter().find(|p| p.handles(path))
+        self.packs.iter().find_map(|p| p.for_path(path))
+    }
+
+    /// See `Pack::check_types`.
+    pub fn check_types(&self, types: &arch_graph::TypeSystem) -> Result<(), IndexError> {
+        self.packs.iter().try_for_each(|p| p.check_types(types))
     }
 
     pub fn by_name(&self, name: &str) -> Option<&Pack> {

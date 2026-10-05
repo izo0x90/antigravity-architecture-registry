@@ -1,5 +1,11 @@
 # Exactly what ingesting tests/fixtures/rust/sample must produce.
 components = [
+  ["sample::Twice", "interface"],
+  ["sample::Twice::once", "operation"],
+  ["sample::Twice::twice", "function"],
+  ["sample::Two", "class"],
+  ["sample::Two::once", "function"],
+  ["sample::double", "function"],
   ["sample", "module"],
   ["sample::store", "module"],
   ["sample::util", "module"],
@@ -31,6 +37,15 @@ components = [
   ["sample::store::store_each", "function"],
 ]
 relations = [
+  ["contains", "sample", "sample::Twice"],
+  ["contains", "sample::Twice", "sample::Twice::once"],
+  ["contains", "sample::Twice", "sample::Twice::twice"],
+  ["contains", "sample", "sample::Two"],
+  ["contains", "sample::Two", "sample::Two::once"],
+  ["contains", "sample", "sample::double"],
+  ["implements", "sample::Two", "sample::Twice"],
+  ["calls", "sample::Twice::twice", "sample::Twice::once"],
+  ["calls", "sample::double", "sample::Twice::twice"],
   ["contains", "sample", "sample::store"],
   ["contains", "sample", "sample::util"],
   ["contains", "sample", "sample::Step"],

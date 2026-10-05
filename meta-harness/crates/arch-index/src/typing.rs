@@ -13,7 +13,7 @@ fn words(written: &str, lang: &LanguageSpec) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
     for c in marked.chars().chain(std::iter::once(' ')) {
-        if c.is_alphanumeric() || c == '_' {
+        if lang.is_identifier_char(c) {
             current.push(c);
         } else if c == PATH {
             current.clear(); // a path prefix: the next segment replaces it
@@ -31,6 +31,16 @@ fn words(written: &str, lang: &LanguageSpec) -> Vec<String> {
 /// when the schema says nothing checkable (open, or a shape this table
 /// can't judge).
 pub fn carries(lang: &LanguageSpec, written: &str, schema: &Value) -> Option<Result<(), String>> {
+    // `string | null`, `str | None`: the value may be absent; judge the rest.
+    let alternatives = split_union(written, lang);
+    let (nulls, values): (Vec<&str>, Vec<&str>) = alternatives.iter().partition(|a| lang.null_types.iter().any(|n| n == a.trim()));
+    if !nulls.is_empty() && values.len() == 1 {
+        let (inner, schema_nullable) = unwrap_null(schema);
+        if !schema_nullable {
+            return Some(Err(format!("{written} may be absent but a value is always expected")));
+        }
+        return carries(lang, values[0].trim(), inner);
+    }
     // `string[]` / `[]string`: an array whatever the item type.
     let bare = lang.strip_references(written);
     if lang.array_suffixes.iter().any(|s| bare.ends_with(s.as_str())) || lang.array_prefixes.iter().any(|p| bare.starts_with(p.as_str())) {
@@ -68,6 +78,34 @@ pub fn carries(lang: &LanguageSpec, written: &str, schema: &Value) -> Option<Res
     })
 }
 
+/// A written type's union alternatives (`a | b`), outside brackets.
+fn split_union<'a>(written: &'a str, lang: &LanguageSpec) -> Vec<&'a str> {
+    if lang.union_separators.is_empty() {
+        return vec![written];
+    }
+    let mut out = Vec::new();
+    let (mut depth, mut start, mut skip_until) = (0i32, 0usize, 0usize);
+    for (i, c) in written.char_indices() {
+        if i < skip_until {
+            continue;
+        }
+        match c {
+            '(' | '[' | '<' | '{' => depth += 1,
+            ')' | ']' | '>' | '}' => depth -= 1,
+            _ if depth == 0 => {
+                if let Some(sep) = lang.union_separators.iter().find(|sep| written[i..].starts_with(sep.as_str())) {
+                    out.push(&written[start..i]);
+                    skip_until = i + sep.len();
+                    start = skip_until;
+                }
+            }
+            _ => {}
+        }
+    }
+    out.push(&written[start..]);
+    out
+}
+
 /// The schema without a `null` option, and whether it had one.
 fn unwrap_null(schema: &Value) -> (&Value, bool) {
     if let Some(options) = schema.get("anyOf").and_then(Value::as_array) {
@@ -103,6 +141,15 @@ mod tests {
         let py = &packs.by_name("python").unwrap().spec.language;
         assert_eq!(carries(py, "Optional[int]", &json!({"anyOf": [{"type": "integer"}, {"type": "null"}]})), Some(Ok(())));
         assert_eq!(carries(py, "list[str]", &json!({"type": "array"})), Some(Ok(())));
+        // Unions with a null type: may be absent.
+        let nullable_int = json!({"anyOf": [{"type": "integer"}, {"type": "null"}]});
+        assert_eq!(carries(py, "int | None", &nullable_int), Some(Ok(())));
+        assert!(carries(py, "int | None", &json!({"type": "integer"})).unwrap().is_err(), "may be absent");
+        let ts = &packs.by_name("typescript").unwrap().spec.language;
+        let nullable_str = json!({"anyOf": [{"type": "string"}, {"type": "null"}]});
+        assert_eq!(carries(ts, "string | null", &nullable_str), Some(Ok(())));
+        assert_eq!(carries(ts, "string[] | undefined", &json!({"anyOf": [{"type": "array"}, {"type": "null"}]})), Some(Ok(())));
+        assert!(carries(ts, "number | null", &nullable_str).unwrap().is_err());
         let ts = &packs.by_name("typescript").unwrap().spec.language;
         assert_eq!(carries(ts, "string[]", &json!({"type": "array"})), Some(Ok(())), "array suffix");
         assert!(carries(ts, "string[]", &json!({"type": "string"})).unwrap().is_err());

@@ -50,7 +50,7 @@ fn implemented_validate(arch: &ArchitectureService, body: &str) {
             description: "Checks input.".into(),
             parent: Some(id("sample")),
             file: None,
-            signature: Some(arch_graph::Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false }], returns: Some("bool".into()), qualifiers: vec![] }),
+            signature: Some(arch_graph::Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] }),
             schemas: None,
             spec: None,
         },

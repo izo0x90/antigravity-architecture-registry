@@ -2084,7 +2084,7 @@ pub(crate) mod tests {
         let step = ComponentId::new("rust:a::step");
         {
             let c = result.components.get_mut(&step).unwrap();
-            c.signature = Some(arch_graph::Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false }], returns: Some("bool".into()), qualifiers: vec![] });
+            c.signature = Some(arch_graph::Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] });
             c.placeholders.push(arch_graph::Span { start_line: 2, end_line: 2, start_byte: 0, end_byte: 1 });
         }
         g.set_result(result);

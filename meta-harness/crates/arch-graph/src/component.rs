@@ -40,6 +40,9 @@ pub struct Param {
     /// Callers may leave it out (a default value, an optional marker).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub optional: bool,
+    /// Takes any number of arguments (`*args`, `...rest`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub variadic: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

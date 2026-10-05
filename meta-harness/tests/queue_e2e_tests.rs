@@ -51,7 +51,7 @@ impl JobRunner for FakeAgent {
         let calls_b = name == "a";
         match ticket.kind {
             JobKind::Design => {
-                let sig = Signature { params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false }], returns: Some("bool".into()), qualifiers: vec![] };
+                let sig = Signature { params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] };
                 let op = PlanOp::Modify { id: ticket.component.clone(), description: Some(format!("{name} checks the input.")), signature: Some(sig), schemas: None, spec: None };
                 self.arch.apply(&ticket.plan, op).map_err(|e| e.to_string())?;
             }

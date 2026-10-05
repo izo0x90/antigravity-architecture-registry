@@ -35,7 +35,7 @@ pub enum IndexError {
 pub fn ingest(root: &Path, scope: &Path, packs: &PackSet, types: &TypeSystem) -> Result<(Vec<FileExtract>, Resolved), IndexError> {
     let mut extracts = Vec::new();
     for file in walk(root, scope, packs)? {
-        let Some(pack) = packs.by_name(&file.language) else { continue };
+        let Some(pack) = packs.for_path(&file.absolute) else { continue };
         let content = std::fs::read_to_string(&file.absolute).map_err(|e| IndexError::Io(format!("{}: {e}", file.path)))?;
         extracts.push(extract_file(pack, file.path, file.module, &content));
     }

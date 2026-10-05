@@ -16,6 +16,15 @@ schema_types = { string = ["str"], integer = ["int"], number = ["float"], boolea
 nullable_wrappers = ["Optional"]
 deferred_scopes = ["lambda"]
 qualifier_tokens = ["async"]
+module_type = "module"
+identifier_chars = "_"
+ignored_kinds = ["comment"]
+import_keywords = ["from", "import", "as"]
+source_roots = ["src"]
+# `super().m()` calls the base class's m.
+super_receivers = ["super()"]
+union_separators = ["|"]
+null_types = ["None"]
 
 [[definitions]]
 type = "function"
@@ -48,6 +57,15 @@ kind = "typed_default_parameter"
 name_field = "name"
 type_field = "type"
 optional = true
+
+# `*args` / `**kwargs`: any number of arguments, none included.
+[[params]]
+kind = "list_splat_pattern"
+variadic = true
+
+[[params]]
+kind = "dictionary_splat_pattern"
+variadic = true
 
 [[calls]]
 rule = { kind = "call" }

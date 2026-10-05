@@ -1,4 +1,4 @@
-import { Base, Formatter, clean, load } from "./helpers";
+import { Base, Formatter, clean, load, shout } from "./helpers";
 import { clean as tidy } from "./helpers";
 import * as h from "./helpers";
 
@@ -10,12 +10,17 @@ export class Greeter extends Base implements Formatter {
   format(text: string): string {
     throw new Error("TODO: format");
   }
+
+  describe(): string {
+    return super.describe();
+  }
 }
 
 export function main(): void {
   const raw = load();
   new Greeter().greet(raw);
   show(raw);
+  shout(raw);
 }
 
 function show(value: string): void {

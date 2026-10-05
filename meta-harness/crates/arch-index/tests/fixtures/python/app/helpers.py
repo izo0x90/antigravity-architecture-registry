@@ -1,5 +1,10 @@
 class Base:
-    pass
+    def describe(self) -> str:
+        return "base"
+
+
+def gather(*items, **options) -> int:
+    return len(items)
 
 
 def clean(s: str) -> str:

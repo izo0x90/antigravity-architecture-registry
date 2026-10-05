@@ -34,6 +34,10 @@ deferred_scopes = ["closure_expression"]
 # `extern "C"` is recorded as written, ABI included.
 qualifier_tokens = ["async", "unsafe", "const", "extern_modifier"]
 qualifier_containers = ["function_modifiers"]
+module_type = "module"
+identifier_chars = "_"
+ignored_kinds = ["line_comment", "block_comment"]
+import_keywords = ["use", "pub", "as"]
 
 [[definitions]]
 type = "function"

@@ -53,7 +53,7 @@ fn user() -> Actor {
 }
 
 fn add(r: &Repo, name: &str) {
-    let sig = Signature { params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false }], returns: Some("bool".into()), qualifiers: vec![] };
+    let sig = Signature { params: vec![Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] };
     r.s.apply(&pid(), PlanOp::AddComponent { name: name.into(), type_name: "function".into(), description: format!("{name} input."), parent: Some(id("sample")), file: None, signature: Some(sig), schemas: None, spec: None })
         .unwrap();
 }

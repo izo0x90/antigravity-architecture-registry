@@ -131,6 +131,8 @@ impl ArchitectureService {
     /// Opens the service over `root`, loading the cached index (no parsing).
     /// Code rules start as the defaults; see `with_rules`.
     pub fn open(root: &Path, packs: PackSet, types: TypeSystem, views: ViewCatalog, plans: Box<dyn PlanRepository>, index: Box<dyn CodeIndexStore>) -> Result<Self, ServiceError> {
+        // Packs map onto types: every one they name must exist.
+        packs.check_types(&types).map_err(|e| ServiceError::Index(e.to_string()))?;
         let rules = CodeRules::defaults(&packs, &types).map_err(|e| ServiceError::Index(e.to_string()))?;
         let service = Self {
             root: root.to_path_buf(),
@@ -281,7 +283,7 @@ impl ArchitectureService {
         report.files += files.len();
         let mut seen = BTreeSet::new();
         for file in &files {
-            let Some(pack) = self.packs.by_name(&file.language) else { continue };
+            let Some(pack) = self.packs.for_path(&file.absolute) else { continue };
             let content = std::fs::read_to_string(&file.absolute).map_err(|e| ServiceError::Io(format!("{}: {e}", file.path)))?;
             let hash = content_hash(&content);
             seen.insert(file.path.clone());

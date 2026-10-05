@@ -1,4 +1,7 @@
 components = [
+  ["app.Greeter.describe", "function"],
+  ["helpers.Base.describe", "function"],
+  ["helpers.gather", "function"],
   ["app", "module"],
   ["helpers", "module"],
   ["app.Greeter", "class"],
@@ -12,6 +15,10 @@ components = [
   ["app.fetch", "function"],
 ]
 relations = [
+  ["contains", "app.Greeter", "app.Greeter.describe"],
+  ["contains", "helpers.Base", "helpers.Base.describe"],
+  ["contains", "helpers", "helpers.gather"],
+  ["calls", "app.Greeter.describe", "helpers.Base.describe"],
   ["contains", "app", "app.Greeter"],
   ["contains", "app", "app.main"],
   ["contains", "app", "app.shout"],

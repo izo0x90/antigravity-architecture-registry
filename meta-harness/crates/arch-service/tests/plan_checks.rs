@@ -458,7 +458,7 @@ fn contracts_carry_location_signature_interfaces_invariants_steps_and_real_calle
     let mut base = comp("sample::base_write", "function");
     base.spec = Some(ImplementationSpec { invariants: vec![inv("durable", InvariantKind::PostCondition)], ..ImplementationSpec::default() });
     let mut write = comp("sample::write", "function");
-    write.signature = Some(Signature { params: vec![arch_graph::Param { name: "item".into(), ty: Some("&str".into()), optional: false }], returns: Some("bool".into()), qualifiers: vec![] });
+    write.signature = Some(Signature { params: vec![arch_graph::Param { name: "item".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] });
     write.schemas.inputs = schema(json!({"item": "str"}));
     write.schemas.side_effects = vec![SideEffect { target: "fs".into(), description: "writes the file".into() }];
     write.spec = Some(ImplementationSpec {
@@ -584,7 +584,7 @@ fn append_lib(r: &Repo, code: &str) {
 }
 
 fn str_sig() -> Option<Signature> {
-    Some(Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false }], returns: Some("bool".into()), qualifiers: vec![] })
+    Some(Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] })
 }
 
 // req: P5.9
@@ -818,7 +818,7 @@ fn concurrent_plan_edits_are_never_lost() {
 #[test]
 fn signatures_compare_qualifiers_and_ignore_spacing() {
     let sig = |ty: &str, returns: &str, qualifiers: &[&str]| Signature {
-        params: vec![arch_graph::Param { name: "input".into(), ty: Some(ty.into()), optional: false }],
+        params: vec![arch_graph::Param { name: "input".into(), ty: Some(ty.into()), optional: false, variadic: false }],
         returns: Some(returns.into()),
         qualifiers: qualifiers.iter().map(|q| q.to_string()).collect(),
     };
