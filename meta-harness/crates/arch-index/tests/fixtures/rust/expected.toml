@@ -18,6 +18,17 @@ components = [
   ["sample::store::helper", "function"],
   ["sample::util::shout", "function"],
   ["sample::util::helper", "function"],
+  ["sample::yelled", "function"],
+  ["sample::keep", "function"],
+  ["sample::later_log", "function"],
+  ["sample::fetch", "function"],
+  ["sample::unfinished", "function"],
+  ["sample::drafted", "function"],
+  ["sample::wrapper", "function"],
+  ["sample::wrapper::nested", "function"],
+  ["sample::stub", "function"],
+  ["sample::guard", "function"],
+  ["sample::store::store_each", "function"],
 ]
 relations = [
   ["contains", "sample", "sample::store"],
@@ -28,6 +39,17 @@ relations = [
   ["contains", "sample", "sample::log"],
   ["contains", "sample", "sample::later"],
   ["contains", "sample", "sample::ambiguous"],
+  ["contains", "sample", "sample::yelled"],
+  ["contains", "sample", "sample::keep"],
+  ["contains", "sample", "sample::later_log"],
+  ["contains", "sample", "sample::fetch"],
+  ["contains", "sample", "sample::unfinished"],
+  ["contains", "sample", "sample::drafted"],
+  ["contains", "sample", "sample::wrapper"],
+  ["contains", "sample", "sample::stub"],
+  ["contains", "sample", "sample::guard"],
+  ["contains", "sample::wrapper", "sample::wrapper::nested"],
+  ["contains", "sample::store", "sample::store::store_each"],
   ["contains", "sample::Step", "sample::Step::apply"],
   ["contains", "sample::Upper", "sample::Upper::apply"],
   ["contains", "sample::store", "sample::store::Store"],
@@ -44,12 +66,25 @@ relations = [
   ["calls", "sample::run", "sample::store::Store::save"],
   ["calls", "sample::run", "sample::log"],
   ["calls", "sample::store::Store::save", "sample::store::Store::check"],
+  # `yell` is an alias of util::shout.
+  ["calls", "sample::yelled", "sample::util::shout"],
+  # The parameter's type (&Store) decides the receiver.
+  ["calls", "sample::keep", "sample::store::Store::save"],
+  # Inside a closure (deferred); the dead branches add nothing.
+  ["calls", "sample::later_log", "sample::log"],
+  ["calls", "sample::wrapper", "sample::wrapper::nested"],
   # `let out = Upper.apply(input)` then `store.save(&out)` / `log(&out)`: String into &str.
   ["data_flow", "sample::Upper::apply", "sample::store::Store::save"],
   ["data_flow", "sample::Upper::apply", "sample::log"],
 ]
-# Calls that could mean more than one component: [caller, callee text, candidates...]
+# Calls proven to mean one of several components (both helpers are glob-imported):
+# [caller, callee text, candidates...]
 ambiguous = [
   ["sample::ambiguous", "helper", "sample::store::helper", "sample::util::helper"],
 ]
-placeholders = ["sample::later"]
+# Calls that can't be proven (a receiver of unknown type): never relations.
+unproven = [
+  ["sample::store::store_each", "s.save", "sample::store::Store::save"],
+]
+# Placeholders count for every definition containing them; unreachable!() isn't one.
+placeholders = ["sample::later", "sample::unfinished", "sample::drafted", "sample::wrapper", "sample::wrapper::nested", "sample::stub"]

@@ -1,8 +1,10 @@
 //! Cross-file resolution: turn raw extracts into the observed graph. Gives
 //! every definition its symbol, links containment and implements, and
-//! resolves calls by evidence (self, qualified path, same module, imports,
-//! unique name). Ambiguous calls are recorded with their candidates; calls to
-//! nothing in the repo are recorded as external. Nothing is guessed.
+//! resolves calls by evidence (self and typed receivers, qualified paths,
+//! same module, imports and aliases), within one language. Calls proven to
+//! mean one of several components are ambiguous; calls that can't be proven
+//! (unknown receiver type, a name neither local nor imported) are unproven;
+//! calls to nothing in the repo are external. Nothing is guessed.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -10,7 +12,7 @@ use arch_graph::{CodeAnchor, Component, ComponentId, Graph, Provenance, Relation
 use serde::{Deserialize, Serialize};
 
 use crate::pack::LanguageSpec;
-use crate::{FileExtract, PackSet};
+use crate::{FileExtract, PackSet, RawCall};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AmbiguousCall {
@@ -43,7 +45,12 @@ pub struct UnverifiedFlow {
 #[derive(Debug, Default)]
 pub struct Resolved {
     pub graph: Graph,
+    /// Calls proven to mean one of several components.
     pub ambiguous: Vec<AmbiguousCall>,
+    /// Calls whose target can't be proven (a receiver of unknown type, a
+    /// name that isn't local or imported), with the components sharing the
+    /// name. Never turned into relations.
+    pub unproven: Vec<AmbiguousCall>,
     pub external: Vec<ExternalCall>,
     pub unverified_flows: Vec<UnverifiedFlow>,
 }
@@ -53,6 +60,7 @@ struct Entry {
     symbol: String,
     name: String,
     module: String,
+    language: String,
     file: usize,
     /// (file, definition) it came from; None for a file's module.
     def: Option<(usize, usize)>,
@@ -60,6 +68,9 @@ struct Entry {
     owner: Option<usize>,
     /// Can own members that `self` refers to (a non-executable, non-module type).
     is_type: bool,
+    /// What the owner value is called inside it, when the language names it
+    /// per definition (a Go receiver).
+    self_name: Option<String>,
 }
 
 impl Entry {
@@ -68,8 +79,9 @@ impl Entry {
     }
 }
 
-/// Strips generics/arguments and reference markers from a type or callee text.
-fn clean(text: &str) -> String {
+/// Strips bracketed groups (generics, arguments) and leading reference
+/// markers/noise words from a type or callee text.
+fn clean(text: &str, lang: &LanguageSpec) -> String {
     let mut out = String::new();
     let mut depth = 0i32;
     for ch in text.chars() {
@@ -80,12 +92,12 @@ fn clean(text: &str) -> String {
             _ => {}
         }
     }
-    out.trim().trim_start_matches(['&', '*']).trim_start_matches("mut ").trim_start_matches("dyn ").trim().to_owned()
+    lang.strip_references(&out).trim().to_owned()
 }
 
-fn split(text: &str, separators: &[String]) -> Vec<String> {
-    let mut parts = vec![clean(text)];
-    for sep in separators {
+fn split(text: &str, lang: &LanguageSpec) -> Vec<String> {
+    let mut parts = vec![clean(text, lang)];
+    for sep in &lang.call_separators {
         parts = parts.iter().flat_map(|p| p.split(sep.as_str()).map(str::to_owned).collect::<Vec<_>>()).collect();
     }
     parts.into_iter().map(|p| p.trim().to_owned()).filter(|p| !p.is_empty()).collect()
@@ -93,6 +105,30 @@ fn split(text: &str, separators: &[String]) -> Vec<String> {
 
 fn symbol_words(symbol: &str) -> Vec<&str> {
     symbol.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).filter(|s| !s.is_empty()).collect()
+}
+
+/// `text` without a leading constructor keyword (`new Greeter` -> `Greeter`).
+fn strip_constructor<'a>(text: &'a str, lang: &LanguageSpec) -> &'a str {
+    let text = text.trim();
+    for prefix in &lang.constructor_prefixes {
+        if let Some(rest) = text.strip_prefix(prefix.as_str())
+            && rest.starts_with(char::is_whitespace)
+        {
+            return rest.trim_start();
+        }
+    }
+    text
+}
+
+/// `text` with a leading alias replaced by what it stands for (its last name).
+fn de_alias(text: &str, aliases: &[(String, String)], lang: &LanguageSpec) -> String {
+    let text = text.trim();
+    let head_end = lang.call_separators.iter().filter_map(|sep| text.find(sep.as_str())).min().unwrap_or(text.len());
+    let head = &text[..head_end];
+    match aliases.iter().find(|(alias, _)| alias == head).and_then(|(_, original)| symbol_words(original).last().map(|w| (*w).to_owned())) {
+        Some(original) => format!("{original}{}", &text[head_end..]),
+        None => text.to_owned(),
+    }
 }
 
 pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) -> Resolved {
@@ -111,10 +147,12 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             symbol: ex.module.clone(),
             name,
             module: ex.module.clone(),
+            language: ex.language.clone(),
             file: fi,
             def: None,
             owner: None,
             is_type: false,
+            self_name: None,
         });
     }
 
@@ -149,7 +187,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                 let (prefix, owner) = match (&def.scope, parent_entry) {
                     (Some(scope), _) => match find_type(&entries, &scope.target, &ex.module, lang) {
                         Some(owner) => (entries[owner].symbol.clone(), Some(owner)),
-                        None => (format!("{}{}{}", ex.module, lang.separator, clean(&scope.target)), None),
+                        None => (format!("{}{}{}", ex.module, lang.separator, clean(&scope.target, lang)), None),
                     },
                     (None, Some(parent)) => (entries[parent].symbol.clone(), Some(parent)),
                     (None, None) => (ex.module.clone(), None),
@@ -161,10 +199,12 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     symbol,
                     name: def.name.clone(),
                     module: ex.module.clone(),
+                    language: ex.language.clone(),
                     file: fi,
                     def: Some((fi, di)),
                     owner,
                     is_type: is_type(&def.type_name),
+                    self_name: def.self_name.clone(),
                 });
             }
             pending = still;
@@ -182,14 +222,10 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             Some(d) => (d.type_name.clone(), d.syntax_kind.clone(), d.span, d.signature.clone()),
             None => ("module".to_owned(), "source_file".to_owned(), Span { start_line: 1, end_line: ex.lines, start_byte: 0, end_byte: ex.bytes }, None),
         };
-        // A placeholder belongs to the innermost definition containing it.
+        // A placeholder counts for every definition containing it: code with a
+        // nested unfinished part isn't finished either.
         let placeholders = match def {
-            Some(_) => ex
-                .placeholders
-                .iter()
-                .filter(|p| span.contains(p) && !ex.definitions.iter().any(|o| o.span != span && span.contains(&o.span) && o.span.contains(p)))
-                .copied()
-                .collect(),
+            Some(_) => ex.placeholders.iter().filter(|p| span.contains(p)).copied().collect(),
             None => Vec::new(),
         };
         out.graph.upsert_component(
@@ -265,6 +301,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
     }
 
     // Calls.
+    let cx = Cx { entries: &entries, extracts, packs };
     let mut seen_external: BTreeSet<(ComponentId, String)> = BTreeSet::new();
     for (fi, ex) in extracts.iter().enumerate() {
         let Some(pack) = packs.by_name(&ex.language) else { continue };
@@ -276,17 +313,18 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             };
             let Some(caller) = caller else { continue };
             let caller_id = entries[caller].id.clone();
-            match resolve_call(&entries, caller, &call.callee, &ex.imports, &pack.spec.language) {
+            match cx.resolve_call(caller, &call.callee, Some(call), 0) {
                 CallTarget::One(target) => {
                     let mut relation = Relation::new(RelationKind::Calls, caller_id.clone(), entries[target].id.clone(), Provenance::OBSERVED);
                     let next = order.entry(caller_id).or_insert(0);
                     relation.order = Some(*next);
                     *next += 1;
                     relation.sites.push(call.span);
+                    relation.deferred = call.deferred;
                     out.graph.upsert_relation(relation);
                     // Outputs of other repo calls passed in as arguments.
                     for arg in &call.args {
-                        let CallTarget::One(source) = resolve_call(&entries, caller, &arg.producer, &ex.imports, &pack.spec.language) else { continue };
+                        let CallTarget::One(source) = cx.resolve_call(caller, &arg.producer, None, 0) else { continue };
                         match flow(&entries, extracts, source, target, arg.position, &pack.spec.language) {
                             Ok(ports) => {
                                 let mut relation = Relation::new(RelationKind::DataFlow, entries[source].id.clone(), entries[target].id.clone(), Provenance::OBSERVED);
@@ -305,13 +343,20 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                         }
                     }
                 }
-                CallTarget::Many(candidates) => out.ambiguous.push(AmbiguousCall {
-                    caller: caller_id,
-                    callee: call.callee.clone(),
-                    file: ex.file.clone(),
-                    span: call.span,
-                    candidates: candidates.iter().map(|&c| entries[c].id.clone()).collect(),
-                }),
+                target @ (CallTarget::Many(_) | CallTarget::Unproven(_)) => {
+                    let (list, candidates) = match target {
+                        CallTarget::Many(c) => (&mut out.ambiguous, c),
+                        CallTarget::Unproven(c) => (&mut out.unproven, c),
+                        _ => continue,
+                    };
+                    list.push(AmbiguousCall {
+                        caller: caller_id,
+                        callee: call.callee.clone(),
+                        file: ex.file.clone(),
+                        span: call.span,
+                        candidates: candidates.iter().map(|&c| entries[c].id.clone()).collect(),
+                    });
+                }
                 CallTarget::External => {
                     if seen_external.insert((caller_id.clone(), call.callee.clone())) {
                         out.external.push(ExternalCall { caller: caller_id, callee: call.callee.clone() });
@@ -331,7 +376,7 @@ fn signature<'a>(entries: &[Entry], extracts: &'a [FileExtract], entry: usize) -
 /// when both types are written and carry the same data.
 fn flow(entries: &[Entry], extracts: &[FileExtract], source: usize, target: usize, position: u32, lang: &LanguageSpec) -> Result<(String, String), String> {
     // A type by its last path segment (`store.Store`, `crate::x::Store` -> Store).
-    let base = |t: &str| split(t, &lang.call_separators).pop().unwrap_or_default();
+    let base = |t: &str| split(t, lang).pop().unwrap_or_default();
     let produced = signature(entries, extracts, source).and_then(|s| s.returns.as_deref()).map(|t| {
         // `Self` (and the like) means the producer's own type.
         let t = base(t);
@@ -350,11 +395,12 @@ fn flow(entries: &[Entry], extracts: &[FileExtract], source: usize, target: usiz
     if compatible { Ok(("return".to_owned(), param.name.clone())) } else { Err(format!("{produced} doesn't match parameter '{}': {wanted}", param.name)) }
 }
 
-/// Finds a type component (one that can own members) by its written name.
+/// Finds a type component (one that can own members) by its written name,
+/// among the components of the same language.
 fn find_type(entries: &[Entry], text: &str, module: &str, lang: &LanguageSpec) -> Option<usize> {
-    let parts: Vec<String> = split(text, &lang.call_separators).into_iter().filter(|p| !lang.relative_prefixes.contains(p)).collect();
+    let parts: Vec<String> = split(text, lang).into_iter().filter(|p| !lang.relative_prefixes.contains(p)).collect();
     let name = parts.last()?;
-    let candidates: Vec<usize> = entries.iter().enumerate().filter(|(_, e)| e.is_type && &e.name == name).map(|(i, _)| i).collect();
+    let candidates: Vec<usize> = entries.iter().enumerate().filter(|(_, e)| e.is_type && &e.name == name && e.language == lang.name).map(|(i, _)| i).collect();
     if candidates.len() == 1 {
         return candidates.first().copied();
     }
@@ -377,7 +423,11 @@ fn path_matches(entries: &[Entry], candidates: &[usize], parts: &[String]) -> Ve
 
 enum CallTarget {
     One(usize),
+    /// Proven to be one of these (e.g. the same name imported twice).
     Many(Vec<usize>),
+    /// Not provable: the receiver's type is unknown, or the name isn't
+    /// local or imported. These share the name.
+    Unproven(Vec<usize>),
     External,
 }
 
@@ -401,58 +451,205 @@ fn self_type(entries: &[Entry], entry: usize) -> Option<usize> {
     None
 }
 
-fn resolve_call(entries: &[Entry], caller: usize, callee: &str, imports: &[String], lang: &LanguageSpec) -> CallTarget {
-    let parts = split(callee, &lang.call_separators);
-    let Some(name) = parts.last().cloned() else { return CallTarget::External };
-    let qualifier = &parts[..parts.len() - 1];
-    let candidates: Vec<usize> = entries.iter().enumerate().filter(|(_, e)| !e.is_module() && e.name == name).map(|(i, _)| i).collect();
-    if candidates.is_empty() {
-        return CallTarget::External;
-    }
-    let is_member = |c: usize| entries[c].owner.is_some_and(|o| entries[o].is_type);
+/// What a receiver's type is known to be.
+enum Receiver {
+    /// A type in the repo.
+    Typed(usize),
+    /// A type outside the repo (a library type, a primitive).
+    Outside,
+    Unknown,
+}
 
-    if let Some(first) = qualifier.first() {
-        // self.method() / Self::method(): members of the caller's own type.
-        if qualifier.len() == 1 && lang.self_names.contains(first) {
-            let own = self_type(entries, caller);
-            let members: Vec<usize> = candidates.iter().copied().filter(|&c| own.is_some() && entries[c].owner == own).collect();
-            return narrow(members).unwrap_or(CallTarget::External);
+/// Recursion bound for receivers that are themselves calls.
+const MAX_DEPTH: u32 = 4;
+
+struct Cx<'a> {
+    entries: &'a [Entry],
+    extracts: &'a [FileExtract],
+    packs: &'a PackSet,
+}
+
+impl Cx<'_> {
+    fn lang(&self, entry: usize) -> Option<&LanguageSpec> {
+        self.packs.by_name(&self.entries[entry].language).map(|p| &p.spec.language)
+    }
+
+    /// The type a written type text names, seen from `context`.
+    fn written_type(&self, context: usize, text: &str) -> Receiver {
+        let Some(lang) = self.lang(context) else { return Receiver::Unknown };
+        let Some(base) = split(text, lang).pop() else { return Receiver::Unknown };
+        if lang.self_names.contains(&base) {
+            return self_type(self.entries, context).map_or(Receiver::Unknown, Receiver::Typed);
         }
-        let path: Vec<String> = parts.iter().filter(|p| !lang.relative_prefixes.contains(p)).cloned().collect();
-        if let Some(target) = narrow(path_matches(entries, &candidates, &path)) {
-            return target;
+        match find_type(self.entries, text, &self.entries[context].module, lang) {
+            Some(t) => Receiver::Typed(t),
+            None if self.entries.iter().any(|e| e.is_type && e.name == base && e.language == lang.name) => Receiver::Unknown,
+            None => Receiver::Outside,
         }
-        // A type or path qualifier that matched nothing is outside the repo
-        // (e.g. Vec::new). A lowercase receiver (store.save()) has an unknown
-        // type: only members can be meant.
-        let via_path_syntax = lang.separator != "." && callee.contains(lang.separator.as_str());
-        let names_module = entries.iter().any(|e| e.is_module() && &e.name == first);
-        let receiver = qualifier.len() == 1
-            && first.chars().next().is_some_and(char::is_lowercase)
-            && !via_path_syntax
-            && !(lang.separator == "." && names_module);
-        if !receiver {
+    }
+
+    /// The type of what calling `target` gives back.
+    fn output_type(&self, target: usize) -> Receiver {
+        if self.entries[target].is_type {
+            return Receiver::Typed(target); // a constructor call
+        }
+        match signature(self.entries, self.extracts, target).and_then(|s| s.returns.as_deref()) {
+            Some(returns) => self.written_type(target, returns),
+            None => Receiver::Unknown,
+        }
+    }
+
+    fn call_output(&self, caller: usize, callee: &str, depth: u32) -> Receiver {
+        if depth >= MAX_DEPTH {
+            return Receiver::Unknown;
+        }
+        match self.resolve_call(caller, callee, None, depth + 1) {
+            CallTarget::One(t) => self.output_type(t),
+            CallTarget::External => Receiver::Outside,
+            CallTarget::Many(_) | CallTarget::Unproven(_) => Receiver::Unknown,
+        }
+    }
+
+    /// What the receiver `qualifier` of a call made in `caller` is.
+    fn receiver(&self, caller: usize, qualifier: &str, call: Option<&RawCall>, depth: u32) -> Receiver {
+        let Some(lang) = self.lang(caller) else { return Receiver::Unknown };
+        let q = qualifier.trim();
+        // self / this / the method's named receiver.
+        if lang.self_names.iter().any(|s| s == q) || self.entries[caller].self_name.as_deref() == Some(q) {
+            return self_type(self.entries, caller).map_or(Receiver::Unknown, Receiver::Typed);
+        }
+        // A call's result: `Greeter().greet`, `new Greeter().greet`.
+        if let Some(inner) = q.strip_suffix(')').and_then(|rest| {
+            let mut depth = 1;
+            rest.char_indices().rev().find_map(|(i, ch)| {
+                match ch {
+                    ')' => depth += 1,
+                    '(' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then(|| &rest[..i])
+            })
+        }) {
+            return self.call_output(caller, inner, depth);
+        }
+        // A local: its declared type, else what it was bound to.
+        if let Some(call) = call {
+            if let Some(ty) = &call.receiver_type {
+                return self.written_type(caller, ty);
+            }
+            if let Some(producer) = &call.receiver_producer {
+                return self.call_output(caller, producer, depth);
+            }
+        }
+        // A parameter with a written type.
+        let name = lang.strip_references(q);
+        if let Some(param) = signature(self.entries, self.extracts, caller).and_then(|s| s.params.iter().find(|p| lang.strip_references(&p.name) == name)) {
+            return match &param.ty {
+                Some(ty) => self.written_type(caller, ty),
+                None => Receiver::Unknown,
+            };
+        }
+        // A type named directly (associated calls on a type value).
+        match find_type(self.entries, q, &self.entries[caller].module, lang) {
+            Some(t) => Receiver::Typed(t),
+            None => Receiver::Unknown,
+        }
+    }
+
+    /// Members named `name` of `ty` or the types it extends (as declared).
+    fn members(&self, ty: usize, name: &str) -> Vec<usize> {
+        let mut types = vec![ty];
+        let mut i = 0;
+        while i < types.len() && i < 32 {
+            if let Some((fi, di)) = self.entries[types[i]].def
+                && let Some(lang) = self.lang(types[i])
+            {
+                for base in &self.extracts[fi].definitions[di].bases {
+                    if let Some(b) = find_type(self.entries, base, &self.entries[types[i]].module, lang)
+                        && !types.contains(&b)
+                    {
+                        types.push(b);
+                    }
+                }
+            }
+            i += 1;
+        }
+        // Nearest declaration wins (an override hides the base's).
+        types
+            .iter()
+            .find_map(|&t| {
+                let found: Vec<usize> = self.entries.iter().enumerate().filter(|(_, e)| e.owner == Some(t) && e.name == name).map(|(i, _)| i).collect();
+                (!found.is_empty()).then_some(found)
+            })
+            .unwrap_or_default()
+    }
+
+    fn resolve_call(&self, caller: usize, callee: &str, call: Option<&RawCall>, depth: u32) -> CallTarget {
+        let Some(lang) = self.lang(caller) else { return CallTarget::External };
+        let ex = &self.extracts[self.entries[caller].file];
+        let callee = de_alias(strip_constructor(callee, lang), &ex.aliases, lang);
+        let same_language = |e: &Entry| !e.is_module() && e.language == lang.name;
+        let is_member = |c: usize| self.entries[c].owner.is_some_and(|o| self.entries[o].is_type);
+        let Some((qualifier, sep, name)) = lang.split_last(&callee) else {
+            return self.bare(caller, &clean(&callee, lang), &ex.imports, lang);
+        };
+        let name = clean(name, lang);
+        let candidates: Vec<usize> = self.entries.iter().enumerate().filter(|(_, e)| same_language(e) && e.name == name).map(|(i, _)| i).collect();
+        let mut receiver = Receiver::Unknown;
+        if lang.is_member_separator(sep) {
+            receiver = self.receiver(caller, qualifier, call, depth);
+            match receiver {
+                Receiver::Typed(t) => return narrow(self.members(t, &name)).unwrap_or(CallTarget::External),
+                Receiver::Outside => return CallTarget::External,
+                Receiver::Unknown => {}
+            }
+        }
+        if lang.is_path_separator(sep) {
+            let path: Vec<String> = split(&callee, lang).into_iter().filter(|p| !lang.relative_prefixes.contains(p)).collect();
+            if let Some(target) = narrow(path_matches(self.entries, &candidates, &path)) {
+                return target;
+            }
+        }
+        // A value of unknown type: any member with the name could be meant.
+        let members: Vec<usize> = candidates.into_iter().filter(|&c| is_member(c)).collect();
+        match receiver {
+            Receiver::Unknown if lang.is_member_separator(sep) && !members.is_empty() => CallTarget::Unproven(members),
+            _ => CallTarget::External,
+        }
+    }
+
+    /// A bare name reaches free functions or types (constructors) in its own
+    /// module, or imported ones; anything else is unproven.
+    fn bare(&self, caller: usize, name: &str, imports: &[String], lang: &LanguageSpec) -> CallTarget {
+        let is_member = |c: usize| self.entries[c].owner.is_some_and(|o| self.entries[o].is_type);
+        let free: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| !e.is_module() && e.language == lang.name && e.name == name && !is_member(*i))
+            .map(|(i, _)| i)
+            .collect();
+        if free.is_empty() {
             return CallTarget::External;
         }
-        return narrow(candidates.into_iter().filter(|&c| is_member(c)).collect()).unwrap_or(CallTarget::External);
+        let caller_module = self.entries[caller].module.as_str();
+        if let Some(target) = narrow(free.iter().copied().filter(|&c| self.entries[c].module == caller_module).collect()) {
+            return target;
+        }
+        let imported: Vec<usize> = free
+            .iter()
+            .copied()
+            .filter(|&c| {
+                // Imported from its module or a package above it (re-exports),
+                // by name or with a glob.
+                let module = symbol_words(&self.entries[c].module);
+                imports.iter().any(|imp| {
+                    let words = symbol_words(imp);
+                    let glob = lang.glob_import.as_deref().is_some_and(|g| imp.contains(g));
+                    module.iter().any(|m| words.contains(m)) && (words.contains(&name) || glob)
+                })
+            })
+            .collect();
+        narrow(imported).unwrap_or(CallTarget::Unproven(free))
     }
-
-    // Bare calls reach free functions or types (constructors), not members.
-    let free: Vec<usize> = candidates.into_iter().filter(|&c| !is_member(c)).collect();
-    let caller_module = entries[caller].module.as_str();
-    if let Some(target) = narrow(free.iter().copied().filter(|&c| entries[c].module == caller_module).collect()) {
-        return target;
-    }
-    let imported: Vec<usize> = free
-        .iter()
-        .copied()
-        .filter(|&c| {
-            let module_tail = symbol_words(&entries[c].module).last().copied().unwrap_or("");
-            imports.iter().any(|imp| symbol_words(imp).contains(&name.as_str()) && symbol_words(imp).contains(&module_tail))
-        })
-        .collect();
-    if let Some(target) = narrow(imported) {
-        return target;
-    }
-    narrow(free).unwrap_or(CallTarget::External)
 }

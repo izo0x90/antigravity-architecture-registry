@@ -84,7 +84,7 @@ fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
         got,
         vec![
             // log's println (not reported again on the module that contains log).
-            (FindingCode::ForbiddenPattern, id("sample::log"), Severity::Error, Some(27)),
+            (FindingCode::ForbiddenPattern, id("sample::log"), Severity::Error, Some(30)),
             // new doesn't call self.check(); save does. Plain functions aren't handlers.
             (FindingCode::MissingRequiredPattern, id("sample::store::Store::new"), Severity::Error, Some(6)),
         ]

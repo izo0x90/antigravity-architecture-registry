@@ -9,7 +9,14 @@ ast_grep = "go"
 extensions = ["go"]
 separator = "."
 call_separators = ["."]
+path_separators = ["."]
+member_separators = ["."]
+reference_markers = ["*", "&"]
 package_manifest = "go.mod"
+# go.mod is line-based: `module example.com/app` names package "app".
+package_name_regex = "^module\\s+\\S*?([^/\\s]+)\\s*$"
+array_prefixes = ["[]"]
+deferred_scopes = ["func_literal"]
 
 [[definitions]]
 type = "function"
@@ -27,6 +34,8 @@ params_field = "parameters"
 return_field = "result"
 owner_field = "receiver"
 owner_kind = "type_identifier"
+# `s` in `func (s *Store)`: calls on it are calls on Store.
+receiver_name_kind = "identifier"
 
 [[definitions]]
 type = "class"
@@ -62,6 +71,12 @@ value_field = "right"
 
 [[imports]]
 rule = { kind = "import_declaration" }
+
+# `import st "example.com/app/store"`
+[[aliases]]
+rule = { kind = "import_spec", has = { field = "name", kind = "package_identifier" } }
+alias_field = "name"
+original_field = "path"
 
 [[placeholders]]
 rule = { kind = "call_expression", regex = "^panic\\(\"(TODO|not implemented)" }

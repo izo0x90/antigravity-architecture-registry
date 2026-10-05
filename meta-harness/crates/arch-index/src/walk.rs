@@ -57,11 +57,14 @@ pub fn module_symbol(root: &Path, path: &RepoPath, pack: &Pack) -> String {
     let mut segments: Vec<String> = Vec::new();
     let rest: &[&str] = match package_depth {
         Some(depth) => {
-            let name = match depth {
-                0 => root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            let dir: PathBuf = root.join(dirs[..depth].iter().collect::<PathBuf>());
+            let manifest = lang.package_manifest.as_deref().map(|m| dir.join(m));
+            let named = manifest.and_then(|m| std::fs::read_to_string(&m).ok().and_then(|text| package_name(&m, &text, pack)));
+            // Without a name in the manifest: the directory's own name.
+            let mut name = named.unwrap_or_else(|| match depth {
+                0 => root.canonicalize().ok().and_then(|r| r.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default(),
                 _ => dirs[depth - 1].to_owned(),
-            };
-            let mut name = name;
+            });
             for (from, to) in &lang.package_name_replace {
                 name = name.replace(from.as_str(), to.as_str());
             }
@@ -75,6 +78,7 @@ pub fn module_symbol(root: &Path, path: &RepoPath, pack: &Pack) -> String {
         rest.remove(0);
     }
     segments.extend(rest.iter().map(|s| (*s).to_owned()));
+    segments.retain(|s| !s.is_empty());
     let file = file[0];
     if !lang.index_files.iter().any(|i| i == file) {
         let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
@@ -84,4 +88,25 @@ pub fn module_symbol(root: &Path, path: &RepoPath, pack: &Pack) -> String {
         segments.push(lang.name.clone());
     }
     segments.join(&lang.separator)
+}
+
+/// The package name a manifest declares, per the pack: a key path into a
+/// TOML or JSON manifest, or a regex's first group.
+fn package_name(manifest: &Path, text: &str, pack: &Pack) -> Option<String> {
+    let lang = &pack.spec.language;
+    if let Some(re) = &pack.package_name_regex {
+        return re.captures(text).and_then(|c| c.get(1)).map(|m| m.as_str().to_owned());
+    }
+    if lang.package_name_key.is_empty() {
+        return None;
+    }
+    let value: serde_json::Value = match manifest.extension().and_then(|e| e.to_str()) {
+        Some("json") => serde_json::from_str(text).ok()?,
+        _ => serde_json::to_value(toml::from_str::<toml::Value>(text).ok()?).ok()?,
+    };
+    let mut node = &value;
+    for key in &lang.package_name_key {
+        node = node.get(key)?;
+    }
+    node.as_str().map(str::to_owned)
 }

@@ -186,6 +186,7 @@ dependencies = [
  "ast-grep-core",
  "ast-grep-language",
  "ignore",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

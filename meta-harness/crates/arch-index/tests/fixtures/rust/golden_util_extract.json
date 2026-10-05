@@ -3,6 +3,7 @@
   "file": "src/util.rs",
   "language": "rust",
   "content_hash": "e89e522065f3289107993bcc509c88050a3ae5348cbd3920a94f61624afd6abb",
+  "pack_fingerprint": "d5d722a90e44f473a7cb76d406a4d61642ea32c77d79a3a23c3daa9dc7cd2420",
   "module": "sample::util",
   "lines": 5,
   "bytes": 77,

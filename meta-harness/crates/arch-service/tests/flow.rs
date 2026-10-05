@@ -409,7 +409,7 @@ message = "log through the logger"
     let hit = report.findings.iter().find(|f| f.code == FindingCode::ForbiddenPattern).unwrap();
     assert_eq!((hit.severity, hit.component()), (Severity::Error, Some(&id("sample::log"))));
     assert!(hit.message.starts_with("[no-println] log through the logger"), "{}", hit.message);
-    assert_eq!(hit.at.as_ref().map(|a| (a.file.as_str(), a.span.start_line)), Some(("src/lib.rs", 27)));
+    assert_eq!(hit.at.as_ref().map(|a| (a.file.as_str(), a.span.start_line)), Some(("src/lib.rs", 30)));
     // Verification: the rule blocks Implemented until the code complies.
     approved_validate(&r, "v");
     append(&r, "src/lib.rs", "\npub fn validate(input: &str) -> bool { crate::store::Store::new(); println!(\"{input}\"); !input.is_empty() }\n");
@@ -491,7 +491,7 @@ fn view_requests_are_checked_and_announced() {
     assert_eq!(r.service.component_at("src/store.rs", 2, None).unwrap().id, id("sample::store::Store"));
     assert!(r.service.component_at("src/none.rs", 1, None).is_err());
     let file = r.service.file_view("src/store.rs", None).unwrap();
-    assert_eq!(file.components.len(), 6, "module, Store, new, save, check, helper");
+    assert_eq!(file.components.len(), 7, "module, Store, new, save, check, helper, store_each");
     assert!(file.relations.iter().any(|(rel, _)| rel.kind == RelationKind::Calls && rel.target == id("sample::store::Store::check")));
 }
 
