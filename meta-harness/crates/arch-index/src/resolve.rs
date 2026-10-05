@@ -131,6 +131,53 @@ fn de_alias(text: &str, aliases: &[(String, String)], lang: &LanguageSpec) -> St
     }
 }
 
+/// Every file's placeholder sites: its own, plus uses of macros that are
+/// placeholders. A name is one when the pack says so, when it aliases one
+/// (`use std::todo as later`), or when a definition anywhere in the repo
+/// (same language) expands to one; worked out to a fixpoint.
+fn placeholder_sites(extracts: &[FileExtract], packs: &PackSet) -> Vec<Vec<Span>> {
+    let mut names: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for ex in extracts {
+        if let Some(m) = packs.by_name(&ex.language).and_then(|p| p.spec.macros.as_ref()) {
+            names.entry(ex.language.as_str()).or_insert_with(|| m.placeholders.iter().cloned().collect());
+        }
+    }
+    loop {
+        let mut changed = false;
+        for ex in extracts {
+            let (Some(pack), Some(set)) = (packs.by_name(&ex.language), names.get_mut(ex.language.as_str())) else { continue };
+            let lang = &pack.spec.language;
+            for (alias, original) in &ex.aliases {
+                let last = lang.split_last(original).map_or(original.as_str(), |(_, _, n)| n);
+                if set.contains(last) && !set.contains(alias) {
+                    set.insert(alias.clone());
+                    changed = true;
+                }
+            }
+            for d in &ex.macro_defs {
+                if !set.contains(&d.name) && (d.placeholder || d.uses.iter().any(|u| set.contains(u))) {
+                    set.insert(d.name.clone());
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    extracts
+        .iter()
+        .map(|ex| {
+            let set = names.get(ex.language.as_str());
+            let mut out = ex.placeholders.clone();
+            out.extend(ex.macro_uses.iter().filter(|(n, _)| set.is_some_and(|s| s.contains(n))).map(|(_, span)| *span));
+            out.sort_by_key(|s| s.start_byte);
+            out.dedup();
+            out
+        })
+        .collect()
+}
+
 pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) -> Resolved {
     let mut out = Resolved::default();
     let mut entries: Vec<Entry> = Vec::new();
@@ -214,6 +261,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
         }
     }
 
+    let sites = placeholder_sites(extracts, packs);
     // Components.
     for entry in &entries {
         let ex = &extracts[entry.file];
@@ -225,7 +273,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
         // A placeholder counts for every definition containing it: code with a
         // nested unfinished part isn't finished either.
         let placeholders = match def {
-            Some(_) => ex.placeholders.iter().filter(|p| span.contains(p)).copied().collect(),
+            Some(_) => sites[entry.file].iter().filter(|p| span.contains(p)).copied().collect(),
             None => Vec::new(),
         };
         out.graph.upsert_component(
@@ -313,6 +361,20 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             };
             let Some(caller) = caller else { continue };
             let caller_id = entries[caller].id.clone();
+            if call.reference {
+                // A function named as a value may be called later: a deferred
+                // edge when the name is a known function, nothing otherwise.
+                if let CallTarget::One(target) = cx.resolve_call(caller, &call.callee, Some(call), 0)
+                    && entries[target].def.is_some()
+                    && !entries[target].is_type
+                {
+                    let mut relation = Relation::new(RelationKind::Calls, caller_id, entries[target].id.clone(), Provenance::OBSERVED);
+                    relation.sites.push(call.span);
+                    relation.deferred = true;
+                    out.graph.upsert_relation(relation);
+                }
+                continue;
+            }
             match cx.resolve_call(caller, &call.callee, Some(call), 0) {
                 CallTarget::One(target) => {
                     let mut relation = Relation::new(RelationKind::Calls, caller_id.clone(), entries[target].id.clone(), Provenance::OBSERVED);

@@ -15,8 +15,8 @@ use std::path::Path;
 
 use arch_graph::TypeSystem;
 
-pub use extract::{FileExtract, RawArg, RawCall, RawDef, RawScope, content_hash, extract_file};
-pub use pack::{AliasSpec, BindingSpec, CallSpec, DefinitionSpec, LanguageSpec, Pack, PackSet, PackSpec, ParamSpec, PlaceholderAliasSpec, RuleSpec, ScopeSpec};
+pub use extract::{FileExtract, MacroDef, RawArg, RawCall, RawDef, RawScope, content_hash, extract_file};
+pub use pack::{AliasSpec, BindingSpec, CallSpec, DefinitionSpec, LanguageSpec, Pack, PackSet, PackSpec, ParamSpec, MacroSpec, DeadCodeSpec, ConditionSpec, ConstantLogic, RuleSpec, ScopeSpec};
 pub use resolve::{AmbiguousCall, ExternalCall, Resolved, UnverifiedFlow, resolve};
 pub use rules::{CodeRule, CodeRuleSpec, CodeRules, RuleKind, RuleSeverity};
 pub use walk::{SourceFile, module_symbol, walk};

@@ -261,16 +261,196 @@ pub struct AliasSpec {
     pub original_ancestor: Option<String>,
 }
 
-/// Local macros (or similar) that expand to a placeholder: their uses are
-/// placeholders too.
+/// Macros (or anything invoked by name that expands to code): which names
+/// are placeholders, directly or through definitions and aliases anywhere
+/// in the repo. Resolution decides, across files, to a fixpoint.
 #[derive(Clone, Debug, Deserialize)]
-pub struct PlaceholderAliasSpec {
-    /// Matches a definition whose body holds a placeholder.
-    pub rule: toml::Value,
-    pub name_field: String,
-    /// Matches a use; its `invocation_name_field` names what's used.
+#[serde(deny_unknown_fields)]
+pub struct MacroSpec {
+    /// A use; `name_field` names what's used (its last path segment counts).
     pub invocation: toml::Value,
-    pub invocation_name_field: String,
+    pub name_field: String,
+    /// A definition; `definition_name_field` names it.
+    pub definition: toml::Value,
+    pub definition_name_field: String,
+    /// Names whose uses are placeholders.
+    pub placeholders: Vec<String>,
+    /// In a definition's text: the names it uses (first capture group).
+    pub definition_uses: String,
+    /// A definition whose text matches this is a placeholder itself.
+    #[serde(default)]
+    pub definition_placeholder: Option<String>,
+}
+
+/// Where a dead-code rule's condition is read from; the code is dead only
+/// when the condition is constant false under `[constant_logic]`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConditionSpec {
+    /// This field of the matched node's parent (`if <condition> { ... }`).
+    #[serde(default)]
+    pub parent_field: Option<String>,
+    /// The node right before the matched one, if it matches this rule; its
+    /// text through `capture` (first group) is the condition.
+    #[serde(default)]
+    pub preceding: Option<toml::Value>,
+    #[serde(default)]
+    pub capture: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeadCodeSpec {
+    pub rule: toml::Value,
+    /// Without a condition, a match is dead as is.
+    #[serde(default)]
+    pub condition: Option<ConditionSpec>,
+}
+
+/// How constant conditions are written: enough to tell code that can never
+/// run from code that might. Anything not built only from these is unknown
+/// (and never treated as dead).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConstantLogic {
+    #[serde(default)]
+    pub true_atoms: Vec<String>,
+    #[serde(default)]
+    pub false_atoms: Vec<String>,
+    #[serde(default)]
+    pub not_prefixes: Vec<String>,
+    #[serde(default)]
+    pub and_operators: Vec<String>,
+    #[serde(default)]
+    pub or_operators: Vec<String>,
+    /// Function forms: `all(a, b)`, `any(a, b)`, `not(a)`, `f(a)` = a.
+    #[serde(default)]
+    pub all_functions: Vec<String>,
+    #[serde(default)]
+    pub any_functions: Vec<String>,
+    #[serde(default)]
+    pub not_functions: Vec<String>,
+    #[serde(default)]
+    pub identity_functions: Vec<String>,
+}
+
+impl ConstantLogic {
+    /// The value of a constant condition, if it is one.
+    pub fn eval(&self, text: &str) -> Option<bool> {
+        let s: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        self.eval_norm(&s)
+    }
+
+    fn eval_norm(&self, s: &str) -> Option<bool> {
+        let s = strip_parens(s);
+        let norm = |list: &[String]| list.iter().map(|a| a.chars().filter(|c| !c.is_whitespace()).collect::<String>()).collect::<Vec<_>>();
+        if norm(&self.true_atoms).iter().any(|a| a == s) {
+            return Some(true);
+        }
+        if norm(&self.false_atoms).iter().any(|a| a == s) {
+            return Some(false);
+        }
+        // Lowest precedence first: or, then and.
+        for (ops, any) in [(&self.or_operators, true), (&self.and_operators, false)] {
+            let parts = split_top(s, &norm(ops));
+            if parts.len() > 1 {
+                let values: Vec<Option<bool>> = parts.iter().map(|p| self.eval_norm(p)).collect();
+                return combine(&values, any);
+            }
+        }
+        for prefix in norm(&self.not_prefixes) {
+            if let Some(rest) = s.strip_prefix(prefix.as_str())
+                && !rest.is_empty()
+                && let Some(v) = self.eval_norm(rest)
+            {
+                return Some(!v);
+            }
+        }
+        let open = s.find('(')?;
+        if !s.ends_with(')') {
+            return None;
+        }
+        let (name, args) = (&s[..open], &s[open + 1..s.len() - 1]);
+        let args: Vec<&str> = if args.is_empty() { Vec::new() } else { split_top(args, &[",".to_owned()]) };
+        let values: Vec<Option<bool>> = args.iter().map(|a| self.eval_norm(a)).collect();
+        let named = |list: &[String]| norm(list).iter().any(|n| n == name);
+        if named(&self.all_functions) {
+            combine(&values, false)
+        } else if named(&self.any_functions) {
+            combine(&values, true)
+        } else if named(&self.not_functions) && values.len() == 1 {
+            values[0].map(|v| !v)
+        } else if named(&self.identity_functions) && values.len() == 1 {
+            values[0]
+        } else {
+            None
+        }
+    }
+}
+
+/// `any` (or) / all (and) over values that may be unknown.
+fn combine(values: &[Option<bool>], any: bool) -> Option<bool> {
+    if any {
+        if values.contains(&Some(true)) {
+            Some(true)
+        } else if values.iter().all(|v| *v == Some(false)) {
+            Some(false)
+        } else {
+            None
+        }
+    } else if values.contains(&Some(false)) {
+        Some(false)
+    } else if values.iter().all(|v| *v == Some(true)) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// `(x)` -> `x`, when the parentheses wrap the whole text.
+fn strip_parens(s: &str) -> &str {
+    let mut s = s;
+    while s.starts_with('(') && s.ends_with(')') {
+        let mut depth = 0;
+        let wraps = s.char_indices().all(|(i, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            depth > 0 || i == s.len() - 1
+        });
+        if !wraps {
+            break;
+        }
+        s = &s[1..s.len() - 1];
+    }
+    s
+}
+
+/// Splits at any of `ops` outside brackets.
+fn split_top<'a>(s: &'a str, ops: &[String]) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let (mut depth, mut start, mut skip_until) = (0i32, 0usize, 0usize);
+    for (i, c) in s.char_indices() {
+        if i < skip_until {
+            continue;
+        }
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            _ if depth == 0 => {
+                if let Some(op) = ops.iter().filter(|o| !o.is_empty() && s[i..].starts_with(o.as_str())).max_by_key(|o| o.len()) {
+                    out.push(&s[start..i]);
+                    skip_until = i + op.len();
+                    start = skip_until;
+                }
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -298,11 +478,17 @@ pub struct PackSpec {
     #[serde(default)]
     pub placeholders: Vec<RuleSpec>,
     #[serde(default)]
-    pub placeholder_aliases: Vec<PlaceholderAliasSpec>,
+    pub macros: Option<MacroSpec>,
     /// Code that never runs as written (an always-false condition or cfg):
     /// calls inside aren't observed.
     #[serde(default)]
-    pub dead_code: Vec<RuleSpec>,
+    pub dead_code: Vec<DeadCodeSpec>,
+    #[serde(default)]
+    pub constant_logic: ConstantLogic,
+    /// A function named as a value (`let f = stubbed;`, `run(stubbed)`):
+    /// recorded as a deferred call when it names a known function.
+    #[serde(default)]
+    pub references: Vec<RuleSpec>,
 }
 
 /// A pack with its rules compiled for its language.
@@ -318,12 +504,20 @@ pub struct Pack {
     pub imports: Vec<RuleCore>,
     pub aliases: Vec<RuleCore>,
     pub placeholders: Vec<RuleCore>,
-    /// Per placeholder alias: (definition rule, invocation rule).
-    pub placeholder_aliases: Vec<(RuleCore, RuleCore)>,
-    pub dead_code: Vec<RuleCore>,
+    pub macros: Option<CompiledMacros>,
+    /// Per dead-code rule: its rule, and the rule a preceding node must match.
+    pub dead_code: Vec<(RuleCore, Option<RuleCore>, Option<regex::Regex>)>,
+    pub references: Vec<RuleCore>,
     pub package_name_regex: Option<regex::Regex>,
     /// Hash of the pack's text: extracts made with another version are stale.
     pub fingerprint: String,
+}
+
+pub struct CompiledMacros {
+    pub invocation: RuleCore,
+    pub definition: RuleCore,
+    pub uses: regex::Regex,
+    pub placeholder: Option<regex::Regex>,
 }
 
 impl std::fmt::Debug for Pack {
@@ -388,16 +582,37 @@ impl Pack {
             imports: rules(spec.imports.iter().map(|d| &d.rule).collect(), "imports")?,
             aliases: rules(spec.aliases.iter().map(|d| &d.rule).collect(), "aliases")?,
             placeholders: rules(spec.placeholders.iter().map(|d| &d.rule).collect(), "placeholders")?,
-            placeholder_aliases: spec
-                .placeholder_aliases
+            macros: spec
+                .macros
+                .as_ref()
+                .map(|m| {
+                    let what = format!("pack '{name}' macros");
+                    let regex = |r: &str, field: &str| regex::Regex::new(r).map_err(|e| IndexError::Pack(format!("{what}.{field}: {e}")));
+                    Ok::<_, IndexError>(CompiledMacros {
+                        invocation: compile(lang, &m.invocation, &format!("{what}.invocation"))?,
+                        definition: compile(lang, &m.definition, &format!("{what}.definition"))?,
+                        uses: regex(&m.definition_uses, "definition_uses")?,
+                        placeholder: m.definition_placeholder.as_deref().map(|r| regex(r, "definition_placeholder")).transpose()?,
+                    })
+                })
+                .transpose()?,
+            dead_code: spec
+                .dead_code
                 .iter()
                 .enumerate()
-                .map(|(i, a)| {
-                    let what = format!("pack '{name}' placeholder_aliases[{i}]");
-                    Ok((compile(lang, &a.rule, &what)?, compile(lang, &a.invocation, &format!("{what}.invocation"))?))
+                .map(|(i, d)| {
+                    let what = format!("pack '{name}' dead_code[{i}]");
+                    let preceding = d.condition.as_ref().and_then(|c| c.preceding.as_ref()).map(|r| compile(lang, r, &format!("{what}.condition.preceding"))).transpose()?;
+                    let capture = d
+                        .condition
+                        .as_ref()
+                        .and_then(|c| c.capture.as_deref())
+                        .map(|r| regex::Regex::new(r).map_err(|e| IndexError::Pack(format!("{what}.condition.capture: {e}"))))
+                        .transpose()?;
+                    Ok((compile(lang, &d.rule, &what)?, preceding, capture))
                 })
                 .collect::<Result<_, IndexError>>()?,
-            dead_code: rules(spec.dead_code.iter().map(|d| &d.rule).collect(), "dead_code")?,
+            references: rules(spec.references.iter().map(|d| &d.rule).collect(), "references")?,
             package_name_regex,
             fingerprint: crate::content_hash(text),
             lang,
@@ -453,5 +668,37 @@ impl PackSet {
 
     pub fn by_name(&self, name: &str) -> Option<&Pack> {
         self.packs.iter().find(|p| p.name() == name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constant_conditions_are_decided_only_when_built_from_constants() {
+        let rust = PackSet::built_in().unwrap();
+        let logic = &rust.by_name("rust").unwrap().spec.constant_logic;
+        for (text, value) in [
+            ("false", Some(false)),
+            ("(false)", Some(false)),
+            ("!true", Some(false)),
+            ("any()", Some(false)),
+            ("all()", Some(true)),
+            ("not(all())", Some(false)),
+            ("all(any())", Some(false)),
+            ("any(all(), x)", Some(true)),
+            ("cfg!(any())", Some(false)),
+            ("true && false", Some(false)),
+            ("false || true", Some(true)),
+            ("feature = \"x\"", None),
+            ("input.is_empty()", None),
+            ("NEVER", None),
+            ("1 == 2", None),
+            ("false && input.is_empty()", Some(false)),
+            ("\"🔄\").clicked(", None),
+        ] {
+            assert_eq!(logic.eval(text), value, "{text}");
+        }
     }
 }

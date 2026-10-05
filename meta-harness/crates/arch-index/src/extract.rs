@@ -63,6 +63,21 @@ pub struct RawCall {
     /// The receiver is a local declared with this type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receiver_type: Option<String>,
+    /// Not a call: a function named as a value (it may be called later). It
+    /// only counts when the name is a known function.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reference: bool,
+}
+
+/// A macro (or similar) defined in a file: the names its expansion uses, and
+/// whether it is a placeholder itself.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MacroDef {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub placeholder: bool,
 }
 
 /// An argument whose value is the output of another call in the same body.
@@ -96,6 +111,12 @@ pub struct FileExtract {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<(String, String)>,
     pub placeholders: Vec<Span>,
+    /// Macro uses by name (last path segment): which are placeholders is
+    /// decided across the repo at resolution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub macro_uses: Vec<(String, Span)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub macro_defs: Vec<MacroDef>,
 }
 
 impl FileExtract {
@@ -206,10 +227,12 @@ fn qualifiers(pack: &Pack, node: &AstNode<'_>) -> Vec<String> {
     let mut out = Vec::new();
     for child in node.children() {
         let kind = child.kind();
+        // As written (an ABI string is part of `extern "C"`), whitespace collapsed.
+        let written = |n: &AstNode<'_>| n.text().split_whitespace().collect::<Vec<_>>().join(" ");
         if lang.qualifier_tokens.iter().any(|t| *t == kind) {
-            out.push(kind.into_owned());
+            out.push(written(&child));
         } else if lang.qualifier_containers.iter().any(|c| *c == kind) {
-            out.extend(child.children().map(|g| g.kind().into_owned()).filter(|k| lang.qualifier_tokens.contains(k)));
+            out.extend(child.children().filter(|g| lang.qualifier_tokens.iter().any(|t| *t == g.kind())).map(|g| written(&g)));
         }
     }
     out
@@ -232,6 +255,28 @@ struct Ctx {
     dead: bool,
 }
 
+/// Whether `node` never runs: it matches a dead-code rule whose condition,
+/// if it has one, is constant false.
+fn dead(pack: &Pack, node: &AstNode<'_>) -> bool {
+    pack.dead_code.iter().zip(&pack.spec.dead_code).any(|((rule, preceding, capture), spec)| {
+        if !node.matches(rule) {
+            return false;
+        }
+        let Some(condition) = &spec.condition else { return true };
+        let text = match (&condition.parent_field, preceding) {
+            (Some(field), _) => node.parent().and_then(|p| p.field(field)).map(|c| c.text().to_string()),
+            (None, Some(rule)) => node.prev_all().find(|n| n.is_named()).filter(|n| n.matches(rule)).map(|n| n.text().to_string()),
+            (None, None) => None,
+        };
+        let text = match (text, capture) {
+            (Some(t), Some(re)) => re.captures(&t).and_then(|c| c.get(1)).map(|g| g.as_str().to_owned()),
+            (t, None) => t,
+            (None, _) => None,
+        };
+        text.is_some_and(|t| pack.spec.constant_logic.eval(&t) == Some(false))
+    })
+}
+
 /// Extracts one file. `module` is its module symbol (see `walk::module_symbol`).
 pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) -> FileExtract {
     let root = pack.lang.ast_grep(content);
@@ -249,13 +294,15 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
         imports: Vec::new(),
         aliases: Vec::new(),
         placeholders: Vec::new(),
+        macro_uses: Vec::new(),
+        macro_defs: Vec::new(),
     };
     let lang = &pack.spec.language;
     // Local names bound to a call's output (or a declared type), per enclosing definition.
     let mut bound: std::collections::HashMap<(Option<usize>, String), Bound> = std::collections::HashMap::new();
     let mut stack: Vec<(AstNode<'_>, Ctx)> = vec![(root.root(), Ctx { parent: None, scope: None, deferred: false, dead: false })];
     while let Some((node, mut ctx)) = stack.pop() {
-        if !ctx.dead && pack.dead_code.iter().any(|rule| node.matches(rule)) {
+        if !ctx.dead && dead(pack, &node) {
             ctx.dead = true;
         }
         if lang.deferred_scopes.iter().any(|k| *k == node.kind()) {
@@ -342,6 +389,19 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
                 deferred: ctx.deferred,
                 receiver_producer: receiver.and_then(|b| b.producer.as_ref().map(|(p, _)| p.clone())),
                 receiver_type: receiver.and_then(|b| b.ty.clone()),
+                reference: false,
+            });
+        }
+        if !ctx.dead && pack.references.iter().any(|rule| node.matches(rule)) {
+            out.calls.push(RawCall {
+                caller: ctx.parent,
+                callee: node.text().trim().to_owned(),
+                span: span(&node),
+                args: Vec::new(),
+                deferred: true,
+                receiver_producer: None,
+                receiver_type: None,
+                reference: true,
             });
         }
         // Children in reverse so the stack visits them in source order.
@@ -374,18 +434,22 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
     for rule in &pack.placeholders {
         out.placeholders.extend(root_node.find_all(rule).map(|m| span(m.get_node())));
     }
-    // Uses of local definitions that expand to a placeholder.
-    for ((definition, invocation), spec) in pack.placeholder_aliases.iter().zip(&pack.spec.placeholder_aliases) {
-        let names: Vec<String> = root_node.find_all(definition).filter_map(|m| field_text(m.get_node(), &spec.name_field)).collect();
-        if names.is_empty() {
-            continue;
-        }
-        for m in root_node.find_all(invocation) {
-            let used = field_text(m.get_node(), &spec.invocation_name_field).unwrap_or_default();
-            let last = lang.split_last(&used).map_or(used.as_str(), |(_, _, name)| name);
-            if names.iter().any(|n| n == last) {
-                out.placeholders.push(span(m.get_node()));
+    if let (Some(macros), Some(spec)) = (&pack.macros, &pack.spec.macros) {
+        let last = |name: &str| lang.split_last(name).map_or(name, |(_, _, n)| n).to_owned();
+        for m in root_node.find_all(&macros.invocation) {
+            if let Some(name) = field_text(m.get_node(), &spec.name_field) {
+                out.macro_uses.push((last(&name), span(m.get_node())));
             }
+        }
+        for m in root_node.find_all(&macros.definition) {
+            let node = m.get_node();
+            let Some(name) = field_text(node, &spec.definition_name_field) else { continue };
+            let text = node.text();
+            let mut uses: Vec<String> = macros.uses.captures_iter(&text).filter_map(|c| c.get(1).map(|g| last(g.as_str()))).filter(|u| *u != name).collect();
+            uses.sort();
+            uses.dedup();
+            let placeholder = macros.placeholder.as_ref().is_some_and(|r| r.is_match(&text));
+            out.macro_defs.push(MacroDef { name, uses, placeholder });
         }
     }
     out.placeholders.sort_by_key(|s| s.start_byte);

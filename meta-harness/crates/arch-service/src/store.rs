@@ -395,6 +395,8 @@ mod tests {
             imports: vec![],
             aliases: vec![],
             placeholders: vec![],
+            macro_uses: vec![],
+            macro_defs: vec![],
         }
     }
 

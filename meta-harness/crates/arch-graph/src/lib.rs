@@ -25,7 +25,7 @@ pub use component::{Component, ComponentId, ImplementationSpec, Invariant, Invar
 pub use graph::{Alignment, CallChain, ChainStep, Graph};
 pub use lifecycle::{Stage, Status, can_transition};
 pub use queue::{Job, JobKind, JobState, QueueSnapshot, QueueStatus};
-pub use plan::{Approval, Plan, PlanId, Reference, SCHEMA_VERSION, Workflow, check_schema_version};
+pub use plan::{Approval, ApprovalKind, Plan, REVOKED_BY, PlanId, Reference, SCHEMA_VERSION, Workflow, check_schema_version};
 pub use relation::{Provenance, Relation, RelationId, RelationKind};
 pub use schema::{Dsl, RefError, SchemaSet};
 pub use review::{Answer, Author, Change, Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, PlanDiff, Reply, ReviewSnapshot};

@@ -43,15 +43,38 @@ pub struct Reference {
     pub depth: u32,
 }
 
+/// What an entry in the approval log records.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalKind {
+    /// The user approved the move.
+    #[default]
+    Approved,
+    /// NAH took a stage back (the design or what it builds on changed, or its
+    /// code stopped holding up): earlier approvals past `to` no longer count.
+    Revoked,
+}
+
+impl ApprovalKind {
+    pub fn is_approved(&self) -> bool {
+        *self == ApprovalKind::Approved
+    }
+}
+
+/// Who records revocations in the approval log.
+pub const REVOKED_BY: &str = "nah";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Approval {
     pub component: ComponentId,
     pub from: Stage,
     pub to: Stage,
-    /// Who approved (a user, never an agent).
+    /// Who approved (a user, never an agent), or NAH for a revocation.
     pub by: String,
     /// RFC 3339 timestamp.
     pub at: String,
+    #[serde(default, skip_serializing_if = "ApprovalKind::is_approved")]
+    pub kind: ApprovalKind,
 }
 
 /// A named end-to-end behavior: the call chain from `entry`, derived from
@@ -125,6 +148,17 @@ impl Plan {
 
     pub fn to_json(&self) -> Result<String, ModelError> {
         serde_json::to_string_pretty(self).map_err(|e| ModelError::Format(e.to_string()))
+    }
+
+    /// Records that `id` was taken back from `from` to `to`.
+    pub fn revoke(&mut self, id: &ComponentId, from: Stage, to: Stage, at: &str) {
+        self.approvals.push(Approval { component: id.clone(), from, to, by: REVOKED_BY.to_owned(), at: at.to_owned(), kind: ApprovalKind::Revoked });
+    }
+
+    /// The user's plan approval is the latest word on `id`: nothing took it
+    /// back since.
+    pub fn plan_approved(&self, id: &ComponentId) -> bool {
+        self.approvals.iter().rev().find(|a| &a.component == id).is_some_and(|a| a.kind == ApprovalKind::Approved && a.to == Stage::PlanApproved)
     }
 
     pub fn component(&self, id: &ComponentId) -> Option<&Component> {

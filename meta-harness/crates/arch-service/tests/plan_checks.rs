@@ -744,7 +744,7 @@ fn verification_rereads_vanished_files_and_changed_callees() {
     extra.stage = Stage::PlanApproved;
     plan.components.push(extra);
     plan.relations.push(rel(RelationKind::Calls, "sample::validate", "sample::store::Store::new"));
-    plan.approvals.push(arch_graph::Approval { component: id("sample::validate"), from: Stage::ArchApproved, to: Stage::PlanApproved, by: "izo".into(), at: "2026-10-03T00:00:00Z".into() });
+    plan.approvals.push(arch_graph::Approval { component: id("sample::validate"), from: Stage::ArchApproved, to: Stage::PlanApproved, by: "izo".into(), at: "2026-10-03T00:00:00Z".into(), kind: arch_graph::ApprovalKind::Approved });
     FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
     append_lib(&r, "\npub fn validate(input: &str) -> bool {\n    crate::store::Store::new();\n    !input.is_empty()\n}\n");
     let verify = || r.service.verify(&pid("fresh"), &id("sample::validate"), Stage::Implemented).unwrap();
