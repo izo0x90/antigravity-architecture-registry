@@ -35,3 +35,26 @@ pub(super) fn loops(plan: &Plan, graph: &Graph, set: &SchemaSet, report: &mut Re
         }
     }
 }
+
+/// References to a name more than one data type has.
+pub(super) fn ambiguous_refs(plan: &Plan, graph: &Graph, ambiguous: &std::collections::BTreeMap<String, Vec<ComponentId>>, report: &mut Report) {
+    if ambiguous.is_empty() {
+        return;
+    }
+    for planned in &plan.components {
+        let Some(c) = graph.component(&planned.id) else { continue };
+        let mut named: BTreeSet<String> = BTreeSet::new();
+        for schema in [&c.schemas.properties, &c.schemas.inputs, &c.schemas.outputs].into_iter().flatten() {
+            named.extend(arch_graph::schema::refs(schema));
+        }
+        for title in named {
+            if let Some(ids) = ambiguous.get(&title) {
+                let list: Vec<&str> = ids.iter().map(ComponentId::as_str).collect();
+                report.push(
+                    Finding::error(FindingCode::AmbiguousSchemaRef, component(&c.id), format!("{title} could be any of {}", list.join(", ")))
+                        .suggest("rename one of the data types so the reference is unique"),
+                );
+            }
+        }
+    }
+}

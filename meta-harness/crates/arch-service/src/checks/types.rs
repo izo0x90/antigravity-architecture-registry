@@ -23,6 +23,10 @@ pub(super) fn rules(plan: &Plan, graph: &Graph, types: &TypeSystem, report: &mut
             if c.schemas.outputs.is_some() {
                 disallowed.push("outputs");
             }
+            // Side effects belong to things that run.
+            if !c.schemas.side_effects.is_empty() {
+                disallowed.push("side effects");
+            }
         }
         if c.spec.is_some() && !ty.allows_implementation_spec {
             disallowed.push("implementation spec");

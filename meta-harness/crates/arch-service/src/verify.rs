@@ -9,8 +9,25 @@ fn target(id: &ComponentId) -> Target {
     Target::Component { id: id.clone() }
 }
 
+/// A written type with spacing that doesn't matter removed: whitespace is
+/// kept (as one space) only between two word characters, so `& str`,
+/// `&str` and `Vec< T >` compare equal to their tight forms.
 fn normalize(ty: &str) -> String {
-    ty.split_whitespace().collect::<Vec<_>>().join(" ")
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::new();
+    let mut pending_space = false;
+    for c in ty.trim().chars() {
+        if c.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if pending_space && out.chars().last().is_some_and(word) && word(c) {
+            out.push(' ');
+        }
+        pending_space = false;
+        out.push(c);
+    }
+    out
 }
 
 /// Differences between the planned and the observed signature (only what the
@@ -37,16 +54,32 @@ pub fn signature_diff(planned: &Signature, observed: &Signature) -> Vec<String> 
     {
         diff.push(format!("returns: planned {r}, code has {}", observed.returns.as_deref().unwrap_or("nothing")));
     }
+    // Qualifiers change how it's called (async returns a future, unsafe
+    // needs an unsafe block), so they must match exactly.
+    let qualifiers = |s: &Signature| s.qualifiers.iter().cloned().collect::<std::collections::BTreeSet<String>>();
+    if qualifiers(planned) != qualifiers(observed) {
+        let show = |s: &Signature| if s.qualifiers.is_empty() { "none".to_owned() } else { s.qualifiers.join(" ") };
+        diff.push(format!("qualifiers: planned {}, code has {}", show(planned), show(observed)));
+    }
     diff
 }
 
-/// Does the code make this planned call? None when it does; otherwise a
+/// Does the code make this planned call? None when it does; a warning when
+/// it only does so in deferred code (a closure that may never run: calls in
+/// closures are common and legitimate, so this doesn't block); otherwise a
 /// MissingCallSite, or WrongCallTarget when it calls something of the same
 /// name instead.
 pub(crate) fn check_planned_call(relation: &Relation, observed: &Graph) -> Option<Finding> {
     let observed_calls: Vec<_> = observed.outgoing(&relation.source, Some(RelationKind::Calls)).collect();
-    if observed_calls.iter().any(|r| r.target == relation.target) {
-        return None;
+    if let Some(found) = observed_calls.iter().find(|r| r.target == relation.target) {
+        return found.deferred.then(|| {
+            Finding::warning(
+                FindingCode::MissingCallSite,
+                Target::Relation { id: relation.id() },
+                format!("{} calls {} only inside deferred code (a closure), which may never run", relation.source, relation.target),
+            )
+            .suggest("make sure the closure runs, or call it directly")
+        });
     }
     let last = |id: &ComponentId| id.as_str().rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("").to_owned();
     let target_name = last(&relation.target);
@@ -105,6 +138,12 @@ pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal
         report.push(at(Finding::error(FindingCode::SignatureMismatch, target(id), "planned with a signature, but the code has none")));
     }
 
+    if goal == Stage::Implemented {
+        for finding in hidden_placeholders(plan, code, observed) {
+            report.push(at(finding));
+        }
+    }
+
     if !code.placeholders.is_empty() {
         let message = format!("{} placeholder bodies remain", code.placeholders.len());
         let finding = match goal {
@@ -118,6 +157,49 @@ pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal
         report.push(finding);
     }
     report.sorted()
+}
+
+/// The first word of a component's symbol (its crate or top package): code
+/// in the same unit is what an implementation can lean on unplanned.
+fn unit(id: &ComponentId) -> &str {
+    let symbol = id.as_str().split_once(':').map_or(id.as_str(), |(_, s)| s);
+    symbol.split(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or(symbol)
+}
+
+/// Placeholder bodies the component leans on without the plan knowing:
+/// code in the same unit it calls (directly or through other unplanned
+/// code) that still has placeholders. Planned callees are excluded; their
+/// own stage says how far along they are.
+fn hidden_placeholders(plan: &Plan, code: &Component, observed: &Graph) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let mut seen: std::collections::BTreeSet<ComponentId> = std::collections::BTreeSet::from([code.id.clone()]);
+    let mut queue: std::collections::VecDeque<(ComponentId, Vec<ComponentId>)> = std::collections::VecDeque::from([(code.id.clone(), Vec::new())]);
+    while let Some((at, via)) = queue.pop_front() {
+        for r in observed.outgoing(&at, Some(RelationKind::Calls)) {
+            let callee = &r.target;
+            if !seen.insert(callee.clone()) || plan.component(callee).is_some() || unit(callee) != unit(&code.id) {
+                continue;
+            }
+            let Some(c) = observed.component(callee) else { continue };
+            let mut path = via.clone();
+            path.push(callee.clone());
+            if !c.placeholders.is_empty() {
+                let route: Vec<&str> = path.iter().map(ComponentId::as_str).collect();
+                let mut f = Finding::error(
+                    FindingCode::PlaceholderRemains,
+                    target(&code.id),
+                    format!("relies on {callee}, which still has {} placeholder bodies (via {})", c.placeholders.len(), route.join(" -> ")),
+                )
+                .suggest("implement the helper too, or plan it as its own component");
+                if let (Some(a), Some(span)) = (&c.anchor, c.placeholders.first()) {
+                    f = f.at(a.file.clone(), *span);
+                }
+                out.push(f);
+            }
+            queue.push_back((callee.clone(), path));
+        }
+    }
+    out
 }
 
 /// Each planned data flow into or out of `id` ends up confirmed (the code
@@ -154,4 +236,29 @@ pub fn planned_flows(plan: &Plan, id: &ComponentId, observed: &Graph, unverified
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arch_graph::{Provenance, Severity};
+
+    // req: P6.2
+    #[test]
+    fn calls_only_in_deferred_code_are_flagged_but_dont_block() {
+        let id = |s: &str| ComponentId::new(format!("rust:{s}"));
+        let planned = Relation::new(RelationKind::Calls, id("a::run"), id("a::save"), Provenance::PLANNED);
+        let mut observed = Graph::new();
+        let mut call = Relation::new(RelationKind::Calls, id("a::run"), id("a::save"), Provenance::OBSERVED);
+        call.deferred = true;
+        observed.upsert_relation(call.clone());
+        let finding = check_planned_call(&planned, &observed).unwrap();
+        assert_eq!(finding.severity, Severity::Warning);
+        assert!(finding.message.contains("only inside deferred code"), "{finding:?}");
+        // Called directly somewhere too: confirmed.
+        let mut direct = call;
+        direct.deferred = false;
+        observed.upsert_relation(direct);
+        assert_eq!(check_planned_call(&planned, &observed), None);
+    }
 }

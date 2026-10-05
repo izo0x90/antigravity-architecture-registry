@@ -80,6 +80,8 @@ pub enum FindingCode {
     DataFlowMissing,
     /// A planned data flow can't be confirmed from the code (no types).
     DataFlowUnverifiable,
+    /// A schema reference names more than one data type.
+    AmbiguousSchemaRef,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -573,3 +573,257 @@ fn planned_data_flows_are_confirmed_missing_or_explicitly_unverifiable() {
     // Seen from the source's side, the same three outcomes.
     assert_eq!(flows("sample::produce").len(), 1, "produce -> sink missing; produce -> consume confirmed");
 }
+
+fn lib_rs(r: &Repo) -> std::path::PathBuf {
+    r.root.join("src/lib.rs")
+}
+
+fn append_lib(r: &Repo, code: &str) {
+    let text = std::fs::read_to_string(lib_rs(r)).unwrap();
+    std::fs::write(lib_rs(r), text + code).unwrap();
+}
+
+fn str_sig() -> Option<Signature> {
+    Some(Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false }], returns: Some("bool".into()), qualifiers: vec![] })
+}
+
+// req: P5.9
+#[test]
+fn approval_is_blocked_by_errors_on_its_relations_and_on_the_plan() {
+    let r = repo();
+    r.service.create_plan("rel", "Relations", "").unwrap();
+    add(&r, "rel", "shouter", "function", "Calls shout.", Some(Signature::default()));
+    // The planned call doesn't fit shout's real signature: an error on the relation, not the component.
+    r.service
+        .apply(
+            &pid("rel"),
+            PlanOp::Relate {
+                kind: RelationKind::Calls,
+                source: id("sample::shouter"),
+                target: id("sample::util::shout"),
+                order: None,
+                ports: None,
+                note: None,
+                expects: Some(Schemas { inputs: Some(json!({"text": "str"})), ..Schemas::default() }),
+            },
+        )
+        .unwrap();
+    let err = r.service.approve(&pid("rel"), &id("sample::shouter"), Stage::ArchApproved, &user()).unwrap_err().to_string();
+    assert!(err.contains("parameter 's' isn't among the planned inputs"), "{err}");
+    // A plan-wide error (no touch point with existing code) blocks every approval in it.
+    r.service.create_plan("alone", "Alone", "").unwrap();
+    add(&r, "alone", "lonely", "function", "Talks to no one.", Some(Signature::default()));
+    let err = r.service.approve(&pid("alone"), &id("sample::lonely"), Stage::ArchApproved, &user()).unwrap_err().to_string();
+    assert!(err.contains("connect to existing code"), "{err}");
+}
+
+// req: P5.5
+#[test]
+fn callees_inherit_interface_schemas_calls_must_pass_required_inputs_and_ports_must_exist() {
+    let r = repo();
+    let mut plan = Plan::new("inherit", "Inherit");
+    let mut put = comp("sample::Sink::put", "operation");
+    put.schemas.inputs = schema(json!({"id": "int"}));
+    put.schemas.outputs = schema(json!("bool"));
+    // The implementation states no schemas of its own: the interface's apply.
+    let file_put = comp("sample::file_put", "function");
+    let caller = comp("sample::caller", "function");
+    let mut wrong = rel(RelationKind::Calls, "sample::caller", "sample::file_put");
+    wrong.expects = Some(Schemas { inputs: schema(json!({"id": "str"})), ..Schemas::default() });
+    let silent = comp("sample::silent", "function");
+    let mut nothing = rel(RelationKind::Calls, "sample::silent", "sample::file_put");
+    nothing.expects = Some(Schemas { outputs: schema(json!("bool")), ..Schemas::default() });
+    let mut produce = comp("sample::produce", "function");
+    produce.schemas.outputs = schema(json!({"count": "int"}));
+    let mut consume = comp("sample::consume", "function");
+    consume.schemas.inputs = schema(json!({"n": "int"}));
+    let mut flow = rel(RelationKind::DataFlow, "sample::produce", "sample::consume");
+    flow.ports = Some(("total".into(), "n".into()));
+    plan.components.extend([put, file_put, caller, silent, produce, consume]);
+    plan.relations.extend([rel(RelationKind::Implements, "sample::file_put", "sample::Sink::put"), wrong, nothing, flow]);
+    let report = check(&r, plan);
+    let found = messages(&report, FindingCode::SchemaMismatch);
+    let has = |needle: &str| found.iter().any(|m| m.contains(needle));
+    assert!(has("rust:sample::caller -> rust:sample::file_put: inputs: id: type string where integer is expected"), "{found:?}");
+    assert!(has("rust:sample::silent -> rust:sample::file_put: passes no inputs, but file_put requires some"), "{found:?}");
+    assert!(has("port 'total' isn't a field of rust:sample::produce's outputs (fields: count)"), "{found:?}");
+    assert_eq!(found.len(), 3, "{found:?}");
+}
+
+// req: P5.2
+#[test]
+fn side_effects_belong_to_types_that_run() {
+    let r = repo();
+    let mut plan = Plan::new("effects", "Effects");
+    let mut record = comp("sample::Record", "class");
+    record.schemas.side_effects = vec![SideEffect { target: "db".into(), description: String::new() }];
+    plan.components.push(record);
+    plan.relations.push(rel(RelationKind::Contains, "sample", "sample::Record"));
+    let report = check(&r, plan);
+    assert_eq!(messages(&report, FindingCode::DisallowedField), vec!["a class can't have side effects"]);
+}
+
+#[test]
+fn references_to_a_name_two_data_types_share_are_ambiguous() {
+    let r = repo();
+    let mut plan = Plan::new("amb", "Ambiguous");
+    let mut a = comp("sample::store::Config", "class");
+    a.schemas.properties = schema(json!({"path": "str"}));
+    let mut b = comp("sample::util::Config", "class");
+    b.schemas.properties = schema(json!({"level": "int"}));
+    let mut load = comp("sample::load", "function");
+    load.schemas.outputs = schema(json!("Config"));
+    plan.components.extend([a, b, load]);
+    let report = check(&r, plan);
+    assert_eq!(messages(&report, FindingCode::AmbiguousSchemaRef), vec!["Config could be any of rust:sample::store::Config, rust:sample::util::Config"]);
+}
+
+// req: P5.17
+#[test]
+fn contracts_list_the_open_placeholders_in_the_code() {
+    let r = repo();
+    r.service.create_plan("later", "Later", "").unwrap();
+    // `later` exists in the code with a todo!() body.
+    r.service.apply(&pid("later"), PlanOp::Modify { id: id("sample::later"), description: Some("Finish it.".into()), signature: None, schemas: None, spec: None }).unwrap();
+    let slice = r.service.contract(&pid("later"), &id("sample::later")).unwrap();
+    assert_eq!(slice.open_placeholders.len(), 1, "{slice:?}");
+    let line = slice.open_placeholders[0].start_line;
+    assert!(slice.to_markdown().contains(&format!("## Open placeholders\nLines {line} still have placeholder bodies.")));
+}
+
+// req: P5.7
+#[test]
+fn proposed_files_outside_the_repo_are_rejected() {
+    let r = repo();
+    r.service.create_plan("out", "Out", "").unwrap();
+    for file in ["../outside.rs", "/etc/evil.rs", "src/../../x.rs"] {
+        let err = r
+            .service
+            .apply(
+                &pid("out"),
+                PlanOp::AddComponent { name: "x".into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: Some(file.into()), signature: None, schemas: None, spec: None },
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("inside the repo"), "{file}: {err}");
+    }
+    // A plan file edited by hand can't sneak one in either.
+    let raw = r#"{"schema_version":1,"id":"hand","title":"Hand","components":[{"id":"rust:x","name":"x","type":"function","status":"new","stage":"declared","proposed":{"language":"rust","file":"../x.rs","symbol":"x"}}]}"#;
+    std::fs::write(r.root.join(".nah/plans/hand.json"), raw).unwrap();
+    assert!(matches!(r.service.plan(&pid("hand")), Err(arch_service::ServiceError::Corrupt(_))));
+}
+
+// req: P6.6
+#[test]
+fn implementing_needs_the_plan_approved_even_after_a_skeleton() {
+    let r = repo();
+    r.service.create_plan("skip", "Skip", "").unwrap();
+    add(&r, "skip", "validate", "function", "Validates input.", str_sig());
+    relate(&r, "skip", "sample::run", "sample::validate");
+    r.service.approve(&pid("skip"), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap();
+    append_lib(&r, "\npub fn validate(input: &str) -> bool {\n    todo!()\n}\n");
+    assert_eq!(r.service.verify(&pid("skip"), &id("sample::validate"), Stage::Skeleton).unwrap().advanced_to, Some(Stage::Skeleton));
+    let text = std::fs::read_to_string(lib_rs(&r)).unwrap().replace("    todo!()\n}", "    !input.is_empty()\n}");
+    std::fs::write(lib_rs(&r), text).unwrap();
+    // Architecture approval plus a skeleton isn't enough: the user approves the plan first.
+    let v = r.service.verify(&pid("skip"), &id("sample::validate"), Stage::Implemented).unwrap();
+    assert_eq!(v.advanced_to, None);
+    assert_eq!(messages(&v.report, FindingCode::ApprovalRequired), vec!["rust:sample::validate can only be implemented once the user approves its plan (PlanApproved)"]);
+    r.service.approve(&pid("skip"), &id("sample::validate"), Stage::PlanApproved, &user()).unwrap();
+    assert_eq!(r.service.verify(&pid("skip"), &id("sample::validate"), Stage::Implemented).unwrap().advanced_to, Some(Stage::Implemented));
+}
+
+// req: P6.6, P6.8
+#[test]
+fn verification_rereads_vanished_files_and_changed_callees() {
+    let r = repo();
+    // A component in lib.rs that calls Store::new in store.rs.
+    let mut plan = Plan::new("fresh", "Fresh");
+    let mut extra = comp("sample::validate", "function");
+    extra.signature = str_sig();
+    extra.stage = Stage::PlanApproved;
+    plan.components.push(extra);
+    plan.relations.push(rel(RelationKind::Calls, "sample::validate", "sample::store::Store::new"));
+    plan.approvals.push(arch_graph::Approval { component: id("sample::validate"), from: Stage::ArchApproved, to: Stage::PlanApproved, by: "izo".into(), at: "2026-10-03T00:00:00Z".into() });
+    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    append_lib(&r, "\npub fn validate(input: &str) -> bool {\n    crate::store::Store::new();\n    !input.is_empty()\n}\n");
+    let verify = || r.service.verify(&pid("fresh"), &id("sample::validate"), Stage::Implemented).unwrap();
+    assert_eq!(verify().advanced_to, Some(Stage::Implemented));
+    // The callee changes shape without anyone re-ingesting: verification sees it.
+    let store = r.root.join("src/store.rs");
+    std::fs::write(&store, std::fs::read_to_string(&store).unwrap().replace("pub fn new()", "pub fn create()")).unwrap();
+    let v = verify();
+    assert_eq!(v.advanced_to, None);
+    assert!(v.report.codes().contains(&FindingCode::MissingCallSite), "{:?}", v.report);
+    std::fs::write(&store, std::fs::read_to_string(&store).unwrap().replace("pub fn create()", "pub fn new()")).unwrap();
+    let first = verify();
+    assert_eq!(first.advanced_to, Some(Stage::Implemented), "{:?}", first.report);
+    // The file is deleted: verification notices instead of trusting the index.
+    std::fs::remove_file(lib_rs(&r)).unwrap();
+    let v = verify();
+    assert_eq!(v.advanced_to, None);
+    assert_eq!(v.report.codes(), vec![FindingCode::MissingSymbol]);
+}
+
+// req: P6.10, P6.11
+#[test]
+fn placeholders_hidden_in_unplanned_helpers_block_implemented() {
+    let r = repo();
+    r.service.create_plan("hide", "Hide", "").unwrap();
+    add(&r, "hide", "validate", "function", "Validates input.", str_sig());
+    relate(&r, "hide", "sample::run", "sample::validate");
+    r.service.approve(&pid("hide"), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap();
+    r.service.approve(&pid("hide"), &id("sample::validate"), Stage::PlanApproved, &user()).unwrap();
+    append_lib(&r, "\npub fn validate(input: &str) -> bool {\n    check_more(input)\n}\n\nfn check_more(input: &str) -> bool {\n    deeper(input)\n}\n\nfn deeper(input: &str) -> bool {\n    todo!()\n}\n");
+    let v = r.service.verify(&pid("hide"), &id("sample::validate"), Stage::Implemented).unwrap();
+    assert_eq!(v.advanced_to, None);
+    assert_eq!(
+        messages(&v.report, FindingCode::PlaceholderRemains),
+        vec!["relies on rust:sample::deeper, which still has 1 placeholder bodies (via rust:sample::check_more -> rust:sample::deeper)"]
+    );
+    // The scope reviewer's unplanned-call point blocks when the helper is a placeholder.
+    let text = std::fs::read_to_string(lib_rs(&r)).unwrap().replace("    check_more(input)\n", "    deeper(input)\n");
+    std::fs::write(lib_rs(&r), text).unwrap();
+    r.service.ingest(&r.root).unwrap();
+    let reviewed = r.service.review(&pid("hide"), &id("sample::validate")).unwrap();
+    let blocking: Vec<&str> = reviewed.report.findings.iter().filter(|f| f.severity == arch_graph::Severity::Error).map(|f| f.message.as_str()).collect();
+    assert!(blocking.iter().any(|m| m.contains("calls rust:sample::deeper, which the plan doesn't mention and which still has 1 placeholder bodies")), "{blocking:?}");
+    // Skeletons may lean on placeholders.
+    assert_eq!(r.service.verify(&pid("hide"), &id("sample::validate"), Stage::Skeleton).unwrap().advanced_to, Some(Stage::Skeleton));
+}
+
+// req: P3.5
+#[test]
+fn concurrent_plan_edits_are_never_lost() {
+    let r = repo();
+    r.service.create_plan("busy", "Busy", "").unwrap();
+    std::thread::scope(|s| {
+        for i in 0..8 {
+            let service = &r.service;
+            s.spawn(move || {
+                service
+                    .apply(
+                        &pid("busy"),
+                        PlanOp::AddComponent { name: format!("worker{i}"), type_name: "function".into(), description: format!("Worker {i}."), parent: Some(id("sample")), file: None, signature: Some(Signature::default()), schemas: None, spec: None },
+                    )
+                    .unwrap();
+            });
+        }
+    });
+    let plan = r.service.plan(&pid("busy")).unwrap();
+    assert_eq!(plan.components.len(), 8, "every edit landed: {:?}", plan.components.iter().map(|c| &c.name).collect::<Vec<_>>());
+}
+
+// req: P6.3
+#[test]
+fn signatures_compare_qualifiers_and_ignore_spacing() {
+    let sig = |ty: &str, returns: &str, qualifiers: &[&str]| Signature {
+        params: vec![arch_graph::Param { name: "input".into(), ty: Some(ty.into()), optional: false }],
+        returns: Some(returns.into()),
+        qualifiers: qualifiers.iter().map(|q| q.to_string()).collect(),
+    };
+    assert!(arch_service::signature_diff(&sig("&str", "Vec<String>", &[]), &sig("& str", "Vec< String >", &[])).is_empty(), "spacing doesn't matter");
+    assert!(!arch_service::signature_diff(&sig("&mut str", "u8", &[]), &sig("&mutstr", "u8", &[])).is_empty(), "word boundaries do");
+    assert_eq!(arch_service::signature_diff(&sig("&str", "bool", &[]), &sig("&str", "bool", &["async"])), vec!["qualifiers: planned none, code has async"]);
+    assert_eq!(arch_service::signature_diff(&sig("&str", "bool", &["unsafe"]), &sig("&str", "bool", &[])), vec!["qualifiers: planned unsafe, code has none"]);
+}

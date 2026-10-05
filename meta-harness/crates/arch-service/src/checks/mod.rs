@@ -46,6 +46,7 @@ pub fn check_plan(plan: &Plan, graph: &Graph, cx: &CheckCx) -> Report {
     types::rules(plan, graph, cx.types, &mut report);
     let set = schema_set(graph, cx.types);
     cycles::loops(plan, graph, &set, &mut report);
+    cycles::ambiguous_refs(plan, graph, &ambiguous_names(graph, cx.types), &mut report);
     schemas::fit(plan, graph, &set, cx.packs, &mut report);
     spec::rules(plan, graph, cx.tools, &mut report);
     gates::check(plan, graph, cx.types, &mut report);
@@ -56,6 +57,32 @@ pub fn check_plan(plan: &Plan, graph: &Graph, cx: &CheckCx) -> Report {
 /// `$ref`s point at, by name.
 pub fn is_data_type(types: &TypeSystem) -> impl Fn(&Component) -> bool + '_ {
     |c| types.resolve(&c.type_name).is_ok_and(|t| t.allows_properties && !t.allows_signature)
+}
+
+/// Data types sharing a name: a `$ref` to that name is ambiguous.
+pub fn ambiguous_names(graph: &Graph, types: &TypeSystem) -> std::collections::BTreeMap<String, Vec<arch_graph::ComponentId>> {
+    let data = is_data_type(types);
+    let mut by_name: std::collections::BTreeMap<String, Vec<arch_graph::ComponentId>> = std::collections::BTreeMap::new();
+    for c in graph.components().filter(|c| data(c)) {
+        by_name.entry(c.name.clone()).or_default().push(c.id.clone());
+    }
+    by_name.retain(|_, ids| ids.len() > 1);
+    by_name
+}
+
+/// The findings that keep `id` from being approved or advanced: errors on
+/// it, on relations it's an end of, and on the plan as a whole.
+pub fn blocking_for<'a>(report: &'a Report, plan: &Plan, id: &arch_graph::ComponentId) -> Vec<&'a arch_graph::Finding> {
+    report
+        .findings
+        .iter()
+        .filter(|f| f.severity == arch_graph::Severity::Error)
+        .filter(|f| match &f.target {
+            Target::Component { id: c } => c == id,
+            Target::Plan { .. } => true,
+            Target::Relation { id: r } => plan.relations.iter().any(|rel| &rel.id() == r && (&rel.source == id || &rel.target == id)),
+        })
+        .collect()
 }
 
 /// The named data types in `graph` (an unspecified shape when a type has no

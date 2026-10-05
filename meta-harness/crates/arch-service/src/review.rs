@@ -143,25 +143,34 @@ fn applies(def: &ReviewerDef, lineage: &[String]) -> bool {
     def.applies_to.is_empty() || def.applies_to.iter().any(|t| lineage.contains(t))
 }
 
-fn rule_findings(rule: &Rule, s: &Subject) -> Vec<String> {
+/// What a rule found, each with whether it blocks regardless of the
+/// reviewer's own setting.
+fn rule_findings(rule: &Rule, s: &Subject) -> Vec<(String, bool)> {
     let c = s.component;
     let calls: Vec<&ComponentId> = s.observed.outgoing(&c.id, Some(RelationKind::Calls)).map(|r| &r.target).collect();
     match rule {
         Rule::MaxLines { limit } => {
             let lines = c.anchor.as_ref().map(|a| a.span.end_line.saturating_sub(a.span.start_line) + 1).unwrap_or(0);
-            if lines > *limit { vec![format!("{lines} lines long (limit {limit}); split it")] } else { Vec::new() }
+            if lines > *limit { vec![(format!("{lines} lines long (limit {limit}); split it"), false)] } else { Vec::new() }
         }
         Rule::MaxCalls { limit } => {
             let distinct: BTreeSet<&ComponentId> = calls.iter().copied().collect();
-            if distinct.len() > *limit { vec![format!("calls {} components (limit {limit}); it does too much", distinct.len())] } else { Vec::new() }
+            if distinct.len() > *limit { vec![(format!("calls {} components (limit {limit}); it does too much", distinct.len()), false)] } else { Vec::new() }
         }
         Rule::UnplannedCalls if c.status == Status::New => {
             let planned: BTreeSet<&ComponentId> = s.plan.relations.iter().filter(|r| r.kind == RelationKind::Calls && r.source == c.id).map(|r| &r.target).collect();
             let extra: BTreeSet<&ComponentId> = calls.into_iter().filter(|t| !planned.contains(t)).collect();
-            extra.into_iter().map(|t| format!("calls {t}, which the plan doesn't mention; plan it or remove it")).collect()
+            // An unplanned helper that's still a placeholder hides unfinished work.
+            extra
+                .into_iter()
+                .map(|t| match s.observed.component(t).filter(|h| !h.placeholders.is_empty()) {
+                    Some(h) => (format!("calls {t}, which the plan doesn't mention and which still has {} placeholder bodies", h.placeholders.len()), true),
+                    None => (format!("calls {t}, which the plan doesn't mention; plan it or remove it"), false),
+                })
+                .collect()
         }
         Rule::UnplannedCalls => Vec::new(),
-        Rule::NoPlaceholders if !c.placeholders.is_empty() => vec![format!("{} placeholder bodies left", c.placeholders.len())],
+        Rule::NoPlaceholders if !c.placeholders.is_empty() => vec![(format!("{} placeholder bodies left", c.placeholders.len()), false)],
         Rule::NoPlaceholders => Vec::new(),
     }
 }
@@ -179,8 +188,8 @@ pub fn review(catalog: &ReviewerCatalog, types: &TypeSystem, provider: Option<&d
         let tag = format!("[{}/{name}]", def.category);
         match def.kind {
             ReviewerKind::Rule => {
-                let severity = if def.blocking { Severity::Error } else { Severity::Warning };
-                for message in def.rules.iter().flat_map(|r| rule_findings(r, s)) {
+                for (message, forced) in def.rules.iter().flat_map(|r| rule_findings(r, s)) {
+                    let severity = if def.blocking || forced { Severity::Error } else { Severity::Warning };
                     let mut f = Finding { severity, ..Finding::error(FindingCode::ReviewFinding, target(), format!("{tag} {message}")) };
                     if let Some(a) = &c.anchor {
                         f = f.at(a.file.clone(), a.span);

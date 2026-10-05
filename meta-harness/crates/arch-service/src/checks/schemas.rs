@@ -38,16 +38,38 @@ pub(super) fn fit(plan: &Plan, graph: &Graph, set: &SchemaSet, packs: &PackSet, 
     }
 }
 
+/// A component's inputs and outputs, falling back to the nearest interface
+/// it implements that states them.
+fn effective(graph: &Graph, c: &Component) -> (Option<Value>, Option<Value>) {
+    let chain: Vec<&Component> = graph.interface_chain(&c.id).iter().filter_map(|i| graph.component(i)).collect();
+    let inputs = c.schemas.inputs.clone().or_else(|| chain.iter().find_map(|i| i.schemas.inputs.clone()));
+    let outputs = c.schemas.outputs.clone().or_else(|| chain.iter().find_map(|i| i.schemas.outputs.clone()));
+    (inputs, outputs)
+}
+
+fn requires_inputs(schema: &Value) -> bool {
+    schema.get("required").and_then(Value::as_array).is_some_and(|r| !r.is_empty())
+}
+
 fn call(r: &Relation, graph: &Graph, resolve: &dyn Fn(&Option<Value>) -> Option<Value>, packs: &PackSet, report: &mut Report) {
     let (Some(expects), Some(callee)) = (&r.expects, graph.component(&r.target)) else { return };
     let target = || Target::Relation { id: r.id() };
     let mut mismatch = |code: FindingCode, msg: String| report.push(Finding::error(code, target(), format!("{} -> {}: {msg}", r.source, r.target)));
-    if let (Some(passed), Some(accepted)) = (resolve(&expects.inputs), resolve(&callee.schemas.inputs)) {
-        for p in compatibility(&passed, &accepted) {
-            mismatch(FindingCode::SchemaMismatch, format!("inputs: {p}"));
+    let (callee_inputs, callee_outputs) = effective(graph, callee);
+    let callee_inputs = resolve(&callee_inputs);
+    match (resolve(&expects.inputs), &callee_inputs) {
+        (Some(passed), Some(accepted)) => {
+            for p in compatibility(&passed, accepted) {
+                mismatch(FindingCode::SchemaMismatch, format!("inputs: {p}"));
+            }
         }
+        // States what it expects, but passes nothing to something that needs input.
+        (None, Some(accepted)) if expects.inputs.is_none() && requires_inputs(accepted) => {
+            mismatch(FindingCode::SchemaMismatch, format!("passes no inputs, but {} requires some", callee.name));
+        }
+        _ => {}
     }
-    if let (Some(given), Some(wanted)) = (resolve(&callee.schemas.outputs), resolve(&expects.outputs)) {
+    if let (Some(given), Some(wanted)) = (resolve(&callee_outputs), resolve(&expects.outputs)) {
         for p in compatibility(&given, &wanted) {
             mismatch(FindingCode::SchemaMismatch, format!("outputs: {p}"));
         }
@@ -57,22 +79,33 @@ fn call(r: &Relation, graph: &Graph, resolve: &dyn Fn(&Option<Value>) -> Option<
     }
 }
 
+/// Words of a parameter as written (`&mut self` -> ["mut", "self"]).
+fn words(name: &str) -> impl Iterator<Item = &str> {
+    name.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty())
+}
+
 /// The call's expected inputs/outputs against the callee's real signature
 /// (only for code that exists: a planned signature is checked by P6.3).
+/// Receivers (self, this...) aren't arguments; optional parameters may be
+/// left out.
 fn against_signature(callee: &Component, inputs: Option<&Value>, outputs: Option<&Value>, packs: &PackSet) -> Vec<String> {
     let (Some(anchor), Some(sig)) = (&callee.anchor, &callee.signature) else { return Vec::new() };
     let Some(lang) = packs.by_name(&anchor.language).map(|p| &p.spec.language) else { return Vec::new() };
     let mut out = Vec::new();
-    let params: Vec<_> = sig.params.iter().filter(|p| !lang.self_names.contains(&p.name)).collect();
+    let params: Vec<_> = sig.params.iter().filter(|p| !words(&p.name).any(|w| lang.self_names.iter().any(|s| s == w))).collect();
     if let Some(inputs) = inputs {
         let empty = serde_json::Map::new();
         let props = inputs.get("properties").and_then(Value::as_object).unwrap_or(&empty);
         let required: Vec<&str> = inputs.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
-        if params.len() < required.len() || params.len() > props.len() {
-            out.push(format!("{} takes {} argument(s); the call passes {} ({} required)", callee.name, params.len(), props.len(), required.len()));
+        let needed = params.iter().filter(|p| !p.optional).count();
+        if props.len() > params.len() || required.len() > params.len() || needed > props.len() {
+            let optional = params.len() - needed;
+            let takes = if optional > 0 { format!("{needed} argument(s) (+{optional} optional)") } else { format!("{} argument(s)", params.len()) };
+            out.push(format!("{} takes {takes}; the call passes {} ({} required)", callee.name, props.len(), required.len()));
         }
         for p in &params {
             match props.get(&p.name) {
+                None if p.optional => {}
                 None => out.push(format!("parameter '{}' isn't among the planned inputs", p.name)),
                 Some(schema) => {
                     if let Some(Err(why)) = p.ty.as_deref().and_then(|ty| carries(lang, ty, schema)) {
@@ -93,15 +126,100 @@ fn against_signature(callee: &Component, inputs: Option<&Value>, outputs: Option
     out
 }
 
+/// The part of `schema` a port names: a property of an object schema, or the
+/// whole value when the port is the source's return (`return`) or the schema
+/// has no fields. Err when the port names a field that isn't there.
+fn port(schema: Value, name: &str, whole_ok: bool) -> Result<Value, Vec<String>> {
+    match schema.get("properties").and_then(Value::as_object) {
+        Some(props) => match props.get(name) {
+            Some(field) => Ok(field.clone()),
+            None if whole_ok => Ok(schema.clone()),
+            None => Err(props.keys().cloned().collect()),
+        },
+        None => Ok(schema),
+    }
+}
+
 fn flow(r: &Relation, graph: &Graph, resolve: &dyn Fn(&Option<Value>) -> Option<Value>, report: &mut Report) {
     let (Some((out_port, in_port)), Some(source), Some(target)) = (&r.ports, graph.component(&r.source), graph.component(&r.target)) else { return };
-    let port = |schema: Option<Value>, name: &str| schema.map(|s| s.get("properties").and_then(|p| p.get(name)).cloned().unwrap_or(s));
-    let (Some(provided), Some(accepted)) = (port(resolve(&source.schemas.outputs), out_port), port(resolve(&target.schemas.inputs), in_port)) else { return };
-    for p in compatibility(&provided, &accepted) {
+    let (Some(outputs), Some(inputs)) = (resolve(&effective(graph, source).1), resolve(&effective(graph, target).0)) else { return };
+    let rel = || Target::Relation { id: r.id() };
+    let mut missing = |side: &str, who: &arch_graph::ComponentId, name: &str, fields: Vec<String>| {
         report.push(Finding::error(
             FindingCode::SchemaMismatch,
-            Target::Relation { id: r.id() },
-            format!("{}.{out_port} -> {}.{in_port}: {p}", r.source, r.target),
+            rel(),
+            format!("port '{name}' isn't a field of {who}'s {side} (fields: {})", fields.join(", ")),
         ));
+    };
+    let provided = match port(outputs, out_port, out_port == "return") {
+        Ok(v) => Some(v),
+        Err(fields) => {
+            missing("outputs", &r.source, out_port, fields);
+            None
+        }
+    };
+    let accepted = match port(inputs, in_port, false) {
+        Ok(v) => Some(v),
+        Err(fields) => {
+            missing("inputs", &r.target, in_port, fields);
+            None
+        }
+    };
+    let (Some(provided), Some(accepted)) = (provided, accepted) else { return };
+    for p in compatibility(&provided, &accepted) {
+        report.push(Finding::error(FindingCode::SchemaMismatch, rel(), format!("{}.{out_port} -> {}.{in_port}: {p}", r.source, r.target)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arch_graph::{CodeAnchor, ComponentId, Param, RepoPath, Schemas, Signature, Span, Stage, Status};
+    use serde_json::json;
+
+    fn method() -> Component {
+        let param = |name: &str, ty: &str, optional: bool| Param { name: name.into(), ty: Some(ty.into()), optional };
+        Component {
+            id: ComponentId::new("rust:app::Store::save"),
+            name: "save".into(),
+            type_name: "function".into(),
+            description: String::new(),
+            status: Status::Existing,
+            stage: Stage::Implemented,
+            anchor: Some(CodeAnchor {
+                language: "rust".into(),
+                file: RepoPath::new("src/store.rs").unwrap(),
+                symbol: "app::Store::save".into(),
+                syntax_kind: "function_item".into(),
+                span: Span { start_line: 1, end_line: 3, start_byte: 0, end_byte: 10 },
+                content_hash: "h".into(),
+            }),
+            proposed: None,
+            signature: Some(Signature { params: vec![param("&mut self", "", false), param("item", "&str", false), param("flush", "bool", true)], returns: None, qualifiers: vec![] }),
+            schemas: Schemas::default(),
+            spec: None,
+            placeholders: vec![],
+        }
+    }
+
+    fn inputs(v: serde_json::Value) -> Value {
+        arch_graph::Dsl::defaults().unwrap().compile(&v).unwrap()
+    }
+
+    // req: P5.6
+    #[test]
+    fn receivers_aren_t_arguments_and_optional_parameters_may_be_left_out() {
+        let packs = PackSet::built_in().unwrap();
+        let callee = method();
+        assert!(against_signature(&callee, Some(&inputs(json!({"item": "str"}))), None, &packs).is_empty(), "&mut self is the receiver; flush is optional");
+        assert!(against_signature(&callee, Some(&inputs(json!({"item": "str", "flush": "bool"}))), None, &packs).is_empty());
+        assert_eq!(
+            against_signature(&callee, Some(&inputs(json!({"flush": "bool"}))), None, &packs),
+            vec!["parameter 'item' isn't among the planned inputs"]
+        );
+        assert_eq!(
+            against_signature(&callee, Some(&inputs(json!({"item": "str", "flush": "bool", "extra": "int"}))), None, &packs),
+            vec!["save takes 1 argument(s) (+1 optional); the call passes 3 (3 required)", "planned input 'extra' isn't a parameter of save"]
+        );
     }
 }
