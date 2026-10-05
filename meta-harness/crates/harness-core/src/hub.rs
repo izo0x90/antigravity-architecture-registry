@@ -19,6 +19,8 @@ enum Key {
     Usage(ThreadId),
     /// The latest request to show part of the architecture graph.
     ArchitectureView,
+    /// The latest state of the work queue over a plan.
+    Queue(String),
 }
 
 struct Entry {
@@ -44,6 +46,8 @@ impl Cache {
             ClientEvent::Architecture { event } => match event {
                 // A late client should land where the agent last pointed.
                 arch_graph::ArchEvent::ViewRequested { .. } => (Key::ArchitectureView, None),
+                // ...and see where the work queue is.
+                arch_graph::ArchEvent::QueueUpdated { snapshot } => (Key::Queue(snapshot.plan.to_string()), None),
                 // Changes and checks are notifications; clients fetch current state.
                 _ => return,
             },

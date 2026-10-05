@@ -210,6 +210,12 @@ impl Queue {
         self.findings.get(id).map(Vec::as_slice).unwrap_or_default()
     }
 
+    /// The queue is being driven from now on.
+    pub fn activate(&mut self) {
+        self.active = true;
+        self.stopping = false;
+    }
+
     pub fn start(&mut self, id: &ComponentId, kind: JobKind) {
         self.active = true;
         self.running = Some((id.clone(), kind, None));

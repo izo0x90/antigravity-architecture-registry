@@ -35,7 +35,7 @@ impl IntoResponse for ArchError {
     }
 }
 
-type ArchResult<T> = Result<Json<T>, ArchError>;
+pub type ArchResult<T> = Result<Json<T>, ArchError>;
 
 /// Runs a service call off the async runtime (parsing and file I/O block).
 pub async fn blocking<T: Send + 'static>(
@@ -81,7 +81,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/arch/plans/{plan}/diff", get(review_diff))
 }
 
-fn plan_id(raw: &str) -> Result<PlanId, ArchError> {
+pub fn plan_id(raw: &str) -> Result<PlanId, ArchError> {
     PlanId::new(raw).map_err(|e| ArchError(ServiceError::InvalidOp(e.to_string())))
 }
 

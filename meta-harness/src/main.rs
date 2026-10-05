@@ -65,11 +65,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }];
     let sessions = Arc::new(SessionManager::new(instances.clone(), hub.clone(), mcp_servers));
 
-    let app = create_router(AppState { registry: instances, sessions, hub, mcp_state, arch, cockpit: meta_harness::cockpit::CockpitAuth::random() });
+    let queue = meta_harness::server::queue_runner(&arch, queue_config(&arch)?, &hub);
+    let app = create_router(AppState { registry: instances, sessions, hub, mcp_state, arch, cockpit: meta_harness::cockpit::CockpitAuth::random(), queue });
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");
     axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
     info!("Meta-harness stopped.");
     Ok(())
+}
+
+/// How the work queue runs: defaults plus the project's `.nah/queue.toml`.
+fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig, Box<dyn std::error::Error>> {
+    let mut config = arch_service::QueueConfig::defaults()?;
+    if let Ok(text) = std::fs::read_to_string(arch.root().join(".nah/queue.toml")) {
+        config.extend_from_toml(&text)?;
+    }
+    Ok(config)
 }
 
 /// The architecture service over the repo at `NAH_REPO_ROOT` (default: the

@@ -246,7 +246,8 @@ pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppS
     let registry = Arc::new(InstanceRegistry::new(vec![Arc::new(FakeDriver)], hub.clone()));
     registry.configure(registry.default_configs()).await.unwrap();
     let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone(), Vec::new()));
-    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::random() };
+    let queue = meta_harness::server::queue_runner(&arch, arch_service::QueueConfig::defaults().unwrap(), &hub);
+    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::random(), queue };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = create_router(state.clone());

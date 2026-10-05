@@ -31,6 +31,7 @@ pub struct AppState {
     pub mcp_state: crate::mcp::McpServerState,
     pub arch: Arc<arch_service::ArchitectureService>,
     pub cockpit: crate::cockpit::CockpitAuth,
+    pub queue: Arc<crate::queue::QueueRunner>,
 }
 
 impl axum::extract::FromRef<AppState> for crate::cockpit::CockpitAuth {
@@ -101,6 +102,12 @@ pub fn bridge_architecture_events(arch: &arch_service::ArchitectureService, hub:
     arch.subscribe(move |event| hub.publish(harness_contracts::ClientEvent::Architecture { event: event.clone() }));
 }
 
+/// The work queues, publishing their progress to every client.
+pub fn queue_runner(arch: &Arc<arch_service::ArchitectureService>, config: arch_service::QueueConfig, hub: &Arc<EventHub>) -> Arc<crate::queue::QueueRunner> {
+    let hub = hub.clone();
+    crate::queue::QueueRunner::new(arch.clone(), config, move |event| hub.publish(harness_contracts::ClientEvent::Architecture { event }))
+}
+
 pub fn create_router(state: AppState) -> Router {
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string());
     let mut router = Router::new()
@@ -127,7 +134,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/sse", get(mcp_sse_proxy).post(mcp_messages_proxy))
         .route("/api/mcp/messages", post(mcp_messages_proxy))
         .route("/ws/events", get(ws_events_handler))
-        .merge(crate::arch::routes());
+        .merge(crate::arch::routes())
+        .merge(crate::queue::routes());
 
     if std::path::Path::new(&static_dir).exists() {
         // The cockpit's page carries its session cookie.
