@@ -101,6 +101,12 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     let (status, body) = http(addr, "GET", "/api/arch/plans", None).await;
     assert_eq!(status, 200);
     assert_eq!(parse(&body)[0]["id"], "val");
+    let (status, body) = http(addr, "DELETE", "/api/arch/plans/nope", None).await;
+    assert_eq!(status, 404, "deleting a plan that doesn't exist: {body}");
+    let (status, _) = http(addr, "DELETE", "/api/arch/plans/val", None).await;
+    assert_eq!(status, 204);
+    let (status, _) = http(addr, "DELETE", "/api/arch/plans/val", None).await;
+    assert_eq!(status, 404, "already gone");
 }
 
 async fn next_architecture_event(ws: &mut (impl StreamExt<Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>> + Unpin)) -> ArchEvent {

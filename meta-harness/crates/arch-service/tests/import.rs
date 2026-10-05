@@ -66,7 +66,15 @@ fn the_old_registry_imports_into_a_plan_matched_to_code() {
     let reasons: Vec<String> = report.unmapped.iter().map(|u| format!("{}: {}", u.item, u.reason)).collect();
     assert!(reasons.iter().any(|r| r.starts_with("type enum: ") && r.contains("'class'")), "{reasons:#?}");
     assert!(reasons.iter().any(|r| r.starts_with("component audit_logger_log stage: was 'implemented'")), "{reasons:#?}");
-    assert!(reasons.iter().any(|r| r.starts_with("usage node user_calls_calculate expected_inputs")), "{reasons:#?}");
+    assert!(!reasons.iter().any(|r| r.contains("expected_")), "call-site expectations are carried, not dropped: {reasons:#?}");
+    // Call-site expectations travel with the call, references converted.
+    let call = |a: &str, b: &str| plan.relations.iter().find(|r| r.kind == RelationKind::Calls && r.source == id_of(a) && r.target == id_of(b)).unwrap();
+    let expects = call("calculator_client_run", "calculator_service_calculate").expects.as_ref().unwrap();
+    assert_eq!(expects.inputs.as_ref().unwrap()["properties"]["request"], serde_json::json!({"$ref": "calculation_request"}));
+    assert_eq!(expects.outputs.as_ref().unwrap()["properties"]["result"], serde_json::json!({"$ref": "calculation_result"}));
+    assert_eq!(expects.side_effects[0].target, "fs");
+    let to_logger = call("calculator_service_calculate", "audit_logger_log").expects.as_ref().unwrap();
+    assert!(to_logger.outputs.is_none() && to_logger.side_effects[0].description == "Appends to calc_history.log");
     // The plan was saved and checks run over it.
     assert_eq!(s.plan(&plan.id).unwrap(), plan);
     s.validate(&plan.id).unwrap();
@@ -86,6 +94,7 @@ fn unmappable_items_are_reported_not_dropped() {
             "orphan": {"id": "orphan", "name": "Orphan", "type": "function", "parent_id": "missing_parent", "description": ""},
             "widget": {"id": "widget", "name": "Widget", "type": "gizmo", "description": ""},
             "trigger": {"id": "trigger", "name": "Trigger", "type": "system_trigger", "description": ""},
+            "run": {"id": "run", "name": "run", "type": "function", "description": "Old entry point.", "status": "deprecated", "location": {"file_path": "src/lib.rs"}},
             "dto": {"id": "dto", "name": "Dto", "type": "class", "description": "", "location": {"file_path": "src/lib.rs"}, "properties": {"type": "object", "properties": {"x": {"type": "object", "title": "nowhere"}}},
                     "implementation_spec": {"invariants": [{"name": "odd", "type": "side_effects", "description": ""}], "logic_steps": [], "validation": [{"tool_id": "ruff", "targets": ["src"]}]}}
         },
@@ -114,7 +123,11 @@ fn unmappable_items_are_reported_not_dropped() {
     assert!(located_id.as_str().starts_with("rust:") && located_id.as_str().ends_with("::located"), "{located_id}");
     let located = plan.component(&located_id).unwrap();
     assert_eq!(located.proposed.as_ref().unwrap().file.as_str(), "src/new.rs");
-    assert_eq!(plan.components.len(), 2, "only what could be placed: {:?}", plan.components.iter().map(|c| &c.id).collect::<Vec<_>>());
+    // Deprecated code stays in the code, marked deprecated.
+    let run = report.components.iter().find(|c| c.old_id == "run").unwrap();
+    assert!(run.matched);
+    assert_eq!(plan.component(&run.id).unwrap().status, Status::Deprecated);
+    assert_eq!(plan.components.len(), 3, "only what could be placed: {:?}", plan.components.iter().map(|c| &c.id).collect::<Vec<_>>());
     assert_eq!(report.tools.get("ruff").unwrap().default_args, vec!["check", "{targets}"]);
     assert!(s.import_registry("bad", "Bad", "{ not json", None).is_err());
 }
