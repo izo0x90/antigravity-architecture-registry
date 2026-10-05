@@ -242,7 +242,7 @@ impl QueueRunner {
                 if let (Some(component), Ok(ty)) = (graph.component(&c), a.types().resolve(&current.component(&c).map(|x| x.type_name.clone()).unwrap_or_default())) {
                     let missing = missing_details(component, &ty);
                     if !missing.is_empty() {
-                        problems.push(Finding::error(FindingCode::SpecIncomplete, Target::Component { id: c.clone() }, format!("still missing: {}", missing.join(", "))));
+                        problems.push(Finding::error(FindingCode::SpecIncomplete, Target::Component { id: c.clone() }, format!("still missing: {}", missing.iter().map(|f| f.name()).collect::<Vec<_>>().join(", "))));
                     }
                 }
                 Ok(if problems.is_empty() { Outcome::Passed } else { Outcome::Failed(problems) })

@@ -100,7 +100,7 @@ fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>
     }
     let mut views = ViewCatalog::defaults()?;
     if let Ok(text) = std::fs::read_to_string(nah.join("views.toml")) {
-        views.extend_with(ViewCatalog::from_toml(&text)?);
+        views.extend_from_toml(&text)?;
     }
     let mut rules = CodeRules::defaults(&packs, &types)?;
     if nah.join("rules").is_dir() {
