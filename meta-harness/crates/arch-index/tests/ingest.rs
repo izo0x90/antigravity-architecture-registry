@@ -370,3 +370,77 @@ fn packs_are_strict_about_fields_and_the_types_they_map_onto() {
     assert!(err.contains("'widget'"), "{err}");
     assert!(PackSet::built_in().unwrap().check_types(&TypeSystem::defaults().unwrap()).is_ok());
 }
+
+// req: P4.6
+#[test]
+fn types_resolve_only_through_scope_and_imports() {
+    let packs = PackSet::built_in().unwrap();
+    // Python: a parameter typed with a library's `Session` isn't the repo's
+    // `client.Session`; one typed with a name that's neither local nor
+    // imported proves nothing.
+    let root = temp_repo(
+        "typeimports",
+        &[
+            ("client.py", "class Session:\n    def get(self):\n        return 1\n"),
+            ("lib_use.py", "from requests import Session\n\n\ndef f(s: Session):\n    s.get()\n"),
+            ("own_use.py", "from client import Session\n\n\ndef g(s: Session):\n    s.get()\n"),
+            ("loose.py", "def h(s: Session):\n    s.get()\n"),
+        ],
+    );
+    let (_, resolved) = run(&root, &packs);
+    let py = |s: &str| ComponentId::for_symbol("python", s);
+    let calls = |from: &str| resolved.graph.outgoing(&py(from), Some(RelationKind::Calls)).map(|r| r.target.to_string()).collect::<Vec<_>>();
+    assert_eq!(calls("own_use.g"), vec![py("client.Session.get").to_string()], "imported: proven");
+    assert!(calls("lib_use.f").is_empty(), "imported from elsewhere: not the repo's");
+    assert!(resolved.external.iter().any(|e| e.caller == py("lib_use.f")), "a library call");
+    assert!(calls("loose.h").is_empty());
+    let loose = resolved.unproven.iter().find(|u| u.caller == py("loose.h")).expect("recorded as unproven");
+    assert_eq!(loose.candidates, vec![py("client.Session.get")], "with its candidates");
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    // Rust: `Store::new()` proves nothing where `Store` isn't in scope; with
+    // `use crate::store::Store` (or the full path) it does.
+    let root = temp_repo(
+        "rustpaths",
+        &[
+            ("Cargo.toml", "[package]\nname = \"app\"\n"),
+            ("src/lib.rs", "pub mod store;\npub mod a;\npub mod b;\n"),
+            ("src/store.rs", "pub struct Store;\n\nimpl Store {\n    pub fn new() -> Self {\n        Store\n    }\n}\n"),
+            ("src/a.rs", "use crate::store::Store;\n\npub fn with_import() {\n    Store::new();\n}\n\npub fn full_path() {\n    crate::store::Store::new();\n}\n"),
+            ("src/b.rs", "pub fn without() {\n    Store::new();\n}\n"),
+        ],
+    );
+    let (_, resolved) = run(&root, &packs);
+    let rs = |s: &str| ComponentId::for_symbol("rust", s);
+    let calls = |from: &str| resolved.graph.outgoing(&rs(from), Some(RelationKind::Calls)).map(|r| r.target.to_string()).collect::<Vec<_>>();
+    assert_eq!(calls("app::a::with_import"), vec![rs("app::store::Store::new").to_string()]);
+    assert_eq!(calls("app::a::full_path"), vec![rs("app::store::Store::new").to_string()]);
+    assert!(calls("app::b::without").is_empty(), "not in scope: not linked");
+    assert!(resolved.unproven.iter().any(|u| u.caller == rs("app::b::without") && u.candidates == vec![rs("app::store::Store::new")]));
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+// req: P4.7
+#[test]
+fn scoped_walks_honor_ignores_from_the_root() {
+    let packs = PackSet::built_in().unwrap();
+    let root = temp_repo(
+        "scoped",
+        &[
+            (".gitignore", "gen/\n"),
+            ("gen/out.py", "def generated():\n    pass\n"),
+            ("src/keep.py", "def kept():\n    pass\n"),
+            (".github/hook.py", "def hook():\n    pass\n"),
+            ("github/real.py", "def real():\n    pass\n"),
+        ],
+    );
+    let files = |scope: &str| arch_index::walk(&root, Path::new(scope), &packs).unwrap().into_iter().map(|f| f.path.to_string()).collect::<Vec<_>>();
+    assert_eq!(files("."), vec!["github/real.py", "src/keep.py"]);
+    assert!(files("gen").is_empty(), "a git-ignored scope yields nothing, as in a full walk");
+    assert!(files(".github").is_empty(), "so does a hidden one");
+    assert_eq!(files("github"), vec!["github/real.py"]);
+    assert_eq!(files("src/keep.py"), vec!["src/keep.py"], "a single file");
+    for (path, ignored) in [("gen/out.py", true), ("gen/new.py", true), (".github/hook.py", true), ("src/keep.py", false), ("src/new.py", false)] {
+        assert_eq!(arch_index::ignored(&root, &root.join(path)), ignored, "{path}");
+    }
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}

@@ -229,7 +229,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     continue;
                 }
                 let (prefix, owner) = match (&def.scope, parent_entry) {
-                    (Some(scope), _) => match find_type(&entries, &scope.target, &ex.module, lang) {
+                    (Some(scope), _) => match find_type(&entries, &scope.target, ex, lang).found() {
                         Some(owner) => (entries[owner].symbol.clone(), Some(owner)),
                         None => (format!("{}{}{}", ex.module, lang.separator, clean(&scope.target, lang)), None),
                     },
@@ -341,7 +341,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             pairs.push((owner, iface.as_str()));
         }
         for (source, text) in pairs {
-            if let Some(target) = find_type(&entries, text, &ex.module, &pack.spec.language)
+            if let Some(target) = find_type(&entries, text, ex, &pack.spec.language).found()
                 && target != source
             {
                 link(&mut out.graph, RelationKind::Implements, &entries[source].id, &entries[target].id);
@@ -462,21 +462,107 @@ fn flow(entries: &[Entry], extracts: &[FileExtract], source: usize, target: usiz
     if compatible { Ok(("return".to_owned(), param.name.clone())) } else { Err(format!("{produced} doesn't match parameter '{}': {wanted}", param.name)) }
 }
 
+/// What a written type name refers to, seen from a file.
+enum TypeRef {
+    /// A type in the repo.
+    Found(usize),
+    /// Not a repo type: no repo type has the name, the qualified path leads
+    /// elsewhere, or the file imports the name from somewhere else.
+    Outside,
+    /// Repo types share the name, but nothing proves which (not local, not
+    /// imported).
+    Unknown,
+}
+
+impl TypeRef {
+    fn found(self) -> Option<usize> {
+        match self {
+            TypeRef::Found(t) => Some(t),
+            _ => None,
+        }
+    }
+}
+
 /// Finds a type component (one that can own members) by its written name,
-/// among the components of the same language.
-fn find_type(entries: &[Entry], text: &str, module: &str, lang: &LanguageSpec) -> Option<usize> {
-    let parts: Vec<String> = split(text, lang).into_iter().filter(|p| !lang.relative_prefixes.contains(p)).collect();
-    let name = parts.last()?;
+/// among the components of the same language, by the same evidence as calls:
+/// a qualified path, the file's own module, or its imports (aliases first).
+fn find_type(entries: &[Entry], text: &str, ex: &FileExtract, lang: &LanguageSpec) -> TypeRef {
+    let text = de_alias(text, &ex.aliases, lang);
+    let raw = split(&text, lang);
+    let anchored = raw.first().is_some_and(|w| lang.relative_prefixes.contains(w));
+    let parts: Vec<String> = raw.into_iter().filter(|p| !lang.relative_prefixes.contains(p)).collect();
+    let Some(name) = parts.last() else { return TypeRef::Outside };
     let candidates: Vec<usize> = entries.iter().enumerate().filter(|(_, e)| e.is_type && &e.name == name && e.language == lang.name).map(|(i, _)| i).collect();
-    if candidates.len() == 1 {
-        return candidates.first().copied();
+    if candidates.is_empty() {
+        return TypeRef::Outside;
     }
-    let by_path = path_matches(entries, &candidates, &parts, lang);
-    if by_path.len() == 1 {
-        return by_path.first().copied();
+    if parts.len() >= 2 {
+        return match path_matches(entries, &candidates, &parts, lang).as_slice() {
+            [] => TypeRef::Outside,
+            // `a::T` proves nothing unless `a` itself is in scope.
+            [one] if anchored || head_in_scope(entries, ex, lang, &parts[0]) => TypeRef::Found(*one),
+            _ => TypeRef::Unknown,
+        };
     }
-    let local: Vec<usize> = candidates.into_iter().filter(|&c| entries[c].module == module).collect();
-    if local.len() == 1 { local.first().copied() } else { None }
+    let local: Vec<usize> = candidates.iter().copied().filter(|&c| entries[c].module == ex.module).collect();
+    if let [one] = local.as_slice() {
+        return TypeRef::Found(*one);
+    }
+    let imported: Vec<usize> = candidates.iter().copied().filter(|&c| imports_from(&ex.imports, lang, &ex.module, name, &entries[c].module)).collect();
+    match imported.as_slice() {
+        [one] => TypeRef::Found(*one),
+        [] if names_import(&ex.imports, lang, name) => TypeRef::Outside,
+        _ => TypeRef::Unknown,
+    }
+}
+
+/// Whether the first segment of a qualified path means something in `ex`:
+/// a local definition, a submodule of its module, the package itself, or an
+/// imported name.
+fn head_in_scope(entries: &[Entry], ex: &FileExtract, lang: &LanguageSpec, head: &str) -> bool {
+    let submodule = format!("{}{}{head}", ex.module, lang.separator);
+    names_import(&ex.imports, lang, head)
+        || ex.aliases.iter().any(|(alias, _)| alias == head)
+        || lang.words(&ex.module).first() == Some(&head)
+        || entries.iter().any(|e| e.language == lang.name && ((e.module == ex.module && e.name == head && !e.is_module()) || (e.is_module() && e.symbol == submodule)))
+}
+
+/// Whether one of `imports` brings `name` in from `module` (the path names it,
+/// whole, or a package above it re-exporting; by name or with a glob). A
+/// path of only relative markers means the importer's module or one above.
+fn imports_from(imports: &[String], lang: &LanguageSpec, importer: &str, name: &str, module: &str) -> bool {
+    let importer_words = lang.words(importer);
+    let module = lang.words(module);
+    imports.iter().any(|imp| {
+        let glob = lang.glob_import.as_deref().is_some_and(|g| imp.contains(g));
+        let words: Vec<&str> = lang.words(imp).into_iter().filter(|w| !lang.import_keywords.iter().any(|k| k == w)).collect();
+        let marked = lang.relative_import_markers.iter().any(|m| imp.contains(m.as_str()));
+        let path_ok = |raw: &[&str]| {
+            let relative = marked || raw.first().is_some_and(|w| lang.relative_prefixes.iter().any(|r| r == w));
+            let path: Vec<&str> = raw.iter().copied().filter(|w| !lang.relative_prefixes.iter().any(|r| r == w)).collect();
+            // The module as the path below one of the importer's ancestors (or
+            // itself): `use store::X` from the crate root, `from .helpers ...`.
+            let below_ancestor = module.ends_with(&path) && importer_words.starts_with(&module[..module.len() - path.len()]);
+            if path.is_empty() {
+                !raw.is_empty() && importer_words.starts_with(&module)
+            } else if relative {
+                below_ancestor
+            } else {
+                // Or from the root: the module itself or a package above it.
+                below_ancestor || module.starts_with(&path)
+            }
+        };
+        (0..=words.len()).any(|i| {
+            let (head, tail) = words.split_at(i);
+            // `use a::b::name` (path first) or `import { name } from "a/b"` (names first).
+            (path_ok(head) && (glob || tail.contains(&name))) || (path_ok(tail) && (glob || head.contains(&name)))
+        })
+    })
+}
+
+/// Whether an import names `name` explicitly (from wherever).
+fn names_import(imports: &[String], lang: &LanguageSpec, name: &str) -> bool {
+    imports.iter().any(|imp| lang.words(imp).contains(&name))
 }
 
 /// Candidates whose symbol ends with the written qualified path.
@@ -552,10 +638,10 @@ impl Cx<'_> {
         if lang.self_names.contains(&base) {
             return self_type(self.entries, context).map_or(Receiver::Unknown, Receiver::Typed);
         }
-        match find_type(self.entries, text, &self.entries[context].module, lang) {
-            Some(t) => Receiver::Typed(t),
-            None if self.entries.iter().any(|e| e.is_type && e.name == base && e.language == lang.name) => Receiver::Unknown,
-            None => Receiver::Outside,
+        match find_type(self.entries, text, &self.extracts[self.entries[context].file], lang) {
+            TypeRef::Found(t) => Receiver::Typed(t),
+            TypeRef::Unknown => Receiver::Unknown,
+            TypeRef::Outside => Receiver::Outside,
         }
     }
 
@@ -625,9 +711,9 @@ impl Cx<'_> {
             };
         }
         // A type named directly (associated calls on a type value).
-        match find_type(self.entries, q, &self.entries[caller].module, lang) {
-            Some(t) => Receiver::Typed(t),
-            None => Receiver::Unknown,
+        match find_type(self.entries, q, &self.extracts[self.entries[caller].file], lang) {
+            TypeRef::Found(t) => Receiver::Typed(t),
+            TypeRef::Outside | TypeRef::Unknown => Receiver::Unknown,
         }
     }
 
@@ -642,7 +728,7 @@ impl Cx<'_> {
             if let Some((fi, di)) = self.entries[t].def
                 && let Some(lang) = self.lang(t)
             {
-                next.extend(self.extracts[fi].definitions[di].bases.iter().filter_map(|base| find_type(self.entries, base, &self.entries[t].module, lang)));
+                next.extend(self.extracts[fi].definitions[di].bases.iter().filter_map(|base| find_type(self.entries, base, &self.extracts[fi], lang).found()));
             }
             for b in next {
                 if !types.contains(&b) {
@@ -699,9 +785,16 @@ impl Cx<'_> {
             }
         }
         if lang.is_path_separator(sep) {
-            let path: Vec<String> = split(&callee, lang).into_iter().filter(|p| !lang.relative_prefixes.contains(p)).collect();
-            if let Some(target) = narrow(path_matches(self.entries, &candidates, &path, lang)) {
-                return target;
+            let raw = split(&callee, lang);
+            let anchored = raw.first().is_some_and(|w| lang.relative_prefixes.contains(w));
+            let path: Vec<String> = raw.into_iter().filter(|p| !lang.relative_prefixes.contains(p)).collect();
+            let matches = path_matches(self.entries, &candidates, &path, lang);
+            if !matches.is_empty() {
+                // `a::f` only proves `f` when `a` itself is in scope here.
+                return match anchored || path.first().is_some_and(|head| head_in_scope(self.entries, ex, lang, head)) {
+                    true => narrow(matches).unwrap_or(CallTarget::External),
+                    false => CallTarget::Unproven(matches),
+                };
             }
         }
         // A value of unknown type: any member with the name could be meant.
@@ -730,34 +823,7 @@ impl Cx<'_> {
         if let Some(target) = narrow(free.iter().copied().filter(|&c| self.entries[c].module == caller_module).collect()) {
             return target;
         }
-        let caller_words = lang.words(caller_module);
-        let imported: Vec<usize> = free
-            .iter()
-            .copied()
-            .filter(|&c| {
-                // Imported from its module (the path names it, whole) or from a
-                // package above it (re-exports), by name or with a glob; a path
-                // of only relative markers means the caller's module or one above.
-                let module = lang.words(&self.entries[c].module);
-                imports.iter().any(|imp| {
-                    let glob = lang.glob_import.as_deref().is_some_and(|g| imp.contains(g));
-                    let words: Vec<&str> = lang.words(imp).into_iter().filter(|w| !lang.import_keywords.iter().any(|k| k == w)).collect();
-                    let path_ok = |raw: &[&str]| {
-                        let path: Vec<&str> = raw.iter().copied().filter(|w| !lang.relative_prefixes.iter().any(|r| r == w)).collect();
-                        if path.is_empty() {
-                            !raw.is_empty() && caller_words.starts_with(&module)
-                        } else {
-                            module.ends_with(&path) || module.starts_with(&path)
-                        }
-                    };
-                    (0..=words.len()).any(|i| {
-                        let (head, tail) = words.split_at(i);
-                        // `use a::b::name` (path first) or `import { name } from "a/b"` (names first).
-                        (path_ok(head) && (glob || tail.contains(&name))) || (path_ok(tail) && (glob || head.contains(&name)))
-                    })
-                })
-            })
-            .collect();
+        let imported: Vec<usize> = free.iter().copied().filter(|&c| imports_from(imports, lang, caller_module, name, &self.entries[c].module)).collect();
         narrow(imported).unwrap_or(CallTarget::Unproven(free))
     }
 }

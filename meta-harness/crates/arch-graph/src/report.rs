@@ -37,6 +37,8 @@ pub enum FindingCode {
     MissingCallSite,
     WrongCallTarget,
     SignatureMismatch,
+    /// The code has the symbol, but as another kind of thing than planned.
+    WrongType,
     PlaceholderRemains,
     UnresolvedCall,
     IllegalTransition,

@@ -23,8 +23,12 @@ deferred_scopes = ["arrow_function", "function_expression"]
 qualifier_tokens = ["async"]
 module_type = "module"
 identifier_chars = "_$"
+# Words that can't name a definition.
+reserved_words = ["break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "function", "if", "import", "in", "instanceof", "new", "null", "return", "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with"]
 ignored_kinds = ["comment"]
 import_keywords = ["import", "from", "as", "type", "export"]
+# Import text that makes the path relative to the importer's package.
+relative_import_markers = ["\"./", "\"../", "'./", "'../"]
 super_receivers = ["super"]
 union_separators = ["|"]
 null_types = ["null", "undefined"]
@@ -119,9 +123,23 @@ alias_child_kind = "identifier"
 original_ancestor = "import_statement"
 original_field = "source"
 
-# Never runs: the body of `if (false)`.
+# Constant conditions, for code that can never run. Anything not built
+# only from these is undecided and its code counts as live.
+[constant_logic]
+true_atoms = ["true"]
+false_atoms = ["false"]
+not_prefixes = ["!"]
+and_operators = ["&&"]
+or_operators = ["||"]
+
+# Never runs: the body of an `if` or `while` whose condition is always false.
 [[dead_code]]
-rule = { kind = "statement_block", inside = { kind = "if_statement", field = "consequence", has = { field = "condition", regex = "^\\(\\s*false\\s*\\)$" } } }
+rule = { kind = "statement_block", any = [{ inside = { kind = "if_statement", field = "consequence" } }, { inside = { kind = "while_statement", field = "body" } }] }
+condition = { parent_field = "condition" }
+
+# Never runs: what follows an unconditional return in the same block.
+[[dead_code]]
+rule = { any = [{ kind = "expression_statement" }, { kind = "lexical_declaration" }], follows = { stopBy = "end", kind = "return_statement" } }
 
 [[placeholders]]
 rule = { kind = "throw_statement", regex = "(?i)(todo|not implemented)" }

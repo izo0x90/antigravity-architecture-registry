@@ -3,7 +3,7 @@
 //! changes only through ingestion. Every change is announced to listeners.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Component as PathPart, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -281,6 +281,18 @@ impl ArchitectureService {
 
     /// Brings the index up to date for one scope (a scope that no longer
     /// exists just drops what was indexed under it).
+    /// `scope` as a repo-relative prefix ("" for the whole repo), spelled the
+    /// way index entries are.
+    fn scope_prefix(&self, scope: &Path) -> String {
+        let absolute = if scope.is_absolute() { scope.to_path_buf() } else { self.root.join(scope) };
+        let relative = absolute.strip_prefix(&self.root).unwrap_or(&absolute).to_string_lossy().into_owned();
+        RepoPath::new(&relative).map(|p| p.as_str().to_owned()).unwrap_or_default()
+    }
+
+    fn under(file: &RepoPath, prefix: &str) -> bool {
+        prefix.is_empty() || file.as_str() == prefix || file.as_str().starts_with(&format!("{prefix}/"))
+    }
+
     fn index_scope(&self, scope: &Path, report: &mut IngestReport) -> Result<(), ServiceError> {
         let files = match scope.exists() {
             true => walk(&self.root, scope, &self.packs).map_err(|e| ServiceError::Index(e.to_string()))?,
@@ -306,10 +318,9 @@ impl ArchitectureService {
             report.changed.push(file.path.clone());
         }
         // Files under the scope that are gone (or now ignored) leave the index.
-        let prefix = scope.strip_prefix(&self.root).unwrap_or(scope).to_string_lossy().trim_start_matches("./").trim_start_matches('.').to_owned();
+        let prefix = self.scope_prefix(scope);
         for extract in self.index.all()? {
-            let under = prefix.is_empty() || extract.file.as_str() == prefix || extract.file.as_str().starts_with(&format!("{}/", prefix.trim_end_matches('/')));
-            if under && !seen.contains(&extract.file) {
+            if Self::under(&extract.file, &prefix) && !seen.contains(&extract.file) {
                 self.index.remove(&extract.file)?;
                 report.removed += 1;
                 report.changed.push(extract.file.clone());
@@ -325,7 +336,12 @@ impl ArchitectureService {
     /// call. Re-verification checks the code (location, calls, signature,
     /// call chain); tools and reviewers run on explicit verification only.
     pub fn refresh(&self, paths: &[PathBuf]) -> Result<Refresh, ServiceError> {
-        let scopes: Vec<PathBuf> = paths.iter().filter(|p| self.watches(p)).cloned().collect();
+        let mut scopes: Vec<PathBuf> = Vec::new();
+        for p in paths {
+            if self.watches(p)? {
+                scopes.push(p.clone());
+            }
+        }
         if scopes.is_empty() {
             return Ok(Refresh::default());
         }
@@ -383,28 +399,22 @@ impl ArchitectureService {
         Ok(Refresh { ingest, reverified, downgraded })
     }
 
-    /// Whether a changed path is something ingestion reads: a source file a
-    /// pack handles (or a vanished one), inside the repo, not hidden and not
-    /// git-ignored.
-    fn watches(&self, path: &Path) -> bool {
-        let Ok(relative) = path.strip_prefix(&self.root) else { return false };
-        if relative.components().any(|c| matches!(c, PathPart::Normal(n) if n.to_string_lossy().starts_with('.'))) {
-            return false;
+    /// Whether a changed path is something ingestion reads: inside the repo,
+    /// not ignored by the walk, and a source file a pack handles, a directory,
+    /// or a vanished path with indexed files under it (a renamed directory).
+    fn watches(&self, path: &Path) -> Result<bool, ServiceError> {
+        if !path.starts_with(&self.root) || arch_index::ignored(&self.root, path) {
+            return Ok(false);
         }
-        if path.is_dir() || self.packs.for_path(path).is_none() {
-            return false;
+        if path.is_dir() || self.packs.for_path(path).is_some() {
+            return Ok(true);
         }
-        // Every .gitignore from the root down to the file's directory.
-        let mut dir = self.root.clone();
-        let mut dirs = vec![dir.clone()];
-        for part in relative.parent().map(|p| p.components().collect::<Vec<_>>()).unwrap_or_default() {
-            dir.push(part);
-            dirs.push(dir.clone());
+        // A vanished directory (renamed or deleted) with indexed files under it.
+        if path.exists() {
+            return Ok(false);
         }
-        !dirs.iter().any(|d| {
-            let file = d.join(".gitignore");
-            file.is_file() && ignore::gitignore::Gitignore::new(&file).0.matched_path_or_any_parents(path, false).is_ignore()
-        })
+        let prefix = self.scope_prefix(path);
+        Ok(!prefix.is_empty() && self.index.all()?.iter().any(|e| Self::under(&e.file, &prefix)))
     }
 
     pub fn observed(&self) -> Result<Graph, ServiceError> {
@@ -693,7 +703,7 @@ impl ArchitectureService {
     /// The code checks for one planned component against `observed`; `deep`
     /// adds its validation tools and reviewers (once the code checks pass).
     fn check(&self, plan: &Plan, planned: &Component, observed: &Graph, goal: Stage, deep: bool) -> Result<Report, ServiceError> {
-        let mut report = verify::verify_component(plan, planned, observed, goal);
+        let mut report = verify::verify_component(plan, planned, observed, goal, &self.packs, &self.types);
         report.findings.extend(self.rules.check(observed.component(&planned.id), observed, &self.root, &self.packs, &self.types));
         report.extend(chain::recheck(plan, &planned.id, observed));
         let unverified = self.observed.read().map_err(ServiceError::poisoned)?.unverified.clone();

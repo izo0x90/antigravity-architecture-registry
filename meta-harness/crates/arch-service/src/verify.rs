@@ -3,7 +3,8 @@
 //! planned calls happen inside its body, compares its signature with the
 //! plan, and tracks placeholder bodies for the skeleton stage.
 
-use arch_graph::{Component, ComponentId, Finding, FindingCode, Graph, Plan, Relation, RelationKind, Report, Signature, Stage, Target};
+use arch_graph::{Component, ComponentId, Finding, FindingCode, Graph, Plan, Relation, RelationKind, Report, Signature, Stage, Target, TypeSystem};
+use arch_index::PackSet;
 
 fn target(id: &ComponentId) -> Target {
     Target::Component { id: id.clone() }
@@ -32,8 +33,18 @@ fn normalize(ty: &str) -> String {
 
 /// Differences between the planned and the observed signature (only what the
 /// plan states is compared: a planned param without a type matches any type).
-pub fn signature_diff(planned: &Signature, observed: &Signature) -> Vec<String> {
+/// A method's receiver (a code parameter written with one of `receivers`,
+/// the language's self names) isn't part of the planned interface unless the
+/// plan lists one too.
+pub fn signature_diff(planned: &Signature, observed: &Signature, receivers: &[String]) -> Vec<String> {
     let mut diff = Vec::new();
+    let is_receiver = |p: &arch_graph::Param| {
+        p.name.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|w| receivers.iter().any(|r| r == w))
+    };
+    let observed = &match planned.params.iter().any(is_receiver) {
+        true => observed.clone(),
+        false => Signature { params: observed.params.iter().filter(|p| !is_receiver(p)).cloned().collect(), ..observed.clone() },
+    };
     let names = |s: &Signature| s.params.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
     if planned.params.len() != observed.params.len() {
         diff.push(format!("parameters: planned ({}) vs code ({})", names(planned).join(", "), names(observed).join(", ")));
@@ -94,7 +105,7 @@ pub(crate) fn check_planned_call(relation: &Relation, observed: &Graph) -> Optio
 
 /// Verifies one planned component against the observed code, for reaching
 /// `goal` (Skeleton tolerates placeholder bodies; Implemented doesn't).
-pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal: Stage) -> Report {
+pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal: Stage, packs: &PackSet, types: &TypeSystem) -> Report {
     let mut report = Report::default();
     let id = &planned.id;
     let Some(code) = observed.component(id) else {
@@ -121,6 +132,17 @@ pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal
         Some(a) => f.at(a.file.clone(), a.span),
         None => f,
     };
+    // What's there must be what was planned (a specialization counts).
+    let same_kind = types.resolve(&code.type_name).is_ok_and(|t| t.is_a(&planned.type_name));
+    if !same_kind {
+        report.push(at(Finding::error(
+            FindingCode::WrongType,
+            target(id),
+            format!("planned as {}, but the code has {} {}", planned.type_name, code.type_name, planned.name),
+        )
+        .suggest("write it as planned, or change the plan's type")));
+    }
+    let receivers: Vec<String> = anchor.as_ref().and_then(|a| packs.by_name(&a.language)).map(|p| p.spec.language.self_names.clone()).unwrap_or_default();
 
     // Planned calls from this component must happen inside its body.
     for relation in plan.relations.iter().filter(|r| r.kind == RelationKind::Calls && &r.source == id) {
@@ -130,7 +152,7 @@ pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal
     }
 
     if let (Some(planned_sig), Some(code_sig)) = (&planned.signature, &code.signature) {
-        let diff = signature_diff(planned_sig, code_sig);
+        let diff = signature_diff(planned_sig, code_sig, &receivers);
         if !diff.is_empty() {
             report.push(at(Finding::error(FindingCode::SignatureMismatch, target(id), diff.join("; "))));
         }

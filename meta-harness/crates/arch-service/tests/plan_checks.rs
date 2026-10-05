@@ -835,10 +835,10 @@ fn signatures_compare_qualifiers_and_ignore_spacing() {
         returns: Some(returns.into()),
         qualifiers: qualifiers.iter().map(|q| q.to_string()).collect(),
     };
-    assert!(arch_service::signature_diff(&sig("&str", "Vec<String>", &[]), &sig("& str", "Vec< String >", &[])).is_empty(), "spacing doesn't matter");
-    assert!(!arch_service::signature_diff(&sig("&mut str", "u8", &[]), &sig("&mutstr", "u8", &[])).is_empty(), "word boundaries do");
-    assert_eq!(arch_service::signature_diff(&sig("&str", "bool", &[]), &sig("&str", "bool", &["async"])), vec!["qualifiers: planned none, code has async"]);
-    assert_eq!(arch_service::signature_diff(&sig("&str", "bool", &["unsafe"]), &sig("&str", "bool", &[])), vec!["qualifiers: planned unsafe, code has none"]);
+    assert!(arch_service::signature_diff(&sig("&str", "Vec<String>", &[]), &sig("& str", "Vec< String >", &[]), &[]).is_empty(), "spacing doesn't matter");
+    assert!(!arch_service::signature_diff(&sig("&mut str", "u8", &[]), &sig("&mutstr", "u8", &[]), &[]).is_empty(), "word boundaries do");
+    assert_eq!(arch_service::signature_diff(&sig("&str", "bool", &[]), &sig("&str", "bool", &["async"]), &[]), vec!["qualifiers: planned none, code has async"]);
+    assert_eq!(arch_service::signature_diff(&sig("&str", "bool", &["unsafe"]), &sig("&str", "bool", &[]), &[]), vec!["qualifiers: planned unsafe, code has none"]);
 }
 
 // req: P5.5
