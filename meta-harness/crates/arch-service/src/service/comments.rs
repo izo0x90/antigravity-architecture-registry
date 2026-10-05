@@ -69,10 +69,8 @@ pub fn approval_blocker(plan: &Plan, id: &ComponentId) -> Option<String> {
 }
 
 impl ArchitectureService {
-    fn save_review(&self, plan: &Plan, components: Vec<ComponentId>) -> Result<(), ServiceError> {
-        self.plans.save(plan)?;
-        self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan.id.clone()], components });
-        Ok(())
+    fn announce_review(&self, plan: &PlanId, components: Vec<ComponentId>) {
+        self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan.clone()], components });
     }
 
     fn anchor_ids(plan: &Plan, comment: &Comment) -> Vec<ComponentId> {
@@ -91,43 +89,48 @@ impl ArchitectureService {
     /// The user comments on (or asks for a change to) part of the plan.
     pub fn add_comment(&self, plan_id: &PlanId, new: NewComment, actor: &Actor) -> Result<Comment, ServiceError> {
         user_only(actor, "raises review comments")?;
-        let mut plan = self.plan(plan_id)?;
-        let graph = self.graph(Some(plan_id))?;
-        let exists = |id: &ComponentId| graph.component(id).is_some();
-        match &new.anchor {
-            CommentAnchor::Plan => {}
-            CommentAnchor::Component { id } | CommentAnchor::Section { id, .. } if !exists(id) => return Err(ServiceError::NotFound(format!("{id}"))),
-            CommentAnchor::Section { section, .. } if section.trim().is_empty() => return Err(ServiceError::InvalidOp("a section comment needs the section's name".into())),
-            CommentAnchor::Relation { kind, source, target } if !graph.outgoing(source, Some(*kind)).any(|r| &r.target == target) => {
-                return Err(ServiceError::NotFound(format!("relation {source} -{}-> {target}", kind.name())));
+        let (comment, touched) = self.edit_plan(plan_id, |plan| {
+            let graph = self.graph(Some(plan_id))?;
+            let exists = |id: &ComponentId| graph.component(id).is_some();
+            match &new.anchor {
+                CommentAnchor::Plan => {}
+                CommentAnchor::Component { id } | CommentAnchor::Section { id, .. } if !exists(id) => return Err(ServiceError::NotFound(format!("{id}"))),
+                CommentAnchor::Section { section, .. } if section.trim().is_empty() => return Err(ServiceError::InvalidOp("a section comment needs the section's name".into())),
+                CommentAnchor::Relation { kind, source, target } if !graph.outgoing(source, Some(*kind)).any(|r| &r.target == target) => {
+                    return Err(ServiceError::NotFound(format!("relation {source} -{}-> {target}", kind.name())));
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        let next = plan.comments.iter().filter_map(|c| c.id.0.strip_prefix('c')?.parse::<u32>().ok()).max().unwrap_or(0) + 1;
-        let comment = Comment {
-            id: CommentId(format!("c{next}")),
-            anchor: new.anchor,
-            kind: new.kind,
-            author: author(actor),
-            text: text(&new.text, "a comment")?,
-            at: now_rfc3339(),
-            status: CommentStatus::Open,
-            replies: Vec::new(),
-            answer: None,
-        };
-        plan.comments.push(comment.clone());
-        let touched = Self::anchor_ids(&plan, &comment);
-        self.save_review(&plan, touched)?;
+            let next = plan.comments.iter().filter_map(|c| c.id.0.strip_prefix('c')?.parse::<u32>().ok()).max().unwrap_or(0) + 1;
+            let comment = Comment {
+                id: CommentId(format!("c{next}")),
+                anchor: new.anchor,
+                kind: new.kind,
+                author: author(actor),
+                text: text(&new.text, "a comment")?,
+                at: now_rfc3339(),
+                status: CommentStatus::Open,
+                replies: Vec::new(),
+                answer: None,
+            };
+            plan.comments.push(comment.clone());
+            let touched = Self::anchor_ids(plan, &comment);
+            Ok((comment, touched))
+        })?;
+        self.announce_review(plan_id, touched);
         Ok(comment)
     }
 
     /// A reply in the comment's thread (user or agent); doesn't change its status.
     pub fn reply(&self, plan_id: &PlanId, comment_id: &CommentId, body: &str, actor: &Actor) -> Result<Comment, ServiceError> {
-        let mut plan = self.plan(plan_id)?;
-        let comment = find(&mut plan, comment_id)?;
-        comment.replies.push(Reply { author: author(actor), text: text(body, "a reply")?, at: now_rfc3339() });
-        let comment = comment.clone();
-        self.save_review(&plan, Self::anchor_ids(&plan, &comment))?;
+        let (comment, touched) = self.edit_plan(plan_id, |plan| {
+            let comment = find(plan, comment_id)?;
+            comment.replies.push(Reply { author: author(actor), text: text(body, "a reply")?, at: now_rfc3339() });
+            let comment = comment.clone();
+            let touched = Self::anchor_ids(plan, &comment);
+            Ok((comment, touched))
+        })?;
+        self.announce_review(plan_id, touched);
         Ok(comment)
     }
 
@@ -135,65 +138,74 @@ impl ArchitectureService {
     /// review) that address it. A change request must link at least one
     /// change touching what it's about.
     pub fn answer_comment(&self, plan_id: &PlanId, comment_id: &CommentId, body: &str, changed: &[ComponentId], actor: &Actor) -> Result<Comment, ServiceError> {
-        let mut plan = self.plan(plan_id)?;
-        let diff = arch_graph::review::diff(plan.last_review.as_ref(), &plan);
-        let since = diff.since.clone().map_or_else(|| "since the plan was started".to_owned(), |at| format!("since the review at {at}"));
-        let mut changes: Vec<Change> = Vec::new();
-        for id in changed {
-            let found: Vec<&Change> = diff.for_component(id).collect();
-            if found.is_empty() {
-                return Err(ServiceError::InvalidOp(format!("{id} hasn't changed {since}; change the plan (plan_edit) first, then link it")));
-            }
-            for change in found {
-                if !changes.contains(change) {
-                    changes.push(change.clone());
+        let (comment, touched) = self.edit_plan(plan_id, |plan| {
+            let diff = arch_graph::review::diff(plan.last_review.as_ref(), plan);
+            let since = diff.since.clone().map_or_else(|| "since the plan was started".to_owned(), |at| format!("since the review at {at}"));
+            let mut changes: Vec<Change> = Vec::new();
+            for id in changed {
+                let found: Vec<&Change> = diff.for_component(id).collect();
+                if found.is_empty() {
+                    return Err(ServiceError::InvalidOp(format!("{id} hasn't changed {since}; change the plan (plan_edit) first, then link it")));
+                }
+                for change in found {
+                    if !changes.contains(change) {
+                        changes.push(change.clone());
+                    }
                 }
             }
-        }
-        let comment = find(&mut plan, comment_id)?;
-        if comment.status == CommentStatus::Resolved {
-            return Err(ServiceError::InvalidOp(format!("{comment_id} is already resolved")));
-        }
-        if comment.kind == CommentKind::ChangeRequest && !changes.iter().any(|ch| ch.components().iter().any(|id| comment.anchor.touches(id))) {
-            return Err(ServiceError::InvalidOp(format!(
-                "{comment_id} asks for a change to {}: link the change you made to it (components changed {since}: {})",
-                comment.anchor.describe(),
-                diff.components().iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", ")
-            )));
-        }
-        comment.answer = Some(Answer { author: author(actor), text: text(body, "an answer")?, changes, at: now_rfc3339() });
-        comment.status = CommentStatus::Answered;
-        let comment = comment.clone();
-        self.save_review(&plan, Self::anchor_ids(&plan, &comment))?;
+            let comment = find(plan, comment_id)?;
+            if comment.status == CommentStatus::Resolved {
+                return Err(ServiceError::InvalidOp(format!("{comment_id} is already resolved")));
+            }
+            if comment.kind == CommentKind::ChangeRequest && !changes.iter().any(|ch| ch.components().iter().any(|id| comment.anchor.touches(id))) {
+                return Err(ServiceError::InvalidOp(format!(
+                    "{comment_id} asks for a change to {}: link the change you made to it (components changed {since}: {})",
+                    comment.anchor.describe(),
+                    diff.components().iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", ")
+                )));
+            }
+            comment.answer = Some(Answer { author: author(actor), text: text(body, "an answer")?, changes, at: now_rfc3339() });
+            comment.status = CommentStatus::Answered;
+            let comment = comment.clone();
+            let touched = Self::anchor_ids(plan, &comment);
+            Ok((comment, touched))
+        })?;
+        self.announce_review(plan_id, touched);
         Ok(comment)
     }
 
     /// The user accepts the answer: the point is addressed.
     pub fn accept_comment(&self, plan_id: &PlanId, comment_id: &CommentId, actor: &Actor) -> Result<Comment, ServiceError> {
         user_only(actor, "accepts answers")?;
-        let mut plan = self.plan(plan_id)?;
-        let comment = find(&mut plan, comment_id)?;
-        if comment.status != CommentStatus::Answered {
-            return Err(ServiceError::InvalidOp(format!("{comment_id} has no answer to accept yet")));
-        }
-        comment.status = CommentStatus::Resolved;
-        let comment = comment.clone();
-        self.save_review(&plan, Self::anchor_ids(&plan, &comment))?;
+        let (comment, touched) = self.edit_plan(plan_id, |plan| {
+            let comment = find(plan, comment_id)?;
+            if comment.status != CommentStatus::Answered {
+                return Err(ServiceError::InvalidOp(format!("{comment_id} has no answer to accept yet")));
+            }
+            comment.status = CommentStatus::Resolved;
+            let comment = comment.clone();
+            let touched = Self::anchor_ids(plan, &comment);
+            Ok((comment, touched))
+        })?;
+        self.announce_review(plan_id, touched);
         Ok(comment)
     }
 
     /// The user isn't satisfied: the point is open again, with the reason.
     pub fn reopen_comment(&self, plan_id: &PlanId, comment_id: &CommentId, reason: &str, actor: &Actor) -> Result<Comment, ServiceError> {
         user_only(actor, "reopens comments")?;
-        let mut plan = self.plan(plan_id)?;
-        let comment = find(&mut plan, comment_id)?;
-        if comment.status == CommentStatus::Open {
-            return Err(ServiceError::InvalidOp(format!("{comment_id} is already open")));
-        }
-        comment.replies.push(Reply { author: author(actor), text: text(reason, "reopening")?, at: now_rfc3339() });
-        comment.status = CommentStatus::Open;
-        let comment = comment.clone();
-        self.save_review(&plan, Self::anchor_ids(&plan, &comment))?;
+        let (comment, touched) = self.edit_plan(plan_id, |plan| {
+            let comment = find(plan, comment_id)?;
+            if comment.status == CommentStatus::Open {
+                return Err(ServiceError::InvalidOp(format!("{comment_id} is already open")));
+            }
+            comment.replies.push(Reply { author: author(actor), text: text(reason, "reopening")?, at: now_rfc3339() });
+            comment.status = CommentStatus::Open;
+            let comment = comment.clone();
+            let touched = Self::anchor_ids(plan, &comment);
+            Ok((comment, touched))
+        })?;
+        self.announce_review(plan_id, touched);
         Ok(comment)
     }
 
@@ -202,10 +214,12 @@ impl ArchitectureService {
         let Actor::User { name } = actor else {
             return Err(ServiceError::Forbidden("only the user marks a plan reviewed".into()));
         };
-        let mut plan = self.plan(plan_id)?;
-        let snapshot = ReviewSnapshot::of(&plan, name, &now_rfc3339());
-        plan.last_review = Some(snapshot.clone());
-        self.save_review(&plan, Vec::new())?;
+        let snapshot = self.edit_plan(plan_id, |plan| {
+            let snapshot = ReviewSnapshot::of(plan, name, &now_rfc3339());
+            plan.last_review = Some(snapshot.clone());
+            Ok(snapshot)
+        })?;
+        self.announce_review(plan_id, Vec::new());
         Ok(snapshot)
     }
 

@@ -87,6 +87,10 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "skeleton" })).await;
     assert!(!err && text.contains("is now Skeleton") && text.contains("replace the placeholder bodies"), "{text}");
     std::fs::write(&lib, code.replace("    todo!()\n", "    !input.is_empty()\n")).unwrap();
+    // Implementing needs the user's plan approval (after the skeleton is fine).
+    let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "implemented" })).await;
+    assert!(!err && text.contains("approves its plan"), "{text}");
+    state.arch.approve(&arch_graph::PlanId::new("val").unwrap(), &arch_graph::ComponentId::new("rust:sample::validate"), arch_graph::Stage::PlanApproved, &arch_service::Actor::User { name: "izo".into() }).unwrap();
     let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "implemented" })).await;
     assert!(!err && text.contains("is now Implemented") && text.contains("nothing pending"), "{text}");
     let (err, _) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "declared" })).await;

@@ -2,9 +2,9 @@
 //! laid over it. Plans change only through operations; the observed graph
 //! changes only through ingestion. Every change is announced to listeners.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Component as PathPart, Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use arch_graph::view::{layout, query, render_text};
@@ -67,6 +67,9 @@ pub struct Reverified {
     /// The stage it was re-verified for (its current one).
     pub stage: Stage,
     pub report: Report,
+    /// Where it was sent back to because the code no longer holds up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demoted_to: Option<Stage>,
 }
 
 /// What a refresh read and which components it re-verified.
@@ -104,6 +107,8 @@ pub struct ArchitectureService {
     runner: Arc<dyn ToolRunner>,
     reviewers: ReviewerCatalog,
     review_provider: Option<Arc<dyn ReviewProvider>>,
+    /// One lock per plan, held across load -> change -> save.
+    plan_locks: Mutex<HashMap<PlanId, Arc<Mutex<()>>>>,
 }
 
 fn now_rfc3339() -> String {
@@ -142,6 +147,7 @@ impl ArchitectureService {
             runner: Arc::new(ProcessRunner),
             reviewers: ReviewerCatalog::defaults()?,
             review_provider: None,
+            plan_locks: Mutex::new(HashMap::new()),
         };
         service.rebuild_observed()?;
         Ok(service)
@@ -212,6 +218,26 @@ impl ArchitectureService {
         for listener in listeners {
             listener(&event);
         }
+    }
+
+    fn plan_lock(&self, id: &PlanId) -> Arc<Mutex<()>> {
+        self.plan_locks.lock().unwrap_or_else(PoisonError::into_inner).entry(id.clone()).or_default().clone()
+    }
+
+    /// Loads plan `id`, lets `change` edit it, and saves it if it changed,
+    /// all under the plan's lock: concurrent edits (the user, agents, the
+    /// file watcher) never overwrite each other. `change` must not edit the
+    /// same plan again; announce events after this returns.
+    pub(crate) fn edit_plan<T>(&self, id: &PlanId, change: impl FnOnce(&mut Plan) -> Result<T, ServiceError>) -> Result<T, ServiceError> {
+        let lock = self.plan_lock(id);
+        let _held = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut plan = self.plan(id)?;
+        let before = plan.clone();
+        let out = change(&mut plan)?;
+        if plan != before {
+            self.plans.save(&plan)?;
+        }
+        Ok(out)
     }
 
     fn rebuild_observed(&self) -> Result<(), ServiceError> {
@@ -293,43 +319,55 @@ impl ArchitectureService {
         if scopes.is_empty() {
             return Ok(Refresh::default());
         }
-        let plans = self.plans()?;
-        let before: Vec<Graph> = {
+        let before: BTreeMap<PlanId, Graph> = {
             let observed = self.observed()?;
-            plans.iter().map(|p| Graph::merge(observed.clone(), std::slice::from_ref(p))).collect()
+            self.plans()?.into_iter().map(|p| (p.id.clone(), Graph::merge(observed.clone(), std::slice::from_ref(&p)))).collect()
         };
         let ingest = self.ingest_scopes(&scopes)?;
         let changed: BTreeSet<&str> = ingest.changed.iter().map(RepoPath::as_str).collect();
         let observed = self.observed()?;
         let mut reverified = Vec::new();
         let mut downgraded = Vec::new();
-        for (plan, before) in plans.iter().zip(&before) {
-            let after = Graph::merge(observed.clone(), std::slice::from_ref(plan));
-            // Existing code the plan builds on changed its signature: what
-            // was designed against the old one needs another look.
-            let mut plan = plan.clone();
-            let reshaped: Vec<ComponentId> = observed
-                .components()
-                .filter(|c| plan.component(&c.id).is_none())
-                .filter(|c| before.component(&c.id).is_some_and(|b| b.signature.is_some() && b.signature != c.signature))
-                .map(|c| c.id.clone())
-                .collect();
-            let mut sent_back = Vec::new();
-            for id in &reshaped {
-                sent_back.extend(cascade(&mut plan, &after, &self.types, id));
+        for (plan_id, before) in &before {
+            // Under the plan's lock, on the plan as it is now (an approval or
+            // edit made while the files were read isn't lost).
+            let (sent_back, checked) = self.edit_plan(plan_id, |plan| {
+                let after = Graph::merge(observed.clone(), std::slice::from_ref(plan));
+                // Existing code the plan builds on changed its signature: what
+                // was designed against the old one needs another look.
+                let reshaped: Vec<ComponentId> = observed
+                    .components()
+                    .filter(|c| plan.component(&c.id).is_none())
+                    .filter(|c| before.component(&c.id).is_some_and(|b| b.signature.is_some() && b.signature != c.signature))
+                    .map(|c| c.id.clone())
+                    .collect();
+                let mut sent_back = Vec::new();
+                for id in &reshaped {
+                    sent_back.extend(cascade(plan, &after, &self.types, id));
+                }
+                let mut checked = Vec::new();
+                for id in affected(plan, before, &after, &changed) {
+                    let Some(planned) = plan.component(&id).cloned() else { continue };
+                    let report = self.check(plan, &planned, &observed, planned.stage, false)?;
+                    // Code that no longer holds up loses the stage it earned.
+                    let demoted_to = demotion(plan, &planned, &report, &observed);
+                    if let (Some(to), Some(c)) = (demoted_to, plan.component_mut(&id)) {
+                        c.stage = to;
+                    }
+                    checked.push(Reverified { plan: plan.id.clone(), component: id, stage: planned.stage, report, demoted_to });
+                }
+                Ok((sent_back, checked))
+            })?;
+            let mut moved: Vec<ComponentId> = sent_back.iter().map(|d| d.id.clone()).collect();
+            moved.extend(checked.iter().filter(|r| r.demoted_to.is_some()).map(|r| r.component.clone()));
+            if !moved.is_empty() {
+                self.emit(ArchEvent::Changed { reason: ChangeReason::StageChanged, plans: vec![plan_id.clone()], components: moved });
             }
-            if !sent_back.is_empty() {
-                self.plans.save(&plan)?;
-                self.emit(ArchEvent::Changed { reason: ChangeReason::StageChanged, plans: vec![plan.id.clone()], components: sent_back.iter().map(|d| d.id.clone()).collect() });
-                downgraded.extend(sent_back.into_iter().map(|d| (plan.id.clone(), d)));
+            for r in &checked {
+                self.emit_validated(plan_id, Some(&r.component), &r.report);
             }
-            let plan = &plan;
-            for id in affected(plan, before, &after, &changed) {
-                let Some(planned) = plan.component(&id) else { continue };
-                let report = self.check(plan, planned, &observed, planned.stage, false)?;
-                self.emit_validated(&plan.id, Some(&id), &report);
-                reverified.push(Reverified { plan: plan.id.clone(), component: id, stage: planned.stage, report });
-            }
+            downgraded.extend(sent_back.into_iter().map(|d| (plan_id.clone(), d)));
+            reverified.extend(checked);
         }
         Ok(Refresh { ingest, reverified, downgraded })
     }
@@ -385,12 +423,15 @@ impl ArchitectureService {
 
     pub fn create_plan(&self, id: &str, title: &str, description: &str) -> Result<Plan, ServiceError> {
         let plan_id = PlanId::new(id).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
+        let lock = self.plan_lock(&plan_id);
+        let held = lock.lock().unwrap_or_else(PoisonError::into_inner);
         if self.plans.get(&plan_id)?.is_some() {
             return Err(ServiceError::InvalidOp(format!("plan {id} already exists")));
         }
         let mut plan = Plan::new(id, title);
         plan.description = description.to_owned();
         self.plans.save(&plan)?;
+        drop(held);
         self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id], components: Vec::new() });
         Ok(plan)
     }
@@ -400,12 +441,15 @@ impl ArchitectureService {
     /// location nor code to match.
     pub fn import_registry(&self, id: &str, title: &str, json: &str, language: Option<&str>) -> Result<(Plan, ImportReport), ServiceError> {
         let plan_id = PlanId::new(id).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
+        let lock = self.plan_lock(&plan_id);
+        let held = lock.lock().unwrap_or_else(PoisonError::into_inner);
         if self.plans.get(&plan_id)?.is_some() {
             return Err(ServiceError::InvalidOp(format!("plan {id} already exists")));
         }
         let input = crate::import::ImportInput { plan: plan_id.clone(), title: title.to_owned(), json, language: language.map(str::to_owned) };
         let (plan, report) = crate::import::import(input, &self.observed()?, &self.root, &self.packs, &self.types)?;
         self.plans.save(&plan)?;
+        drop(held);
         self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id], components: plan.components.iter().map(|c| c.id.clone()).collect() });
         Ok((plan, report))
     }
@@ -418,26 +462,30 @@ impl ArchitectureService {
     }
 
     pub fn delete_plan(&self, id: &PlanId) -> Result<(), ServiceError> {
+        let lock = self.plan_lock(id);
+        let held = lock.lock().unwrap_or_else(PoisonError::into_inner);
         self.plans.delete(id)?;
+        drop(held);
         self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![id.clone()], components: Vec::new() });
         Ok(())
     }
 
     /// Applies one operation to a plan.
     pub fn apply(&self, plan_id: &PlanId, op: PlanOp) -> Result<Plan, ServiceError> {
-        let mut plan = self.plan(plan_id)?;
         let observed = self.observed()?;
-        let graph = Graph::merge(observed.clone(), std::slice::from_ref(&plan));
-        let changed = op.design_change().cloned();
-        let removes = matches!(op, PlanOp::Remove { .. });
-        let mut touched = apply(&mut plan, op, &graph, &self.root, &self.packs, &self.types, &self.dsl)?;
-        // A design change sends it (if approved) and what builds on it back.
-        if let Some(changed) = changed {
-            // A removed component's dependents are only visible before removal.
-            let basis = if removes { graph } else { Graph::merge(observed, std::slice::from_ref(&plan)) };
-            touched.extend(cascade(&mut plan, &basis, &self.types, &changed).into_iter().map(|d| d.id));
-        }
-        self.plans.save(&plan)?;
+        let (plan, touched) = self.edit_plan(plan_id, |plan| {
+            let graph = Graph::merge(observed.clone(), std::slice::from_ref(plan));
+            let changed = op.design_change().cloned();
+            let removes = matches!(op, PlanOp::Remove { .. });
+            let mut touched = apply(plan, op, &graph, &self.root, &self.packs, &self.types, &self.dsl)?;
+            // A design change sends it (if approved) and what builds on it back.
+            if let Some(changed) = changed {
+                // A removed component's dependents are only visible before removal.
+                let basis = if removes { graph } else { Graph::merge(observed, std::slice::from_ref(plan)) };
+                touched.extend(cascade(plan, &basis, &self.types, &changed).into_iter().map(|d| d.id));
+            }
+            Ok((plan.clone(), touched))
+        })?;
         self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id.clone()], components: touched });
         Ok(plan)
     }
@@ -498,27 +546,30 @@ impl ArchitectureService {
         if !matches!(to, Stage::ArchApproved | Stage::PlanApproved) {
             return Err(ServiceError::InvalidOp(format!("{to:?} is reached by verification, not approval")));
         }
-        let mut plan = self.plan(plan_id)?;
-        let from = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?.stage;
-        if !can_transition(from, to) {
-            return Err(ServiceError::InvalidOp(format!("can't go from {from:?} to {to:?}")));
-        }
-        if let Some(blocked) = approval_blocker(&plan, id) {
-            return Err(ServiceError::InvalidOp(blocked));
-        }
-        // Check as if approved (location rules depend on the stage).
-        if let Some(c) = plan.component_mut(id) {
-            c.stage = to;
-        }
-        let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
-        let report = checks::check_plan(&plan, &graph, &self.check_cx());
-        let blocking: Vec<String> = report.errors_for(id).map(|f| f.message.clone()).collect();
-        if !blocking.is_empty() {
-            return Err(ServiceError::InvalidOp(format!("{id} can't be approved yet: {}", blocking.join("; "))));
-        }
-        let approval = Approval { component: id.clone(), from, to, by: name.clone(), at: now_rfc3339() };
-        plan.approvals.push(approval.clone());
-        self.plans.save(&plan)?;
+        let observed = self.observed()?;
+        let approval = self.edit_plan(plan_id, |plan| {
+            let from = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?.stage;
+            if !can_transition(from, to) {
+                return Err(ServiceError::InvalidOp(format!("can't go from {from:?} to {to:?}")));
+            }
+            if let Some(blocked) = approval_blocker(plan, id) {
+                return Err(ServiceError::InvalidOp(blocked));
+            }
+            // Check as if approved (location rules depend on the stage).
+            if let Some(c) = plan.component_mut(id) {
+                c.stage = to;
+            }
+            let graph = Graph::merge(observed, std::slice::from_ref(plan));
+            let report = checks::check_plan(plan, &graph, &self.check_cx());
+            // Errors on it, on its relations, or on the plan as a whole.
+            let blocking: Vec<String> = checks::blocking_for(&report, plan, id).into_iter().map(|f| f.message.clone()).collect();
+            if !blocking.is_empty() {
+                return Err(ServiceError::InvalidOp(format!("{id} can't be approved yet: {}", blocking.join("; "))));
+            }
+            let approval = Approval { component: id.clone(), from, to, by: name.clone(), at: now_rfc3339() };
+            plan.approvals.push(approval.clone());
+            Ok(approval)
+        })?;
         self.emit(ArchEvent::Changed { reason: ChangeReason::Approved, plans: vec![plan_id.clone()], components: vec![id.clone()] });
         Ok(approval)
     }
@@ -539,38 +590,61 @@ impl ArchitectureService {
         if !matches!(goal, Stage::Skeleton | Stage::Implemented) {
             return Err(ServiceError::InvalidOp(format!("verification targets Skeleton or Implemented, not {goal:?}")));
         }
-        let mut plan = self.plan(plan_id)?;
+        let plan = self.plan(plan_id)?;
         let planned = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?.clone();
+        // Re-read everything the checks look at, including files that are gone
+        // (re-reading a vanished file drops it from the index).
         let merged = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
-        let mut files: BTreeSet<String> = chain::caller_files(&plan, id, &merged);
-        files.extend(planned.file().map(|f| f.as_str().to_owned()));
-        let scopes: Vec<PathBuf> = files.iter().map(|f| self.root.join(f)).filter(|p| p.exists()).collect();
+        let scopes: Vec<PathBuf> = match verification_files(&plan, id, &merged) {
+            Some(files) => files.iter().map(|f| self.root.join(f)).collect(),
+            // Something it depends on isn't where the index last saw it: re-read
+            // the repo (incrementally: only changed files are parsed).
+            None => vec![self.root.clone()],
+        };
         if !scopes.is_empty() {
             self.ingest_scopes(&scopes)?;
         }
         let observed = self.observed()?;
         let mut report = self.check(&plan, &planned, &observed, goal, goal == Stage::Implemented)?;
-        let merged = Graph::merge(observed.clone(), std::slice::from_ref(&plan));
+        let merged = Graph::merge(observed, std::slice::from_ref(&plan));
         for f in checks::stage_gate(&plan, &merged, &self.types, id, goal) {
             report.push(f);
         }
+        if goal == Stage::Implemented && planned.stage != Stage::Implemented && !plan_approved(&plan, id) {
+            report.push(
+                Finding::error(
+                    FindingCode::ApprovalRequired,
+                    Target::Component { id: id.clone() },
+                    format!("{id} can only be implemented once the user approves its plan (PlanApproved)"),
+                )
+                .suggest("present the contract and wait for the user's plan approval in the cockpit"),
+            );
+        }
         let mut advanced_to = None;
         if !report.has_errors() {
-            if planned.stage == goal {
-                advanced_to = Some(goal);
-            } else if can_transition(planned.stage, goal) {
-                if let Some(c) = plan.component_mut(id) {
-                    c.stage = goal;
+            // Move it under the plan's lock, against the plan as it is now.
+            let moved = self.edit_plan(plan_id, |plan| {
+                let Some(c) = plan.component_mut(id) else { return Ok(Err(format!("{id} left the plan while it was being verified"))) };
+                if c.stage != planned.stage {
+                    return Ok(Err(format!("{id} moved to {:?} while it was being verified; verify again", c.stage)));
                 }
-                self.plans.save(&plan)?;
-                advanced_to = Some(goal);
-                self.emit(ArchEvent::Changed { reason: ChangeReason::StageChanged, plans: vec![plan_id.clone()], components: vec![id.clone()] });
-            } else {
-                report.push(Finding::error(
-                    FindingCode::IllegalTransition,
-                    Target::Component { id: id.clone() },
-                    format!("verified, but {:?} can't move to {goal:?} (approve the design first)", planned.stage),
-                ));
+                if c.stage == goal {
+                    return Ok(Ok(false));
+                }
+                if !can_transition(c.stage, goal) {
+                    return Ok(Err(format!("verified, but {:?} can't move to {goal:?} (approve the design first)", c.stage)));
+                }
+                c.stage = goal;
+                Ok(Ok(true))
+            })?;
+            match moved {
+                Ok(changed) => {
+                    advanced_to = Some(goal);
+                    if changed {
+                        self.emit(ArchEvent::Changed { reason: ChangeReason::StageChanged, plans: vec![plan_id.clone()], components: vec![id.clone()] });
+                    }
+                }
+                Err(why) => report.push(Finding::error(FindingCode::IllegalTransition, Target::Component { id: id.clone() }, why)),
             }
         }
         self.emit_validated(plan_id, Some(id), &report);
@@ -770,4 +844,64 @@ pub fn affected(plan: &Plan, before: &Graph, after: &Graph, changed: &BTreeSet<&
         .filter(|c| touches(&c.id) || plan.relations.iter().any(|r| r.kind == arch_graph::RelationKind::Calls && r.source == c.id && touches(&r.target)))
         .map(|c| c.id.clone())
         .collect()
+}
+
+/// Files whose current contents verifying `id` depends on: its own (planned
+/// and found), its call chain's callers, what it's planned to call, and the
+/// other ends of its planned data flows. Vanished files are included. None
+/// when a planned callee or flow end that should exist isn't in the index,
+/// since its file can't be known then.
+fn verification_files(plan: &Plan, id: &ComponentId, merged: &Graph) -> Option<BTreeSet<String>> {
+    let mut ids: BTreeSet<&ComponentId> = BTreeSet::from([id]);
+    for r in &plan.relations {
+        match r.kind {
+            arch_graph::RelationKind::Calls if &r.source == id => {
+                ids.insert(&r.target);
+            }
+            arch_graph::RelationKind::DataFlow if &r.source == id || &r.target == id => {
+                ids.insert(&r.source);
+                ids.insert(&r.target);
+            }
+            _ => {}
+        }
+    }
+    let mut files: BTreeSet<String> = chain::caller_files(plan, id, merged);
+    for c in ids {
+        let found = merged.component(c).and_then(|c| c.file()).map(|f| f.as_str().to_owned());
+        let planned = plan.component(c).and_then(|c| c.file()).map(|f| f.as_str().to_owned());
+        if found.is_none() && planned.is_none() {
+            return None;
+        }
+        files.extend(found);
+        files.extend(planned);
+    }
+    Some(files)
+}
+
+/// Whether the user's latest approval of `id` is its plan approval: only then
+/// may verification take it to Implemented (structure can come earlier).
+fn plan_approved(plan: &Plan, id: &ComponentId) -> bool {
+    plan.approvals.iter().rev().find(|a| &a.component == id).is_some_and(|a| a.to == Stage::PlanApproved)
+}
+
+/// Where a component in the code goes when re-verification finds errors of
+/// its own (not a broken hop elsewhere in its chain): back to PlanApproved
+/// if its code is gone, Implemented back to Skeleton otherwise.
+fn demotion(plan: &Plan, planned: &Component, report: &Report, observed: &Graph) -> Option<Stage> {
+    let own = report.findings.iter().any(|f| {
+        f.severity == Severity::Error
+            && match &f.target {
+                Target::Component { id } => id == &planned.id,
+                Target::Relation { id } => plan.relations.iter().any(|r| &r.id() == id && r.source == planned.id),
+                Target::Plan { .. } => false,
+            }
+    });
+    if !own {
+        return None;
+    }
+    match (planned.stage, observed.component(&planned.id).is_some()) {
+        (Stage::Skeleton | Stage::Implemented, false) => Some(Stage::PlanApproved),
+        (Stage::Implemented, true) => Some(Stage::Skeleton),
+        _ => None,
+    }
 }

@@ -785,11 +785,18 @@ fn changing_a_file_reverifies_only_the_components_it_affects() {
     assert_eq!(refresh.reverified[0].report.codes(), vec![FindingCode::MissingCallSite]);
     assert_eq!(refresh.reverified[0].stage, Stage::Implemented);
     assert!(r.events.lock().unwrap().iter().any(|e| matches!(e, ArchEvent::Validated { component: Some(c), errors: 1, .. } if c == &id("sample::validate"))));
+    // It no longer holds up: Implemented is taken back (the code is still there).
+    assert_eq!(refresh.reverified[0].demoted_to, Some(Stage::Skeleton));
+    assert_eq!(stage_of(&r, "w", "sample::validate"), Stage::Skeleton);
+    assert!(r.events.lock().unwrap().iter().any(|e| matches!(e, ArchEvent::Changed { reason: ChangeReason::StageChanged, components, .. } if components.contains(&id("sample::validate")))));
     // A deleted file: what lived there is re-verified (and missing).
     std::fs::remove_file(r.root.join("src/util.rs")).unwrap();
     let (ids, refresh) = reverified(&["src/util.rs"]);
     assert_eq!(ids, vec!["rust:sample::util::quiet"]);
     assert_eq!(refresh.reverified[0].report.codes(), vec![FindingCode::MissingSymbol]);
+    // Its code is gone: back to the approved plan.
+    assert_eq!(refresh.reverified[0].demoted_to, Some(Stage::PlanApproved));
+    assert_eq!(stage_of(&r, "w", "sample::util::quiet"), Stage::PlanApproved);
 }
 
 // req: P6.11

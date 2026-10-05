@@ -26,7 +26,7 @@ pub use service::{Actor, ArchitectureService, IngestReport, NewComment, Refresh,
 pub use tools::{Invocation, LogicChecks, ProcessRunner, ToolCatalog, ToolDef, ToolOutput, ToolRun, ToolRunner, ToolsReport};
 pub use store::{CodeIndexStore, FsIndex, FsPlans, MemoryIndex, MemoryPlans, PlanRepository};
 pub use chain::chain;
-pub use checks::{CheckCx, check_plan, is_data_type, missing_details, schema_set, stage_gate};
+pub use checks::{CheckCx, blocking_for, check_plan, is_data_type, missing_details, schema_set, stage_gate};
 pub use verify::signature_diff;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
