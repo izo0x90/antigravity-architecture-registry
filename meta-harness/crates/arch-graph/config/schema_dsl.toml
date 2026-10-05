@@ -6,6 +6,11 @@
 #   "string[]"   -> {"type": "array", "items": {"type": "string"}}
 #   "User?"      -> {"anyOf": [{"$ref": "User"}, {"type": "null"}]}
 #   {id = "int", note = "string?"} -> object; fields without `?` are required
+#
+# A map is taken as JSON Schema as is when every key is a JSON Schema keyword
+# holding the right kind of value. A record whose fields happen to be named
+# like keywords (type, description...) must be written as full schema:
+#   {type = "object", properties = {type = "string", description = "string"}}
 
 [primitives]
 string = "string"

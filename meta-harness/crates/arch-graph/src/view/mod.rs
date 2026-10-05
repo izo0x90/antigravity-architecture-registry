@@ -301,8 +301,13 @@ pub fn query(graph: &Graph, spec: &ViewSpec) -> View {
     if spec.include_ancestors {
         let shown: Vec<ComponentId> = nodes.keys().cloned().collect();
         for id in shown {
+            // Containment can loop (a plan may say so): stop at the first repeat.
+            let mut seen: BTreeSet<ComponentId> = BTreeSet::from([id.clone()]);
             let mut current = id;
             while let Some(parent) = graph.parent(&current) {
+                if !seen.insert(parent.clone()) {
+                    break;
+                }
                 nodes.entry(parent.clone()).or_insert(None);
                 current = parent.clone();
             }
@@ -438,6 +443,17 @@ pub(crate) mod tests {
         assert_eq!(query(&g, &structure), query(&g, &structure));
     }
 
+
+    // req: P7.2
+    #[test]
+    fn ancestors_stop_at_a_containment_loop() {
+        let mut g = sample();
+        // A plan can say what the code says contains it, contains it back.
+        g.upsert_relation(crate::Relation::new(RelationKind::Contains, id("app::run"), id("app"), crate::Provenance::PLANNED));
+        let combined = ViewCatalog::defaults().unwrap().get("combined").unwrap().clone();
+        let v = query(&g, &combined);
+        assert!(v.node(&id("app")).is_some() && v.node(&id("app::run")).is_some(), "the query returns, with both ends");
+    }
     // req: P7.2
     #[test]
     fn combined_view_overlays_structure_and_keeps_ancestors() {

@@ -13,15 +13,13 @@ pub struct RepoPath(String);
 impl RepoPath {
     pub fn new(path: &str) -> Result<Self, ModelError> {
         let normalized = path.replace('\\', "/");
-        let trimmed = normalized.trim_start_matches("./");
-        let bad = trimmed.is_empty()
-            || trimmed.starts_with('/')
-            || trimmed.chars().nth(1) == Some(':')
-            || trimmed.split('/').any(|part| part == ".." || part.is_empty());
-        if bad {
+        let absolute = normalized.starts_with('/') || normalized.chars().nth(1) == Some(':');
+        // One spelling per file: `.` segments go, anything else odd is refused.
+        let parts: Vec<&str> = normalized.split('/').filter(|part| *part != ".").collect();
+        if absolute || parts.is_empty() || parts.iter().any(|part| *part == ".." || part.is_empty()) {
             return Err(ModelError::InvalidPath(path.to_owned()));
         }
-        Ok(Self(trimmed.to_owned()))
+        Ok(Self(parts.join("/")))
     }
 
     pub fn as_str(&self) -> &str {
@@ -136,6 +134,10 @@ mod tests {
             assert!(RepoPath::new(bad).is_err(), "{bad}");
         }
         assert_eq!(RepoPath::new("a/b.test.rs").unwrap().extension(), Some("rs"));
+        assert_eq!(RepoPath::new("a/./b.rs").unwrap(), RepoPath::new("a/b.rs").unwrap(), "one spelling per file");
+        for bad in [".", "./", "./."] {
+            assert!(RepoPath::new(bad).is_err(), "{bad}");
+        }
         assert!(serde_json::from_str::<RepoPath>("\"../x\"").is_err());
     }
 }

@@ -276,7 +276,10 @@ impl CodeIndexStore for FsIndex {
 /// A repo path as one file name: every `_` doubles, every `/` becomes `_s`.
 /// Each `_` in the result starts a two-character token, so decoding is
 /// unambiguous and distinct paths never collide.
+/// Long paths would exceed file-name limits: those use `_h` plus a hash of
+/// the path (`_h` never occurs in an encoded path; `get` checks the file).
 fn encode(path: &str) -> String {
+    const MAX: usize = 180;
     let mut out = String::with_capacity(path.len() + 8);
     for c in path.chars() {
         match c {
@@ -285,7 +288,7 @@ fn encode(path: &str) -> String {
             c => out.push(c),
         }
     }
-    out
+    if out.len() > MAX { format!("_h{}", arch_index::content_hash(path)) } else { out }
 }
 
 #[cfg(test)]
@@ -396,6 +399,11 @@ mod tests {
     }
 
     fn exercise_index(index: &dyn CodeIndexStore) {
+        // Paths past file-name limits still round-trip (hashed names).
+        let deep = format!("src/{}/x.rs", ["very_long_directory_name"; 12].join("/"));
+        index.put(&extract(&deep, "hd")).unwrap();
+        assert!(index.get(&RepoPath::new(&deep).unwrap(), "hd").unwrap().is_some());
+        index.remove(&RepoPath::new(&deep).unwrap()).unwrap();
         let f = RepoPath::new("src/a.rs").unwrap();
         index.put(&extract("src/a.rs", "h1")).unwrap();
         assert!(index.get(&f, "h1").unwrap().is_some(), "hit by hash");

@@ -129,10 +129,28 @@ impl Dsl {
     }
 }
 
+/// Whether `value` has the JSON type JSON Schema gives `keyword`.
+fn keyword_fits(keyword: &str, value: &Value) -> bool {
+    match keyword {
+        "type" => value.is_string() || value.is_array(),
+        "enum" | "required" | "examples" | "anyOf" | "oneOf" | "allOf" | "prefixItems" => value.is_array(),
+        "properties" | "$defs" | "definitions" | "patternProperties" | "not" => value.is_object(),
+        "items" | "additionalProperties" => value.is_object() || value.is_boolean(),
+        "minItems" | "maxItems" | "minimum" | "maximum" | "minLength" | "maxLength" => value.is_number(),
+        "uniqueItems" => value.is_boolean(),
+        "default" | "const" => true,
+        _ => value.is_string(),
+    }
+}
+
+/// A map is JSON Schema (not a shorthand record) when it says what it is and
+/// every key is a schema keyword holding the right kind of value. A record
+/// whose field names are all schema keywords must be written as full schema
+/// (`{type = "object", properties = {...}}`).
 fn is_schema(map: &Map<String, Value>) -> bool {
     let typed = map.get("type").and_then(Value::as_str).is_some_and(|t| JSON_TYPES.contains(&t));
     let shaped = typed || SCHEMA_SHAPES.iter().any(|k| map.contains_key(*k));
-    shaped && map.keys().all(|k| SCHEMA_KEYWORDS.contains(&k.as_str()))
+    shaped && map.iter().all(|(k, v)| SCHEMA_KEYWORDS.contains(&k.as_str()) && keyword_fits(k, v))
 }
 
 fn is_identifier(text: &str) -> bool {
@@ -358,6 +376,12 @@ mod tests {
         let mut required: Vec<&str> = event["required"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         required.sort();
         assert_eq!(required, ["payload", "type"]);
+        // A record whose field is named like a keyword, with a non-schema value, stays a record.
+        let record = dsl.compile(&json!({"enum": "string"})).unwrap();
+        assert_eq!(record["properties"]["enum"], json!({"type": "string"}));
+        // Written as full schema, keyword-named fields are fine too.
+        let full = dsl.compile(&json!({"type": "object", "properties": {"type": "string", "description": "string"}})).unwrap();
+        assert_eq!(full["properties"]["description"], json!({"type": "string"}));
         assert!(dsl.compile(&json!("not a type!")).is_err());
         assert!(dsl.compile(&json!(3)).is_err());
         // Aliases are data: projects add their own; bad targets are rejected.
