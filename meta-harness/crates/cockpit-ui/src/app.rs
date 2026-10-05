@@ -23,10 +23,11 @@ pub enum BufferKind {
     Graph,
     Tree,
     Spec,
+    Queue,
 }
 
 impl BufferKind {
-    pub const ALL: [Self; 5] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec];
+    pub const ALL: [Self; 6] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec, Self::Queue];
 
     pub fn title(&self) -> &'static str {
         match self {
@@ -35,6 +36,7 @@ impl BufferKind {
             Self::Graph => "GRAPH",
             Self::Tree => "TREE",
             Self::Spec => "SPEC",
+            Self::Queue => "QUEUE",
         }
     }
 
@@ -46,6 +48,7 @@ impl BufferKind {
             Self::Graph => "graph",
             Self::Tree => "tree",
             Self::Spec => "spec",
+            Self::Queue => "queue",
         }
     }
 
@@ -56,6 +59,7 @@ impl BufferKind {
             Self::Graph => egui_phosphor::regular::GIT_FORK,
             Self::Tree => egui_phosphor::regular::TREE_STRUCTURE,
             Self::Spec => egui_phosphor::regular::ARTICLE,
+            Self::Queue => egui_phosphor::regular::LIST_CHECKS,
         }
     }
 }
@@ -89,6 +93,7 @@ pub struct CockpitApp {
     pub feedback: FeedbackInspectorState,
     /// The current plan's comments and changes since review.
     pub review: ReviewState,
+    pub queue: crate::queue::QueueState,
     review_seen: u64,
 
     // Layout configuration
@@ -171,6 +176,7 @@ impl CockpitApp {
             tree: ArchitectureTreeState::default(),
             feedback: FeedbackInspectorState::default(),
             review: ReviewState::default(),
+            queue: crate::queue::QueueState::default(),
             review_seen: 0,
 
             column_count: 2,
@@ -249,6 +255,7 @@ impl CockpitApp {
         for event in events {
             if let harness_contracts::ClientEvent::Architecture { event } = &event {
                 self.graph.on_event(event);
+                self.queue.on_event(event);
                 if !matches!(event, arch_graph::ArchEvent::ViewRequested { .. }) {
                     self.spec.invalidate();
                     self.tree.invalidate();
@@ -283,6 +290,22 @@ impl CockpitApp {
         self.ensure_visible(BufferKind::Code);
     }
 
+    /// The queue view runs on the graph's plan with the chat's harness, and
+    /// sends the user to components and sessions.
+    fn link_queue(&mut self, plan: Option<&arch_graph::PlanId>, ctx: &egui::Context) {
+        self.queue.author = self.config.user.name.clone();
+        self.queue.instance = self.chat.active_instance.clone();
+        self.queue.tick(&self.net, ctx, plan);
+        if let Some(id) = self.queue.requests.select.take() {
+            self.graph.reveal(id);
+            self.ensure_visible(BufferKind::Graph);
+        }
+        if let Some(thread) = self.queue.requests.open_thread.take() {
+            self.chat.active_thread = Some(harness_contracts::ThreadId::new(thread));
+            self.ensure_visible(BufferKind::Chat);
+        }
+    }
+
     /// The plan's review state feeds the graph's badges and the spec's threads.
     fn link_review(&mut self, plan: Option<&arch_graph::PlanId>, ctx: &egui::Context) {
         if std::mem::take(&mut self.spec.requests.review_changed) {
@@ -306,6 +329,7 @@ impl CockpitApp {
         let plan = self.graph.nav.current().plan.clone();
         self.spec.follow(self.graph.selection.as_ref(), plan.as_ref());
         self.link_review(plan.as_ref(), ctx);
+        self.link_queue(plan.as_ref(), ctx);
         self.tree.set_plan(plan.as_ref());
         if let Some((file, start, end)) = self.graph.requests.open_code.take() {
             self.show_code(&file, start, end, ctx);
@@ -368,6 +392,7 @@ impl CockpitApp {
             BufferKind::Graph => &self.graph,
             BufferKind::Tree => &self.tree,
             BufferKind::Spec => &self.spec,
+            BufferKind::Queue => &self.queue,
         }
     }
 
@@ -379,6 +404,7 @@ impl CockpitApp {
             BufferKind::Graph => &mut self.graph,
             BufferKind::Tree => &mut self.tree,
             BufferKind::Spec => &mut self.spec,
+            BufferKind::Queue => &mut self.queue,
         };
         (provider, &self.net, &mut self.input_mode, &self.config.keymap.hint_chars)
     }
@@ -861,6 +887,11 @@ impl CockpitApp {
                             let ctx = ui.ctx().clone();
                             let mut cx = RunCx { net: &self.net, ctx: &ctx, input_mode: &mut self.input_mode, slot: slot_idx, hint_chars: &self.config.keymap.hint_chars };
                             self.spec.render(ui, &mut cx);
+                        }
+                        BufferKind::Queue => {
+                            let ctx = ui.ctx().clone();
+                            let mut cx = RunCx { net: &self.net, ctx: &ctx, input_mode: &mut self.input_mode, slot: slot_idx, hint_chars: &self.config.keymap.hint_chars };
+                            self.queue.render(ui, &mut cx);
                         }
                     }
                 });

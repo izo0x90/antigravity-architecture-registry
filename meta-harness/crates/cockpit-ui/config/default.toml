@@ -151,6 +151,16 @@ e = "Code links"
 "spec.next_point" = { keys = ["] c"] }
 "spec.accept" = { keys = ["a"] }
 "spec.reopen" = { keys = ["o"] }
+# Queue view: the plan's work, one job per component.
+"queue.next" = { keys = ["j"] }
+"queue.prev" = { keys = ["k"] }
+"queue.approve" = { keys = ["a"] }
+"queue.retry" = { keys = ["r"] }
+"queue.expand" = { keys = ["z a", "Enter"] }
+"queue.show_in_graph" = { keys = ["g g"] }
+"queue.open_session" = { keys = ["g s"] }
+"queue.start" = { keys = ["g S"] }
+"queue.stop" = { keys = ["g X"] }
 
 # Code links: code view <-> graph.
 "code.reveal" = { leader = "e r", keys = ["g r"] }

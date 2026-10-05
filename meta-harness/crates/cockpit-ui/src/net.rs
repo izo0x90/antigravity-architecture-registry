@@ -379,6 +379,38 @@ impl NetClient {
         self.call("POST", &format!("/api/arch/plans/{}/validate", urlencoding::encode(&plan.0)), Some(serde_json::json!({})), ctx, on_done);
     }
 
+    /// The work queue over a plan.
+    pub fn arch_queue(&self, plan: &arch_graph::PlanId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static) {
+        self.call("GET", &format!("/api/arch/plans/{}/queue", urlencoding::encode(&plan.0)), None, ctx, on_done);
+    }
+
+    /// Starts the queue; `instance` runs its sessions.
+    pub fn arch_queue_start(&self, plan: &arch_graph::PlanId, instance: &harness_contracts::InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static) {
+        self.call("POST", &format!("/api/arch/plans/{}/queue/start", urlencoding::encode(&plan.0)), Some(serde_json::json!({ "instanceId": instance })), ctx, on_done);
+    }
+
+    pub fn arch_queue_stop(&self, plan: &arch_graph::PlanId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static) {
+        self.call("POST", &format!("/api/arch/plans/{}/queue/stop", urlencoding::encode(&plan.0)), Some(serde_json::json!({})), ctx, on_done);
+    }
+
+    pub fn arch_queue_retry(&self, plan: &arch_graph::PlanId, component: &arch_graph::ComponentId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::QueueSnapshot>) + Send + 'static) {
+        self.call("POST", &format!("/api/arch/plans/{}/queue/retry", urlencoding::encode(&plan.0)), Some(serde_json::json!({ "component": component })), ctx, on_done);
+    }
+
+    /// The user approves a component's design (ArchApproved or PlanApproved).
+    pub fn arch_approve(
+        &self,
+        plan: &arch_graph::PlanId,
+        component: &arch_graph::ComponentId,
+        to: arch_graph::Stage,
+        by: &str,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_graph::Approval>) + Send + 'static,
+    ) {
+        let path = format!("/api/arch/plans/{}/components/{}/approve", urlencoding::encode(&plan.0), urlencoding::encode(component.as_str()));
+        self.call("POST", &path, Some(serde_json::json!({ "to": to, "by": by })), ctx, on_done);
+    }
+
     /// A plan's review comments (unaddressed only, unless `all`).
     pub fn arch_comments(&self, plan: &arch_graph::PlanId, all: bool, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<arch_graph::Comment>>) + Send + 'static) {
         self.call("GET", &format!("/api/arch/plans/{}/comments?all={all}", urlencoding::encode(&plan.0)), None, ctx, on_done);
