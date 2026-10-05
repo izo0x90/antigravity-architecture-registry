@@ -127,7 +127,7 @@ original_field = "source"
 # only from these is undecided and its code counts as live.
 [constant_logic]
 true_atoms = ["true"]
-false_atoms = ["false"]
+false_atoms = ["false", "0", "null", "undefined"]
 not_prefixes = ["!"]
 and_operators = ["&&"]
 or_operators = ["||"]
@@ -139,7 +139,7 @@ condition = { parent_field = "condition" }
 
 # Never runs: what follows an unconditional return in the same block.
 [[dead_code]]
-rule = { any = [{ kind = "expression_statement" }, { kind = "lexical_declaration" }], follows = { stopBy = "end", kind = "return_statement" } }
+rule = { any = [{ kind = "expression_statement" }, { kind = "lexical_declaration" }], follows = { stopBy = "end", any = [{ kind = "return_statement" }, { kind = "throw_statement" }] } }
 
 [[placeholders]]
 rule = { kind = "throw_statement", regex = "(?i)(todo|not implemented)" }

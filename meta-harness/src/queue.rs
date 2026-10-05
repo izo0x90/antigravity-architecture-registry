@@ -45,12 +45,15 @@ pub struct SessionRunner {
 #[async_trait]
 impl JobRunner for SessionRunner {
     async fn run(&self, ticket: &Ticket, timeout: Duration, attach: &(dyn Fn(String) + Send + Sync)) -> Result<(), String> {
-        let thread = self.sessions.open(self.open.clone()).await.map_err(|e| format!("couldn't open a session: {e}"))?;
-        attach(thread.to_string());
-        let session = self.sessions.get(&thread).map_err(|e| e.to_string())?;
-        let mut events = session.events();
-        let turn = session.start_turn(TurnInput { text: ticket.brief.clone(), attachments: Vec::new() }).await.map_err(|e| format!("couldn't start the turn: {e}"))?;
-        let finished = async {
+        // The whole job (opening the session included) runs against the clock.
+        let opened: std::sync::Mutex<Option<harness_contracts::ThreadId>> = std::sync::Mutex::new(None);
+        let job = async {
+            let thread = self.sessions.open(self.open.clone()).await.map_err(|e| format!("couldn't open a session: {e}"))?;
+            *opened.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(thread.clone());
+            attach(thread.to_string());
+            let session = self.sessions.get(&thread).map_err(|e| e.to_string())?;
+            let mut events = session.events();
+            let turn = session.start_turn(TurnInput { text: ticket.brief.clone(), attachments: Vec::new() }).await.map_err(|e| format!("couldn't start the turn: {e}"))?;
             while let Some(event) = events.next().await {
                 if let AdapterEvent::TurnUpdated { turn: t } = event
                     && t.id == turn
@@ -64,12 +67,17 @@ impl JobRunner for SessionRunner {
             }
             Err("the session closed before the turn ended".into())
         };
-        match tokio::time::timeout(timeout, finished).await {
+        match tokio::time::timeout(timeout, job).await {
             Ok(result) => result,
             Err(_) => {
                 // Stop it for real: a retry must not race a session still editing the code.
-                let _ = session.interrupt().await;
-                let _ = self.sessions.close(&thread).await;
+                let thread = opened.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+                if let Some(thread) = thread {
+                    if let Ok(session) = self.sessions.get(&thread) {
+                        let _ = session.interrupt().await;
+                    }
+                    let _ = self.sessions.close(&thread).await;
+                }
                 Err(format!("the session didn't finish within {}s and was stopped", timeout.as_secs()))
             }
         }

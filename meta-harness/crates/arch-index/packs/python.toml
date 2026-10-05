@@ -96,7 +96,7 @@ original_field = "name"
 # and its code counts as live: reviewers judge intent beyond that.
 [constant_logic]
 true_atoms = ["True"]
-false_atoms = ["False"]
+false_atoms = ["False", "0", "None"]
 not_prefixes = ["not"]
 and_operators = ["and"]
 or_operators = ["or"]
@@ -108,7 +108,7 @@ condition = { parent_field = "condition" }
 
 # Never runs: what follows an unconditional return in the same block.
 [[dead_code]]
-rule = { kind = "expression_statement", follows = { stopBy = "end", kind = "return_statement" } }
+rule = { kind = "expression_statement", follows = { stopBy = "end", any = [{ kind = "return_statement" }, { kind = "raise_statement" }] } }
 
 [[placeholders]]
 rule = { pattern = "raise NotImplementedError" }

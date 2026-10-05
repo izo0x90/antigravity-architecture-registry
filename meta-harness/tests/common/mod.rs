@@ -102,6 +102,10 @@ impl ProviderAdapter for FakeAdapter {
     }
 
     async fn open_session(&self, config: SessionConfig) -> Result<Box<dyn SessionRuntime>> {
+        // A working directory of "[hang-open]": a harness that never finishes opening.
+        if config.policy.cwd.as_deref() == Some("[hang-open]") {
+            futures::future::pending::<()>().await;
+        }
         let thread = Thread {
             id: config.thread_id,
             instance_id: InstanceId::new(FAKE),
