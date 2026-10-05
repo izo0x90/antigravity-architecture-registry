@@ -90,6 +90,15 @@ fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
         ]
     );
     assert!(findings[0].message.starts_with("[no-println]") && findings[1].message.starts_with("[handlers-check]"));
+    // An anchor from an index that's behind its file isn't judged on code it no longer describes.
+    let mut stale = graph.clone();
+    let mut log = graph.component(&id("sample::log")).unwrap().clone();
+    if let Some(anchor) = log.anchor.as_mut() {
+        anchor.content_hash = "indexed-before-the-last-edit".into();
+    }
+    stale.upsert_component(log, Provenance::OBSERVED);
+    let findings = rules.check(stale.components(), &stale, &root, &packs, &types);
+    assert!(findings.iter().all(|f| f.component() != Some(&id("sample::log"))), "{findings:?}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

@@ -166,38 +166,47 @@ fn unit(id: &ComponentId) -> &str {
     symbol.split(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or(symbol)
 }
 
-/// Placeholder bodies the component leans on without the plan knowing:
-/// code in the same unit it calls (directly or through other unplanned
-/// code) that still has placeholders. Planned callees are excluded; their
-/// own stage says how far along they are.
-fn hidden_placeholders(plan: &Plan, code: &Component, observed: &Graph) -> Vec<Finding> {
+/// The unplanned code in the same unit `id` leans on: what it calls
+/// (directly or through other unplanned code), with the route to each.
+/// Planned callees are excluded; their own stage says how far along they are.
+pub fn hidden_reach(plan: &Plan, id: &ComponentId, observed: &Graph) -> Vec<(ComponentId, Vec<ComponentId>)> {
     let mut out = Vec::new();
-    let mut seen: std::collections::BTreeSet<ComponentId> = std::collections::BTreeSet::from([code.id.clone()]);
-    let mut queue: std::collections::VecDeque<(ComponentId, Vec<ComponentId>)> = std::collections::VecDeque::from([(code.id.clone(), Vec::new())]);
+    let mut seen: std::collections::BTreeSet<ComponentId> = std::collections::BTreeSet::from([id.clone()]);
+    let mut queue: std::collections::VecDeque<(ComponentId, Vec<ComponentId>)> = std::collections::VecDeque::from([(id.clone(), Vec::new())]);
     while let Some((at, via)) = queue.pop_front() {
         for r in observed.outgoing(&at, Some(RelationKind::Calls)) {
             let callee = &r.target;
-            if !seen.insert(callee.clone()) || plan.component(callee).is_some() || unit(callee) != unit(&code.id) {
+            if !seen.insert(callee.clone()) || plan.component(callee).is_some() || unit(callee) != unit(id) || observed.component(callee).is_none() {
                 continue;
             }
-            let Some(c) = observed.component(callee) else { continue };
             let mut path = via.clone();
             path.push(callee.clone());
-            if !c.placeholders.is_empty() {
-                let route: Vec<&str> = path.iter().map(ComponentId::as_str).collect();
-                let mut f = Finding::error(
-                    FindingCode::PlaceholderRemains,
-                    target(&code.id),
-                    format!("relies on {callee}, which still has {} placeholder bodies (via {})", c.placeholders.len(), route.join(" -> ")),
-                )
-                .suggest("implement the helper too, or plan it as its own component");
-                if let (Some(a), Some(span)) = (&c.anchor, c.placeholders.first()) {
-                    f = f.at(a.file.clone(), *span);
-                }
-                out.push(f);
-            }
+            out.push((callee.clone(), path.clone()));
             queue.push_back((callee.clone(), path));
         }
+    }
+    out
+}
+
+/// Placeholder bodies the component leans on without the plan knowing.
+fn hidden_placeholders(plan: &Plan, code: &Component, observed: &Graph) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for (callee, path) in hidden_reach(plan, &code.id, observed) {
+        let Some(c) = observed.component(&callee) else { continue };
+        if c.placeholders.is_empty() {
+            continue;
+        }
+        let route: Vec<&str> = path.iter().map(ComponentId::as_str).collect();
+        let mut f = Finding::error(
+            FindingCode::PlaceholderRemains,
+            target(&code.id),
+            format!("relies on {callee}, which still has {} placeholder bodies (via {})", c.placeholders.len(), route.join(" -> ")),
+        )
+        .suggest("implement the helper too, or plan it as its own component");
+        if let (Some(a), Some(span)) = (&c.anchor, c.placeholders.first()) {
+            f = f.at(a.file.clone(), *span);
+        }
+        out.push(f);
     }
     out
 }

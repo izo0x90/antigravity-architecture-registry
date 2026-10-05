@@ -136,6 +136,8 @@ impl ArchitectureService {
     /// Opens the service over `root`, loading the cached index (no parsing).
     /// Code rules start as the defaults; see `with_rules`.
     pub fn open(root: &Path, packs: PackSet, types: TypeSystem, views: ViewCatalog, plans: Box<dyn PlanRepository>, index: Box<dyn CodeIndexStore>) -> Result<Self, ServiceError> {
+        // Packs map onto types: every one they name must exist.
+        packs.check_types(&types).map_err(|e| ServiceError::Index(e.to_string()))?;
         let rules = CodeRules::defaults(&packs, &types).map_err(|e| ServiceError::Index(e.to_string()))?;
         let service = Self {
             root: root.to_path_buf(),
@@ -287,7 +289,7 @@ impl ArchitectureService {
         report.files += files.len();
         let mut seen = BTreeSet::new();
         for file in &files {
-            let Some(pack) = self.packs.by_name(&file.language) else { continue };
+            let Some(pack) = self.packs.for_path(&file.absolute) else { continue };
             let content = std::fs::read_to_string(&file.absolute).map_err(|e| ServiceError::Io(format!("{}: {e}", file.path)))?;
             let hash = content_hash(&content);
             seen.insert(file.path.clone());
@@ -353,6 +355,7 @@ impl ArchitectureService {
                 for id in &reshaped {
                     sent_back.extend(cascade(plan, &after, &self.types, id));
                 }
+                revoke(plan, &sent_back);
                 let mut checked = Vec::new();
                 for id in affected(plan, before, &after, &changed) {
                     let Some(planned) = plan.component(&id).cloned() else { continue };
@@ -496,7 +499,9 @@ impl ArchitectureService {
             if let Some(changed) = changed {
                 // A removed component's dependents are only visible before removal.
                 let basis = if removes { graph } else { Graph::merge(observed, std::slice::from_ref(plan)) };
-                touched.extend(cascade(plan, &basis, &self.types, &changed).into_iter().map(|d| d.id));
+                let downgrades = cascade(plan, &basis, &self.types, &changed);
+                revoke(plan, &downgrades);
+                touched.extend(downgrades.into_iter().map(|d| d.id));
             }
             Ok((plan.clone(), touched))
         })?;
@@ -584,7 +589,7 @@ impl ArchitectureService {
             if !blocking.is_empty() {
                 return Err(ServiceError::InvalidOp(format!("{id} can't be approved yet: {}", blocking.join("; "))));
             }
-            let approval = Approval { component: id.clone(), from, to, by: name.clone(), at: now_rfc3339() };
+            let approval = Approval { component: id.clone(), from, to, by: name.clone(), at: now_rfc3339(), kind: arch_graph::ApprovalKind::Approved };
             plan.approvals.push(approval.clone());
             Ok(approval)
         })?;
@@ -628,7 +633,7 @@ impl ArchitectureService {
         for f in checks::stage_gate(&plan, &merged, &self.types, id, goal) {
             report.push(f);
         }
-        if goal == Stage::Implemented && planned.stage != Stage::Implemented && !plan_approved(&plan, id) {
+        if goal == Stage::Implemented && planned.stage != Stage::Implemented && !plan.plan_approved(id) {
             report.push(
                 Finding::error(
                     FindingCode::ApprovalRequired,
@@ -663,6 +668,22 @@ impl ArchitectureService {
                     }
                 }
                 Err(why) => report.push(Finding::error(FindingCode::IllegalTransition, Target::Component { id: id.clone() }, why)),
+            }
+        }
+        // Code that no longer holds up loses the stage it had earned.
+        if report.has_errors() && planned.stage >= Stage::Skeleton {
+            let observed = self.observed()?;
+            let demoted = self.edit_plan(plan_id, |plan| {
+                let Some(current) = plan.component(id).cloned() else { return Ok(None) };
+                let Some(to) = demotion(plan, &current, &report, &observed) else { return Ok(None) };
+                // Its design still stands: the plan approval isn't taken back.
+                if let Some(c) = plan.component_mut(id) {
+                    c.stage = to;
+                }
+                Ok(Some(to))
+            })?;
+            if demoted.is_some() {
+                self.emit(ArchEvent::Changed { reason: ChangeReason::StageChanged, plans: vec![plan_id.clone()], components: vec![id.clone()] });
             }
         }
         self.emit_validated(plan_id, Some(id), &report);
@@ -850,7 +871,8 @@ impl ArchitectureService {
 
 /// Planned components already in the code (Skeleton or Implemented) that a
 /// change to `changed` files affects: they live in one (before or after the
-/// change), or something they're planned to call does.
+/// change), or something they're planned to call does, or unplanned code
+/// they lean on does.
 pub fn affected(plan: &Plan, before: &Graph, after: &Graph, changed: &BTreeSet<&str>) -> Vec<ComponentId> {
     let touches = |id: &ComponentId| {
         let files = [before.component(id).and_then(|c| c.file()), after.component(id).and_then(|c| c.file()), plan.component(id).and_then(|c| c.file())];
@@ -859,7 +881,12 @@ pub fn affected(plan: &Plan, before: &Graph, after: &Graph, changed: &BTreeSet<&
     plan.components
         .iter()
         .filter(|c| c.stage.expects_code())
-        .filter(|c| touches(&c.id) || plan.relations.iter().any(|r| r.kind == arch_graph::RelationKind::Calls && r.source == c.id && touches(&r.target)))
+        .filter(|c| {
+            touches(&c.id)
+                || plan.relations.iter().any(|r| r.kind == arch_graph::RelationKind::Calls && r.source == c.id && touches(&r.target))
+                // Unplanned helpers it leans on changed too.
+                || [before, after].into_iter().any(|g| verify::hidden_reach(plan, &c.id, g).iter().any(|(h, _)| touches(h)))
+        })
         .map(|c| c.id.clone())
         .collect()
 }
@@ -884,6 +911,8 @@ fn verification_files(plan: &Plan, id: &ComponentId, merged: &Graph) -> Option<B
         }
     }
     let mut files: BTreeSet<String> = chain::caller_files(plan, id, merged);
+    // The unplanned helpers it leans on (their placeholders count against it).
+    files.extend(verify::hidden_reach(plan, id, merged).iter().filter_map(|(h, _)| merged.component(h).and_then(|c| c.file()).map(|f| f.as_str().to_owned())));
     for c in ids {
         let found = merged.component(c).and_then(|c| c.file()).map(|f| f.as_str().to_owned());
         let planned = plan.component(c).and_then(|c| c.file()).map(|f| f.as_str().to_owned());
@@ -896,10 +925,14 @@ fn verification_files(plan: &Plan, id: &ComponentId, merged: &Graph) -> Option<B
     Some(files)
 }
 
-/// Whether the user's latest approval of `id` is its plan approval: only then
-/// may verification take it to Implemented (structure can come earlier).
-fn plan_approved(plan: &Plan, id: &ComponentId) -> bool {
-    plan.approvals.iter().rev().find(|a| &a.component == id).is_some_and(|a| a.to == Stage::PlanApproved)
+/// Records in the approval log every design taken back below its plan
+/// approval, so that approval no longer counts. (Code falling back while its
+/// design stands keeps it.)
+fn revoke(plan: &mut Plan, downgrades: &[Downgrade]) {
+    let at = now_rfc3339();
+    for d in downgrades.iter().filter(|d| d.to < Stage::PlanApproved) {
+        plan.revoke(&d.id, d.from, d.to, &at);
+    }
 }
 
 /// Where a component in the code goes when re-verification finds errors of

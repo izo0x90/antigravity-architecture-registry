@@ -63,6 +63,21 @@ pub struct RawCall {
     /// The receiver is a local declared with this type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receiver_type: Option<String>,
+    /// Not a call: a function named as a value (it may be called later). It
+    /// only counts when the name is a known function.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reference: bool,
+}
+
+/// A macro (or similar) defined in a file: the names its expansion uses, and
+/// whether it is a placeholder itself.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MacroDef {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub placeholder: bool,
 }
 
 /// An argument whose value is the output of another call in the same body.
@@ -87,6 +102,9 @@ pub struct FileExtract {
     pub pack_fingerprint: String,
     /// The file's module symbol (from its path and package).
     pub module: String,
+    /// The syntax kind of the file's root node.
+    #[serde(default)]
+    pub root_kind: String,
     pub lines: u32,
     pub bytes: u32,
     pub definitions: Vec<RawDef>,
@@ -96,6 +114,12 @@ pub struct FileExtract {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<(String, String)>,
     pub placeholders: Vec<Span>,
+    /// Macro uses by name (last path segment): which are placeholders is
+    /// decided across the repo at resolution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub macro_uses: Vec<(String, Span)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub macro_defs: Vec<MacroDef>,
 }
 
 impl FileExtract {
@@ -160,7 +184,7 @@ fn as_call(pack: &Pack, node: &AstNode<'_>) -> Option<(String, Span)> {
 /// A plain local name as written in an argument (`&out`, `mut x` -> name).
 fn local_name<'a>(pack: &Pack, text: &'a str) -> Option<&'a str> {
     let name = pack.spec.language.strip_references(text);
-    (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')).then_some(name)
+    (!name.is_empty() && name.chars().all(|c| pack.spec.language.is_identifier_char(c))).then_some(name)
 }
 
 /// Whether `inner` sits directly in `def` (no other definition in between).
@@ -176,6 +200,12 @@ fn directly_in(pack: &Pack, inner: &AstNode<'_>, def: &AstNode<'_>) -> bool {
     false
 }
 fn signature(pack: &Pack, def: &crate::pack::DefinitionSpec, node: &AstNode<'_>) -> Option<Signature> {
+    // Parameters and return type may live on a child (`const f = (x) => ...`).
+    let holder = match &def.signature_field {
+        Some(field) => node.field(field)?,
+        None => node.clone(),
+    };
+    let node = &holder;
     let params_node = def.params_field.as_ref().and_then(|f| node.field(f));
     let returns = def.return_field.as_ref().and_then(|f| type_text(pack, node, f));
     if params_node.is_none() && returns.is_none() {
@@ -194,7 +224,7 @@ fn signature(pack: &Pack, def: &crate::pack::DefinitionSpec, node: &AstNode<'_>)
             let Some(name) = name else { continue };
             let ty = spec.type_field.as_ref().and_then(|f| type_text(pack, &child, f));
             let optional = spec.optional || spec.default_field.as_ref().is_some_and(|f| child.field(f).is_some());
-            params.push(Param { name, ty, optional });
+            params.push(Param { name, ty, optional, variadic: spec.variadic });
         }
     }
     Some(Signature { params, returns, qualifiers: qualifiers(pack, node) })
@@ -206,10 +236,12 @@ fn qualifiers(pack: &Pack, node: &AstNode<'_>) -> Vec<String> {
     let mut out = Vec::new();
     for child in node.children() {
         let kind = child.kind();
+        // As written (an ABI string is part of `extern "C"`), whitespace collapsed.
+        let written = |n: &AstNode<'_>| n.text().split_whitespace().collect::<Vec<_>>().join(" ");
         if lang.qualifier_tokens.iter().any(|t| *t == kind) {
-            out.push(kind.into_owned());
+            out.push(written(&child));
         } else if lang.qualifier_containers.iter().any(|c| *c == kind) {
-            out.extend(child.children().map(|g| g.kind().into_owned()).filter(|k| lang.qualifier_tokens.contains(k)));
+            out.extend(child.children().filter(|g| lang.qualifier_tokens.iter().any(|t| *t == g.kind())).map(|g| written(&g)));
         }
     }
     out
@@ -230,6 +262,31 @@ struct Ctx {
     deferred: bool,
     /// Inside code that never runs.
     dead: bool,
+    /// The node that is the enclosing definition's own body (an arrow
+    /// function bound to a name): not a deferred scope.
+    own_body: Option<usize>,
+}
+
+/// Whether `node` never runs: it matches a dead-code rule whose condition,
+/// if it has one, is constant false.
+fn dead(pack: &Pack, node: &AstNode<'_>) -> bool {
+    pack.dead_code.iter().zip(&pack.spec.dead_code).any(|((rule, preceding, capture), spec)| {
+        if !node.matches(rule) {
+            return false;
+        }
+        let Some(condition) = &spec.condition else { return true };
+        let text = match (&condition.parent_field, preceding) {
+            (Some(field), _) => node.parent().and_then(|p| p.field(field)).map(|c| c.text().to_string()),
+            (None, Some(rule)) => node.prev_all().find(|n| n.is_named()).filter(|n| n.matches(rule)).map(|n| n.text().to_string()),
+            (None, None) => None,
+        };
+        let text = match (text, capture) {
+            (Some(t), Some(re)) => re.captures(&t).and_then(|c| c.get(1)).map(|g| g.as_str().to_owned()),
+            (t, None) => t,
+            (None, _) => None,
+        };
+        text.is_some_and(|t| pack.spec.constant_logic.eval(&t) == Some(false))
+    })
 }
 
 /// Extracts one file. `module` is its module symbol (see `walk::module_symbol`).
@@ -242,6 +299,7 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
         content_hash: content_hash(content),
         pack_fingerprint: pack.fingerprint.clone(),
         module,
+        root_kind: root.root().kind().into_owned(),
         lines: content.lines().count().max(1) as u32,
         bytes: content.len() as u32,
         definitions: Vec::new(),
@@ -249,16 +307,18 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
         imports: Vec::new(),
         aliases: Vec::new(),
         placeholders: Vec::new(),
+        macro_uses: Vec::new(),
+        macro_defs: Vec::new(),
     };
     let lang = &pack.spec.language;
     // Local names bound to a call's output (or a declared type), per enclosing definition.
     let mut bound: std::collections::HashMap<(Option<usize>, String), Bound> = std::collections::HashMap::new();
-    let mut stack: Vec<(AstNode<'_>, Ctx)> = vec![(root.root(), Ctx { parent: None, scope: None, deferred: false, dead: false })];
+    let mut stack: Vec<(AstNode<'_>, Ctx)> = vec![(root.root(), Ctx { parent: None, scope: None, deferred: false, dead: false, own_body: None })];
     while let Some((node, mut ctx)) = stack.pop() {
-        if !ctx.dead && pack.dead_code.iter().any(|rule| node.matches(rule)) {
+        if !ctx.dead && dead(pack, &node) {
             ctx.dead = true;
         }
-        if lang.deferred_scopes.iter().any(|k| *k == node.kind()) {
+        if lang.deferred_scopes.iter().any(|k| *k == node.kind()) && ctx.own_body != Some(node.node_id()) {
             ctx.deferred = true;
         }
         let mut child_ctx = ctx.clone();
@@ -268,7 +328,7 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
                     .bases_field
                     .as_ref()
                     .and_then(|f| node.field(f))
-                    .map(|b| b.children().filter(|c| c.is_named() && !c.kind().contains("comment")).map(|c| c.text().trim().to_owned()).collect())
+                    .map(|b| b.children().filter(|c| c.is_named() && !lang.ignored(&c.kind())).map(|c| c.text().trim().to_owned()).collect())
                     .unwrap_or_default();
                 if let Some(rule) = &pack.bases[di] {
                     bases.extend(node.find_all(rule).map(|m| m.get_node().clone()).filter(|m| directly_in(pack, m, &node)).map(|m| m.text().trim().to_owned()));
@@ -298,7 +358,8 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
                     self_name,
                 });
                 // A definition is its own caller: not deferred by what encloses it.
-                child_ctx = Ctx { parent: Some(out.definitions.len() - 1), scope: None, deferred: false, dead: ctx.dead };
+                let own_body = def.signature_field.as_ref().and_then(|f| node.field(f)).map(|b| b.node_id());
+                child_ctx = Ctx { parent: Some(out.definitions.len() - 1), scope: None, deferred: false, dead: ctx.dead, own_body };
             }
         } else if let Some(scope) = pack.scopes.iter().zip(&pack.spec.scopes).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
             && let Some(target) = field_text(&node, &scope.target_field)
@@ -324,7 +385,7 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
         {
             let mut args = Vec::new();
             if let Some(list) = call.args_field.as_ref().and_then(|f| node.field(f)) {
-                for (position, arg) in list.named_children().filter(|c| !c.kind().contains("comment")).enumerate() {
+                for (position, arg) in list.named_children().filter(|c| !lang.ignored(&c.kind())).enumerate() {
                     let producer =
                         as_call(pack, &arg).or_else(|| local_name(pack, &arg.text()).and_then(|n| bound.get(&(ctx.parent, n.to_owned())).and_then(|b| b.producer.clone())));
                     if let Some((producer, producer_span)) = producer {
@@ -342,6 +403,19 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
                 deferred: ctx.deferred,
                 receiver_producer: receiver.and_then(|b| b.producer.as_ref().map(|(p, _)| p.clone())),
                 receiver_type: receiver.and_then(|b| b.ty.clone()),
+                reference: false,
+            });
+        }
+        if !ctx.dead && pack.references.iter().any(|rule| node.matches(rule)) {
+            out.calls.push(RawCall {
+                caller: ctx.parent,
+                callee: node.text().trim().to_owned(),
+                span: span(&node),
+                args: Vec::new(),
+                deferred: true,
+                receiver_producer: None,
+                receiver_type: None,
+                reference: true,
             });
         }
         // Children in reverse so the stack visits them in source order.
@@ -374,18 +448,22 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
     for rule in &pack.placeholders {
         out.placeholders.extend(root_node.find_all(rule).map(|m| span(m.get_node())));
     }
-    // Uses of local definitions that expand to a placeholder.
-    for ((definition, invocation), spec) in pack.placeholder_aliases.iter().zip(&pack.spec.placeholder_aliases) {
-        let names: Vec<String> = root_node.find_all(definition).filter_map(|m| field_text(m.get_node(), &spec.name_field)).collect();
-        if names.is_empty() {
-            continue;
-        }
-        for m in root_node.find_all(invocation) {
-            let used = field_text(m.get_node(), &spec.invocation_name_field).unwrap_or_default();
-            let last = lang.split_last(&used).map_or(used.as_str(), |(_, _, name)| name);
-            if names.iter().any(|n| n == last) {
-                out.placeholders.push(span(m.get_node()));
+    if let (Some(macros), Some(spec)) = (&pack.macros, &pack.spec.macros) {
+        let last = |name: &str| lang.split_last(name).map_or(name, |(_, _, n)| n).to_owned();
+        for m in root_node.find_all(&macros.invocation) {
+            if let Some(name) = field_text(m.get_node(), &spec.name_field) {
+                out.macro_uses.push((last(&name), span(m.get_node())));
             }
+        }
+        for m in root_node.find_all(&macros.definition) {
+            let node = m.get_node();
+            let Some(name) = field_text(node, &spec.definition_name_field) else { continue };
+            let text = node.text();
+            let mut uses: Vec<String> = macros.uses.captures_iter(&text).filter_map(|c| c.get(1).map(|g| last(g.as_str()))).filter(|u| *u != name).collect();
+            uses.sort();
+            uses.dedup();
+            let placeholder = macros.placeholder.as_ref().is_some_and(|r| r.is_match(&text));
+            out.macro_defs.push(MacroDef { name, uses, placeholder });
         }
     }
     out.placeholders.sort_by_key(|s| s.start_byte);

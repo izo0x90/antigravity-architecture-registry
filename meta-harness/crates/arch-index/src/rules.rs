@@ -115,12 +115,17 @@ impl CodeRules {
             let Ok(ty) = types.resolve(&c.type_name) else { continue };
             let rules: Vec<&CodeRule> =
                 self.rules.iter().filter(|r| r.spec.language == anchor.language && r.spec.types.iter().any(|t| ty.is_a(t))).collect();
-            let Some(pack) = packs.by_name(&anchor.language) else { continue };
+            let Some(pack) = packs.for_path(Path::new(anchor.file.as_str())) else { continue };
             if rules.is_empty() {
                 continue;
             }
             let content = files.entry(anchor.file.as_str().to_owned()).or_insert_with(|| std::fs::read_to_string(root.join(anchor.file.as_str())).ok());
             let Some(content) = content else { continue };
+            // The file changed since it was indexed: its spans point at other
+            // code. Nothing is judged until it's read again.
+            if crate::content_hash(content) != anchor.content_hash {
+                continue;
+            }
             let doc = pack.lang.ast_grep(content.as_str());
             let own = anchor.span.start_byte as usize..anchor.span.end_byte as usize;
             // Code of nested components (in the same file) isn't this one's own.

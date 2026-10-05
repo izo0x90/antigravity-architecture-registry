@@ -15,8 +15,8 @@ use std::path::Path;
 
 use arch_graph::TypeSystem;
 
-pub use extract::{FileExtract, RawArg, RawCall, RawDef, RawScope, content_hash, extract_file};
-pub use pack::{AliasSpec, BindingSpec, CallSpec, DefinitionSpec, LanguageSpec, Pack, PackSet, PackSpec, ParamSpec, PlaceholderAliasSpec, RuleSpec, ScopeSpec};
+pub use extract::{FileExtract, MacroDef, RawArg, RawCall, RawDef, RawScope, content_hash, extract_file};
+pub use pack::{AliasSpec, BindingSpec, CallSpec, DefinitionSpec, LanguageSpec, Pack, PackSet, PackSpec, ParamSpec, MacroSpec, DeadCodeSpec, ConditionSpec, ConstantLogic, RuleSpec, ScopeSpec};
 pub use resolve::{AmbiguousCall, ExternalCall, Resolved, UnverifiedFlow, resolve};
 pub use rules::{CodeRule, CodeRuleSpec, CodeRules, RuleKind, RuleSeverity};
 pub use walk::{SourceFile, module_symbol, walk};
@@ -35,7 +35,7 @@ pub enum IndexError {
 pub fn ingest(root: &Path, scope: &Path, packs: &PackSet, types: &TypeSystem) -> Result<(Vec<FileExtract>, Resolved), IndexError> {
     let mut extracts = Vec::new();
     for file in walk(root, scope, packs)? {
-        let Some(pack) = packs.by_name(&file.language) else { continue };
+        let Some(pack) = packs.for_path(&file.absolute) else { continue };
         let content = std::fs::read_to_string(&file.absolute).map_err(|e| IndexError::Io(format!("{}: {e}", file.path)))?;
         extracts.push(extract_file(pack, file.path, file.module, &content));
     }

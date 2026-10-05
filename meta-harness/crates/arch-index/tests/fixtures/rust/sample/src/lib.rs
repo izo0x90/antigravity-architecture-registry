@@ -92,3 +92,23 @@ pub fn guard(x: u32) -> u32 {
     }
     x
 }
+
+pub trait Twice {
+    fn once(&self) -> u32;
+
+    fn twice(&self) -> u32 {
+        self.once() * 2
+    }
+}
+
+pub struct Two;
+
+impl Twice for Two {
+    fn once(&self) -> u32 {
+        1
+    }
+}
+
+pub fn double() -> u32 {
+    Two.twice()
+}

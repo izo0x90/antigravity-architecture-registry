@@ -1,5 +1,9 @@
 # Exactly what ingesting tests/fixtures/typescript/app must produce.
 components = [
+  ["helpers.shout", "function"],
+  ["app.Greeter.describe", "function"],
+  ["view", "module"],
+  ["view.View", "function"],
   ["app", "module"],
   ["helpers", "module"],
   ["app.Greeter", "class"],
@@ -16,6 +20,12 @@ components = [
   ["app.fetch", "function"],
 ]
 relations = [
+  ["contains", "app.Greeter", "app.Greeter.describe"],
+  ["contains", "helpers", "helpers.shout"],
+  ["contains", "view", "view.View"],
+  ["calls", "app.Greeter.describe", "helpers.Base.describe"],
+  ["calls", "app.main", "helpers.shout"],
+  ["calls", "view.View", "helpers.clean"],
   ["contains", "app", "app.Greeter"],
   ["contains", "app", "app.main"],
   ["contains", "app", "app.show"],

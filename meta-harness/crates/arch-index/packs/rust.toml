@@ -31,8 +31,13 @@ type_noise = ["mut", "dyn", "impl", "const"]
 nullable_wrappers = ["Option"]
 # Closures may run later or never: calls inside are deferred.
 deferred_scopes = ["closure_expression"]
-qualifier_tokens = ["async", "unsafe", "const"]
+# `extern "C"` is recorded as written, ABI included.
+qualifier_tokens = ["async", "unsafe", "const", "extern_modifier"]
 qualifier_containers = ["function_modifiers"]
+module_type = "module"
+identifier_chars = "_"
+ignored_kinds = ["line_comment", "block_comment"]
+import_keywords = ["use", "pub", "as"]
 
 [[definitions]]
 type = "function"
@@ -98,26 +103,59 @@ rule = { kind = "use_as_clause" }
 alias_field = "alias"
 original_field = "path"
 
-# todo!() / unimplemented!(), also through a path (std::todo!).
-[[placeholders]]
-rule = { kind = "macro_invocation", has = { field = "macro", regex = "^(.*::)?(todo|unimplemented)$" } }
+# Placeholder macros: todo!()/unimplemented!() by name (std::todo!, a
+# `use std::todo as later` alias, or a macro defined anywhere in the repo
+# that expands to one or to a panic with a not-implemented message).
+[macros]
+invocation = { kind = "macro_invocation" }
+name_field = "macro"
+definition = { kind = "macro_definition" }
+definition_name_field = "name"
+placeholders = ["todo", "unimplemented"]
+definition_uses = "(?:[A-Za-z_][A-Za-z0-9_]*::)*([A-Za-z_][A-Za-z0-9_]*)\\s*!"
+definition_placeholder = "(?i)\\bpanic\\s*!\\s*\\(\\s*(\\)|\"[^\"]*(not\\s+(yet\\s+)?implemented|todo|unfinished))"
 
 # panic!("not implemented") and the like. unreachable!() is not a
 # placeholder: it marks code that can't run, not code still to write.
 [[placeholders]]
 rule = { kind = "macro_invocation", has = { field = "macro", regex = "^(.*::)?panic$" }, regex = "(?i)(not\\s+(yet\\s+)?implemented|todo)" }
 
-# A local macro that expands to todo!()/unimplemented!(): its uses are placeholders.
-[[placeholder_aliases]]
-rule = { kind = "macro_definition", regex = "\\b(todo|unimplemented)\\s*!" }
-name_field = "name"
-invocation = { kind = "macro_invocation" }
-invocation_name_field = "macro"
+# A function whose body ends by panicking (any message, or none) has no
+# real body yet. Functions returning `!` are meant to diverge and don't count.
+[[placeholders]]
+rule = { kind = "macro_invocation", has = { field = "macro", regex = "^(.*::)?panic$" }, any = [
+  { nthChild = { position = 1, reverse = true }, inside = { kind = "block", inside = { kind = "function_item", field = "body", not = { has = { field = "return_type", regex = "^!$" } } } } },
+  { inside = { kind = "expression_statement", nthChild = { position = 1, reverse = true }, inside = { kind = "block", inside = { kind = "function_item", field = "body", not = { has = { field = "return_type", regex = "^!$" } } } } } },
+] }
 
-# Compiled out: the item or statement after an always-false cfg.
-[[dead_code]]
-rule = { any = [{ kind = "expression_statement" }, { kind = "let_declaration" }, { kind = "function_item" }, { kind = "impl_item" }, { kind = "mod_item" }], follows = { kind = "attribute_item", regex = "^#\\[cfg\\((any\\(\\s*\\)|false|FALSE)\\)\\]$" } }
+# A function named as a value may be called later (a deferred call).
+[[references]]
+rule = { kind = "identifier", any = [{ inside = { kind = "let_declaration", field = "value" } }, { inside = { kind = "arguments" } }] }
 
-# Never runs: the body of `if false`.
+# Constant conditions, for code that can never run. Whatever isn't built
+# only from these (a runtime value, a const, a comparison) is undecided and
+# its code counts as live: reviewers judge intent beyond that.
+[constant_logic]
+true_atoms = ["true"]
+false_atoms = ["false"]
+not_prefixes = ["!"]
+and_operators = ["&&"]
+or_operators = ["||"]
+all_functions = ["all"]
+any_functions = ["any"]
+not_functions = ["not"]
+identity_functions = ["cfg!"]
+
+# Compiled out: the item or statement after a cfg attribute that's always false.
 [[dead_code]]
-rule = { kind = "block", inside = { kind = "if_expression", field = "consequence", has = { field = "condition", regex = "^false$" } } }
+rule = { any = [{ kind = "expression_statement" }, { kind = "let_declaration" }, { kind = "function_item" }, { kind = "impl_item" }, { kind = "mod_item" }, { kind = "block" }], follows = { kind = "attribute_item" } }
+condition = { preceding = { kind = "attribute_item" }, capture = "^#\\[\\s*cfg\\s*\\((.*)\\)\\s*\\]$" }
+
+# Never runs: the body of an if or while whose condition is always false.
+[[dead_code]]
+rule = { kind = "block", any = [{ inside = { kind = "if_expression", field = "consequence" } }, { inside = { kind = "while_expression", field = "body" } }] }
+condition = { parent_field = "condition" }
+
+# Never runs: what follows an unconditional return in the same block.
+[[dead_code]]
+rule = { any = [{ kind = "expression_statement" }, { kind = "let_declaration" }], follows = { stopBy = "end", kind = "expression_statement", has = { kind = "return_expression" } } }

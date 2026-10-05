@@ -105,7 +105,7 @@ fn words(name: &str) -> impl Iterator<Item = &str> {
 /// The call's expected inputs/outputs against the callee's real signature
 /// (only for code that exists: a planned signature is checked by P6.3).
 /// Receivers (self, this...) aren't arguments; optional parameters may be
-/// left out.
+/// left out; a variadic parameter (`*args`) takes any number, none included.
 fn against_signature(callee: &Component, inputs: Option<&Value>, outputs: Option<&Value>, packs: &PackSet) -> Vec<String> {
     let (Some(anchor), Some(sig)) = (&callee.anchor, &callee.signature) else { return Vec::new() };
     let Some(lang) = packs.by_name(&anchor.language).map(|p| &p.spec.language) else { return Vec::new() };
@@ -115,15 +115,16 @@ fn against_signature(callee: &Component, inputs: Option<&Value>, outputs: Option
         let empty = serde_json::Map::new();
         let props = inputs.get("properties").and_then(Value::as_object).unwrap_or(&empty);
         let required: Vec<&str> = inputs.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
-        let needed = params.iter().filter(|p| !p.optional).count();
-        if props.len() > params.len() || required.len() > params.len() || needed > props.len() {
+        let needed = params.iter().filter(|p| !p.optional && !p.variadic).count();
+        let variadic = params.iter().any(|p| p.variadic);
+        if (!variadic && (props.len() > params.len() || required.len() > params.len())) || needed > props.len() {
             let optional = params.len() - needed;
             let takes = if optional > 0 { format!("{needed} argument(s) (+{optional} optional)") } else { format!("{} argument(s)", params.len()) };
             out.push(format!("{} takes {takes}; the call passes {} ({} required)", callee.name, props.len(), required.len()));
         }
         for p in &params {
             match props.get(&p.name) {
-                None if p.optional => {}
+                None if p.optional || p.variadic => {}
                 None => out.push(format!("parameter '{}' isn't among the planned inputs", p.name)),
                 Some(schema) => {
                     if let Some(Err(why)) = p.ty.as_deref().and_then(|ty| carries(lang, ty, schema)) {
@@ -132,7 +133,7 @@ fn against_signature(callee: &Component, inputs: Option<&Value>, outputs: Option
                 }
             }
         }
-        for name in props.keys().filter(|k| !params.iter().any(|p| &p.name == *k)) {
+        for name in props.keys().filter(|k| !variadic && !params.iter().any(|p| &p.name == *k)) {
             out.push(format!("planned input '{name}' isn't a parameter of {}", callee.name));
         }
     }
@@ -196,7 +197,7 @@ mod tests {
     use serde_json::json;
 
     fn method() -> Component {
-        let param = |name: &str, ty: &str, optional: bool| Param { name: name.into(), ty: Some(ty.into()), optional };
+        let param = |name: &str, ty: &str, optional: bool| Param { name: name.into(), ty: Some(ty.into()), optional, variadic: false };
         Component {
             id: ComponentId::new("rust:app::Store::save"),
             name: "save".into(),

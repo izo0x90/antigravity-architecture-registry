@@ -388,6 +388,7 @@ mod tests {
             content_hash: hash.into(),
             pack_fingerprint: "p".into(),
             module: "m".into(),
+            root_kind: "source_file".into(),
             lines: 1,
             bytes: 1,
             definitions: vec![],
@@ -395,6 +396,8 @@ mod tests {
             imports: vec![],
             aliases: vec![],
             placeholders: vec![],
+            macro_uses: vec![],
+            macro_defs: vec![],
         }
     }
 

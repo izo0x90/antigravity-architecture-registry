@@ -103,10 +103,6 @@ fn split(text: &str, lang: &LanguageSpec) -> Vec<String> {
     parts.into_iter().map(|p| p.trim().to_owned()).filter(|p| !p.is_empty()).collect()
 }
 
-fn symbol_words(symbol: &str) -> Vec<&str> {
-    symbol.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).filter(|s| !s.is_empty()).collect()
-}
-
 /// `text` without a leading constructor keyword (`new Greeter` -> `Greeter`).
 fn strip_constructor<'a>(text: &'a str, lang: &LanguageSpec) -> &'a str {
     let text = text.trim();
@@ -125,10 +121,57 @@ fn de_alias(text: &str, aliases: &[(String, String)], lang: &LanguageSpec) -> St
     let text = text.trim();
     let head_end = lang.call_separators.iter().filter_map(|sep| text.find(sep.as_str())).min().unwrap_or(text.len());
     let head = &text[..head_end];
-    match aliases.iter().find(|(alias, _)| alias == head).and_then(|(_, original)| symbol_words(original).last().map(|w| (*w).to_owned())) {
+    match aliases.iter().find(|(alias, _)| alias == head).and_then(|(_, original)| lang.words(original).last().map(|w| (*w).to_owned())) {
         Some(original) => format!("{original}{}", &text[head_end..]),
         None => text.to_owned(),
     }
+}
+
+/// Every file's placeholder sites: its own, plus uses of macros that are
+/// placeholders. A name is one when the pack says so, when it aliases one
+/// (`use std::todo as later`), or when a definition anywhere in the repo
+/// (same language) expands to one; worked out to a fixpoint.
+fn placeholder_sites(extracts: &[FileExtract], packs: &PackSet) -> Vec<Vec<Span>> {
+    let mut names: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for ex in extracts {
+        if let Some(m) = packs.by_name(&ex.language).and_then(|p| p.spec.macros.as_ref()) {
+            names.entry(ex.language.as_str()).or_insert_with(|| m.placeholders.iter().cloned().collect());
+        }
+    }
+    loop {
+        let mut changed = false;
+        for ex in extracts {
+            let (Some(pack), Some(set)) = (packs.by_name(&ex.language), names.get_mut(ex.language.as_str())) else { continue };
+            let lang = &pack.spec.language;
+            for (alias, original) in &ex.aliases {
+                let last = lang.split_last(original).map_or(original.as_str(), |(_, _, n)| n);
+                if set.contains(last) && !set.contains(alias) {
+                    set.insert(alias.clone());
+                    changed = true;
+                }
+            }
+            for d in &ex.macro_defs {
+                if !set.contains(&d.name) && (d.placeholder || d.uses.iter().any(|u| set.contains(u))) {
+                    set.insert(d.name.clone());
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    extracts
+        .iter()
+        .map(|ex| {
+            let set = names.get(ex.language.as_str());
+            let mut out = ex.placeholders.clone();
+            out.extend(ex.macro_uses.iter().filter(|(n, _)| set.is_some_and(|s| s.contains(n))).map(|(_, span)| *span));
+            out.sort_by_key(|s| s.start_byte);
+            out.dedup();
+            out
+        })
+        .collect()
 }
 
 pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) -> Resolved {
@@ -136,7 +179,8 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
     let mut entries: Vec<Entry> = Vec::new();
     let mut def_entry: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     let mut module_entry: BTreeMap<usize, usize> = BTreeMap::new();
-    let is_type = |type_name: &str| types.resolve(type_name).map(|t| !t.executable && !t.is_a("module")).unwrap_or(false);
+    let module_types: BTreeSet<&str> = packs.packs.iter().map(|p| p.spec.language.module_type.as_str()).collect();
+    let is_type = |type_name: &str| types.resolve(type_name).map(|t| !t.executable && !module_types.iter().any(|m| t.is_a(m))).unwrap_or(false);
 
     for (fi, ex) in extracts.iter().enumerate() {
         let sep = packs.by_name(&ex.language).map_or("::", |p| p.spec.language.separator.as_str());
@@ -214,18 +258,22 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
         }
     }
 
+    let sites = placeholder_sites(extracts, packs);
     // Components.
     for entry in &entries {
         let ex = &extracts[entry.file];
         let def = entry.def.map(|(fi, di)| &extracts[fi].definitions[di]);
         let (type_name, syntax_kind, span, signature) = match def {
             Some(d) => (d.type_name.clone(), d.syntax_kind.clone(), d.span, d.signature.clone()),
-            None => ("module".to_owned(), "source_file".to_owned(), Span { start_line: 1, end_line: ex.lines, start_byte: 0, end_byte: ex.bytes }, None),
+            None => {
+                let module_type = packs.by_name(&ex.language).map(|p| p.spec.language.module_type.clone()).unwrap_or_default();
+                (module_type, ex.root_kind.clone(), Span { start_line: 1, end_line: ex.lines, start_byte: 0, end_byte: ex.bytes }, None)
+            }
         };
         // A placeholder counts for every definition containing it: code with a
         // nested unfinished part isn't finished either.
         let placeholders = match def {
-            Some(_) => ex.placeholders.iter().filter(|p| span.contains(p)).copied().collect(),
+            Some(_) => sites[entry.file].iter().filter(|p| span.contains(p)).copied().collect(),
             None => Vec::new(),
         };
         out.graph.upsert_component(
@@ -281,6 +329,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
         link(&mut out.graph, RelationKind::Contains, &container, &entries[ei].id);
     }
     // Implements: declared bases and scope interfaces.
+    let mut implements_of: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (&(fi, di), &ei) in &def_entry {
         let ex = &extracts[fi];
         let Some(pack) = packs.by_name(&ex.language) else { continue };
@@ -296,12 +345,16 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                 && target != source
             {
                 link(&mut out.graph, RelationKind::Implements, &entries[source].id, &entries[target].id);
+                let list = implements_of.entry(source).or_default();
+                if !list.contains(&target) {
+                    list.push(target);
+                }
             }
         }
     }
 
     // Calls.
-    let cx = Cx { entries: &entries, extracts, packs };
+    let cx = Cx { entries: &entries, extracts, packs, implements: &implements_of };
     let mut seen_external: BTreeSet<(ComponentId, String)> = BTreeSet::new();
     for (fi, ex) in extracts.iter().enumerate() {
         let Some(pack) = packs.by_name(&ex.language) else { continue };
@@ -313,6 +366,20 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             };
             let Some(caller) = caller else { continue };
             let caller_id = entries[caller].id.clone();
+            if call.reference {
+                // A function named as a value may be called later: a deferred
+                // edge when the name is a known function, nothing otherwise.
+                if let CallTarget::One(target) = cx.resolve_call(caller, &call.callee, Some(call), 0)
+                    && entries[target].def.is_some()
+                    && !entries[target].is_type
+                {
+                    let mut relation = Relation::new(RelationKind::Calls, caller_id, entries[target].id.clone(), Provenance::OBSERVED);
+                    relation.sites.push(call.span);
+                    relation.deferred = true;
+                    out.graph.upsert_relation(relation);
+                }
+                continue;
+            }
             match cx.resolve_call(caller, &call.callee, Some(call), 0) {
                 CallTarget::One(target) => {
                     let mut relation = Relation::new(RelationKind::Calls, caller_id.clone(), entries[target].id.clone(), Provenance::OBSERVED);
@@ -387,7 +454,7 @@ fn flow(entries: &[Entry], extracts: &[FileExtract], source: usize, target: usiz
     });
     let Some(produced) = produced else { return Err(format!("{} declares no return type", entries[source].symbol)) };
     let params: Vec<&arch_graph::Param> = signature(entries, extracts, target)
-        .map(|s| s.params.iter().filter(|p| !symbol_words(&p.name).iter().any(|w| lang.self_names.iter().any(|n| n == w))).collect())
+        .map(|s| s.params.iter().filter(|p| !lang.words(&p.name).iter().any(|w| lang.self_names.iter().any(|n| n == w))).collect())
         .unwrap_or_default();
     let Some(param) = params.get(position as usize) else { return Err(format!("{} has no parameter at position {position}", entries[target].symbol)) };
     let Some(wanted) = param.ty.as_deref().map(base) else { return Err(format!("parameter '{}' of {} has no type", param.name, entries[target].symbol)) };
@@ -404,7 +471,7 @@ fn find_type(entries: &[Entry], text: &str, module: &str, lang: &LanguageSpec) -
     if candidates.len() == 1 {
         return candidates.first().copied();
     }
-    let by_path = path_matches(entries, &candidates, &parts);
+    let by_path = path_matches(entries, &candidates, &parts, lang);
     if by_path.len() == 1 {
         return by_path.first().copied();
     }
@@ -413,12 +480,12 @@ fn find_type(entries: &[Entry], text: &str, module: &str, lang: &LanguageSpec) -
 }
 
 /// Candidates whose symbol ends with the written qualified path.
-fn path_matches(entries: &[Entry], candidates: &[usize], parts: &[String]) -> Vec<usize> {
+fn path_matches(entries: &[Entry], candidates: &[usize], parts: &[String], lang: &LanguageSpec) -> Vec<usize> {
     if parts.len() < 2 {
         return Vec::new();
     }
     let wanted: Vec<&str> = parts.iter().map(String::as_str).collect();
-    candidates.iter().copied().filter(|&c| symbol_words(&entries[c].symbol).ends_with(&wanted)).collect()
+    candidates.iter().copied().filter(|&c| lang.words(&entries[c].symbol).ends_with(&wanted)).collect()
 }
 
 enum CallTarget {
@@ -455,6 +522,8 @@ fn self_type(entries: &[Entry], entry: usize) -> Option<usize> {
 enum Receiver {
     /// A type in the repo.
     Typed(usize),
+    /// The bases of a type in the repo (`super`).
+    Base(usize),
     /// A type outside the repo (a library type, a primitive).
     Outside,
     Unknown,
@@ -467,6 +536,8 @@ struct Cx<'a> {
     entries: &'a [Entry],
     extracts: &'a [FileExtract],
     packs: &'a PackSet,
+    /// Entry -> the interfaces its scopes say it implements.
+    implements: &'a BTreeMap<usize, Vec<usize>>,
 }
 
 impl Cx<'_> {
@@ -514,6 +585,10 @@ impl Cx<'_> {
     fn receiver(&self, caller: usize, qualifier: &str, call: Option<&RawCall>, depth: u32) -> Receiver {
         let Some(lang) = self.lang(caller) else { return Receiver::Unknown };
         let q = qualifier.trim();
+        // super: the enclosing type's bases.
+        if lang.super_receivers.iter().any(|s| s == q) {
+            return self_type(self.entries, caller).map_or(Receiver::Unknown, Receiver::Base);
+        }
         // self / this / the method's named receiver.
         if lang.self_names.iter().any(|s| s == q) || self.entries[caller].self_name.as_deref() == Some(q) {
             return self_type(self.entries, caller).map_or(Receiver::Unknown, Receiver::Typed);
@@ -556,25 +631,40 @@ impl Cx<'_> {
         }
     }
 
-    /// Members named `name` of `ty` or the types it extends (as declared).
-    fn members(&self, ty: usize, name: &str) -> Vec<usize> {
+    /// What `ty` extends or implements, transitively: declared bases and
+    /// interfaces from scopes (`impl Trait for Type`), nearest first.
+    fn bases(&self, ty: usize) -> Vec<usize> {
         let mut types = vec![ty];
         let mut i = 0;
         while i < types.len() && i < 32 {
-            if let Some((fi, di)) = self.entries[types[i]].def
-                && let Some(lang) = self.lang(types[i])
+            let t = types[i];
+            let mut next: Vec<usize> = self.implements.get(&t).cloned().unwrap_or_default();
+            if let Some((fi, di)) = self.entries[t].def
+                && let Some(lang) = self.lang(t)
             {
-                for base in &self.extracts[fi].definitions[di].bases {
-                    if let Some(b) = find_type(self.entries, base, &self.entries[types[i]].module, lang)
-                        && !types.contains(&b)
-                    {
-                        types.push(b);
-                    }
+                next.extend(self.extracts[fi].definitions[di].bases.iter().filter_map(|base| find_type(self.entries, base, &self.entries[t].module, lang)));
+            }
+            for b in next {
+                if !types.contains(&b) {
+                    types.push(b);
                 }
             }
             i += 1;
         }
-        // Nearest declaration wins (an override hides the base's).
+        types.remove(0);
+        types
+    }
+
+    /// Members named `name` of `ty` or what it extends or implements (a
+    /// trait's default method counts).
+    fn members(&self, ty: usize, name: &str) -> Vec<usize> {
+        let mut types = vec![ty];
+        types.extend(self.bases(ty));
+        self.members_of(&types, name)
+    }
+
+    /// The nearest declaration among `types` (an override hides the base's).
+    fn members_of(&self, types: &[usize], name: &str) -> Vec<usize> {
         types
             .iter()
             .find_map(|&t| {
@@ -600,13 +690,17 @@ impl Cx<'_> {
             receiver = self.receiver(caller, qualifier, call, depth);
             match receiver {
                 Receiver::Typed(t) => return narrow(self.members(t, &name)).unwrap_or(CallTarget::External),
+                Receiver::Base(t) => {
+                    let bases = self.bases(t);
+                    return narrow(self.members_of(&bases, &name)).unwrap_or(CallTarget::External);
+                }
                 Receiver::Outside => return CallTarget::External,
                 Receiver::Unknown => {}
             }
         }
         if lang.is_path_separator(sep) {
             let path: Vec<String> = split(&callee, lang).into_iter().filter(|p| !lang.relative_prefixes.contains(p)).collect();
-            if let Some(target) = narrow(path_matches(self.entries, &candidates, &path)) {
+            if let Some(target) = narrow(path_matches(self.entries, &candidates, &path, lang)) {
                 return target;
             }
         }
@@ -636,17 +730,31 @@ impl Cx<'_> {
         if let Some(target) = narrow(free.iter().copied().filter(|&c| self.entries[c].module == caller_module).collect()) {
             return target;
         }
+        let caller_words = lang.words(caller_module);
         let imported: Vec<usize> = free
             .iter()
             .copied()
             .filter(|&c| {
-                // Imported from its module or a package above it (re-exports),
-                // by name or with a glob.
-                let module = symbol_words(&self.entries[c].module);
+                // Imported from its module (the path names it, whole) or from a
+                // package above it (re-exports), by name or with a glob; a path
+                // of only relative markers means the caller's module or one above.
+                let module = lang.words(&self.entries[c].module);
                 imports.iter().any(|imp| {
-                    let words = symbol_words(imp);
                     let glob = lang.glob_import.as_deref().is_some_and(|g| imp.contains(g));
-                    module.iter().any(|m| words.contains(m)) && (words.contains(&name) || glob)
+                    let words: Vec<&str> = lang.words(imp).into_iter().filter(|w| !lang.import_keywords.iter().any(|k| k == w)).collect();
+                    let path_ok = |raw: &[&str]| {
+                        let path: Vec<&str> = raw.iter().copied().filter(|w| !lang.relative_prefixes.iter().any(|r| r == w)).collect();
+                        if path.is_empty() {
+                            !raw.is_empty() && caller_words.starts_with(&module)
+                        } else {
+                            module.ends_with(&path) || module.starts_with(&path)
+                        }
+                    };
+                    (0..=words.len()).any(|i| {
+                        let (head, tail) = words.split_at(i);
+                        // `use a::b::name` (path first) or `import { name } from "a/b"` (names first).
+                        (path_ok(head) && (glob || tail.contains(&name))) || (path_ok(tail) && (glob || head.contains(&name)))
+                    })
                 })
             })
             .collect();

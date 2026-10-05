@@ -128,7 +128,7 @@ fn python_fixture_ingests_to_exactly_the_expected_graph() {
 fn typescript_fixture_ingests_to_exactly_the_expected_graph() {
     let packs = PackSet::built_in().unwrap();
     let (extracts, resolved) = run(&fixtures().join("typescript/app"), &packs);
-    assert_eq!(extracts.len(), 2);
+    assert_eq!(extracts.len(), 3, ".ts files and the .tsx one (its own grammar)");
     assert_matches("typescript", &resolved, &fixtures().join("typescript/expected.toml"));
     let greet = resolved.graph.component(&ComponentId::for_symbol("typescript", "app.Greeter.greet")).unwrap();
     let sig = greet.signature.as_ref().unwrap();
@@ -178,7 +178,7 @@ fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
     assert_eq!(flows(&rust), BTreeSet::from([row("rust", "sample::Upper::apply", "sample::store::Store::save", "item"), row("rust", "sample::Upper::apply", "sample::log", "msg")]));
     assert!(rust.unverified_flows.is_empty(), "{:?}", rust.unverified_flows);
     // Python and TypeScript: a nested call is typed; load() has no return type.
-    for (lang, fixture, untyped_targets) in [("python", "python/app", vec!["app.Greeter.greet"]), ("typescript", "typescript/app", vec!["app.Greeter.greet", "app.show"])] {
+    for (lang, fixture, untyped_targets) in [("python", "python/app", vec!["app.Greeter.greet"]), ("typescript", "typescript/app", vec!["app.Greeter.greet", "app.show", "helpers.shout"])] {
         let (_, resolved) = run(&fixtures().join(fixture), &PackSet::built_in().unwrap());
         assert_eq!(flows(&resolved), BTreeSet::from([row(lang, "helpers.clean", "app.Greeter.format", "text")]), "{lang}");
         let reported: Vec<(String, String)> = resolved.unverified_flows.iter().map(|u| (u.source.to_string(), u.target.to_string())).collect();
@@ -312,4 +312,61 @@ fn module_symbols_come_from_the_manifest_not_the_checkout_directory() {
     let go = packs_with_test_data();
     let (extracts, _) = run(&fixtures().join("go/app"), &go);
     assert!(extracts.iter().all(|e| e.module.starts_with("app.")), "{:?}", extracts.iter().map(|e| &e.module).collect::<Vec<_>>());
+}
+
+// req: P4.6
+#[test]
+fn imports_match_whole_module_paths_and_inherited_members_resolve() {
+    let packs = PackSet::built_in().unwrap();
+    // Python: `from other.helpers import clean` is not this repo's helpers module,
+    // even though the words overlap; `from helpers import clean` is.
+    let root = temp_repo(
+        "imports",
+        &[
+            ("helpers.py", "def clean(s):\n    return s\n"),
+            ("other_use.py", "from other.helpers import clean\n\n\ndef a():\n    clean(\"x\")\n"),
+            ("own_use.py", "from helpers import clean\n\n\ndef b():\n    clean(\"x\")\n"),
+            ("src/pkg/tool.py", "def make(*parts, **options):\n    return parts\n"),
+        ],
+    );
+    let (_, resolved) = run(&root, &packs);
+    let py = |s: &str| ComponentId::for_symbol("python", s);
+    let calls = |from: &str| resolved.graph.outgoing(&py(from), Some(RelationKind::Calls)).map(|r| r.target.to_string()).collect::<Vec<_>>();
+    assert_eq!(calls("own_use.b"), vec![py("helpers.clean").to_string()]);
+    assert!(calls("other_use.a").is_empty(), "another package's helpers");
+    assert!(resolved.unproven.iter().any(|u| u.caller == py("other_use.a")), "recorded as unproven, never linked");
+    // Source roots drop from module paths; *args/**kwargs are variadic.
+    let make = resolved.graph.component(&py("pkg.tool.make")).expect("src/ is a source root");
+    let params: Vec<(&str, bool)> = make.signature.as_ref().unwrap().params.iter().map(|p| (p.name.as_str(), p.variadic)).collect();
+    assert_eq!(params, [("*parts", true), ("**options", true)]);
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    // TypeScript: package.json names the package; .tsx files parse with their own grammar.
+    let root = temp_repo(
+        "tsxpkg",
+        &[
+            ("package.json", "{ \"name\": \"web\", \"version\": \"1.0.0\" }"),
+            ("src/util.ts", "export const twice = (n: number): number => n * 2;\n"),
+            ("src/view.tsx", "import { twice } from \"./util\";\n\nexport function View() {\n  return <b>{twice(2)}</b>;\n}\n"),
+        ],
+    );
+    let (_, resolved) = run(&root, &packs);
+    let ts = |s: &str| ComponentId::for_symbol("typescript", s);
+    assert!(resolved.graph.component(&ts("web.util.twice")).is_some(), "a module-level arrow function, under the package name");
+    assert!(resolved.graph.outgoing(&ts("web.view.View"), Some(RelationKind::Calls)).any(|r| r.target == ts("web.util.twice")));
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+// req: P4.2
+#[test]
+fn packs_are_strict_about_fields_and_the_types_they_map_onto() {
+    let rust = include_str!("../packs/rust.toml");
+    let typo = rust.replacen("separator = \"::\"", "seperator = \"::\"", 1);
+    let err = arch_index::Pack::from_toml(&typo).unwrap_err().to_string();
+    assert!(err.contains("seperator"), "unknown fields are rejected: {err}");
+    let widget = rust.replacen("type = \"interface\"", "type = \"widget\"", 1);
+    let mut packs = PackSet::default();
+    packs.add(arch_index::Pack::from_toml(&widget).unwrap());
+    let err = packs.check_types(&TypeSystem::defaults().unwrap()).unwrap_err().to_string();
+    assert!(err.contains("'widget'"), "{err}");
+    assert!(PackSet::built_in().unwrap().check_types(&TypeSystem::defaults().unwrap()).is_ok());
 }

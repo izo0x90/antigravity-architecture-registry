@@ -17,6 +17,10 @@ package_manifest = "go.mod"
 package_name_regex = "^module\\s+\\S*?([^/\\s]+)\\s*$"
 array_prefixes = ["[]"]
 deferred_scopes = ["func_literal"]
+module_type = "module"
+identifier_chars = "_"
+ignored_kinds = ["comment"]
+import_keywords = ["import"]
 
 [[definitions]]
 type = "function"
