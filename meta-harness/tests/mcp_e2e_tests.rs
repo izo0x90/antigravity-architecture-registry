@@ -167,3 +167,15 @@ async fn tools_report_failures_as_errors_the_agent_can_act_on() {
     let (status, _) = common::http(addr, "GET", "/api/arch/plans/p/next?action=dance", None).await;
     assert_eq!(status, 400);
 }
+
+// req: P8.3
+#[tokio::test]
+async fn notifications_are_taken_but_never_answered() {
+    let (addr, _) = spawn_app().await;
+    let mut mcp = Mcp::connect(addr).await;
+    assert_eq!(mcp.notify("notifications/initialized").await, 202);
+    assert_eq!(mcp.notify("notifications/unknown").await, 202, "unknown notifications aren't errors either");
+    // Nothing was put on the stream for them: the next message answers the next request.
+    let next = mcp.rpc_next("ping").await;
+    assert!(next["id"].is_number() && next.get("error").is_none(), "{next}");
+}

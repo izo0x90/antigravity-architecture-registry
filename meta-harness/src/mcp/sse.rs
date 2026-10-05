@@ -85,9 +85,10 @@ pub async fn mcp_messages_handler(
     Query(query): Query<McpMessagesQuery>,
     Json(rpc_req): Json<JsonRpcRequest>,
 ) -> impl IntoResponse {
-    let has_id = rpc_req.id.is_some();
-    let response = mcp_state.service.handle_request(rpc_req).await;
-
+    let Some(response) = mcp_state.service.handle_request(rpc_req).await else {
+        // A notification: taken, never answered.
+        return StatusCode::ACCEPTED.into_response();
+    };
     if let Some(ref sid) = query.session_id
         && let Ok(json_str) = serde_json::to_string(&response)
     {
@@ -97,10 +98,5 @@ pub async fn mcp_messages_handler(
             tracing::warn!("Failed to deliver MCP message to session: {}", sid);
         }
     }
-
-    if has_id {
-        (StatusCode::OK, Json(response)).into_response()
-    } else {
-        StatusCode::NO_CONTENT.into_response()
-    }
+    (StatusCode::OK, Json(response)).into_response()
 }

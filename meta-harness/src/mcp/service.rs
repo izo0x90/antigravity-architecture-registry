@@ -260,9 +260,10 @@ impl McpService {
         Self { arch }
     }
 
-    pub async fn handle_request(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+    /// Answers a request; notifications (no id) get no answer, as JSON-RPC requires.
+    pub async fn handle_request(&self, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
         let req_id = req.id.clone();
-        match req.method.as_str() {
+        let response = match req.method.as_str() {
             "initialize" => JsonRpcResponse::success(
                 req_id,
                 json!({
@@ -287,7 +288,8 @@ impl McpService {
                 }
             }
             other => JsonRpcResponse::error(req_id, -32601, format!("Method not found: '{other}'"), None),
-        }
+        };
+        req.id.is_some().then_some(response)
     }
 
     /// The next steps for `plan` (or one component of it), from its current state.

@@ -31,7 +31,8 @@ pub struct Ticket {
 #[async_trait]
 pub trait JobRunner: Send + Sync {
     /// `attach` is called with the session's thread id as soon as it exists.
-    async fn run(&self, ticket: &Ticket, attach: &(dyn Fn(String) + Send + Sync)) -> Result<(), String>;
+    /// A job that runs past `timeout` is stopped (its session too) and fails.
+    async fn run(&self, ticket: &Ticket, timeout: Duration, attach: &(dyn Fn(String) + Send + Sync)) -> Result<(), String>;
 }
 
 /// Opens a session per job on a configured harness instance and runs the
@@ -43,24 +44,35 @@ pub struct SessionRunner {
 
 #[async_trait]
 impl JobRunner for SessionRunner {
-    async fn run(&self, ticket: &Ticket, attach: &(dyn Fn(String) + Send + Sync)) -> Result<(), String> {
+    async fn run(&self, ticket: &Ticket, timeout: Duration, attach: &(dyn Fn(String) + Send + Sync)) -> Result<(), String> {
         let thread = self.sessions.open(self.open.clone()).await.map_err(|e| format!("couldn't open a session: {e}"))?;
         attach(thread.to_string());
         let session = self.sessions.get(&thread).map_err(|e| e.to_string())?;
         let mut events = session.events();
         let turn = session.start_turn(TurnInput { text: ticket.brief.clone(), attachments: Vec::new() }).await.map_err(|e| format!("couldn't start the turn: {e}"))?;
-        while let Some(event) = events.next().await {
-            if let AdapterEvent::TurnUpdated { turn: t } = event
-                && t.id == turn
-                && t.status.is_terminal()
-            {
-                return match t.status {
-                    TurnStatus::Completed => Ok(()),
-                    other => Err(format!("the session's turn ended {other:?}{}", t.failure.map(|f| format!(": {}", f.message)).unwrap_or_default())),
-                };
+        let finished = async {
+            while let Some(event) = events.next().await {
+                if let AdapterEvent::TurnUpdated { turn: t } = event
+                    && t.id == turn
+                    && t.status.is_terminal()
+                {
+                    return match t.status {
+                        TurnStatus::Completed => Ok(()),
+                        other => Err(format!("the session's turn ended {other:?}{}", t.failure.map(|f| format!(": {}", f.message)).unwrap_or_default())),
+                    };
+                }
+            }
+            Err("the session closed before the turn ended".into())
+        };
+        match tokio::time::timeout(timeout, finished).await {
+            Ok(result) => result,
+            Err(_) => {
+                // Stop it for real: a retry must not race a session still editing the code.
+                let _ = session.interrupt().await;
+                let _ = self.sessions.close(&thread).await;
+                Err(format!("the session didn't finish within {}s and was stopped", timeout.as_secs()))
             }
         }
-        Err("the session closed before the turn ended".into())
     }
 }
 
@@ -220,10 +232,7 @@ impl QueueRunner {
                 }
             };
             let timeout = Duration::from_secs(self.config.queue.job_timeout_secs);
-            let ran = match tokio::time::timeout(timeout, runner.run(&ticket, &attach)).await {
-                Ok(r) => r,
-                Err(_) => Err(format!("the session didn't finish within {}s", timeout.as_secs())),
-            };
+            let ran = runner.run(&ticket, timeout, &attach).await;
             let outcome = match ran {
                 Ok(()) => self.evaluate(plan, &component, kind).await?,
                 Err(e) => Outcome::Failed(vec![Finding::error(FindingCode::ReviewerUnavailable, Target::Component { id: component.clone() }, e)]),

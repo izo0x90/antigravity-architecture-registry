@@ -88,7 +88,8 @@ fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig,
 /// The architecture service over the repo at `NAH_REPO_ROOT` (default: the
 /// working directory). Projects can add language packs (`.nah/packs/*.toml`),
 /// types (`.nah/types.toml`), views (`.nah/views.toml`), validation tools
-/// (`.nah/tools.toml`) and reviewers (`.nah/reviewers.toml`).
+/// (`.nah/tools.toml`), reviewers (`.nah/reviewers.toml`) and schema
+/// shorthand aliases (`.nah/schema_dsl.toml`).
 fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>> {
     let root = std::env::var("NAH_REPO_ROOT").map(PathBuf::from).or_else(|_| std::env::current_dir())?;
     let root = root.canonicalize()?;
@@ -127,7 +128,12 @@ fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>
     );
     // No review session provider here: session reviewers (none by default)
     // report that they couldn't run.
+    let mut dsl = arch_graph::Dsl::defaults()?;
+    if let Ok(text) = std::fs::read_to_string(nah.join("schema_dsl.toml")) {
+        dsl.extend_with(arch_graph::Dsl::from_toml(&text)?)?;
+    }
     Ok(ArchitectureService::open(&root, packs, types, views, Box::new(FsPlans::new(&root)?), Box::new(FsIndex::new(&root)?))?
+        .with_dsl(dsl)
         .with_rules(rules)
         .with_tools(tools, Arc::new(ProcessRunner))
         .with_reviewers(reviewers, None))

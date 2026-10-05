@@ -223,7 +223,32 @@ fn natural_roots(graph: &Graph, spec: &ViewSpec) -> Vec<ComponentId> {
     match spec.direction {
         Direction::Out | Direction::In => {
             let reverse = if spec.direction == Direction::Out { Direction::In } else { Direction::Out };
-            graph.components().filter(shown).filter(|c| has(&c.id, spec.direction) && !has(&c.id, reverse)).map(|c| c.id.clone()).collect()
+            let candidates: Vec<ComponentId> = graph.components().filter(shown).filter(|c| has(&c.id, spec.direction)).map(|c| c.id.clone()).collect();
+            let mut roots: Vec<ComponentId> = candidates.iter().filter(|id| !has(id, reverse)).cloned().collect();
+            // A loop with no way in has no source: enter it at its smallest member.
+            let mut reached: BTreeSet<ComponentId> = BTreeSet::new();
+            let walk = |from: &ComponentId, reached: &mut BTreeSet<ComponentId>| {
+                let mut queue = VecDeque::from([from.clone()]);
+                reached.insert(from.clone());
+                while let Some(id) = queue.pop_front() {
+                    for (_, next) in neighbors(graph, &id, &spec.kinds, spec.direction) {
+                        if passes(graph, next, &spec.filters) && reached.insert(next.clone()) {
+                            queue.push_back(next.clone());
+                        }
+                    }
+                }
+            };
+            for root in &roots {
+                walk(root, &mut reached);
+            }
+            for id in &candidates {
+                if !reached.contains(id) {
+                    roots.push(id.clone());
+                    walk(id, &mut reached);
+                }
+            }
+            roots.sort();
+            roots
         }
         Direction::Both => {
             let mut grouped: BTreeSet<ComponentId> = BTreeSet::new();
@@ -443,6 +468,19 @@ pub(crate) mod tests {
         assert_eq!(query(&g, &structure), query(&g, &structure));
     }
 
+
+    // req: P7.2
+    #[test]
+    fn a_call_loop_with_no_way_in_still_shows() {
+        let mut g = sample();
+        let call = |a: &str, b: &str| crate::Relation::new(RelationKind::Calls, id(a), id(b), crate::Provenance::OBSERVED);
+        g.upsert_relation(call("lib::Step", "app::log"));
+        g.upsert_relation(call("app::log", "lib::Step"));
+        let calls = ViewCatalog::defaults().unwrap().get("calls").unwrap().clone();
+        let v = query(&g, &calls);
+        assert!(v.roots.contains(&id("app::run")), "the real entry point stays a root");
+        assert!(v.node(&id("lib::Step")).is_some(), "the loop is entered at its smallest member: {:?}", v.roots);
+    }
 
     // req: P7.2
     #[test]

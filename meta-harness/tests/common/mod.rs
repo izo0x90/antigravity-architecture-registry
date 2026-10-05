@@ -46,11 +46,13 @@ impl SessionRuntime for FakeSession {
     }
 
     async fn start_turn(&self, input: TurnInput) -> Result<TurnId> {
+        // "[hang]" in the input: a turn that never finishes (for timeouts).
+        let status = if input.text.contains("[hang]") { TurnStatus::Running } else { TurnStatus::Completed };
         let turn = Turn {
             id: TurnId::new("turn-1"),
             thread_id: self.thread.id.clone(),
             ordinal: 1,
-            status: TurnStatus::Completed,
+            status,
             failure: None,
             usage: None,
         };
@@ -331,6 +333,30 @@ impl Mcp {
             if let Some(data) = line.strip_prefix("data: ")
                 && let Ok(v) = serde_json::from_str::<Value>(data.trim())
                 && v["id"] == id
+            {
+                return v;
+            }
+        }
+    }
+
+    /// Sends a notification (no id); returns the HTTP status.
+    pub async fn notify(&mut self, method: &str) -> u16 {
+        let body = json!({ "jsonrpc": "2.0", "method": method }).to_string();
+        http(self.addr, "POST", &self.endpoint, Some(&body)).await.0
+    }
+
+    /// Sends a request and returns the very next message on the stream.
+    pub async fn rpc_next(&mut self, method: &str) -> Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        let body = json!({ "jsonrpc": "2.0", "id": id, "method": method }).to_string();
+        let (status, _) = http(self.addr, "POST", &self.endpoint, Some(&body)).await;
+        assert_eq!(status, 200);
+        loop {
+            let mut line = String::new();
+            self.events.read_line(&mut line).await.unwrap();
+            if let Some(data) = line.strip_prefix("data: ")
+                && let Ok(v) = serde_json::from_str::<Value>(data.trim())
             {
                 return v;
             }
