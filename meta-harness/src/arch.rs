@@ -266,7 +266,9 @@ async fn get_plan(State(state): State<AppState>, Path(plan): Path<String>) -> Ar
 
 async fn delete_plan(_: CockpitUser, State(state): State<AppState>, Path(plan): Path<String>) -> Result<StatusCode, ArchError> {
     let plan = plan_id(&plan)?;
-    blocking(&state.arch, move |a| a.delete_plan(&plan)).await?;
+    let p = plan.clone();
+    blocking(&state.arch, move |a| a.delete_plan(&p)).await?;
+    state.queue.forget(&plan);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -437,7 +439,7 @@ struct TextBody {
     by: String,
 }
 
-async fn reply_comment(State(state): State<AppState>, Path((plan, comment)): Path<(String, String)>, Json(body): Json<TextBody>) -> ArchResult<Comment> {
+async fn reply_comment(_: CockpitUser, State(state): State<AppState>, Path((plan, comment)): Path<(String, String)>, Json(body): Json<TextBody>) -> ArchResult<Comment> {
     let plan = plan_id(&plan)?;
     let actor = user(&body.by)?;
     Ok(Json(blocking(&state.arch, move |a| a.reply(&plan, &CommentId(comment), &body.text, &actor)).await?))

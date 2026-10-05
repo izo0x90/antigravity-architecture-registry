@@ -247,7 +247,7 @@ pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppS
     registry.configure(registry.default_configs()).await.unwrap();
     let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone(), Vec::new()));
     let queue = meta_harness::server::queue_runner(&arch, arch_service::QueueConfig::defaults().unwrap(), &hub);
-    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::random(), queue };
+    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = create_router(state.clone());
@@ -275,13 +275,17 @@ async fn request(addr: SocketAddr, method: &str, path: &str, body: Option<&str>,
     (status, body)
 }
 
-/// The cockpit's session cookie, as the cockpit gets it when it loads.
+/// The test server's cockpit token (the user's, in a real launch).
+pub const COCKPIT_TOKEN: &str = "test-cockpit-token";
+
+/// The cockpit's session cookie, as the user's launch link sets it.
 pub async fn cockpit_cookie(addr: SocketAddr) -> String {
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    stream.write_all(b"GET /api/ui/config HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.unwrap();
+    let request = format!("GET /cockpit?nah={COCKPIT_TOKEN} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
     let mut response = String::new();
     stream.read_to_string(&mut response).await.unwrap();
-    let line = response.lines().find(|l| l.to_ascii_lowercase().starts_with("set-cookie:")).expect("the cockpit gets a cookie");
+    let line = response.lines().find(|l| l.to_ascii_lowercase().starts_with("set-cookie:")).expect("the launch link sets the cookie");
     line.split_once(':').map(|(_, v)| v.trim()).unwrap_or_default().split(';').next().unwrap_or_default().to_owned()
 }
 

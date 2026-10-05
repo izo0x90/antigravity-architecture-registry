@@ -112,10 +112,8 @@ pub fn create_router(state: AppState) -> Router {
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string());
     let mut router = Router::new()
         .route("/health", get(health_check))
-        .route(
-            "/api/ui/config",
-            get(ui_config_handler).route_layer(axum::middleware::from_fn_with_state(state.cockpit.clone(), crate::cockpit::issue)),
-        )
+        .route("/api/ui/config", get(ui_config_handler))
+        .route("/cockpit", get(crate::cockpit::launch))
         .route("/api/instances", get(list_instances))
         .route("/api/instances/{id}/refresh", post(refresh_instance))
         .route("/api/instances/{id}/sessions", get(list_saved_sessions))
@@ -138,11 +136,7 @@ pub fn create_router(state: AppState) -> Router {
         .merge(crate::queue::routes());
 
     if std::path::Path::new(&static_dir).exists() {
-        // The cockpit's page carries its session cookie.
-        let cockpit = tower::ServiceBuilder::new()
-            .layer(axum::middleware::from_fn_with_state(state.cockpit.clone(), crate::cockpit::issue))
-            .service(ServeDir::new(static_dir));
-        router = router.fallback_service(cockpit);
+        router = router.fallback_service(ServeDir::new(static_dir));
     }
 
     // Same-origin only: no CORS layer, so other sites can't call the API.
@@ -305,7 +299,9 @@ async fn interrupt(State(state): State<AppState>, Path(thread): Path<String>) ->
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Answering an agent's permission request is the user's call.
 async fn respond_request(
+    _: crate::cockpit::CockpitUser,
     State(state): State<AppState>,
     Path((thread, request)): Path<(String, String)>,
     Json(response): Json<RequestResponse>,

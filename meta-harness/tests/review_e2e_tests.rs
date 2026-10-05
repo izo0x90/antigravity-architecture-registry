@@ -111,7 +111,7 @@ async fn comments_reach_the_agent_and_answers_come_back_for_the_user() {
     assert!(!err);
     let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/v/comments/c1/accept", Some(r#"{"by":"izo"}"#)).await;
     assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("resolved")), "{body}");
-    let (status, body) = http(addr, "POST", "/api/arch/plans/v/comments/c1/replies", Some(r#"{"text":"Thanks.","by":"izo"}"#)).await;
+    let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/v/comments/c1/replies", Some(r#"{"text":"Thanks.","by":"izo"}"#)).await;
     assert_eq!(status, 200, "{body}");
     let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/v/components/rust:sample::validate/approve", Some(r#"{"to":"arch_approved","by":"izo"}"#)).await;
     assert_eq!(status, 200, "{body}");

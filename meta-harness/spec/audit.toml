@@ -238,8 +238,9 @@ lands = ["P2.2", "P5.9", "P5.14"]
 
 [[item]]
 source = "validator: topological guardrails (plan needs deps >= arch_approved; implement needs deps implemented)"
-decision = "keep"
+decision = "change"
 lands = ["P5.9"]
+note = "Plan/skeleton need deps >= arch_approved; implement needs deps >= skeleton (their structure in code), not implemented: with the skeleton stage, mutually calling components can't both wait for the other to be implemented, and code compiles against skeletons."
 
 [[item]]
 source = "validator.get_next_actionable_components"

@@ -158,6 +158,15 @@ impl QueueRunner {
         self.announce(plan).await
     }
 
+    /// The plan is gone: stop its queue and tell clients there's nothing left.
+    pub fn forget(&self, plan: &PlanId) {
+        if let Some(handle) = lock(&self.queues).remove(plan) {
+            lock(&handle.queue).stop();
+            handle.wake.notify_one();
+        }
+        (self.publish)(ArchEvent::QueueUpdated { snapshot: Box::new(QueueSnapshot { plan: plan.clone(), status: QueueStatus::Idle, jobs: Vec::new() }) });
+    }
+
     /// Gives a job that ran out of attempts another round.
     pub async fn retry(&self, plan: &PlanId, id: &ComponentId) -> Result<QueueSnapshot, ServiceError> {
         let handle = self.handle(plan);

@@ -71,7 +71,17 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     let (status, body) = http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", "izo"))).await;
     assert_eq!(status, 403, "{body}");
     assert!(body.contains("only the user, in the cockpit"));
-    for (method, path) in [("DELETE", "/api/arch/plans/val"), ("POST", "/api/arch/plans/val/reviewed")] {
+    // The API never hands out the cockpit's cookie: only the user's launch link does.
+    for path in ["/api/ui/config", "/cockpit?nah=guess", "/health"] {
+        let (status, _) = http(addr, "GET", path, None).await;
+        assert_ne!(status, 303, "{path}");
+    }
+    for (method, path) in [
+        ("DELETE", "/api/arch/plans/val"),
+        ("POST", "/api/arch/plans/val/reviewed"),
+        ("POST", "/api/arch/plans/val/comments/c1/replies"),
+        ("POST", "/api/threads/t1/requests/r1"),
+    ] {
         let (status, _) = http(addr, method, path, Some(r#"{"by":"izo"}"#)).await;
         assert_eq!(status, 403, "{method} {path}");
     }
