@@ -16,3 +16,10 @@ impl Store {
 }
 
 pub fn helper() {}
+
+/// `s` comes from a loop: its type isn't known, so the call is unproven.
+pub fn store_each(items: Vec<Store>) {
+    for s in items {
+        s.save("x");
+    }
+}

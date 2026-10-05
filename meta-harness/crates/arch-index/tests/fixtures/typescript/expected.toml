@@ -13,11 +13,13 @@ components = [
   ["helpers.Base.describe", "function"],
   ["helpers.clean", "function"],
   ["helpers.load", "function"],
+  ["app.fetch", "function"],
 ]
 relations = [
   ["contains", "app", "app.Greeter"],
   ["contains", "app", "app.main"],
   ["contains", "app", "app.show"],
+  ["contains", "app", "app.fetch"],
   ["contains", "app.Greeter", "app.Greeter.greet"],
   ["contains", "app.Greeter", "app.Greeter.format"],
   ["contains", "helpers", "helpers.Formatter"],
@@ -35,7 +37,13 @@ relations = [
   ["calls", "app.main", "app.Greeter"],
   ["calls", "app.main", "app.Greeter.greet"],
   ["calls", "app.main", "app.show"],
+  # Aliases: tidy is clean, h is the helpers module (inside an arrow: deferred).
+  ["calls", "app.fetch", "helpers.load"],
+  ["calls", "app.fetch", "helpers.clean"],
   ["data_flow", "helpers.clean", "app.Greeter.format"],
 ]
 ambiguous = []
-placeholders = ["app.Greeter.format"]
+unproven = [
+  ["app.fetch", "item.greet", "app.Greeter.greet"],
+]
+placeholders = ["app.Greeter", "app.Greeter.format"]

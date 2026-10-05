@@ -31,6 +31,13 @@ fn words(written: &str, lang: &LanguageSpec) -> Vec<String> {
 /// when the schema says nothing checkable (open, or a shape this table
 /// can't judge).
 pub fn carries(lang: &LanguageSpec, written: &str, schema: &Value) -> Option<Result<(), String>> {
+    // `string[]` / `[]string`: an array whatever the item type.
+    let bare = lang.strip_references(written);
+    if lang.array_suffixes.iter().any(|s| bare.ends_with(s.as_str())) || lang.array_prefixes.iter().any(|p| bare.starts_with(p.as_str())) {
+        let (schema, _) = unwrap_null(schema);
+        let ty = schema.get("type").and_then(Value::as_str)?;
+        return Some(if ty == "array" { Ok(()) } else { Err(format!("{written} is an array where {ty} is expected")) });
+    }
     let mut words = words(written, lang);
     // Strip optional wrappers; remember the value may be absent.
     let mut nullable = false;
@@ -96,5 +103,9 @@ mod tests {
         let py = &packs.by_name("python").unwrap().spec.language;
         assert_eq!(carries(py, "Optional[int]", &json!({"anyOf": [{"type": "integer"}, {"type": "null"}]})), Some(Ok(())));
         assert_eq!(carries(py, "list[str]", &json!({"type": "array"})), Some(Ok(())));
+        let ts = &packs.by_name("typescript").unwrap().spec.language;
+        assert_eq!(carries(ts, "string[]", &json!({"type": "array"})), Some(Ok(())), "array suffix");
+        assert!(carries(ts, "string[]", &json!({"type": "string"})).unwrap().is_err());
+        assert_eq!(carries(ts, "string", &json!({"type": "string"})), Some(Ok(())));
     }
 }

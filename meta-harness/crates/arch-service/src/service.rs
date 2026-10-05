@@ -259,8 +259,10 @@ impl ArchitectureService {
             let content = std::fs::read_to_string(&file.absolute).map_err(|e| ServiceError::Io(format!("{}: {e}", file.path)))?;
             let hash = content_hash(&content);
             seen.insert(file.path.clone());
+            // Reused only if made from the same content, module and pack version.
             if let Some(cached) = self.index.get(&file.path, &hash)?
                 && cached.module == file.module
+                && cached.pack_fingerprint == pack.fingerprint
             {
                 report.cached += 1;
                 continue;

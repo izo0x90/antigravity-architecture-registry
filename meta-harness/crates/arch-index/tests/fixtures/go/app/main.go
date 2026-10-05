@@ -1,18 +1,18 @@
 package main
 
-import "example.com/app/store"
+import st "example.com/app/store"
 
 func shout(s string) string {
 	return s + "!"
 }
 
-func keep(st *store.Store, msg string) {
-	_ = st
+func keep(s *st.Store, msg string) {
+	_ = s
 	_ = msg
 }
 
 func main() {
-	st := store.New()
+	s := st.New()
 	msg := shout("hi")
-	keep(st, msg)
+	keep(s, msg)
 }

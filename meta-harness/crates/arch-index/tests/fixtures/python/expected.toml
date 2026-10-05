@@ -8,10 +8,14 @@ components = [
   ["helpers.Base", "class"],
   ["helpers.clean", "function"],
   ["helpers.load", "function"],
+  ["app.shout", "function"],
+  ["app.fetch", "function"],
 ]
 relations = [
   ["contains", "app", "app.Greeter"],
   ["contains", "app", "app.main"],
+  ["contains", "app", "app.shout"],
+  ["contains", "app", "app.fetch"],
   ["contains", "app.Greeter", "app.Greeter.greet"],
   ["contains", "app.Greeter", "app.Greeter.format"],
   ["contains", "helpers", "helpers.Base"],
@@ -23,8 +27,16 @@ relations = [
   ["calls", "app.main", "app.Greeter"],
   ["calls", "app.main", "app.Greeter.greet"],
   ["calls", "app.main", "helpers.load"],
+  # Aliases: tidy is helpers.clean, h is helpers (inside a lambda: deferred).
+  ["calls", "app.shout", "helpers.clean"],
+  ["calls", "app.fetch", "helpers.load"],
   # clean() -> str feeds format(text: str). load() is untyped: no flow.
   ["data_flow", "helpers.clean", "app.Greeter.format"],
 ]
 ambiguous = []
-placeholders = ["app.Greeter.format"]
+# `item` comes from a loop: its type isn't known.
+unproven = [
+  ["app.fetch", "item.greet", "app.Greeter.greet"],
+]
+# A placeholder counts for the class holding the method too.
+placeholders = ["app.Greeter", "app.Greeter.format"]

@@ -1,4 +1,6 @@
 from helpers import clean, load, Base
+from helpers import clean as tidy
+import helpers as h
 
 
 class Greeter(Base):
@@ -12,3 +14,15 @@ class Greeter(Base):
 def main():
     data = load()
     Greeter().greet(data)
+
+
+def shout(text: str, loud=False) -> str:
+    return tidy(text)
+
+
+async def fetch(items):
+    later = lambda: h.load()
+    if False:
+        tidy("never")
+    for item in items:
+        item.greet("x")

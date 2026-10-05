@@ -7,10 +7,15 @@ ast_grep = "python"
 extensions = ["py"]
 separator = "."
 call_separators = ["."]
+path_separators = ["."]
+member_separators = ["."]
+glob_import = "*"
 index_files = ["__init__.py"]
 self_names = ["self", "cls"]
 schema_types = { string = ["str"], integer = ["int"], number = ["float"], boolean = ["bool"], array = ["list", "tuple", "set", "List", "Tuple", "Set"], object = ["dict", "Dict"], null = ["None"] }
 nullable_wrappers = ["Optional"]
+deferred_scopes = ["lambda"]
+qualifier_tokens = ["async"]
 
 [[definitions]]
 type = "function"
@@ -36,11 +41,13 @@ type_field = "type"
 [[params]]
 kind = "default_parameter"
 name_field = "name"
+optional = true
 
 [[params]]
 kind = "typed_default_parameter"
 name_field = "name"
 type_field = "type"
+optional = true
 
 [[calls]]
 rule = { kind = "call" }
@@ -51,9 +58,20 @@ args_field = "arguments"
 rule = { kind = "assignment" }
 name_field = "left"
 value_field = "right"
+type_field = "type"
 
 [[imports]]
 rule = { any = [{ kind = "import_statement" }, { kind = "import_from_statement" }] }
+
+# `import helpers as h`, `from helpers import clean as tidy`
+[[aliases]]
+rule = { kind = "aliased_import" }
+alias_field = "alias"
+original_field = "name"
+
+# Never runs: the body of `if False:`.
+[[dead_code]]
+rule = { kind = "block", inside = { kind = "if_statement", field = "consequence", has = { field = "condition", kind = "false" } } }
 
 [[placeholders]]
 rule = { pattern = "raise NotImplementedError" }

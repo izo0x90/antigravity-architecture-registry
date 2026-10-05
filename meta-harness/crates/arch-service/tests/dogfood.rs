@@ -46,3 +46,45 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
     assert_eq!((second.files, second.parsed, second.cached, second.removed), (first.files, 0, first.files, 0), "{second:?}");
     assert_eq!((second.components, second.relations), (first.components, first.relations));
 }
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+// req: P4.7
+#[test]
+fn cached_extracts_from_another_pack_version_are_parsed_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("sample");
+    copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample"), &root);
+    let open = |packs: PackSet| {
+        ArchitectureService::open(
+            &root,
+            packs,
+            TypeSystem::defaults().unwrap(),
+            ViewCatalog::defaults().unwrap(),
+            Box::new(MemoryPlans::default()),
+            Box::new(arch_service::FsIndex::new(&root).unwrap()),
+        )
+        .unwrap()
+    };
+    let first = open(PackSet::built_in().unwrap()).ingest(&root).unwrap();
+    assert_eq!((first.parsed, first.cached), (3, 0));
+    let same = open(PackSet::built_in().unwrap()).ingest(&root).unwrap();
+    assert_eq!((same.parsed, same.cached), (0, 3), "same pack: served from the cache");
+    // The same language pack, edited: everything it extracted is stale.
+    let text = include_str!("../../arch-index/packs/rust.toml").to_owned() + "\n# edited\n";
+    let mut edited = PackSet::built_in().unwrap();
+    edited.add(arch_index::Pack::from_toml(&text).unwrap());
+    let again = open(edited).ingest(&root).unwrap();
+    assert_eq!((again.parsed, again.cached), (3, 0), "another pack version: parsed again");
+}

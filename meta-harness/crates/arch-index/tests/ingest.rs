@@ -12,6 +12,8 @@ struct Expected {
     components: Vec<(String, String)>,
     relations: Vec<(String, String, String)>,
     ambiguous: Vec<Vec<String>>,
+    #[serde(default)]
+    unproven: Vec<Vec<String>>,
     placeholders: Vec<String>,
 }
 
@@ -43,21 +45,20 @@ fn assert_matches(lang: &str, resolved: &Resolved, expected_file: &Path) {
         expected.relations.iter().map(|(k, a, b)| (k.clone(), id(a).to_string(), id(b).to_string())).collect();
     assert_eq!(got.difference(&want).collect::<Vec<_>>(), Vec::<&(String, String, String)>::new(), "unexpected relations");
     assert_eq!(want.difference(&got).collect::<Vec<_>>(), Vec::<&(String, String, String)>::new(), "missing relations");
-    let got: Vec<Vec<String>> = resolved
-        .ambiguous
-        .iter()
-        .map(|a| {
-            let mut row = vec![a.caller.to_string(), a.callee.clone()];
-            row.extend(a.candidates.iter().map(ToString::to_string));
-            row
-        })
-        .collect();
-    let want: Vec<Vec<String>> = expected
-        .ambiguous
-        .iter()
-        .map(|row| row.iter().enumerate().map(|(i, s)| if i == 1 { s.clone() } else { id(s).to_string() }).collect())
-        .collect();
-    assert_eq!(got, want, "ambiguous calls");
+    let rows = |list: &[arch_index::AmbiguousCall]| -> Vec<Vec<String>> {
+        list.iter()
+            .map(|a| {
+                let mut row = vec![a.caller.to_string(), a.callee.clone()];
+                row.extend(a.candidates.iter().map(ToString::to_string));
+                row
+            })
+            .collect()
+    };
+    let want = |list: &[Vec<String>]| -> Vec<Vec<String>> {
+        list.iter().map(|row| row.iter().enumerate().map(|(i, s)| if i == 1 { s.clone() } else { id(s).to_string() }).collect()).collect()
+    };
+    assert_eq!(rows(&resolved.ambiguous), want(&expected.ambiguous), "ambiguous calls");
+    assert_eq!(rows(&resolved.unproven), want(&expected.unproven), "unproven calls");
     let got: BTreeSet<String> = resolved.graph.components().filter(|c| !c.placeholders.is_empty()).map(|c| c.id.to_string()).collect();
     let want: BTreeSet<String> = expected.placeholders.iter().map(|s| id(s).to_string()).collect();
     assert_eq!(got, want, "placeholders");
@@ -82,6 +83,8 @@ fn rust_fixture_ingests_to_exactly_the_expected_graph() {
     assert_eq!(shout.signature.as_ref().unwrap().returns.as_deref(), Some("String"));
     assert_eq!(shout.anchor.as_ref().unwrap().file.as_str(), "src/util.rs");
     assert_eq!(shout.anchor.as_ref().unwrap().span.start_line, 1);
+    let fetch = resolved.graph.component(&ComponentId::for_symbol("rust", "sample::fetch")).unwrap();
+    assert_eq!(fetch.signature.as_ref().unwrap().qualifiers, ["async"], "qualifiers from the pack");
 }
 
 // req: P4.6
@@ -114,6 +117,10 @@ fn python_fixture_ingests_to_exactly_the_expected_graph() {
     let format = resolved.graph.component(&ComponentId::for_symbol("python", "app.Greeter.format")).unwrap();
     let params: Vec<_> = format.signature.as_ref().unwrap().params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect();
     assert_eq!(params, [("self".into(), None), ("text".into(), Some("str".into())), ("loud".into(), None)]);
+    let optional: Vec<bool> = format.signature.as_ref().unwrap().params.iter().map(|p| p.optional).collect();
+    assert_eq!(optional, [false, false, true], "a default value makes it optional");
+    let fetch = resolved.graph.component(&ComponentId::for_symbol("python", "app.fetch")).unwrap();
+    assert_eq!(fetch.signature.as_ref().unwrap().qualifiers, ["async"]);
 }
 
 // req: P4.5
@@ -129,6 +136,10 @@ fn typescript_fixture_ingests_to_exactly_the_expected_graph() {
     assert_eq!(sig.returns.as_deref(), Some("string"));
     let external: BTreeSet<&str> = resolved.external.iter().map(|e| e.callee.as_str()).collect();
     assert!(external.contains("console.log") && external.contains("Error"), "{external:?}");
+    let fetch = resolved.graph.component(&ComponentId::for_symbol("typescript", "app.fetch")).unwrap();
+    let sig = fetch.signature.as_ref().unwrap();
+    assert_eq!(sig.qualifiers, ["async"]);
+    assert_eq!(sig.params.iter().map(|p| (p.name.as_str(), p.optional)).collect::<Vec<_>>(), [("items", false), ("loud", true), ("times", true)]);
 }
 
 // req: P4.2, P4.13
@@ -178,7 +189,7 @@ fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
     }
     // Go: a qualified type (*store.Store) matches the producer's Store.
     let (_, go) = run(&fixtures().join("go/app"), &packs_with_test_data());
-    assert!(flows(&go).contains(&row("go", "app.store.store.New", "app.main.keep", "st")));
+    assert!(flows(&go).contains(&row("go", "app.store.store.New", "app.main.keep", "s")));
     // A mismatch is reported, not invented: a number passed where a string is expected.
     let dir = std::env::temp_dir().join(format!("nah-flow-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -217,8 +228,88 @@ fn index_entries_round_trip_and_reject_other_versions() {
         std::fs::write(&golden_path, util.to_json().unwrap()).unwrap();
     }
     let golden = std::fs::read_to_string(golden_path).unwrap();
-    assert_eq!(FileExtract::from_json(&golden).unwrap(), *util, "the util.rs extract matches the golden file");
+    // The pack fingerprint moves with every pack edit; everything else is fixed.
+    let golden_extract = FileExtract::from_json(&golden).unwrap();
+    assert!(!golden_extract.pack_fingerprint.is_empty() && !util.pack_fingerprint.is_empty());
+    assert_eq!(FileExtract { pack_fingerprint: util.pack_fingerprint.clone(), ..golden_extract }, *util, "the util.rs extract matches the golden file");
     assert_eq!(FileExtract::from_json(&util.to_json().unwrap()).unwrap(), *util);
     let future = golden.replacen("\"schema_version\": 1", "\"schema_version\": 7", 1);
     assert!(FileExtract::from_json(&future).unwrap_err().to_string().contains("schema version 7"));
+}
+
+fn temp_repo(name: &str, files: &[(&str, &str)]) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("nah-{name}-{}", std::process::id())).join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    for (path, text) in files {
+        let file = dir.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    }
+    dir
+}
+
+// req: P4.6
+#[test]
+fn calls_stay_within_their_language_and_unknown_receivers_are_never_guessed() {
+    // A Python run() and a TypeScript Store share names with the other language.
+    let dir = temp_repo(
+        "mixed",
+        &[
+            ("app.py", "class Store:\n    def save(self):\n        pass\n\ndef run():\n    helper()\n    thing.save()\n"),
+            ("src/lib.ts", "export function helper(): void {}\nexport class Widget extends Store {}\nfunction go(): void { run(); }\n"),
+        ],
+    );
+    let (_, resolved) = run(&dir, &PackSet::built_in().unwrap());
+    let crossing: Vec<_> = resolved.graph.relations().filter(|r| r.source.as_str().split(':').next() != r.target.as_str().split(':').next()).collect();
+    assert!(crossing.is_empty(), "no relation crosses languages: {crossing:?}");
+    let external: BTreeSet<&str> = resolved.external.iter().map(|e| e.callee.as_str()).collect();
+    assert!(external.contains("helper") && external.contains("run"), "{external:?}");
+    // `thing` has no known type: recorded as unproven with the candidates, not linked.
+    assert_eq!(resolved.unproven.len(), 1);
+    assert_eq!(resolved.unproven[0].callee, "thing.save");
+    assert_eq!(resolved.unproven[0].candidates, [ComponentId::for_symbol("python", "app.Store.save")]);
+    std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn observed_calls_carry_deferral_and_dead_code_is_not_observed() {
+    let (_, resolved) = run(&fixtures().join("rust/sample"), &PackSet::built_in().unwrap());
+    let id = |s: &str| ComponentId::for_symbol("rust", s);
+    let later: Vec<_> = resolved.graph.outgoing(&id("sample::later_log"), Some(RelationKind::Calls)).collect();
+    assert_eq!(later.len(), 1, "the dead branches add no calls: {later:?}");
+    assert!(later[0].deferred, "the call sits in a closure");
+    let run_calls: Vec<_> = resolved.graph.outgoing(&id("sample::run"), Some(RelationKind::Calls)).collect();
+    assert!(run_calls.iter().all(|r| !r.deferred));
+    for (lang, fixture, caller, callee) in [("python", "python/app", "app.fetch", "helpers.load"), ("typescript", "typescript/app", "app.fetch", "helpers.load")] {
+        let (_, resolved) = run(&fixtures().join(fixture), &PackSet::built_in().unwrap());
+        let call = resolved.graph.outgoing(&ComponentId::for_symbol(lang, caller), Some(RelationKind::Calls)).find(|r| r.target == ComponentId::for_symbol(lang, callee)).unwrap();
+        assert!(call.deferred, "{lang}: inside a lambda/arrow");
+        let external: BTreeSet<&str> = resolved.external.iter().map(|e| e.callee.as_str()).collect();
+        assert!(!external.contains("tidy"), "{lang}: the dead branch's call isn't observed at all");
+    }
+}
+
+#[test]
+fn module_symbols_come_from_the_manifest_not_the_checkout_directory() {
+    // The Rust fixture copied under another directory name keeps its crate name.
+    let source = fixtures().join("rust/sample");
+    let files: Vec<(String, String)> = ["Cargo.toml", "src/lib.rs", "src/store.rs", "src/util.rs"]
+        .iter()
+        .map(|f| (f.to_string(), std::fs::read_to_string(source.join(f)).unwrap()))
+        .collect();
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let dir = temp_repo("fx", &refs);
+    let (extracts, _) = run(&dir, &PackSet::built_in().unwrap());
+    let modules: BTreeSet<&str> = extracts.iter().map(|e| e.module.as_str()).collect();
+    assert_eq!(modules, BTreeSet::from(["sample", "sample::store", "sample::util"]));
+    std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    // A root given as "." names the package from its manifest, with no empty segments.
+    let packs = PackSet::built_in().unwrap();
+    let rust = packs.by_name("rust").unwrap();
+    assert_eq!(arch_index::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/lib.rs").unwrap(), rust), "arch_index");
+    assert_eq!(arch_index::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/walk.rs").unwrap(), rust), "arch_index::walk");
+    // Go's line-based go.mod names the module through the pack's regex.
+    let go = packs_with_test_data();
+    let (extracts, _) = run(&fixtures().join("go/app"), &go);
+    assert!(extracts.iter().all(|e| e.module.starts_with("app.")), "{:?}", extracts.iter().map(|e| &e.module).collect::<Vec<_>>());
 }

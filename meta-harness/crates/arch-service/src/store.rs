@@ -295,12 +295,14 @@ mod tests {
             file: RepoPath::new(file).unwrap(),
             language: "rust".into(),
             content_hash: hash.into(),
+            pack_fingerprint: "p".into(),
             module: "m".into(),
             lines: 1,
             bytes: 1,
             definitions: vec![],
             calls: vec![],
             imports: vec![],
+            aliases: vec![],
             placeholders: vec![],
         }
     }

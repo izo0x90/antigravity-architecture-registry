@@ -7,12 +7,20 @@ ast_grep = "typescript"
 extensions = ["ts", "mts", "cts"]
 separator = "."
 call_separators = ["."]
+path_separators = ["."]
+member_separators = ["."]
+constructor_prefixes = ["new"]
+glob_import = "*"
 source_roots = ["src"]
 index_files = ["index.ts"]
 self_names = ["this"]
 schema_types = { string = ["string"], integer = ["number"], number = ["number"], boolean = ["boolean"], array = ["Array"], object = ["Record", "object"], null = ["null", "undefined"] }
 # `: string` annotations wrap the type itself.
 type_wrappers = ["type_annotation"]
+array_suffixes = ["[]"]
+# Arrow functions and function expressions may run later or never.
+deferred_scopes = ["arrow_function", "function_expression"]
+qualifier_tokens = ["async"]
 
 [[definitions]]
 type = "function"
@@ -48,11 +56,14 @@ bases_rule = { kind = "type_identifier", inside = { kind = "extends_type_clause"
 kind = "required_parameter"
 name_field = "pattern"
 type_field = "type"
+# `x = 1`: callers may leave it out.
+default_field = "value"
 
 [[params]]
 kind = "optional_parameter"
 name_field = "pattern"
 type_field = "type"
+optional = true
 
 [[calls]]
 rule = { kind = "call_expression" }
@@ -69,9 +80,27 @@ args_field = "arguments"
 rule = { kind = "variable_declarator" }
 name_field = "name"
 value_field = "value"
+type_field = "type"
 
 [[imports]]
 rule = { kind = "import_statement" }
+
+# `import { clean as tidy } from "./helpers"`
+[[aliases]]
+rule = { kind = "import_specifier", has = { field = "alias", kind = "identifier" } }
+alias_field = "alias"
+original_field = "name"
+
+# `import * as h from "./helpers"`
+[[aliases]]
+rule = { kind = "namespace_import" }
+alias_child_kind = "identifier"
+original_ancestor = "import_statement"
+original_field = "source"
+
+# Never runs: the body of `if (false)`.
+[[dead_code]]
+rule = { kind = "statement_block", inside = { kind = "if_statement", field = "consequence", has = { field = "condition", regex = "^\\(\\s*false\\s*\\)$" } } }
 
 [[placeholders]]
 rule = { kind = "throw_statement", regex = "(?i)(todo|not implemented)" }

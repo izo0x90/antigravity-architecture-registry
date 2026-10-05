@@ -7,7 +7,13 @@ ast_grep = "rust"
 extensions = ["rs"]
 separator = "::"
 call_separators = ["::", "."]
+# `a::b` is a module/type path; `a.b` is a member of the value `a`.
+path_separators = ["::"]
+member_separators = ["."]
+reference_markers = ["&", "*"]
+glob_import = "*"
 package_manifest = "Cargo.toml"
+package_name_key = ["package", "name"]
 package_name_replace = [["-", "_"]]
 source_roots = ["src"]
 index_files = ["lib.rs", "mod.rs"]
@@ -23,6 +29,10 @@ schema_types = { string = ["String", "str", "char", "PathBuf", "Path"], integer 
 # make a value optional.
 type_noise = ["mut", "dyn", "impl", "const"]
 nullable_wrappers = ["Option"]
+# Closures may run later or never: calls inside are deferred.
+deferred_scopes = ["closure_expression"]
+qualifier_tokens = ["async", "unsafe", "const"]
+qualifier_containers = ["function_modifiers"]
 
 [[definitions]]
 type = "function"
@@ -77,9 +87,37 @@ args_field = "arguments"
 rule = { kind = "let_declaration" }
 name_field = "pattern"
 value_field = "value"
+type_field = "type"
 
 [[imports]]
 rule = { kind = "use_declaration" }
 
+# `use x::shout as yell`
+[[aliases]]
+rule = { kind = "use_as_clause" }
+alias_field = "alias"
+original_field = "path"
+
+# todo!() / unimplemented!(), also through a path (std::todo!).
 [[placeholders]]
-rule = { kind = "macro_invocation", has = { field = "macro", regex = "^(todo|unimplemented)$" } }
+rule = { kind = "macro_invocation", has = { field = "macro", regex = "^(.*::)?(todo|unimplemented)$" } }
+
+# panic!("not implemented") and the like. unreachable!() is not a
+# placeholder: it marks code that can't run, not code still to write.
+[[placeholders]]
+rule = { kind = "macro_invocation", has = { field = "macro", regex = "^(.*::)?panic$" }, regex = "(?i)(not\\s+(yet\\s+)?implemented|todo)" }
+
+# A local macro that expands to todo!()/unimplemented!(): its uses are placeholders.
+[[placeholder_aliases]]
+rule = { kind = "macro_definition", regex = "\\b(todo|unimplemented)\\s*!" }
+name_field = "name"
+invocation = { kind = "macro_invocation" }
+invocation_name_field = "macro"
+
+# Compiled out: the item or statement after an always-false cfg.
+[[dead_code]]
+rule = { any = [{ kind = "expression_statement" }, { kind = "let_declaration" }, { kind = "function_item" }, { kind = "impl_item" }, { kind = "mod_item" }], follows = { kind = "attribute_item", regex = "^#\\[cfg\\((any\\(\\s*\\)|false|FALSE)\\)\\]$" } }
+
+# Never runs: the body of `if false`.
+[[dead_code]]
+rule = { kind = "block", inside = { kind = "if_expression", field = "consequence", has = { field = "condition", regex = "^false$" } } }

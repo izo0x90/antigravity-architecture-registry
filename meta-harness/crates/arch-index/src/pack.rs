@@ -28,10 +28,36 @@ pub struct LanguageSpec {
     /// Separators that split a callee expression into qualifier and name.
     #[serde(default)]
     pub call_separators: Vec<String>,
+    /// Call separators that can follow a module or type path (`util::shout`,
+    /// `helpers.clean`). Empty with `member_separators` empty: all of them.
+    #[serde(default)]
+    pub path_separators: Vec<String>,
+    /// Call separators that can follow a value (`store.save`), whose type
+    /// then decides the target. Empty with `path_separators` empty: all of them.
+    #[serde(default)]
+    pub member_separators: Vec<String>,
+    /// Punctuation before a type or a value that only says how it's passed
+    /// (`&`, `*`); stripped along with leading `type_noise` words.
+    #[serde(default)]
+    pub reference_markers: Vec<String>,
+    /// Words before a constructor call (`new`).
+    #[serde(default)]
+    pub constructor_prefixes: Vec<String>,
+    /// Marks an import of everything in a module (`*`).
+    #[serde(default)]
+    pub glob_import: Option<String>,
     /// A file whose directory is a package root (e.g. Cargo.toml). Without it,
     /// module paths are relative to the repository root.
     #[serde(default)]
     pub package_manifest: Option<String>,
+    /// Where the manifest names the package: a key path for TOML or JSON
+    /// manifests (`["package", "name"]`)...
+    #[serde(default)]
+    pub package_name_key: Vec<String>,
+    /// ...or a regex whose first group is the name (line-based manifests).
+    /// Without either (or when the manifest doesn't say), the directory name.
+    #[serde(default)]
+    pub package_name_regex: Option<String>,
     #[serde(default)]
     pub package_name_replace: Vec<(String, String)>,
     /// Directories stripped from module paths (e.g. "src").
@@ -62,6 +88,79 @@ pub struct LanguageSpec {
     /// Wrappers that make a value optional (e.g. Option, Optional).
     #[serde(default)]
     pub nullable_wrappers: Vec<String>,
+    /// Written forms of an array of something (`string[]`, `[]string`).
+    #[serde(default)]
+    pub array_suffixes: Vec<String>,
+    #[serde(default)]
+    pub array_prefixes: Vec<String>,
+    /// Syntax kinds whose body may never run where it's written (closures,
+    /// lambdas): calls inside are deferred.
+    #[serde(default)]
+    pub deferred_scopes: Vec<String>,
+    /// Tokens on a definition that change how it's called or what it
+    /// returns (async, unsafe, const), found among its children or inside
+    /// children of a `qualifier_containers` kind.
+    #[serde(default)]
+    pub qualifier_tokens: Vec<String>,
+    #[serde(default)]
+    pub qualifier_containers: Vec<String>,
+}
+
+impl LanguageSpec {
+    pub fn is_path_separator(&self, sep: &str) -> bool {
+        (self.path_separators.is_empty() && self.member_separators.is_empty()) || self.path_separators.iter().any(|s| s == sep)
+    }
+
+    pub fn is_member_separator(&self, sep: &str) -> bool {
+        (self.path_separators.is_empty() && self.member_separators.is_empty()) || self.member_separators.iter().any(|s| s == sep)
+    }
+
+    /// Splits a callee at its last separator outside brackets:
+    /// (qualifier, separator, name). `Greeter().greet` -> (`Greeter()`, `.`, `greet`).
+    pub fn split_last<'a>(&self, text: &'a str) -> Option<(&'a str, &'a str, &'a str)> {
+        let mut depth = 0i32;
+        let mut found: Option<(usize, &str)> = None;
+        let mut skip_until = 0;
+        for (i, ch) in text.char_indices() {
+            if i < skip_until {
+                continue;
+            }
+            match ch {
+                '(' | '[' | '<' | '{' => depth += 1,
+                ')' | ']' | '>' | '}' => depth -= 1,
+                _ if depth == 0 => {
+                    if let Some(sep) = self.call_separators.iter().filter(|s| text[i..].starts_with(s.as_str())).max_by_key(|s| s.len()) {
+                        found = Some((i, sep.as_str()));
+                        skip_until = i + sep.len();
+                    }
+                }
+                _ => {}
+            }
+        }
+        let (at, sep) = found?;
+        Some((&text[..at], &text[at..at + sep.len()], &text[at + sep.len()..]))
+    }
+
+    /// `text` without leading reference markers and noise words (`&mut x` -> `x`).
+    pub fn strip_references<'a>(&self, text: &'a str) -> &'a str {
+        let mut rest = text.trim();
+        loop {
+            let before = rest;
+            for marker in &self.reference_markers {
+                rest = rest.strip_prefix(marker.as_str()).unwrap_or(rest).trim_start();
+            }
+            for word in &self.type_noise {
+                if let Some(after) = rest.strip_prefix(word.as_str())
+                    && after.starts_with(char::is_whitespace)
+                {
+                    rest = after.trim_start();
+                }
+            }
+            if rest == before {
+                return rest;
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -88,6 +187,11 @@ pub struct DefinitionSpec {
     pub owner_field: Option<String>,
     #[serde(default)]
     pub owner_kind: Option<String>,
+    /// The name the owner field binds for the owner value (a Go receiver's
+    /// `s`): the first node of this kind under `owner_field`. Calls on it
+    /// are calls on the owner type, like `self`.
+    #[serde(default)]
+    pub receiver_name_kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -111,6 +215,12 @@ pub struct ParamSpec {
     pub name_child_kind: Option<String>,
     #[serde(default)]
     pub type_field: Option<String>,
+    /// Parameters of this kind may be left out by callers.
+    #[serde(default)]
+    pub optional: bool,
+    /// A parameter with this field (a default value) may be left out.
+    #[serde(default)]
+    pub default_field: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -129,6 +239,38 @@ pub struct BindingSpec {
     pub rule: toml::Value,
     pub name_field: String,
     pub value_field: String,
+    /// The declared type, when written (`let s: Store = ...`).
+    #[serde(default)]
+    pub type_field: Option<String>,
+}
+
+/// A local name for something imported (`import helpers as h`,
+/// `use x::shout as yell`).
+#[derive(Clone, Debug, Deserialize)]
+pub struct AliasSpec {
+    pub rule: toml::Value,
+    /// The alias: this field, or the first child of `alias_child_kind`.
+    #[serde(default)]
+    pub alias_field: Option<String>,
+    #[serde(default)]
+    pub alias_child_kind: Option<String>,
+    /// What it stands for: this field on the node, or on the nearest
+    /// `original_ancestor` (e.g. the import statement's source).
+    pub original_field: String,
+    #[serde(default)]
+    pub original_ancestor: Option<String>,
+}
+
+/// Local macros (or similar) that expand to a placeholder: their uses are
+/// placeholders too.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PlaceholderAliasSpec {
+    /// Matches a definition whose body holds a placeholder.
+    pub rule: toml::Value,
+    pub name_field: String,
+    /// Matches a use; its `invocation_name_field` names what's used.
+    pub invocation: toml::Value,
+    pub invocation_name_field: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -152,7 +294,15 @@ pub struct PackSpec {
     #[serde(default)]
     pub imports: Vec<RuleSpec>,
     #[serde(default)]
+    pub aliases: Vec<AliasSpec>,
+    #[serde(default)]
     pub placeholders: Vec<RuleSpec>,
+    #[serde(default)]
+    pub placeholder_aliases: Vec<PlaceholderAliasSpec>,
+    /// Code that never runs as written (an always-false condition or cfg):
+    /// calls inside aren't observed.
+    #[serde(default)]
+    pub dead_code: Vec<RuleSpec>,
 }
 
 /// A pack with its rules compiled for its language.
@@ -166,7 +316,14 @@ pub struct Pack {
     pub bindings: Vec<RuleCore>,
     pub calls: Vec<RuleCore>,
     pub imports: Vec<RuleCore>,
+    pub aliases: Vec<RuleCore>,
     pub placeholders: Vec<RuleCore>,
+    /// Per placeholder alias: (definition rule, invocation rule).
+    pub placeholder_aliases: Vec<(RuleCore, RuleCore)>,
+    pub dead_code: Vec<RuleCore>,
+    pub package_name_regex: Option<regex::Regex>,
+    /// Hash of the pack's text: extracts made with another version are stale.
+    pub fingerprint: String,
 }
 
 impl std::fmt::Debug for Pack {
@@ -193,6 +350,27 @@ impl Pack {
         if spec.definitions.is_empty() {
             return Err(IndexError::Pack(format!("pack '{name}': no definitions")));
         }
+        for sep in spec.language.path_separators.iter().chain(&spec.language.member_separators) {
+            if !spec.language.call_separators.contains(sep) {
+                return Err(IndexError::Pack(format!("pack '{name}': separator '{sep}' isn't one of call_separators")));
+            }
+        }
+        if !(spec.language.path_separators.is_empty() && spec.language.member_separators.is_empty())
+            && let Some(sep) = spec.language.call_separators.iter().find(|s| !spec.language.is_path_separator(s) && !spec.language.is_member_separator(s))
+        {
+            return Err(IndexError::Pack(format!("pack '{name}': call separator '{sep}' is neither a path nor a member separator")));
+        }
+        for (i, alias) in spec.aliases.iter().enumerate() {
+            if alias.alias_field.is_none() == alias.alias_child_kind.is_none() {
+                return Err(IndexError::Pack(format!("pack '{name}' aliases[{i}]: set exactly one of alias_field and alias_child_kind")));
+            }
+        }
+        let package_name_regex = spec
+            .language
+            .package_name_regex
+            .as_deref()
+            .map(|r| regex::RegexBuilder::new(r).multi_line(true).build().map_err(|e| IndexError::Pack(format!("pack '{name}' package_name_regex: {e}"))))
+            .transpose()?;
         let rules = |items: Vec<&toml::Value>, what: &str| -> Result<Vec<RuleCore>, IndexError> {
             items.into_iter().enumerate().map(|(i, rule)| compile(lang, rule, &format!("pack '{name}' {what}[{i}]"))).collect()
         };
@@ -208,7 +386,20 @@ impl Pack {
             bindings: rules(spec.bindings.iter().map(|d| &d.rule).collect(), "bindings")?,
             calls: rules(spec.calls.iter().map(|d| &d.rule).collect(), "calls")?,
             imports: rules(spec.imports.iter().map(|d| &d.rule).collect(), "imports")?,
+            aliases: rules(spec.aliases.iter().map(|d| &d.rule).collect(), "aliases")?,
             placeholders: rules(spec.placeholders.iter().map(|d| &d.rule).collect(), "placeholders")?,
+            placeholder_aliases: spec
+                .placeholder_aliases
+                .iter()
+                .enumerate()
+                .map(|(i, a)| {
+                    let what = format!("pack '{name}' placeholder_aliases[{i}]");
+                    Ok((compile(lang, &a.rule, &what)?, compile(lang, &a.invocation, &format!("{what}.invocation"))?))
+                })
+                .collect::<Result<_, IndexError>>()?,
+            dead_code: rules(spec.dead_code.iter().map(|d| &d.rule).collect(), "dead_code")?,
+            package_name_regex,
+            fingerprint: crate::content_hash(text),
             lang,
             spec,
         })
