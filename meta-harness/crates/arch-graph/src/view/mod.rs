@@ -48,6 +48,24 @@ pub struct Filters {
     pub file_prefix: Option<String>,
 }
 
+impl Filters {
+    /// The type filter widened to every type that specializes a listed one
+    /// (filtering on `function` keeps an `endpoint` that extends it).
+    pub fn with_specializations(&self, types: &crate::TypeSystem) -> Filters {
+        let mut out = self.clone();
+        if out.types.is_empty() {
+            return out;
+        }
+        for name in types.types.keys() {
+            let specializes = types.resolve(name).is_ok_and(|t| self.types.iter().any(|wanted| t.is_a(wanted)));
+            if specializes && !out.types.contains(name) {
+                out.types.push(name.clone());
+            }
+        }
+        out
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ViewSpec {
     #[serde(default)]
@@ -90,9 +108,44 @@ impl ViewCatalog {
         Ok(catalog)
     }
 
-    /// Adds or replaces views by name.
+    /// Adds or replaces whole views by name.
     pub fn extend_with(&mut self, other: ViewCatalog) {
         self.views.extend(other.views);
+    }
+
+    /// Applies a project's view config: a view that already exists takes
+    /// only the fields given (`[views.calls] depth = 9`); a new one must be
+    /// complete.
+    pub fn extend_from_toml(&mut self, text: &str) -> Result<(), ModelError> {
+        let config = |e: &dyn std::fmt::Display| ModelError::Config(e.to_string());
+        let mut doc: toml::Table = toml::from_str(text).map_err(|e| config(&e))?;
+        let Some(views) = doc.remove("views") else { return Ok(()) };
+        let toml::Value::Table(views) = views else { return Err(ModelError::Config("`views` must be a table of views".into())) };
+        for (name, fields) in views {
+            let toml::Value::Table(fields) = fields else { return Err(ModelError::Config(format!("view '{name}' must be a table"))) };
+            let merged = match self.views.get(&name) {
+                Some(base) => {
+                    let toml::Value::Table(mut table) = toml::Value::try_from(base).map_err(|e| config(&e))? else {
+                        return Err(ModelError::Config(format!("view '{name}' didn't serialize to a table")));
+                    };
+                    for (key, value) in fields {
+                        match (table.get_mut(&key), value) {
+                            // Filters merge one level down, like the view itself.
+                            (Some(toml::Value::Table(existing)), toml::Value::Table(update)) if key == "filters" => existing.extend(update),
+                            (_, value) => {
+                                table.insert(key, value);
+                            }
+                        }
+                    }
+                    table
+                }
+                None => fields,
+            };
+            let mut spec: ViewSpec = toml::Value::Table(merged).try_into().map_err(|e| ModelError::Config(format!("view '{name}': {e}")))?;
+            spec.name = name.clone();
+            self.views.insert(name, spec);
+        }
+        Ok(())
     }
 
     pub fn get(&self, name: &str) -> Option<&ViewSpec> {
@@ -162,22 +215,43 @@ fn passes(graph: &Graph, id: &ComponentId, filters: &Filters) -> bool {
 
 /// The view's natural entry points: components with relations of its kinds
 /// going out and none coming in (for structure, the top-level containers).
+/// Walking both ways there is no "in": one entry per connected group, its
+/// first source if it has one, else its first member.
 fn natural_roots(graph: &Graph, spec: &ViewSpec) -> Vec<ComponentId> {
-    let reverse = match spec.direction {
-        Direction::Out => Direction::In,
-        Direction::In => Direction::Out,
-        Direction::Both => Direction::Both,
-    };
-    graph
-        .components()
-        .filter(|c| passes(graph, &c.id, &spec.filters))
-        .filter(|c| {
-            let has_out = !neighbors(graph, &c.id, &spec.kinds, spec.direction).is_empty();
-            let has_in = !neighbors(graph, &c.id, &spec.kinds, reverse).is_empty();
-            has_out && (spec.direction == Direction::Both || !has_in)
-        })
-        .map(|c| c.id.clone())
-        .collect()
+    let shown = |c: &&crate::Component| passes(graph, &c.id, &spec.filters);
+    let has = |id: &ComponentId, direction| neighbors(graph, id, &spec.kinds, direction).iter().any(|(_, n)| passes(graph, n, &spec.filters));
+    match spec.direction {
+        Direction::Out | Direction::In => {
+            let reverse = if spec.direction == Direction::Out { Direction::In } else { Direction::Out };
+            graph.components().filter(shown).filter(|c| has(&c.id, spec.direction) && !has(&c.id, reverse)).map(|c| c.id.clone()).collect()
+        }
+        Direction::Both => {
+            let mut grouped: BTreeSet<ComponentId> = BTreeSet::new();
+            let mut roots = Vec::new();
+            // Sources first, so a group is entered where its flow starts.
+            let candidates: Vec<&crate::Component> = graph.components().filter(shown).filter(|c| has(&c.id, Direction::Both)).collect();
+            let is_source = |c: &&&crate::Component| has(&c.id, Direction::Out) && !has(&c.id, Direction::In);
+            let sources = candidates.iter().filter(is_source);
+            let rest = candidates.iter().filter(|c| !is_source(c));
+            for c in sources.chain(rest) {
+                if grouped.contains(&c.id) {
+                    continue;
+                }
+                roots.push(c.id.clone());
+                let mut queue = VecDeque::from([c.id.clone()]);
+                grouped.insert(c.id.clone());
+                while let Some(id) = queue.pop_front() {
+                    for (_, next) in neighbors(graph, &id, &spec.kinds, Direction::Both) {
+                        if passes(graph, next, &spec.filters) && grouped.insert(next.clone()) {
+                            queue.push_back(next.clone());
+                        }
+                    }
+                }
+            }
+            roots.sort();
+            roots
+        }
+    }
 }
 
 /// Cuts the subgraph a view shows.
@@ -195,24 +269,31 @@ pub fn query(graph: &Graph, spec: &ViewSpec) -> View {
         depth_of.insert(root.clone(), 0);
         queue.push_back(root.clone());
     }
-    let mut truncated: BTreeSet<ComponentId> = BTreeSet::new();
     while let Some(id) = queue.pop_front() {
         let depth = depth_of[&id];
-        for (relation, next) in neighbors(graph, &id, &spec.kinds, spec.direction) {
-            if !passes(graph, next, &spec.filters) {
-                continue;
-            }
-            if depth >= spec.depth {
-                if !depth_of.contains_key(next) {
-                    truncated.insert(id.clone());
-                }
-                continue;
-            }
-            if !depth_of.contains_key(next) {
+        if depth >= spec.depth {
+            continue;
+        }
+        for (_, next) in neighbors(graph, &id, &spec.kinds, spec.direction) {
+            if passes(graph, next, &spec.filters) && !depth_of.contains_key(next) {
                 depth_of.insert(next.clone(), depth + 1);
                 queue.push_back(next.clone());
             }
-            edges.insert(relation.id(), edge(graph, relation, false));
+        }
+    }
+    // Every relation of the view's kinds between shown nodes is drawn, also
+    // at the depth limit; a node with more beyond the limit is truncated.
+    let mut truncated: BTreeSet<ComponentId> = BTreeSet::new();
+    for id in depth_of.keys() {
+        for (relation, next) in neighbors(graph, id, &spec.kinds, spec.direction) {
+            if !passes(graph, next, &spec.filters) {
+                continue;
+            }
+            if depth_of.contains_key(next) {
+                edges.insert(relation.id(), edge(graph, relation, false));
+            } else {
+                truncated.insert(id.clone());
+            }
         }
     }
 
@@ -309,10 +390,19 @@ pub(crate) mod tests {
             assert_eq!(view.name, name);
             assert!(!view.description.is_empty());
         }
-        let user = ViewCatalog::from_toml("[views.calls]\nkinds = [\"calls\"]\ndepth = 9\n[views.mine]\nkinds = [\"implements\"]\ndepth = 1\nlayout = \"nested\"\n").unwrap();
-        catalog.extend_with(user);
-        assert_eq!(catalog.get("calls").unwrap().depth, 9);
+        let before = catalog.get("calls").unwrap().clone();
+        // A partial override changes only what it names; new views are complete.
+        catalog.extend_from_toml("[views.calls]\ndepth = 9\n[views.calls.filters]\ntypes = [\"function\"]\n[views.mine]\nkinds = [\"implements\"]\ndepth = 1\nlayout = \"nested\"\n").unwrap();
+        let calls = catalog.get("calls").unwrap();
+        assert_eq!(calls.depth, 9);
+        assert_eq!(calls.filters.types, vec!["function"]);
+        assert_eq!((&calls.description, &calls.kinds, calls.layout), (&before.description, &before.kinds, before.layout), "the rest is kept");
         assert_eq!(catalog.get("mine").unwrap().layout, LayoutKind::Nested);
+        assert!(catalog.clone().extend_from_toml("[views.half]\ndepth = 2\n").is_err(), "a new view needs its kinds");
+        assert!(catalog.clone().extend_from_toml("[views.calls]\nkinds = [\"teleports\"]\n").is_err());
+        // Whole catalogs still replace by name.
+        catalog.extend_with(ViewCatalog::from_toml("[views.calls]\nkinds = [\"calls\"]\ndepth = 2\n").unwrap());
+        assert_eq!(catalog.get("calls").unwrap().depth, 2);
         assert!(ViewCatalog::from_toml("[views.bad]\nkinds = [\"teleports\"]\ndepth = 1\n").is_err());
     }
 
@@ -359,5 +449,46 @@ pub(crate) mod tests {
         let overlay_kinds: BTreeSet<_> = v.edges.iter().filter(|e| e.overlay).map(|e| e.kind).collect();
         assert!(overlay_kinds.contains(&RelationKind::Contains));
         assert!(v.edges.iter().any(|e| e.kind == RelationKind::Calls && !e.overlay));
+    }
+
+    // req: P7.2
+    #[test]
+    fn edges_between_shown_nodes_survive_the_depth_limit_and_both_ways_has_one_entry() {
+        let mut g = sample();
+        g.upsert_relation(crate::Relation::new(RelationKind::Calls, id("app::step"), id("app::log"), crate::Provenance::OBSERVED));
+        let mut calls = ViewCatalog::defaults().unwrap().get("calls").unwrap().clone();
+        calls.depth = 1;
+        let v = query(&g, &calls);
+        let edges: Vec<(String, String)> = v.edges.iter().map(|e| (e.source.0.clone(), e.target.0.clone())).collect();
+        assert!(edges.contains(&("rust:app::step".into(), "rust:app::log".into())), "both ends shown: drawn even at the limit: {edges:?}");
+        assert_eq!(v.edges.len(), 3);
+        assert!(v.node(&id("app::step")).unwrap().truncated, "save is still beyond the cut");
+        assert!(!v.node(&id("app::log")).unwrap().truncated);
+        // Walking both ways: one entry per connected group, at its source.
+        calls.direction = Direction::Both;
+        calls.depth = 5;
+        let v = query(&g, &calls);
+        assert_eq!(v.roots, vec![id("app::run")]);
+        assert_eq!(v.nodes.len(), 4);
+    }
+
+    // req: P7.2
+    #[test]
+    fn type_filters_include_specialized_types() {
+        let mut types = crate::TypeSystem::defaults().unwrap();
+        types.extend_from_toml("[types.endpoint]\nextends = \"function\"").unwrap();
+        let mut g = sample();
+        let mut hook = planned("rust:app::hook", crate::Stage::Implemented);
+        hook.status = crate::Status::Existing;
+        hook.type_name = "endpoint".into();
+        hook.anchor = Some(anchor_for("app::hook"));
+        g.upsert_component(hook, crate::Provenance::OBSERVED);
+        g.upsert_relation(crate::Relation::new(RelationKind::Calls, id("app::run"), id("app::hook"), crate::Provenance::OBSERVED));
+        let mut calls = ViewCatalog::defaults().unwrap().get("calls").unwrap().clone();
+        calls.filters.types = vec!["function".into()];
+        assert!(query(&g, &calls).node(&id("app::hook")).is_none(), "exact names only");
+        calls.filters = calls.filters.with_specializations(&types);
+        assert!(calls.filters.types.contains(&"endpoint".to_owned()));
+        assert!(query(&g, &calls).node(&id("app::hook")).is_some(), "an endpoint is a function");
     }
 }

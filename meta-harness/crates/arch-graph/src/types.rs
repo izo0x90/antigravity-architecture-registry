@@ -9,6 +9,63 @@ use crate::ModelError;
 
 const DEFAULT_TYPES: &str = include_str!("../config/types.toml");
 
+/// A detail a type can require before approval. Unknown names are rejected
+/// when the type system loads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequiredField {
+    Description,
+    /// A language signature or input/output schemas.
+    Signature,
+    Inputs,
+    Outputs,
+    Properties,
+    SideEffects,
+    Spec,
+    Pattern,
+    LogicSteps,
+    Invariants,
+    Validation,
+}
+
+impl RequiredField {
+    pub const ALL: [RequiredField; 11] = [
+        Self::Description,
+        Self::Signature,
+        Self::Inputs,
+        Self::Outputs,
+        Self::Properties,
+        Self::SideEffects,
+        Self::Spec,
+        Self::Pattern,
+        Self::LogicSteps,
+        Self::Invariants,
+        Self::Validation,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Description => "description",
+            Self::Signature => "signature",
+            Self::Inputs => "inputs",
+            Self::Outputs => "outputs",
+            Self::Properties => "properties",
+            Self::SideEffects => "side_effects",
+            Self::Spec => "spec",
+            Self::Pattern => "pattern",
+            Self::LogicSteps => "logic_steps",
+            Self::Invariants => "invariants",
+            Self::Validation => "validation",
+        }
+    }
+}
+
+impl std::fmt::Display for RequiredField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 /// A type as written in config; unset rules inherit from `extends`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TypeDef {
@@ -28,7 +85,7 @@ pub struct TypeDef {
     pub allows_implementation_spec: Option<bool>,
     /// Added to (not replacing) the base type's required fields.
     #[serde(default)]
-    pub required_fields: Vec<String>,
+    pub required_fields: Vec<RequiredField>,
 }
 
 /// A type with its inheritance resolved.
@@ -43,7 +100,7 @@ pub struct ResolvedType {
     pub allows_signature: bool,
     pub allows_properties: bool,
     pub allows_implementation_spec: bool,
-    pub required_fields: Vec<String>,
+    pub required_fields: Vec<RequiredField>,
 }
 
 impl ResolvedType {
@@ -118,11 +175,11 @@ impl TypeSystem {
         // Nearest definition wins for each rule; required fields accumulate.
         let defs: Vec<&TypeDef> = lineage.iter().filter_map(|t| self.types.get(t)).collect();
         let pick = |f: fn(&TypeDef) -> Option<bool>| defs.iter().find_map(|d| f(d)).unwrap_or(false);
-        let mut required: Vec<String> = Vec::new();
+        let mut required: Vec<RequiredField> = Vec::new();
         for def in defs.iter().rev() {
             for field in &def.required_fields {
                 if !required.contains(field) {
-                    required.push(field.clone());
+                    required.push(*field);
                 }
             }
         }
@@ -174,7 +231,7 @@ mod tests {
             [types.endpoint]
             extends = "function"
             description = "An HTTP handler."
-            required_fields = ["route"]
+            required_fields = ["logic_steps"]
             [types.repository]
             extends = "class"
             allows_implementation_spec = true
@@ -187,7 +244,7 @@ mod tests {
             [types.endpoint]
             extends = "function"
             description = "An HTTP handler."
-            required_fields = ["route"]
+            required_fields = ["logic_steps"]
             [types.repository]
             extends = "class"
             allows_implementation_spec = true
@@ -198,7 +255,10 @@ mod tests {
         let endpoint = types.resolve("endpoint").unwrap();
         assert_eq!(endpoint.lineage, ["endpoint", "function"]);
         assert!(endpoint.executable && endpoint.allows_signature);
-        assert_eq!(endpoint.required_fields, ["description", "signature", "route"]);
+        assert_eq!(endpoint.required_fields, [RequiredField::Description, RequiredField::Signature, RequiredField::LogicSteps]);
+        // Only details NAH knows how to check can be required.
+        let unknown = TypeSystem::from_toml("[types.x]\nrequired_fields = [\"route\"]");
+        assert!(matches!(&unknown, Err(ModelError::Config(m)) if m.contains("route")), "{unknown:?}");
         assert!(endpoint.is_a("function"));
         let repository = types.resolve("repository").unwrap();
         assert!(repository.allows_implementation_spec && repository.allows_properties);

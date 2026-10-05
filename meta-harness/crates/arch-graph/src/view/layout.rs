@@ -151,8 +151,29 @@ fn nested(view: &View) -> Layout {
             has_parent.insert(&e.target);
         }
     }
+    // Top-level boxes: nodes nothing contains, then (for containment loops,
+    // where every node has a parent) the first node of each part not yet
+    // covered, so nothing goes undrawn.
+    let mut tops: Vec<&ComponentId> = view.nodes.iter().map(|n| &n.id).filter(|id| !has_parent.contains(id)).collect();
+    fn cover<'a>(from: &'a ComponentId, children: &BTreeMap<&'a ComponentId, Vec<&'a ComponentId>>, covered: &mut BTreeSet<&'a ComponentId>) {
+        let mut stack = vec![from];
+        while let Some(id) = stack.pop() {
+            if covered.insert(id) {
+                stack.extend(children.get(id).into_iter().flatten().copied());
+            }
+        }
+    }
+    let mut covered: BTreeSet<&ComponentId> = BTreeSet::new();
+    for top in &tops {
+        cover(top, &children, &mut covered);
+    }
+    for node in &view.nodes {
+        if !covered.contains(&node.id) {
+            tops.push(&node.id);
+            cover(&node.id, &children, &mut covered);
+        }
+    }
     // Lay each top-level box out at the origin first to learn its size.
-    let tops: Vec<&ComponentId> = view.nodes.iter().map(|n| &n.id).filter(|id| !has_parent.contains(id)).collect();
     let mut sized: Vec<(&ComponentId, (f32, f32))> = Vec::new();
     for top in &tops {
         let mut scratch = Layout::default();
@@ -264,6 +285,28 @@ mod tests {
         }
         assert!(l.rects[&id("lib")].contains(&l.rects[&id("lib::Step")]));
         assert!(!l.rects[&id("app")].overlaps(&l.rects[&id("lib")]));
+    }
+
+    // req: P7.3
+    #[test]
+    fn containment_loops_still_place_every_node() {
+        use crate::view::{LayoutKind, ViewEdge, ViewNode};
+        let node = |s: &str| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: crate::Alignment::Observed };
+        let contains = |a: &str, b: &str| ViewEdge {
+            id: crate::RelationId(format!("contains:{a}->{b}")),
+            kind: RelationKind::Contains,
+            source: id(a),
+            target: id(b),
+            alignment: crate::Alignment::Planned,
+            overlay: false,
+        };
+        let mut spec = ViewCatalog::defaults().unwrap().get("structure").unwrap().clone();
+        spec.layout = LayoutKind::Nested;
+        let view = crate::View { spec, roots: vec![], nodes: vec![node("a"), node("b"), node("c")], edges: vec![contains("a", "b"), contains("b", "a")] };
+        let l = layout(&view);
+        assert_eq!(l.rects.len(), 3, "a, b and the unrelated c: {l:?}");
+        assert!(l.rects[&id("a")].contains(&l.rects[&id("b")]), "the loop is cut once, at its first node");
+        no_overlaps_except_nesting(&l);
     }
 
     // req: P7.3

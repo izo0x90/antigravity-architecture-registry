@@ -651,7 +651,10 @@ impl ArchitectureService {
 
     pub fn view(&self, spec: &ViewSpec, plan: Option<&PlanId>) -> Result<ViewResult, ServiceError> {
         let graph = self.graph(plan)?;
-        let view = query(&graph, spec);
+        // Filtering on a type keeps its specializations.
+        let mut spec = spec.clone();
+        spec.filters = spec.filters.with_specializations(&self.types);
+        let view = query(&graph, &spec);
         let layout = layout(&view);
         let text = render_text(&graph, &view);
         let components = view.nodes.iter().filter_map(|n| graph.component(&n.id).map(|c| (n.id.clone(), c.clone()))).collect();

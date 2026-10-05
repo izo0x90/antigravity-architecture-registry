@@ -99,8 +99,29 @@ pub struct Line {
 }
 
 impl GraphStyle {
-    /// Every token names a theme color, and node outlines have colors.
+    /// Every token names a theme color, node outlines have colors, and every
+    /// width, weight and opacity is positive (a zero would hide lines).
     pub fn check(&self, theme: &Theme) -> Result<(), String> {
+        let (e, n, p, o) = (&self.edges, &self.nodes, &self.provenance, &self.overlay);
+        let sizes = [
+            ("edges.observed.width", e.observed.width),
+            ("edges.planned.width", e.planned.width),
+            ("edges.missing.width", e.missing.width),
+            ("edges.present.width", e.present.width),
+            ("nodes.outline.observed.width", n.outline.observed.width),
+            ("nodes.outline.planned.width", n.outline.planned.width),
+            ("nodes.outline.missing.width", n.outline.missing.width),
+            ("nodes.outline.present.width", n.outline.present.width),
+            ("nodes.selected_width", n.selected_width),
+            ("provenance.planned", p.planned),
+            ("provenance.observed", p.observed),
+            ("provenance.both", p.both),
+            ("overlay.width", o.width),
+            ("overlay.alpha", o.alpha),
+        ];
+        if let Some((at, value)) = sizes.into_iter().find(|(_, v)| !(*v > 0.0 && v.is_finite())) {
+            return Err(format!("graph_style.{at}: must be a positive number, got {value}"));
+        }
         let k = &self.kinds;
         let mut tokens: Vec<(&str, &str)> = vec![("kinds.contains", &k.contains), ("kinds.implements", &k.implements), ("kinds.calls", &k.calls), ("kinds.data_flow", &k.data_flow)];
         tokens.extend(self.edges.all().into_iter().filter_map(|l| l.color.as_deref()).map(|t| ("edges", t)));
@@ -224,5 +245,7 @@ mod tests {
         let custom = UiConfig::with_overrides("[graph_style.kinds]\ncalls = \"warn\"").unwrap();
         assert_eq!(custom.graph_style.kind_color(&custom.theme, RelationKind::Calls), custom.theme.warn);
         assert!(UiConfig::with_overrides("[graph_style.kinds]\ncalls = \"chartreuse\"").unwrap_err().contains("'chartreuse' is not a theme color"));
+        assert!(UiConfig::with_overrides("[graph_style.provenance]\nplanned = 0.0\nobserved = 1.0\nboth = 1.5").unwrap_err().contains("provenance.planned: must be a positive number"));
+        assert!(UiConfig::with_overrides("[graph_style.overlay]\nwidth = -1.0\nalpha = 0.5").unwrap_err().contains("overlay.width"));
     }
 }
