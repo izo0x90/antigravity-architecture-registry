@@ -832,8 +832,12 @@ impl CockpitApp {
                     // Synchronized Slot Header
                     let active_kind = self.slot_buffers[slot_idx];
                     let is_compact = ui.available_width() < 340.0;
+                    // Full tab captions only when they all fit; otherwise icons
+                    // (the active tab keeps its name). The row wraps rather than
+                    // widen the slot.
+                    let tab_captions = ui.available_width() >= 120.0 * BufferKind::ALL.len() as f32;
 
-                    let header_res = ui.horizontal(|ui| {
+                    let header_res = ui.horizontal_wrapped(|ui| {
                         let title_text = if is_compact {
                             format!("[S{}]", slot_idx + 1)
                         } else {
@@ -853,7 +857,8 @@ impl CockpitApp {
                         // Buffer tabs for this slot
                         for kind in BufferKind::ALL {
                             let title = kind.title();
-                            let label = if is_compact { kind.icon().to_owned() } else { format!("{} {}{}", kind.icon(), &title[..1], title[1..].to_lowercase()) };
+                            let named = !is_compact && (tab_captions || self.slot_buffers[slot_idx] == kind);
+                            let label = if named { format!("{} {}{}", kind.icon(), &title[..1], title[1..].to_lowercase()) } else { kind.icon().to_owned() };
                             let tab = ui.selectable_value(&mut self.slot_buffers[slot_idx], kind, label);
                             if tab.clicked() {
                                 self.focused_slot = slot_idx;

@@ -264,8 +264,8 @@ swipe_max_ms = 450.0
 # On-screen chips: "auto" (narrow screens, or after a touch), "always" or "never".
 [graph.chips]
 show = "auto"
-narrow_below = 700.0
-size = 40.0
+narrow_below = 480.0
+size = 32.0
 actions = ["graph.back", "graph.forward", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.next_view", "graph.hint_focus", "graph.legend"]
 
 # Semantic zoom: card detail by zoom level. Below `mid`: the name; from `mid`:
