@@ -202,9 +202,9 @@ slice = "S2"
 title = "Domain model audit"
 manual = true
 acceptance = "An independent audit found no missing or partial domain requirements."
+done = "2026-10-05: final independent audit (HEAD c18b6e6) found P2.1-P2.11 fully met, no hardcoded specifics; earlier rounds' gaps (alignment by status, plan anchors, DSL keyword records, required fields, path spelling) fixed and re-verified."
 
 # ---- repositories ----
-done = "2026-10-05: final independent audit (HEAD c18b6e6) found P2.1-P2.11 fully met, no hardcoded specifics; earlier rounds' gaps (alignment by status, plan anchors, DSL keyword records, required fields, path spelling) fixed and re-verified."
 
 [[req]]
 id = "P3.1"
