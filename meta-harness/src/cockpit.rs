@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{FromRef, FromRequestParts, Query, State};
-use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
+use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -92,14 +92,16 @@ pub struct Launch {
 }
 
 /// The launch link: a matching token sets the cookie and opens the cockpit.
+/// It answers with a page (not a redirect) so the cookie also survives
+/// proxies that follow redirects themselves.
 pub async fn launch(State(auth): State<CockpitAuth>, Query(q): Query<Launch>) -> Response {
     if q.nah != *auth.token {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "this isn't the cockpit's launch link" }))).into_response();
     }
-    let mut response = StatusCode::SEE_OTHER.into_response();
-    if let (Ok(cookie), Ok(home)) = (HeaderValue::from_str(&auth.set_cookie()), HeaderValue::from_str("/")) {
+    let page = "<!doctype html><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0; url=/\"><title>NAH</title><script>location.replace('/')</script><a href=\"/\">Open the cockpit</a>";
+    let mut response = (StatusCode::OK, axum::response::Html(page)).into_response();
+    if let Ok(cookie) = HeaderValue::from_str(&auth.set_cookie()) {
         response.headers_mut().insert(SET_COOKIE, cookie);
-        response.headers_mut().insert(LOCATION, home);
     }
     response
 }

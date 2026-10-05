@@ -77,8 +77,11 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     assert!(body.contains("only the user, in the cockpit"));
     // The API never hands out the cockpit's cookie: only the user's launch link does.
     for path in ["/api/ui/config", "/cockpit?nah=guess", "/health"] {
-        let (status, _) = http(addr, "GET", path, None).await;
-        assert_ne!(status, 303, "{path}");
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut stream, format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let mut response = String::new();
+        tokio::io::AsyncReadExt::read_to_string(&mut stream, &mut response).await.unwrap();
+        assert!(!response.to_ascii_lowercase().contains("set-cookie"), "{path} must not hand out the cookie");
     }
     for (method, path) in [
         ("DELETE", "/api/arch/plans/val"),
