@@ -32,18 +32,27 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 fn repo_with_types(types: TypeSystem) -> Repo {
+    repo_with(types, "")
+}
+
+/// The fixture repo with project types and project code rules (TOML).
+fn repo_with(types: TypeSystem, rules_toml: &str) -> Repo {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("sample");
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample"), &root);
+    let packs = PackSet::built_in().unwrap();
+    let mut rules = arch_index::CodeRules::defaults(&packs, &types).unwrap();
+    rules.add_toml(rules_toml, &packs, &types).unwrap();
     let service = ArchitectureService::open(
         &root,
-        PackSet::built_in().unwrap(),
+        packs,
         types,
         ViewCatalog::defaults().unwrap(),
         Box::new(FsPlans::new(&root).unwrap()),
         Box::new(FsIndex::new(&root).unwrap()),
     )
-    .unwrap();
+    .unwrap()
+    .with_rules(rules);
     service.ingest(&root).unwrap();
     Repo { _dir: dir, root, service }
 }
@@ -289,6 +298,10 @@ fn spec_rules_cover_step_order_invariant_inheritance_tools_and_side_effects() {
     let effects = messages(&report, FindingCode::UndeclaredSideEffect);
     assert!(effects.contains(&"changes 'fs', which the interface it implements doesn't declare".to_owned()), "{effects:?}");
     assert!(effects.contains(&"rust:sample::write also changes 'fs', which rust:sample::save_all doesn't expect".to_owned()), "{effects:?}");
+    assert!(
+        report.findings.iter().filter(|f| f.code == FindingCode::UndeclaredSideEffect).all(|f| f.severity == arch_graph::Severity::Error),
+        "undeclared side effects are errors, at the interface and at the call site"
+    );
     assert_eq!(effects.len(), 2, "db is declared everywhere: {effects:?}");
     assert!(report.findings.iter().all(|f| f.component() != Some(&id("sample::save_all")) || f.code == FindingCode::MissingTouchPoint), "steps 1..2 are fine");
 }
@@ -826,4 +839,153 @@ fn signatures_compare_qualifiers_and_ignore_spacing() {
     assert!(!arch_service::signature_diff(&sig("&mut str", "u8", &[]), &sig("&mutstr", "u8", &[])).is_empty(), "word boundaries do");
     assert_eq!(arch_service::signature_diff(&sig("&str", "bool", &[]), &sig("&str", "bool", &["async"])), vec!["qualifiers: planned none, code has async"]);
     assert_eq!(arch_service::signature_diff(&sig("&str", "bool", &["unsafe"]), &sig("&str", "bool", &[])), vec!["qualifiers: planned unsafe, code has none"]);
+}
+
+// req: P5.5
+#[test]
+fn every_interface_in_the_chain_with_a_shape_must_fit() {
+    let r = repo();
+    let mut plan = Plan::new("multi", "Multi");
+    let mut ia = comp("sample::IA::go", "operation");
+    ia.schemas.inputs = schema(json!({"x": "int"}));
+    let mut ib = comp("sample::IB::go", "operation");
+    ib.schemas.inputs = schema(json!({"x": "str"}));
+    let mut imp = comp("sample::imp", "function");
+    imp.schemas.inputs = schema(json!({"x": "int"}));
+    plan.components.extend([ia, ib, imp]);
+    plan.relations.extend([rel(RelationKind::Implements, "sample::imp", "sample::IA::go"), rel(RelationKind::Implements, "sample::imp", "sample::IB::go")]);
+    let found = messages(&check(&r, plan), FindingCode::SchemaMismatch);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].starts_with("doesn't fit rust:sample::IB::go it implements: inputs: x: type string where integer is expected"), "{found:?}");
+}
+
+// req: P5.1, P5.2
+#[test]
+fn containment_follows_type_rules_and_each_component_has_one_container() {
+    let r = repo();
+    r.service.create_plan("c", "Containment", "").unwrap();
+    add(&r, "c", "helper2", "function", "Helps.", str_sig());
+    let relate_contains = |a: &str, b: &str| {
+        r.service.apply(&pid("c"), PlanOp::Relate { kind: RelationKind::Contains, source: id(a), target: id(b), order: None, ports: None, note: None, expects: None })
+    };
+    let err = relate_contains("sample::helper2", "sample::store").unwrap_err().to_string();
+    assert!(err.contains("is a function, which can't contain rust:sample::store (a module)"), "{err}");
+    let err = relate_contains("sample::run", "sample::helper2").unwrap_err().to_string();
+    assert!(err.contains("rust:sample::helper2 is already inside rust:sample; a component has one container"), "{err}");
+    // A plan edited by hand with two containers is reported.
+    let mut plan = Plan::new("two", "Two");
+    plan.components.push(comp("sample::f2", "function"));
+    plan.relations.extend([rel(RelationKind::Contains, "sample", "sample::f2"), rel(RelationKind::Contains, "sample::run", "sample::f2")]);
+    let found = messages(&check(&r, plan), FindingCode::DisallowedParent);
+    assert!(found.iter().any(|m| m == "sits in more than one container (rust:sample, rust:sample::run); a component has one"), "{found:?}");
+}
+
+// req: P5.6
+#[test]
+fn a_call_stating_expectations_without_inputs_passes_no_arguments() {
+    let r = repo();
+    let mut plan = Plan::new("noin", "No inputs");
+    plan.components.push(comp("sample::caller2", "function"));
+    plan.relations.push(rel(RelationKind::Contains, "sample", "sample::caller2"));
+    let mut call = rel(RelationKind::Calls, "sample::caller2", "sample::util::shout");
+    call.expects = Some(Schemas { outputs: schema(json!("string")), ..Schemas::default() });
+    plan.relations.push(call);
+    let found = messages(&check(&r, plan), FindingCode::CallMismatch);
+    assert!(found.iter().any(|m| m.ends_with("parameter 's' isn't among the planned inputs")), "{found:?}");
+    assert!(found.iter().any(|m| m.contains("shout takes 1 argument(s); the call passes 0")), "{found:?}");
+}
+
+// req: P5.9, P5.18
+#[test]
+fn approval_blocks_on_failing_logic_checks_and_code_rule_errors() {
+    let r = repo_with(
+        TypeSystem::defaults().unwrap(),
+        r#"
+[[rule]]
+id = "no-println"
+language = "rust"
+types = ["function"]
+kind = "forbidden"
+rule = { kind = "macro_invocation", has = { field = "macro", regex = "^println$" } }
+message = "log through the logger"
+"#,
+    );
+    // A failing logic-step check blocks the design's approval.
+    r.service.create_plan("l", "Logic", "").unwrap();
+    add(&r, "l", "parse2", "function", "Parses.", str_sig());
+    relate(&r, "l", "sample::run", "sample::parse2");
+    let step = LogicStep { sequence: 1, name: "split".into(), description: String::new(), algorithm: None, complexity: None, check: Some("echo nope; exit 1".into()) };
+    r.service
+        .apply(&pid("l"), PlanOp::Modify { id: id("sample::parse2"), description: None, signature: None, schemas: None, spec: Some(ImplementationSpec { logic_steps: vec![step], ..ImplementationSpec::default() }) })
+        .unwrap();
+    let err = r.service.approve(&pid("l"), &id("sample::parse2"), Stage::ArchApproved, &user()).unwrap_err().to_string();
+    assert!(err.contains("logic step 1 'split' check failed: nope"), "{err}");
+    // Changes to code that breaks a project rule can't be approved either.
+    r.service.create_plan("m", "Modify log", "").unwrap();
+    r.service.apply(&pid("m"), PlanOp::Modify { id: id("sample::log"), description: Some("Logs.".into()), signature: None, schemas: None, spec: None }).unwrap();
+    let err = r.service.approve(&pid("m"), &id("sample::log"), Stage::ArchApproved, &user()).unwrap_err().to_string();
+    assert!(err.contains("[no-println] log through the logger"), "{err}");
+}
+
+// req: P5.11, P5.17
+#[test]
+fn contracts_show_inherited_resolved_shapes_tools_effects_and_data_flows() {
+    let r = repo();
+    let mut plan = Plan::new("k", "Contract");
+    let mut user_type = comp("sample::User", "class");
+    user_type.signature = None;
+    user_type.schemas.properties = schema(json!({"name": "str"}));
+    let mut port = comp("sample::Saver::save", "operation");
+    port.schemas.inputs = schema(json!({"who": "User"}));
+    let mut save = comp("sample::save_user", "function");
+    save.spec = Some(ImplementationSpec { validation: vec![ToolRef { tool: "clippy".into(), targets: vec!["src/lib.rs".into()], args: None }], ..ImplementationSpec::default() });
+    let mut produce = comp("sample::load_user", "function");
+    produce.schemas.outputs = schema(json!("User"));
+    plan.components.extend([user_type, port, save, produce]);
+    let mut call = rel(RelationKind::Calls, "sample::save_user", "sample::log");
+    call.expects = Some(Schemas { side_effects: vec![SideEffect { target: "stdout".into(), description: "prints".into() }], ..Schemas::default() });
+    let mut flow = rel(RelationKind::DataFlow, "sample::load_user", "sample::save_user");
+    flow.ports = Some(("return".into(), "who".into()));
+    plan.relations.extend([rel(RelationKind::Implements, "sample::save_user", "sample::Saver::save"), call, flow]);
+    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    let slice = r.service.contract(&pid("k"), &id("sample::save_user")).unwrap();
+    assert_eq!(slice.data.inputs_from, Some(id("sample::Saver::save")), "inherited from the interface");
+    assert_eq!(slice.data.inputs.as_ref().unwrap()["properties"]["who"]["properties"]["name"], json!({"type": "string"}), "the $ref is resolved");
+    assert_eq!(slice.validation[0].tool, "clippy");
+    assert_eq!(slice.data_in.len(), 1);
+    assert_eq!(slice.data_in[0].ports, Some(("return".into(), "who".into())));
+    let md = slice.to_markdown();
+    for needle in [
+        "- Inputs (from rust:sample::Saver::save): `",
+        "\"name\"",
+        "  - expects it to change `stdout`: prints",
+        "## Data in\n- `load_user` function [return -> who] — planned",
+        "## Validation tools\n- `clippy` on src/lib.rs",
+    ] {
+        assert!(md.contains(needle), "missing {needle:?} in:\n{md}");
+    }
+}
+
+// req: P4.6
+#[test]
+fn calls_that_cant_be_proven_are_reported_not_linked() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("sample");
+    copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample"), &root);
+    let service = ArchitectureService::open(
+        &root,
+        PackSet::built_in().unwrap(),
+        TypeSystem::defaults().unwrap(),
+        ViewCatalog::defaults().unwrap(),
+        Box::new(arch_service::MemoryPlans::default()),
+        Box::new(arch_service::MemoryIndex::default()),
+    )
+    .unwrap();
+    let report = service.ingest(&root).unwrap();
+    let unproven = service.unproven_calls().unwrap();
+    assert_eq!(report.unproven, unproven.len());
+    let call = unproven.iter().find(|c| c.caller == id("sample::store::store_each")).expect("s.save on an untyped receiver");
+    assert_eq!(call.candidates, vec![id("sample::store::Store::save")]);
+    let graph = service.observed().unwrap();
+    assert!(!graph.outgoing(&id("sample::store::store_each"), Some(RelationKind::Calls)).any(|c| c.target == id("sample::store::Store::save")), "never guessed");
 }

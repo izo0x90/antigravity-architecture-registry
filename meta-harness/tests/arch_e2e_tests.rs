@@ -40,6 +40,10 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     let (status, body) = http(addr, "GET", "/api/arch/file?path=src/util.rs", None).await;
     assert_eq!(status, 200);
     assert_eq!(parse(&body)["components"].as_array().unwrap().len(), 3);
+    // Calls the code makes that couldn't be tied to a component, never guessed.
+    let (status, body) = http(addr, "GET", "/api/arch/unproven", None).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(parse(&body).as_array().unwrap().iter().any(|c| c["caller"] == "rust:sample::store::store_each"), "{body}");
     let (status, body) = http(addr, "GET", "/api/arch/search?q=shout", None).await;
     assert_eq!(status, 200);
     assert_eq!(parse(&body)[0]["id"], "rust:sample::util::shout");

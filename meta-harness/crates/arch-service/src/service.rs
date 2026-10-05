@@ -44,6 +44,10 @@ pub struct IngestReport {
     pub components: usize,
     pub relations: usize,
     pub ambiguous: usize,
+    /// Calls not linked to anything: the receiver's type or the name isn't
+    /// known from the code (never guessed).
+    #[serde(default)]
+    pub unproven: usize,
     pub external: usize,
     pub millis: u64,
     /// Files whose content changed (parsed anew or removed).
@@ -85,6 +89,7 @@ pub struct Refresh {
 struct Observed {
     graph: Graph,
     ambiguous: Vec<AmbiguousCall>,
+    unproven: Vec<AmbiguousCall>,
     external: Vec<ExternalCall>,
     /// Data handed from one call to another that types couldn't confirm.
     unverified: Vec<UnverifiedFlow>,
@@ -244,7 +249,7 @@ impl ArchitectureService {
         let extracts: Vec<FileExtract> = self.index.all()?;
         let resolved = resolve(&extracts, &self.packs, &self.types);
         let mut observed = self.observed.write().map_err(ServiceError::poisoned)?;
-        *observed = Observed { graph: resolved.graph, ambiguous: resolved.ambiguous, external: resolved.external, unverified: resolved.unverified_flows };
+        *observed = Observed { graph: resolved.graph, ambiguous: resolved.ambiguous, unproven: resolved.unproven, external: resolved.external, unverified: resolved.unverified_flows };
         Ok(())
     }
 
@@ -264,6 +269,7 @@ impl ArchitectureService {
         let observed = self.observed.read().map_err(ServiceError::poisoned)?;
         (report.components, report.relations) = observed.graph.len();
         report.ambiguous = observed.ambiguous.len();
+        report.unproven = observed.unproven.len();
         report.external = observed.external.len();
         report.millis = started.elapsed().as_millis() as u64;
         drop(observed);
@@ -404,6 +410,12 @@ impl ArchitectureService {
 
     pub fn ambiguous_calls(&self) -> Result<Vec<AmbiguousCall>, ServiceError> {
         Ok(self.observed.read().map_err(ServiceError::poisoned)?.ambiguous.clone())
+    }
+
+    /// Calls the code makes that couldn't be tied to a component (unknown
+    /// receiver type, or a name neither local nor imported), with candidates.
+    pub fn unproven_calls(&self) -> Result<Vec<AmbiguousCall>, ServiceError> {
+        Ok(self.observed.read().map_err(ServiceError::poisoned)?.unproven.clone())
     }
 
     /// The code with one plan (or all plans) laid over it.
@@ -562,7 +574,11 @@ impl ArchitectureService {
                 c.stage = to;
             }
             let graph = Graph::merge(observed, std::slice::from_ref(plan));
-            let report = checks::check_plan(plan, &graph, &self.check_cx());
+            let mut report = checks::check_plan(plan, &graph, &self.check_cx());
+            // The same blocking set validation shows for it: code rules on its
+            // code and its logic steps' own checks.
+            report.findings.extend(self.rules.check(graph.component(id), &graph, &self.root, &self.packs, &self.types));
+            report.findings.extend(tools::run_logic_checks(graph.component(id).into_iter(), &self.tools.logic_checks, self.runner.as_ref(), &self.root));
             // Errors on it, on its relations, or on the plan as a whole.
             let blocking: Vec<String> = checks::blocking_for(&report, plan, id).into_iter().map(|f| f.message.clone()).collect();
             if !blocking.is_empty() {
@@ -580,7 +596,7 @@ impl ArchitectureService {
         let plan = self.plan(plan_id)?;
         let planned = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?;
         let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
-        Ok(slice(&plan, planned, &graph))
+        Ok(slice(&plan, planned, &graph, &checks::schema_set(&graph, &self.types)))
     }
 
     /// Re-reads the component's file (and its call chain's), verifies it for
@@ -679,7 +695,7 @@ impl ArchitectureService {
     }
 
     fn review_with(&self, plan: &Plan, component: &Component, merged: &Graph) -> Result<ReviewsReport, ServiceError> {
-        let contract = plan.component(&component.id).map(|p| slice(plan, p, merged).to_markdown()).unwrap_or_default();
+        let contract = plan.component(&component.id).map(|p| slice(plan, p, merged, &checks::schema_set(merged, &self.types)).to_markdown()).unwrap_or_default();
         let code = self.component(&component.id, Some(&plan.id))?.code;
         let subject = Subject { plan, component, observed: merged, contract, code };
         Ok(review::review(&self.reviewers, &self.types, self.review_provider.as_deref(), &subject))

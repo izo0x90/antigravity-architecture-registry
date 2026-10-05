@@ -224,6 +224,18 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
                     return Err(invalid(format!("{source} is a {caller}, which can't call anything")));
                 }
             }
+            // Containment follows the type rules, and each component has one
+            // container (the one add_component gave it, or the code's).
+            if kind == RelationKind::Contains {
+                let type_of = |id: &ComponentId| graph.component(id).map(|c| c.type_name.clone()).unwrap_or_default();
+                let (parent, child) = (type_of(&source), type_of(&target));
+                if !types.may_contain(&parent, &child).map_err(|e| invalid(e.to_string()))? {
+                    return Err(invalid(format!("{source} is a {parent}, which can't contain {target} (a {child})")));
+                }
+                if let Some(existing) = graph.parent(&target).filter(|p| **p != source) {
+                    return Err(invalid(format!("{target} is already inside {existing}; a component has one container")));
+                }
+            }
             if kind == RelationKind::DataFlow && ports.is_none() {
                 return Err(invalid("a data flow needs ports (source output, target input)"));
             }

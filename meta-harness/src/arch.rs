@@ -60,6 +60,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/arch/tools", get(tools))
         .route("/api/arch/reviewers", get(reviewers))
         .route("/api/arch/ambiguous", get(ambiguous))
+        .route("/api/arch/unproven", get(unproven))
         .route("/api/arch/navigate", post(navigate))
         .route("/api/arch/plans", get(list_plans).post(create_plan))
         .route("/api/arch/import", post(import_registry))
@@ -201,6 +202,11 @@ async fn ingest(State(state): State<AppState>, body: Option<Json<IngestBody>>) -
 
 async fn ambiguous(State(state): State<AppState>) -> ArchResult<Vec<arch_index::AmbiguousCall>> {
     Ok(Json(state.arch.ambiguous_calls()?))
+}
+
+/// Calls the code makes that couldn't be tied to a component (never guessed).
+async fn unproven(State(state): State<AppState>) -> ArchResult<Vec<arch_index::AmbiguousCall>> {
+    Ok(Json(state.arch.unproven_calls()?))
 }
 
 async fn navigate(State(state): State<AppState>, Json(request): Json<ViewRequest>) -> Result<StatusCode, ArchError> {
