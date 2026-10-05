@@ -18,23 +18,99 @@ pub enum Action {
     Build,
 }
 
-/// Plan components, dependencies first (ties and loops by id).
+/// Plan components, dependencies first. Components that depend on each
+/// other (a loop) come together, after everything the loop depends on and
+/// before what depends on it; ties and loop members go by id.
 pub fn topological(plan: &Plan, graph: &Graph, types: &TypeSystem) -> Vec<ComponentId> {
-    let ids: BTreeSet<&ComponentId> = plan.components.iter().map(|c| &c.id).collect();
-    let deps: BTreeMap<&ComponentId, BTreeSet<ComponentId>> =
-        ids.iter().map(|id| (*id, graph.dependencies(id, is_data_type(types)).into_iter().filter(|d| ids.contains(d)).collect())).collect();
-    let mut order: Vec<ComponentId> = Vec::new();
-    let mut done: BTreeSet<ComponentId> = BTreeSet::new();
-    while done.len() < ids.len() {
-        let ready: Vec<&ComponentId> = ids.iter().copied().filter(|id| !done.contains(*id) && deps[id].iter().all(|d| done.contains(d))).collect();
-        // A loop: take its smallest member and carry on.
-        let next = if ready.is_empty() { ids.iter().copied().filter(|id| !done.contains(*id)).take(1).collect() } else { ready };
-        for id in next {
-            done.insert(id.clone());
-            order.push(id.clone());
+    let ids: Vec<&ComponentId> = plan.components.iter().map(|c| &c.id).collect::<BTreeSet<_>>().into_iter().collect();
+    let index: BTreeMap<&ComponentId, usize> = ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let deps: Vec<Vec<usize>> = ids.iter().map(|id| graph.dependencies(id, is_data_type(types)).iter().filter_map(|d| index.get(d).copied()).collect()).collect();
+    let groups = strongly_connected(&deps);
+    let group_of: Vec<usize> = {
+        let mut g = vec![0; ids.len()];
+        for (gi, members) in groups.iter().enumerate() {
+            for &m in members {
+                g[m] = gi;
+            }
+        }
+        g
+    };
+    // Kahn's algorithm over the groups (a loop is one group).
+    let group_deps: Vec<BTreeSet<usize>> =
+        groups.iter().enumerate().map(|(gi, members)| members.iter().flat_map(|&m| deps[m].iter().map(|&d| group_of[d])).filter(|&g| g != gi).collect()).collect();
+    let mut done = vec![false; groups.len()];
+    let mut order = Vec::with_capacity(ids.len());
+    loop {
+        let mut ready: Vec<usize> = (0..groups.len()).filter(|&g| !done[g] && group_deps[g].iter().all(|&d| done[d])).collect();
+        if ready.is_empty() {
+            break;
+        }
+        ready.sort_by_key(|&g| groups[g].iter().copied().min());
+        for g in ready {
+            done[g] = true;
+            let mut members = groups[g].clone();
+            members.sort();
+            order.extend(members.into_iter().map(|m| ids[m].clone()));
         }
     }
     order
+}
+
+/// Strongly connected components of a graph given as adjacency lists
+/// (Tarjan's algorithm, iterative).
+fn strongly_connected(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let n = edges.len();
+    let mut index = vec![usize::MAX; n];
+    let mut low = vec![0; n];
+    let mut on_stack = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut next = 0;
+    let mut groups = Vec::new();
+    for start in 0..n {
+        if index[start] != usize::MAX {
+            continue;
+        }
+        // (node, next edge to look at)
+        let mut work: Vec<(usize, usize)> = vec![(start, 0)];
+        index[start] = next;
+        low[start] = next;
+        next += 1;
+        stack.push(start);
+        on_stack[start] = true;
+        while let Some(&mut (v, ref mut i)) = work.last_mut() {
+            if *i < edges[v].len() {
+                let w = edges[v][*i];
+                *i += 1;
+                if index[w] == usize::MAX {
+                    index[w] = next;
+                    low[w] = next;
+                    next += 1;
+                    stack.push(w);
+                    on_stack[w] = true;
+                    work.push((w, 0));
+                } else if on_stack[w] {
+                    low[v] = low[v].min(index[w]);
+                }
+            } else {
+                work.pop();
+                if let Some(&(parent, _)) = work.last() {
+                    low[parent] = low[parent].min(low[v]);
+                }
+                if low[v] == index[v] {
+                    let mut group = Vec::new();
+                    while let Some(w) = stack.pop() {
+                        on_stack[w] = false;
+                        group.push(w);
+                        if w == v {
+                            break;
+                        }
+                    }
+                    groups.push(group);
+                }
+            }
+        }
+    }
+    groups
 }
 
 /// Components ready for `action`, in dependency order.

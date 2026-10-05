@@ -61,6 +61,16 @@ fn location(c: &arch_graph::Component, graph: &Graph, root: &Path, packs: &PackS
         report.push(Finding::error(FindingCode::InvalidLocation, component(&c.id), format!("no language pack handles {}", proposed.file)));
         return;
     };
+    if arch_index::ignored(root, path) {
+        report.push(
+            Finding::error(
+                FindingCode::InvalidLocation,
+                component(&c.id),
+                format!("{} is git-ignored or hidden: ingestion never reads it, so the code there could never be verified", proposed.file),
+            )
+            .suggest("place it in a file the repository tracks"),
+        );
+    }
     if pack.name() != proposed.language {
         report.push(Finding::error(
             FindingCode::InvalidLocation,

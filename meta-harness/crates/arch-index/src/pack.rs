@@ -109,9 +109,16 @@ pub struct LanguageSpec {
     pub module_type: String,
     /// Characters besides letters and digits that identifiers may contain.
     pub identifier_chars: String,
+    /// Words that can't name a definition (keywords).
+    #[serde(default)]
+    pub reserved_words: Vec<String>,
     /// Syntax kinds that never mean anything here (comments).
     #[serde(default)]
     pub ignored_kinds: Vec<String>,
+    /// Text in an import statement that makes its path relative to the
+    /// importer's package (`"./`, `from .`), besides `relative_prefixes`.
+    #[serde(default)]
+    pub relative_import_markers: Vec<String>,
     /// Words in an import statement that aren't names (`use`, `from`, `import`).
     #[serde(default)]
     pub import_keywords: Vec<String>,
@@ -140,6 +147,20 @@ pub struct DialectSpec {
 impl LanguageSpec {
     pub fn is_identifier_char(&self, c: char) -> bool {
         c.is_alphanumeric() || self.identifier_chars.contains(c)
+    }
+
+    /// Why `name` can't name a definition in this language, if it can't: it
+    /// must be one identifier (no separators), not start with a digit, and
+    /// not be a reserved word.
+    pub fn check_name(&self, name: &str) -> Result<(), String> {
+        let first_ok = name.chars().next().is_some_and(|c| c.is_alphabetic() || self.identifier_chars.contains(c));
+        if !first_ok || !name.chars().all(|c| self.is_identifier_char(c)) {
+            return Err(format!("'{name}' isn't a single {} identifier", self.name));
+        }
+        if self.reserved_words.iter().any(|w| w == name) {
+            return Err(format!("'{name}' is a reserved word in {}", self.name));
+        }
+        Ok(())
     }
 
     /// The identifier words in `text`, in order.

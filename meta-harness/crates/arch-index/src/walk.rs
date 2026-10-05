@@ -15,17 +15,34 @@ pub struct SourceFile {
 }
 
 /// All files under `scope` (a directory or file inside `root`) that some pack
-/// handles, sorted by path. Ignored files (.gitignore, hidden) are skipped.
+/// handles, sorted by path. The walk always starts at `root`, so every
+/// .gitignore from the root down applies the same as in a full walk; ignored
+/// files and hidden ones are skipped (a scope that is itself ignored yields
+/// nothing).
 pub fn walk(root: &Path, scope: &Path, packs: &PackSet) -> Result<Vec<SourceFile>, IndexError> {
     let start = if scope.is_absolute() { scope.to_path_buf() } else { root.join(scope) };
     let mut files = Vec::new();
-    let walker = ignore::WalkBuilder::new(&start).hidden(true).git_ignore(true).git_exclude(true).require_git(false).build();
+    // Only descend toward the scope, and within it.
+    let toward = start.clone();
+    let walker = ignore::WalkBuilder::new(root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .require_git(false)
+        .filter_entry(move |entry| {
+            let path = entry.path();
+            toward.starts_with(path) || path.starts_with(&toward)
+        })
+        .build();
     for entry in walker {
         let entry = entry.map_err(|e| IndexError::Io(e.to_string()))?;
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
         let absolute = entry.path().to_path_buf();
+        if !absolute.starts_with(&start) {
+            continue;
+        }
         let Some(pack) = packs.for_path(&absolute) else { continue };
         let relative = absolute.strip_prefix(root).map_err(|_| IndexError::Io(format!("{} is outside {}", absolute.display(), root.display())))?;
         let path = RepoPath::new(&relative.to_string_lossy()).map_err(|e| IndexError::Io(e.to_string()))?;
@@ -34,6 +51,31 @@ pub fn walk(root: &Path, scope: &Path, packs: &PackSet) -> Result<Vec<SourceFile
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
+}
+
+/// Whether a full walk of `root` would skip `path` (which needn't exist): a
+/// hidden segment below the root, or a .gitignore from the root down to it
+/// (or the repo's git exclude file) matching it or a directory above it.
+/// The one definition of "ignored", for the walk's callers.
+pub fn ignored(root: &Path, path: &Path) -> bool {
+    let absolute = if path.is_absolute() { path.to_path_buf() } else { root.join(path) };
+    let Ok(relative) = absolute.strip_prefix(root) else { return true };
+    if relative.components().any(|c| matches!(c, std::path::Component::Normal(n) if n.to_string_lossy().starts_with('.'))) {
+        return true;
+    }
+    let is_dir = absolute.is_dir();
+    // (rules file, the directory its patterns are relative to)
+    let mut sources = vec![(root.join(".git/info/exclude"), root.to_path_buf()), (root.join(".gitignore"), root.to_path_buf())];
+    let mut dir = root.to_path_buf();
+    for part in relative.parent().map(|p| p.components().collect::<Vec<_>>()).unwrap_or_default() {
+        dir.push(part);
+        sources.push((dir.join(".gitignore"), dir.clone()));
+    }
+    sources.iter().filter(|(file, _)| file.is_file()).any(|(file, base)| {
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(base);
+        builder.add(file);
+        builder.build().is_ok_and(|rules| rules.matched_path_or_any_parents(&absolute, is_dir).is_ignore())
+    })
 }
 
 /// The module symbol for a file: package name (from the nearest manifest, if

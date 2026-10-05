@@ -19,7 +19,7 @@ pub use extract::{FileExtract, MacroDef, RawArg, RawCall, RawDef, RawScope, cont
 pub use pack::{AliasSpec, BindingSpec, CallSpec, DefinitionSpec, LanguageSpec, Pack, PackSet, PackSpec, ParamSpec, MacroSpec, DeadCodeSpec, ConditionSpec, ConstantLogic, RuleSpec, ScopeSpec};
 pub use resolve::{AmbiguousCall, ExternalCall, Resolved, UnverifiedFlow, resolve};
 pub use rules::{CodeRule, CodeRuleSpec, CodeRules, RuleKind, RuleSeverity};
-pub use walk::{SourceFile, module_symbol, walk};
+pub use walk::{SourceFile, ignored, module_symbol, walk};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum IndexError {

@@ -146,6 +146,12 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
                     (pack.name().to_owned(), file, format!("{module}{}{name}", pack.spec.language.separator), parent)
                 }
             };
+            if let Some(pack) = packs.by_name(&language) {
+                pack.spec.language.check_name(&name).map_err(|e| invalid(format!("component name: {e}")))?;
+            }
+            if arch_index::ignored(root, std::path::Path::new(file.as_str())) {
+                return Err(invalid(format!("{file} is git-ignored or hidden: ingestion never reads it, so code there could never be verified")));
+            }
             let id = ComponentId::for_symbol(&language, &symbol);
             if graph.component(&id).is_some() {
                 return Err(invalid(format!("{id} already exists; modify it instead, or pick another name")));
