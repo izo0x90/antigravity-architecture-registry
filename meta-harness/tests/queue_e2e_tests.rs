@@ -192,3 +192,52 @@ async fn queue_control_is_for_the_user_in_the_cockpit() {
     let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/q/queue/stop", None).await;
     assert_eq!(status, 200, "{body}");
 }
+
+// req: P10.1
+#[tokio::test(flavor = "multi_thread")]
+async fn ingest_plan_validate_skeleton_implement_verify_break_and_detect_on_a_fixture_copy() {
+    let arch = fixture_architecture();
+    // Ingest: the fixture's code is the starting point.
+    let ingested = arch.ingest(arch.root()).unwrap();
+    assert!(ingested.components > 0);
+    let plan = PlanId::new("e2e").unwrap();
+    arch.create_plan("e2e", "End to end", "").unwrap();
+    arch.apply(&plan, PlanOp::SetGreenfield { greenfield: true }).unwrap();
+    for name in ["a", "b"] {
+        arch.apply(&plan, PlanOp::AddComponent { name: name.into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None }).unwrap();
+    }
+    arch.apply(&plan, PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::a"), target: id("sample::b"), order: None, ports: None, note: None, expects: None }).unwrap();
+    // Validate: the bare components aren't ready for approval yet.
+    let report = arch.validate(&plan).unwrap();
+    assert!(report.findings.iter().any(|f| f.code == arch_graph::FindingCode::SpecIncomplete), "{report:?}");
+
+    // The queue designs, lays the skeleton, implements and verifies; the test approves as the user.
+    let queue = QueueRunner::new(arch.clone(), QueueConfig::defaults().unwrap(), |_| {});
+    let agent = Arc::new(FakeAgent { arch: arch.clone(), log: Mutex::new(Vec::new()) });
+    queue.start(plan.clone(), agent.clone()).await.unwrap();
+    for to in [Stage::ArchApproved, Stage::PlanApproved] {
+        for _ in 0..400 {
+            let s = queue.snapshot(&plan).await.unwrap();
+            if s.status == QueueStatus::WaitingForUser && s.awaiting_approval().count() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        approve(&arch, &plan, "sample::b", to);
+        approve(&arch, &plan, "sample::a", to);
+    }
+    wait_for(&queue, &plan, QueueStatus::Done).await;
+    let kinds: Vec<&str> = agent.log.lock().unwrap().iter().map(|t| t.kind.name()).collect();
+    assert!(kinds.contains(&"skeleton") && kinds.contains(&"implement"));
+    let stage = |s: &str| arch.plan(&plan).unwrap().component(&id(s)).unwrap().stage;
+    assert_eq!((stage("sample::a"), stage("sample::b")), (Stage::Implemented, Stage::Implemented));
+
+    // Break: a stops calling b. Detect: the change is re-verified and a drops back.
+    let lib = arch.root().join("src/lib.rs");
+    std::fs::write(&lib, std::fs::read_to_string(&lib).unwrap().replace("    b(input)\n", "    !input.is_empty()\n")).unwrap();
+    let refresh = arch.refresh(std::slice::from_ref(&lib)).unwrap();
+    let a = refresh.reverified.iter().find(|r| r.component == id("sample::a")).expect("a is re-verified");
+    assert!(a.report.findings.iter().any(|f| f.code == arch_graph::FindingCode::MissingCallSite), "{:?}", a.report);
+    assert_ne!(stage("sample::a"), Stage::Implemented, "broken code isn't implemented any more");
+    assert_eq!(stage("sample::b"), Stage::Implemented, "b is untouched");
+}
