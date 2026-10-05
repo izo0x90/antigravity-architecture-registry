@@ -66,12 +66,13 @@ pub(super) fn rules(plan: &Plan, graph: &Graph, tools: &ToolCatalog, report: &mu
             }
         }
     }
-    // A caller that states what a call may change is told about the rest.
+    // A caller that states what a call may change must expect everything the
+    // callee changes.
     for r in plan.relations.iter().filter(|r| r.kind == RelationKind::Calls) {
         let (Some(expects), Some(callee)) = (&r.expects, graph.component(&r.target)) else { continue };
         let expected: BTreeSet<&str> = expects.side_effects.iter().map(|e| e.target.as_str()).collect();
         for effect in callee.schemas.side_effects.iter().filter(|e| !expected.contains(e.target.as_str())) {
-            report.push(Finding::warning(
+            report.push(Finding::error(
                 FindingCode::UndeclaredSideEffect,
                 Target::Relation { id: r.id() },
                 format!("{} also changes '{}', which {} doesn't expect", r.target, effect.target, r.source),

@@ -15,7 +15,7 @@ mod store;
 mod tools;
 mod verify;
 
-pub use contract::{ContractSlice, HeldInvariant, Neighbor};
+pub use contract::{ContractSlice, EffectiveData, FlowNeighbor, HeldInvariant, Neighbor};
 pub use import::{ImportReport, ImportedComponent, Unmapped};
 pub use ops::PlanOp;
 pub use queue::{BriefContext, Outcome, Queue, QueueConfig, QueueSettings, job_for, render_brief};

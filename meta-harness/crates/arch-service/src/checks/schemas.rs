@@ -3,7 +3,7 @@
 //! code that exists, its real signature), and data flows port to port.
 
 use arch_graph::schema::compatibility;
-use arch_graph::{Component, Finding, FindingCode, Graph, Plan, Relation, RelationKind, Report, SchemaSet, Target};
+use arch_graph::{Component, ComponentId, Finding, FindingCode, Graph, Plan, Relation, RelationKind, Report, SchemaSet, Target};
 use arch_index::PackSet;
 use arch_index::typing::carries;
 use serde_json::Value;
@@ -16,17 +16,20 @@ pub(super) fn fit(plan: &Plan, graph: &Graph, set: &SchemaSet, packs: &PackSet, 
     // return what it promises to give.
     for planned in &plan.components {
         let Some(c) = graph.component(&planned.id) else { continue };
-        let interface = graph.interface_chain(&c.id).into_iter().filter_map(|i| graph.component(&i)).find(|i| i.schemas.inputs.is_some() || i.schemas.outputs.is_some());
-        let Some(interface) = interface else { continue };
-        let mut problems = Vec::new();
-        if let (Some(promised), Some(accepted)) = (resolve(&interface.schemas.inputs), resolve(&c.schemas.inputs)) {
-            problems.extend(compatibility(&promised, &accepted).into_iter().map(|p| format!("inputs: {p}")));
-        }
-        if let (Some(given), Some(promised)) = (resolve(&c.schemas.outputs), resolve(&interface.schemas.outputs)) {
-            problems.extend(compatibility(&given, &promised).into_iter().map(|p| format!("outputs: {p}")));
-        }
-        for p in problems {
-            report.push(Finding::error(FindingCode::SchemaMismatch, component(&c.id), format!("doesn't fit {} it implements: {p}", interface.id)));
+        // Every interface it implements (directly or through others) that
+        // states a shape must be satisfied, not just the nearest.
+        let interfaces = graph.interface_chain(&c.id).into_iter().filter_map(|i| graph.component(&i)).filter(|i| i.schemas.inputs.is_some() || i.schemas.outputs.is_some());
+        for interface in interfaces {
+            let mut problems = Vec::new();
+            if let (Some(promised), Some(accepted)) = (resolve(&interface.schemas.inputs), resolve(&c.schemas.inputs)) {
+                problems.extend(compatibility(&promised, &accepted).into_iter().map(|p| format!("inputs: {p}")));
+            }
+            if let (Some(given), Some(promised)) = (resolve(&c.schemas.outputs), resolve(&interface.schemas.outputs)) {
+                problems.extend(compatibility(&given, &promised).into_iter().map(|p| format!("outputs: {p}")));
+            }
+            for p in problems {
+                report.push(Finding::error(FindingCode::SchemaMismatch, component(&c.id), format!("doesn't fit {} it implements: {p}", interface.id)));
+            }
         }
     }
     for r in &plan.relations {
@@ -38,13 +41,22 @@ pub(super) fn fit(plan: &Plan, graph: &Graph, set: &SchemaSet, packs: &PackSet, 
     }
 }
 
+/// A shape and the component that states it.
+pub(crate) type Stated = Option<(Value, ComponentId)>;
+
 /// A component's inputs and outputs, falling back to the nearest interface
-/// it implements that states them.
-fn effective(graph: &Graph, c: &Component) -> (Option<Value>, Option<Value>) {
+/// it implements that states them, with who states each.
+pub(crate) fn effective_with_source(graph: &Graph, c: &Component) -> (Stated, Stated) {
     let chain: Vec<&Component> = graph.interface_chain(&c.id).iter().filter_map(|i| graph.component(i)).collect();
-    let inputs = c.schemas.inputs.clone().or_else(|| chain.iter().find_map(|i| i.schemas.inputs.clone()));
-    let outputs = c.schemas.outputs.clone().or_else(|| chain.iter().find_map(|i| i.schemas.outputs.clone()));
-    (inputs, outputs)
+    let pick = |own: &Option<Value>, of: fn(&Component) -> &Option<Value>| -> Stated {
+        own.clone().map(|v| (v, c.id.clone())).or_else(|| chain.iter().find_map(|i| of(i).clone().map(|v| (v, i.id.clone()))))
+    };
+    (pick(&c.schemas.inputs, |x| &x.schemas.inputs), pick(&c.schemas.outputs, |x| &x.schemas.outputs))
+}
+
+fn effective(graph: &Graph, c: &Component) -> (Option<Value>, Option<Value>) {
+    let (inputs, outputs) = effective_with_source(graph, c);
+    (inputs.map(|(v, _)| v), outputs.map(|(v, _)| v))
 }
 
 fn requires_inputs(schema: &Value) -> bool {
@@ -74,7 +86,13 @@ fn call(r: &Relation, graph: &Graph, resolve: &dyn Fn(&Option<Value>) -> Option<
             mismatch(FindingCode::SchemaMismatch, format!("outputs: {p}"));
         }
     }
-    for p in against_signature(callee, resolve(&expects.inputs).as_ref(), resolve(&expects.outputs).as_ref(), packs) {
+    // Stating expectations without inputs means passing nothing: check that
+    // against the real signature too.
+    let passed = match &expects.inputs {
+        Some(_) => resolve(&expects.inputs),
+        None => Some(serde_json::json!({"type": "object", "properties": {}})),
+    };
+    for p in against_signature(callee, passed.as_ref(), resolve(&expects.outputs).as_ref(), packs) {
         mismatch(FindingCode::CallMismatch, p);
     }
 }

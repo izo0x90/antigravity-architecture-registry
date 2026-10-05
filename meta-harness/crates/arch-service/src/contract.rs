@@ -3,7 +3,10 @@
 
 use std::fmt::Write;
 
-use arch_graph::{CodeAnchor, Component, ComponentId, Graph, ImplementationSpec, Invariant, Plan, ProposedLocation, RelationKind, Schemas, Signature, Span, Stage, Status};
+use arch_graph::{CodeAnchor, Component, ComponentId, Graph, ImplementationSpec, Invariant, Plan, ProposedLocation, RelationKind, SchemaSet, Schemas, Signature, Span, Stage, Status, ToolRef};
+use serde_json::Value;
+
+use crate::checks::effective_with_source;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -26,6 +29,39 @@ pub struct Neighbor {
     /// For calls: what this call passes, gets back and expects changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expects: Option<Schemas>,
+}
+
+/// Data handed over along a planned or observed data flow.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FlowNeighbor {
+    #[serde(flatten)]
+    pub neighbor: Neighbor,
+    /// The source's output port and the target's input port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports: Option<(String, String)>,
+}
+
+/// The data shapes that hold for the component: its own, or inherited from
+/// what it implements, with every `$ref` replaced by the data type's shape.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EffectiveData {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<Value>,
+    /// Set when the inputs come from an interface rather than the component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs_from: Option<ComponentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outputs_from: Option<ComponentId>,
+}
+
+impl EffectiveData {
+    fn is_empty(&self) -> bool {
+        self == &EffectiveData::default()
+    }
 }
 
 /// An invariant that holds here, and the component that declares it.
@@ -54,8 +90,14 @@ pub struct ContractSlice {
     pub signature: Option<Signature>,
     #[serde(default, skip_serializing_if = "Schemas::is_empty")]
     pub schemas: Schemas,
+    /// The shapes that actually hold (inherited, refs resolved).
+    #[serde(default, skip_serializing_if = "EffectiveData::is_empty")]
+    pub data: EffectiveData,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec: Option<ImplementationSpec>,
+    /// Project tools it must pass (from its spec).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validation: Vec<ToolRef>,
     /// Every invariant that holds: its own, then inherited through what it
     /// implements (nearest first).
     #[serde(default)]
@@ -69,6 +111,12 @@ pub struct ContractSlice {
     pub implements: Vec<Neighbor>,
     /// Everything it implements, transitively, nearest first.
     pub interface_chain: Vec<Neighbor>,
+    /// Where its input data comes from (data flows into it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_in: Vec<FlowNeighbor>,
+    /// Where its output data goes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_out: Vec<FlowNeighbor>,
     /// Placeholder bodies still in its code.
     pub open_placeholders: Vec<Span>,
 }
@@ -88,10 +136,29 @@ fn neighbor(graph: &Graph, id: &ComponentId, note: &str) -> Option<Neighbor> {
     })
 }
 
-/// The slice for `planned` in `plan`; `graph` is the code merged with the plan.
-pub fn slice(plan: &Plan, planned: &Component, graph: &Graph) -> ContractSlice {
+/// The slice for `planned` in `plan`; `graph` is the code merged with the
+/// plan, `set` the named data types `$ref`s resolve against.
+pub fn slice(plan: &Plan, planned: &Component, graph: &Graph, set: &SchemaSet) -> ContractSlice {
     let id = &planned.id;
     let merged = graph.component(id).unwrap_or(planned);
+    // A ref that doesn't resolve stays as written (plan checks report it).
+    let resolve = |v: Value| set.resolve(&v).unwrap_or(v);
+    let (inputs, outputs) = effective_with_source(graph, merged);
+    let inherited = |from: &ComponentId| (from != id).then(|| from.clone());
+    let data = EffectiveData {
+        properties: merged.schemas.properties.clone().map(resolve),
+        inputs_from: inputs.as_ref().and_then(|(_, from)| inherited(from)),
+        inputs: inputs.map(|(v, _)| resolve(v)),
+        outputs_from: outputs.as_ref().and_then(|(_, from)| inherited(from)),
+        outputs: outputs.map(|(v, _)| resolve(v)),
+    };
+    let flows = |incoming: bool| -> Vec<FlowNeighbor> {
+        let relations: Vec<_> = if incoming { graph.incoming(id, Some(RelationKind::DataFlow)).collect() } else { graph.outgoing(id, Some(RelationKind::DataFlow)).collect() };
+        relations
+            .into_iter()
+            .filter_map(|r| neighbor(graph, if incoming { &r.source } else { &r.target }, &r.note).map(|n| FlowNeighbor { neighbor: n, ports: r.ports.clone() }))
+            .collect()
+    };
     let mut calls: Vec<(u32, Neighbor)> = graph
         .outgoing(id, Some(RelationKind::Calls))
         .filter_map(|r| neighbor(graph, &r.target, &r.note).map(|n| (r.order.unwrap_or(u32::MAX), Neighbor { expects: r.expects.clone(), ..n })))
@@ -109,6 +176,8 @@ pub fn slice(plan: &Plan, planned: &Component, graph: &Graph) -> ContractSlice {
         anchor: merged.anchor.clone(),
         signature: merged.signature.clone(),
         schemas: merged.schemas.clone(),
+        data,
+        validation: merged.spec.as_ref().map(|s| s.validation.clone()).unwrap_or_default(),
         spec: merged.spec.clone(),
         invariants: graph.invariants(id).into_iter().map(|(from, invariant)| HeldInvariant { from, invariant }).collect(),
         container: graph.parent(id).and_then(|p| neighbor(graph, p, "")),
@@ -116,6 +185,8 @@ pub fn slice(plan: &Plan, planned: &Component, graph: &Graph) -> ContractSlice {
         called_by: graph.incoming(id, Some(RelationKind::Calls)).filter_map(|r| neighbor(graph, &r.source, &r.note)).collect(),
         implements: graph.outgoing(id, Some(RelationKind::Implements)).filter_map(|r| neighbor(graph, &r.target, "")).collect(),
         interface_chain: graph.interface_chain(id).iter().filter_map(|i| neighbor(graph, i, "")).collect(),
+        data_in: flows(true),
+        data_out: flows(false),
         open_placeholders: merged.placeholders.clone(),
     }
 }
@@ -136,18 +207,9 @@ fn sig(s: &Option<Signature>) -> String {
     }
 }
 
-fn data(out: &mut String, title: &str, schemas: &Schemas) {
-    if schemas.is_empty() {
-        return;
-    }
-    let _ = writeln!(out, "\n## {title}");
-    for (what, schema) in [("Properties", &schemas.properties), ("Inputs", &schemas.inputs), ("Outputs", &schemas.outputs)] {
-        if let Some(schema) = schema {
-            let _ = writeln!(out, "- {what}: `{schema}`");
-        }
-    }
-    for e in &schemas.side_effects {
-        let _ = writeln!(out, "- Changes `{}`{}", e.target, if e.description.is_empty() { String::new() } else { format!(": {}", e.description) });
+fn effects(out: &mut String, prefix: &str, list: &[arch_graph::SideEffect]) {
+    for e in list {
+        let _ = writeln!(out, "{prefix}`{}`{}", e.target, if e.description.is_empty() { String::new() } else { format!(": {}", e.description) });
     }
 }
 
@@ -159,6 +221,25 @@ fn where_(n: &Neighbor) -> String {
 }
 
 impl ContractSlice {
+    /// The shapes that hold (inherited and resolved) and what it changes.
+    fn render_data(&self, out: &mut String) {
+        if self.data.is_empty() && self.schemas.side_effects.is_empty() {
+            return;
+        }
+        out.push_str("\n## Data\n");
+        let from = |f: &Option<ComponentId>| f.as_ref().map(|c| format!(" (from {c})")).unwrap_or_default();
+        if let Some(p) = &self.data.properties {
+            let _ = writeln!(out, "- Properties: `{p}`");
+        }
+        if let Some(i) = &self.data.inputs {
+            let _ = writeln!(out, "- Inputs{}: `{i}`", from(&self.data.inputs_from));
+        }
+        if let Some(o) = &self.data.outputs {
+            let _ = writeln!(out, "- Outputs{}: `{o}`", from(&self.data.outputs_from));
+        }
+        effects(out, "- Changes ", &self.schemas.side_effects);
+    }
+
     pub fn to_markdown(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "# {} `{}` ({}, {:?}/{:?})", self.type_name, self.name, self.id, self.status, self.stage);
@@ -176,7 +257,7 @@ impl ContractSlice {
             (None, None) => out.push_str("Not placed yet.\n"),
         }
         let _ = writeln!(out, "\n## Signature\n`{}`", sig(&self.signature));
-        data(&mut out, "Data", &self.schemas);
+        self.render_data(&mut out);
         if let Some(spec) = &self.spec {
             if let Some(p) = &spec.pattern {
                 let _ = writeln!(out, "\n## Pattern\n{p}");
@@ -215,6 +296,7 @@ impl ContractSlice {
                             let _ = writeln!(out, "  - {what} `{schema}`");
                         }
                     }
+                    effects(out, "  - expects it to change ", &expects.side_effects);
                 }
             }
         };
@@ -223,6 +305,26 @@ impl ContractSlice {
         section(&mut out, "Implements", &self.implements);
         let inherited: Vec<Neighbor> = self.interface_chain.iter().filter(|n| !self.implements.iter().any(|d| d.id == n.id)).cloned().collect();
         section(&mut out, "Through those, also implements", &inherited);
+        let flows = |out: &mut String, title: &str, list: &[FlowNeighbor]| {
+            if list.is_empty() {
+                return;
+            }
+            let _ = writeln!(out, "\n## {title}");
+            for f in list {
+                let ports = f.ports.as_ref().map(|(a, b)| format!(" [{a} -> {b}]")).unwrap_or_default();
+                let _ = writeln!(out, "- `{}` {}{ports} — {}", f.neighbor.name, f.neighbor.type_name, where_(&f.neighbor));
+            }
+        };
+        flows(&mut out, "Data in", &self.data_in);
+        flows(&mut out, "Data out", &self.data_out);
+        if !self.validation.is_empty() {
+            out.push_str("\n## Validation tools\n");
+            for t in &self.validation {
+                let targets = if t.targets.is_empty() { String::new() } else { format!(" on {}", t.targets.join(", ")) };
+                let args = t.args.as_ref().map(|a| format!(" (args: {})", a.join(" "))).unwrap_or_default();
+                let _ = writeln!(out, "- `{}`{targets}{args}", t.tool);
+            }
+        }
         if let Some(c) = &self.container {
             let _ = writeln!(out, "\n## Inside\n`{}` ({}) — {}", c.name, c.type_name, where_(c));
         }

@@ -18,6 +18,7 @@ use arch_index::PackSet;
 use crate::ToolCatalog;
 
 pub use gates::{missing_details, stage_gate};
+pub(crate) use schemas::effective_with_source;
 
 /// What the checks need besides the plan and the graph.
 pub struct CheckCx<'a> {

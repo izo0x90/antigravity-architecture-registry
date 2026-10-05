@@ -34,7 +34,15 @@ pub(super) fn rules(plan: &Plan, graph: &Graph, types: &TypeSystem, report: &mut
         for field in disallowed {
             report.push(Finding::error(FindingCode::DisallowedField, component(&c.id), format!("{} can't have {field}", a(&c.type_name))));
         }
-        if let Some(parent) = graph.parent(&c.id).and_then(|p| graph.component(p)) {
+        let containers: Vec<_> = graph.incoming(&c.id, Some(RelationKind::Contains)).map(|r| r.source.to_string()).collect();
+        if containers.len() > 1 {
+            report.push(Finding::error(
+                FindingCode::DisallowedParent,
+                component(&c.id),
+                format!("sits in more than one container ({}); a component has one", containers.join(", ")),
+            ));
+        }
+        for parent in graph.incoming(&c.id, Some(RelationKind::Contains)).filter_map(|r| graph.component(&r.source)) {
             let fits = types.resolve(&parent.type_name).is_ok_and(|p| ty.allowed_parents.iter().any(|allowed| p.is_a(allowed)));
             if !fits {
                 let allowed = if ty.allowed_parents.is_empty() { "nothing (top level only)".to_owned() } else { ty.allowed_parents.join(", ") };
