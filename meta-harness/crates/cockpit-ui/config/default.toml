@@ -122,6 +122,19 @@ e = "Code links"
 "graph.fit" = { leader = "g z", keys = ["z z"] }
 "graph.close_inspector" = { leader = "g x", keys = ["x", "Escape"] }
 "graph.refresh" = { leader = "g ." }
+# Search the view (/ then type, Enter), next/previous match, marks (m then a
+# letter sets one, ' then the letter jumps back), first/last node. A count
+# before a key repeats it (3j, 2gc): in the graph, digits are counts, so
+# switch slots with Tab or the leader there.
+"graph.search" = { leader = "g /", keys = ["/"] }
+"graph.search_next" = { keys = ["n"] }
+"graph.search_prev" = { keys = ["N"] }
+"graph.mark_set" = { keys = ["m"] }
+"graph.mark_jump" = { keys = ["'"] }
+"graph.first" = { keys = ["g g"] }
+"graph.last" = { keys = ["G"] }
+"graph.legend" = { leader = "g ?", keys = ["?"] }
+"graph.agent_return" = { leader = "g a", keys = ["g a"] }
 
 # Spec view (when focused).
 "spec.next_section" = { keys = ["] ]", "J"] }
@@ -219,3 +232,35 @@ selected_outline = "focus"
 selected_width = 2.5
 fill = "card"
 selected_fill = "card_selected"
+# A stripe on the card's left edge by lifecycle stage.
+stages = { declared = "faint", arch_approved = "info", plan_approved = "accent", skeleton = "warn", implemented = "ok" }
+# Ring around the node the agent pointed at.
+agent = "special"
+
+# How the graph behaves.
+[graph]
+# Long-press a node: these actions (the ones that apply) as chips.
+context = ["graph.focus", "graph.open_spec", "graph.open_code", "graph.callees", "graph.callers", "graph.parent", "graph.children", "graph.implements", "graph.flows_to"]
+
+[graph.touch]
+# Points a finger may wander and still tap or long-press.
+tap_slop = 12.0
+double_tap_ms = 320.0
+long_press_ms = 550.0
+# A swipe (history back/forward) is a quick horizontal flick at least this long.
+swipe_min = 90.0
+swipe_max_ms = 450.0
+
+# On-screen chips: "auto" (narrow screens, or after a touch), "always" or "never".
+[graph.chips]
+show = "auto"
+narrow_below = 700.0
+size = 40.0
+actions = ["graph.back", "graph.forward", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.next_view", "graph.hint_focus", "graph.legend"]
+
+# Semantic zoom: card detail by zoom level. Below `mid`: the name; from `mid`:
+# type, stage and location; from `near`: signature, alignment, placeholders
+# and review points.
+[graph.detail]
+mid = 0.45
+near = 0.9

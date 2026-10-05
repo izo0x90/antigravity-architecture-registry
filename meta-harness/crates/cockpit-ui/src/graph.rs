@@ -1,7 +1,9 @@
 //! The architecture graph: server views drawn with pan and zoom, a navigation
-//! history (view, plan, focus, depth), vim-style commands, hint targeting, and
-//! a compact inspector. Everything shown comes from the server's views; the
-//! graph refreshes itself when the architecture changes.
+//! history (view, plan, focus, depth and the node jumped to), vim-style
+//! commands with counts, search, marks and hint targeting, touch gestures and
+//! on-screen chips, a legend, semantic zoom and a compact inspector.
+//! Everything shown comes from the server's views; the graph refreshes itself
+//! when the architecture changes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -12,10 +14,12 @@ use egui::{Align2, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKin
 
 use crate::actions::{Action, ActionProvider, Choice, Param, RunCx, ToolbarStyle, ToolbarUse, toolbar_control};
 use crate::feedback::FeedbackInspectorState;
+use crate::graph_config::{ChipMode, GraphUi};
+use crate::graph_style::{Swatch, alignment_label, provenance_of, style};
 use crate::keymap::InputMode;
 use crate::net::{NetClient, NetResult};
-use crate::graph_style::{provenance_of, style};
 use crate::theme::colors;
+use crate::touch::{Gesture, Gestures, Swipe};
 
 /// Where the graph is looking: which view, laid over which plan, rooted where,
 /// how deep. Every change is a step in the history.
@@ -26,6 +30,16 @@ pub struct Nav {
     pub roots: Vec<ComponentId>,
     /// None means the view's own depth.
     pub depth: Option<u32>,
+    /// The node this step is at (where a jump landed, or what was selected
+    /// when the next step was taken), so back returns to it.
+    pub cursor: Option<ComponentId>,
+}
+
+impl Nav {
+    /// Same view of the graph (a fetch would return the same thing).
+    pub fn same_view(&self, other: &Nav) -> bool {
+        self.view == other.view && self.plan == other.plan && self.roots == other.roots && self.depth == other.depth
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,6 +53,10 @@ pub enum NavChange {
     Back,
     Forward,
     Request(Box<ViewRequest>),
+    /// Go to a node in the same view (search, marks, first/last).
+    Jump(ComponentId),
+    /// Return to a recorded place (a mark, or where the agent took over).
+    Restore(Box<Nav>),
 }
 
 /// The navigation history (a jump list): one reducer for keys, touch,
@@ -53,7 +71,12 @@ const HISTORY: usize = 100;
 
 impl Navigator {
     pub fn new(view: &str) -> Self {
-        Self { history: vec![Nav { view: view.to_owned(), plan: None, roots: Vec::new(), depth: None }], cursor: 0 }
+        Self { history: vec![Nav { view: view.to_owned(), plan: None, roots: Vec::new(), depth: None, cursor: None }], cursor: 0 }
+    }
+
+    /// Records the node the current step is at (before leaving it).
+    pub fn remember(&mut self, at: Option<ComponentId>) {
+        self.history[self.cursor].cursor = at;
     }
 
     pub fn current(&self) -> &Nav {
@@ -88,7 +111,10 @@ impl Navigator {
             }
             NavChange::View(view) => next.view = view,
             NavChange::Plan(plan) => next.plan = plan,
-            NavChange::Focus(id) => next.roots = vec![id],
+            NavChange::Focus(id) => {
+                next.roots = vec![id.clone()];
+                next.cursor = Some(id);
+            }
             NavChange::Unfocus => next.roots.clear(),
             NavChange::Depth { delta, base } => {
                 let current = next.depth.unwrap_or(base) as i32;
@@ -108,7 +134,12 @@ impl Navigator {
                 if request.depth.is_some() {
                     next.depth = request.depth;
                 }
+                if request.focus.is_some() {
+                    next.cursor = request.focus;
+                }
             }
+            NavChange::Jump(id) => next.cursor = Some(id),
+            NavChange::Restore(nav) => next = *nav,
         }
         if &next == self.current() {
             return false;
@@ -170,6 +201,52 @@ pub fn hint_labels(n: usize, alphabet: &[char]) -> Vec<String> {
         .collect()
 }
 
+/// The agent moved the view: what it showed, and where the user was.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentMove {
+    pub what: String,
+    pub focus: Option<ComponentId>,
+    pub return_to: Nav,
+}
+
+/// What typed keys mean while the graph captures the keyboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Capture {
+    Search,
+    MarkSet,
+    MarkJump,
+}
+
+/// A search being typed: the query, and the selection to go back to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Search {
+    pub query: String,
+    before: Option<ComponentId>,
+}
+
+/// How much a node card shows (semantic zoom).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Detail {
+    Far,
+    Mid,
+    Near,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineRole {
+    Name,
+    Meta,
+    Signature,
+    Location,
+    Badges,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CardLine {
+    pub role: LineRole,
+    pub text: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Camera {
     pan: Vec2,
@@ -225,10 +302,25 @@ pub struct GraphState {
     pub hint: Option<Hint>,
     pub drawer_open: bool,
     /// The agent moved the view (shown until the user navigates).
-    pub agent_moved: bool,
+    pub agent: Option<AgentMove>,
     pub requests: GraphRequests,
     canvas: Rect,
     inbox: Arc<Mutex<Vec<Reply>>>,
+    /// Behavior settings (touch, chips, semantic zoom), from the UI config.
+    pub ui: GraphUi,
+    gestures: Gestures,
+    /// A finger has touched the graph (chips show from then on in auto mode).
+    touch_seen: bool,
+    /// Long-pressed node and where: its actions show as chips there.
+    pub context: Option<(ComponentId, Pos2)>,
+    /// On-screen chips last drawn: action id and where.
+    pub(crate) chip_rects: Vec<(String, Rect)>,
+    pub legend_open: bool,
+    capture: Option<Capture>,
+    pub search: Option<Search>,
+    last_query: String,
+    /// Marks by letter: a place in the history to jump back to.
+    bookmarks: BTreeMap<char, Nav>,
 }
 
 impl Default for GraphState {
@@ -251,10 +343,20 @@ impl Default for GraphState {
             fit: true,
             hint: None,
             drawer_open: true,
-            agent_moved: false,
+            agent: None,
             requests: GraphRequests::default(),
             canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
             inbox: Arc::default(),
+            ui: GraphUi::default(),
+            gestures: Gestures::default(),
+            touch_seen: false,
+            context: None,
+            chip_rects: Vec::new(),
+            legend_open: false,
+            capture: None,
+            search: None,
+            last_query: String::new(),
+            bookmarks: BTreeMap::new(),
         }
     }
 }
@@ -272,15 +374,39 @@ impl GraphState {
         self.selection.as_ref().and_then(|id| self.component(id))
     }
 
-    /// Navigates; the view is fetched again when it changed.
+    /// Navigates through the history reducer: the view is fetched again when
+    /// it changed, and the selection follows the step's node.
     pub fn navigate(&mut self, change: NavChange) {
         let user = !matches!(change, NavChange::Request(_));
+        let before = self.nav.current().clone();
+        self.nav.remember(self.selection.clone());
         if self.nav.apply(change) {
-            self.stale = true;
-            self.fit = true;
+            let now = self.nav.current().clone();
+            let refetch = !now.same_view(&before);
+            if refetch {
+                self.stale = true;
+                self.fit = true;
+            }
+            if let Some(at) = now.cursor {
+                if !refetch && self.component(&at).is_some() {
+                    self.select(Some(at.clone()));
+                    self.bring_into_view(&at);
+                } else {
+                    self.pending_select = Some(at);
+                }
+            }
         }
         if user {
-            self.agent_moved = false;
+            self.agent = None;
+        }
+    }
+
+    /// Pans so `id` is on screen (centered) when it isn't.
+    fn bring_into_view(&mut self, id: &ComponentId) {
+        let Some(r) = self.result.as_ref().and_then(|r| r.layout.rects.get(id)).copied() else { return };
+        let rect = self.to_screen(&r);
+        if !self.canvas.contains_rect(rect) {
+            self.camera.pan += self.canvas.center() - rect.center();
         }
     }
 
@@ -314,7 +440,11 @@ impl GraphState {
             ArchEvent::QueueUpdated { .. } => {}
             ArchEvent::ViewRequested { request, by } => {
                 if *by == Requester::Agent {
-                    self.agent_moved = true;
+                    let mut return_to = self.agent.as_ref().map(|a| a.return_to.clone()).unwrap_or_else(|| self.nav.current().clone());
+                    if self.agent.is_none() {
+                        return_to.cursor = self.selection.clone();
+                    }
+                    self.agent = Some(AgentMove { what: self.describe(request), focus: request.focus.clone(), return_to });
                 }
                 self.pending_select = request.focus.clone();
                 self.navigate(NavChange::Request(request.clone()));
@@ -325,6 +455,22 @@ impl GraphState {
                 }
             }
         }
+    }
+
+    /// What a view request shows, in words.
+    fn describe(&self, request: &ViewRequest) -> String {
+        let name = |id: &ComponentId| self.component(id).map_or_else(|| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned(), |c| c.name.clone());
+        let mut parts = vec![format!("{} view", request.view.as_deref().unwrap_or(&self.nav.current().view))];
+        if let Some(plan) = &request.plan {
+            parts.push(format!("plan {plan}"));
+        }
+        if !request.roots.is_empty() {
+            parts.push(format!("from {}", request.roots.iter().map(name).collect::<Vec<_>>().join(", ")));
+        }
+        if let Some(focus) = &request.focus {
+            parts.push(format!("at {}", name(focus)));
+        }
+        parts.join(" · ")
     }
 
     /// Applies a fetched view, keeping selection and camera when possible.
@@ -528,6 +674,174 @@ impl GraphState {
         }
     }
 
+    // ---- search, marks, first/last ----
+
+    /// Nodes in the view whose name or symbol (the id without its language)
+    /// contains `query` (any case), in view order.
+    pub fn matches(&self, query: &str) -> Vec<ComponentId> {
+        let (Some(result), false) = (&self.result, query.is_empty()) else { return Vec::new() };
+        let q = query.to_lowercase();
+        result
+            .view
+            .nodes
+            .iter()
+            .filter(|n| {
+                let symbol = n.id.as_str().split_once(':').map_or(n.id.as_str(), |(_, symbol)| symbol);
+                result.components.get(&n.id).is_some_and(|c| c.name.to_lowercase().contains(&q)) || symbol.to_lowercase().contains(&q)
+            })
+            .map(|n| n.id.clone())
+            .collect()
+    }
+
+    /// Opens the search prompt (the keyboard goes to it).
+    pub fn start_search(&mut self) {
+        self.capture = Some(Capture::Search);
+        self.search = Some(Search { query: String::new(), before: self.selection.clone() });
+    }
+
+    /// Typed keys for the search prompt: Enter jumps to the match shown,
+    /// Backspace deletes, Escape gives up. Returns whether it's still open.
+    fn search_input(&mut self, typed: &[char], back: bool) -> bool {
+        let Some(mut search) = self.search.take() else { return false };
+        if back {
+            self.selection = search.before;
+            self.capture = None;
+            return false;
+        }
+        for c in typed {
+            match c {
+                '\n' | '\r' => {
+                    let target = self.selection.clone();
+                    self.selection = search.before.clone();
+                    self.last_query = search.query;
+                    self.capture = None;
+                    if let Some(target) = target.filter(|t| Some(t) != search.before.as_ref()) {
+                        self.navigate(NavChange::Jump(target));
+                    }
+                    return false;
+                }
+                '\u{8}' => {
+                    search.query.pop();
+                }
+                c if !c.is_control() => search.query.push(*c),
+                _ => {}
+            }
+        }
+        // Incremental: show the first match while typing.
+        match self.matches(&search.query).into_iter().next() {
+            Some(first) => {
+                self.selection = Some(first.clone());
+                self.bring_into_view(&first);
+            }
+            None => self.selection = search.before.clone(),
+        }
+        self.search = Some(search);
+        true
+    }
+
+    /// Jumps to the next (or previous) match of the last search.
+    pub fn search_step(&mut self, forward: bool) {
+        let found = self.matches(&self.last_query);
+        if found.is_empty() {
+            return;
+        }
+        let n = found.len();
+        let next = match self.selection.as_ref().and_then(|s| found.iter().position(|f| f == s)) {
+            Some(i) if forward => (i + 1) % n,
+            Some(i) => (i + n - 1) % n,
+            None if forward => 0,
+            None => n - 1,
+        };
+        self.navigate(NavChange::Jump(found[next].clone()));
+    }
+
+    /// Where the selection is among the last search's matches: (index, count).
+    pub fn search_position(&self) -> Option<(usize, usize)> {
+        let found = self.matches(&self.last_query);
+        let at = self.selection.as_ref().and_then(|s| found.iter().position(|f| f == s))?;
+        Some((at + 1, found.len()))
+    }
+
+    /// Records the current place under `letter`.
+    pub fn set_mark(&mut self, letter: char) {
+        let mut here = self.nav.current().clone();
+        here.cursor = self.selection.clone();
+        self.bookmarks.insert(letter, here);
+    }
+
+    /// Goes back to the place marked `letter`, if any.
+    pub fn jump_to_mark(&mut self, letter: char) {
+        if let Some(place) = self.bookmarks.get(&letter).cloned() {
+            self.navigate(NavChange::Restore(Box::new(place)));
+        }
+    }
+
+    /// The first (or last) node in view order.
+    pub fn jump_to_end(&mut self, last: bool) {
+        let Some(result) = &self.result else { return };
+        let target = if last { result.view.nodes.last() } else { result.view.nodes.first() };
+        if let Some(target) = target.map(|n| n.id.clone()) {
+            self.navigate(NavChange::Jump(target));
+        }
+    }
+
+    // ---- semantic zoom ----
+
+    /// How much node cards show at the current zoom.
+    pub fn detail(&self) -> Detail {
+        let z = self.camera.zoom;
+        if z >= self.ui.detail.near {
+            Detail::Near
+        } else if z >= self.ui.detail.mid {
+            Detail::Mid
+        } else {
+            Detail::Far
+        }
+    }
+
+    /// The lines a node card shows at `detail`.
+    pub fn card_lines(&self, c: &Component, alignment: Alignment, detail: Detail) -> Vec<CardLine> {
+        let line = |role, text: String| CardLine { role, text };
+        let mut out = vec![line(LineRole::Name, c.name.clone())];
+        if detail == Detail::Far {
+            return out;
+        }
+        let location = match (&c.anchor, &c.proposed) {
+            (Some(a), _) => format!("{}:{}", a.file, a.span.start_line),
+            (None, Some(p)) => format!("→ {}", p.file),
+            (None, None) => "unplaced".to_owned(),
+        };
+        if detail == Detail::Mid {
+            let placeholders = if c.placeholders.is_empty() { String::new() } else { format!(" · {} placeholders", c.placeholders.len()) };
+            out.push(line(LineRole::Meta, format!("{} · {:?}{placeholders}", c.type_name, c.stage)));
+            out.push(line(LineRole::Location, location));
+            return out;
+        }
+        out.push(line(LineRole::Meta, format!("{} · {:?} · {}", c.type_name, c.stage, alignment_label(alignment))));
+        if let Some(sig) = &c.signature {
+            let params: Vec<String> = sig.params.iter().map(|p| p.ty.as_ref().map_or_else(|| p.name.clone(), |t| format!("{}: {t}", p.name))).collect();
+            let returns = sig.returns.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
+            out.push(line(LineRole::Signature, format!("({}){returns}", params.join(", "))));
+        }
+        out.push(line(LineRole::Location, location));
+        let mut badges = Vec::new();
+        if !c.placeholders.is_empty() {
+            badges.push(format!("{} placeholders", c.placeholders.len()));
+        }
+        if let Some(mark) = self.marks.get(&c.id) {
+            if mark.open > 0 {
+                badges.push(format!("{} open review points", mark.open));
+            }
+            if mark.changed {
+                badges.push("changed since review".to_owned());
+            }
+        }
+        if !badges.is_empty() {
+            out.push(line(LineRole::Badges, badges.join(" · ")));
+        }
+        out
+    }
+
     fn request_code(&mut self) {
         if let Some(c) = self.selected() {
             self.requests.open_code = match (&c.anchor, &c.proposed) {
@@ -568,7 +882,11 @@ impl GraphState {
         self.tick(cx.net, cx.ctx);
         self.render_toolbar(ui, cx);
         let area = ui.available_rect_before_wrap();
-        let drawer_w = if self.drawer_open && self.selected().is_some() { (area.width() * 0.38).clamp(220.0, 340.0) } else { 0.0 };
+        let narrow = area.width() < self.ui.chips.narrow_below;
+        let has_drawer = self.drawer_open && self.selected().is_some();
+        // Wide: the inspector sits beside the canvas. Narrow: it's a sheet
+        // over the bottom of the canvas.
+        let drawer_w = if has_drawer && !narrow { (area.width() * 0.38).clamp(220.0, 340.0) } else { 0.0 };
         let canvas = Rect::from_min_max(area.min, Pos2::new(area.max.x - drawer_w, area.max.y));
         self.canvas = canvas;
         feedback.register_inspectable(ui, &format!("slot_{}:graph:canvas", slot_idx + 1), canvas);
@@ -580,20 +898,24 @@ impl GraphState {
             self.fit = false;
             self.fit_view();
         }
-        // Pan (drag, or hold the leader key) and zoom (wheel, pinch).
-        if response.dragged() {
-            self.camera.pan += response.drag_delta();
-        }
-        if pan_held && response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-        }
-        if response.hovered() {
-            let (scroll, pinch, pointer) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta(), i.pointer.hover_pos()));
-            let around = pointer.unwrap_or(canvas.center());
-            if pinch != 1.0 {
-                self.zoom_by(pinch, around);
-            } else if scroll != 0.0 {
-                self.zoom_by((1.0 + scroll * 0.0015).clamp(0.8, 1.25), around);
+        // Fingers first: while touching, pointer emulation is ignored.
+        let touched = self.handle_touch(ui, cx);
+        if !touched {
+            // Pan (drag, or hold the leader key) and zoom (wheel, pinch).
+            if response.dragged() {
+                self.camera.pan += response.drag_delta();
+            }
+            if pan_held && response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            }
+            if response.hovered() {
+                let (scroll, pinch, pointer) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta(), i.pointer.hover_pos()));
+                let around = pointer.unwrap_or(canvas.center());
+                if pinch != 1.0 {
+                    self.zoom_by(pinch, around);
+                } else if scroll != 0.0 {
+                    self.zoom_by((1.0 + scroll * 0.0015).clamp(0.8, 1.25), around);
+                }
             }
         }
 
@@ -622,7 +944,8 @@ impl GraphState {
         }
 
         // Click selects, double click focuses.
-        if (response.clicked() || response.double_clicked())
+        if !touched
+            && (response.clicked() || response.double_clicked())
             && let Some(pos) = response.interact_pointer_pos()
         {
             let hit = self.hit(pos);
@@ -633,12 +956,196 @@ impl GraphState {
             }
             self.select(hit);
         }
-        if drawer_w > 0.0 {
-            let drawer = Rect::from_min_max(Pos2::new(canvas.max.x, area.min.y), area.max);
+        if self.legend_open {
+            self.draw_legend(&painter);
+        }
+        self.render_chips(ui, cx);
+        if has_drawer {
+            let drawer = if narrow { Rect::from_min_max(Pos2::new(canvas.min.x, canvas.max.y - canvas.height() * 0.42), canvas.max) } else { Rect::from_min_max(Pos2::new(canvas.max.x, area.min.y), area.max) };
             ui.scope_builder(egui::UiBuilder::new().max_rect(drawer.shrink(6.0)), |ui| self.render_drawer(ui));
         }
-        if *cx.input_mode == (InputMode::Capture { slot: cx.slot }) && self.hint.is_none() {
+        let capturing = self.hint.is_some() || self.capture.is_some();
+        if *cx.input_mode == (InputMode::Capture { slot: cx.slot }) && !capturing {
             *cx.input_mode = InputMode::Normal;
+        }
+    }
+
+    /// Feeds this frame's finger events to the gesture recognizer and acts on
+    /// what it sees. Returns whether fingers were involved this frame.
+    fn handle_touch(&mut self, ui: &egui::Ui, cx: &mut RunCx<'_>) -> bool {
+        let (events, time) = ui.input(|i| {
+            let touches: Vec<(u64, crate::touch::Phase, Pos2)> = i
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Touch { id, phase, pos, .. } => Some((id.0, crate::touch::Phase::from(*phase), *pos)),
+                    _ => None,
+                })
+                .collect();
+            (touches, i.time)
+        });
+        let cfg = self.ui.touch.clone();
+        let mut gestures = Vec::new();
+        for (id, phase, pos) in &events {
+            // Fingers that start on a chip belong to the chip.
+            if *phase == crate::touch::Phase::Start && self.chip_rects.iter().any(|(_, r)| r.contains(*pos)) {
+                continue;
+            }
+            if *phase == crate::touch::Phase::Start && !self.canvas.contains(*pos) {
+                continue;
+            }
+            gestures.extend(self.gestures.feed(*id, *phase, *pos, time, &cfg));
+        }
+        gestures.extend(self.gestures.tick(time, &cfg));
+        if let Some(due) = self.gestures.long_press_due(&cfg) {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((due - time).max(0.0)));
+        }
+        let involved = !events.is_empty() || self.gestures.active();
+        if involved {
+            self.touch_seen = true;
+        }
+        for gesture in gestures {
+            self.on_gesture(gesture, cx);
+        }
+        involved
+    }
+
+    /// What each gesture does to the graph.
+    pub fn on_gesture(&mut self, gesture: Gesture, cx: &mut RunCx<'_>) {
+        match gesture {
+            Gesture::Tap(pos) => {
+                self.context = None;
+                let hit = self.hit(pos);
+                match (&self.hint, hit) {
+                    // A hint on a phone: tapping a labelled node completes it.
+                    (Some(hint), Some(id)) => {
+                        let action = hint.action;
+                        self.hint = None;
+                        *cx.input_mode = InputMode::Normal;
+                        self.hint_hit(action, id);
+                    }
+                    (_, hit) => self.select(hit),
+                }
+            }
+            Gesture::DoubleTap(pos) => match self.hit(pos) {
+                Some(id) => {
+                    self.select(Some(id.clone()));
+                    self.navigate(NavChange::Focus(id));
+                }
+                None => self.fit_view(),
+            },
+            Gesture::LongPress(pos) => {
+                if let Some(id) = self.hit(pos) {
+                    self.select(Some(id.clone()));
+                    self.context = Some((id, pos));
+                }
+            }
+            Gesture::Pan(delta) => self.camera.pan += delta,
+            Gesture::Pinch { factor, center } => self.zoom_by(factor, center),
+            Gesture::Swipe(Swipe::Right) => self.navigate(NavChange::Back),
+            Gesture::Swipe(Swipe::Left) => self.navigate(NavChange::Forward),
+        }
+    }
+
+    /// Whether the on-screen chips show now.
+    fn chips_shown(&self) -> bool {
+        match self.ui.chips.show {
+            ChipMode::Always => true,
+            ChipMode::Never => false,
+            ChipMode::Auto => self.touch_seen || self.canvas.width() < self.ui.chips.narrow_below,
+        }
+    }
+
+    /// On-screen chips (view navigation) along the canvas top, and a
+    /// long-pressed node's actions next to it. Both run the same actions as
+    /// the keys.
+    fn render_chips(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
+        self.chip_rects.clear();
+        let actions = self.actions();
+        let size = self.ui.chips.size;
+        let chip = |ui: &mut egui::Ui, action: &Action| {
+            let text = action.glyph().map_or_else(|| action.label.clone(), str::to_owned);
+            let response = ui.add(egui::Button::new(RichText::new(text).size(size * 0.42)).min_size(Vec2::splat(size)).corner_radius(size / 2.0)).on_hover_text(&action.label);
+            (response.rect, response.clicked())
+        };
+        let mut run: Option<Action> = None;
+        if self.chips_shown() {
+            let bar = Rect::from_min_max(self.canvas.min + Vec2::splat(6.0), Pos2::new(self.canvas.max.x - 6.0, self.canvas.min.y + size * 2.0 + 12.0));
+            let wanted: Vec<&Action> = self.ui.chips.actions.iter().filter_map(|id| actions.iter().find(|a| &a.id == id)).collect();
+            ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for action in wanted {
+                        let (rect, clicked) = chip(ui, action);
+                        self.chip_rects.push((action.id.clone(), rect));
+                        if clicked {
+                            run = Some(action.clone());
+                        }
+                    }
+                });
+            });
+        }
+        if let Some((_, at)) = self.context.clone() {
+            let wanted: Vec<&Action> = self.ui.context.iter().filter_map(|id| actions.iter().find(|a| &a.id == id)).collect();
+            let width = (size + 8.0) * 3.0;
+            let origin = Pos2::new(at.x.min(self.canvas.max.x - width).max(self.canvas.min.x), (at.y + 12.0).min(self.canvas.max.y - size * 2.0));
+            let panel = Rect::from_min_size(origin, Vec2::new(width, (size + 8.0) * wanted.len().div_ceil(3) as f32));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(panel), |ui| {
+                egui::Frame::NONE.fill(colors().overlay).corner_radius(8).show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for action in wanted {
+                            let text = RichText::new(&action.label).size(12.0);
+                            let response = ui.add(egui::Button::new(text).min_size(Vec2::new(size, size)));
+                            self.chip_rects.push((action.id.clone(), response.rect));
+                            if response.clicked() {
+                                run = Some(action.clone());
+                            }
+                        }
+                    });
+                });
+            });
+        }
+        if let Some(action) = run {
+            self.context = None;
+            self.run(&action, None, cx);
+        }
+    }
+
+    /// The legend: what each color, line and outline means, from the style table.
+    fn draw_legend(&self, painter: &egui::Painter) {
+        let theme = colors();
+        let entries = style().legend(&theme);
+        let row = 18.0;
+        let sections: BTreeSet<&str> = entries.iter().map(|e| e.section).collect();
+        let height = (entries.len() + sections.len()) as f32 * row + 16.0;
+        let rect = Rect::from_min_size(Pos2::new(self.canvas.max.x - 260.0, self.canvas.min.y + 8.0), Vec2::new(250.0, height)).intersect(self.canvas);
+        painter.rect_filled(rect, 6.0, theme.overlay);
+        let mut y = rect.min.y + 8.0;
+        let mut section = "";
+        for entry in &entries {
+            if entry.section != section {
+                section = entry.section;
+                painter.text(Pos2::new(rect.min.x + 10.0, y), Align2::LEFT_TOP, section, FontId::proportional(11.0), theme.muted);
+                y += row;
+            }
+            let swatch = Rect::from_min_size(Pos2::new(rect.min.x + 12.0, y + 3.0), Vec2::new(28.0, 10.0));
+            match entry.swatch {
+                Swatch::Line(line) => {
+                    let points = [swatch.left_center(), swatch.right_center()];
+                    if line.dashed {
+                        painter.extend(Shape::dashed_line(&points, Stroke::new(line.width, line.color), 5.0, 3.0));
+                    } else {
+                        painter.line_segment(points, Stroke::new(line.width, line.color));
+                    }
+                }
+                Swatch::Outline(line) => {
+                    painter.rect_stroke(swatch, 3.0, Stroke::new(line.width, line.color), StrokeKind::Inside);
+                }
+                Swatch::Stripe(color) => {
+                    painter.rect_filled(Rect::from_min_size(swatch.min, Vec2::new(5.0, swatch.height())), 1.0, color);
+                }
+            }
+            painter.text(Pos2::new(swatch.max.x + 8.0, y), Align2::LEFT_TOP, &entry.label, FontId::proportional(11.0), theme.text);
+            y += row;
         }
     }
 
@@ -679,8 +1186,30 @@ impl GraphState {
             let depth = nav.depth.unwrap_or(self.base_depth());
             let shown = self.result.as_ref().map_or(0, |r| r.view.nodes.len());
             ui.label(RichText::new(format!("{} · from {focus} · depth {depth} · {shown} nodes", nav.plan.as_ref().map_or("code".to_owned(), |p| format!("plan {p}")))).size(11.0).color(colors().muted));
-            if self.agent_moved {
-                ui.label(RichText::new(format!("{} agent moved the view (Ctrl-o goes back)", egui_phosphor::regular::ROBOT)).size(11.0).color(colors().special));
+            if let Some(agent) = &self.agent {
+                ui.label(RichText::new(format!("{} the agent moved the view: {}", egui_phosphor::regular::ROBOT, agent.what)).size(11.0).color(colors().special));
+                if let Some(back) = actions.iter().find(|a| a.id == "graph.agent_return")
+                    && ui.small_button(format!("{} Return", egui_phosphor::regular::ARROW_U_UP_LEFT)).on_hover_text(&back.label).clicked()
+                {
+                    used = Some((back.clone(), ToolbarUse::Run(None)));
+                }
+            }
+            match (&self.search, self.capture) {
+                (Some(search), _) => {
+                    let found = self.matches(&search.query).len();
+                    ui.label(RichText::new(format!("/{}▏ {found} matches", search.query)).monospace().size(11.0).color(colors().key));
+                }
+                (None, Some(Capture::MarkSet)) => {
+                    ui.label(RichText::new("mark: press a letter").size(11.0).color(colors().key));
+                }
+                (None, Some(Capture::MarkJump)) => {
+                    ui.label(RichText::new("jump to mark: press its letter").size(11.0).color(colors().key));
+                }
+                _ => {
+                    if let Some((at, of)) = (!self.last_query.is_empty()).then(|| self.search_position()).flatten() {
+                        ui.label(RichText::new(format!("/{} {at}/{of}", self.last_query)).monospace().size(11.0).color(colors().muted));
+                    }
+                }
             }
         });
         ui.separator();
@@ -784,24 +1313,35 @@ impl GraphState {
         } else {
             painter.rect_stroke(rect, 6.0, stroke, StrokeKind::Inside);
         }
+        // The stage as a stripe on the left edge.
+        let stripe = (3.0 * z).clamp(2.0, 5.0);
+        painter.rect_filled(Rect::from_min_size(rect.min, Vec2::new(stripe, rect.height())), egui::CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, style.stage_color(&theme, c.stage));
+        if self.agent.as_ref().and_then(|a| a.focus.as_ref()) == Some(&c.id) {
+            painter.rect_stroke(rect.expand(4.0), 8.0, Stroke::new(2.0, style.agent_color(&theme)), StrokeKind::Outside);
+        }
         self.draw_marks(painter, rect, &c.id);
         // Too small to read: the card's color and outline carry it.
         if rect.height() < 9.0 {
             return;
         }
         let clip = painter.with_clip_rect(rect.shrink(2.0));
-        let size = (13.0 * z).clamp(6.0, 18.0).min(rect.height() * 0.45);
-        clip.text(rect.min + Vec2::new(10.0, 8.0) * z, Align2::LEFT_TOP, &c.name, FontId::proportional(size), colors().text_strong);
-        if z > 0.45 {
-            let small = (10.0 * z).clamp(7.0, 13.0);
-            let stage = format!("{} · {:?}{}", c.type_name, c.stage, if c.placeholders.is_empty() { String::new() } else { format!(" · {} placeholders", c.placeholders.len()) });
-            clip.text(rect.min + Vec2::new(10.0, 28.0) * z, Align2::LEFT_TOP, stage, FontId::proportional(small), border);
-            let at = match (&c.anchor, &c.proposed) {
-                (Some(a), _) => format!("{}:{}", a.file, a.span.start_line),
-                (None, Some(p)) => format!("→ {}", p.file),
-                (None, None) => "unplaced".to_owned(),
+        let detail = self.detail();
+        let lines = self.card_lines(c, alignment, detail);
+        // More lines at closer zoom: tighter spacing, smaller type.
+        let (step, small) = match detail {
+            Detail::Near => (11.0, (8.5 * z).clamp(7.0, 12.0)),
+            _ => (16.0, (10.0 * z).clamp(7.0, 13.0)),
+        };
+        let mut y = 8.0;
+        for line in lines {
+            let (font, color) = match line.role {
+                LineRole::Name => (FontId::proportional((13.0 * z).clamp(6.0, 18.0).min(rect.height() * 0.45)), colors().text_strong),
+                LineRole::Meta => (FontId::proportional(small), border),
+                LineRole::Signature | LineRole::Location => (FontId::monospace(small * 0.95), colors().muted),
+                LineRole::Badges => (FontId::proportional(small), colors().warn),
             };
-            clip.text(rect.min + Vec2::new(10.0, 44.0) * z, Align2::LEFT_TOP, at, FontId::monospace(small * 0.95), colors().muted);
+            clip.text(rect.min + Vec2::new(10.0, y) * z, Align2::LEFT_TOP, line.text, font, color);
+            y += if line.role == LineRole::Name { step + 4.0 } else { step };
         }
         if truncated {
             painter.text(rect.right_center() + Vec2::new(4.0, 0.0), Align2::LEFT_CENTER, "…", FontId::proportional(14.0 * z.max(0.6)), colors().muted);
@@ -933,6 +1473,13 @@ enum GraphCommand {
     Fit,
     CloseInspector,
     Refresh,
+    Search,
+    SearchStep { forward: bool },
+    MarkSet,
+    MarkJump,
+    End { last: bool },
+    Legend,
+    AgentReturn,
 }
 
 impl ActionProvider for GraphState {
@@ -945,7 +1492,7 @@ impl ActionProvider for GraphState {
             let current = &self.nav.current().view;
             let choices = catalog.views.iter().map(|(name, v)| Choice::new(name, name).detail(Some(v.description.clone())).current(name == current)).collect();
             out.push(f("graph.view", "Switch view", G::SetView).param(Param::Choice(choices)).toolbar(Control, "View", Some(egui_phosphor::regular::GRAPH)));
-            out.push(f("graph.next_view", "Next view", G::NextView));
+            out.push(f("graph.next_view", "Next view", G::NextView).icon(egui_phosphor::regular::SWAP));
         }
         let plan = self.nav.current().plan.clone();
         let mut plans = vec![Choice::new("", "code only").current(plan.is_none())];
@@ -959,14 +1506,25 @@ impl ActionProvider for GraphState {
             out.push(f("graph.unfocus", "Back to the view's entry points", G::Unfocus).toolbar(Button, "All", Some(egui_phosphor::regular::ARROWS_OUT)));
         }
         out.push(f("graph.fit", "Fit to screen", G::Fit).toolbar(Button, "", Some(egui_phosphor::regular::CORNERS_OUT)));
-        out.push(f("graph.zoom_in", "Zoom in", G::Zoom(1.2)));
-        out.push(f("graph.zoom_out", "Zoom out", G::Zoom(1.0 / 1.2)));
+        out.push(f("graph.zoom_in", "Zoom in", G::Zoom(1.2)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS));
+        out.push(f("graph.zoom_out", "Zoom out", G::Zoom(1.0 / 1.2)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS));
         out.push(f("graph.refresh", "Refresh the view", G::Refresh));
+        out.push(f("graph.legend", if self.legend_open { "Hide the legend" } else { "Show the legend" }, G::Legend).toolbar(Button, "", Some(egui_phosphor::regular::INFO)));
+        out.push(f("graph.search", "Search the view", G::Search).icon(egui_phosphor::regular::MAGNIFYING_GLASS));
+        out.push(f("graph.search_next", "Next match", G::SearchStep { forward: true }));
+        out.push(f("graph.search_prev", "Previous match", G::SearchStep { forward: false }));
+        out.push(f("graph.mark_set", "Set a mark here", G::MarkSet).icon(egui_phosphor::regular::BOOKMARK_SIMPLE));
+        out.push(f("graph.mark_jump", "Jump to a mark", G::MarkJump));
+        out.push(f("graph.first", "First node", G::End { last: false }));
+        out.push(f("graph.last", "Last node", G::End { last: true }));
+        if self.agent.is_some() {
+            out.push(f("graph.agent_return", "Return to where you were before the agent moved the view", G::AgentReturn));
+        }
         for (id, label, dir) in [("graph.left", "Select left", Dir::Left), ("graph.down", "Select below", Dir::Down), ("graph.up", "Select above", Dir::Up), ("graph.right", "Select right", Dir::Right)] {
             out.push(f(id, label, G::Move(dir)));
         }
         out.push(f("graph.hint", "Pick a node by hint", G::Hint(HintAction::Select)));
-        out.push(f("graph.hint_focus", "Focus a node by hint", G::Hint(HintAction::Focus)));
+        out.push(f("graph.hint_focus", "Focus a node by hint", G::Hint(HintAction::Focus)).icon(egui_phosphor::regular::CURSOR_CLICK));
         out.push(f("graph.hint_code", "Open a node's code by hint", G::Hint(HintAction::OpenCode)));
         out.push(f("graph.hint_spec", "Open a node's spec by hint", G::Hint(HintAction::OpenSpec)));
         if self.selection.is_some() {
@@ -1055,11 +1613,58 @@ impl ActionProvider for GraphState {
                 self.stale = true;
                 self.plans_stale = true;
             }
+            GraphCommand::Search => {
+                self.start_search();
+                *cx.input_mode = InputMode::Capture { slot: cx.slot };
+            }
+            GraphCommand::SearchStep { forward } => self.search_step(forward),
+            GraphCommand::MarkSet | GraphCommand::MarkJump => {
+                self.capture = Some(if command == GraphCommand::MarkSet { Capture::MarkSet } else { Capture::MarkJump });
+                *cx.input_mode = InputMode::Capture { slot: cx.slot };
+            }
+            GraphCommand::End { last } => self.jump_to_end(last),
+            GraphCommand::Legend => {
+                self.legend_open = match value.as_deref() {
+                    Some("true") => true,
+                    Some("false") => false,
+                    _ => !self.legend_open,
+                };
+            }
+            GraphCommand::AgentReturn => {
+                if let Some(agent) = self.agent.take() {
+                    self.navigate(NavChange::Restore(Box::new(agent.return_to)));
+                }
+            }
         }
     }
 
     fn on_capture(&mut self, typed: &[char], back: bool, _cx: &mut RunCx<'_>) -> bool {
-        self.hint_input(typed, back)
+        if self.hint.is_some() {
+            return self.hint_input(typed, back);
+        }
+        match self.capture {
+            Some(Capture::Search) => self.search_input(typed, back),
+            Some(mark @ (Capture::MarkSet | Capture::MarkJump)) => {
+                // Waits for a letter; anything else (or Escape) gives up.
+                if !back && typed.is_empty() {
+                    return true;
+                }
+                self.capture = None;
+                if let Some(letter) = typed.iter().copied().find(|c| c.is_alphanumeric()).filter(|_| !back) {
+                    if mark == Capture::MarkSet {
+                        self.set_mark(letter);
+                    } else {
+                        self.jump_to_mark(letter);
+                    }
+                }
+                false
+            }
+            None => false,
+        }
+    }
+
+    fn takes_counts(&self) -> bool {
+        true
     }
 }
 
@@ -1236,10 +1841,280 @@ pub(crate) mod tests {
         assert!(g.selection.is_none(), "selection dropped when the node is gone");
         g.stale = false;
         g.on_event(&ArchEvent::ViewRequested { request: Box::new(ViewRequest { view: Some("calls".into()), focus: Some(ComponentId::new("rust:a::save")), ..Default::default() }), by: Requester::Agent });
-        assert!(g.agent_moved && g.stale);
+        assert!(g.agent.is_some() && g.stale);
         g.set_result(sample_result());
         assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::save", "agent focus selected once shown");
         g.navigate(NavChange::Back);
-        assert!(!g.agent_moved, "the user took over");
+        assert!(g.agent.is_none(), "the user took over");
+    }
+
+    /// A graph showing the sample, set up from the default UI config.
+    fn configured() -> GraphState {
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        crate::graph_style::set(config.graph_style.clone());
+        let mut g = showing(sample_result());
+        g.ui = config.graph;
+        g
+    }
+
+    /// Draws one frame of the graph alone at `size`, at `time` seconds.
+    fn draw(g: &mut GraphState, ctx: &egui::Context, events: Vec<egui::Event>, time: f64, size: Vec2) -> (egui::FullOutput, InputMode) {
+        let net = NetClient::new("http://127.0.0.1:9");
+        let mut mode = InputMode::Normal;
+        let mut feedback = FeedbackInspectorState::default();
+        let out = ctx.run(egui::RawInput { events, time: Some(time), screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), ..Default::default() }, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                g.render(ui, &mut feedback, 0, false, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, hint_chars: "asdf" });
+            });
+        });
+        (out, mode)
+    }
+
+    fn texts(output: &egui::FullOutput) -> String {
+        fn collect(shape: &Shape, out: &mut String) {
+            match shape {
+                Shape::Text(t) => {
+                    out.push_str(t.galley.text());
+                    out.push('\n');
+                }
+                Shape::Vec(list) => list.iter().for_each(|s| collect(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = String::new();
+        output.shapes.iter().for_each(|c| collect(&c.shape, &mut out));
+        out
+    }
+
+    fn touch(id: u64, phase: egui::TouchPhase, pos: Pos2) -> egui::Event {
+        egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos, force: None }
+    }
+
+    fn click(pos: Pos2, pressed: bool) -> Vec<egui::Event> {
+        let button = egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        if pressed { vec![egui::Event::PointerMoved(pos), button] } else { vec![button] }
+    }
+
+    fn center_of(g: &GraphState, id: &str) -> Pos2 {
+        let r = g.result.as_ref().unwrap().layout.rects[&ComponentId::new(id)];
+        g.to_screen(&r).center()
+    }
+
+    fn chip(g: &GraphState, action: &str) -> Rect {
+        g.chip_rects.iter().find(|(id, _)| id == action).map(|(_, r)| *r).unwrap_or_else(|| panic!("chip {action} shown: {:?}", g.chip_rects))
+    }
+
+    // req: P9.6
+    #[test]
+    fn touch_gestures_and_chips_drive_the_graph_at_phone_size() {
+        use egui::TouchPhase::{End, Move, Start};
+        let ctx = egui::Context::default();
+        let phone = Vec2::new(390.0, 844.0);
+        let mut g = configured();
+        let mut t = 0.0;
+        let mut frame = |g: &mut GraphState, events: Vec<egui::Event>, dt: f64| {
+            t += dt;
+            draw(g, &ctx, events, t, phone)
+        };
+        frame(&mut g, vec![], 0.0);
+        // Chips show on a narrow screen: big enough to touch, inside the screen.
+        let size = g.ui.chips.size;
+        assert_eq!(g.chip_rects.len(), g.ui.chips.actions.len(), "{:?}", g.chip_rects);
+        for (id, r) in &g.chip_rects {
+            assert!(r.height() >= size && r.width() >= size && r.max.x <= phone.x, "{id}: {r:?}");
+        }
+        // Tap selects.
+        let step = center_of(&g, "rust:a::step");
+        frame(&mut g, vec![touch(1, Start, step)], 0.1);
+        frame(&mut g, vec![touch(1, End, step)], 0.05);
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::step");
+        // Double tap focuses.
+        let save = center_of(&g, "rust:a::save");
+        frame(&mut g, vec![touch(2, Start, save)], 1.0);
+        frame(&mut g, vec![touch(2, End, save)], 0.05);
+        frame(&mut g, vec![touch(3, Start, save)], 0.1);
+        frame(&mut g, vec![touch(3, End, save)], 0.05);
+        assert_eq!(g.nav.current().roots, vec![ComponentId::new("rust:a::save")]);
+        // Swipe right goes back, left goes forward.
+        let mid = Pos2::new(120.0, 500.0);
+        frame(&mut g, vec![touch(4, Start, mid)], 1.0);
+        frame(&mut g, vec![touch(4, Move, mid + Vec2::new(60.0, 0.0))], 0.05);
+        frame(&mut g, vec![touch(4, End, mid + Vec2::new(150.0, 4.0))], 0.05);
+        assert!(g.nav.current().roots.is_empty(), "back");
+        frame(&mut g, vec![touch(5, Start, mid + Vec2::new(150.0, 0.0))], 1.0);
+        frame(&mut g, vec![touch(5, End, mid - Vec2::new(10.0, 0.0))], 0.1);
+        assert_eq!(g.nav.current().roots.len(), 1, "forward");
+        g.navigate(NavChange::Back);
+        g.set_result(sample_result());
+        frame(&mut g, vec![], 0.1);
+        // Long press opens the node's actions as chips; tapping one runs it.
+        let log = center_of(&g, "rust:a::log");
+        frame(&mut g, vec![touch(6, Start, log)], 1.0);
+        let hold = g.ui.touch.long_press_ms / 1000.0 + 0.05;
+        frame(&mut g, vec![], hold);
+        assert_eq!(g.context.as_ref().map(|(id, _)| id.as_str()), Some("rust:a::log"));
+        frame(&mut g, vec![touch(6, End, log)], 0.1);
+        assert!(g.context.is_some(), "lifting doesn't close it");
+        let spec = chip(&g, "graph.open_spec").center();
+        frame(&mut g, click(spec, true), 0.1);
+        frame(&mut g, click(spec, false), 0.05);
+        assert!(g.requests.open_spec && g.context.is_none());
+        // Two fingers: pan together, pinch apart to zoom.
+        let (zoom, pan) = (g.camera.zoom, g.camera.pan);
+        let (a, b) = (Pos2::new(150.0, 400.0), Pos2::new(250.0, 400.0));
+        frame(&mut g, vec![touch(7, Start, a), touch(8, Start, b)], 1.0);
+        frame(&mut g, vec![touch(7, Move, a + Vec2::new(30.0, 0.0)), touch(8, Move, b + Vec2::new(30.0, 0.0))], 0.05);
+        assert!((g.camera.pan.x - pan.x - 30.0).abs() < 0.5 && (g.camera.zoom - zoom).abs() < 1e-4, "two-finger pan: {:?} -> {:?}", pan, g.camera.pan);
+        frame(&mut g, vec![touch(7, Move, a - Vec2::new(20.0, 0.0)), touch(8, Move, b + Vec2::new(80.0, 0.0))], 0.05);
+        assert!(g.camera.zoom > zoom * 1.5, "pinch out zooms in: {zoom} -> {}", g.camera.zoom);
+        frame(&mut g, vec![touch(7, End, a), touch(8, End, b)], 0.05);
+        assert_eq!(g.nav.current().roots.len(), 0, "no tap or swipe from a two-finger gesture");
+        // Chips run the same actions as keys.
+        let zoomed = g.camera.zoom;
+        let zoom_out = chip(&g, "graph.zoom_out").center();
+        frame(&mut g, click(zoom_out, true), 0.3);
+        frame(&mut g, click(zoom_out, false), 0.05);
+        assert!(g.camera.zoom < zoomed);
+        g.navigate(NavChange::Focus(ComponentId::new("rust:a::run")));
+        let back = chip(&g, "graph.back").center();
+        frame(&mut g, click(back, true), 0.3);
+        frame(&mut g, click(back, false), 0.05);
+        assert!(g.nav.current().roots.is_empty(), "back chip");
+        // Wide screens don't show them until a finger touches the graph.
+        let mut wide = configured();
+        draw(&mut wide, &egui::Context::default(), vec![], 0.0, Vec2::new(1600.0, 900.0));
+        assert!(wide.chip_rects.is_empty());
+        wide.ui.chips.show = ChipMode::Always;
+        draw(&mut wide, &egui::Context::default(), vec![], 0.1, Vec2::new(1600.0, 900.0));
+        assert!(!wide.chip_rects.is_empty());
+    }
+
+    // req: P9.7
+    #[test]
+    fn agent_requests_move_the_view_mark_it_and_back_returns() {
+        let ctx = egui::Context::default();
+        let mut g = configured();
+        draw(&mut g, &ctx, vec![], 0.0, Vec2::new(1200.0, 800.0));
+        g.select(Some(ComponentId::new("rust:a::step")));
+        let before = g.nav.current().clone();
+        let request = |view: &str, focus: &str| ArchEvent::ViewRequested {
+            request: Box::new(ViewRequest { view: Some(view.into()), roots: vec![ComponentId::new(focus)], focus: Some(ComponentId::new(focus)), ..Default::default() }),
+            by: Requester::Agent,
+        };
+        g.on_event(&request("calls", "rust:a::save"));
+        assert_eq!(g.nav.current().roots, vec![ComponentId::new("rust:a::save")], "moved through the reducer");
+        assert_eq!(g.agent.as_ref().unwrap().what, "calls view · from save · at save");
+        g.set_result(sample_result());
+        let text = texts(&draw(&mut g, &ctx, vec![], 0.1, Vec2::new(1200.0, 800.0)).0);
+        assert!(text.contains("the agent moved the view: calls view · from save · at save"), "{text}");
+        assert!(g.actions().iter().any(|a| a.id == "graph.agent_return"));
+        // A second move keeps where the user was.
+        g.on_event(&request("structure", "rust:a::log"));
+        assert_eq!(g.agent.as_ref().unwrap().return_to.roots, before.roots);
+        // Return goes straight back to the user's place, selection included.
+        let action = g.actions().into_iter().find(|a| a.id == "graph.agent_return").unwrap();
+        let (net, ctx2, mut mode) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default(), InputMode::Normal);
+        g.run(&action, None, &mut RunCx { net: &net, ctx: &ctx2, input_mode: &mut mode, slot: 0, hint_chars: "asdf" });
+        assert!(g.nav.current().same_view(&before) && g.agent.is_none());
+        g.set_result(sample_result());
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::step");
+        // Plain back (ctrl+o, swipe, chip) steps back one move and clears the mark.
+        g.on_event(&request("calls", "rust:a::save"));
+        g.navigate(NavChange::Back);
+        assert!(g.agent.is_none() && g.nav.current().same_view(&before));
+        // User requests (e.g. from REST) move without the agent mark.
+        g.on_event(&ArchEvent::ViewRequested { request: Box::new(ViewRequest { view: Some("calls".into()), ..Default::default() }), by: Requester::User });
+        assert!(g.agent.is_none());
+    }
+
+    // req: P9.10
+    #[test]
+    fn styles_draw_from_the_table_with_a_matching_legend() {
+        use crate::graph_style::{LegendEntry, Swatch};
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        let (style, theme) = (&config.graph_style, &config.theme);
+        let legend = style.legend(theme);
+        let find = |section: &str, label: &str| legend.iter().find(|e: &&LegendEntry| e.section == section && e.label == label).map(|e| e.swatch);
+        for kind in RelationKind::ALL {
+            assert_eq!(find("Relations", &kind.name().replace('_', " ")), Some(Swatch::Line(style.edge(theme, kind, arch_graph::Provenance::OBSERVED, Alignment::Observed, false))));
+        }
+        for alignment in [Alignment::Observed, Alignment::Planned, Alignment::Missing, Alignment::Present] {
+            let label = alignment_label(alignment);
+            assert_eq!(find("Plan vs code", label), Some(Swatch::Line(style.edge(theme, RelationKind::Calls, provenance_of(alignment), alignment, false))));
+            assert_eq!(find("Nodes", label), Some(Swatch::Outline(style.node_outline(theme, alignment, false))));
+        }
+        for stage in arch_graph::Stage::ALL {
+            assert_eq!(find("Stage", &format!("{stage:?}")), Some(Swatch::Stripe(style.stage_color(theme, stage))));
+        }
+        assert!(config.keymap.bind.contains_key("graph.legend") && config.graph.chips.actions.iter().any(|a| a == "graph.legend"), "a key and a chip");
+        // Toggling shows exactly the table's entries.
+        let ctx = egui::Context::default();
+        crate::theme::set(config.theme.clone(), &ctx);
+        let mut g = configured();
+        let text = texts(&draw(&mut g, &ctx, vec![], 0.0, Vec2::new(1200.0, 800.0)).0);
+        assert!(!text.contains("planned, missing in code"));
+        let toggle = g.actions().into_iter().find(|a| a.id == "graph.legend").unwrap();
+        let (net, mut mode) = (NetClient::new("http://127.0.0.1:9"), InputMode::Normal);
+        g.run(&toggle, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, hint_chars: "asdf" });
+        let out = draw(&mut g, &ctx, vec![], 0.1, Vec2::new(1200.0, 800.0)).0;
+        let text = texts(&out);
+        for entry in &legend {
+            assert!(text.contains(&entry.label), "legend shows {}: {text}", entry.label);
+        }
+        // Nodes carry their stage stripe in the stage's color.
+        let mut fills = Vec::new();
+        fn rects(shape: &Shape, out: &mut Vec<egui::Color32>) {
+            match shape {
+                Shape::Rect(r) => out.push(r.fill),
+                Shape::Vec(list) => list.iter().for_each(|s| rects(s, out)),
+                _ => {}
+            }
+        }
+        out.shapes.iter().for_each(|c| rects(&c.shape, &mut fills));
+        assert!(fills.contains(&style.stage_color(theme, arch_graph::Stage::Implemented)), "implemented stripe drawn");
+        g.run(&toggle, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, hint_chars: "asdf" });
+        assert!(!g.legend_open);
+    }
+
+    // req: P9.17
+    #[test]
+    fn node_cards_show_more_detail_at_closer_zoom_per_config() {
+        let mut g = configured();
+        let mut result = sample_result();
+        let step = ComponentId::new("rust:a::step");
+        {
+            let c = result.components.get_mut(&step).unwrap();
+            c.signature = Some(arch_graph::Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()) }], returns: Some("bool".into()) });
+            c.placeholders.push(arch_graph::Span { start_line: 2, end_line: 2, start_byte: 0, end_byte: 1 });
+        }
+        g.set_result(result);
+        g.marks.insert(step.clone(), crate::review::NodeMark { changed: true, open: 2 });
+        let c = g.component(&step).unwrap().clone();
+        let texts_at = |g: &GraphState, zoom: f32| -> Vec<String> {
+            let mut g2 = GraphState { camera: Camera { zoom, ..g.camera }, ..showing(g.result.clone().unwrap()) };
+            g2.ui = g.ui.clone();
+            g2.marks = g.marks.clone();
+            g2.card_lines(&c, Alignment::Present, g2.detail()).into_iter().map(|l| l.text).collect()
+        };
+        let (mid, near) = (g.ui.detail.mid, g.ui.detail.near);
+        assert_eq!(texts_at(&g, mid * 0.9), vec!["step"]);
+        assert_eq!(texts_at(&g, mid), vec!["step", "function · Implemented · 1 placeholders", "unplaced"]);
+        assert_eq!(
+            texts_at(&g, near),
+            vec!["step", "function · Implemented · planned and in code", "(input: &str) -> bool", "unplaced", "1 placeholders · 2 open review points · changed since review"]
+        );
+        // Thresholds are config (and must make sense).
+        assert!(crate::config::UiConfig::with_overrides("[graph.detail]\nmid = 1.0\nnear = 0.5").unwrap_err().contains("graph.detail"));
+        g.ui.detail.near = 5.0;
+        assert_eq!(texts_at(&g, 1.0).len(), 3, "near now needs zoom 5");
+        // What's computed is what's drawn.
+        let ctx = egui::Context::default();
+        let mut close = configured();
+        close.set_result(g.result.clone().unwrap());
+        close.marks = g.marks.clone();
+        draw(&mut close, &ctx, vec![], 0.0, Vec2::new(1400.0, 800.0));
+        close.camera.zoom = close.ui.detail.near + 0.1;
+        let text = texts(&draw(&mut close, &ctx, vec![], 0.1, Vec2::new(1400.0, 800.0)).0);
+        assert!(text.contains("(input: &str) -> bool") && text.contains("2 open review points"), "{text}");
     }
 }

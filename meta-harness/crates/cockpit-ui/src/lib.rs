@@ -5,6 +5,7 @@ pub mod code;
 pub mod config;
 pub mod feedback;
 pub mod graph;
+pub mod graph_config;
 pub mod graph_style;
 pub mod keymap;
 pub mod net;
@@ -13,6 +14,7 @@ pub mod review;
 pub mod spec;
 pub mod store;
 pub mod theme;
+pub mod touch;
 pub mod tree;
 
 #[cfg(target_arch = "wasm32")]
