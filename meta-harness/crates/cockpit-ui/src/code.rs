@@ -75,7 +75,8 @@ pub struct CodeViewerState {
     pub highlight: Option<(usize, usize)>,
     pub is_loading: bool,
     pub error_message: Option<String>,
-    pending_result: Arc<Mutex<Option<Result<String, String>>>>,
+    /// The fetched file's contents, with the path they're for.
+    pending_result: Arc<Mutex<Option<(String, Result<String, String>)>>>,
     marks: BTreeMap<usize, Vec<Mark>>,
     marks_inbox: Arc<Mutex<Option<NetResult<FileView>>>>,
     /// Where to scroll once the right file's lines are in.
@@ -136,9 +137,10 @@ impl CodeViewerState {
 
         let pending = self.pending_result.clone();
         let ctx_clone = ctx.clone();
+        let for_path = path.to_owned();
         net.fetch_file(path, ctx_clone, move |result| {
             if let Ok(mut lock) = pending.lock() {
-                *lock = Some(result);
+                *lock = Some((for_path, result));
             }
         });
     }
@@ -185,14 +187,20 @@ impl CodeViewerState {
 
     pub fn render(&mut self, ui: &mut egui::Ui, net: &NetClient, feedback: &mut FeedbackInspectorState, slot_idx: usize) {
         // Drain any incoming file contents from background fetch
+        // Replies for a file that's no longer the one shown (an earlier load
+        // answering late) are dropped, so they can't use up its scroll.
         let incoming = self.pending_result.lock().ok().and_then(|mut l| l.take());
-        if let Some(res) = incoming {
+        if let Some((path, res)) = incoming
+            && path == self.current_file
+        {
             match res {
                 Ok(c) => self.set_content(c),
                 Err(e) => self.set_error(e),
             }
         }
-        if let Some(Ok(view)) = self.marks_inbox.lock().ok().and_then(|mut m| m.take()) {
+        if let Some(Ok(view)) = self.marks_inbox.lock().ok().and_then(|mut m| m.take())
+            && view.file == self.current_file
+        {
             self.marks = gutter_marks(&view);
         }
 
@@ -479,7 +487,10 @@ mod tests {
         frame(&mut code, &mut feedback);
         // A target far down: the file is reloaded (lines stay until the reply),
         // and the scroll waits for the content, then lands on the target.
-        // (as load_file leaves it; no network in tests)
+        // (as load_file leaves it; no network in tests). An earlier load's
+        // reply arriving late for another file must not use up the scroll.
+        code.current_file = "src/big.rs".into();
+        *code.pending_result.lock().unwrap() = Some(("Cargo.toml".into(), Ok("[package]\nname = \"x\"\n".into())));
         code.target_line = Some(700);
         code.highlight = Some((700, 700));
         code.scroll = Some(Scroll::Center);

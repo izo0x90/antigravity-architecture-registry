@@ -294,6 +294,9 @@ pub struct GraphState {
     pub result: Option<ViewResult>,
     /// Ids drawn inside some container (hidden when containers collapse).
     nested: BTreeSet<ComponentId>,
+    /// The one container everything else sits in (a focused module): it
+    /// stays open when zoomed out, so its parts show as blocks.
+    frame: Option<ComponentId>,
     /// Review badges: changed since the last review, unaddressed comments.
     pub marks: BTreeMap<ComponentId, crate::review::NodeMark>,
     load: Load,
@@ -347,6 +350,7 @@ impl Default for GraphState {
             nav: Navigator::new("structure"),
             result: None,
             nested: BTreeSet::new(),
+            frame: None,
             marks: BTreeMap::new(),
             load: Load::Idle,
             stale: true,
@@ -528,10 +532,22 @@ impl GraphState {
                 self.pending_select = Some(pending);
             }
         }
+        let tops: Vec<&ComponentId> = result
+            .layout
+            .rects
+            .iter()
+            .filter(|(_, r)| !result.layout.containers.iter().filter_map(|c| result.layout.rects.get(c)).any(|outer| outer != *r && outer.contains(r)))
+            .map(|(id, _)| id)
+            .collect();
+        self.frame = match tops.as_slice() {
+            [only] if result.layout.containers.contains(*only) => Some((*only).clone()),
+            _ => None,
+        };
         self.nested = result
             .layout
             .containers
             .iter()
+            .filter(|c| Some(*c) != self.frame.as_ref())
             .filter_map(|c| result.layout.rects.get(c))
             .flat_map(|outer| result.layout.rects.iter().filter(move |(_, r)| *r != outer && outer.contains(r)).map(|(id, _)| id.clone()))
             .collect();
@@ -624,7 +640,8 @@ impl GraphState {
             .layout
             .rects
             .iter()
-            .filter(|(id, _)| Some(*id) != self.selection.as_ref() && self.shown(id))
+            // Not what it sits in, nor what sits in it: moves go between neighbours.
+            .filter(|(id, r)| Some(*id) != self.selection.as_ref() && self.shown(id) && !r.contains(current) && !current.contains(r))
             .filter_map(|(id, r)| {
                 let (x, y) = center(r);
                 // Sideways distance is the gap between the boxes' spans, so
@@ -1336,7 +1353,7 @@ impl GraphState {
             painter.rect_filled(rect, 6.0, colors().surface.gamma_multiply(0.6));
             painter.rect_stroke(rect, 6.0, Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { colors().focus } else { colors().border_strong }), StrokeKind::Inside);
             let Some(c) = result.components.get(id) else { continue };
-            if collapsed {
+            if collapsed && Some(id) != self.frame.as_ref() {
                 // One block per container: its name, as large as fits, and how much is inside.
                 let inner = result.layout.rects.iter().filter(|(_, k)| *k != r && r.contains(k)).count();
                 let size = (rect.width() / (c.name.len().max(4) as f32 * 0.6)).min(rect.height() / 2.6).clamp(8.0, 20.0);
@@ -1896,6 +1913,19 @@ pub(crate) mod tests {
         g.select(Some(ComponentId::new("rust:a")));
         g.move_selection(Dir::Right);
         assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:b", "not into the collapsed module");
+        // A focused module (the only box at the top) stays open zoomed out:
+        // its parts show as blocks, and moves never jump out to it.
+        let mut only_a = nested_result();
+        only_a.layout.rects.remove(&ComponentId::new("rust:b"));
+        only_a.view.nodes.retain(|n| n.id.as_str() != "rust:b");
+        let mut f = showing(only_a);
+        f.camera.zoom = 0.1;
+        assert!(f.collapsed() && f.shown(&ComponentId::new("rust:a::save")), "the focused module's parts are drawn");
+        f.select(Some(ComponentId::new("rust:a::save")));
+        for dir in [Dir::Left, Dir::Right, Dir::Up, Dir::Down] {
+            f.move_selection(dir);
+            assert_ne!(f.selection.as_ref().unwrap().as_str(), "rust:a", "never onto the module it sits in");
+        }
         // A search hit inside a collapsed module opens it up.
         g.last_query = "save".into();
         g.search_step(true);

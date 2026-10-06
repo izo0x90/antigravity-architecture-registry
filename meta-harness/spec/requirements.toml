@@ -682,6 +682,7 @@ slice = "S3"
 title = "UI audit"
 manual = true
 acceptance = "An independent audit driving the UI found no gaps."
+done = "2026-10-06: three UI audits driving the live cockpit over CDP. The first found 5 blockers + polish (all fixed); the re-audit confirmed those and found 2 blockers (code scroll, validate echo loop; fixed); the confirming audit verified B and all polish, and A except a first-load stale-reply case, fixed with a test (code.rs stale reply + scroll), plus the two minor notes (moves into enclosing containers, focused module collapsing)."
 
 [[req]]
 id = "P9.12"
