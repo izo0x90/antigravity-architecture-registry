@@ -132,8 +132,17 @@ pub fn verify_component(plan: &Plan, planned: &Component, observed: &Graph, goal
         Some(a) => f.at(a.file.clone(), a.span),
         None => f,
     };
-    // What's there must be what was planned (a specialization counts).
-    let same_kind = types.resolve(&code.type_name).is_ok_and(|t| t.is_a(&planned.type_name));
+    // What's there must be what was planned, as far as the language's pack
+    // can tell: the nearest type in the planned type's lineage that the pack
+    // produces (a project's `handler extends function` is seen as a function;
+    // a type the pack can't produce at all isn't judged).
+    let pack = anchor.as_ref().and_then(|a| packs.by_name(&a.language));
+    let observable = |t: &str| pack.is_some_and(|p| p.spec.language.module_type == t || p.spec.definitions.iter().any(|d| d.type_name == t));
+    let expected = types.resolve(&planned.type_name).ok().and_then(|t| t.lineage.into_iter().find(|t| observable(t)));
+    let same_kind = match &expected {
+        Some(expected) => types.resolve(&code.type_name).is_ok_and(|t| t.is_a(expected)),
+        None => true,
+    };
     if !same_kind {
         report.push(at(Finding::error(
             FindingCode::WrongType,

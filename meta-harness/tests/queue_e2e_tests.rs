@@ -264,8 +264,22 @@ async fn a_session_past_its_time_is_stopped_before_the_job_is_retried() {
     let thread = thread.lock().unwrap().clone().expect("a session was opened");
     assert!(state.sessions.get(&harness_contracts::ThreadId::new(thread)).is_err(), "and its session is closed, so a retry can't race it");
     // A turn that completes is fine.
-    let ok = Ticket { brief: "do it".into(), ..ticket };
+    let ok = Ticket { brief: "do it".into(), ..ticket.clone() };
     assert!(runner.run(&ok, Duration::from_secs(5), &|_| {}).await.is_ok());
+    // A harness that never finishes opening the session is cut off too.
+    let stuck = meta_harness::queue::SessionRunner {
+        sessions: state.sessions.clone(),
+        open: harness_core::OpenThread {
+            instance_id: harness_contracts::InstanceId::new("fake"),
+            policy: harness_contracts::RuntimePolicy { cwd: Some("[hang-open]".into()), ..Default::default() },
+            model: None,
+            resume: None,
+            extra_mcp_servers: Vec::new(),
+        },
+    };
+    let started = std::time::Instant::now();
+    let result = stuck.run(&ticket, Duration::from_millis(200), &|_| {}).await;
+    assert!(result.unwrap_err().contains("didn't finish") && started.elapsed() < Duration::from_secs(3));
 }
 
 /// A session that never gets the work done.

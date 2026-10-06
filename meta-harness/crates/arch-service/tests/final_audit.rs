@@ -18,6 +18,10 @@ struct Repo {
 }
 
 fn repo(files: &[(&str, &str)]) -> Repo {
+    repo_typed(files, TypeSystem::defaults().unwrap())
+}
+
+fn repo_typed(files: &[(&str, &str)], types: TypeSystem) -> Repo {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("app");
     for (path, text) in files {
@@ -28,7 +32,7 @@ fn repo(files: &[(&str, &str)]) -> Repo {
     let s = ArchitectureService::open(
         &root,
         PackSet::built_in().unwrap(),
-        TypeSystem::defaults().unwrap(),
+        types,
         ViewCatalog::defaults().unwrap(),
         Box::new(FsPlans::new(&root).unwrap()),
         Box::new(FsIndex::new(&root).unwrap()),
@@ -122,6 +126,25 @@ fn the_symbol_found_must_be_the_kind_planned() {
     assert_eq!((advanced, codes), (None, vec![FindingCode::WrongType]), "a struct where an interface was planned");
     write(&r, "src/lib.rs", "pub fn run() {}\n\npub trait Saver {}\n");
     assert_eq!(verify(&r, &rs("app::Saver")).0, Some(Stage::Implemented));
+    // A project's specialized type is checked as the base the code can show.
+    let mut types = TypeSystem::defaults().unwrap();
+    types.extend_from_toml("[types.handler]\nextends = \"function\"").unwrap();
+    let r = repo_typed(&[("Cargo.toml", "[package]\nname = \"app\"\n"), ("src/lib.rs", "pub fn run() {}\n")], types);
+    r.s.create_plan("p", "P", "").unwrap();
+    r.s.apply(&pid(), PlanOp::SetGreenfield { greenfield: true }).unwrap();
+    add(&r, "on_event", "handler", &rs("app"), sig(vec![], "bool")).unwrap();
+    approve(&r, &rs("app::on_event"));
+    write(&r, "src/lib.rs", "pub fn run() {}\n\npub fn on_event() -> bool {\n    true\n}\n");
+    assert_eq!(verify(&r, &rs("app::on_event")), (Some(Stage::Implemented), vec![]), "a handler written as a function");
+    // A type the language's pack can't tell apart (a Python interface is a class) isn't judged.
+    let r = repo(&[("ports.py", "def run():\n    return 1\n")]);
+    let py = |s: &str| ComponentId::for_symbol("python", s);
+    r.s.create_plan("p", "P", "").unwrap();
+    r.s.apply(&pid(), PlanOp::SetGreenfield { greenfield: true }).unwrap();
+    add(&r, "Saver", "interface", &py("ports"), None).unwrap();
+    approve(&r, &py("ports.Saver"));
+    write(&r, "ports.py", "from typing import Protocol\n\ndef run():\n    return 1\n\nclass Saver(Protocol):\n    pass\n");
+    assert_eq!(verify(&r, &py("ports.Saver")).0, Some(Stage::Implemented));
 }
 
 /// A planned Python function `run(text: str) -> str` that must call `clean`.
@@ -157,6 +180,8 @@ fn python_and_typescript_stubs_and_dead_calls_dont_pass() {
         ("while False", "def run(text: str) -> str:\n    while False:\n        clean(text)\n    return text\n"),
         ("if not True", "def run(text: str) -> str:\n    if not True:\n        clean(text)\n    return text\n"),
         ("if False or False", "def run(text: str) -> str:\n    if False or False:\n        clean(text)\n    return text\n"),
+        ("after raise", "def run(text: str) -> str:\n    raise ValueError(text)\n    clean(text)\n"),
+        ("while 0", "def run(text: str) -> str:\n    while 0:\n        clean(text)\n    return text\n"),
     ] {
         let r = python_run_calls_clean();
         write(&r, "app.py", &format!("{head}{body}"));

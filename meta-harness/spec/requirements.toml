@@ -254,6 +254,7 @@ slice = "S2"
 title = "Repository audit"
 manual = true
 acceptance = "An independent audit found no missing or partial repository requirements."
+done = "2026-10-05: confirming independent audit (HEAD df10a35) PASS; three earlier rounds' gaps (cache name collisions/length, atomic writes, corrupt files, plan locking, importer types/expectations, scoped ingest) fixed and re-verified."
 
 # ---- ingestion ----
 [[req]]
@@ -330,6 +331,7 @@ slice = "S2"
 title = "Ingestion audit"
 manual = true
 acceptance = "An independent audit found no missing or partial ingestion requirements."
+done = "2026-10-05: confirming independent audit (HEAD df10a35) PASS: import-aware resolution, scoped/renamed paths, strict packs, no engine language specifics; earlier rounds' gaps fixed and re-verified."
 
 [[req]]
 id = "P4.13"
@@ -416,6 +418,7 @@ slice = "S2"
 title = "Plan checks audit"
 manual = true
 acceptance = "An independent audit found no missing or partial plan-check requirements."
+done = "2026-10-05: confirming independent audit (HEAD df10a35) PASS: every audit.toml validator rule honored (gate change recorded), SCC ordering, name rules, ignored locations; earlier rounds' gaps fixed and re-verified."
 
 [[req]]
 id = "P5.14"
@@ -502,6 +505,7 @@ slice = "S2"
 title = "Implementation checks audit"
 manual = true
 acceptance = "An independent audit, including attempts to fool the verifier, found no gaps."
+done = "2026-10-05: three adversarial audit rounds; the confirming audit (HEAD df10a35) re-ran every earlier trick (all caught) and found two last issues, fixed with tests in final_audit.rs: type check judged by what the language pack can observe (specialized/unobservable types), Python dead code after raise and `while 0`. Out of scope per spec/deferred.toml: direct tampering with plan/cache files; statically undecidable runtime conditions."
 
 [[req]]
 id = "P6.10"
@@ -558,6 +562,7 @@ slice = "S2"
 title = "Views audit"
 manual = true
 acceptance = "An independent audit found no missing or partial view requirements."
+done = "2026-10-05: confirming independent audit (HEAD df10a35) PASS: loops without an entry shown, containment loops safe, partial overrides, legend from the style table."
 
 # ---- server and agent tools ----
 [[req]]
@@ -596,6 +601,7 @@ slice = "S2"
 title = "Server audit"
 manual = true
 acceptance = "An independent audit of REST, MCP and events found no gaps."
+done = "2026-10-05: audits of REST, MCP and events across three rounds; the confirming audit (HEAD df10a35) found one last issue, fixed with a test (queue_e2e_tests: job timeout covers opening the session). User-only routes need the cockpit session from the launch link; MCP notifications unanswered; no agent approval path."
 
 [[req]]
 id = "P8.7"
