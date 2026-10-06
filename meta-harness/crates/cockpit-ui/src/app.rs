@@ -358,7 +358,7 @@ impl CockpitApp {
         if let (Some(detail), Some(shown)) = (&self.spec.detail, self.graph.selected())
             && detail.component.id == shown.id
             && detail.component.anchor != shown.anchor
-            && std::mem::replace(&mut self.anchor_checked, Some(detail.component.anchor.clone())) != Some(detail.component.anchor.clone())
+            && self.anchor_checked.replace(detail.component.anchor.clone()) != Some(detail.component.anchor.clone())
         {
             self.graph.invalidate();
         }
