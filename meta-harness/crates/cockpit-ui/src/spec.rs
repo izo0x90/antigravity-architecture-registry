@@ -449,7 +449,10 @@ impl SpecState {
                                     }
                                     ui.label(RichText::new(label).size(11.0).color(colors().muted));
                                     for id in items {
-                                        if ui.link(RichText::new(id.as_str()).monospace().size(11.0)).clicked() {
+                                        // The component's own name; its full id on hover.
+                                        let symbol = id.as_str().split_once(':').map_or(id.as_str(), |(_, s)| s);
+                                        let name = symbol.rsplit(|c: char| c == ':' || c == '.').next().unwrap_or(symbol);
+                                        if ui.link(RichText::new(name).monospace().size(11.0)).on_hover_text(id.as_str()).clicked() {
                                             self.requests.select = Some(id.clone());
                                         }
                                     }

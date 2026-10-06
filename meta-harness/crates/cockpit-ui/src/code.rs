@@ -78,7 +78,14 @@ pub struct CodeViewerState {
     pending_result: Arc<Mutex<Option<Result<String, String>>>>,
     marks: BTreeMap<usize, Vec<Mark>>,
     marks_inbox: Arc<Mutex<Option<NetResult<FileView>>>>,
-    scroll_pending: bool,
+    /// Where to scroll once the right file's lines are in.
+    scroll: Option<Scroll>,
+    /// The scroll position and viewport height last frame.
+    offset_y: f32,
+    view_h: f32,
+    /// The height a drawn row really takes (labels can be taller than the
+    /// font's line height); rows are laid out and scrolled by it.
+    row_h: f32,
     /// Asks the app to find this file:line's component in the graph.
     pub reveal: Option<(String, usize)>,
     /// Asks the app to select this component in the graph.
@@ -101,7 +108,10 @@ impl Default for CodeViewerState {
             pending_result: Arc::new(Mutex::new(None)),
             marks: BTreeMap::new(),
             marks_inbox: Arc::default(),
-            scroll_pending: false,
+            scroll: None,
+            offset_y: 0.0,
+            view_h: 0.0,
+            row_h: 0.0,
             reveal: None,
             select: None,
             cursor_moved_at: None,
@@ -114,7 +124,7 @@ impl CodeViewerState {
         self.current_file = path.to_string();
         self.target_line = target_line;
         self.highlight = target_line.map(|l| (l, l));
-        self.scroll_pending = target_line.is_some();
+        self.scroll = target_line.map(|_| Scroll::Center);
         self.is_loading = true;
         self.error_message = None;
         let marks = self.marks_inbox.clone();
@@ -193,10 +203,12 @@ impl CodeViewerState {
             let w = ui.available_width();
             let is_narrow = ui.available_width() < 240.0;
             let copy_label = if is_narrow { "📋" } else { "📋 Copy" };
+            // Room for the buttons and the `:line` label next to the path.
+            let label_w = if self.target_line.is_some() { 48.0 } else { 0.0 };
             let edit_w = if is_narrow {
-                (ui.available_width() - 80.0).max(50.0)
+                (ui.available_width() - 80.0 - label_w).max(50.0)
             } else {
-                (ui.available_width() - 120.0).max(80.0)
+                (ui.available_width() - 120.0 - label_w).max(80.0)
             };
 
             ui.horizontal(|ui| {
@@ -262,12 +274,24 @@ impl CodeViewerState {
 
             // One row per line: the gutter (number and marks) and the code
             // share the row, so marks always sit next to their line.
-            let row_height = ui.text_style_height(&egui::TextStyle::Monospace).max(14.0);
+            let row_height = ui.text_style_height(&egui::TextStyle::Monospace).max(14.0).max(self.row_h);
+            let mut measured: f32 = 0.0;
             let gutter_w = ui.fonts_mut(|f| f.layout_no_wrap("00000".into(), egui::FontId::monospace(11.0), colors().faint).size().x) + 3.0 * 16.0;
             let mut clicked: Option<ComponentId> = None;
             let mut put_cursor: Option<usize> = None;
-            let scroll_to = if self.scroll_pending { self.target_line } else { None };
-            let viewer_res = egui::ScrollArea::both().auto_shrink([false, false]).show_rows(ui, row_height, self.lines.len(), |ui, rows| {
+            // Rows are laid out only when visible, so scrolling to a line is
+            // done by offset, once the requested file's lines are in.
+            let pitch = row_height + ui.spacing().item_spacing.y;
+            let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
+            if !self.is_loading
+                && let (Some(how), Some(line)) = (self.scroll, self.target_line)
+            {
+                let view_h = if self.view_h > 0.0 { self.view_h } else { ui.available_height() };
+                let offset = scroll_offset(how, line, pitch, self.offset_y, view_h);
+                area = area.vertical_scroll_offset(offset);
+                self.scroll = None;
+            }
+            let viewer_res = area.show_rows(ui, row_height, self.lines.len(), |ui, rows| {
                 for idx in rows {
                     let line_no = idx + 1;
                     let highlighted = self.in_highlight(line_no);
@@ -292,11 +316,15 @@ impl CodeViewerState {
                             put_cursor = Some(line_no);
                         }
                     });
-                    if scroll_to == Some(line_no) {
-                        row.response.scroll_to_me(Some(egui::Align::Center));
-                    }
+                    measured = measured.max(row.response.rect.height());
                 }
             });
+            if measured > self.row_h + 0.5 {
+                self.row_h = measured;
+                ui.ctx().request_repaint();
+            }
+            self.offset_y = viewer_res.state.offset.y;
+            self.view_h = viewer_res.inner_rect.height();
             if clicked.is_some() {
                 self.select = clicked;
             }
@@ -304,10 +332,46 @@ impl CodeViewerState {
                 self.move_cursor(line, ui.input(|i| i.time));
             }
             feedback.register_inspectable(ui, &format!("slot_{}:code:viewer", slot_idx + 1), viewer_res.inner_rect);
-            if !self.lines.is_empty() {
-                self.scroll_pending = false;
-            }
         });
+    }
+}
+
+impl CodeViewerState {
+    fn run_command(&mut self, command: CodeCommand, now: f64) {
+        let line = self.target_line.unwrap_or(1);
+        match command {
+            CodeCommand::Down => {
+                self.move_cursor(line + 5, now);
+                self.scroll = Some(Scroll::KeepVisible);
+            }
+            CodeCommand::Up => {
+                self.move_cursor(line.saturating_sub(5), now);
+                self.scroll = Some(Scroll::KeepVisible);
+            }
+            CodeCommand::Reveal => self.reveal = Some((self.current_file.clone(), self.highlight.map_or(line, |(a, _)| a))),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scroll {
+    /// Bring the line to the middle (opening a target).
+    Center,
+    /// Scroll only as far as needed to keep the line on screen (cursor moves).
+    KeepVisible,
+}
+
+/// The scroll offset that shows `line` (1-based) the way `how` asks, given
+/// the row pitch, the current offset and the viewport height.
+fn scroll_offset(how: Scroll, line: usize, pitch: f32, current: f32, view_h: f32) -> f32 {
+    let top = line.saturating_sub(1) as f32 * pitch;
+    // A couple of rows of context around a cursor kept in view.
+    let margin = 2.0 * pitch;
+    match how {
+        Scroll::Center => (top - (view_h - pitch) / 2.0).max(0.0),
+        Scroll::KeepVisible if top < current + margin => (top - margin).max(0.0),
+        Scroll::KeepVisible if top + pitch > current + view_h - margin => (top + pitch + margin - view_h).max(0.0),
+        Scroll::KeepVisible => current,
     }
 }
 
@@ -329,19 +393,8 @@ impl crate::actions::ActionProvider for CodeViewerState {
     }
 
     fn run(&mut self, action: &crate::actions::Action, _value: Option<String>, cx: &mut crate::actions::RunCx<'_>) {
-        let line = self.target_line.unwrap_or(1);
-        let now = cx.ctx.input(|i| i.time);
-        match action.command::<CodeCommand>() {
-            Some(CodeCommand::Down) => {
-                self.move_cursor(line + 5, now);
-                self.scroll_pending = true;
-            }
-            Some(CodeCommand::Up) => {
-                self.move_cursor(line.saturating_sub(5), now);
-                self.scroll_pending = true;
-            }
-            Some(CodeCommand::Reveal) => self.reveal = Some((self.current_file.clone(), self.highlight.map_or(line, |(a, _)| a))),
-            None => {}
+        if let Some(command) = action.command::<CodeCommand>() {
+            self.run_command(*command, cx.ctx.input(|i| i.time));
         }
     }
 }
@@ -405,5 +458,58 @@ mod tests {
         assert_eq!(code.settled_cursor(11.0, 0.25), None, "taken once");
         code.move_cursor(99, 12.0);
         assert_eq!(code.target_line, Some(3), "clamped to the file");
+    }
+
+    // req: P9.15
+    #[test]
+    fn opening_a_target_off_screen_scrolls_it_into_view_and_the_cursor_stays_visible() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let net = NetClient::new("http://localhost:0");
+        let mut feedback = FeedbackInspectorState::default();
+        let mut code = CodeViewerState::default();
+        let text: String = (1..=900).map(|i| format!("fn line_{i}() {{}}\n")).collect();
+        let frame = |code: &mut CodeViewerState, feedback: &mut FeedbackInspectorState| {
+            let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0))), ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| code.render(ui, &net, feedback, 0));
+            });
+            placed(&output).into_iter().map(|(t, _)| t).collect::<Vec<_>>()
+        };
+        code.set_content(text.clone());
+        frame(&mut code, &mut feedback);
+        // A target far down: the file is reloaded (lines stay until the reply),
+        // and the scroll waits for the content, then lands on the target.
+        // (as load_file leaves it; no network in tests)
+        code.target_line = Some(700);
+        code.highlight = Some((700, 700));
+        code.scroll = Some(Scroll::Center);
+        code.is_loading = true;
+        frame(&mut code, &mut feedback);
+        code.set_content(text.clone());
+        let mut drawn = Vec::new();
+        for _ in 0..3 {
+            drawn = frame(&mut code, &mut feedback);
+        }
+        assert!(drawn.iter().any(|t| t == "fn line_700() {}"), "the target line is on screen");
+        assert!(!drawn.iter().any(|t| t == "fn line_10() {}"), "the top of the file isn't");
+        // Moving the cursor past the bottom scrolls just enough to keep it visible.
+        for _ in 0..12 {
+            code.run_command(CodeCommand::Down, 0.0);
+            for _ in 0..2 {
+                drawn = frame(&mut code, &mut feedback);
+            }
+        }
+        let cursor = code.target_line.unwrap();
+        assert_eq!(cursor, 760);
+        assert!(drawn.iter().any(|t| *t == format!("fn line_{cursor}() {{}}")), "the cursor line stays on screen");
+    }
+
+    #[test]
+    fn scroll_offsets_center_targets_and_keep_the_cursor_visible() {
+        assert_eq!(scroll_offset(Scroll::Center, 1, 20.0, 0.0, 400.0), 0.0);
+        assert_eq!(scroll_offset(Scroll::Center, 101, 20.0, 0.0, 420.0), 2000.0 - 200.0);
+        assert_eq!(scroll_offset(Scroll::KeepVisible, 10, 20.0, 0.0, 400.0), 0.0, "already visible");
+        assert_eq!(scroll_offset(Scroll::KeepVisible, 30, 20.0, 0.0, 400.0), 600.0 + 40.0 - 400.0, "just below: scroll by what's needed, with context");
+        assert_eq!(scroll_offset(Scroll::KeepVisible, 5, 20.0, 500.0, 400.0), 40.0, "above: bring near the top, with context");
     }
 }

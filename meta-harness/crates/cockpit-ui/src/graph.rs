@@ -465,7 +465,9 @@ impl GraphState {
                     self.plans_stale = true;
                 }
             }
-            ArchEvent::Validated { .. } => self.stale = true,
+            // A check result changes no shape on screen (and refetching on it
+            // would echo the spec view's own validation forever).
+            ArchEvent::Validated { .. } => {}
             // Stages show on nodes; the queue panel follows the rest.
             ArchEvent::QueueUpdated { .. } => {}
             ArchEvent::ViewRequested { request, by } => {
@@ -575,6 +577,11 @@ impl GraphState {
                     }
                     match *result {
                         Ok(result) => self.set_result(result),
+                        // The plan this step shows is gone (deleted): show the code instead.
+                        Err(e) if self.nav.current().plan.as_ref().is_some_and(|p| !self.plans.contains(p)) && e.to_lowercase().contains("not found") => {
+                            self.plans_stale = true;
+                            self.navigate(NavChange::Plan(None));
+                        }
                         Err(e) => self.load = Load::Failed(e),
                     }
                 }
@@ -620,11 +627,14 @@ impl GraphState {
             .filter(|(id, _)| Some(*id) != self.selection.as_ref() && self.shown(id))
             .filter_map(|(id, r)| {
                 let (x, y) = center(r);
+                // Sideways distance is the gap between the boxes' spans, so
+                // boxes in the same row (whatever their heights) line up.
+                let gap = |a0: f32, a1: f32, b0: f32, b1: f32| if a1 < b0 { b0 - a1 } else if b1 < a0 { a0 - b1 } else { 0.0 };
                 let (along, across) = match dir {
-                    Dir::Right => (x - cx, y - cy),
-                    Dir::Left => (cx - x, y - cy),
-                    Dir::Down => (y - cy, x - cx),
-                    Dir::Up => (cy - y, x - cx),
+                    Dir::Right => (x - cx, gap(current.y, current.y + current.h, r.y, r.y + r.h)),
+                    Dir::Left => (cx - x, gap(current.y, current.y + current.h, r.y, r.y + r.h)),
+                    Dir::Down => (y - cy, gap(current.x, current.x + current.w, r.x, r.x + r.w)),
+                    Dir::Up => (cy - y, gap(current.x, current.x + current.w, r.x, r.x + r.w)),
                 };
                 (along > 1.0 && across.abs() <= along * 2.0).then_some((along + 2.0 * across.abs(), id))
             })
@@ -727,16 +737,29 @@ impl GraphState {
     pub fn matches(&self, query: &str) -> Vec<ComponentId> {
         let (Some(result), false) = (&self.result, query.is_empty()) else { return Vec::new() };
         let q = query.to_lowercase();
-        result
+        // Best first: exact name, then name starting with it, then anywhere.
+        let mut hits: Vec<(u8, ComponentId)> = result
             .view
             .nodes
             .iter()
-            .filter(|n| {
-                let symbol = n.id.as_str().split_once(':').map_or(n.id.as_str(), |(_, symbol)| symbol);
-                result.components.get(&n.id).is_some_and(|c| c.name.to_lowercase().contains(&q)) || symbol.to_lowercase().contains(&q)
+            .filter_map(|n| {
+                let symbol = n.id.as_str().split_once(':').map_or(n.id.as_str(), |(_, symbol)| symbol).to_lowercase();
+                let name = result.components.get(&n.id).map(|c| c.name.to_lowercase()).unwrap_or_default();
+                let rank = if name == q {
+                    0
+                } else if name.starts_with(&q) {
+                    1
+                } else if name.contains(&q) || symbol.contains(&q) {
+                    2
+                } else {
+                    return None;
+                };
+                Some((rank, n.id.clone()))
             })
-            .map(|n| n.id.clone())
-            .collect()
+            .collect();
+        // Ties keep the view's order.
+        hits.sort_by_key(|(rank, _)| *rank);
+        hits.into_iter().map(|(_, id)| id).collect()
     }
 
     /// Opens the search prompt (the keyboard goes to it).
@@ -1464,12 +1487,14 @@ impl GraphState {
         egui::Frame::NONE.fill(colors().surface).stroke(Stroke::new(1.0, colors().border_strong)).corner_radius(6).inner_margin(8).show(ui, |ui| {
             ui.set_width(ui.available_width());
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(&c.name).strong().size(14.0).color(colors().text_strong));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button(egui_phosphor::regular::X).on_hover_text("Close (x)").clicked() {
-                            self.drawer_open = false;
-                        }
+                // Close first (right-aligned), then the name takes what's left
+                // and truncates, so a long name never hides the close button.
+                ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button(egui_phosphor::regular::X).on_hover_text("Close (x)").clicked() {
+                        self.drawer_open = false;
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(egui::Label::new(RichText::new(&c.name).strong().size(14.0).color(colors().text_strong)).truncate()).on_hover_text(&c.name);
                     });
                 });
                 ui.label(RichText::new(c.id.as_str()).monospace().size(10.0).color(colors().muted));
@@ -1995,6 +2020,10 @@ pub(crate) mod tests {
         let mut g = GraphState { result: Some(sample_result()), stale: false, catalog: Some(ViewCatalog::defaults().unwrap()), ..Default::default() };
         g.select(Some(ComponentId::new("rust:a::step")));
         let camera = g.camera;
+        // A check result isn't a change: no refetch (the spec view validates
+        // on load; refetching on its result would loop).
+        g.on_event(&ArchEvent::Validated { plan: arch_graph::PlanId::new("p").unwrap(), component: None, errors: 0, warnings: 0 });
+        assert!(!g.stale, "no refetch on a check result");
         g.on_event(&ArchEvent::Changed { reason: ChangeReason::Ingested, plans: vec![], components: vec![] });
         assert!(g.stale, "refetch requested");
         g.set_result(sample_result());

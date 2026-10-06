@@ -281,7 +281,9 @@ impl CockpitApp {
             if let harness_contracts::ClientEvent::Architecture { event } = &event {
                 self.graph.on_event(event);
                 self.queue.on_event(event);
-                if !matches!(event, arch_graph::ArchEvent::ViewRequested { .. }) {
+                // Only real changes refetch: a check result (often the spec
+                // view's own validation) must not trigger another round.
+                if matches!(event, arch_graph::ArchEvent::Changed { .. }) {
                     self.spec.invalidate();
                     self.tree.invalidate();
                     self.review.invalidate();
