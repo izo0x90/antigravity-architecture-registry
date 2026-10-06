@@ -58,12 +58,7 @@ impl WebHandle {
                 canvas,
                 web_options,
                 Box::new(move |cc| {
-                    let mut fonts = egui::FontDefinitions::default();
-                    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-                    if let Some(font_keys) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-                        font_keys.insert(1, "phosphor".into());
-                    }
-                    cc.egui_ctx.set_fonts(fonts);
+                    cc.egui_ctx.set_fonts(crate::theme::font_definitions());
                     Ok(Box::new(CockpitApp::new(&origin)))
                 }),
             )

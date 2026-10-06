@@ -56,6 +56,15 @@ pub struct NetClient {
     /// Bumped on every HTTP request/response and WebSocket message (drives the activity LED).
     pub activity: Arc<AtomicU64>,
     pub last_error: Arc<Mutex<Option<String>>>,
+    /// Reconnect delays (seconds): first try, and the cap it doubles up to.
+    backoff: (f64, f64),
+    /// When the next reconnect is due (app time, seconds), and the delay used.
+    retry: Option<(f64, f64)>,
+    /// The socket dropped once already: the next open is a reconnect.
+    dropped: bool,
+    /// Set when a dropped socket came back: views should refetch (events
+    /// were missed meanwhile). Taken by the app.
+    pub reconnected: bool,
 }
 
 /// Error text from a non-2xx response: the server's `{"error": ...}` or the status.
@@ -87,7 +96,21 @@ impl NetClient {
             ws_state: Arc::new(Mutex::new(WsState::Closed)),
             activity: Arc::new(AtomicU64::new(0)),
             last_error: Arc::new(Mutex::new(None)),
+            backoff: (0.5, 10.0),
+            retry: None,
+            dropped: false,
+            reconnected: false,
         }
+    }
+
+    /// Reconnect delays from config (milliseconds).
+    pub fn set_backoff(&mut self, min_ms: u64, max_ms: u64) {
+        self.backoff = (min_ms as f64 / 1000.0, (max_ms.max(min_ms)) as f64 / 1000.0);
+    }
+
+    /// When the next reconnect attempt is due, if one is scheduled.
+    pub fn retry_at(&self) -> Option<f64> {
+        self.retry.map(|(at, _)| at)
     }
 
     fn set_ws_state(&self, state: WsState) {
@@ -156,47 +179,85 @@ impl NetClient {
                 self.ws_sender = Some(sender);
                 self.ws_receiver = Some(receiver);
                 self.set_ws_state(WsState::Connecting);
+                // Keep the delay: if this attempt fails too, the next waits longer.
+                self.retry = self.retry.map(|(_, delay)| (f64::INFINITY, delay));
             }
             Err(e) => {
-                if let Ok(mut err) = self.last_error.lock() {
-                    *err = Some(format!("WebSocket connect error: {}", e));
-                }
+                let now = self.retry.map_or(0.0, |(at, _)| if at.is_finite() { at } else { 0.0 });
+                self.dropped_at(now, Some(format!("WebSocket connect error: {e}")));
             }
         }
     }
 
-    pub fn poll_ws(&mut self) {
+    /// Drains socket events; reconnects (with backoff) after the socket drops.
+    pub fn poll_ws(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        let mut events = Vec::new();
         if let Some(receiver) = &self.ws_receiver {
             while let Some(event) = receiver.try_recv() {
-                match event {
-                    WsEvent::Message(WsMessage::Text(text)) => {
-                        self.activity.fetch_add(1, Ordering::Relaxed);
-                        match serde_json::from_str::<ClientEvent>(&text) {
-                            Ok(parsed) => {
-                                if let Ok(mut events) = self.incoming.lock() {
-                                    events.push(parsed);
-                                }
-                            }
-                            Err(err) => {
-                                #[cfg(target_arch = "wasm32")]
-                                web_sys::console::warn_1(&format!("Unreadable server event: {err} | {text}").into());
-                                #[cfg(not(target_arch = "wasm32"))]
-                                eprintln!("Unreadable server event: {err} | {text}");
-                            }
-                        }
-                    }
-                    WsEvent::Opened => self.set_ws_state(WsState::Open),
-                    WsEvent::Closed => self.set_ws_state(WsState::Closed),
-                    WsEvent::Error(err) => {
-                        self.set_ws_state(WsState::Closed);
-                        if let Ok(mut e) = self.last_error.lock() {
-                            *e = Some(format!("WS Error: {}", err));
-                        }
-                    }
-                    _ => {}
-                }
+                events.push(event);
             }
         }
+        for event in events {
+            self.on_ws_event(event, now);
+        }
+        if let Some((at, _)) = self.retry.filter(|(at, _)| at.is_finite()) {
+            if now >= at {
+                self.connect_ws(ctx.clone());
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(at - now));
+            }
+        }
+    }
+
+    /// One socket event at app time `now`.
+    pub fn on_ws_event(&mut self, event: WsEvent, now: f64) {
+        match event {
+            WsEvent::Message(WsMessage::Text(text)) => {
+                self.activity.fetch_add(1, Ordering::Relaxed);
+                match serde_json::from_str::<ClientEvent>(&text) {
+                    Ok(parsed) => {
+                        if let Ok(mut events) = self.incoming.lock() {
+                            events.push(parsed);
+                        }
+                    }
+                    Err(err) => {
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::warn_1(&format!("Unreadable server event: {err} | {text}").into());
+                        #[cfg(not(target_arch = "wasm32"))]
+                        eprintln!("Unreadable server event: {err} | {text}");
+                    }
+                }
+            }
+            WsEvent::Opened => {
+                self.set_ws_state(WsState::Open);
+                self.retry = None;
+                if std::mem::take(&mut self.dropped) {
+                    self.reconnected = true;
+                }
+            }
+            WsEvent::Closed => self.dropped_at(now, None),
+            WsEvent::Error(err) => self.dropped_at(now, Some(format!("WS Error: {err}"))),
+            _ => {}
+        }
+    }
+
+    /// The socket is gone: try again later, waiting longer each time.
+    fn dropped_at(&mut self, now: f64, error: Option<String>) {
+        self.set_ws_state(WsState::Closed);
+        if let Some(error) = error
+            && let Ok(mut e) = self.last_error.lock()
+        {
+            *e = Some(error);
+        }
+        self.ws_sender = None;
+        self.ws_receiver = None;
+        self.dropped = true;
+        let delay = match self.retry {
+            Some((_, last)) => (last * 2.0).min(self.backoff.1),
+            None => self.backoff.0,
+        };
+        self.retry = Some((now + delay, delay));
     }
 
     // ---- threads ----
@@ -516,5 +577,32 @@ impl NetClient {
             }
             ctx.request_repaint();
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // req: P9.2
+    #[test]
+    fn a_dropped_event_socket_comes_back_with_backoff_and_asks_for_a_refresh() {
+        let mut net = NetClient::new("http://127.0.0.1:9");
+        net.set_backoff(500, 4000);
+        net.on_ws_event(WsEvent::Opened, 0.0);
+        assert!(!net.reconnected, "the first open isn't a reconnect");
+        net.on_ws_event(WsEvent::Error("gone".into()), 10.0);
+        assert_eq!(*net.ws_state.lock().unwrap(), WsState::Closed);
+        assert_eq!(net.retry_at(), Some(10.5), "first retry after the minimum delay");
+        // Each failed attempt waits twice as long, up to the cap.
+        for (now, expected) in [(10.5, 11.5), (11.5, 13.5), (13.5, 17.5), (17.5, 21.5)] {
+            net.retry = net.retry.map(|(_, d)| (f64::INFINITY, d));
+            net.on_ws_event(WsEvent::Closed, now);
+            assert_eq!(net.retry_at(), Some(expected), "at {now}");
+        }
+        net.on_ws_event(WsEvent::Opened, 30.0);
+        assert_eq!(net.retry_at(), None);
+        assert!(net.reconnected, "views refetch what they missed");
+        assert_eq!(*net.ws_state.lock().unwrap(), WsState::Open);
     }
 }

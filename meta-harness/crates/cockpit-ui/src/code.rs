@@ -52,6 +52,20 @@ pub fn gutter_marks(view: &FileView) -> BTreeMap<usize, Vec<Mark>> {
     marks
 }
 
+/// How a gutter mark looks: icon, color, tooltip and its component.
+fn mark_look(mark: &Mark) -> (&'static str, egui::Color32, String, &ComponentId) {
+    match mark {
+        Mark::Starts(id, name) => (egui_phosphor::regular::DIAMOND, colors().accent, format!("{name}: show in the graph"), id),
+        Mark::Placeholder(id) => (egui_phosphor::regular::HOURGLASS, colors().warn, "placeholder body (skeleton)".to_owned(), id),
+        Mark::MissingCall(id, target) => (egui_phosphor::regular::WARNING, colors().error, format!("planned call to {target} is missing"), id),
+    }
+}
+
+/// The marks drawn on one row of the code view, next to that line's text.
+pub fn row_marks(marks: &BTreeMap<usize, Vec<Mark>>, line_no: usize) -> &[Mark] {
+    marks.get(&line_no).map(Vec::as_slice).unwrap_or_default()
+}
+
 pub struct CodeViewerState {
     pub current_file: String,
     pub content: String,
@@ -69,6 +83,9 @@ pub struct CodeViewerState {
     pub reveal: Option<(String, usize)>,
     /// Asks the app to select this component in the graph.
     pub select: Option<ComponentId>,
+    /// When the user last moved the cursor (follow mode syncs the graph
+    /// once it settles).
+    pub cursor_moved_at: Option<f64>,
 }
 
 impl Default for CodeViewerState {
@@ -87,6 +104,7 @@ impl Default for CodeViewerState {
             scroll_pending: false,
             reveal: None,
             select: None,
+            cursor_moved_at: None,
         }
     }
 }
@@ -119,6 +137,24 @@ impl CodeViewerState {
     pub fn show_span(&mut self, path: &str, start: usize, end: usize, net: &NetClient, ctx: egui::Context) {
         self.load_file(path, Some(start), net, ctx);
         self.highlight = Some((start, end.max(start)));
+    }
+
+    /// Puts the cursor on `line` (the user moved it at `now`).
+    pub fn move_cursor(&mut self, line: usize, now: f64) {
+        self.target_line = Some(line.clamp(1, self.lines.len().max(1)));
+        self.highlight = self.target_line.map(|l| (l, l));
+        self.cursor_moved_at = Some(now);
+    }
+
+    /// The cursor's file and line once it has rested for `debounce` seconds
+    /// since the user moved it (taken once).
+    pub fn settled_cursor(&mut self, now: f64, debounce: f64) -> Option<(String, usize)> {
+        let moved = self.cursor_moved_at?;
+        if now - moved < debounce {
+            return None;
+        }
+        self.cursor_moved_at = None;
+        Some((self.current_file.clone(), self.target_line?))
     }
 
     fn in_highlight(&self, line: usize) -> bool {
@@ -191,7 +227,7 @@ impl CodeViewerState {
                         self.load_file(&path, target, net, ctx);
                     }
                     if self.is_loading {
-                        ui.label(RichText::new("●").size(10.0).color(colors().warn));
+                        ui.label(RichText::new(egui_phosphor::regular::DOT).size(10.0).color(colors().warn));
                     }
                 });
             });
@@ -224,66 +260,49 @@ impl CodeViewerState {
                 return;
             }
 
-            // Gutter + Code Viewer
-            let viewer_res = egui::ScrollArea::both()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.horizontal_top(|ui| {
-                        // Line numbers, plus marks linking lines to the graph.
-                        let mut clicked: Option<ComponentId> = None;
-                        ui.vertical(|ui| {
-                            for line_no in 1..=self.lines.len() {
-                                let marks = self.marks.get(&line_no).cloned().unwrap_or_default();
-                                let highlighted = self.in_highlight(line_no);
-                                ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 2.0;
-                                    let color = if highlighted { colors().warn } else { colors().faint };
-                                    ui.label(RichText::new(format!("{line_no:>4}")).monospace().size(11.0).color(color));
-                                    for mark in &marks {
-                                        let (icon, color, tip, id) = match mark {
-                                            Mark::Starts(id, name) => (egui_phosphor::regular::DIAMOND, colors().accent, format!("{name}: show in the graph"), id),
-                                            Mark::Placeholder(id) => (egui_phosphor::regular::HOURGLASS, colors().warn, "placeholder body (skeleton)".to_owned(), id),
-                                            Mark::MissingCall(id, target) => (egui_phosphor::regular::WARNING, colors().error, format!("planned call to {target} is missing"), id),
-                                        };
-                                        if ui.add(egui::Label::new(RichText::new(icon).size(11.0).color(color)).sense(egui::Sense::click())).on_hover_text(tip).clicked() {
-                                            clicked = Some(id.clone());
-                                        }
-                                    }
-                                });
-                            }
-                        });
-                        if clicked.is_some() {
-                            self.select = clicked;
-                        }
-
-                        ui.add_space(6.0);
-                        ui.separator();
-                        ui.add_space(6.0);
-
-                        // Code text lines
-                        ui.vertical(|ui| {
-                            let scroll_to = if self.scroll_pending { self.target_line } else { None };
-                            for (idx, line) in self.lines.iter().enumerate() {
-                                let line_no = idx + 1;
-                                let response = if self.in_highlight(line_no) {
-                                    Frame::NONE
-                                        .fill(colors().warn_bg)
-                                        .corner_radius(2)
-                                        .inner_margin(Margin::symmetric(2, 1))
-                                        .show(ui, |ui| {
-                                            ui.label(RichText::new(line).monospace().size(11.0).color(colors().warn));
-                                        })
-                                        .response
-                                } else {
-                                    ui.label(RichText::new(line).monospace().size(11.0).color(colors().text))
-                                };
-                                if scroll_to == Some(line_no) {
-                                    response.scroll_to_me(Some(egui::Align::Center));
+            // One row per line: the gutter (number and marks) and the code
+            // share the row, so marks always sit next to their line.
+            let row_height = ui.text_style_height(&egui::TextStyle::Monospace).max(14.0);
+            let gutter_w = ui.fonts_mut(|f| f.layout_no_wrap("00000".into(), egui::FontId::monospace(11.0), colors().faint).size().x) + 3.0 * 16.0;
+            let mut clicked: Option<ComponentId> = None;
+            let mut put_cursor: Option<usize> = None;
+            let scroll_to = if self.scroll_pending { self.target_line } else { None };
+            let viewer_res = egui::ScrollArea::both().auto_shrink([false, false]).show_rows(ui, row_height, self.lines.len(), |ui, rows| {
+                for idx in rows {
+                    let line_no = idx + 1;
+                    let highlighted = self.in_highlight(line_no);
+                    let row = ui.horizontal(|ui| {
+                        ui.set_min_height(row_height);
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.allocate_ui_with_layout(Vec2::new(gutter_w, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.set_min_width(gutter_w);
+                            let color = if highlighted { colors().warn } else { colors().faint };
+                            ui.label(RichText::new(format!("{line_no:>4}")).monospace().size(11.0).color(color));
+                            for mark in self.marks.get(&line_no).into_iter().flatten() {
+                                let (icon, color, tip, id) = mark_look(mark);
+                                if ui.add(egui::Label::new(RichText::new(icon).size(11.0).color(color)).sense(egui::Sense::click())).on_hover_text(tip).clicked() {
+                                    clicked = Some(id.clone());
                                 }
                             }
                         });
+                        ui.separator();
+                        let line = &self.lines[idx];
+                        let text = if highlighted { RichText::new(line).monospace().size(11.0).color(colors().warn).background_color(colors().warn_bg) } else { RichText::new(line).monospace().size(11.0).color(colors().text) };
+                        if ui.add(egui::Label::new(text).sense(egui::Sense::click())).clicked() {
+                            put_cursor = Some(line_no);
+                        }
                     });
-                });
+                    if scroll_to == Some(line_no) {
+                        row.response.scroll_to_me(Some(egui::Align::Center));
+                    }
+                }
+            });
+            if clicked.is_some() {
+                self.select = clicked;
+            }
+            if let Some(line) = put_cursor {
+                self.move_cursor(line, ui.input(|i| i.time));
+            }
             feedback.register_inspectable(ui, &format!("slot_{}:code:viewer", slot_idx + 1), viewer_res.inner_rect);
             if !self.lines.is_empty() {
                 self.scroll_pending = false;
@@ -309,21 +328,82 @@ impl crate::actions::ActionProvider for CodeViewerState {
         ]
     }
 
-    fn run(&mut self, action: &crate::actions::Action, _value: Option<String>, _cx: &mut crate::actions::RunCx<'_>) {
+    fn run(&mut self, action: &crate::actions::Action, _value: Option<String>, cx: &mut crate::actions::RunCx<'_>) {
         let line = self.target_line.unwrap_or(1);
+        let now = cx.ctx.input(|i| i.time);
         match action.command::<CodeCommand>() {
             Some(CodeCommand::Down) => {
-                self.target_line = Some((line + 5).min(self.lines.len().max(1)));
-                self.highlight = self.target_line.map(|l| (l, l));
+                self.move_cursor(line + 5, now);
                 self.scroll_pending = true;
             }
             Some(CodeCommand::Up) => {
-                self.target_line = Some(line.saturating_sub(5).max(1));
-                self.highlight = self.target_line.map(|l| (l, l));
+                self.move_cursor(line.saturating_sub(5), now);
                 self.scroll_pending = true;
             }
             Some(CodeCommand::Reveal) => self.reveal = Some((self.current_file.clone(), self.highlight.map_or(line, |(a, _)| a))),
             None => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Text drawn this frame with where it is.
+    fn placed(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => out.push((t.galley.text().to_owned(), t.visual_bounding_rect())),
+                egui::Shape::Vec(list) => list.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for clipped in &output.shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    // req: P9.15
+    #[test]
+    fn gutter_marks_sit_on_the_row_of_their_line() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let net = NetClient::new("http://localhost:0");
+        let mut feedback = FeedbackInspectorState::default();
+        let mut code = CodeViewerState::default();
+        // Lines of different heights' worth of content, marks deep in the file.
+        let text: String = (1..=40).map(|i| if i % 3 == 0 { format!("    let value_{i} = compute({i}); // a longer line\n") } else { format!("fn f{i}() {{}}\n") }).collect();
+        code.set_content(text);
+        let id = ComponentId::new("rust:x::f29");
+        code.marks.insert(29, vec![Mark::Starts(id.clone(), "f29".into()), Mark::Placeholder(id)]);
+        let mut shapes = Vec::new();
+        for _ in 0..2 {
+            let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 2000.0))), ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| code.render(ui, &net, &mut feedback, 0));
+            });
+            shapes = placed(&output);
+        }
+        let row_of = |needle: &str| shapes.iter().find(|(t, _)| t == needle).map(|(_, r)| r.center().y).unwrap_or_else(|| panic!("{needle} not drawn"));
+        let line = row_of("fn f29() {}");
+        for (what, needle) in [("line number", "  29"), ("component mark", egui_phosphor::regular::DIAMOND), ("placeholder mark", egui_phosphor::regular::HOURGLASS)] {
+            assert!((row_of(needle) - line).abs() < 4.0, "{what} is on line 29's row ({} vs {line})", row_of(needle));
+        }
+        assert_eq!(row_marks(&code.marks, 29).len(), 2);
+        assert!(row_marks(&code.marks, 28).is_empty());
+    }
+
+    #[test]
+    fn the_cursor_settles_before_follow_syncs() {
+        let mut code = CodeViewerState::default();
+        code.set_content("a\nb\nc\n".into());
+        code.move_cursor(2, 10.0);
+        assert_eq!(code.settled_cursor(10.1, 0.25), None, "still moving");
+        assert_eq!(code.settled_cursor(10.3, 0.25), Some(("Cargo.toml".into(), 2)));
+        assert_eq!(code.settled_cursor(11.0, 0.25), None, "taken once");
+        code.move_cursor(99, 12.0);
+        assert_eq!(code.target_line, Some(3), "clamped to the file");
     }
 }

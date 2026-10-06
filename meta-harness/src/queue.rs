@@ -58,7 +58,14 @@ impl JobRunner for SessionRunner {
                 {
                     return match t.status {
                         TurnStatus::Completed => Ok(()),
-                        other => Err(format!("the session's turn ended {other:?}{}", t.failure.map(|f| format!(": {}", f.message)).unwrap_or_default())),
+                        other => {
+                            let how = match other {
+                                TurnStatus::Cancelled => "was cancelled",
+                                TurnStatus::Interrupted => "was interrupted",
+                                _ => "failed",
+                            };
+                            Err(format!("the session {how}{}", t.failure.map(|f| format!(": {}", f.message)).unwrap_or_default()))
+                        }
                     };
                 }
             }
@@ -235,7 +242,7 @@ impl QueueRunner {
             let ran = runner.run(&ticket, timeout, &attach).await;
             let outcome = match ran {
                 Ok(()) => self.evaluate(plan, &component, kind).await?,
-                Err(e) => Outcome::Failed(vec![Finding::error(FindingCode::ReviewerUnavailable, Target::Component { id: component.clone() }, e)]),
+                Err(e) => Outcome::Failed(vec![Finding::error(FindingCode::SessionFailed, Target::Component { id: component.clone() }, e)]),
             };
             lock(&handle.queue).finish(&component, kind, planned.stage, outcome);
             self.announce(plan).await?;
