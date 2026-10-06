@@ -84,6 +84,9 @@ pub enum FindingCode {
     DataFlowUnverifiable,
     /// A schema reference names more than one data type.
     AmbiguousSchemaRef,
+    /// The agent session running a queue job didn't finish its work (it
+    /// failed, was cancelled or interrupted, or ran out of time).
+    SessionFailed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

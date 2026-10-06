@@ -15,7 +15,7 @@ use egui::{Align2, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKin
 use crate::actions::{Action, ActionProvider, Choice, Param, RunCx, ToolbarStyle, ToolbarUse, toolbar_control};
 use crate::feedback::FeedbackInspectorState;
 use crate::graph_config::{ChipMode, GraphUi};
-use crate::graph_style::{Swatch, alignment_label, provenance_of, style};
+use crate::graph_style::{LegendEntry, Swatch, alignment_label, provenance_of, style};
 use crate::keymap::InputMode;
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
@@ -280,6 +280,11 @@ enum Load {
     Failed(String),
 }
 
+/// How much of a wide graph slot the inspector takes, beside the canvas.
+const DRAWER_SHARE: f32 = 0.3;
+/// How much of a narrow canvas the inspector sheet covers, from the bottom.
+const SHEET_SHARE: f32 = 0.32;
+
 pub struct GraphState {
     catalog: Option<ViewCatalog>,
     catalog_requested: bool,
@@ -299,12 +304,21 @@ pub struct GraphState {
     pending_select: Option<ComponentId>,
     camera: Camera,
     fit: bool,
+    /// Fit once the next result (of a view just navigated to) arrives: the
+    /// one on screen now is the old view.
+    refit: bool,
+    /// Bring this node into view once the frame's camera is settled (after a
+    /// fit), opening collapsed containers if it's inside one.
+    reveal_after_fit: Option<ComponentId>,
     pub hint: Option<Hint>,
     pub drawer_open: bool,
     /// The agent moved the view (shown until the user navigates).
     pub agent: Option<AgentMove>,
     pub requests: GraphRequests,
     canvas: Rect,
+    /// The part of the canvas the inspector doesn't cover (fits and reveals
+    /// aim here).
+    open_area: Rect,
     inbox: Arc<Mutex<Vec<Reply>>>,
     /// Behavior settings (touch, chips, semantic zoom), from the UI config.
     pub ui: GraphUi,
@@ -341,11 +355,14 @@ impl Default for GraphState {
             pending_select: None,
             camera: Camera::default(),
             fit: true,
+            refit: false,
+            reveal_after_fit: None,
             hint: None,
             drawer_open: true,
             agent: None,
             requests: GraphRequests::default(),
             canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
+            open_area: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
             inbox: Arc::default(),
             ui: GraphUi::default(),
             gestures: Gestures::default(),
@@ -385,7 +402,7 @@ impl GraphState {
             let refetch = !now.same_view(&before);
             if refetch {
                 self.stale = true;
-                self.fit = true;
+                self.refit = true;
             }
             if let Some(at) = now.cursor {
                 if !refetch && self.component(&at).is_some() {
@@ -401,12 +418,24 @@ impl GraphState {
         }
     }
 
-    /// Pans so `id` is on screen (centered) when it isn't.
+    /// The least zoom at which containers open (their contents are drawn).
+    fn open_zoom() -> f32 {
+        11.0 / arch_graph::view::layout::HEADER * 1.05
+    }
+
+    /// Makes `id` visible: zooms in when it's inside a collapsed container,
+    /// and pans so it's on screen (centered) when it isn't.
     fn bring_into_view(&mut self, id: &ComponentId) {
         let Some(r) = self.result.as_ref().and_then(|r| r.layout.rects.get(id)).copied() else { return };
+        if !self.shown(id) {
+            self.camera.zoom = Self::open_zoom().max(self.camera.zoom);
+            let center = Vec2::new(r.x + r.w / 2.0, r.y + r.h / 2.0) * self.camera.zoom;
+            self.camera.pan = (self.open_area.center() - self.canvas.min) - center;
+            return;
+        }
         let rect = self.to_screen(&r);
-        if !self.canvas.contains_rect(rect) {
-            self.camera.pan += self.canvas.center() - rect.center();
+        if !self.open_area.contains_rect(rect) {
+            self.camera.pan += self.open_area.center() - rect.center();
         }
     }
 
@@ -420,6 +449,7 @@ impl GraphState {
     /// Selects `id`, refocusing the view on it when it isn't shown.
     pub fn reveal(&mut self, id: ComponentId) {
         if self.component(&id).is_some() {
+            self.bring_into_view(&id);
             self.select(Some(id));
         } else {
             self.pending_select = Some(id.clone());
@@ -452,6 +482,7 @@ impl GraphState {
                     && self.component(focus).is_some()
                 {
                     self.select(Some(focus.clone()));
+                    self.reveal_after_fit = Some(focus.clone());
                 }
             }
         }
@@ -473,6 +504,12 @@ impl GraphState {
         parts.join(" · ")
     }
 
+    /// Fetch everything again (events may have been missed).
+    pub fn invalidate(&mut self) {
+        self.stale = true;
+        self.plans_stale = true;
+    }
+
     /// Applies a fetched view, keeping selection and camera when possible.
     pub fn set_result(&mut self, result: ViewResult) {
         if let Some(sel) = &self.selection
@@ -482,8 +519,9 @@ impl GraphState {
         }
         if let Some(pending) = self.pending_select.take() {
             if result.components.contains_key(&pending) {
-                self.selection = Some(pending);
+                self.selection = Some(pending.clone());
                 self.drawer_open = true;
+                self.reveal_after_fit = Some(pending);
             } else {
                 self.pending_select = Some(pending);
             }
@@ -497,6 +535,9 @@ impl GraphState {
             .collect();
         self.result = Some(result);
         self.load = Load::Idle;
+        if std::mem::take(&mut self.refit) {
+            self.fit = true;
+        }
     }
 
     /// Zoomed out past the point where container headers are legible: each
@@ -564,7 +605,10 @@ impl GraphState {
         let Some(result) = &self.result else { return };
         let Some(current) = self.selection.as_ref().and_then(|s| result.layout.rects.get(s)) else {
             let first = result.view.roots.first().or(result.view.nodes.first().map(|n| &n.id)).cloned();
-            self.select(first);
+            if let Some(first) = first {
+                self.bring_into_view(&first);
+                self.select(Some(first));
+            }
             return;
         };
         let center = |r: &WorldRect| (r.x + r.w / 2.0, r.y + r.h / 2.0);
@@ -573,7 +617,7 @@ impl GraphState {
             .layout
             .rects
             .iter()
-            .filter(|(id, _)| Some(*id) != self.selection.as_ref())
+            .filter(|(id, _)| Some(*id) != self.selection.as_ref() && self.shown(id))
             .filter_map(|(id, r)| {
                 let (x, y) = center(r);
                 let (along, across) = match dir {
@@ -586,8 +630,9 @@ impl GraphState {
             })
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, id)| id.clone());
-        if best.is_some() {
-            self.select(best);
+        if let Some(best) = best {
+            self.bring_into_view(&best);
+            self.select(Some(best));
         }
     }
 
@@ -665,6 +710,7 @@ impl GraphState {
     }
 
     fn hint_hit(&mut self, action: HintAction, target: ComponentId) {
+        self.bring_into_view(&target);
         self.select(Some(target.clone()));
         match action {
             HintAction::Select => {}
@@ -808,7 +854,7 @@ impl GraphState {
         }
         let location = match (&c.anchor, &c.proposed) {
             (Some(a), _) => format!("{}:{}", a.file, a.span.start_line),
-            (None, Some(p)) => format!("→ {}", p.file),
+            (None, Some(p)) => format!("{} {}", egui_phosphor::regular::ARROW_RIGHT, p.file),
             (None, None) => "unplaced".to_owned(),
         };
         if detail == Detail::Mid {
@@ -870,10 +916,11 @@ impl GraphState {
         let (max_x, max_y) = rects.iter().fold((f32::MIN, f32::MIN), |(x, y), r| (x.max(r.x + r.w), y.max(r.y + r.h)));
         let (w, h) = ((max_x - min_x).max(1.0), (max_y - min_y).max(1.0));
         let pad = 32.0;
-        let zoom = ((self.canvas.width() - pad * 2.0) / w).min((self.canvas.height() - pad * 2.0) / h).clamp(0.03, 1.4);
+        let area = self.open_area;
+        let zoom = ((area.width() - pad * 2.0) / w).min((area.height() - pad * 2.0) / h).clamp(0.03, 1.4);
         self.camera.zoom = zoom;
         let content = Vec2::new(w, h) * zoom;
-        self.camera.pan = (self.canvas.size() - content) / 2.0 - Vec2::new(min_x, min_y) * zoom;
+        self.camera.pan = (area.min - self.canvas.min) + (area.size() - content) / 2.0 - Vec2::new(min_x, min_y) * zoom;
     }
 
     // ---- drawing ----
@@ -886,9 +933,11 @@ impl GraphState {
         let has_drawer = self.drawer_open && self.selected().is_some();
         // Wide: the inspector sits beside the canvas. Narrow: it's a sheet
         // over the bottom of the canvas.
-        let drawer_w = if has_drawer && !narrow { (area.width() * 0.38).clamp(220.0, 340.0) } else { 0.0 };
+        let drawer_w = if has_drawer && !narrow { (area.width() * DRAWER_SHARE).clamp(200.0, 320.0) } else { 0.0 };
         let canvas = Rect::from_min_max(area.min, Pos2::new(area.max.x - drawer_w, area.max.y));
         self.canvas = canvas;
+        let sheet_h = if has_drawer && narrow { canvas.height() * SHEET_SHARE } else { 0.0 };
+        self.open_area = Rect::from_min_max(canvas.min, Pos2::new(canvas.max.x, canvas.max.y - sheet_h));
         feedback.register_inspectable(ui, &format!("slot_{}:graph:canvas", slot_idx + 1), canvas);
         let response = ui.allocate_rect(canvas, Sense::click_and_drag());
         let painter = ui.painter_at(canvas);
@@ -897,6 +946,9 @@ impl GraphState {
         if self.fit && self.result.is_some() {
             self.fit = false;
             self.fit_view();
+        }
+        if let Some(id) = self.reveal_after_fit.take() {
+            self.bring_into_view(&id);
         }
         // Fingers first: while touching, pointer emulation is ignored.
         let touched = self.handle_touch(ui, cx);
@@ -961,7 +1013,7 @@ impl GraphState {
         }
         self.render_chips(ui, cx);
         if has_drawer {
-            let drawer = if narrow { Rect::from_min_max(Pos2::new(canvas.min.x, canvas.max.y - canvas.height() * 0.42), canvas.max) } else { Rect::from_min_max(Pos2::new(canvas.max.x, area.min.y), area.max) };
+            let drawer = if narrow { Rect::from_min_max(Pos2::new(canvas.min.x, canvas.max.y - sheet_h), canvas.max) } else { Rect::from_min_max(Pos2::new(canvas.max.x, area.min.y), area.max) };
             ui.scope_builder(egui::UiBuilder::new().max_rect(drawer.shrink(6.0)), |ui| self.render_drawer(ui));
         }
         let capturing = self.hint.is_some() || self.capture.is_some();
@@ -1110,42 +1162,72 @@ impl GraphState {
         }
     }
 
-    /// The legend: what each color, line and outline means, from the style table.
+    /// The legend: what each color, line and outline means, from the style
+    /// table. Sized to its text (wrapping on narrow canvases) and kept clear
+    /// of the on-screen chips.
     fn draw_legend(&self, painter: &egui::Painter) {
         let theme = colors();
         let entries = style().legend(&theme);
-        let row = 18.0;
-        let sections: BTreeSet<&str> = entries.iter().map(|e| e.section).collect();
-        let height = (entries.len() + sections.len()) as f32 * row + 16.0;
-        let rect = Rect::from_min_size(Pos2::new(self.canvas.max.x - 260.0, self.canvas.min.y + 8.0), Vec2::new(250.0, height)).intersect(self.canvas);
-        painter.rect_filled(rect, 6.0, theme.overlay);
-        let mut y = rect.min.y + 8.0;
+        let (pad, swatch_w, gap) = (10.0, 28.0, 8.0);
+        let max_w = (self.canvas.width() - 16.0).clamp(160.0, 380.0);
+        let text_w = max_w - pad * 2.0 - swatch_w - gap;
+        let font = FontId::proportional(11.0);
+        let mut rows: Vec<(Option<&str>, Option<&LegendEntry>, std::sync::Arc<egui::Galley>)> = Vec::new();
         let mut section = "";
         for entry in &entries {
             if entry.section != section {
                 section = entry.section;
-                painter.text(Pos2::new(rect.min.x + 10.0, y), Align2::LEFT_TOP, section, FontId::proportional(11.0), theme.muted);
-                y += row;
+                rows.push((Some(section), None, painter.layout(section.to_owned(), font.clone(), theme.muted, max_w - pad * 2.0)));
             }
-            let swatch = Rect::from_min_size(Pos2::new(rect.min.x + 12.0, y + 3.0), Vec2::new(28.0, 10.0));
-            match entry.swatch {
-                Swatch::Line(line) => {
-                    let points = [swatch.left_center(), swatch.right_center()];
-                    if line.dashed {
-                        painter.extend(Shape::dashed_line(&points, Stroke::new(line.width, line.color), 5.0, 3.0));
-                    } else {
-                        painter.line_segment(points, Stroke::new(line.width, line.color));
+            rows.push((None, Some(entry), painter.layout(entry.label.clone(), font.clone(), theme.text, text_w)));
+        }
+        let width = rows
+            .iter()
+            .map(|(head, _, g)| if head.is_some() { g.size().x + pad * 2.0 } else { g.size().x + pad * 2.0 + swatch_w + gap })
+            .fold(0.0f32, f32::max)
+            .min(max_w);
+        let height: f32 = rows.iter().map(|(_, _, g)| g.size().y.max(14.0) + 4.0).sum::<f32>() + pad * 2.0;
+        // Below any chips that would sit over its corner.
+        let mut top = self.canvas.min.y + 8.0;
+        let left = self.canvas.max.x - width - 8.0;
+        let footprint = Rect::from_min_size(Pos2::new(left, top), Vec2::new(width, height));
+        for (_, chip) in &self.chip_rects {
+            if chip.intersects(footprint) {
+                top = top.max(chip.max.y + 8.0);
+            }
+        }
+        let rect = Rect::from_min_size(Pos2::new(left, top), Vec2::new(width, height)).intersect(self.canvas);
+        painter.rect_filled(rect, 6.0, theme.overlay);
+        let mut y = rect.min.y + pad;
+        for (head, entry, galley) in rows {
+            let h = galley.size().y.max(14.0);
+            match (head, entry) {
+                (Some(_), _) => {
+                    painter.galley(Pos2::new(rect.min.x + pad, y), galley, theme.muted);
+                }
+                (None, Some(entry)) => {
+                    let swatch = Rect::from_min_size(Pos2::new(rect.min.x + pad, y + 2.0), Vec2::new(swatch_w, 10.0));
+                    match entry.swatch {
+                        Swatch::Line(line) => {
+                            let points = [swatch.left_center(), swatch.right_center()];
+                            if line.dashed {
+                                painter.extend(Shape::dashed_line(&points, Stroke::new(line.width, line.color), 5.0, 3.0));
+                            } else {
+                                painter.line_segment(points, Stroke::new(line.width, line.color));
+                            }
+                        }
+                        Swatch::Outline(line) => {
+                            painter.rect_stroke(swatch, 3.0, Stroke::new(line.width, line.color), StrokeKind::Inside);
+                        }
+                        Swatch::Stripe(color) => {
+                            painter.rect_filled(Rect::from_min_size(swatch.min, Vec2::new(5.0, swatch.height())), 1.0, color);
+                        }
                     }
+                    painter.galley(Pos2::new(swatch.max.x + gap, y), galley, theme.text);
                 }
-                Swatch::Outline(line) => {
-                    painter.rect_stroke(swatch, 3.0, Stroke::new(line.width, line.color), StrokeKind::Inside);
-                }
-                Swatch::Stripe(color) => {
-                    painter.rect_filled(Rect::from_min_size(swatch.min, Vec2::new(5.0, swatch.height())), 1.0, color);
-                }
+                (None, None) => {}
             }
-            painter.text(Pos2::new(swatch.max.x + 8.0, y), Align2::LEFT_TOP, &entry.label, FontId::proportional(11.0), theme.text);
-            y += row;
+            y += h + 4.0;
         }
     }
 
@@ -1197,7 +1279,7 @@ impl GraphState {
             match (&self.search, self.capture) {
                 (Some(search), _) => {
                     let found = self.matches(&search.query).len();
-                    ui.label(RichText::new(format!("/{}▏ {found} matches", search.query)).monospace().size(11.0).color(colors().key));
+                    ui.label(RichText::new(format!("/{}| {found} matches", search.query)).monospace().size(11.0).color(colors().key));
                 }
                 (None, Some(Capture::MarkSet)) => {
                     ui.label(RichText::new("mark: press a letter").size(11.0).color(colors().key));
@@ -1235,9 +1317,19 @@ impl GraphState {
                 // One block per container: its name, as large as fits, and how much is inside.
                 let inner = result.layout.rects.iter().filter(|(_, k)| *k != r && r.contains(k)).count();
                 let size = (rect.width() / (c.name.len().max(4) as f32 * 0.6)).min(rect.height() / 2.6).clamp(8.0, 20.0);
-                let clip = painter.with_clip_rect(rect.expand(2.0));
-                clip.text(rect.center() - Vec2::new(0.0, size * 0.4), Align2::CENTER_CENTER, &c.name, FontId::proportional(size), colors().text_strong);
-                clip.text(rect.center() + Vec2::new(0.0, size * 0.7), Align2::CENTER_CENTER, format!("{} · {inner}", c.type_name), FontId::proportional((size * 0.7).max(8.0)), colors().muted);
+                // Labels stay inside their block: shortened when they don't fit,
+                // the second line only when there's room for it.
+                let clip = painter.with_clip_rect(rect);
+                let room = rect.width() - 6.0;
+                let two_lines = rect.height() >= size * 2.6;
+                let name_at = if two_lines { rect.center() - Vec2::new(0.0, size * 0.4) } else { rect.center() };
+                if let Some(name) = fit_text(painter, &c.name, &FontId::proportional(size), room) {
+                    clip.text(name_at, Align2::CENTER_CENTER, name, FontId::proportional(size), colors().text_strong);
+                }
+                let small = FontId::proportional((size * 0.7).max(8.0));
+                if two_lines && let Some(kind) = fit_text(painter, &format!("{} · {inner}", c.type_name), &small, room) {
+                    clip.text(rect.center() + Vec2::new(0.0, size * 0.7), Align2::CENTER_CENTER, kind, small, colors().muted);
+                }
             } else {
                 let size = (12.0 * z).clamp(8.0, 16.0);
                 painter.with_clip_rect(rect).text(rect.min + Vec2::new(10.0 * z, (arch_graph::view::layout::HEADER * z - size) / 2.0), Align2::LEFT_TOP, format!("{} {}", c.name, c.type_name), FontId::proportional(size), colors().muted);
@@ -1303,7 +1395,6 @@ impl GraphState {
         let z = self.camera.zoom;
         let selected = self.selection.as_ref() == Some(&c.id);
         let (theme, style) = (colors(), style());
-        let border = style.node_outline(&theme, alignment, false).color;
         let outline = style.node_outline(&theme, alignment, selected);
         painter.rect_filled(rect, 6.0, style.node_fill(&theme, selected));
         let stroke = Stroke::new(outline.width, outline.color);
@@ -1336,7 +1427,7 @@ impl GraphState {
         for line in lines {
             let (font, color) = match line.role {
                 LineRole::Name => (FontId::proportional((13.0 * z).clamp(6.0, 18.0).min(rect.height() * 0.45)), colors().text_strong),
-                LineRole::Meta => (FontId::proportional(small), border),
+                LineRole::Meta => (FontId::proportional(small), colors().muted),
                 LineRole::Signature | LineRole::Location => (FontId::monospace(small * 0.95), colors().muted),
                 LineRole::Badges => (FontId::proportional(small), colors().warn),
             };
@@ -1426,7 +1517,8 @@ impl GraphState {
                     for kind in RelationKind::ALL {
                         let out: Vec<&ComponentId> = result.view.edges.iter().filter(|e| e.kind == kind && e.source == c.id).map(|e| &e.target).collect();
                         let inc: Vec<&ComponentId> = result.view.edges.iter().filter(|e| e.kind == kind && e.target == c.id).map(|e| &e.source).collect();
-                        for (label, list) in [(format!("{} →", kind.name()), out), (format!("← {}", kind.name()), inc)] {
+                        let (to, from) = (egui_phosphor::regular::ARROW_RIGHT, egui_phosphor::regular::ARROW_LEFT);
+                        for (label, list) in [(format!("{} {to}", kind.name()), out), (format!("{from} {}", kind.name()), inc)] {
                             if list.is_empty() {
                                 continue;
                             }
@@ -1441,7 +1533,7 @@ impl GraphState {
                     }
                 }
                 if let Some(id) = go {
-                    self.select(Some(id));
+                    self.navigate(NavChange::Jump(id));
                 }
             });
         });
@@ -1567,7 +1659,8 @@ impl ActionProvider for GraphState {
                     None => targets.into_iter().next(),
                 };
                 if let Some(t) = target {
-                    self.select(Some(t));
+                    // Through the history, so going back undoes it.
+                    self.navigate(NavChange::Jump(t));
                 }
             }
             GraphCommand::Focus => {
@@ -1668,6 +1761,17 @@ impl ActionProvider for GraphState {
     }
 }
 
+/// `text` as it fits in `width`: whole, shortened with an ellipsis, or not
+/// at all when not even one letter fits.
+fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, width: f32) -> Option<String> {
+    let fits = |t: &str| painter.layout_no_wrap(t.to_owned(), font.clone(), egui::Color32::WHITE).size().x <= width;
+    if fits(text) {
+        return Some(text.to_owned());
+    }
+    let chars: Vec<char> = text.chars().collect();
+    (1..chars.len()).rev().map(|n| format!("{}…", chars[..n].iter().collect::<String>())).find(|t| fits(t))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1719,6 +1823,67 @@ pub(crate) mod tests {
             text: String::new(),
             components: ids.iter().map(|s| (id(s), component(s))).collect(),
         }
+    }
+
+    /// The sample inside a module `rust:a` (a container holding all four),
+    /// plus a top-level module `rust:b` to its right.
+    fn nested_result() -> ViewResult {
+        let mut r = sample_result();
+        for (id, x) in [("rust:a", -20.0), ("rust:b", 1000.0)] {
+            let mut c = r.components[&ComponentId::new("rust:a::run")].clone();
+            c.id = ComponentId::new(id);
+            c.name = id.trim_start_matches("rust:").into();
+            c.type_name = "module".into();
+            r.components.insert(c.id.clone(), c);
+            r.view.nodes.push(ViewNode { id: ComponentId::new(id), depth: Some(0), truncated: false, alignment: Alignment::Observed });
+            let w = if id == "rust:a" { 900.0 } else { 220.0 };
+            r.layout.rects.insert(ComponentId::new(id), WorldRect { x, y: -40.0, w, h: 240.0 });
+        }
+        r.layout.containers.insert(ComponentId::new("rust:a"));
+        r
+    }
+
+    // req: P9.1
+    #[test]
+    fn a_new_view_is_fitted_when_it_arrives_not_on_the_old_one() {
+        let mut g = showing(sample_result());
+        g.fit = false;
+        g.navigate(NavChange::Focus(ComponentId::new("rust:a::step")));
+        assert!(!g.fit, "the view on screen is still the old one: don't fit it");
+        assert!(g.refit && g.stale, "fit once the new view is in");
+        g.set_result(sample_result());
+        assert!(g.fit && !g.refit, "the new view gets fitted");
+        // A refresh of the same view keeps the camera.
+        g.fit = false;
+        g.on_event(&ArchEvent::Changed { reason: ChangeReason::Ingested, plans: vec![], components: vec![] });
+        g.set_result(sample_result());
+        assert!(!g.fit, "same view, refreshed: camera stays");
+    }
+
+    // req: P9.4, P9.14
+    #[test]
+    fn moves_searches_and_jumps_only_land_on_what_can_be_seen() {
+        let mut g = showing(sample_result());
+        g.set_result(nested_result());
+        g.camera.zoom = 0.1;
+        assert!(g.collapsed() && !g.shown(&ComponentId::new("rust:a::save")), "zoomed out: the module is one block");
+        // Moving goes between what's drawn: the module, then the module beside it.
+        g.select(Some(ComponentId::new("rust:a")));
+        g.move_selection(Dir::Right);
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:b", "not into the collapsed module");
+        // A search hit inside a collapsed module opens it up.
+        g.last_query = "save".into();
+        g.search_step(true);
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::save");
+        assert!(g.shown(&ComponentId::new("rust:a::save")), "zoomed in so it's drawn");
+        assert!(g.camera.zoom >= GraphState::open_zoom());
+        // So does the first/last jump, and the agent's focus once its view is in.
+        g.camera.zoom = 0.1;
+        g.jump_to_end(false);
+        assert!(g.shown(g.selection.as_ref().unwrap()), "{:?}", g.selection);
+        g.camera.zoom = 0.1;
+        g.reveal(ComponentId::new("rust:a::log"));
+        assert!(g.shown(&ComponentId::new("rust:a::log")));
     }
 
     // req: P9.3

@@ -281,3 +281,29 @@ async fn a_session_past_its_time_is_stopped_before_the_job_is_retried() {
     let result = stuck.run(&ticket, Duration::from_millis(200), &|_| {}).await;
     assert!(result.unwrap_err().contains("didn't finish") && started.elapsed() < Duration::from_secs(3));
 }
+
+/// A session that never gets the work done.
+struct BrokenAgent;
+
+#[async_trait]
+impl JobRunner for BrokenAgent {
+    async fn run(&self, _ticket: &Ticket, _timeout: Duration, _attach: &(dyn Fn(String) + Send + Sync)) -> Result<(), String> {
+        Err("the session was cancelled".into())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_session_is_reported_as_such() {
+    let arch = fixture_architecture();
+    let plan = PlanId::new("broken").unwrap();
+    arch.create_plan("broken", "Broken", "").unwrap();
+    arch.apply(&plan, PlanOp::SetGreenfield { greenfield: true }).unwrap();
+    arch.apply(&plan, PlanOp::AddComponent { name: "a".into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None }).unwrap();
+    let queue = QueueRunner::new(arch.clone(), QueueConfig::defaults().unwrap(), |_| {});
+    queue.start(plan.clone(), Arc::new(BrokenAgent)).await.unwrap();
+    let snapshot = wait_for(&queue, &plan, QueueStatus::WaitingForUser).await;
+    let job = snapshot.job(&id("sample::a")).unwrap();
+    assert_eq!(job.state, JobState::Failed, "out of attempts");
+    assert_eq!(job.findings[0].code, arch_graph::FindingCode::SessionFailed);
+    assert_eq!(job.findings[0].message, "the session was cancelled");
+}

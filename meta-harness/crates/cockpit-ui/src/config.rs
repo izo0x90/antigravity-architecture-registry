@@ -22,6 +22,32 @@ pub struct User {
     pub name: String,
 }
 
+/// The server connection: how the event socket comes back after a drop.
+#[derive(Clone, Debug, Deserialize)]
+pub struct NetUi {
+    pub reconnect_min_ms: u64,
+    pub reconnect_max_ms: u64,
+}
+
+impl Default for NetUi {
+    fn default() -> Self {
+        Self { reconnect_min_ms: 500, reconnect_max_ms: 10_000 }
+    }
+}
+
+/// Links between views.
+#[derive(Clone, Debug, Deserialize)]
+pub struct LinksUi {
+    /// Follow mode: how long the code cursor rests before the graph follows it.
+    pub follow_debounce_ms: u64,
+}
+
+impl Default for LinksUi {
+    fn default() -> Self {
+        Self { follow_debounce_ms: 250 }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct UiConfig {
     pub brand: Brand,
@@ -31,6 +57,8 @@ pub struct UiConfig {
     pub theme: Theme,
     pub graph_style: GraphStyle,
     pub graph: GraphUi,
+    pub net: NetUi,
+    pub links: LinksUi,
 }
 
 /// Tables merge key by key; any other value replaces the base.

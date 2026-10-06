@@ -369,7 +369,7 @@ impl SpecState {
                 let open = !self.folded.contains(&section);
                 let mut title = section.title().to_owned();
                 if changed.contains(&section) {
-                    title.push_str("  ● changed");
+                    title.push_str(&format!("  {} changed", egui_phosphor::regular::DOT));
                 }
                 let open_here = self.comments_in(Some(section)).iter().filter(|c| !c.is_addressed()).count();
                 if open_here > 0 {
@@ -409,7 +409,7 @@ impl SpecState {
                                 for p in &sig.params {
                                     ui.label(RichText::new(format!("{}: {}", p.name, p.ty.as_deref().unwrap_or("?"))).monospace());
                                 }
-                                ui.label(RichText::new(format!("→ {}", sig.returns.as_deref().unwrap_or("()"))).monospace());
+                                ui.label(RichText::new(format!("{} {}", egui_phosphor::regular::ARROW_RIGHT, sig.returns.as_deref().unwrap_or("()"))).monospace());
                             }
                             None => {
                                 ui.label(RichText::new("No signature.").color(colors().muted));
@@ -442,7 +442,7 @@ impl SpecState {
                         }
                         Section::Relations => {
                             for kind in RelationKind::ALL {
-                                for (label, list, outgoing) in [(format!("{} →", kind.name()), &detail.outgoing, true), (format!("← {}", kind.name()), &detail.incoming, false)] {
+                                for (label, list, outgoing) in [(format!("{} {}", kind.name(), egui_phosphor::regular::ARROW_RIGHT), &detail.outgoing, true), (format!("{} {}", egui_phosphor::regular::ARROW_LEFT, kind.name()), &detail.incoming, false)] {
                                     let items: Vec<&ComponentId> = list.iter().filter(|r| r.kind == kind).map(|r| if outgoing { &r.target } else { &r.source }).collect();
                                     if items.is_empty() {
                                         continue;
@@ -527,7 +527,7 @@ impl SpecState {
             let fields = self.diff.fields(id);
             if !fields.is_empty() {
                 let since = self.diff.since.as_deref().map_or_else(|| "new in this plan (never reviewed)".to_owned(), |at| format!("changed since the review at {at}"));
-                ui.label(RichText::new(format!("● {since}: {}", fields.into_iter().collect::<Vec<_>>().join(", "))).size(11.0).color(colors().info));
+                ui.label(RichText::new(format!("{} {since}: {}", egui_phosphor::regular::DOT, fields.into_iter().collect::<Vec<_>>().join(", "))).size(11.0).color(colors().info));
             }
         }
         if let Some(note) = &self.note {
@@ -591,7 +591,7 @@ fn render_threads(ui: &mut egui::Ui, threads: &[Comment], point: Option<&Comment
                 ui.label(RichText::new(format!("{}: {}", r.author, r.text)).size(11.0).color(colors().text));
             }
             if let Some(a) = &c.answer {
-                ui.label(RichText::new(format!("↳ {}: {}", a.author, a.text)).size(11.0).color(colors().info));
+                ui.label(RichText::new(format!("{} {}: {}", egui_phosphor::regular::ARROW_ELBOW_DOWN_RIGHT, a.author, a.text)).size(11.0).color(colors().info));
                 for ch in &a.changes {
                     ui.label(RichText::new(format!("   {}", ch.describe())).size(10.0).monospace().color(colors().muted));
                 }

@@ -16,6 +16,19 @@ use crate::net::{NetClient, NetResult, WsState};
 use crate::tree::ArchitectureTreeState;
 use crate::theme::colors;
 
+/// Whether one of our text fields has the keyboard (as opposed to a button
+/// or nothing): only then do keys go to the widget instead of the keymap.
+pub(crate) fn text_input_focused(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| m.focused()).is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some())
+}
+
+/// The palette's field (or whatever had the keyboard) lets go of it.
+fn release_keyboard(ctx: &egui::Context) {
+    if let Some(id) = ctx.memory(|m| m.focused()) {
+        ctx.memory_mut(|m| m.surrender_focus(id));
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferKind {
     Chat,
@@ -119,6 +132,12 @@ pub struct CockpitApp {
     /// Graph selection and code view follow each other.
     pub follow: bool,
     follow_last: Option<arch_graph::ComponentId>,
+    /// A code-cursor lookup is on its way: its answer moves the graph but
+    /// mustn't move the code back.
+    following_code: bool,
+    /// The spec's anchor we last refetched the view for (so a mismatch the
+    /// server itself holds doesn't refetch every frame).
+    anchor_checked: Option<Option<arch_graph::CodeAnchor>>,
     reveal_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
     palette: crate::palette::Palette,
 
@@ -195,6 +214,8 @@ impl CockpitApp {
             pending_count: None,
             follow: false,
             follow_last: None,
+            following_code: false,
+            anchor_checked: None,
             reveal_inbox: Arc::default(),
             palette: crate::palette::Palette::default(),
 
@@ -206,12 +227,7 @@ impl CockpitApp {
     pub fn update_lifecycle(&mut self, ctx: &egui::Context) {
         if !self.initialized {
             self.initialized = true;
-            let mut fonts = egui::FontDefinitions::default();
-            egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-            if let Some(font_keys) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-                font_keys.insert(1, "phosphor".into());
-            }
-            ctx.set_fonts(fonts);
+            ctx.set_fonts(crate::theme::font_definitions());
 
             self.net.connect_ws(ctx.clone());
 
@@ -236,11 +252,20 @@ impl CockpitApp {
         if std::mem::take(&mut self.theme_dirty) {
             crate::theme::set(self.config.theme.clone(), ctx);
             crate::graph_style::set(self.config.graph_style.clone());
+            self.net.set_backoff(self.config.net.reconnect_min_ms, self.config.net.reconnect_max_ms);
             self.graph.ui = self.config.graph.clone();
         }
 
         // Poll WebSocket messages
-        self.net.poll_ws();
+        self.net.poll_ws(ctx);
+        if std::mem::take(&mut self.net.reconnected) {
+            // Back after a drop: what changed meanwhile wasn't heard.
+            self.graph.invalidate();
+            self.spec.invalidate();
+            self.tree.invalidate();
+            self.review.invalidate();
+            self.queue.invalidate();
+        }
 
         // Process incoming events
         let events = {
@@ -328,6 +353,15 @@ impl CockpitApp {
         self.graph.tick(&self.net, ctx);
         let plan = self.graph.nav.current().plan.clone();
         self.spec.follow(self.graph.selection.as_ref(), plan.as_ref());
+        // One truth for where code is: if the spec fetched a newer anchor for
+        // the selection than the view on screen has, the view is stale.
+        if let (Some(detail), Some(shown)) = (&self.spec.detail, self.graph.selected())
+            && detail.component.id == shown.id
+            && detail.component.anchor != shown.anchor
+            && self.anchor_checked.replace(detail.component.anchor.clone()) != Some(detail.component.anchor.clone())
+        {
+            self.graph.invalidate();
+        }
         self.link_review(plan.as_ref(), ctx);
         self.link_queue(plan.as_ref(), ctx);
         self.tree.set_plan(plan.as_ref());
@@ -354,10 +388,30 @@ impl CockpitApp {
         }
         let found = std::mem::take(&mut *self.reveal_inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for component in found.into_iter().flatten() {
+            if std::mem::take(&mut self.following_code) {
+                self.follow_last = Some(component.id.clone());
+            }
             self.graph.reveal(component.id);
             self.ensure_visible(BufferKind::Graph);
         }
-        // Follow mode: the code view tracks the graph selection.
+        // Follow mode, code to graph: once the code cursor rests, the graph
+        // selects the component under it.
+        let now = ctx.input(|i| i.time);
+        if let Some((file, line)) = self.code.settled_cursor(now, self.config.links.follow_debounce_ms as f64 / 1000.0)
+            && self.follow
+        {
+            self.following_code = true;
+            let inbox = self.reveal_inbox.clone();
+            self.net.arch_at(&file, line, plan.as_ref(), ctx.clone(), move |r| {
+                if let Ok(mut i) = inbox.lock() {
+                    i.push(r);
+                }
+            });
+        }
+        if self.code.cursor_moved_at.is_some() && self.follow {
+            ctx.request_repaint_after(std::time::Duration::from_millis(self.config.links.follow_debounce_ms));
+        }
+        // Follow mode, graph to code: the code view tracks the graph selection.
         if self.follow && self.graph.selection != self.follow_last {
             self.follow_last = self.graph.selection.clone();
             if let Some(c) = self.graph.selected()
@@ -619,9 +673,12 @@ impl CockpitApp {
             }
 
             // A focused text field (e.g. a search box) gets its keys.
-            InputMode::Normal if ctx.wants_keyboard_input() => {}
+            InputMode::Normal if text_input_focused(ctx) => {}
 
             InputMode::Normal => {
+                // Anything else with keyboard focus (a button reached by Tab,
+                // a field that just closed) gives it back: keys are commands.
+                release_keyboard(ctx);
                 if leader_tapped {
                     self.leader_path.clear();
                     self.input_mode = InputMode::Leader;
@@ -796,11 +853,13 @@ impl CockpitApp {
                         ui.add_space(8.0);
 
                         // Layout Mode Selector (1, 2, 3 cols)
+                        // This row runs right to left: add from the right end so
+                        // it reads "Layout: 1 2 3".
                         let layout_res = ui.horizontal(|ui| {
+                            for cols in (1..=MAX_SLOTS).rev() {
+                                ui.selectable_value(&mut self.column_count, cols, cols.to_string());
+                            }
                             ui.label(RichText::new("Layout:").size(11.0).color(colors().muted));
-                            ui.selectable_value(&mut self.column_count, 1, "1");
-                            ui.selectable_value(&mut self.column_count, 2, "2");
-                            ui.selectable_value(&mut self.column_count, 3, "3");
                         });
                         self.feedback.register_inspectable(ui, "top_bar:layout_selector", layout_res.response.rect);
                     });
@@ -1023,10 +1082,12 @@ impl CockpitApp {
         }
         if let Some(invocation) = self.palette.render(ctx, &bound, &self.config.keymap) {
             self.input_mode = InputMode::Normal;
+            release_keyboard(ctx);
             self.invoke(invocation, ctx);
         }
         if self.input_mode == InputMode::Palette && !self.palette.is_open() {
             self.input_mode = InputMode::Normal;
+            release_keyboard(ctx);
         }
     }
 }
@@ -1170,10 +1231,23 @@ mod tests {
         assert_eq!(app.input_mode, InputMode::Palette);
         frame(&ctx, &mut app, vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
         assert_eq!(app.input_mode, InputMode::Normal, "Escape closes the palette");
+        frame(&ctx, &mut app, vec![]);
+        assert!(!text_input_focused(&ctx), "the palette's field let go of the keyboard");
+        app.graph.select(Some(ComponentId::new("rust:a::run")));
+        frame(&ctx, &mut app, key("l"));
+        assert_eq!(app.graph.selection.as_ref().unwrap().as_str(), "rust:a::step", "keys work right after the palette");
+        // A button holding the keyboard (Tab) doesn't swallow keys either.
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("a button")));
+        app.graph.select(Some(ComponentId::new("rust:a::run")));
+        frame(&ctx, &mut app, key("l"));
+        assert_eq!(app.graph.selection.as_ref().unwrap().as_str(), "rust:a::step", "keys work while a button has focus");
+        assert!(ctx.memory(|m| m.focused()).is_none(), "and the button gave the keyboard back");
         app.graph.select(Some(ComponentId::new("rust:a::step")));
         frame(&ctx, &mut app, key("g"));
         frame(&ctx, &mut app, key("c"));
         assert_eq!(app.graph.selection.as_ref().unwrap().as_str(), "rust:a::save", "single callee: straight there");
+        ctrl(&ctx, &mut app, egui::Key::O);
+        assert_eq!(app.graph.selection.as_ref().unwrap().as_str(), "rust:a::step", "following an edge is in the history: back undoes it");
         frame(&ctx, &mut app, key("g"));
         frame(&ctx, &mut app, key("q"));
         assert!(app.pending_keys.is_empty(), "a key that continues nothing drops the sequence");
@@ -1199,7 +1273,7 @@ mod tests {
         app.graph = showing(result);
         app.graph.select(Some(ComponentId::new("rust:a::step")));
         let text = texts(&frame(&ctx, &mut app, vec![]));
-        for expected in ["rust:a::step", "function · Existing · Implemented", "src/a.rs:10–20", "Spec view", "Code", "calls →", "save", "← calls", "run"] {
+        for expected in ["rust:a::step", "function · Existing · Implemented", "src/a.rs:10–20", "Spec view", "Code", "calls", "save", "run"] {
             assert!(text.contains(expected), "drawer shows {expected}: {text}");
         }
         // x closes it.
@@ -1235,6 +1309,16 @@ mod tests {
         app.graph.select(Some(ComponentId::new("rust:a::save")));
         frame(&ctx, &mut app, vec![]);
         assert_eq!((app.code.current_file.as_str(), app.code.highlight), ("src/b.rs", Some((3, 5))));
+        // ...and the graph tracks the code cursor once it rests: the lookup
+        // goes out, its answer selects the component, the code stays put.
+        app.code.set_content((1..=30).map(|i| format!("line {i}\n")).collect());
+        app.code.move_cursor(4, -10.0);
+        frame(&ctx, &mut app, vec![]);
+        assert!(app.following_code, "the cursor rested: its component is being looked up");
+        app.reveal_inbox.lock().unwrap().push(Ok(app.graph.result.as_ref().unwrap().components[&ComponentId::new("rust:a::step")].clone()));
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.graph.selection.as_ref().unwrap().as_str(), "rust:a::step");
+        assert_eq!((app.code.current_file.as_str(), app.code.target_line), ("src/b.rs", Some(4)), "following the code doesn't move the code");
         // Gutter marks come from the file's components.
         let mut file_comp = sample_result().components[&ComponentId::new("rust:a::log")].clone();
         file_comp.anchor = Some(CodeAnchor { language: "rust".into(), file: RepoPath::new("src/b.rs").unwrap(), symbol: "a::log".into(), syntax_kind: "function_item".into(), span: Span { start_line: 7, end_line: 9, start_byte: 70, end_byte: 90 }, content_hash: String::new() });
@@ -1297,7 +1381,7 @@ mod tests {
         assert_eq!(app.input_mode, InputMode::Capture { slot: 1 });
         frame(&ctx, &mut app, key("s"));
         assert_eq!(selected(&app), "rust:a::step", "first match shows while typing");
-        assert!(texts(&frame(&ctx, &mut app, vec![])).contains("/s▏ 2 matches"));
+        assert!(texts(&frame(&ctx, &mut app, vec![])).contains("/s| 2 matches"));
         frame(&ctx, &mut app, press(egui::Key::Enter, false));
         assert_eq!((selected(&app), app.input_mode), ("rust:a::step", InputMode::Normal));
         frame(&ctx, &mut app, key("n"));

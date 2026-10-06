@@ -50,6 +50,8 @@ e = "Code links"
 "buffer.code" = { leader = "b v", keys = ["v"] }
 "buffer.graph" = { leader = "b g", keys = ["g"] }
 "buffer.tree" = { leader = "b t", keys = ["t"] }
+"buffer.spec" = { leader = "b s" }
+"buffer.queue" = { leader = "b q" }
 "layout.1" = { leader = "l 1", keys = ["alt+1"] }
 "layout.2" = { leader = "l 2", keys = ["alt+2"] }
 "layout.3" = { leader = "l 3", keys = ["alt+3"] }
@@ -274,3 +276,14 @@ actions = ["graph.back", "graph.forward", "graph.fit", "graph.zoom_in", "graph.z
 [graph.detail]
 mid = 0.45
 near = 0.9
+
+# The event socket: when it drops, try again after `reconnect_min_ms`, doubling
+# up to `reconnect_max_ms`; views refetch once it's back.
+[net]
+reconnect_min_ms = 500
+reconnect_max_ms = 10000
+
+# Follow mode (link.follow): the graph selects the code cursor's component
+# once the cursor has rested this long.
+[links]
+follow_debounce_ms = 250
