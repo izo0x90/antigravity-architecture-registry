@@ -135,6 +135,8 @@ impl Palette {
 
                         match &stage {
                             Stage::Actions => {
+                                // `:42` goes to line (or row) 42 of the focused view.
+                                let line = self.filter.trim().parse::<usize>().ok().filter(|n| *n > 0).and_then(|n| actions.iter().find(|b| b.action.id == "nav.line").map(|b| (n, b)));
                                 let mut ranked: Vec<(i32, &Bound)> = actions
                                     .iter()
                                     .filter_map(|b| {
@@ -144,9 +146,17 @@ impl Palette {
                                     })
                                     .collect();
                                 ranked.sort_by_key(|(s, b)| (-s, b.action.label.clone()));
-                                self.move_selection(up, down, ranked.len());
+                                let first = usize::from(line.is_some());
+                                self.move_selection(up, down, ranked.len() + first);
                                 egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
+                                    if let Some((n, bound)) = line {
+                                        let selected = self.selected == 0;
+                                        if palette_row(ui, selected, self.scroll, &format!("Go to line {n}"), None, ":N") || (selected && enter) {
+                                            picked = Some(invocation(bound, Some(n.to_string())));
+                                        }
+                                    }
                                     for (row, (_, bound)) in ranked.iter().enumerate() {
+                                        let row = row + first;
                                         let selected = row == self.selected;
                                         let clicked = palette_row(ui, selected, self.scroll, &bound.action.label, bound.action.detail.as_deref(), &bound.key_hint());
                                         if clicked || (selected && enter) {
@@ -156,7 +166,7 @@ impl Palette {
                                             }
                                         }
                                     }
-                                    if ranked.is_empty() {
+                                    if ranked.is_empty() && line.is_none() {
                                         ui.label(RichText::new("No matching actions").size(11.0).color(colors().muted));
                                     }
                                 });

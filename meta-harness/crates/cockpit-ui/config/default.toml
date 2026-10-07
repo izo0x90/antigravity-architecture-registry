@@ -13,10 +13,24 @@ name = "user"
 [keymap]
 # Tap to open the leader menu (holding it still pans the graph).
 leader = "Space"
-# Leaves insert mode, steps back out of leader menus and the palette.
+# Leaves insert mode, steps back out of leader menus, popups and the palette.
 back = "Escape"
-# Hint labels (graph `f`) are made of these, best first.
+# Hint labels (`f`) are made of these, best first.
 hint_chars = "asdfghjkl"
+# How long a half-typed key sequence (g, z, [, ], m, ') waits before a popup
+# lists what can follow. Typing the whole sequence quickly never shows it.
+which_key_delay_ms = 300
+# The leader key for the focused view's own menu (its actions without a
+# leader path of their own get the next free keys in it).
+view_menu = ","
+
+# The key bar at the bottom: the keys that matter for what the cursor is on.
+[keymap.bar]
+show = true
+# How many keys it shows.
+max = 8
+# Below this width the keys are big, tappable chips.
+narrow_below = 600.0
 
 # Leader submenus, by key path.
 [keymap.groups]
@@ -30,26 +44,32 @@ h = "Harness commands"
 a = "Account"
 r = "Requests"
 g = "Graph"
-e = "Code links"
+e = "Links"
 
 # Bindings, by action id. Keys:
 #   leader: keys after the leader, space separated; "#" is the next free key in
 #           that menu.
 #   keys:   direct keys in normal mode. A single character matches what is typed
 #           ("Y" is shift+y); otherwise modifiers+key, e.g. "ctrl+shift+c", "alt+1".
+#           Several keys in one string are a sequence ("g d").
 # Actions are looked up by id, then by their aliases, then by wildcard
 # ("config.*" covers every id starting with "config.").
+#
+# One grammar in every view: nav.* keys move the cursor of whatever view has
+# focus, goto.* keys take what the cursor is on somewhere else, and a view's
+# own keys (graph.*, spec.*, ...) only exist while it has focus. Digits before
+# a key are a count (3j, 2ctrl+d) everywhere.
 [keymap.bind]
 "palette.open" = { leader = "/", keys = [":"] }
-"slot.focus.1" = { leader = "1", keys = ["1"] }
-"slot.focus.2" = { leader = "2", keys = ["2"] }
-"slot.focus.3" = { leader = "3", keys = ["3"] }
+"slot.focus.1" = { leader = "1" }
+"slot.focus.2" = { leader = "2" }
+"slot.focus.3" = { leader = "3" }
 "slot.next" = { keys = ["Tab"] }
 "slot.prev" = { keys = ["shift+Tab"] }
-"buffer.chat" = { leader = "b c", keys = ["c"] }
-"buffer.code" = { leader = "b v", keys = ["v"] }
-"buffer.graph" = { leader = "b g", keys = ["g"] }
-"buffer.tree" = { leader = "b t", keys = ["t"] }
+"buffer.chat" = { leader = "b c" }
+"buffer.code" = { leader = "b v" }
+"buffer.graph" = { leader = "b g" }
+"buffer.tree" = { leader = "b t" }
 "buffer.spec" = { leader = "b s" }
 "buffer.queue" = { leader = "b q" }
 "layout.1" = { leader = "l 1", keys = ["alt+1"] }
@@ -58,6 +78,57 @@ e = "Code links"
 "inspector.toggle" = { leader = "i", keys = ["ctrl+shift+c"] }
 "issues.toggle" = { leader = "d", keys = ["F2"] }
 "drawer.close" = { leader = "x" }
+
+# Moving the cursor, in every view.
+"nav.left" = { keys = ["h"] }
+"nav.down" = { keys = ["j"] }
+"nav.up" = { keys = ["k"] }
+"nav.right" = { keys = ["l"] }
+"nav.half_down" = { keys = ["ctrl+d"] }
+"nav.half_up" = { keys = ["ctrl+u"] }
+"nav.first" = { keys = ["g g"] }
+"nav.last" = { keys = ["G"] }
+"nav.next_sibling" = { keys = ["] ]"] }
+"nav.prev_sibling" = { keys = ["[ ["] }
+"nav.enter" = { keys = ["Enter"] }
+"nav.leave" = { keys = ["Backspace"] }
+# Hints: label what's on screen, type a label to go there (F: and open it).
+"nav.hint" = { keys = ["f"] }
+"nav.hint_open" = { keys = ["F"] }
+# Search the view (/ then type, Enter), next/previous match.
+"nav.search" = { keys = ["/"] }
+"nav.search_next" = { keys = ["n"] }
+"nav.search_prev" = { keys = ["N"] }
+# Folds: open, close, toggle, open all, close all.
+"nav.fold_open" = { keys = ["z o"] }
+"nav.fold_close" = { keys = ["z c"] }
+"nav.fold_toggle" = { keys = ["z a"] }
+"nav.fold_open_all" = { keys = ["z R"] }
+"nav.fold_close_all" = { keys = ["z M"] }
+# Marks: m then a letter sets one, ' then the letter jumps back to it (from
+# any view).
+"nav.mark_set" = { keys = ["m"] }
+"nav.mark_jump" = { keys = ["'"] }
+# The jump list: back to where a jump left from, and forward again.
+"nav.back" = { keys = ["ctrl+o"] }
+"nav.forward" = { keys = ["ctrl+i"] }
+# This view's keys.
+"nav.keys" = { leader = "?", keys = ["?"] }
+
+# Go to, from whatever the cursor is on: its code, spec, place in the graph
+# ("map"), outline row, queue job; who calls it, what it calls, what holds
+# it, its members, what it implements, where its data flows.
+"goto.code" = { keys = ["g d"] }
+"goto.spec" = { keys = ["g s"] }
+"goto.graph" = { keys = ["g m"] }
+"goto.tree" = { keys = ["g t"] }
+"goto.queue" = { keys = ["g q"] }
+"goto.callers" = { keys = ["g r"] }
+"goto.callees" = { keys = ["g c"] }
+"goto.parent" = { keys = ["g p"] }
+"goto.members" = { keys = ["g n"] }
+"goto.implements" = { keys = ["g i"] }
+"goto.flows" = { keys = ["g l"] }
 
 "chat.insert" = { keys = ["i"] }
 "chat.clear" = { keys = ["x"] }
@@ -87,89 +158,60 @@ e = "Code links"
 "auth.complete" = { leader = "a c" }
 "auth.logout" = { leader = "a o" }
 
+# Answering the agent's requests, from any view.
 "request.accept" = { leader = "r y", keys = ["y"] }
 "request.accept_for_session" = { leader = "r a", keys = ["Y"] }
-"request.accept_always" = { leader = "r a", keys = ["Y"] }
-"request.decline" = { leader = "r n", keys = ["n"] }
+"request.accept_always" = { leader = "r A", keys = ["A"] }
+"request.decline" = { leader = "r n", keys = ["d"] }
 "request.cancel" = { leader = "r c" }
 
-# Graph (when focused): vim-style movement, g-sequences to follow relations.
-"graph.left" = { keys = ["h"] }
-"graph.down" = { keys = ["j"] }
-"graph.up" = { keys = ["k"] }
-"graph.right" = { keys = ["l"] }
-"graph.callees" = { leader = "g c", keys = ["g c"] }
-"graph.callers" = { leader = "g r", keys = ["g r"] }
-"graph.parent" = { leader = "g p", keys = ["g p"] }
-"graph.children" = { leader = "g n", keys = ["g n"] }
-"graph.implements" = { leader = "g i", keys = ["g i"] }
-"graph.flows_to" = { leader = "g l", keys = ["g l"] }
-"graph.focus" = { leader = "g f", keys = ["Enter"] }
-"graph.unfocus" = { leader = "g u", keys = ["Backspace"] }
+# Graph (when focused).
+"graph.focus" = { leader = "g f" }
+"graph.unfocus" = { leader = "g u" }
 "graph.depth_more" = { leader = "g +", keys = ["+"] }
 "graph.depth_less" = { leader = "g -", keys = ["-"] }
 "graph.view" = { leader = "g v" }
 "graph.next_view" = { keys = ["v"] }
 "graph.plan" = { leader = "g P" }
-"graph.back" = { leader = "g [", keys = ["ctrl+o"] }
-"graph.forward" = { leader = "g ]", keys = ["ctrl+i"] }
-"graph.open_code" = { leader = "g d", keys = ["g d"] }
-"graph.open_spec" = { leader = "g s", keys = ["s"] }
-"graph.hint" = { leader = "g h", keys = ["f"] }
-"graph.hint_focus" = { keys = ["F"] }
-"graph.hint_code" = { keys = ["g o"] }
-"graph.hint_spec" = { keys = ["S"] }
-"graph.zoom_in" = { keys = ["z i"] }
-"graph.zoom_out" = { keys = ["z o"] }
+"graph.next_call" = { keys = ["] e"] }
+"graph.prev_call" = { keys = ["[ e"] }
+"graph.zoom_in" = { keys = ["z +"] }
+"graph.zoom_out" = { keys = ["z -"] }
 "graph.fit" = { leader = "g z", keys = ["z z"] }
 "graph.close_inspector" = { leader = "g x", keys = ["x", "Escape"] }
 "graph.refresh" = { leader = "g ." }
-# Search the view (/ then type, Enter), next/previous match, marks (m then a
-# letter sets one, ' then the letter jumps back), first/last node. A count
-# before a key repeats it (3j, 2gc): in the graph, digits are counts, so
-# switch slots with Tab or the leader there.
-"graph.search" = { leader = "g /", keys = ["/"] }
-"graph.search_next" = { keys = ["n"] }
-"graph.search_prev" = { keys = ["N"] }
-"graph.mark_set" = { keys = ["m"] }
-"graph.mark_jump" = { keys = ["'"] }
-"graph.first" = { keys = ["g g"] }
-"graph.last" = { keys = ["G"] }
-"graph.legend" = { leader = "g ?", keys = ["?"] }
+"graph.legend" = { leader = "g ?", keys = ["g ?"] }
 "graph.agent_return" = { leader = "g a", keys = ["g a"] }
 
-# Spec view (when focused).
-"spec.next_section" = { keys = ["] ]", "J"] }
-"spec.prev_section" = { keys = ["[ [", "K"] }
-"spec.fold" = { keys = ["z a"] }
+# Spec view (when focused). j/k walk every item; J/K (and ]] / [[) jump
+# between sections. Review: comment on (or ask for a change to) the item
+# under the cursor; on a review point, reply, accept or reopen it.
+"spec.next_section" = { keys = ["J"] }
+"spec.prev_section" = { keys = ["K"] }
 "spec.pin" = { keys = ["p"] }
-"spec.open_code" = { keys = ["g d"] }
-"spec.show_in_graph" = { keys = ["g g"] }
-# Review: comment on (or ask for a change to) the current section, mark the
-# plan reviewed, accept or reopen the answer to the point under review.
 "spec.comment" = { keys = ["c"] }
 "spec.request_change" = { keys = ["C"] }
-"spec.mark_reviewed" = { keys = ["g m"] }
-"spec.next_point" = { keys = ["] c"] }
+"spec.reply" = { keys = ["r"] }
 "spec.accept" = { keys = ["a"] }
-"spec.reopen" = { keys = ["o"] }
-# Queue view: the plan's work, one job per component.
-"queue.next" = { keys = ["j"] }
-"queue.prev" = { keys = ["k"] }
+"spec.reopen" = { keys = ["x"] }
+"spec.next_point" = { keys = ["] c"] }
+"spec.prev_point" = { keys = ["[ c"] }
+"spec.mark_reviewed" = { keys = ["R"] }
+# Escape leaves the comment field; a second Escape throws the draft away.
+"spec.cancel" = { keys = ["Escape"] }
+
+# Queue view: the plan's work, one job per component (Enter shows why a job
+# failed).
 "queue.approve" = { keys = ["a"] }
 "queue.retry" = { keys = ["r"] }
-"queue.expand" = { keys = ["z a", "Enter"] }
-"queue.show_in_graph" = { keys = ["g g"] }
-"queue.open_session" = { keys = ["g s"] }
+"queue.open_session" = { keys = ["o"] }
 "queue.start" = { keys = ["g S"] }
 "queue.stop" = { keys = ["g X"] }
 
-# Code links: code view <-> graph.
-"code.reveal" = { leader = "e r", keys = ["g r"] }
+# Code view: definitions in order.
+"code.next_def" = { keys = ["] f"] }
+"code.prev_def" = { keys = ["[ f"] }
 "link.follow" = { leader = "e f" }
-
-"code.down" = { keys = ["j"] }
-"code.up" = { keys = ["k"] }
 
 # Colors by role: "#rrggbb" or "#rrggbbaa".
 [theme]
@@ -252,14 +294,14 @@ agent = "special"
 # How the graph behaves.
 [graph]
 # Long-press a node: these actions (the ones that apply) as chips.
-context = ["graph.focus", "graph.open_spec", "graph.open_code", "graph.callees", "graph.callers", "graph.parent", "graph.children", "graph.implements", "graph.flows_to"]
+context = ["graph.focus", "goto.spec", "goto.code", "goto.callees", "goto.callers", "goto.parent", "goto.members", "goto.implements", "goto.flows"]
 
 [graph.touch]
 # Points a finger may wander and still tap or long-press.
 tap_slop = 12.0
 double_tap_ms = 320.0
 long_press_ms = 550.0
-# A swipe (history back/forward) is a quick horizontal flick at least this long.
+# A swipe (back/forward in the jump list) is a quick horizontal flick at least this long.
 swipe_min = 90.0
 swipe_max_ms = 450.0
 
@@ -268,7 +310,7 @@ swipe_max_ms = 450.0
 show = "auto"
 narrow_below = 480.0
 size = 32.0
-actions = ["graph.back", "graph.forward", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.next_view", "graph.hint_focus", "graph.legend"]
+actions = ["nav.back", "nav.forward", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.next_view", "nav.hint_open", "graph.legend"]
 
 # Semantic zoom: card detail by zoom level. Below `mid`: the name; from `mid`:
 # type, stage and location; from `near`: signature, alignment, placeholders

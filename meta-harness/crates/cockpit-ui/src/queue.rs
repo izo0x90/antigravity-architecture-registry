@@ -10,7 +10,8 @@ use arch_graph::{ArchEvent, ComponentId, Job, JobState, PlanId, QueueSnapshot, Q
 use egui::RichText;
 use harness_contracts::InstanceId;
 
-use crate::actions::{Action, ActionProvider, RunCx, ToolbarStyle, ToolbarUse, toolbar_control};
+use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, ToolbarStyle, ToolbarUse, When, toolbar_control};
+use crate::nav::{Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
 
@@ -20,10 +21,7 @@ pub enum QueueCommand {
     Stop,
     Approve,
     Retry,
-    Next,
-    Prev,
     Expand,
-    ShowInGraph,
     OpenSession,
 }
 
@@ -35,7 +33,6 @@ enum Reply {
 /// What the queue view asks of the other views.
 #[derive(Default)]
 pub struct QueueRequests {
-    pub select: Option<ComponentId>,
     pub open_thread: Option<String>,
 }
 
@@ -54,6 +51,11 @@ pub struct QueueState {
     pub requests: QueueRequests,
     loaded: Option<Option<PlanId>>,
     inbox: Arc<Mutex<Vec<Reply>>>,
+    /// Jobs drawn last frame, and where; and the viewport.
+    spots: Vec<Spot>,
+    view_h: f32,
+    /// Scroll the selected job into view next frame.
+    scroll: bool,
 }
 
 fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
@@ -134,11 +136,34 @@ impl QueueState {
         self.snapshot.as_ref().map(|s| s.status)
     }
 
-    fn step(&mut self, by: isize) {
-        let n = self.snapshot.as_ref().map_or(0, |s| s.jobs.len());
+    fn jobs(&self) -> usize {
+        self.snapshot.as_ref().map_or(0, |s| s.jobs.len())
+    }
+
+    fn put_cursor(&mut self, index: usize) {
+        let n = self.jobs();
         if n > 0 {
-            self.selected = (self.selected as isize + by).rem_euclid(n as isize) as usize;
+            self.selected = index.min(n - 1);
+            self.scroll = true;
         }
+    }
+
+    pub fn has_job(&self, id: &ComponentId) -> bool {
+        self.snapshot.as_ref().is_some_and(|s| s.jobs.iter().any(|j| &j.component == id))
+    }
+
+    /// Selects the job for `id`, if the queue has one.
+    pub fn select_component(&mut self, id: &ComponentId) -> bool {
+        let at = self.snapshot.as_ref().and_then(|s| s.jobs.iter().position(|j| &j.component == id));
+        if let Some(i) = at {
+            self.put_cursor(i);
+        }
+        at.is_some()
+    }
+
+    fn half_page_jobs(&self) -> usize {
+        let avg = if self.spots.is_empty() { 30.0 } else { self.spots.iter().map(|s| s.rect.height()).sum::<f32>() / self.spots.len() as f32 };
+        if self.view_h > 0.0 { ((self.view_h / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 5 }
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
@@ -162,7 +187,9 @@ impl QueueState {
         }
         ui.separator();
         let mut clicked: Option<(usize, Option<QueueCommand>)> = None;
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        let mut spots = Vec::new();
+        let scroll = std::mem::take(&mut self.scroll);
+        let output = egui::ScrollArea::vertical().id_salt("queue_jobs").auto_shrink([false, false]).show(ui, |ui| {
             let Some(snapshot) = &self.snapshot else {
                 ui.label(RichText::new("Nothing to show yet.").color(colors().muted));
                 return;
@@ -170,8 +197,11 @@ impl QueueState {
             for (i, job) in snapshot.jobs.iter().enumerate() {
                 let selected = i == self.selected;
                 let (label, color) = state_label(&job.state);
-                let frame = egui::Frame::new().inner_margin(4.0).stroke(egui::Stroke::new(1.0, if selected { colors().focus } else { colors().border }));
-                frame.show(ui, |ui| {
+                let mut frame = egui::Frame::new().inner_margin(4.0).stroke(egui::Stroke::new(1.0, if selected { colors().focus } else { colors().border }));
+                if selected {
+                    frame = frame.fill(colors().selection);
+                }
+                let shown = frame.show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         let name = job.component.as_str().split_once(':').map_or(job.component.as_str(), |(_, s)| s);
                         if ui.selectable_label(selected, RichText::new(name).strong()).clicked() {
@@ -183,12 +213,12 @@ impl QueueState {
                             ui.label(RichText::new(format!("attempt {}", job.attempts + 1)).color(colors().muted));
                         }
                         match &job.state {
-                            JobState::AwaitingApproval if ui.button(format!("Approve {:?}", job.kind.goal())).clicked() => clicked = Some((i, Some(QueueCommand::Approve))),
-                            JobState::Failed if ui.button("Retry").clicked() => clicked = Some((i, Some(QueueCommand::Retry))),
-                            JobState::Running { thread: Some(_) } if ui.button("Session").clicked() => clicked = Some((i, Some(QueueCommand::OpenSession))),
+                            JobState::AwaitingApproval if ui.button(format!("Approve {:?}", job.kind.goal())).on_hover_text("a").clicked() => clicked = Some((i, Some(QueueCommand::Approve))),
+                            JobState::Failed if ui.button("Retry").on_hover_text("r").clicked() => clicked = Some((i, Some(QueueCommand::Retry))),
+                            JobState::Running { thread: Some(_) } if ui.button("Session").on_hover_text("o").clicked() => clicked = Some((i, Some(QueueCommand::OpenSession))),
                             _ => {}
                         }
-                        if !job.findings.is_empty() && ui.small_button(format!("{} findings", job.findings.len())).clicked() {
+                        if !job.findings.is_empty() && ui.small_button(format!("{} findings", job.findings.len())).on_hover_text("Enter").clicked() {
                             clicked = Some((i, Some(QueueCommand::Expand)));
                         }
                     });
@@ -198,8 +228,14 @@ impl QueueState {
                         }
                     }
                 });
+                if selected && scroll {
+                    shown.response.scroll_to_me(None);
+                }
+                spots.push(Spot { key: i.to_string(), rect: shown.response.rect });
             }
         });
+        self.view_h = output.inner_rect.height();
+        self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
         if let Some((i, command)) = clicked {
             self.selected = i;
             if let Some(c) = command {
@@ -219,18 +255,14 @@ impl QueueState {
                 None => self.error = Some("connect a harness in the chat first: its instance runs the sessions".into()),
             },
             QueueCommand::Stop => cx.net.arch_queue_stop(&plan, cx.ctx.clone(), self.done()),
-            QueueCommand::Approve => {
-                if let Some(job) = self.job().filter(|j| j.state == JobState::AwaitingApproval).cloned() {
-                    cx.net.arch_approve(&plan, &job.component, job.kind.goal(), &self.author, cx.ctx.clone(), self.done());
-                }
-            }
-            QueueCommand::Retry => {
-                if let Some(job) = self.job().filter(|j| j.state == JobState::Failed).cloned() {
-                    cx.net.arch_queue_retry(&plan, &job.component, cx.ctx.clone(), self.done());
-                }
-            }
-            QueueCommand::Next => self.step(1),
-            QueueCommand::Prev => self.step(-1),
+            QueueCommand::Approve => match self.job().filter(|j| j.state == JobState::AwaitingApproval).cloned() {
+                Some(job) => cx.net.arch_approve(&plan, &job.component, job.kind.goal(), &self.author, cx.ctx.clone(), self.done()),
+                None => *cx.note = Some("Only a job waiting for your approval can be approved.".into()),
+            },
+            QueueCommand::Retry => match self.job().filter(|j| j.state == JobState::Failed).cloned() {
+                Some(job) => cx.net.arch_queue_retry(&plan, &job.component, cx.ctx.clone(), self.done()),
+                None => *cx.note = Some("Only a failed job can be retried.".into()),
+            },
             QueueCommand::Expand => {
                 if let Some(id) = self.job().map(|j| j.component.clone())
                     && !self.expanded.remove(&id)
@@ -238,12 +270,10 @@ impl QueueState {
                     self.expanded.insert(id);
                 }
             }
-            QueueCommand::ShowInGraph => self.requests.select = self.job().map(|j| j.component.clone()),
-            QueueCommand::OpenSession => {
-                if let Some(JobState::Running { thread: Some(t) }) = self.job().map(|j| &j.state) {
-                    self.requests.open_thread = Some(t.clone());
-                }
-            }
+            QueueCommand::OpenSession => match self.job().map(|j| &j.state) {
+                Some(JobState::Running { thread: Some(t) }) => self.requests.open_thread = Some(t.clone()),
+                _ => *cx.note = Some("Only a running job has a session.".into()),
+            },
         }
     }
 }
@@ -252,27 +282,25 @@ impl ActionProvider for QueueState {
     fn actions(&self) -> Vec<Action> {
         use QueueCommand as Q;
         let f = |id: &str, label: &str, c: QueueCommand| Action::new(id, label, c).focused();
-        let mut out = vec![f("queue.next", "Next job", Q::Next), f("queue.prev", "Previous job", Q::Prev)];
+        let mut out = Vec::new();
         if self.plan.is_none() {
             return out;
         }
         let running = matches!(self.status(), Some(QueueStatus::Running | QueueStatus::WaitingForUser | QueueStatus::Stopping));
         if running {
-            out.push(f("queue.stop", "Stop the queue (after the running job)", Q::Stop).toolbar(ToolbarStyle::Button, "Stop", Some(egui_phosphor::regular::STOP)));
+            out.push(f("queue.stop", "Stop the queue (after the running job)", Q::Stop).toolbar(ToolbarStyle::Button, "Stop", Some(egui_phosphor::regular::STOP)).importance(MINOR));
         } else if self.status() != Some(QueueStatus::Done) {
             out.push(f("queue.start", "Start working through the plan", Q::Start).toolbar(ToolbarStyle::Button, "Start", Some(egui_phosphor::regular::PLAY)));
         }
         if let Some(job) = self.job() {
-            out.push(f("queue.show_in_graph", "Show this component in the graph", Q::ShowInGraph));
             if !job.findings.is_empty() {
-                out.push(f("queue.expand", "Show or hide why the last attempt failed", Q::Expand));
+                out.push(f("queue.expand", "Show or hide why the last attempt failed", Q::Expand).group(Group::View));
             }
-            match job.state {
-                JobState::AwaitingApproval => out.push(f("queue.approve", "Approve this component's design", Q::Approve)),
-                JobState::Failed => out.push(f("queue.retry", "Give this job another round", Q::Retry)),
-                JobState::Running { thread: Some(_) } => out.push(f("queue.open_session", "Open the session working on it", Q::OpenSession)),
-                _ => {}
-            }
+            // Always listed (the key sheet shows them); they apply to some jobs.
+            let applies = |yes: bool| if yes { When::Always } else { When::Unavailable };
+            out.push(f("queue.approve", "Approve this component's design", Q::Approve).importance(PRIMARY).when(applies(job.state == JobState::AwaitingApproval)));
+            out.push(f("queue.retry", "Give this job another round", Q::Retry).importance(PRIMARY).when(applies(job.state == JobState::Failed)));
+            out.push(f("queue.open_session", "Open the session working on it", Q::OpenSession).group(Group::GoTo).importance(PRIMARY).when(applies(matches!(job.state, JobState::Running { thread: Some(_) }))));
         }
         out
     }
@@ -284,8 +312,118 @@ impl ActionProvider for QueueState {
     }
 }
 
+impl Navigable for QueueState {
+    fn place(&self) -> Place {
+        Place::Queue { component: self.job().map(|j| j.component.clone()) }
+    }
+
+    fn restore(&mut self, place: &Place) {
+        if let Place::Queue { component: Some(id) } = place {
+            self.select_component(id);
+        }
+    }
+
+    fn target(&self) -> Option<Target> {
+        self.job().map(|j| Target::Job { component: j.component.clone() })
+    }
+
+    fn motion(&mut self, motion: Motion, count: usize) {
+        let n = self.jobs();
+        if n == 0 {
+            return;
+        }
+        match motion {
+            Motion::Down => self.put_cursor(self.selected + count),
+            Motion::Up => self.put_cursor(self.selected.saturating_sub(count)),
+            Motion::HalfDown => self.put_cursor(self.selected + self.half_page_jobs() * count),
+            Motion::HalfUp => self.put_cursor(self.selected.saturating_sub(self.half_page_jobs() * count)),
+            Motion::First => self.put_cursor(0),
+            Motion::Last => self.put_cursor(n - 1),
+            Motion::Line(i) => self.put_cursor(i.saturating_sub(1)),
+            Motion::NextSibling | Motion::PrevSibling | Motion::Left | Motion::Right => {}
+        }
+    }
+
+    /// Shows or hides why the job's last attempt failed.
+    fn enter(&mut self) -> Step {
+        match self.job() {
+            Some(job) if !job.findings.is_empty() => {
+                let id = job.component.clone();
+                if !self.expanded.remove(&id) {
+                    self.expanded.insert(id);
+                }
+                Step::Done
+            }
+            Some(_) => Step::Nothing("No findings on this job.".into()),
+            None => Step::Nothing("The queue is empty.".into()),
+        }
+    }
+
+    fn can_enter(&self) -> bool {
+        self.job().is_some_and(|j| !j.findings.is_empty())
+    }
+
+    fn can_leave(&self) -> bool {
+        self.job().is_some_and(|j| self.expanded.contains(&j.component))
+    }
+
+    fn leave(&mut self) -> Step {
+        match self.job().map(|j| j.component.clone()) {
+            Some(id) if self.expanded.remove(&id) => Step::Done,
+            _ => Step::Nothing("Nothing open here.".into()),
+        }
+    }
+
+    fn fold(&mut self, fold: Fold) {
+        let with_findings: Vec<ComponentId> = self.snapshot.as_ref().map(|s| s.jobs.iter().filter(|j| !j.findings.is_empty()).map(|j| j.component.clone()).collect()).unwrap_or_default();
+        let here = self.job().map(|j| j.component.clone());
+        match (fold, here) {
+            (Fold::OpenAll, _) => self.expanded = with_findings.into_iter().collect(),
+            (Fold::CloseAll, _) => self.expanded.clear(),
+            (Fold::Open, Some(id)) if with_findings.contains(&id) => {
+                self.expanded.insert(id);
+            }
+            (Fold::Close, Some(id)) => {
+                self.expanded.remove(&id);
+            }
+            (Fold::Toggle, Some(_)) => {
+                self.enter();
+            }
+            _ => {}
+        }
+    }
+
+    fn items(&self) -> Vec<Item> {
+        let Some(snapshot) = &self.snapshot else { return Vec::new() };
+        snapshot
+            .jobs
+            .iter()
+            .enumerate()
+            .map(|(i, j)| {
+                let symbol = j.component.as_str().split_once(':').map_or(j.component.as_str(), |(_, s)| s);
+                let name = symbol.rsplit([':', '.']).next().unwrap_or(symbol);
+                Item::new(i.to_string(), name, format!("{symbol} {} {}", j.kind.name(), state_label(&j.state).0))
+            })
+            .collect()
+    }
+
+    fn spots(&self) -> Vec<Spot> {
+        self.spots.clone()
+    }
+
+    fn cursor_key(&self) -> Option<String> {
+        (self.jobs() > 0).then(|| self.selected.to_string())
+    }
+
+    fn move_to(&mut self, key: &str) {
+        if let Ok(i) = key.parse() {
+            self.put_cursor(i);
+        }
+    }
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use arch_graph::{Finding, FindingCode, JobKind, Target};
 
@@ -293,7 +431,7 @@ mod tests {
         ComponentId::new(format!("rust:{s}"))
     }
 
-    fn snapshot(status: QueueStatus) -> QueueSnapshot {
+    pub(crate) fn snapshot(status: QueueStatus) -> QueueSnapshot {
         let job = |s: &str, kind, state, findings: Vec<Finding>| Job { component: id(s), kind, state, attempts: findings.len() as u32, findings };
         QueueSnapshot {
             plan: PlanId::new("p").unwrap(),
@@ -306,11 +444,12 @@ mod tests {
         }
     }
 
+    /// The actions that apply to the selected job now.
     fn ids(q: &QueueState) -> Vec<String> {
-        q.actions().into_iter().map(|a| a.id).collect()
+        q.actions().into_iter().filter(|a| a.when != When::Unavailable).map(|a| a.id).collect()
     }
 
-    // req: P9.12
+    // req: P9.12, N.19
     #[test]
     fn queue_sessions_approvals_and_findings_are_visible_and_actionable() {
         let ctx = egui::Context::default();
@@ -320,23 +459,34 @@ mod tests {
         q.on_event(&ArchEvent::QueueUpdated { snapshot: Box::new(snapshot(QueueStatus::Running)) });
         assert_eq!(q.snapshot.as_ref().unwrap().jobs.len(), 3, "the pushed snapshot is shown");
         let mut mode = crate::keymap::InputMode::Normal;
-        let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, hint_chars: "asdf" };
+        let mut note = None;
+        let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] };
         // The running job links to its session.
         assert!(ids(&q).contains(&"queue.open_session".to_owned()) && ids(&q).contains(&"queue.stop".to_owned()));
         q.apply(QueueCommand::OpenSession, &mut cx);
         assert_eq!(q.requests.open_thread.take(), Some("t1".into()));
         // Approval waits on the user: the action is offered on that job only.
-        q.apply(QueueCommand::Next, &mut cx);
+        q.motion(Motion::Down, 1);
         assert!(ids(&q).contains(&"queue.approve".to_owned()) && !ids(&q).contains(&"queue.retry".to_owned()));
-        q.apply(QueueCommand::ShowInGraph, &mut cx);
-        assert_eq!(q.requests.select.take(), Some(id("a")));
+        assert_eq!(q.target(), Some(crate::nav::Target::Job { component: id("a") }), "the job's component is the cursor's target");
         // Failed work shows why and can be retried.
-        q.apply(QueueCommand::Next, &mut cx);
+        q.motion(Motion::Down, 1);
         assert!(ids(&q).contains(&"queue.retry".to_owned()) && ids(&q).contains(&"queue.expand".to_owned()));
+        assert_eq!(q.enter(), Step::Done, "Enter shows the findings");
+        assert!(q.expanded.contains(&id("c")));
+        assert_eq!(q.leave(), Step::Done, "Backspace hides them");
         q.apply(QueueCommand::Expand, &mut cx);
         assert!(q.expanded.contains(&id("c")));
-        q.apply(QueueCommand::Next, &mut cx);
-        assert_eq!(q.selected, 0, "wraps around");
+        q.motion(Motion::Down, 1);
+        assert_eq!(q.selected, 2, "stops at the last job");
+        q.motion(Motion::First, 1);
+        assert_eq!(q.selected, 0);
+        q.motion(Motion::Last, 1);
+        assert_eq!(q.selected, 2);
+        assert!(q.select_component(&id("a")) && q.selected == 1, "a go-to finds a component's job");
+        assert!(!q.select_component(&id("zzz")));
+        let found = crate::nav::rank_matches(&q.items(), "c");
+        assert_eq!(q.items()[found[0]].key, "2", "search finds jobs by name first");
         // Starting needs a harness to run sessions on.
         q.on_event(&ArchEvent::QueueUpdated { snapshot: Box::new(snapshot(QueueStatus::Idle)) });
         assert!(ids(&q).contains(&"queue.start".to_owned()));
@@ -351,7 +501,8 @@ mod tests {
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let mut mode = crate::keymap::InputMode::Normal;
-                let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, hint_chars: "asdf" };
+                let mut note = None;
+                let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] };
                 q.render(ui, &mut cx);
             });
         });

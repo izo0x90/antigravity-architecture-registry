@@ -106,8 +106,8 @@ class ReqStatusTests(unittest.TestCase):
         reqs = rs.load_spec()
         ids = [r.id for r in reqs]
         self.assertEqual(len(ids), len(set(ids)))
-        self.assertTrue(all(r.slice.startswith("S") for r in reqs))
-        for needed in ("P0.1", "P2.4", "P6.10", "P9.13", "R.3"):
+        self.assertTrue(all(r.slice.strip() for r in reqs))
+        for needed in ("P0.1", "P2.4", "P6.10", "P9.13", "R.3", "N.1"):
             self.assertIn(needed, ids)
 
     # req: P0.2

@@ -299,6 +299,7 @@ mod tests {
             target: id(b),
             alignment: crate::Alignment::Planned,
             overlay: false,
+            order: None,
         };
         let mut spec = ViewCatalog::defaults().unwrap().get("structure").unwrap().clone();
         spec.layout = LayoutKind::Nested;

@@ -14,8 +14,9 @@ use harness_contracts::{
 
 use egui_phosphor::regular as icon;
 
-use crate::actions::{Action, ActionProvider, Choice, Param, RunCx, ToolbarStyle, ToolbarUse, toolbar_control};
+use crate::actions::{Action, ActionProvider, Choice, MINOR, Param, RunCx, ToolbarStyle, ToolbarUse, toolbar_control};
 use crate::feedback::FeedbackInspectorState;
+use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, Spot, Step, Target};
 use crate::net::{NetClient, NetResult, OpenThreadBody};
 use crate::store::{Store, ThreadView};
 use crate::theme::colors;
@@ -69,6 +70,17 @@ pub struct ChatStreamState {
     auth_instructions: Option<String>,
     auth_paste: String,
     mailbox: Mailbox,
+    /// The message the cursor is on (normal mode); None follows the latest.
+    pub cursor: Option<usize>,
+    /// Which of its links a hint picked.
+    link_pick: Option<usize>,
+    /// Scroll the cursor's message into view next frame.
+    scroll: bool,
+    /// Messages and links drawn last frame (and this one's, as drawn), and
+    /// the stream's viewport.
+    spots: Vec<Spot>,
+    drawing: Vec<Spot>,
+    view: Rect,
 }
 
 impl Default for ChatStreamState {
@@ -92,6 +104,12 @@ impl Default for ChatStreamState {
             auth_instructions: None,
             auth_paste: String::new(),
             mailbox: Mailbox::default(),
+            cursor: None,
+            link_pick: None,
+            scroll: false,
+            spots: Vec::new(),
+            drawing: Vec::new(),
+            view: Rect::NOTHING,
         }
     }
 }
@@ -290,11 +308,15 @@ impl ChatStreamState {
             self.render_plan(ui);
 
             let scroll_height = (ui.available_height() - 105.0).max(50.0);
+            self.drawing.clear();
             let stream = egui::ScrollArea::vertical()
+                .id_salt("chat_stream")
                 .auto_shrink([false, false])
-                .stick_to_bottom(true)
+                .stick_to_bottom(self.cursor.is_none())
                 .max_height(scroll_height)
                 .show(ui, |ui| self.render_stream(ui, net));
+            self.view = stream.inner_rect;
+            self.spots = std::mem::take(&mut self.drawing).into_iter().filter(|s| s.rect.intersects(stream.inner_rect)).collect();
             feedback.register_inspectable(ui, &format!("slot_{}:chat:stream", slot_idx + 1), stream.inner_rect);
             ui.separator();
 
@@ -442,6 +464,8 @@ impl ChatStreamState {
             });
             return;
         };
+        let scroll = std::mem::take(&mut self.scroll);
+        let mut index = 0;
         for turn in &view.turns {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("Turn {}", turn.ordinal)).monospace().size(10.0).color(colors().faint));
@@ -452,14 +476,44 @@ impl ChatStreamState {
                 }
             });
             for item in view.items_of(&turn.id) {
-                self.render_item(ui, net, &view, item);
+                let on = self.cursor == Some(index);
+                let fill = if on { colors().selection } else { Color32::TRANSPARENT };
+                let shown = Frame::NONE.fill(fill).corner_radius(3).inner_margin(Margin::symmetric(3, 1)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    self.render_item(ui, net, &view, item, index);
+                });
+                if on && scroll {
+                    shown.response.scroll_to_me(Some(egui::Align::Center));
+                }
+                self.drawing.push(Spot { key: index.to_string(), rect: shown.response.rect });
+                index += 1;
                 ui.add_space(3.0);
             }
             ui.add(egui::Separator::default().spacing(8.0));
         }
     }
 
-    fn render_item(&mut self, ui: &mut egui::Ui, net: &NetClient, view: &ThreadView, item: &TurnItem) {
+    /// Every item in the active thread, in the order shown.
+    fn stream(&self) -> Vec<TurnItem> {
+        let Some(view) = self.thread() else { return Vec::new() };
+        view.turns.iter().flat_map(|t| view.items_of(&t.id).cloned()).collect()
+    }
+
+    fn put_cursor(&mut self, index: usize) {
+        let n = self.stream().len();
+        if n > 0 {
+            self.cursor = Some(index.min(n - 1));
+            self.link_pick = None;
+            self.scroll = true;
+        }
+    }
+
+    fn half_page_items(&self) -> usize {
+        let avg = if self.spots.is_empty() { 40.0 } else { self.spots.iter().map(|s| s.rect.height()).sum::<f32>() / self.spots.len() as f32 };
+        if self.view.height() > 0.0 { ((self.view.height() / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 4 }
+    }
+
+    fn render_item(&mut self, ui: &mut egui::Ui, net: &NetClient, view: &ThreadView, item: &TurnItem, index: usize) {
         match &item.body {
             ItemBody::UserMessage { text } => {
                 ui.horizontal_wrapped(|ui| {
@@ -489,9 +543,11 @@ impl ChatStreamState {
                 let title = item.title.clone().unwrap_or_else(|| name.clone());
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(format!("{tag} {} {title}", tool_icon(kind))).monospace().size(11.0).color(color));
-                    for loc in locations {
+                    for (n, loc) in locations.iter().enumerate() {
                         let label = match loc.line { Some(l) => format!("{} {}:{l}", icon::FOLDER_OPEN, loc.path), None => format!("{} {}", icon::FOLDER_OPEN, loc.path) };
-                        if ui.small_button(RichText::new(label).monospace().size(10.0)).clicked() {
+                        let link = ui.small_button(RichText::new(label).monospace().size(10.0));
+                        self.drawing.push(Spot { key: format!("{index}:{n}"), rect: link.rect });
+                        if link.clicked() {
                             self.requested_file_jump = Some((loc.path.clone(), loc.line.map(|l| l as usize)));
                         }
                     }
@@ -507,7 +563,9 @@ impl ChatStreamState {
                 }
             }
             ItemBody::FileChange { path, .. } => {
-                if ui.small_button(RichText::new(format!("{} {path}", icon::PENCIL_SIMPLE)).monospace().size(11.0)).clicked() {
+                let link = ui.small_button(RichText::new(format!("{} {path}", icon::PENCIL_SIMPLE)).monospace().size(11.0));
+                self.drawing.push(Spot { key: format!("{index}:0"), rect: link.rect });
+                if link.clicked() {
                     self.requested_file_jump = Some((path.clone(), None));
                 }
             }
@@ -612,6 +670,132 @@ impl ChatStreamState {
     }
 }
 
+/// The files an item points at, in the order they're drawn.
+fn links_of(item: &TurnItem) -> Vec<(String, Option<usize>)> {
+    match &item.body {
+        ItemBody::ToolCall { locations, .. } => locations.iter().map(|l| (l.path.clone(), l.line.map(|l| l as usize))).collect(),
+        ItemBody::FileChange { path, .. } => vec![(path.clone(), None)],
+        _ => Vec::new(),
+    }
+}
+
+/// What search looks through in an item.
+fn item_text(item: &TurnItem) -> String {
+    match &item.body {
+        ItemBody::UserMessage { text } => text.clone(),
+        ItemBody::AssistantMessage { content, .. } => content.iter().map(block_summary).collect::<Vec<_>>().join(" "),
+        ItemBody::Reasoning { text, .. } => text.clone(),
+        ItemBody::ToolCall { name, locations, .. } => {
+            let paths: Vec<&str> = locations.iter().map(|l| l.path.as_str()).collect();
+            format!("{} {name} {}", item.title.clone().unwrap_or_default(), paths.join(" "))
+        }
+        ItemBody::FileChange { path, .. } => path.clone(),
+        ItemBody::CommandExecution { command, .. } => command.clone(),
+        ItemBody::ProposedPlan { markdown, .. } => markdown.clone(),
+        ItemBody::Notice { text, .. } => text.clone(),
+        ItemBody::Error { message } => message.clone(),
+        ItemBody::Unknown { display, .. } => display.clone(),
+        _ => String::new(),
+    }
+}
+
+impl Navigable for ChatStreamState {
+    fn place(&self) -> Place {
+        Place::Chat { message: self.cursor }
+    }
+
+    fn restore(&mut self, place: &Place) {
+        if let Place::Chat { message } = place {
+            self.cursor = *message;
+            self.link_pick = None;
+            self.scroll = message.is_some();
+        }
+    }
+
+    fn target(&self) -> Option<Target> {
+        let index = self.cursor?;
+        let item = self.stream().into_iter().nth(index)?;
+        let links = links_of(&item);
+        let link = self.link_pick.and_then(|n| links.get(n).cloned()).or_else(|| links.first().cloned());
+        Some(Target::Message { thread: self.active_thread.as_ref().map(|t| t.to_string()), index, link })
+    }
+
+    /// From the latest message (none under the cursor yet), moves start at
+    /// the bottom.
+    fn motion(&mut self, motion: Motion, count: usize) {
+        let n = self.stream().len();
+        if n == 0 {
+            return;
+        }
+        let at = self.cursor.unwrap_or(n - 1);
+        let fresh = self.cursor.is_none();
+        match motion {
+            Motion::Down => self.put_cursor(if fresh { at } else { at + count }),
+            Motion::Up => self.put_cursor(if fresh { at } else { at.saturating_sub(count) }),
+            Motion::HalfDown => self.put_cursor(at + self.half_page_items() * count),
+            Motion::HalfUp => self.put_cursor(at.saturating_sub(self.half_page_items() * count)),
+            Motion::First => self.put_cursor(0),
+            Motion::Last => self.put_cursor(n - 1),
+            Motion::Line(i) => self.put_cursor(i.saturating_sub(1)),
+            Motion::NextSibling | Motion::PrevSibling | Motion::Left | Motion::Right => {}
+        }
+    }
+
+    /// A message's file opens in the code view.
+    fn enter(&mut self) -> Step {
+        match self.target() {
+            Some(Target::Message { link: Some(_), .. }) => Step::GoTo(GoTo::Code),
+            Some(_) => Step::Nothing("No file in this message.".into()),
+            None => Step::Nothing("Move to a message first (j / k).".into()),
+        }
+    }
+
+    fn can_enter(&self) -> bool {
+        matches!(self.target(), Some(Target::Message { link: Some(_), .. }))
+    }
+
+    fn can_leave(&self) -> bool {
+        self.cursor.is_some()
+    }
+
+    fn enter_label(&self) -> Option<String> {
+        match self.target()? {
+            Target::Message { link: Some((path, _)), .. } => Some(format!("Open {path}")),
+            _ => None,
+        }
+    }
+
+    /// Lets go of the cursor: the stream follows the latest again.
+    fn leave(&mut self) -> Step {
+        if self.cursor.take().is_none() {
+            return Step::Nothing("Already following the latest.".into());
+        }
+        Step::Done
+    }
+
+    fn fold(&mut self, _fold: Fold) {}
+
+    fn items(&self) -> Vec<Item> {
+        self.stream().iter().enumerate().map(|(i, item)| Item::new(i.to_string(), "", item_text(item))).collect()
+    }
+
+    fn spots(&self) -> Vec<Spot> {
+        self.spots.clone()
+    }
+
+    fn cursor_key(&self) -> Option<String> {
+        self.cursor.map(|c| c.to_string())
+    }
+
+    /// A message ("3") or one of its links ("3:1").
+    fn move_to(&mut self, key: &str) {
+        let mut parts = key.split(':');
+        let Some(index) = parts.next().and_then(|i| i.parse::<usize>().ok()) else { return };
+        self.put_cursor(index);
+        self.link_pick = parts.next().and_then(|n| n.parse().ok());
+    }
+}
+
 fn mcp_label(server: &McpServer) -> String {
     match &server.transport {
         McpTransport::Http { url, .. } => format!("{} — {url}", server.name),
@@ -692,8 +876,10 @@ impl ActionProvider for ChatStreamState {
         let idle = self.active_thread.is_none() && !self.opening;
 
         // Prompt (this view only)
-        out.push(Action::new("chat.insert", "Type a prompt", C::Insert).focused());
-        out.push(Action::new("chat.clear", "Clear the prompt", C::ClearPrompt).focused());
+        out.push(Action::new("chat.insert", "Type a prompt", C::Insert).focused().importance(crate::actions::PRIMARY));
+        if !self.input_buffer.is_empty() {
+            out.push(Action::new("chat.clear", "Clear the prompt", C::ClearPrompt).focused().importance(MINOR));
+        }
 
         // Session
         let mut new = Action::new("session.new", "New session", C::NewSession);
@@ -1058,5 +1244,92 @@ fn block_detail(block: &ContentBlock) -> String {
         }
         ContentBlock::Resource { uri, text: Some(text) } => format!("{uri}\n{}", text.chars().take(600).collect::<String>()),
         other => block_summary(other),
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use harness_contracts::{AdapterEvent, FileLocation, InstanceId, ItemId, RuntimePolicy, Thread, ThreadStatus, Turn, TurnId, TurnStatus};
+
+    fn session(event: AdapterEvent) -> ClientEvent {
+        ClientEvent::Session { event }
+    }
+
+    pub(crate) fn item(n: u32, body: ItemBody) -> ClientEvent {
+        session(AdapterEvent::ItemUpdated {
+            item: TurnItem {
+                id: ItemId::new(format!("i{n}")),
+                thread_id: ThreadId::new("t"),
+                turn_id: TurnId::new("turn"),
+                native_id: None,
+                parent_id: None,
+                ordinal: n,
+                status: ItemStatus::Completed,
+                title: None,
+                body,
+            },
+        })
+    }
+
+    /// A thread with a prompt, an answer, a tool call reading two files and a file change.
+    pub(crate) fn conversation() -> ChatStreamState {
+        let mut chat = ChatStreamState::default();
+        let thread = Thread { id: ThreadId::new("t"), instance_id: InstanceId::new("i"), native_id: None, title: None, status: ThreadStatus::Idle, policy: RuntimePolicy::default(), model: None, controls: Default::default(), mcp_servers: Vec::new() };
+        chat.process_event(session(AdapterEvent::ThreadUpdated { thread }));
+        chat.process_event(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Completed, failure: None, usage: None } }));
+        chat.process_event(item(0, ItemBody::UserMessage { text: "fix the parser".into() }));
+        chat.process_event(item(1, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Looking at it.".into() }], streaming: false }));
+        let locations = vec![FileLocation { path: "src/parse.rs".into(), line: Some(12) }, FileLocation { path: "src/lex.rs".into(), line: None }];
+        chat.process_event(item(2, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations }));
+        chat.process_event(item(3, ItemBody::FileChange { path: "src/parse.rs".into(), diff: None }));
+        chat
+    }
+
+    // req: N.20
+    #[test]
+    fn messages_take_a_cursor_and_their_links_open() {
+        let mut chat = conversation();
+        assert_eq!(chat.target(), None, "no cursor: the stream follows the latest");
+        chat.motion(Motion::Up, 1);
+        assert_eq!(chat.cursor, Some(3), "the first move starts at the latest message");
+        chat.motion(Motion::Up, 2);
+        assert_eq!(chat.cursor, Some(1));
+        chat.motion(Motion::Last, 1);
+        assert_eq!(chat.cursor, Some(3));
+        chat.motion(Motion::First, 1);
+        assert_eq!(chat.cursor, Some(0));
+        assert!(matches!(chat.enter(), Step::Nothing(_)), "a prompt has no file");
+        chat.motion(Motion::Line(3), 1);
+        assert_eq!(chat.target(), Some(Target::Message { thread: Some("t".into()), index: 2, link: Some(("src/parse.rs".into(), Some(12))) }));
+        assert_eq!(chat.enter(), Step::GoTo(GoTo::Code), "Enter opens the file it points to");
+        // A hint on the second link picks it.
+        chat.move_to("2:1");
+        assert_eq!(chat.target().and_then(|t| t.code()), Some(("src/lex.rs".into(), None)));
+        // Search finds messages by what they say.
+        let items = chat.items();
+        assert_eq!(crate::nav::rank_matches(&items, "parser"), vec![0]);
+        assert_eq!(crate::nav::rank_matches(&items, "lex.rs"), vec![2]);
+        // Backspace lets go: the stream follows the latest again.
+        assert_eq!(chat.leave(), Step::Done);
+        assert_eq!(chat.cursor, None);
+        // What's drawn takes hints: each message, and each link.
+        let ctx = egui::Context::default();
+        let net = NetClient::new("http://127.0.0.1:9");
+        let mut feedback = FeedbackInspectorState::default();
+        for _ in 0..2 {
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 900.0))), ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut mode = crate::keymap::InputMode::Normal;
+                    let mut note = None;
+                    let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] };
+                    chat.render(ui, &mut feedback, true, &mut cx);
+                });
+            });
+        }
+        let keys: Vec<String> = chat.spots().into_iter().map(|s| s.key).collect();
+        for key in ["0", "1", "2", "2:0", "2:1", "3", "3:0"] {
+            assert!(keys.contains(&key.to_owned()), "{key} in {keys:?}");
+        }
     }
 }

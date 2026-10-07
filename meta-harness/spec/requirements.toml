@@ -766,3 +766,168 @@ slice = "S4"
 title = "Revisit spec workflow with the user"
 manual = true
 acceptance = "Decisions on specs/invariants workflow, task breakdown and wireframes are recorded."
+
+# ---- N: navigation and keys (agreed with the user 2026-10-06) ----
+# One key language across every view: a shared cursor target, the same verbs
+# everywhere, a "go to" family, one jump history, and discoverability.
+# All keys live in config (crates/cockpit-ui/config/default.toml).
+
+[[req]]
+id = "N.1"
+slice = "N"
+title = "Shared cursor target in every view"
+acceptance = "Graph, tree, code, spec, queue and chat each expose a cursor that resolves to one shared Target type (component, file and line, spec section/item, queue job, chat thread/message); every navigation feature below acts on it."
+
+[[req]]
+id = "N.2"
+slice = "N"
+title = "One jump history across views"
+acceptance = "ctrl+o / ctrl+i go back/forward across all views and slots; every jump (go-to keys, search, gg/G, marks, hint picks, Enter/Backspace, follow) records (slot, view, target); the graph-only back/forward is replaced."
+
+[[req]]
+id = "N.3"
+slice = "N"
+title = "Key grammar from config, no conflicts"
+acceptance = "Every key below is bound in config, none hardcoded; old conflicting bindings are renamed (spec/queue 'g g' show-in-graph -> 'g m'; code 'g r' reveal -> 'g m'; spec reopen 'o' -> 'x'); a test proves no two actions in one view share a key sequence."
+
+[[req]]
+id = "N.4"
+slice = "N"
+title = "Action metadata for ranking"
+acceptance = "Each action carries a group (navigate, go to, act, view), an importance tier and an applies-when condition on the current target; the key bar, prefix popup, leader menu and ? sheet are generated from it."
+
+[[req]]
+id = "N.5"
+slice = "N"
+title = "j/k (and h/l) move in every view, with counts"
+acceptance = "j/k move the cursor in graph, tree, code, spec, queue and chat; h/l where there are two dimensions (graph; tree collapse/expand); counts like 5j work in every view."
+
+[[req]]
+id = "N.6"
+slice = "N"
+title = "ctrl+d / ctrl+u half-page in every view"
+acceptance = "ctrl+d / ctrl+u move half a page down/up in every view: half the visible rows in tree, code, spec, queue and chat (cursor moves with it, stays visible); half the viewport in the graph (pan, selecting the nearest shown node)."
+
+[[req]]
+id = "N.7"
+slice = "N"
+title = "gg / G first and last in every view"
+acceptance = "gg / G go to the first / last item in every view (graph keeps first/last node; code first/last line; tree, spec, queue, chat first/last row or item)."
+
+[[req]]
+id = "N.8"
+slice = "N"
+title = "f hint mode in every view"
+acceptance = "f labels the visible targets in the focused view (graph nodes, tree rows, code symbols, spec items, queue jobs, chat links/messages); typing a label moves the cursor there; F opens/goes into it; labels only on what's actually drawn."
+
+[[req]]
+id = "N.9"
+slice = "N"
+title = "/ search with n/N in every view"
+acceptance = "/ searches within the focused view with a match count (exact names first), n/N step through matches, in graph, tree, code, spec, queue and chat."
+
+[[req]]
+id = "N.10"
+slice = "N"
+title = "Enter goes in, Backspace goes out, in every view"
+acceptance = "Enter = go in/open/follow and Backspace = go out/up in every view: graph focus/unfocus; tree expand-or-select / collapse-or-parent; code Enter on a call goes to its target; spec Enter follows a relation; queue Enter expands a job; chat Enter opens a link."
+
+[[req]]
+id = "N.11"
+slice = "N"
+title = "Folding zo/zc/za/zR/zM"
+acceptance = "zo/zc/za/zR/zM open/close/toggle/open-all/close-all: graph modules in place (without changing the view's root), tree rows, spec sections, and code definitions (folded by their index span)."
+
+[[req]]
+id = "N.12"
+slice = "N"
+title = "Global marks"
+acceptance = "m{letter} sets a mark on the current target in any view; '{letter} jumps to it from any view, switching slot/view as needed, and records the jump."
+
+[[req]]
+id = "N.13"
+slice = "N"
+title = "? key sheet per view"
+acceptance = "? opens a searchable sheet of the focused view's keys, grouped (navigate, go to, act, view), generated from the keymap and action metadata."
+
+[[req]]
+id = "N.14"
+slice = "N"
+title = "Go-to family from any view"
+acceptance = "On the current target in any view: g d code (definition), g s spec, g m graph, g t tree, g r callers/references, g c callees, g p parent, g i implements, g q queue job; each shows the target in the right slot (reusing or placing it), records a jump, and says briefly why when there's nothing to go to."
+
+[[req]]
+id = "N.15"
+slice = "N"
+title = "Graph extras: siblings and call order"
+acceptance = "In the graph, [[ / ]] move to the previous/next sibling (same container; the same keys move between sibling sections in the spec and sibling rows in the tree) and ]e / [e step through the selected node's calls in call order."
+
+[[req]]
+id = "N.16"
+slice = "N"
+title = "Code symbol navigation"
+acceptance = "The code cursor knows its line and symbol: ]f/[f next/previous definition (index spans); g d on a call site goes to the callee's definition (observed call sites); g r lists callers to pick from; f labels the symbols on screen; :N goes to line N; / searches the file."
+
+[[req]]
+id = "N.17"
+slice = "N"
+title = "Tree fully keyboard driven"
+acceptance = "The tree has j/k, h (collapse or go to parent), l (expand or go to first child), Enter (select; graph follows), / filter, f hints, zo/zc, gg/G, ctrl+d/u; no tree action is mouse-only."
+
+[[req]]
+id = "N.18"
+slice = "N"
+title = "Spec fully keyboard driven"
+acceptance = "In the spec: J/K (and ]]/[[) move between sections; j/k move between items inside a section (relations, steps, invariants, findings, comments, replies); Enter follows a relation; c/C comment / request a change on the current item; on a comment r reply, a accept, x reopen; every clickable spec control has a key."
+
+[[req]]
+id = "N.19"
+slice = "N"
+title = "Queue keys aligned"
+acceptance = "In the queue: j/k jobs, Enter expands findings, a approve, r retry, o opens the job's session (g s is go-to-spec in every view), g m shows the component in the graph (renamed from g g)."
+
+[[req]]
+id = "N.20"
+slice = "N"
+title = "Chat keys"
+acceptance = "In the chat (normal mode): j/k move between messages, ctrl+d/u, gg/G, f labels links and file references, Enter opens a link (a file opens in the code view)."
+
+[[req]]
+id = "N.21"
+slice = "N"
+title = "Key bar"
+acceptance = "A one-line key bar for the focused slot shows the 6-8 most relevant keys for the current mode, view and target, generated from action metadata; tappable chips on narrow screens; can be turned off in config."
+
+[[req]]
+id = "N.22"
+slice = "N"
+title = "Prefix popup"
+acceptance = "After a configurable pause (default 300 ms) on a sequence prefix (g, z, [, ], m, ') a small panel lists only the continuations that apply now; typing the sequence quickly never shows it; Esc dismisses it."
+
+[[req]]
+id = "N.23"
+slice = "N"
+title = "Leader menu ordered by context"
+acceptance = "The leader menu lists the focused view's actions first (highlighted), then global/shell actions; other slots' view actions are not in the top level (still reachable in the palette)."
+
+[[req]]
+id = "N.24"
+slice = "N"
+title = "Navigation audit"
+manual = true
+acceptance = "An independent audit driving the UI found every N item working and consistent across views."
+done = "2026-10-07: six independent UI audits (audit-n..audit-n6 under the job tmp), each followed by fixes with regression tests; the last found no blockers or bugs. Chat (N.20) proven by tests only (no live agent session), accepted by the user."
+
+# ---- N2: after navigation (agreed, not started) ----
+
+[[req]]
+id = "N2.1"
+slice = "N2"
+title = "Comments on code lines"
+acceptance = "c on a code line leaves a review point anchored to file and line, stored with the plan, shown in the gutter and delivered to the agent like spec comments."
+
+[[req]]
+id = "N2.2"
+slice = "N2"
+title = "Diffs inside the code view"
+acceptance = "The code view toggles between the whole file and only its changes; ]c/[c (or ]h/[h, user to decide) jump between changes; changed lines are marked in the gutter; changes can be commented on; it is the same view, not a separate diff screen."

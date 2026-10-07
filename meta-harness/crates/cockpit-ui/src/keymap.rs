@@ -200,7 +200,32 @@ pub struct Binding {
 impl Default for KeymapConfig {
     fn default() -> Self {
         let key = |key| Chord { key: ChordKey::Key(key), ctrl: false, alt: false, shift: false };
-        Self { leader: key(Key::Space), back: key(Key::Escape), groups: BTreeMap::new(), bind: BTreeMap::new(), hint_chars: default_hint_chars() }
+        Self {
+            leader: key(Key::Space),
+            back: key(Key::Escape),
+            groups: BTreeMap::new(),
+            bind: BTreeMap::new(),
+            hint_chars: default_hint_chars(),
+            which_key_delay_ms: default_which_key_delay(),
+            view_menu: default_view_menu(),
+            bar: KeyBar::default(),
+        }
+    }
+}
+
+/// The key bar: the keys that matter for what the cursor is on.
+#[derive(Clone, Debug, Deserialize)]
+pub struct KeyBar {
+    pub show: bool,
+    /// How many keys it shows.
+    pub max: usize,
+    /// Below this width its keys are big, tappable chips.
+    pub narrow_below: f32,
+}
+
+impl Default for KeyBar {
+    fn default() -> Self {
+        Self { show: true, max: 8, narrow_below: 600.0 }
     }
 }
 
@@ -216,14 +241,30 @@ pub struct KeymapConfig {
     /// Characters hint labels are made of, best first.
     #[serde(default = "default_hint_chars")]
     pub hint_chars: String,
+    /// How long a half-typed sequence waits before its popup shows.
+    #[serde(default = "default_which_key_delay")]
+    pub which_key_delay_ms: u64,
+    /// The leader key of the focused view's own menu.
+    #[serde(default = "default_view_menu")]
+    pub view_menu: char,
+    #[serde(default)]
+    pub bar: KeyBar,
 }
 
 fn default_hint_chars() -> String {
     "asdfghjkl".to_owned()
 }
 
+fn default_which_key_delay() -> u64 {
+    300
+}
+
+fn default_view_menu() -> char {
+    ','
+}
+
 /// Keys handed out to `#` entries, in order.
-const AUTO_KEYS: &str = "123456789abcdefghijklmnopqrstuvwxyz";
+pub const AUTO_KEYS: &str = "123456789abcdefghijklmnopqrstuvwxyz";
 
 impl KeymapConfig {
     pub fn group_label(&self, path: &[char]) -> Option<&str> {
@@ -309,6 +350,18 @@ pub enum SeqMatch {
     Pending(Chord),
     /// Matches nothing.
     None,
+}
+
+/// What can follow the chords typed so far: each action whose sequence starts
+/// with them, with the rest of its sequence.
+pub fn continuations<'a>(bound: &'a [Bound], pending: &[Chord]) -> Vec<(&'a Bound, Vec<Chord>)> {
+    let mut out = Vec::new();
+    for b in bound {
+        if let Some(seq) = b.keys.iter().find(|seq| seq.len() > pending.len() && seq[..pending.len()] == *pending) {
+            out.push((b, seq[pending.len()..].to_vec()));
+        }
+    }
+    out
 }
 
 /// Matches the next pressed chord against every bound sequence, given what's

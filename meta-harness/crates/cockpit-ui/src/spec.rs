@@ -1,13 +1,16 @@
 //! The spec view: everything about one component, in full. It follows the
-//! graph's selection (or stays pinned), and is navigable by section.
+//! graph's selection (or stays pinned). A cursor walks every item in it
+//! (section titles, relations, steps, invariants, findings, comments and
+//! replies), so every control has a key.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use arch_graph::{Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, ComponentDetail, ComponentId, Finding, PlanDiff, PlanId, RelationKind, Report, Severity};
-use egui::RichText;
+use egui::{Rect, RichText};
 
-use crate::actions::{Action, ActionProvider, RunCx, ToolbarStyle, ToolbarUse, toolbar_control};
+use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, ToolbarStyle, ToolbarUse, When, toolbar_control};
+use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, SpecItem, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
 
@@ -94,6 +97,8 @@ pub enum Compose {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Composer {
     pub purpose: Compose,
+    /// What a new comment is about.
+    pub anchor: Option<CommentAnchor>,
     pub section: Section,
     pub text: String,
 }
@@ -113,6 +118,22 @@ pub struct SpecRequests {
     pub open_code: Option<(String, u32, u32)>,
     /// A review write went through: refresh the plan's review state.
     pub review_changed: bool,
+    /// The composer opened: the keyboard goes to it.
+    pub insert: bool,
+}
+
+/// One cursor stop: an item in a section.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Entry {
+    pub section: Section,
+    pub item: SpecItem,
+}
+
+impl Entry {
+    /// Stable across frames (search results and marks hold it).
+    pub fn key(&self) -> String {
+        format!("{}#{:?}", self.section.key(), self.item)
+    }
 }
 
 pub struct SpecState {
@@ -122,9 +143,13 @@ pub struct SpecState {
     pub pinned: bool,
     pub detail: Option<ComponentDetail>,
     pub findings: Vec<Finding>,
+    /// The section the cursor is in.
     pub current: Section,
+    /// The cursor: an index into `entries()`.
+    pub cursor: usize,
     pub folded: BTreeSet<Section>,
-    scroll_to: Option<Section>,
+    /// Scroll the cursor's item into view next frame.
+    scroll: bool,
     loaded: Option<(ComponentId, Option<PlanId>)>,
     error: Option<String>,
     pub requests: SpecRequests,
@@ -134,9 +159,14 @@ pub struct SpecState {
     pub comments: Vec<Comment>,
     pub diff: PlanDiff,
     pub composer: Option<Composer>,
-    /// The review point under the cursor (`] c` cycles them).
+    /// The review point `] c` is on.
     pub point: Option<CommentId>,
     note: Option<String>,
+    /// The item a restored place is on, until the component's detail is in.
+    restore_item: Option<String>,
+    /// Items drawn last frame, and where; and the viewport.
+    spots: Vec<Spot>,
+    view: Rect,
     inbox: Arc<Mutex<Vec<Reply>>>,
 }
 
@@ -149,8 +179,9 @@ impl Default for SpecState {
             detail: None,
             findings: Vec::new(),
             current: Section::Overview,
+            cursor: 0,
             folded: BTreeSet::new(),
-            scroll_to: None,
+            scroll: false,
             loaded: None,
             error: None,
             requests: SpecRequests::default(),
@@ -160,6 +191,9 @@ impl Default for SpecState {
             composer: None,
             point: None,
             note: None,
+            restore_item: None,
+            spots: Vec::new(),
+            view: Rect::NOTHING,
             inbox: Arc::default(),
         }
     }
@@ -169,9 +203,29 @@ impl SpecState {
     /// Follows the graph (unless pinned).
     pub fn follow(&mut self, selection: Option<&ComponentId>, plan: Option<&PlanId>) {
         if !self.pinned {
+            if self.target.as_ref() != selection {
+                self.leave_component();
+            }
             self.target = selection.cloned();
             self.plan = plan.cloned();
         }
+    }
+
+    /// Moving to another component: the cursor, the review point and an
+    /// unsent composer belonged to the old one.
+    fn leave_component(&mut self) {
+        self.cursor = 0;
+        self.current = Section::Overview;
+        self.point = None;
+        self.composer = None;
+    }
+
+    /// Shows `id` even while pinned (a go-to asked for it).
+    pub fn show(&mut self, id: ComponentId) {
+        if self.target.as_ref() != Some(&id) {
+            self.leave_component();
+        }
+        self.target = Some(id);
     }
 
     /// The architecture changed: load again.
@@ -188,6 +242,10 @@ impl SpecState {
                     Ok(detail) => {
                         self.detail = Some(detail);
                         self.error = None;
+                        // A restored place whose item only exists once this is in.
+                        if let Some(key) = self.restore_item.take() {
+                            self.move_to(&key);
+                        }
                     }
                     Err(e) => self.error = Some(e),
                 },
@@ -206,6 +264,10 @@ impl SpecState {
             self.detail = None;
             return;
         };
+        // Never another component's content under this one's name.
+        if self.detail.as_ref().is_some_and(|d| d.component.id != target) {
+            self.detail = None;
+        }
         let key = (target.clone(), self.plan.clone());
         if self.loaded.as_ref() == Some(&key) {
             return;
@@ -221,17 +283,76 @@ impl SpecState {
         }
     }
 
-    pub fn step_section(&mut self, delta: i32) {
-        let at = Section::ALL.iter().position(|s| *s == self.current).unwrap_or(0) as i32;
-        let next = (at + delta).clamp(0, Section::ALL.len() as i32 - 1) as usize;
-        self.current = Section::ALL[next];
-        self.scroll_to = Some(self.current);
+    /// The relations shown, in order: by kind, outgoing then incoming.
+    fn relations(&self) -> Vec<(RelationKind, ComponentId, bool)> {
+        let Some(detail) = &self.detail else { return Vec::new() };
+        let mut out = Vec::new();
+        for kind in RelationKind::ALL {
+            for (list, outgoing) in [(&detail.outgoing, true), (&detail.incoming, false)] {
+                for r in list.iter().filter(|r| r.kind == kind) {
+                    out.push((kind, if outgoing { r.target.clone() } else { r.source.clone() }, outgoing));
+                }
+            }
+        }
+        out
     }
 
-    pub fn toggle_fold(&mut self) {
-        if !self.folded.remove(&self.current) {
-            self.folded.insert(self.current);
+    /// Every item in a section, in the order it's drawn (title first).
+    fn section_items(&self, section: Section) -> Vec<SpecItem> {
+        let mut out = vec![SpecItem::Header];
+        let spec = self.detail.as_ref().and_then(|d| d.component.spec.as_ref());
+        match section {
+            Section::Logic => out.extend((0..spec.map_or(0, |s| s.logic_steps.len())).map(SpecItem::Step)),
+            Section::Invariants => out.extend((0..spec.map_or(0, |s| s.invariants.len())).map(SpecItem::Invariant)),
+            Section::Relations => out.extend(self.relations().into_iter().map(|(kind, other, outgoing)| SpecItem::Relation { kind, other, outgoing })),
+            Section::Code if self.detail.as_ref().is_some_and(|d| d.code.is_some()) => out.push(SpecItem::Source),
+            Section::Placeholders => out.extend((0..self.detail.as_ref().map_or(0, |d| d.component.placeholders.len())).map(SpecItem::Placeholder)),
+            Section::Findings => out.extend((0..self.findings.len()).map(SpecItem::Finding)),
+            _ => {}
         }
+        for c in self.comments_in(Some(section)) {
+            out.push(SpecItem::Comment(c.id.clone()));
+            out.extend((0..c.replies.len()).map(|i| SpecItem::Reply(c.id.clone(), i)));
+        }
+        out
+    }
+
+    /// Every item (folded sections included).
+    fn all_entries(&self) -> Vec<Entry> {
+        Section::ALL.into_iter().flat_map(|section| self.section_items(section).into_iter().map(move |item| Entry { section, item })).collect()
+    }
+
+    /// The cursor's stops: titles, and the items of open sections.
+    pub fn entries(&self) -> Vec<Entry> {
+        self.all_entries().into_iter().filter(|e| e.item == SpecItem::Header || !self.folded.contains(&e.section)).collect()
+    }
+
+    pub fn entry(&self) -> Option<Entry> {
+        self.entries().get(self.cursor).cloned()
+    }
+
+    fn put_cursor(&mut self, index: usize) {
+        let entries = self.entries();
+        if entries.is_empty() {
+            return;
+        }
+        self.cursor = index.min(entries.len() - 1);
+        self.current = entries[self.cursor].section;
+        self.scroll = true;
+    }
+
+    /// Puts the cursor on an entry (opening its section).
+    fn put_on(&mut self, entry: &Entry) {
+        self.folded.remove(&entry.section);
+        if let Some(i) = self.entries().iter().position(|e| e == entry) {
+            self.put_cursor(i);
+        }
+    }
+
+    pub fn step_section(&mut self, delta: i32) {
+        let at = Section::ALL.iter().position(|s| *s == self.current).unwrap_or(0) as i32;
+        let next = Section::ALL[(at + delta).clamp(0, Section::ALL.len() as i32 - 1) as usize];
+        self.put_on(&Entry { section: next, item: SpecItem::Header });
     }
 
     /// The comments on the target, in a section (or all of them), oldest first.
@@ -255,8 +376,8 @@ impl SpecState {
         }
     }
 
-    /// Moves to the next unaddressed point (and its section).
-    pub fn next_point(&mut self) {
+    /// Moves to the next (or previous) unaddressed point, cursor and all.
+    pub fn step_point(&mut self, forward: bool) {
         let points: Vec<(CommentId, Option<Section>)> = {
             let target = self.target.clone();
             self.open_points().into_iter().map(|c| (c.id.clone(), target.as_ref().and_then(|t| section_of(&c.anchor, t)))).collect()
@@ -265,19 +386,38 @@ impl SpecState {
             self.point = None;
             return;
         }
-        let at = self.point.as_ref().and_then(|p| points.iter().position(|(id, _)| id == p)).map_or(0, |i| (i + 1) % points.len());
+        let n = points.len();
+        let at = self.point.as_ref().and_then(|p| points.iter().position(|(id, _)| id == p)).map_or(if forward { 0 } else { n - 1 }, |i| if forward { (i + 1) % n } else { (i + n - 1) % n });
         let (id, section) = points[at].clone();
-        self.point = Some(id);
+        self.point = Some(id.clone());
         if let Some(section) = section {
-            self.current = section;
-            self.folded.remove(&section);
-            self.scroll_to = Some(section);
+            self.put_on(&Entry { section, item: SpecItem::Comment(id) });
         }
     }
 
-    fn start_composing(&mut self, purpose: Compose, cx: &mut RunCx<'_>) {
-        self.composer = Some(Composer { purpose, section: self.current, text: String::new() });
-        *cx.input_mode = crate::keymap::InputMode::Insert { slot: cx.slot };
+    /// The comment the cursor is on (or in a reply to).
+    fn comment_here(&self) -> Option<&Comment> {
+        let id = match self.entry()?.item {
+            SpecItem::Comment(id) | SpecItem::Reply(id, _) => id,
+            _ => return None,
+        };
+        self.comments.iter().find(|c| c.id == id)
+    }
+
+    fn start_composing(&mut self, purpose: Compose) {
+        let entry = self.entry();
+        let section = entry.as_ref().map_or(self.current, |e| e.section);
+        let anchor = match (&purpose, &self.target, entry.map(|e| e.item)) {
+            (Compose::New(_), Some(target), Some(SpecItem::Relation { kind, other, outgoing })) => {
+                let (source, rel_target) = if outgoing { (target.clone(), other) } else { (other, target.clone()) };
+                Some(CommentAnchor::Relation { kind, source, target: rel_target })
+            }
+            (Compose::New(_), Some(target), _) if section == Section::Overview => Some(CommentAnchor::Component { id: target.clone() }),
+            (Compose::New(_), Some(target), _) => Some(CommentAnchor::Section { id: target.clone(), section: section.key().to_owned() }),
+            _ => None,
+        };
+        self.composer = Some(Composer { purpose, anchor, section, text: String::new() });
+        self.requests.insert = true;
     }
 
     fn posted<T: Send + 'static>(&self) -> impl FnOnce(NetResult<T>) + Send + 'static {
@@ -287,17 +427,14 @@ impl SpecState {
 
     /// Sends what the composer holds.
     pub fn send_composer(&mut self, net: &NetClient, ctx: &egui::Context) {
-        let (Some(composer), Some(plan), Some(target)) = (self.composer.clone(), self.plan.clone(), self.target.clone()) else { return };
+        let (Some(composer), Some(plan)) = (self.composer.clone(), self.plan.clone()) else { return };
         let text = composer.text.trim().to_owned();
         if text.is_empty() {
             return;
         }
         match composer.purpose {
             Compose::New(kind) => {
-                let anchor = match composer.section {
-                    Section::Overview => CommentAnchor::Component { id: target },
-                    section => CommentAnchor::Section { id: target, section: section.key().to_owned() },
-                };
+                let Some(anchor) = composer.anchor else { return };
                 let body = serde_json::json!({ "anchor": anchor, "kind": kind, "text": text, "by": self.author });
                 net.arch_add_comment(&plan, body, ctx.clone(), self.posted());
             }
@@ -313,11 +450,21 @@ impl SpecState {
         }
     }
 
-    /// The answered point under the cursor, or else the first answered one
-    /// (what accept and reopen act on).
-    fn current_point(&self) -> Option<CommentId> {
+    /// The answered point accept and reopen act on: the one under the
+    /// cursor, else the one `] c` is on, else the first answered one.
+    fn answered_point(&self) -> Option<CommentId> {
+        if let Some(c) = self.comment_here() {
+            return (c.status == CommentStatus::Answered).then(|| c.id.clone());
+        }
         let answered: Vec<&Comment> = self.open_points().into_iter().filter(|c| c.status == CommentStatus::Answered).collect();
         self.point.clone().filter(|p| answered.iter().any(|c| &c.id == p)).or_else(|| answered.first().map(|c| c.id.clone()))
+    }
+
+    /// The comment a reply goes to: the one under the cursor, else the one
+    /// `] c` is on.
+    fn reply_point(&self) -> Option<CommentId> {
+        let here = self.comment_here().map(|c| c.id.clone());
+        here.or_else(|| self.point.clone().filter(|p| self.comments_in(None).iter().any(|c| &c.id == p)))
     }
 
     fn code_location(&self) -> Option<(String, u32, u32)> {
@@ -327,6 +474,12 @@ impl SpecState {
             (None, Some(p)) => Some((p.file.to_string(), 1, 1)),
             (None, None) => None,
         }
+    }
+
+    fn half_page_items(&self) -> usize {
+        let heights: Vec<f32> = self.spots.iter().map(|s| s.rect.height()).collect();
+        let avg = if heights.is_empty() { 20.0 } else { heights.iter().sum::<f32>() / heights.len() as f32 };
+        if self.view.height() > 0.0 { ((self.view.height() / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 8 }
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
@@ -341,9 +494,8 @@ impl SpecState {
             }
             for section in Section::ALL {
                 let label = RichText::new(section.title()).size(11.0);
-                if ui.selectable_label(self.current == section, label).clicked() {
-                    self.current = section;
-                    self.scroll_to = Some(section);
+                if ui.selectable_label(self.current == section, label).on_hover_text("J / K").clicked() {
+                    self.put_on(&Entry { section, item: SpecItem::Header });
                 }
             }
         });
@@ -359,12 +511,35 @@ impl SpecState {
                 (Some(_), None) => "Loading…".to_owned(),
             };
             ui.label(RichText::new(msg).color(colors().muted));
+            self.spots.clear();
             return;
         };
+        let entries = self.entries();
+        if self.cursor >= entries.len() {
+            self.cursor = entries.len().saturating_sub(1);
+        }
+        let cursor_key = entries.get(self.cursor).map(Entry::key);
         let c = &detail.component;
         let changed = self.changed_sections();
-        let mut clicked: Option<(CommentId, Option<Compose>)> = None;
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        let mut spots: Vec<Spot> = Vec::new();
+        let mut clicked: Option<Click> = None;
+        let scroll = std::mem::take(&mut self.scroll);
+        let relations = self.relations();
+        let output = egui::ScrollArea::vertical().id_salt("spec_items").auto_shrink([false, false]).show(ui, |ui| {
+            // One item: highlighted under the cursor, scrolled to when it moved there.
+            let mut item = |ui: &mut egui::Ui, entry: Entry, add: &mut dyn FnMut(&mut egui::Ui)| -> egui::Response {
+                let on = cursor_key.as_deref() == Some(entry.key().as_str());
+                let fill = if on { colors().selection } else { egui::Color32::TRANSPARENT };
+                let response = egui::Frame::NONE.fill(fill).corner_radius(3).inner_margin(egui::Margin::symmetric(4, 1)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    add(ui);
+                }).response;
+                if on && scroll {
+                    response.scroll_to_me(None);
+                }
+                spots.push(Spot { key: entry.key(), rect: response.rect });
+                response
+            };
             for section in Section::ALL {
                 let open = !self.folded.contains(&section);
                 let mut title = section.title().to_owned();
@@ -375,16 +550,18 @@ impl SpecState {
                 if open_here > 0 {
                     title.push_str(&format!("  · {open_here} open"));
                 }
-                let header = RichText::new(title).strong().size(13.0).color(if self.current == section {
-                    colors().focus
-                } else if changed.contains(&section) {
-                    colors().info
-                } else {
-                    colors().text_strong
+                let color = if self.current == section { colors().focus } else if changed.contains(&section) { colors().info } else { colors().text_strong };
+                let caret = if open { egui_phosphor::regular::CARET_DOWN } else { egui_phosphor::regular::CARET_RIGHT };
+                let header = item(ui, Entry { section, item: SpecItem::Header }, &mut |ui| {
+                    ui.add(egui::Label::new(RichText::new(format!("{caret} {title}")).strong().size(13.0).color(color)).sense(egui::Sense::click()));
                 });
-                let threads: Vec<Comment> = self.comments_in(Some(section)).into_iter().cloned().collect();
-                let point = self.point.clone();
-                let response = egui::CollapsingHeader::new(header).id_salt(("spec", section as u8)).open(Some(open)).show(ui, |ui| {
+                if header.interact(egui::Sense::click()).clicked() {
+                    clicked = Some(Click::Header(section));
+                }
+                if !open {
+                    continue;
+                }
+                ui.indent(("spec", section as u8), |ui| {
                     match section {
                         Section::Overview => {
                             ui.label(RichText::new(&c.name).size(16.0).strong());
@@ -420,12 +597,13 @@ impl SpecState {
                             if steps.is_empty() {
                                 ui.label(RichText::new("No logic steps written yet.").color(colors().muted));
                             }
-                            for step in steps {
-                                ui.label(RichText::new(format!("{}. {}", step.sequence, step.name)).strong());
-                                if !step.description.is_empty() {
-                                    ui.label(&step.description);
-                                }
-                                ui.add_space(4.0);
+                            for (i, step) in steps.iter().enumerate() {
+                                item(ui, Entry { section, item: SpecItem::Step(i) }, &mut |ui| {
+                                    ui.label(RichText::new(format!("{}. {}", step.sequence, step.name)).strong());
+                                    if !step.description.is_empty() {
+                                        ui.label(&step.description);
+                                    }
+                                });
                             }
                         }
                         Section::Invariants => {
@@ -433,39 +611,47 @@ impl SpecState {
                             if invariants.is_empty() {
                                 ui.label(RichText::new("No invariants declared.").color(colors().muted));
                             }
-                            for inv in invariants {
-                                ui.label(RichText::new(format!("{} ({})", inv.name, inv.kind)).strong());
-                                if !inv.description.is_empty() {
-                                    ui.label(&inv.description);
-                                }
+                            for (i, inv) in invariants.iter().enumerate() {
+                                item(ui, Entry { section, item: SpecItem::Invariant(i) }, &mut |ui| {
+                                    ui.label(RichText::new(format!("{} ({})", inv.name, inv.kind)).strong());
+                                    if !inv.description.is_empty() {
+                                        ui.label(&inv.description);
+                                    }
+                                });
                             }
                         }
                         Section::Relations => {
-                            for kind in RelationKind::ALL {
-                                for (label, list, outgoing) in [(format!("{} {}", kind.name(), egui_phosphor::regular::ARROW_RIGHT), &detail.outgoing, true), (format!("{} {}", egui_phosphor::regular::ARROW_LEFT, kind.name()), &detail.incoming, false)] {
-                                    let items: Vec<&ComponentId> = list.iter().filter(|r| r.kind == kind).map(|r| if outgoing { &r.target } else { &r.source }).collect();
-                                    if items.is_empty() {
-                                        continue;
-                                    }
+                            let mut heading: Option<(RelationKind, bool)> = None;
+                            for (kind, other, outgoing) in &relations {
+                                if heading != Some((*kind, *outgoing)) {
+                                    heading = Some((*kind, *outgoing));
+                                    let label = if *outgoing { format!("{} {}", kind.name(), egui_phosphor::regular::ARROW_RIGHT) } else { format!("{} {}", egui_phosphor::regular::ARROW_LEFT, kind.name()) };
                                     ui.label(RichText::new(label).size(11.0).color(colors().muted));
-                                    for id in items {
-                                        // The component's own name; its full id on hover.
-                                        let symbol = id.as_str().split_once(':').map_or(id.as_str(), |(_, s)| s);
-                                        let name = symbol.rsplit(|c: char| c == ':' || c == '.').next().unwrap_or(symbol);
-                                        if ui.link(RichText::new(name).monospace().size(11.0)).on_hover_text(id.as_str()).clicked() {
-                                            self.requests.select = Some(id.clone());
-                                        }
-                                    }
+                                }
+                                // The component's own name; its full id on hover.
+                                let symbol = other.as_str().split_once(':').map_or(other.as_str(), |(_, s)| s);
+                                let name = symbol.rsplit([':', '.']).next().unwrap_or(symbol).to_owned();
+                                let entry = Entry { section, item: SpecItem::Relation { kind: *kind, other: other.clone(), outgoing: *outgoing } };
+                                let mut followed = false;
+                                item(ui, entry, &mut |ui| {
+                                    followed |= ui.link(RichText::new(&name).monospace().size(11.0)).on_hover_text(format!("{} (Enter)", other.as_str())).clicked();
+                                });
+                                if followed {
+                                    clicked = Some(Click::Follow(other.clone()));
                                 }
                             }
                         }
                         Section::Code => match &detail.code {
                             Some(code) => {
-                                egui::Frame::NONE.fill(colors().bg).inner_margin(6).corner_radius(4).show(ui, |ui| {
-                                    ui.label(RichText::new(code).monospace().size(11.0));
+                                let mut open_code = false;
+                                item(ui, Entry { section, item: SpecItem::Source }, &mut |ui| {
+                                    egui::Frame::NONE.fill(colors().bg).inner_margin(6).corner_radius(4).show(ui, |ui| {
+                                        ui.label(RichText::new(code).monospace().size(11.0));
+                                    });
+                                    open_code |= ui.button("Open in the code view").on_hover_text("g d").clicked();
                                 });
-                                if ui.button("Open in the code view").clicked() {
-                                    self.requests.open_code = self.code_location();
+                                if open_code {
+                                    clicked = Some(Click::OpenCode);
                                 }
                             }
                             None => {
@@ -476,8 +662,10 @@ impl SpecState {
                             if c.placeholders.is_empty() {
                                 ui.label(RichText::new("None.").color(colors().muted));
                             }
-                            for span in &c.placeholders {
-                                ui.label(RichText::new(format!("placeholder body at line {}", span.start_line)).color(colors().warn));
+                            for (i, span) in c.placeholders.iter().enumerate() {
+                                item(ui, Entry { section, item: SpecItem::Placeholder(i) }, &mut |ui| {
+                                    ui.label(RichText::new(format!("placeholder body at line {}", span.start_line)).color(colors().warn));
+                                });
                             }
                         }
                         Section::Findings => {
@@ -486,38 +674,42 @@ impl SpecState {
                             } else if self.findings.is_empty() {
                                 ui.label(RichText::new("No findings.").color(colors().ok));
                             }
-                            for f in &self.findings {
+                            for (i, f) in self.findings.iter().enumerate() {
                                 let color = match f.severity {
                                     Severity::Error => colors().error,
                                     Severity::Warning => colors().warn,
                                     Severity::Info => colors().muted,
                                 };
-                                ui.label(RichText::new(&f.message).color(color));
-                                if let Some(s) = &f.suggestion {
-                                    ui.label(RichText::new(s).size(11.0).color(colors().muted));
-                                }
+                                item(ui, Entry { section, item: SpecItem::Finding(i) }, &mut |ui| {
+                                    ui.label(RichText::new(&f.message).color(color));
+                                    if let Some(s) = &f.suggestion {
+                                        ui.label(RichText::new(s).size(11.0).color(colors().muted));
+                                    }
+                                });
                             }
                         }
                     }
-                    if let Some(action) = render_threads(ui, &threads, point.as_ref()) {
-                        clicked = Some(action);
+                    for comment in self.comments_in(Some(section)) {
+                        if let Some(click) = render_thread(ui, comment, self.point.as_ref(), section, &mut item) {
+                            clicked = Some(click);
+                        }
                     }
                 });
-                if self.scroll_to == Some(section) {
-                    response.header_response.scroll_to_me(Some(egui::Align::TOP));
-                }
-                if response.header_response.clicked() {
-                    self.current = section;
-                    self.toggle_fold();
-                }
             }
         });
-        self.scroll_to = None;
+        self.view = output.inner_rect;
+        self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
         match clicked {
-            Some((id, None)) => self.accept(&id, cx.net, cx.ctx),
-            Some((id, Some(purpose))) => {
+            Some(Click::Header(section)) => {
+                self.put_on(&Entry { section, item: SpecItem::Header });
+                self.fold(Fold::Toggle);
+            }
+            Some(Click::Follow(id)) => self.requests.select = Some(id),
+            Some(Click::OpenCode) => self.requests.open_code = self.code_location(),
+            Some(Click::Accept(id)) => self.accept(&id, cx.net, cx.ctx),
+            Some(Click::Compose(id, purpose)) => {
                 self.point = Some(id);
-                self.start_composing(purpose, cx);
+                self.start_composing(purpose);
             }
             None => {}
         }
@@ -537,15 +729,20 @@ impl SpecState {
             ui.label(RichText::new(note).size(11.0).color(colors().error));
         }
         let Some(composer) = self.composer.as_mut() else { return };
-        let what = match &composer.purpose {
-            Compose::New(CommentKind::Comment) => format!("Comment on {}", composer.section.title()),
-            Compose::New(CommentKind::ChangeRequest) => format!("Change request on {}", composer.section.title()),
-            Compose::Reply(id) => format!("Reply to {id}"),
-            Compose::Reopen(id) => format!("Why reopen {id}?"),
+        let what = match (&composer.purpose, &composer.anchor) {
+            (Compose::New(kind), Some(CommentAnchor::Relation { kind: rel, source, target })) => {
+                let name = |id: &ComponentId| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned();
+                let what = if *kind == CommentKind::ChangeRequest { "Change request" } else { "Comment" };
+                format!("{what} on {} {} {}", name(source), rel.name(), name(target))
+            }
+            (Compose::New(CommentKind::ChangeRequest), _) => format!("Change request on {}", composer.section.title()),
+            (Compose::New(_), _) => format!("Comment on {}", composer.section.title()),
+            (Compose::Reply(id), _) => format!("Reply to {id}"),
+            (Compose::Reopen(id), _) => format!("Why reopen {id}?"),
         };
         ui.label(RichText::new(what).size(11.0).color(colors().muted));
         let inserting = *cx.input_mode == crate::keymap::InputMode::Insert { slot: cx.slot };
-        let output = ui.add(egui::TextEdit::multiline(&mut composer.text).id(egui::Id::new(("spec_composer", cx.slot))).desired_rows(2).desired_width(f32::INFINITY).hint_text("Enter sends, Shift+Enter for a new line"));
+        let output = ui.add(egui::TextEdit::multiline(&mut composer.text).id(egui::Id::new(("spec_composer", cx.slot))).desired_rows(2).desired_width(f32::INFINITY).hint_text("Enter sends, Shift+Enter for a new line, Esc leaves"));
         if inserting {
             output.request_focus();
         }
@@ -555,7 +752,7 @@ impl SpecState {
         let enter = inserting && output.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
         let (mut send, mut cancel) = (enter, false);
         ui.horizontal(|ui| {
-            send |= ui.button("Send").clicked();
+            send |= ui.button("Send").on_hover_text("Enter").clicked();
             cancel = ui.button("Cancel").clicked();
         });
         if cancel {
@@ -569,19 +766,28 @@ impl SpecState {
     }
 }
 
-/// The comment threads in one section. Returns a click: accept (`None`) or
-/// start writing (`Some(purpose)`) for a comment.
-fn render_threads(ui: &mut egui::Ui, threads: &[Comment], point: Option<&CommentId>) -> Option<(CommentId, Option<Compose>)> {
+/// What a click in the spec asks for.
+enum Click {
+    Header(Section),
+    Follow(ComponentId),
+    OpenCode,
+    Accept(CommentId),
+    Compose(CommentId, Compose),
+}
+
+/// One comment thread: the comment and its replies are cursor stops; its
+/// buttons name their keys.
+fn render_thread(ui: &mut egui::Ui, c: &Comment, point: Option<&CommentId>, section: Section, item: &mut dyn FnMut(&mut egui::Ui, Entry, &mut dyn FnMut(&mut egui::Ui)) -> egui::Response) -> Option<Click> {
     let mut clicked = None;
-    for c in threads {
-        let (label, color) = match c.status {
-            CommentStatus::Open => ("OPEN", colors().warn),
-            CommentStatus::Answered => ("ANSWERED", colors().info),
-            CommentStatus::Resolved => ("RESOLVED", colors().ok),
-        };
-        let stroke = if point == Some(&c.id) { colors().focus } else { colors().border };
-        egui::Frame::NONE.fill(colors().surface).stroke(egui::Stroke::new(1.0, stroke)).corner_radius(4).inner_margin(6).show(ui, |ui| {
-            ui.set_width(ui.available_width());
+    let (label, color) = match c.status {
+        CommentStatus::Open => ("OPEN", colors().warn),
+        CommentStatus::Answered => ("ANSWERED", colors().info),
+        CommentStatus::Resolved => ("RESOLVED", colors().ok),
+    };
+    let stroke = if point == Some(&c.id) { colors().focus } else { colors().border };
+    egui::Frame::NONE.fill(colors().surface).stroke(egui::Stroke::new(1.0, stroke)).corner_radius(4).inner_margin(6).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        item(ui, Entry { section, item: SpecItem::Comment(c.id.clone()) }, &mut |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(label).size(10.0).strong().color(color));
                 if c.kind == CommentKind::ChangeRequest {
@@ -590,32 +796,34 @@ fn render_threads(ui: &mut egui::Ui, threads: &[Comment], point: Option<&Comment
                 ui.label(RichText::new(format!("{} · {}", c.id, c.author)).size(10.0).color(colors().muted));
             });
             ui.label(&c.text);
-            for r in &c.replies {
-                ui.label(RichText::new(format!("{}: {}", r.author, r.text)).size(11.0).color(colors().text));
-            }
-            if let Some(a) = &c.answer {
-                ui.label(RichText::new(format!("{} {}: {}", egui_phosphor::regular::ARROW_ELBOW_DOWN_RIGHT, a.author, a.text)).size(11.0).color(colors().info));
-                for ch in &a.changes {
-                    ui.label(RichText::new(format!("   {}", ch.describe())).size(10.0).monospace().color(colors().muted));
-                }
-            }
-            if !c.is_addressed() {
-                ui.horizontal(|ui| {
-                    if c.status == CommentStatus::Answered {
-                        if ui.small_button("Accept").clicked() {
-                            clicked = Some((c.id.clone(), None));
-                        }
-                        if ui.small_button("Reopen").clicked() {
-                            clicked = Some((c.id.clone(), Some(Compose::Reopen(c.id.clone()))));
-                        }
-                    }
-                    if ui.small_button("Reply").clicked() {
-                        clicked = Some((c.id.clone(), Some(Compose::Reply(c.id.clone()))));
-                    }
-                });
-            }
         });
-    }
+        for (i, r) in c.replies.iter().enumerate() {
+            item(ui, Entry { section, item: SpecItem::Reply(c.id.clone(), i) }, &mut |ui| {
+                ui.label(RichText::new(format!("{}: {}", r.author, r.text)).size(11.0).color(colors().text));
+            });
+        }
+        if let Some(a) = &c.answer {
+            ui.label(RichText::new(format!("{} {}: {}", egui_phosphor::regular::ARROW_ELBOW_DOWN_RIGHT, a.author, a.text)).size(11.0).color(colors().info));
+            for ch in &a.changes {
+                ui.label(RichText::new(format!("   {}", ch.describe())).size(10.0).monospace().color(colors().muted));
+            }
+        }
+        if !c.is_addressed() {
+            ui.horizontal(|ui| {
+                if c.status == CommentStatus::Answered {
+                    if ui.small_button("Accept").on_hover_text("a").clicked() {
+                        clicked = Some(Click::Accept(c.id.clone()));
+                    }
+                    if ui.small_button("Reopen").on_hover_text("x").clicked() {
+                        clicked = Some(Click::Compose(c.id.clone(), Compose::Reopen(c.id.clone())));
+                    }
+                }
+                if ui.small_button("Reply").on_hover_text("r").clicked() {
+                    clicked = Some(Click::Compose(c.id.clone(), Compose::Reply(c.id.clone())));
+                }
+            });
+        }
+    });
     clicked
 }
 
@@ -627,16 +835,15 @@ fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum SpecCommand {
+    CancelCompose,
     NextSection,
     PrevSection,
-    Fold,
     Pin,
-    OpenCode,
-    ShowInGraph,
     Comment,
     RequestChange,
     MarkReviewed,
-    NextPoint,
+    Point { forward: bool },
+    Reply,
     Accept,
     Reopen,
 }
@@ -645,34 +852,41 @@ impl ActionProvider for SpecState {
     fn actions(&self) -> Vec<Action> {
         use SpecCommand as S;
         let f = |id: &str, label: &str, c: SpecCommand| Action::new(id, label, c).focused();
-        let mut out = vec![
-            f("spec.next_section", "Next section", S::NextSection),
-            f("spec.prev_section", "Previous section", S::PrevSection),
-            f("spec.fold", "Fold or unfold this section", S::Fold),
-            f("spec.pin", if self.pinned { "Unpin (follow the graph)" } else { "Pin this component" }, S::Pin).toolbar(
-                ToolbarStyle::Button,
-                if self.pinned { "Pinned" } else { "Pin" },
-                Some(egui_phosphor::regular::PUSH_PIN),
-            ),
-        ];
+        let mut out = vec![];
+        if self.composer.is_some() {
+            out.push(f("spec.cancel", "Throw away what's being written", S::CancelCompose).importance(PRIMARY));
+        }
+        out.extend([
+            f("spec.next_section", "Next section", S::NextSection).group(Group::Navigate),
+            f("spec.prev_section", "Previous section", S::PrevSection).group(Group::Navigate).importance(MINOR),
+            f("spec.pin", if self.pinned { "Unpin (follow the graph)" } else { "Pin this component" }, S::Pin)
+                .toolbar(ToolbarStyle::Button, if self.pinned { "Pinned" } else { "Pin" }, Some(egui_phosphor::regular::PUSH_PIN))
+                .group(Group::View)
+                .importance(MINOR),
+        ]);
+        // On a comment, its own verbs lead; without a plan, commenting only says why not.
+        let on_comment = self.comment_here().is_some();
+        let comment_rank = if self.plan.is_none() { MINOR } else if on_comment { SECONDARY } else { PRIMARY };
         if self.detail.is_some() {
-            out.push(f("spec.open_code", "Open in code", S::OpenCode));
-            out.push(f("spec.show_in_graph", "Show in the graph", S::ShowInGraph));
+            out.push(f("spec.comment", "Comment on this item", S::Comment).importance(comment_rank));
+            out.push(f("spec.request_change", "Ask for a change to this item", S::RequestChange).importance(comment_rank));
         }
         if self.plan.is_some() {
-            out.push(f("spec.mark_reviewed", "Mark the plan reviewed (later changes are highlighted)", S::MarkReviewed).toolbar(
-                ToolbarStyle::Button,
-                "Reviewed",
-                Some(egui_phosphor::regular::CHECK_SQUARE),
-            ));
-            if self.detail.is_some() {
-                out.push(f("spec.comment", "Comment on this section", S::Comment));
-                out.push(f("spec.request_change", "Ask for a change to this section", S::RequestChange));
+            out.push(
+                f("spec.mark_reviewed", "Mark the plan reviewed (later changes are highlighted)", S::MarkReviewed)
+                    .toolbar(ToolbarStyle::Button, "Reviewed", Some(egui_phosphor::regular::CHECK_SQUARE))
+                    .importance(MINOR),
+            );
+            // Always there: with no open points it says so.
+            let points = if self.open_points().is_empty() { When::Unavailable } else { When::Always };
+            out.push(f("spec.next_point", "Next open review point", S::Point { forward: true }).group(Group::Navigate).importance(if on_comment { SECONDARY } else { PRIMARY }).when(points).jump());
+            out.push(f("spec.prev_point", "Previous open review point", S::Point { forward: false }).group(Group::Navigate).importance(MINOR).when(points).jump());
+            if self.reply_point().is_some() {
+                out.push(f("spec.reply", "Reply to this point", S::Reply).importance(if on_comment { PRIMARY } else { SECONDARY }));
             }
-            if !self.open_points().is_empty() {
-                out.push(f("spec.next_point", "Next open review point", S::NextPoint));
-                out.push(f("spec.reopen", "Reopen the answered point", S::Reopen));
-                out.push(f("spec.accept", "Accept the answer to this point", S::Accept));
+            if self.answered_point().is_some() {
+                out.push(f("spec.accept", "Accept the answer to this point", S::Accept).importance(PRIMARY));
+                out.push(f("spec.reopen", "Reopen this point (say why)", S::Reopen).importance(SECONDARY));
             }
         }
         out
@@ -680,40 +894,266 @@ impl ActionProvider for SpecState {
 
     fn run(&mut self, action: &Action, _value: Option<String>, cx: &mut RunCx<'_>) {
         match action.command::<SpecCommand>() {
-            Some(SpecCommand::Comment) => self.start_composing(Compose::New(CommentKind::Comment), cx),
-            Some(SpecCommand::RequestChange) => self.start_composing(Compose::New(CommentKind::ChangeRequest), cx),
+            // Comments live in a plan.
+            Some(SpecCommand::Comment | SpecCommand::RequestChange) if self.plan.is_none() => *cx.note = Some("Comments go in a plan: pick one in the graph first.".into()),
+            Some(SpecCommand::Comment) => self.start_composing(Compose::New(CommentKind::Comment)),
+            Some(SpecCommand::RequestChange) => self.start_composing(Compose::New(CommentKind::ChangeRequest)),
             Some(SpecCommand::MarkReviewed) => {
                 if let Some(plan) = self.plan.clone() {
                     cx.net.arch_mark_reviewed(&plan, &self.author, cx.ctx.clone(), self.posted());
                 }
             }
-            Some(SpecCommand::NextPoint) => self.next_point(),
-            Some(SpecCommand::Accept) => {
-                if let Some(id) = self.current_point() {
-                    self.accept(&id, cx.net, cx.ctx);
-                }
-            }
-            Some(SpecCommand::Reopen) => {
-                if let Some(id) = self.current_point() {
+            Some(SpecCommand::Point { .. }) if self.open_points().is_empty() => *cx.note = Some("No open review points on this component.".into()),
+            Some(SpecCommand::Point { forward }) => self.step_point(*forward),
+            Some(SpecCommand::Reply) => match self.reply_point() {
+                Some(id) => {
                     self.point = Some(id.clone());
-                    self.start_composing(Compose::Reopen(id), cx);
+                    self.start_composing(Compose::Reply(id));
                 }
-            }
+                None => *cx.note = Some("Put the cursor on a comment to reply to it.".into()),
+            },
+            Some(SpecCommand::Accept) => match self.answered_point() {
+                Some(id) => self.accept(&id, cx.net, cx.ctx),
+                None => *cx.note = Some("Only an answered point can be accepted.".into()),
+            },
+            Some(SpecCommand::Reopen) => match self.answered_point() {
+                Some(id) => {
+                    self.point = Some(id.clone());
+                    self.start_composing(Compose::Reopen(id));
+                }
+                None => *cx.note = Some("Only an answered point can be reopened.".into()),
+            },
+            Some(SpecCommand::CancelCompose) => self.composer = None,
             Some(SpecCommand::NextSection) => self.step_section(1),
             Some(SpecCommand::PrevSection) => self.step_section(-1),
-            Some(SpecCommand::Fold) => self.toggle_fold(),
             Some(SpecCommand::Pin) => self.pinned = !self.pinned,
-            Some(SpecCommand::OpenCode) => self.requests.open_code = self.code_location(),
-            Some(SpecCommand::ShowInGraph) => self.requests.select = self.target.clone(),
             None => {}
         }
     }
 }
 
+impl Navigable for SpecState {
+    fn place(&self) -> Place {
+        Place::Spec { component: self.target.clone(), item: self.entry().map(|e| e.key()) }
+    }
+
+    /// Back to the component (pinned there, so the graph doesn't take it
+    /// away) and the item.
+    fn restore(&mut self, place: &Place) {
+        if let Place::Spec { component, item } = place {
+            if let Some(id) = component {
+                self.show(id.clone());
+            }
+            let loaded = self.detail.as_ref().is_some_and(|d| Some(&d.component.id) == self.target.as_ref());
+            match item.as_deref().and_then(|key| self.all_entries().into_iter().find(|e| e.key() == key)) {
+                Some(entry) if loaded => self.put_on(&entry),
+                // Not in yet: land there when it is.
+                _ if !loaded => {
+                    self.restore_item = item.clone();
+                    self.put_cursor(0);
+                }
+                _ => self.put_cursor(0),
+            }
+        }
+    }
+
+    fn target(&self) -> Option<Target> {
+        let component = self.target.clone()?;
+        let entry = self.entry().unwrap_or(Entry { section: self.current, item: SpecItem::Header });
+        Some(Target::Spec { component, section: entry.section, item: entry.item })
+    }
+
+    fn motion(&mut self, motion: Motion, count: usize) {
+        let n = self.entries().len();
+        if n == 0 {
+            return;
+        }
+        match motion {
+            Motion::Down => self.put_cursor(self.cursor + count),
+            Motion::Up => self.put_cursor(self.cursor.saturating_sub(count)),
+            Motion::HalfDown => self.put_cursor(self.cursor + self.half_page_items() * count),
+            Motion::HalfUp => self.put_cursor(self.cursor.saturating_sub(self.half_page_items() * count)),
+            Motion::First => self.put_cursor(0),
+            Motion::Last => self.put_cursor(n - 1),
+            Motion::Line(i) => self.put_cursor(i.saturating_sub(1)),
+            Motion::NextSibling => self.step_section(count as i32),
+            Motion::PrevSibling => self.step_section(-(count as i32)),
+            Motion::Left | Motion::Right => {}
+        }
+    }
+
+    /// Titles fold and unfold; a relation goes to the other component; the
+    /// source opens in the code view; a comment takes a reply.
+    fn enter(&mut self) -> Step {
+        let Some(entry) = self.entry() else { return Step::Nothing("Nothing to show yet.".into()) };
+        match entry.item {
+            SpecItem::Header => {
+                self.fold(Fold::Toggle);
+                Step::Done
+            }
+            SpecItem::Relation { .. } => Step::GoTo(GoTo::Spec),
+            SpecItem::Source => Step::GoTo(GoTo::Code),
+            SpecItem::Comment(id) | SpecItem::Reply(id, _) => {
+                self.point = Some(id.clone());
+                self.start_composing(Compose::Reply(id));
+                Step::Done
+            }
+            SpecItem::Placeholder(_) => Step::GoTo(GoTo::Code),
+            SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_) => Step::Nothing("c comments on it, C asks for a change.".into()),
+        }
+    }
+
+    fn can_enter(&self) -> bool {
+        self.entry().is_some_and(|e| !matches!(e.item, SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_)))
+    }
+
+    fn can_leave(&self) -> bool {
+        self.entry().is_some_and(|e| e.item != SpecItem::Header)
+    }
+
+    fn enter_label(&self) -> Option<String> {
+        let name = |id: &ComponentId| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned();
+        Some(match self.entry()?.item {
+            SpecItem::Header if self.folded.contains(&self.current) => "Unfold this section".to_owned(),
+            SpecItem::Header => "Fold this section".to_owned(),
+            SpecItem::Relation { other, .. } => format!("Follow to {}", name(&other)),
+            SpecItem::Source | SpecItem::Placeholder(_) => "Open in the code".to_owned(),
+            SpecItem::Comment(_) | SpecItem::Reply(..) => "Reply".to_owned(),
+            SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_) => return None,
+        })
+    }
+
+    /// Up to the section's title.
+    fn leave(&mut self) -> Step {
+        match self.entry() {
+            Some(entry) if entry.item != SpecItem::Header => {
+                self.put_on(&Entry { section: entry.section, item: SpecItem::Header });
+                Step::Done
+            }
+            _ => Step::Nothing("Already on a section title.".into()),
+        }
+    }
+
+    fn fold(&mut self, fold: Fold) {
+        match fold {
+            Fold::OpenAll => self.folded.clear(),
+            Fold::CloseAll => self.folded = Section::ALL.into_iter().collect(),
+            Fold::Open | Fold::Close | Fold::Toggle => {
+                let section = self.current;
+                let open = match fold {
+                    Fold::Open => true,
+                    Fold::Close => false,
+                    _ => self.folded.contains(&section),
+                };
+                if open {
+                    self.folded.remove(&section);
+                } else {
+                    self.folded.insert(section);
+                }
+            }
+        }
+        // The cursor stays in its section (on its title once folded).
+        let section = self.current;
+        if self.folded.contains(&section) {
+            self.put_on_header_keeping_fold(section);
+        } else if let Some(i) = self.entries().iter().position(|e| e.section == section && e.item == SpecItem::Header) {
+            if self.entry().is_none_or(|e| e.section != section) {
+                self.put_cursor(i);
+            }
+        }
+    }
+
+    fn items(&self) -> Vec<Item> {
+        let detail = self.detail.as_ref();
+        let spec = detail.and_then(|d| d.component.spec.as_ref());
+        self.all_entries()
+            .into_iter()
+            .map(|e| {
+                let (name, text) = match &e.item {
+                    SpecItem::Header => (e.section.title().to_owned(), String::new()),
+                    SpecItem::Step(i) => spec.and_then(|s| s.logic_steps.get(*i)).map_or_else(Default::default, |s| (s.name.clone(), s.description.clone())),
+                    SpecItem::Invariant(i) => spec.and_then(|s| s.invariants.get(*i)).map_or_else(Default::default, |s| (s.name.clone(), s.description.clone())),
+                    SpecItem::Relation { other, .. } => (other.as_str().rsplit([':', '.']).next().unwrap_or_default().to_owned(), other.to_string()),
+                    SpecItem::Source => (String::new(), detail.and_then(|d| d.code.clone()).unwrap_or_default()),
+                    SpecItem::Placeholder(_) => (String::new(), "placeholder".to_owned()),
+                    SpecItem::Finding(i) => (String::new(), self.findings.get(*i).map(|f| f.message.clone()).unwrap_or_default()),
+                    SpecItem::Comment(id) => (String::new(), self.comments.iter().find(|c| &c.id == id).map(|c| c.text.clone()).unwrap_or_default()),
+                    SpecItem::Reply(id, i) => (String::new(), self.comments.iter().find(|c| &c.id == id).and_then(|c| c.replies.get(*i)).map(|r| r.text.clone()).unwrap_or_default()),
+                };
+                Item::new(e.key(), name, text)
+            })
+            .collect()
+    }
+
+    fn spots(&self) -> Vec<Spot> {
+        self.spots.clone()
+    }
+
+    fn cursor_key(&self) -> Option<String> {
+        self.entry().map(|e| e.key())
+    }
+
+    fn move_to(&mut self, key: &str) {
+        if let Some(entry) = self.all_entries().into_iter().find(|e| e.key() == key) {
+            self.put_on(&entry);
+        }
+    }
+}
+
+impl SpecState {
+    /// The cursor onto a folded section's title (without unfolding it).
+    fn put_on_header_keeping_fold(&mut self, section: Section) {
+        if let Some(i) = self.entries().iter().position(|e| e.section == section && e.item == SpecItem::Header) {
+            self.put_cursor(i);
+        }
+    }
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use arch_graph::{Alignment, Component, ImplementationSpec, Invariant, LogicStep, Stage, Status};
+    use arch_graph::{Alignment, Component, ImplementationSpec, Invariant, LogicStep, Relation, Stage, Status};
+
+    pub(crate) fn detail(id: &ComponentId, other: &ComponentId) -> ComponentDetail {
+        ComponentDetail {
+            component: Component {
+                id: id.clone(),
+                name: "step".into(),
+                type_name: "function".into(),
+                description: "Does a step.".into(),
+                status: Status::New,
+                stage: Stage::PlanApproved,
+                anchor: None,
+                proposed: Some(arch_graph::ProposedLocation { language: "rust".into(), file: arch_graph::RepoPath::new("src/a.rs").unwrap(), parent: None, symbol: "a::step".into() }),
+                signature: None,
+                schemas: Default::default(),
+                spec: Some(ImplementationSpec {
+                    pattern: None,
+                    logic_steps: vec![
+                        LogicStep { sequence: 1, name: "read".into(), description: "Read the input.".into(), algorithm: None, complexity: None, check: None },
+                        LogicStep { sequence: 2, name: "write".into(), description: "Write it out.".into(), algorithm: None, complexity: None, check: None },
+                    ],
+                    invariants: vec![Invariant { name: "pure".into(), kind: arch_graph::InvariantKind::PostCondition, description: "No I/O.".into() }],
+                    ..Default::default()
+                }),
+                placeholders: vec![],
+            },
+            alignment: Alignment::Planned,
+            outgoing: vec![Relation::new(RelationKind::Calls, id.clone(), other.clone(), arch_graph::Provenance::PLANNED)],
+            incoming: vec![],
+            code: None,
+        }
+    }
+
+    fn frame(s: &mut SpecState, ctx: &egui::Context, mode: &mut crate::keymap::InputMode, slot: usize) {
+        let net = NetClient::new("http://127.0.0.1:9");
+        let mut note = None;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: mode, slot, note: &mut note, shell: &[] });
+            });
+        });
+    }
 
     // req: P9.16
     #[test]
@@ -733,9 +1173,9 @@ mod tests {
         s.step_section(1);
         s.step_section(1);
         assert_eq!(s.current, Section::Logic);
-        s.toggle_fold();
+        s.fold(Fold::Toggle);
         assert!(s.folded.contains(&Section::Logic));
-        s.toggle_fold();
+        s.fold(Fold::Toggle);
         assert!(!s.folded.contains(&Section::Logic));
         s.step_section(-10);
         assert_eq!(s.current, Section::Overview, "clamped");
@@ -743,47 +1183,104 @@ mod tests {
         assert_eq!(s.current, Section::Findings);
 
         // Full content renders: every section, with steps, invariants and code.
-        s.detail = Some(ComponentDetail {
-            component: Component {
-                id: b.clone(),
-                name: "step".into(),
-                type_name: "function".into(),
-                description: "Does a step.".into(),
-                status: Status::New,
-                stage: Stage::PlanApproved,
-                anchor: None,
-                proposed: Some(arch_graph::ProposedLocation { language: "rust".into(), file: arch_graph::RepoPath::new("src/a.rs").unwrap(), parent: None, symbol: "a::step".into() }),
-                signature: None,
-                schemas: Default::default(),
-                spec: Some(ImplementationSpec {
-                    pattern: None,
-                    logic_steps: vec![LogicStep { sequence: 1, name: "read".into(), description: "Read the input.".into(), algorithm: None, complexity: None, check: None }],
-                    invariants: vec![Invariant { name: "pure".into(), kind: arch_graph::InvariantKind::PostCondition, description: "No I/O.".into() }],
-                    ..Default::default()
-                }),
-                placeholders: vec![],
-            },
-            alignment: Alignment::Planned,
-            outgoing: vec![],
-            incoming: vec![],
-            code: None,
-        });
+        s.detail = Some(detail(&b, &a));
         let ctx = egui::Context::default();
-        let net = NetClient::new("http://127.0.0.1:9");
         s.loaded = Some((b.clone(), s.plan.clone()));
         let mut mode = crate::keymap::InputMode::Normal;
         for _ in 0..2 {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    s.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, hint_chars: "asdf" });
-                });
-            });
+            frame(&mut s, &ctx, &mut mode, 0);
         }
         assert_eq!(s.code_location(), Some(("src/a.rs".into(), 1, 1)), "planned components open their proposed file");
         let actions = s.actions();
-        for id in ["spec.next_section", "spec.prev_section", "spec.fold", "spec.pin", "spec.open_code", "spec.show_in_graph"] {
+        for id in ["spec.next_section", "spec.prev_section", "spec.pin", "spec.comment"] {
             assert!(actions.iter().any(|a| a.id == id), "{id}");
         }
+    }
+
+    // req: N.18
+    #[test]
+    fn the_cursor_walks_every_item_and_every_item_has_a_key() {
+        use crate::review::tests::comment;
+        let id = ComponentId::new("rust:a::step");
+        let other = ComponentId::new("rust:a::save");
+        let mut s = SpecState::default();
+        s.follow(Some(&id), Some(&PlanId::new("p").unwrap()));
+        s.detail = Some(detail(&id, &other));
+        s.loaded = Some((id.clone(), s.plan.clone()));
+        let mut answered = comment(1, CommentAnchor::Section { id: id.clone(), section: "logic".into() }, CommentStatus::Answered);
+        answered.replies.push(arch_graph::Reply { author: arch_graph::Author::User { name: "izo".into() }, text: "and?".into(), at: String::new() });
+        s.comments = vec![answered];
+        let keys: Vec<String> = s.entries().iter().map(Entry::key).collect();
+        let at = |k: &str| keys.iter().position(|x| x == k).unwrap_or_else(|| panic!("{k} in {keys:?}"));
+        // j walks titles, steps, comments and replies in order.
+        assert!(at("logic#Header") < at("logic#Step(0)") && at("logic#Step(1)") < at("logic#Comment(CommentId(\"c1\"))"));
+        assert!(at("logic#Comment(CommentId(\"c1\"))") < at("logic#Reply(CommentId(\"c1\"), 0)"));
+        s.motion(Motion::Line(at("logic#Step(1)") + 1), 1);
+        assert_eq!(s.current, Section::Logic);
+        s.motion(Motion::Down, 1);
+        assert!(matches!(s.entry().unwrap().item, SpecItem::Comment(_)));
+        // On a comment: a accepts it, x reopens it, r (or Enter) replies.
+        let ids: Vec<String> = s.actions().into_iter().map(|a| a.id).collect();
+        for a in ["spec.reply", "spec.accept", "spec.reopen", "spec.comment", "spec.request_change", "spec.next_point", "spec.mark_reviewed", "spec.pin"] {
+            assert!(ids.contains(&a.to_owned()), "{a}: {ids:?}");
+        }
+        assert_eq!(s.enter(), Step::Done);
+        assert_eq!(s.composer.as_ref().map(|c| c.purpose.clone()), Some(Compose::Reply(CommentId("c1".into()))));
+        assert!(std::mem::take(&mut s.requests.insert), "the composer takes the keyboard");
+        s.composer = None;
+        // Backspace goes up to the title; Enter on a title folds it.
+        assert_eq!(s.leave(), Step::Done);
+        assert_eq!(s.entry().unwrap().item, SpecItem::Header);
+        assert_eq!(s.enter(), Step::Done);
+        assert!(s.folded.contains(&Section::Logic));
+        assert!(!s.entries().iter().any(|e| matches!(e.item, SpecItem::Step(_))), "folded items are skipped");
+        s.fold(Fold::OpenAll);
+        // Relations: Enter follows (to the other component's spec); c comments on the relation itself.
+        s.move_to(&Entry { section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: other.clone(), outgoing: true } }.key());
+        assert_eq!(s.target().unwrap().component(), Some(&other));
+        assert_eq!(s.enter(), Step::GoTo(GoTo::Spec));
+        let comment_action = s.actions().into_iter().find(|a| a.id == "spec.comment").unwrap();
+        let (ctx, net, mut mode, mut note) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
+        s.run(&comment_action, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] });
+        assert_eq!(s.composer.as_ref().unwrap().anchor, Some(CommentAnchor::Relation { kind: RelationKind::Calls, source: id.clone(), target: other.clone() }));
+        s.composer = None;
+        // Search finds items; hints label what's drawn.
+        let found = crate::nav::rank_matches(&s.items(), "write");
+        assert_eq!(s.items()[found[0]].key, "logic#Step(1)");
+        let mut mode = crate::keymap::InputMode::Normal;
+        for _ in 0..2 {
+            frame(&mut s, &ctx, &mut mode, 0);
+        }
+        let spots = s.spots();
+        assert!(spots.iter().any(|sp| sp.key == "logic#Step(0)") && spots.iter().any(|sp| sp.key == "overview#Header"), "{spots:?}");
+        // ] c lands on the open point; G and gg go to the ends.
+        s.motion(Motion::First, 1);
+        s.step_point(true);
+        assert_eq!(s.entry().unwrap().item, SpecItem::Comment(CommentId("c1".into())));
+        s.motion(Motion::Last, 1);
+        assert_eq!(s.entry().unwrap().section, Section::Findings);
+        s.motion(Motion::NextSibling, 1);
+        assert_eq!(s.current, Section::Findings, "no section after the last");
+        s.motion(Motion::PrevSibling, 2);
+        assert_eq!(s.current, Section::Code);
+    }
+
+    // req: N.2, N.18
+    #[test]
+    fn a_restored_item_is_found_once_the_component_loads() {
+        let step = ComponentId::new("rust:a::step");
+        let save = ComponentId::new("rust:a::save");
+        let mut s = SpecState { pinned: true, ..Default::default() };
+        s.show(save.clone());
+        let relation = Entry { section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: save.clone(), outgoing: true } }.key();
+        s.restore(&Place::Spec { component: Some(step.clone()), item: Some(relation.clone()) });
+        assert_eq!(s.cursor, 0, "not loaded yet");
+        s.loaded = Some((step.clone(), None));
+        push(&s.inbox, Reply::Detail(step.clone(), Box::new(Ok(detail(&step, &save)))));
+        let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
+        s.tick(&net, &ctx);
+        assert_eq!(s.cursor_key(), Some(relation), "on the relation once it's in");
+        assert_eq!(s.current, Section::Relations);
     }
 
     // req: R.1, R.2
@@ -822,34 +1319,20 @@ mod tests {
         }
 
         // ] c walks the open points and brings their section up.
-        s.next_point();
+        s.step_point(true);
         assert_eq!((s.point.as_ref().map(|p| p.0.as_str()), s.current), (Some("c1"), Section::Overview));
-        s.next_point();
+        s.step_point(true);
         assert_eq!((s.point.as_ref().map(|p| p.0.as_str()), s.current), (Some("c2"), Section::Invariants));
-        s.next_point();
+        s.step_point(true);
         assert_eq!(s.point.as_ref().map(|p| p.0.as_str()), Some("c1"), "wraps around");
 
-        // Review actions exist with a plan and a loaded component; c starts a comment on the section in insert mode.
-        s.detail = Some(ComponentDetail {
-            component: Component {
-                id: id.clone(),
-                name: "step".into(),
-                type_name: "function".into(),
-                description: String::new(),
-                status: Status::New,
-                stage: Stage::Declared,
-                anchor: None,
-                proposed: None,
-                signature: None,
-                schemas: Default::default(),
-                spec: None,
-                placeholders: vec![],
-            },
-            alignment: Alignment::Planned,
-            outgoing: vec![],
-            incoming: vec![],
-            code: None,
-        });
+        // Review actions exist with a plan and a loaded component; C on a section starts a change request in insert mode.
+        let mut d = detail(&id, &other);
+        d.component.spec = None;
+        d.outgoing.clear();
+        s.detail = Some(d);
+        // Off the comments, accept and reopen act on the answered point.
+        s.motion(Motion::First, 1);
         let actions = s.actions();
         for a in ["spec.comment", "spec.request_change", "spec.mark_reviewed", "spec.next_point", "spec.accept", "spec.reopen"] {
             assert!(actions.iter().any(|x| x.id == a), "{a}");
@@ -857,19 +1340,21 @@ mod tests {
         let ctx = egui::Context::default();
         let net = NetClient::new("http://127.0.0.1:9");
         let mut mode = crate::keymap::InputMode::Normal;
-        s.current = Section::Logic;
+        s.step_section(2);
+        assert_eq!(s.current, Section::Logic);
         let request = actions.iter().find(|a| a.id == "spec.request_change").unwrap().clone();
-        s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 1, hint_chars: "asdf" });
-        assert_eq!(mode, crate::keymap::InputMode::Insert { slot: 1 });
-        assert_eq!(s.composer, Some(Composer { purpose: Compose::New(CommentKind::ChangeRequest), section: Section::Logic, text: String::new() }));
+        let mut note = None;
+        s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 1, note: &mut note, shell: &[] });
+        assert!(s.requests.insert);
+        assert_eq!(
+            s.composer,
+            Some(Composer { purpose: Compose::New(CommentKind::ChangeRequest), anchor: Some(CommentAnchor::Section { id: id.clone(), section: "logic".into() }), section: Section::Logic, text: String::new() })
+        );
         // It all renders: markers, threads with their buttons, the composer.
         s.loaded = Some((id.clone(), s.plan.clone()));
+        mode = crate::keymap::InputMode::Insert { slot: 1 };
         for _ in 0..2 {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    s.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 1, hint_chars: "asdf" });
-                });
-            });
+            frame(&mut s, &ctx, &mut mode, 1);
         }
         assert!(s.composer.is_some(), "an empty composer isn't sent");
         s.composer.as_mut().unwrap().text = "Steps 2 and 3 are one step.".into();

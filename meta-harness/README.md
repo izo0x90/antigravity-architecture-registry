@@ -80,22 +80,46 @@ NAH opens is given automatically.
 
 ## The cockpit
 
-The cockpit has six views: chat, code, graph, tree, spec and queue.
+The cockpit has six views: chat, code, graph, tree, spec and queue. Each
+slot (column) shows one. Every view has a cursor, and the same keys drive
+all of them:
 
-- **Graph:** shows the structure, calls, data-flow and combined views. Moving
-  around:
-  - vim keys;
-  - hint mode (`f`) to jump to any node;
-  - `/` search, marks and counts;
-  - back and forward history;
-  - touch gestures.
+- **Move:**
+  - `j`/`k` (and `h`/`l` in the graph and tree), with counts (`3j`);
+  - `ctrl+d`/`ctrl+u` for half a page;
+  - `gg`/`G` for first and last;
+  - `]]`/`[[` for siblings (sections in the spec, definitions in the code);
+  - `Enter` to go in, `Backspace` to go out.
+- **Find:**
+  - `f` labels what's on screen (type a label to go there; `F` opens it);
+  - `/` searches the view, `n`/`N` step through matches;
+  - `z o`/`z c`/`z a`/`z R`/`z M` fold.
+- **Go to**, from whatever the cursor is on:
+  - `g d` code, `g s` spec, `g m` graph, `g t` outline, `g q` queue job;
+  - `g r` callers, `g c` callees, `g p` parent, `g n` members,
+    `g i` implements, `g l` data flow.
+- **Come back:** `ctrl+o`/`ctrl+i` walk one jump list across all views and
+  slots; `m` plus a letter sets a mark and `'` plus the letter returns to it.
 
-  It also has a legend, and nodes show more detail as you zoom in.
-- **Spec:** shows one component in full, with review threads.
-- **Queue:** shows each job, its session, and the Approve and Retry actions.
+The key bar at the bottom shows the keys that matter for what the cursor
+is on. Pausing on a prefix (`g`, `z`, `[`, `]`, `m`, `'`) lists what can
+follow, and `?` lists every key of the focused view. `Space` opens the
+leader menu (the focused view's entries first), and `:` opens the command
+palette (`:42` goes to line 42).
 
-`Space` opens the leader menu, and `:` opens the command palette. All keys
-are configurable in `crates/cockpit-ui/config/default.toml`.
+Views also have their own keys:
+
+- **Graph:**
+  - `]e`/`[e` step through calls in order; `v` switches view, `+`/`-` set the depth;
+  - semantic zoom, a legend (`g ?`), touch gestures.
+- **Code:** `]f`/`[f` move between definitions.
+- **Spec:**
+  - `J`/`K` move between sections;
+  - `c`/`C` comment on or ask for a change to the item under the cursor;
+  - `r`/`a`/`x` reply to, accept or reopen a review point.
+- **Queue:** `a` approve, `r` retry, `o` open the job's session.
+
+All keys are configurable in `crates/cockpit-ui/config/default.toml`.
 
 ## Configuration
 
