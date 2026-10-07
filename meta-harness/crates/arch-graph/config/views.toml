@@ -13,6 +13,28 @@
 #                    relations among their parts, lifted and counted (a module
 #                    calling into another gets one line with the count)
 
+# Levels a view of relations (calls, data flow) can be seen at, finest
+# first: each part is drawn as what holds it at that level, the lines
+# between merged. `types` are the component types that stand for the level;
+# `pick` says which holder of those types: the nearest (default) or the
+# outermost (a crate's root module).
+[[grains]]
+name = "types"
+types = ["class", "interface"]
+
+[[grains]]
+name = "modules"
+types = ["module"]
+
+[[grains]]
+name = "packages"
+types = ["module"]
+pick = "outermost"
+
+[[grains]]
+name = "folders"
+types = ["folder"]
+
 [views.structure]
 description = "Static structure: what contains what, and what implements which interface. Read it as the shape of the code."
 kinds = ["contains", "implements"]

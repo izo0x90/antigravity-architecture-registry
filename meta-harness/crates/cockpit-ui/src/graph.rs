@@ -170,6 +170,8 @@ const MAX_ZOOM: f32 = 3.0;
 
 /// The views that tell calls as a story, forwards and backwards.
 const STORY: &str = "story";
+/// The finest level: the parts themselves.
+const PARTS: &str = "parts";
 /// The view that shows one value's whole path.
 const DATA_PATH: &str = "data_path";
 const REACHED_BY: &str = "reached_by";
@@ -188,7 +190,12 @@ pub struct GraphState {
     plans: Vec<PlanId>,
     plans_stale: bool,
     pub nav: Nav,
+    /// The view as drawn: the server's, seen at the chosen level.
     pub result: Option<ViewResult>,
+    /// The view as the server sent it (the level is applied to a copy).
+    raw: Option<ViewResult>,
+    /// The level relations are seen at (a level's name; none: the parts).
+    pub grain: Option<String>,
     /// How the view is drawn at this level: cards, open modules, blocks and
     /// routed lines (rebuilt when the view, the open modules or the
     /// selection's neighbourhood change).
@@ -275,6 +282,8 @@ impl Default for GraphState {
             plans_stale: true,
             nav: Nav::new("structure"),
             result: None,
+            raw: None,
+            grain: None,
             scene: Scene::default(),
             names: BTreeMap::new(),
             open: BTreeSet::new(),
@@ -540,6 +549,8 @@ impl GraphState {
 
     /// Applies a fetched view, keeping selection and camera when possible.
     pub fn set_result(&mut self, result: ViewResult) {
+        self.raw = Some(result.clone());
+        let result = self.at_level(result);
         if let Some(sel) = self.selection.clone()
             && !result.components.contains_key(&sel)
         {
@@ -581,7 +592,7 @@ impl GraphState {
         self.rebuild(same_level);
         // Focused on one thing that holds nothing (a function, in a view of
         // what's in what): show it where it lives, inside its module, selected.
-        if let Some(result) = &self.result
+        if let Some(result) = &self.raw
             && result.view.spec.layout == LayoutKind::Nested
             && let [root] = result.view.roots.as_slice()
             && !result.view.edges.iter().any(|e| e.kind == RelationKind::Contains && &e.source == root)
@@ -614,6 +625,73 @@ impl GraphState {
             if !from.is_empty() && crate::theme::look().move_seconds > 0.0 {
                 self.moving = Some(Moving { from, started: None });
             }
+        }
+    }
+
+    /// The levels this view can be seen at (those that group some of it).
+    fn levels(&self) -> Vec<arch_graph::view::grain::GrainSpec> {
+        let (Some(raw), Some(catalog)) = (&self.raw, &self.catalog) else { return Vec::new() };
+        if matches!(raw.view.spec.layout, LayoutKind::Nested | LayoutKind::Story) {
+            return Vec::new();
+        }
+        arch_graph::view::grain::levels(&raw.view, &raw.components, &catalog.grains).into_iter().cloned().collect()
+    }
+
+    /// `result` seen at the chosen level (as it is, at the parts' level).
+    fn at_level(&self, mut result: ViewResult) -> ViewResult {
+        let Some(name) = &self.grain else { return result };
+        let Some(catalog) = &self.catalog else { return result };
+        if matches!(result.view.spec.layout, LayoutKind::Nested | LayoutKind::Story) {
+            return result;
+        }
+        let levels = arch_graph::view::grain::levels(&result.view, &result.components, &catalog.grains);
+        if let Some(at) = levels.iter().position(|g| &g.name == name) {
+            result.view = arch_graph::view::grain::regroup(&result.view, &result.components, &levels, at);
+        }
+        result
+    }
+
+    /// Sees the view at another level (none: the parts themselves). What
+    /// was selected stays selected, or what holds it now does.
+    fn set_grain(&mut self, grain: Option<String>) {
+        if self.grain == grain {
+            return;
+        }
+        self.grain = grain;
+        self.open.clear();
+        if let Some(raw) = self.raw.clone() {
+            self.set_result(raw);
+            self.moving = None;
+            self.fit = true;
+            if let Some(sel) = self.selection.clone()
+                && !self.shown(&sel)
+            {
+                let holder = self.scene.ancestors(&sel).into_iter().rev().find(|a| self.shown(a));
+                self.select(holder);
+            }
+        }
+    }
+
+    /// One level coarser (`up`) or finer.
+    fn step_grain(&mut self, up: bool) -> Result<(), String> {
+        let names: Vec<String> = self.levels().into_iter().map(|g| g.name).collect();
+        if names.is_empty() {
+            return Err("This view has no levels to step through.".into());
+        }
+        let at = self.grain.as_ref().and_then(|g| names.iter().position(|n| n == g));
+        let next = match (at, up) {
+            (None, true) => Some(Some(names[0].clone())),
+            (Some(i), true) if i + 1 < names.len() => Some(Some(names[i + 1].clone())),
+            (Some(0), false) => Some(None),
+            (Some(i), false) => Some(Some(names[i - 1].clone())),
+            _ => None,
+        };
+        match next {
+            Some(grain) => {
+                self.set_grain(grain);
+                Ok(())
+            }
+            None => Err(if up { "Already at the widest level." } else { "Already showing every part." }.into()),
         }
     }
 
@@ -1143,9 +1221,23 @@ impl GraphState {
         let readable = self.ui.detail.mid;
         if self.camera.zoom < readable {
             let area = self.open_area;
-            let anchor = self.selection.as_ref().and_then(|s| self.box_of(s)).map_or((bounds.x + area.width() / readable / 2.0, bounds.y + area.height() / readable / 2.0), |r| r.center());
             self.camera.zoom = readable;
-            self.camera.pan = (area.center() - self.canvas.min) - Vec2::new(anchor.0, anchor.1) * readable;
+            match self.selection.as_ref().and_then(|s| self.box_of(s)) {
+                // Toward what it's linked to, as far as keeps it on screen.
+                Some(sel) => {
+                    let (min_x, min_y) = focus.iter().fold((f32::MAX, f32::MAX), |(x, y), r| (x.min(r.x), y.min(r.y)));
+                    let (max_x, max_y) = focus.iter().fold((f32::MIN, f32::MIN), |(x, y), r| (x.max(r.right()), y.max(r.bottom())));
+                    let margin = self.ui.arrange.gap_x / 2.0;
+                    let half = Vec2::new(area.width(), area.height()) / readable / 2.0;
+                    let toward = |lo: f32, hi: f32, s0: f32, s1: f32, half: f32| ((lo + hi) / 2.0).clamp(s1 + margin - half, s0 - margin + half);
+                    let center = Vec2::new(toward(min_x, max_x, sel.x, sel.right(), half.x), toward(min_y, max_y, sel.y, sel.bottom(), half.y));
+                    self.camera.pan = (area.center() - self.canvas.min) - center * readable;
+                }
+                None => {
+                    let anchor = Vec2::new(bounds.x, bounds.y) + Vec2::new(area.width(), area.height()) / readable / 2.0;
+                    self.camera.pan = (area.center() - self.canvas.min) - anchor * readable;
+                }
+            }
         }
     }
 
@@ -1651,6 +1743,9 @@ impl GraphState {
             let depth = nav.depth.unwrap_or(self.base_depth());
             let shown = self.result.as_ref().map_or(0, |r| r.view.nodes.len());
             ui.label(muted(format!("· depth {depth} · {shown} nodes")));
+            if let Some(level) = &self.grain {
+                ui.label(RichText::new(format!("{} by {level}", egui_phosphor::regular::STACK)).size(look.text_body).strong().color(colors().focus));
+            }
             if let Some(value) = &self.trace {
                 let (glyph, word, color) = crate::status::look("following");
                 ui.label(RichText::new(format!("{glyph} {word} {value}")).size(look.text_body).strong().color(color));
@@ -1854,7 +1949,11 @@ impl GraphState {
         let area = self.open_area.shrink(look.space_m);
         let font = FontId::proportional(look.text_small);
         let mut placed: Vec<(ComponentId, Rect)> = Vec::new();
-        for line in &self.scene.lines {
+        let mut hidden = 0usize;
+        // Heaviest lines first: they get a marker when there's no room for all.
+        let mut lines: Vec<&scene::Line> = self.scene.lines.iter().collect();
+        lines.sort_by(|a, b| b.count.cmp(&a.count));
+        for line in lines {
             let is = |e: &End| matches!(e, End::Node(id) | End::Outside(id) if *id == sel);
             let (other, outgoing) = if is(&line.from) { (&line.to, true) } else if is(&line.to) { (&line.from, false) } else { continue };
             let (End::Node(other_id) | End::Outside(other_id)) = other else { continue };
@@ -1878,11 +1977,25 @@ impl GraphState {
             let size = galley.size() + Vec2::new(look.space_m * 2.0, look.space_xs * 2.0);
             let mut rect = Rect::from_center_size(exit, size);
             rect = rect.translate(Vec2::new((area.left() - rect.left()).max(0.0) + (area.right() - rect.right()).min(0.0), (area.top() - rect.top()).max(0.0) + (area.bottom() - rect.bottom()).min(0.0)));
-            // Along the edge it sits on, clear of the markers already there.
+            if placed.len() >= self.ui.levels.max_markers {
+                hidden += 1;
+                continue;
+            }
+            // Along the edge it sits on, clear of the markers already there;
+            // past the edge's end, a column (or row) further in.
             let on_side = (exit.x - area.left()).abs() < 1.0 || (exit.x - area.right()).abs() < 1.0;
+            let inward = if (exit.x - area.right()).abs() < 1.0 || (exit.y - area.bottom()).abs() < 1.0 { -1.0 } else { 1.0 };
             let mut tries = 0;
-            while placed.iter().any(|(_, r)| r.expand(look.space_hair).intersects(rect)) && tries < 64 {
+            while placed.iter().any(|(_, r)| r.expand(look.space_hair).intersects(rect)) && tries < 256 {
                 rect = rect.translate(if on_side { Vec2::new(0.0, size.y + look.space_xs) } else { Vec2::new(size.x + look.space_xs, 0.0) });
+                if !area.contains_rect(rect) {
+                    let wrap = placed.iter().map(|(_, r)| if on_side { r.width() } else { r.height() }).fold(0.0f32, f32::max) + look.space_s;
+                    rect = if on_side {
+                        Rect::from_min_size(Pos2::new(rect.min.x + inward * wrap, area.top()), rect.size())
+                    } else {
+                        Rect::from_min_size(Pos2::new(area.left(), rect.min.y + inward * wrap), rect.size())
+                    };
+                }
                 tries += 1;
             }
             let st = style().edge(&theme, line.kind, provenance_of(line.alignment), line.alignment, line.overlay);
@@ -1890,6 +2003,13 @@ impl GraphState {
             painter.rect_stroke(rect, look.radius_pill, Stroke::new(look.line_thin, st.color), StrokeKind::Inside);
             painter.galley(rect.min + Vec2::new(look.space_m, look.space_xs), galley, theme.text_strong);
             placed.push((other_id.clone(), rect));
+        }
+        if hidden > 0 {
+            let galley = painter.layout_no_wrap(format!("+{hidden} more off screen"), font.clone(), theme.muted);
+            let size = galley.size() + Vec2::new(look.space_m * 2.0, look.space_xs * 2.0);
+            let rect = Rect::from_min_size(Pos2::new(area.right() - size.x, area.bottom() - size.y), size);
+            painter.rect_filled(rect, look.radius_pill, theme.overlay);
+            painter.galley(rect.min + Vec2::new(look.space_m, look.space_xs), galley, theme.muted);
         }
         placed
     }
@@ -2307,6 +2427,11 @@ enum GraphCommand {
     /// Follow a value through the data flow (or stop).
     Follow,
     Unfollow,
+    /// See the relations at a level (by name; empty: the parts), or a level
+    /// coarser or finer.
+    Level,
+    Coarser,
+    Finer,
 }
 
 impl ActionProvider for GraphState {
@@ -2325,6 +2450,14 @@ impl ActionProvider for GraphState {
         let mut plans = vec![Choice::new("", "code only").current(plan.is_none())];
         plans.extend(self.plans.iter().map(|p| Choice::new(&p.0, &p.0).current(plan.as_ref() == Some(p))));
         out.push(f("graph.plan", "Lay a plan over the code", G::SetPlan).param(Param::Choice(plans)).toolbar(Control, "Plan", None).group(Group::View).jump());
+        let levels = self.levels();
+        if !levels.is_empty() {
+            let mut choices = vec![Choice::new("", PARTS).current(self.grain.is_none())];
+            choices.extend(levels.iter().map(|g| Choice::new(&g.name, &g.name).current(self.grain.as_deref() == Some(g.name.as_str()))));
+            out.push(f("graph.level", "See it by level (functions, types, modules, packages, folders)", G::Level).param(Param::Choice(choices)).toolbar(Control, "Level", Some(egui_phosphor::regular::STACK)).group(Group::View));
+            out.push(f("graph.coarser", "A level up: group into what holds them", G::Coarser).icon(egui_phosphor::regular::ARROW_LINE_UP).group(Group::View).importance(SECONDARY));
+            out.push(f("graph.finer", "A level down: open into the parts", G::Finer).icon(egui_phosphor::regular::ARROW_LINE_DOWN).group(Group::View).importance(SECONDARY));
+        }
         out.push(f("graph.depth_less", "Show fewer hops", G::Depth(-1)).toolbar(Button, "", Some(egui_phosphor::regular::MINUS)).group(Group::View).importance(MINOR).jump());
         out.push(f("graph.depth_more", "Show more hops", G::Depth(1)).toolbar(Button, "", Some(egui_phosphor::regular::PLUS)).group(Group::View).importance(MINOR).jump());
         if !self.nav.roots.is_empty() {
@@ -2417,6 +2550,12 @@ impl ActionProvider for GraphState {
                 }
             }
             GraphCommand::Unfollow => self.trace = None,
+            GraphCommand::Level => self.set_grain(value.filter(|v| !v.is_empty())),
+            GraphCommand::Coarser | GraphCommand::Finer => {
+                if let Err(why) = self.step_grain(matches!(command, GraphCommand::Coarser)) {
+                    *cx.note = Some(why);
+                }
+            }
             GraphCommand::Story(view) => {
                 if let Some(id) = self.selection.clone() {
                     self.navigate(NavChange::View(view.to_owned()));
@@ -2929,7 +3068,7 @@ pub(crate) mod tests {
             view: View {
                 spec: ViewSpec { name: "calls".into(), description: String::new(), kinds: vec![RelationKind::Calls], direction: Default::default(), depth: 3, layout: Default::default(), overlays: vec![], include_ancestors: false, links: vec![], roots: vec![], filters: Default::default() },
                 roots: vec![id("rust:a::run")],
-                nodes: ids.iter().map(|s| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, container: None }).collect(),
+                nodes: ids.iter().map(|s| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, ancestors: vec![] }).collect(),
                 edges: vec![edge("rust:a::run", "rust:a::step"), edge("rust:a::step", "rust:a::save"), edge("rust:a::run", "rust:a::log")],
                 links: vec![],
                 trail: vec![],
@@ -2954,7 +3093,7 @@ pub(crate) mod tests {
             c.type_name = "module".into();
             r.components.insert(c.id.clone(), c);
             let members = if id == "rust:a" { 4 } else { 0 };
-            r.view.nodes.push(ViewNode { id: ComponentId::new(id), depth: Some(0), truncated: false, alignment: Alignment::Observed, members, container: None });
+            r.view.nodes.push(ViewNode { id: ComponentId::new(id), depth: Some(0), truncated: false, alignment: Alignment::Observed, members, ancestors: vec![] });
         }
         for part in ["rust:a::run", "rust:a::step", "rust:a::save", "rust:a::log"] {
             r.view.edges.push(ViewEdge { id: arch_graph::RelationId(format!("contains:rust:a->{part}")), kind: RelationKind::Contains, source: ComponentId::new("rust:a"), target: ComponentId::new(part), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None });
@@ -3219,7 +3358,7 @@ pub(crate) mod tests {
             c.id = id.clone();
             c.name = format!("n{i}");
             r.components.insert(id.clone(), c);
-            r.view.nodes.push(arch_graph::view::ViewNode { id: id.clone(), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, container: None });
+            r.view.nodes.push(arch_graph::view::ViewNode { id: id.clone(), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, ancestors: vec![] });
         }
         let mut g = showing(r);
         // Laid out by hand: run at the top of a tall column, the rest to its right.
@@ -3730,7 +3869,7 @@ pub(crate) mod tests {
         let mut other = twins.components[&ComponentId::new("rust:a::log")].clone();
         other.id = ComponentId::new("rust:b::log");
         twins.components.insert(other.id.clone(), other);
-        twins.view.nodes.push(ViewNode { id: ComponentId::new("rust:b::log"), depth: Some(1), truncated: false, alignment: Alignment::Observed, members: 0, container: None });
+        twins.view.nodes.push(ViewNode { id: ComponentId::new("rust:b::log"), depth: Some(1), truncated: false, alignment: Alignment::Observed, members: 0, ancestors: vec![] });
         g.set_result(twins);
         assert_eq!((g.names[&ComponentId::new("rust:a::log")].as_str(), g.names[&ComponentId::new("rust:b::log")].as_str()), ("a::log", "b::log"));
         assert_eq!(g.names[&ComponentId::new("rust:a::run")], "run", "the rest keep their short names");
@@ -3839,7 +3978,7 @@ pub(crate) mod tests {
         module.name = "a".into();
         r.components.insert(module.id.clone(), module);
         for n in &mut r.view.nodes {
-            n.container = Some(ComponentId::new("rust:a"));
+            n.ancestors = vec![ComponentId::new("rust:a")];
         }
         let mut g = configured();
         g.set_result(r);
@@ -3966,7 +4105,7 @@ pub(crate) mod tests {
             c.id = id.clone();
             c.name = format!("n{i:02}");
             wide.components.insert(id.clone(), c);
-            wide.view.nodes.push(ViewNode { id: id.clone(), depth: Some(1), truncated: false, alignment: Alignment::Observed, members: 0, container: None });
+            wide.view.nodes.push(ViewNode { id: id.clone(), depth: Some(1), truncated: false, alignment: Alignment::Observed, members: 0, ancestors: vec![] });
             let from = if i == 0 { "rust:a::save".to_owned() } else { format!("rust:a::n{:02}", i - 1) };
             wide.view.edges.push(ViewEdge { id: arch_graph::RelationId(format!("calls:{from}->{id}")), kind: RelationKind::Calls, source: ComponentId::new(&from), target: id.clone(), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None });
         }
@@ -4010,5 +4149,104 @@ pub(crate) mod tests {
         n.set_result(module);
         assert_eq!(n.selection.as_ref().map(|s| s.as_str()), Some("rust:a::step"), "selected there, among its neighbours");
         assert!(n.shown(&ComponentId::new("rust:a::run")) && n.shown(&ComponentId::new("rust:a::save")));
+    }
+
+    // req: G.13, G.14
+    #[test]
+    fn relations_step_through_levels_open_in_place_and_markers_stay_on_screen() {
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::set(config.theme.clone(), &ctx);
+        crate::theme::set_look(config.look.clone());
+        let size = Vec2::new(1400.0, 800.0);
+        // The sample's functions sit in module a; a second module b holds one more.
+        let mut r = sample_result();
+        let mut module = |id: &str| {
+            let mut c = r.components[&ComponentId::new("rust:a::run")].clone();
+            c.id = ComponentId::new(id);
+            c.name = id.trim_start_matches("rust:").into();
+            c.type_name = "module".into();
+            r.components.insert(c.id.clone(), c);
+        };
+        module("rust:a");
+        module("rust:b");
+        let mut extra = r.components[&ComponentId::new("rust:a::run")].clone();
+        extra.id = ComponentId::new("rust:b::keep");
+        extra.name = "keep".into();
+        r.components.insert(extra.id.clone(), extra);
+        r.view.nodes.push(ViewNode { id: ComponentId::new("rust:b::keep"), depth: Some(2), truncated: false, alignment: Alignment::Observed, members: 0, ancestors: vec![ComponentId::new("rust:b")] });
+        for n in r.view.nodes.iter_mut().filter(|n| n.id.as_str().starts_with("rust:a::")) {
+            n.ancestors = vec![ComponentId::new("rust:a")];
+        }
+        for (from, to) in [("rust:a::save", "rust:b::keep"), ("rust:a::log", "rust:b::keep")] {
+            r.view.edges.push(ViewEdge { id: arch_graph::RelationId(format!("calls:{from}->{to}")), kind: RelationKind::Calls, source: ComponentId::new(from), target: ComponentId::new(to), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None });
+        }
+        let mut g = configured();
+        g.set_result(r);
+        assert!(g.actions().iter().any(|a| a.id == "graph.level"), "a level control");
+        assert_eq!(g.levels().iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["modules"], "packages would group the same: not offered");
+        g.select(Some(ComponentId::new("rust:a::save")));
+        // A level up: two modules, one line between them counting both calls.
+        g.step_grain(true).unwrap();
+        assert_eq!(g.grain.as_deref(), Some("modules"));
+        assert_eq!(g.scene.rects.keys().map(|k| k.as_str()).collect::<Vec<_>>(), ["rust:a", "rust:b"]);
+        assert_eq!(g.scene.lines.len(), 1);
+        assert_eq!(g.scene.lines[0].count, 2);
+        assert_eq!(g.selection.as_ref().map(|s| s.as_str()), Some("rust:a"), "the selection's holder is selected");
+        let text = texts(&draw(&mut g, &ctx, vec![], 0.0, size));
+        assert!(text.contains("by modules"), "the toolbar says the level: {text}");
+        // Opened in place: a's functions inside it, the rest as it was.
+        g.fold(Fold::Open);
+        assert!(g.shown(&ComponentId::new("rust:a::save")) && !g.shown(&ComponentId::new("rust:b::keep")));
+        assert!(g.scene.rects[&ComponentId::new("rust:a")].contains(&g.scene.rects[&ComponentId::new("rust:a::run")]));
+        g.fold(Fold::Close);
+        assert!(!g.shown(&ComponentId::new("rust:a::save")));
+        // And back down to the parts.
+        g.step_grain(false).unwrap();
+        assert!(g.grain.is_none() && g.shown(&ComponentId::new("rust:a::save")));
+        assert!(g.step_grain(false).is_err(), "the parts are the finest");
+        // Focused on one function in a view of calls, a level up keeps the
+        // view where it is (it doesn't jump to the function's module).
+        let nav = g.nav.clone();
+        g.nav.roots = vec![ComponentId::new("rust:a::run")];
+        let mut rooted = g.raw.clone().unwrap();
+        rooted.view.roots = vec![ComponentId::new("rust:a::run")];
+        rooted.view.trail = vec![ComponentId::new("rust:a")];
+        g.set_result(rooted);
+        g.step_grain(true).unwrap();
+        assert_eq!(g.nav.roots, vec![ComponentId::new("rust:a::run")], "still rooted at run");
+        assert!(g.scene.rects.len() >= 2, "{:?}", g.scene.rects.keys().collect::<Vec<_>>());
+        g.nav = nav;
+
+        // G.14: many lines off screen: markers on screen, apart, the rest summed up.
+        let mut wide = sample_result();
+        let hub = ComponentId::new("rust:a::run");
+        for i in 0..40 {
+            let id = ComponentId::new(format!("rust:a::far{i:02}"));
+            let mut c = wide.components[&hub].clone();
+            c.id = id.clone();
+            c.name = format!("far{i:02}");
+            wide.components.insert(id.clone(), c);
+            wide.view.nodes.push(ViewNode { id: id.clone(), depth: Some(1), truncated: false, alignment: Alignment::Observed, members: 0, ancestors: vec![] });
+            wide.view.edges.push(ViewEdge { id: arch_graph::RelationId(format!("calls:run->{id}")), kind: RelationKind::Calls, source: hub.clone(), target: id, alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None });
+        }
+        let mut w = configured();
+        w.set_result(wide);
+        w.select(Some(hub.clone()));
+        draw(&mut w, &ctx, vec![], 0.0, Vec2::new(900.0, 500.0));
+        w.camera.zoom = 2.5;
+        w.camera.pan = (w.open_area.center() - w.canvas.min) - {
+            let (x, y) = w.scene.rects[&hub].center();
+            Vec2::new(x, y) * 2.5
+        };
+        let text = texts(&draw(&mut w, &ctx, vec![], 0.1, Vec2::new(900.0, 500.0)));
+        assert!(!w.beyond.is_empty() && w.beyond.len() <= w.ui.levels.max_markers, "{}", w.beyond.len());
+        for (i, (_, a)) in w.beyond.iter().enumerate() {
+            assert!(w.open_area.contains_rect(*a), "on screen: {a:?}");
+            for (_, b) in w.beyond.iter().skip(i + 1) {
+                assert!(!a.intersects(*b), "apart: {a:?} {b:?}");
+            }
+        }
+        assert!(text.contains("more off screen"), "the rest summed up: {text}");
     }
 }

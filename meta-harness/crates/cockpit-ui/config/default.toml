@@ -173,6 +173,9 @@ I = "Index"
 "graph.depth_less" = { leader = "g -", keys = ["-"] }
 "graph.view" = { leader = "g v" }
 "graph.next_view" = { keys = ["v"] }
+"graph.level" = { leader = "g L" }
+"graph.coarser" = { leader = "g <", keys = ["<"] }
+"graph.finer" = { leader = "g >", keys = [">"] }
 "graph.plan" = { leader = "g P" }
 "graph.next_call" = { keys = ["] e"] }
 "graph.prev_call" = { keys = ["[ e"] }
@@ -563,6 +566,9 @@ line_height = 1.4
 enter_fill = 0.5
 leave_fill = 0.25
 max_cards = 60
+# Most markers at the screen's edge naming where the selection's lines go
+# off screen; the rest are summed up in one ("+N more off screen").
+max_markers = 14
 
 # The event socket: when it drops, try again after `reconnect_min_ms`, doubling
 # up to `reconnect_max_ms`; views refetch once it's back.

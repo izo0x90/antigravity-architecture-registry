@@ -117,6 +117,11 @@ Views also have their own keys:
     `calls` (left to right), `story` and `reached_by` (a function's calls top to
     bottom in order, or what reaches it), `data_flow` (a pipeline: what each
     line carries, each step's shape) and `data_path` (one value's whole path);
+  - levels in every view of relations: `<` / `>` see calls or data flow by
+    type, module, package or folder (lines merge with counts), and
+    `z o` / `z c` open one group in place to see its parts;
+  - select something and what it links to lights up while the rest dims;
+    where its lines leave the screen, markers name the other end (click to go);
   - on a selected function: tell its story, see what reaches it, or follow
     its data through the code (from the view menu or the palette);
   - `]e`/`[e` step through calls in order; `v` switches view, `+`/`-` set the depth;

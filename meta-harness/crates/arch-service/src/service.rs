@@ -925,7 +925,7 @@ impl ArchitectureService {
                             truncated: false,
                             alignment: graph.alignment(end).unwrap_or(arch_graph::Alignment::Observed),
                             members: 0,
-                            container: graph.parent(end).cloned(),
+                            ancestors: graph.parent(end).map(|_| arch_graph::view::ancestors_of(&graph, end)).unwrap_or_default(),
                         });
                     }
                 }
@@ -948,7 +948,7 @@ impl ArchitectureService {
         }
         let text = render_text(&graph, &view);
         // What's shown, what holds the focus, and what it reaches outside.
-        let named = view.nodes.iter().map(|n| &n.id).chain(&view.trail).chain(view.outside.iter().map(|o| &o.group)).chain(view.nodes.iter().filter_map(|n| n.container.as_ref()));
+        let named = view.nodes.iter().map(|n| &n.id).chain(&view.trail).chain(view.outside.iter().map(|o| &o.group)).chain(view.nodes.iter().flat_map(|n| n.ancestors.iter()));
         let components = named.filter_map(|id| graph.component(id).map(|c| (id.clone(), c.clone()))).collect();
         Ok(ViewResult { view, text, components })
     }

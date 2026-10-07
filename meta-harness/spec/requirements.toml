@@ -1077,6 +1077,18 @@ title = "Readable, not squeezed"
 acceptance = "A view opens at a readable size around the selection (or where it starts) rather than shrinking everything onto one screen; fitting all is a button. Lines are smooth curves between facing sides, one per pair of things (arrows at both ends when it goes both ways), never on top of each other or through a card."
 
 [[req]]
+id = "G.13"
+slice = "G"
+title = "Every relation view by level"
+acceptance = "Calls, data flow and the other relation views can be seen by level (types, modules, packages, folders, whichever the code has): each part drawn as what holds it at that level, the lines between them merged with counts; a group opens in place (a level finer) and closes again with the fold keys; keys step a level up or down; the toolbar says the level."
+
+[[req]]
+id = "G.14"
+slice = "G"
+title = "Edge markers stay readable"
+acceptance = "However many of the selection's lines go off screen, their markers stay on screen and never overlap (wrapping inward when an edge fills up); past a set number, the busiest lines keep theirs and one marker says how many more."
+
+[[req]]
 id = "G.12"
 slice = "G"
 title = "Going to the graph lands in context"

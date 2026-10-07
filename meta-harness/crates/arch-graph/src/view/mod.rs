@@ -1,6 +1,7 @@
 //! Views: named lenses on the graph (from config), a query engine that cuts
 //! the subgraph a view shows, layouts, and a text form for agents.
 
+pub mod grain;
 mod text;
 pub mod scene;
 pub mod story;
@@ -100,6 +101,10 @@ pub struct ViewSpec {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ViewCatalog {
     pub views: BTreeMap<String, ViewSpec>,
+    /// Levels a view can be seen at, finest first after the parts
+    /// themselves (types, modules, packages, folders).
+    #[serde(default)]
+    pub grains: Vec<grain::GrainSpec>,
 }
 
 impl ViewCatalog {
@@ -173,9 +178,17 @@ pub struct ViewNode {
     /// How many parts it contains (shown or not).
     #[serde(default)]
     pub members: u32,
-    /// What contains it (shown or not).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub container: Option<ComponentId>,
+    /// What contains it (shown or not), innermost first: its module, the
+    /// module above, ... up to the top.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ancestors: Vec<ComponentId>,
+}
+
+impl ViewNode {
+    /// What directly contains it.
+    pub fn container(&self) -> Option<&ComponentId> {
+        self.ancestors.first()
+    }
 }
 
 /// Relations of the view's link kinds between the parts of two shown nodes,
@@ -430,7 +443,7 @@ pub fn query(graph: &Graph, spec: &ViewSpec) -> View {
                 truncated: truncated.contains(&id),
                 alignment: graph.alignment(&id).unwrap_or(Alignment::Observed),
                 members: graph.outgoing(&id, Some(RelationKind::Contains)).count() as u32,
-                container: graph.parent(&id).cloned(),
+                ancestors: ancestors(graph, &id),
                 id,
                 depth,
             })
@@ -444,6 +457,10 @@ pub fn query(graph: &Graph, spec: &ViewSpec) -> View {
 
 /// The containers `id` is in, innermost first (a containment loop stops at
 /// its first repeat).
+pub fn ancestors_of(graph: &Graph, id: &ComponentId) -> Vec<ComponentId> {
+    ancestors(graph, id)
+}
+
 fn ancestors(graph: &Graph, id: &ComponentId) -> Vec<ComponentId> {
     let mut out: Vec<ComponentId> = Vec::new();
     let mut current = id;

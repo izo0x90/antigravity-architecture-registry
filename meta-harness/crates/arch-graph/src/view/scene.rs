@@ -587,7 +587,7 @@ fn story(view: &View, options: &Options, measure: &dyn Measure, metrics: &Metric
     // Bands: consecutive steps in the same module, across the whole width
     // (with room for what's said beside the steps).
     let right = scene.rects.values().map(Rect::right).fold(0.0, f32::max) + metrics.gap_x * 2.0;
-    let module_of = |id: &ComponentId| view.node(id).and_then(|n| n.container.clone());
+    let module_of = |id: &ComponentId| view.node(id).and_then(|n| n.container().cloned());
     let mut start = 0;
     while start < told.rows.len() {
         let module = module_of(&told.rows[start].id);
@@ -1573,7 +1573,7 @@ pub(crate) mod tests {
     #[test]
     fn a_crowded_level_shows_the_neighbourhood_and_holds_the_rest_in_more() {
         use crate::view::{ViewEdge, ViewNode};
-        let node = |s: &str| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, container: None };
+        let node = |s: &str| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, ancestors: vec![] };
         let call = |a: &str, b: &str| ViewEdge { id: crate::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: id(a), target: id(b), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None };
         let names: Vec<String> = (0..12).map(|i| format!("n{i:02}")).collect();
         let spec = ViewCatalog::defaults().unwrap().get("calls").unwrap().clone();
@@ -1655,7 +1655,7 @@ pub(crate) mod tests {
         assert!(modules.contains(&id("app")) && modules.contains(&id("lib")), "{modules:?}");
         for b in &s.bands {
             for (step, rect) in &s.rects {
-                if v.node(step).and_then(|n| n.container.as_ref()) == Some(&b.module) {
+                if v.node(step).and_then(|n| n.container()) == Some(&b.module) {
                     assert!(b.rect.contains(rect), "{step} in its band");
                 }
             }

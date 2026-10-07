@@ -46,6 +46,9 @@ pub struct Levels {
     pub leave_fill: f32,
     /// More parts than this: the selection's neighbourhood, the rest in "+N more".
     pub max_cards: usize,
+    /// Most markers at the screen's edge for the selection's lines that go
+    /// off it; the rest are summed up in one.
+    pub max_markers: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -95,8 +98,8 @@ impl GraphUi {
             return Err("graph.arrange: sizes must be positive, card_min_w <= card_max_w and column >= 1".into());
         }
         let l = &self.levels;
-        if !(l.leave_fill > 0.0 && l.leave_fill < l.enter_fill && l.enter_fill <= 1.0) || l.max_cards == 0 {
-            return Err("graph.levels: 0 < leave_fill < enter_fill <= 1 and max_cards >= 1".into());
+        if !(l.leave_fill > 0.0 && l.leave_fill < l.enter_fill && l.enter_fill <= 1.0) || l.max_cards == 0 || l.max_markers == 0 {
+            return Err("graph.levels: 0 < leave_fill < enter_fill <= 1, max_cards >= 1 and max_markers >= 1".into());
         }
         Ok(())
     }
