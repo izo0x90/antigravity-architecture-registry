@@ -27,6 +27,9 @@ pub struct ComponentDetail {
     /// The component's source text (from its anchor), if it's in the code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
+    /// Its file changed on disk since it was indexed.
+    #[serde(default)]
+    pub stale: bool,
 }
 
 /// The components in one file and the relations leaving them, each with how
@@ -36,4 +39,8 @@ pub struct FileView {
     pub file: String,
     pub components: Vec<(Component, Alignment)>,
     pub relations: Vec<(Relation, Alignment)>,
+    /// The file changed on disk since it was indexed (what's shown is from
+    /// the older version).
+    #[serde(default)]
+    pub stale: bool,
 }

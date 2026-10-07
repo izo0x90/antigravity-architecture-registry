@@ -45,6 +45,7 @@ a = "Account"
 r = "Requests"
 g = "Graph"
 e = "Links"
+I = "Index"
 
 # Bindings, by action id. Keys:
 #   leader: keys after the leader, space separated; "#" is the next free key in
@@ -213,6 +214,11 @@ e = "Links"
 "code.prev_def" = { keys = ["[ f"] }
 "link.follow" = { leader = "e f" }
 
+# Indexing: re-read what changed, rebuild everything, re-read the open file.
+"index.changed" = { leader = "I r" }
+"index.rebuild" = { leader = "I R" }
+"index.file" = { leader = "I f" }
+
 # Colors by role: "#rrggbb" or "#rrggbbaa".
 [theme]
 bg = "#0c0e12"
@@ -253,6 +259,28 @@ card_ok_selected = "#1a241e"
 chrome = "#1b1b1b"
 widget_selection = "#005c80"
 link = "#5aaaff"
+
+# How each state looks wherever it's shown: a word, an icon (by name) and a
+# theme colour (token name from [theme]). Views never colour a state alone.
+[status.index_fresh]
+word = "up to date"
+icon = "check-circle"
+color = "ok"
+
+[status.indexing]
+word = "indexing"
+icon = "arrows-clockwise"
+color = "info"
+
+[status.stale]
+word = "out of date"
+icon = "clock-counter-clockwise"
+color = "warn"
+
+[status.index_failed]
+word = "indexing failed"
+icon = "warning-octagon"
+color = "error"
 
 # How the graph looks. Colors are theme token names (from [theme] above).
 [graph_style.kinds]

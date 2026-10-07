@@ -156,6 +156,7 @@ pub(crate) mod tests {
             outgoing,
             incoming,
             code: None,
+            stale: false,
         }
     }
 

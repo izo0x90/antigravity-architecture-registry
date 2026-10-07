@@ -11,6 +11,7 @@ use arch_graph::view::{layout, query, render_text};
 use arch_graph::{
     Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
     RepoPath, Severity, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult, schema::Dsl,
+    IndexState, IndexStatus, IndexSummary,
 };
 use arch_index::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk, UnverifiedFlow};
 use serde::{Deserialize, Serialize};
@@ -54,6 +55,14 @@ pub struct IngestReport {
     #[serde(default)]
     pub changed: Vec<RepoPath>,
 }
+
+/// How far an indexing run got (progress is announced at most this often).
+struct Progress {
+    done: usize,
+    last: Instant,
+}
+
+const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(150);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Verification {
@@ -114,6 +123,11 @@ pub struct ArchitectureService {
     review_provider: Option<Arc<dyn ReviewProvider>>,
     /// One lock per plan, held across load -> change -> save.
     plan_locks: Mutex<HashMap<PlanId, Arc<Mutex<()>>>>,
+    /// Indexing as clients see it (state, progress, last run, stale files).
+    index_status: RwLock<IndexStatus>,
+    /// One indexing run at a time (the watcher, agents and the user can all
+    /// start one).
+    ingest_lock: Mutex<()>,
 }
 
 fn now_rfc3339() -> String {
@@ -155,6 +169,8 @@ impl ArchitectureService {
             reviewers: ReviewerCatalog::defaults()?,
             review_provider: None,
             plan_locks: Mutex::new(HashMap::new()),
+            index_status: RwLock::new(IndexStatus::default()),
+            ingest_lock: Mutex::new(()),
         };
         service.rebuild_observed()?;
         Ok(service)
@@ -261,11 +277,54 @@ impl ArchitectureService {
         self.ingest_scopes(&[scope.to_path_buf()])
     }
 
+    /// Rebuilds the whole index from scratch: the cache is dropped and every
+    /// file is read again.
+    pub fn reindex(&self) -> Result<IngestReport, ServiceError> {
+        let _one = self.ingest_lock.lock().unwrap_or_else(PoisonError::into_inner);
+        self.index.clear()?;
+        self.ingest_locked(&[self.root.clone()])
+    }
+
     fn ingest_scopes(&self, scopes: &[PathBuf]) -> Result<IngestReport, ServiceError> {
+        let _one = self.ingest_lock.lock().unwrap_or_else(PoisonError::into_inner);
+        self.ingest_locked(scopes)
+    }
+
+    fn ingest_locked(&self, scopes: &[PathBuf]) -> Result<IngestReport, ServiceError> {
+        match self.run_ingest(scopes) {
+            Ok(report) => Ok(report),
+            Err(e) => {
+                self.set_index_status(|s| {
+                    s.state = IndexState::Failed;
+                    s.error = Some(e.to_string());
+                });
+                Err(e)
+            }
+        }
+    }
+
+    fn run_ingest(&self, scopes: &[PathBuf]) -> Result<IngestReport, ServiceError> {
         let started = Instant::now();
         let mut report = IngestReport::default();
+        // Every file first, so progress has a total.
+        let mut found = Vec::new();
         for scope in scopes {
-            self.index_scope(scope, &mut report)?;
+            let files = match scope.exists() {
+                true => walk(&self.root, scope, &self.packs).map_err(|e| ServiceError::Index(e.to_string()))?,
+                false => Vec::new(),
+            };
+            found.push((scope.clone(), files));
+        }
+        let total = found.iter().map(|(_, f)| f.len()).sum();
+        self.set_index_status(|s| {
+            s.state = IndexState::Indexing;
+            s.done = 0;
+            s.total = total;
+            s.error = None;
+        });
+        let mut progress = Progress { done: 0, last: Instant::now() };
+        for (scope, files) in &found {
+            self.index_scope(scope, files, &mut report, &mut progress)?;
         }
         self.rebuild_observed()?;
         let observed = self.observed.read().map_err(ServiceError::poisoned)?;
@@ -275,8 +334,78 @@ impl ArchitectureService {
         report.external = observed.external.len();
         report.millis = started.elapsed().as_millis() as u64;
         drop(observed);
+        // What was read is fresh again.
+        let read: Vec<String> = scopes.iter().map(|s| self.scope_prefix(s)).collect();
+        self.set_index_status(|s| {
+            s.state = IndexState::Idle;
+            s.done = total;
+            s.last = Some(IndexSummary {
+                millis: report.millis,
+                files: report.files,
+                parsed: report.parsed,
+                components: report.components,
+                relations: report.relations,
+                unresolved: report.ambiguous + report.unproven,
+                at: now_rfc3339(),
+            });
+            s.stale.retain(|stale| !read.iter().any(|scope| scope.is_empty() || stale == scope || stale.starts_with(&format!("{scope}/"))));
+        });
         self.emit(ArchEvent::Changed { reason: ChangeReason::Ingested, plans: Vec::new(), components: Vec::new() });
         Ok(report)
+    }
+
+    /// Indexing as clients see it.
+    pub fn index_status(&self) -> IndexStatus {
+        self.index_status.read().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    /// Changes the status and tells clients.
+    fn set_index_status(&self, change: impl FnOnce(&mut IndexStatus)) {
+        let status = {
+            let mut s = self.index_status.write().unwrap_or_else(PoisonError::into_inner);
+            change(&mut s);
+            s.clone()
+        };
+        self.emit(ArchEvent::Index { status: Box::new(status) });
+    }
+
+    /// Files changed on disk (the watcher saw them) that haven't been read
+    /// since: shown as out of date until they are.
+    pub fn mark_stale(&self, paths: &[PathBuf]) -> Result<(), ServiceError> {
+        let mut changed: Vec<String> = Vec::new();
+        for path in paths {
+            if self.watches(path)? {
+                let prefix = self.scope_prefix(path);
+                if !prefix.is_empty() {
+                    changed.push(prefix);
+                }
+            }
+        }
+        let known = self.index_status().stale;
+        changed.retain(|p| !known.contains(p));
+        changed.sort();
+        changed.dedup();
+        if changed.is_empty() {
+            return Ok(());
+        }
+        self.set_index_status(|s| {
+            s.stale.extend(changed);
+            s.stale.sort();
+            s.stale.dedup();
+        });
+        Ok(())
+    }
+
+    /// Whether `file` is out of date: changed on disk since it was indexed
+    /// (by the watcher's word, or its content no longer matching the index).
+    pub fn is_stale(&self, file: &str) -> Result<bool, ServiceError> {
+        if self.index_status().is_stale(file) {
+            return Ok(true);
+        }
+        let Ok(path) = RepoPath::new(file) else { return Ok(false) };
+        let Ok(content) = std::fs::read_to_string(self.root.join(path.as_str())) else { return Ok(false) };
+        let indexed = self.index.all()?.into_iter().find(|e| e.file == path).map(|e| e.content_hash);
+        Ok(indexed.is_some_and(|hash| hash != content_hash(&content)))
     }
 
     /// Brings the index up to date for one scope (a scope that no longer
@@ -293,14 +422,16 @@ impl ArchitectureService {
         prefix.is_empty() || file.as_str() == prefix || file.as_str().starts_with(&format!("{prefix}/"))
     }
 
-    fn index_scope(&self, scope: &Path, report: &mut IngestReport) -> Result<(), ServiceError> {
-        let files = match scope.exists() {
-            true => walk(&self.root, scope, &self.packs).map_err(|e| ServiceError::Index(e.to_string()))?,
-            false => Vec::new(),
-        };
+    fn index_scope(&self, scope: &Path, files: &[arch_index::SourceFile], report: &mut IngestReport, progress: &mut Progress) -> Result<(), ServiceError> {
         report.files += files.len();
         let mut seen = BTreeSet::new();
-        for file in &files {
+        for file in files {
+            progress.done += 1;
+            if progress.last.elapsed() >= PROGRESS_EVERY {
+                progress.last = Instant::now();
+                let done = progress.done;
+                self.set_index_status(|s| s.done = done);
+            }
             let Some(pack) = self.packs.for_path(&file.absolute) else { continue };
             let content = std::fs::read_to_string(&file.absolute).map_err(|e| ServiceError::Io(format!("{}: {e}", file.path)))?;
             let hash = content_hash(&content);
@@ -804,12 +935,17 @@ impl ArchitectureService {
             let (start, end) = (a.span.start_line.saturating_sub(1) as usize, (a.span.end_line as usize).min(lines.len()));
             (start < end).then(|| lines[start..end].join("\n"))
         });
+        let stale = match &component.anchor {
+            Some(a) => self.is_stale(a.file.as_str())?,
+            None => false,
+        };
         Ok(ComponentDetail {
             alignment: graph.alignment(id).unwrap_or(Alignment::Observed),
             outgoing: graph.outgoing(id, None).cloned().collect(),
             incoming: graph.incoming(id, None).cloned().collect(),
             component,
             code,
+            stale,
         })
     }
 
@@ -853,7 +989,7 @@ impl ArchitectureService {
             .flat_map(|(c, _)| graph.outgoing(&c.id, None))
             .map(|r| (r.clone(), graph.relation_alignment(r)))
             .collect();
-        Ok(arch_graph::FileView { file: file.to_owned(), components, relations })
+        Ok(arch_graph::FileView { file: file.to_owned(), components, relations, stale: self.is_stale(file)? })
     }
 
     /// The innermost component whose code contains `line` of `file`.

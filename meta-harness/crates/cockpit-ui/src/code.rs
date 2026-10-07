@@ -137,6 +137,12 @@ pub struct CodeViewerState {
     char_w: f32,
     /// Asks the app to select this component in the graph.
     pub select: Option<ComponentId>,
+    /// The server says this file changed since it was indexed.
+    pub file_stale: bool,
+    /// Out of date, by the server's word or the index status (set by the app).
+    pub out_of_date: bool,
+    /// Asks the app to read this file again.
+    pub reread: bool,
     /// When the user last moved the cursor (follow mode syncs the graph
     /// once it settles).
     pub cursor_moved_at: Option<f64>,
@@ -167,6 +173,9 @@ impl Default for CodeViewerState {
             drawn: Vec::new(),
             char_w: 7.0,
             select: None,
+            file_stale: false,
+            out_of_date: false,
+            reread: false,
             cursor_moved_at: None,
         }
     }
@@ -251,6 +260,7 @@ impl CodeViewerState {
 
     /// Takes what the index knows about the file: marks, definitions, calls.
     pub fn set_file_view(&mut self, view: FileView) {
+        self.file_stale = view.stale;
         self.marks = gutter_marks(&view);
         let mut defs: Vec<Def> = definitions(&view)
             .into_iter()
@@ -430,6 +440,20 @@ impl CodeViewerState {
             let toolbar_rect = Rect::from_min_size(Pos2::new(start_x, start_y), Vec2::new(w, (end_y - start_y).max(22.0)));
             feedback.register_inspectable(ui, &format!("slot_{}:code:toolbar", slot_idx + 1), toolbar_rect);
             ui.separator();
+
+            // Out of date: the marks and spans below come from an older read.
+            if self.out_of_date && !self.lines.is_empty() {
+                let (_, _, color) = crate::status::look("stale");
+                Frame::NONE.fill(color.gamma_multiply(0.12)).stroke(Stroke::new(1.0, color.gamma_multiply(0.5))).corner_radius(4).inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        crate::status::chip(ui, "stale", None);
+                        ui.label(RichText::new("This file changed since it was indexed: marks and spans may be off.").size(11.0).color(colors().text));
+                        if ui.small_button("Re-read it").on_hover_text("SPC I f").clicked() {
+                            self.reread = true;
+                        }
+                    });
+                });
+            }
 
             if let Some(err) = &self.error_message {
                 Frame::NONE.fill(colors().error_bg).stroke(Stroke::new(1.0, colors().error)).corner_radius(4).inner_margin(Margin::same(8)).show(ui, |ui| {
@@ -912,6 +936,7 @@ pub(crate) mod tests {
                 (component("rust:a::step", "step", 6, 8, (starts[5], starts[8] - 1)), Alignment::Observed),
             ],
             relations: vec![(call, Alignment::Observed), (log, Alignment::Observed)],
+            stale: false,
         };
         code.set_file_view(view);
         code

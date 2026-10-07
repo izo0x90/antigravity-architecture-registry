@@ -59,6 +59,9 @@ pub struct UiConfig {
     pub graph: GraphUi,
     pub net: NetUi,
     pub links: LinksUi,
+    /// Every state's word, icon and colour.
+    #[serde(default)]
+    pub status: crate::status::Statuses,
 }
 
 /// Tables merge key by key; any other value replaces the base.
@@ -81,6 +84,7 @@ impl UiConfig {
         merge(&mut table, user);
         let config: Self = toml::Value::Table(table).try_into().map_err(|e: toml::de::Error| format!("ui config: {e}"))?;
         config.graph_style.check(&config.theme).map_err(|e| format!("ui config: {e}"))?;
+        crate::status::check(&config.status, &config.theme).map_err(|e| format!("ui config: {e}"))?;
         config.graph.check().map_err(|e| format!("ui config: {e}"))?;
         Ok(config)
     }

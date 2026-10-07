@@ -15,6 +15,7 @@ pub mod palette;
 pub mod queue;
 pub mod review;
 pub mod spec;
+pub mod status;
 pub mod store;
 pub mod theme;
 pub mod touch;

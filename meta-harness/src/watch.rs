@@ -10,9 +10,10 @@ use arch_service::ArchitectureService;
 use notify::{RecursiveMode, Watcher};
 use tracing::{info, warn};
 
-/// Starts watching `arch`'s repo. Changes are gathered until `quiet` passes
-/// without another, then handed to [`ArchitectureService::refresh`] (which
-/// skips what ingestion doesn't read). Runs until the process ends.
+/// Starts watching `arch`'s repo. A changed file is marked out of date at
+/// once; changes are gathered until `quiet` passes without another, then
+/// handed to [`ArchitectureService::refresh`] (which skips what ingestion
+/// doesn't read). Runs until the process ends.
 pub fn watch(arch: Arc<ArchitectureService>, quiet: Duration) -> notify::Result<()> {
     let (tx, rx) = channel::<PathBuf>();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| match event {
@@ -31,10 +32,14 @@ pub fn watch(arch: Arc<ArchitectureService>, quiet: Duration) -> notify::Result<
             // The watcher lives as long as this thread.
             let _watcher = watcher;
             while let Ok(first) = rx.recv() {
+                mark(&arch, &first);
                 let mut paths = vec![first];
                 loop {
                     match rx.recv_timeout(quiet) {
-                        Ok(path) => paths.push(path),
+                        Ok(path) => {
+                            mark(&arch, &path);
+                            paths.push(path);
+                        }
                         Err(RecvTimeoutError::Timeout) => break,
                         Err(RecvTimeoutError::Disconnected) => return,
                     }
@@ -53,4 +58,11 @@ pub fn watch(arch: Arc<ArchitectureService>, quiet: Duration) -> notify::Result<
         })
         .map_err(|e| notify::Error::generic(&e.to_string()))?;
     Ok(())
+}
+
+/// Shows a changed file as out of date until it's read again.
+fn mark(arch: &ArchitectureService, path: &std::path::Path) {
+    if let Err(e) = arch.mark_stale(&[path.to_path_buf()]) {
+        warn!("marking {} out of date failed: {e}", path.display());
+    }
 }

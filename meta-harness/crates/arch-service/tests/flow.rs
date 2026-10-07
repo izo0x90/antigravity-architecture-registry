@@ -862,3 +862,37 @@ rules = [{ rule = "max_lines", limit = 1 }]
     assert_eq!(v.advanced_to, Some(Stage::Implemented), "{:?}", v.report);
     assert_eq!(v.report.findings.iter().map(|f| f.severity).collect::<Vec<_>>(), vec![Severity::Warning]);
 }
+
+// req: I.1, I.2, I.3, I.4
+#[test]
+fn indexing_reports_progress_and_files_changed_since_they_were_read() {
+    let r = repo();
+    // The first ingest ran: indexing, progress, then a finished summary.
+    let statuses: Vec<arch_graph::IndexStatus> = r.events.lock().unwrap().iter().filter_map(|e| match e { ArchEvent::Index { status } => Some((**status).clone()), _ => None }).collect();
+    assert_eq!(statuses.first().map(|s| s.state), Some(arch_graph::IndexState::Indexing), "announced when it starts");
+    let done = r.service.index_status();
+    assert_eq!(done.state, arch_graph::IndexState::Idle);
+    assert_eq!((done.done, done.total), (done.total, 3), "every file counted");
+    let last = done.last.clone().expect("a summary of the run");
+    assert!(last.components > 0 && last.files == 3 && !last.at.is_empty());
+    // A file changed on disk: out of date at once (the watcher's word), and by
+    // its content even without the watcher.
+    let util = r.root.join("src/util.rs");
+    std::fs::write(&util, std::fs::read_to_string(&util).unwrap() + "\npub fn later() {}\n").unwrap();
+    assert!(r.service.is_stale("src/util.rs").unwrap(), "content no longer matches the index");
+    assert!(r.service.file_view("src/util.rs", None).unwrap().stale);
+    r.service.mark_stale(&[util.clone()]).unwrap();
+    assert_eq!(r.service.index_status().stale, vec!["src/util.rs".to_owned()]);
+    assert!(!r.service.is_stale("src/lib.rs").unwrap());
+    // What's shown meanwhile is the last good state (nothing waits).
+    assert!(r.service.observed().unwrap().components().count() > 0);
+    // Re-reading the file makes it fresh again.
+    r.service.refresh(&[util]).unwrap();
+    let after = r.service.index_status();
+    assert!(after.stale.is_empty() && !r.service.is_stale("src/util.rs").unwrap());
+    assert!(r.service.observed().unwrap().components().any(|c| c.name == "later"));
+    // A full rebuild drops the cache and reads every file again.
+    let report = r.service.reindex().unwrap();
+    assert_eq!((report.parsed, report.cached), (3, 0));
+    assert_eq!(r.service.index_status().last.unwrap().parsed, 3);
+}

@@ -13,6 +13,7 @@ mod plan;
 mod queue;
 mod relation;
 mod report;
+pub mod index;
 pub mod review;
 pub mod schema;
 mod types;
@@ -21,6 +22,7 @@ mod wire;
 
 pub use anchor::{CodeAnchor, ProposedLocation, RepoPath, Span};
 pub use events::{ArchEvent, ChangeReason, Requester, ViewRequest};
+pub use index::{IndexState, IndexStatus, IndexSummary};
 pub use component::{Component, ComponentId, ImplementationSpec, Invariant, InvariantKind, LogicStep, Param, Schemas, SideEffect, Signature, Task, ToolRef};
 pub use graph::{Alignment, CallChain, ChainStep, Graph};
 pub use lifecycle::{Stage, Status, can_transition};

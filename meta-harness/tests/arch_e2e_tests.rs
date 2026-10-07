@@ -137,7 +137,7 @@ async fn next_architecture_event(ws: &mut (impl StreamExt<Item = Result<tokio_tu
     }
 }
 
-// req: P8.2
+// req: P8.2, I.2
 #[tokio::test]
 async fn changes_checks_and_navigation_arrive_on_the_event_socket() {
     let (addr, _) = spawn_app().await;
@@ -147,7 +147,16 @@ async fn changes_checks_and_navigation_arrive_on_the_event_socket() {
     http(addr, "POST", "/api/arch/plans/ev/validate", None).await;
     assert!(matches!(next_architecture_event(&mut ws).await, ArchEvent::Validated { errors: 0, .. }));
     http(addr, "POST", "/api/arch/ingest", Some("{}")).await;
-    assert!(matches!(next_architecture_event(&mut ws).await, ArchEvent::Changed { reason: ChangeReason::Ingested, .. }));
+    // Indexing announces itself (started, progress, done), then the change.
+    let mut index_states = Vec::new();
+    loop {
+        match next_architecture_event(&mut ws).await {
+            ArchEvent::Index { status } => index_states.push(status.state),
+            ArchEvent::Changed { reason: ChangeReason::Ingested, .. } => break,
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!((index_states.first(), index_states.last()), (Some(&arch_graph::IndexState::Indexing), Some(&arch_graph::IndexState::Idle)));
     let (status, _) = http(addr, "POST", "/api/arch/navigate", Some(r#"{"view":"calls","focus":"rust:sample::run"}"#)).await;
     assert_eq!(status, 204);
     match next_architecture_event(&mut ws).await {

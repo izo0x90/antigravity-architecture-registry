@@ -117,6 +117,8 @@ pub struct GraphRequests {
     /// Run this action (by id, with its value) the way keys do: from a chip
     /// or the toolbar, for actions that are jumps or belong to the shell.
     pub run: Option<(String, Option<String>)>,
+    /// Read the code that changed again.
+    pub reindex: bool,
 }
 
 enum Reply {
@@ -164,6 +166,8 @@ pub struct GraphState {
     /// A selection the view on screen doesn't have (it comes back with a
     /// view that does).
     remembered: Option<ComponentId>,
+    /// Files changed since they were indexed (their cards are marked).
+    pub stale_files: Vec<String>,
     /// The camera and folds before a search started previewing matches.
     saved_view: Option<(Camera, BTreeMap<ComponentId, bool>, bool)>,
     /// Review badges: changed since the last review, unaddressed comments.
@@ -220,6 +224,7 @@ impl Default for GraphState {
             saved_view: None,
             holders: Vec::new(),
             remembered: None,
+            stale_files: Vec::new(),
             marks: BTreeMap::new(),
             load: Load::Idle,
             stale: true,
@@ -428,6 +433,8 @@ impl GraphState {
             ArchEvent::Validated { .. } => {}
             // Stages show on nodes; the queue panel follows the rest.
             ArchEvent::QueueUpdated { .. } => {}
+            // The shell keeps the index status (and hands the graph its stale files).
+            ArchEvent::Index { .. } => {}
             ArchEvent::ViewRequested { request, by } => {
                 if *by == Requester::Agent {
                     let (return_to, return_selection) = match &self.agent {
@@ -1287,6 +1294,13 @@ impl GraphState {
             let depth = nav.depth.unwrap_or(self.base_depth());
             let shown = self.result.as_ref().map_or(0, |r| r.view.nodes.len());
             ui.label(RichText::new(format!("{} · from {focus} · depth {depth} · {shown} nodes", nav.plan.as_ref().map_or("code".to_owned(), |p| format!("plan {p}")))).size(11.0).color(colors().muted));
+            if !self.stale_files.is_empty() {
+                let count = self.stale_files.len().to_string();
+                crate::status::chip(ui, "stale", Some(&count)).on_hover_text(self.stale_files.join("\n"));
+                if ui.small_button("Re-read").on_hover_text("Read the code that changed again (SPC I r)").clicked() {
+                    self.requests.reindex = true;
+                }
+            }
             if let Some(agent) = &self.agent {
                 ui.label(RichText::new(format!("{} the agent moved the view: {}", egui_phosphor::regular::ROBOT, agent.what)).size(11.0).color(colors().special));
                 if let Some(back) = actions.iter().find(|a| a.id == "graph.agent_return")
@@ -1401,6 +1415,12 @@ impl GraphState {
             painter.rect_stroke(rect.expand(4.0), 8.0, Stroke::new(2.0, style.agent_color(&theme)), StrokeKind::Outside);
         }
         self.draw_marks(painter, rect, &c.id);
+        // Its code changed since it was indexed: the card may be behind.
+        if c.anchor.as_ref().is_some_and(|a| self.file_stale(a.file.as_str())) {
+            let (glyph, _, color) = crate::status::look("stale");
+            let size = (11.0 * z).clamp(9.0, 14.0);
+            painter.text(rect.left_top() + Vec2::new(6.0, 4.0) * z.max(0.6), Align2::LEFT_TOP, glyph, FontId::proportional(size), color);
+        }
         // Too small to read: the card's color and outline carry it.
         if rect.height() < 9.0 {
             return;
@@ -1431,6 +1451,11 @@ impl GraphState {
 
     /// Review badges at the card's top right: a dot when it changed since the
     /// last review, a count of unaddressed comments.
+    /// Whether `file` changed since it was indexed.
+    fn file_stale(&self, file: &str) -> bool {
+        self.stale_files.iter().any(|s| s == file || file.strip_prefix(s.as_str()).is_some_and(|rest| rest.starts_with('/')))
+    }
+
     fn draw_marks(&self, painter: &egui::Painter, rect: Rect, id: &ComponentId) {
         let Some(mark) = self.marks.get(id) else { return };
         let z = self.camera.zoom.max(0.4);

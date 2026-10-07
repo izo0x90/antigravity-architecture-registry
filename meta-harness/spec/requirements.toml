@@ -931,3 +931,187 @@ id = "N2.2"
 slice = "N2"
 title = "Diffs inside the code view"
 acceptance = "The code view toggles between the whole file and only its changes; ]c/[c (or ]h/[h, user to decide) jump between changes; changed lines are marked in the gutter; changes can be commented on; it is the same view, not a separate diff screen."
+
+# ---- I: indexing control and state (agreed with the user 2026-10-07) ----
+
+[[req]]
+id = "I.1"
+slice = "I"
+title = "Re-index on demand from the cockpit"
+acceptance = "From the cockpit (key, leader menu, palette) the user can re-read changed files, rebuild the whole index from scratch (cache dropped), or re-read just the file open in the code view; each goes through the server and the views refresh when it finishes."
+
+[[req]]
+id = "I.2"
+slice = "I"
+title = "Indexing light with progress"
+acceptance = "The server announces when indexing starts, its progress (files done of total) and when it finishes (or fails); the top bar shows an INDEX light beside SRV and AGENT that reads 'indexing N of M' while running and, on hover, the last run's time, files read, components and unresolved calls."
+
+[[req]]
+id = "I.3"
+slice = "I"
+title = "Out-of-date markers"
+acceptance = "The server tracks files changed on disk since they were last indexed (from the watcher, and by comparing the hash of a file the client opens); the cockpit marks them in the code view (a banner), on the spec's code excerpt, and on graph cards whose code is in such a file."
+
+[[req]]
+id = "I.4"
+slice = "I"
+title = "Never blocking"
+acceptance = "While indexing or when something is out of date, every view keeps showing the last good state, marked, with the re-index action offered next to the marker; nothing waits for a sync."
+
+[[req]]
+id = "I.5"
+slice = "I"
+title = "One meaning for index states everywhere"
+acceptance = "The index states (up to date, indexing, out of date, failed) have one icon, word and theme colour each, used identically in the top bar, code view, spec and graph."
+
+# ---- V: indicators, look and theming ----
+
+[[req]]
+id = "V.1"
+slice = "V"
+title = "Status as words, not only colours"
+acceptance = "Every status the cockpit shows (planned, missing in code, placeholders, open comments, changed since review, out of date, stage) appears as a chip with an icon and a word wherever it's shown, not as colour alone."
+
+[[req]]
+id = "V.2"
+slice = "V"
+title = "Spec header card"
+acceptance = "The spec opens with a header card: name, type, location (linked), a stage track Declared → Arch approved → Plan approved → Skeleton → Implemented with the current step lit, the plan alignment and the open review points."
+
+[[req]]
+id = "V.3"
+slice = "V"
+title = "Spec sections say what's missing"
+acceptance = "Each spec section says when something its component type requires is missing (from the type system's required fields); findings are listed first in their section and coloured by severity."
+
+[[req]]
+id = "V.4"
+slice = "V"
+title = "Changes marked per item"
+acceptance = "Changes since the last review are marked on the item that changed (a step, an invariant, a relation), not only on the section."
+
+[[req]]
+id = "V.5"
+slice = "V"
+title = "Queue jobs show their stage track"
+acceptance = "Each queue job shows the four steps (design, plan, skeleton, implement) with the current one lit and, when it waits, what it waits for."
+
+[[req]]
+id = "V.6"
+slice = "V"
+title = "A calmer, sharper look"
+acceptance = "A deeper background with a faint grid, one accent colour reserved for focus and selection, status colours used only for status, a glow on the selection, a pulse where the agent points, moving dashes on planned connections, a clear type hierarchy and quieter chrome (icon tabs with tooltips, one toolbar row)."
+
+[[req]]
+id = "V.7"
+slice = "V"
+title = "Everything themeable, presets"
+acceptance = "Every colour, size, spacing, glow, animation duration and fade level comes from named theme values in config; named presets can be defined and one setting switches between them; a test fails if a colour or size literal appears outside the theme code."
+
+# ---- G: graph arrangement and zoom ----
+
+[[req]]
+id = "G.1"
+slice = "G"
+title = "Levels instead of shrinking"
+acceptance = "The graph works in containment levels (repo, crates, modules, members): zooming into a module moves into its own full-size layout (contents unfold from the block); zooming out folds them back with the module highlighted; transitions animate."
+
+[[req]]
+id = "G.2"
+slice = "G"
+title = "Text stays readable"
+acceptance = "Labels keep a constant on-screen size at every zoom; when they don't all fit, the most important (selection, its neighbours, larger items) are drawn and the rest appear on hover; no label overlaps another."
+
+[[req]]
+id = "G.3"
+slice = "G"
+title = "Names shortened by context, breadcrumb"
+acceptance = "Inside a module its members show their short names; the full path of where you are shows as a clickable breadcrumb."
+
+[[req]]
+id = "G.4"
+slice = "G"
+title = "Arranged by meaning"
+acceptance = "Structure layouts place callers before what they depend on (by dependency) and keep modules that talk a lot near each other, instead of an alphabetical grid."
+
+[[req]]
+id = "G.5"
+slice = "G"
+title = "Focus with surroundings"
+acceptance = "Around the focus, things outside it are summarised into blocks ('12 more in arch_index') that open on demand; large views open on the neighbourhood of the selection with '+N more' handles."
+
+[[req]]
+id = "G.6"
+slice = "G"
+title = "Edge stubs and merged lines"
+acceptance = "Connections leaving what's shown appear as stubs on its edge with counts; between modules, many relations merge into one line whose thickness shows the count; only the selection's own lines are drawn in full, the rest fade."
+
+[[req]]
+id = "G.7"
+slice = "G"
+title = "Clean routing, no overlaps"
+acceptance = "Cards never overlap, sit on an aligned grid sized to their text, and stay inside their parent; lines run in straight segments with rounded corners through the gaps, never through cards, and travel together when going the same way."
+
+[[req]]
+id = "G.8"
+slice = "G"
+title = "Stable positions"
+acceptance = "A component keeps its place across refreshes and small code changes (incremental layout); changes animate."
+
+[[req]]
+id = "G.9"
+slice = "G"
+title = "Layout tests on real data"
+acceptance = "Tests over sample graphs and this repo's real graph check: no overlaps, children inside parents, text inside cards, no line through a card, crossings under a set bound."
+
+# ---- C: call stack view ----
+
+[[req]]
+id = "C.1"
+slice = "C"
+title = "Calls as a story"
+acceptance = "A call view lays out from an entry: what it calls stacked top to bottom in call order, depth to the right; any branch collapses or expands in place ('load_file: 12 calls inside')."
+
+[[req]]
+id = "C.2"
+slice = "C"
+title = "No duplicates or knots"
+acceptance = "A function called from several places appears once with 'also called from N places'; recursion shows as a loop marker."
+
+[[req]]
+id = "C.3"
+slice = "C"
+title = "Both directions, module bands"
+acceptance = "The same view in reverse shows what reaches a function; bands show which module each step belongs to."
+
+# ---- D: data flow ----
+
+[[req]]
+id = "D.1"
+slice = "D"
+title = "Capture more data flow"
+acceptance = "Beyond results passed straight into calls, ingestion records results returned to callers, field/state writes and reads, construction and destructuring, and crossings at boundaries declared in packs/config (channels, events, HTTP routes, messages)."
+
+[[req]]
+id = "D.2"
+slice = "D"
+title = "Data types as nodes"
+acceptance = "Data types (plan schemas and real signatures) are selectable nodes; each flow step shows the shape going in and coming out."
+
+[[req]]
+id = "D.3"
+slice = "D"
+title = "Flow as a pipeline"
+acceptance = "A data-flow view reads left to right from sources to sinks, marking each place the data's shape changes."
+
+[[req]]
+id = "D.4"
+slice = "D"
+title = "Follow one value"
+acceptance = "Picking a value or type traces its whole path through the code."
+
+[[req]]
+id = "D.5"
+slice = "D"
+title = "Planned against observed flow"
+acceptance = "Planned flows show beside observed ones; missing or unconfirmed flows stand out."

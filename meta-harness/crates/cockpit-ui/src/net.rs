@@ -432,6 +432,22 @@ impl NetClient {
         self.call("GET", &path, None, ctx, on_done);
     }
 
+    /// Indexing state: running or not, progress, last run, stale files.
+    pub fn arch_index_status(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::IndexStatus>) + Send + 'static) {
+        self.call("GET", "/api/arch/index", None, ctx, on_done);
+    }
+
+    /// Reads the code again: what changed (or everything, from scratch, when
+    /// `full`).
+    pub fn arch_ingest(&self, full: bool, ctx: egui::Context, on_done: impl FnOnce(NetResult<serde_json::Value>) + Send + 'static) {
+        self.call("POST", "/api/arch/ingest", Some(serde_json::json!({ "full": full })), ctx, on_done);
+    }
+
+    /// Reads these repo files again.
+    pub fn arch_refresh(&self, paths: &[String], ctx: egui::Context, on_done: impl FnOnce(NetResult<serde_json::Value>) + Send + 'static) {
+        self.call("POST", "/api/arch/refresh", Some(serde_json::json!({ "paths": paths })), ctx, on_done);
+    }
+
     pub fn arch_plans(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<arch_graph::Plan>>) + Send + 'static) {
         self.call("GET", "/api/arch/plans", None, ctx, on_done);
     }

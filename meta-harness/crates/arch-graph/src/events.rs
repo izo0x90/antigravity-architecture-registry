@@ -62,4 +62,7 @@ pub enum ArchEvent {
     ViewRequested { request: Box<ViewRequest>, by: Requester },
     /// The work queue over a plan moved (a job started, finished, waits).
     QueueUpdated { snapshot: Box<crate::QueueSnapshot> },
+    /// Code indexing started, moved on, finished or failed, or files changed
+    /// on disk since they were read.
+    Index { status: Box<crate::IndexStatus> },
 }

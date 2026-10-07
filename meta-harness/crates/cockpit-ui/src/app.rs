@@ -113,6 +113,18 @@ enum ShellCommand {
     GoTo(GoTo),
     /// One of several places a go-to can land (its value).
     GotoPick,
+    Index(IndexOp),
+}
+
+/// Reading the code again, on the user's word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexOp {
+    /// What changed since it was read.
+    Changed,
+    /// Everything, from scratch (the cache dropped).
+    Rebuild,
+    /// The file open in the code view.
+    File,
 }
 
 /// Hint labels on what the focused view draws.
@@ -200,6 +212,9 @@ pub struct CockpitApp {
     pending_goto: Option<Pending>,
     choosing: Option<Choosing>,
     at_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
+    /// Code indexing: running or not, progress, last run, stale files.
+    pub index: arch_graph::IndexStatus,
+    index_inbox: Arc<Mutex<Vec<NetResult<arch_graph::IndexStatus>>>>,
     /// A short note in the key bar (why something didn't happen), and since when.
     pub note: Option<String>,
     note_since: Option<f64>,
@@ -224,6 +239,7 @@ pub struct CockpitApp {
     // Top-bar status LEDs
     pub srv_led: ActivityLed,
     pub agent_led: ActivityLed,
+    pub index_led: ActivityLed,
 }
 
 /// Status LED that flickers on traffic, like a drive or router activity light.
@@ -302,6 +318,8 @@ impl CockpitApp {
             pending_goto: None,
             choosing: None,
             at_inbox: Arc::default(),
+            index: arch_graph::IndexStatus::default(),
+            index_inbox: Arc::default(),
             note: None,
             note_since: None,
             key_sheet: None,
@@ -316,6 +334,7 @@ impl CockpitApp {
 
             srv_led: ActivityLed::default(),
             agent_led: ActivityLed::default(),
+            index_led: ActivityLed::default(),
         }
     }
 
@@ -338,12 +357,14 @@ impl CockpitApp {
 
             // Auto-load dev feedback issues
             self.feedback.load_issues(&self.net, ctx.clone());
+            self.fetch_index_status(ctx);
         }
 
         self.apply_user_config();
         if std::mem::take(&mut self.theme_dirty) {
             crate::theme::set(self.config.theme.clone(), ctx);
             crate::graph_style::set(self.config.graph_style.clone());
+            crate::status::set(self.config.status.clone());
             self.net.set_backoff(self.config.net.reconnect_min_ms, self.config.net.reconnect_max_ms);
             self.graph.ui = self.config.graph.clone();
         }
@@ -358,10 +379,14 @@ impl CockpitApp {
             self.review.invalidate();
             self.queue.invalidate();
             self.details.clear();
+            self.fetch_index_status(ctx);
         }
 
         let events = self.net.incoming.lock().map(|mut lock| lock.drain(..).collect::<Vec<_>>()).unwrap_or_default();
         for event in events {
+            if let harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::Index { status } } = &event {
+                self.index = (**status).clone();
+            }
             if let harness_contracts::ClientEvent::Architecture { event } = &event {
                 // The agent moving the graph is a jump: back returns from it.
                 let before = matches!(event, arch_graph::ArchEvent::ViewRequested { .. }).then(|| self.jump_of(BufferKind::Graph));
@@ -383,7 +408,14 @@ impl CockpitApp {
             }
             self.chat.process_event(event);
         }
+        for reply in std::mem::take(&mut *self.index_inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
+            match reply {
+                Ok(status) => self.index = status,
+                Err(e) => self.note = Some(format!("Couldn't read the index status: {e}")),
+            }
+        }
         self.link_views(ctx);
+        self.mark_out_of_date();
         self.goto_tick(ctx);
         // The focused target's relations, so the bar and popup offer only
         // the go-tos that lead somewhere.
@@ -436,6 +468,46 @@ impl CockpitApp {
     /// Shows `kind` and moves focus to it.
     fn focus_kind(&mut self, kind: BufferKind) {
         self.focused_slot = self.ensure_visible(kind);
+    }
+
+    fn fetch_index_status(&self, ctx: &egui::Context) {
+        let inbox = self.index_inbox.clone();
+        self.net.arch_index_status(ctx.clone(), move |r| {
+            if let Ok(mut i) = inbox.lock() {
+                i.push(r);
+            }
+        });
+    }
+
+    /// Tells the views what's out of date (they mark it, never wait for it).
+    fn mark_out_of_date(&mut self) {
+        let code_stale = self.code.file_stale || self.index.is_stale(&self.code.current_file);
+        self.code.out_of_date = code_stale;
+        let spec_file = self.spec.detail.as_ref().and_then(|d| d.component.anchor.as_ref()).map(|a| a.file.to_string());
+        self.spec.out_of_date = self.spec.detail.as_ref().is_some_and(|d| d.stale) || spec_file.is_some_and(|f| self.index.is_stale(&f));
+        if self.graph.stale_files != self.index.stale {
+            self.graph.stale_files = self.index.stale.clone();
+        }
+    }
+
+    /// Reads the code again, as the user asked.
+    fn run_index(&mut self, op: IndexOp, ctx: &egui::Context) {
+        let notes = self.index_inbox.clone();
+        let failed = move |r: NetResult<serde_json::Value>| {
+            if let Err(e) = r
+                && let Ok(mut i) = notes.lock()
+            {
+                i.push(Err(e));
+            }
+        };
+        match op {
+            IndexOp::Changed => self.net.arch_ingest(false, ctx.clone(), failed),
+            IndexOp::Rebuild => self.net.arch_ingest(true, ctx.clone(), failed),
+            IndexOp::File => {
+                let file = self.code.current_file.clone();
+                self.net.arch_refresh(&[file], ctx.clone(), failed);
+            }
+        }
     }
 
     fn show_code(&mut self, file: &str, start: u32, end: u32, ctx: &egui::Context) {
@@ -618,6 +690,22 @@ impl CockpitApp {
             self.jumps.record(self.jump_of(BufferKind::Spec));
             self.show_code(&file, start, end, ctx);
         }
+        if std::mem::take(&mut self.code.reread) {
+            self.run_index(IndexOp::File, ctx);
+        }
+        if let Some(file) = self.spec.requests.reread.take() {
+            let notes = self.index_inbox.clone();
+            self.net.arch_refresh(&[file], ctx.clone(), move |r| {
+                if let Err(e) = r
+                    && let Ok(mut i) = notes.lock()
+                {
+                    i.push(Err(e));
+                }
+            });
+        }
+        if std::mem::take(&mut self.graph.requests.reindex) {
+            self.run_index(IndexOp::Changed, ctx);
+        }
         if std::mem::take(&mut self.spec.requests.insert) {
             let slot = self.ensure_visible(BufferKind::Spec);
             self.focused_slot = slot;
@@ -718,6 +806,10 @@ impl CockpitApp {
         let follow = if self.follow { "Stop following (graph and code)" } else { "Follow: code tracks the graph selection" };
         actions.push(admin("link.follow".into(), follow.into(), S::ToggleFollow));
         actions.push(admin("palette.open".into(), "Command palette".into(), S::OpenPalette));
+        let index = |id: &str, label: &str, op: IndexOp| Action::new(id, label, S::Index(op)).group(Group::Act).importance(MINOR);
+        actions.push(index("index.changed", "Re-read the code that changed", IndexOp::Changed));
+        actions.push(index("index.rebuild", "Rebuild the index from scratch", IndexOp::Rebuild));
+        actions.push(index("index.file", &format!("Re-read {}", self.code.current_file), IndexOp::File));
         actions.extend(self.nav_actions());
         actions
     }
@@ -1006,6 +1098,7 @@ impl CockpitApp {
             ShellCommand::Keys => self.key_sheet = Some(String::new()),
             ShellCommand::GoTo(op) => self.goto(op, ctx),
             ShellCommand::GotoPick => self.goto_pick(value, ctx),
+            ShellCommand::Index(op) => self.run_index(op, ctx),
         }
     }
 
@@ -1626,6 +1719,10 @@ impl CockpitApp {
                 let agent_res = self.agent_led.show(ui, "AGENT", agent_color, self.chat.agent_activity(), &agent_hint);
                 self.feedback.register_inspectable(ui, "top_bar:agent_status", agent_res.rect);
 
+                ui.add_space(6.0);
+                let index_res = self.render_index_light(ui);
+                self.feedback.register_inspectable(ui, "top_bar:index_status", index_res.rect);
+
                 ui.add_space(8.0);
 
                 // Input mode indicator.
@@ -1706,6 +1803,43 @@ impl CockpitApp {
                 });
             });
         });
+    }
+
+    /// The INDEX light: its state's colour and word, progress while it runs,
+    /// the last run on hover; a click offers the re-index actions.
+    fn render_index_light(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        let state = index_state(&self.index);
+        let (_, word, color) = crate::status::look(state);
+        let detail = match state {
+            "indexing" => format!("{word} {} of {}", self.index.done, self.index.total),
+            "stale" => format!("{} {word}", self.index.stale.len()),
+            _ => word,
+        };
+        let mut hover = match &self.index.last {
+            Some(l) => format!("Last read {}: {} files ({} re-read) in {} ms; {} components, {} connections, {} calls not linked for certain.", l.at, l.files, l.parsed, l.millis, l.components, l.relations, l.unresolved),
+            None => "Not read yet.".to_owned(),
+        };
+        if let Some(e) = &self.index.error {
+            hover.push_str(&format!("\nThe last run failed: {e}"));
+        }
+        if !self.index.stale.is_empty() {
+            hover.push_str(&format!("\nChanged since read: {}", self.index.stale.join(", ")));
+        }
+        hover.push_str("\nClick to read the code again.");
+        // Flickers while files go by.
+        let activity = if state == "indexing" { self.index.done as u64 } else { 0 };
+        let response = ui
+            .horizontal(|ui| {
+                let led = self.index_led.show(ui, "INDEX", color, activity, &hover);
+                let text = ui.add(egui::Label::new(RichText::new(detail).size(10.0).color(color)).sense(egui::Sense::click())).on_hover_text(&hover);
+                led.union(text)
+            })
+            .inner;
+        if response.interact(egui::Sense::click()).clicked() {
+            self.palette.open_with("index.");
+            self.input_mode = InputMode::Palette;
+        }
+        response
     }
 
     pub fn render_slot(&mut self, slot_idx: usize, ui: &mut egui::Ui, shell: &[Action]) {
@@ -2131,6 +2265,16 @@ fn hint_chip(item: egui::Rect, size: egui::Vec2, slot: egui::Rect, taken: &[egui
     places.iter().copied().find(|r| inside(r) && !taken.iter().any(|t| t.intersects(*r))).or_else(|| places.iter().copied().find(inside)).unwrap_or(corner)
 }
 
+/// The status-vocabulary name for the index's state (one meaning everywhere).
+pub fn index_state(index: &arch_graph::IndexStatus) -> &'static str {
+    match index.state {
+        arch_graph::IndexState::Indexing => "indexing",
+        arch_graph::IndexState::Failed => "index_failed",
+        arch_graph::IndexState::Idle if !index.stale.is_empty() => "stale",
+        arch_graph::IndexState::Idle => "index_fresh",
+    }
+}
+
 /// An action's keys as the key sheet lists them ("g d", "SPC g v").
 fn keys_of(b: &Bound) -> String {
     let mut all: Vec<String> = b.keys.iter().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" ")).collect();
@@ -2459,7 +2603,7 @@ mod tests {
         file_comp.placeholders.push(Span { start_line: 8, end_line: 8, start_byte: 80, end_byte: 87 });
         let mut missing = Relation::new(RelationKind::Calls, ComponentId::new("rust:a::log"), ComponentId::new("rust:a::save"), Provenance::PLANNED);
         missing.order = Some(0);
-        let view = arch_graph::FileView { file: "src/b.rs".into(), components: vec![(file_comp, arch_graph::Alignment::Present)], relations: vec![(missing, arch_graph::Alignment::Missing)] };
+        let view = arch_graph::FileView { file: "src/b.rs".into(), components: vec![(file_comp, arch_graph::Alignment::Present)], relations: vec![(missing, arch_graph::Alignment::Missing)], stale: false };
         let marks = crate::code::gutter_marks(&view);
         assert!(matches!(marks[&7][..], [crate::code::Mark::Starts(_, _), crate::code::Mark::MissingCall(_, _)]));
         assert!(matches!(marks[&8][..], [crate::code::Mark::Placeholder(_)]));
@@ -3338,5 +3482,54 @@ mod tests {
         app.spec.comments.clear();
         keys(&ctx, &mut app, "]c");
         assert!(app.note.as_deref().unwrap_or_default().contains("No open review points"), "{:?}", app.note);
+    }
+
+    fn index_event(status: arch_graph::IndexStatus) -> harness_contracts::ClientEvent {
+        harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::Index { status: Box::new(status) } }
+    }
+
+    // req: I.1, I.2, I.3, I.4, I.5
+    #[test]
+    fn indexing_shows_its_state_everywhere_and_can_be_run_from_the_cockpit() {
+        let (ctx, mut app) = full_app();
+        crate::status::set(app.config.status.clone());
+        // Re-index actions: changed files, from scratch, the open file.
+        let bound = app.bound_actions();
+        let leader = |id: &str| bound.iter().find(|b| b.action.id == id).and_then(|b| b.leader.clone()).map(|l| l.into_iter().collect::<String>());
+        assert_eq!((leader("index.changed"), leader("index.rebuild"), leader("index.file")), (Some("Ir".into()), Some("IR".into()), Some("If".into())));
+        assert!(bound.iter().any(|b| b.action.id == "index.file" && b.action.label.contains("src/a.rs")), "names the open file");
+        // The light: indexing with progress.
+        app.net.incoming.lock().unwrap().push(index_event(arch_graph::IndexStatus { state: arch_graph::IndexState::Indexing, done: 3, total: 10, ..Default::default() }));
+        let text = texts(&frame(&ctx, &mut app, vec![]));
+        assert!(text.contains("INDEX") && text.contains("indexing 3 of 10"), "{text}");
+        // Done, but two files changed since: one word for it everywhere.
+        let stale = arch_graph::IndexStatus { stale: vec!["src/a.rs".into(), "src/b.rs".into()], last: Some(arch_graph::IndexSummary { millis: 40, files: 10, parsed: 2, components: 30, relations: 50, unresolved: 1, at: "now".into() }), ..Default::default() };
+        app.net.incoming.lock().unwrap().push(index_event(stale));
+        focus(&ctx, &mut app, BufferKind::Code);
+        let text = texts(&frame(&ctx, &mut app, vec![]));
+        let (_, word, _) = crate::status::look("stale");
+        assert_eq!(word, "out of date");
+        assert!(text.contains("2 out of date"), "the light: {text}");
+        assert!(app.code.out_of_date && text.contains("This file changed since it was indexed"), "the code view says so");
+        assert!(text.contains("fn run() {"), "and still shows the code (nothing waits)");
+        // The spec's code and the graph's cards say it the same way.
+        let mut anchored = crate::spec::tests::detail(&ComponentId::new("rust:a::step"), &ComponentId::new("rust:a::save"));
+        anchored.component.anchor = Some(CodeAnchor { language: "rust".into(), file: RepoPath::new("src/b.rs").unwrap(), symbol: "a::step".into(), syntax_kind: "function_item".into(), span: Span { start_line: 1, end_line: 2, start_byte: 0, end_byte: 1 }, content_hash: String::new() });
+        anchored.code = Some("fn step() {}".into());
+        app.spec.detail = Some(anchored);
+        frame(&ctx, &mut app, vec![]);
+        assert!(app.spec.out_of_date);
+        focus(&ctx, &mut app, BufferKind::Spec);
+        app.spec.move_to("code#Header");
+        let text = texts(&frame(&ctx, &mut app, vec![]));
+        assert!(text.contains("out of date") && text.contains("This code changed since it was indexed"), "{text}");
+        focus(&ctx, &mut app, BufferKind::Graph);
+        let text = texts(&frame(&ctx, &mut app, vec![]));
+        assert!(text.contains("2 out of date") && text.contains("Re-read"), "the graph offers to re-read: {text}");
+        // A failed run says so.
+        app.net.incoming.lock().unwrap().push(index_event(arch_graph::IndexStatus { state: arch_graph::IndexState::Failed, error: Some("disk".into()), ..Default::default() }));
+        assert!(texts(&frame(&ctx, &mut app, vec![])).contains("indexing failed"));
+        // Every state names a real icon and colour (config is checked).
+        assert!(UiConfig::with_overrides("[status.stale]\nword = \"old\"\nicon = \"nope\"\ncolor = \"warn\"\n").unwrap_err().contains("unknown icon"));
     }
 }

@@ -39,6 +39,12 @@ impl Palette {
         *self = Self { open: true, ..Self::default() };
     }
 
+    /// Opens with the list already filtered (e.g. "index." for the index actions).
+    pub fn open_with(&mut self, filter: &str) {
+        self.open();
+        self.filter = filter.to_owned();
+    }
+
     /// Opens straight at an action's parameter (e.g. from a leader key).
     pub fn open_for(&mut self, action: &Bound) {
         self.open();

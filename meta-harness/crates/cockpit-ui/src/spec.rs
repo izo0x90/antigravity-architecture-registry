@@ -120,6 +120,8 @@ pub struct SpecRequests {
     pub review_changed: bool,
     /// The composer opened: the keyboard goes to it.
     pub insert: bool,
+    /// Read this file again (its code changed since it was indexed).
+    pub reread: Option<String>,
 }
 
 /// One cursor stop: an item in a section.
@@ -162,6 +164,8 @@ pub struct SpecState {
     /// The review point `] c` is on.
     pub point: Option<CommentId>,
     note: Option<String>,
+    /// The component's code changed since it was indexed (set by the app).
+    pub out_of_date: bool,
     /// The item a restored place is on, until the component's detail is in.
     restore_item: Option<String>,
     /// Items drawn last frame, and where; and the viewport.
@@ -191,6 +195,7 @@ impl Default for SpecState {
             composer: None,
             point: None,
             note: None,
+            out_of_date: false,
             restore_item: None,
             spots: Vec::new(),
             view: Rect::NOTHING,
@@ -643,6 +648,15 @@ impl SpecState {
                         }
                         Section::Code => match &detail.code {
                             Some(code) => {
+                                if self.out_of_date {
+                                    ui.horizontal_wrapped(|ui| {
+                                        crate::status::chip(ui, "stale", None);
+                                        ui.label(RichText::new("This code changed since it was indexed; the excerpt may be old.").size(11.0).color(colors().muted));
+                                        if ui.small_button("Re-read it").clicked() {
+                                            clicked = Some(Click::Reread);
+                                        }
+                                    });
+                                }
                                 let mut open_code = false;
                                 item(ui, Entry { section, item: SpecItem::Source }, &mut |ui| {
                                     egui::Frame::NONE.fill(colors().bg).inner_margin(6).corner_radius(4).show(ui, |ui| {
@@ -705,6 +719,7 @@ impl SpecState {
                 self.fold(Fold::Toggle);
             }
             Some(Click::Follow(id)) => self.requests.select = Some(id),
+            Some(Click::Reread) => self.requests.reread = self.code_location().map(|(file, _, _)| file),
             Some(Click::OpenCode) => self.requests.open_code = self.code_location(),
             Some(Click::Accept(id)) => self.accept(&id, cx.net, cx.ctx),
             Some(Click::Compose(id, purpose)) => {
@@ -768,6 +783,7 @@ impl SpecState {
 
 /// What a click in the spec asks for.
 enum Click {
+    Reread,
     Header(Section),
     Follow(ComponentId),
     OpenCode,
@@ -1142,6 +1158,7 @@ pub(crate) mod tests {
             outgoing: vec![Relation::new(RelationKind::Calls, id.clone(), other.clone(), arch_graph::Provenance::PLANNED)],
             incoming: vec![],
             code: None,
+            stale: false,
         }
     }
 

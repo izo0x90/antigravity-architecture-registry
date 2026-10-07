@@ -56,6 +56,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/arch/at", get(component_at))
         .route("/api/arch/file", get(file_view))
         .route("/api/arch/ingest", post(ingest))
+        .route("/api/arch/index", get(index_status))
         .route("/api/arch/refresh", post(refresh))
         .route("/api/arch/tools", get(tools))
         .route("/api/arch/reviewers", get(reviewers))
@@ -184,12 +185,18 @@ struct IngestBody {
     /// Path inside the repo; the whole repo when absent.
     #[serde(default)]
     scope: Option<String>,
+    /// Drop the cache and read everything again.
+    #[serde(default)]
+    full: bool,
 }
 
 async fn ingest(State(state): State<AppState>, body: Option<Json<IngestBody>>) -> ArchResult<arch_service::IngestReport> {
-    let scope = body.and_then(|b| b.0.scope);
+    let (scope, full) = body.map(|b| (b.0.scope, b.0.full)).unwrap_or_default();
     Ok(Json(
         blocking(&state.arch, move |a| {
+            if full {
+                return a.reindex();
+            }
             let path = match &scope {
                 Some(s) => a.root().join(arch_graph::RepoPath::new(s).map_err(|e| ServiceError::InvalidOp(e.to_string()))?.as_str()),
                 None => a.root().to_path_buf(),
@@ -198,6 +205,10 @@ async fn ingest(State(state): State<AppState>, body: Option<Json<IngestBody>>) -
         })
         .await?,
     ))
+}
+
+async fn index_status(State(state): State<AppState>) -> Json<arch_graph::IndexStatus> {
+    Json(state.arch.index_status())
 }
 
 async fn ambiguous(State(state): State<AppState>) -> ArchResult<Vec<arch_index::AmbiguousCall>> {
