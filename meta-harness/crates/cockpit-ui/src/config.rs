@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::graph_config::GraphUi;
 use crate::graph_style::GraphStyle;
 use crate::keymap::KeymapConfig;
-use crate::theme::Theme;
+use crate::theme::{Look, Theme};
 
 const DEFAULTS: &str = include_str!("../config/default.toml");
 
@@ -55,6 +55,7 @@ pub struct UiConfig {
     pub user: User,
     pub keymap: KeymapConfig,
     pub theme: Theme,
+    pub look: Look,
     pub graph_style: GraphStyle,
     pub graph: GraphUi,
     pub net: NetUi,
@@ -82,6 +83,11 @@ impl UiConfig {
         let mut table: toml::Table = DEFAULTS.parse().map_err(|e: toml::de::Error| e.to_string())?;
         let user: toml::Table = user.parse().map_err(|e: toml::de::Error| format!("ui config: {e}"))?;
         merge(&mut table, user);
+        // A named preset (`preset = "classic"`) lays its own sections over the rest.
+        if let Some(name) = table.get("preset").and_then(|p| p.as_str()).filter(|p| !p.is_empty()).map(str::to_owned) {
+            let preset = table.get("presets").and_then(|p| p.get(&name)).and_then(|p| p.as_table()).cloned().ok_or_else(|| format!("ui config: no preset `{name}` in [presets]"))?;
+            merge(&mut table, preset);
+        }
         let config: Self = toml::Value::Table(table).try_into().map_err(|e: toml::de::Error| format!("ui config: {e}"))?;
         config.graph_style.check(&config.theme).map_err(|e| format!("ui config: {e}"))?;
         crate::status::check(&config.status, &config.theme).map_err(|e| format!("ui config: {e}"))?;
@@ -122,7 +128,7 @@ mod tests {
     fn theme_colors_come_from_config() {
         let config = UiConfig::with_overrides("[theme]\nwarn = \"#010203\"").unwrap();
         assert_eq!(config.theme.warn, egui::Color32::from_rgb(1, 2, 3));
-        assert_eq!(config.theme.ok, egui::Color32::from_rgb(0x50, 0xc8, 0x78));
+        assert_eq!(config.theme.ok, egui::Color32::from_rgb(0x4a, 0xde, 0x80));
         assert!(UiConfig::with_overrides("[theme]\nwarn = \"orange\"").is_err());
     }
 

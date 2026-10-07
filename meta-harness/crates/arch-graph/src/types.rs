@@ -60,6 +60,26 @@ impl RequiredField {
     }
 }
 
+impl RequiredField {
+    /// Whether `c` has this detail.
+    pub fn present_in(self, c: &crate::Component) -> bool {
+        let spec = c.spec.as_ref();
+        match self {
+            Self::Description => !c.description.trim().is_empty(),
+            Self::Signature => c.signature.is_some() || c.schemas.inputs.is_some() || c.schemas.outputs.is_some(),
+            Self::Inputs => c.schemas.inputs.is_some(),
+            Self::Outputs => c.schemas.outputs.is_some(),
+            Self::Properties => c.schemas.properties.is_some(),
+            Self::SideEffects => !c.schemas.side_effects.is_empty(),
+            Self::Spec => spec.is_some(),
+            Self::Pattern => spec.is_some_and(|s| s.pattern.is_some()),
+            Self::LogicSteps => spec.is_some_and(|s| !s.logic_steps.is_empty()),
+            Self::Invariants => spec.is_some_and(|s| !s.invariants.is_empty()),
+            Self::Validation => spec.is_some_and(|s| !s.validation.is_empty()),
+        }
+    }
+}
+
 impl std::fmt::Display for RequiredField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
@@ -107,6 +127,11 @@ impl ResolvedType {
     /// True when this type is `name` or specializes it.
     pub fn is_a(&self, name: &str) -> bool {
         self.lineage.iter().any(|t| t == name)
+    }
+
+    /// The details this type requires that `c` doesn't have yet.
+    pub fn missing(&self, c: &crate::Component) -> Vec<RequiredField> {
+        self.required_fields.iter().copied().filter(|field| !field.present_in(c)).collect()
     }
 }
 

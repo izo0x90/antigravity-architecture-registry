@@ -373,6 +373,11 @@ impl NetClient {
 
     // ---- architecture ----
 
+    /// The component types and what each requires.
+    pub fn arch_types(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::TypeSystem>) + Send + 'static) {
+        self.call("GET", "/api/arch/types", None, ctx, on_done);
+    }
+
     pub fn arch_views(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::ViewCatalog>) + Send + 'static) {
         self.call("GET", "/api/arch/views", None, ctx, on_done);
     }

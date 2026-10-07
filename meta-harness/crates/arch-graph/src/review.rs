@@ -281,6 +281,9 @@ impl PlanDiff {
 const NESTED: [&str; 2] = ["spec", "schemas"];
 /// Facts from the code, not intent: not part of what the user reviews.
 const IGNORED: [&str; 2] = ["anchor", "placeholders"];
+/// Spec lists whose changed items are named too (`spec.logic_steps.2`), so
+/// a change shows on the step, not only the section.
+const ITEMIZED: [&str; 3] = ["logic_steps", "invariants", "tasks"];
 
 fn field_changes(before: &Value, after: &Value) -> Vec<String> {
     let empty = serde_json::Map::new();
@@ -298,7 +301,14 @@ fn field_changes(before: &Value, after: &Value) -> Vec<String> {
         let objects = (old.is_object() || is_blank(old)) && (new.is_object() || is_blank(new));
         if NESTED.contains(&key.as_str()) && objects {
             let inner = field_changes(old, new);
-            out.extend(inner.into_iter().map(|f| format!("{key}.{f}")));
+            for f in inner {
+                out.push(format!("{key}.{f}"));
+                if key == "spec" && ITEMIZED.contains(&f.as_str()) {
+                    let items = |v: &Value| v.get(&f).and_then(Value::as_array).cloned().unwrap_or_default();
+                    let (was, now) = (items(old), items(new));
+                    out.extend((0..now.len()).filter(|i| was.get(*i) != now.get(*i)).map(|i| format!("spec.{f}.{i}")));
+                }
+            }
         } else {
             out.push(key.clone());
         }
@@ -454,7 +464,7 @@ mod tests {
             vec![
                 Change::PlanChanged { fields: vec!["title".into()] },
                 Change::ComponentAdded { id: id("app::new") },
-                Change::ComponentChanged { id: id("app::validate"), fields: vec!["description".into(), "schemas.inputs".into(), "spec.invariants".into()] },
+                Change::ComponentChanged { id: id("app::validate"), fields: vec!["description".into(), "schemas.inputs".into(), "spec.invariants".into(), "spec.invariants.0".into()] },
                 Change::ComponentRemoved { id: id("app::old") },
                 Change::RelationChanged { kind: RelationKind::Calls, source: id("app::run"), target: id("app::validate"), fields: vec!["order".into()] },
                 Change::RelationAdded { kind: RelationKind::Calls, source: id("app::validate"), target: id("app::new") },
@@ -462,7 +472,7 @@ mod tests {
                 Change::WorkflowChanged { name: "checkout".into() },
             ]
         );
-        assert_eq!(d.fields(&id("app::validate")), ["description", "relations", "schemas.inputs", "spec.invariants"].into_iter().map(String::from).collect());
+        assert_eq!(d.fields(&id("app::validate")), ["description", "relations", "schemas.inputs", "spec.invariants", "spec.invariants.0"].into_iter().map(String::from).collect(), "the changed invariant itself is named");
         assert!(d.components().contains(&id("app::run")), "relation ends count as changed");
 
         // A spec that existed before reports which part changed.

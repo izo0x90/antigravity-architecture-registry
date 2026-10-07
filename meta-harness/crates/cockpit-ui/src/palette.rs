@@ -2,7 +2,7 @@
 //! takes one) its parameter: a filterable choice list or a text field. Opens with
 //! the input focused, so it works for typing, dictation and touch alike.
 
-use egui::{Color32, Frame, Margin, RichText, Stroke};
+use egui::{Color32, Frame, RichText, Stroke};
 
 use crate::actions::{Bound, Choice, Invocation, Param, fuzzy_score};
 use crate::keymap::KeymapConfig;
@@ -115,16 +115,16 @@ impl Palette {
             .show(ctx, |ui| {
                 Frame::NONE
                     .fill(colors().overlay)
-                    .stroke(Stroke::new(1.0, colors().focus))
-                    .corner_radius(8)
-                    .inner_margin(Margin::same(10))
+                    .stroke(Stroke::new(crate::theme::look().line_thin, colors().focus))
+                    .corner_radius(crate::theme::look().radius_xl)
+                    .inner_margin(crate::theme::margin(crate::theme::look().space_ml))
                     .show(ui, |ui| {
                         ui.set_width(width - 20.0);
                         let title = match &stage {
                             Stage::Actions => "Run an action".to_owned(),
                             Stage::Choose { action, .. } | Stage::Text { action, .. } => action.action.label.clone(),
                         };
-                        ui.label(RichText::new(title).strong().size(12.0).color(colors().info));
+                        ui.label(RichText::new(title).strong().size(crate::theme::look().text_label).color(colors().info));
                         let hint = match &stage {
                             Stage::Text { action, .. } => match &action.action.param {
                                 Param::Text { hint } => hint.clone(),
@@ -137,7 +137,7 @@ impl Palette {
                         if edit.changed() {
                             self.selected = 0;
                         }
-                        ui.add_space(4.0);
+                        ui.add_space(crate::theme::look().space_s);
 
                         match &stage {
                             Stage::Actions => {
@@ -173,7 +173,7 @@ impl Palette {
                                         }
                                     }
                                     if ranked.is_empty() && line.is_none() {
-                                        ui.label(RichText::new("No matching actions").size(11.0).color(colors().muted));
+                                        ui.label(RichText::new("No matching actions").size(crate::theme::look().text_body).color(colors().muted));
                                     }
                                 });
                             }
@@ -195,7 +195,7 @@ impl Palette {
                                         }
                                     }
                                     if ranked.is_empty() {
-                                        ui.label(RichText::new("Nothing to choose").size(11.0).color(colors().muted));
+                                        ui.label(RichText::new("Nothing to choose").size(crate::theme::look().text_body).color(colors().muted));
                                     }
                                 });
                             }
@@ -203,7 +203,7 @@ impl Palette {
                                 if enter && !self.filter.trim().is_empty() {
                                     picked = Some(invocation(action, Some(self.filter.trim().to_owned())));
                                 }
-                                ui.label(RichText::new("Enter to submit • Esc to go back").size(10.0).color(colors().muted));
+                                ui.label(RichText::new("Enter to submit • Esc to go back").size(crate::theme::look().text_small).color(colors().muted));
                             }
                         }
                     });
@@ -243,18 +243,18 @@ fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, det
     let fill = if selected { colors().selection } else { Color32::TRANSPARENT };
     let response = Frame::NONE
         .fill(fill)
-        .corner_radius(4)
-        .inner_margin(Margin::symmetric(8, 6))
+        .corner_radius(crate::theme::look().radius_m)
+        .inner_margin(crate::theme::margin2(crate::theme::look().space_m, crate::theme::look().space_sm))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(label).size(12.0).color(colors().text_strong));
+                ui.label(RichText::new(label).size(crate::theme::look().text_label).color(colors().text_strong));
                 if let Some(detail) = detail {
-                    ui.label(RichText::new(detail).size(10.0).color(colors().muted));
+                    ui.label(RichText::new(detail).size(crate::theme::look().text_small).color(colors().muted));
                 }
                 if !keys.is_empty() {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(keys).monospace().size(10.0).color(colors().key));
+                        ui.label(RichText::new(keys).monospace().size(crate::theme::look().text_small).color(colors().key));
                     });
                 }
             });

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use arch_graph::{Alignment, Component, ComponentId, FileView, RelationKind};
-use egui::{Frame, Margin, Pos2, Rect, RichText, Stroke, Vec2};
+use egui::{Frame, Pos2, Rect, RichText, Stroke, Vec2};
 
 use crate::actions::{Action, ActionProvider, Group, RunCx};
 use crate::feedback::FeedbackInspectorState;
@@ -411,7 +411,7 @@ impl CodeViewerState {
             let edit_w = if is_narrow { (ui.available_width() - 80.0 - label_w).max(50.0) } else { (ui.available_width() - 120.0 - label_w).max(80.0) };
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("📂").size(13.0));
+                ui.label(RichText::new("📂").size(crate::theme::look().text_title));
                 let mut path_edit = self.current_file.clone();
                 let resp = ui.add(egui::TextEdit::singleline(&mut path_edit).desired_width(edit_w).font(egui::TextStyle::Monospace));
                 if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -419,7 +419,7 @@ impl CodeViewerState {
                     self.load_file(&path_edit, None, net, ctx);
                 }
                 if let Some(target) = self.target_line {
-                    ui.label(RichText::new(format!(":{}", target)).monospace().strong().size(11.0).color(colors().warn));
+                    ui.label(RichText::new(format!(":{}", target)).monospace().strong().size(crate::theme::look().text_body).color(colors().warn));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button(copy_label).clicked() {
@@ -432,7 +432,7 @@ impl CodeViewerState {
                         self.load_file(&path, target, net, ctx);
                     }
                     if self.is_loading {
-                        ui.label(RichText::new(egui_phosphor::regular::DOT).size(10.0).color(colors().warn));
+                        ui.label(RichText::new(egui_phosphor::regular::DOT).size(crate::theme::look().text_small).color(colors().warn));
                     }
                 });
             });
@@ -444,10 +444,10 @@ impl CodeViewerState {
             // Out of date: the marks and spans below come from an older read.
             if self.out_of_date && !self.lines.is_empty() {
                 let (_, _, color) = crate::status::look("stale");
-                Frame::NONE.fill(color.gamma_multiply(0.12)).stroke(Stroke::new(1.0, color.gamma_multiply(0.5))).corner_radius(4).inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
+                Frame::NONE.fill(color.gamma_multiply(0.12)).stroke(Stroke::new(crate::theme::look().line_thin, color.gamma_multiply(0.5))).corner_radius(crate::theme::look().radius_m).inner_margin(crate::theme::margin2(crate::theme::look().space_m, crate::theme::look().space_s)).show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         crate::status::chip(ui, "stale", None);
-                        ui.label(RichText::new("This file changed since it was indexed: marks and spans may be off.").size(11.0).color(colors().text));
+                        ui.label(RichText::new("This file changed since it was indexed: marks and spans may be off.").size(crate::theme::look().text_body).color(colors().text));
                         if ui.small_button("Re-read it").on_hover_text("SPC I f").clicked() {
                             self.reread = true;
                         }
@@ -456,16 +456,16 @@ impl CodeViewerState {
             }
 
             if let Some(err) = &self.error_message {
-                Frame::NONE.fill(colors().error_bg).stroke(Stroke::new(1.0, colors().error)).corner_radius(4).inner_margin(Margin::same(8)).show(ui, |ui| {
-                    ui.label(RichText::new(format!("Error: {}", err)).color(colors().error).size(11.0));
+                Frame::NONE.fill(colors().error_bg).stroke(Stroke::new(crate::theme::look().line_thin, colors().error)).corner_radius(crate::theme::look().radius_m).inner_margin(crate::theme::margin(crate::theme::look().space_m)).show(ui, |ui| {
+                    ui.label(RichText::new(format!("Error: {}", err)).color(colors().error).size(crate::theme::look().text_body));
                 });
                 return;
             }
 
             if self.lines.is_empty() && !self.is_loading {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(30.0);
-                    ui.label(RichText::new("No file content loaded.").size(12.0).color(colors().muted));
+                    ui.add_space(crate::theme::look().space_xxxl);
+                    ui.label(RichText::new("No file content loaded.").size(crate::theme::look().text_label).color(colors().muted));
                     if ui.button("Load Cargo.toml").clicked() {
                         let ctx = ui.ctx().clone();
                         self.load_file("Cargo.toml", None, net, ctx);
@@ -478,8 +478,8 @@ impl CodeViewerState {
             // code share the row, so marks always sit next to their line.
             let row_height = ui.text_style_height(&egui::TextStyle::Monospace).max(14.0).max(self.row_h);
             let mut measured: f32 = 0.0;
-            let gutter_w = ui.fonts_mut(|f| f.layout_no_wrap("00000".into(), egui::FontId::monospace(11.0), colors().faint).size().x) + 3.0 * 16.0;
-            self.char_w = ui.fonts_mut(|f| f.glyph_width(&egui::FontId::monospace(11.0), 'x'));
+            let gutter_w = ui.fonts_mut(|f| f.layout_no_wrap("00000".into(), egui::FontId::monospace(crate::theme::look().text_body), colors().faint).size().x) + 3.0 * 16.0;
+            self.char_w = ui.fonts_mut(|f| f.glyph_width(&egui::FontId::monospace(crate::theme::look().text_body), 'x'));
             let mut clicked: Option<ComponentId> = None;
             let mut put_cursor: Option<usize> = None;
             let mut unfold: Option<usize> = None;
@@ -512,17 +512,17 @@ impl CodeViewerState {
                         ui.allocate_ui_with_layout(Vec2::new(gutter_w, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.set_min_width(gutter_w);
                             let color = if on_cursor || highlighted { colors().warn } else { colors().faint };
-                            ui.label(RichText::new(format!("{line_no:>4}")).monospace().size(11.0).color(color));
+                            ui.label(RichText::new(format!("{line_no:>4}")).monospace().size(crate::theme::look().text_body).color(color));
                             for mark in self.marks.get(&line_no).into_iter().flatten() {
                                 let (icon, color, tip, id) = mark_look(mark);
-                                if ui.add(egui::Label::new(RichText::new(icon).size(11.0).color(color)).sense(egui::Sense::click())).on_hover_text(tip).clicked() {
+                                if ui.add(egui::Label::new(RichText::new(icon).size(crate::theme::look().text_body).color(color)).sense(egui::Sense::click())).on_hover_text(tip).clicked() {
                                     clicked = Some(id.clone());
                                 }
                             }
                         });
                         ui.separator();
                         let line = &self.lines[idx];
-                        let mut text = RichText::new(line).monospace().size(11.0).color(if highlighted { colors().warn } else { colors().text });
+                        let mut text = RichText::new(line).monospace().size(crate::theme::look().text_body).color(if highlighted { colors().warn } else { colors().text });
                         if highlighted {
                             text = text.background_color(colors().warn_bg);
                         } else if on_cursor {
@@ -534,7 +534,7 @@ impl CodeViewerState {
                             put_cursor = Some(line_no);
                         }
                         if let Some(hidden) = folded
-                            && ui.add(egui::Label::new(RichText::new(format!("  … {hidden} lines")).monospace().size(10.0).color(colors().muted)).sense(egui::Sense::click())).on_hover_text("Unfold (z o)").clicked()
+                            && ui.add(egui::Label::new(RichText::new(format!("  … {hidden} lines")).monospace().size(crate::theme::look().text_small).color(colors().muted)).sense(egui::Sense::click())).on_hover_text("Unfold (z o)").clicked()
                         {
                             unfold = Some(line_no);
                         }

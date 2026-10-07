@@ -64,14 +64,27 @@ fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
     }
 }
 
-fn state_label(state: &JobState) -> (&'static str, egui::Color32) {
+/// The four steps of a component's work, as the stage track shows them.
+const STEPS: [(arch_graph::JobKind, &str); 4] = [
+    (arch_graph::JobKind::Design, "stage_arch_approved"),
+    (arch_graph::JobKind::Plan, "stage_plan_approved"),
+    (arch_graph::JobKind::Skeleton, "stage_skeleton"),
+    (arch_graph::JobKind::Implement, "stage_implemented"),
+];
+
+/// A job's track: the four steps (by status name and word) and the one it's on.
+fn track_of(job: &arch_graph::Job) -> (Vec<(&'static str, &'static str)>, Option<usize>) {
+    let steps = STEPS.iter().map(|(kind, name)| (*name, kind.name())).collect();
+    (steps, STEPS.iter().position(|(kind, _)| *kind == job.kind))
+}
+
+/// What a job waits for, in words (none when it's moving).
+fn waiting(state: &JobState) -> Option<&'static str> {
     match state {
-        JobState::Queued => ("queued", colors().muted),
-        JobState::Running { .. } => ("running", colors().info),
-        JobState::AwaitingApproval => ("needs your approval", colors().warn),
-        JobState::Retrying => ("retrying", colors().warn),
-        JobState::Failed => ("failed", colors().error),
-        JobState::Done => ("done", colors().ok),
+        JobState::Queued => Some("waiting its turn (and for what it depends on)"),
+        JobState::AwaitingApproval => Some("waiting for your approval"),
+        JobState::Retrying => Some("waiting to try again with what failed"),
+        JobState::Running { .. } | JobState::Failed | JobState::Done => None,
     }
 }
 
@@ -196,8 +209,7 @@ impl QueueState {
             };
             for (i, job) in snapshot.jobs.iter().enumerate() {
                 let selected = i == self.selected;
-                let (label, color) = state_label(&job.state);
-                let mut frame = egui::Frame::new().inner_margin(4.0).stroke(egui::Stroke::new(1.0, if selected { colors().focus } else { colors().border }));
+                let mut frame = egui::Frame::new().inner_margin(crate::theme::margin(crate::theme::look().space_s)).stroke(egui::Stroke::new(crate::theme::look().line_thin, if selected { colors().focus } else { colors().border }));
                 if selected {
                     frame = frame.fill(colors().selection);
                 }
@@ -207,8 +219,7 @@ impl QueueState {
                         if ui.selectable_label(selected, RichText::new(name).strong()).clicked() {
                             clicked = Some((i, None));
                         }
-                        ui.label(RichText::new(job.kind.name()).color(colors().muted));
-                        ui.colored_label(color, label);
+                        crate::status::chip(ui, crate::status::job(&job.state), None);
                         if job.attempts > 0 {
                             ui.label(RichText::new(format!("attempt {}", job.attempts + 1)).color(colors().muted));
                         }
@@ -222,9 +233,20 @@ impl QueueState {
                             clicked = Some((i, Some(QueueCommand::Expand)));
                         }
                     });
+                    // Where it is in design, plan, skeleton, implement; and what it waits for.
+                    ui.horizontal_wrapped(|ui| {
+                        let (steps, current) = track_of(job);
+                        crate::status::track(ui, &steps, current);
+                        if let Some(why) = waiting(&job.state) {
+                            ui.label(RichText::new(why).size(crate::theme::look().text_small).color(colors().muted));
+                        }
+                    });
                     if self.expanded.contains(&job.component) {
                         for f in &job.findings {
-                            ui.label(RichText::new(format!("• [{:?}] {}", f.code, f.message)).color(colors().warn).size(11.0));
+                            ui.horizontal_wrapped(|ui| {
+                                crate::status::chip(ui, crate::status::severity(f.severity), None);
+                                ui.label(RichText::new(format!("[{:?}] {}", f.code, f.message)).color(colors().text).size(crate::theme::look().text_body));
+                            });
                         }
                     }
                 });
@@ -402,7 +424,7 @@ impl Navigable for QueueState {
             .map(|(i, j)| {
                 let symbol = j.component.as_str().split_once(':').map_or(j.component.as_str(), |(_, s)| s);
                 let name = symbol.rsplit([':', '.']).next().unwrap_or(symbol);
-                Item::new(i.to_string(), name, format!("{symbol} {} {}", j.kind.name(), state_label(&j.state).0))
+                Item::new(i.to_string(), name, format!("{symbol} {} {}", j.kind.name(), crate::status::look(crate::status::job(&j.state)).1))
             })
             .collect()
     }
@@ -506,5 +528,49 @@ pub(crate) mod tests {
                 q.render(ui, &mut cx);
             });
         });
+    }
+
+    // req: V.5, V.1
+    #[test]
+    fn each_job_shows_its_four_steps_and_what_it_waits_for() {
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        crate::status::set(config.status.clone());
+        let ctx = egui::Context::default();
+        crate::theme::set(config.theme.clone(), &ctx);
+        let net = NetClient::new("http://localhost:0");
+        let mut q = QueueState::default();
+        q.tick(&net, &ctx, Some(&PlanId::new("p").unwrap()));
+        q.on_event(&ArchEvent::QueueUpdated { snapshot: Box::new(snapshot(QueueStatus::Running)) });
+        let jobs = q.snapshot.clone().unwrap().jobs;
+        // The design job is on the first step, the implement jobs on the last.
+        let (steps, current) = track_of(&jobs[1]);
+        assert_eq!(steps.iter().map(|(_, w)| *w).collect::<Vec<_>>(), ["design", "plan", "skeleton", "implement"]);
+        assert_eq!((current, track_of(&jobs[0]).1), (Some(0), Some(3)));
+        q.expanded.insert(id("c"));
+        let out = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (mut mode, mut note) = (crate::keymap::InputMode::Normal, None);
+                q.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] });
+            });
+        });
+        fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                egui::Shape::Vec(list) => list.iter().for_each(|s| collect(s, out)),
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        out.shapes.iter().for_each(|c| collect(&c.shape, &mut texts));
+        for step in ["design", "plan", "skeleton", "implement"] {
+            assert_eq!(texts.iter().filter(|t| *t == step).count(), 3, "every job's track names {step}: {texts:?}");
+        }
+        assert!(texts.iter().any(|t| t == "waiting for your approval"), "the waiting job says what for");
+        assert_eq!(texts.iter().filter(|t| t.starts_with("waiting")).count(), 1, "moving and failed jobs don't wait");
+        // States are icon and word.
+        for state in ["job_running", "job_awaiting_approval", "job_failed", "severity_error"] {
+            let (glyph, word, _) = crate::status::look(state);
+            assert!(texts.iter().any(|t| *t == format!("{glyph} {word}")), "{state} as a chip: {texts:?}");
+        }
     }
 }

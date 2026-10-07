@@ -450,10 +450,10 @@ pub fn toolbar_control(ui: &mut egui::Ui, action: &Action) -> Option<ToolbarUse>
     match (&action.param, toolbar.style) {
         (Param::Toggle { on }, ToolbarStyle::Control) => {
             let mut value = *on;
-            ui.checkbox(&mut value, RichText::new(text).size(11.0)).changed().then(|| ToolbarUse::Run(Some(value.to_string())))
+            ui.checkbox(&mut value, RichText::new(text).size(crate::theme::look().text_body)).changed().then(|| ToolbarUse::Run(Some(value.to_string())))
         }
         (Param::Choice(choices), ToolbarStyle::Control) => {
-            let caption = RichText::new(format!("{text}:")).strong().size(11.0);
+            let caption = RichText::new(format!("{text}:")).strong().size(crate::theme::look().text_body);
             let shown = choices.iter().find(|c| c.current).map(|c| c.label.clone()).unwrap_or_else(|| "—".into());
             // Caption and picker stay on one row: wrap first if they won't fit, and
             // truncate the picker rather than let it push the slot wider.

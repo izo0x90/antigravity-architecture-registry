@@ -8,27 +8,7 @@ use super::{a, component, is_data_type};
 
 /// The details `c`'s type requires that it doesn't have yet.
 pub fn missing_details(c: &Component, ty: &ResolvedType) -> Vec<RequiredField> {
-    let spec = c.spec.as_ref();
-    ty.required_fields
-        .iter()
-        .copied()
-        .filter(|field| {
-            let present = match field {
-                RequiredField::Description => !c.description.trim().is_empty(),
-                RequiredField::Signature => c.signature.is_some() || c.schemas.inputs.is_some() || c.schemas.outputs.is_some(),
-                RequiredField::Inputs => c.schemas.inputs.is_some(),
-                RequiredField::Outputs => c.schemas.outputs.is_some(),
-                RequiredField::Properties => c.schemas.properties.is_some(),
-                RequiredField::SideEffects => !c.schemas.side_effects.is_empty(),
-                RequiredField::Spec => spec.is_some(),
-                RequiredField::Pattern => spec.is_some_and(|s| s.pattern.is_some()),
-                RequiredField::LogicSteps => spec.is_some_and(|s| !s.logic_steps.is_empty()),
-                RequiredField::Invariants => spec.is_some_and(|s| !s.invariants.is_empty()),
-                RequiredField::Validation => spec.is_some_and(|s| !s.validation.is_empty()),
-            };
-            !present
-        })
-        .collect()
+    ty.missing(c)
 }
 
 /// The least stage a planned dependency must have for `stage`.

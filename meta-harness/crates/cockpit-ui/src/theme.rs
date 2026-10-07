@@ -1,5 +1,7 @@
-//! Semantic colors, from the `[theme]` section of the UI config. Views ask for
-//! roles (`colors().warn`), never for literal colors.
+//! Semantic colors, from the `[theme]` section of the UI config, and the
+//! look's sizes (text, spacing, corners, lines, effects) from `[look]`.
+//! Views ask for roles (`colors().warn`, `look().text_body`), never for
+//! literal colors or sizes.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -116,8 +118,89 @@ impl Theme {
     }
 }
 
+macro_rules! look {
+    ($($(#[$doc:meta])* $name:ident),* $(,)?) => {
+        /// Sizes, from `[look]`: every one in points (or as noted).
+        #[derive(Clone, Debug, Default, Deserialize)]
+        pub struct Look {
+            $($(#[$doc])* pub $name: f32,)*
+        }
+
+        impl Look {
+            pub const TOKENS: &'static [&'static str] = &[$(stringify!($name)),*];
+        }
+    };
+}
+
+look! {
+    /// Text sizes, smallest to largest.
+    text_tiny,
+    text_small,
+    text_body,
+    text_label,
+    text_title,
+    text_heading,
+    text_display,
+    /// The spacing scale.
+    space_hair,
+    space_xs,
+    space_s,
+    space_sm,
+    space_m,
+    space_ml,
+    space_l,
+    space_xl,
+    space_xxl,
+    space_xxxl,
+    space_huge,
+    /// Corner radii.
+    radius_s,
+    radius_m,
+    radius_l,
+    radius_xl,
+    radius_pill,
+    /// Line widths.
+    line_thin,
+    line_bold,
+    /// The selection's glow: how wide, and how strong (0 to 1).
+    glow_width,
+    glow_alpha,
+    /// The pulse around what the agent points at: one beat, in seconds.
+    pulse_seconds,
+    /// Planned connections' dashes move this many points a second.
+    dash_speed,
+    /// How strongly what's not selected fades (0: not at all, 1: gone).
+    fade,
+    /// The background grid's spacing (0: no grid).
+    grid_step,
+}
+
+/// The built-in look (the `defaults_parse` test keeps it loadable).
+fn built_in_look() -> Look {
+    crate::config::UiConfig::with_overrides("").map(|c| c.look).unwrap_or_default()
+}
+
+/// Inner margins from look sizes (egui wants whole points).
+pub fn margin(all: f32) -> egui::Margin {
+    egui::Margin::same(all.round() as i8)
+}
+
+pub fn margin2(x: f32, y: f32) -> egui::Margin {
+    egui::Margin::symmetric(x.round() as i8, y.round() as i8)
+}
+
 thread_local! {
     static CURRENT: RefCell<Rc<Theme>> = RefCell::new(Rc::new(Theme::default()));
+    static LOOK: RefCell<Rc<Look>> = RefCell::new(Rc::new(built_in_look()));
+}
+
+/// The active look's sizes.
+pub fn look() -> Rc<Look> {
+    LOOK.with(|l| l.borrow().clone())
+}
+
+pub fn set_look(look: Look) {
+    LOOK.with(|l| *l.borrow_mut() = Rc::new(look));
 }
 
 /// The active theme (the UI is single-threaded).
@@ -196,5 +279,44 @@ mod glyph_tests {
             }
         }
         assert!(missing.is_empty(), "characters the fonts can't draw:\n{}", missing.join("\n"));
+    }
+
+    // req: V.7
+    #[test]
+    fn no_view_writes_its_own_colours_or_sizes() {
+        // Calls whose first argument must be a theme or look value, never a number.
+        let sized = [".size(", "FontId::proportional(", "FontId::monospace(", "add_space(", "Margin::same(", "Margin::symmetric(", "inner_margin(", "corner_radius(", "Stroke::new("];
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if name == "theme.rs" || path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            // What the UI draws (tests check values, they don't draw).
+            let drawn = text.split("#[cfg(test)]").next().unwrap_or_default();
+            for (n, line) in drawn.lines().enumerate() {
+                for call in sized {
+                    for (at, _) in line.match_indices(call) {
+                        if line[at + call.len()..].trim_start().starts_with(|c: char| c.is_ascii_digit()) {
+                            found.push(format!("{name}:{} {}", n + 1, line.trim()));
+                        }
+                    }
+                }
+                if line.contains("Color32::from_") || (line.contains("Color32::") && !line.contains("Color32::TRANSPARENT") && line.contains("Color32::") && line.split("Color32::").skip(1).any(|rest| rest.starts_with(|c: char| c.is_ascii_uppercase()) && !rest.starts_with("TRANSPARENT"))) {
+                    found.push(format!("{name}:{} {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(found.is_empty(), "colours and sizes come from the theme and look:\n{}", found.join("\n"));
+    }
+
+    #[test]
+    fn presets_lay_their_sections_over_the_rest() {
+        let config = crate::config::UiConfig::with_overrides("preset = \"big\"\n[presets.big.look]\ntext_body = 15.0\n[presets.big.theme]\naccent = \"#ff00ff\"\n").unwrap();
+        assert_eq!((config.look.text_body, config.theme.accent), (15.0, egui::Color32::from_rgb(255, 0, 255)));
+        assert!(crate::config::UiConfig::with_overrides("preset = \"nope\"\n").unwrap_err().contains("no preset `nope`"));
     }
 }

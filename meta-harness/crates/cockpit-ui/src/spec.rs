@@ -48,13 +48,24 @@ impl Section {
         Self::ALL.into_iter().find(|s| s.key() == key)
     }
 
+    /// Where a required detail is written.
+    pub fn of_required(field: arch_graph::RequiredField) -> Section {
+        use arch_graph::RequiredField as F;
+        match field {
+            F::Description => Self::Overview,
+            F::Signature | F::Inputs | F::Outputs | F::Properties | F::SideEffects => Self::Signature,
+            F::Spec | F::Pattern | F::LogicSteps | F::Validation => Self::Logic,
+            F::Invariants => Self::Invariants,
+        }
+    }
+
     /// Where a field changed since the last review shows (diff field paths).
     pub fn of_field(field: &str) -> Section {
         match field {
             "signature" => Self::Signature,
             f if f.starts_with("schemas") => Self::Signature,
-            "spec.logic_steps" | "spec.tasks" => Self::Logic,
-            "spec.invariants" => Self::Invariants,
+            f if f.starts_with("spec.logic_steps") || f.starts_with("spec.tasks") => Self::Logic,
+            f if f.starts_with("spec.invariants") => Self::Invariants,
             "relations" => Self::Relations,
             "placeholders" => Self::Placeholders,
             _ => Self::Overview,
@@ -166,6 +177,8 @@ pub struct SpecState {
     note: Option<String>,
     /// The component's code changed since it was indexed (set by the app).
     pub out_of_date: bool,
+    /// The component types (what each requires), from the server.
+    pub types: Option<arch_graph::TypeSystem>,
     /// The item a restored place is on, until the component's detail is in.
     restore_item: Option<String>,
     /// Items drawn last frame, and where; and the viewport.
@@ -196,6 +209,7 @@ impl Default for SpecState {
             point: None,
             note: None,
             out_of_date: false,
+            types: None,
             restore_item: None,
             spots: Vec::new(),
             view: Rect::NOTHING,
@@ -381,6 +395,99 @@ impl SpecState {
         }
     }
 
+    /// The details the component's type requires that it doesn't have yet.
+    pub fn missing_required(&self) -> Vec<arch_graph::RequiredField> {
+        let (Some(detail), Some(types)) = (&self.detail, &self.types) else { return Vec::new() };
+        types.resolve(&detail.component.type_name).map(|ty| ty.missing(&detail.component)).unwrap_or_default()
+    }
+
+    /// The items that changed since the last review (by entry key).
+    pub fn changed_items(&self) -> BTreeSet<String> {
+        let Some(target) = &self.target else { return BTreeSet::new() };
+        let fields = self.diff.fields(target);
+        let mut out: BTreeSet<String> = BTreeSet::new();
+        for f in &fields {
+            let item = |prefix: &str| f.strip_prefix(prefix).and_then(|i| i.parse::<usize>().ok());
+            if let Some(i) = item("spec.logic_steps.") {
+                out.insert(Entry { section: Section::Logic, item: SpecItem::Step(i) }.key());
+            }
+            if let Some(i) = item("spec.invariants.") {
+                out.insert(Entry { section: Section::Invariants, item: SpecItem::Invariant(i) }.key());
+            }
+        }
+        for change in &self.diff.changes {
+            if let arch_graph::Change::RelationAdded { kind, source, target: to } | arch_graph::Change::RelationChanged { kind, source, target: to, .. } = change {
+                let (other, outgoing) = if source == target { (to.clone(), true) } else if to == target { (source.clone(), false) } else { continue };
+                out.insert(Entry { section: Section::Relations, item: SpecItem::Relation { kind: *kind, other, outgoing } }.key());
+            }
+        }
+        out
+    }
+
+    /// The header card: what it is, where, how far along, and what needs looking at.
+    fn render_header(&self, ui: &mut egui::Ui, detail: &ComponentDetail) -> Option<Click> {
+        let c = &detail.component;
+        let look = crate::theme::look();
+        let mut clicked = None;
+        egui::Frame::NONE.fill(colors().surface).stroke(egui::Stroke::new(look.line_thin, colors().border_strong)).corner_radius(look.radius_xl).inner_margin(crate::theme::margin(look.space_l)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(&c.name).size(look.text_display).strong().color(colors().text_strong));
+                ui.label(RichText::new(&c.type_name).size(look.text_label).color(colors().muted));
+            });
+            ui.label(RichText::new(c.id.as_str()).monospace().size(look.text_small).color(colors().faint));
+            let location = match (&c.anchor, &c.proposed) {
+                (Some(a), _) => Some(format!("{}:{}–{}", a.file, a.span.start_line, a.span.end_line)),
+                (None, Some(p)) => Some(format!("{} (planned)", p.file)),
+                (None, None) => None,
+            };
+            match location {
+                Some(text) => {
+                    if ui.link(RichText::new(format!("{} {text}", egui_phosphor::regular::FILE_CODE)).monospace().size(look.text_small)).on_hover_text("Open in the code view (g d)").clicked() {
+                        clicked = Some(Click::OpenCode);
+                    }
+                }
+                None => {
+                    ui.label(crate::status::text("planned").size(look.text_small));
+                }
+            }
+            ui.add_space(look.space_s);
+            ui.horizontal_wrapped(|ui| {
+                crate::status::chip(ui, crate::status::alignment(detail.alignment), None);
+                let open = self.open_points().len();
+                if open > 0 {
+                    crate::status::chip(ui, "open_comments", Some(&open.to_string()));
+                }
+                if !self.changed_sections().is_empty() {
+                    crate::status::chip(ui, "changed", None);
+                }
+                if !c.placeholders.is_empty() {
+                    crate::status::chip(ui, "placeholders", Some(&c.placeholders.len().to_string()));
+                }
+                let missing = self.missing_required();
+                if !missing.is_empty() {
+                    crate::status::chip(ui, "required_missing", Some(&missing.len().to_string())).on_hover_text(missing.iter().map(|f| f.name()).collect::<Vec<_>>().join(", "));
+                }
+                if self.out_of_date {
+                    crate::status::chip(ui, "stale", None);
+                }
+            });
+            ui.add_space(look.space_s);
+            let stages = [
+                arch_graph::Stage::Declared,
+                arch_graph::Stage::ArchApproved,
+                arch_graph::Stage::PlanApproved,
+                arch_graph::Stage::Skeleton,
+                arch_graph::Stage::Implemented,
+            ];
+            let words: Vec<(&str, String)> = stages.iter().map(|s| (crate::status::stage(*s), crate::status::look(crate::status::stage(*s)).1)).collect();
+            let steps: Vec<(&str, &str)> = words.iter().map(|(n, w)| (*n, w.as_str())).collect();
+            crate::status::track(ui, &steps, stages.iter().position(|s| *s == c.stage));
+        });
+        ui.add_space(look.space_m);
+        clicked
+    }
+
     /// Moves to the next (or previous) unaddressed point, cursor and all.
     pub fn step_point(&mut self, forward: bool) {
         let points: Vec<(CommentId, Option<Section>)> = {
@@ -498,7 +605,7 @@ impl SpecState {
                 }
             }
             for section in Section::ALL {
-                let label = RichText::new(section.title()).size(11.0);
+                let label = RichText::new(section.title()).size(crate::theme::look().text_body);
                 if ui.selectable_label(self.current == section, label).on_hover_text("J / K").clicked() {
                     self.put_on(&Entry { section, item: SpecItem::Header });
                 }
@@ -530,21 +637,34 @@ impl SpecState {
         let mut clicked: Option<Click> = None;
         let scroll = std::mem::take(&mut self.scroll);
         let relations = self.relations();
+        let changed_items = self.changed_items();
+        let missing = self.missing_required();
+        let type_name = c.type_name.clone();
         let output = egui::ScrollArea::vertical().id_salt("spec_items").auto_shrink([false, false]).show(ui, |ui| {
             // One item: highlighted under the cursor, scrolled to when it moved there.
             let mut item = |ui: &mut egui::Ui, entry: Entry, add: &mut dyn FnMut(&mut egui::Ui)| -> egui::Response {
                 let on = cursor_key.as_deref() == Some(entry.key().as_str());
                 let fill = if on { colors().selection } else { egui::Color32::TRANSPARENT };
-                let response = egui::Frame::NONE.fill(fill).corner_radius(3).inner_margin(egui::Margin::symmetric(4, 1)).show(ui, |ui| {
+                let response = egui::Frame::NONE.fill(fill).corner_radius(crate::theme::look().radius_s).inner_margin(crate::theme::margin2(crate::theme::look().space_s, crate::theme::look().space_hair)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     add(ui);
                 }).response;
                 if on && scroll {
                     response.scroll_to_me(None);
                 }
+                // Changed since the review: a bar at its left edge.
+                if changed_items.contains(&entry.key()) {
+                    let (_, word, color) = crate::status::look("changed");
+                    let bar = egui::Rect::from_min_size(response.rect.left_top() - egui::vec2(crate::theme::look().space_s, 0.0), egui::vec2(crate::theme::look().line_bold, response.rect.height()));
+                    ui.painter().rect_filled(bar, 0.0, color);
+                    response.clone().on_hover_text(word);
+                }
                 spots.push(Spot { key: entry.key(), rect: response.rect });
                 response
             };
+            if let Some(click) = self.render_header(ui, &detail) {
+                clicked = Some(click);
+            }
             for section in Section::ALL {
                 let open = !self.folded.contains(&section);
                 let mut title = section.title().to_owned();
@@ -555,10 +675,15 @@ impl SpecState {
                 if open_here > 0 {
                     title.push_str(&format!("  · {open_here} open"));
                 }
+                let required = missing.iter().filter(|f| Section::of_required(**f) == section).count();
+                if required > 0 {
+                    let (glyph, word, _) = crate::status::look("required_missing");
+                    title.push_str(&format!("  {glyph} {required} {word}"));
+                }
                 let color = if self.current == section { colors().focus } else if changed.contains(&section) { colors().info } else { colors().text_strong };
                 let caret = if open { egui_phosphor::regular::CARET_DOWN } else { egui_phosphor::regular::CARET_RIGHT };
                 let header = item(ui, Entry { section, item: SpecItem::Header }, &mut |ui| {
-                    ui.add(egui::Label::new(RichText::new(format!("{caret} {title}")).strong().size(13.0).color(color)).sense(egui::Sense::click()));
+                    ui.add(egui::Label::new(RichText::new(format!("{caret} {title}")).strong().size(crate::theme::look().text_title).color(color)).sense(egui::Sense::click()));
                 });
                 if header.interact(egui::Sense::click()).clicked() {
                     clicked = Some(Click::Header(section));
@@ -566,12 +691,24 @@ impl SpecState {
                 if !open {
                     continue;
                 }
+                let required_here: Vec<&arch_graph::RequiredField> = missing.iter().filter(|f| Section::of_required(**f) == section).collect();
                 ui.indent(("spec", section as u8), |ui| {
+                    // What this type needs here and doesn't have yet.
+                    for field in &required_here {
+                        ui.horizontal_wrapped(|ui| {
+                            crate::status::chip(ui, "required_missing", None);
+                            ui.label(RichText::new(format!("{}: none yet, required for a {type_name}.", field.name().replace('_', " "))).size(crate::theme::look().text_body).color(colors().text));
+                        });
+                    }
                     match section {
                         Section::Overview => {
-                            ui.label(RichText::new(&c.name).size(16.0).strong());
-                            ui.label(RichText::new(c.id.as_str()).monospace().size(11.0).color(colors().muted));
-                            ui.label(format!("{} · {:?} · {:?} · {:?}", c.type_name, c.status, c.stage, detail.alignment));
+                            ui.label(RichText::new(&c.name).size(crate::theme::look().text_display).strong());
+                            ui.label(RichText::new(c.id.as_str()).monospace().size(crate::theme::look().text_body).color(colors().muted));
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(format!("{} · {:?}", c.type_name, c.status));
+                                crate::status::chip(ui, crate::status::stage(c.stage), None);
+                                crate::status::chip(ui, crate::status::alignment(detail.alignment), None);
+                            });
                             match (&c.anchor, &c.proposed) {
                                 (Some(a), _) => ui.label(RichText::new(format!("{} ({}:{}–{})", a.symbol, a.file, a.span.start_line, a.span.end_line)).monospace()),
                                 (None, Some(p)) => ui.label(RichText::new(format!("planned as {} in {}", p.symbol, p.file)).monospace().color(colors().warn)),
@@ -631,7 +768,7 @@ impl SpecState {
                                 if heading != Some((*kind, *outgoing)) {
                                     heading = Some((*kind, *outgoing));
                                     let label = if *outgoing { format!("{} {}", kind.name(), egui_phosphor::regular::ARROW_RIGHT) } else { format!("{} {}", egui_phosphor::regular::ARROW_LEFT, kind.name()) };
-                                    ui.label(RichText::new(label).size(11.0).color(colors().muted));
+                                    ui.label(RichText::new(label).size(crate::theme::look().text_body).color(colors().muted));
                                 }
                                 // The component's own name; its full id on hover.
                                 let symbol = other.as_str().split_once(':').map_or(other.as_str(), |(_, s)| s);
@@ -639,7 +776,7 @@ impl SpecState {
                                 let entry = Entry { section, item: SpecItem::Relation { kind: *kind, other: other.clone(), outgoing: *outgoing } };
                                 let mut followed = false;
                                 item(ui, entry, &mut |ui| {
-                                    followed |= ui.link(RichText::new(&name).monospace().size(11.0)).on_hover_text(format!("{} (Enter)", other.as_str())).clicked();
+                                    followed |= ui.link(RichText::new(&name).monospace().size(crate::theme::look().text_body)).on_hover_text(format!("{} (Enter)", other.as_str())).clicked();
                                 });
                                 if followed {
                                     clicked = Some(Click::Follow(other.clone()));
@@ -651,7 +788,7 @@ impl SpecState {
                                 if self.out_of_date {
                                     ui.horizontal_wrapped(|ui| {
                                         crate::status::chip(ui, "stale", None);
-                                        ui.label(RichText::new("This code changed since it was indexed; the excerpt may be old.").size(11.0).color(colors().muted));
+                                        ui.label(RichText::new("This code changed since it was indexed; the excerpt may be old.").size(crate::theme::look().text_body).color(colors().muted));
                                         if ui.small_button("Re-read it").clicked() {
                                             clicked = Some(Click::Reread);
                                         }
@@ -659,8 +796,8 @@ impl SpecState {
                                 }
                                 let mut open_code = false;
                                 item(ui, Entry { section, item: SpecItem::Source }, &mut |ui| {
-                                    egui::Frame::NONE.fill(colors().bg).inner_margin(6).corner_radius(4).show(ui, |ui| {
-                                        ui.label(RichText::new(code).monospace().size(11.0));
+                                    egui::Frame::NONE.fill(colors().bg).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).corner_radius(crate::theme::look().radius_m).show(ui, |ui| {
+                                        ui.label(RichText::new(code).monospace().size(crate::theme::look().text_body));
                                     });
                                     open_code |= ui.button("Open in the code view").on_hover_text("g d").clicked();
                                 });
@@ -688,16 +825,23 @@ impl SpecState {
                             } else if self.findings.is_empty() {
                                 ui.label(RichText::new("No findings.").color(colors().ok));
                             }
-                            for (i, f) in self.findings.iter().enumerate() {
-                                let color = match f.severity {
-                                    Severity::Error => colors().error,
-                                    Severity::Warning => colors().warn,
-                                    Severity::Info => colors().muted,
-                                };
+                            // Worst first.
+                            let mut order: Vec<usize> = (0..self.findings.len()).collect();
+                            order.sort_by_key(|i| match self.findings[*i].severity {
+                                Severity::Error => 0,
+                                Severity::Warning => 1,
+                                Severity::Info => 2,
+                            });
+                            for i in order {
+                                let f = &self.findings[i];
+                                let (_, _, color) = crate::status::look(crate::status::severity(f.severity));
                                 item(ui, Entry { section, item: SpecItem::Finding(i) }, &mut |ui| {
-                                    ui.label(RichText::new(&f.message).color(color));
+                                    ui.horizontal_wrapped(|ui| {
+                                        crate::status::chip(ui, crate::status::severity(f.severity), None);
+                                        ui.label(RichText::new(&f.message).color(color));
+                                    });
                                     if let Some(s) = &f.suggestion {
-                                        ui.label(RichText::new(s).size(11.0).color(colors().muted));
+                                        ui.label(RichText::new(s).size(crate::theme::look().text_body).color(colors().muted));
                                     }
                                 });
                             }
@@ -734,14 +878,15 @@ impl SpecState {
     /// the composer when writing a comment, reply or reason to reopen.
     fn render_review_bar(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         if let Some(id) = &self.target {
-            let fields = self.diff.fields(id);
+            // Items that changed carry their own mark; the line names the fields.
+            let fields: Vec<String> = self.diff.fields(id).into_iter().filter(|f| f.rsplit('.').next().is_none_or(|last| last.parse::<usize>().is_err())).collect();
             if !fields.is_empty() {
                 let since = self.diff.since.as_deref().map_or_else(|| "new in this plan (never reviewed)".to_owned(), |at| format!("changed since the review at {at}"));
-                ui.label(RichText::new(format!("{} {since}: {}", egui_phosphor::regular::DOT, fields.into_iter().collect::<Vec<_>>().join(", "))).size(11.0).color(colors().info));
+                ui.label(RichText::new(format!("{} {since}: {}", egui_phosphor::regular::DOT, fields.into_iter().collect::<Vec<_>>().join(", "))).size(crate::theme::look().text_body).color(colors().info));
             }
         }
         if let Some(note) = &self.note {
-            ui.label(RichText::new(note).size(11.0).color(colors().error));
+            ui.label(RichText::new(note).size(crate::theme::look().text_body).color(colors().error));
         }
         let Some(composer) = self.composer.as_mut() else { return };
         let what = match (&composer.purpose, &composer.anchor) {
@@ -755,7 +900,7 @@ impl SpecState {
             (Compose::Reply(id), _) => format!("Reply to {id}"),
             (Compose::Reopen(id), _) => format!("Why reopen {id}?"),
         };
-        ui.label(RichText::new(what).size(11.0).color(colors().muted));
+        ui.label(RichText::new(what).size(crate::theme::look().text_body).color(colors().muted));
         let inserting = *cx.input_mode == crate::keymap::InputMode::Insert { slot: cx.slot };
         let output = ui.add(egui::TextEdit::multiline(&mut composer.text).id(egui::Id::new(("spec_composer", cx.slot))).desired_rows(2).desired_width(f32::INFINITY).hint_text("Enter sends, Shift+Enter for a new line, Esc leaves"));
         if inserting {
@@ -801,27 +946,27 @@ fn render_thread(ui: &mut egui::Ui, c: &Comment, point: Option<&CommentId>, sect
         CommentStatus::Resolved => ("RESOLVED", colors().ok),
     };
     let stroke = if point == Some(&c.id) { colors().focus } else { colors().border };
-    egui::Frame::NONE.fill(colors().surface).stroke(egui::Stroke::new(1.0, stroke)).corner_radius(4).inner_margin(6).show(ui, |ui| {
+    egui::Frame::NONE.fill(colors().surface).stroke(egui::Stroke::new(crate::theme::look().line_thin, stroke)).corner_radius(crate::theme::look().radius_m).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         item(ui, Entry { section, item: SpecItem::Comment(c.id.clone()) }, &mut |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(label).size(10.0).strong().color(color));
+                ui.label(RichText::new(label).size(crate::theme::look().text_small).strong().color(color));
                 if c.kind == CommentKind::ChangeRequest {
-                    ui.label(RichText::new("change request").size(10.0).color(colors().special));
+                    ui.label(RichText::new("change request").size(crate::theme::look().text_small).color(colors().special));
                 }
-                ui.label(RichText::new(format!("{} · {}", c.id, c.author)).size(10.0).color(colors().muted));
+                ui.label(RichText::new(format!("{} · {}", c.id, c.author)).size(crate::theme::look().text_small).color(colors().muted));
             });
             ui.label(&c.text);
         });
         for (i, r) in c.replies.iter().enumerate() {
             item(ui, Entry { section, item: SpecItem::Reply(c.id.clone(), i) }, &mut |ui| {
-                ui.label(RichText::new(format!("{}: {}", r.author, r.text)).size(11.0).color(colors().text));
+                ui.label(RichText::new(format!("{}: {}", r.author, r.text)).size(crate::theme::look().text_body).color(colors().text));
             });
         }
         if let Some(a) = &c.answer {
-            ui.label(RichText::new(format!("{} {}: {}", egui_phosphor::regular::ARROW_ELBOW_DOWN_RIGHT, a.author, a.text)).size(11.0).color(colors().info));
+            ui.label(RichText::new(format!("{} {}: {}", egui_phosphor::regular::ARROW_ELBOW_DOWN_RIGHT, a.author, a.text)).size(crate::theme::look().text_body).color(colors().info));
             for ch in &a.changes {
-                ui.label(RichText::new(format!("   {}", ch.describe())).size(10.0).monospace().color(colors().muted));
+                ui.label(RichText::new(format!("   {}", ch.describe())).size(crate::theme::look().text_small).monospace().color(colors().muted));
             }
         }
         if !c.is_addressed() {
@@ -1377,5 +1522,96 @@ pub(crate) mod tests {
         s.composer.as_mut().unwrap().text = "Steps 2 and 3 are one step.".into();
         s.send_composer(&net, &ctx);
         assert!(s.composer.is_none(), "sent");
+    }
+
+    /// Every text a frame draws, one per line.
+    fn drawn(s: &mut SpecState, ctx: &egui::Context) -> String {
+        let (net, mut mode, mut note) = (NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
+        let out = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] });
+            });
+        });
+        fn collect(shape: &egui::Shape, out: &mut String) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    out.push_str(t.galley.text());
+                    out.push('\n');
+                }
+                egui::Shape::Vec(list) => list.iter().for_each(|s| collect(s, out)),
+                _ => {}
+            }
+        }
+        let mut text = String::new();
+        out.shapes.iter().for_each(|c| collect(&c.shape, &mut text));
+        text
+    }
+
+    // req: V.1, V.2, V.3, V.4
+    #[test]
+    fn the_spec_opens_with_a_header_says_whats_missing_and_marks_changed_items() {
+        use crate::review::tests::comment;
+        use arch_graph::{Change, CommentStatus, Finding, FindingCode, Target};
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        crate::status::set(config.status.clone());
+        let ctx = egui::Context::default();
+        crate::theme::set(config.theme.clone(), &ctx);
+        let word = |name: &str| crate::status::look(name).1;
+        let (id, other) = (ComponentId::new("rust:a::step"), ComponentId::new("rust:a::run"));
+        let plan = PlanId::new("p").unwrap();
+        let mut s = SpecState::default();
+        s.follow(Some(&id), Some(&plan));
+        let mut d = detail(&id, &other);
+        d.component.description.clear();
+        s.detail = Some(d);
+        s.loaded = Some((id.clone(), Some(plan)));
+        // The type wants a description and a signature; this one has neither.
+        s.types = Some(arch_graph::TypeSystem::from_toml("[types.function]\nrequired_fields = [\"description\", \"signature\", \"logic_steps\"]").unwrap());
+        assert_eq!(s.missing_required(), [arch_graph::RequiredField::Description, arch_graph::RequiredField::Signature]);
+        s.comments = vec![comment(1, CommentAnchor::Component { id: id.clone() }, CommentStatus::Open)];
+        // The second step and the call changed; the first step didn't.
+        s.diff = PlanDiff {
+            since: Some("2026-10-03T09:00:00Z".into()),
+            changes: vec![
+                Change::ComponentChanged { id: id.clone(), fields: vec!["spec.logic_steps".into(), "spec.logic_steps.1".into()] },
+                Change::RelationAdded { kind: RelationKind::Calls, source: id.clone(), target: other.clone() },
+            ],
+        };
+        s.findings = vec![
+            Finding::info(FindingCode::MissingCallSite, Target::Component { id: id.clone() }, "a note"),
+            Finding::error(FindingCode::MissingCallSite, Target::Component { id: id.clone() }, "a problem"),
+        ];
+        let text = drawn(&mut s, &ctx);
+        let text = drawn(&mut s, &ctx).max(text);
+
+        // V.2: the header names it, links its place, shows how far along it is and what needs looking at.
+        for expected in ["step", "function", "rust:a::step", "src/a.rs (planned)", &word("planned"), &format!("1 {}", word("open_comments")), &word("changed")] {
+            assert!(text.contains(expected), "header shows {expected}: {text}");
+        }
+        for stage in arch_graph::Stage::ALL {
+            assert!(text.contains(&word(crate::status::stage(stage))), "the track names {stage:?}");
+        }
+        // V.1: states are icon and word, not colour alone.
+        let (glyph, _, _) = crate::status::look("planned");
+        assert!(text.contains(&format!("{glyph} {}", word("planned"))), "icon with the word");
+        assert!(!text.contains("PlanApproved") && !text.contains("Planned\n"), "no raw names: {text}");
+        // V.3: sections say what the type needs and doesn't have; findings come worst first.
+        assert!(text.contains(&format!("2 {}", word("required_missing"))), "the header counts it");
+        let title = |name: &str| text.lines().find(|l| l.trim_start().contains(name) && l.contains("  ")).unwrap_or_default().to_owned();
+        assert!(title("Overview").contains(&format!("{} 1 {}", crate::status::look("required_missing").0, word("required_missing"))), "{text}");
+        assert!(title("Signature").contains(&format!("1 {}", word("required_missing"))), "{text}");
+        assert!(text.contains("spec.logic_steps") && !text.contains("spec.logic_steps.1"), "the review line names fields, not items");
+        assert!(text.contains("description: none yet, required for a function.") && text.contains("signature: none yet, required for a function."));
+        assert!(!text.contains("logic steps: none yet"), "it has logic steps");
+        assert!(text.find("a problem") < text.find("a note") && text.contains(&word("severity_error")), "worst first, with its severity");
+        let spots: Vec<String> = s.spots().into_iter().map(|sp| sp.key).collect();
+        let at = |i: usize| spots.iter().position(|k| *k == Entry { section: Section::Findings, item: SpecItem::Finding(i) }.key());
+        assert!(at(1) < at(0), "the error's item comes first: {spots:?}");
+        // V.4: the changed step and the changed relation are marked, the unchanged step isn't.
+        let changed = s.changed_items();
+        assert!(changed.contains(&Entry { section: Section::Logic, item: SpecItem::Step(1) }.key()));
+        assert!(changed.contains(&Entry { section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: other.clone(), outgoing: true } }.key()));
+        assert!(!changed.contains(&Entry { section: Section::Logic, item: SpecItem::Step(0) }.key()));
+        assert_eq!(changed.len(), 2);
     }
 }

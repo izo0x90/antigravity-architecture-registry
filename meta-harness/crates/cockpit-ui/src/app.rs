@@ -1,4 +1,4 @@
-use egui::{Color32, Frame, Margin, RichText, Stroke};
+use egui::{Color32, Frame, RichText, Stroke};
 
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
@@ -215,6 +215,7 @@ pub struct CockpitApp {
     /// Code indexing: running or not, progress, last run, stale files.
     pub index: arch_graph::IndexStatus,
     index_inbox: Arc<Mutex<Vec<NetResult<arch_graph::IndexStatus>>>>,
+    types_inbox: Arc<Mutex<Option<NetResult<arch_graph::TypeSystem>>>>,
     /// A short note in the key bar (why something didn't happen), and since when.
     pub note: Option<String>,
     note_since: Option<f64>,
@@ -267,9 +268,9 @@ impl ActivityLed {
             let fill = if lit { color } else { color.gamma_multiply(0.25) };
             ui.painter().circle_filled(rect.center(), 4.0, fill);
             if lit && color != colors().faint {
-                ui.painter().circle_stroke(rect.center(), 5.5, Stroke::new(1.0, color.gamma_multiply(0.35)));
+                ui.painter().circle_stroke(rect.center(), 5.5, Stroke::new(crate::theme::look().line_thin, color.gamma_multiply(0.35)));
             }
-            ui.label(RichText::new(label).monospace().size(10.0).color(colors().muted));
+            ui.label(RichText::new(label).monospace().size(crate::theme::look().text_small).color(colors().muted));
         })
         .response
         .on_hover_text(hover)
@@ -320,6 +321,7 @@ impl CockpitApp {
             at_inbox: Arc::default(),
             index: arch_graph::IndexStatus::default(),
             index_inbox: Arc::default(),
+            types_inbox: Arc::default(),
             note: None,
             note_since: None,
             key_sheet: None,
@@ -358,13 +360,23 @@ impl CockpitApp {
             // Auto-load dev feedback issues
             self.feedback.load_issues(&self.net, ctx.clone());
             self.fetch_index_status(ctx);
+            let types = self.types_inbox.clone();
+            self.net.arch_types(ctx.clone(), move |r| {
+                if let Ok(mut t) = types.lock() {
+                    *t = Some(r);
+                }
+            });
         }
 
         self.apply_user_config();
+        if let Some(Ok(types)) = self.types_inbox.lock().ok().and_then(|mut t| t.take()) {
+            self.spec.types = Some(types);
+        }
         if std::mem::take(&mut self.theme_dirty) {
             crate::theme::set(self.config.theme.clone(), ctx);
             crate::graph_style::set(self.config.graph_style.clone());
             crate::status::set(self.config.status.clone());
+            crate::theme::set_look(self.config.look.clone());
             self.net.set_backoff(self.config.net.reconnect_min_ms, self.config.net.reconnect_max_ms);
             self.graph.ui = self.config.graph.clone();
         }
@@ -1686,16 +1698,16 @@ impl CockpitApp {
         let top_rect = ui.available_rect_before_wrap();
         self.feedback.register_inspectable(ui, "top_bar", top_rect);
 
-        Frame::NONE.fill(colors().panel).inner_margin(Margin::symmetric(12, 6)).show(ui, |ui| {
+        Frame::NONE.fill(colors().panel).inner_margin(crate::theme::margin2(crate::theme::look().space_l, crate::theme::look().space_sm)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 let brand_res = ui.horizontal(|ui| {
                     let brand = &self.config.brand;
-                    ui.label(RichText::new(&brand.name).strong().size(13.0).color(colors().text_strong));
-                    ui.label(RichText::new(&brand.tagline).monospace().size(10.0).color(colors().accent));
+                    ui.label(RichText::new(&brand.name).strong().size(crate::theme::look().text_title).color(colors().text_strong));
+                    ui.label(RichText::new(&brand.tagline).monospace().size(crate::theme::look().text_small).color(colors().accent));
                 });
                 self.feedback.register_inspectable(ui, "top_bar:brand", brand_res.response.rect);
 
-                ui.add_space(8.0);
+                ui.add_space(crate::theme::look().space_m);
 
                 // Status LEDs: SRV = event WebSocket to the meta-harness server,
                 // AGENT = the agent session behind it. Both flicker on traffic.
@@ -1709,7 +1721,7 @@ impl CockpitApp {
                 let srv_res = self.srv_led.show(ui, "SRV", srv_color, srv_count, srv_hint);
                 self.feedback.register_inspectable(ui, "top_bar:connection_status", srv_res.rect);
 
-                ui.add_space(6.0);
+                ui.add_space(crate::theme::look().space_sm);
                 let (agent_color, agent_hint) = match &self.chat.session_status() {
                     SessionStatus::Idle => (colors().faint, "Agent: not connected".to_string()),
                     SessionStatus::Connecting => (colors().warn, "Agent: connecting…".to_string()),
@@ -1719,11 +1731,11 @@ impl CockpitApp {
                 let agent_res = self.agent_led.show(ui, "AGENT", agent_color, self.chat.agent_activity(), &agent_hint);
                 self.feedback.register_inspectable(ui, "top_bar:agent_status", agent_res.rect);
 
-                ui.add_space(6.0);
+                ui.add_space(crate::theme::look().space_sm);
                 let index_res = self.render_index_light(ui);
                 self.feedback.register_inspectable(ui, "top_bar:index_status", index_res.rect);
 
-                ui.add_space(8.0);
+                ui.add_space(crate::theme::look().space_m);
 
                 // Input mode indicator.
                 let (mode_label, mode_color, mode_bg) = match self.input_mode {
@@ -1753,12 +1765,12 @@ impl CockpitApp {
                     ),
                 };
 
-                Frame::NONE.fill(mode_bg).stroke(Stroke::new(1.0, mode_color)).corner_radius(3).inner_margin(Margin::symmetric(6, 2)).show(ui, |ui| {
-                    ui.label(RichText::new(mode_label).monospace().strong().size(10.5).color(mode_color));
+                Frame::NONE.fill(mode_bg).stroke(Stroke::new(crate::theme::look().line_thin, mode_color)).corner_radius(crate::theme::look().radius_s).inner_margin(crate::theme::margin2(crate::theme::look().space_sm, crate::theme::look().space_xs)).show(ui, |ui| {
+                    ui.label(RichText::new(mode_label).monospace().strong().size(crate::theme::look().text_small).color(mode_color));
                 });
 
                 if let Some(err) = &self.config_error {
-                    ui.label(RichText::new(format!("{} config", egui_phosphor::regular::WARNING)).size(11.0).color(colors().warn))
+                    ui.label(RichText::new(format!("{} config", egui_phosphor::regular::WARNING)).size(crate::theme::look().text_body).color(colors().warn))
                         .on_hover_text(format!("Your UI config was not applied (using defaults):\n{err}"));
                 }
 
@@ -1789,7 +1801,7 @@ impl CockpitApp {
                     }
                     self.feedback.register_inspectable(ui, "top_bar:issues_button", issues_btn.rect);
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::theme::look().space_m);
 
                     // This row runs right to left: add from the right end so
                     // it reads "Layout: 1 2 3".
@@ -1797,7 +1809,7 @@ impl CockpitApp {
                         for cols in (1..=MAX_SLOTS).rev() {
                             ui.selectable_value(&mut self.column_count, cols, cols.to_string());
                         }
-                        ui.label(RichText::new("Layout:").size(11.0).color(colors().muted));
+                        ui.label(RichText::new("Layout:").size(crate::theme::look().text_body).color(colors().muted));
                     });
                     self.feedback.register_inspectable(ui, "top_bar:layout_selector", layout_res.response.rect);
                 });
@@ -1831,7 +1843,7 @@ impl CockpitApp {
         let response = ui
             .horizontal(|ui| {
                 let led = self.index_led.show(ui, "INDEX", color, activity, &hover);
-                let text = ui.add(egui::Label::new(RichText::new(detail).size(10.0).color(color)).sense(egui::Sense::click())).on_hover_text(&hover);
+                let text = ui.add(egui::Label::new(RichText::new(detail).size(crate::theme::look().text_small).color(color)).sense(egui::Sense::click())).on_hover_text(&hover);
                 led.union(text)
             })
             .inner;
@@ -1842,36 +1854,45 @@ impl CockpitApp {
         response
     }
 
-    pub fn render_slot(&mut self, slot_idx: usize, ui: &mut egui::Ui, shell: &[Action]) {
+    /// Each view's tab key ("SPC b g"), in `BufferKind::ALL` order.
+    fn tab_keys(&self, shell: &[Action]) -> Vec<String> {
+        let bound = self.config.keymap.bind(shell.iter().map(|a| (Origin::Shell, a.clone())).collect());
+        BufferKind::ALL.iter().map(|kind| bound.iter().find(|b| b.action.id == format!("buffer.{}", kind.name())).map(Bound::key_hint).unwrap_or_default()).collect()
+    }
+
+    pub fn render_slot(&mut self, slot_idx: usize, ui: &mut egui::Ui, shell: &[Action], tab_keys: &[String]) {
         let is_focused = self.focused_slot == slot_idx;
         let border_color = if is_focused { colors().focus } else { colors().border };
 
         let slot_id = format!("slot_{}", slot_idx + 1);
         self.feedback.register_inspectable(ui, &slot_id, ui.available_rect_before_wrap());
 
-        Frame::NONE.fill(colors().bg).stroke(Stroke::new(1.0, border_color)).corner_radius(4).inner_margin(Margin::same(8)).show(ui, |ui| {
+        Frame::NONE.fill(colors().bg).stroke(Stroke::new(crate::theme::look().line_thin, border_color)).corner_radius(crate::theme::look().radius_m).inner_margin(crate::theme::margin(crate::theme::look().space_m)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.set_height(ui.available_height());
 
             ui.vertical(|ui| {
                 let active_kind = self.slot_buffers[slot_idx];
                 let is_compact = ui.available_width() < 340.0;
-                // Full tab captions only when they all fit; otherwise icons
-                // (the active tab keeps its name). The row wraps rather than
-                // widen the slot.
-                let tab_captions = ui.available_width() >= 120.0 * BufferKind::ALL.len() as f32;
 
+                // Quiet chrome: the slot's number, then a tab per view as an
+                // icon (the active one named), each saying its name and key on
+                // hover. The row wraps rather than widen the slot.
                 let header_res = ui.horizontal_wrapped(|ui| {
-                    let title_text = if is_compact { format!("[S{}]", slot_idx + 1) } else { format!("[SLOT {}: {}]", slot_idx + 1, active_kind.title()) };
-                    let slot_label = ui.selectable_label(is_focused, RichText::new(title_text).strong().monospace().size(11.0));
-                    if slot_label.clicked() {
+                    let number_color = if is_focused { colors().focus } else { colors().faint };
+                    let slot_label = ui.add(egui::Label::new(RichText::new((slot_idx + 1).to_string()).strong().monospace().size(crate::theme::look().text_body).color(number_color)).sense(egui::Sense::click()));
+                    if slot_label.on_hover_text(format!("Slot {}: {}", slot_idx + 1, active_kind.title().to_lowercase())).clicked() {
                         self.focused_slot = slot_idx;
                     }
-                    for kind in BufferKind::ALL {
+                    for (n, kind) in BufferKind::ALL.into_iter().enumerate() {
                         let title = kind.title();
-                        let named = !is_compact && (tab_captions || self.slot_buffers[slot_idx] == kind);
-                        let label = if named { format!("{} {}{}", kind.icon(), &title[..1], title[1..].to_lowercase()) } else { kind.icon().to_owned() };
-                        let tab = ui.selectable_value(&mut self.slot_buffers[slot_idx], kind, label);
+                        let name = format!("{}{}", &title[..1], title[1..].to_lowercase());
+                        let label = if !is_compact && active_kind == kind { format!("{} {name}", kind.icon()) } else { kind.icon().to_owned() };
+                        let tip = match tab_keys.get(n).filter(|k| !k.is_empty()) {
+                            Some(key) => format!("{name} ({key})"),
+                            None => name,
+                        };
+                        let tab = ui.selectable_value(&mut self.slot_buffers[slot_idx], kind, label).on_hover_text(tip);
                         if tab.clicked() {
                             self.focused_slot = slot_idx;
                         }
@@ -1946,10 +1967,10 @@ impl CockpitApp {
 
         egui::Area::new(egui::Id::new("which_key_floating_hud")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0)).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
             ui.set_max_width(hud_w);
-            Frame::NONE.fill(colors().overlay).stroke(Stroke::new(1.0, colors().focus)).corner_radius(8).inner_margin(Margin::symmetric(14, 6)).show(ui, |ui| {
+            Frame::NONE.fill(colors().overlay).stroke(Stroke::new(crate::theme::look().line_thin, colors().focus)).corner_radius(crate::theme::look().radius_xl).inner_margin(crate::theme::margin2(crate::theme::look().space_xl, crate::theme::look().space_sm)).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.colored_label(colors().info, RichText::new(self.leader_title(&self.config.keymap.leader.label().to_uppercase())).strong().monospace().size(11.0));
-                    let esc = egui::Button::new(RichText::new(self.config.keymap.back.label()).color(colors().key).monospace().size(11.0)).corner_radius(4);
+                    ui.colored_label(colors().info, RichText::new(self.leader_title(&self.config.keymap.leader.label().to_uppercase())).strong().monospace().size(crate::theme::look().text_body));
+                    let esc = egui::Button::new(RichText::new(self.config.keymap.back.label()).color(colors().key).monospace().size(crate::theme::look().text_body)).corner_radius(crate::theme::look().radius_m);
                     if ui.add(esc).clicked() {
                         back = true;
                     }
@@ -1964,7 +1985,7 @@ impl CockpitApp {
                 for (heading, block) in blocks.iter().filter(|(_, b)| !b.is_empty()) {
                     match heading {
                         Some(name) => {
-                            ui.label(RichText::new(*name).monospace().strong().size(10.0).color(colors().focus));
+                            ui.label(RichText::new(*name).monospace().strong().size(crate::theme::look().text_small).color(colors().focus));
                         }
                         None if blocks[0].1.is_empty() => {}
                         None => {
@@ -1987,12 +2008,12 @@ impl CockpitApp {
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 4.0;
                                     let fill = if primary { colors().focus } else { colors().overlay_raised };
-                                    let btn = egui::Button::new(RichText::new(key.to_string()).color(colors().key).monospace().strong().size(11.0)).fill(fill).corner_radius(4);
+                                    let btn = egui::Button::new(RichText::new(key.to_string()).color(colors().key).monospace().strong().size(crate::theme::look().text_body)).fill(fill).corner_radius(crate::theme::look().radius_m);
                                     if ui.add(btn).clicked() {
                                         tapped = Some(key);
                                     }
                                     let color = if primary { colors().text_strong } else { colors().text };
-                                    ui.add(egui::Label::new(RichText::new(label).size(11.0).color(color)).truncate());
+                                    ui.add(egui::Label::new(RichText::new(label).size(crate::theme::look().text_body).color(color)).truncate());
                                 });
                             });
                         }
@@ -2012,7 +2033,7 @@ impl CockpitApp {
     /// The palette overlay plus a floating button that opens it (touch entry point).
     pub fn render_palette(&mut self, ctx: &egui::Context) {
         egui::Area::new(egui::Id::new("palette_touch_button")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -48.0)).order(egui::Order::Foreground).show(ctx, |ui| {
-            let button = egui::Button::new(RichText::new(format!("{} Actions", egui_phosphor::regular::COMMAND)).size(13.0)).fill(colors().overlay_raised).corner_radius(16);
+            let button = egui::Button::new(RichText::new(format!("{} Actions", egui_phosphor::regular::COMMAND)).size(crate::theme::look().text_title)).fill(colors().overlay_raised).corner_radius(crate::theme::look().radius_pill);
             if ui.add(button).on_hover_text("Command palette").clicked() {
                 self.open_palette(None);
             }
@@ -2081,10 +2102,10 @@ impl CockpitApp {
         egui::TopBottomPanel::bottom("key_bar").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if let Some((text, color)) = &status {
-                    ui.label(RichText::new(text).monospace().size(11.0).color(*color));
+                    ui.label(RichText::new(text).monospace().size(crate::theme::look().text_body).color(*color));
                 }
                 if let Some(note) = &self.note {
-                    ui.label(RichText::new(note).size(11.0).color(colors().warn));
+                    ui.label(RichText::new(note).size(crate::theme::look().text_body).color(colors().warn));
                 }
                 if !show_keys {
                     return;
@@ -2100,14 +2121,14 @@ impl CockpitApp {
                 };
                 if let Some(typing) = typing {
                     for (keys, what) in typing {
-                        ui.label(RichText::new(format!("{keys} {what}")).size(11.0).color(colors().muted));
+                        ui.label(RichText::new(format!("{keys} {what}")).size(crate::theme::look().text_body).color(colors().muted));
                     }
                     return;
                 }
                 for b in self.bar_keys(&bound) {
                     let keys = b.keys.first().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" ")).unwrap_or_default();
-                    let text = RichText::new(format!("{keys} {}", b.action.label)).size(if narrow { 13.0 } else { 11.0 });
-                    let mut button = egui::Button::new(text).corner_radius(4);
+                    let text = RichText::new(format!("{keys} {}", b.action.label)).size(if narrow { crate::theme::look().text_title } else { crate::theme::look().text_body });
+                    let mut button = egui::Button::new(text).corner_radius(crate::theme::look().radius_m);
                     if narrow {
                         button = button.min_size(egui::vec2(32.0, 32.0));
                     }
@@ -2157,18 +2178,18 @@ impl CockpitApp {
         };
         let title = if waiting { self.pending_keys.iter().map(Chord::label).collect::<Vec<_>>().join(" ") + " …" } else { "marks".into() };
         egui::Area::new(egui::Id::new("prefix_popup")).anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0)).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
-            Frame::NONE.fill(colors().overlay).stroke(Stroke::new(1.0, colors().focus)).corner_radius(8).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
-                ui.label(RichText::new(title).monospace().strong().size(11.0).color(colors().info));
+            Frame::NONE.fill(colors().overlay).stroke(Stroke::new(crate::theme::look().line_thin, colors().focus)).corner_radius(crate::theme::look().radius_xl).inner_margin(crate::theme::margin2(crate::theme::look().space_l, crate::theme::look().space_m)).show(ui, |ui| {
+                ui.label(RichText::new(title).monospace().strong().size(crate::theme::look().text_body).color(colors().info));
                 if rows.is_empty() {
-                    ui.label(RichText::new("nothing applies here").size(11.0).color(colors().muted));
+                    ui.label(RichText::new("nothing applies here").size(crate::theme::look().text_body).color(colors().muted));
                 }
                 for (keys, label) in rows {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(keys).monospace().strong().size(11.0).color(colors().key));
-                        ui.label(RichText::new(label).size(11.0).color(colors().text));
+                        ui.label(RichText::new(keys).monospace().strong().size(crate::theme::look().text_body).color(colors().key));
+                        ui.label(RichText::new(label).size(crate::theme::look().text_body).color(colors().text));
                     });
                 }
-                ui.label(RichText::new(format!("{} to cancel", self.config.keymap.back.label())).size(10.0).color(colors().muted));
+                ui.label(RichText::new(format!("{} to cancel", self.config.keymap.back.label())).size(crate::theme::look().text_small).color(colors().muted));
             });
         });
     }
@@ -2192,7 +2213,7 @@ impl CockpitApp {
             egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
                 let matches = |b: &&&Bound| filter.trim().is_empty() || format!("{} {} {}", b.action.label, b.action.id, keys_of(b)).to_lowercase().contains(&filter.trim().to_lowercase());
                 if !rows.iter().any(|b| matches(&b)) {
-                    ui.label(RichText::new("No keys match.").size(11.0).color(colors().muted));
+                    ui.label(RichText::new("No keys match.").size(crate::theme::look().text_body).color(colors().muted));
                 }
                 for group in Group::ALL {
                     let mut in_group: Vec<&&Bound> = rows.iter().filter(|b| b.action.group == group).filter(matches).collect();
@@ -2200,16 +2221,16 @@ impl CockpitApp {
                         continue;
                     }
                     in_group.sort_by_key(|b| (b.origin != focused, b.action.importance));
-                    ui.label(RichText::new(group.title()).strong().size(12.0).color(colors().info));
+                    ui.label(RichText::new(group.title()).strong().size(crate::theme::look().text_label).color(colors().info));
                     egui::Grid::new(("key_sheet", group as u8)).num_columns(2).spacing(egui::vec2(16.0, 2.0)).show(ui, |ui| {
                         for b in in_group {
                             let applies = b.action.when.holds(&situation);
-                            ui.label(RichText::new(keys_of(b)).monospace().size(11.0).color(colors().key));
-                            ui.label(RichText::new(&b.action.label).size(11.0).color(if applies { colors().text } else { colors().faint }));
+                            ui.label(RichText::new(keys_of(b)).monospace().size(crate::theme::look().text_body).color(colors().key));
+                            ui.label(RichText::new(&b.action.label).size(crate::theme::look().text_body).color(if applies { colors().text } else { colors().faint }));
                             ui.end_row();
                         }
                     });
-                    ui.add_space(4.0);
+                    ui.add_space(crate::theme::look().space_s);
                 }
             });
         });
@@ -2231,7 +2252,7 @@ impl CockpitApp {
             if !label.starts_with(&hint.typed) {
                 continue;
             }
-            let galley = painter.layout_no_wrap(label.to_uppercase(), egui::FontId::monospace(13.0), colors().on_bright);
+            let galley = painter.layout_no_wrap(label.to_uppercase(), egui::FontId::monospace(crate::theme::look().text_title), colors().on_bright);
             let chip = hint_chip(spot.rect, galley.size() + egui::vec2(8.0, 4.0), self.slot_rects[hint.slot], &taken);
             taken.push(chip);
             painter.rect_filled(chip, 3.0, colors().key);
@@ -2316,11 +2337,12 @@ impl CockpitApp {
         self.render_key_bar(ctx);
 
         let shell = self.shell_actions();
+        let tab_keys = self.tab_keys(&shell);
         egui::CentralPanel::default().show(ctx, |ui| {
             let col_count = self.column_count.clamp(1, 3);
             ui.columns(col_count, |cols| {
                 for (i, col) in cols.iter_mut().enumerate() {
-                    self.render_slot(i, col, &shell);
+                    self.render_slot(i, col, &shell, &tab_keys);
                 }
             });
         });
@@ -2544,6 +2566,23 @@ mod tests {
         assert_eq!(selected(&app), "rust:a::step");
     }
 
+    // req: V.6
+    #[test]
+    fn tabs_are_icons_that_name_themselves_and_their_key() {
+        let (ctx, mut app) = app_with_graph();
+        let shell = app.shell_actions();
+        let keys = app.tab_keys(&shell);
+        let at = |kind: BufferKind| BufferKind::ALL.iter().position(|k| *k == kind).unwrap();
+        assert_eq!((keys[at(BufferKind::Graph)].as_str(), keys[at(BufferKind::Queue)].as_str()), ("SPC b g", "SPC b q"));
+        // Only each slot's active tab is named.
+        let text = texts(&frame(&ctx, &mut app, vec![]));
+        let named = |kind: BufferKind| text.lines().any(|l| l == format!("{} {}{}", kind.icon(), &kind.title()[..1], kind.title()[1..].to_lowercase()));
+        let active: Vec<BufferKind> = app.slot_buffers.iter().take(app.column_count.clamp(1, 3)).copied().collect();
+        for kind in BufferKind::ALL {
+            assert_eq!(named(kind), active.contains(&kind), "{kind:?}: {text}");
+        }
+    }
+
     // req: P9.8
     #[test]
     fn inspector_summarizes_the_selection_and_links_onward() {
@@ -2553,7 +2592,7 @@ mod tests {
         app.graph = showing(result);
         app.graph.select(Some(ComponentId::new("rust:a::step")));
         let text = texts(&frame(&ctx, &mut app, vec![]));
-        for expected in ["rust:a::step", "function · Existing · Implemented", "src/a.rs:10–20", "Spec view", "Code", "calls", "save", "run"] {
+        for expected in ["rust:a::step", "function · Existing", "implemented", "src/a.rs:10–20", "Spec view", "Code", "calls", "save", "run"] {
             assert!(text.contains(expected), "drawer shows {expected}: {text}");
         }
         frame(&ctx, &mut app, key("x"));

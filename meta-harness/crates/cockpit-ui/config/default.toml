@@ -220,45 +220,87 @@ I = "Index"
 "index.file" = { leader = "I f" }
 
 # Colors by role: "#rrggbb" or "#rrggbbaa".
+# Sizes, in points: text, the spacing scale, corners, lines, and effects.
+# Views use these names, never numbers of their own.
+[look]
+text_tiny = 9.0
+text_small = 10.0
+text_body = 11.0
+text_label = 12.0
+text_title = 13.0
+text_heading = 14.0
+text_display = 16.0
+space_hair = 1.0
+space_xs = 2.0
+space_s = 4.0
+space_sm = 6.0
+space_m = 8.0
+space_ml = 10.0
+space_l = 12.0
+space_xl = 16.0
+space_xxl = 24.0
+space_xxxl = 32.0
+space_huge = 48.0
+radius_s = 3.0
+radius_m = 4.0
+radius_l = 6.0
+radius_xl = 8.0
+radius_pill = 16.0
+line_thin = 1.0
+line_bold = 2.0
+# The selection's glow (points wide, and strength 0 to 1).
+glow_width = 6.0
+glow_alpha = 0.35
+# One beat of the pulse where the agent points, in seconds.
+pulse_seconds = 1.6
+# Planned connections' dashes move this many points a second (0: still).
+dash_speed = 18.0
+# How much what's not selected fades back (0 to 1).
+fade = 0.6
+# Background grid spacing in the graph (0: none).
+grid_step = 32.0
+
+# Colors by role: "#rrggbb" or "#rrggbbaa". A deep background, one electric
+# accent kept for focus and selection, and status colors used for status only.
 [theme]
-bg = "#0c0e12"
-panel = "#0e1117"
-surface = "#12161e"
-raised = "#1e2d41"
-selection = "#233755"
-border = "#1e2430"
-border_strong = "#2d374b"
-focus = "#508cdc"
-grid = "#6a88bf3c"
-text_strong = "#ffffff"
-text = "#c8d7e6"
-muted = "#a0a5af"
-faint = "#5a6e87"
-on_bright = "#000000"
-accent = "#64a0f0"
-info = "#8cc8ff"
-key = "#ffd700"
-ok = "#50c878"
-warn = "#fab432"
-error = "#f05050"
-special = "#b478ff"
-info_bg = "#141e30"
-ok_bg = "#14301e"
-warn_bg = "#241e12"
-error_bg = "#3c1418"
-special_bg = "#201c30"
-overlay = "#111621f5"
-overlay_raised = "#29384fdc"
-highlight = "#fab43223"
-card = "#12161e"
-card_selected = "#182230"
-card_special = "#161320"
-card_special_selected = "#201c30"
-card_ok = "#121a16"
-card_ok_selected = "#1a241e"
-chrome = "#1b1b1b"
-widget_selection = "#005c80"
-link = "#5aaaff"
+bg = "#080a0f"
+panel = "#0b0e14"
+surface = "#10141c"
+raised = "#182030"
+selection = "#0d2f3a"
+border = "#1a202b"
+border_strong = "#283244"
+focus = "#3ee6ff"
+grid = "#3ee6ff12"
+text_strong = "#f4f8ff"
+text = "#c6d3e3"
+muted = "#8a96a8"
+faint = "#4f5b6d"
+on_bright = "#041016"
+accent = "#3ee6ff"
+info = "#7cc4ff"
+key = "#ffd166"
+ok = "#4ade80"
+warn = "#fbbf24"
+error = "#f87171"
+special = "#c084fc"
+info_bg = "#0e1c2c"
+ok_bg = "#0f2418"
+warn_bg = "#241c0c"
+error_bg = "#2c1216"
+special_bg = "#1c1530"
+overlay = "#0b0f17f2"
+overlay_raised = "#1d2a3cdc"
+highlight = "#3ee6ff1c"
+card = "#0f141d"
+card_selected = "#0c2630"
+card_special = "#141022"
+card_special_selected = "#1c1630"
+card_ok = "#0e1914"
+card_ok_selected = "#12241b"
+chrome = "#0b0e14"
+widget_selection = "#0b4f5f"
+link = "#5fdcff"
 
 # How each state looks wherever it's shown: a word, an icon (by name) and a
 # theme colour (token name from [theme]). Views never colour a state alone.
@@ -281,6 +323,121 @@ color = "warn"
 word = "indexing failed"
 icon = "warning-octagon"
 color = "error"
+
+# Plan against code.
+[status.observed]
+word = "in code (no plan)"
+icon = "code"
+color = "muted"
+
+[status.planned]
+word = "planned, not built yet"
+icon = "circle-dashed"
+color = "warn"
+
+[status.missing]
+word = "planned, missing in code"
+icon = "warning-circle"
+color = "error"
+
+[status.present]
+word = "planned and in code"
+icon = "seal-check"
+color = "ok"
+
+# Review and work.
+[status.placeholders]
+word = "placeholders"
+icon = "hourglass"
+color = "warn"
+
+[status.open_comments]
+word = "open comments"
+icon = "chat-circle-dots"
+color = "warn"
+
+[status.changed]
+word = "changed since review"
+icon = "pencil-simple"
+color = "info"
+
+[status.required_missing]
+word = "required, missing"
+icon = "flag"
+color = "error"
+
+# Stages, in order.
+[status.stage_declared]
+word = "declared"
+icon = "lightbulb"
+color = "faint"
+
+[status.stage_arch_approved]
+word = "architecture approved"
+icon = "check-circle"
+color = "info"
+
+[status.stage_plan_approved]
+word = "plan approved"
+icon = "list-checks"
+color = "accent"
+
+[status.stage_skeleton]
+word = "skeleton"
+icon = "stack"
+color = "warn"
+
+[status.stage_implemented]
+word = "implemented"
+icon = "seal-check"
+color = "ok"
+
+# Queue jobs.
+[status.job_queued]
+word = "queued"
+icon = "circle"
+color = "muted"
+
+[status.job_running]
+word = "running"
+icon = "play"
+color = "info"
+
+[status.job_awaiting_approval]
+word = "needs your approval"
+icon = "hand"
+color = "warn"
+
+[status.job_retrying]
+word = "retrying"
+icon = "arrows-clockwise"
+color = "warn"
+
+[status.job_failed]
+word = "failed"
+icon = "x-circle"
+color = "error"
+
+[status.job_done]
+word = "done"
+icon = "check-circle"
+color = "ok"
+
+# Finding severities.
+[status.severity_error]
+word = "error"
+icon = "warning-octagon"
+color = "error"
+
+[status.severity_warning]
+word = "warning"
+icon = "warning"
+color = "warn"
+
+[status.severity_info]
+word = "note"
+icon = "eye"
+color = "muted"
 
 # How the graph looks. Colors are theme token names (from [theme] above).
 [graph_style.kinds]
@@ -357,3 +514,50 @@ reconnect_max_ms = 10000
 # once the cursor has rested this long.
 [links]
 follow_debounce_ms = 250
+
+# Presets: whole looks you can switch to with one setting at the top of your
+# UI config, e.g. `preset = "classic"`. A preset's sections are laid over the
+# rest (only what it sets changes).
+
+[presets.classic.theme]
+bg = "#0c0e12"
+panel = "#0e1117"
+surface = "#12161e"
+raised = "#1e2d41"
+selection = "#233755"
+border = "#1e2430"
+border_strong = "#2d374b"
+focus = "#508cdc"
+grid = "#6a88bf3c"
+text_strong = "#ffffff"
+text = "#c8d7e6"
+muted = "#a0a5af"
+faint = "#5a6e87"
+on_bright = "#000000"
+accent = "#64a0f0"
+info = "#8cc8ff"
+key = "#ffd700"
+ok = "#50c878"
+warn = "#fab432"
+error = "#f05050"
+special = "#b478ff"
+info_bg = "#141e30"
+ok_bg = "#14301e"
+warn_bg = "#241e12"
+error_bg = "#3c1418"
+special_bg = "#201c30"
+overlay = "#111621f5"
+overlay_raised = "#29384fdc"
+highlight = "#fab43223"
+card = "#12161e"
+card_selected = "#182230"
+card_special = "#161320"
+card_special_selected = "#201c30"
+card_ok = "#121a16"
+card_ok_selected = "#1a241e"
+chrome = "#1b1b1b"
+widget_selection = "#005c80"
+link = "#5aaaff"
+
+# How each state looks wherever it's shown: a word, an icon (by name) and a
+# theme colour (token name from [theme]). Views never colour a state alone.

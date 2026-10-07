@@ -15,7 +15,7 @@ use egui::{Align2, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKin
 use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, ToolbarStyle, ToolbarUse, toolbar_control};
 use crate::feedback::FeedbackInspectorState;
 use crate::graph_config::{ChipMode, GraphUi};
-use crate::graph_style::{LegendEntry, Swatch, alignment_label, provenance_of, style};
+use crate::graph_style::{LegendEntry, Swatch, provenance_of, style};
 use crate::nav::{Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
@@ -867,13 +867,22 @@ impl GraphState {
             (None, Some(p)) => format!("{} {}", egui_phosphor::regular::ARROW_RIGHT, p.file),
             (None, None) => "unplaced".to_owned(),
         };
+        // Each state with its icon and word, as everywhere else.
+        let badge = |name: &str, count: Option<usize>| {
+            let (glyph, word, _) = crate::status::look(name);
+            match count {
+                Some(n) => format!("{glyph} {n} {word}"),
+                None => format!("{glyph} {word}"),
+            }
+        };
+        let stage = badge(crate::status::stage(c.stage), None);
         if detail == Detail::Mid {
-            let placeholders = if c.placeholders.is_empty() { String::new() } else { format!(" · {} placeholders", c.placeholders.len()) };
-            out.push(line(LineRole::Meta, format!("{} · {:?}{placeholders}", c.type_name, c.stage)));
+            let placeholders = if c.placeholders.is_empty() { String::new() } else { format!(" · {}", badge("placeholders", Some(c.placeholders.len()))) };
+            out.push(line(LineRole::Meta, format!("{} · {stage}{placeholders}", c.type_name)));
             out.push(line(LineRole::Location, location));
             return out;
         }
-        out.push(line(LineRole::Meta, format!("{} · {:?} · {}", c.type_name, c.stage, alignment_label(alignment))));
+        out.push(line(LineRole::Meta, format!("{} · {stage} · {}", c.type_name, badge(crate::status::alignment(alignment), None))));
         if let Some(sig) = &c.signature {
             let params: Vec<String> = sig.params.iter().map(|p| p.ty.as_ref().map_or_else(|| p.name.clone(), |t| format!("{}: {t}", p.name))).collect();
             let returns = sig.returns.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
@@ -882,14 +891,14 @@ impl GraphState {
         out.push(line(LineRole::Location, location));
         let mut badges = Vec::new();
         if !c.placeholders.is_empty() {
-            badges.push(format!("{} placeholders", c.placeholders.len()));
+            badges.push(badge("placeholders", Some(c.placeholders.len())));
         }
         if let Some(mark) = self.marks.get(&c.id) {
             if mark.open > 0 {
-                badges.push(format!("{} open review points", mark.open));
+                badges.push(badge("open_comments", Some(mark.open)));
             }
             if mark.changed {
-                badges.push("changed since review".to_owned());
+                badges.push(badge("changed", None));
             }
         }
         if !badges.is_empty() {
@@ -957,6 +966,8 @@ impl GraphState {
         let response = ui.allocate_rect(canvas, Sense::click_and_drag());
         let painter = ui.painter_at(canvas);
         painter.rect_filled(canvas, 0.0, colors().bg);
+        self.draw_grid(&painter);
+        let time = ui.input(|i| i.time);
 
         if self.fit && self.result.is_some() {
             self.fit = false;
@@ -988,26 +999,31 @@ impl GraphState {
 
         match (&self.result, &self.load) {
             (_, Load::Failed(err)) if self.result.is_none() => {
-                painter.text(canvas.center(), Align2::CENTER_CENTER, format!("Couldn't load the view: {err}"), FontId::proportional(13.0), colors().error);
+                painter.text(canvas.center(), Align2::CENTER_CENTER, format!("Couldn't load the view: {err}"), FontId::proportional(crate::theme::look().text_title), colors().error);
             }
             (None, _) => {
-                painter.text(canvas.center(), Align2::CENTER_CENTER, "Loading the architecture…", FontId::proportional(13.0), colors().muted);
+                painter.text(canvas.center(), Align2::CENTER_CENTER, "Loading the architecture…", FontId::proportional(crate::theme::look().text_title), colors().muted);
             }
             (Some(result), _) if result.view.nodes.is_empty() => {
                 painter.text(
                     canvas.center(),
                     Align2::CENTER_CENTER,
                     "Nothing to show in this view yet. Ingest the code (Space p… or the agent's ingest tool), or pick another view.",
-                    FontId::proportional(13.0),
+                    FontId::proportional(crate::theme::look().text_title),
                     colors().muted,
                 );
             }
-            (Some(_), _) => self.draw_graph(&painter),
+            (Some(_), _) => {
+                // Moving dashes and the agent's pulse keep drawing.
+                if self.draw_graph(&painter, time) {
+                    ui.ctx().request_repaint();
+                }
+            }
         }
         if let Load::Failed(err) = &self.load
             && self.result.is_some()
         {
-            painter.text(canvas.left_bottom() + Vec2::new(8.0, -8.0), Align2::LEFT_BOTTOM, format!("refresh failed: {err}"), FontId::proportional(11.0), colors().error);
+            painter.text(canvas.left_bottom() + Vec2::new(8.0, -8.0), Align2::LEFT_BOTTOM, format!("refresh failed: {err}"), FontId::proportional(crate::theme::look().text_body), colors().error);
         }
 
         // Click selects, double click focuses.
@@ -1147,10 +1163,10 @@ impl GraphState {
             let origin = Pos2::new(at.x.min(self.canvas.max.x - width).max(self.canvas.min.x), (at.y + 12.0).min(self.canvas.max.y - size * 2.0));
             let panel = Rect::from_min_size(origin, Vec2::new(width, (size + 8.0) * wanted.len().div_ceil(3) as f32));
             ui.scope_builder(egui::UiBuilder::new().max_rect(panel), |ui| {
-                egui::Frame::NONE.fill(colors().overlay).corner_radius(8).show(ui, |ui| {
+                egui::Frame::NONE.fill(colors().overlay).corner_radius(crate::theme::look().radius_xl).show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for action in wanted {
-                            let text = RichText::new(&action.label).size(12.0);
+                            let text = RichText::new(&action.label).size(crate::theme::look().text_label);
                             let response = ui.add(egui::Button::new(text).min_size(Vec2::new(size, size)));
                             self.chip_rects.push((action.id.clone(), response.rect));
                             if response.clicked() {
@@ -1187,7 +1203,7 @@ impl GraphState {
         let (pad, swatch_w, gap) = (10.0, 28.0, 8.0);
         let max_w = (self.canvas.width() - 16.0).clamp(160.0, 380.0);
         let text_w = max_w - pad * 2.0 - swatch_w - gap;
-        let font = FontId::proportional(11.0);
+        let font = FontId::proportional(crate::theme::look().text_body);
         let mut rows: Vec<(Option<&str>, Option<&LegendEntry>, std::sync::Arc<egui::Galley>)> = Vec::new();
         let mut section = "";
         for entry in &entries {
@@ -1293,7 +1309,7 @@ impl GraphState {
             };
             let depth = nav.depth.unwrap_or(self.base_depth());
             let shown = self.result.as_ref().map_or(0, |r| r.view.nodes.len());
-            ui.label(RichText::new(format!("{} · from {focus} · depth {depth} · {shown} nodes", nav.plan.as_ref().map_or("code".to_owned(), |p| format!("plan {p}")))).size(11.0).color(colors().muted));
+            ui.label(RichText::new(format!("{} · from {focus} · depth {depth} · {shown} nodes", nav.plan.as_ref().map_or("code".to_owned(), |p| format!("plan {p}")))).size(crate::theme::look().text_body).color(colors().muted));
             if !self.stale_files.is_empty() {
                 let count = self.stale_files.len().to_string();
                 crate::status::chip(ui, "stale", Some(&count)).on_hover_text(self.stale_files.join("\n"));
@@ -1302,7 +1318,7 @@ impl GraphState {
                 }
             }
             if let Some(agent) = &self.agent {
-                ui.label(RichText::new(format!("{} the agent moved the view: {}", egui_phosphor::regular::ROBOT, agent.what)).size(11.0).color(colors().special));
+                ui.label(RichText::new(format!("{} the agent moved the view: {}", egui_phosphor::regular::ROBOT, agent.what)).size(crate::theme::look().text_body).color(colors().special));
                 if let Some(back) = actions.iter().find(|a| a.id == "graph.agent_return")
                     && ui.small_button(format!("{} Return", egui_phosphor::regular::ARROW_U_UP_LEFT)).on_hover_text(&back.label).clicked()
                 {
@@ -1317,8 +1333,36 @@ impl GraphState {
         }
     }
 
-    fn draw_graph(&self, painter: &egui::Painter) {
-        let Some(result) = &self.result else { return };
+    /// A faint grid under the graph, moving and scaling with it.
+    fn draw_grid(&self, painter: &egui::Painter) {
+        let look = crate::theme::look();
+        if look.grid_step <= 0.0 {
+            return;
+        }
+        let mut step = look.grid_step * self.camera.zoom;
+        while step < look.grid_step / 2.0 {
+            step *= 2.0;
+        }
+        let origin = self.canvas.min + self.camera.pan;
+        let stroke = Stroke::new(look.line_thin, colors().grid);
+        let mut x = self.canvas.left() + (origin.x - self.canvas.left()).rem_euclid(step);
+        while x < self.canvas.right() {
+            painter.line_segment([Pos2::new(x, self.canvas.top()), Pos2::new(x, self.canvas.bottom())], stroke);
+            x += step;
+        }
+        let mut y = self.canvas.top() + (origin.y - self.canvas.top()).rem_euclid(step);
+        while y < self.canvas.bottom() {
+            painter.line_segment([Pos2::new(self.canvas.left(), y), Pos2::new(self.canvas.right(), y)], stroke);
+            y += step;
+        }
+    }
+
+    /// Draws the view; returns whether something on it moves (and wants
+    /// another frame).
+    fn draw_graph(&self, painter: &egui::Painter, time: f64) -> bool {
+        let look = crate::theme::look();
+        let mut moving = false;
+        let Some(result) = &self.result else { return false };
         let z = self.camera.zoom;
         // Containers first, then edges, then nodes on top.
         for id in result.layout.containers.iter().filter(|id| self.shown(id)) {
@@ -1328,7 +1372,7 @@ impl GraphState {
             let holds_selection = self.closed(id) && self.selection.as_ref().is_some_and(|s| self.ancestors.get(s).is_some_and(|a| a.contains(id)));
             let selected = self.selection.as_ref() == Some(id) || holds_selection;
             painter.rect_filled(rect, 6.0, colors().surface.gamma_multiply(0.6));
-            painter.rect_stroke(rect, 6.0, Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { colors().focus } else { colors().border_strong }), StrokeKind::Inside);
+            painter.rect_stroke(rect, 6.0, Stroke::new(if selected { crate::theme::look().line_bold } else { crate::theme::look().line_thin }, if selected { colors().focus } else { colors().border_strong }), StrokeKind::Inside);
             let Some(c) = result.components.get(id) else { continue };
             if self.closed(id) {
                 // One block per container: its name, as large as fits, and how much is inside.
@@ -1362,7 +1406,10 @@ impl GraphState {
             }
             let (ra, rb) = (self.to_screen(a), self.to_screen(b));
             let line = style().edge(&colors(), edge.kind, provenance_of(edge.alignment), edge.alignment, edge.overlay);
-            let (color, stroke) = (line.color, Stroke::new(line.width, line.color));
+            // With something selected, lines that don't touch it fade back.
+            let touches = self.selection.as_ref().is_none_or(|s| *s == edge.source || *s == edge.target);
+            let color = if touches { line.color } else { line.color.gamma_multiply(1.0 - look.fade) };
+            let stroke = Stroke::new(line.width, color);
             let (from, to) = if rb.left() > ra.right() { (ra.right_center(), rb.left_center()) } else { (ra.center_bottom(), rb.center_top()) };
             let mid = (to.x - from.x).abs().max(40.0) * 0.5;
             let (c1, c2) = if rb.left() > ra.right() { (from + Vec2::new(mid, 0.0), to - Vec2::new(mid, 0.0)) } else { (from + Vec2::new(0.0, mid), to - Vec2::new(0.0, mid)) };
@@ -1377,7 +1424,15 @@ impl GraphState {
                 })
                 .collect();
             if line.dashed {
-                painter.extend(Shape::dashed_line(&points, stroke, 6.0, 4.0));
+                // Planned connections' dashes move along them.
+                let period = look.space_sm + look.space_s;
+                let offset = if look.dash_speed > 0.0 {
+                    moving = true;
+                    period - ((time as f32 * look.dash_speed) % period)
+                } else {
+                    0.0
+                };
+                painter.extend(Shape::dashed_line_with_offset(&points, stroke, &[look.space_sm], &[look.space_s], offset));
             } else {
                 painter.add(Shape::line(points.clone(), stroke));
             }
@@ -1391,14 +1446,26 @@ impl GraphState {
                 continue;
             }
             let (Some(r), Some(c)) = (result.layout.rects.get(&node.id), result.components.get(&node.id)) else { continue };
-            self.draw_node(painter, self.to_screen(r), c, node.alignment, node.truncated);
+            moving |= self.draw_node(painter, self.to_screen(r), c, node.alignment, node.truncated, time);
         }
+        moving
     }
 
-    fn draw_node(&self, painter: &egui::Painter, rect: Rect, c: &Component, alignment: Alignment, truncated: bool) {
+    /// Draws one card; returns whether it animates (the agent's pulse).
+    fn draw_node(&self, painter: &egui::Painter, rect: Rect, c: &Component, alignment: Alignment, truncated: bool, time: f64) -> bool {
         let z = self.camera.zoom;
+        let look = crate::theme::look();
         let selected = self.selection.as_ref() == Some(&c.id);
         let (theme, style) = (colors(), style());
+        // The selection glows.
+        if selected && look.glow_width > 0.0 {
+            let rings = 4;
+            for i in 1..=rings {
+                let t = i as f32 / rings as f32;
+                let alpha = look.glow_alpha * (1.0 - t);
+                painter.rect_stroke(rect.expand(look.glow_width * t), look.radius_l + look.glow_width * t, Stroke::new(look.glow_width / rings as f32, theme.focus.gamma_multiply(alpha)), StrokeKind::Outside);
+            }
+        }
         let outline = style.node_outline(&theme, alignment, selected);
         painter.rect_filled(rect, 6.0, style.node_fill(&theme, selected));
         let stroke = Stroke::new(outline.width, outline.color);
@@ -1411,8 +1478,16 @@ impl GraphState {
         // The stage as a stripe on the left edge.
         let stripe = (3.0 * z).clamp(2.0, 5.0);
         painter.rect_filled(Rect::from_min_size(rect.min, Vec2::new(stripe, rect.height())), egui::CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, style.stage_color(&theme, c.stage));
-        if self.agent.as_ref().and_then(|a| a.focus.as_ref()) == Some(&c.id) {
-            painter.rect_stroke(rect.expand(4.0), 8.0, Stroke::new(2.0, style.agent_color(&theme)), StrokeKind::Outside);
+        // Where the agent points: a ring, and a pulse going out from it.
+        let pointed = self.agent.as_ref().and_then(|a| a.focus.as_ref()) == Some(&c.id);
+        if pointed {
+            let agent = style.agent_color(&theme);
+            painter.rect_stroke(rect.expand(look.space_s), look.radius_xl, Stroke::new(look.line_bold, agent), StrokeKind::Outside);
+            if look.pulse_seconds > 0.0 {
+                let beat = (time as f32 % look.pulse_seconds) / look.pulse_seconds;
+                let reach = look.space_s + look.glow_width * 2.0 * beat;
+                painter.rect_stroke(rect.expand(reach), look.radius_xl + reach, Stroke::new(look.line_thin, agent.gamma_multiply(1.0 - beat)), StrokeKind::Outside);
+            }
         }
         self.draw_marks(painter, rect, &c.id);
         // Its code changed since it was indexed: the card may be behind.
@@ -1423,7 +1498,7 @@ impl GraphState {
         }
         // Too small to read: the card's color and outline carry it.
         if rect.height() < 9.0 {
-            return;
+            return pointed;
         }
         let clip = painter.with_clip_rect(rect.shrink(2.0));
         let detail = self.detail();
@@ -1436,7 +1511,7 @@ impl GraphState {
         let mut y = 8.0;
         for line in lines {
             let (font, color) = match line.role {
-                LineRole::Name => (FontId::proportional((13.0 * z).clamp(6.0, 18.0).min(rect.height() * 0.45)), colors().text_strong),
+                LineRole::Name => (FontId::proportional((crate::theme::look().text_title * z).clamp(crate::theme::look().text_tiny * 0.66, crate::theme::look().text_display * 1.12).min(rect.height() * 0.45)), colors().text_strong),
                 LineRole::Meta => (FontId::proportional(small), colors().muted),
                 LineRole::Signature | LineRole::Location => (FontId::monospace(small * 0.95), colors().muted),
                 LineRole::Badges => (FontId::proportional(small), colors().warn),
@@ -1445,8 +1520,9 @@ impl GraphState {
             y += if line.role == LineRole::Name { step + 4.0 } else { step };
         }
         if truncated {
-            painter.text(rect.right_center() + Vec2::new(4.0, 0.0), Align2::LEFT_CENTER, "…", FontId::proportional(14.0 * z.max(0.6)), colors().muted);
+            painter.text(rect.right_center() + Vec2::new(4.0, 0.0), Align2::LEFT_CENTER, "…", FontId::proportional(crate::theme::look().text_heading * z.max(0.6)), colors().muted);
         }
+        pointed
     }
 
     /// Review badges at the card's top right: a dot when it changed since the
@@ -1461,7 +1537,7 @@ impl GraphState {
         let z = self.camera.zoom.max(0.4);
         let mut at = rect.right_top() + Vec2::new(-8.0, 8.0) * z;
         if mark.open > 0 {
-            let galley = painter.layout_no_wrap(format!("{}", mark.open), FontId::proportional(10.0 * z), colors().on_bright);
+            let galley = painter.layout_no_wrap(format!("{}", mark.open), FontId::proportional(crate::theme::look().text_small * z), colors().on_bright);
             let chip = Rect::from_center_size(at, galley.size() + Vec2::new(8.0, 2.0) * z);
             painter.rect_filled(chip, chip.height() / 2.0, colors().warn);
             painter.galley(chip.center() - galley.size() / 2.0, galley, colors().on_bright);
@@ -1476,7 +1552,7 @@ impl GraphState {
     fn render_drawer(&mut self, ui: &mut egui::Ui) {
         let Some(c) = self.selected().cloned() else { return };
         let alignment = self.result.as_ref().and_then(|r| r.view.node(&c.id)).map(|n| n.alignment);
-        egui::Frame::NONE.fill(colors().surface).stroke(Stroke::new(1.0, colors().border_strong)).corner_radius(6).inner_margin(8).show(ui, |ui| {
+        egui::Frame::NONE.fill(colors().surface).stroke(Stroke::new(crate::theme::look().line_thin, colors().border_strong)).corner_radius(crate::theme::look().radius_l).inner_margin(crate::theme::margin(crate::theme::look().space_m)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             egui::ScrollArea::vertical().id_salt("graph_inspector").auto_shrink([false, false]).show(ui, |ui| {
                 // Close first (right-aligned), then the name takes what's left
@@ -1486,28 +1562,34 @@ impl GraphState {
                         self.drawer_open = false;
                     }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(RichText::new(&c.name).strong().size(14.0).color(colors().text_strong)).truncate()).on_hover_text(&c.name);
+                        ui.add(egui::Label::new(RichText::new(&c.name).strong().size(crate::theme::look().text_heading).color(colors().text_strong)).truncate()).on_hover_text(&c.name);
                     });
                 });
-                ui.label(RichText::new(c.id.as_str()).monospace().size(10.0).color(colors().muted));
-                ui.label(RichText::new(format!("{} · {:?} · {:?}{}", c.type_name, c.status, c.stage, alignment.map(|a| format!(" · {a:?}")).unwrap_or_default())).size(11.0));
+                ui.label(RichText::new(c.id.as_str()).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(format!("{} · {:?}", c.type_name, c.status)).size(crate::theme::look().text_body).color(colors().muted));
+                    crate::status::chip(ui, crate::status::stage(c.stage), None);
+                    if let Some(a) = alignment {
+                        crate::status::chip(ui, crate::status::alignment(a), None);
+                    }
+                });
                 if let Some(mark) = self.marks.get(&c.id) {
                     ui.horizontal_wrapped(|ui| {
                         if mark.changed {
-                            ui.label(RichText::new("changed since review").size(11.0).color(colors().info));
+                            ui.label(RichText::new("changed since review").size(crate::theme::look().text_body).color(colors().info));
                         }
                         if mark.open > 0 {
-                            ui.label(RichText::new(format!("{} open review points", mark.open)).size(11.0).color(colors().warn));
+                            ui.label(RichText::new(format!("{} open review points", mark.open)).size(crate::theme::look().text_body).color(colors().warn));
                         }
                     });
                 }
                 match (&c.anchor, &c.proposed) {
-                    (Some(a), _) => ui.label(RichText::new(format!("{} {}:{}–{}", egui_phosphor::regular::FILE_CODE, a.file, a.span.start_line, a.span.end_line)).monospace().size(11.0)),
-                    (None, Some(p)) => ui.label(RichText::new(format!("{} planned in {}", egui_phosphor::regular::FILE_DASHED, p.file)).monospace().size(11.0).color(colors().warn)),
-                    (None, None) => ui.label(RichText::new("not placed yet").size(11.0).color(colors().warn)),
+                    (Some(a), _) => ui.label(RichText::new(format!("{} {}:{}–{}", egui_phosphor::regular::FILE_CODE, a.file, a.span.start_line, a.span.end_line)).monospace().size(crate::theme::look().text_body)),
+                    (None, Some(p)) => ui.label(RichText::new(format!("{} planned in {}", egui_phosphor::regular::FILE_DASHED, p.file)).monospace().size(crate::theme::look().text_body).color(colors().warn)),
+                    (None, None) => ui.label(RichText::new("not placed yet").size(crate::theme::look().text_body).color(colors().warn)),
                 };
                 if !c.description.is_empty() {
-                    ui.label(RichText::new(&c.description).size(11.0));
+                    ui.label(RichText::new(&c.description).size(crate::theme::look().text_body));
                 }
                 let spec = c.spec.as_ref();
                 ui.label(
@@ -1517,7 +1599,7 @@ impl GraphState {
                         spec.map_or(0, |s| s.invariants.len()),
                         c.placeholders.len()
                     ))
-                    .size(11.0)
+                    .size(crate::theme::look().text_body)
                     .color(colors().muted),
                 );
                 ui.horizontal(|ui| {
@@ -1539,10 +1621,10 @@ impl GraphState {
                             if list.is_empty() {
                                 continue;
                             }
-                            ui.label(RichText::new(label).size(10.0).color(colors().muted));
+                            ui.label(RichText::new(label).size(crate::theme::look().text_small).color(colors().muted));
                             for id in list.into_iter().take(8) {
                                 let name = result.components.get(id).map_or(id.to_string(), |x| x.name.clone());
-                                if ui.link(RichText::new(name).size(11.0)).clicked() {
+                                if ui.link(RichText::new(name).size(crate::theme::look().text_body)).clicked() {
                                     go = Some(id.clone());
                                 }
                             }
@@ -1848,7 +1930,7 @@ impl Navigable for GraphState {
 /// `text` as it fits in `width`: whole, shortened with an ellipsis, or not
 /// at all when not even one letter fits.
 fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, width: f32) -> Option<String> {
-    let fits = |t: &str| painter.layout_no_wrap(t.to_owned(), font.clone(), egui::Color32::WHITE).size().x <= width;
+    let fits = |t: &str| painter.layout_no_wrap(t.to_owned(), font.clone(), colors().text).size().x <= width;
     if fits(text) {
         return Some(text.to_owned());
     }
@@ -2234,6 +2316,7 @@ pub(crate) mod tests {
     fn configured() -> GraphState {
         let config = crate::config::UiConfig::with_overrides("").unwrap();
         crate::graph_style::set(config.graph_style.clone());
+        crate::status::set(config.status.clone());
         let mut g = showing(sample_result());
         g.ui = config.graph;
         g
@@ -2419,18 +2502,20 @@ pub(crate) mod tests {
         use crate::graph_style::{LegendEntry, Swatch};
         let config = crate::config::UiConfig::with_overrides("").unwrap();
         let (style, theme) = (&config.graph_style, &config.theme);
+        crate::status::set(config.status.clone());
         let legend = style.legend(theme);
         let find = |section: &str, label: &str| legend.iter().find(|e: &&LegendEntry| e.section == section && e.label == label).map(|e| e.swatch);
         for kind in RelationKind::ALL {
             assert_eq!(find("Relations", &kind.name().replace('_', " ")), Some(Swatch::Line(style.edge(theme, kind, arch_graph::Provenance::OBSERVED, Alignment::Observed, false))));
         }
         for alignment in [Alignment::Observed, Alignment::Planned, Alignment::Missing, Alignment::Present] {
-            let label = alignment_label(alignment);
+            let label = crate::graph_style::alignment_label(alignment);
+            let label = label.as_str();
             assert_eq!(find("Plan vs code", label), Some(Swatch::Line(style.edge(theme, RelationKind::Calls, provenance_of(alignment), alignment, false))));
             assert_eq!(find("Nodes", label), Some(Swatch::Outline(style.node_outline(theme, alignment, false))));
         }
         for stage in arch_graph::Stage::ALL {
-            assert_eq!(find("Stage", &format!("{stage:?}")), Some(Swatch::Stripe(style.stage_color(theme, stage))));
+            assert_eq!(find("Stage", &crate::status::look(crate::status::stage(stage)).1), Some(Swatch::Stripe(style.stage_color(theme, stage))));
         }
         assert!(config.keymap.bind.contains_key("graph.legend") && config.graph.chips.actions.iter().any(|a| a == "graph.legend"), "a key and a chip");
         // Toggling shows exactly the table's entries.
@@ -2484,11 +2569,24 @@ pub(crate) mod tests {
         };
         let (mid, near) = (g.ui.detail.mid, g.ui.detail.near);
         assert_eq!(texts_at(&g, mid * 0.9), vec!["step"]);
-        assert_eq!(texts_at(&g, mid), vec!["step", "function · Implemented · 1 placeholders", "unplaced"]);
+        // States read as icon and word, from the status vocabulary.
+        let state = |name: &str, count: Option<usize>| {
+            let (glyph, word, _) = crate::status::look(name);
+            count.map_or_else(|| format!("{glyph} {word}"), |n| format!("{glyph} {n} {word}"))
+        };
+        let implemented = state("stage_implemented", None);
+        assert_eq!(texts_at(&g, mid), vec!["step".to_owned(), format!("function · {implemented} · {}", state("placeholders", Some(1))), "unplaced".to_owned()]);
         assert_eq!(
             texts_at(&g, near),
-            vec!["step", "function · Implemented · planned and in code", "(input: &str) -> bool", "unplaced", "1 placeholders · 2 open review points · changed since review"]
+            vec![
+                "step".to_owned(),
+                format!("function · {implemented} · {}", state("present", None)),
+                "(input: &str) -> bool".to_owned(),
+                "unplaced".to_owned(),
+                format!("{} · {} · {}", state("placeholders", Some(1)), state("open_comments", Some(2)), state("changed", None)),
+            ]
         );
+        assert!(implemented.contains("implemented") && state("present", None).contains("planned and in code"), "words from config");
         // Thresholds are config (and must make sense).
         assert!(crate::config::UiConfig::with_overrides("[graph.detail]\nmid = 1.0\nnear = 0.5").unwrap_err().contains("graph.detail"));
         g.ui.detail.near = 5.0;
@@ -2501,6 +2599,90 @@ pub(crate) mod tests {
         draw(&mut close, &ctx, vec![], 0.0, Vec2::new(1400.0, 800.0));
         close.camera.zoom = close.ui.detail.near + 0.1;
         let text = texts(&draw(&mut close, &ctx, vec![], 0.1, Vec2::new(1400.0, 800.0)));
-        assert!(text.contains("(input: &str) -> bool") && text.contains("2 open review points"), "{text}");
+        assert!(text.contains("(input: &str) -> bool") && text.contains(&format!("2 {}", crate::status::look("open_comments").1)), "{text}");
+    }
+
+    // req: V.6
+    #[test]
+    fn the_graph_has_a_grid_a_glowing_selection_a_pulse_and_moving_dashes() {
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::set(config.theme.clone(), &ctx);
+        crate::theme::set_look(config.look.clone());
+        let theme = colors();
+        let size = Vec2::new(1400.0, 800.0);
+        fn shapes(out: &egui::FullOutput) -> Vec<Shape> {
+            fn flat(shape: &Shape, into: &mut Vec<Shape>) {
+                match shape {
+                    Shape::Vec(list) => list.iter().for_each(|s| flat(s, into)),
+                    other => into.push(other.clone()),
+                }
+            }
+            let mut all = Vec::new();
+            out.shapes.iter().for_each(|c| flat(&c.shape, &mut all));
+            all
+        }
+        let wants_frame = |out: &egui::FullOutput| out.viewport_output.values().any(|v| v.repaint_delay.is_zero());
+        let strokes_in = |all: &[Shape], color: egui::Color32| all.iter().filter(|s| matches!(s, Shape::Rect(r) if r.stroke.color == color)).count();
+        let mut result = sample_result();
+        result.view.edges[2].alignment = Alignment::Planned;
+        let mut g = configured();
+        g.set_result(result);
+        draw(&mut g, &ctx, vec![], 0.0, size);
+
+        // A faint grid, in its own colour, under everything.
+        let still = draw(&mut g, &ctx, vec![], 0.1, size);
+        let grid = shapes(&still).iter().filter(|s| matches!(s, Shape::LineSegment { stroke, .. } if stroke.color == theme.grid)).count();
+        assert!(grid > 10, "grid lines: {grid}");
+
+        // Planned connections' dashes move: they want frames and differ over time.
+        assert!(wants_frame(&still), "moving dashes keep drawing");
+        let later = draw(&mut g, &ctx, vec![], 0.4, size);
+        let dashes = |all: Vec<Shape>| all.into_iter().filter_map(|s| if let Shape::LineSegment { points, stroke } = s { (stroke.color != theme.grid).then_some(points) } else { None }).collect::<Vec<_>>();
+        assert_ne!(dashes(shapes(&still)), dashes(shapes(&later)), "the dashes moved");
+
+        // The selection glows; the other lines fade back.
+        let look = crate::theme::look();
+        let ring = theme.focus.gamma_multiply(look.glow_alpha * (1.0 - 1.0 / 4.0));
+        assert_eq!(strokes_in(&shapes(&later), ring), 0, "no glow without a selection");
+        g.select(Some(ComponentId::new("rust:a::save")));
+        let selected = shapes(&draw(&mut g, &ctx, vec![], 0.5, size));
+        assert_eq!(strokes_in(&selected, ring), 1, "the selected card glows");
+        let solid = style().edge(&theme, RelationKind::Calls, provenance_of(Alignment::Observed), Alignment::Observed, false).color;
+        let lines: Vec<egui::Color32> = selected.iter().filter_map(|s| match s {
+            Shape::LineSegment { stroke, .. } if stroke.color != theme.grid => Some(stroke.color),
+            Shape::Path(p) => match p.stroke.color {
+                egui::epaint::ColorMode::Solid(c) => Some(c),
+                _ => None,
+            },
+            _ => None,
+        }).collect();
+        assert!(lines.contains(&solid), "the selection's own line in full");
+        assert!(lines.contains(&solid.gamma_multiply(1.0 - look.fade)), "a line away from it faded: {lines:?}");
+
+        // Where the agent points: a pulse, which keeps drawing even with still dashes.
+        let mut quiet = (*look).clone();
+        quiet.dash_speed = 0.0;
+        crate::theme::set_look(quiet);
+        g.select(None);
+        g.agent = Some(AgentMove { what: "reading".into(), focus: Some(ComponentId::new("rust:a::step")), return_to: g.nav.clone(), return_selection: None });
+        draw(&mut g, &ctx, vec![], 1.0, size);
+        let t = 1.0 + f64::from(look.pulse_seconds) / 4.0;
+        let out = draw(&mut g, &ctx, vec![], t, size);
+        assert!(wants_frame(&out), "the pulse keeps drawing");
+        let agent = style().agent_color(&theme);
+        let beat = (t as f32 % look.pulse_seconds) / look.pulse_seconds;
+        let width_of = |all: &[Shape], color: egui::Color32| all.iter().find_map(|s| match s {
+            Shape::Rect(r) if r.stroke.color == color => Some(r.rect.width()),
+            _ => None,
+        });
+        let all = shapes(&out);
+        let (ring, pulse) = (width_of(&all, agent).expect("the agent's ring"), width_of(&all, agent.gamma_multiply(1.0 - beat)).expect("the pulse"));
+        assert!(pulse > ring, "the pulse goes out from the card: {pulse} > {ring}");
+        g.agent = None;
+        draw(&mut g, &ctx, vec![], 2.0, size);
+        let calm = draw(&mut g, &ctx, vec![], 2.1, size);
+        assert!(!wants_frame(&calm), "nothing moving, nothing redrawn");
+        crate::theme::set_look((*look).clone());
     }
 }

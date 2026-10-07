@@ -218,16 +218,16 @@ impl GraphStyle {
             out.push(LegendEntry { section: "Relations", label: kind.name().replace('_', " "), swatch: Swatch::Line(self.edge(theme, kind, Provenance::OBSERVED, Alignment::Observed, false)) });
         }
         for alignment in ALIGNMENTS {
-            out.push(LegendEntry { section: "Plan vs code", label: alignment_label(alignment).to_owned(), swatch: Swatch::Line(self.edge(theme, RelationKind::Calls, provenance_of(alignment), alignment, false)) });
+            out.push(LegendEntry { section: "Plan vs code", label: alignment_label(alignment), swatch: Swatch::Line(self.edge(theme, RelationKind::Calls, provenance_of(alignment), alignment, false)) });
         }
         out.push(LegendEntry { section: "Plan vs code", label: "overlay (another kind drawn over the view)".to_owned(), swatch: Swatch::Line(self.edge(theme, RelationKind::Calls, Provenance::OBSERVED, Alignment::Observed, true)) });
         for alignment in ALIGNMENTS {
-            out.push(LegendEntry { section: "Nodes", label: alignment_label(alignment).to_owned(), swatch: Swatch::Outline(self.node_outline(theme, alignment, false)) });
+            out.push(LegendEntry { section: "Nodes", label: alignment_label(alignment), swatch: Swatch::Outline(self.node_outline(theme, alignment, false)) });
         }
         out.push(LegendEntry { section: "Nodes", label: "selected".to_owned(), swatch: Swatch::Outline(self.node_outline(theme, Alignment::Observed, true)) });
         out.push(LegendEntry { section: "Nodes", label: "the agent pointed here".to_owned(), swatch: Swatch::Outline(Line { color: self.agent_color(theme), width: self.nodes.selected_width, dashed: false }) });
         for stage in Stage::ALL {
-            out.push(LegendEntry { section: "Stage", label: format!("{stage:?}"), swatch: Swatch::Stripe(self.stage_color(theme, stage)) });
+            out.push(LegendEntry { section: "Stage", label: crate::status::look(crate::status::stage(stage)).1, swatch: Swatch::Stripe(self.stage_color(theme, stage)) });
         }
         out
     }
@@ -235,13 +235,9 @@ impl GraphStyle {
 
 const ALIGNMENTS: [Alignment; 4] = [Alignment::Observed, Alignment::Planned, Alignment::Missing, Alignment::Present];
 
-pub fn alignment_label(alignment: Alignment) -> &'static str {
-    match alignment {
-        Alignment::Observed => "in code (no plan)",
-        Alignment::Planned => "planned, not built yet",
-        Alignment::Missing => "planned, missing in code",
-        Alignment::Present => "planned and in code",
-    }
+/// How plan and code line up, in the status vocabulary's words.
+pub fn alignment_label(alignment: Alignment) -> String {
+    crate::status::look(crate::status::alignment(alignment)).1
 }
 
 /// How a legend entry is drawn.

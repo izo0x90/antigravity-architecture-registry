@@ -270,22 +270,22 @@ impl ArchitectureTreeState {
                 let response = ui
                     .horizontal(|ui| {
                         ui.set_min_height(row_h);
-                        ui.add_space(row.depth as f32 * 14.0);
+                        ui.add_space(row.depth as f32 * crate::theme::look().space_xl);
                         if self.has_children(&row.id) {
                             let open = !self.closed.contains(&row.id);
                             let icon = if open { egui_phosphor::regular::CARET_DOWN } else { egui_phosphor::regular::CARET_RIGHT };
-                            if ui.add(egui::Label::new(RichText::new(icon).size(11.0).color(colors().muted)).sense(Sense::click())).clicked() {
+                            if ui.add(egui::Label::new(RichText::new(icon).size(crate::theme::look().text_body).color(colors().muted)).sense(Sense::click())).clicked() {
                                 toggled = Some(row.id.clone());
                             }
                         } else {
-                            ui.add_space(14.0);
+                            ui.add_space(crate::theme::look().space_xl);
                         }
                         let c = self.result.as_ref().and_then(|r| r.components.get(&row.id));
                         let (name, kind) = c.map_or_else(|| (row.id.to_string(), String::new()), |c| (c.name.clone(), c.type_name.clone()));
                         let color = if self.matches(&row.id) { colors().text } else { colors().faint };
-                        let text = RichText::new(format!("{name} ")).size(12.0).color(if on_cursor { colors().text_strong } else { color });
+                        let text = RichText::new(format!("{name} ")).size(crate::theme::look().text_label).color(if on_cursor { colors().text_strong } else { color });
                         let label = ui.selectable_label(on_cursor, text);
-                        ui.label(RichText::new(kind).size(10.0).color(colors().muted));
+                        ui.label(RichText::new(kind).size(crate::theme::look().text_small).color(colors().muted));
                         if label.clicked() {
                             picked = Some(row.id.clone());
                         }

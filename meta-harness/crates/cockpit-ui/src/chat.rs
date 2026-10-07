@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use egui::{Color32, Frame, Margin, Pos2, Rect, RichText, Stroke, Vec2};
+use egui::{Color32, Frame, Pos2, Rect, RichText, Stroke, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use harness_contracts::{
     ApprovalDecision, ClientEvent, ConfigKind, McpServer, McpTransport, NativeId, OptionValue, ContentBlock, InstanceId, ItemBody, ItemStatus, ModelSelection, NoticeLevel, PlanBody,
@@ -150,11 +150,11 @@ fn status_tag(status: ItemStatus) -> (&'static str, Color32) {
 fn banner(ui: &mut egui::Ui, fill: Color32, stroke: Color32, add: impl FnOnce(&mut egui::Ui)) {
     Frame::NONE
         .fill(fill)
-        .stroke(Stroke::new(1.0, stroke))
-        .corner_radius(4.0)
-        .inner_margin(Margin::symmetric(8, 6))
+        .stroke(Stroke::new(crate::theme::look().line_thin, stroke))
+        .corner_radius(crate::theme::look().radius_m)
+        .inner_margin(crate::theme::margin2(crate::theme::look().space_m, crate::theme::look().space_sm))
         .show(ui, |ui| ui.horizontal_wrapped(add));
-    ui.add_space(4.0);
+    ui.add_space(crate::theme::look().space_s);
 }
 
 impl ChatStreamState {
@@ -336,7 +336,7 @@ impl ChatStreamState {
 
         ui.horizontal(|ui| {
             let name = self.instance().map(|s| s.display_name.clone()).unwrap_or_else(|| "No harness".into());
-            ui.label(RichText::new(name).strong().size(12.0));
+            ui.label(RichText::new(name).strong().size(crate::theme::look().text_label));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 for action in on_toolbar(ToolbarStyle::Button) {
                     if let Some(u) = toolbar_control(ui, action) {
@@ -345,9 +345,9 @@ impl ChatStreamState {
                 }
                 if let Some(thread) = &self.active_thread {
                     let short: String = thread.as_str().chars().take(8).collect();
-                    ui.label(RichText::new(format!("[{short}]")).monospace().size(10.0).color(colors().info));
+                    ui.label(RichText::new(format!("[{short}]")).monospace().size(crate::theme::look().text_small).color(colors().info));
                 } else if self.opening {
-                    ui.label(RichText::new(format!("{} Connecting…", icon::HOURGLASS)).size(10.0).color(colors().warn));
+                    ui.label(RichText::new(format!("{} Connecting…", icon::HOURGLASS)).size(crate::theme::look().text_small).color(colors().warn));
                 }
             });
         });
@@ -362,13 +362,13 @@ impl ChatStreamState {
                 && !thread.mcp_servers.is_empty()
             {
                 let names: Vec<String> = thread.mcp_servers.iter().map(mcp_label).collect();
-                ui.add(egui::Label::new(RichText::new(format!("{} MCP {}", icon::PLUGS_CONNECTED, thread.mcp_servers.len())).size(10.0).color(colors().muted)).extend())
+                ui.add(egui::Label::new(RichText::new(format!("{} MCP {}", icon::PLUGS_CONNECTED, thread.mcp_servers.len())).size(crate::theme::look().text_small).color(colors().muted)).extend())
                     .on_hover_text(names.join("\n"));
             }
             if let Some(usage) = self.thread().and_then(|t| t.usage.clone())
                 && let (Some(used), Some(window)) = (usage.context_used_tokens, usage.context_window_tokens)
             {
-                ui.add(egui::Label::new(RichText::new(format!("ctx {:.1}k/{:.0}k", used as f64 / 1000.0, window as f64 / 1000.0)).monospace().size(10.0).color(colors().muted)).extend());
+                ui.add(egui::Label::new(RichText::new(format!("ctx {:.1}k/{:.0}k", used as f64 / 1000.0, window as f64 / 1000.0)).monospace().size(crate::theme::look().text_small).color(colors().muted)).extend());
             }
         });
 
@@ -385,8 +385,8 @@ impl ChatStreamState {
             let mut retry = false;
             let mut dismiss = false;
             banner(ui, colors().error_bg, colors().error, |ui| {
-                ui.label(RichText::new(icon::X_CIRCLE).size(12.0).color(colors().error));
-                ui.label(RichText::new(&err).size(12.0).color(colors().text));
+                ui.label(RichText::new(icon::X_CIRCLE).size(crate::theme::look().text_label).color(colors().error));
+                ui.label(RichText::new(&err).size(crate::theme::look().text_label).color(colors().text));
                 if self.active_thread.is_none() {
                     retry = ui.button(format!("{} Retry", icon::ARROW_COUNTER_CLOCKWISE)).clicked();
                 }
@@ -411,7 +411,7 @@ impl ChatStreamState {
             let instance = snapshot.instance_id.clone();
             banner(ui, colors().info_bg, colors().focus, |ui| match self.auth_instructions.clone() {
                 None => {
-                    ui.label(RichText::new(format!("{} Sign in:", icon::KEY)).strong().size(12.0));
+                    ui.label(RichText::new(format!("{} Sign in:", icon::KEY)).strong().size(crate::theme::look().text_label));
                     for method in &snapshot.auth.methods {
                         let button = ui.button(&method.name);
                         let button = match &method.description {
@@ -425,7 +425,7 @@ impl ChatStreamState {
                     }
                 }
                 Some(instructions) => {
-                    ui.label(RichText::new(instructions).size(12.0));
+                    ui.label(RichText::new(instructions).size(crate::theme::look().text_label));
                     ui.add(egui::TextEdit::singleline(&mut self.auth_paste).hint_text("http://127.0.0.1:…/?code=…").desired_width(220.0));
                     if ui.button("Complete").clicked() && !self.auth_paste.trim().is_empty() {
                         let mailbox = self.mailbox.clone();
@@ -446,21 +446,21 @@ impl ChatStreamState {
             return;
         };
         let done = steps.iter().filter(|s| s.status == StepStatus::Completed).count();
-        egui::CollapsingHeader::new(RichText::new(format!("{} Plan ({done}/{})", icon::CLIPBOARD_TEXT, steps.len())).size(11.0))
+        egui::CollapsingHeader::new(RichText::new(format!("{} Plan ({done}/{})", icon::CLIPBOARD_TEXT, steps.len())).size(crate::theme::look().text_body))
             .default_open(true)
             .show(ui, |ui| render_steps(ui, &steps));
     }
 
     fn render_stream(&mut self, ui: &mut egui::Ui, net: &NetClient) {
         let Some(view) = self.thread().cloned() else {
-            ui.add_space(20.0);
+            ui.add_space(crate::theme::look().space_xxl);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("No session yet").strong().size(15.0).color(colors().accent));
+                ui.label(RichText::new("No session yet").strong().size(crate::theme::look().text_heading).color(colors().accent));
                 let hint = match self.instance() {
                     Some(s) => format!("{} • type below or Connect to start a session", s.display_name),
                     None => "Waiting for the server…".into(),
                 };
-                ui.label(RichText::new(hint).size(12.0).color(colors().muted));
+                ui.label(RichText::new(hint).size(crate::theme::look().text_label).color(colors().muted));
             });
             return;
         };
@@ -468,17 +468,17 @@ impl ChatStreamState {
         let mut index = 0;
         for turn in &view.turns {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("Turn {}", turn.ordinal)).monospace().size(10.0).color(colors().faint));
+                ui.label(RichText::new(format!("Turn {}", turn.ordinal)).monospace().size(crate::theme::look().text_small).color(colors().faint));
                 if !turn.status.is_terminal() {
-                    ui.label(RichText::new("RUNNING").size(9.0).color(colors().warn));
+                    ui.label(RichText::new("RUNNING").size(crate::theme::look().text_tiny).color(colors().warn));
                 } else if let Some(f) = &turn.failure {
-                    ui.label(RichText::new(format!("failed: {}", f.message)).size(9.0).color(colors().error));
+                    ui.label(RichText::new(format!("failed: {}", f.message)).size(crate::theme::look().text_tiny).color(colors().error));
                 }
             });
             for item in view.items_of(&turn.id) {
                 let on = self.cursor == Some(index);
                 let fill = if on { colors().selection } else { Color32::TRANSPARENT };
-                let shown = Frame::NONE.fill(fill).corner_radius(3).inner_margin(Margin::symmetric(3, 1)).show(ui, |ui| {
+                let shown = Frame::NONE.fill(fill).corner_radius(crate::theme::look().radius_s).inner_margin(crate::theme::margin2(crate::theme::look().space_xs, crate::theme::look().space_hair)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     self.render_item(ui, net, &view, item, index);
                 });
@@ -487,7 +487,7 @@ impl ChatStreamState {
                 }
                 self.drawing.push(Spot { key: index.to_string(), rect: shown.response.rect });
                 index += 1;
-                ui.add_space(3.0);
+                ui.add_space(crate::theme::look().space_xs);
             }
             ui.add(egui::Separator::default().spacing(8.0));
         }
@@ -517,8 +517,8 @@ impl ChatStreamState {
         match &item.body {
             ItemBody::UserMessage { text } => {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(">").monospace().size(14.0).strong().color(colors().accent));
-                    ui.label(RichText::new(text).size(13.0).strong().color(colors().text_strong));
+                    ui.label(RichText::new(">").monospace().size(crate::theme::look().text_heading).strong().color(colors().accent));
+                    ui.label(RichText::new(text).size(crate::theme::look().text_title).strong().color(colors().text_strong));
                 });
             }
             ItemBody::AssistantMessage { content, .. } => {
@@ -527,25 +527,25 @@ impl ChatStreamState {
                     CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &text);
                 }
                 for block in content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })) {
-                    ui.label(RichText::new(block_summary(block)).monospace().size(10.0).color(colors().muted));
+                    ui.label(RichText::new(block_summary(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
                 }
             }
             ItemBody::Reasoning { text, streaming } => {
                 let label = if *streaming { format!("{} Thinking… ({} chars)", icon::BRAIN, text.len()) } else { format!("{} Reasoning ({} chars)", icon::BRAIN, text.len()) };
-                egui::CollapsingHeader::new(RichText::new(label).size(11.0).color(colors().special))
+                egui::CollapsingHeader::new(RichText::new(label).size(crate::theme::look().text_body).color(colors().special))
                     .id_salt(item.id.as_str())
                     .show(ui, |ui| {
-                        ui.label(RichText::new(text).monospace().size(11.0).color(colors().muted));
+                        ui.label(RichText::new(text).monospace().size(crate::theme::look().text_body).color(colors().muted));
                     });
             }
             ItemBody::ToolCall { kind, name, output, locations, .. } => {
                 let (tag, color) = status_tag(item.status);
                 let title = item.title.clone().unwrap_or_else(|| name.clone());
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(format!("{tag} {} {title}", tool_icon(kind))).monospace().size(11.0).color(color));
+                    ui.label(RichText::new(format!("{tag} {} {title}", tool_icon(kind))).monospace().size(crate::theme::look().text_body).color(color));
                     for (n, loc) in locations.iter().enumerate() {
                         let label = match loc.line { Some(l) => format!("{} {}:{l}", icon::FOLDER_OPEN, loc.path), None => format!("{} {}", icon::FOLDER_OPEN, loc.path) };
-                        let link = ui.small_button(RichText::new(label).monospace().size(10.0));
+                        let link = ui.small_button(RichText::new(label).monospace().size(crate::theme::look().text_small));
                         self.drawing.push(Spot { key: format!("{index}:{n}"), rect: link.rect });
                         if link.clicked() {
                             self.requested_file_jump = Some((loc.path.clone(), loc.line.map(|l| l as usize)));
@@ -553,34 +553,34 @@ impl ChatStreamState {
                     }
                 });
                 if !output.is_empty() {
-                    egui::CollapsingHeader::new(RichText::new("output").size(10.0).color(colors().muted))
+                    egui::CollapsingHeader::new(RichText::new("output").size(crate::theme::look().text_small).color(colors().muted))
                         .id_salt((item.id.as_str(), "out"))
                         .show(ui, |ui| {
                             for block in output {
-                                ui.label(RichText::new(block_detail(block)).monospace().size(10.0).color(colors().muted));
+                                ui.label(RichText::new(block_detail(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
                             }
                         });
                 }
             }
             ItemBody::FileChange { path, .. } => {
-                let link = ui.small_button(RichText::new(format!("{} {path}", icon::PENCIL_SIMPLE)).monospace().size(11.0));
+                let link = ui.small_button(RichText::new(format!("{} {path}", icon::PENCIL_SIMPLE)).monospace().size(crate::theme::look().text_body));
                 self.drawing.push(Spot { key: format!("{index}:0"), rect: link.rect });
                 if link.clicked() {
                     self.requested_file_jump = Some((path.clone(), None));
                 }
             }
             ItemBody::CommandExecution { command, output, exit_code } => {
-                ui.label(RichText::new(format!("$ {command}")).monospace().size(11.0));
+                ui.label(RichText::new(format!("$ {command}")).monospace().size(crate::theme::look().text_body));
                 if let Some(out) = output {
-                    ui.label(RichText::new(out).monospace().size(10.0).color(colors().muted));
+                    ui.label(RichText::new(out).monospace().size(crate::theme::look().text_small).color(colors().muted));
                 }
                 if let Some(code) = exit_code {
-                    ui.label(RichText::new(format!("exit {code}")).monospace().size(10.0).color(colors().muted));
+                    ui.label(RichText::new(format!("exit {code}")).monospace().size(crate::theme::look().text_small).color(colors().muted));
                 }
             }
             ItemBody::ProposedPlan { markdown, .. } => {
-                Frame::NONE.fill(colors().surface).inner_margin(Margin::same(6)).show(ui, |ui| {
-                    ui.label(RichText::new(format!("{} Proposed plan", icon::CLIPBOARD_TEXT)).strong().size(11.0));
+                Frame::NONE.fill(colors().surface).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).show(ui, |ui| {
+                    ui.label(RichText::new(format!("{} Proposed plan", icon::CLIPBOARD_TEXT)).strong().size(crate::theme::look().text_body));
                     CommonMarkViewer::new().show(ui, &mut self.markdown_cache, markdown);
                 });
             }
@@ -591,21 +591,21 @@ impl ChatStreamState {
                 }
             }
             ItemBody::Subagent { subagent_id } => {
-                ui.label(RichText::new(format!("{} subagent {subagent_id}", icon::ROBOT)).size(11.0));
+                ui.label(RichText::new(format!("{} subagent {subagent_id}", icon::ROBOT)).size(crate::theme::look().text_body));
             }
             ItemBody::Notice { level, text } => {
                 let color = match level { NoticeLevel::Info => colors().muted, NoticeLevel::Warning => colors().warn };
-                ui.label(RichText::new(text).size(11.0).color(color));
+                ui.label(RichText::new(text).size(crate::theme::look().text_body).color(color));
             }
             ItemBody::Error { message } => {
-                ui.label(RichText::new(format!("{} {message}", icon::WARNING)).size(11.0).color(colors().error));
+                ui.label(RichText::new(format!("{} {message}", icon::WARNING)).size(crate::theme::look().text_body).color(colors().error));
             }
             ItemBody::Unknown { native_kind, display } => {
                 let shown: String = display.chars().take(300).collect();
-                ui.label(RichText::new(format!("[{native_kind}] {shown}")).monospace().size(10.0).color(colors().muted));
+                ui.label(RichText::new(format!("[{native_kind}] {shown}")).monospace().size(crate::theme::look().text_small).color(colors().muted));
             }
             ItemBody::Unsupported => {
-                ui.label(RichText::new("(item type not supported by this client)").size(10.0).color(colors().muted));
+                ui.label(RichText::new("(item type not supported by this client)").size(crate::theme::look().text_small).color(colors().muted));
             }
         }
     }
@@ -628,7 +628,7 @@ impl ChatStreamState {
             let matches: Vec<_> = snapshot.commands.iter().filter(|c| c.name.starts_with(prefix)).cloned().collect();
             ui.horizontal_wrapped(|ui| {
                 for command in matches {
-                    let label = RichText::new(format!("/{}", command.name)).monospace().size(10.0);
+                    let label = RichText::new(format!("/{}", command.name)).monospace().size(crate::theme::look().text_small);
                     let hint = match &command.input_hint { Some(h) => format!("{} — {h}", command.description), None => command.description.clone() };
                     if ui.small_button(label).on_hover_text(hint).clicked() {
                         self.input_buffer = format!("/{} ", command.name);
@@ -659,7 +659,7 @@ impl ChatStreamState {
             if output.clicked() || output.gained_focus() {
                 *input_mode = crate::keymap::InputMode::Insert { slot: slot_idx };
             }
-            let send = ui.add_sized([send_w, 36.0], egui::Button::new(RichText::new("Send").strong().size(11.0))).clicked();
+            let send = ui.add_sized([send_w, 36.0], egui::Button::new(RichText::new("Send").strong().size(crate::theme::look().text_body))).clicked();
             let enter = inserting && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
             if (send || enter) && !self.input_buffer.trim().is_empty() {
                 let text = self.input_buffer.trim().to_string();
@@ -1172,21 +1172,21 @@ fn render_steps(ui: &mut egui::Ui, steps: &[PlanStep]) {
             StepStatus::InProgress => (icon::CIRCLE_HALF, colors().warn),
             StepStatus::Pending => (icon::SQUARE, colors().muted),
         };
-        ui.label(RichText::new(format!("{mark} {}", step.text)).size(11.0).color(color));
+        ui.label(RichText::new(format!("{mark} {}", step.text)).size(crate::theme::look().text_body).color(color));
     }
 }
 
 fn render_request(ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, request: &harness_contracts::RuntimeRequest) {
     Frame::NONE
         .fill(colors().warn_bg)
-        .stroke(Stroke::new(1.0, colors().warn))
-        .corner_radius(4)
-        .inner_margin(Margin::same(8))
+        .stroke(Stroke::new(crate::theme::look().line_thin, colors().warn))
+        .corner_radius(crate::theme::look().radius_m)
+        .inner_margin(crate::theme::margin(crate::theme::look().space_m))
         .show(ui, |ui| {
-            ui.label(RichText::new(format!("{} PERMISSION REQUIRED", icon::WARNING)).strong().size(11.0).color(colors().warn));
-            ui.label(RichText::new(&request.title).size(12.0));
+            ui.label(RichText::new(format!("{} PERMISSION REQUIRED", icon::WARNING)).strong().size(crate::theme::look().text_body).color(colors().warn));
+            ui.label(RichText::new(&request.title).size(crate::theme::look().text_label));
             if let Some(detail) = &request.detail {
-                ui.label(RichText::new(detail).size(11.0).color(colors().muted));
+                ui.label(RichText::new(detail).size(crate::theme::look().text_body).color(colors().muted));
             }
             match request.status {
                 RequestStatus::Pending => {
@@ -1217,7 +1217,7 @@ fn render_request(ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, request
                         (RequestStatus::Resolved, None) => format!("{} Resolved", icon::CHECK),
                         (other, _) => format!("{other:?}"),
                     };
-                    ui.label(RichText::new(text).size(11.0).color(colors().ok));
+                    ui.label(RichText::new(text).size(crate::theme::look().text_body).color(colors().ok));
                 }
             }
         });

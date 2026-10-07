@@ -105,10 +105,10 @@ pub fn chip(ui: &mut egui::Ui, name: &str, detail: Option<&str>) -> egui::Respon
     };
     egui::Frame::NONE
         .fill(color.gamma_multiply(0.15))
-        .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.6)))
-        .corner_radius(8)
-        .inner_margin(egui::Margin::symmetric(6, 1))
-        .show(ui, |ui| ui.label(RichText::new(text).size(11.0).color(color)))
+        .stroke(egui::Stroke::new(crate::theme::look().line_thin, color.gamma_multiply(0.6)))
+        .corner_radius(crate::theme::look().radius_xl)
+        .inner_margin(crate::theme::margin2(crate::theme::look().space_sm, crate::theme::look().space_hair))
+        .show(ui, |ui| ui.label(RichText::new(text).size(crate::theme::look().text_body).color(color)))
         .response
 }
 
@@ -116,4 +116,99 @@ pub fn chip(ui: &mut egui::Ui, name: &str, detail: Option<&str>) -> egui::Respon
 pub fn text(name: &str) -> RichText {
     let (glyph, word, color) = look(name);
     RichText::new(format!("{glyph} {word}")).color(color)
+}
+
+/// The vocabulary's name for how plan and code line up.
+pub fn alignment(a: arch_graph::Alignment) -> &'static str {
+    match a {
+        arch_graph::Alignment::Observed => "observed",
+        arch_graph::Alignment::Planned => "planned",
+        arch_graph::Alignment::Missing => "missing",
+        arch_graph::Alignment::Present => "present",
+    }
+}
+
+/// The vocabulary's name for a lifecycle stage.
+pub fn stage(s: arch_graph::Stage) -> &'static str {
+    match s {
+        arch_graph::Stage::Declared => "stage_declared",
+        arch_graph::Stage::ArchApproved => "stage_arch_approved",
+        arch_graph::Stage::PlanApproved => "stage_plan_approved",
+        arch_graph::Stage::Skeleton => "stage_skeleton",
+        arch_graph::Stage::Implemented => "stage_implemented",
+    }
+}
+
+/// The vocabulary's name for a queue job's state.
+pub fn job(state: &arch_graph::JobState) -> &'static str {
+    match state {
+        arch_graph::JobState::Queued => "job_queued",
+        arch_graph::JobState::Running { .. } => "job_running",
+        arch_graph::JobState::AwaitingApproval => "job_awaiting_approval",
+        arch_graph::JobState::Retrying => "job_retrying",
+        arch_graph::JobState::Failed => "job_failed",
+        arch_graph::JobState::Done => "job_done",
+    }
+}
+
+/// The vocabulary's name for a finding's severity.
+pub fn severity(s: arch_graph::Severity) -> &'static str {
+    match s {
+        arch_graph::Severity::Error => "severity_error",
+        arch_graph::Severity::Warning => "severity_warning",
+        arch_graph::Severity::Info => "severity_info",
+    }
+}
+
+/// Steps in order, the ones before `current` done, `current` lit, the rest
+/// ahead: dots joined by a line, each with its word under it.
+pub fn track(ui: &mut egui::Ui, steps: &[(&str, &str)], current: Option<usize>) -> egui::Response {
+    let look = crate::theme::look();
+    let theme = colors();
+    let gap = look.space_xxxl * 2.0;
+    let dot = look.space_s;
+    let font = egui::FontId::proportional(look.text_small);
+    let height = dot * 4.0 + look.text_small * 1.6;
+    let width = gap * (steps.len().max(1) - 1) as f32 + gap;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let painter = ui.painter_at(rect.expand(look.space_s));
+    let x = |i: usize| rect.left() + gap / 2.0 + gap * i as f32;
+    let y = rect.top() + dot * 2.0;
+    for (i, (name, label)) in steps.iter().enumerate() {
+        let (_, _, color) = look_of(name);
+        let state = match current {
+            Some(c) if i < c => 0,
+            Some(c) if i == c => 1,
+            _ => 2,
+        };
+        if i + 1 < steps.len() {
+            let line = if state == 0 { color } else { theme.border_strong };
+            painter.line_segment([egui::pos2(x(i) + dot, y), egui::pos2(x(i + 1) - dot, y)], egui::Stroke::new(look.line_bold, line));
+        }
+        let center = egui::pos2(x(i), y);
+        match state {
+            0 => {
+                painter.circle_filled(center, dot, color);
+            }
+            1 => {
+                painter.circle_filled(center, dot * 1.4, color);
+                painter.circle_stroke(center, dot * 2.0, egui::Stroke::new(look.line_thin, color.gamma_multiply(0.6)));
+            }
+            _ => {
+                painter.circle_stroke(center, dot, egui::Stroke::new(look.line_thin, theme.faint));
+            }
+        }
+        let text_color = match state {
+            1 => color,
+            0 => theme.muted,
+            _ => theme.faint,
+        };
+        painter.text(egui::pos2(x(i), y + dot * 2.5), egui::Align2::CENTER_TOP, *label, font.clone(), text_color);
+    }
+    response
+}
+
+/// `look` under another name (inside `track`, where `look` is the sizes).
+fn look_of(name: &str) -> (&'static str, String, Color32) {
+    look(name)
 }

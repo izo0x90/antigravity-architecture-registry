@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use egui::{Color32, Frame, Margin, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2};
+use egui::{Color32, Frame, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -196,12 +196,12 @@ impl FeedbackInspectorState {
         if let Some((ref target_id, rect)) = self.hovered_target {
             // Draw translucent amber box
             painter.rect_filled(rect, 4.0, colors().highlight);
-            painter.rect_stroke(rect, 4.0, Stroke::new(2.0, colors().warn), StrokeKind::Outside);
+            painter.rect_stroke(rect, 4.0, Stroke::new(crate::theme::look().line_bold, colors().warn), StrokeKind::Outside);
 
             // Draw floating target label badge
             let badge_pos = Pos2::new(rect.min.x.max(8.0), (rect.min.y - 22.0).max(8.0));
             let badge_text = format!("🎯 Target: {}", target_id);
-            let font = egui::FontId::monospace(11.0);
+            let font = egui::FontId::monospace(crate::theme::look().text_body);
             let text_rect = painter.text(badge_pos, egui::Align2::LEFT_TOP, badge_text, font, colors().on_bright);
 
             let padded_badge = text_rect.expand2(Vec2::new(6.0, 3.0));
@@ -239,20 +239,20 @@ impl FeedbackInspectorState {
             .show(ctx, |ui| {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Target Element:").strong().size(12.0));
+                        ui.label(RichText::new("Target Element:").strong().size(crate::theme::look().text_label));
                         Frame::NONE
                             .fill(colors().surface)
-                            .stroke(Stroke::new(1.0, colors().selection))
-                            .corner_radius(4)
-                            .inner_margin(Margin::symmetric(8, 4))
+                            .stroke(Stroke::new(crate::theme::look().line_thin, colors().selection))
+                            .corner_radius(crate::theme::look().radius_m)
+                            .inner_margin(crate::theme::margin2(crate::theme::look().space_m, crate::theme::look().space_s))
                             .show(ui, |ui| {
-                                ui.label(RichText::new(&self.target_id).monospace().size(12.0).color(colors().info));
+                                ui.label(RichText::new(&self.target_id).monospace().size(crate::theme::look().text_label).color(colors().info));
                             });
                     });
-                    ui.add_space(8.0);
+                    ui.add_space(crate::theme::look().space_m);
 
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Category:").strong().size(12.0));
+                        ui.label(RichText::new("Category:").strong().size(crate::theme::look().text_label));
                         for cat in FeedbackCategory::all() {
                             let is_selected = &self.selected_category == cat;
                             let color = if is_selected { cat.color() } else { colors().muted };
@@ -261,9 +261,9 @@ impl FeedbackInspectorState {
                             }
                         }
                     });
-                    ui.add_space(10.0);
+                    ui.add_space(crate::theme::look().space_ml);
 
-                    ui.label(RichText::new("Critique, Friction & Bug Notes:").strong().size(12.0));
+                    ui.label(RichText::new("Critique, Friction & Bug Notes:").strong().size(crate::theme::look().text_label));
                     let text_resp = ui.add(
                         egui::TextEdit::multiline(&mut self.comment)
                             .id(egui::Id::new("feedback_modal_comment_edit"))
@@ -275,7 +275,7 @@ impl FeedbackInspectorState {
                         text_resp.request_focus();
                         self.should_focus_modal = false;
                     }
-                    ui.add_space(12.0);
+                    ui.add_space(crate::theme::look().space_l);
 
                     ui.horizontal(|ui| {
                         if ui.button(RichText::new("🚀 Submit Feedback").strong().color(colors().ok)).clicked() {
@@ -382,7 +382,7 @@ impl FeedbackInspectorState {
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("Total: {} issues", self.issues.len())).strong().size(12.0));
+                    ui.label(RichText::new(format!("Total: {} issues", self.issues.len())).strong().size(crate::theme::look().text_label));
                     ui.separator();
 
                     ui.label("Filter:");
@@ -422,7 +422,7 @@ impl FeedbackInspectorState {
                                 }).collect();
 
                                 if filtered.is_empty() {
-                                    ui.add_space(20.0);
+                                    ui.add_space(crate::theme::look().space_xxl);
                                     ui.label(RichText::new("No issues match current filter.").italics().color(colors().muted));
                                 } else if self.selected_issue_id.is_none() {
                                     if let Some(first) = filtered.first() {
@@ -446,21 +446,21 @@ impl FeedbackInspectorState {
 
                                     let card_res = Frame::NONE
                                         .fill(bg)
-                                        .stroke(Stroke::new(1.0, if is_selected { colors().accent } else { colors().raised }))
-                                        .corner_radius(4)
-                                        .inner_margin(Margin::same(8))
+                                        .stroke(Stroke::new(crate::theme::look().line_thin, if is_selected { colors().accent } else { colors().raised }))
+                                        .corner_radius(crate::theme::look().radius_m)
+                                        .inner_margin(crate::theme::margin(crate::theme::look().space_m))
                                         .show(ui, |ui| {
                                             ui.horizontal(|ui| {
-                                                ui.label(RichText::new(cat.as_str()).size(10.0).color(cat.color()).strong());
-                                                ui.label(RichText::new(&issue.status).size(10.0).color(colors().text));
+                                                ui.label(RichText::new(cat.as_str()).size(crate::theme::look().text_small).color(cat.color()).strong());
+                                                ui.label(RichText::new(&issue.status).size(crate::theme::look().text_small).color(colors().text));
                                             });
-                                            ui.label(RichText::new(target_id_str).monospace().size(11.0).color(colors().text_strong));
+                                            ui.label(RichText::new(target_id_str).monospace().size(crate::theme::look().text_body).color(colors().text_strong));
                                             let snippet = if issue.comment.len() > 45 {
                                                 format!("{}...", &issue.comment[..45])
                                             } else {
                                                 issue.comment.clone()
                                             };
-                                            ui.label(RichText::new(snippet).size(10.0).color(colors().muted));
+                                            ui.label(RichText::new(snippet).size(crate::theme::look().text_small).color(colors().muted));
                                         });
 
                                     let card_interact = ui.interact(card_res.response.rect, ui.id().with(&issue.id), egui::Sense::click());
@@ -473,7 +473,7 @@ impl FeedbackInspectorState {
                                     if card_interact.hovered() {
                                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                                     }
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::theme::look().space_s);
                                 }
                             });
                         },
@@ -490,17 +490,17 @@ impl FeedbackInspectorState {
                                 if let Some(issue) = self.issues.iter().find(|i| i.id == selected_id).cloned() {
                                     let target_id_str = issue.target.get("id").and_then(|v| v.as_str()).unwrap_or("general").to_string();
 
-                                    ui.label(RichText::new(format!("Issue: {}", issue.id)).monospace().strong().size(13.0));
-                                    ui.add_space(4.0);
+                                    ui.label(RichText::new(format!("Issue: {}", issue.id)).monospace().strong().size(crate::theme::look().text_title));
+                                    ui.add_space(crate::theme::look().space_s);
 
                                     ui.horizontal(|ui| {
-                                        ui.label(RichText::new("Target:").strong().size(11.0));
-                                        ui.label(RichText::new(&target_id_str).monospace().size(11.0).color(colors().info));
+                                        ui.label(RichText::new("Target:").strong().size(crate::theme::look().text_body));
+                                        ui.label(RichText::new(&target_id_str).monospace().size(crate::theme::look().text_body).color(colors().info));
                                     });
-                                    ui.add_space(6.0);
+                                    ui.add_space(crate::theme::look().space_sm);
 
                                     ui.horizontal(|ui| {
-                                        ui.label(RichText::new("Status:").strong().size(11.0));
+                                        ui.label(RichText::new("Status:").strong().size(crate::theme::look().text_body));
                                         let statuses = ["open", "in_progress", "resolved"];
                                         for st in statuses {
                                             let is_st = self.editing_status.eq_ignore_ascii_case(st);
@@ -515,10 +515,10 @@ impl FeedbackInspectorState {
                                             }
                                         }
                                     });
-                                    ui.add_space(6.0);
+                                    ui.add_space(crate::theme::look().space_sm);
 
                                     ui.horizontal(|ui| {
-                                        ui.label(RichText::new("Category:").strong().size(11.0));
+                                        ui.label(RichText::new("Category:").strong().size(crate::theme::look().text_body));
                                         for cat in FeedbackCategory::all() {
                                             let is_cat = &self.editing_category == cat;
                                             if ui.selectable_label(is_cat, cat.as_str()).clicked() {
@@ -526,22 +526,22 @@ impl FeedbackInspectorState {
                                             }
                                         }
                                     });
-                                    ui.add_space(8.0);
+                                    ui.add_space(crate::theme::look().space_m);
 
-                                    ui.label(RichText::new("Critique & Notes (Editable):").strong().size(11.0));
+                                    ui.label(RichText::new("Critique & Notes (Editable):").strong().size(crate::theme::look().text_body));
                                     ui.add(
                                         egui::TextEdit::multiline(&mut self.editing_comment)
                                             .desired_rows(7)
                                             .desired_width(ui.available_width())
                                     );
-                                    ui.add_space(10.0);
+                                    ui.add_space(crate::theme::look().space_ml);
 
                                     if let Some(ctx_val) = &issue.context {
                                         ui.collapsing("System Context Metadata", |ui| {
                                             let pretty = serde_json::to_string_pretty(ctx_val).unwrap_or_default();
-                                            ui.label(RichText::new(pretty).monospace().size(10.0).color(colors().muted));
+                                            ui.label(RichText::new(pretty).monospace().size(crate::theme::look().text_small).color(colors().muted));
                                         });
-                                        ui.add_space(10.0);
+                                        ui.add_space(crate::theme::look().space_ml);
                                     }
 
                                     ui.horizontal(|ui| {
@@ -570,7 +570,7 @@ impl FeedbackInspectorState {
                                 }
                             } else {
                                 ui.vertical_centered(|ui| {
-                                    ui.add_space(50.0);
+                                    ui.add_space(crate::theme::look().space_huge);
                                     ui.label(RichText::new("Select an issue from the list to view or edit.").italics().color(colors().muted));
                                 });
                             }
@@ -591,11 +591,11 @@ impl FeedbackInspectorState {
                     .show(ctx, |ui| {
                         Frame::NONE
                             .fill(colors().ok_bg)
-                            .stroke(Stroke::new(1.0, colors().ok))
-                            .corner_radius(6)
-                            .inner_margin(Margin::same(10))
+                            .stroke(Stroke::new(crate::theme::look().line_thin, colors().ok))
+                            .corner_radius(crate::theme::look().radius_l)
+                            .inner_margin(crate::theme::margin(crate::theme::look().space_ml))
                             .show(ui, |ui| {
-                                ui.label(RichText::new(msg).color(colors().text_strong).size(12.0));
+                                ui.label(RichText::new(msg).color(colors().text_strong).size(crate::theme::look().text_label));
                             });
                     });
             } else {
