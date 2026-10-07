@@ -1050,7 +1050,7 @@ acceptance = "Connections leaving what's shown appear as stubs on its edge with 
 id = "G.7"
 slice = "G"
 title = "Clean routing, no overlaps"
-acceptance = "Cards never overlap, sit on an aligned grid sized to their text, and stay inside their parent; lines run in straight segments with rounded corners through the gaps, never through cards, and travel together when going the same way."
+acceptance = "Cards never overlap, sit on an aligned grid sized to their text, and stay inside their parent; lines run through the gaps, never through cards, each its own (never on top of another)."
 
 [[req]]
 id = "G.8"
@@ -1063,6 +1063,24 @@ id = "G.9"
 slice = "G"
 title = "Layout tests on real data"
 acceptance = "Tests over sample graphs and this repo's real graph check: no overlaps, children inside parents, text inside cards, no line through a card, crossings under a set bound."
+
+[[req]]
+id = "G.10"
+slice = "G"
+title = "Selecting lights up what's related"
+acceptance = "With something selected, it and what it links to (either way), what holds it and its parts stay bright and their lines are drawn bold and labelled; everything else dims, without filtering anything out. Lines say nothing until their end is selected."
+
+[[req]]
+id = "G.11"
+slice = "G"
+title = "Readable, not squeezed"
+acceptance = "A view opens at a readable size around the selection (or where it starts) rather than shrinking everything onto one screen; fitting all is a button. Lines are smooth curves between facing sides, one per pair of things (arrows at both ends when it goes both ways), never on top of each other or through a card."
+
+[[req]]
+id = "G.12"
+slice = "G"
+title = "Going to the graph lands in context"
+acceptance = "Showing something that holds nothing (a function) in the graph opens it inside the module that holds it, selected, with its neighbours around it."
 
 # ---- C: call stack view ----
 

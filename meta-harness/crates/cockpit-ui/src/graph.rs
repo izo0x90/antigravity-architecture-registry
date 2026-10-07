@@ -260,6 +260,9 @@ pub struct GraphState {
     pub(crate) chip_rects: Vec<(String, Rect)>,
     /// Where the long-press chips start in `chip_rects` (after the bar's).
     context_chips: usize,
+    /// Markers at the screen's edge for the selection's lines that go off
+    /// it: what's at the other end, and where the marker is (click to go).
+    pub(crate) beyond: Vec<(ComponentId, Rect)>,
     pub legend_open: bool,
 }
 
@@ -309,6 +312,7 @@ impl Default for GraphState {
             context: None,
             chip_rects: Vec::new(),
             context_chips: 0,
+            beyond: Vec::new(),
             legend_open: false,
         }
     }
@@ -575,6 +579,18 @@ impl GraphState {
         self.shut.retain(|c| result.view.node(c).is_some());
         self.result = Some(result);
         self.rebuild(same_level);
+        // Focused on one thing that holds nothing (a function, in a view of
+        // what's in what): show it where it lives, inside its module, selected.
+        if let Some(result) = &self.result
+            && result.view.spec.layout == LayoutKind::Nested
+            && let [root] = result.view.roots.as_slice()
+            && !result.view.edges.iter().any(|e| e.kind == RelationKind::Contains && &e.source == root)
+            && let Some(holder) = result.view.trail.last().cloned()
+        {
+            let root = root.clone();
+            self.navigate(NavChange::Focus(holder));
+            self.pending_select = Some(root);
+        }
         self.load = Load::Idle;
         if std::mem::take(&mut self.refit) {
             self.fit = true;
@@ -966,6 +982,28 @@ impl GraphState {
         lines
     }
 
+    /// With something selected: it, what it's linked to (either way), what
+    /// holds it and, for an open module, its parts. The rest dims.
+    fn related(&self) -> Option<BTreeSet<ComponentId>> {
+        let sel = self.selection.as_ref()?;
+        let mut out: BTreeSet<ComponentId> = BTreeSet::from([sel.clone()]);
+        for line in &self.scene.lines {
+            let ends = [&line.from, &line.to];
+            if ends.iter().any(|e| matches!(e, End::Node(id) | End::Outside(id) if id == sel)) {
+                for e in ends {
+                    if let End::Node(id) | End::Outside(id) = e {
+                        out.insert(id.clone());
+                    }
+                }
+            }
+        }
+        out.extend(self.scene.ancestors(sel));
+        if self.scene.containers.contains(sel) {
+            out.extend(self.scene.parent.iter().filter(|(_, p)| *p == sel).map(|(c, _)| c.clone()));
+        }
+        Some(out)
+    }
+
     /// Whether the view shows data flow (steps say their shape).
     fn is_flow(&self) -> bool {
         self.result.as_ref().is_some_and(|r| r.view.spec.kinds.contains(&RelationKind::DataFlow))
@@ -1097,7 +1135,18 @@ impl GraphState {
             self.camera.pan = (area.min - self.canvas.min) + Vec2::splat(pad) - Vec2::new(bounds.x, bounds.y) * zoom;
             return;
         }
-        self.fit_rects(&[bounds]);
+        // With a selection, frame it and what it's linked to; else the whole.
+        let focus: Vec<WorldRect> = self.related().map(|r| r.iter().filter_map(|id| self.box_of(id)).collect()).unwrap_or_default();
+        self.fit_rects(if focus.is_empty() { std::slice::from_ref(&bounds) } else { &focus });
+        // Never smaller than readable: what doesn't fit opens at reading
+        // size around the selection (or where it starts), and pans from there.
+        let readable = self.ui.detail.mid;
+        if self.camera.zoom < readable {
+            let area = self.open_area;
+            let anchor = self.selection.as_ref().and_then(|s| self.box_of(s)).map_or((bounds.x + area.width() / readable / 2.0, bounds.y + area.height() / readable / 2.0), |r| r.center());
+            self.camera.zoom = readable;
+            self.camera.pan = (area.center() - self.canvas.min) - Vec2::new(anchor.0, anchor.1) * readable;
+        }
     }
 
     /// Zooms and pans so `rects` fill the open part of the canvas.
@@ -1229,6 +1278,7 @@ impl GraphState {
                 if self.draw_graph(&painter, time, hover) {
                     ui.ctx().request_repaint();
                 }
+                self.beyond = self.edge_markers(&painter);
             }
         }
         if let Load::Failed(err) = &self.load
@@ -1242,6 +1292,10 @@ impl GraphState {
             && (response.clicked() || response.double_clicked())
             && let Some(pos) = response.interact_pointer_pos()
         {
+            if let Some(id) = self.beyond.iter().find(|(_, r)| r.contains(pos)).map(|(id, _)| id.clone()) {
+                self.pointer_jump(NavChange::Jump(id));
+                return;
+            }
             if self.hit_more(pos) {
                 self.show_everything();
                 return;
@@ -1309,6 +1363,10 @@ impl GraphState {
         match gesture {
             Gesture::Tap(pos) => {
                 self.close_context();
+                if let Some(id) = self.beyond.iter().find(|(_, r)| r.contains(pos)).map(|(id, _)| id.clone()) {
+                    self.pointer_jump(NavChange::Jump(id));
+                    return;
+                }
                 if self.hit_more(pos) {
                     self.show_everything();
                     return;
@@ -1426,7 +1484,7 @@ impl GraphState {
     /// of the on-screen chips.
     fn draw_legend(&self, painter: &egui::Painter) {
         let theme = colors();
-        let entries = style().legend(&theme);
+        let entries: Vec<LegendEntry> = style().legend(&theme).into_iter().filter(|e| self.on_screen(e)).collect();
         let (pad, swatch_w, gap) = (10.0, 28.0, 8.0);
         let max_w = (self.canvas.width() - 16.0).clamp(160.0, 380.0);
         let text_w = max_w - pad * 2.0 - swatch_w - gap;
@@ -1487,6 +1545,32 @@ impl GraphState {
                 (None, None) => {}
             }
             y += h + 4.0;
+        }
+    }
+
+    /// Whether a legend entry explains something drawn now.
+    fn on_screen(&self, entry: &LegendEntry) -> bool {
+        let Some(result) = &self.result else { return false };
+        let lines = &self.scene.lines;
+        let drawn = || self.scene.rects.keys().filter_map(|id| result.view.node(id));
+        match entry.section {
+            "Relations" => lines.iter().any(|l| l.kinds.iter().any(|k| k.name().replace('_', " ") == entry.label)),
+            "Plan vs code" => {
+                if entry.label == crate::status::look("unconfirmed").1 {
+                    lines.iter().any(|l| l.unconfirmed)
+                } else if entry.label.starts_with("overlay") {
+                    lines.iter().any(|l| l.overlay)
+                } else {
+                    lines.iter().any(|l| crate::graph_style::alignment_label(l.alignment) == entry.label)
+                }
+            }
+            "Nodes" => match entry.label.as_str() {
+                "selected" => self.selection.is_some(),
+                "the agent pointed here" => self.agent.as_ref().is_some_and(|a| a.focus.is_some()),
+                label => drawn().any(|n| crate::graph_style::alignment_label(n.alignment) == label),
+            },
+            "Stage" => self.scene.rects.keys().filter_map(|id| result.components.get(id)).any(|c| crate::status::look(crate::status::stage(c.stage)).1 == entry.label),
+            _ => true,
         }
     }
 
@@ -1631,6 +1715,7 @@ impl GraphState {
         // Lines settle in once the cards have moved.
         let settle = self.moving.as_ref().map_or(1.0, |m| move_t(m.started, time).unwrap_or(0.0));
         let mut unlabelled: Vec<Unlabelled> = Vec::new();
+        let related = self.related();
         // A story's module bands, behind everything: each run of steps in one module.
         for (i, band) in self.scene.bands.iter().enumerate() {
             let rect = self.to_screen(&band.rect);
@@ -1677,6 +1762,14 @@ impl GraphState {
             let shut = node.is_some_and(|n| n.members > 0);
             let (animates, named) = self.draw_node(painter, rect, c, node.map_or(Alignment::Observed, |n| n.alignment), node.is_some_and(|n| n.truncated) && !shut, shut, time);
             moving |= animates;
+            // With something selected, what isn't related dims; what is gets a ring.
+            if let Some(related) = &related {
+                if !related.contains(id) {
+                    painter.rect_filled(rect.expand(look.space_xs), look.radius_l, theme.bg.gamma_multiply(look.dim));
+                } else if self.selection.as_ref() != Some(id) {
+                    painter.rect_stroke(rect, look.radius_l, Stroke::new(look.line_bold, theme.focus.gamma_multiply(look.glow_alpha * 2.0)), StrokeKind::Outside);
+                }
+            }
             // Following a value: what it doesn't pass through fades back.
             if self.trace.is_some() && !self.scene.lines.iter().any(|l| self.on_trace(&l.carries) && [&l.from, &l.to].iter().any(|e| matches!(e, End::Node(n) if n == id))) {
                 painter.rect_filled(rect.expand(look.space_xs), look.radius_l, theme.bg.gamma_multiply(look.fade));
@@ -1728,6 +1821,9 @@ impl GraphState {
             if !self.block_text(painter, rect, &text, theme.special) {
                 unlabelled.push(Unlabelled { id: group.clone(), rect, text, open: false });
             }
+            if related.as_ref().is_some_and(|r| !r.contains(group)) {
+                painter.rect_filled(rect.expand(look.space_xs), look.radius_l, theme.bg.gamma_multiply(look.dim));
+            }
         }
         if let Some((r, held)) = &self.scene.more {
             let rect = self.to_screen(r);
@@ -1746,6 +1842,56 @@ impl GraphState {
             painter.text(at.center(), Align2::CENTER_CENTER, &u.text, font.clone(), if u.open { theme.muted } else { theme.text_strong });
         }
         moving
+    }
+
+    /// Where the selection's lines leave the screen: a marker at the edge
+    /// naming what's at the other end (an arrow for which way), placed where
+    /// the line goes out and kept clear of the others. Returns them for clicks.
+    fn edge_markers(&self, painter: &egui::Painter) -> Vec<(ComponentId, Rect)> {
+        let Some(sel) = self.selection.clone() else { return Vec::new() };
+        let look = crate::theme::look();
+        let theme = colors();
+        let area = self.open_area.shrink(look.space_m);
+        let font = FontId::proportional(look.text_small);
+        let mut placed: Vec<(ComponentId, Rect)> = Vec::new();
+        for line in &self.scene.lines {
+            let is = |e: &End| matches!(e, End::Node(id) | End::Outside(id) if *id == sel);
+            let (other, outgoing) = if is(&line.from) { (&line.to, true) } else if is(&line.to) { (&line.from, false) } else { continue };
+            let (End::Node(other_id) | End::Outside(other_id)) = other else { continue };
+            let Some(far) = self.scene.rect_of(other).map(|r| self.to_screen(&r)) else { continue };
+            if area.intersects(far) || placed.iter().any(|(id, _)| id == other_id) {
+                continue;
+            }
+            let mut points: Vec<Pos2> = line.points.iter().map(|p| self.world_to_screen(*p)).collect();
+            if !outgoing {
+                points.reverse();
+            }
+            let Some(out) = points.iter().position(|p| !area.contains(*p)) else { continue };
+            let exit = area.clamp(points[out]);
+            let name = self.names.get(other_id).cloned().or_else(|| self.component(other_id).map(|c| c.name.clone())).unwrap_or_else(|| other_id.to_string());
+            let arrow = match (line.both_ways, outgoing) {
+                (true, _) => egui_phosphor::regular::ARROWS_LEFT_RIGHT,
+                (false, true) => egui_phosphor::regular::ARROW_RIGHT,
+                (false, false) => egui_phosphor::regular::ARROW_LEFT,
+            };
+            let galley = painter.layout_no_wrap(format!("{arrow} {name}"), font.clone(), theme.text_strong);
+            let size = galley.size() + Vec2::new(look.space_m * 2.0, look.space_xs * 2.0);
+            let mut rect = Rect::from_center_size(exit, size);
+            rect = rect.translate(Vec2::new((area.left() - rect.left()).max(0.0) + (area.right() - rect.right()).min(0.0), (area.top() - rect.top()).max(0.0) + (area.bottom() - rect.bottom()).min(0.0)));
+            // Along the edge it sits on, clear of the markers already there.
+            let on_side = (exit.x - area.left()).abs() < 1.0 || (exit.x - area.right()).abs() < 1.0;
+            let mut tries = 0;
+            while placed.iter().any(|(_, r)| r.expand(look.space_hair).intersects(rect)) && tries < 64 {
+                rect = rect.translate(if on_side { Vec2::new(0.0, size.y + look.space_xs) } else { Vec2::new(size.x + look.space_xs, 0.0) });
+                tries += 1;
+            }
+            let st = style().edge(&theme, line.kind, provenance_of(line.alignment), line.alignment, line.overlay);
+            painter.rect_filled(rect, look.radius_pill, theme.overlay);
+            painter.rect_stroke(rect, look.radius_pill, Stroke::new(look.line_thin, st.color), StrokeKind::Inside);
+            painter.galley(rect.min + Vec2::new(look.space_m, look.space_xs), galley, theme.text_strong);
+            placed.push((other_id.clone(), rect));
+        }
+        placed
     }
 
     /// A block's one line, centred, when it fits; says whether it did.
@@ -1851,10 +1997,39 @@ impl GraphState {
         // following a value, lines that don't carry it fade further.
         let touches = self.selection.as_ref().is_none_or(|s| [&line.from, &line.to].iter().any(|e| matches!(e, End::Node(id) | End::Outside(id) if id == s)));
         let traced = self.trace.is_none() || self.on_trace(&line.carries);
-        let color = if traced && touches { st.color } else if traced { st.color.gamma_multiply(1.0 - look.fade) } else { st.color.gamma_multiply((1.0 - look.fade) * (1.0 - look.fade)) }.gamma_multiply(settle);
-        let width = st.width * (1.0 + (line.count as f32).log2() * look.line_count_gain).min(look.line_count_max);
+        let lit = self.selection.is_some() && touches;
+        let color = if traced && touches { st.color } else if traced { st.color.gamma_multiply(1.0 - look.dim) } else { st.color.gamma_multiply((1.0 - look.dim) * (1.0 - look.fade)) }.gamma_multiply(settle);
+        let width = st.width * (1.0 + (line.count as f32).log2() * look.line_count_gain).min(look.line_count_max) + if lit { look.line_thin } else { 0.0 };
         let stroke = Stroke::new(width, color);
-        let corners: Vec<Pos2> = line.points.iter().map(|p| self.world_to_screen(*p)).collect();
+        let mut corners: Vec<Pos2> = line.points.iter().map(|p| self.world_to_screen(*p)).collect();
+        // A line leaving the level is a short stub on its card's edge (with
+        // its count), drawn whole only when either end is selected.
+        let outward = matches!((&line.from, &line.to), (End::Outside(_), _) | (_, End::Outside(_)));
+        if outward && !lit {
+            let inside_first = matches!(line.from, End::Node(_));
+            if !inside_first {
+                corners.reverse();
+            }
+            let reach = self.ui.arrange.gap_x * self.camera.zoom / 2.0;
+            let mut stub = vec![corners[0]];
+            let mut left = reach;
+            for pair in corners.windows(2) {
+                let step = (pair[1] - pair[0]).length();
+                if step >= left {
+                    stub.push(pair[0] + (pair[1] - pair[0]) * (left / step.max(f32::EPSILON)));
+                    break;
+                }
+                stub.push(pair[1]);
+                left -= step;
+            }
+            let tip = stub[stub.len() - 1];
+            let (glyph, color) = (if inside_first { egui_phosphor::regular::ARROW_RIGHT } else { egui_phosphor::regular::ARROW_LEFT }, st.color.gamma_multiply(settle));
+            painter.add(Shape::line(stub, Stroke::new(st.width, color.gamma_multiply(if self.selection.is_some() { 1.0 - look.dim } else { 1.0 }))));
+            if self.selection.is_none() {
+                line_pill(painter, tip, &format!("{glyph} {}", line.count), color);
+            }
+            return false;
+        }
         let points = rounded(&corners, look.radius_l);
         let mut moving = false;
         if st.dashed {
@@ -1870,12 +2045,17 @@ impl GraphState {
         } else {
             painter.add(Shape::line(points, stroke));
         }
-        // Arrow head.
+        // Arrow heads: where it goes, and where it comes back to (both ways).
         let n = corners.len();
-        let tip = corners[n - 1];
-        let dir = (tip - corners[n - 2]).normalized();
-        let side = Vec2::new(-dir.y, dir.x) * look.space_s;
-        painter.add(Shape::convex_polygon(vec![tip, tip - dir * look.space_m + side, tip - dir * look.space_m - side], color, Stroke::NONE));
+        let mut heads = vec![(corners[n - 1], corners[n - 2])];
+        if line.both_ways {
+            heads.push((corners[0], corners[1]));
+        }
+        for (tip, before) in heads {
+            let dir = (tip - before).normalized();
+            let side = Vec2::new(-dir.y, dir.x) * look.space_s;
+            painter.add(Shape::convex_polygon(vec![tip, tip - dir * look.space_m + side, tip - dir * look.space_m - side], color, Stroke::NONE));
+        }
         // What it carries and how many relations it stands for, on its
         // longest stretch; and the count where it leaves the level.
         let said = {
@@ -1890,12 +2070,15 @@ impl GraphState {
                 (false, _) => what,
             }
         };
-        let legible = self.camera.zoom >= self.ui.detail.mid || (touches && self.selection.is_some()) || (self.trace.is_some() && traced);
+        // Said only for the selection's own lines (or the value followed).
+        let legible = lit || (self.trace.is_some() && traced);
         if !said.is_empty() && legible {
             let (a, b) = corners.windows(2).map(|w| (w[0], w[1])).max_by(|x, y| (x.1 - x.0).length().total_cmp(&(y.1 - y.0).length())).unwrap_or((corners[0], corners[1]));
             line_pill(painter, a.lerp(b, 0.5), &said, color);
         }
-        if let Some(exit) = line.exit {
+        if let Some(exit) = line.exit
+            && legible
+        {
             line_pill(painter, self.world_to_screen(exit), &line.count.to_string(), color);
         }
         moving
@@ -3170,13 +3353,17 @@ pub(crate) mod tests {
         frame(&mut g, vec![touch(1, Start, step)], 0.1);
         frame(&mut g, vec![touch(1, End, step)], 0.05);
         assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::step");
-        // Double tap focuses.
-        let save = center_of(&g, "rust:a::save");
+        // Double tap focuses (on the card, not on a marker or chip over it).
+        let card = g.to_screen(&g.scene.rects[&ComponentId::new("rust:a::step")]).intersect(g.open_area);
+        let save = [card.center(), card.left_center() + Vec2::new(4.0, 0.0), card.right_center() - Vec2::new(4.0, 0.0), card.center_top() + Vec2::new(0.0, 4.0), card.center_bottom() - Vec2::new(0.0, 4.0)]
+            .into_iter()
+            .find(|p| !g.beyond.iter().map(|(_, r)| r).chain(g.chip_rects.iter().map(|(_, r)| r)).any(|r| r.contains(*p)))
+            .expect("some of the card is free");
         frame(&mut g, vec![touch(2, Start, save)], 1.0);
         frame(&mut g, vec![touch(2, End, save)], 0.05);
         frame(&mut g, vec![touch(3, Start, save)], 0.1);
         frame(&mut g, vec![touch(3, End, save)], 0.05);
-        assert_eq!(g.nav.roots, vec![ComponentId::new("rust:a::save")]);
+        assert_eq!(g.nav.roots, vec![ComponentId::new("rust:a::step")]);
         assert!(g.jumped.take().is_some(), "a double tap is a jump (the shell records it)");
         // Swipe right goes back, left goes forward (the shell's jump list).
         let mid = Pos2::new(120.0, 500.0);
@@ -3293,7 +3480,7 @@ pub(crate) mod tests {
             assert_eq!(find("Stage", &crate::status::look(crate::status::stage(stage)).1), Some(Swatch::Stripe(style.stage_color(theme, stage))));
         }
         assert!(config.keymap.bind.contains_key("graph.legend") && config.graph.chips.actions.iter().any(|a| a == "graph.legend"), "a key and a chip");
-        // Toggling shows exactly the table's entries.
+        // Toggling shows the table's entries for what's on screen, and only those.
         let ctx = egui::Context::default();
         crate::theme::set(config.theme.clone(), &ctx);
         let mut g = configured();
@@ -3304,9 +3491,11 @@ pub(crate) mod tests {
         g.run(&toggle, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] });
         let out = draw(&mut g, &ctx, vec![], 0.1, Vec2::new(1200.0, 800.0));
         let text = texts(&out);
-        for entry in &legend {
+        let shown: Vec<&LegendEntry> = legend.iter().filter(|e| g.on_screen(e)).collect();
+        for entry in &shown {
             assert!(text.contains(&entry.label), "legend shows {}: {text}", entry.label);
         }
+        assert!(shown.iter().any(|e| e.label == "calls") && !text.contains("\ncontains\n") && !text.contains("data flow"), "only calls are drawn here: {text}");
         // Nodes carry their stage stripe in the stage's color.
         let mut fills = Vec::new();
         fn rects(shape: &Shape, out: &mut Vec<egui::Color32>) {
@@ -3433,7 +3622,7 @@ pub(crate) mod tests {
             _ => None,
         }).collect();
         assert!(lines.contains(&solid), "the selection's own line in full");
-        assert!(lines.contains(&solid.gamma_multiply(1.0 - look.fade)), "a line away from it faded: {lines:?}");
+        assert!(lines.contains(&solid.gamma_multiply(1.0 - look.dim)), "a line away from it dimmed: {lines:?}");
 
         // Where the agent points: a pulse, which keeps drawing even with still dashes.
         let mut quiet = (*look).clone();
@@ -3603,7 +3792,11 @@ pub(crate) mod tests {
         let line = g.scene.lines.iter().find(|l| l.kind == RelationKind::Calls && l.from == End::Node(ComponentId::new("rust:b"))).expect("merged").clone();
         assert_eq!((line.to.clone(), line.count), (End::Node(ComponentId::new("rust:a")), 6));
         let text = texts(&draw(&mut g, &ctx, vec![], 0.0, size));
-        assert!(text.lines().any(|l| l == "6"), "the count shows on it: {text}");
+        assert!(!text.lines().any(|l| l == "6"), "nothing selected: lines say nothing: {text}");
+        g.select(Some(ComponentId::new("rust:b")));
+        let text = texts(&draw(&mut g, &ctx, vec![], 0.05, size));
+        assert!(text.lines().any(|l| l == "6"), "selected: its line says how many it stands for: {text}");
+        g.select(None);
         // Opened in place: the lines split onto the parts, and the cards
         // that moved glide there.
         let before = g.scene.rects.clone();
@@ -3704,7 +3897,10 @@ pub(crate) mod tests {
         let text = texts(&draw(&mut g, &ctx, vec![], 0.0, size));
         // D.2: each step's shape; what flows on each line.
         assert!(text.contains("Text -> Result<Report, Error>"), "{text}");
-        assert!(text.lines().any(|l| l == "Text"), "the line says what flows: {text}");
+        g.select(Some(ComponentId::new("rust:a::step")));
+        let text = texts(&draw(&mut g, &ctx, vec![], 0.05, size));
+        assert!(text.lines().any(|l| l == "Text"), "the selection's lines say what flows: {text}");
+        g.select(None);
         // D.3: steps where the data changes shape are marked; one that keeps it isn't.
         let (_, reshapes, _) = crate::status::look("reshapes");
         let step = shape_of(g.component(&ComponentId::new("rust:a::step")).unwrap()).unwrap();
@@ -3727,5 +3923,92 @@ pub(crate) mod tests {
         let unfollow = g.actions().into_iter().find(|a| a.id == "graph.unfollow").expect("can stop");
         g.run(&unfollow, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] });
         assert!(g.trace.is_none());
+    }
+
+    // req: G.10, G.11, G.12
+    #[test]
+    fn selecting_lights_up_whats_related_views_open_readable_and_go_tos_land_in_context() {
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::set(config.theme.clone(), &ctx);
+        crate::theme::set_look(config.look.clone());
+        let (look, theme) = (crate::theme::look(), colors());
+        let size = Vec2::new(1400.0, 800.0);
+        // G.10: step is linked to run (its caller) and save (its callee); log isn't.
+        let mut g = configured();
+        draw(&mut g, &ctx, vec![], 0.0, size);
+        assert!(g.related().is_none(), "nothing selected: nothing dims");
+        g.select(Some(ComponentId::new("rust:a::step")));
+        let related = g.related().unwrap();
+        let ids = |names: &[&str]| names.iter().map(|n| ComponentId::new(*n)).collect::<BTreeSet<_>>();
+        assert_eq!(related, ids(&["rust:a::run", "rust:a::step", "rust:a::save"]));
+        let out = draw(&mut g, &ctx, vec![], 0.1, size);
+        let dim = theme.bg.gamma_multiply(look.dim);
+        fn fills(shape: &Shape, into: &mut Vec<(egui::Color32, Rect)>) {
+            match shape {
+                Shape::Rect(r) => into.push((r.fill, r.rect)),
+                Shape::Vec(list) => list.iter().for_each(|s| fills(s, into)),
+                _ => {}
+            }
+        }
+        let mut drawn = Vec::new();
+        out.shapes.iter().for_each(|c| fills(&c.shape, &mut drawn));
+        let log = g.to_screen(&g.scene.rects[&ComponentId::new("rust:a::log")]);
+        let veiled = |card: Rect| drawn.iter().any(|(fill, r)| *fill == dim && r.contains_rect(card));
+        assert!(veiled(log), "log isn't related: it dims");
+        assert!(!veiled(g.to_screen(&g.scene.rects[&ComponentId::new("rust:a::save")])), "save is: it stays bright");
+
+        // G.11: a wide view opens at reading size around the selection, not squeezed.
+        let mut wide = sample_result();
+        for i in 0..30 {
+            let id = ComponentId::new(format!("rust:a::n{i:02}"));
+            let mut c = wide.components[&ComponentId::new("rust:a::run")].clone();
+            c.id = id.clone();
+            c.name = format!("n{i:02}");
+            wide.components.insert(id.clone(), c);
+            wide.view.nodes.push(ViewNode { id: id.clone(), depth: Some(1), truncated: false, alignment: Alignment::Observed, members: 0, container: None });
+            let from = if i == 0 { "rust:a::save".to_owned() } else { format!("rust:a::n{:02}", i - 1) };
+            wide.view.edges.push(ViewEdge { id: arch_graph::RelationId(format!("calls:{from}->{id}")), kind: RelationKind::Calls, source: ComponentId::new(&from), target: id.clone(), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None });
+        }
+        let mut w = configured();
+        w.set_result(wide);
+        w.select(Some(ComponentId::new("rust:a::n15")));
+        draw(&mut w, &ctx, vec![], 0.0, size);
+        w.fit_view();
+        assert!(w.camera.zoom >= w.ui.detail.mid, "readable: {}", w.camera.zoom);
+        let at = w.to_screen(&w.scene.rects[&ComponentId::new("rust:a::n15")]).center();
+        assert!(at.distance(w.open_area.center()) < 1.0, "around the selection");
+        // Lines: one per pair, never on top of each other.
+        assert!(scene::problems(&w.scene).is_empty(), "{:?}", scene::problems(&w.scene));
+        // What a selected line reaches off screen is named at the edge; a click goes there.
+        let mut far = w.result.clone().unwrap();
+        far.view.edges.push(ViewEdge { id: arch_graph::RelationId("calls:n15->n29".into()), kind: RelationKind::Calls, source: ComponentId::new("rust:a::n15"), target: ComponentId::new("rust:a::n29"), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None });
+        w.set_result(far);
+        w.fit_view();
+        let text = texts(&draw(&mut w, &ctx, vec![], 1.0, size));
+        let marker = w.beyond.iter().find(|(id, _)| id.as_str() == "rust:a::n29").map(|(_, r)| *r).expect("n29 is off screen: marked at the edge");
+        assert!(text.contains("n29"), "{text}");
+        assert!(w.open_area.contains_rect(marker), "on screen");
+        draw(&mut w, &ctx, click(marker.center(), true), 1.1, size);
+        draw(&mut w, &ctx, click(marker.center(), false), 1.15, size);
+        assert_eq!(w.selection.as_ref().map(|s| s.as_str()), Some("rust:a::n29"), "clicking it goes there");
+
+        // G.12: going to a function (it holds nothing) opens it in its module.
+        let mut n = configured();
+        n.set_result(nested_result());
+        let mut alone = nested_result();
+        alone.view.roots = vec![ComponentId::new("rust:a::step")];
+        alone.view.nodes.retain(|x| x.id.as_str() == "rust:a::step");
+        alone.view.edges.clear();
+        alone.view.trail = vec![ComponentId::new("rust:a")];
+        n.reveal(ComponentId::new("rust:zz::unshown"));
+        n.set_result(alone);
+        assert_eq!(n.nav.roots, vec![ComponentId::new("rust:a")], "to the module that holds it");
+        let mut module = nested_result();
+        module.view.roots = vec![ComponentId::new("rust:a")];
+        module.view.nodes.retain(|x| x.id.as_str() != "rust:b");
+        n.set_result(module);
+        assert_eq!(n.selection.as_ref().map(|s| s.as_str()), Some("rust:a::step"), "selected there, among its neighbours");
+        assert!(n.shown(&ComponentId::new("rust:a::run")) && n.shown(&ComponentId::new("rust:a::save")));
     }
 }

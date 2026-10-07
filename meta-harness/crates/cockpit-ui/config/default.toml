@@ -259,6 +259,8 @@ dash_speed = 18.0
 fade = 0.6
 # Background grid spacing in the graph (0: none).
 grid_step = 32.0
+# With something selected, how far what isn't related to it dims (0 to 1).
+dim = 0.78
 # Merged lines grow with how many relations they stand for: this much of
 # their width per doubling, up to this many times as wide.
 line_count_gain = 0.5

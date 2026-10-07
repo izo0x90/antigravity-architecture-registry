@@ -3,7 +3,8 @@
 //! coupled parts near each other) on an aligned grid; modules show shut
 //! unless opened, and a focused module is the level everything sits in;
 //! relations between hidden parts are lifted onto what's drawn and merged
-//! into counted lines, routed in straight segments around the cards. What a
+//! into counted lines, drawn as smooth curves between facing sides (each
+//! its own, never on top of another or through a card). What a
 //! focused level reaches outside it shows as blocks beside it; a level with
 //! too many parts shows the selection's neighbourhood and a "+N more" block.
 
@@ -147,6 +148,10 @@ pub struct Line {
     pub carries: Vec<String>,
     /// Seen in the code, but the types can't confirm it.
     pub unconfirmed: bool,
+    /// Relations go both ways between the two ends (arrows at both).
+    pub both_ways: bool,
+    /// Every kind of relation it stands for (the first is the commonest).
+    pub kinds: Vec<RelationKind>,
 }
 
 /// A view as drawn at one level.
@@ -466,10 +471,37 @@ pub fn build(view: &View, options: &Options, measure: &dyn Measure, metrics: &Me
     }
 
     // Lines: heaviest first, so the main ones run straightest.
-    let mut lines: Vec<Line> = merged
-        .into_iter()
-        .map(|((from, to, kind, overlay, unconfirmed), (count, alignment, carries))| Line { from, to, kind, count, alignment, overlay, points: Vec::new(), exit: None, carries, unconfirmed })
-        .collect();
+    // One line per pair of things (whichever way, whatever kinds): the
+    // commonest direction and kind lead; the rest say so when selected.
+    let mut combined: BTreeMap<(End, End, bool, bool), Line> = BTreeMap::new();
+    let mut ordered: Vec<((End, End, RelationKind, bool, bool), (u32, Alignment, Vec<String>))> = merged.into_iter().collect();
+    ordered.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
+    let mut tally: BTreeMap<(End, End, bool, bool), BTreeMap<RelationKind, u32>> = BTreeMap::new();
+    for ((from, to, kind, overlay, unconfirmed), (count, alignment, carries)) in ordered {
+        let key = if from <= to { (from.clone(), to.clone(), overlay, unconfirmed) } else { (to.clone(), from.clone(), overlay, unconfirmed) };
+        *tally.entry(key.clone()).or_default().entry(kind).or_default() += count;
+        match combined.get_mut(&key) {
+            Some(line) => {
+                line.count += count;
+                line.alignment = worst(line.alignment, alignment);
+                line.both_ways |= line.from != from;
+                for c in carries {
+                    if !line.carries.contains(&c) {
+                        line.carries.push(c);
+                    }
+                }
+            }
+            None => {
+                combined.insert(key, Line { from, to, kind, count, alignment, overlay, points: Vec::new(), exit: None, carries, unconfirmed, both_ways: false, kinds: Vec::new() });
+            }
+        }
+    }
+    for (key, line) in combined.iter_mut() {
+        let mut kinds: Vec<(RelationKind, u32)> = tally.remove(key).unwrap_or_default().into_iter().collect();
+        kinds.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        line.kinds = kinds.into_iter().map(|(k, _)| k).collect();
+    }
+    let mut lines: Vec<Line> = combined.into_values().collect();
     let mut order: Vec<usize> = (0..lines.len()).collect();
     let span = |l: &Line| match (scene.rect_of(&l.from), scene.rect_of(&l.to)) {
         (Some(a), Some(b)) => (a.center().0 - b.center().0).abs() + (a.center().1 - b.center().1).abs(),
@@ -544,7 +576,7 @@ fn story(view: &View, options: &Options, measure: &dyn Measure, metrics: &Metric
             points.reverse();
             std::mem::swap(&mut from, &mut to);
         }
-        scene.lines.push(Line { from, to, kind: RelationKind::Calls, count: 1, alignment: edge.map_or(Alignment::Observed, |e| e.alignment), overlay: false, points, exit: None, carries: Vec::new(), unconfirmed: false });
+        scene.lines.push(Line { from, to, kind: RelationKind::Calls, count: 1, alignment: edge.map_or(Alignment::Observed, |e| e.alignment), overlay: false, points, exit: None, carries: Vec::new(), unconfirmed: false, both_ways: false, kinds: vec![RelationKind::Calls] });
     }
     for row in &told.rows {
         let note = Note { also: told.also.get(&row.id).copied().unwrap_or(0), loops: told.loops.get(&row.id).cloned().unwrap_or_default(), inside: told.inside.get(&row.id).copied().unwrap_or(0) };
@@ -688,6 +720,9 @@ struct Placed {
     passes: BTreeMap<(usize, usize), Vec<(f32, f32)>>,
 }
 
+/// Column gaps grow by this many lanes at a time.
+const LANE_STEP: usize = 4;
+
 /// Positions for siblings of the given sizes, tied by weights `w[i][j]`
 /// (i depends on j): tied ones in columns, what depends before what it
 /// depends on, each near what it's tied to; untied ones in rows below.
@@ -749,7 +784,7 @@ fn place(sizes: &[(f32, f32)], w: &[Vec<u32>], previous: &[Option<Rect>], ids: &
     // per column and far end).
     let mut elem_layer: Vec<usize> = layer.clone();
     let mut slot_end: Vec<Option<usize>> = vec![None; n];
-    let mut slot_of: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    let mut slot_of: BTreeMap<(usize, usize, usize), usize> = BTreeMap::new();
     let mut adj: BTreeMap<(usize, usize), u32> = BTreeMap::new();
     let mut chains: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
     for (a, &i) in tied.iter().enumerate() {
@@ -762,7 +797,8 @@ fn place(sizes: &[(f32, f32)], w: &[Vec<u32>], previous: &[Option<Rect>], ids: &
             let mut prev = lo;
             let mut chain = Vec::new();
             for l in layer[lo] + 1..layer[hi] {
-                let slot = *slot_of.entry((hi, l)).or_insert_with(|| {
+                // Each line its own slot: lines never lie on top of each other.
+                let slot = *slot_of.entry((lo, hi, l)).or_insert_with(|| {
                     elem_layer.push(l);
                     slot_end.push(Some(hi));
                     elem_layer.len() - 1
@@ -837,13 +873,25 @@ fn place(sizes: &[(f32, f32)], w: &[Vec<u32>], previous: &[Option<Rect>], ids: &
         .into_iter()
         .flat_map(|col| if col.iter().any(|&e| e >= n) || col.len() <= m.column.max(1) { vec![col] } else { col.chunks(m.column.max(1)).map(<[usize]>::to_vec).collect() })
         .collect();
-    // Columns side by side; in each, every element near the middle of what
-    // it's tied to on its left, in order, without overlap.
+    // Columns side by side, the gap between two as wide as the lines
+    // passing through it need (each its own lane; grown in steps, so a line
+    // more or less doesn't move everything); in each column, every element
+    // near the middle of what it's tied to on its left, in order, without overlap.
+    let col_of: BTreeMap<usize, usize> = columns.iter().enumerate().flat_map(|(c, col)| col.iter().map(move |&e| (e, c))).collect();
+    let mut passing = vec![0usize; columns.len()];
+    for ((a, b), _) in adj.iter().filter(|((a, b), _)| a < b) {
+        if let (Some(&ca), Some(&cb)) = (col_of.get(a), col_of.get(b)) {
+            for gap in passing.iter_mut().take(ca.max(cb)).skip(ca.min(cb)) {
+                *gap += 1;
+            }
+        }
+    }
+    let lanes = |n: usize| (n.div_ceil(LANE_STEP) * LANE_STEP) as f32;
     let mut at: Vec<Option<(f32, f32)>> = vec![None; elems];
     let mut spans: Vec<(f32, f32)> = vec![(0.0, 0.0); elems];
     let mut x = 0.0f32;
     let mut tied_h = 0.0f32;
-    for col in &columns {
+    for (c, col) in columns.iter().enumerate() {
         let col_w = col.iter().filter(|&&e| e < n).map(|&e| sizes[e].0).fold(0.0, f32::max);
         let mut bottom: Option<(f32, bool)> = None;
         for &e in col {
@@ -864,7 +912,7 @@ fn place(sizes: &[(f32, f32)], w: &[Vec<u32>], previous: &[Option<Rect>], ids: &
             bottom = Some((y + h, real));
             tied_h = tied_h.max(y + h);
         }
-        x = m.snap_up(x + col_w + m.gap_x);
+        x = m.snap_up(x + col_w + m.gap_x + m.lane * lanes(passing[c]));
     }
     let tied_w = (x - m.gap_x).max(0.0);
     let passes: BTreeMap<(usize, usize), Vec<(f32, f32)>> = chains
@@ -957,10 +1005,12 @@ fn side(from: &Rect, to: &Rect, lane: f32) -> (i32, i32) {
     }
 }
 
-/// Routes each (from, to) pair in straight segments around `obstacles`:
-/// out of the side facing the other end, through the gaps, turning as
-/// little as it can, running along routes going the same way and crossing
-/// others as little as it can. Returns corner points, edge to edge.
+/// Draws each (from, to) pair as a smooth curve out of the side facing the
+/// other end, through its slots, into the facing side, each at its own
+/// point on a card's side (ordered so neighbours don't cross). A curve that
+/// would cut through a card is routed round them in straight segments
+/// instead: each in its own lane, turning and crossing as little as it can.
+/// Returns points along the line, edge to edge.
 pub fn route(obstacles: &[Rect], ends: &[(Rect, Rect, Vec<(f32, f32)>)], bounds: Rect, m: &Metrics) -> Vec<Vec<(f32, f32)>> {
     let cell = m.lane.max(1.0);
     let margin = cell * 6.0;
@@ -1003,10 +1053,31 @@ pub fn route(obstacles: &[Rect], ends: &[(Rect, Rect, Vec<(f32, f32)>)], bounds:
             offset.insert((*i, *start), (n as f32 - (k - 1.0) / 2.0) * step);
         }
     }
+    // Curves first: out of the side facing the other end, through any slots,
+    // into the facing side. Only one that would cut through a card is routed
+    // round them on the grid instead.
+    let mut curves: Vec<Option<Vec<(f32, f32)>>> = ends
+        .iter()
+        .enumerate()
+        .map(|(i, (a, b, slots))| {
+            let (da, db) = (side(a, b, cell), side(b, a, cell));
+            let pa = side_point(a, da, offset.get(&(i, true)).copied().unwrap_or(0.0));
+            let pb = side_point(b, db, offset.get(&(i, false)).copied().unwrap_or(0.0));
+            let points = curve(pa, da, slots, pb, db, cell);
+            let clear = obstacles.iter().filter(|r| **r != *a && **r != *b).all(|r| {
+                let inner = Rect { x: r.x + 1.0, y: r.y + 1.0, w: r.w - 2.0, h: r.h - 2.0 };
+                !points.iter().any(|p| inner.holds(*p))
+            });
+            clear.then_some(points)
+        })
+        .collect();
     let mut buffers = Search::new((cols * rows * 4) as usize);
     ends.iter()
         .enumerate()
         .map(|(i, (a, b, slots))| {
+            if let Some(points) = curves[i].take() {
+                return points;
+            }
             let (da, db) = (side(a, b, cell), side(b, a, cell));
             let (pa, ca) = port(&grid, a, da, offset.get(&(i, true)).copied().unwrap_or(0.0));
             let (pb, cb) = port(&grid, b, db, offset.get(&(i, false)).copied().unwrap_or(0.0));
@@ -1040,6 +1111,54 @@ pub fn route(obstacles: &[Rect], ends: &[(Rect, Rect, Vec<(f32, f32)>)], bounds:
         })
         .collect()
 }
+
+/// Where a line meets a card's side, `offset` along it from the middle.
+fn side_point(r: &Rect, d: (i32, i32), offset: f32) -> (f32, f32) {
+    let (cx, cy) = r.center();
+    match d {
+        (1, 0) => (r.right(), (cy + offset).clamp(r.y, r.bottom())),
+        (-1, 0) => (r.x, (cy + offset).clamp(r.y, r.bottom())),
+        (0, 1) => ((cx + offset).clamp(r.x, r.right()), r.bottom()),
+        _ => ((cx + offset).clamp(r.x, r.right()), r.y),
+    }
+}
+
+/// A smooth line from `a` (leaving in direction `da`) through each slot
+/// (straight across it) to `b` (arriving against `db`), as points close
+/// enough together to draw.
+fn curve(a: (f32, f32), da: (i32, i32), slots: &[(f32, f32)], b: (f32, f32), db: (i32, i32), lane: f32) -> Vec<(f32, f32)> {
+    // Stops with the direction the line runs through them.
+    let mut stops: Vec<((f32, f32), (f32, f32))> = vec![(a, (da.0 as f32, da.1 as f32))];
+    for pair in slots.chunks(2) {
+        if let [s0, s1] = pair {
+            let dir = if s1.0 >= s0.0 { (1.0, 0.0) } else { (-1.0, 0.0) };
+            stops.push((*s0, dir));
+            stops.push((*s1, dir));
+        }
+    }
+    stops.push((b, (-(db.0 as f32), -(db.1 as f32))));
+    let mut out = vec![a];
+    for (k, pair) in stops.windows(2).enumerate() {
+        let ((p, tp), (q, tq)) = (pair[0], pair[1]);
+        // Across a slot: straight.
+        if k > 0 && k % 2 == 1 && k + 1 < stops.len() - 1 {
+            out.push(q);
+            continue;
+        }
+        let reach = ((q.0 - p.0).abs().max((q.1 - p.1).abs()) * 0.45).max(lane * 2.0);
+        let (c1, c2) = ((p.0 + tp.0 * reach, p.1 + tp.1 * reach), (q.0 - tq.0 * reach, q.1 - tq.1 * reach));
+        for n in 1..=CURVE_STEPS {
+            let t = n as f32 / CURVE_STEPS as f32;
+            let u = 1.0 - t;
+            let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+            out.push((w[0] * p.0 + w[1] * c1.0 + w[2] * c2.0 + w[3] * q.0, w[0] * p.1 + w[1] * c1.1 + w[2] * c2.1 + w[3] * q.1));
+        }
+    }
+    out
+}
+
+/// Points per curve between two stops.
+const CURVE_STEPS: usize = 20;
 
 /// Where a route meets a card's side (offset along it) and the free cell
 /// just outside.
@@ -1088,13 +1207,13 @@ impl Search {
     }
 }
 
-/// A* over the grid: steps cost, bends cost more, running along other routes
-/// costs less and crossing them more.
+/// A* over the grid: steps cost, bends cost more, crossing another route a
+/// little more, and running on top of one a lot.
 fn search(grid: &Grid, buffers: &mut Search, start: (i32, i32), start_dir: (i32, i32), goal: (i32, i32), bend: f32) -> Option<Vec<(i32, i32)>> {
     buffers.round += 1;
     let dir_index = |d: (i32, i32)| DIRS.iter().position(|x| *x == d).unwrap_or(0);
     let state = |c: (i32, i32), d: usize| -> Option<usize> { grid.index(c.0, c.1).map(|i| i * 4 + d) };
-    let heuristic = |c: (i32, i32)| (((c.0 - goal.0).abs() + (c.1 - goal.1).abs()) * 6) as u32;
+    let heuristic = |c: (i32, i32)| (((c.0 - goal.0).abs() + (c.1 - goal.1).abs()) * 10) as u32;
     let bend_cost = (bend * 10.0) as u32;
     let mut open: BinaryHeap<Reverse<(u32, u32, usize)>> = BinaryHeap::new();
     let first = state(start, dir_index(start_dir))?;
@@ -1136,9 +1255,11 @@ fn search(grid: &Grid, buffers: &mut Search, start: (i32, i32), start_dir: (i32,
             let Some(k) = grid.index(next.0, next.1) else { continue };
             let horizontal = step.1 == 0;
             let (same, other) = if horizontal { (grid.along[k], grid.across[k]) } else { (grid.across[k], grid.along[k]) };
-            let mut c = if same > 0 { 6 } else { 10 };
+            // Running on top of another line hides both: avoided hard.
+            // Crossing one is clear enough, but costs a little.
+            let mut c = 10 + 40 * u32::from(same);
             if other > 0 {
-                c += 20;
+                c += 15;
             }
             if nd != d {
                 c += bend_cost;
@@ -1241,8 +1362,8 @@ pub fn through(points: &[(f32, f32)], card: &Rect) -> bool {
 }
 
 /// What breaks the layout rules, in words: cards that overlap (other than
-/// nesting), parts outside their open module, lines through a card or not
-/// in straight segments.
+/// nesting), parts outside their open module, lines through a card or on
+/// top of each other.
 pub fn problems(scene: &Scene) -> Vec<String> {
     let mut out = Vec::new();
     let cards: Vec<(String, Rect)> = scene
@@ -1289,11 +1410,47 @@ pub fn problems(scene: &Scene) -> Vec<String> {
                 out.push(format!("{:?} -> {:?} runs through {name}", line.from, line.to));
             }
         }
-        if line.points.windows(2).any(|p| (p[0].0 - p[1].0).abs() > 0.01 && (p[0].1 - p[1].1).abs() > 0.01) {
-            out.push(format!("{:?} -> {:?} has a slanted segment", line.from, line.to));
+    }
+    for (i, a) in scene.lines.iter().enumerate() {
+        for b in scene.lines.iter().skip(i + 1) {
+            // Branches of one trunk (a story's lines leaving one point of a
+            // card, like a file tree) share it; anything else may only touch.
+            let trunk = a.from == b.from && a.points.first() == b.points.first();
+            if !trunk && shared_stretch(&a.points, &b.points, LANE_TOLERANCE) > LANE_TOLERANCE {
+                out.push(format!("{:?} -> {:?} and {:?} -> {:?} run on top of each other: {:?} / {:?}", a.from, a.to, b.from, b.to, a.points, b.points));
+            }
         }
     }
     out
+}
+
+/// How far two routes would have to overlap to count as one on top of
+/// the other (world units): more than a corner's touch.
+const LANE_TOLERANCE: f32 = 24.0;
+
+/// How long two routes run on top of each other (collinear and overlapping),
+/// ignoring stretches no longer than `slack`.
+pub fn shared_stretch(a: &[(f32, f32)], b: &[(f32, f32)], slack: f32) -> f32 {
+    let mut total = 0.0;
+    for sa in a.windows(2) {
+        for sb in b.windows(2) {
+            let (p, q, r, t) = (sa[0], sa[1], sb[0], sb[1]);
+            let vertical = |s: (f32, f32), e: (f32, f32)| (s.0 - e.0).abs() < 0.01;
+            let horizontal = |s: (f32, f32), e: (f32, f32)| (s.1 - e.1).abs() < 0.01;
+            let overlap = |a0: f32, a1: f32, b0: f32, b1: f32| (a0.max(a1).min(b0.max(b1)) - a0.min(a1).max(b0.min(b1))).max(0.0);
+            let shared = if vertical(p, q) && vertical(r, t) && (p.0 - r.0).abs() < 0.5 {
+                overlap(p.1, q.1, r.1, t.1)
+            } else if horizontal(p, q) && horizontal(r, t) && (p.1 - r.1).abs() < 0.5 {
+                overlap(p.0, q.0, r.0, t.0)
+            } else {
+                0.0
+            };
+            if shared > slack {
+                total += shared;
+            }
+        }
+    }
+    total
 }
 
 #[cfg(test)]
@@ -1354,7 +1511,7 @@ pub(crate) mod tests {
         sound(&s2);
     }
 
-    // req: G.1, G.6, P7.3
+    // req: G.1, G.6, P7.3, G.11
     #[test]
     fn modules_show_shut_until_opened_and_relations_inside_them_merge_onto_them() {
         let mut g = sample();
@@ -1364,13 +1521,15 @@ pub(crate) mod tests {
         let structure = ViewCatalog::defaults().unwrap().get("structure").unwrap().clone();
         let v = query(&g, &structure);
         assert!(v.links.iter().any(|l| l.source == id("lib::util") && l.target == id("app::step") && l.kind == RelationKind::Calls));
-        // Shut: one card each, and one line lib -> app counting both calls.
+        // Shut: one card each, and one line between them standing for all
+        // three: lib's two calls into app, and step implementing lib's Step.
         let shut = scene_of(&v, &BTreeSet::new(), None);
         sound(&shut);
         assert!(shut.containers.is_empty() && shut.rects.contains_key(&id("app")) && !shut.rects.contains_key(&id("app::run")));
-        let merged: Vec<&Line> = shut.lines.iter().filter(|l| l.kind == RelationKind::Calls).collect();
-        assert_eq!(merged.len(), 1, "{:?}", shut.lines);
-        assert_eq!((&merged[0].from, &merged[0].to, merged[0].count), (&End::Node(id("lib")), &End::Node(id("app")), 2));
+        assert_eq!(shut.lines.len(), 1, "one line per pair: {:?}", shut.lines);
+        let line = &shut.lines[0];
+        assert_eq!((&line.from, &line.to, line.count, line.both_ways), (&End::Node(id("lib")), &End::Node(id("app")), 3, true));
+        assert_eq!(line.kinds, vec![RelationKind::Calls, RelationKind::Implements], "the commonest kind first");
         // Opened in place: its parts inside it, the line splits onto them.
         let open: BTreeSet<ComponentId> = [id("app")].into();
         let opened = scene_of(&v, &open, Some(&shut));
@@ -1379,8 +1538,9 @@ pub(crate) mod tests {
         for part in ["app::run", "app::step", "app::save", "app::log"] {
             assert!(opened.rects[&id("app")].contains(&opened.rects[&id(part)]));
         }
-        let to: BTreeSet<End> = opened.lines.iter().filter(|l| l.kind == RelationKind::Calls && l.from == End::Node(id("lib"))).map(|l| l.to.clone()).collect();
-        assert_eq!(to, [End::Node(id("app::run")), End::Node(id("app::step"))].into());
+        let lib = End::Node(id("lib"));
+        let linked: BTreeSet<End> = opened.lines.iter().filter(|l| l.from == lib || l.to == lib).map(|l| if l.from == lib { l.to.clone() } else { l.from.clone() }).collect();
+        assert_eq!(linked, [End::Node(id("app::run")), End::Node(id("app::step"))].into(), "lib's line splits onto the parts it reaches");
         // lib stays where it was.
         assert_eq!(opened.rects[&id("lib")].x < opened.rects[&id("app")].x, shut.rects[&id("lib")].x < shut.rects[&id("app")].x);
     }
@@ -1453,21 +1613,26 @@ pub(crate) mod tests {
         assert!(after.rects.contains_key(&id("app::audit")));
     }
 
-    // req: G.7
+    // req: G.7, G.11
     #[test]
-    fn routes_go_round_cards_and_travel_together() {
+    fn routes_go_round_cards_each_in_its_own_lane() {
         let m = metrics();
-        let a = Rect { x: 0.0, y: 0.0, w: 96.0, h: 48.0 };
+        let a = Rect { x: 0.0, y: 0.0, w: 96.0, h: 64.0 };
         let wall = Rect { x: 192.0, y: -64.0, w: 96.0, h: 176.0 };
-        let b = Rect { x: 384.0, y: 0.0, w: 96.0, h: 48.0 };
+        let b = Rect { x: 384.0, y: 0.0, w: 96.0, h: 64.0 };
         let bounds = Rect { x: 0.0, y: -64.0, w: 480.0, h: 176.0 };
-        let routes = route(&[a, wall, b], &[(a, b, vec![]), (a, b, vec![])], bounds, &m);
+        let routes = route(&[a, wall, b], &[(a, b, vec![]), (a, b, vec![]), (a, b, vec![])], bounds, &m);
         for points in &routes {
             assert!(!through(points, &wall), "{points:?}");
             assert_eq!(points.first().unwrap().0, a.right());
             assert_eq!(points.last().unwrap().0, b.x);
         }
         assert!(routes[0].len() > 2, "it bends round the wall");
+        for (i, x) in routes.iter().enumerate() {
+            for y in routes.iter().skip(i + 1) {
+                assert!(shared_stretch(x, y, m.lane) == 0.0, "lines never lie on top of each other: {x:?} / {y:?}");
+            }
+        }
     }
 
     // req: C.1, C.2, C.3

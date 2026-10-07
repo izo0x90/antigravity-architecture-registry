@@ -92,7 +92,7 @@ fn scene(result: &ViewResult, open: &BTreeSet<ComponentId>) -> Scene {
     build(&result.view, &Options { open, selection: None, max_cards: 60, show_all: false, shut: &BTreeSet::new() }, &Cards(result), &metrics(), None)
 }
 
-// req: G.9, G.7
+// req: G.9, G.7, G.11
 #[test]
 fn every_level_of_this_repository_lays_out_cleanly() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();

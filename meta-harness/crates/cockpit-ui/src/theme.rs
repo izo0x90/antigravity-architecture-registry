@@ -173,6 +173,9 @@ look! {
     fade,
     /// The background grid's spacing (0: no grid).
     grid_step,
+    /// With something selected, how far what isn't related to it dims
+    /// (0: not at all, 1: gone).
+    dim,
     /// Merged lines grow with how many relations they stand for: this much
     /// width per doubling, up to this many times their own width.
     line_count_gain,
