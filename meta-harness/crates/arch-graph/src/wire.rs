@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::view::Layout;
 use crate::{Alignment, Component, ComponentId, Relation, View};
 
 /// A view ready to draw: the subgraph, its layout, the shown components, and
@@ -12,7 +11,6 @@ use crate::{Alignment, Component, ComponentId, Relation, View};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ViewResult {
     pub view: View,
-    pub layout: Layout,
     pub text: String,
     pub components: BTreeMap<ComponentId, Component>,
 }

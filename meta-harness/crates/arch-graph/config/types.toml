@@ -10,9 +10,18 @@
 #   allows_implementation_spec has logic steps and invariants
 #   required_fields            spec details required before approval
 
+[types.folder]
+description = "A folder of code in the repository: it holds crates, packages, modules or other folders."
+allowed_parents = ["folder"]
+executable = false
+allows_signature = false
+allows_properties = false
+allows_implementation_spec = false
+required_fields = []
+
 [types.module]
 description = "A unit of code organization: package, crate, module or file."
-allowed_parents = ["module"]
+allowed_parents = ["module", "folder"]
 executable = true
 allows_signature = false
 allows_properties = false

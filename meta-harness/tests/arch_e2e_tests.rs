@@ -27,7 +27,9 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     assert_eq!(status, 200, "{body}");
     let view = parse(&body);
     assert!(view["text"].as_str().unwrap().contains("run [function"));
-    assert!(view["layout"]["rects"]["rust:sample::run"]["w"].is_number());
+    // The view itself (the cockpit lays it out): what's shown, and their components.
+    assert!(view["view"]["nodes"].as_array().unwrap().iter().any(|n| n["id"] == "rust:sample::run"));
+    assert!(view["components"]["rust:sample::run"]["name"].is_string());
     let (status, _) = http(addr, "GET", "/api/arch/view?name=nope", None).await;
     assert_eq!(status, 404);
 

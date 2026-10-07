@@ -8,6 +8,9 @@
 #   layout           nested (containment boxes) or layered (left to right)
 #   overlays         extra relation kinds drawn between nodes already shown
 #   include_ancestors  keep the containers of shown nodes for context
+#   links            relation kinds summarised between shown nodes: the
+#                    relations among their parts, lifted and counted (a module
+#                    calling into another gets one line with the count)
 
 [views.structure]
 description = "Static structure: what contains what, and what implements which interface. Read it as the shape of the code."
@@ -18,6 +21,7 @@ depth = 1
 layout = "nested"
 overlays = []
 include_ancestors = false
+links = ["calls", "data_flow"]
 
 [views.calls]
 description = "Dynamic behavior: who calls whom, left to right in call order. Read it as what happens at runtime."

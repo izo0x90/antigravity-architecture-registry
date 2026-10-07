@@ -1,5 +1,7 @@
 # Exactly what ingesting tests/fixtures/typescript/app must produce.
 components = [
+  # The three files share a folder (ids starting with `folder:` are taken as they are).
+  ["folder:src", "folder"],
   ["helpers.shout", "function"],
   ["app.Greeter.describe", "function"],
   ["view", "module"],
@@ -20,6 +22,9 @@ components = [
   ["app.fetch", "function"],
 ]
 relations = [
+  ["contains", "folder:src", "app"],
+  ["contains", "folder:src", "helpers"],
+  ["contains", "folder:src", "view"],
   ["contains", "app.Greeter", "app.Greeter.describe"],
   ["contains", "helpers", "helpers.shout"],
   ["contains", "view", "view.View"],

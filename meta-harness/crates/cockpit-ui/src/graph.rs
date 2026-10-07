@@ -1,14 +1,18 @@
-//! The architecture graph: server views drawn with pan and zoom, one reducer
-//! for where it looks (view, plan, focus, depth), modules folded in place,
-//! touch gestures and on-screen chips, a legend, semantic zoom and a compact
-//! inspector. The universal keys (moves, search, hints, marks, the jump list)
-//! drive it through `Navigable`. Everything shown comes from the server's
-//! views; the graph refreshes itself when the architecture changes.
+//! The architecture graph: server views drawn as scenes (cards sized to their
+//! text, arranged by what depends on what, lines routed round them), one
+//! reducer for where it looks (view, plan, focus, depth), levels you zoom
+//! into and out of, modules opened in place, touch gestures and on-screen
+//! chips, a legend, semantic zoom and a compact inspector. The universal keys
+//! (moves, search, hints, marks, the jump list) drive it through `Navigable`.
+//! Everything shown comes from the server's views; the graph refreshes itself
+//! when the architecture changes.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
-use arch_graph::view::Rect as WorldRect;
+use arch_graph::view::scene::{self, End, Measure, Rect as WorldRect, Scene};
+use arch_graph::view::LayoutKind;
 use arch_graph::{Alignment, ArchEvent, ChangeReason, Component, ComponentId, PlanId, RelationKind, Requester, ViewCatalog, ViewRequest, ViewResult};
 use egui::{Align2, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, Vec2};
 
@@ -96,6 +100,30 @@ pub struct CardLine {
     pub text: String,
 }
 
+/// Cards moving to new places (after a refresh or a module opening): where
+/// they were, and when the move started (the first frame that draws it).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Moving {
+    from: BTreeMap<ComponentId, WorldRect>,
+    started: Option<f64>,
+}
+
+/// The camera gliding from one place to another (into a level or out).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Glide {
+    from: Camera,
+    to: Camera,
+    started: Option<f64>,
+}
+
+/// Going into a module, or up out of a level, by zooming: where it was on
+/// screen, so the new level grows out of it (or shrinks back into it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Going {
+    In(Rect),
+    Out(Rect),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Camera {
     pan: Vec2,
@@ -134,6 +162,13 @@ enum Load {
     Failed(String),
 }
 
+/// How far out and in the camera zooms.
+const MIN_ZOOM: f32 = 0.03;
+const MAX_ZOOM: f32 = 3.0;
+
+/// The hint key of the "+N more" block.
+const MORE: &str = "more";
+
 /// How much of a wide graph slot the inspector takes, beside the canvas.
 const DRAWER_SHARE: f32 = 0.3;
 /// How much of a narrow canvas the inspector sheet covers, from the bottom.
@@ -146,14 +181,20 @@ pub struct GraphState {
     plans_stale: bool,
     pub nav: Nav,
     pub result: Option<ViewResult>,
-    /// The containers each node is drawn inside, outermost first.
-    ancestors: BTreeMap<ComponentId, Vec<ComponentId>>,
-    /// The one container everything else sits in (a focused module): it
-    /// stays open when zoomed out, so its parts show as blocks.
-    frame: Option<ComponentId>,
-    /// Modules opened (true) or closed (false) by hand; the rest follow the
-    /// zoom (closed when zoomed out too far to read them).
-    folds: BTreeMap<ComponentId, bool>,
+    /// How the view is drawn at this level: cards, open modules, blocks and
+    /// routed lines (rebuilt when the view, the open modules or the
+    /// selection's neighbourhood change).
+    pub scene: Scene,
+    /// Names as drawn here (short, with the part above when two shown
+    /// components share one).
+    names: BTreeMap<ComponentId, String>,
+    /// Modules opened in place (the rest show shut).
+    open: BTreeSet<ComponentId>,
+    /// Every part of a crowded level shown (not just the neighbourhood).
+    show_all: bool,
+    moving: Option<Moving>,
+    glide: Option<Glide>,
+    going: Option<Going>,
     /// Stepping through a caller's calls in order (`] e`): the caller and
     /// which call the selection is on.
     call_walk: Option<(ComponentId, usize)>,
@@ -168,8 +209,8 @@ pub struct GraphState {
     remembered: Option<ComponentId>,
     /// Files changed since they were indexed (their cards are marked).
     pub stale_files: Vec<String>,
-    /// The camera and folds before a search started previewing matches.
-    saved_view: Option<(Camera, BTreeMap<ComponentId, bool>, bool)>,
+    /// The camera and open modules before a search started previewing matches.
+    saved_view: Option<(Camera, BTreeSet<ComponentId>, bool)>,
     /// Review badges: changed since the last review, unaddressed comments.
     pub marks: BTreeMap<ComponentId, crate::review::NodeMark>,
     load: Load,
@@ -204,6 +245,8 @@ pub struct GraphState {
     pub context: Option<(ComponentId, Pos2)>,
     /// On-screen chips last drawn: action id and where.
     pub(crate) chip_rects: Vec<(String, Rect)>,
+    /// Where the long-press chips start in `chip_rects` (after the bar's).
+    context_chips: usize,
     pub legend_open: bool,
 }
 
@@ -216,9 +259,13 @@ impl Default for GraphState {
             plans_stale: true,
             nav: Nav::new("structure"),
             result: None,
-            ancestors: BTreeMap::new(),
-            frame: None,
-            folds: BTreeMap::new(),
+            scene: Scene::default(),
+            names: BTreeMap::new(),
+            open: BTreeSet::new(),
+            show_all: false,
+            moving: None,
+            glide: None,
+            going: None,
             call_walk: None,
             jumped: None,
             saved_view: None,
@@ -246,6 +293,7 @@ impl Default for GraphState {
             touch_seen: false,
             context: None,
             chip_rects: Vec::new(),
+            context_chips: 0,
             legend_open: false,
         }
     }
@@ -330,6 +378,7 @@ impl GraphState {
         if refetch {
             self.stale = true;
             self.refit = true;
+            self.show_all = false;
         }
         if let Some(at) = land {
             if !refetch && self.component(&at).is_some() {
@@ -353,39 +402,22 @@ impl GraphState {
         self.navigate(change);
     }
 
-    /// The least zoom at which containers open (their contents are drawn).
-    fn open_zoom() -> f32 {
-        11.0 / arch_graph::view::layout::HEADER * 1.05
-    }
-
-    /// Makes `id` visible: opens modules closed by hand around it, zooms in
-    /// when it's inside one closed by the zoom, and pans so it's on screen
-    /// (centered) when it isn't.
+    /// Makes `id` visible: opens the shut modules around it in place (or
+    /// shows every part of a crowded level, when "+N more" holds it), and
+    /// pans so it's on screen when it isn't.
     fn bring_into_view(&mut self, id: &ComponentId) {
-        let Some(r) = self.result.as_ref().and_then(|r| r.layout.rects.get(id)).copied() else { return };
-        for outer in self.ancestors.get(id).cloned().unwrap_or_default() {
-            if self.folds.get(&outer) == Some(&false) {
-                self.folds.remove(&outer);
+        if !self.shown(id) && self.scene.outside.get(id).is_none() {
+            if self.scene.more.as_ref().is_some_and(|(_, held)| held.iter().any(|h| h == id || self.scene.ancestors(id).contains(h))) {
+                self.show_all = true;
             }
+            for outer in self.scene.ancestors(id) {
+                if Some(&outer) != self.scene.frame.as_ref() {
+                    self.open.insert(outer);
+                }
+            }
+            self.rebuild(true);
         }
-        if !self.shown(id) {
-            // Inside a module closed by the zoom: bring the module that holds
-            // it up to fill the view (the rest of the graph stays as it was,
-            // off to the sides), and the node with it.
-            let holder = self.container_of(id).and_then(|c| self.result.as_ref()?.layout.rects.get(c)).copied();
-            if let Some(holder) = holder {
-                self.fit_rects(&[holder]);
-            }
-            if !self.shown(id) {
-                self.camera.zoom = Self::open_zoom().max(self.camera.zoom);
-            }
-            let center = Vec2::new(r.x + r.w / 2.0, r.y + r.h / 2.0) * self.camera.zoom;
-            let rect = self.to_screen(&r);
-            if !self.open_area.contains_rect(rect) {
-                self.camera.pan = (self.open_area.center() - self.canvas.min) - center;
-            }
-            return;
-        }
+        let Some(r) = self.box_of(id) else { return };
         let rect = self.to_screen(&r);
         if !self.open_area.contains_rect(rect) {
             self.camera.pan += self.open_area.center() - rect.center();
@@ -511,56 +543,61 @@ impl GraphState {
                 self.pending_select = Some(pending);
             }
         }
-        let tops: Vec<&ComponentId> = result
-            .layout
-            .rects
-            .iter()
-            .filter(|(_, r)| !result.layout.containers.iter().filter_map(|c| result.layout.rects.get(c)).any(|outer| outer != *r && outer.contains(r)))
-            .map(|(id, _)| id)
-            .collect();
-        self.frame = match tops.as_slice() {
-            [only] if result.layout.containers.contains(*only) => Some((*only).clone()),
-            _ => None,
-        };
-        let mut ancestors: BTreeMap<ComponentId, Vec<(f32, ComponentId)>> = BTreeMap::new();
-        for c in &result.layout.containers {
-            let Some(outer) = result.layout.rects.get(c) else { continue };
-            for (id, r) in &result.layout.rects {
-                if r != outer && outer.contains(r) {
-                    ancestors.entry(id.clone()).or_default().push((outer.w * outer.h, c.clone()));
-                }
-            }
-        }
-        self.ancestors = ancestors
-            .into_iter()
-            .map(|(id, mut outer)| {
-                outer.sort_by(|a, b| b.0.total_cmp(&a.0));
-                (id, outer.into_iter().map(|(_, c)| c).collect())
-            })
-            .collect();
-        self.folds.retain(|c, _| result.layout.containers.contains(c));
+        // The same level again (a refresh): things keep their places and glide
+        // to new ones.
+        let same_level = self.result.as_ref().is_some_and(|old| old.view.spec.name == result.view.spec.name && old.view.roots == result.view.roots);
+        self.open.retain(|c| result.view.edges.iter().any(|e| e.kind == RelationKind::Contains && &e.source == c));
         self.result = Some(result);
+        self.rebuild(same_level);
         self.load = Load::Idle;
         if std::mem::take(&mut self.refit) {
             self.fit = true;
         }
     }
 
-    /// Zoomed out past the point where container headers are legible: each
-    /// top-level container is drawn as one labelled block.
-    fn collapsed(&self) -> bool {
-        arch_graph::view::layout::HEADER * self.camera.zoom < 11.0
+    /// Lays the view out again: the same level keeps its places (and cards
+    /// glide to new ones), a new level starts fresh.
+    fn rebuild(&mut self, keep: bool) {
+        let Some(result) = &self.result else {
+            self.scene = Scene::default();
+            return;
+        };
+        let previous = keep.then(|| std::mem::take(&mut self.scene));
+        let cards = Cards::new(result, &self.ui.arrange);
+        self.names = cards.names.clone();
+        let options = scene::Options { open: &self.open, selection: self.selection.as_ref(), max_cards: self.ui.levels.max_cards, show_all: self.show_all };
+        self.scene = scene::build(&result.view, &options, &cards, &self.ui.arrange, previous.as_ref());
+        if let Some(before) = previous {
+            let from: BTreeMap<ComponentId, WorldRect> = before.rects.into_iter().filter(|(id, r)| self.scene.rects.get(id).is_some_and(|now| now != r)).collect();
+            if !from.is_empty() && crate::theme::look().move_seconds > 0.0 {
+                self.moving = Some(Moving { from, started: None });
+            }
+        }
     }
 
-    /// Whether a module shows as one closed block: closed by hand, or by the
-    /// zoom (all but the focused module).
+    /// Whether `id` holds parts in this view (a module that opens in place).
+    fn is_module(&self, id: &ComponentId) -> bool {
+        self.result.as_ref().is_some_and(|r| r.view.edges.iter().any(|e| e.kind == RelationKind::Contains && &e.source == id)) && self.scene.frame.as_ref() != Some(id)
+    }
+
+    /// Whether a module shows shut (as one card).
     fn closed(&self, container: &ComponentId) -> bool {
-        self.folds.get(container).map_or_else(|| self.collapsed() && Some(container) != self.frame.as_ref(), |open| !open)
+        !self.scene.containers.contains(container)
     }
 
-    /// Whether a node is drawn (no module around it is closed).
+    /// Whether a node is drawn (not inside a shut module, not held in "+N more").
     fn shown(&self, id: &ComponentId) -> bool {
-        self.ancestors.get(id).is_none_or(|outer| outer.iter().all(|c| !self.closed(c)))
+        self.scene.rects.contains_key(id)
+    }
+
+    /// Everything that can be selected, with where it is: cards, open
+    /// modules, and the blocks for what's outside the focus.
+    fn boxes(&self) -> impl Iterator<Item = (&ComponentId, &WorldRect)> {
+        self.scene.rects.iter().chain(self.scene.outside.iter().map(|(id, (r, _))| (id, r)))
+    }
+
+    fn box_of(&self, id: &ComponentId) -> Option<WorldRect> {
+        self.boxes().find(|(b, _)| *b == id).map(|(_, r)| *r)
     }
 
     /// Fetches what's missing or stale and applies replies. Call every frame.
@@ -621,7 +658,7 @@ impl GraphState {
     /// Moves the selection to the nearest node in a direction (on the layout).
     pub fn move_selection(&mut self, dir: Dir) {
         let Some(result) = &self.result else { return };
-        let Some(current) = self.selection.as_ref().and_then(|s| result.layout.rects.get(s)) else {
+        let Some(current) = self.selection.as_ref().and_then(|s| self.box_of(s)) else {
             let first = result.view.roots.first().or(result.view.nodes.first().map(|n| &n.id)).cloned();
             if let Some(first) = first {
                 self.bring_into_view(&first);
@@ -630,13 +667,12 @@ impl GraphState {
             return;
         };
         let center = |r: &WorldRect| (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        let current = &current;
         let (cx, cy) = center(current);
-        let best = result
-            .layout
-            .rects
-            .iter()
+        let best = self
+            .boxes()
             // Not what it sits in, nor what sits in it: moves go between neighbours.
-            .filter(|(id, r)| Some(*id) != self.selection.as_ref() && self.shown(id) && !r.contains(current) && !current.contains(r))
+            .filter(|(id, r)| Some(*id) != self.selection.as_ref() && !r.contains(current) && !current.contains(r))
             .filter_map(|(id, r)| {
                 let (x, y) = center(r);
                 // Sideways distance is the gap between the boxes' spans, so
@@ -656,7 +692,7 @@ impl GraphState {
         // Nothing beside it: a module's moves go into it (its first part
         // that way).
         let best = best.or_else(|| {
-            let inside: Vec<(&ComponentId, &WorldRect)> = result.layout.rects.iter().filter(|(id, r)| self.shown(id) && current.contains(r) && *r != current).collect();
+            let inside: Vec<(&ComponentId, &WorldRect)> = self.boxes().filter(|(_, r)| current.contains(r) && *r != current).collect();
             let key = |r: &WorldRect| match dir {
                 Dir::Right | Dir::Down => (r.y + r.x * 0.001, r.x),
                 Dir::Left => (-(r.x + r.w), r.y),
@@ -703,9 +739,9 @@ impl GraphState {
         out
     }
 
-    /// The innermost module a node is drawn in (None: the top level).
+    /// The innermost open module a node is drawn in (None: the top level).
     fn container_of(&self, id: &ComponentId) -> Option<&ComponentId> {
-        self.ancestors.get(id).and_then(|outer| outer.last())
+        self.scene.parent.get(id).filter(|p| self.scene.containers.contains(*p))
     }
 
     /// Drawn nodes in the same module as the selection, in reading order
@@ -713,8 +749,8 @@ impl GraphState {
     fn siblings(&self) -> Vec<ComponentId> {
         let (Some(result), Some(sel)) = (&self.result, &self.selection) else { return Vec::new() };
         let parent = self.container_of(sel).cloned();
-        let mut out: Vec<(&WorldRect, &ComponentId)> =
-            result.layout.rects.iter().filter(|(id, _)| self.shown(id) && self.container_of(id).cloned() == parent).map(|(id, r)| (r, id)).collect();
+        let _ = result;
+        let mut out: Vec<(&WorldRect, &ComponentId)> = self.boxes().filter(|(id, _)| self.container_of(id).cloned() == parent).map(|(id, r)| (r, id)).collect();
         out.sort_by(|a, b| a.0.y.total_cmp(&b.0.y).then(a.0.x.total_cmp(&b.0.x)).then_with(|| a.1.cmp(b.1)));
         out.into_iter().map(|(_, id)| id.clone()).collect()
     }
@@ -785,13 +821,10 @@ impl GraphState {
         let anchor = self.selected_rect().map(|r| r.center()).filter(|p| self.open_area.contains(*p)).unwrap_or(self.open_area.center());
         let dy = self.open_area.height() / 2.0 * count as f32;
         self.camera.pan.y += if down { -dy } else { dy };
-        let Some(result) = &self.result else { return };
-        // Cards and closed modules; not the frames of open ones.
-        let nearest = result
-            .layout
-            .rects
-            .iter()
-            .filter(|(id, _)| self.shown(id) && (!result.layout.containers.contains(*id) || self.closed(id)))
+        // Cards, shut modules and blocks; not the frames of open ones.
+        let nearest = self
+            .boxes()
+            .filter(|(id, _)| !self.scene.containers.contains(*id))
             .map(|(id, r)| (self.to_screen(r).center().distance(anchor), id))
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, id)| id.clone());
@@ -801,8 +834,8 @@ impl GraphState {
     }
 
     fn selected_rect(&self) -> Option<Rect> {
-        let r = self.result.as_ref()?.layout.rects.get(self.selection.as_ref()?)?;
-        Some(self.to_screen(r))
+        let r = self.box_of(self.selection.as_ref()?)?;
+        Some(self.to_screen(&r))
     }
 
     /// The `index`th node in view order, or the last (drawn or not: a jump
@@ -821,23 +854,33 @@ impl GraphState {
     /// The module a fold acts on: the selection if it's one, else the one
     /// it's in.
     fn fold_target(&self) -> Option<ComponentId> {
-        let result = self.result.as_ref()?;
         let sel = self.selection.as_ref()?;
-        if result.layout.containers.contains(sel) { Some(sel.clone()) } else { self.container_of(sel).cloned() }
+        if self.is_module(sel) { Some(sel.clone()) } else { self.container_of(sel).cloned() }
     }
 
-    /// Opens or closes a module by hand; when that's what the zoom would do
-    /// anyway, the zoom decides again.
-    fn set_fold(&mut self, container: ComponentId, open: bool) {
-        let zoom_closed = self.collapsed() && Some(&container) != self.frame.as_ref();
-        if open == !zoom_closed {
-            self.folds.remove(&container);
-        } else {
-            self.folds.insert(container.clone(), open);
+    /// Opens or shuts modules in place. The rest keep their places (and
+    /// glide to new ones); the module stays where it is on screen.
+    fn set_folds(&mut self, modules: &[ComponentId], open: bool) {
+        let anchor = modules.first().and_then(|m| self.box_of(m)).map(|r| self.to_screen(&r).min);
+        for m in modules {
+            if open {
+                self.open.insert(m.clone());
+            } else {
+                self.open.remove(m);
+            }
         }
-        // A node the fold hides hands the selection to its module.
-        if !open && self.selection.as_ref().is_some_and(|s| !self.shown(s)) {
-            self.select(Some(container));
+        self.rebuild(true);
+        if let (Some(before), Some(now)) = (anchor, modules.first().and_then(|m| self.box_of(m)).map(|r| self.to_screen(&r).min)) {
+            self.camera.pan += before - now;
+        }
+        // A node a module shut over hands the selection to the module.
+        if !open
+            && let Some(sel) = self.selection.clone()
+            && !self.shown(&sel)
+            && self.scene.outside.get(&sel).is_none()
+        {
+            let holder = self.scene.ancestors(&sel).into_iter().rev().find(|a| self.shown(a));
+            self.select(holder);
         }
     }
 
@@ -855,61 +898,99 @@ impl GraphState {
         }
     }
 
-    /// The lines a node card shows at `detail`.
     pub fn card_lines(&self, c: &Component, alignment: Alignment, detail: Detail) -> Vec<CardLine> {
-        let line = |role, text: String| CardLine { role, text };
-        let mut out = vec![line(LineRole::Name, c.name.clone())];
-        if detail == Detail::Far {
-            return out;
-        }
-        let location = match (&c.anchor, &c.proposed) {
-            (Some(a), _) => format!("{}:{}", a.file, a.span.start_line),
-            (None, Some(p)) => format!("{} {}", egui_phosphor::regular::ARROW_RIGHT, p.file),
-            (None, None) => "unplaced".to_owned(),
+        card_lines(c, alignment, detail, self.marks.get(&c.id))
+    }
+
+    /// What a card says at the current zoom, under the name it's drawn with
+    /// (a shut module says how many parts it holds).
+    fn card_text(&self, c: &Component, alignment: Alignment, closed: bool) -> Vec<CardLine> {
+        let detail = self.detail();
+        let mut lines = if closed {
+            let members = self.result.as_ref().and_then(|r| r.view.node(&c.id)).map_or(0, |n| n.members);
+            let mut lines = vec![CardLine { role: LineRole::Name, text: c.name.clone() }, CardLine { role: LineRole::Meta, text: module_meta(c, members) }];
+            if detail == Detail::Near {
+                lines.extend(card_lines(c, alignment, detail, self.marks.get(&c.id)).into_iter().filter(|l| l.role == LineRole::Badges));
+            }
+            lines
+        } else {
+            card_lines(c, alignment, detail, self.marks.get(&c.id))
         };
-        // Each state with its icon and word, as everywhere else.
-        let badge = |name: &str, count: Option<usize>| {
-            let (glyph, word, _) = crate::status::look(name);
-            match count {
-                Some(n) => format!("{glyph} {n} {word}"),
-                None => format!("{glyph} {word}"),
+        if let Some(name) = self.names.get(&c.id) {
+            lines[0].text = name.clone();
+        }
+        lines
+    }
+
+    // ---- levels ----
+
+    /// Up a level: to the module above the focus (or the whole view), with
+    /// the one you were in selected. Views without levels go back to their
+    /// entry points.
+    fn up_level(&mut self) {
+        let left = self.nav.roots.first().cloned();
+        let nested = self.result.as_ref().is_some_and(|r| r.view.spec.layout == LayoutKind::Nested);
+        let above = self.result.as_ref().and_then(|r| r.view.trail.last().cloned());
+        match (nested, above) {
+            (true, Some(parent)) => self.navigate(NavChange::Focus(parent)),
+            _ => self.navigate(NavChange::Unfocus),
+        }
+        if let Some(left) = left {
+            self.pending_select = Some(left);
+        }
+    }
+
+    /// Zooming moves between levels: far enough into a shut module goes
+    /// into it (it grows into the new level); far enough out of a level goes
+    /// up to the one above (it shrinks back into its card).
+    fn level_by_zoom(&mut self, around: Pos2, factor: f32) {
+        let nested = self.result.as_ref().is_some_and(|r| r.view.spec.layout == LayoutKind::Nested);
+        if !nested || self.load == Load::Loading || self.stale {
+            return;
+        }
+        let levels = self.ui.levels.clone();
+        let area = self.open_area;
+        let fills = |r: Rect, share: f32| r.width() >= area.width() * share || r.height() >= area.height() * share;
+        let shut = |g: &Self, id: &ComponentId| g.shown(id) && g.closed(id) && g.result.as_ref().and_then(|r| r.view.node(id)).is_some_and(|n| n.members > 0);
+        let under = self.hit(around).filter(|id| shut(self, id)).or_else(|| self.selection.clone().filter(|id| shut(self, id)));
+        // In: it fills enough of the view, or the zoom can't go closer.
+        let at_limit = factor > 1.0 && self.camera.zoom >= MAX_ZOOM;
+        if let Some(id) = under
+            && let Some(r) = self.box_of(&id).map(|r| self.to_screen(&r))
+            && (fills(r, levels.enter_fill) || at_limit)
+        {
+            self.going = Some(Going::In(r));
+            self.pointer_jump(NavChange::Focus(id));
+            return;
+        }
+        if factor < 1.0
+            && !self.nav.roots.is_empty()
+            && let Some(b) = self.scene.bounds().map(|b| self.to_screen(&b))
+            && !fills(b, levels.leave_fill)
+        {
+            self.going = Some(Going::Out(b));
+            if self.jumped.is_none() {
+                self.jumped = Some(self.place());
             }
-        };
-        let stage = badge(crate::status::stage(c.stage), None);
-        if detail == Detail::Mid {
-            let placeholders = if c.placeholders.is_empty() { String::new() } else { format!(" · {}", badge("placeholders", Some(c.placeholders.len()))) };
-            out.push(line(LineRole::Meta, format!("{} · {stage}{placeholders}", c.type_name)));
-            out.push(line(LineRole::Location, location));
-            return out;
+            self.up_level();
         }
-        out.push(line(LineRole::Meta, format!("{} · {stage} · {}", c.type_name, badge(crate::status::alignment(alignment), None))));
-        if let Some(sig) = &c.signature {
-            let params: Vec<String> = sig.params.iter().map(|p| p.ty.as_ref().map_or_else(|| p.name.clone(), |t| format!("{}: {t}", p.name))).collect();
-            let returns = sig.returns.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
-            out.push(line(LineRole::Signature, format!("({}){returns}", params.join(", "))));
+    }
+
+    /// Zooms as the user asked (wheel, pinch, keys, chips), which can move
+    /// between levels.
+    fn zoom_by_user(&mut self, factor: f32, around: Pos2) {
+        // Mid-way into (or out of) a level, the zoom waits for it to arrive.
+        if self.glide.is_some() || self.going.is_some() {
+            return;
         }
-        out.push(line(LineRole::Location, location));
-        let mut badges = Vec::new();
-        if !c.placeholders.is_empty() {
-            badges.push(badge("placeholders", Some(c.placeholders.len())));
-        }
-        if let Some(mark) = self.marks.get(&c.id) {
-            if mark.open > 0 {
-                badges.push(badge("open_comments", Some(mark.open)));
-            }
-            if mark.changed {
-                badges.push(badge("changed", None));
-            }
-        }
-        if !badges.is_empty() {
-            out.push(line(LineRole::Badges, badges.join(" · ")));
-        }
-        out
+        self.zoom_by(factor, around);
+        self.level_by_zoom(around, factor);
     }
 
     fn request_code(&mut self) {
         if let Some(c) = self.selected() {
             self.requests.open_code = match (&c.anchor, &c.proposed) {
+                (Some(a), _) if crate::status::is_folder(a) => None,
                 (Some(a), _) => Some((a.file.to_string(), a.span.start_line, a.span.end_line)),
                 (None, Some(p)) => Some((p.file.to_string(), 1, 1)),
                 (None, None) => None,
@@ -919,16 +1000,16 @@ impl GraphState {
 
     fn zoom_by(&mut self, factor: f32, around: Pos2) {
         let old = self.camera.zoom;
-        let new = (old * factor).clamp(0.03, 3.0);
+        let new = (old * factor).clamp(MIN_ZOOM, MAX_ZOOM);
         let world = (around - self.canvas.min - self.camera.pan) / old;
         self.camera.zoom = new;
         self.camera.pan = around - self.canvas.min - world * new;
     }
 
     fn fit_view(&mut self) {
-        let Some(result) = &self.result else { return };
-        let rects: Vec<WorldRect> = result.layout.rects.values().copied().collect();
-        self.fit_rects(&rects);
+        if let Some(bounds) = self.scene.bounds() {
+            self.fit_rects(&[bounds]);
+        }
     }
 
     /// Zooms and pans so `rects` fill the open part of the canvas.
@@ -941,10 +1022,30 @@ impl GraphState {
         let (w, h) = ((max_x - min_x).max(1.0), (max_y - min_y).max(1.0));
         let pad = 32.0;
         let area = self.open_area;
-        let zoom = ((area.width() - pad * 2.0) / w).min((area.height() - pad * 2.0) / h).clamp(0.03, 1.4);
+        let zoom = ((area.width() - pad * 2.0) / w).min((area.height() - pad * 2.0) / h).clamp(MIN_ZOOM, 1.4);
         self.camera.zoom = zoom;
         let content = Vec2::new(w, h) * zoom;
         self.camera.pan = (area.min - self.canvas.min) + (area.size() - content) / 2.0 - Vec2::new(min_x, min_y) * zoom;
+    }
+
+    /// Arriving at a level by zooming: it grows out of the card it was (or
+    /// the level left shrinks back into its card), then settles where the
+    /// fit put it.
+    fn glide_in(&mut self, time: f64) {
+        let Some(going) = self.going.take() else { return };
+        let target = self.camera;
+        let (world, screen) = match going {
+            Going::In(card) => (self.scene.bounds(), card),
+            Going::Out(level) => (self.pending_select.as_ref().or(self.selection.as_ref()).and_then(|id| self.box_of(id)), level),
+        };
+        let Some(world) = world.filter(|w| w.w > 0.0 && w.h > 0.0) else { return };
+        let zoom = (screen.width() / world.w).min(screen.height() / world.h).max(f32::EPSILON);
+        let pan = (screen.center() - self.canvas.min) - Vec2::new(world.x + world.w / 2.0, world.y + world.h / 2.0) * zoom;
+        let from = Camera { zoom, pan };
+        if crate::theme::look().move_seconds > 0.0 {
+            self.camera = from;
+            self.glide = Some(Glide { from, to: target, started: Some(time) });
+        }
     }
 
     // ---- drawing ----
@@ -972,6 +1073,26 @@ impl GraphState {
         if self.fit && self.result.is_some() {
             self.fit = false;
             self.fit_view();
+            self.glide_in(time);
+        }
+        // Moves and glides start on the first frame that draws them.
+        if let Some(m) = &mut self.moving {
+            let started = *m.started.get_or_insert(time);
+            if move_t(Some(started), time).is_none_or(|t| t >= 1.0) {
+                self.moving = None;
+            }
+        }
+        if let Some(g) = &mut self.glide {
+            let started = *g.started.get_or_insert(time);
+            match move_t(Some(started), time) {
+                Some(t) if t < 1.0 => {
+                    self.camera = Camera { zoom: g.from.zoom * (g.to.zoom / g.from.zoom).powf(t), pan: g.from.pan + (g.to.pan - g.from.pan) * t };
+                }
+                _ => {
+                    self.camera = g.to;
+                    self.glide = None;
+                }
+            }
         }
         if let Some(id) = self.reveal_after_fit.take() {
             self.bring_into_view(&id);
@@ -981,6 +1102,7 @@ impl GraphState {
         if !touched {
             // Pan (drag, or hold the leader key) and zoom (wheel, pinch).
             if response.dragged() {
+                self.glide = None;
                 self.camera.pan += response.drag_delta();
             }
             if pan_held && response.hovered() {
@@ -990,9 +1112,9 @@ impl GraphState {
                 let (scroll, pinch, pointer) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta(), i.pointer.hover_pos()));
                 let around = pointer.unwrap_or(canvas.center());
                 if pinch != 1.0 {
-                    self.zoom_by(pinch, around);
+                    self.zoom_by_user(pinch, around);
                 } else if scroll != 0.0 {
-                    self.zoom_by((1.0 + scroll * 0.0015).clamp(0.8, 1.25), around);
+                    self.zoom_by_user((1.0 + scroll * 0.0015).clamp(0.8, 1.25), around);
                 }
             }
         }
@@ -1014,8 +1136,9 @@ impl GraphState {
                 );
             }
             (Some(_), _) => {
-                // Moving dashes and the agent's pulse keep drawing.
-                if self.draw_graph(&painter, time) {
+                // Moving dashes, gliding cards and the agent's pulse keep drawing.
+                let hover = response.hover_pos();
+                if self.draw_graph(&painter, time, hover) {
                     ui.ctx().request_repaint();
                 }
             }
@@ -1026,11 +1149,15 @@ impl GraphState {
             painter.text(canvas.left_bottom() + Vec2::new(8.0, -8.0), Align2::LEFT_BOTTOM, format!("refresh failed: {err}"), FontId::proportional(crate::theme::look().text_body), colors().error);
         }
 
-        // Click selects, double click focuses.
+        // Click selects, double click focuses ("+N more" shows everything).
         if !touched
             && (response.clicked() || response.double_clicked())
             && let Some(pos) = response.interact_pointer_pos()
         {
+            if self.hit_more(pos) {
+                self.show_everything();
+                return;
+            }
             let hit = self.hit(pos);
             if response.double_clicked()
                 && let Some(id) = hit.clone()
@@ -1093,7 +1220,11 @@ impl GraphState {
     pub fn on_gesture(&mut self, gesture: Gesture) {
         match gesture {
             Gesture::Tap(pos) => {
-                self.context = None;
+                self.close_context();
+                if self.hit_more(pos) {
+                    self.show_everything();
+                    return;
+                }
                 let hit = self.hit(pos);
                 self.select(hit);
             }
@@ -1111,7 +1242,7 @@ impl GraphState {
                 }
             }
             Gesture::Pan(delta) => self.camera.pan += delta,
-            Gesture::Pinch { factor, center } => self.zoom_by(factor, center),
+            Gesture::Pinch { factor, center } => self.zoom_by_user(factor, center),
             // The jump list is the shell's: back and forward go through it.
             Gesture::Swipe(Swipe::Right) => self.requests.run = Some(("nav.back".into(), None)),
             Gesture::Swipe(Swipe::Left) => self.requests.run = Some(("nav.forward".into(), None)),
@@ -1157,6 +1288,7 @@ impl GraphState {
                 });
             });
         }
+        self.context_chips = self.chip_rects.len();
         if let Some((_, at)) = self.context.clone() {
             let wanted: Vec<&Action> = self.ui.context.iter().filter_map(|id| actions.iter().find(|a| &a.id == id)).collect();
             let width = (size + 8.0) * 3.0;
@@ -1178,9 +1310,16 @@ impl GraphState {
             });
         }
         if let Some(action) = run {
-            self.context = None;
+            self.close_context();
             self.use_action(&action, None, cx);
         }
+    }
+
+    /// Closes the long-press chips (and forgets where they were, so the next
+    /// touch there is the graph's).
+    fn close_context(&mut self) {
+        self.context = None;
+        self.chip_rects.truncate(self.context_chips);
     }
 
     /// Runs an action from a chip or the toolbar: the graph's own right here,
@@ -1264,16 +1403,23 @@ impl GraphState {
     }
 
     fn hit(&self, pos: Pos2) -> Option<ComponentId> {
-        let result = self.result.as_ref()?;
-        // Innermost first: smallest rect containing the point.
-        result
-            .layout
-            .rects
-            .iter()
+        // Innermost first: smallest box containing the point.
+        self.boxes()
             .map(|(id, r)| (self.to_screen(r), id))
             .filter(|(rect, _)| rect.contains(pos))
             .min_by(|a, b| a.0.area().total_cmp(&b.0.area()))
             .map(|(_, id)| id.clone())
+    }
+
+    /// Whether `pos` is on the "+N more" block.
+    fn hit_more(&self, pos: Pos2) -> bool {
+        self.scene.more.as_ref().is_some_and(|(r, _)| self.to_screen(r).contains(pos))
+    }
+
+    /// Shows every part of a crowded level.
+    fn show_everything(&mut self) {
+        self.show_all = true;
+        self.rebuild(true);
     }
 
     fn render_toolbar(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
@@ -1299,17 +1445,40 @@ impl GraphState {
                 ui.label(RichText::new(egui_phosphor::regular::HOURGLASS).color(colors().warn));
             }
         });
-        // Where we are: plan, focus, depth; and whether the agent moved us.
+        // Where we are: plan, the level's trail (each step a link), depth;
+        // and whether the agent moved us.
+        let mut crumb: Option<Option<ComponentId>> = None;
         ui.horizontal_wrapped(|ui| {
             let nav = self.nav.clone();
-            let focus = if nav.roots.is_empty() {
-                "entry points".to_owned()
-            } else {
-                nav.roots.iter().map(|r| self.component(r).map_or_else(|| r.to_string(), |c| c.name.clone())).collect::<Vec<_>>().join(", ")
-            };
+            let look = crate::theme::look();
+            let muted = |t: String| RichText::new(t).size(look.text_body).color(colors().muted);
+            ui.label(muted(format!("{} ·", nav.plan.as_ref().map_or("code".to_owned(), |p| format!("plan {p}")))));
+            let name = |id: &ComponentId| self.component(id).map_or_else(|| id.to_string(), |c| c.name.clone());
+            let trail = self.result.as_ref().map(|r| r.view.trail.clone()).unwrap_or_default();
+            match nav.roots.as_slice() {
+                [] => {
+                    ui.label(muted("from the entry points".into()));
+                }
+                [root] => {
+                    if ui.link(RichText::new("All").size(look.text_body)).on_hover_text("The whole view").clicked() {
+                        crumb = Some(None);
+                    }
+                    for step in &trail {
+                        ui.label(muted("›".into()));
+                        if ui.link(RichText::new(name(step)).size(look.text_body)).clicked() {
+                            crumb = Some(Some(step.clone()));
+                        }
+                    }
+                    ui.label(muted("›".into()));
+                    ui.label(RichText::new(name(root)).size(look.text_body).strong().color(colors().text_strong));
+                }
+                roots => {
+                    ui.label(muted(format!("from {}", roots.iter().map(name).collect::<Vec<_>>().join(", "))));
+                }
+            }
             let depth = nav.depth.unwrap_or(self.base_depth());
             let shown = self.result.as_ref().map_or(0, |r| r.view.nodes.len());
-            ui.label(RichText::new(format!("{} · from {focus} · depth {depth} · {shown} nodes", nav.plan.as_ref().map_or("code".to_owned(), |p| format!("plan {p}")))).size(crate::theme::look().text_body).color(colors().muted));
+            ui.label(muted(format!("· depth {depth} · {shown} nodes")));
             if !self.stale_files.is_empty() {
                 let count = self.stale_files.len().to_string();
                 crate::status::chip(ui, "stale", Some(&count)).on_hover_text(self.stale_files.join("\n"));
@@ -1327,6 +1496,11 @@ impl GraphState {
             }
         });
         ui.separator();
+        match crumb {
+            Some(Some(id)) => self.pointer_jump(NavChange::Focus(id)),
+            Some(None) => self.pointer_jump(NavChange::Unfocus),
+            None => {}
+        }
         match used {
             Some((action, ToolbarUse::Run(value))) => self.use_action(&action, value, cx),
             Some((_, ToolbarUse::OpenPalette)) | None => {}
@@ -1357,103 +1531,223 @@ impl GraphState {
         }
     }
 
-    /// Draws the view; returns whether something on it moves (and wants
-    /// another frame).
-    fn draw_graph(&self, painter: &egui::Painter, time: f64) -> bool {
+    fn draw_graph(&self, painter: &egui::Painter, time: f64, hover: Option<Pos2>) -> bool {
         let look = crate::theme::look();
-        let mut moving = false;
+        let theme = colors();
         let Some(result) = &self.result else { return false };
-        let z = self.camera.zoom;
-        // Containers first, then edges, then nodes on top.
-        for id in result.layout.containers.iter().filter(|id| self.shown(id)) {
-            let Some(r) = result.layout.rects.get(id) else { continue };
-            let rect = self.to_screen(r);
-            // A closed module shows the selection hidden inside it.
-            let holds_selection = self.closed(id) && self.selection.as_ref().is_some_and(|s| self.ancestors.get(s).is_some_and(|a| a.contains(id)));
-            let selected = self.selection.as_ref() == Some(id) || holds_selection;
-            painter.rect_filled(rect, 6.0, colors().surface.gamma_multiply(0.6));
-            painter.rect_stroke(rect, 6.0, Stroke::new(if selected { crate::theme::look().line_bold } else { crate::theme::look().line_thin }, if selected { colors().focus } else { colors().border_strong }), StrokeKind::Inside);
+        let mut moving = self.moving.is_some() || self.glide.is_some();
+        // Lines settle in once the cards have moved.
+        let settle = self.moving.as_ref().map_or(1.0, |m| move_t(m.started, time).unwrap_or(0.0));
+        let mut unlabelled: Vec<Unlabelled> = Vec::new();
+        // Open modules, outermost first: a box with the name in its title band.
+        let mut open: Vec<&ComponentId> = self.scene.containers.iter().collect();
+        open.sort_by_key(|c| self.scene.ancestors(c).len());
+        for id in open {
+            let Some(r) = self.scene.rects.get(id) else { continue };
+            let rect = self.drawn(id, r, time);
+            let selected = self.selection.as_ref() == Some(id);
+            let fill = if self.scene.frame.as_ref() == Some(id) { theme.surface.gamma_multiply(0.35) } else { theme.surface.gamma_multiply(0.6) };
+            painter.rect_filled(rect, look.radius_l, fill);
+            let stroke = if selected { Stroke::new(look.line_bold, theme.focus) } else { Stroke::new(look.line_thin, theme.border_strong) };
+            painter.rect_stroke(rect, look.radius_l, stroke, StrokeKind::Inside);
+            let name = self.names.get(id).cloned().or_else(|| result.components.get(id).map(|c| c.name.clone())).unwrap_or_default();
+            let band = self.ui.arrange.header * self.camera.zoom;
+            let font = FontId::proportional(look.text_label);
+            let pad = (self.ui.arrange.pad * self.camera.zoom).min(self.ui.arrange.pad);
+            match (band >= look.text_label * self.ui.arrange.line_height).then(|| whole_or_full(painter, &name, &font, rect.width() - pad * 2.0, self.camera.zoom >= 1.0)).flatten() {
+                Some(text) => {
+                    painter.text(Pos2::new(rect.left() + pad, rect.top() + band / 2.0), Align2::LEFT_CENTER, text, font, theme.muted);
+                }
+                None => unlabelled.push(Unlabelled { id: id.clone(), rect, text: name, open: true }),
+            }
+        }
+        for line in &self.scene.lines {
+            moving |= self.draw_line(painter, line, time, settle);
+        }
+        for (id, r) in self.scene.cards() {
             let Some(c) = result.components.get(id) else { continue };
-            if self.closed(id) {
-                // One block per container: its name, as large as fits, and how much is inside.
-                let inner = result.layout.rects.iter().filter(|(_, k)| *k != r && r.contains(k)).count();
-                let size = (rect.width() / (c.name.len().max(4) as f32 * 0.6)).min(rect.height() / 2.6).clamp(8.0, 20.0);
-                // Labels stay inside their block: shortened when they don't fit,
-                // the second line only when there's room for it.
-                let clip = painter.with_clip_rect(rect);
-                let room = rect.width() - 6.0;
-                let two_lines = rect.height() >= size * 2.6;
-                let name_at = if two_lines { rect.center() - Vec2::new(0.0, size * 0.4) } else { rect.center() };
-                if let Some(name) = fit_text(painter, &c.name, &FontId::proportional(size), room) {
-                    clip.text(name_at, Align2::CENTER_CENTER, name, FontId::proportional(size), colors().text_strong);
-                }
-                let small = FontId::proportional((size * 0.7).max(8.0));
-                if two_lines && let Some(kind) = fit_text(painter, &format!("{} · {inner}", c.type_name), &small, room) {
-                    clip.text(rect.center() + Vec2::new(0.0, size * 0.7), Align2::CENTER_CENTER, kind, small, colors().muted);
-                }
-            } else {
-                let size = (12.0 * z).clamp(8.0, 16.0);
-                painter.with_clip_rect(rect).text(rect.min + Vec2::new(10.0 * z, (arch_graph::view::layout::HEADER * z - size) / 2.0), Align2::LEFT_TOP, format!("{} {}", c.name, c.type_name), FontId::proportional(size), colors().muted);
+            let node = result.view.node(id);
+            let rect = self.drawn(id, r, time);
+            // A card that holds parts is a module, shown shut, whether or not its parts are here.
+            let shut = node.is_some_and(|n| n.members > 0);
+            let (animates, named) = self.draw_node(painter, rect, c, node.map_or(Alignment::Observed, |n| n.alignment), node.is_some_and(|n| n.truncated) && !shut, shut, time);
+            moving |= animates;
+            if !named {
+                unlabelled.push(Unlabelled { id: id.clone(), rect, text: self.names.get(id).cloned().unwrap_or_else(|| c.name.clone()), open: false });
             }
         }
-        for edge in &result.view.edges {
-            if !self.shown(&edge.source) || !self.shown(&edge.target) {
-                continue;
+        // What's reached outside the focus, and what a crowded level holds back.
+        for (group, (r, reached)) in &self.scene.outside {
+            let rect = self.to_screen(r);
+            let selected = self.selection.as_ref() == Some(group);
+            painter.rect_filled(rect, look.radius_l, theme.special_bg);
+            painter.rect_stroke(rect, look.radius_l, Stroke::new(if selected { look.line_bold } else { look.line_thin }, if selected { theme.focus } else { theme.special }), StrokeKind::Inside);
+            let text = outside_text(result, group, *reached);
+            if !self.block_text(painter, rect, &text, theme.special) {
+                unlabelled.push(Unlabelled { id: group.clone(), rect, text, open: false });
             }
-            let (Some(a), Some(b)) = (result.layout.rects.get(&edge.source), result.layout.rects.get(&edge.target)) else { continue };
-            if edge.kind == RelationKind::Contains && result.layout.containers.contains(&edge.source) {
-                continue; // drawn as nesting
-            }
-            let (ra, rb) = (self.to_screen(a), self.to_screen(b));
-            let line = style().edge(&colors(), edge.kind, provenance_of(edge.alignment), edge.alignment, edge.overlay);
-            // With something selected, lines that don't touch it fade back.
-            let touches = self.selection.as_ref().is_none_or(|s| *s == edge.source || *s == edge.target);
-            let color = if touches { line.color } else { line.color.gamma_multiply(1.0 - look.fade) };
-            let stroke = Stroke::new(line.width, color);
-            let (from, to) = if rb.left() > ra.right() { (ra.right_center(), rb.left_center()) } else { (ra.center_bottom(), rb.center_top()) };
-            let mid = (to.x - from.x).abs().max(40.0) * 0.5;
-            let (c1, c2) = if rb.left() > ra.right() { (from + Vec2::new(mid, 0.0), to - Vec2::new(mid, 0.0)) } else { (from + Vec2::new(0.0, mid), to - Vec2::new(0.0, mid)) };
-            let points: Vec<Pos2> = (0..=16)
-                .map(|i| {
-                    let t = i as f32 / 16.0;
-                    let u = 1.0 - t;
-                    Pos2::new(
-                        u * u * u * from.x + 3.0 * u * u * t * c1.x + 3.0 * u * t * t * c2.x + t * t * t * to.x,
-                        u * u * u * from.y + 3.0 * u * u * t * c1.y + 3.0 * u * t * t * c2.y + t * t * t * to.y,
-                    )
-                })
-                .collect();
-            if line.dashed {
-                // Planned connections' dashes move along them.
-                let period = look.space_sm + look.space_s;
-                let offset = if look.dash_speed > 0.0 {
-                    moving = true;
-                    period - ((time as f32 * look.dash_speed) % period)
-                } else {
-                    0.0
-                };
-                painter.extend(Shape::dashed_line_with_offset(&points, stroke, &[look.space_sm], &[look.space_s], offset));
-            } else {
-                painter.add(Shape::line(points.clone(), stroke));
-            }
-            // Arrow head.
-            let dir = (to - points[14]).normalized();
-            let side = Vec2::new(-dir.y, dir.x) * 4.0;
-            painter.add(Shape::convex_polygon(vec![to, to - dir * 8.0 + side, to - dir * 8.0 - side], color, Stroke::NONE));
         }
-        for node in &result.view.nodes {
-            if result.layout.containers.contains(&node.id) || !self.shown(&node.id) {
-                continue;
-            }
-            let (Some(r), Some(c)) = (result.layout.rects.get(&node.id), result.components.get(&node.id)) else { continue };
-            moving |= self.draw_node(painter, self.to_screen(r), c, node.alignment, node.truncated, time);
+        if let Some((r, held)) = &self.scene.more {
+            let rect = self.to_screen(r);
+            painter.rect_filled(rect, look.radius_l, theme.surface);
+            let corners = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom(), rect.left_top()];
+            painter.extend(Shape::dashed_line(&corners, Stroke::new(look.line_thin, theme.border_strong), look.space_sm, look.space_s));
+            self.block_text(painter, rect, &more_text(held.len()), theme.muted);
+        }
+        // Names that don't fit their cards float over them.
+        let font = FontId::proportional(look.text_label);
+        let sized: Vec<(ComponentId, Rect, Vec2)> = unlabelled.iter().map(|u| (u.id.clone(), u.rect, painter.layout_no_wrap(u.text.clone(), font.clone(), theme.text).size())).collect();
+        for (id, at) in self.label_plan(&sized, hover) {
+            let Some(u) = unlabelled.iter().find(|u| u.id == id) else { continue };
+            painter.rect_filled(at, look.radius_pill, theme.overlay);
+            painter.rect_stroke(at, look.radius_pill, Stroke::new(look.line_thin, if self.selection.as_ref() == Some(&id) { theme.focus } else { theme.border }), StrokeKind::Inside);
+            painter.text(at.center(), Align2::CENTER_CENTER, &u.text, font.clone(), if u.open { theme.muted } else { theme.text_strong });
         }
         moving
     }
 
-    /// Draws one card; returns whether it animates (the agent's pulse).
-    fn draw_node(&self, painter: &egui::Painter, rect: Rect, c: &Component, alignment: Alignment, truncated: bool, time: f64) -> bool {
-        let z = self.camera.zoom;
+    /// A block's one line, centred, when it fits; says whether it did.
+    fn block_text(&self, painter: &egui::Painter, rect: Rect, text: &str, color: egui::Color32) -> bool {
+        let look = crate::theme::look();
+        let font = FontId::proportional(look.text_body);
+        if rect.height() < look.text_body * self.ui.arrange.line_height {
+            return false;
+        }
+        let pad = (self.ui.arrange.pad * self.camera.zoom).min(self.ui.arrange.pad);
+        match whole_or_full(painter, text, &font, rect.width() - pad * 2.0, self.camera.zoom >= 1.0) {
+            Some(shown) => {
+                painter.text(rect.center(), Align2::CENTER_CENTER, shown, font, color);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Where the names that don't fit their cards go: over the card (an open
+    /// module's at its top), most important first (the selection, what it's
+    /// tied to, open modules, shut modules, the most tied), each only where
+    /// it covers no other; the one under the pointer always.
+    pub(crate) fn label_plan(&self, items: &[(ComponentId, Rect, Vec2)], hover: Option<Pos2>) -> Vec<(ComponentId, Rect)> {
+        let look = crate::theme::look();
+        let sel = self.selection.as_ref();
+        let mut degree: BTreeMap<&ComponentId, u32> = BTreeMap::new();
+        let mut near: BTreeSet<&ComponentId> = BTreeSet::new();
+        for line in &self.scene.lines {
+            for (end, other) in [(&line.from, &line.to), (&line.to, &line.from)] {
+                if let End::Node(id) | End::Outside(id) = end {
+                    *degree.entry(id).or_default() += line.count;
+                    if let End::Node(o) | End::Outside(o) = other
+                        && Some(o) == sel
+                    {
+                        near.insert(id);
+                    }
+                }
+            }
+        }
+        let rank = |id: &ComponentId| {
+            let class = if Some(id) == sel {
+                0
+            } else if near.contains(id) {
+                1
+            } else if self.scene.containers.contains(id) {
+                2
+            } else if self.is_module(id) {
+                3
+            } else {
+                4
+            };
+            (class, Reverse(degree.get(id).copied().unwrap_or(0)), id.clone())
+        };
+        let mut order: Vec<&(ComponentId, Rect, Vec2)> = items.iter().collect();
+        order.sort_by_key(|(id, _, _)| rank(id));
+        let pill = |(id, card, size): &(ComponentId, Rect, Vec2)| {
+            let size = *size + Vec2::new(look.space_m * 2.0, look.space_xs * 2.0);
+            let at = if self.scene.containers.contains(id) { Rect::from_min_size(card.min + Vec2::splat(look.space_s), size) } else { Rect::from_center_size(card.center(), size) };
+            (id.clone(), at)
+        };
+        let mut placed: Vec<(ComponentId, Rect)> = Vec::new();
+        for item in &order {
+            let (id, at) = pill(item);
+            if !placed.iter().any(|(_, r)| r.expand(look.space_hair).intersects(at)) && at.intersects(self.canvas) {
+                placed.push((id, at));
+            }
+        }
+        // Under the pointer: shown whatever it covers (drawn last, on top).
+        if let Some(pos) = hover
+            && let Some(item) = order.iter().filter(|(_, card, _)| card.contains(pos)).min_by(|a, b| a.1.area().total_cmp(&b.1.area()))
+            && !placed.iter().any(|(id, _)| *id == item.0)
+        {
+            placed.push(pill(item));
+        }
+        placed
+    }
+
+    /// Where a node is drawn now: gliding from its old place while cards move.
+    fn drawn(&self, id: &ComponentId, r: &WorldRect, time: f64) -> Rect {
+        let to = self.to_screen(r);
+        let Some(m) = &self.moving else { return to };
+        let (Some(from), Some(t)) = (m.from.get(id), move_t(m.started, time)) else { return to };
+        let from = self.to_screen(from);
+        Rect::from_min_max(from.min.lerp(to.min, t), from.max.lerp(to.max, t))
+    }
+
+    fn world_to_screen(&self, (x, y): (f32, f32)) -> Pos2 {
+        self.canvas.min + self.camera.pan + Vec2::new(x, y) * self.camera.zoom
+    }
+
+    /// One merged line: its corners rounded, as thick as how many relations
+    /// it stands for, its count where it's worth saying, and a stub with the
+    /// count where it leaves the level. Returns whether it moves (dashes).
+    fn draw_line(&self, painter: &egui::Painter, line: &scene::Line, time: f64, settle: f32) -> bool {
+        if line.points.len() < 2 {
+            return false;
+        }
+        let look = crate::theme::look();
+        let theme = colors();
+        let st = style().edge(&theme, line.kind, provenance_of(line.alignment), line.alignment, line.overlay);
+        // With something selected, lines that don't touch it fade back.
+        let touches = self.selection.as_ref().is_none_or(|s| [&line.from, &line.to].iter().any(|e| matches!(e, End::Node(id) | End::Outside(id) if id == s)));
+        let color = if touches { st.color } else { st.color.gamma_multiply(1.0 - look.fade) }.gamma_multiply(settle);
+        let width = st.width * (1.0 + (line.count as f32).log2() * look.line_count_gain).min(look.line_count_max);
+        let stroke = Stroke::new(width, color);
+        let corners: Vec<Pos2> = line.points.iter().map(|p| self.world_to_screen(*p)).collect();
+        let points = rounded(&corners, look.radius_l);
+        let mut moving = false;
+        if st.dashed {
+            // Planned connections' dashes move along them.
+            let period = look.space_sm + look.space_s;
+            let offset = if look.dash_speed > 0.0 {
+                moving = true;
+                period - ((time as f32 * look.dash_speed) % period)
+            } else {
+                0.0
+            };
+            painter.extend(Shape::dashed_line_with_offset(&points, stroke, &[look.space_sm], &[look.space_s], offset));
+        } else {
+            painter.add(Shape::line(points, stroke));
+        }
+        // Arrow head.
+        let n = corners.len();
+        let tip = corners[n - 1];
+        let dir = (tip - corners[n - 2]).normalized();
+        let side = Vec2::new(-dir.y, dir.x) * look.space_s;
+        painter.add(Shape::convex_polygon(vec![tip, tip - dir * look.space_m + side, tip - dir * look.space_m - side], color, Stroke::NONE));
+        // How many relations it stands for: on its longest stretch, and
+        // where it leaves the level.
+        if line.count > 1 && (self.camera.zoom >= self.ui.detail.mid || (touches && self.selection.is_some())) {
+            let (a, b) = corners.windows(2).map(|w| (w[0], w[1])).max_by(|x, y| (x.1 - x.0).length().total_cmp(&(y.1 - y.0).length())).unwrap_or((corners[0], corners[1]));
+            count_pill(painter, a.lerp(b, 0.5), line.count, color);
+        }
+        if let Some(exit) = line.exit {
+            count_pill(painter, self.world_to_screen(exit), line.count, color);
+        }
+        moving
+    }
+
+    /// Draws one card; returns whether it animates (the agent's pulse) and
+    /// whether its name fit on it.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_node(&self, painter: &egui::Painter, rect: Rect, c: &Component, alignment: Alignment, truncated: bool, closed: bool, time: f64) -> (bool, bool) {
         let look = crate::theme::look();
         let selected = self.selection.as_ref() == Some(&c.id);
         let (theme, style) = (colors(), style());
@@ -1467,17 +1761,22 @@ impl GraphState {
             }
         }
         let outline = style.node_outline(&theme, alignment, selected);
-        painter.rect_filled(rect, 6.0, style.node_fill(&theme, selected));
+        painter.rect_filled(rect, look.radius_l, style.node_fill(&theme, selected));
         let stroke = Stroke::new(outline.width, outline.color);
         if outline.dashed {
             let corners = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom(), rect.left_top()];
-            painter.extend(Shape::dashed_line(&corners, stroke, 6.0, 4.0));
+            painter.extend(Shape::dashed_line(&corners, stroke, look.space_sm, look.space_s));
         } else {
-            painter.rect_stroke(rect, 6.0, stroke, StrokeKind::Inside);
+            painter.rect_stroke(rect, look.radius_l, stroke, StrokeKind::Inside);
+        }
+        // A shut module: a second edge behind, like a stack.
+        if closed {
+            painter.rect_stroke(rect.translate(Vec2::splat(look.space_xs)), look.radius_l, Stroke::new(look.line_thin, theme.border), StrokeKind::Outside);
         }
         // The stage as a stripe on the left edge.
-        let stripe = (3.0 * z).clamp(2.0, 5.0);
-        painter.rect_filled(Rect::from_min_size(rect.min, Vec2::new(stripe, rect.height())), egui::CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, style.stage_color(&theme, c.stage));
+        let stripe = look.space_s.min(rect.width() / 4.0);
+        let r = look.radius_l as u8;
+        painter.rect_filled(Rect::from_min_size(rect.min, Vec2::new(stripe, rect.height())), egui::CornerRadius { nw: r, sw: r, ne: 0, se: 0 }, style.stage_color(&theme, c.stage));
         // Where the agent points: a ring, and a pulse going out from it.
         let pointed = self.agent.as_ref().and_then(|a| a.focus.as_ref()) == Some(&c.id);
         if pointed {
@@ -1493,36 +1792,36 @@ impl GraphState {
         // Its code changed since it was indexed: the card may be behind.
         if c.anchor.as_ref().is_some_and(|a| self.file_stale(a.file.as_str())) {
             let (glyph, _, color) = crate::status::look("stale");
-            let size = (11.0 * z).clamp(9.0, 14.0);
-            painter.text(rect.left_top() + Vec2::new(6.0, 4.0) * z.max(0.6), Align2::LEFT_TOP, glyph, FontId::proportional(size), color);
+            painter.text(rect.left_top() + Vec2::new(stripe + look.space_xs, look.space_xs), Align2::LEFT_TOP, glyph, FontId::proportional(look.text_small), color);
         }
-        // Too small to read: the card's color and outline carry it.
-        if rect.height() < 9.0 {
-            return pointed;
-        }
-        let clip = painter.with_clip_rect(rect.shrink(2.0));
-        let detail = self.detail();
-        let lines = self.card_lines(c, alignment, detail);
-        // More lines at closer zoom: tighter spacing, smaller type.
-        let (step, small) = match detail {
-            Detail::Near => (11.0, (8.5 * z).clamp(7.0, 12.0)),
-            _ => (16.0, (10.0 * z).clamp(7.0, 13.0)),
-        };
-        let mut y = 8.0;
-        for line in lines {
+        // Text keeps its size: the lines that fit, the name first.
+        let pad = (self.ui.arrange.pad * self.camera.zoom).min(self.ui.arrange.pad);
+        let left = rect.left() + stripe + pad;
+        let room = rect.right() - pad - left;
+        let mut y = rect.top() + pad * 0.75;
+        let mut named = false;
+        for (k, line) in self.card_text(c, alignment, closed).into_iter().enumerate() {
             let (font, color) = match line.role {
-                LineRole::Name => (FontId::proportional((crate::theme::look().text_title * z).clamp(crate::theme::look().text_tiny * 0.66, crate::theme::look().text_display * 1.12).min(rect.height() * 0.45)), colors().text_strong),
-                LineRole::Meta => (FontId::proportional(small), colors().muted),
-                LineRole::Signature | LineRole::Location => (FontId::monospace(small * 0.95), colors().muted),
-                LineRole::Badges => (FontId::proportional(small), colors().warn),
+                LineRole::Name => (FontId::proportional(look.text_title), theme.text_strong),
+                LineRole::Meta => (FontId::proportional(look.text_small), theme.muted),
+                LineRole::Signature | LineRole::Location => (FontId::monospace(look.text_small), theme.muted),
+                LineRole::Badges => (FontId::proportional(look.text_small), theme.warn),
             };
-            clip.text(rect.min + Vec2::new(10.0, y) * z, Align2::LEFT_TOP, line.text, font, color);
-            y += if line.role == LineRole::Name { step + 4.0 } else { step };
+            let h = font.size * self.ui.arrange.line_height;
+            if y + h > rect.bottom() - pad * 0.5 {
+                break;
+            }
+            // The name whole, or not here (it floats); other lines may shorten.
+            let fitted = if k == 0 { whole_or_full(painter, &line.text, &font, room, self.camera.zoom >= 1.0) } else { fit_text(painter, &line.text, &font, room) };
+            let Some(text) = fitted else { break };
+            painter.with_clip_rect(rect).text(Pos2::new(left, y), Align2::LEFT_TOP, text, font, color);
+            named |= k == 0;
+            y += h;
         }
         if truncated {
-            painter.text(rect.right_center() + Vec2::new(4.0, 0.0), Align2::LEFT_CENTER, "…", FontId::proportional(crate::theme::look().text_heading * z.max(0.6)), colors().muted);
+            painter.text(rect.right_center() + Vec2::new(look.space_s, 0.0), Align2::LEFT_CENTER, "…", FontId::proportional(look.text_heading), theme.muted);
         }
-        pointed
+        (pointed, named)
     }
 
     /// Review badges at the card's top right: a dot when it changed since the
@@ -1584,7 +1883,7 @@ impl GraphState {
                     });
                 }
                 match (&c.anchor, &c.proposed) {
-                    (Some(a), _) => ui.label(RichText::new(format!("{} {}:{}–{}", egui_phosphor::regular::FILE_CODE, a.file, a.span.start_line, a.span.end_line)).monospace().size(crate::theme::look().text_body)),
+                    (Some(a), _) => ui.label(RichText::new(format!("{} {}", if crate::status::is_folder(a) { egui_phosphor::regular::FOLDER } else { egui_phosphor::regular::FILE_CODE }, crate::status::place(a))).monospace().size(crate::theme::look().text_body)),
                     (None, Some(p)) => ui.label(RichText::new(format!("{} planned in {}", egui_phosphor::regular::FILE_DASHED, p.file)).monospace().size(crate::theme::look().text_body).color(colors().warn)),
                     (None, None) => ui.label(RichText::new("not placed yet").size(crate::theme::look().text_body).color(colors().warn)),
                 };
@@ -1660,6 +1959,8 @@ enum GraphCommand {
     Legend,
     AgentReturn,
     Call { forward: bool },
+    Up,
+    ShowAll,
 }
 
 impl ActionProvider for GraphState {
@@ -1681,7 +1982,13 @@ impl ActionProvider for GraphState {
         out.push(f("graph.depth_less", "Show fewer hops", G::Depth(-1)).toolbar(Button, "", Some(egui_phosphor::regular::MINUS)).group(Group::View).importance(MINOR).jump());
         out.push(f("graph.depth_more", "Show more hops", G::Depth(1)).toolbar(Button, "", Some(egui_phosphor::regular::PLUS)).group(Group::View).importance(MINOR).jump());
         if !self.nav.roots.is_empty() {
+            if self.result.as_ref().is_some_and(|r| r.view.spec.layout == LayoutKind::Nested && !r.view.trail.is_empty()) {
+                out.push(f("graph.up", "Up a level", G::Up).toolbar(Button, "", Some(egui_phosphor::regular::ARROW_UP)).group(Group::View).jump());
+            }
             out.push(f("graph.unfocus", "Back to the view's entry points", G::Unfocus).toolbar(Button, "All", Some(egui_phosphor::regular::ARROWS_OUT)).group(Group::View).jump());
+        }
+        if let Some((_, held)) = &self.scene.more {
+            out.push(f("graph.show_all", &format!("Show every part ({} more)", held.len()), G::ShowAll).group(Group::View).importance(SECONDARY));
         }
         out.push(f("graph.fit", "Fit to screen", G::Fit).toolbar(Button, "", Some(egui_phosphor::regular::CORNERS_OUT)).group(Group::View).importance(MINOR));
         out.push(f("graph.zoom_in", "Zoom in", G::Zoom(1.2)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS).group(Group::View).importance(MINOR));
@@ -1735,9 +2042,11 @@ impl ActionProvider for GraphState {
                 self.navigate(NavChange::Plan(plan));
             }
             GraphCommand::Zoom(factor) => {
-                let center = self.canvas.center();
-                self.zoom_by(factor, center);
+                let center = self.selected_rect().map_or(self.canvas.center(), |r| r.center());
+                self.zoom_by_user(factor, center);
             }
+            GraphCommand::Up => self.up_level(),
+            GraphCommand::ShowAll => self.show_everything(),
             GraphCommand::Fit => self.fit_view(),
             GraphCommand::CloseInspector => self.drawer_open = false,
             GraphCommand::Refresh => {
@@ -1825,30 +2134,41 @@ impl Navigable for GraphState {
     }
 
     fn enter_label(&self) -> Option<String> {
-        self.selected().map(|c| format!("Focus on {}", c.name))
+        let nested = self.result.as_ref().is_some_and(|r| r.view.spec.layout == LayoutKind::Nested);
+        let holds = |id: &ComponentId| self.result.as_ref().and_then(|r| r.view.node(id)).is_some_and(|n| n.members > 0) || self.scene.outside.contains_key(id);
+        self.selected().map(|c| if nested && holds(&c.id) { format!("Into {}", c.name) } else { format!("Focus on {}", c.name) })
+    }
+
+    fn leave_label(&self) -> Option<String> {
+        let result = self.result.as_ref()?;
+        if result.view.spec.layout != LayoutKind::Nested || self.nav.roots.is_empty() {
+            return None;
+        }
+        Some(match result.view.trail.last() {
+            Some(up) => format!("Up to {}", self.component(up).map_or_else(|| up.to_string(), |c| c.name.clone())),
+            None => "Up to the whole view".to_owned(),
+        })
     }
 
     fn leave(&mut self) -> Step {
         if self.nav.roots.is_empty() {
             return Step::Nothing("Already showing the whole view.".into());
         }
-        self.navigate(NavChange::Unfocus);
+        self.up_level();
         Step::Done
     }
 
     fn fold(&mut self, fold: Fold) {
         let Some(result) = &self.result else { return };
-        let containers: Vec<ComponentId> = result.layout.containers.iter().filter(|c| Some(*c) != self.frame.as_ref()).cloned().collect();
+        let modules: BTreeSet<ComponentId> = result.view.edges.iter().filter(|e| e.kind == RelationKind::Contains && self.is_module(&e.source)).map(|e| e.source.clone()).collect();
         match fold {
             Fold::OpenAll => {
-                for c in containers {
-                    self.set_fold(c, true);
-                }
+                let all: Vec<ComponentId> = modules.into_iter().collect();
+                self.set_folds(&all, true);
             }
             Fold::CloseAll => {
-                for c in containers {
-                    self.set_fold(c, false);
-                }
+                let all: Vec<ComponentId> = modules.into_iter().collect();
+                self.set_folds(&all, false);
             }
             Fold::Open | Fold::Close | Fold::Toggle => {
                 let Some(c) = self.fold_target() else { return };
@@ -1857,15 +2177,7 @@ impl Navigable for GraphState {
                     Fold::Close => false,
                     _ => self.closed(&c),
                 };
-                // Opened while zoomed out too far to read what's inside:
-                // bring the module up to fill the view first.
-                if open
-                    && self.collapsed()
-                    && let Some(rect) = self.result.as_ref().and_then(|r| r.layout.rects.get(&c)).copied()
-                {
-                    self.fit_rects(&[rect]);
-                }
-                self.set_fold(c, open);
+                self.set_folds(&[c], open);
             }
         }
     }
@@ -1884,19 +2196,17 @@ impl Navigable for GraphState {
             .collect()
     }
 
-    /// Drawn nodes on screen, nearest the selection (or the middle) first.
     fn spots(&self) -> Vec<Spot> {
-        let Some(result) = &self.result else { return Vec::new() };
         let anchor = self.selected_rect().map(|r| r.center()).unwrap_or(self.canvas.center());
-        let mut visible: Vec<(f32, Spot)> = result
-            .layout
-            .rects
-            .iter()
-            .filter(|(id, _)| self.shown(id))
-            .map(|(id, r)| (self.to_screen(r), id))
+        let more = self.scene.more.iter().map(|(r, _)| (MORE.to_owned(), r));
+        let mut visible: Vec<(f32, Spot)> = self
+            .boxes()
+            .map(|(id, r)| (id.to_string(), r))
+            .chain(more)
+            .map(|(key, r)| (self.to_screen(r), key))
             .filter(|(rect, _)| rect.intersects(self.open_area))
             // The part on screen: a label never sits over the inspector.
-            .map(|(rect, id)| (rect.center().distance(anchor), Spot { key: id.to_string(), rect: rect.intersect(self.open_area) }))
+            .map(|(rect, key)| (rect.center().distance(anchor), Spot { key, rect: rect.intersect(self.open_area) }))
             .collect();
         visible.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.key.cmp(&b.1.key)));
         visible.into_iter().map(|(_, spot)| spot).collect()
@@ -1907,24 +2217,224 @@ impl Navigable for GraphState {
     }
 
     fn save_view(&mut self) {
-        self.saved_view = Some((self.camera, self.folds.clone(), self.drawer_open));
+        self.saved_view = Some((self.camera, self.open.clone(), self.drawer_open));
     }
 
     fn restore_view(&mut self) {
-        if let Some((camera, folds, drawer_open)) = self.saved_view.take() {
+        if let Some((camera, open, drawer_open)) = self.saved_view.take() {
+            self.open = open;
+            self.rebuild(true);
+            self.moving = None;
             self.camera = camera;
-            self.folds = folds;
             self.drawer_open = drawer_open;
         }
     }
 
     fn move_to(&mut self, key: &str) {
+        if key == MORE {
+            self.show_everything();
+            return;
+        }
         let id = ComponentId::new(key);
         if self.component(&id).is_some() {
             self.bring_into_view(&id);
             self.select(Some(id));
         }
     }
+}
+
+/// The lines a node card shows at `detail` (badges from its review `mark`).
+pub fn card_lines(c: &Component, alignment: Alignment, detail: Detail, mark: Option<&crate::review::NodeMark>) -> Vec<CardLine> {
+    let line = |role, text: String| CardLine { role, text };
+    let mut out = vec![line(LineRole::Name, c.name.clone())];
+    if detail == Detail::Far {
+        return out;
+    }
+    let location = match (&c.anchor, &c.proposed) {
+        (Some(a), _) if crate::status::is_folder(a) => crate::status::place(a),
+        (Some(a), _) => format!("{}:{}", a.file, a.span.start_line),
+        (None, Some(p)) => format!("{} {}", egui_phosphor::regular::ARROW_RIGHT, p.file),
+        (None, None) => "unplaced".to_owned(),
+    };
+    // Each state with its icon and word, as everywhere else.
+    let badge = |name: &str, count: Option<usize>| {
+        let (glyph, word, _) = crate::status::look(name);
+        match count {
+            Some(n) => format!("{glyph} {n} {word}"),
+            None => format!("{glyph} {word}"),
+        }
+    };
+    let stage = badge(crate::status::stage(c.stage), None);
+    if detail == Detail::Mid {
+        let placeholders = if c.placeholders.is_empty() { String::new() } else { format!(" · {}", badge("placeholders", Some(c.placeholders.len()))) };
+        out.push(line(LineRole::Meta, format!("{} · {stage}{placeholders}", c.type_name)));
+        out.push(line(LineRole::Location, location));
+        return out;
+    }
+    out.push(line(LineRole::Meta, format!("{} · {stage} · {}", c.type_name, badge(crate::status::alignment(alignment), None))));
+    if let Some(sig) = &c.signature {
+        let params: Vec<String> = sig.params.iter().map(|p| p.ty.as_ref().map_or_else(|| p.name.clone(), |t| format!("{}: {t}", p.name))).collect();
+        let returns = sig.returns.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
+        out.push(line(LineRole::Signature, format!("({}){returns}", params.join(", "))));
+    }
+    out.push(line(LineRole::Location, location));
+    let mut badges = Vec::new();
+    if !c.placeholders.is_empty() {
+        badges.push(badge("placeholders", Some(c.placeholders.len())));
+    }
+    if let Some(mark) = mark {
+        if mark.open > 0 {
+            badges.push(badge("open_comments", Some(mark.open)));
+        }
+        if mark.changed {
+            badges.push(badge("changed", None));
+        }
+    }
+    if !badges.is_empty() {
+        out.push(line(LineRole::Badges, badges.join(" · ")));
+    }
+    out
+}
+
+/// A name drawn off its card, waiting for a place.
+struct Unlabelled {
+    id: ComponentId,
+    rect: Rect,
+    text: String,
+    open: bool,
+}
+
+/// How far along a move is (eased), from when it started; None before it
+/// has (or with moves turned off).
+fn move_t(started: Option<f64>, time: f64) -> Option<f32> {
+    let secs = crate::theme::look().move_seconds;
+    if secs <= 0.0 {
+        return None;
+    }
+    let t = ((time - started?) as f32 / secs).clamp(0.0, 1.0);
+    Some(1.0 - (1.0 - t).powi(3))
+}
+
+/// A polyline with its corners rounded.
+fn rounded(points: &[Pos2], radius: f32) -> Vec<Pos2> {
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+    let mut out = vec![points[0]];
+    for w in points.windows(3) {
+        let (a, b, c) = (w[0], w[1], w[2]);
+        let r = radius.min((b - a).length() / 2.0).min((c - b).length() / 2.0);
+        let (p0, p1) = (b + (a - b).normalized() * r, b + (c - b).normalized() * r);
+        for k in 0..=4 {
+            let t = k as f32 / 4.0;
+            let u = 1.0 - t;
+            out.push(Pos2::new(u * u * p0.x + 2.0 * u * t * b.x + t * t * p1.x, u * u * p0.y + 2.0 * u * t * b.y + t * t * p1.y));
+        }
+    }
+    out.push(points[points.len() - 1]);
+    out
+}
+
+/// A small count on a line.
+fn count_pill(painter: &egui::Painter, at: Pos2, count: u32, color: egui::Color32) {
+    let look = crate::theme::look();
+    let theme = colors();
+    let galley = painter.layout_no_wrap(count.to_string(), FontId::proportional(look.text_tiny), color);
+    let rect = Rect::from_center_size(at, galley.size() + Vec2::new(look.space_s * 2.0, look.space_hair * 2.0));
+    painter.rect_filled(rect, look.radius_pill, theme.bg);
+    painter.rect_stroke(rect, look.radius_pill, Stroke::new(look.line_thin, color), StrokeKind::Inside);
+    painter.galley(rect.center() - galley.size() / 2.0, galley, color);
+}
+
+/// A shut module's second line: what it is and how much is inside.
+fn module_meta(c: &Component, members: u32) -> String {
+    format!("{} · {members} parts", c.type_name)
+}
+
+/// The block for what's reached outside the focus.
+fn outside_text(result: &ViewResult, group: &ComponentId, reached: u32) -> String {
+    let name = result.components.get(group).map_or_else(|| group.to_string(), |c| c.name.clone());
+    format!("{reached} more in {name}")
+}
+
+fn more_text(hidden: usize) -> String {
+    format!("+{hidden} more")
+}
+
+/// What cards say, sized for the scene (the text keeps its size at every
+/// zoom, so cards are as big as their text at zoom 1).
+struct Cards<'a> {
+    result: &'a ViewResult,
+    metrics: &'a scene::Metrics,
+    names: BTreeMap<ComponentId, String>,
+}
+
+impl<'a> Cards<'a> {
+    fn new(result: &'a ViewResult, metrics: &'a scene::Metrics) -> Self {
+        let mut count: BTreeMap<&str, usize> = BTreeMap::new();
+        for n in &result.view.nodes {
+            if let Some(c) = result.components.get(&n.id) {
+                *count.entry(c.name.as_str()).or_default() += 1;
+            }
+        }
+        // A name two shown components share comes with the part above it.
+        let names = result
+            .view
+            .nodes
+            .iter()
+            .filter_map(|n| result.components.get(&n.id))
+            .map(|c| {
+                let name = if count.get(c.name.as_str()).copied().unwrap_or(0) > 1 { qualified(c) } else { c.name.clone() };
+                (c.id.clone(), name)
+            })
+            .collect();
+        Self { result, metrics, names }
+    }
+
+    fn lines(&self, id: &ComponentId, closed: bool) -> Vec<(String, f32)> {
+        let look = crate::theme::look();
+        let Some(c) = self.result.components.get(id) else { return vec![(id.to_string(), look.text_title)] };
+        let name = self.names.get(id).cloned().unwrap_or_else(|| c.name.clone());
+        if closed || self.result.view.node(id).is_some_and(|n| n.members > 0) {
+            let members = self.result.view.node(id).map_or(0, |n| n.members);
+            return vec![(name, look.text_title), (module_meta(c, members), look.text_small)];
+        }
+        let alignment = self.result.view.node(id).map_or(Alignment::Observed, |n| n.alignment);
+        let mut lines: Vec<(String, f32)> = card_lines(c, alignment, Detail::Mid, None).into_iter().map(|l| (l.text, look.text_small)).collect();
+        lines[0] = (name, look.text_title);
+        lines
+    }
+}
+
+impl Measure for Cards<'_> {
+    fn card(&self, id: &ComponentId, closed: bool) -> (f32, f32) {
+        let lines = self.lines(id, closed);
+        let refs: Vec<(&str, f32)> = lines.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        self.metrics.card(&refs)
+    }
+    fn outside(&self, group: &ComponentId, reached: u32) -> (f32, f32) {
+        self.metrics.card(&[(&outside_text(self.result, group, reached), crate::theme::look().text_body)])
+    }
+    fn more(&self, hidden: usize) -> (f32, f32) {
+        self.metrics.card(&[(&more_text(hidden), crate::theme::look().text_body)])
+    }
+}
+
+/// A name with the part of the id above it (`app.helpers`, `tests::common`).
+fn qualified(c: &Component) -> String {
+    let symbol = c.id.as_str().split_once(':').map_or(c.id.as_str(), |(_, s)| s);
+    let cut = symbol.strip_suffix(c.name.as_str()).unwrap_or(symbol);
+    let sep: String = cut.chars().rev().take_while(|ch| !ch.is_alphanumeric() && *ch != '_').collect::<Vec<_>>().into_iter().rev().collect();
+    let above = cut[..cut.len() - sep.len()].rsplit(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-').next().unwrap_or_default();
+    if above.is_empty() { c.name.clone() } else { format!("{above}{sep}{}", c.name) }
+}
+
+/// Text for a card or block: whole when it fits; shortened only when the
+/// card is at full size (`full`), since a longer name than any card is wide
+/// can't fit anywhere; otherwise none (the name floats over it instead).
+fn whole_or_full(painter: &egui::Painter, text: &str, font: &FontId, width: f32, full: bool) -> Option<String> {
+    let shown = fit_text(painter, text, font, width)?;
+    (shown == text || full).then_some(shown)
 }
 
 /// `text` as it fits in `width`: whole, shortened with an ellipsis, or not
@@ -1941,7 +2451,7 @@ fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, width: f32) -> O
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use arch_graph::view::{Layout, ViewEdge, ViewNode};
+    use arch_graph::view::{ViewEdge, ViewNode};
 
     /// A graph waiting for its first view (nothing in flight, nothing shown).
     pub(crate) fn loading() -> GraphState {
@@ -1961,10 +2471,6 @@ pub(crate) mod tests {
             ComponentId::new(s)
         }
         let ids = ["rust:a::run", "rust:a::step", "rust:a::save", "rust:a::log"];
-        let mut layout = Layout::default();
-        for (i, (x, y)) in [(0.0, 0.0), (300.0, 0.0), (600.0, 0.0), (300.0, 100.0)].into_iter().enumerate() {
-            layout.rects.insert(id(ids[i]), WorldRect { x, y, w: 220.0, h: 64.0 });
-        }
         let component = |s: &str| Component {
             id: id(s),
             name: s.rsplit("::").next().unwrap().into(),
@@ -1982,33 +2488,47 @@ pub(crate) mod tests {
         let edge = |a: &str, b: &str| ViewEdge { id: arch_graph::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: id(a), target: id(b), alignment: Alignment::Observed, overlay: false, order: None };
         ViewResult {
             view: View {
-                spec: ViewSpec { name: "calls".into(), description: String::new(), kinds: vec![RelationKind::Calls], direction: Default::default(), depth: 3, layout: Default::default(), overlays: vec![], include_ancestors: false, roots: vec![], filters: Default::default() },
+                spec: ViewSpec { name: "calls".into(), description: String::new(), kinds: vec![RelationKind::Calls], direction: Default::default(), depth: 3, layout: Default::default(), overlays: vec![], include_ancestors: false, links: vec![], roots: vec![], filters: Default::default() },
                 roots: vec![id("rust:a::run")],
-                nodes: ids.iter().map(|s| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed }).collect(),
+                nodes: ids.iter().map(|s| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0 }).collect(),
                 edges: vec![edge("rust:a::run", "rust:a::step"), edge("rust:a::step", "rust:a::save"), edge("rust:a::run", "rust:a::log")],
+                links: vec![],
+                trail: vec![],
+                outside: vec![],
             },
-            layout,
             text: String::new(),
             components: ids.iter().map(|s| (id(s), component(s))).collect(),
         }
     }
 
-    /// The sample inside a module `rust:a` (a container holding all four),
-    /// plus a top-level module `rust:b` to its right.
-    fn nested_result() -> ViewResult {
+    /// The sample inside a module `rust:a` (holding all four), plus a
+    /// top-level module `rust:b`, as a structure view (modules nest).
+    pub(crate) fn nested_result() -> ViewResult {
         let mut r = sample_result();
-        for (id, x) in [("rust:a", -20.0), ("rust:b", 1000.0)] {
+        r.view.spec.name = "structure".into();
+        r.view.spec.layout = arch_graph::view::LayoutKind::Nested;
+        r.view.roots.clear();
+        for id in ["rust:a", "rust:b"] {
             let mut c = r.components[&ComponentId::new("rust:a::run")].clone();
             c.id = ComponentId::new(id);
             c.name = id.trim_start_matches("rust:").into();
             c.type_name = "module".into();
             r.components.insert(c.id.clone(), c);
-            r.view.nodes.push(ViewNode { id: ComponentId::new(id), depth: Some(0), truncated: false, alignment: Alignment::Observed });
-            let w = if id == "rust:a" { 900.0 } else { 220.0 };
-            r.layout.rects.insert(ComponentId::new(id), WorldRect { x, y: -40.0, w, h: 240.0 });
+            let members = if id == "rust:a" { 4 } else { 0 };
+            r.view.nodes.push(ViewNode { id: ComponentId::new(id), depth: Some(0), truncated: false, alignment: Alignment::Observed, members });
         }
-        r.layout.containers.insert(ComponentId::new("rust:a"));
+        for part in ["rust:a::run", "rust:a::step", "rust:a::save", "rust:a::log"] {
+            r.view.edges.push(ViewEdge { id: arch_graph::RelationId(format!("contains:rust:a->{part}")), kind: RelationKind::Contains, source: ComponentId::new("rust:a"), target: ComponentId::new(part), alignment: Alignment::Observed, overlay: false, order: None });
+        }
         r
+    }
+
+    /// `nested_result` with module `a` open in place.
+    pub(crate) fn opened() -> GraphState {
+        let mut g = showing(nested_result());
+        g.set_folds(&[ComponentId::new("rust:a")], true);
+        g.moving = None;
+        g
     }
 
     // req: P9.1
@@ -2033,35 +2553,31 @@ pub(crate) mod tests {
     fn moves_searches_and_jumps_only_land_on_what_can_be_seen() {
         let mut g = showing(sample_result());
         g.set_result(nested_result());
-        g.camera.zoom = 0.1;
-        assert!(g.collapsed() && !g.shown(&ComponentId::new("rust:a::save")), "zoomed out: the module is one block");
+        assert!(g.closed(&ComponentId::new("rust:a")) && !g.shown(&ComponentId::new("rust:a::save")), "a module shows shut: one card");
         // Moving goes between what's drawn: the module, then the module beside it.
         g.select(Some(ComponentId::new("rust:a")));
         g.move_selection(Dir::Right);
-        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:b", "not into the collapsed module");
-        // A focused module (the only box at the top) stays open zoomed out:
-        // its parts show as blocks, and moves never jump out to it.
+        assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:b", "not into the shut module");
+        // A focused module (the only one at the top) is the level, open: its
+        // parts are drawn, and moves never jump out to it.
         let mut only_a = nested_result();
-        only_a.layout.rects.remove(&ComponentId::new("rust:b"));
         only_a.view.nodes.retain(|n| n.id.as_str() != "rust:b");
         let mut f = showing(only_a);
-        f.camera.zoom = 0.1;
-        assert!(f.collapsed() && f.shown(&ComponentId::new("rust:a::save")), "the focused module's parts are drawn");
+        assert!(f.shown(&ComponentId::new("rust:a::save")), "the focused module's parts are drawn");
         f.select(Some(ComponentId::new("rust:a::save")));
         for dir in [Dir::Left, Dir::Right, Dir::Up, Dir::Down] {
             f.move_selection(dir);
             assert_ne!(f.selection.as_ref().unwrap().as_str(), "rust:a", "never onto the module it sits in");
         }
-        // A search hit inside a collapsed module opens it up.
+        // A search hit inside a shut module opens it.
         Navigable::move_to(&mut g, "rust:a::save");
         assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::save");
-        assert!(g.shown(&ComponentId::new("rust:a::save")), "zoomed in so it's drawn");
-        assert!(g.camera.zoom >= GraphState::open_zoom());
+        assert!(g.shown(&ComponentId::new("rust:a::save")), "opened so it's drawn");
         // So does the first/last jump, and the agent's focus once its view is in.
-        g.camera.zoom = 0.1;
+        g.fold(Fold::CloseAll);
         g.motion(Motion::First, 1);
         assert!(g.shown(g.selection.as_ref().unwrap()), "{:?}", g.selection);
-        g.camera.zoom = 0.1;
+        g.fold(Fold::CloseAll);
         g.reveal(ComponentId::new("rust:a::log"));
         assert!(g.shown(&ComponentId::new("rust:a::log")));
     }
@@ -2106,7 +2622,7 @@ pub(crate) mod tests {
         assert_eq!(spots.len(), 4);
         assert_eq!(spots[0].key, "rust:a::run", "nearest the selection first (it gets the first label)");
         let save = spots.iter().find(|s| s.key == "rust:a::save").unwrap();
-        assert_eq!(save.rect, g.to_screen(&g.result.as_ref().unwrap().layout.rects[&ComponentId::new("rust:a::save")]));
+        assert_eq!(save.rect, g.to_screen(&g.scene.rects[&ComponentId::new("rust:a::save")]));
         assert_eq!(g.open_item("rust:a::save"), Step::Done);
         assert_eq!((g.selection.as_ref().unwrap().as_str(), g.nav.roots.clone()), ("rust:a::save", vec![ComponentId::new("rust:a::save")]), "F focuses on it");
         // Off screen: no spot.
@@ -2177,8 +2693,7 @@ pub(crate) mod tests {
         g.select(Some(ComponentId::new("rust:a::save")));
         assert!(g.step_call(true).unwrap_err().contains("calls nothing"), "no calls: it says so");
         // ]] / [[: siblings in reading order, in the same module.
-        let mut n = showing(nested_result());
-        n.camera.zoom = 1.0;
+        let mut n = opened();
         n.select(Some(ComponentId::new("rust:a::run")));
         n.motion(Motion::NextSibling, 1);
         assert_eq!(n.selection.as_ref().unwrap().as_str(), "rust:a::step");
@@ -2190,12 +2705,11 @@ pub(crate) mod tests {
         n.motion(Motion::NextSibling, 1);
         assert_eq!(n.selection.as_ref().unwrap().as_str(), "rust:b", "modules are siblings of modules");
         // l prefers the box in the same row over a nearer one a row up.
-        let mut rows = sample_result();
-        rows.layout.rects.insert(ComponentId::new("rust:a::run"), WorldRect { x: 0.0, y: 100.0, w: 220.0, h: 64.0 });
-        rows.layout.rects.insert(ComponentId::new("rust:a::step"), WorldRect { x: 260.0, y: 0.0, w: 220.0, h: 60.0 });
-        rows.layout.rects.insert(ComponentId::new("rust:a::save"), WorldRect { x: 420.0, y: 110.0, w: 220.0, h: 64.0 });
-        rows.layout.rects.insert(ComponentId::new("rust:a::log"), WorldRect { x: 0.0, y: 400.0, w: 220.0, h: 64.0 });
-        let mut r = showing(rows);
+        let mut r = showing(sample_result());
+        r.scene.rects.insert(ComponentId::new("rust:a::run"), WorldRect { x: 0.0, y: 100.0, w: 220.0, h: 64.0 });
+        r.scene.rects.insert(ComponentId::new("rust:a::step"), WorldRect { x: 260.0, y: 0.0, w: 220.0, h: 60.0 });
+        r.scene.rects.insert(ComponentId::new("rust:a::save"), WorldRect { x: 420.0, y: 110.0, w: 220.0, h: 64.0 });
+        r.scene.rects.insert(ComponentId::new("rust:a::log"), WorldRect { x: 0.0, y: 400.0, w: 220.0, h: 64.0 });
         r.select(Some(ComponentId::new("rust:a::run")));
         r.motion(Motion::Right, 1);
         assert_eq!(r.selection.as_ref().unwrap().as_str(), "rust:a::save");
@@ -2206,10 +2720,8 @@ pub(crate) mod tests {
     fn moves_go_into_a_module_and_backing_out_keeps_what_held_the_selection() {
         // Focused on the module: its parts are inside it, so moves go in.
         let mut only_a = nested_result();
-        only_a.layout.rects.remove(&ComponentId::new("rust:b"));
         only_a.view.nodes.retain(|n| n.id.as_str() != "rust:b");
         let mut g = showing(only_a);
-        g.camera.zoom = 1.0;
         g.select(Some(ComponentId::new("rust:a")));
         g.motion(Motion::Right, 1);
         assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::run", "l from the module: its first part");
@@ -2224,7 +2736,7 @@ pub(crate) mod tests {
         let mut whole = nested_result();
         whole.components.retain(|id, _| !id.as_str().contains("::"));
         whole.view.nodes.retain(|n| !n.id.as_str().contains("::"));
-        whole.layout.rects.retain(|id, _| !id.as_str().contains("::"));
+        whole.view.edges.clear();
         g.set_result(whole);
         assert_eq!(g.selection.as_ref().map(|s| s.as_str()), Some("rust:a"), "the module that held it");
     }
@@ -2232,28 +2744,27 @@ pub(crate) mod tests {
     // req: N.11
     #[test]
     fn modules_fold_in_place_without_moving_the_view() {
-        let mut g = showing(nested_result());
-        g.camera.zoom = 1.0;
+        let mut g = opened();
         let nav = g.nav.clone();
+        let a = ComponentId::new("rust:a");
+        let on_screen = |g: &GraphState| g.to_screen(&g.scene.rects[&ComponentId::new("rust:a")]).min;
         g.select(Some(ComponentId::new("rust:a::step")));
+        let before = on_screen(&g);
         g.fold(Fold::Close);
-        assert!(!g.shown(&ComponentId::new("rust:a::step")), "zc closes the module it's in");
+        assert!(!g.shown(&ComponentId::new("rust:a::step")), "zc shuts the module it's in");
         assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a", "the selection moves to the module");
         assert_eq!(g.nav, nav, "the view's root didn't change");
+        assert_eq!(on_screen(&g), before, "the module stays where it was on screen");
         g.fold(Fold::Toggle);
         assert!(g.shown(&ComponentId::new("rust:a::step")), "za opens it again");
-        g.camera.zoom = 0.1;
-        assert!(!g.shown(&ComponentId::new("rust:a::step")), "zoomed out it closes by itself");
-        g.fold(Fold::Open);
-        assert!(g.shown(&ComponentId::new("rust:a::step")), "zo opens it even zoomed out");
-        assert!(g.camera.zoom >= GraphState::open_zoom(), "and brings it up close enough to read");
+        assert_eq!(on_screen(&g), before);
+        assert!(g.scene.rects[&a].contains(&g.scene.rects[&ComponentId::new("rust:a::step")]), "its parts inside it");
         g.fold(Fold::CloseAll);
         assert!(!g.shown(&ComponentId::new("rust:a::save")));
         g.fold(Fold::OpenAll);
         assert!(g.shown(&ComponentId::new("rust:a::save")));
-        // A jump into a closed module opens it.
+        // A jump into a shut module opens it.
         g.fold(Fold::CloseAll);
-        g.camera.zoom = 1.0;
         Navigable::move_to(&mut g, "rust:a::log");
         assert!(g.shown(&ComponentId::new("rust:a::log")));
     }
@@ -2269,10 +2780,18 @@ pub(crate) mod tests {
             c.id = id.clone();
             c.name = format!("n{i}");
             r.components.insert(id.clone(), c);
-            r.view.nodes.push(arch_graph::view::ViewNode { id: id.clone(), depth: Some(0), truncated: false, alignment: Alignment::Observed });
-            r.layout.rects.insert(id, WorldRect { x: 0.0, y: 200.0 + i as f32 * 100.0, w: 220.0, h: 64.0 });
+            r.view.nodes.push(arch_graph::view::ViewNode { id: id.clone(), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0 });
         }
         let mut g = showing(r);
+        // Laid out by hand: run at the top of a tall column, the rest to its right.
+        g.scene.rects.clear();
+        g.scene.lines.clear();
+        for (id, x, y) in [("rust:a::run", 0.0, 0.0), ("rust:a::step", 300.0, 0.0), ("rust:a::save", 600.0, 0.0), ("rust:a::log", 300.0, 100.0)] {
+            g.scene.rects.insert(ComponentId::new(id), WorldRect { x, y, w: 220.0, h: 64.0 });
+        }
+        for i in 0..20 {
+            g.scene.rects.insert(ComponentId::new(format!("rust:a::n{i}")), WorldRect { x: 0.0, y: 200.0 + i as f32 * 100.0, w: 220.0, h: 64.0 });
+        }
         g.canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
         g.open_area = g.canvas;
         g.camera = Camera { pan: Vec2::new(24.0, 24.0), zoom: 1.0 };
@@ -2363,7 +2882,7 @@ pub(crate) mod tests {
     }
 
     fn center_of(g: &GraphState, id: &str) -> Pos2 {
-        let r = g.result.as_ref().unwrap().layout.rects[&ComponentId::new(id)];
+        let r = g.scene.rects[&ComponentId::new(id)];
         g.to_screen(&r).center()
     }
 
@@ -2684,5 +3203,171 @@ pub(crate) mod tests {
         let calm = draw(&mut g, &ctx, vec![], 2.1, size);
         assert!(!wants_frame(&calm), "nothing moving, nothing redrawn");
         crate::theme::set_look((*look).clone());
+    }
+
+    /// Every text a frame draws, with its size.
+    fn sized_texts(out: &egui::FullOutput) -> Vec<(String, f32)> {
+        fn collect(shape: &Shape, into: &mut Vec<(String, f32)>) {
+            match shape {
+                Shape::Text(t) => into.push((t.galley.text().to_owned(), t.galley.job.sections.first().map_or(0.0, |s| s.format.font_id.size))),
+                Shape::Vec(list) => list.iter().for_each(|s| collect(s, into)),
+                _ => {}
+            }
+        }
+        let mut all = Vec::new();
+        out.shapes.iter().for_each(|c| collect(&c.shape, &mut all));
+        all
+    }
+
+    /// `nested_result` focused on module `a` (the level a zoom goes into).
+    fn inside_a() -> ViewResult {
+        let mut r = nested_result();
+        r.view.roots = vec![ComponentId::new("rust:a")];
+        r.view.nodes.retain(|n| n.id.as_str() != "rust:b");
+        r
+    }
+
+    // req: G.1, G.3
+    #[test]
+    fn zooming_goes_into_a_module_and_out_of_it_with_the_way_shown() {
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::set(config.theme.clone(), &ctx);
+        crate::theme::set_look(config.look.clone());
+        let size = Vec2::new(1400.0, 800.0);
+        let mut g = configured();
+        g.set_result(nested_result());
+        draw(&mut g, &ctx, vec![], 0.0, size);
+        let a = ComponentId::new("rust:a");
+        assert!(g.closed(&a) && g.shown(&a), "a shows shut at the top");
+        assert_eq!(g.leave_label(), None, "at the top there's nowhere up");
+        // Zooming in on it: past the share of the view it goes in.
+        let card = g.to_screen(&g.scene.rects[&a]);
+        for _ in 0..60 {
+            if !g.nav.roots.is_empty() {
+                break;
+            }
+            g.zoom_by_user(1.15, card.center());
+        }
+        assert_eq!(g.nav.roots, vec![a.clone()], "zoomed into a");
+        assert!(g.jumped.take().is_some(), "a jump (the jump list has it)");
+        let zoom_then = g.camera.zoom;
+        g.zoom_by_user(1.15, card.center());
+        assert_eq!(g.camera.zoom, zoom_then, "on the way in, more zoom waits");
+        // The level arrives and grows out of where the card was.
+        g.set_result(inside_a());
+        let t0 = 1.0;
+        draw(&mut g, &ctx, vec![], t0, size);
+        let target = g.glide.expect("it glides").to;
+        assert_ne!(g.camera, target, "it starts from the card");
+        draw(&mut g, &ctx, vec![], t0 + 5.0, size);
+        assert_eq!((g.camera, g.glide), (target, None), "and settles where the fit puts it");
+        assert!(g.shown(&ComponentId::new("rust:a::save")) && g.scene.frame == Some(a.clone()), "inside, its parts are the level");
+        assert_eq!(g.leave_label().as_deref(), Some("Up to the whole view"));
+        // The trail says where we are, and each step is a link.
+        let text = texts(&draw(&mut g, &ctx, vec![], t0 + 10.0, size));
+        assert!(text.contains("All\n") && text.contains("a\n"), "{text}");
+        // Zooming out of it: below the share it goes up, a selected.
+        let middle = g.open_area.center();
+        for _ in 0..60 {
+            if g.nav.roots.is_empty() {
+                break;
+            }
+            g.zoom_by_user(1.0 / 1.15, middle);
+        }
+        assert!(g.nav.roots.is_empty(), "back up");
+        g.set_result(nested_result());
+        draw(&mut g, &ctx, vec![], t0 + 20.0, size);
+        assert_eq!(g.selection, Some(a.clone()), "the module it came out of is selected");
+        assert!(g.glide.is_some(), "and the level shrinks back into its card");
+        // Two shown things with one name say which is which.
+        let mut twins = nested_result();
+        let mut other = twins.components[&ComponentId::new("rust:a::log")].clone();
+        other.id = ComponentId::new("rust:b::log");
+        twins.components.insert(other.id.clone(), other);
+        twins.view.nodes.push(ViewNode { id: ComponentId::new("rust:b::log"), depth: Some(1), truncated: false, alignment: Alignment::Observed, members: 0 });
+        g.set_result(twins);
+        assert_eq!((g.names[&ComponentId::new("rust:a::log")].as_str(), g.names[&ComponentId::new("rust:b::log")].as_str()), ("a::log", "b::log"));
+        assert_eq!(g.names[&ComponentId::new("rust:a::run")], "run", "the rest keep their short names");
+    }
+
+    // req: G.2
+    #[test]
+    fn text_keeps_its_size_and_names_that_dont_fit_float_without_covering_each_other() {
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::set(config.theme.clone(), &ctx);
+        crate::theme::set_look(config.look.clone());
+        let look = crate::theme::look();
+        let size = Vec2::new(1400.0, 800.0);
+        let mut g = configured();
+        draw(&mut g, &ctx, vec![], 0.0, size);
+        let name_size = |g: &mut GraphState, zoom: f32| {
+            g.camera.zoom = zoom;
+            sized_texts(&draw(g, &ctx, vec![], 0.1, size)).into_iter().find(|(t, _)| t == "step").map(|(_, s)| s)
+        };
+        assert_eq!(name_size(&mut g, 1.0), Some(look.text_title), "on its card");
+        assert_eq!(name_size(&mut g, 2.5), Some(look.text_title), "the same size close up");
+        assert_eq!(name_size(&mut g, 0.2), Some(look.text_label), "too small for its card: it floats, still readable");
+        // Floating names: the selection's first, never over each other.
+        g.select(Some(ComponentId::new("rust:a::log")));
+        let card = Rect::from_min_size(Pos2::new(100.0, 100.0), Vec2::new(20.0, 10.0));
+        let crowd: Vec<(ComponentId, Rect, Vec2)> = ["rust:a::run", "rust:a::step", "rust:a::save", "rust:a::log"].iter().map(|id| (ComponentId::new(*id), card, Vec2::new(60.0, 14.0))).collect();
+        let plan = g.label_plan(&crowd, None);
+        assert_eq!(plan.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["rust:a::log"], "all in one place: only the most important shows");
+        let spread: Vec<(ComponentId, Rect, Vec2)> = crowd.iter().enumerate().map(|(i, (id, r, s))| (id.clone(), r.translate(Vec2::new(i as f32 * 40.0, 0.0)), *s)).collect();
+        let plan = g.label_plan(&spread, None);
+        assert_eq!(plan[0].0.as_str(), "rust:a::log");
+        for (i, (a, ra)) in plan.iter().enumerate() {
+            for (b, rb) in plan.iter().skip(i + 1) {
+                assert!(!ra.intersects(*rb), "{a} and {b} overlap");
+            }
+        }
+        assert!(plan.len() < 4, "some wait for the pointer");
+        let missing = spread.iter().find(|(id, _, _)| !plan.iter().any(|(p, _)| p == id)).unwrap();
+        let hovered = g.label_plan(&spread, Some(missing.1.center()));
+        assert!(hovered.iter().any(|(id, _)| *id == missing.0), "under the pointer it shows");
+    }
+
+    // req: G.6, G.8
+    #[test]
+    fn merged_lines_show_their_counts_and_cards_glide_to_new_places() {
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::set(config.theme.clone(), &ctx);
+        crate::theme::set_look(config.look.clone());
+        let size = Vec2::new(1400.0, 800.0);
+        // b calls into a's parts three times over: one line, b -> a, counted.
+        let mut r = nested_result();
+        for (i, part) in ["rust:a::run", "rust:a::step", "rust:a::save"].iter().enumerate() {
+            r.view.links.push(arch_graph::view::ViewLink { source: ComponentId::new("rust:b"), target: ComponentId::new(*part), kind: RelationKind::Calls, count: i as u32 + 1 });
+        }
+        let mut g = configured();
+        g.set_result(r.clone());
+        let line = g.scene.lines.iter().find(|l| l.kind == RelationKind::Calls && l.from == End::Node(ComponentId::new("rust:b"))).expect("merged").clone();
+        assert_eq!((line.to.clone(), line.count), (End::Node(ComponentId::new("rust:a")), 6));
+        let text = texts(&draw(&mut g, &ctx, vec![], 0.0, size));
+        assert!(text.lines().any(|l| l == "6"), "the count shows on it: {text}");
+        // Opened in place: the lines split onto the parts, and the cards
+        // that moved glide there.
+        let before = g.scene.rects.clone();
+        g.set_folds(&[ComponentId::new("rust:a")], true);
+        let moved = g.moving.clone().expect("cards move");
+        assert!(moved.from.iter().all(|(id, r)| before.get(id) == Some(r)));
+        let b = ComponentId::new("rust:b");
+        let (from, to) = (g.to_screen(&before[&b]), g.to_screen(&g.scene.rects[&b]));
+        if from != to {
+            draw(&mut g, &ctx, vec![], 1.0, size);
+            let half = g.drawn(&b, &g.scene.rects[&b].clone(), 1.0 + f64::from(crate::theme::look().move_seconds) / 2.0);
+            assert!(half != from && half != to, "between the two halfway");
+        }
+        draw(&mut g, &ctx, vec![], 5.0, size);
+        draw(&mut g, &ctx, vec![], 10.0, size);
+        assert!(g.moving.is_none(), "and stop");
+        assert_eq!(g.scene.lines.iter().filter(|l| l.from == End::Node(b.clone()) && l.kind == RelationKind::Calls).count(), 3);
+        // A refresh of the same level keeps everything where it is.
+        let places = g.scene.rects.clone();
+        g.set_result(r);
+        assert_eq!(g.scene.rects, places);
     }
 }

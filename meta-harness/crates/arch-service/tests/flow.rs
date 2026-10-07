@@ -480,7 +480,7 @@ fn view_requests_are_checked_and_announced() {
     assert!(matches!(r.events.lock().unwrap().last(), Some(ArchEvent::ViewRequested { by: Requester::Agent, .. })));
     let view = r.service.named_view("calls", None, vec![id("sample::run")], Some(1)).unwrap();
     assert!(view.text.contains("run [function"));
-    assert!(view.layout.rects.contains_key(&id("sample::run")));
+    assert!(view.view.nodes.iter().any(|n| n.id == id("sample::run")));
     let found = r.service.search("store", None, 10).unwrap();
     let top: Vec<_> = found.iter().take(2).map(|c| c.id.clone()).collect();
     assert_eq!(top, vec![id("sample::store"), id("sample::store::Store")], "exact name matches first, ties by id");

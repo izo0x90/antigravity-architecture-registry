@@ -769,7 +769,7 @@ impl CockpitApp {
         if self.follow && self.graph.selection != self.follow_last {
             self.follow_last = self.graph.selection.clone();
             if let Some(c) = self.graph.selected()
-                && let Some(a) = &c.anchor
+                && let Some(a) = c.anchor.as_ref().filter(|a| !crate::status::is_folder(a))
             {
                 let (file, start, end) = (a.file.to_string(), a.span.start_line, a.span.end_line);
                 self.show_code(&file, start, end, ctx);
@@ -870,7 +870,8 @@ impl CockpitApp {
         };
         let enter = self.view(kind).enter_label().unwrap_or_else(|| enter.to_owned());
         out.push(nav("nav.enter", &enter, S::Enter).importance(PRIMARY).when(When::Enter));
-        out.push(nav("nav.leave", leave, S::Leave).importance(SECONDARY).when(When::Leave));
+        let leave = self.view(kind).leave_label().unwrap_or_else(|| leave.to_owned());
+        out.push(nav("nav.leave", &leave, S::Leave).importance(SECONDARY).when(When::Leave));
         out.push(nav("nav.hint", "Jump to something on screen", S::Hint { open: false }).importance(PRIMARY));
         out.push(nav("nav.hint_open", "Open something on screen", S::Hint { open: true }).importance(SECONDARY).icon(egui_phosphor::regular::CURSOR_CLICK));
         out.push(nav("nav.search", "Search this view", S::Search).importance(PRIMARY).icon(egui_phosphor::regular::MAGNIFYING_GLASS));
@@ -1450,6 +1451,7 @@ impl CockpitApp {
     /// knows it.
     fn code_location(&self, id: &ComponentId) -> Option<Option<(String, u32, u32)>> {
         let of = |c: &arch_graph::Component| match (&c.anchor, &c.proposed) {
+            (Some(a), _) if crate::status::is_folder(a) => None,
             (Some(a), _) => Some((a.file.to_string(), a.span.start_line, a.span.end_line)),
             (None, Some(p)) => Some((p.file.to_string(), 1, 1)),
             (None, None) => None,
@@ -2514,7 +2516,7 @@ mod tests {
         assert!(text.contains("Loading the architecture"), "{text}");
         let mut empty = sample_result();
         empty.view.nodes.clear();
-        empty.layout.rects.clear();
+        empty.view.edges.clear();
         app.graph = showing(empty);
         let text = texts(&frame(&ctx, &mut app, vec![]));
         assert!(text.contains("Nothing to show in this view yet"), "{text}");
@@ -3314,9 +3316,7 @@ mod tests {
         assert_eq!((app.tree.search_filter.as_str(), app.tree.rows().len()), ("", 6));
         // A graph search that finds nothing puts the view back as it was.
         focus(&ctx, &mut app, BufferKind::Graph);
-        let mut nested = sample_result();
-        nested.layout.containers.insert(ComponentId::new("rust:a::run"));
-        app.graph.set_result(nested);
+        app.graph.set_result(crate::graph::tests::nested_result());
         let before = app.graph.place();
         keys(&ctx, &mut app, "/zzz");
         assert_eq!(app.graph.place(), before);
@@ -3504,7 +3504,7 @@ mod tests {
         let mut without = sample_result();
         without.components.remove(&ComponentId::new("rust:a::step"));
         without.view.nodes.retain(|n| n.id.as_str() != "rust:a::step");
-        without.layout.rects.remove(&ComponentId::new("rust:a::step"));
+        without.view.edges.retain(|e| e.source.as_str() != "rust:a::step" && e.target.as_str() != "rust:a::step");
         app.graph.set_result(without);
         frame(&ctx, &mut app, vec![]);
         assert_eq!((app.graph.selection.clone(), app.graph.current().map(|c| c.as_str())), (None, Some("rust:a::step")));

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use arch_graph::view::{layout, query, render_text};
+use arch_graph::view::{query, render_text};
 use arch_graph::{
     Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
     RepoPath, Severity, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult, schema::Dsl,
@@ -667,6 +667,7 @@ impl ArchitectureService {
                     layout: arch_graph::view::LayoutKind::Layered,
                     overlays: Vec::new(),
                     include_ancestors: false,
+                    links: Vec::new(),
                     roots: vec![reference.id.clone()],
                     filters: Default::default(),
                 };
@@ -909,10 +910,11 @@ impl ArchitectureService {
         let mut spec = spec.clone();
         spec.filters = spec.filters.with_specializations(&self.types);
         let view = query(&graph, &spec);
-        let layout = layout(&view);
         let text = render_text(&graph, &view);
-        let components = view.nodes.iter().filter_map(|n| graph.component(&n.id).map(|c| (n.id.clone(), c.clone()))).collect();
-        Ok(ViewResult { view, layout, text, components })
+        // What's shown, what holds the focus, and what it reaches outside.
+        let named = view.nodes.iter().map(|n| &n.id).chain(&view.trail).chain(view.outside.iter().map(|o| &o.group));
+        let components = named.filter_map(|id| graph.component(id).map(|c| (id.clone(), c.clone()))).collect();
+        Ok(ViewResult { view, text, components })
     }
 
     pub fn named_view(&self, name: &str, plan: Option<&PlanId>, roots: Vec<ComponentId>, depth: Option<u32>) -> Result<ViewResult, ServiceError> {

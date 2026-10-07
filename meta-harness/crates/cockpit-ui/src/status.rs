@@ -103,19 +103,37 @@ pub fn chip(ui: &mut egui::Ui, name: &str, detail: Option<&str>) -> egui::Respon
         Some(d) => format!("{glyph} {d} {word}"),
         None => format!("{glyph} {word}"),
     };
-    egui::Frame::NONE
-        .fill(color.gamma_multiply(0.15))
-        .stroke(egui::Stroke::new(crate::theme::look().line_thin, color.gamma_multiply(0.6)))
-        .corner_radius(crate::theme::look().radius_xl)
-        .inner_margin(crate::theme::margin2(crate::theme::look().space_sm, crate::theme::look().space_hair))
-        .show(ui, |ui| ui.label(RichText::new(text).size(crate::theme::look().text_body).color(color)))
-        .response
+    let look = crate::theme::look();
+    let margin = crate::theme::margin2(look.space_sm, look.space_hair);
+    // Sized before it's placed, so a wrapping row moves it whole to the next line.
+    let galley = ui.painter().layout_no_wrap(text.clone(), egui::FontId::proportional(look.text_body), color);
+    let size = galley.size() + egui::vec2(margin.sum().x, margin.sum().y) + egui::Vec2::splat(look.line_thin * 2.0);
+    ui.allocate_ui(size, |ui| {
+        egui::Frame::NONE
+            .fill(color.gamma_multiply(0.15))
+            .stroke(egui::Stroke::new(look.line_thin, color.gamma_multiply(0.6)))
+            .corner_radius(look.radius_xl)
+            .inner_margin(margin)
+            .show(ui, |ui| ui.add(egui::Label::new(RichText::new(text).size(look.text_body).color(color)).extend()))
+            .response
+    })
+    .inner
 }
 
 /// A state as inline text: icon and word, coloured (for tight spots).
 pub fn text(name: &str) -> RichText {
     let (glyph, word, color) = look(name);
     RichText::new(format!("{glyph} {word}")).color(color)
+}
+
+/// Whether an anchor is a folder (it has no lines to open).
+pub fn is_folder(a: &arch_graph::CodeAnchor) -> bool {
+    a.syntax_kind == "folder"
+}
+
+/// Where an anchor is, in words: `file:12–30`, or `folder/`.
+pub fn place(a: &arch_graph::CodeAnchor) -> String {
+    if is_folder(a) { format!("{}/", a.file) } else { format!("{}:{}–{}", a.file, a.span.start_line, a.span.end_line) }
 }
 
 /// The vocabulary's name for how plan and code line up.

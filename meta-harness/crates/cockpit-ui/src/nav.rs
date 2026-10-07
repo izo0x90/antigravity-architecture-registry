@@ -401,6 +401,12 @@ pub trait Navigable {
 
     fn can_leave(&self) -> bool;
 
+    /// What Backspace does now, in words ("Up to crates"); the view's
+    /// general wording when `None`.
+    fn leave_label(&self) -> Option<String> {
+        None
+    }
+
     /// Backspace: go out, up.
     fn leave(&mut self) -> Step;
 

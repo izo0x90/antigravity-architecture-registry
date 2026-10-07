@@ -173,6 +173,13 @@ look! {
     fade,
     /// The background grid's spacing (0: no grid).
     grid_step,
+    /// Merged lines grow with how many relations they stand for: this much
+    /// width per doubling, up to this many times their own width.
+    line_count_gain,
+    line_count_max,
+    /// How long things take to move (cards rearranging, going into a
+    /// level or out of it), in seconds (0: at once).
+    move_seconds,
 }
 
 /// The built-in look (the `defaults_parse` test keeps it loadable).

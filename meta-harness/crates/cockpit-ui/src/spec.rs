@@ -437,7 +437,7 @@ impl SpecState {
             });
             ui.label(RichText::new(c.id.as_str()).monospace().size(look.text_small).color(colors().faint));
             let location = match (&c.anchor, &c.proposed) {
-                (Some(a), _) => Some(format!("{}:{}–{}", a.file, a.span.start_line, a.span.end_line)),
+                (Some(a), _) => Some(crate::status::place(a)),
                 (None, Some(p)) => Some(format!("{} (planned)", p.file)),
                 (None, None) => None,
             };
@@ -582,6 +582,7 @@ impl SpecState {
     fn code_location(&self) -> Option<(String, u32, u32)> {
         let c = &self.detail.as_ref()?.component;
         match (&c.anchor, &c.proposed) {
+            (Some(a), _) if crate::status::is_folder(a) => None,
             (Some(a), _) => Some((a.file.to_string(), a.span.start_line, a.span.end_line)),
             (None, Some(p)) => Some((p.file.to_string(), 1, 1)),
             (None, None) => None,
@@ -710,7 +711,7 @@ impl SpecState {
                                 crate::status::chip(ui, crate::status::alignment(detail.alignment), None);
                             });
                             match (&c.anchor, &c.proposed) {
-                                (Some(a), _) => ui.label(RichText::new(format!("{} ({}:{}–{})", a.symbol, a.file, a.span.start_line, a.span.end_line)).monospace()),
+                                (Some(a), _) => ui.label(RichText::new(format!("{} ({})", a.symbol, crate::status::place(a))).monospace()),
                                 (None, Some(p)) => ui.label(RichText::new(format!("planned as {} in {}", p.symbol, p.file)).monospace().color(colors().warn)),
                                 (None, None) => ui.label(RichText::new("not placed yet").color(colors().warn)),
                             };

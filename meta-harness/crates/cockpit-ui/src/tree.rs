@@ -541,8 +541,8 @@ pub(crate) mod tests {
             r.components.insert(c.id.clone(), c);
         }
         let contains = |a: &str, b: &str| ViewEdge { id: RelationId(format!("contains:{a}->{b}")), kind: RelationKind::Contains, source: ComponentId::new(a), target: ComponentId::new(b), alignment: Alignment::Observed, overlay: false, order: None };
-        r.view.nodes.insert(0, arch_graph::view::ViewNode { id: ComponentId::new("rust:a"), depth: Some(0), truncated: false, alignment: Alignment::Observed });
-        r.view.nodes.push(arch_graph::view::ViewNode { id: ComponentId::new("rust:b"), depth: Some(0), truncated: false, alignment: Alignment::Observed });
+        r.view.nodes.insert(0, arch_graph::view::ViewNode { id: ComponentId::new("rust:a"), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0 });
+        r.view.nodes.push(arch_graph::view::ViewNode { id: ComponentId::new("rust:b"), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0 });
         r.view.edges = vec![contains("rust:a", "rust:a::run"), contains("rust:a", "rust:a::step"), contains("rust:a", "rust:a::save"), contains("rust:a::run", "rust:a::log")];
         r
     }

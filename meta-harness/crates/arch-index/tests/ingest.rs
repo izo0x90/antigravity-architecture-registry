@@ -35,7 +35,7 @@ fn run(root: &Path, packs: &PackSet) -> (Vec<FileExtract>, Resolved) {
 /// Compares the ingested graph with an expected file, exactly.
 fn assert_matches(lang: &str, resolved: &Resolved, expected_file: &Path) {
     let expected: Expected = toml::from_str(&std::fs::read_to_string(expected_file).unwrap()).unwrap();
-    let id = |s: &str| ComponentId::for_symbol(lang, s);
+    let id = |s: &str| if s.starts_with("folder:") { ComponentId::new(s) } else { ComponentId::for_symbol(lang, s) };
     let got: BTreeSet<(String, String)> = resolved.graph.components().map(|c| (c.id.to_string(), c.type_name.clone())).collect();
     let want: BTreeSet<(String, String)> = expected.components.iter().map(|(s, t)| (id(s).to_string(), t.clone())).collect();
     assert_eq!(got, want, "components");

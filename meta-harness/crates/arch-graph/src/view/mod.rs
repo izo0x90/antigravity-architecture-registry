@@ -1,14 +1,13 @@
 //! Views: named lenses on the graph (from config), a query engine that cuts
 //! the subgraph a view shows, layouts, and a text form for agents.
 
-pub mod layout;
 mod text;
+pub mod scene;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-pub use layout::{Layout, Rect, layout};
 pub use text::render_text;
 
 use crate::{Alignment, ComponentId, Graph, ModelError, RelationId, RelationKind, Stage, Status};
@@ -82,6 +81,11 @@ pub struct ViewSpec {
     pub overlays: Vec<RelationKind>,
     #[serde(default)]
     pub include_ancestors: bool,
+    /// Relation kinds summarised between what's shown: relations among the
+    /// parts of shown nodes are lifted onto them and counted (a module that
+    /// calls into another gets one line with the count).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<RelationKind>,
     /// Start points; empty means the view's natural entry points.
     #[serde(default)]
     pub roots: Vec<ComponentId>,
@@ -163,6 +167,40 @@ pub struct ViewNode {
     /// It has more relations of the view's kinds beyond the depth limit.
     pub truncated: bool,
     pub alignment: Alignment,
+    /// How many parts it contains (shown or not).
+    #[serde(default)]
+    pub members: u32,
+}
+
+/// Relations of the view's link kinds between the parts of two shown nodes,
+/// lifted onto them and counted.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ViewLink {
+    pub source: ComponentId,
+    pub target: ComponentId,
+    pub kind: RelationKind,
+    pub count: u32,
+}
+
+/// What a focused view's parts reach outside it, grouped by where it is:
+/// the group (a module beside the focus, or another top-level part), how
+/// many of its components are reached, and from which shown node.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Outside {
+    pub group: ComponentId,
+    /// Distinct components in the group that are reached (either way).
+    pub reached: u32,
+    pub links: Vec<OutsideLink>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OutsideLink {
+    /// The shown node the relations start (or end) inside.
+    pub inside: ComponentId,
+    pub kind: RelationKind,
+    pub count: u32,
+    /// From inside to the group (else from the group in).
+    pub outgoing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -185,6 +223,15 @@ pub struct View {
     pub roots: Vec<ComponentId>,
     pub nodes: Vec<ViewNode>,
     pub edges: Vec<ViewEdge>,
+    /// Lifted relations of the view's link kinds between shown nodes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<ViewLink>,
+    /// With one root: the containers it's in, outermost first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trail: Vec<ComponentId>,
+    /// Focused: what the shown parts reach outside the focus.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outside: Vec<Outside>,
 }
 
 impl View {
@@ -356,6 +403,12 @@ pub fn query(graph: &Graph, spec: &ViewSpec) -> View {
         }
     }
 
+    let trail = match roots.as_slice() {
+        [root] => ancestors(graph, root).into_iter().rev().collect(),
+        _ => Vec::new(),
+    };
+    let shown: BTreeSet<ComponentId> = nodes.keys().cloned().collect();
+    let (links, outside) = summarise(graph, spec, &roots, &shown);
     View {
         spec: spec.clone(),
         roots,
@@ -364,12 +417,105 @@ pub fn query(graph: &Graph, spec: &ViewSpec) -> View {
             .map(|(id, depth)| ViewNode {
                 truncated: truncated.contains(&id),
                 alignment: graph.alignment(&id).unwrap_or(Alignment::Observed),
+                members: graph.outgoing(&id, Some(RelationKind::Contains)).count() as u32,
                 id,
                 depth,
             })
             .collect(),
         edges: edges.into_values().collect(),
+        links,
+        trail,
+        outside,
     }
+}
+
+/// The containers `id` is in, innermost first (a containment loop stops at
+/// its first repeat).
+fn ancestors(graph: &Graph, id: &ComponentId) -> Vec<ComponentId> {
+    let mut out: Vec<ComponentId> = Vec::new();
+    let mut current = id;
+    while let Some(parent) = graph.parent(current) {
+        if parent == id || out.contains(parent) {
+            break;
+        }
+        out.push(parent.clone());
+        current = parent;
+    }
+    out
+}
+
+/// Lifts relations of the view's link kinds onto shown nodes: between two
+/// shown nodes they become counted links; from a shown node out of a
+/// focused view they're grouped by where they lead.
+fn summarise(graph: &Graph, spec: &ViewSpec, roots: &[ComponentId], shown: &BTreeSet<ComponentId>) -> (Vec<ViewLink>, Vec<Outside>) {
+    if spec.links.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    // The shown node a component is drawn as: itself, or its nearest shown container.
+    let mut lifted: BTreeMap<ComponentId, Option<ComponentId>> = BTreeMap::new();
+    let mut lift = |id: &ComponentId| -> Option<ComponentId> {
+        if let Some(known) = lifted.get(id) {
+            return known.clone();
+        }
+        let found = std::iter::once(id.clone()).chain(ancestors(graph, id)).find(|a| shown.contains(a));
+        lifted.insert(id.clone(), found.clone());
+        found
+    };
+    let focused = !roots.is_empty();
+    // Outside a focus, things are grouped under the part beside the focus's
+    // own line of containers (or their top-level part).
+    let around: BTreeSet<ComponentId> = roots.first().map(|r| std::iter::once(r.clone()).chain(ancestors(graph, r)).collect()).unwrap_or_default();
+    let group_of = |id: &ComponentId| -> ComponentId {
+        let mut current = id.clone();
+        for parent in ancestors(graph, id) {
+            if around.contains(&parent) {
+                return current;
+            }
+            current = parent;
+        }
+        current
+    };
+    let mut kinds: Vec<RelationKind> = spec.links.clone();
+    for kind in &spec.kinds {
+        if *kind != RelationKind::Contains && !kinds.contains(kind) {
+            kinds.push(*kind);
+        }
+    }
+    let mut links: BTreeMap<(ComponentId, ComponentId, RelationKind), u32> = BTreeMap::new();
+    let mut outside: BTreeMap<ComponentId, (BTreeSet<ComponentId>, BTreeMap<(ComponentId, RelationKind, bool), u32>)> = BTreeMap::new();
+    for relation in graph.relations().filter(|r| kinds.contains(&r.kind)) {
+        match (lift(&relation.source), lift(&relation.target)) {
+            (Some(a), Some(b)) => {
+                // The view's own kinds are drawn as edges already; nothing
+                // links to what holds it.
+                let nested = ancestors(graph, &a).contains(&b) || ancestors(graph, &b).contains(&a);
+                if a != b && spec.links.contains(&relation.kind) && !nested && !(shown.contains(&relation.source) && shown.contains(&relation.target) && spec.kinds.contains(&relation.kind)) {
+                    *links.entry((a, b, relation.kind)).or_default() += 1;
+                }
+            }
+            (Some(inside), None) if focused => {
+                let entry = outside.entry(group_of(&relation.target)).or_default();
+                entry.0.insert(relation.target.clone());
+                *entry.1.entry((inside, relation.kind, true)).or_default() += 1;
+            }
+            (None, Some(inside)) if focused => {
+                let entry = outside.entry(group_of(&relation.source)).or_default();
+                entry.0.insert(relation.source.clone());
+                *entry.1.entry((inside, relation.kind, false)).or_default() += 1;
+            }
+            _ => {}
+        }
+    }
+    let links = links.into_iter().map(|((source, target, kind), count)| ViewLink { source, target, kind, count }).collect();
+    let outside = outside
+        .into_iter()
+        .map(|(group, (reached, by))| Outside {
+            group,
+            reached: reached.len() as u32,
+            links: by.into_iter().map(|((inside, kind, outgoing), count)| OutsideLink { inside, kind, count, outgoing }).collect(),
+        })
+        .collect();
+    (links, outside)
 }
 
 fn edge(graph: &Graph, relation: &crate::Relation, overlay: bool) -> ViewEdge {

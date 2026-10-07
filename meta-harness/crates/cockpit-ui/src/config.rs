@@ -8,7 +8,7 @@ use crate::graph_style::GraphStyle;
 use crate::keymap::KeymapConfig;
 use crate::theme::{Look, Theme};
 
-const DEFAULTS: &str = include_str!("../config/default.toml");
+pub(crate) const DEFAULTS: &str = include_str!("../config/default.toml");
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Brand {

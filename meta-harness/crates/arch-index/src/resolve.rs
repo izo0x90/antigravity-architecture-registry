@@ -79,6 +79,90 @@ impl Entry {
     }
 }
 
+/// A folder holding code: its component and id.
+struct Folder {
+    id: ComponentId,
+    component: Component,
+}
+
+/// The folders that hold `modules` (top-level modules and their files),
+/// each with what it holds. A folder holding only one thing is that thing
+/// (`crates/a/src` with just `lib.rs` is the crate's module); a kept folder
+/// is named by its path below the folder above it.
+fn folders(modules: &[(ComponentId, RepoPath)]) -> Vec<(Folder, Vec<ComponentId>)> {
+    #[derive(Default)]
+    struct Dir {
+        dirs: BTreeSet<String>,
+        modules: Vec<ComponentId>,
+    }
+    let mut tree: BTreeMap<String, Dir> = BTreeMap::new();
+    tree.entry(String::new()).or_default();
+    for (id, file) in modules {
+        let path = file.as_str();
+        let dir = path.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
+        // Two files can be one module (a crate's lib.rs and main.rs): once.
+        let here = &mut tree.entry(dir.clone()).or_default().modules;
+        if !here.contains(id) {
+            here.push(id.clone());
+        }
+        let mut child = dir;
+        while !child.is_empty() {
+            let parent = child.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
+            tree.entry(parent.clone()).or_default().dirs.insert(child.clone());
+            child = parent;
+        }
+    }
+    enum Item {
+        Module(ComponentId),
+        Folder(String, Vec<Item>),
+    }
+    fn fold(path: &str, tree: &BTreeMap<String, Dir>) -> Vec<Item> {
+        let Some(dir) = tree.get(path) else { return Vec::new() };
+        let mut items: Vec<Item> = dir.modules.iter().cloned().map(Item::Module).collect();
+        for child in &dir.dirs {
+            let mut inside = fold(child, tree);
+            if inside.len() == 1 {
+                items.append(&mut inside);
+            } else if !inside.is_empty() {
+                items.push(Item::Folder(child.clone(), inside));
+            }
+        }
+        items
+    }
+    fn emit(items: Vec<Item>, above: &str, out: &mut Vec<(Folder, Vec<ComponentId>)>) -> Vec<ComponentId> {
+        items
+            .into_iter()
+            .map(|item| match item {
+                Item::Module(id) => id,
+                Item::Folder(path, inside) => {
+                    let parts = emit(inside, &path, out);
+                    let name = path.strip_prefix(above).map_or(path.as_str(), |rest| rest.trim_start_matches('/')).to_owned();
+                    let id = ComponentId::for_symbol("folder", &path);
+                    let component = Component {
+                        id: id.clone(),
+                        name,
+                        type_name: "folder".into(),
+                        description: String::new(),
+                        status: Status::Existing,
+                        stage: Stage::Implemented,
+                        anchor: RepoPath::new(&path).ok().map(|file| CodeAnchor { language: "folder".into(), file, symbol: path.clone(), syntax_kind: "folder".into(), span: Span { start_line: 0, end_line: 0, start_byte: 0, end_byte: 0 }, content_hash: String::new() }),
+                        proposed: None,
+                        signature: None,
+                        schemas: Default::default(),
+                        spec: None,
+                        placeholders: Vec::new(),
+                    };
+                    out.push((Folder { id: id.clone(), component }, parts));
+                    id
+                }
+            })
+            .collect()
+    }
+    let mut out = Vec::new();
+    emit(fold("", &tree), "", &mut out);
+    out
+}
+
 /// Strips bracketed groups (generics, arguments) and leading reference
 /// markers/noise words from a type or callee text.
 fn clean(text: &str, lang: &LanguageSpec) -> String {
@@ -318,6 +402,19 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             && let Some(parent_id) = modules.get(&(lang, parent))
         {
             link(&mut out.graph, RelationKind::Contains, parent_id, &entry.id);
+        }
+    }
+    // Folders: modules nothing else contains sit in the folders their files
+    // are in, so the repo reads as folders, crates, modules and members.
+    let tops: Vec<(ComponentId, RepoPath)> = entries
+        .iter()
+        .filter(|e| e.is_module() && out.graph.parent(&e.id).is_none())
+        .map(|e| (e.id.clone(), extracts[e.file].file.clone()))
+        .collect();
+    for (folder, parts) in folders(&tops) {
+        out.graph.upsert_component(folder.component, Provenance::OBSERVED);
+        for part in parts {
+            link(&mut out.graph, RelationKind::Contains, &folder.id, &part);
         }
     }
     // Definitions are contained by their owner, else by their file's module.
