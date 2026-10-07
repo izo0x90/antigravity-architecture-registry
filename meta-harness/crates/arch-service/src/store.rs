@@ -259,6 +259,14 @@ impl CodeIndexStore for FsIndex {
             if path.extension().is_some_and(|e| e == "json")
                 && let Some(extract) = self.read(&path)?
             {
+                // Only an entry under its file's own name counts: one left
+                // by an older naming (or moved by hand) would put an old
+                // copy of the file's code beside the current one.
+                if path != self.path(&extract.file) {
+                    let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
+                    std::fs::remove_file(&path).map_err(|e| io(&path, e))?;
+                    continue;
+                }
                 out.push(extract);
             }
         }
@@ -452,5 +460,11 @@ mod tests {
         // An entry that belongs to another file (moved by hand) is a miss.
         std::fs::copy(dir.path().join(".nah/cache/index/src_sa____b.rs.json"), dir.path().join(".nah/cache/index/src_sc.rs.json")).unwrap();
         assert!(index.get(&RepoPath::new("src/c.rs").unwrap(), "h1").unwrap().is_none());
+        // Nor does it come back as a second copy of a__b.rs: it's dropped.
+        assert_eq!(index.all().unwrap().len(), 4, "no duplicate from a misnamed entry");
+        assert!(!dir.path().join(".nah/cache/index/src_sc.rs.json").exists());
+        // The same for one left by an older naming (`/` as `__`).
+        std::fs::copy(dir.path().join(".nah/cache/index/src_sa_sb.rs.json"), dir.path().join(".nah/cache/index/src__a__b.rs.json")).unwrap();
+        assert_eq!(index.all().unwrap().iter().filter(|e| e.file.as_str() == "src/a/b.rs").count(), 1);
     }
 }
