@@ -3,6 +3,7 @@
 
 mod text;
 pub mod scene;
+pub mod story;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -31,6 +32,8 @@ pub enum LayoutKind {
     /// Left to right along the view's edges.
     #[default]
     Layered,
+    /// Calls as a story: top to bottom in call order, deeper to the right.
+    Story,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -170,6 +173,9 @@ pub struct ViewNode {
     /// How many parts it contains (shown or not).
     #[serde(default)]
     pub members: u32,
+    /// What contains it (shown or not).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<ComponentId>,
 }
 
 /// Relations of the view's link kinds between the parts of two shown nodes,
@@ -418,6 +424,7 @@ pub fn query(graph: &Graph, spec: &ViewSpec) -> View {
                 truncated: truncated.contains(&id),
                 alignment: graph.alignment(&id).unwrap_or(Alignment::Observed),
                 members: graph.outgoing(&id, Some(RelationKind::Contains)).count() as u32,
+                container: graph.parent(&id).cloned(),
                 id,
                 depth,
             })

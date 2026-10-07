@@ -5,7 +5,8 @@
 #   kinds            relation kinds walked from the roots
 #   direction        out (follow source -> target), in (reverse), both
 #   depth            how many hops from the roots
-#   layout           nested (containment boxes) or layered (left to right)
+#   layout           nested (containment boxes), layered (left to right) or
+#                    story (calls top to bottom in call order, deeper right)
 #   overlays         extra relation kinds drawn between nodes already shown
 #   include_ancestors  keep the containers of shown nodes for context
 #   links            relation kinds summarised between shown nodes: the
@@ -29,6 +30,24 @@ kinds = ["calls"]
 direction = "out"
 depth = 4
 layout = "layered"
+overlays = []
+include_ancestors = false
+
+[views.story]
+description = "Calls as a story: from an entry, what it calls top to bottom in call order, deeper to the right. Each function once (others just count), loops marked, branches fold."
+kinds = ["calls"]
+direction = "out"
+depth = 6
+layout = "story"
+overlays = []
+include_ancestors = false
+
+[views.reached_by]
+description = "The story backwards: what reaches a function, its callers to the right."
+kinds = ["calls"]
+direction = "in"
+depth = 6
+layout = "story"
 overlays = []
 include_ancestors = false
 

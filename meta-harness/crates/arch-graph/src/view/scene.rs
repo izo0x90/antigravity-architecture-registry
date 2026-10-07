@@ -161,6 +161,29 @@ pub struct Scene {
     /// The "+N more" block and the parts it holds.
     pub more: Option<(Rect, Vec<ComponentId>)>,
     pub lines: Vec<Line>,
+    /// Stories: what's said beside a step (reached from elsewhere too,
+    /// loops, a collapsed branch's size).
+    pub notes: BTreeMap<ComponentId, Note>,
+    /// Stories: the module each run of steps is in.
+    pub bands: Vec<Band>,
+}
+
+/// Beside a step in a story.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Note {
+    /// Reached from this many other places (told once, here).
+    pub also: u32,
+    /// Calls back into the steps above it.
+    pub loops: Vec<ComponentId>,
+    /// Collapsed: how many steps are inside.
+    pub inside: u32,
+}
+
+/// A run of story steps in one module.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Band {
+    pub module: ComponentId,
+    pub rect: Rect,
 }
 
 impl Scene {
@@ -230,10 +253,15 @@ pub struct Options<'a> {
     pub max_cards: usize,
     /// Show every part however many there are.
     pub show_all: bool,
+    /// Story steps collapsed (their branch summed up).
+    pub shut: &'a BTreeSet<ComponentId>,
 }
 
 /// Builds the scene for `view` at its level.
 pub fn build(view: &View, options: &Options, measure: &dyn Measure, metrics: &Metrics, previous: Option<&Scene>) -> Scene {
+    if view.spec.layout == LayoutKind::Story {
+        return story(view, options, measure, metrics);
+    }
     let nested = view.spec.layout == LayoutKind::Nested;
     let ids: BTreeSet<&ComponentId> = view.nodes.iter().map(|n| &n.id).collect();
     // What contains what: the first container wins, loops are cut where they close.
@@ -478,6 +506,60 @@ pub fn build(view: &View, options: &Options, measure: &dyn Measure, metrics: &Me
         }
     }
     scene.lines = lines;
+    scene
+}
+
+/// A story: each step a row, deeper steps further right, joined to the
+/// step they're told under by a line down the gutter on the left (so lines
+/// never cross a card); runs of steps in one module share a band.
+fn story(view: &View, options: &Options, measure: &dyn Measure, metrics: &Metrics) -> Scene {
+    let told = super::story::tell(view, options.shut);
+    let indent = metrics.snap_up(metrics.gap_x / 2.0);
+    let mut scene = Scene::default();
+    let mut y = 0.0f32;
+    for row in &told.rows {
+        let (w, h) = measure.card(&row.id, false);
+        scene.rects.insert(row.id.clone(), Rect { x: row.depth as f32 * indent, y, w, h });
+        y = metrics.snap_up(y + h + metrics.gap_y / 2.0);
+    }
+    let outward = view.spec.direction != super::Direction::In;
+    for row in &told.rows {
+        let (Some(under), Some(child)) = (row.under.as_ref(), scene.rects.get(&row.id).copied()) else { continue };
+        let Some(parent) = scene.rects.get(under).copied() else { continue };
+        let gutter = parent.x + indent / 2.0;
+        let mut points = vec![(gutter, parent.bottom()), (gutter, child.center().1), (child.x, child.center().1)];
+        let edge = view.edges.iter().find(|e| e.kind == RelationKind::Calls && ((&e.source, &e.target) == (under, &row.id) || (&e.source, &e.target) == (&row.id, under)));
+        let (mut from, mut to) = (End::Node(under.clone()), End::Node(row.id.clone()));
+        // Backwards, the caller is the deeper one: the arrow points up the story.
+        if !outward {
+            points.reverse();
+            std::mem::swap(&mut from, &mut to);
+        }
+        scene.lines.push(Line { from, to, kind: RelationKind::Calls, count: 1, alignment: edge.map_or(Alignment::Observed, |e| e.alignment), overlay: false, points, exit: None });
+    }
+    for row in &told.rows {
+        let note = Note { also: told.also.get(&row.id).copied().unwrap_or(0), loops: told.loops.get(&row.id).cloned().unwrap_or_default(), inside: told.inside.get(&row.id).copied().unwrap_or(0) };
+        if note != Note::default() {
+            scene.notes.insert(row.id.clone(), note);
+        }
+    }
+    // Bands: consecutive steps in the same module, across the whole width
+    // (with room for what's said beside the steps).
+    let right = scene.rects.values().map(Rect::right).fold(0.0, f32::max) + metrics.gap_x * 2.0;
+    let module_of = |id: &ComponentId| view.node(id).and_then(|n| n.container.clone());
+    let mut start = 0;
+    while start < told.rows.len() {
+        let module = module_of(&told.rows[start].id);
+        let mut end = start;
+        while end + 1 < told.rows.len() && module_of(&told.rows[end + 1].id) == module {
+            end += 1;
+        }
+        if let (Some(module), Some(top), Some(bottom)) = (module, scene.rects.get(&told.rows[start].id), scene.rects.get(&told.rows[end].id)) {
+            let margin = metrics.gap_y / 4.0;
+            scene.bands.push(Band { module, rect: Rect { x: -metrics.pad, y: top.y - margin, w: right + metrics.pad, h: bottom.bottom() - top.y + margin * 2.0 } });
+        }
+        start = end + 1;
+    }
     scene
 }
 
@@ -1232,7 +1314,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn scene_of(view: &View, open: &BTreeSet<ComponentId>, previous: Option<&Scene>) -> Scene {
-        build(view, &Options { open, selection: None, max_cards: 60, show_all: false }, &Names, &metrics(), previous)
+        build(view, &Options { open, selection: None, max_cards: 60, show_all: false, shut: &BTreeSet::new() }, &Names, &metrics(), previous)
     }
 
     pub(crate) fn sound(scene: &Scene) {
@@ -1322,14 +1404,14 @@ pub(crate) mod tests {
     #[test]
     fn a_crowded_level_shows_the_neighbourhood_and_holds_the_rest_in_more() {
         use crate::view::{ViewEdge, ViewNode};
-        let node = |s: &str| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0 };
+        let node = |s: &str| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, container: None };
         let call = |a: &str, b: &str| ViewEdge { id: crate::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: id(a), target: id(b), alignment: Alignment::Observed, overlay: false, order: None };
         let names: Vec<String> = (0..12).map(|i| format!("n{i:02}")).collect();
         let spec = ViewCatalog::defaults().unwrap().get("calls").unwrap().clone();
         let view = View { spec, roots: vec![], nodes: names.iter().map(|n| node(n)).collect(), edges: vec![call("n05", "n09"), call("n05", "n10"), call("n01", "n02")], links: vec![], trail: vec![], outside: vec![] };
         let open = BTreeSet::new();
         let selected = id("n05");
-        let s = build(&view, &Options { open: &open, selection: Some(&selected), max_cards: 4, show_all: false }, &Names, &metrics(), None);
+        let s = build(&view, &Options { open: &open, selection: Some(&selected), max_cards: 4, show_all: false, shut: &BTreeSet::new() }, &Names, &metrics(), None);
         sound(&s);
         let shown: BTreeSet<&ComponentId> = s.rects.keys().collect();
         assert_eq!(shown.len(), 4);
@@ -1339,7 +1421,7 @@ pub(crate) mod tests {
         let (_, held) = s.more.as_ref().unwrap();
         assert_eq!(held.len(), 8);
         assert!(s.lines.iter().all(|l| l.from != End::More || l.to != End::More));
-        let all = build(&view, &Options { open: &open, selection: Some(&selected), max_cards: 4, show_all: true }, &Names, &metrics(), None);
+        let all = build(&view, &Options { open: &open, selection: Some(&selected), max_cards: 4, show_all: true, shut: &BTreeSet::new() }, &Names, &metrics(), None);
         assert_eq!((all.rects.len(), all.more.is_none()), (12, true), "opened on demand");
     }
 
@@ -1377,5 +1459,37 @@ pub(crate) mod tests {
             assert_eq!(points.last().unwrap().0, b.x);
         }
         assert!(routes[0].len() > 2, "it bends round the wall");
+    }
+
+    // req: C.1, C.2, C.3
+    #[test]
+    fn a_story_is_rows_in_call_order_with_lines_down_the_gutter_and_module_bands() {
+        let mut g = sample();
+        g.upsert_relation(crate::Relation::new(RelationKind::Calls, id("app::step"), id("lib::util"), crate::Provenance::OBSERVED));
+        g.upsert_relation(crate::Relation::new(RelationKind::Calls, id("app::save"), id("app::run"), crate::Provenance::OBSERVED));
+        let mut spec = ViewCatalog::defaults().unwrap().get("story").unwrap().clone();
+        spec.roots = vec![id("app::run")];
+        let v = query(&g, &spec);
+        let s = scene_of(&v, &BTreeSet::new(), None);
+        sound(&s);
+        let r = |n: &str| s.rects[&id(n)];
+        assert!(r("app::step").y > r("app::run").y && r("app::step").x > r("app::run").x, "under it, to the right");
+        assert!(r("app::save").x > r("app::step").x, "deeper, further right");
+        assert_eq!(s.notes[&id("app::save")].loops, vec![id("app::run")], "the loop is said beside save");
+        // Bands: run, step, save, log are in app; util in lib.
+        let modules: Vec<ComponentId> = s.bands.iter().map(|b| b.module.clone()).collect();
+        assert!(modules.contains(&id("app")) && modules.contains(&id("lib")), "{modules:?}");
+        for b in &s.bands {
+            for (step, rect) in &s.rects {
+                if v.node(step).and_then(|n| n.container.as_ref()) == Some(&b.module) {
+                    assert!(b.rect.contains(rect), "{step} in its band");
+                }
+            }
+        }
+        // Collapsed in place: the branch goes, its size is said.
+        let shut: BTreeSet<ComponentId> = [id("app::step")].into();
+        let folded = build(&v, &Options { open: &BTreeSet::new(), selection: None, max_cards: 60, show_all: false, shut: &shut }, &Names, &metrics(), None);
+        assert!(!folded.rects.contains_key(&id("app::save")) && folded.notes[&id("app::step")].inside > 0);
+        sound(&folded);
     }
 }

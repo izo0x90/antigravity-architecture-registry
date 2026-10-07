@@ -912,7 +912,7 @@ impl ArchitectureService {
         let view = query(&graph, &spec);
         let text = render_text(&graph, &view);
         // What's shown, what holds the focus, and what it reaches outside.
-        let named = view.nodes.iter().map(|n| &n.id).chain(&view.trail).chain(view.outside.iter().map(|o| &o.group));
+        let named = view.nodes.iter().map(|n| &n.id).chain(&view.trail).chain(view.outside.iter().map(|o| &o.group)).chain(view.nodes.iter().filter_map(|n| n.container.as_ref()));
         let components = named.filter_map(|id| graph.component(id).map(|c| (id.clone(), c.clone()))).collect();
         Ok(ViewResult { view, text, components })
     }

@@ -82,6 +82,20 @@ pub fn render_text(graph: &Graph, view: &View) -> String {
                 let _ = writeln!(out, "  {} -{}-> {}{} ({})", short(&e.source), e.kind.name(), short(&e.target), ports(graph, e), mark(e.alignment));
             }
         }
+        LayoutKind::Story => {
+            // An outline: each step under what calls it, in call order.
+            let story = super::story::tell(view, &BTreeSet::new());
+            for row in &story.rows {
+                let mut line = format!("{}{}", "  ".repeat(row.depth), describe(graph, view, &row.id));
+                if let Some(n) = story.also.get(&row.id) {
+                    let _ = write!(line, "  (also from {n} more)");
+                }
+                for back in story.loops.get(&row.id).into_iter().flatten() {
+                    let _ = write!(line, "  (loops back to {})", short(back));
+                }
+                let _ = writeln!(out, "{line}");
+            }
+        }
         LayoutKind::Layered => {
             out.push_str("Nodes:\n");
             for node in &view.nodes {

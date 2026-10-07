@@ -166,6 +166,10 @@ enum Load {
 const MIN_ZOOM: f32 = 0.03;
 const MAX_ZOOM: f32 = 3.0;
 
+/// The views that tell calls as a story, forwards and backwards.
+const STORY: &str = "story";
+const REACHED_BY: &str = "reached_by";
+
 /// The hint key of the "+N more" block.
 const MORE: &str = "more";
 
@@ -192,6 +196,8 @@ pub struct GraphState {
     open: BTreeSet<ComponentId>,
     /// Every part of a crowded level shown (not just the neighbourhood).
     show_all: bool,
+    /// Story steps collapsed by hand (their branch summed up).
+    shut: BTreeSet<ComponentId>,
     moving: Option<Moving>,
     glide: Option<Glide>,
     going: Option<Going>,
@@ -263,6 +269,7 @@ impl Default for GraphState {
             names: BTreeMap::new(),
             open: BTreeSet::new(),
             show_all: false,
+            shut: BTreeSet::new(),
             moving: None,
             glide: None,
             going: None,
@@ -406,6 +413,16 @@ impl GraphState {
     /// shows every part of a crowded level, when "+N more" holds it), and
     /// pans so it's on screen when it isn't.
     fn bring_into_view(&mut self, id: &ComponentId) {
+        if !self.shown(id) && self.is_story() {
+            // Open the collapsed branches hiding it, one at a time.
+            for branch in self.shut.clone() {
+                self.shut.remove(&branch);
+                self.rebuild(true);
+                if self.shown(id) {
+                    break;
+                }
+            }
+        }
         if !self.shown(id) && self.scene.outside.get(id).is_none() {
             if self.scene.more.as_ref().is_some_and(|(_, held)| held.iter().any(|h| h == id || self.scene.ancestors(id).contains(h))) {
                 self.show_all = true;
@@ -547,6 +564,7 @@ impl GraphState {
         // to new ones.
         let same_level = self.result.as_ref().is_some_and(|old| old.view.spec.name == result.view.spec.name && old.view.roots == result.view.roots);
         self.open.retain(|c| result.view.edges.iter().any(|e| e.kind == RelationKind::Contains && &e.source == c));
+        self.shut.retain(|c| result.view.node(c).is_some());
         self.result = Some(result);
         self.rebuild(same_level);
         self.load = Load::Idle;
@@ -565,7 +583,7 @@ impl GraphState {
         let previous = keep.then(|| std::mem::take(&mut self.scene));
         let cards = Cards::new(result, &self.ui.arrange);
         self.names = cards.names.clone();
-        let options = scene::Options { open: &self.open, selection: self.selection.as_ref(), max_cards: self.ui.levels.max_cards, show_all: self.show_all };
+        let options = scene::Options { open: &self.open, selection: self.selection.as_ref(), max_cards: self.ui.levels.max_cards, show_all: self.show_all, shut: &self.shut };
         self.scene = scene::build(&result.view, &options, &cards, &self.ui.arrange, previous.as_ref());
         if let Some(before) = previous {
             let from: BTreeMap<ComponentId, WorldRect> = before.rects.into_iter().filter(|(id, r)| self.scene.rects.get(id).is_some_and(|now| now != r)).collect();
@@ -573,6 +591,19 @@ impl GraphState {
                 self.moving = Some(Moving { from, started: None });
             }
         }
+    }
+
+    /// Whether the view is told as a story.
+    fn is_story(&self) -> bool {
+        self.result.as_ref().is_some_and(|r| r.view.spec.layout == LayoutKind::Story)
+    }
+
+    /// Story steps that lead somewhere (a branch that can collapse).
+    fn branches(&self) -> Vec<ComponentId> {
+        let Some(result) = &self.result else { return Vec::new() };
+        let outward = result.view.spec.direction != arch_graph::view::Direction::In;
+        let ends: BTreeSet<&ComponentId> = result.view.edges.iter().filter(|e| e.kind == RelationKind::Calls).map(|e| if outward { &e.source } else { &e.target }).collect();
+        ends.into_iter().cloned().collect()
     }
 
     /// Whether `id` holds parts in this view (a module that opens in place).
@@ -1007,9 +1038,18 @@ impl GraphState {
     }
 
     fn fit_view(&mut self) {
-        if let Some(bounds) = self.scene.bounds() {
-            self.fit_rects(&[bounds]);
+        let Some(bounds) = self.scene.bounds() else { return };
+        if self.is_story() {
+            // A story reads like a page: as wide as the view (never past
+            // full size), from the top.
+            let pad = crate::theme::look().space_xxxl;
+            let area = self.open_area;
+            let zoom = ((area.width() - pad * 2.0) / bounds.w.max(1.0)).clamp(MIN_ZOOM, 1.0);
+            self.camera.zoom = zoom;
+            self.camera.pan = (area.min - self.canvas.min) + Vec2::splat(pad) - Vec2::new(bounds.x, bounds.y) * zoom;
+            return;
         }
+        self.fit_rects(&[bounds]);
     }
 
     /// Zooms and pans so `rects` fill the open part of the canvas.
@@ -1539,6 +1579,19 @@ impl GraphState {
         // Lines settle in once the cards have moved.
         let settle = self.moving.as_ref().map_or(1.0, |m| move_t(m.started, time).unwrap_or(0.0));
         let mut unlabelled: Vec<Unlabelled> = Vec::new();
+        // A story's module bands, behind everything: each run of steps in one module.
+        for (i, band) in self.scene.bands.iter().enumerate() {
+            let rect = self.to_screen(&band.rect);
+            // Alternate bands differ, so a change of module shows.
+            let fill = if i % 2 == 0 { theme.raised.gamma_multiply(look.fade) } else { theme.surface.gamma_multiply(look.fade) };
+            painter.rect_filled(rect, look.radius_m, fill);
+            if rect.height() >= look.text_small * self.ui.arrange.line_height * 2.0 {
+                // Named at its right end, kept in view.
+                let name = result.components.get(&band.module).map_or_else(|| band.module.to_string(), |c| c.name.clone());
+                let right = rect.right().min(self.open_area.right()) - look.space_m;
+                painter.text(Pos2::new(right, rect.top() + look.space_s), Align2::RIGHT_TOP, name, FontId::proportional(look.text_small), theme.muted);
+            }
+        }
         // Open modules, outermost first: a box with the name in its title band.
         let mut open: Vec<&ComponentId> = self.scene.containers.iter().collect();
         open.sort_by_key(|c| self.scene.ancestors(c).len());
@@ -1574,6 +1627,39 @@ impl GraphState {
             moving |= animates;
             if !named {
                 unlabelled.push(Unlabelled { id: id.clone(), rect, text: self.names.get(id).cloned().unwrap_or_else(|| c.name.clone()), open: false });
+            }
+        }
+        // What a story says beside its steps.
+        let outward = result.view.spec.direction != arch_graph::view::Direction::In;
+        for (id, note) in &self.scene.notes {
+            let Some(r) = self.scene.rects.get(id) else { continue };
+            let rect = self.drawn(id, r, time);
+            // Said only where the step is big enough to read beside.
+            if rect.height() < look.text_small * self.ui.arrange.line_height * 2.0 {
+                continue;
+            }
+            let mut said: Vec<(String, egui::Color32)> = Vec::new();
+            if note.inside > 0 {
+                let what = if outward { "calls inside" } else { "callers further out" };
+                said.push((format!("{} {} {what}", egui_phosphor::regular::CARET_RIGHT, note.inside), theme.muted));
+            }
+            if note.also > 0 {
+                let what = if outward { "also called from" } else { "also reached from" };
+                said.push((format!("{} {what} {} more", egui_phosphor::regular::ARROWS_MERGE, note.also), theme.info));
+            }
+            for back in &note.loops {
+                let name = self.names.get(back).cloned().unwrap_or_else(|| back.to_string());
+                said.push((format!("{} back to {name}", egui_phosphor::regular::ARROW_U_UP_LEFT), theme.warn));
+            }
+            let font = FontId::proportional(look.text_small);
+            let mut x = rect.right() + look.space_m;
+            for (text, color) in said {
+                let galley = painter.layout_no_wrap(text, font.clone(), color);
+                let pill = Rect::from_min_size(Pos2::new(x, rect.center().y - galley.size().y / 2.0 - look.space_hair), galley.size() + Vec2::new(look.space_m * 2.0, look.space_hair * 2.0));
+                painter.rect_filled(pill, look.radius_pill, theme.bg);
+                painter.rect_stroke(pill, look.radius_pill, Stroke::new(look.line_thin, color.gamma_multiply(0.6)), StrokeKind::Inside);
+                painter.galley(pill.min + Vec2::new(look.space_m, look.space_hair), galley, color);
+                x = pill.right() + look.space_s;
             }
         }
         // What's reached outside the focus, and what a crowded level holds back.
@@ -1961,6 +2047,8 @@ enum GraphCommand {
     Call { forward: bool },
     Up,
     ShowAll,
+    /// The selection's story in the named view (forwards or backwards).
+    Story(&'static str),
 }
 
 impl ActionProvider for GraphState {
@@ -2003,6 +2091,13 @@ impl ActionProvider for GraphState {
             out.push(f("graph.prev_call", "Previous call, in call order", G::Call { forward: false }).group(Group::Navigate).importance(MINOR).jump());
         }
         if self.selection.is_some() {
+            let has_story = |name: &str| self.catalog.as_ref().is_some_and(|c| c.get(name).is_some());
+            if has_story(STORY) {
+                out.push(f("graph.story", "Tell its story (what it calls, in order)", G::Story(STORY)).icon(egui_phosphor::regular::LIST_NUMBERS).group(Group::View).importance(SECONDARY).jump());
+            }
+            if has_story(REACHED_BY) {
+                out.push(f("graph.reached_by", "What reaches it (its callers, outwards)", G::Story(REACHED_BY)).icon(egui_phosphor::regular::ARROW_BEND_UP_LEFT).group(Group::View).importance(SECONDARY).jump());
+            }
             out.push(f("graph.focus", "Focus on the selection", G::Focus).group(Group::View).jump());
             out.push(f("graph.close_inspector", "Close the inspector", G::CloseInspector).group(Group::View).importance(MINOR));
             // Always offered: when there's nothing to step through, it says why.
@@ -2046,6 +2141,12 @@ impl ActionProvider for GraphState {
                 self.zoom_by_user(factor, center);
             }
             GraphCommand::Up => self.up_level(),
+            GraphCommand::Story(view) => {
+                if let Some(id) = self.selection.clone() {
+                    self.navigate(NavChange::View(view.to_owned()));
+                    self.navigate(NavChange::Focus(id));
+                }
+            }
             GraphCommand::ShowAll => self.show_everything(),
             GraphCommand::Fit => self.fit_view(),
             GraphCommand::CloseInspector => self.drawer_open = false,
@@ -2159,6 +2260,30 @@ impl Navigable for GraphState {
     }
 
     fn fold(&mut self, fold: Fold) {
+        // A story's branches collapse and open in place.
+        if self.is_story() {
+            match fold {
+                Fold::OpenAll => self.shut.clear(),
+                Fold::CloseAll => self.shut = self.branches().into_iter().collect(),
+                Fold::Open | Fold::Close | Fold::Toggle => {
+                    let Some(step) = self.selection.clone() else { return };
+                    let close = match fold {
+                        Fold::Open => false,
+                        Fold::Close => true,
+                        _ => !self.shut.contains(&step),
+                    };
+                    if close { self.shut.insert(step) } else { self.shut.remove(&step) };
+                }
+            }
+            self.rebuild(true);
+            if let Some(sel) = self.selection.clone()
+                && !self.shown(&sel)
+            {
+                let holder = self.shut.iter().find(|b| self.shown(b)).cloned();
+                self.select(holder);
+            }
+            return;
+        }
         let Some(result) = &self.result else { return };
         let modules: BTreeSet<ComponentId> = result.view.edges.iter().filter(|e| e.kind == RelationKind::Contains && self.is_module(&e.source)).map(|e| e.source.clone()).collect();
         match fold {
@@ -2490,7 +2615,7 @@ pub(crate) mod tests {
             view: View {
                 spec: ViewSpec { name: "calls".into(), description: String::new(), kinds: vec![RelationKind::Calls], direction: Default::default(), depth: 3, layout: Default::default(), overlays: vec![], include_ancestors: false, links: vec![], roots: vec![], filters: Default::default() },
                 roots: vec![id("rust:a::run")],
-                nodes: ids.iter().map(|s| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0 }).collect(),
+                nodes: ids.iter().map(|s| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, container: None }).collect(),
                 edges: vec![edge("rust:a::run", "rust:a::step"), edge("rust:a::step", "rust:a::save"), edge("rust:a::run", "rust:a::log")],
                 links: vec![],
                 trail: vec![],
@@ -2515,7 +2640,7 @@ pub(crate) mod tests {
             c.type_name = "module".into();
             r.components.insert(c.id.clone(), c);
             let members = if id == "rust:a" { 4 } else { 0 };
-            r.view.nodes.push(ViewNode { id: ComponentId::new(id), depth: Some(0), truncated: false, alignment: Alignment::Observed, members });
+            r.view.nodes.push(ViewNode { id: ComponentId::new(id), depth: Some(0), truncated: false, alignment: Alignment::Observed, members, container: None });
         }
         for part in ["rust:a::run", "rust:a::step", "rust:a::save", "rust:a::log"] {
             r.view.edges.push(ViewEdge { id: arch_graph::RelationId(format!("contains:rust:a->{part}")), kind: RelationKind::Contains, source: ComponentId::new("rust:a"), target: ComponentId::new(part), alignment: Alignment::Observed, overlay: false, order: None });
@@ -2780,7 +2905,7 @@ pub(crate) mod tests {
             c.id = id.clone();
             c.name = format!("n{i}");
             r.components.insert(id.clone(), c);
-            r.view.nodes.push(arch_graph::view::ViewNode { id: id.clone(), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0 });
+            r.view.nodes.push(arch_graph::view::ViewNode { id: id.clone(), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, container: None });
         }
         let mut g = showing(r);
         // Laid out by hand: run at the top of a tall column, the rest to its right.
@@ -3285,7 +3410,7 @@ pub(crate) mod tests {
         let mut other = twins.components[&ComponentId::new("rust:a::log")].clone();
         other.id = ComponentId::new("rust:b::log");
         twins.components.insert(other.id.clone(), other);
-        twins.view.nodes.push(ViewNode { id: ComponentId::new("rust:b::log"), depth: Some(1), truncated: false, alignment: Alignment::Observed, members: 0 });
+        twins.view.nodes.push(ViewNode { id: ComponentId::new("rust:b::log"), depth: Some(1), truncated: false, alignment: Alignment::Observed, members: 0, container: None });
         g.set_result(twins);
         assert_eq!((g.names[&ComponentId::new("rust:a::log")].as_str(), g.names[&ComponentId::new("rust:b::log")].as_str()), ("a::log", "b::log"));
         assert_eq!(g.names[&ComponentId::new("rust:a::run")], "run", "the rest keep their short names");
@@ -3369,5 +3494,55 @@ pub(crate) mod tests {
         let places = g.scene.rects.clone();
         g.set_result(r);
         assert_eq!(g.scene.rects, places);
+    }
+
+    // req: C.1, C.2, C.3
+    #[test]
+    fn a_story_folds_in_place_and_says_what_it_hides() {
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::set(config.theme.clone(), &ctx);
+        crate::theme::set_look(config.look.clone());
+        let size = Vec2::new(1400.0, 800.0);
+        // run calls step, then log; step calls save and log; all in module a.
+        let mut r = sample_result();
+        r.view.spec.name = "story".into();
+        r.view.spec.layout = arch_graph::view::LayoutKind::Story;
+        let call = |a: &str, b: &str, order: u32| ViewEdge { id: arch_graph::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: ComponentId::new(a), target: ComponentId::new(b), alignment: Alignment::Observed, overlay: false, order: Some(order) };
+        r.view.edges = vec![call("rust:a::run", "rust:a::step", 0), call("rust:a::run", "rust:a::log", 1), call("rust:a::step", "rust:a::save", 0), call("rust:a::step", "rust:a::log", 1)];
+        let mut module = r.components[&ComponentId::new("rust:a::run")].clone();
+        module.id = ComponentId::new("rust:a");
+        module.name = "a".into();
+        r.components.insert(module.id.clone(), module);
+        for n in &mut r.view.nodes {
+            n.container = Some(ComponentId::new("rust:a"));
+        }
+        let mut g = configured();
+        g.set_result(r);
+        let y = |g: &GraphState, id: &str| g.scene.rects[&ComponentId::new(id)].y;
+        assert!(y(&g, "rust:a::run") < y(&g, "rust:a::step") && y(&g, "rust:a::step") < y(&g, "rust:a::save") && y(&g, "rust:a::save") < y(&g, "rust:a::log"), "top to bottom in the order things happen");
+        let text = texts(&draw(&mut g, &ctx, vec![], 0.0, size));
+        assert!(text.contains("also called from 1 more"), "log is told once: {text}");
+        assert!(text.contains("a\n"), "the module's band is named");
+        // zc on step: its branch collapses in place and says how much it hides.
+        g.select(Some(ComponentId::new("rust:a::step")));
+        g.fold(Fold::Close);
+        assert!(!g.shown(&ComponentId::new("rust:a::save")) && g.shown(&ComponentId::new("rust:a::step")));
+        let text = texts(&draw(&mut g, &ctx, vec![], 1.0, size));
+        assert!(text.contains("2 calls inside"), "{text}");
+        // A jump to something it hides opens it again.
+        Navigable::move_to(&mut g, "rust:a::save");
+        assert!(g.shown(&ComponentId::new("rust:a::save")) && g.selection.as_ref().map(|s| s.as_str()) == Some("rust:a::save"));
+        g.fold(Fold::CloseAll);
+        assert!(!g.shown(&ComponentId::new("rust:a::step")), "everything folds into the entry");
+        g.fold(Fold::OpenAll);
+        assert!(g.shown(&ComponentId::new("rust:a::save")));
+        // From any view, a selected function's story (and what reaches it) is one action.
+        let mut c = showing(sample_result());
+        c.select(Some(ComponentId::new("rust:a::step")));
+        let story = c.actions().into_iter().find(|a| a.id == "graph.reached_by").expect("offered");
+        let (net, mut mode, mut note) = (NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
+        c.run(&story, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] });
+        assert_eq!((c.nav.view.as_str(), c.nav.roots.clone()), ("reached_by", vec![ComponentId::new("rust:a::step")]));
     }
 }

@@ -89,7 +89,7 @@ fn check(what: &str, result: &ViewResult, scene: &Scene) {
 }
 
 fn scene(result: &ViewResult, open: &BTreeSet<ComponentId>) -> Scene {
-    build(&result.view, &Options { open, selection: None, max_cards: 60, show_all: false }, &Cards(result), &metrics(), None)
+    build(&result.view, &Options { open, selection: None, max_cards: 60, show_all: false, shut: &BTreeSet::new() }, &Cards(result), &metrics(), None)
 }
 
 // req: G.9, G.7
@@ -137,5 +137,13 @@ fn every_level_of_this_repository_lays_out_cleanly() {
     let x = |id: &ComponentId| s.rects[id].x;
     for e in calls.view.edges.iter().filter(|e| e.source == entry) {
         assert!(x(&e.target) > x(&entry), "{} is right of what calls it", e.target);
+    }
+
+    // The same as a story, both ways.
+    for view in ["story", "reached_by"] {
+        let told = service.named_view(view, None, vec![entry.clone()], Some(4)).unwrap();
+        let s = scene(&told, &none);
+        check(&format!("{view} of validate"), &told, &s);
+        assert!(!s.bands.is_empty(), "{view}: module bands");
     }
 }
