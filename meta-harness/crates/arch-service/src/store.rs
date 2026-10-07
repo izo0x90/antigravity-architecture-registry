@@ -406,6 +406,7 @@ mod tests {
             placeholders: vec![],
             macro_uses: vec![],
             macro_defs: vec![],
+            flows: vec![],
         }
     }
 

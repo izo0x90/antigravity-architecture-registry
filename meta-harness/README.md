@@ -110,8 +110,17 @@ palette (`:42` goes to line 42).
 Views also have their own keys:
 
 - **Graph:**
+  - levels: the repo reads as folders, crates, modules and members; zoom
+    into a module (or `Enter`) to go in, zoom out (or `Backspace`) to go up;
+    the breadcrumb above shows where you are; `z o`/`z c` open a module in place;
+  - views: `structure` (what's in what, with counted lines between parts),
+    `calls` (left to right), `story` and `reached_by` (a function's calls top to
+    bottom in order, or what reaches it), `data_flow` (a pipeline: what each
+    line carries, each step's shape) and `data_path` (one value's whole path);
+  - on a selected function: tell its story, see what reaches it, or follow
+    its data through the code (from the view menu or the palette);
   - `]e`/`[e` step through calls in order; `v` switches view, `+`/`-` set the depth;
-  - semantic zoom, a legend (`g ?`), touch gestures.
+  - text keeps its size at every zoom, a legend (`g ?`), touch gestures.
 - **Code:** `]f`/`[f` move between definitions.
 - **Spec:**
   - `J`/`K` move between sections;
@@ -155,7 +164,7 @@ Every result ends with next steps, given in dependency order.
 
 | Crate | What it holds |
 |---|---|
-| `arch-graph` | the domain: types, components, relations, plans, schemas, views, layouts, queue shapes (no I/O; shared with the cockpit) |
+| `arch-graph` | the domain: types, components, relations, plans, schemas, views, scenes (how a view is laid out and routed), queue shapes (no I/O; shared with the cockpit) |
 | `arch-index` | ingestion: language packs, extraction, resolution, code rules |
 | `arch-service` | plans and cache, plan operations and checks, verification, tools, reviewers, review loop, queue state |
 | `src/` (server) | REST (`/api/arch/...`), MCP, events over WebSocket, the queue runner, the cockpit session |

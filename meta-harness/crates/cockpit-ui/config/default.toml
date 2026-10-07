@@ -362,6 +362,21 @@ word = "open comments"
 icon = "chat-circle-dots"
 color = "warn"
 
+[status.unconfirmed]
+word = "unconfirmed flow (the types don't confirm it)"
+icon = "question"
+color = "warn"
+
+[status.reshapes]
+word = "reshapes the data"
+icon = "shuffle"
+color = "special"
+
+[status.following]
+word = "following"
+icon = "path"
+color = "focus"
+
 [status.changed]
 word = "changed since review"
 icon = "pencil-simple"
@@ -459,6 +474,13 @@ observed = { width = 1.4 }
 planned = { width = 1.4, dashed = true }
 missing = { color = "error", width = 1.8, dashed = true }
 present = { width = 1.6 }
+
+# A data flow the code shows but the types can't confirm (mismatched or
+# missing types).
+[graph_style.unconfirmed]
+color = "warn"
+width = 1.2
+dashed = true
 
 # Width multipliers by where a relation is known from.
 [graph_style.provenance]

@@ -86,11 +86,14 @@ pub struct Relation {
     /// so the call may never run.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deferred: bool,
+    /// DataFlow: what flows (a type, a type's field, a boundary's key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
 }
 
 impl Relation {
     pub fn new(kind: RelationKind, source: ComponentId, target: ComponentId, provenance: Provenance) -> Self {
-        Self { kind, source, target, provenance, order: None, sites: Vec::new(), ports: None, note: String::new(), expects: None, deferred: false }
+        Self { kind, source, target, provenance, order: None, sites: Vec::new(), ports: None, note: String::new(), expects: None, deferred: false, data: None }
     }
 
     /// One relation per kind and endpoint pair (data flows also per port pair).
@@ -123,6 +126,9 @@ impl Relation {
         }
         if self.expects.is_none() {
             self.expects = other.expects.clone();
+        }
+        if self.data.is_none() {
+            self.data = other.data.clone();
         }
     }
 

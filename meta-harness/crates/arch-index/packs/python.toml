@@ -30,6 +30,8 @@ super_receivers = ["super()"]
 union_separators = ["|"]
 null_types = ["None"]
 
+# The names a destructuring pattern binds.
+pattern_name_kinds = ["identifier"]
 [[definitions]]
 type = "function"
 rule = { kind = "function_definition" }
@@ -128,3 +130,16 @@ rule = { kind = "ellipsis", inside = { kind = "expression_statement", nthChild =
 # `pass` as the whole body of a function that promises a value.
 [[placeholders]]
 rule = { kind = "pass_statement", all = [{ nthChild = { position = 1 } }, { nthChild = { position = 1, reverse = true } }], inside = { kind = "block", inside = { kind = "function_definition", field = "body", has = { field = "return_type", not = { regex = "^None$" } } } } }
+
+# Where a function's result leaves it.
+[[returns]]
+rule = { kind = "return_statement" }
+
+# `self.x`: the definition's own value's state, written when assigned to.
+[state]
+# (Not a method call's callee: `self.save()` calls, it doesn't read.)
+access = { kind = "attribute", not = { inside = { kind = "call", field = "function" } } }
+object_field = "object"
+field_field = "attribute"
+assignments = [{ kind = "assignment" }, { kind = "augmented_assignment" }]
+left_field = "left"

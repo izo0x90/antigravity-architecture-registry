@@ -104,7 +104,9 @@ pub fn render_text(graph: &Graph, view: &View) -> String {
             out.push_str("Edges:\n");
             for e in &view.edges {
                 let overlay = if e.overlay { " (overlay)" } else { "" };
-                let _ = writeln!(out, "  {} -{}-> {}{} ({}){overlay}", short(&e.source), e.kind.name(), short(&e.target), ports(graph, e), mark(e.alignment));
+                let carries = e.carries.as_ref().map(|c| format!(" carries {c}")).unwrap_or_default();
+                let unconfirmed = e.unconfirmed.as_ref().map(|why| format!(" UNCONFIRMED: {why}")).unwrap_or_default();
+                let _ = writeln!(out, "  {} -{}-> {}{}{carries} ({}){overlay}{unconfirmed}", short(&e.source), e.kind.name(), short(&e.target), ports(graph, e), mark(e.alignment));
             }
         }
     }

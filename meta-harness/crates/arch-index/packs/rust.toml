@@ -20,6 +20,11 @@ index_files = ["lib.rs", "mod.rs"]
 self_names = ["self", "Self"]
 # Leading path segments that mean "relative to here" in qualified calls.
 relative_prefixes = ["crate", "super", "self", "Self"]
+# Calls that just wrap their argument: a value returned or kept through
+# them is the argument's.
+transparent_calls = ["Ok", "Some", "Box::new", "Arc::new", "Rc::new"]
+# The names a destructuring pattern binds.
+pattern_name_kinds = ["identifier"]
 # Owned and borrowed forms carry the same data.
 compatible_types = [["String", "str"], ["PathBuf", "Path"]]
 # Which written types carry each JSON Schema type (planned calls are checked
@@ -129,6 +134,51 @@ rule = { kind = "macro_invocation", has = { field = "macro", regex = "^(.*::)?pa
   { nthChild = { position = 1, reverse = true }, inside = { kind = "block", inside = { kind = "function_item", field = "body", not = { has = { field = "return_type", regex = "^!$" } } } } },
   { inside = { kind = "expression_statement", nthChild = { position = 1, reverse = true }, inside = { kind = "block", inside = { kind = "function_item", field = "body", not = { has = { field = "return_type", regex = "^!$" } } } } } },
 ] }
+
+# Where a function's result leaves it: `return x`, and the body's final
+# expression.
+[[returns]]
+rule = { kind = "return_expression" }
+
+[[returns]]
+rule = { nthChild = { position = 1, reverse = true }, not = { kind = "expression_statement" }, inside = { kind = "block", inside = { kind = "function_item", field = "body" } } }
+
+# `Report { .. }`: a value of a type made.
+[[constructions]]
+rule = { kind = "struct_expression" }
+type_field = "name"
+
+# `self.x`: the definition's own value's state, written when assigned to.
+[state]
+# (Not a method call's callee: `self.save()` calls, it doesn't read.)
+access = { kind = "field_expression", not = { inside = { kind = "call_expression", field = "function" } } }
+object_field = "value"
+field_field = "field"
+assignments = [{ kind = "assignment_expression" }, { kind = "compound_assignment_expr" }]
+left_field = "left"
+
+# Events: an enum variant handed to an emit/send/publish call, received
+# where a match arm takes that variant.
+[[boundaries]]
+name = "event"
+send = { kind = "call_expression", has = { field = "function", regex = "(^|[.:])(emit|send|publish|broadcast)$" } }
+send_key = "\\(\\s*(?:[a-z_][a-z0-9_]*::)*([A-Z][A-Za-z0-9_]*::[A-Z][A-Za-z0-9_]*)"
+receive = { kind = "match_arm" }
+receive_field = "pattern"
+receive_key = "^\\s*(?:[a-z_][a-z0-9_]*::)*([A-Z][A-Za-z0-9_]*::[A-Z][A-Za-z0-9_]*)"
+
+# HTTP: a string holding an API path is a request; `.route("/api/..",
+# get(handler).post(other))` hands it to its handlers. Path parameters
+# (`{id}`) are holes.
+[[boundaries]]
+name = "http"
+send = { kind = "string_literal", regex = "/api/", not = { inside = { kind = "call_expression", has = { field = "function", regex = "\\.route$" }, stopBy = "end" } } }
+send_key = "(/api/[^\"?#\\s]*)"
+receive = { kind = "call_expression", has = { field = "function", regex = "\\.route$" } }
+receive_field = "arguments"
+receive_key = "\"(/api/[^\"?#\\s]*)"
+receive_handlers = "(?:get|post|put|patch|delete)\\(\\s*([A-Za-z_][A-Za-z0-9_:]*)\\s*\\)"
+key_holes = "\\{[^}]*\\}"
 
 # A function named as a value may be called later (a deferred call).
 [[references]]

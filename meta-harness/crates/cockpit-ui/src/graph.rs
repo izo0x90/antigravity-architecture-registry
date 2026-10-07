@@ -89,6 +89,8 @@ pub enum Detail {
 pub enum LineRole {
     Name,
     Meta,
+    /// What a step takes and gives (data-flow views).
+    Shape,
     Signature,
     Location,
     Badges,
@@ -168,6 +170,8 @@ const MAX_ZOOM: f32 = 3.0;
 
 /// The views that tell calls as a story, forwards and backwards.
 const STORY: &str = "story";
+/// The view that shows one value's whole path.
+const DATA_PATH: &str = "data_path";
 const REACHED_BY: &str = "reached_by";
 
 /// The hint key of the "+N more" block.
@@ -198,6 +202,9 @@ pub struct GraphState {
     show_all: bool,
     /// Story steps collapsed by hand (their branch summed up).
     shut: BTreeSet<ComponentId>,
+    /// Following one value through the data flow (its name): what doesn't
+    /// carry it fades.
+    pub trace: Option<String>,
     moving: Option<Moving>,
     glide: Option<Glide>,
     going: Option<Going>,
@@ -270,6 +277,7 @@ impl Default for GraphState {
             open: BTreeSet::new(),
             show_all: false,
             shut: BTreeSet::new(),
+            trace: None,
             moving: None,
             glide: None,
             going: None,
@@ -950,7 +958,47 @@ impl GraphState {
         if let Some(name) = self.names.get(&c.id) {
             lines[0].text = name.clone();
         }
+        if self.is_flow() && detail != Detail::Far
+            && let Some(shape) = shape_of(c)
+        {
+            lines.insert(1.min(lines.len()), CardLine { role: LineRole::Shape, text: shape });
+        }
         lines
+    }
+
+    /// Whether the view shows data flow (steps say their shape).
+    fn is_flow(&self) -> bool {
+        self.result.as_ref().is_some_and(|r| r.view.spec.kinds.contains(&RelationKind::DataFlow))
+    }
+
+    /// Whether a line carries the value being followed.
+    fn on_trace(&self, carries: &[String]) -> bool {
+        self.trace.as_ref().is_some_and(|t| carries.iter().any(|c| mentions(c, t)))
+    }
+
+    /// What the selection could be followed by: its own type, what it
+    /// takes and gives, and what its flows carry.
+    fn follow_choices(&self) -> Vec<String> {
+        let Some(c) = self.selected() else { return Vec::new() };
+        let mut out: Vec<String> = Vec::new();
+        let mut push = |v: String| {
+            if !v.is_empty() && !out.contains(&v) {
+                out.push(v);
+            }
+        };
+        if c.signature.is_none() && c.type_name != "function" {
+            push(c.name.clone());
+        }
+        if let Some(sig) = &c.signature {
+            sig.returns.iter().flat_map(|r| type_names(r)).for_each(&mut push);
+            sig.params.iter().filter_map(|p| p.ty.as_deref()).flat_map(type_names).for_each(&mut push);
+        }
+        for line in &self.scene.lines {
+            if [&line.from, &line.to].iter().any(|e| matches!(e, End::Node(id) if *id == c.id)) {
+                line.carries.iter().cloned().for_each(&mut push);
+            }
+        }
+        out
     }
 
     // ---- levels ----
@@ -1519,6 +1567,10 @@ impl GraphState {
             let depth = nav.depth.unwrap_or(self.base_depth());
             let shown = self.result.as_ref().map_or(0, |r| r.view.nodes.len());
             ui.label(muted(format!("· depth {depth} · {shown} nodes")));
+            if let Some(value) = &self.trace {
+                let (glyph, word, color) = crate::status::look("following");
+                ui.label(RichText::new(format!("{glyph} {word} {value}")).size(look.text_body).strong().color(color));
+            }
             if !self.stale_files.is_empty() {
                 let count = self.stale_files.len().to_string();
                 crate::status::chip(ui, "stale", Some(&count)).on_hover_text(self.stale_files.join("\n"));
@@ -1625,6 +1677,10 @@ impl GraphState {
             let shut = node.is_some_and(|n| n.members > 0);
             let (animates, named) = self.draw_node(painter, rect, c, node.map_or(Alignment::Observed, |n| n.alignment), node.is_some_and(|n| n.truncated) && !shut, shut, time);
             moving |= animates;
+            // Following a value: what it doesn't pass through fades back.
+            if self.trace.is_some() && !self.scene.lines.iter().any(|l| self.on_trace(&l.carries) && [&l.from, &l.to].iter().any(|e| matches!(e, End::Node(n) if n == id))) {
+                painter.rect_filled(rect.expand(look.space_xs), look.radius_l, theme.bg.gamma_multiply(look.fade));
+            }
             if !named {
                 unlabelled.push(Unlabelled { id: id.clone(), rect, text: self.names.get(id).cloned().unwrap_or_else(|| c.name.clone()), open: false });
             }
@@ -1790,10 +1846,12 @@ impl GraphState {
         }
         let look = crate::theme::look();
         let theme = colors();
-        let st = style().edge(&theme, line.kind, provenance_of(line.alignment), line.alignment, line.overlay);
-        // With something selected, lines that don't touch it fade back.
+        let st = if line.unconfirmed { style().unconfirmed(&theme) } else { style().edge(&theme, line.kind, provenance_of(line.alignment), line.alignment, line.overlay) };
+        // With something selected, lines that don't touch it fade back;
+        // following a value, lines that don't carry it fade further.
         let touches = self.selection.as_ref().is_none_or(|s| [&line.from, &line.to].iter().any(|e| matches!(e, End::Node(id) | End::Outside(id) if id == s)));
-        let color = if touches { st.color } else { st.color.gamma_multiply(1.0 - look.fade) }.gamma_multiply(settle);
+        let traced = self.trace.is_none() || self.on_trace(&line.carries);
+        let color = if traced && touches { st.color } else if traced { st.color.gamma_multiply(1.0 - look.fade) } else { st.color.gamma_multiply((1.0 - look.fade) * (1.0 - look.fade)) }.gamma_multiply(settle);
         let width = st.width * (1.0 + (line.count as f32).log2() * look.line_count_gain).min(look.line_count_max);
         let stroke = Stroke::new(width, color);
         let corners: Vec<Pos2> = line.points.iter().map(|p| self.world_to_screen(*p)).collect();
@@ -1818,14 +1876,27 @@ impl GraphState {
         let dir = (tip - corners[n - 2]).normalized();
         let side = Vec2::new(-dir.y, dir.x) * look.space_s;
         painter.add(Shape::convex_polygon(vec![tip, tip - dir * look.space_m + side, tip - dir * look.space_m - side], color, Stroke::NONE));
-        // How many relations it stands for: on its longest stretch, and
-        // where it leaves the level.
-        if line.count > 1 && (self.camera.zoom >= self.ui.detail.mid || (touches && self.selection.is_some())) {
+        // What it carries and how many relations it stands for, on its
+        // longest stretch; and the count where it leaves the level.
+        let said = {
+            let mut parts: Vec<String> = line.carries.iter().take(2).cloned().collect();
+            if line.carries.len() > 2 {
+                parts.push(format!("+{}", line.carries.len() - 2));
+            }
+            let what = parts.join(", ");
+            match (line.count > 1, what.is_empty()) {
+                (true, true) => line.count.to_string(),
+                (true, false) => format!("{} · {what}", line.count),
+                (false, _) => what,
+            }
+        };
+        let legible = self.camera.zoom >= self.ui.detail.mid || (touches && self.selection.is_some()) || (self.trace.is_some() && traced);
+        if !said.is_empty() && legible {
             let (a, b) = corners.windows(2).map(|w| (w[0], w[1])).max_by(|x, y| (x.1 - x.0).length().total_cmp(&(y.1 - y.0).length())).unwrap_or((corners[0], corners[1]));
-            count_pill(painter, a.lerp(b, 0.5), line.count, color);
+            line_pill(painter, a.lerp(b, 0.5), &said, color);
         }
         if let Some(exit) = line.exit {
-            count_pill(painter, self.world_to_screen(exit), line.count, color);
+            line_pill(painter, self.world_to_screen(exit), &line.count.to_string(), color);
         }
         moving
     }
@@ -1890,6 +1961,7 @@ impl GraphState {
             let (font, color) = match line.role {
                 LineRole::Name => (FontId::proportional(look.text_title), theme.text_strong),
                 LineRole::Meta => (FontId::proportional(look.text_small), theme.muted),
+                LineRole::Shape => (FontId::monospace(look.text_small), theme.info),
                 LineRole::Signature | LineRole::Location => (FontId::monospace(look.text_small), theme.muted),
                 LineRole::Badges => (FontId::proportional(look.text_small), theme.warn),
             };
@@ -2049,6 +2121,9 @@ enum GraphCommand {
     ShowAll,
     /// The selection's story in the named view (forwards or backwards).
     Story(&'static str),
+    /// Follow a value through the data flow (or stop).
+    Follow,
+    Unfollow,
 }
 
 impl ActionProvider for GraphState {
@@ -2083,6 +2158,9 @@ impl ActionProvider for GraphState {
         out.push(f("graph.zoom_out", "Zoom out", G::Zoom(1.0 / 1.2)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS).group(Group::View).importance(MINOR));
         out.push(f("graph.refresh", "Refresh the view", G::Refresh).group(Group::View).importance(MINOR));
         out.push(f("graph.legend", if self.legend_open { "Hide the legend" } else { "Show the legend" }, G::Legend).toolbar(Button, "", Some(egui_phosphor::regular::INFO)).group(Group::View).importance(MINOR));
+        if self.trace.is_some() {
+            out.push(f("graph.unfollow", "Stop following", G::Unfollow).toolbar(Button, "", Some(egui_phosphor::regular::X)).group(Group::View).importance(SECONDARY));
+        }
         if self.agent.is_some() {
             out.push(f("graph.agent_return", "Return to where you were before the agent moved the view", G::AgentReturn).group(Group::Navigate).importance(PRIMARY).jump());
         }
@@ -2097,6 +2175,11 @@ impl ActionProvider for GraphState {
             }
             if has_story(REACHED_BY) {
                 out.push(f("graph.reached_by", "What reaches it (its callers, outwards)", G::Story(REACHED_BY)).icon(egui_phosphor::regular::ARROW_BEND_UP_LEFT).group(Group::View).importance(SECONDARY).jump());
+            }
+            let values = self.follow_choices();
+            if !values.is_empty() && self.catalog.as_ref().is_some_and(|c| c.get(DATA_PATH).is_some()) {
+                let choices = values.iter().map(|v| Choice::new(v, v).current(self.trace.as_deref() == Some(v.as_str()))).collect();
+                out.push(f("graph.follow", "Follow this data through the code", G::Follow).param(Param::Choice(choices)).icon(egui_phosphor::regular::PATH).group(Group::View).importance(SECONDARY).jump());
             }
             out.push(f("graph.focus", "Focus on the selection", G::Focus).group(Group::View).jump());
             out.push(f("graph.close_inspector", "Close the inspector", G::CloseInspector).group(Group::View).importance(MINOR));
@@ -2141,6 +2224,16 @@ impl ActionProvider for GraphState {
                 self.zoom_by_user(factor, center);
             }
             GraphCommand::Up => self.up_level(),
+            GraphCommand::Follow => {
+                let value = value.or_else(|| self.follow_choices().into_iter().next());
+                if let (Some(value), Some(id)) = (value, self.selection.clone()) {
+                    self.trace = Some(value);
+                    // Its whole path: where it comes from and where it goes.
+                    self.navigate(NavChange::View(DATA_PATH.to_owned()));
+                    self.navigate(NavChange::Focus(id));
+                }
+            }
+            GraphCommand::Unfollow => self.trace = None,
             GraphCommand::Story(view) => {
                 if let Some(id) = self.selection.clone() {
                     self.navigate(NavChange::View(view.to_owned()));
@@ -2460,15 +2553,48 @@ fn rounded(points: &[Pos2], radius: f32) -> Vec<Pos2> {
     out
 }
 
-/// A small count on a line.
-fn count_pill(painter: &egui::Painter, at: Pos2, count: u32, color: egui::Color32) {
+/// A small label on a line (a count, what it carries).
+fn line_pill(painter: &egui::Painter, at: Pos2, text: &str, color: egui::Color32) {
     let look = crate::theme::look();
     let theme = colors();
-    let galley = painter.layout_no_wrap(count.to_string(), FontId::proportional(look.text_tiny), color);
+    let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(look.text_tiny), color);
     let rect = Rect::from_center_size(at, galley.size() + Vec2::new(look.space_s * 2.0, look.space_hair * 2.0));
     painter.rect_filled(rect, look.radius_pill, theme.bg);
     painter.rect_stroke(rect, look.radius_pill, Stroke::new(look.line_thin, color), StrokeKind::Inside);
     painter.galley(rect.center() - galley.size() / 2.0, galley, color);
+}
+
+/// What a step takes and gives, by type (`Plan, &str -> Report`), marked
+/// when what comes out isn't one of what goes in (the data changes shape).
+fn shape_of(c: &Component) -> Option<String> {
+    let sig = c.signature.as_ref()?;
+    let ins: Vec<String> = sig.params.iter().filter_map(|p| p.ty.clone()).collect();
+    let out = sig.returns.clone()?;
+    let mut text = format!("{} -> {out}", if ins.is_empty() { "()".to_owned() } else { ins.join(", ") });
+    let took: BTreeSet<String> = ins.iter().flat_map(|t| type_names(t)).collect();
+    let gives = type_names(&out);
+    if !ins.is_empty() && !gives.is_empty() && gives.iter().all(|g| !took.contains(g)) {
+        let (glyph, word, _) = crate::status::look("reshapes");
+        text = format!("{text}  {glyph} {word}");
+    }
+    Some(text)
+}
+
+/// The type names in a written type (`Result<Report, Error>` -> Report,
+/// Error): capitalised words, wrappers and all.
+fn type_names(written: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for word in written.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')) {
+        if word.chars().next().is_some_and(char::is_uppercase) && !out.iter().any(|w| w == word) {
+            out.push(word.to_owned());
+        }
+    }
+    out
+}
+
+/// Whether `text` names `value` as a whole word (`Store.count` names Store).
+fn mentions(text: &str, value: &str) -> bool {
+    text.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).any(|w| w == value) || text == value
 }
 
 /// A shut module's second line: what it is and how much is inside.
@@ -2527,6 +2653,11 @@ impl<'a> Cards<'a> {
         let alignment = self.result.view.node(id).map_or(Alignment::Observed, |n| n.alignment);
         let mut lines: Vec<(String, f32)> = card_lines(c, alignment, Detail::Mid, None).into_iter().map(|l| (l.text, look.text_small)).collect();
         lines[0] = (name, look.text_title);
+        if self.result.view.spec.kinds.contains(&RelationKind::DataFlow)
+            && let Some(shape) = shape_of(c)
+        {
+            lines.insert(1, (shape, look.text_small));
+        }
         lines
     }
 }
@@ -2610,7 +2741,7 @@ pub(crate) mod tests {
             spec: None,
             placeholders: vec![],
         };
-        let edge = |a: &str, b: &str| ViewEdge { id: arch_graph::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: id(a), target: id(b), alignment: Alignment::Observed, overlay: false, order: None };
+        let edge = |a: &str, b: &str| ViewEdge { id: arch_graph::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: id(a), target: id(b), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None };
         ViewResult {
             view: View {
                 spec: ViewSpec { name: "calls".into(), description: String::new(), kinds: vec![RelationKind::Calls], direction: Default::default(), depth: 3, layout: Default::default(), overlays: vec![], include_ancestors: false, links: vec![], roots: vec![], filters: Default::default() },
@@ -2643,7 +2774,7 @@ pub(crate) mod tests {
             r.view.nodes.push(ViewNode { id: ComponentId::new(id), depth: Some(0), truncated: false, alignment: Alignment::Observed, members, container: None });
         }
         for part in ["rust:a::run", "rust:a::step", "rust:a::save", "rust:a::log"] {
-            r.view.edges.push(ViewEdge { id: arch_graph::RelationId(format!("contains:rust:a->{part}")), kind: RelationKind::Contains, source: ComponentId::new("rust:a"), target: ComponentId::new(part), alignment: Alignment::Observed, overlay: false, order: None });
+            r.view.edges.push(ViewEdge { id: arch_graph::RelationId(format!("contains:rust:a->{part}")), kind: RelationKind::Contains, source: ComponentId::new("rust:a"), target: ComponentId::new(part), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None });
         }
         r
     }
@@ -2795,7 +2926,7 @@ pub(crate) mod tests {
     /// A layered view of calls in order: run calls step (0), log (1), save (2).
     fn ordered_calls() -> ViewResult {
         let mut r = sample_result();
-        let edge = |a: &str, b: &str, order: u32| ViewEdge { id: arch_graph::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: ComponentId::new(a), target: ComponentId::new(b), alignment: Alignment::Observed, overlay: false, order: Some(order) };
+        let edge = |a: &str, b: &str, order: u32| ViewEdge { id: arch_graph::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: ComponentId::new(a), target: ComponentId::new(b), alignment: Alignment::Observed, overlay: false, order: Some(order), carries: None, unconfirmed: None };
         r.view.edges = vec![edge("rust:a::run", "rust:a::save", 2), edge("rust:a::run", "rust:a::step", 0), edge("rust:a::run", "rust:a::log", 1)];
         r
     }
@@ -2852,7 +2983,7 @@ pub(crate) mod tests {
         assert_eq!(g.selection.as_ref().unwrap().as_str(), "rust:a::run", "l from the module: its first part");
         // Backing out to a view that doesn't have the selection: what held it.
         let mut nested = nested_result();
-        nested.view.edges.push(ViewEdge { id: arch_graph::RelationId("contains:a->log".into()), kind: RelationKind::Contains, source: ComponentId::new("rust:a"), target: ComponentId::new("rust:a::log"), alignment: Alignment::Observed, overlay: false, order: None });
+        nested.view.edges.push(ViewEdge { id: arch_graph::RelationId("contains:a->log".into()), kind: RelationKind::Contains, source: ComponentId::new("rust:a"), target: ComponentId::new("rust:a::log"), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None });
         let mut g = showing(nested);
         g.navigate(NavChange::Focus(ComponentId::new("rust:a")));
         g.set_result(g.result.clone().unwrap());
@@ -3508,7 +3639,7 @@ pub(crate) mod tests {
         let mut r = sample_result();
         r.view.spec.name = "story".into();
         r.view.spec.layout = arch_graph::view::LayoutKind::Story;
-        let call = |a: &str, b: &str, order: u32| ViewEdge { id: arch_graph::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: ComponentId::new(a), target: ComponentId::new(b), alignment: Alignment::Observed, overlay: false, order: Some(order) };
+        let call = |a: &str, b: &str, order: u32| ViewEdge { id: arch_graph::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: ComponentId::new(a), target: ComponentId::new(b), alignment: Alignment::Observed, overlay: false, order: Some(order), carries: None, unconfirmed: None };
         r.view.edges = vec![call("rust:a::run", "rust:a::step", 0), call("rust:a::run", "rust:a::log", 1), call("rust:a::step", "rust:a::save", 0), call("rust:a::step", "rust:a::log", 1)];
         let mut module = r.components[&ComponentId::new("rust:a::run")].clone();
         module.id = ComponentId::new("rust:a");
@@ -3544,5 +3675,57 @@ pub(crate) mod tests {
         let (net, mut mode, mut note) = (NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
         c.run(&story, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] });
         assert_eq!((c.nav.view.as_str(), c.nav.roots.clone()), ("reached_by", vec![ComponentId::new("rust:a::step")]));
+    }
+
+    // req: D.2, D.3, D.4
+    #[test]
+    fn flow_steps_say_their_shape_lines_say_what_flows_and_one_value_can_be_followed() {
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::set(config.theme.clone(), &ctx);
+        crate::theme::set_look(config.look.clone());
+        let size = Vec2::new(1400.0, 800.0);
+        // load -> parse (a Text), parse -> check (a Report), and an unconfirmed log.
+        let mut r = sample_result();
+        r.view.spec.name = "data_flow".into();
+        r.view.spec.kinds = vec![RelationKind::DataFlow];
+        let sig = |ins: &[&str], out: &str| Some(arch_graph::Signature { params: ins.iter().enumerate().map(|(i, t)| arch_graph::Param { name: format!("p{i}"), ty: Some((*t).into()), optional: false, variadic: false }).collect(), returns: Some(out.into()), qualifiers: vec![] });
+        r.components.get_mut(&ComponentId::new("rust:a::run")).unwrap().signature = sig(&["&Path"], "Text");
+        r.components.get_mut(&ComponentId::new("rust:a::step")).unwrap().signature = sig(&["Text"], "Result<Report, Error>");
+        r.components.get_mut(&ComponentId::new("rust:a::save")).unwrap().signature = sig(&["Report"], "Report");
+        let flow = |a: &str, b: &str, carries: &str| ViewEdge { id: arch_graph::RelationId(format!("data_flow:{a}->{b}")), kind: RelationKind::DataFlow, source: ComponentId::new(a), target: ComponentId::new(b), alignment: Alignment::Observed, overlay: false, order: None, carries: Some(carries.into()), unconfirmed: None };
+        let mut unsure = flow("rust:a::run", "rust:a::log", "");
+        unsure.carries = None;
+        unsure.unconfirmed = Some("log declares no parameter types".into());
+        r.view.edges = vec![flow("rust:a::run", "rust:a::step", "Text"), flow("rust:a::step", "rust:a::save", "Result<Report, Error>"), unsure];
+        let mut g = configured();
+        g.set_result(r);
+        g.camera.zoom = 1.4;
+        let text = texts(&draw(&mut g, &ctx, vec![], 0.0, size));
+        // D.2: each step's shape; what flows on each line.
+        assert!(text.contains("Text -> Result<Report, Error>"), "{text}");
+        assert!(text.lines().any(|l| l == "Text"), "the line says what flows: {text}");
+        // D.3: steps where the data changes shape are marked; one that keeps it isn't.
+        let (_, reshapes, _) = crate::status::look("reshapes");
+        let step = shape_of(g.component(&ComponentId::new("rust:a::step")).unwrap()).unwrap();
+        let save = shape_of(g.component(&ComponentId::new("rust:a::save")).unwrap()).unwrap();
+        assert!(step.contains(&reshapes) && !save.contains(&reshapes), "{step} / {save}");
+        assert!(g.scene.lines.iter().any(|l| l.unconfirmed), "the unconfirmed flow is drawn as one");
+        // D.4: follow Report from save: its whole path, the rest faded.
+        g.select(Some(ComponentId::new("rust:a::save")));
+        let follow = g.actions().into_iter().find(|a| a.id == "graph.follow").expect("offered");
+        let crate::actions::Param::Choice(choices) = follow.param.clone() else { panic!("a choice") };
+        assert!(choices.iter().any(|c| c.value == "Report"), "{choices:?}");
+        let (net, mut mode, mut note) = (NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
+        g.run(&follow, Some("Report".into()), &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] });
+        assert_eq!((g.trace.as_deref(), g.nav.view.as_str(), g.nav.roots.clone()), (Some("Report"), "data_path", vec![ComponentId::new("rust:a::save")]));
+        let carrying = g.scene.lines.iter().find(|l| l.carries.iter().any(|c| c.contains("Report"))).unwrap().clone();
+        let other = g.scene.lines.iter().find(|l| l.carries == vec!["Text".to_owned()]).unwrap().clone();
+        assert!(g.on_trace(&carrying.carries) && !g.on_trace(&other.carries), "Result<Report, Error> carries Report; Text doesn't");
+        let text = texts(&draw(&mut g, &ctx, vec![], 1.0, size));
+        assert!(text.contains("following Report"), "{text}");
+        let unfollow = g.actions().into_iter().find(|a| a.id == "graph.unfollow").expect("can stop");
+        g.run(&unfollow, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] });
+        assert!(g.trace.is_none());
     }
 }

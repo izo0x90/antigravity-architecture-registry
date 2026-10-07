@@ -52,10 +52,19 @@ overlays = []
 include_ancestors = false
 
 [views.data_flow]
-description = "Data movement: which outputs feed which inputs. Read it as where data goes and in what shape."
+description = "Data as a pipeline: from sources on the left to sinks on the right, each line saying what flows, each step its shape, and where the shape changes."
 kinds = ["data_flow"]
 direction = "out"
 depth = 4
+layout = "layered"
+overlays = []
+include_ancestors = false
+
+[views.data_path]
+description = "One value's whole path: where it comes from and where it goes, both ways from where you start."
+kinds = ["data_flow"]
+direction = "both"
+depth = 8
 layout = "layered"
 overlays = []
 include_ancestors = false

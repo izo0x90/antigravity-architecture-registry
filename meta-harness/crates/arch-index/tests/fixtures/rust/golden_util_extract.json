@@ -3,7 +3,7 @@
   "file": "src/util.rs",
   "language": "rust",
   "content_hash": "e89e522065f3289107993bcc509c88050a3ae5348cbd3920a94f61624afd6abb",
-  "pack_fingerprint": "2cb2805ba9c7c98961c59f1555cb9deb22c629f207c3e0b34ea68e3788db2120",
+  "pack_fingerprint": "873a670a7f86b41492ea90038cb29b78cb33b6c29d651f2a8bb7ad243f2e7858",
   "module": "sample::util",
   "root_kind": "source_file",
   "lines": 5,
@@ -57,5 +57,18 @@
     }
   ],
   "imports": [],
-  "placeholders": []
+  "placeholders": [],
+  "flows": [
+    {
+      "kind": "returned",
+      "at": 0,
+      "what": "s.to_uppercase",
+      "span": {
+        "start_line": 2,
+        "end_line": 2,
+        "start_byte": 38,
+        "end_byte": 54
+      }
+    }
+  ]
 }

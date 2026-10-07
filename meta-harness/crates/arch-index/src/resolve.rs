@@ -12,7 +12,7 @@ use arch_graph::{CodeAnchor, Component, ComponentId, Graph, Provenance, Relation
 use serde::{Deserialize, Serialize};
 
 use crate::pack::LanguageSpec;
-use crate::{FileExtract, PackSet, RawCall};
+use crate::{FileExtract, FlowKind, PackSet, RawCall};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AmbiguousCall {
@@ -68,6 +68,8 @@ struct Entry {
     owner: Option<usize>,
     /// Can own members that `self` refers to (a non-executable, non-module type).
     is_type: bool,
+    /// A type whose values carry data (it has properties): made, and holds state.
+    holds_data: bool,
     /// What the owner value is called inside it, when the language names it
     /// per definition (a Go receiver).
     self_name: Option<String>,
@@ -280,6 +282,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             def: None,
             owner: None,
             is_type: false,
+            holds_data: false,
             self_name: None,
         });
     }
@@ -332,6 +335,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     def: Some((fi, di)),
                     owner,
                     is_type: is_type(&def.type_name),
+                    holds_data: types.resolve(&def.type_name).is_ok_and(|t| t.allows_properties),
                     self_name: def.self_name.clone(),
                 });
             }
@@ -486,13 +490,22 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     relation.sites.push(call.span);
                     relation.deferred = call.deferred;
                     out.graph.upsert_relation(relation);
+                    // Calling a type makes a value of it (`Report(...)`, `new Store()`).
+                    if entries[target].holds_data {
+                        let mut made = Relation::new(RelationKind::DataFlow, entries[caller].id.clone(), entries[target].id.clone(), Provenance::OBSERVED);
+                        made.ports = Some(("makes".to_owned(), "value".to_owned()));
+                        made.data = Some(entries[target].name.clone());
+                        made.sites.push(call.span);
+                        out.graph.upsert_relation(made);
+                    }
                     // Outputs of other repo calls passed in as arguments.
                     for arg in &call.args {
                         let CallTarget::One(source) = cx.resolve_call(caller, &arg.producer, None, 0) else { continue };
                         match flow(&entries, extracts, source, target, arg.position, &pack.spec.language) {
-                            Ok(ports) => {
+                            Ok((ports, carried)) => {
                                 let mut relation = Relation::new(RelationKind::DataFlow, entries[source].id.clone(), entries[target].id.clone(), Provenance::OBSERVED);
                                 relation.ports = Some(ports);
+                                relation.data = Some(carried);
                                 relation.sites.push(call.span);
                                 out.graph.upsert_relation(relation);
                             }
@@ -529,6 +542,88 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             }
         }
     }
+
+    // Data flow beyond arguments: results returned or kept, values made,
+    // the state of a definition's own type, and boundaries crossed.
+    let mut senders: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+    let mut receivers: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+    for (fi, ex) in extracts.iter().enumerate() {
+        let Some(pack) = packs.by_name(&ex.language) else { continue };
+        let lang = &pack.spec.language;
+        for raw in &ex.flows {
+            let at = match raw.at {
+                Some(di) => def_entry.get(&(fi, di)).copied(),
+                None => Some(module_entry[&fi]),
+            };
+            let Some(at) = at else { continue };
+            let mut add = |source: usize, target: usize, ports: (String, String), data: Option<String>| {
+                if source == target {
+                    return;
+                }
+                let mut relation = Relation::new(RelationKind::DataFlow, entries[source].id.clone(), entries[target].id.clone(), Provenance::OBSERVED);
+                relation.ports = Some(ports);
+                relation.data = data;
+                relation.sites.push(raw.span);
+                out.graph.upsert_relation(relation);
+            };
+            match raw.kind {
+                FlowKind::Returned | FlowKind::Bound => {
+                    let CallTarget::One(source) = cx.resolve_call(at, &raw.what, None, 0) else { continue };
+                    if entries[source].is_type {
+                        continue;
+                    }
+                    // What comes back, as written (`Result<Report, Error>`, `(u32, u32)`).
+                    let carried = signature(&entries, extracts, source).and_then(|s| s.returns.as_deref()).map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "));
+                    let into = if raw.kind == FlowKind::Returned { "returns".to_owned() } else { format!("kept as {}", raw.names.join(", ")) };
+                    add(source, at, ("return".to_owned(), into), carried);
+                }
+                FlowKind::Constructs => {
+                    if let Some(ty) = find_type(&entries, &raw.what, ex, lang).found().filter(|t| entries[*t].holds_data) {
+                        add(at, ty, ("makes".to_owned(), "value".to_owned()), Some(entries[ty].name.clone()));
+                    }
+                }
+                FlowKind::Writes | FlowKind::Reads => {
+                    let Some(owner) = entries[at].owner.filter(|o| entries[*o].holds_data) else { continue };
+                    let data = Some(format!("{}.{}", entries[owner].name, raw.what));
+                    if raw.kind == FlowKind::Writes {
+                        add(at, owner, ("writes".to_owned(), raw.what.clone()), data);
+                    } else {
+                        add(owner, at, (raw.what.clone(), "reads".to_owned()), data);
+                    }
+                }
+                FlowKind::Sends => {
+                    if let Some(boundary) = &raw.boundary {
+                        senders.entry((boundary.clone(), raw.what.clone())).or_default().push(at);
+                    }
+                }
+                FlowKind::Receives => {
+                    let Some(boundary) = &raw.boundary else { continue };
+                    let list = receivers.entry((boundary.clone(), raw.what.clone())).or_default();
+                    if raw.names.is_empty() {
+                        list.push(at);
+                    }
+                    // Named handlers (route handlers) receive, wherever they're registered.
+                    for handler in &raw.names {
+                        if let CallTarget::One(h) = cx.resolve_call(at, handler, None, 0) {
+                            list.push(h);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (key, from) in &senders {
+        for &to in receivers.get(key).into_iter().flatten() {
+            for &source in from {
+                if source != to {
+                    let mut relation = Relation::new(RelationKind::DataFlow, entries[source].id.clone(), entries[to].id.clone(), Provenance::OBSERVED);
+                    relation.ports = Some((key.0.clone(), key.1.clone()));
+                    relation.data = Some(key.1.clone());
+                    out.graph.upsert_relation(relation);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -538,7 +633,7 @@ fn signature<'a>(entries: &[Entry], extracts: &'a [FileExtract], entry: usize) -
 
 /// Ports for `source`'s output flowing into `target`'s argument `position`,
 /// when both types are written and carry the same data.
-fn flow(entries: &[Entry], extracts: &[FileExtract], source: usize, target: usize, position: u32, lang: &LanguageSpec) -> Result<(String, String), String> {
+fn flow(entries: &[Entry], extracts: &[FileExtract], source: usize, target: usize, position: u32, lang: &LanguageSpec) -> Result<((String, String), String), String> {
     // A type by its last path segment (`store.Store`, `crate::x::Store` -> Store).
     let base = |t: &str| split(t, lang).pop().unwrap_or_default();
     let produced = signature(entries, extracts, source).and_then(|s| s.returns.as_deref()).map(|t| {
@@ -556,7 +651,7 @@ fn flow(entries: &[Entry], extracts: &[FileExtract], source: usize, target: usiz
     let Some(param) = params.get(position as usize) else { return Err(format!("{} has no parameter at position {position}", entries[target].symbol)) };
     let Some(wanted) = param.ty.as_deref().map(base) else { return Err(format!("parameter '{}' of {} has no type", param.name, entries[target].symbol)) };
     let compatible = produced == wanted || lang.compatible_types.iter().any(|group| group.contains(&produced) && group.contains(&wanted));
-    if compatible { Ok(("return".to_owned(), param.name.clone())) } else { Err(format!("{produced} doesn't match parameter '{}': {wanted}", param.name)) }
+    if compatible { Ok((("return".to_owned(), param.name.clone()), produced)) } else { Err(format!("{produced} doesn't match parameter '{}': {wanted}", param.name)) }
 }
 
 /// What a written type name refers to, seen from a file.

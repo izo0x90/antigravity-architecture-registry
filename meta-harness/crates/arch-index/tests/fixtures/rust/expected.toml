@@ -37,6 +37,14 @@ components = [
   ["sample::store::store_each", "function"],
 ]
 relations = [
+  # Results kept or returned, and values made (data flow beyond arguments).
+  ["data_flow", "sample::Twice::twice", "sample::double"],
+  ["data_flow", "sample::Upper::apply", "sample::run"],
+  ["data_flow", "sample::store::Store::new", "sample::run"],
+  ["data_flow", "sample::store::Store::new", "sample::store::Store"],
+  ["data_flow", "sample::util::shout", "sample::Upper::apply"],
+  ["data_flow", "sample::util::shout", "sample::yelled"],
+  ["data_flow", "sample::wrapper::nested", "sample::wrapper"],
   ["contains", "sample", "sample::Twice"],
   ["contains", "sample::Twice", "sample::Twice::once"],
   ["contains", "sample::Twice", "sample::Twice::twice"],

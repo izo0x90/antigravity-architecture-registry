@@ -164,7 +164,8 @@ fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
         resolved
             .graph
             .relations()
-            .filter(|r| r.kind == RelationKind::DataFlow)
+            // Values passed into calls (not kept, returned or made: see the flow tests).
+            .filter(|r| r.kind == RelationKind::DataFlow && r.ports.as_ref().is_some_and(|(from, to)| from == "return" && to != "returns" && !to.starts_with("kept as ")))
             .map(|r| {
                 let (from, to) = r.ports.clone().unwrap();
                 assert!(r.provenance.observed && !r.provenance.planned && r.sites.len() == 1);
@@ -199,6 +200,65 @@ fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
     assert!(flows(&mismatch).is_empty());
     assert_eq!(mismatch.unverified_flows.len(), 1);
     assert!(mismatch.unverified_flows[0].reason.contains("number doesn't match parameter 's': string"), "{:?}", mismatch.unverified_flows);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// req: D.1
+#[test]
+fn data_flow_covers_results_kept_values_made_state_and_boundaries() {
+    let dir = temp_repo(
+        "flows",
+        &[
+            ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+            (
+                "src/lib.rs",
+                r#"pub enum Event { Saved { id: u32 }, Gone }
+pub struct Store { count: u32 }
+impl Store {
+    pub fn new() -> Store { Store { count: 0 } }
+    pub fn add(&mut self) { self.count += 1; }
+    pub fn total(&self) -> u32 { self.count }
+    pub fn save(&self) { self.emit(Event::Saved { id: 1 }); }
+    fn emit(&self, _e: Event) {}
+}
+pub fn on_event(e: Event) { match e { Event::Saved { id } => {}, Event::Gone => {} } }
+pub fn pair() -> (u32, u32) { (1, 2) }
+pub fn split() -> u32 { let (a, b) = pair(); a + b }
+pub fn routes(r: Router) -> Router { r.route("/api/items/{id}", get(item)).route("/api/other", get(other)) }
+pub fn other() -> String { String::new() }
+pub fn asks_other() -> String { fetch("/api/other") }
+pub fn item() -> String { String::new() }
+pub fn client(base: &str) -> String { fetch(&format!("{base}/api/items/{}", 3)) }
+fn fetch(url: &str) -> String { url.to_owned() }
+"#,
+            ),
+        ],
+    );
+    let (_, resolved) = run(&dir, &PackSet::built_in().unwrap());
+    let id = |s: &str| ComponentId::for_symbol("rust", s).to_string();
+    let flows: BTreeSet<(String, String, String, String, String)> = resolved
+        .graph
+        .relations()
+        .filter(|r| r.kind == RelationKind::DataFlow)
+        .map(|r| {
+            let (from, to) = r.ports.clone().unwrap();
+            (r.source.to_string(), r.target.to_string(), from, to, r.data.clone().unwrap_or_default())
+        })
+        .collect();
+    let has = |a: &str, b: &str, from: &str, to: &str, data: &str| {
+        let row = (id(a), id(b), from.to_owned(), to.to_owned(), data.to_owned());
+        assert!(flows.contains(&row), "{row:?} in {flows:#?}");
+    };
+    has("shop::Store::new", "shop::Store", "makes", "value", "Store");
+    has("shop::Store::add", "shop::Store", "writes", "count", "Store.count");
+    has("shop::Store", "shop::Store::total", "count", "reads", "Store.count");
+    has("shop::pair", "shop::split", "return", "kept as a, b", "(u32, u32)");
+    has("shop::Store::save", "shop::on_event", "event", "Event::Saved", "Event::Saved");
+    has("shop::client", "shop::item", "http", "/api/items/{}", "/api/items/{}");
+    assert!(!flows.iter().any(|f| f.1 == id("shop::Store::emit") && f.2 == "count"), "a method call isn't a field read");
+    assert!(!flows.iter().any(|f| f.0 == id("shop::routes") && f.2 == "http"), "registering a route isn't a request");
+    has("shop::asks_other", "shop::other", "http", "/api/other", "/api/other");
+    assert!(!flows.iter().any(|f| f.0 == id("shop::asks_other") && f.1 == id("shop::item")), "a request reaches only its own route's handler, however routes chain");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

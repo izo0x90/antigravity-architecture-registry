@@ -221,6 +221,12 @@ pub struct ViewEdge {
     /// Calls: position among the caller's calls (0 = first).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<u32>,
+    /// Data flows: what flows along it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carries: Option<String>,
+    /// A flow seen in the code that the types can't confirm: why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unconfirmed: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -534,6 +540,8 @@ fn edge(graph: &Graph, relation: &crate::Relation, overlay: bool) -> ViewEdge {
         alignment: graph.relation_alignment(relation),
         overlay,
         order: relation.order,
+        carries: relation.data.clone(),
+        unconfirmed: None,
     }
 }
 

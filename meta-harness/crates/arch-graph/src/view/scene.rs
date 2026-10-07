@@ -143,6 +143,10 @@ pub struct Line {
     pub points: Vec<(f32, f32)>,
     /// Where it leaves the level's frame (lines to what's outside).
     pub exit: Option<(f32, f32)>,
+    /// Data flows: what flows along it (each distinct thing once).
+    pub carries: Vec<String>,
+    /// Seen in the code, but the types can't confirm it.
+    pub unconfirmed: bool,
 }
 
 /// A view as drawn at one level.
@@ -357,11 +361,16 @@ pub fn build(view: &View, options: &Options, measure: &dyn Measure, metrics: &Me
     };
 
     // Relations lifted onto what's drawn, merged.
-    let mut merged: BTreeMap<(End, End, RelationKind, bool), (u32, Alignment)> = BTreeMap::new();
-    let mut add = |from: End, to: End, kind: RelationKind, overlay: bool, count: u32, alignment: Alignment| {
-        let entry = merged.entry((from, to, kind, overlay)).or_insert((0, alignment));
+    let mut merged: BTreeMap<(End, End, RelationKind, bool, bool), (u32, Alignment, Vec<String>)> = BTreeMap::new();
+    let mut add = |from: End, to: End, kind: RelationKind, overlay: bool, count: u32, alignment: Alignment, carries: Option<&String>, unconfirmed: bool| {
+        let entry = merged.entry((from, to, kind, overlay, unconfirmed)).or_insert((0, alignment, Vec::new()));
         entry.0 += count;
         entry.1 = worst(entry.1, alignment);
+        if let Some(c) = carries
+            && !entry.2.contains(c)
+        {
+            entry.2.push(c.clone());
+        }
     };
     for e in &view.edges {
         if nested && e.kind == RelationKind::Contains {
@@ -371,7 +380,7 @@ pub fn build(view: &View, options: &Options, measure: &dyn Measure, metrics: &Me
             && a != b
             && !nested_ends(&a, &b)
         {
-            add(a, b, e.kind, e.overlay, 1, e.alignment);
+            add(a, b, e.kind, e.overlay, 1, e.alignment, e.carries.as_ref(), e.unconfirmed.is_some());
         }
     }
     for l in &view.links {
@@ -379,7 +388,7 @@ pub fn build(view: &View, options: &Options, measure: &dyn Measure, metrics: &Me
             && a != b
             && !nested_ends(&a, &b)
         {
-            add(a, b, l.kind, false, l.count, Alignment::Observed);
+            add(a, b, l.kind, false, l.count, Alignment::Observed, None, false);
         }
     }
     let mut outside_sides: BTreeMap<ComponentId, bool> = BTreeMap::new();
@@ -388,7 +397,7 @@ pub fn build(view: &View, options: &Options, measure: &dyn Measure, metrics: &Me
             let Some(inside) = end_of(&link.inside) else { continue };
             let group = End::Outside(o.group.clone());
             let (from, to) = if link.outgoing { (inside, group) } else { (group, inside) };
-            add(from, to, link.kind, false, link.count, Alignment::Observed);
+            add(from, to, link.kind, false, link.count, Alignment::Observed, None, false);
             *outside_sides.entry(o.group.clone()).or_default() |= link.outgoing;
         }
     }
@@ -399,7 +408,7 @@ pub fn build(view: &View, options: &Options, measure: &dyn Measure, metrics: &Me
         sizes.insert(id.clone(), measure.card(id, children.contains_key(id) && !open.contains(id)));
     }
     let mut weights: BTreeMap<(ComponentId, ComponentId), u32> = BTreeMap::new();
-    for ((from, to, _, overlay), (count, _)) in &merged {
+    for ((from, to, _, overlay, _), (count, _, _)) in &merged {
         if let (End::Node(a), End::Node(b), false) = (from, to, overlay) {
             *weights.entry((a.clone(), b.clone())).or_default() += count;
         }
@@ -459,7 +468,7 @@ pub fn build(view: &View, options: &Options, measure: &dyn Measure, metrics: &Me
     // Lines: heaviest first, so the main ones run straightest.
     let mut lines: Vec<Line> = merged
         .into_iter()
-        .map(|((from, to, kind, overlay), (count, alignment))| Line { from, to, kind, count, alignment, overlay, points: Vec::new(), exit: None })
+        .map(|((from, to, kind, overlay, unconfirmed), (count, alignment, carries))| Line { from, to, kind, count, alignment, overlay, points: Vec::new(), exit: None, carries, unconfirmed })
         .collect();
     let mut order: Vec<usize> = (0..lines.len()).collect();
     let span = |l: &Line| match (scene.rect_of(&l.from), scene.rect_of(&l.to)) {
@@ -535,7 +544,7 @@ fn story(view: &View, options: &Options, measure: &dyn Measure, metrics: &Metric
             points.reverse();
             std::mem::swap(&mut from, &mut to);
         }
-        scene.lines.push(Line { from, to, kind: RelationKind::Calls, count: 1, alignment: edge.map_or(Alignment::Observed, |e| e.alignment), overlay: false, points, exit: None });
+        scene.lines.push(Line { from, to, kind: RelationKind::Calls, count: 1, alignment: edge.map_or(Alignment::Observed, |e| e.alignment), overlay: false, points, exit: None, carries: Vec::new(), unconfirmed: false });
     }
     for row in &told.rows {
         let note = Note { also: told.also.get(&row.id).copied().unwrap_or(0), loops: told.loops.get(&row.id).cloned().unwrap_or_default(), inside: told.inside.get(&row.id).copied().unwrap_or(0) };
@@ -1405,7 +1414,7 @@ pub(crate) mod tests {
     fn a_crowded_level_shows_the_neighbourhood_and_holds_the_rest_in_more() {
         use crate::view::{ViewEdge, ViewNode};
         let node = |s: &str| ViewNode { id: id(s), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, container: None };
-        let call = |a: &str, b: &str| ViewEdge { id: crate::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: id(a), target: id(b), alignment: Alignment::Observed, overlay: false, order: None };
+        let call = |a: &str, b: &str| ViewEdge { id: crate::RelationId(format!("calls:{a}->{b}")), kind: RelationKind::Calls, source: id(a), target: id(b), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None };
         let names: Vec<String> = (0..12).map(|i| format!("n{i:02}")).collect();
         let spec = ViewCatalog::defaults().unwrap().get("calls").unwrap().clone();
         let view = View { spec, roots: vec![], nodes: names.iter().map(|n| node(n)).collect(), edges: vec![call("n05", "n09"), call("n05", "n10"), call("n01", "n02")], links: vec![], trail: vec![], outside: vec![] };

@@ -61,6 +61,7 @@ pub fn icon(name: &str) -> Option<&'static str> {
         "flag" => i::FLAG,
         "lock" => i::LOCK,
         "sparkle" => i::SPARKLE,
+        "shuffle" => i::SHUFFLE,
         _ => return None,
     })
 }

@@ -14,6 +14,9 @@ components = [
   ["app.store.store.Later", "function"],
 ]
 relations = [
+  # Results kept or returned, and values made (data flow beyond arguments).
+  ["data_flow", "app.main.shout", "app.main.main"],
+  ["data_flow", "app.store.store.New", "app.main.main"],
   ["contains", "app.main", "app.main.main"],
   ["contains", "app.main", "app.main.shout"],
   ["contains", "app.main", "app.main.keep"],

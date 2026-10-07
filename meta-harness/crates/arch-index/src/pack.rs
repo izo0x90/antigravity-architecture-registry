@@ -135,6 +135,13 @@ pub struct LanguageSpec {
     /// (`.tsx`): the same rules, compiled for that grammar.
     #[serde(default)]
     pub dialects: Vec<DialectSpec>,
+    /// Calls that just wrap their argument (`Ok(x)`, `Some(x)`): what's
+    /// returned or bound through them is the argument.
+    #[serde(default)]
+    pub transparent_calls: Vec<String>,
+    /// Kinds of the names a pattern binds (`let (a, b) = ...` binds a and b).
+    #[serde(default)]
+    pub pattern_name_kinds: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -537,6 +544,56 @@ pub struct RuleSpec {
     pub rule: toml::Value,
 }
 
+/// Making a value of a type (`Report { .. }`, `new Store()`): the type is
+/// written in `type_field`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConstructSpec {
+    pub rule: toml::Value,
+    pub type_field: String,
+}
+
+/// The fields of a definition's own value (`self.x`, `this.x`): written
+/// where they're assigned to, read anywhere else.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StateSpec {
+    /// A field access.
+    pub access: toml::Value,
+    /// The value it's on (must be a self name) and the field's name.
+    pub object_field: String,
+    pub field_field: String,
+    /// Assignments: an access in their `left_field` is written.
+    #[serde(default)]
+    pub assignments: Vec<toml::Value>,
+    pub left_field: String,
+}
+
+/// A boundary data crosses without a direct call (events, HTTP routes,
+/// messages): where it's sent and where it's received, matched by a key.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoundarySpec {
+    pub name: String,
+    pub send: toml::Value,
+    /// Over the sending node's text: the first group is the key.
+    pub send_key: String,
+    pub receive: toml::Value,
+    /// Over the receiving node's text (or its `receive_field`): the first
+    /// group is the key.
+    pub receive_key: String,
+    #[serde(default)]
+    pub receive_field: Option<String>,
+    /// The receivers named in the receiving node (route handlers), each
+    /// match's first group; without it, the definition the node is in.
+    #[serde(default)]
+    pub receive_handlers: Option<String>,
+    /// Parts of a key that vary (path parameters like `{id}`): written
+    /// the same way on both sides before keys are compared.
+    #[serde(default)]
+    pub key_holes: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackSpec {
@@ -569,6 +626,16 @@ pub struct PackSpec {
     /// recorded as a deferred call when it names a known function.
     #[serde(default)]
     pub references: Vec<RuleSpec>,
+    /// Where a definition's result leaves it: the matched node is (or
+    /// wraps) the value returned.
+    #[serde(default)]
+    pub returns: Vec<RuleSpec>,
+    #[serde(default)]
+    pub constructions: Vec<ConstructSpec>,
+    #[serde(default)]
+    pub state: Option<StateSpec>,
+    #[serde(default)]
+    pub boundaries: Vec<BoundarySpec>,
 }
 
 /// A pack with its rules compiled for its language.
@@ -588,11 +655,36 @@ pub struct Pack {
     /// Per dead-code rule: its rule, and the rule a preceding node must match.
     pub dead_code: Vec<(RuleCore, Option<RuleCore>, Option<regex::Regex>)>,
     pub references: Vec<RuleCore>,
+    pub returns: Vec<RuleCore>,
+    pub constructions: Vec<RuleCore>,
+    pub state: Option<CompiledState>,
+    pub boundaries: Vec<CompiledBoundary>,
     pub package_name_regex: Option<regex::Regex>,
     /// Hash of the pack's text: extracts made with another version are stale.
     pub fingerprint: String,
     /// The same pack compiled for its other grammars (by extension).
     pub dialects: Vec<Pack>,
+}
+
+pub struct CompiledState {
+    pub access: RuleCore,
+    pub assignments: Vec<RuleCore>,
+}
+
+pub struct CompiledBoundary {
+    pub send: RuleCore,
+    pub send_key: regex::Regex,
+    pub receive: RuleCore,
+    pub receive_key: regex::Regex,
+    pub receive_handlers: Option<regex::Regex>,
+    pub key_holes: Option<regex::Regex>,
+}
+
+impl CompiledBoundary {
+    /// A key as compared: its varying parts written as `{}`.
+    pub fn key(&self, raw: &str) -> String {
+        self.key_holes.as_ref().map_or_else(|| raw.to_owned(), |re| re.replace_all(raw, "{}").into_owned())
+    }
 }
 
 pub struct CompiledMacros {
@@ -708,6 +800,34 @@ impl Pack {
                 })
                 .collect::<Result<_, IndexError>>()?,
             references: rules(spec.references.iter().map(|d| &d.rule).collect(), "references")?,
+            returns: rules(spec.returns.iter().map(|d| &d.rule).collect(), "returns")?,
+            constructions: rules(spec.constructions.iter().map(|d| &d.rule).collect(), "constructions")?,
+            state: spec
+                .state
+                .as_ref()
+                .map(|st| {
+                    Ok::<_, IndexError>(CompiledState {
+                        access: compile(lang, &st.access, &format!("pack '{name}' state.access"))?,
+                        assignments: st.assignments.iter().enumerate().map(|(i, a)| compile(lang, a, &format!("pack '{name}' state.assignments[{i}]"))).collect::<Result<_, _>>()?,
+                    })
+                })
+                .transpose()?,
+            boundaries: spec
+                .boundaries
+                .iter()
+                .map(|b| {
+                    let what = format!("pack '{name}' boundaries.{}", b.name);
+                    let regex = |r: &str, field: &str| regex::Regex::new(r).map_err(|e| IndexError::Pack(format!("{what}.{field}: {e}")));
+                    Ok::<_, IndexError>(CompiledBoundary {
+                        send: compile(lang, &b.send, &format!("{what}.send"))?,
+                        send_key: regex(&b.send_key, "send_key")?,
+                        receive: compile(lang, &b.receive, &format!("{what}.receive"))?,
+                        receive_key: regex(&b.receive_key, "receive_key")?,
+                        receive_handlers: b.receive_handlers.as_deref().map(|r| regex(r, "receive_handlers")).transpose()?,
+                        key_holes: b.key_holes.as_deref().map(|r| regex(r, "key_holes")).transpose()?,
+                    })
+                })
+                .collect::<Result<_, IndexError>>()?,
             package_name_regex,
             fingerprint: fingerprint.to_owned(),
             dialects: Vec::new(),

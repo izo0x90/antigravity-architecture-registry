@@ -22,6 +22,13 @@ components = [
   ["app.fetch", "function"],
 ]
 relations = [
+  # Results kept or returned, and values made (data flow beyond arguments).
+  ["data_flow", "app.Greeter.format", "app.Greeter.greet"],
+  ["data_flow", "app.main", "app.Greeter"],
+  ["data_flow", "helpers.Base.describe", "app.Greeter.describe"],
+  ["data_flow", "helpers.clean", "app.fetch"],
+  ["data_flow", "helpers.load", "app.fetch"],
+  ["data_flow", "helpers.load", "app.main"],
   ["contains", "folder:src", "app"],
   ["contains", "folder:src", "helpers"],
   ["contains", "folder:src", "view"],

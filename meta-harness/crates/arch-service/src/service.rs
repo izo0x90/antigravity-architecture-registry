@@ -909,7 +909,43 @@ impl ArchitectureService {
         // Filtering on a type keeps its specializations.
         let mut spec = spec.clone();
         spec.filters = spec.filters.with_specializations(&self.types);
-        let view = query(&graph, &spec);
+        let mut view = query(&graph, &spec);
+        // Flows the code shows but the types can't confirm, between what's shown.
+        if spec.kinds.contains(&arch_graph::RelationKind::DataFlow) || spec.overlays.contains(&arch_graph::RelationKind::DataFlow) {
+            let shown: BTreeSet<ComponentId> = view.nodes.iter().map(|n| n.id.clone()).collect();
+            let unverified = self.observed.read().map_err(ServiceError::poisoned)?.unverified.clone();
+            let touching: Vec<&arch_index::UnverifiedFlow> = unverified.iter().filter(|u| shown.contains(&u.source) || shown.contains(&u.target)).collect();
+            // The other end comes into the view with it.
+            for u in &touching {
+                for end in [&u.source, &u.target] {
+                    if !shown.contains(end) && view.node(end).is_none() && graph.component(end).is_some() {
+                        view.nodes.push(arch_graph::view::ViewNode {
+                            id: end.clone(),
+                            depth: None,
+                            truncated: false,
+                            alignment: graph.alignment(end).unwrap_or(arch_graph::Alignment::Observed),
+                            members: 0,
+                            container: graph.parent(end).cloned(),
+                        });
+                    }
+                }
+            }
+            let mut extra = Vec::new();
+            for u in touching {
+                extra.push(arch_graph::view::ViewEdge {
+                    id: arch_graph::RelationId(format!("data_flow:{}->{}:unconfirmed:{}", u.source, u.target, u.position)),
+                    kind: arch_graph::RelationKind::DataFlow,
+                    source: u.source.clone(),
+                    target: u.target.clone(),
+                    alignment: arch_graph::Alignment::Observed,
+                    overlay: !spec.kinds.contains(&arch_graph::RelationKind::DataFlow),
+                    order: None,
+                    carries: None,
+                    unconfirmed: Some(u.reason.clone()),
+                });
+            }
+            view.edges.extend(extra);
+        }
         let text = render_text(&graph, &view);
         // What's shown, what holds the focus, and what it reaches outside.
         let named = view.nodes.iter().map(|n| &n.id).chain(&view.trail).chain(view.outside.iter().map(|o| &o.group)).chain(view.nodes.iter().filter_map(|n| n.container.as_ref()));

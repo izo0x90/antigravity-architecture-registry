@@ -37,6 +37,8 @@ package_name_key = ["name"]
 # .tsx files: the same rules on the TSX grammar.
 dialects = [{ ast_grep = "tsx", extensions = ["tsx"] }]
 
+# The names a destructuring pattern binds.
+pattern_name_kinds = ["identifier", "shorthand_property_identifier_pattern"]
 [[definitions]]
 type = "function"
 rule = { any = [{ kind = "function_declaration" }, { kind = "method_definition" }] }
@@ -143,3 +145,20 @@ rule = { any = [{ kind = "expression_statement" }, { kind = "lexical_declaration
 
 [[placeholders]]
 rule = { kind = "throw_statement", regex = "(?i)(todo|not implemented)" }
+
+# Where a function's result leaves it: `return x`, and an arrow
+# function's expression body.
+[[returns]]
+rule = { kind = "return_statement" }
+
+[[returns]]
+rule = { inside = { kind = "arrow_function", field = "body" }, not = { kind = "statement_block" } }
+
+# `this.x`: the definition's own value's state, written when assigned to.
+[state]
+# (Not a method call's callee: `this.save()` calls, it doesn't read.)
+access = { kind = "member_expression", not = { inside = { kind = "call_expression", field = "function" } } }
+object_field = "object"
+field_field = "property"
+assignments = [{ kind = "assignment_expression" }, { kind = "augmented_assignment_expression" }]
+left_field = "left"

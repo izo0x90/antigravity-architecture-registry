@@ -69,6 +69,43 @@ pub struct RawCall {
     pub reference: bool,
 }
 
+/// How data leaves or enters a definition, besides being passed into a call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowKind {
+    /// A call's result is what the definition returns.
+    Returned,
+    /// A call's result is bound to local names (destructured: several).
+    Bound,
+    /// A value of a type is made.
+    Constructs,
+    /// A field of the definition's own value is written.
+    Writes,
+    /// A field of the definition's own value is read.
+    Reads,
+    /// Data is sent across a boundary (an event, a request).
+    Sends,
+    /// Data is received from a boundary.
+    Receives,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RawFlow {
+    pub kind: FlowKind,
+    /// The definition it's in (None: module level).
+    pub at: Option<usize>,
+    /// Returned/Bound: the producing call's callee; Constructs: the type as
+    /// written; Writes/Reads: the field; Sends/Receives: the key.
+    pub what: String,
+    /// Bound: the names; Receives: the handlers named (route handlers).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+    /// Sends/Receives: the boundary's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary: Option<String>,
+    pub span: Span,
+}
+
 /// A macro (or similar) defined in a file: the names its expansion uses, and
 /// whether it is a placeholder itself.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -120,6 +157,9 @@ pub struct FileExtract {
     pub macro_uses: Vec<(String, Span)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub macro_defs: Vec<MacroDef>,
+    /// Returns, bindings, construction, state and boundaries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flows: Vec<RawFlow>,
 }
 
 impl FileExtract {
@@ -179,6 +219,46 @@ fn as_call(pack: &Pack, node: &AstNode<'_>) -> Option<(String, Span)> {
             _ => None,
         }
     })
+}
+
+/// The call that produces `node`'s value: the call itself, through calls
+/// that just wrap their argument (`Ok(f(x))`), or a local bound to a call.
+fn producer(pack: &Pack, node: &AstNode<'_>, bound: &std::collections::HashMap<(Option<usize>, String), Bound>, at: Option<usize>) -> Option<(String, Span)> {
+    let lang = &pack.spec.language;
+    fn call<'r, 'p>(pack: &'p Pack, n: &AstNode<'r>) -> Option<(AstNode<'r>, &'p crate::pack::CallSpec)> {
+        pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| n.matches(rule).then_some(spec)).map(|spec| (n.clone(), spec))
+    }
+    let found = call(pack, node).or_else(|| {
+        let mut named = node.named_children();
+        match (named.next(), named.next()) {
+            (Some(only), None) => call(pack, &only),
+            _ => None,
+        }
+    });
+    if let Some((n, spec)) = found {
+        let callee = field_text(&n, &spec.callee_field)?;
+        let last = lang.split_last(&callee).map_or(callee.as_str(), |(_, _, name)| name);
+        if lang.transparent_calls.iter().any(|t| *t == callee || *t == last) {
+            let arg = spec.args_field.as_ref().and_then(|f| n.field(f)).and_then(|list| list.named_children().find(|c| !lang.ignored(&c.kind())))?;
+            return producer(pack, &arg, bound, at);
+        }
+        return Some((callee, span(&n)));
+    }
+    local_name(pack, &node.text()).and_then(|name| bound.get(&(at, name.to_owned())).and_then(|b| b.producer.clone()))
+}
+
+/// The names a binding's pattern binds: one local, or each name in a
+/// destructuring pattern.
+fn pattern_names(pack: &Pack, pattern: &AstNode<'_>) -> Vec<String> {
+    if let Some(name) = local_name(pack, &pattern.text()) {
+        return vec![name.to_owned()];
+    }
+    // `self.x = ...` sets a field, not locals.
+    if pack.state.as_ref().is_some_and(|s| pattern.matches(&s.access)) {
+        return Vec::new();
+    }
+    let kinds = &pack.spec.language.pattern_name_kinds;
+    pattern.dfs().filter(|n| kinds.iter().any(|k| *k == n.kind())).filter_map(|n| local_name(pack, &n.text()).map(str::to_owned)).collect()
 }
 
 /// A plain local name as written in an argument (`&out`, `mut x` -> name).
@@ -289,6 +369,53 @@ fn dead(pack: &Pack, node: &AstNode<'_>) -> bool {
     })
 }
 
+/// The flows a node makes: a returned call, a value made, a field of the
+/// definition's own value written or read, data sent or received across a
+/// boundary.
+fn flows(pack: &Pack, node: &AstNode<'_>, ctx: &Ctx, bound: &std::collections::HashMap<(Option<usize>, String), Bound>, defs: &[RawDef], out: &mut Vec<RawFlow>) {
+    let lang = &pack.spec.language;
+    let mut push = |kind, what: String, names: Vec<String>, boundary: Option<String>| out.push(RawFlow { kind, at: ctx.parent, what, names, boundary, span: span(node) });
+    if pack.returns.iter().any(|rule| node.matches(rule))
+        && let Some((callee, _)) = producer(pack, node, bound, ctx.parent)
+    {
+        push(FlowKind::Returned, callee, Vec::new(), None);
+    }
+    for (rule, spec) in pack.constructions.iter().zip(&pack.spec.constructions) {
+        if node.matches(rule)
+            && let Some(ty) = field_text(node, &spec.type_field)
+        {
+            push(FlowKind::Constructs, ty, Vec::new(), None);
+        }
+    }
+    if let (Some(state), Some(spec)) = (&pack.state, &pack.spec.state)
+        && node.matches(&state.access)
+        && let (Some(object), Some(field)) = (field_text(node, &spec.object_field), field_text(node, &spec.field_field))
+    {
+        let own = ctx.parent.and_then(|p| defs.get(p)).and_then(|d| d.self_name.clone());
+        if lang.self_names.contains(&object) || own.as_deref() == Some(object.as_str()) {
+            let written = node.parent().is_some_and(|p| state.assignments.iter().any(|a| p.matches(a)) && p.field(&spec.left_field).is_some_and(|l| l.node_id() == node.node_id()));
+            push(if written { FlowKind::Writes } else { FlowKind::Reads }, field, Vec::new(), None);
+        }
+    }
+    for (compiled, spec) in pack.boundaries.iter().zip(&pack.spec.boundaries) {
+        if node.matches(&compiled.send) {
+            let text = node.text();
+            if let Some(key) = compiled.send_key.captures(&text).and_then(|c| c.get(1)) {
+                push(FlowKind::Sends, compiled.key(key.as_str()), Vec::new(), Some(spec.name.clone()));
+            }
+        }
+        if node.matches(&compiled.receive) {
+            let keyed = spec.receive_field.as_ref().and_then(|f| node.field(f)).map_or_else(|| node.text().to_string(), |f| f.text().to_string());
+            if let Some(key) = compiled.receive_key.captures(&keyed).and_then(|c| c.get(1)) {
+                // Handlers from the same part as the key (a chain of
+                // `.route(..)` calls holds every route's handlers).
+                let handlers = compiled.receive_handlers.as_ref().map(|re| re.captures_iter(&keyed).filter_map(|c| c.get(1).map(|g| g.as_str().to_owned())).collect()).unwrap_or_default();
+                push(FlowKind::Receives, compiled.key(key.as_str()), handlers, Some(spec.name.clone()));
+            }
+        }
+    }
+}
+
 /// Extracts one file. `module` is its module symbol (see `walk::module_symbol`).
 pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) -> FileExtract {
     let root = pack.lang.ast_grep(content);
@@ -309,6 +436,7 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
         placeholders: Vec::new(),
         macro_uses: Vec::new(),
         macro_defs: Vec::new(),
+        flows: Vec::new(),
     };
     let lang = &pack.spec.language;
     // Local names bound to a call's output (or a declared type), per enclosing definition.
@@ -369,15 +497,24 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
         }
         if !ctx.dead
             && let Some(binding) = pack.bindings.iter().zip(&pack.spec.bindings).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
-            && let Some(name) = field_text(&node, &binding.name_field)
-            && let Some(name) = local_name(pack, &name)
+            && let Some(pattern) = node.field(&binding.name_field)
         {
+            let names = pattern_names(pack, &pattern);
             let value = node.field(&binding.value_field);
-            let entry = Bound {
-                producer: value.as_ref().and_then(|v| as_call(pack, v)),
-                ty: binding.type_field.as_ref().and_then(|f| type_text(pack, &node, f)),
-            };
-            bound.insert((ctx.parent, name.to_owned()), entry);
+            let produced = value.as_ref().and_then(|v| producer(pack, v, &bound, ctx.parent));
+            let entry = Bound { producer: produced.clone(), ty: binding.type_field.as_ref().and_then(|f| type_text(pack, &node, f)) };
+            for name in &names {
+                bound.insert((ctx.parent, name.clone()), entry.clone());
+            }
+            // A call's result kept in locals flows into this definition.
+            if let Some((callee, _)) = produced
+                && !names.is_empty()
+            {
+                out.flows.push(RawFlow { kind: FlowKind::Bound, at: ctx.parent, what: callee, names, boundary: None, span: span(&node) });
+            }
+        }
+        if !ctx.dead {
+            flows(pack, &node, &ctx, &bound, &out.definitions, &mut out.flows);
         }
         if !ctx.dead
             && let Some(call) = pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
@@ -468,5 +605,8 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
     }
     out.placeholders.sort_by_key(|s| s.start_byte);
     out.placeholders.dedup();
+    // A field read many times in one definition is one flow.
+    let mut seen = std::collections::BTreeSet::new();
+    out.flows.retain(|f| !matches!(f.kind, FlowKind::Reads | FlowKind::Writes) || seen.insert((f.kind, f.at, f.what.clone())));
     out
 }

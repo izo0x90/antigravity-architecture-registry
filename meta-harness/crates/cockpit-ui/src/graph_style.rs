@@ -110,6 +110,8 @@ pub struct NodeLooks {
 pub struct GraphStyle {
     pub kinds: KindColors,
     pub edges: AlignmentLooks,
+    /// A data flow the code shows but the types can't confirm.
+    pub unconfirmed: Look,
     pub provenance: ProvenanceWeights,
     pub overlay: OverlayLook,
     pub nodes: NodeLooks,
@@ -133,6 +135,7 @@ impl GraphStyle {
             ("edges.planned.width", e.planned.width),
             ("edges.missing.width", e.missing.width),
             ("edges.present.width", e.present.width),
+            ("unconfirmed.width", self.unconfirmed.width),
             ("nodes.outline.observed.width", n.outline.observed.width),
             ("nodes.outline.planned.width", n.outline.planned.width),
             ("nodes.outline.missing.width", n.outline.missing.width),
@@ -150,6 +153,10 @@ impl GraphStyle {
         let k = &self.kinds;
         let mut tokens: Vec<(&str, &str)> = vec![("kinds.contains", &k.contains), ("kinds.implements", &k.implements), ("kinds.calls", &k.calls), ("kinds.data_flow", &k.data_flow)];
         tokens.extend(self.edges.all().into_iter().filter_map(|l| l.color.as_deref()).map(|t| ("edges", t)));
+        match self.unconfirmed.color.as_deref() {
+            Some(t) => tokens.push(("unconfirmed", t)),
+            None => return Err("graph_style.unconfirmed: needs a color".into()),
+        }
         for look in self.nodes.outline.all() {
             match look.color.as_deref() {
                 Some(t) => tokens.push(("nodes.outline", t)),
@@ -212,6 +219,12 @@ impl GraphStyle {
 
     /// What every style means, generated from this table (the legend draws
     /// exactly these).
+    /// A flow seen in the code that the types can't confirm.
+    pub fn unconfirmed(&self, theme: &Theme) -> Line {
+        let look = &self.unconfirmed;
+        Line { color: look.color.as_deref().map_or(theme.warn, |t| Self::color(theme, t)), width: look.width, dashed: look.dashed }
+    }
+
     pub fn legend(&self, theme: &Theme) -> Vec<LegendEntry> {
         let mut out = Vec::new();
         for kind in RelationKind::ALL {
@@ -221,6 +234,7 @@ impl GraphStyle {
             out.push(LegendEntry { section: "Plan vs code", label: alignment_label(alignment), swatch: Swatch::Line(self.edge(theme, RelationKind::Calls, provenance_of(alignment), alignment, false)) });
         }
         out.push(LegendEntry { section: "Plan vs code", label: "overlay (another kind drawn over the view)".to_owned(), swatch: Swatch::Line(self.edge(theme, RelationKind::Calls, Provenance::OBSERVED, Alignment::Observed, true)) });
+        out.push(LegendEntry { section: "Plan vs code", label: crate::status::look("unconfirmed").1, swatch: Swatch::Line(self.unconfirmed(theme)) });
         for alignment in ALIGNMENTS {
             out.push(LegendEntry { section: "Nodes", label: alignment_label(alignment), swatch: Swatch::Outline(self.node_outline(theme, alignment, false)) });
         }
