@@ -9,7 +9,7 @@ use arch_service::{ArchitectureService, Limits, MemoryPlans, SearchKind, open_fa
 
 fn sample() -> PathBuf {
     let root = tempfile::tempdir().unwrap().keep().join("sample");
-    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample");
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample");
     std::fs::create_dir_all(root.join("src")).unwrap();
     for f in ["Cargo.toml", "src/lib.rs", "src/store.rs", "src/util.rs"] {
         std::fs::copy(from.join(f), root.join(f)).unwrap();
@@ -19,7 +19,7 @@ fn sample() -> PathBuf {
 
 fn open(root: &Path, limits: Limits) -> ArchitectureService {
     let facts = open_facts(root, &limits).unwrap();
-    ArchitectureService::open(root, arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(facts)).unwrap().with_limits(limits)
+    ArchitectureService::open(root, code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(facts)).unwrap().with_limits(limits)
 }
 
 fn stages(timed: &arch_service::Timed) -> Vec<&str> {

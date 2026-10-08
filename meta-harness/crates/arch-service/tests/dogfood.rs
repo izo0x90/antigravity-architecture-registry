@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use arch_graph::{ComponentId, RelationKind, TypeSystem};
-use arch_index::PackSet;
+use code_analyzer::PackSet;
 use arch_service::{ArchitectureService, MemoryPlans};
 
 // req: P4.10
@@ -13,7 +13,7 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
     let service = ArchitectureService::open(
         &root,
-        arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
+        code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
         TypeSystem::defaults().unwrap(),
         Box::new(MemoryPlans::default()),
         Box::new(arch_service::MemoryStore::default()),
@@ -28,7 +28,7 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
         "arch_service::service::ArchitectureService",
         "arch_service::service::ArchitectureService::validate",
         "arch_service::checks::check_plan",
-        "arch_index::resolve::resolve",
+        "code_analyzer::resolve::resolve",
         "arch_graph::graph::Graph",
         "arch_graph::tree::build",
     ] {
@@ -36,8 +36,8 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
     }
     let calls = |from: &str, to: &str| graph.outgoing(&id(from), Some(RelationKind::Calls)).any(|r| r.target == id(to));
     assert!(calls("arch_service::service::ArchitectureService::validate", "arch_service::checks::check_plan"));
-    assert!(calls("arch_service::service::ArchitectureService::read_file", "arch_index::extract::extract_file"));
-    assert!(calls("arch_index::ingest", "arch_index::resolve::resolve"));
+    assert!(calls("arch_service::service::ArchitectureService::read_file", "code_analyzer::extract::extract_file"));
+    assert!(calls("code_analyzer::ingest", "code_analyzer::resolve::resolve"));
     // The Python scripts come in through the Python pack.
     assert!(graph.component(&ComponentId::for_symbol("python", "scripts.req_status")).is_some());
     // Nothing changed: the second run parses nothing.
@@ -64,7 +64,7 @@ fn copy_dir(from: &Path, to: &Path) {
 fn cached_extracts_from_another_pack_version_are_parsed_again() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("sample");
-    copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample"), &root);
+    copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample"), &root);
     let open = |packs: PackSet| {
         ArchitectureService::open(
             &root,
@@ -75,9 +75,9 @@ fn cached_extracts_from_another_pack_version_are_parsed_again() {
         )
         .unwrap()
     };
-    let first = open(arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap()).ingest(&root).unwrap();
+    let first = open(code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap()).ingest(&root).unwrap();
     assert_eq!((first.parsed, first.cached), (3, 0));
-    let same = open(arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap()).ingest(&root).unwrap();
+    let same = open(code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap()).ingest(&root).unwrap();
     assert_eq!((same.parsed, same.cached), (0, 3), "same pack: served from the cache");
     // The project's own Rust pack, edited: everything the shipped one read is stale.
     let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
@@ -88,7 +88,7 @@ fn cached_extracts_from_another_pack_version_are_parsed_again() {
     std::fs::write(own.join("syntax.toml"), std::fs::read_to_string(shipped.join("language/rust/syntax.toml")).unwrap() + "\n# edited\n").unwrap();
     let places = nah_packs::Places { project: root.clone(), ..nah_packs::Places::isolated(&dir.path().join("elsewhere")) };
     let catalog = nah_packs::Catalog::load(&nah_packs::Distribution::from_dir(&shipped).unwrap(), &places).unwrap();
-    let edited = arch_index::PackSet::from_catalog(&catalog).unwrap();
+    let edited = code_analyzer::PackSet::from_catalog(&catalog).unwrap();
     let again = open(edited).ingest(&root).unwrap();
     assert_eq!((again.parsed, again.cached), (3, 0), "another pack version: parsed again");
 }

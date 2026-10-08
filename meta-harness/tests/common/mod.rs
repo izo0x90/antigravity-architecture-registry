@@ -224,10 +224,10 @@ pub fn fixture_architecture() -> Arc<ArchitectureService> {
 /// first ingest.
 pub fn fixture_architecture_with(setup: impl FnOnce(ArchitectureService) -> ArchitectureService) -> Arc<ArchitectureService> {
     let root = tempfile::tempdir().unwrap().keep().join("sample");
-    copy_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/arch-index/tests/fixtures/rust/sample"), &root);
+    copy_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/code-analyzer/tests/fixtures/rust/sample"), &root);
     let arch = ArchitectureService::open(
         &root,
-        arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packs")).unwrap(),
+        code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packs")).unwrap(),
         arch_graph::TypeSystem::defaults().unwrap(),
         Box::new(FsPlans::new(&root).unwrap()),
         Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),

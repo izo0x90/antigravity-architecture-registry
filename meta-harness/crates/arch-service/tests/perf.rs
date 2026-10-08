@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use arch_graph::tree::{TreeRequest, ViewKind, Way, problems};
 use arch_graph::TypeSystem;
-use arch_index::PackSet;
+use code_analyzer::PackSet;
 use arch_service::{ArchitectureService, MemoryPlans, SearchKind};
 
 /// The big repository: tokio at a fixed tag, fetched once into the cache.
@@ -32,7 +32,7 @@ fn big_repo() -> PathBuf {
 /// a test can change one without touching the real tree.
 fn copy_sources(root: &Path, packs: &PackSet) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    for file in arch_index::walk(root, root, packs).unwrap() {
+    for file in code_analyzer::walk(root, root, packs).unwrap() {
         let to = dir.path().join(file.path.as_str());
         std::fs::create_dir_all(to.parent().unwrap()).unwrap();
         std::fs::copy(&file.absolute, &to).unwrap();
@@ -42,7 +42,7 @@ fn copy_sources(root: &Path, packs: &PackSet) -> tempfile::TempDir {
 
 fn open(root: &Path) -> ArchitectureService {
     let facts = arch_service::open_facts(root, &arch_service::Limits::defaults().unwrap()).unwrap();
-    ArchitectureService::open(root, arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(facts)).unwrap()
+    ArchitectureService::open(root, code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(facts)).unwrap()
 }
 
 fn ms(since: Instant) -> u64 {
@@ -83,7 +83,7 @@ fn trees(name: &str, service: &ArchitectureService) {
 }
 
 fn measure(name: &str, root: &Path) {
-    let packs = arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
+    let packs = code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
     let copy = copy_sources(root, &packs);
     let root = copy.path();
     let service = open(root);
@@ -95,7 +95,7 @@ fn measure(name: &str, root: &Path) {
     assert!(took <= limits.perf.full_index_ms, "{name}: full index took {took} ms");
 
     // One file changed: the biggest Rust file gets a comment.
-    let file = arch_index::walk(root, root, &packs).unwrap().into_iter().filter(|f| f.path.as_str().ends_with(".rs")).max_by_key(|f| std::fs::metadata(&f.absolute).map(|m| m.len()).unwrap_or(0)).unwrap();
+    let file = code_analyzer::walk(root, root, &packs).unwrap().into_iter().filter(|f| f.path.as_str().ends_with(".rs")).max_by_key(|f| std::fs::metadata(&f.absolute).map(|m| m.len()).unwrap_or(0)).unwrap();
     let text = std::fs::read_to_string(&file.absolute).unwrap();
     std::fs::write(&file.absolute, format!("{text}\n// changed\n")).unwrap();
     let t = Instant::now();

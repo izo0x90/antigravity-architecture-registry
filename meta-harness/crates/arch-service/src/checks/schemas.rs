@@ -4,8 +4,8 @@
 
 use arch_graph::schema::compatibility;
 use arch_graph::{Component, ComponentId, Finding, FindingCode, Graph, Plan, Relation, RelationKind, Report, SchemaSet, Target};
-use arch_index::PackSet;
-use arch_index::typing::carries;
+use code_analyzer::PackSet;
+use code_analyzer::typing::carries;
 use serde_json::Value;
 
 use super::component;
@@ -228,7 +228,7 @@ mod tests {
     // req: P5.6
     #[test]
     fn receivers_aren_t_arguments_and_optional_parameters_may_be_left_out() {
-        let packs = arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
+        let packs = code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
         let callee = method();
         assert!(against_signature(&callee, Some(&inputs(json!({"item": "str"}))), None, &packs).is_empty(), "&mut self is the receiver; flush is optional");
         assert!(against_signature(&callee, Some(&inputs(json!({"item": "str", "flush": "bool"}))), None, &packs).is_empty());

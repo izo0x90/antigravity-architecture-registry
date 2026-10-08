@@ -17,7 +17,7 @@ use arch_graph::{
     RepoPath, Severity, Source, Stage, Target, TypeSystem, ViewRequest, can_transition, ComponentDetail, schema::Dsl,
     IndexState, IndexStatus, IndexSummary,
 };
-use arch_index::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk, UnverifiedFlow};
+use code_analyzer::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk, UnverifiedFlow};
 use serde::{Deserialize, Serialize};
 
 use crate::progress::{Downgrade, cascade};
@@ -592,8 +592,8 @@ impl ArchitectureService {
     /// on many threads at once, and only those whose content changed are
     /// read for facts again. Files under a scope that are gone (or now
     /// ignored) are dropped. The changes are kept together, all or none.
-    fn read_files(&self, t: &mut Timing, found: &[(PathBuf, Vec<arch_index::SourceFile>)], report: &mut IngestReport) -> Result<(), ServiceError> {
-        let mut unique: BTreeMap<&RepoPath, &arch_index::SourceFile> = BTreeMap::new();
+    fn read_files(&self, t: &mut Timing, found: &[(PathBuf, Vec<code_analyzer::SourceFile>)], report: &mut IngestReport) -> Result<(), ServiceError> {
+        let mut unique: BTreeMap<&RepoPath, &code_analyzer::SourceFile> = BTreeMap::new();
         for (_, files) in found {
             report.files += files.len();
             unique.extend(files.iter().map(|f| (&f.path, f)));
@@ -648,7 +648,7 @@ impl ArchitectureService {
 
     /// One file: skipped if its size and time match what was kept (and that
     /// time was trusted), else read and compared by content.
-    fn read_file(&self, file: &arch_index::SourceFile, files: &Files, trusted_before: i64) -> Result<Read, ServiceError> {
+    fn read_file(&self, file: &code_analyzer::SourceFile, files: &Files, trusted_before: i64) -> Result<Read, ServiceError> {
         let Some(pack) = self.packs.for_path(&file.absolute) else { return Ok(Read::Skipped) };
         let io = |e: std::io::Error| ServiceError::Io(format!("{}: {e}", file.path));
         let mut stamp = Stamp::of(&std::fs::metadata(&file.absolute).map_err(io)?);
@@ -763,7 +763,7 @@ impl ArchitectureService {
     /// not ignored by the walk, and a source file a pack handles, a directory,
     /// or a vanished path with indexed files under it (a renamed directory).
     fn watches(&self, path: &Path) -> Result<bool, ServiceError> {
-        if !path.starts_with(&self.root) || arch_index::ignored(&self.root, path) {
+        if !path.starts_with(&self.root) || code_analyzer::ignored(&self.root, path) {
             return Ok(false);
         }
         if path.is_dir() || self.packs.for_path(path).is_some() {

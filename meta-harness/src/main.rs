@@ -4,7 +4,7 @@ use std::sync::Arc;
 use harness_contracts::{McpServer, McpTransport};
 use harness_core::{EventHub, InstanceRegistry, ProviderDriver, SessionManager};
 use arch_graph::TypeSystem;
-use arch_index::{CodeRules, PackSet};
+use code_analyzer::{CodeRules, PackSet};
 use arch_service::{ArchitectureService, FsPlans, ProcessRunner, ReviewerCatalog, ToolCatalog};
 use meta_harness::mcp::{McpServerState, McpService};
 use meta_harness::server::{AppState, create_router};

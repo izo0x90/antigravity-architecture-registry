@@ -38,9 +38,9 @@ fn repo_with_types(types: TypeSystem) -> Repo {
 fn repo_with(types: TypeSystem, rules_toml: &str) -> Repo {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("sample");
-    copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample"), &root);
-    let packs = arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
-    let mut rules = arch_index::CodeRules::defaults(&packs, &types).unwrap();
+    copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample"), &root);
+    let packs = code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
+    let mut rules = code_analyzer::CodeRules::defaults(&packs, &types).unwrap();
     rules.add_toml(rules_toml, &packs, &types).unwrap();
     let service = ArchitectureService::open(
         &root,
@@ -1008,10 +1008,10 @@ fn contracts_show_inherited_resolved_shapes_tools_effects_and_data_flows() {
 fn calls_that_cant_be_proven_are_reported_not_linked() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("sample");
-    copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample"), &root);
+    copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample"), &root);
     let service = ArchitectureService::open(
         &root,
-        arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
+        code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
         TypeSystem::defaults().unwrap(),
         Box::new(arch_service::MemoryPlans::default()),
         Box::new(arch_service::MemoryStore::default()),

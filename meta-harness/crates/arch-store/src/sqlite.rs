@@ -30,7 +30,7 @@ fn failed(e: impl std::fmt::Display) -> StoreError {
 /// What wrote a store: its layout, and the reader whose facts it holds. A
 /// store from any other is rebuilt from the code.
 fn writer() -> String {
-    format!("store {STORE_VERSION} · facts {} · reader {}", arch_graph::SCHEMA_VERSION, arch_index::EXTRACTOR_VERSION)
+    format!("store {STORE_VERSION} · facts {} · reader {}", arch_graph::SCHEMA_VERSION, code_analyzer::EXTRACTOR_VERSION)
 }
 
 impl SqliteStore {

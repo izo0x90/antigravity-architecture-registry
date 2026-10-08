@@ -6,7 +6,7 @@ description = "The architecture service: plan and index storage, incremental ing
 
 [dependencies]
 arch-graph = { path = "../arch-graph" }
-arch-index = { path = "../arch-index" }
+code-analyzer = { path = "../code-analyzer" }
 arch-store = { path = "../arch-store" }
 arch-search = { path = "../arch-search" }
 rayon = "1"

@@ -6,7 +6,7 @@ description = "Where the facts read from the code are kept between runs: one row
 
 [dependencies]
 arch-graph = { path = "../arch-graph" }
-arch-index = { path = "../arch-index" }
+code-analyzer = { path = "../code-analyzer" }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json = "1.0"
 thiserror = "2.0"

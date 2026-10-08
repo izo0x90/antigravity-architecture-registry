@@ -149,7 +149,7 @@ impl ArchitectureService {
     pub(super) fn files_changed(&self, paths: &[PathBuf]) {
         let mut files = self.repo_files.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(files) = files.as_mut() {
-            let kept: Vec<PathBuf> = paths.iter().filter(|p| !arch_index::ignored(self.root(), p)).cloned().collect();
+            let kept: Vec<PathBuf> = paths.iter().filter(|p| !code_analyzer::ignored(self.root(), p)).cloned().collect();
             files.changed(&kept);
         }
     }

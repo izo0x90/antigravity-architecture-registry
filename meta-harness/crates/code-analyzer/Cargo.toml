@@ -1,8 +1,8 @@
 [package]
-name = "arch-index"
+name = "code-analyzer"
 version = "0.1.0"
 edition = "2024"
-description = "Language-generic code ingestion: language packs (ast-grep rules as data), extraction, call and data-flow resolution into the observed architecture graph, and code rules over components."
+description = "Our analyzer: reads each file once with ast-grep by its language pack (definitions, calls, data flow, placeholders, code-rule matches), links names across files, and combines that with a language indexer's SCIP output into one result."
 
 [dependencies]
 nah-packs = { path = "../nah-packs" }

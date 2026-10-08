@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use arch_graph::{Finding, FindingCode, Graph, Plan, RelationKind, Report, Status, Target, TypeSystem};
-use arch_index::{PackSet, module_symbol};
+use code_analyzer::{PackSet, module_symbol};
 
 use super::component;
 
@@ -61,7 +61,7 @@ fn location(c: &arch_graph::Component, graph: &Graph, root: &Path, packs: &PackS
         report.push(Finding::error(FindingCode::InvalidLocation, component(&c.id), format!("no language pack handles {}", proposed.file)));
         return;
     };
-    if arch_index::ignored(root, path) {
+    if code_analyzer::ignored(root, path) {
         report.push(
             Finding::error(
                 FindingCode::InvalidLocation,

@@ -9,7 +9,7 @@ use arch_service::{ArchitectureService, Limits, MemoryPlans, MemoryStore, open_f
 
 fn sample() -> PathBuf {
     let root = tempfile::tempdir().unwrap().keep().join("sample");
-    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample");
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample");
     for entry in walk(&from) {
         let to = root.join(entry.strip_prefix(&from).unwrap());
         std::fs::create_dir_all(to.parent().unwrap()).unwrap();
@@ -44,7 +44,7 @@ fn open(root: &Path, kept: bool) -> ArchitectureService {
         true => Box::new(open_facts(root, &Limits::defaults().unwrap()).unwrap()),
         false => Box::new(MemoryStore::default()),
     };
-    ArchitectureService::open(root, arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap()
+    ArchitectureService::open(root, code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap()
 }
 
 /// The graph as text, in a fixed order.

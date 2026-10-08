@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use arch_graph::{ComponentId, FindingCode, Graph, Provenance, Severity, TypeSystem};
-use arch_index::{CodeRules, RuleSeverity, ingest};
+use code_analyzer::{CodeRules, RuleSeverity, ingest};
 
 const PROJECT_RULES: &str = r#"
 [[rule]]
@@ -50,7 +50,7 @@ fn id(s: &str) -> ComponentId {
 // req: P6.12, M.15
 #[test]
 fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
-    let packs = arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
+    let packs = code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
     let mut types = TypeSystem::defaults().unwrap();
     types.extend_with(toml::from_str("[types.handler]\nextends = \"function\"\ndescription = \"Handles a request.\"\n").unwrap()).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/rust/sample");
@@ -111,7 +111,7 @@ fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
 // req: P6.12
 #[test]
 fn bad_rules_are_rejected_with_a_reason() {
-    let packs = arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
+    let packs = code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
     let types = TypeSystem::defaults().unwrap();
     let rule = |language: &str, types_list: &str, body: &str| {
         format!("[[rule]]\nid = \"r\"\nlanguage = \"{language}\"\ntypes = [{types_list}]\nkind = \"forbidden\"\nrule = {body}\nmessage = \"m\"\n")

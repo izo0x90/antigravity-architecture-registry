@@ -8,7 +8,7 @@ use arch_service::{ArchitectureService, MemoryPlans};
 fn service(root: &Path) -> ArchitectureService {
     let s = ArchitectureService::open(
         root,
-        arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
+        code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
         TypeSystem::defaults().unwrap(),
         Box::new(MemoryPlans::default()),
         Box::new(arch_service::MemoryStore::default()),

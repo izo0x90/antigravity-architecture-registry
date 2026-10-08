@@ -214,7 +214,8 @@ Every result ends with next steps, given in dependency order.
 | Crate | What it holds |
 |---|---|
 | `arch-graph` | the domain: types, components, relations, plans, schemas, views, scenes (how a view is laid out and routed), queue shapes (no I/O; shared with the cockpit) |
-| `arch-index` | ingestion: language packs, extraction, resolution, code rules |
+| `code-analyzer` | our analyzer: reads each file with ast-grep by its language pack, links names, code rules |
+| `nah-packs` | packs (harnesses, languages, indexers) and the one installer |
 | `arch-store` | where the facts read from the code are kept between runs (SQLite) |
 | `arch-service` | plans and cache, plan operations and checks, verification, tools, reviewers, review loop, queue state |
 | `src/` (server) | REST (`/api/arch/...`), MCP, events over WebSocket, the queue runner, the cockpit session |

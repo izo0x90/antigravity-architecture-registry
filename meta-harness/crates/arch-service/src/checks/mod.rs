@@ -13,7 +13,7 @@ mod types;
 use std::path::Path;
 
 use arch_graph::{Component, Graph, Plan, Report, SchemaSet, Target, TypeSystem};
-use arch_index::PackSet;
+use code_analyzer::PackSet;
 
 use crate::ToolCatalog;
 

@@ -484,7 +484,7 @@ window.EXPLAINER = {
       user: [{ a: "index.changed" }, { a: "index.rebuild" }],
       agent: [{ t: "ingest" }],
       ties: [["index-light", "shows its state"], ["tree-build", "trees are built from its graph"]],
-      files: ["crates/arch-index/src/extract.rs", "crates/arch-index/src/resolve.rs", "crates/arch-index/packs", "crates/arch-store/src/sqlite.rs"],
+      files: ["crates/code-analyzer/src/extract.rs", "crates/code-analyzer/src/resolve.rs", "packs/language", "crates/arch-store/src/sqlite.rs"],
     },
     {
       id: "tree-build", group: "engine", title: "Building a tree", demo: "treebuild",

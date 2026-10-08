@@ -11,7 +11,7 @@ mod memory;
 mod sqlite;
 
 use arch_graph::RepoPath;
-use arch_index::FileExtract;
+use code_analyzer::FileExtract;
 
 pub use memory::MemoryStore;
 pub use sqlite::{Settings, SqliteStore};
@@ -77,9 +77,9 @@ pub(crate) mod tests {
     use super::*;
 
     pub fn extract(file: &str, hash: &str) -> FileExtract {
-        let mut e = arch_index::extract_file(
-            arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap().by_name("rust").unwrap(),
-            &arch_index::CodeRules::default(),
+        let mut e = code_analyzer::extract_file(
+            code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap().by_name("rust").unwrap(),
+            &code_analyzer::CodeRules::default(),
             RepoPath::new(file).unwrap(),
             "m".into(),
             "pub fn f() {}\n",

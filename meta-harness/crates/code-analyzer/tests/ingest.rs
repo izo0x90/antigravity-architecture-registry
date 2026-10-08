@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use arch_graph::{ComponentId, RelationKind, TypeSystem};
-use arch_index::{FileExtract, PackSet, Resolved, ingest};
+use code_analyzer::{FileExtract, PackSet, Resolved, ingest};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -27,7 +27,7 @@ fn shipped_packs_dir() -> PathBuf {
 
 /// The shipped packs plus a project's own (`files`: path under the
 /// project's `.nah/packs`, text), loaded the way the server loads them.
-fn with_project_packs(files: &[(&str, String)]) -> Result<PackSet, arch_index::IndexError> {
+fn with_project_packs(files: &[(&str, String)]) -> Result<PackSet, code_analyzer::IndexError> {
     let dir = std::env::temp_dir().join(format!("nah-project-packs-{}-{:?}", std::process::id(), std::thread::current().id()));
     let places = nah_packs::Places::isolated(&dir);
     for (path, text) in files {
@@ -36,7 +36,7 @@ fn with_project_packs(files: &[(&str, String)]) -> Result<PackSet, arch_index::I
         std::fs::write(file, text).unwrap();
     }
     let shipped = nah_packs::Distribution::from_dir(&shipped_packs_dir()).unwrap();
-    let packs = nah_packs::Catalog::load(&shipped, &places).map_err(|e| arch_index::IndexError::Pack(e.to_string())).and_then(|c| PackSet::from_catalog(&c));
+    let packs = nah_packs::Catalog::load(&shipped, &places).map_err(|e| code_analyzer::IndexError::Pack(e.to_string())).and_then(|c| PackSet::from_catalog(&c));
     std::fs::remove_dir_all(&dir).unwrap();
     packs
 }
@@ -50,7 +50,7 @@ fn packs_with_test_data() -> PackSet {
 
 fn run(root: &Path, packs: &PackSet) -> (Vec<FileExtract>, Resolved) {
     let types = TypeSystem::defaults().unwrap();
-    ingest(root, Path::new("."), packs, &arch_index::CodeRules::default(), &types).unwrap()
+    ingest(root, Path::new("."), packs, &code_analyzer::CodeRules::default(), &types).unwrap()
 }
 
 /// Compares the ingested graph with an expected file, exactly.
@@ -66,7 +66,7 @@ fn assert_matches(lang: &str, resolved: &Resolved, expected_file: &Path) {
         expected.relations.iter().map(|(k, a, b)| (k.clone(), id(a).to_string(), id(b).to_string())).collect();
     assert_eq!(got.difference(&want).collect::<Vec<_>>(), Vec::<&(String, String, String)>::new(), "unexpected relations");
     assert_eq!(want.difference(&got).collect::<Vec<_>>(), Vec::<&(String, String, String)>::new(), "missing relations");
-    let rows = |list: &[arch_index::AmbiguousCall]| -> Vec<Vec<String>> {
+    let rows = |list: &[code_analyzer::AmbiguousCall]| -> Vec<Vec<String>> {
         list.iter()
             .map(|a| {
                 let mut row = vec![a.caller.to_string(), a.callee.clone()];
@@ -293,7 +293,7 @@ fn malformed_packs_are_rejected_with_a_reason() {
         ("[language]\nname = \"x\"\n".to_owned(), "missing field"),
     ];
     for (text, needle) in cases {
-        let err = arch_index::Pack::from_toml(&text).unwrap_err().to_string();
+        let err = code_analyzer::Pack::from_toml(&text).unwrap_err().to_string();
         assert!(err.contains(needle), "{err} should mention {needle}");
     }
 }
@@ -387,8 +387,8 @@ fn module_symbols_come_from_the_manifest_not_the_checkout_directory() {
     // A root given as "." names the package from its manifest, with no empty segments.
     let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     let rust = packs.by_name("rust").unwrap();
-    assert_eq!(arch_index::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/lib.rs").unwrap(), rust), "arch_index");
-    assert_eq!(arch_index::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/walk.rs").unwrap(), rust), "arch_index::walk");
+    assert_eq!(code_analyzer::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/lib.rs").unwrap(), rust), "code_analyzer");
+    assert_eq!(code_analyzer::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/walk.rs").unwrap(), rust), "code_analyzer::walk");
     // Go's line-based go.mod names the module through the pack's regex.
     let go = packs_with_test_data();
     let (extracts, _) = run(&fixtures().join("go/app"), &go);
@@ -516,14 +516,14 @@ fn scoped_walks_honor_ignores_from_the_root() {
             ("github/real.py", "def real():\n    pass\n"),
         ],
     );
-    let files = |scope: &str| arch_index::walk(&root, Path::new(scope), &packs).unwrap().into_iter().map(|f| f.path.to_string()).collect::<Vec<_>>();
+    let files = |scope: &str| code_analyzer::walk(&root, Path::new(scope), &packs).unwrap().into_iter().map(|f| f.path.to_string()).collect::<Vec<_>>();
     assert_eq!(files("."), vec!["github/real.py", "src/keep.py"]);
     assert!(files("gen").is_empty(), "a git-ignored scope yields nothing, as in a full walk");
     assert!(files(".github").is_empty(), "so does a hidden one");
     assert_eq!(files("github"), vec!["github/real.py"]);
     assert_eq!(files("src/keep.py"), vec!["src/keep.py"], "a single file");
     for (path, ignored) in [("gen/out.py", true), ("gen/new.py", true), (".github/hook.py", true), ("src/keep.py", false), ("src/new.py", false)] {
-        assert_eq!(arch_index::ignored(&root, &root.join(path)), ignored, "{path}");
+        assert_eq!(code_analyzer::ignored(&root, &root.join(path)), ignored, "{path}");
     }
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
@@ -565,7 +565,7 @@ fn locals_named_like_functions_and_same_named_nested_functions_dont_mislink() {
 // req: M.15
 #[test]
 fn call_targets_are_read_from_the_syntax_tree() {
-    use arch_index::{CodeRules, Expr, extract_file};
+    use code_analyzer::{CodeRules, Expr, extract_file};
     let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     let read = |lang: &str, file: &str, code: &str| -> Vec<Expr> {
         extract_file(packs.by_name(lang).unwrap(), &CodeRules::default(), arch_graph::RepoPath::new(file).unwrap(), "m".into(), code).calls.into_iter().filter(|c| !c.reference).map(|c| c.callee).collect()

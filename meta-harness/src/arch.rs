@@ -180,12 +180,12 @@ async fn index_status(State(state): State<AppState>) -> Json<arch_graph::IndexSt
     Json(state.arch.index_status())
 }
 
-async fn ambiguous(State(state): State<AppState>) -> ArchResult<Vec<arch_index::AmbiguousCall>> {
+async fn ambiguous(State(state): State<AppState>) -> ArchResult<Vec<code_analyzer::AmbiguousCall>> {
     Ok(Json(state.arch.ambiguous_calls()?))
 }
 
 /// Calls the code makes that couldn't be tied to a component (never guessed).
-async fn unproven(State(state): State<AppState>) -> ArchResult<Vec<arch_index::AmbiguousCall>> {
+async fn unproven(State(state): State<AppState>) -> ArchResult<Vec<code_analyzer::AmbiguousCall>> {
     Ok(Json(state.arch.unproven_calls()?))
 }
 

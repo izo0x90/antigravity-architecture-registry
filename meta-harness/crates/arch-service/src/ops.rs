@@ -6,7 +6,7 @@ use arch_graph::{
     Schemas, Signature, Stage, Status, TypeSystem,
     schema::Dsl,
 };
-use arch_index::{PackSet, module_symbol};
+use code_analyzer::{PackSet, module_symbol};
 use serde::{Deserialize, Serialize};
 
 use crate::ServiceError;
@@ -149,7 +149,7 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
             if let Some(pack) = packs.by_name(&language) {
                 pack.spec.language.check_name(&name).map_err(|e| invalid(format!("component name: {e}")))?;
             }
-            if arch_index::ignored(root, std::path::Path::new(file.as_str())) {
+            if code_analyzer::ignored(root, std::path::Path::new(file.as_str())) {
                 return Err(invalid(format!("{file} is git-ignored or hidden: ingestion never reads it, so code there could never be verified")));
             }
             let id = ComponentId::for_symbol(&language, &symbol);

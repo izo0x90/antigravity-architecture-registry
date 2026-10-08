@@ -4,7 +4,7 @@
 //! plan, and tracks placeholder bodies for the skeleton stage.
 
 use arch_graph::{Component, ComponentId, Finding, FindingCode, Graph, Plan, Relation, RelationKind, Report, Signature, Stage, Target, TypeSystem};
-use arch_index::PackSet;
+use code_analyzer::PackSet;
 
 fn target(id: &ComponentId) -> Target {
     Target::Component { id: id.clone() }
@@ -247,7 +247,7 @@ fn hidden_placeholders(plan: &Plan, code: &Component, observed: &Graph) -> Vec<F
 /// (both ends are in the code but it doesn't), or unverifiable (the hand-off
 /// is there but types can't confirm it). Flows with an end not in the code
 /// yet wait for that end's own verification.
-pub fn planned_flows(plan: &Plan, id: &ComponentId, observed: &Graph, unverified: &[arch_index::UnverifiedFlow]) -> Vec<Finding> {
+pub fn planned_flows(plan: &Plan, id: &ComponentId, observed: &Graph, unverified: &[code_analyzer::UnverifiedFlow]) -> Vec<Finding> {
     let mut out = Vec::new();
     for flow in plan.relations.iter().filter(|r| r.kind == RelationKind::DataFlow && (&r.source == id || &r.target == id)) {
         let in_code = |c: &ComponentId| observed.component(c).is_some_and(|c| c.anchor.is_some());

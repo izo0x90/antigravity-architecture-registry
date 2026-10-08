@@ -14,7 +14,7 @@ members = [
     "crates/workspace-fs",
     "crates/provider-antigravity",
     "crates/arch-graph",
-    "crates/arch-index",
+    "crates/code-analyzer",
     "crates/arch-service",
     "crates/arch-store",
     "crates/arch-search",
@@ -31,7 +31,7 @@ opt-level = 2
 [profile.dev.package.arch-graph]
 opt-level = 2
 
-[profile.dev.package.arch-index]
+[profile.dev.package.code-analyzer]
 opt-level = 2
 
 [profile.dev.package.arch-service]
@@ -45,7 +45,7 @@ harness-contracts = { path = "crates/harness-contracts" }
 harness-core = { path = "crates/harness-core" }
 provider-antigravity = { path = "crates/provider-antigravity" }
 arch-graph = { path = "crates/arch-graph" }
-arch-index = { path = "crates/arch-index" }
+code-analyzer = { path = "crates/code-analyzer" }
 arch-service = { path = "crates/arch-service" }
 nah-packs = { path = "crates/nah-packs" }
 include_dir = "0.7"

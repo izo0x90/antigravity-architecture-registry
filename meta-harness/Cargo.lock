@@ -243,24 +243,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arch-index"
-version = "0.1.0"
-dependencies = [
- "arch-graph",
- "ast-grep-config",
- "ast-grep-core",
- "ast-grep-language",
- "ignore",
- "nah-packs",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.20",
- "toml",
-]
-
-[[package]]
 name = "arch-search"
 version = "0.1.0"
 dependencies = [
@@ -276,9 +258,9 @@ name = "arch-service"
 version = "0.1.0"
 dependencies = [
  "arch-graph",
- "arch-index",
  "arch-search",
  "arch-store",
+ "code-analyzer",
  "criterion",
  "ignore",
  "memory-stats",
@@ -297,7 +279,7 @@ name = "arch-store"
 version = "0.1.0"
 dependencies = [
  "arch-graph",
- "arch-index",
+ "code-analyzer",
  "rusqlite",
  "serde_json",
  "tempfile",
@@ -961,6 +943,24 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "code-analyzer"
+version = "0.1.0"
+dependencies = [
+ "arch-graph",
+ "ast-grep-config",
+ "ast-grep-core",
+ "ast-grep-language",
+ "ignore",
+ "nah-packs",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
+ "toml",
 ]
 
 [[package]]
@@ -3080,13 +3080,13 @@ name = "meta-harness"
 version = "0.1.0"
 dependencies = [
  "arch-graph",
- "arch-index",
  "arch-service",
  "ast-grep-config",
  "ast-grep-core",
  "async-trait",
  "axum",
  "clap",
+ "code-analyzer",
  "futures",
  "harness-contracts",
  "harness-core",

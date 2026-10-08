@@ -63,7 +63,7 @@ fn no_install_scripts_or_hard_coded_harness_paths_remain() {
 fn languages_and_indexers_are_shipped_packs() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = Catalog::load(&distribution(), &places(dir.path())).unwrap();
-    let languages = arch_index::PackSet::from_catalog(&catalog).unwrap();
+    let languages = code_analyzer::PackSet::from_catalog(&catalog).unwrap();
     for (language, indexer) in [("rust", "rust-analyzer"), ("python", "scip-python"), ("typescript", "scip-typescript")] {
         let pack = languages.by_name(language).unwrap_or_else(|| panic!("{language} is a shipped language pack"));
         assert_eq!(pack.indexer.as_deref(), Some(indexer));
