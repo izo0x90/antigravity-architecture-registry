@@ -504,3 +504,37 @@ fn scoped_walks_honor_ignores_from_the_root() {
     }
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
+
+// req: M.15
+#[test]
+fn locals_named_like_functions_and_same_named_nested_functions_dont_mislink() {
+    let dir = temp_repo(
+        "scopes",
+        &[
+            ("Cargo.toml", "[package]\nname = \"m\"\n"),
+            (
+                "src/lib.rs",
+                "pub fn helper() {}\npub fn callback() {}\n\
+                 pub fn run(callback: impl Fn()) {\n    let helper = || 1;\n    helper();\n    callback();\n}\n\
+                 pub fn a() { fn inner() {} inner(); }\npub fn b() { fn inner() {} inner(); }\n\
+                 pub fn outer() { fn x() { y(); } fn y() {} x(); }\n\
+                 pub fn merge() { observed(); }\n\
+                 #[cfg(test)]\nmod tests {\n    use super::*;\n    fn observed() {}\n    #[test]\n    fn t() { observed(); merge(); }\n}\n",
+            ),
+        ],
+    );
+    let (_, resolved) = run(&dir, &PackSet::built_in().unwrap());
+    let id = |s: &str| ComponentId::for_symbol("rust", s);
+    let calls: BTreeSet<(String, String)> = resolved.graph.relations().filter(|r| r.kind == RelationKind::Calls).map(|r| (r.source.to_string(), r.target.to_string())).collect();
+    let call = |a: &str, b: &str| (id(a).to_string(), id(b).to_string());
+    // A local closure and a parameter aren't the functions they're named like.
+    assert!(!calls.contains(&call("m::run", "m::helper")) && !calls.contains(&call("m::run", "m::callback")), "{calls:?}");
+    // Each nested function is its own parent's (and a sibling's, from inside).
+    assert!(calls.contains(&call("m::a", "m::a::inner")) && calls.contains(&call("m::b", "m::b::inner")));
+    assert!(calls.contains(&call("m::outer::x", "m::outer::y")));
+    assert!(resolved.ambiguous.is_empty(), "{:?}", resolved.ambiguous);
+    // What's in `mod tests` isn't seen outside it by name; from inside, the parent is (use super::*).
+    assert!(!calls.contains(&call("m::merge", "m::tests::observed")));
+    assert!(calls.contains(&call("m::tests::t", "m::tests::observed")) && calls.contains(&call("m::tests::t", "m::merge")));
+    std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+}

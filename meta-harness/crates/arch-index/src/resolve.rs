@@ -68,6 +68,8 @@ struct Entry {
     owner: Option<usize>,
     /// Can own members that `self` refers to (a non-executable, non-module type).
     is_type: bool,
+    /// Runs (a function, a method): what's declared inside it is its own.
+    executable: bool,
     /// A type whose values carry data (it has properties): made, and holds state.
     holds_data: bool,
     /// What the owner value is called inside it, when the language names it
@@ -317,6 +319,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             def: None,
             owner: None,
             is_type: false,
+            executable: false,
             holds_data: false,
             self_name: None,
         };
@@ -372,6 +375,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     def: Some((fi, di)),
                     owner,
                     is_type: is_type(&def.type_name),
+                    executable: types.resolve(&def.type_name).is_ok_and(|t| t.executable),
                     holds_data: types.resolve(&def.type_name).is_ok_and(|t| t.allows_properties),
                     self_name: def.self_name.clone(),
                 };
@@ -1037,6 +1041,20 @@ impl Cx<'_> {
         }
     }
 
+    /// The module declared inside a file that `entry` sits in (an inline
+    /// `mod`), through the functions and types around it; None: the file's own.
+    fn space(&self, entry: usize) -> Option<usize> {
+        let mut at = self.entries[entry].owner;
+        while let Some(o) = at {
+            let e = &self.entries[o];
+            if !e.executable && !e.is_type && !e.is_module() {
+                return Some(o);
+            }
+            at = e.owner;
+        }
+        None
+    }
+
     /// A bare name reaches free functions or types (constructors) in its own
     /// module, or imported ones; anything else is unproven.
     fn bare(&self, caller: usize, name: &str, imports: &[String], lang: &LanguageSpec) -> CallTarget {
@@ -1045,8 +1063,25 @@ impl Cx<'_> {
         if free.is_empty() {
             return CallTarget::External;
         }
+        // A definition nested in a function is seen only inside that function:
+        // the nearest one around the caller wins, as scoping does.
+        let local_to = |c: usize| self.entries[c].owner.filter(|&o| self.entries[o].executable);
+        let mut scope = Some(caller);
+        while let Some(s) = scope {
+            if let Some(target) = narrow(free.iter().copied().filter(|&c| local_to(c) == Some(s)).collect()) {
+                return target;
+            }
+            scope = self.entries[s].owner.filter(|&o| self.entries[o].executable);
+        }
+        let free: Vec<usize> = free.into_iter().filter(|&c| local_to(c).is_none()).collect();
+        if free.is_empty() {
+            return CallTarget::External;
+        }
+        // In its own module: the same file, and the same module inside it
+        // (what's in an inline `mod tests` isn't seen outside it by name).
         let caller_module = self.entries[caller].module.as_str();
-        if let Some(target) = narrow(free.iter().copied().filter(|&c| self.entries[c].module == caller_module).collect()) {
+        let space = self.space(caller);
+        if let Some(target) = narrow(free.iter().copied().filter(|&c| self.entries[c].module == caller_module && self.space(c) == space).collect()) {
             return target;
         }
         let imported: Vec<usize> = free.iter().copied().filter(|&c| imports_from(imports, lang, caller_module, name, &self.entries[c].module)).collect();

@@ -267,6 +267,19 @@ fn local_name<'a>(pack: &Pack, text: &'a str) -> Option<&'a str> {
     (!name.is_empty() && name.chars().all(|c| pack.spec.language.is_identifier_char(c))).then_some(name)
 }
 
+/// Whether `name`, called or named as a value inside definition `at`, is
+/// one of its locals (bound in it, or a parameter) rather than a function:
+/// `let helper = || ..; helper()` or `fn run(callback: impl Fn()) { callback() }`.
+/// A definition of that name nested right there is a function after all.
+fn is_local(pack: &Pack, name: &str, at: Option<usize>, defs: &[RawDef], bound: &std::collections::HashMap<(Option<usize>, String), Bound>) -> bool {
+    let Some(at) = at else { return false };
+    if local_name(pack, name) != Some(name) || defs.iter().any(|d| d.parent == Some(at) && d.name == name) {
+        return false;
+    }
+    let param = defs.get(at).and_then(|d| d.signature.as_ref()).is_some_and(|s| s.params.iter().any(|p| local_name(pack, &p.name) == Some(name)));
+    param || bound.contains_key(&(Some(at), name.to_owned()))
+}
+
 /// Whether `inner` sits directly in `def` (no other definition in between).
 fn directly_in(pack: &Pack, inner: &AstNode<'_>, def: &AstNode<'_>) -> bool {
     for ancestor in inner.ancestors() {
@@ -519,6 +532,7 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
         if !ctx.dead
             && let Some(call) = pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
             && let Some(callee) = field_text(&node, &call.callee_field)
+            && !is_local(pack, &callee, ctx.parent, &out.definitions, &bound)
         {
             let mut args = Vec::new();
             if let Some(list) = call.args_field.as_ref().and_then(|f| node.field(f)) {
@@ -543,7 +557,7 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
                 reference: false,
             });
         }
-        if !ctx.dead && pack.references.iter().any(|rule| node.matches(rule)) {
+        if !ctx.dead && pack.references.iter().any(|rule| node.matches(rule)) && !is_local(pack, node.text().trim(), ctx.parent, &out.definitions, &bound) {
             out.calls.push(RawCall {
                 caller: ctx.parent,
                 callee: node.text().trim().to_owned(),
