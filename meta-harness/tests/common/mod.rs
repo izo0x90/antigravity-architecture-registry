@@ -9,7 +9,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use harness_contracts::*;
 use harness_core::*;
-use arch_service::{ArchitectureService, FsIndex, FsPlans};
+use arch_service::{ArchitectureService, FsPlans};
 use meta_harness::mcp::{McpServerState, McpService};
 use meta_harness::server::{AppState, bridge_architecture_events, create_router};
 use serde_json::{Value, json};
@@ -230,7 +230,7 @@ pub fn fixture_architecture_with(setup: impl FnOnce(ArchitectureService) -> Arch
         arch_index::PackSet::built_in().unwrap(),
         arch_graph::TypeSystem::defaults().unwrap(),
         Box::new(FsPlans::new(&root).unwrap()),
-        Box::new(FsIndex::new(&root).unwrap()),
+        Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),
     )
     .unwrap();
     let arch = setup(arch);

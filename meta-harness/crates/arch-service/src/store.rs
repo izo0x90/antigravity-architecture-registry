@@ -1,13 +1,12 @@
-//! Storage: plans (the only persisted architecture) and the code index (a
-//! disposable cache of per-file extracts). Traits are storage-agnostic; the
-//! file implementations live under `<repo>/.nah/`.
+//! Storage: plans (the only persisted architecture), and where the facts
+//! read from the code are kept between runs (a disposable cache, see
+//! `arch-store`). Both live under `<repo>/.nah/`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use arch_graph::{Plan, PlanId, RepoPath};
-use arch_index::FileExtract;
+use arch_graph::{Plan, PlanId};
 
 use crate::ServiceError;
 
@@ -20,17 +19,6 @@ pub trait PlanRepository: Send + Sync {
     fn save(&self, plan: &Plan) -> Result<(), ServiceError>;
     /// Removes a plan; `NotFound` if there is none.
     fn delete(&self, id: &PlanId) -> Result<(), ServiceError>;
-}
-
-/// The observed code, one extract per source file, keyed by content hash.
-pub trait CodeIndexStore: Send + Sync {
-    /// The cached extract for `file`, if it was made from content with `hash`.
-    fn get(&self, file: &RepoPath, hash: &str) -> Result<Option<FileExtract>, ServiceError>;
-    fn put(&self, extract: &FileExtract) -> Result<(), ServiceError>;
-    fn remove(&self, file: &RepoPath) -> Result<(), ServiceError>;
-    /// Every cached extract.
-    fn all(&self) -> Result<Vec<FileExtract>, ServiceError>;
-    fn clear(&self) -> Result<(), ServiceError>;
 }
 
 /// In-memory plans (embedding and tests).
@@ -53,31 +41,6 @@ impl PlanRepository for MemoryPlans {
             Some(_) => Ok(()),
             None => Err(ServiceError::NotFound(format!("plan {id}"))),
         }
-    }
-}
-
-/// In-memory index (embedding and tests).
-#[derive(Default)]
-pub struct MemoryIndex(Mutex<BTreeMap<RepoPath, FileExtract>>);
-
-impl CodeIndexStore for MemoryIndex {
-    fn get(&self, file: &RepoPath, hash: &str) -> Result<Option<FileExtract>, ServiceError> {
-        Ok(self.0.lock().map_err(ServiceError::poisoned)?.get(file).filter(|e| &e.file == file && e.content_hash == hash).cloned())
-    }
-    fn put(&self, extract: &FileExtract) -> Result<(), ServiceError> {
-        self.0.lock().map_err(ServiceError::poisoned)?.insert(extract.file.clone(), extract.clone());
-        Ok(())
-    }
-    fn remove(&self, file: &RepoPath) -> Result<(), ServiceError> {
-        self.0.lock().map_err(ServiceError::poisoned)?.remove(file);
-        Ok(())
-    }
-    fn all(&self) -> Result<Vec<FileExtract>, ServiceError> {
-        Ok(self.0.lock().map_err(ServiceError::poisoned)?.values().cloned().collect())
-    }
-    fn clear(&self) -> Result<(), ServiceError> {
-        self.0.lock().map_err(ServiceError::poisoned)?.clear();
-        Ok(())
     }
 }
 
@@ -241,103 +204,6 @@ impl PlanRepository for FsPlans {
     }
 }
 
-/// Extracts as `<repo>/.nah/cache/index/<encoded path>.json`; the encoding
-/// (`_` -> `__`, `/` -> `_s`) is one-to-one, so no two files share an entry.
-pub struct FsIndex {
-    dir: PathBuf,
-    write: Mutex<()>,
-}
-
-impl FsIndex {
-    pub fn new(repo_root: &Path) -> Result<Self, ServiceError> {
-        let nah = repo_root.join(".nah");
-        let dir = nah.join("cache").join("index");
-        std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
-        ensure_nah_gitignore(&nah)?;
-        Ok(Self { dir, write: Mutex::new(()) })
-    }
-
-    fn path(&self, file: &RepoPath) -> PathBuf {
-        self.dir.join(format!("{}.json", encode(file.as_str())))
-    }
-
-    fn read(&self, path: &Path) -> Result<Option<FileExtract>, ServiceError> {
-        match std::fs::read_to_string(path) {
-            // A cache entry that no longer parses (older format) is a miss.
-            Ok(text) => Ok(FileExtract::from_json(&text).ok()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(io(path, e)),
-        }
-    }
-}
-
-impl CodeIndexStore for FsIndex {
-    fn get(&self, file: &RepoPath, hash: &str) -> Result<Option<FileExtract>, ServiceError> {
-        Ok(self.read(&self.path(file))?.filter(|e| &e.file == file && e.content_hash == hash))
-    }
-
-    fn put(&self, extract: &FileExtract) -> Result<(), ServiceError> {
-        let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
-        let text = extract.to_json().map_err(|e| ServiceError::Corrupt(e.to_string()))?;
-        write_atomic(&self.path(&extract.file), &text)
-    }
-
-    fn remove(&self, file: &RepoPath) -> Result<(), ServiceError> {
-        let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
-        match std::fs::remove_file(self.path(file)) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(io(&self.path(file), e)),
-        }
-    }
-
-    fn all(&self) -> Result<Vec<FileExtract>, ServiceError> {
-        let mut out = Vec::new();
-        for entry in std::fs::read_dir(&self.dir).map_err(|e| io(&self.dir, e))? {
-            let path = entry.map_err(|e| io(&self.dir, e))?.path();
-            if path.extension().is_some_and(|e| e == "json")
-                && let Some(extract) = self.read(&path)?
-            {
-                // Only an entry under its file's own name counts: one left
-                // by an older naming (or moved by hand) would put an old
-                // copy of the file's code beside the current one.
-                if path != self.path(&extract.file) {
-                    let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
-                    std::fs::remove_file(&path).map_err(|e| io(&path, e))?;
-                    continue;
-                }
-                out.push(extract);
-            }
-        }
-        out.sort_by(|a, b| a.file.cmp(&b.file));
-        Ok(out)
-    }
-
-    fn clear(&self) -> Result<(), ServiceError> {
-        let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
-        std::fs::remove_dir_all(&self.dir).map_err(|e| io(&self.dir, e))?;
-        std::fs::create_dir_all(&self.dir).map_err(|e| io(&self.dir, e))
-    }
-}
-
-/// A repo path as one file name: every `_` doubles, every `/` becomes `_s`.
-/// Each `_` in the result starts a two-character token, so decoding is
-/// unambiguous and distinct paths never collide.
-/// Long paths would exceed file-name limits: those use `_h` plus a hash of
-/// the path (`_h` never occurs in an encoded path; `get` checks the file).
-fn encode(path: &str) -> String {
-    const MAX: usize = 180;
-    let mut out = String::with_capacity(path.len() + 8);
-    for c in path.chars() {
-        match c {
-            '_' => out.push_str("__"),
-            '/' => out.push_str("_s"),
-            c => out.push(c),
-        }
-    }
-    if out.len() > MAX { format!("_h{}", arch_index::content_hash(path)) } else { out }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,85 +312,17 @@ mod tests {
         assert_eq!(leftovers, 0);
         assert!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap().contains("cache/"));
     }
+}
 
-    fn extract(file: &str, hash: &str) -> FileExtract {
-        FileExtract {
-            schema_version: arch_graph::SCHEMA_VERSION,
-            file: RepoPath::new(file).unwrap(),
-            language: "rust".into(),
-            content_hash: hash.into(),
-            pack_fingerprint: "p".into(),
-            module: "m".into(),
-            root_kind: "source_file".into(),
-            lines: 1,
-            bytes: 1,
-            definitions: vec![],
-            calls: vec![],
-            imports: vec![],
-            aliases: vec![],
-            placeholders: vec![],
-            macro_uses: vec![],
-            macro_defs: vec![],
-            flows: vec![],
-        }
+/// The facts read from the code, kept in `<repo>/.nah/cache/index.sqlite`.
+/// The JSON folder older versions kept them in is removed.
+pub fn open_facts(repo_root: &Path, limits: &crate::Limits) -> Result<arch_store::SqliteStore, ServiceError> {
+    let nah = repo_root.join(".nah");
+    ensure_nah_gitignore(&nah)?;
+    let old = nah.join("cache").join("index");
+    if old.is_dir() {
+        std::fs::remove_dir_all(&old).map_err(|e| io(&old, e))?;
     }
-
-    fn exercise_index(index: &dyn CodeIndexStore) {
-        // Paths past file-name limits still round-trip (hashed names).
-        let deep = format!("src/{}/x.rs", ["very_long_directory_name"; 12].join("/"));
-        index.put(&extract(&deep, "hd")).unwrap();
-        assert!(index.get(&RepoPath::new(&deep).unwrap(), "hd").unwrap().is_some());
-        index.remove(&RepoPath::new(&deep).unwrap()).unwrap();
-        let f = RepoPath::new("src/a.rs").unwrap();
-        index.put(&extract("src/a.rs", "h1")).unwrap();
-        assert!(index.get(&f, "h1").unwrap().is_some(), "hit by hash");
-        assert!(index.get(&f, "h2").unwrap().is_none(), "content changed: miss");
-        index.put(&extract("src/b/c.rs", "h3")).unwrap();
-        assert_eq!(index.all().unwrap().len(), 2);
-        index.remove(&f).unwrap();
-        assert_eq!(index.all().unwrap().len(), 1);
-        index.clear().unwrap();
-        assert!(index.all().unwrap().is_empty());
-    }
-
-    // req: P3.2
-    #[test]
-    fn index_stores_share_one_contract() {
-        exercise_index(&MemoryIndex::default());
-        let dir = tempfile::tempdir().unwrap();
-        exercise_index(&FsIndex::new(dir.path()).unwrap());
-    }
-
-    // req: P3.4
-    #[test]
-    fn file_index_persists_under_nah_cache_and_skips_stale_formats() {
-        let dir = tempfile::tempdir().unwrap();
-        let index = FsIndex::new(dir.path()).unwrap();
-        index.put(&extract("src/a.rs", "h1")).unwrap();
-        let path = dir.path().join(".nah/cache/index/src_sa.rs.json");
-        assert!(path.is_file());
-        let reopened = FsIndex::new(dir.path()).unwrap();
-        assert!(reopened.get(&RepoPath::new("src/a.rs").unwrap(), "h1").unwrap().is_some(), "survives a restart");
-        std::fs::write(&path, std::fs::read_to_string(&path).unwrap().replace("\"schema_version\": 1", "\"schema_version\": 0")).unwrap();
-        assert!(reopened.get(&RepoPath::new("src/a.rs").unwrap(), "h1").unwrap().is_none(), "old format is a miss, not an error");
-        // Paths that a lossy encoding would merge keep separate entries.
-        index.put(&extract("src/a__b.rs", "h1")).unwrap();
-        index.put(&extract("src/a/b.rs", "h2")).unwrap();
-        index.put(&extract("src/a_/b.rs", "h3")).unwrap();
-        index.put(&extract("src/a/_b.rs", "h4")).unwrap();
-        for (file, hash) in [("src/a__b.rs", "h1"), ("src/a/b.rs", "h2"), ("src/a_/b.rs", "h3"), ("src/a/_b.rs", "h4")] {
-            let got = index.get(&RepoPath::new(file).unwrap(), hash).unwrap();
-            assert_eq!(got.map(|e| e.file.as_str().to_owned()), Some(file.to_owned()), "{file}");
-        }
-        assert_eq!(index.all().unwrap().len(), 4, "src/a.rs's stale entry is skipped, the four others stay");
-        // An entry that belongs to another file (moved by hand) is a miss.
-        std::fs::copy(dir.path().join(".nah/cache/index/src_sa____b.rs.json"), dir.path().join(".nah/cache/index/src_sc.rs.json")).unwrap();
-        assert!(index.get(&RepoPath::new("src/c.rs").unwrap(), "h1").unwrap().is_none());
-        // Nor does it come back as a second copy of a__b.rs: it's dropped.
-        assert_eq!(index.all().unwrap().len(), 4, "no duplicate from a misnamed entry");
-        assert!(!dir.path().join(".nah/cache/index/src_sc.rs.json").exists());
-        // The same for one left by an older naming (`/` as `__`).
-        std::fs::copy(dir.path().join(".nah/cache/index/src_sa_sb.rs.json"), dir.path().join(".nah/cache/index/src__a__b.rs.json")).unwrap();
-        assert_eq!(index.all().unwrap().iter().filter(|e| e.file.as_str() == "src/a/b.rs").count(), 1);
-    }
+    let settings = arch_store::Settings { synchronous: limits.store.synchronous.clone(), cache_kib: limits.store.cache_kib };
+    Ok(arch_store::SqliteStore::open(&nah.join("cache").join("index.sqlite"), &settings)?)
 }

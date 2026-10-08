@@ -5,7 +5,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use arch_store::{Change, FactStore, Stamp, Stored};
+use rayon::prelude::*;
 
 use arch_graph::tree::{Tree, TreeRequest};
 use arch_graph::{
@@ -21,7 +25,7 @@ use crate::import::ImportReport;
 use crate::contract::{ContractSlice, slice};
 use crate::ops::{PlanOp, apply};
 use crate::review::{ReviewProvider, ReviewerCatalog, ReviewsReport, Subject};
-use crate::store::{CodeIndexStore, PlanRepository};
+use crate::store::PlanRepository;
 use crate::tools::{ProcessRunner, ToolCatalog, ToolRunner, ToolsReport};
 use crate::{ServiceError, chain, checks, review, tools, verify};
 
@@ -40,7 +44,11 @@ pub enum Actor {
 pub struct IngestReport {
     pub files: usize,
     pub parsed: usize,
+    /// Files not read for facts again (unchanged).
     pub cached: usize,
+    /// Files whose content was read (changed by size or time).
+    #[serde(default)]
+    pub read: usize,
     pub removed: usize,
     pub components: usize,
     pub relations: usize,
@@ -57,9 +65,65 @@ pub struct IngestReport {
 }
 
 /// How far an indexing run got (progress is announced at most this often).
+/// Files are read on many threads at once, so both are shared.
 struct Progress {
-    done: usize,
-    last: Instant,
+    done: AtomicUsize,
+    last: Mutex<Instant>,
+}
+
+/// Every source file's facts as last read: what the graph is linked from.
+#[derive(Default)]
+struct Files {
+    /// Sorted by file.
+    extracts: Vec<FileExtract>,
+    stamps: HashMap<RepoPath, Stamp>,
+}
+
+impl Files {
+    fn new(stored: Vec<Stored>) -> Self {
+        let mut files = Self::default();
+        files.apply(stored.into_iter().map(|s| Change::Put(Box::new(s))).collect());
+        files
+    }
+
+    fn get(&self, file: &RepoPath) -> Option<(&FileExtract, Stamp)> {
+        let at = self.extracts.binary_search_by(|e| e.file.cmp(file)).ok()?;
+        Some((&self.extracts[at], self.stamps.get(file).copied().unwrap_or_default()))
+    }
+
+    fn apply(&mut self, changes: Vec<Change>) {
+        if changes.is_empty() {
+            return;
+        }
+        let mut by_file: BTreeMap<RepoPath, FileExtract> = std::mem::take(&mut self.extracts).into_iter().map(|e| (e.file.clone(), e)).collect();
+        for change in changes {
+            match change {
+                Change::Put(stored) => {
+                    self.stamps.insert(stored.extract.file.clone(), stored.stamp);
+                    by_file.insert(stored.extract.file.clone(), stored.extract);
+                }
+                Change::Restamp { file, stamp } => {
+                    self.stamps.insert(file, stamp);
+                }
+                Change::Remove(file) => {
+                    self.stamps.remove(&file);
+                    by_file.remove(&file);
+                }
+            }
+        }
+        self.extracts = by_file.into_values().collect();
+    }
+}
+
+/// What reading one file came to.
+enum Read {
+    /// Not a file any pack reads.
+    Skipped,
+    /// Unchanged by size and time: not read.
+    Unread,
+    /// Read, and found the same.
+    Same,
+    Changed(Change),
 }
 
 const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(150);
@@ -126,7 +190,10 @@ pub struct ArchitectureService {
     trees: arch_graph::tree::TreeConfig,
     rules: CodeRules,
     plans: Box<dyn PlanRepository>,
-    index: Box<dyn CodeIndexStore>,
+    /// Where every file's facts are kept between runs.
+    facts: Box<dyn FactStore>,
+    /// Every file's facts, as last read.
+    files: RwLock<Files>,
     observed: RwLock<Arc<Observed>>,
     /// Plans laid over the code, by plan (the most recently used few).
     merged: Mutex<HashMap<PlanId, Merged>>,
@@ -143,6 +210,13 @@ pub struct ArchitectureService {
     /// One indexing run at a time (the watcher, agents and the user can all
     /// start one).
     ingest_lock: Mutex<()>,
+}
+
+fn change_file(change: &Change) -> &RepoPath {
+    match change {
+        Change::Put(stored) => &stored.extract.file,
+        Change::Restamp { file, .. } | Change::Remove(file) => file,
+    }
 }
 
 fn now_rfc3339() -> String {
@@ -162,9 +236,10 @@ fn now_rfc3339() -> String {
 }
 
 impl ArchitectureService {
-    /// Opens the service over `root`, loading the cached index (no parsing).
-    /// Code rules start as the defaults; see `with_rules`.
-    pub fn open(root: &Path, packs: PackSet, types: TypeSystem, plans: Box<dyn PlanRepository>, index: Box<dyn CodeIndexStore>) -> Result<Self, ServiceError> {
+    /// Opens the service over `root`, loading the facts kept from the last
+    /// run (no file is read). Code rules start as the defaults; see `with_rules`.
+    pub fn open(root: &Path, packs: PackSet, types: TypeSystem, plans: Box<dyn PlanRepository>, facts: Box<dyn FactStore>) -> Result<Self, ServiceError> {
+        let files = RwLock::new(Files::new(facts.load()?));
         // Packs map onto types: every one they name must exist.
         packs.check_types(&types).map_err(|e| ServiceError::Index(e.to_string()))?;
         let rules = CodeRules::defaults(&packs, &types).map_err(|e| ServiceError::Index(e.to_string()))?;
@@ -176,7 +251,8 @@ impl ArchitectureService {
             trees: arch_graph::tree::TreeConfig::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in tree config: {e}")))?,
             rules,
             plans,
-            index,
+            facts,
+            files,
             observed: RwLock::new(Arc::new(Observed::default())),
             merged: Mutex::new(HashMap::new()),
             limits: crate::Limits::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in limits: {e}")))?,
@@ -278,8 +354,7 @@ impl ArchitectureService {
     }
 
     fn rebuild_observed(&self) -> Result<(), ServiceError> {
-        let extracts: Vec<FileExtract> = self.index.all()?;
-        let resolved = resolve(&extracts, &self.packs, &self.types);
+        let resolved = resolve(&self.files.read().map_err(ServiceError::poisoned)?.extracts, &self.packs, &self.types);
         let generation = self.snapshot()?.generation + 1;
         let next = Arc::new(Observed {
             graph: Arc::new(resolved.graph),
@@ -330,7 +405,8 @@ impl ArchitectureService {
     /// file is read again.
     pub fn reindex(&self) -> Result<IngestReport, ServiceError> {
         let _one = self.ingest_lock.lock().unwrap_or_else(PoisonError::into_inner);
-        self.index.clear()?;
+        self.facts.clear()?;
+        *self.files.write().map_err(ServiceError::poisoned)? = Files::default();
         self.ingest_locked(&[self.root.clone()])
     }
 
@@ -371,10 +447,7 @@ impl ArchitectureService {
             s.total = total;
             s.error = None;
         });
-        let mut progress = Progress { done: 0, last: Instant::now() };
-        for (scope, files) in &found {
-            self.index_scope(scope, files, &mut report, &mut progress)?;
-        }
+        self.read_files(&found, &mut report)?;
         self.rebuild_observed()?;
         let observed = self.snapshot()?;
         (report.components, report.relations) = observed.graph.len();
@@ -452,9 +525,15 @@ impl ArchitectureService {
             return Ok(true);
         }
         let Ok(path) = RepoPath::new(file) else { return Ok(false) };
-        let Ok(content) = std::fs::read_to_string(self.root.join(path.as_str())) else { return Ok(false) };
-        let indexed = self.index.all()?.into_iter().find(|e| e.file == path).map(|e| e.content_hash);
-        Ok(indexed.is_some_and(|hash| hash != content_hash(&content)))
+        let absolute = self.root.join(path.as_str());
+        let files = self.files.read().map_err(ServiceError::poisoned)?;
+        let Some((extract, stamp)) = files.get(&path) else { return Ok(false) };
+        let Ok(meta) = std::fs::metadata(&absolute) else { return Ok(false) };
+        if stamp.modified != 0 && Stamp::of(&meta) == stamp {
+            return Ok(false);
+        }
+        let Ok(content) = std::fs::read_to_string(&absolute) else { return Ok(false) };
+        Ok(extract.content_hash != content_hash(&content))
     }
 
     /// Brings the index up to date for one scope (a scope that no longer
@@ -471,42 +550,98 @@ impl ArchitectureService {
         prefix.is_empty() || file.as_str() == prefix || file.as_str().starts_with(&format!("{prefix}/"))
     }
 
-    fn index_scope(&self, scope: &Path, files: &[arch_index::SourceFile], report: &mut IngestReport, progress: &mut Progress) -> Result<(), ServiceError> {
-        report.files += files.len();
-        let mut seen = BTreeSet::new();
-        for file in files {
-            progress.done += 1;
-            if progress.last.elapsed() >= PROGRESS_EVERY {
-                progress.last = Instant::now();
-                let done = progress.done;
-                self.set_index_status(|s| s.done = done);
-            }
-            let Some(pack) = self.packs.for_path(&file.absolute) else { continue };
-            let content = std::fs::read_to_string(&file.absolute).map_err(|e| ServiceError::Io(format!("{}: {e}", file.path)))?;
-            let hash = content_hash(&content);
-            seen.insert(file.path.clone());
-            // Reused only if made from the same content, module and pack version.
-            if let Some(cached) = self.index.get(&file.path, &hash)?
-                && cached.module == file.module
-                && cached.pack_fingerprint == pack.fingerprint
-            {
-                report.cached += 1;
-                continue;
-            }
-            self.index.put(&extract_file(pack, file.path.clone(), file.module.clone(), &content))?;
-            report.parsed += 1;
-            report.changed.push(file.path.clone());
+    /// Brings every file's facts up to date for the scopes walked: a file
+    /// whose size and time match what was kept isn't read; the rest are read
+    /// on many threads at once, and only those whose content changed are
+    /// read for facts again. Files under a scope that are gone (or now
+    /// ignored) are dropped. The changes are kept together, all or none.
+    fn read_files(&self, found: &[(PathBuf, Vec<arch_index::SourceFile>)], report: &mut IngestReport) -> Result<(), ServiceError> {
+        let mut unique: BTreeMap<&RepoPath, &arch_index::SourceFile> = BTreeMap::new();
+        for (_, files) in found {
+            report.files += files.len();
+            unique.extend(files.iter().map(|f| (&f.path, f)));
         }
-        // Files under the scope that are gone (or now ignored) leave the index.
-        let prefix = self.scope_prefix(scope);
-        for extract in self.index.all()? {
-            if Self::under(&extract.file, &prefix) && !seen.contains(&extract.file) {
-                self.index.remove(&extract.file)?;
+        let recent = std::time::Duration::from_millis(self.limits.store.recent_change_ms);
+        let trusted_before = SystemTime::now().checked_sub(recent).unwrap_or(UNIX_EPOCH).duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
+        let progress = Progress { done: AtomicUsize::new(0), last: Mutex::new(Instant::now()) };
+        let mut changes: Vec<Change> = {
+            let files = self.files.read().map_err(ServiceError::poisoned)?;
+            let read: Vec<Result<Read, ServiceError>> = unique.values().collect::<Vec<_>>().par_iter().map(|file| {
+                let read = self.read_file(file, &files, trusted_before);
+                self.tick(&progress);
+                read
+            }).collect();
+            let mut changes = Vec::new();
+            for r in read {
+                match r? {
+                    Read::Skipped => {}
+                    Read::Unread => report.cached += 1,
+                    Read::Same => {
+                        report.cached += 1;
+                        report.read += 1;
+                    }
+                    Read::Changed(change) => {
+                        report.read += 1;
+                        if let Change::Put(stored) = &change {
+                            report.parsed += 1;
+                            report.changed.push(stored.extract.file.clone());
+                        }
+                        changes.push(change);
+                    }
+                }
+            }
+            // Files under a scope that weren't found there leave.
+            let prefixes: Vec<String> = found.iter().map(|(scope, _)| self.scope_prefix(scope)).collect();
+            for extract in files.extracts.iter().filter(|e| !unique.contains_key(&e.file) && prefixes.iter().any(|p| Self::under(&e.file, p))) {
                 report.removed += 1;
                 report.changed.push(extract.file.clone());
+                changes.push(Change::Remove(extract.file.clone()));
             }
-        }
+            changes
+        };
+        report.changed.sort();
+        changes.sort_by(|a, b| change_file(a).cmp(change_file(b)));
+        self.facts.apply(&changes)?;
+        self.files.write().map_err(ServiceError::poisoned)?.apply(changes);
         Ok(())
+    }
+
+    /// One file: skipped if its size and time match what was kept (and that
+    /// time was trusted), else read and compared by content.
+    fn read_file(&self, file: &arch_index::SourceFile, files: &Files, trusted_before: i64) -> Result<Read, ServiceError> {
+        let Some(pack) = self.packs.for_path(&file.absolute) else { return Ok(Read::Skipped) };
+        let io = |e: std::io::Error| ServiceError::Io(format!("{}: {e}", file.path));
+        let mut stamp = Stamp::of(&std::fs::metadata(&file.absolute).map_err(io)?);
+        // Changed too recently to tell a later change in the same tick of the clock.
+        if stamp.modified > trusted_before {
+            stamp.modified = 0;
+        }
+        let kept = files.get(&file.path).filter(|(e, _)| e.module == file.module && e.pack_fingerprint == pack.fingerprint);
+        if let Some((_, was)) = kept
+            && was.modified != 0
+            && was == stamp
+        {
+            return Ok(Read::Unread);
+        }
+        let content = std::fs::read_to_string(&file.absolute).map_err(io)?;
+        Ok(match kept {
+            Some((e, was)) if e.content_hash == content_hash(&content) => match was == stamp {
+                true => Read::Same,
+                false => Read::Changed(Change::Restamp { file: file.path.clone(), stamp }),
+            },
+            _ => Read::Changed(Change::Put(Box::new(Stored { extract: extract_file(pack, file.path.clone(), file.module.clone(), &content), stamp }))),
+        })
+    }
+
+    /// Counts one file done, and tells clients now and then.
+    fn tick(&self, progress: &Progress) {
+        let done = progress.done.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Ok(mut last) = progress.last.try_lock()
+            && last.elapsed() >= PROGRESS_EVERY
+        {
+            *last = Instant::now();
+            self.set_index_status(|s| s.done = s.done.max(done));
+        }
     }
 
     /// Reacts to changed paths (from a file watcher, say): re-reads the ones
@@ -597,7 +732,7 @@ impl ArchitectureService {
             return Ok(false);
         }
         let prefix = self.scope_prefix(path);
-        Ok(!prefix.is_empty() && self.index.all()?.iter().any(|e| Self::under(&e.file, &prefix)))
+        Ok(!prefix.is_empty() && self.files.read().map_err(ServiceError::poisoned)?.extracts.iter().any(|e| Self::under(&e.file, &prefix)))
     }
 
     /// The code as last indexed (shared: reading it copies nothing).

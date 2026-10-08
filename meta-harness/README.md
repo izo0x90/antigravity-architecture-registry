@@ -173,7 +173,7 @@ overrides them in its own `.nah/` folder:
 |---|---|
 | `.nah/types.toml` | component types (`extends` a built-in to specialize it) |
 | `.nah/trees.toml` | the three views: default depth, starting points, layout sizes |
-| `.nah/limits.toml` | cards per answer, time limits, performance limits |
+| `.nah/limits.toml` | cards per answer, time limits, the fact store, performance limits |
 | `.nah/packs/*.toml` | more language packs |
 | `.nah/rules/*.toml` | forbidden or required ast-grep patterns, per type |
 | `.nah/tools.toml` | validation tools, and the shell for logic-step checks |
@@ -181,8 +181,11 @@ overrides them in its own `.nah/` folder:
 | `.nah/queue.toml` | queue settings and session brief templates |
 | `.nah/schema_dsl.toml` | extra shorthand type names for schemas |
 
-Plans live in `.nah/plans/` and the index cache in `.nah/cache/`, which isn't
-committed.
+Plans live in `.nah/plans/`. What was read from the code is kept in
+`.nah/cache/index.sqlite` (one row per file, with its size and time), which
+isn't committed: on start the graph is linked from it without reading a file,
+and afterwards only files whose size or time changed are read again, in
+parallel. It's thrown away and rebuilt when the reader changes.
 
 ## Agent tools (MCP)
 
@@ -201,6 +204,7 @@ Every result ends with next steps, given in dependency order.
 |---|---|
 | `arch-graph` | the domain: types, components, relations, plans, schemas, views, scenes (how a view is laid out and routed), queue shapes (no I/O; shared with the cockpit) |
 | `arch-index` | ingestion: language packs, extraction, resolution, code rules |
+| `arch-store` | where the facts read from the code are kept between runs (SQLite) |
 | `arch-service` | plans and cache, plan operations and checks, verification, tools, reviewers, review loop, queue state |
 | `src/` (server) | REST (`/api/arch/...`), MCP, events over WebSocket, the queue runner, the cockpit session |
 | `cockpit-ui` | the egui/WASM cockpit |

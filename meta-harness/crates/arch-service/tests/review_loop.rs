@@ -8,7 +8,7 @@ use arch_graph::{
     Change, CommentAnchor, CommentId, CommentKind, CommentStatus, ComponentId, Param, Plan, PlanId, RelationKind, Signature, Stage, TypeSystem,
 };
 use arch_index::PackSet;
-use arch_service::{Actor, ArchitectureService, FsIndex, FsPlans, NewComment, PlanOp, PlanRepository, ServiceError};
+use arch_service::{Actor, ArchitectureService, FsPlans, NewComment, PlanOp, PlanRepository, ServiceError};
 
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
@@ -29,7 +29,7 @@ fn open(root: &Path) -> ArchitectureService {
         PackSet::built_in().unwrap(),
         TypeSystem::defaults().unwrap(),
         Box::new(FsPlans::new(root).unwrap()),
-        Box::new(FsIndex::new(root).unwrap()),
+        Box::new(arch_service::open_facts(root, &arch_service::Limits::defaults().unwrap()).unwrap()),
     )
     .unwrap()
 }

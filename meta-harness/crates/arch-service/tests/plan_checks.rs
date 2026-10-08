@@ -9,7 +9,7 @@ use arch_graph::{
     Relation, RelationKind, RepoPath, Report, Schemas, SideEffect, Signature, Stage, Status, ToolRef, TypeSystem,
 };
 use arch_index::PackSet;
-use arch_service::{Actor, ArchitectureService, FsIndex, FsPlans, PlanOp, PlanRepository};
+use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, PlanRepository};
 use serde_json::{Value, json};
 
 struct Repo {
@@ -48,7 +48,7 @@ fn repo_with(types: TypeSystem, rules_toml: &str) -> Repo {
         packs,
         types,
         Box::new(FsPlans::new(&root).unwrap()),
-        Box::new(FsIndex::new(&root).unwrap()),
+        Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),
     )
     .unwrap()
     .with_rules(rules);
@@ -1015,7 +1015,7 @@ fn calls_that_cant_be_proven_are_reported_not_linked() {
         PackSet::built_in().unwrap(),
         TypeSystem::defaults().unwrap(),
         Box::new(arch_service::MemoryPlans::default()),
-        Box::new(arch_service::MemoryIndex::default()),
+        Box::new(arch_service::MemoryStore::default()),
     )
     .unwrap();
     let report = service.ingest(&root).unwrap();

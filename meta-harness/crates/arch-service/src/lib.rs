@@ -18,7 +18,7 @@ mod verify;
 
 pub use contract::{ContractSlice, EffectiveData, FlowNeighbor, HeldInvariant, Neighbor};
 pub use import::{ImportReport, ImportedComponent, Unmapped};
-pub use limits::{Limits, PerfLimits};
+pub use limits::{Limits, PerfLimits, StoreLimits};
 pub use ops::PlanOp;
 pub use queue::{BriefContext, Outcome, Queue, QueueConfig, QueueSettings, job_for, render_brief};
 pub use progress::{Action, Downgrade, cascade, next_actionable, topological};
@@ -26,7 +26,8 @@ pub use arch_graph::ComponentDetail;
 pub use review::{ReviewNote, ReviewProvider, ReviewRequest, ReviewRun, ReviewerCatalog, ReviewerDef, ReviewerKind, ReviewsReport, Rule};
 pub use service::{Actor, ArchitectureService, IngestReport, NewComment, Refresh, Reverified, Verification, affected, approval_blocker};
 pub use tools::{Invocation, LogicChecks, ProcessRunner, ToolCatalog, ToolDef, ToolOutput, ToolRun, ToolRunner, ToolsReport};
-pub use store::{CodeIndexStore, FsIndex, FsPlans, MemoryIndex, MemoryPlans, PlanRepository};
+pub use store::{FsPlans, MemoryPlans, PlanRepository, open_facts};
+pub use arch_store::{FactStore, MemoryStore, SqliteStore};
 pub use chain::chain;
 pub use checks::{CheckCx, blocking_for, check_plan, is_data_type, missing_details, schema_set, stage_gate};
 pub use verify::signature_diff;
@@ -47,6 +48,12 @@ pub enum ServiceError {
     Index(String),
     #[error("internal lock poisoned")]
     Poisoned,
+}
+
+impl From<arch_store::StoreError> for ServiceError {
+    fn from(e: arch_store::StoreError) -> Self {
+        Self::Io(e.to_string())
+    }
 }
 
 impl ServiceError {

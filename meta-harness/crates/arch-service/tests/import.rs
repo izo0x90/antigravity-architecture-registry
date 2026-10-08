@@ -4,7 +4,7 @@ use std::path::Path;
 
 use arch_graph::{ComponentId, InvariantKind, RelationKind, Stage, Status, TypeSystem};
 use arch_index::PackSet;
-use arch_service::{ArchitectureService, MemoryIndex, MemoryPlans};
+use arch_service::{ArchitectureService, MemoryPlans};
 
 fn service(root: &Path) -> ArchitectureService {
     let s = ArchitectureService::open(
@@ -12,7 +12,7 @@ fn service(root: &Path) -> ArchitectureService {
         PackSet::built_in().unwrap(),
         TypeSystem::defaults().unwrap(),
         Box::new(MemoryPlans::default()),
-        Box::new(MemoryIndex::default()),
+        Box::new(arch_service::MemoryStore::default()),
     )
     .unwrap();
     s.ingest(root).unwrap();

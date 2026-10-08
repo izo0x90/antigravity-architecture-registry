@@ -5,7 +5,7 @@ use harness_contracts::{McpServer, McpTransport};
 use harness_core::{EventHub, InstanceRegistry, ProviderDriver, SessionManager};
 use arch_graph::TypeSystem;
 use arch_index::{CodeRules, PackSet};
-use arch_service::{ArchitectureService, FsIndex, FsPlans, ProcessRunner, ReviewerCatalog, ToolCatalog};
+use arch_service::{ArchitectureService, FsPlans, ProcessRunner, ReviewerCatalog, ToolCatalog};
 use meta_harness::mcp::{McpServerState, McpService};
 use meta_harness::server::{AppState, create_router};
 use provider_antigravity::AntigravityDriver;
@@ -137,7 +137,7 @@ fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>
         Ok(text) => arch_service::Limits::with_overrides(&text)?,
         Err(_) => arch_service::Limits::defaults()?,
     };
-    Ok(ArchitectureService::open(&root, packs, types, Box::new(FsPlans::new(&root)?), Box::new(FsIndex::new(&root)?))?
+    Ok(ArchitectureService::open(&root, packs, types, Box::new(FsPlans::new(&root)?), Box::new(arch_service::open_facts(&root, &limits)?))?
         .with_trees(trees)
         .with_limits(limits)
         .with_dsl(dsl)

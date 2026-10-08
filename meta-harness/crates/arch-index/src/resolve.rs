@@ -6,7 +6,7 @@
 //! (unknown receiver type, a name neither local nor imported) are unproven;
 //! calls to nothing in the repo are external. Nothing is guessed.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use arch_graph::{CodeAnchor, Component, ComponentId, Graph, Provenance, Relation, RelationKind, RepoPath, Span, Stage, Status, TypeSystem};
 use serde::{Deserialize, Serialize};
@@ -78,6 +78,40 @@ struct Entry {
 impl Entry {
     fn is_module(&self) -> bool {
         self.def.is_none()
+    }
+}
+
+/// Lookups over the entries, kept as they're added, so resolution asks a
+/// table instead of scanning every entry for every name.
+#[derive(Default)]
+struct Index {
+    /// (language, name) -> the definitions with that name, in entry order.
+    named: HashMap<(String, String), Vec<usize>>,
+    /// (owner, name) -> the members of `owner` with that name.
+    members: HashMap<(usize, String), Vec<usize>>,
+    /// (language, symbol) of every module.
+    modules: HashSet<(String, String)>,
+}
+
+impl Index {
+    fn add(&mut self, i: usize, e: &Entry) {
+        if e.is_module() {
+            self.modules.insert((e.language.clone(), e.symbol.clone()));
+            return;
+        }
+        self.named.entry((e.language.clone(), e.name.clone())).or_default().push(i);
+        if let Some(owner) = e.owner {
+            self.members.entry((owner, e.name.clone())).or_default().push(i);
+        }
+    }
+
+    /// Definitions (not modules) of `language` named `name`, in entry order.
+    fn named(&self, language: &str, name: &str) -> &[usize] {
+        self.named.get(&(language.to_owned(), name.to_owned())).map_or(&[], Vec::as_slice)
+    }
+
+    fn members(&self, owner: usize, name: &str) -> &[usize] {
+        self.members.get(&(owner, name.to_owned())).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -263,6 +297,7 @@ fn placeholder_sites(extracts: &[FileExtract], packs: &PackSet) -> Vec<Vec<Span>
 pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) -> Resolved {
     let mut out = Resolved::default();
     let mut entries: Vec<Entry> = Vec::new();
+    let mut index = Index::default();
     let mut def_entry: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     let mut module_entry: BTreeMap<usize, usize> = BTreeMap::new();
     let module_types: BTreeSet<&str> = packs.packs.iter().map(|p| p.spec.language.module_type.as_str()).collect();
@@ -272,7 +307,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
         let sep = packs.by_name(&ex.language).map_or("::", |p| p.spec.language.separator.as_str());
         let name = ex.module.rsplit(sep).next().unwrap_or(&ex.module).to_owned();
         module_entry.insert(fi, entries.len());
-        entries.push(Entry {
+        let entry = Entry {
             id: ComponentId::for_symbol(&ex.language, &ex.module),
             symbol: ex.module.clone(),
             name,
@@ -284,7 +319,9 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             is_type: false,
             holds_data: false,
             self_name: None,
-        });
+        };
+        index.add(entries.len(), &entry);
+        entries.push(entry);
     }
 
     // Symbols: definitions outside scopes first (types), then scoped ones and
@@ -316,7 +353,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     continue;
                 }
                 let (prefix, owner) = match (&def.scope, parent_entry) {
-                    (Some(scope), _) => match find_type(&entries, &scope.target, ex, lang).found() {
+                    (Some(scope), _) => match find_type(&entries, &index, &scope.target, ex, lang).found() {
                         Some(owner) => (entries[owner].symbol.clone(), Some(owner)),
                         None => (format!("{}{}{}", ex.module, lang.separator, clean(&scope.target, lang)), None),
                     },
@@ -325,7 +362,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                 };
                 let symbol = format!("{prefix}{}{}", lang.separator, def.name);
                 def_entry.insert((fi, di), entries.len());
-                entries.push(Entry {
+                let entry = Entry {
                     id: ComponentId::for_symbol(&ex.language, &symbol),
                     symbol,
                     name: def.name.clone(),
@@ -337,7 +374,9 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     is_type: is_type(&def.type_name),
                     holds_data: types.resolve(&def.type_name).is_ok_and(|t| t.allows_properties),
                     self_name: def.self_name.clone(),
-                });
+                };
+                index.add(entries.len(), &entry);
+                entries.push(entry);
             }
             pending = still;
             if pending.len() == before || pending.is_empty() {
@@ -442,7 +481,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             pairs.push((owner, iface.as_str()));
         }
         for (source, text) in pairs {
-            if let Some(target) = find_type(&entries, text, ex, &pack.spec.language).found()
+            if let Some(target) = find_type(&entries, &index, text, ex, &pack.spec.language).found()
                 && target != source
             {
                 link(&mut out.graph, RelationKind::Implements, &entries[source].id, &entries[target].id);
@@ -455,7 +494,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
     }
 
     // Calls.
-    let cx = Cx { entries: &entries, extracts, packs, implements: &implements_of };
+    let cx = Cx { entries: &entries, index: &index, extracts, packs, implements: &implements_of };
     let mut seen_external: BTreeSet<(ComponentId, String)> = BTreeSet::new();
     for (fi, ex) in extracts.iter().enumerate() {
         let Some(pack) = packs.by_name(&ex.language) else { continue };
@@ -578,7 +617,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     add(source, at, ("return".to_owned(), into), carried);
                 }
                 FlowKind::Constructs => {
-                    if let Some(ty) = find_type(&entries, &raw.what, ex, lang).found().filter(|t| entries[*t].holds_data) {
+                    if let Some(ty) = find_type(&entries, &index, &raw.what, ex, lang).found().filter(|t| entries[*t].holds_data) {
                         add(at, ty, ("makes".to_owned(), "value".to_owned()), Some(entries[ty].name.clone()));
                     }
                 }
@@ -678,13 +717,13 @@ impl TypeRef {
 /// Finds a type component (one that can own members) by its written name,
 /// among the components of the same language, by the same evidence as calls:
 /// a qualified path, the file's own module, or its imports (aliases first).
-fn find_type(entries: &[Entry], text: &str, ex: &FileExtract, lang: &LanguageSpec) -> TypeRef {
+fn find_type(entries: &[Entry], index: &Index, text: &str, ex: &FileExtract, lang: &LanguageSpec) -> TypeRef {
     let text = de_alias(text, &ex.aliases, lang);
     let raw = split(&text, lang);
     let anchored = raw.first().is_some_and(|w| lang.relative_prefixes.contains(w));
     let parts: Vec<String> = raw.into_iter().filter(|p| !lang.relative_prefixes.contains(p)).collect();
     let Some(name) = parts.last() else { return TypeRef::Outside };
-    let candidates: Vec<usize> = entries.iter().enumerate().filter(|(_, e)| e.is_type && &e.name == name && e.language == lang.name).map(|(i, _)| i).collect();
+    let candidates: Vec<usize> = index.named(&lang.name, name).iter().copied().filter(|&i| entries[i].is_type).collect();
     if candidates.is_empty() {
         return TypeRef::Outside;
     }
@@ -692,7 +731,7 @@ fn find_type(entries: &[Entry], text: &str, ex: &FileExtract, lang: &LanguageSpe
         return match path_matches(entries, &candidates, &parts, lang).as_slice() {
             [] => TypeRef::Outside,
             // `a::T` proves nothing unless `a` itself is in scope.
-            [one] if anchored || head_in_scope(entries, ex, lang, &parts[0]) => TypeRef::Found(*one),
+            [one] if anchored || head_in_scope(entries, index, ex, lang, &parts[0]) => TypeRef::Found(*one),
             _ => TypeRef::Unknown,
         };
     }
@@ -711,12 +750,13 @@ fn find_type(entries: &[Entry], text: &str, ex: &FileExtract, lang: &LanguageSpe
 /// Whether the first segment of a qualified path means something in `ex`:
 /// a local definition, a submodule of its module, the package itself, or an
 /// imported name.
-fn head_in_scope(entries: &[Entry], ex: &FileExtract, lang: &LanguageSpec, head: &str) -> bool {
+fn head_in_scope(entries: &[Entry], index: &Index, ex: &FileExtract, lang: &LanguageSpec, head: &str) -> bool {
     let submodule = format!("{}{}{head}", ex.module, lang.separator);
     names_import(&ex.imports, lang, head)
         || ex.aliases.iter().any(|(alias, _)| alias == head)
         || lang.words(&ex.module).first() == Some(&head)
-        || entries.iter().any(|e| e.language == lang.name && ((e.module == ex.module && e.name == head && !e.is_module()) || (e.is_module() && e.symbol == submodule)))
+        || index.named(&lang.name, head).iter().any(|&i| entries[i].module == ex.module)
+        || index.modules.contains(&(lang.name.clone(), submodule))
 }
 
 /// Whether one of `imports` brings `name` in from `module` (the path names it,
@@ -812,6 +852,7 @@ const MAX_DEPTH: u32 = 4;
 
 struct Cx<'a> {
     entries: &'a [Entry],
+    index: &'a Index,
     extracts: &'a [FileExtract],
     packs: &'a PackSet,
     /// Entry -> the interfaces its scopes say it implements.
@@ -830,7 +871,7 @@ impl Cx<'_> {
         if lang.self_names.contains(&base) {
             return self_type(self.entries, context).map_or(Receiver::Unknown, Receiver::Typed);
         }
-        match find_type(self.entries, text, &self.extracts[self.entries[context].file], lang) {
+        match find_type(self.entries, self.index, text, &self.extracts[self.entries[context].file], lang) {
             TypeRef::Found(t) => Receiver::Typed(t),
             TypeRef::Unknown => Receiver::Unknown,
             TypeRef::Outside => Receiver::Outside,
@@ -903,7 +944,7 @@ impl Cx<'_> {
             };
         }
         // A type named directly (associated calls on a type value).
-        match find_type(self.entries, q, &self.extracts[self.entries[caller].file], lang) {
+        match find_type(self.entries, self.index, q, &self.extracts[self.entries[caller].file], lang) {
             TypeRef::Found(t) => Receiver::Typed(t),
             TypeRef::Outside | TypeRef::Unknown => Receiver::Unknown,
         }
@@ -920,7 +961,7 @@ impl Cx<'_> {
             if let Some((fi, di)) = self.entries[t].def
                 && let Some(lang) = self.lang(t)
             {
-                next.extend(self.extracts[fi].definitions[di].bases.iter().filter_map(|base| find_type(self.entries, base, &self.extracts[fi], lang).found()));
+                next.extend(self.extracts[fi].definitions[di].bases.iter().filter_map(|base| find_type(self.entries, self.index, base, &self.extracts[fi], lang).found()));
             }
             for b in next {
                 if !types.contains(&b) {
@@ -946,7 +987,7 @@ impl Cx<'_> {
         types
             .iter()
             .find_map(|&t| {
-                let found: Vec<usize> = self.entries.iter().enumerate().filter(|(_, e)| e.owner == Some(t) && e.name == name).map(|(i, _)| i).collect();
+                let found: Vec<usize> = self.index.members(t, name).to_vec();
                 (!found.is_empty()).then_some(found)
             })
             .unwrap_or_default()
@@ -956,13 +997,12 @@ impl Cx<'_> {
         let Some(lang) = self.lang(caller) else { return CallTarget::External };
         let ex = &self.extracts[self.entries[caller].file];
         let callee = de_alias(strip_constructor(callee, lang), &ex.aliases, lang);
-        let same_language = |e: &Entry| !e.is_module() && e.language == lang.name;
         let is_member = |c: usize| self.entries[c].owner.is_some_and(|o| self.entries[o].is_type);
         let Some((qualifier, sep, name)) = lang.split_last(&callee) else {
             return self.bare(caller, &clean(&callee, lang), &ex.imports, lang);
         };
         let name = clean(name, lang);
-        let candidates: Vec<usize> = self.entries.iter().enumerate().filter(|(_, e)| same_language(e) && e.name == name).map(|(i, _)| i).collect();
+        let candidates: Vec<usize> = self.index.named(&lang.name, &name).to_vec();
         let mut receiver = Receiver::Unknown;
         if lang.is_member_separator(sep) {
             receiver = self.receiver(caller, qualifier, call, depth);
@@ -983,7 +1023,7 @@ impl Cx<'_> {
             let matches = path_matches(self.entries, &candidates, &path, lang);
             if !matches.is_empty() {
                 // `a::f` only proves `f` when `a` itself is in scope here.
-                return match anchored || path.first().is_some_and(|head| head_in_scope(self.entries, ex, lang, head)) {
+                return match anchored || path.first().is_some_and(|head| head_in_scope(self.entries, self.index, ex, lang, head)) {
                     true => narrow(matches).unwrap_or(CallTarget::External),
                     false => CallTarget::Unproven(matches),
                 };
@@ -1001,13 +1041,7 @@ impl Cx<'_> {
     /// module, or imported ones; anything else is unproven.
     fn bare(&self, caller: usize, name: &str, imports: &[String], lang: &LanguageSpec) -> CallTarget {
         let is_member = |c: usize| self.entries[c].owner.is_some_and(|o| self.entries[o].is_type);
-        let free: Vec<usize> = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(i, e)| !e.is_module() && e.language == lang.name && e.name == name && !is_member(*i))
-            .map(|(i, _)| i)
-            .collect();
+        let free: Vec<usize> = self.index.named(&lang.name, name).iter().copied().filter(|&i| !is_member(i)).collect();
         if free.is_empty() {
             return CallTarget::External;
         }

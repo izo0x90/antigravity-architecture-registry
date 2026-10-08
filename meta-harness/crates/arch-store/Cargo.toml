@@ -1,0 +1,15 @@
+[package]
+name = "arch-store"
+version = "0.1.0"
+edition = "2024"
+description = "Where the facts read from the code are kept between runs: one row per source file, in SQLite (or in memory for tests). Disposable: the code is the source of truth, so a store that can't be read is rebuilt."
+
+[dependencies]
+arch-graph = { path = "../arch-graph" }
+arch-index = { path = "../arch-index" }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde_json = "1.0"
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3"

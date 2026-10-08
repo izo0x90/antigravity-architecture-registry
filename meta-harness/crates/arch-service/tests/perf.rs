@@ -7,7 +7,7 @@ use std::time::Instant;
 use arch_graph::tree::{TreeRequest, ViewKind, Way, problems};
 use arch_graph::TypeSystem;
 use arch_index::PackSet;
-use arch_service::{ArchitectureService, MemoryIndex, MemoryPlans};
+use arch_service::{ArchitectureService, MemoryPlans};
 
 /// The big repository: tokio at a fixed tag, fetched once into the cache.
 const BIG_REPO: &str = "https://github.com/tokio-rs/tokio.git";
@@ -41,7 +41,8 @@ fn copy_sources(root: &Path, packs: &PackSet) -> tempfile::TempDir {
 }
 
 fn open(root: &Path) -> ArchitectureService {
-    ArchitectureService::open(root, PackSet::built_in().unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(MemoryIndex::default())).unwrap()
+    let facts = arch_service::open_facts(root, &arch_service::Limits::defaults().unwrap()).unwrap();
+    ArchitectureService::open(root, PackSet::built_in().unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(facts)).unwrap()
 }
 
 fn ms(since: Instant) -> u64 {
@@ -98,8 +99,25 @@ fn measure(name: &str, root: &Path) {
     let text = std::fs::read_to_string(&file.absolute).unwrap();
     std::fs::write(&file.absolute, format!("{text}\n// changed\n")).unwrap();
     let t = Instant::now();
-    service.ingest(&file.absolute).unwrap();
-    println!("perf {name} one_file ms={} file={}", ms(t), file.path);
+    let one = service.ingest(&file.absolute).unwrap();
+    let took = ms(t);
+    println!("perf {name} one_file ms={took} file={} parsed={}", file.path, one.parsed);
+    assert!(took <= limits.perf.one_file_ms, "{name}: one file took {took} ms");
+    // The same change found by re-checking the whole repo.
+    std::fs::write(&file.absolute, format!("{text}\n// changed again\n")).unwrap();
+    let t = Instant::now();
+    let whole = service.ingest(root).unwrap();
+    let took = ms(t);
+    println!("perf {name} one_file_in_whole_repo ms={took} read={} parsed={}", whole.read, whole.parsed);
+    assert_eq!(whole.parsed, 1, "{name}: {whole:?}");
+    assert!(took <= limits.perf.one_file_ms, "{name}: one file found in the whole repo took {took} ms");
+    drop(service);
+    // Starting again from the kept facts (no file read).
+    let t = Instant::now();
+    let service = open(root);
+    let took = ms(t);
+    println!("perf {name} restart ms={took} components={}", service.observed().unwrap().len().0);
+    assert!(took <= limits.perf.full_index_ms, "{name}: restart took {took} ms");
 
     trees(name, &service);
     let t = Instant::now();

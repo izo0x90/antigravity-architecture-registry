@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use arch_graph::{ComponentId, FindingCode, Param, PlanId, RelationKind, Severity, Signature, Stage, TypeSystem};
 use arch_index::{CodeRules, PackSet};
-use arch_service::{Actor, ArchitectureService, FsIndex, FsPlans, PlanOp};
+use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp};
 
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
@@ -33,7 +33,7 @@ fn repo() -> Repo {
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample"), &root);
     let (packs, types) = (PackSet::built_in().unwrap(), TypeSystem::defaults().unwrap());
     let rules = CodeRules::defaults(&packs, &types).unwrap();
-    let s = ArchitectureService::open(&root, packs, types, Box::new(FsPlans::new(&root).unwrap()), Box::new(FsIndex::new(&root).unwrap()))
+    let s = ArchitectureService::open(&root, packs, types, Box::new(FsPlans::new(&root).unwrap()), Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()))
         .unwrap()
         .with_rules(rules);
     s.ingest(&root).unwrap();

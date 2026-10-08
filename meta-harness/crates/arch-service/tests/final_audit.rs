@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use arch_graph::{Component, ComponentId, FindingCode, Param, Plan, PlanId, Provenance, ProposedLocation, Relation, RelationKind, RepoPath, Schemas, Signature, Stage, Status, TypeSystem};
 use arch_index::PackSet;
-use arch_service::{Actor, ArchitectureService, FsIndex, FsPlans, PlanOp, PlanRepository};
+use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, PlanRepository};
 
 struct Repo {
     _dir: tempfile::TempDir,
@@ -34,7 +34,7 @@ fn repo_typed(files: &[(&str, &str)], types: TypeSystem) -> Repo {
         PackSet::built_in().unwrap(),
         types,
         Box::new(FsPlans::new(&root).unwrap()),
-        Box::new(FsIndex::new(&root).unwrap()),
+        Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),
     )
     .unwrap();
     s.ingest(&root).unwrap();

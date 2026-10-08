@@ -39,4 +39,21 @@ repo in `~/.cache/nah-bench/layout-before/`.
 
 ## After
 
-Filled in as the new system lands.
+Measured by `cargo test -p arch-service --test perf` (dev profile, the
+same machine).
+
+### Reading the code (slice P5)
+
+Files are read on many threads at once; one whose size and time match what
+was kept isn't read; the facts are kept in `.nah/cache/index.sqlite`.
+
+| | this repo (171 files) | tokio (717 files) |
+|---|---|---|
+| Full index | 0.53 s | 0.92 s |
+| One file changed | 0.36 s | 0.54 s |
+| The same, found by re-checking the whole repo | 0.34 s | 0.54 s |
+| Restart from the kept facts (no file read) | 0.23 s | 0.54 s |
+
+Linking (tying calls and names across files) is now about 0.44 s on tokio,
+down from 2.55 s, after its name lookups were indexed; it's redone whole
+after a change, which is what a one-file change costs.

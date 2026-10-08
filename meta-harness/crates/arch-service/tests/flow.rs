@@ -9,7 +9,7 @@ use arch_graph::{
     Requester, Severity, Signature, Stage, Status, TypeSystem, ViewRequest,
 };
 use arch_index::{CodeRules, PackSet};
-use arch_service::{Actor, ArchitectureService, FsIndex, FsPlans, PlanOp, PlanRepository, ServiceError};
+use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, PlanRepository, ServiceError};
 
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
@@ -53,7 +53,7 @@ fn repo_with(rules_toml: &str, setup: impl FnOnce(ArchitectureService) -> Archit
         packs,
         types,
         Box::new(FsPlans::new(&root).unwrap()),
-        Box::new(FsIndex::new(&root).unwrap()),
+        Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),
     )
     .unwrap()
     .with_rules(rules);

@@ -17,8 +17,18 @@ pub struct Limits {
     pub tree_ms: u64,
     /// A request slower than this is logged.
     pub slow_request_ms: u64,
+    /// Where the facts read from the code are kept.
+    pub store: StoreLimits,
     /// What the performance tests hold the code to.
     pub perf: PerfLimits,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StoreLimits {
+    pub synchronous: String,
+    pub cache_kib: i64,
+    /// A file changed more recently than this when read is read again next time.
+    pub recent_change_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

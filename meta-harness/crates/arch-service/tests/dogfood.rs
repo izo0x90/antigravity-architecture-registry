@@ -5,7 +5,7 @@ use std::path::Path;
 
 use arch_graph::{ComponentId, RelationKind, TypeSystem};
 use arch_index::PackSet;
-use arch_service::{ArchitectureService, MemoryIndex, MemoryPlans};
+use arch_service::{ArchitectureService, MemoryPlans};
 
 // req: P4.10
 #[test]
@@ -16,7 +16,7 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
         PackSet::built_in().unwrap(),
         TypeSystem::defaults().unwrap(),
         Box::new(MemoryPlans::default()),
-        Box::new(MemoryIndex::default()),
+        Box::new(arch_service::MemoryStore::default()),
     )
     .unwrap();
     let first = service.ingest(&root).unwrap();
@@ -36,7 +36,7 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
     }
     let calls = |from: &str, to: &str| graph.outgoing(&id(from), Some(RelationKind::Calls)).any(|r| r.target == id(to));
     assert!(calls("arch_service::service::ArchitectureService::validate", "arch_service::checks::check_plan"));
-    assert!(calls("arch_service::service::ArchitectureService::index_scope", "arch_index::extract::extract_file"));
+    assert!(calls("arch_service::service::ArchitectureService::read_file", "arch_index::extract::extract_file"));
     assert!(calls("arch_index::ingest", "arch_index::resolve::resolve"));
     // The Python scripts come in through the Python pack.
     assert!(graph.component(&ComponentId::for_symbol("python", "scripts.req_status")).is_some());
@@ -71,7 +71,7 @@ fn cached_extracts_from_another_pack_version_are_parsed_again() {
             packs,
             TypeSystem::defaults().unwrap(),
             Box::new(MemoryPlans::default()),
-            Box::new(arch_service::FsIndex::new(&root).unwrap()),
+            Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),
         )
         .unwrap()
     };

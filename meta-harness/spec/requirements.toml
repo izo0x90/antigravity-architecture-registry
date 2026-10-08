@@ -217,6 +217,8 @@ id = "P3.2"
 slice = "S1"
 title = "CodeIndexStore trait"
 acceptance = "Observed index entries are keyed by file content hash and can be invalidated."
+manual = true
+done = "2026-10-08: superseded by M.11: FactStore keeps each file's facts with its size, time and content hash"
 
 [[req]]
 id = "P3.3"
@@ -229,6 +231,8 @@ id = "P3.4"
 slice = "S1"
 title = "File-based index cache"
 acceptance = "Index entries persist under .nah/cache, hit by hash, miss after content changes."
+manual = true
+done = "2026-10-08: superseded by M.11: one SQLite file at .nah/cache/index.sqlite replaces the JSON folder"
 
 [[req]]
 id = "P3.5"
@@ -1278,7 +1282,7 @@ acceptance = "Per-file facts live in one SQLite file behind the store trait: rep
 id = "M.12"
 slice = "M"
 title = "Updates are incremental and parallel"
-acceptance = "Changed files are found by size and time before hashing, read in parallel, and only they plus the files calling names they define are linked again; a one-file change gives the same graph as a full index; an unchanged file is never re-read."
+acceptance = "Changed files are found by size and time before hashing (a time too recent to trust is checked again next time), read in parallel, and linking is fast enough to redo whole (within one_file_ms on tokio); a one-file change gives the same graph as a full index; an unchanged file is never re-read; a restart links from the kept facts without reading a file."
 
 [[req]]
 id = "M.13"
