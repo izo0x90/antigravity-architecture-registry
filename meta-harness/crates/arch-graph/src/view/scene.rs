@@ -1013,12 +1013,39 @@ fn side(from: &Rect, to: &Rect, lane: f32) -> (i32, i32) {
 /// Returns points along the line, edge to edge.
 pub fn route(obstacles: &[Rect], ends: &[(Rect, Rect, Vec<(f32, f32)>)], bounds: Rect, m: &Metrics) -> Vec<Vec<(f32, f32)>> {
     let cell = m.lane.max(1.0);
+    let ports = port_offsets(ends, cell);
+    // Curves first: out of the side facing the other end, through any slots,
+    // into the facing side. Only one that would cut through a card is routed
+    // round them on a grid instead.
+    let mut curves: Vec<Option<Vec<(f32, f32)>>> = ends
+        .iter()
+        .enumerate()
+        .map(|(i, (a, b, slots))| {
+            let (da, db) = (side(a, b, cell), side(b, a, cell));
+            let pa = side_point(a, da, ports.get(&(i, true)).copied().unwrap_or(0.0));
+            let pb = side_point(b, db, ports.get(&(i, false)).copied().unwrap_or(0.0));
+            let points = curve(pa, da, slots, pb, db, cell);
+            let (lo, hi) = points.iter().fold(((f32::MAX, f32::MAX), (f32::MIN, f32::MIN)), |(lo, hi), p| ((lo.0.min(p.0), lo.1.min(p.1)), (hi.0.max(p.0), hi.1.max(p.1))));
+            let span = Rect { x: lo.0, y: lo.1, w: hi.0 - lo.0, h: hi.1 - lo.1 };
+            let clear = obstacles.iter().filter(|r| **r != *a && **r != *b && r.overlaps(&span)).all(|r| !through(&points, r));
+            clear.then_some(points)
+        })
+        .collect();
+    if curves.iter().all(Option::is_some) {
+        return curves.into_iter().flatten().collect();
+    }
+    // The grid for the rest: lanes wide, coarser when the drawing is so big
+    // that lane-wide cells would be too many to search.
+    let margin = cell * 6.0;
+    let (span_w, span_h) = (f64::from(bounds.w + margin * 2.0), f64::from(bounds.h + margin * 2.0));
+    let cell = cell.max((span_w * span_h / MAX_GRID_CELLS as f64).sqrt() as f32);
     let margin = cell * 6.0;
     let x0 = bounds.x - margin;
     let y0 = bounds.y - margin;
     let cols = ((bounds.w + margin * 2.0) / cell).ceil() as i32 + 1;
     let rows = ((bounds.h + margin * 2.0) / cell).ceil() as i32 + 1;
-    let mut grid = Grid { x0, y0, cell, cols, rows, blocked: vec![false; (cols * rows) as usize], across: vec![0; (cols * rows) as usize], along: vec![0; (cols * rows) as usize] };
+    let cells = cols as usize * rows as usize;
+    let mut grid = Grid { x0, y0, cell, cols, rows, blocked: vec![false; cells], across: vec![0; cells], along: vec![0; cells] };
     for r in obstacles {
         let grown = Rect { x: r.x - cell / 2.0, y: r.y - cell / 2.0, w: r.w + cell, h: r.h + cell };
         let (c0, r0) = grid.cell_of((grown.x, grown.y));
@@ -1033,8 +1060,32 @@ pub fn route(obstacles: &[Rect], ends: &[(Rect, Rect, Vec<(f32, f32)>)], bounds:
             }
         }
     }
-    // Ports: routes leaving one side of a card spread along it, ordered by
-    // where their other ends are.
+    let offset = ports;
+    let mut buffers = Search::new(cells * 4);
+    buffers.budget = MAX_SEARCH_STEPS;
+    ends.iter()
+        .enumerate()
+        .map(|(i, (a, b, slots))| {
+            if let Some(points) = curves[i].take() {
+                return points;
+            }
+            let (da, db) = (side(a, b, cell), side(b, a, cell));
+            let (pa, ca) = port(&grid, a, da, offset.get(&(i, true)).copied().unwrap_or(0.0));
+            let (pb, cb) = port(&grid, b, db, offset.get(&(i, false)).copied().unwrap_or(0.0));
+            route_on_grid(&mut grid, &mut buffers, (pa, ca, da), (pb, cb), slots, m.bend)
+        })
+        .collect()
+}
+
+/// Most cells the fallback grid may have, and most search steps all the
+/// routes on it may take together (one hard route may search the whole
+/// grid; beyond the budget, a route takes the plain way round).
+const MAX_GRID_CELLS: usize = 400_000;
+const MAX_SEARCH_STEPS: usize = 4_000_000;
+
+/// Where each route meets its cards' sides: routes leaving one side of a
+/// card spread along it, ordered by where their other ends are.
+fn port_offsets(ends: &[(Rect, Rect, Vec<(f32, f32)>)], cell: f32) -> BTreeMap<(usize, bool), f32> {
     let mut ports: BTreeMap<(i64, i64, i32, i32), Vec<(usize, bool, f32)>> = BTreeMap::new();
     let key = |r: &Rect, d: (i32, i32)| ((r.x * 4.0) as i64, (r.y * 4.0) as i64, d.0, d.1);
     for (i, (a, b, _)) in ends.iter().enumerate() {
@@ -1053,63 +1104,40 @@ pub fn route(obstacles: &[Rect], ends: &[(Rect, Rect, Vec<(f32, f32)>)], bounds:
             offset.insert((*i, *start), (n as f32 - (k - 1.0) / 2.0) * step);
         }
     }
-    // Curves first: out of the side facing the other end, through any slots,
-    // into the facing side. Only one that would cut through a card is routed
-    // round them on the grid instead.
-    let mut curves: Vec<Option<Vec<(f32, f32)>>> = ends
-        .iter()
-        .enumerate()
-        .map(|(i, (a, b, slots))| {
-            let (da, db) = (side(a, b, cell), side(b, a, cell));
-            let pa = side_point(a, da, offset.get(&(i, true)).copied().unwrap_or(0.0));
-            let pb = side_point(b, db, offset.get(&(i, false)).copied().unwrap_or(0.0));
-            let points = curve(pa, da, slots, pb, db, cell);
-            let clear = obstacles.iter().filter(|r| **r != *a && **r != *b).all(|r| {
-                let inner = Rect { x: r.x + 1.0, y: r.y + 1.0, w: r.w - 2.0, h: r.h - 2.0 };
-                !points.iter().any(|p| inner.holds(*p))
-            });
-            clear.then_some(points)
-        })
-        .collect();
-    let mut buffers = Search::new((cols * rows * 4) as usize);
-    ends.iter()
-        .enumerate()
-        .map(|(i, (a, b, slots))| {
-            if let Some(points) = curves[i].take() {
-                return points;
+    offset
+}
+
+/// One route on the grid: from the cell outside its start, through each
+/// slot in turn, to the cell outside its end; recorded on the grid so later
+/// routes keep out of its lane.
+fn route_on_grid(grid: &mut Grid, buffers: &mut Search, start: ((f32, f32), (i32, i32), (i32, i32)), end: ((f32, f32), (i32, i32)), slots: &[(f32, f32)], bend: f32) -> Vec<(f32, f32)> {
+    let ((pa, ca, da), (pb, cb)) = (start, end);
+    let mut stops: Vec<(i32, i32)> = slots.iter().map(|p| grid.cell_of(*p)).collect();
+    stops.dedup();
+    stops.push(cb);
+    let (mut here, mut dir) = (ca, da);
+    let mut cells: Vec<(i32, i32)> = vec![ca];
+    for stop in stops {
+        let leg = search(grid, buffers, here, dir, stop, bend).unwrap_or_else(|| fallback(here, stop));
+        if leg.len() >= 2 {
+            let (p, q) = (leg[leg.len() - 2], leg[leg.len() - 1]);
+            dir = (q.0 - p.0, q.1 - p.1);
+        }
+        cells.extend(leg.into_iter().skip(1));
+        here = stop;
+    }
+    for pair in cells.windows(2) {
+        let horizontal = pair[0].1 == pair[1].1;
+        for c in [pair[0], pair[1]] {
+            if let Some(k) = grid.index(c.0, c.1) {
+                if horizontal { grid.along[k] = grid.along[k].saturating_add(1) } else { grid.across[k] = grid.across[k].saturating_add(1) }
             }
-            let (da, db) = (side(a, b, cell), side(b, a, cell));
-            let (pa, ca) = port(&grid, a, da, offset.get(&(i, true)).copied().unwrap_or(0.0));
-            let (pb, cb) = port(&grid, b, db, offset.get(&(i, false)).copied().unwrap_or(0.0));
-            // Through each slot in turn, then to the far end.
-            let mut stops: Vec<(i32, i32)> = slots.iter().map(|p| grid.cell_of(*p)).collect();
-            stops.dedup();
-            stops.push(cb);
-            let (mut here, mut dir) = (ca, da);
-            let mut cells: Vec<(i32, i32)> = vec![ca];
-            for stop in stops {
-                let leg = search(&grid, &mut buffers, here, dir, stop, m.bend).unwrap_or_else(|| fallback(here, stop));
-                if leg.len() >= 2 {
-                    let (p, q) = (leg[leg.len() - 2], leg[leg.len() - 1]);
-                    dir = (q.0 - p.0, q.1 - p.1);
-                }
-                cells.extend(leg.into_iter().skip(1));
-                here = stop;
-            }
-            for pair in cells.windows(2) {
-                let horizontal = pair[0].1 == pair[1].1;
-                for c in [pair[0], pair[1]] {
-                    if let Some(k) = grid.index(c.0, c.1) {
-                        if horizontal { grid.along[k] = grid.along[k].saturating_add(1) } else { grid.across[k] = grid.across[k].saturating_add(1) }
-                    }
-                }
-            }
-            let mut points = vec![pa];
-            points.extend(cells.iter().map(|c| grid.center(*c)));
-            points.push(pb);
-            corners(points)
-        })
-        .collect()
+        }
+    }
+    let mut points = vec![pa];
+    points.extend(cells.iter().map(|c| grid.center(*c)));
+    points.push(pb);
+    corners(points)
 }
 
 /// Where a line meets a card's side, `offset` along it from the middle.
@@ -1189,11 +1217,13 @@ struct Search {
     came: Vec<u32>,
     stamp: Vec<u32>,
     round: u32,
+    /// Steps left for every search on this grid together.
+    budget: usize,
 }
 
 impl Search {
     fn new(states: usize) -> Self {
-        Self { best: vec![0; states], came: vec![u32::MAX; states], stamp: vec![0; states], round: 0 }
+        Self { best: vec![0; states], came: vec![u32::MAX; states], stamp: vec![0; states], round: 0, budget: states }
     }
 
     fn best(&self, s: usize) -> Option<u32> {
@@ -1219,7 +1249,7 @@ fn search(grid: &Grid, buffers: &mut Search, start: (i32, i32), start_dir: (i32,
     let first = state(start, dir_index(start_dir))?;
     buffers.set(first, 0, u32::MAX);
     open.push(Reverse((heuristic(start), 0, first)));
-    let limit = (grid.cols * grid.rows * 4) as usize;
+    let limit = (grid.cols as usize * grid.rows as usize * 4).min(buffers.budget);
     let mut popped = 0usize;
     while let Some(Reverse((_, cost, s))) = open.pop() {
         popped += 1;
@@ -1232,6 +1262,7 @@ fn search(grid: &Grid, buffers: &mut Search, start: (i32, i32), start_dir: (i32,
         let (cell_index, d) = (s / 4, s % 4);
         let cell = ((cell_index as i32) % grid.cols, (cell_index as i32) / grid.cols);
         if cell == goal {
+            buffers.budget = buffers.budget.saturating_sub(popped);
             let mut path = vec![cell];
             let mut at = s;
             while buffers.came[at] != u32::MAX {
@@ -1272,6 +1303,7 @@ fn search(grid: &Grid, buffers: &mut Search, start: (i32, i32), start_dir: (i32,
             }
         }
     }
+    buffers.budget = buffers.budget.saturating_sub(popped);
     None
 }
 
@@ -1349,16 +1381,39 @@ fn cross(a: ((f32, f32), (f32, f32)), b: ((f32, f32), (f32, f32))) -> Option<(f3
     (x > hx0 + 0.01 && x < hx1 - 0.01 && y > vy0 + 0.01 && y < vy1 - 0.01).then_some((x, y))
 }
 
-/// Whether a route's segment runs through a card (other than its ends).
+/// Whether a route runs through a card's inside (touching its edge doesn't
+/// count): each straight piece is clipped against the card exactly.
 pub fn through(points: &[(f32, f32)], card: &Rect) -> bool {
-    points.windows(2).any(|p| {
-        let (a, b) = (p[0], p[1]);
-        let n = ((a.0 - b.0).abs() + (a.1 - b.1).abs()).ceil().max(1.0) as usize;
-        (0..=n).any(|k| {
-            let t = k as f32 / n as f32;
-            card.holds((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t))
-        })
-    })
+    let inner = Rect { x: card.x + 1.0, y: card.y + 1.0, w: card.w - 2.0, h: card.h - 2.0 };
+    if inner.w <= 0.0 || inner.h <= 0.0 {
+        return false;
+    }
+    points.windows(2).any(|p| crosses(p[0], p[1], &inner))
+}
+
+/// Whether the segment from `a` to `b` has a stretch inside `r` (clipping
+/// it to the rectangle, Liang–Barsky).
+fn crosses(a: (f32, f32), b: (f32, f32), r: &Rect) -> bool {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, q) in [(-dx, a.0 - r.x), (dx, r.right() - a.0), (-dy, a.1 - r.y), (dy, r.bottom() - a.1)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return false;
+            }
+        } else {
+            let t = q / p;
+            if p < 0.0 {
+                t0 = t0.max(t);
+            } else {
+                t1 = t1.min(t);
+            }
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    t1 - t0 > f32::EPSILON
 }
 
 /// What breaks the layout rules, in words: cards that overlap (other than
@@ -1633,6 +1688,22 @@ pub(crate) mod tests {
                 assert!(shared_stretch(x, y, m.lane) == 0.0, "lines never lie on top of each other: {x:?} / {y:?}");
             }
         }
+    }
+
+    // req: G.11
+    #[test]
+    fn a_huge_drawing_routes_without_running_out_of_room_or_time() {
+        let m = metrics();
+        // Far apart, a wall between them that no curve gets past.
+        let a = Rect { x: 0.0, y: 0.0, w: 96.0, h: 64.0 };
+        let b = Rect { x: 900_000.0, y: 0.0, w: 96.0, h: 64.0 };
+        let wall = Rect { x: 400_000.0, y: -300_000.0, w: 96.0, h: 600_000.0 };
+        let bounds = Rect { x: -1000.0, y: -400_000.0, w: 1_000_000.0, h: 800_000.0 };
+        let started = std::time::Instant::now();
+        let routes = route(&[a, wall, b], &[(a, b, vec![])], bounds, &m);
+        assert!(started.elapsed().as_secs() < 5, "took {:?}", started.elapsed());
+        assert_eq!(routes.len(), 1);
+        assert!(!through(&routes[0], &wall), "still round the wall: {:?}", routes[0]);
     }
 
     // req: C.1, C.2, C.3
