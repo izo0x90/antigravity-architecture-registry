@@ -28,7 +28,7 @@ pub use walk::{SourceFile, ignored, module_symbol, walk};
 /// Bumped whenever what extraction reads from a file changes (not the
 /// packs: their fingerprint is kept with each file). Facts kept from an
 /// older reader are read again.
-pub const EXTRACTOR_VERSION: u32 = 6;
+pub const EXTRACTOR_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum IndexError {

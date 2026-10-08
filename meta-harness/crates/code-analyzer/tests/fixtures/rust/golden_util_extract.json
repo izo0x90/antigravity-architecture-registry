@@ -19,6 +19,12 @@
         "start_byte": 0,
         "end_byte": 56
       },
+      "name_span": {
+        "start_line": 1,
+        "end_line": 1,
+        "start_byte": 7,
+        "end_byte": 12
+      },
       "signature": {
         "params": [
           {
@@ -38,6 +44,12 @@
         "end_line": 5,
         "start_byte": 58,
         "end_byte": 76
+      },
+      "name_span": {
+        "start_line": 5,
+        "end_line": 5,
+        "start_byte": 65,
+        "end_byte": 71
       },
       "signature": {
         "params": []
@@ -85,6 +97,12 @@
           "to_uppercase",
           "."
         ]
+      },
+      "call_span": {
+        "start_line": 2,
+        "end_line": 2,
+        "start_byte": 38,
+        "end_byte": 54
       },
       "span": {
         "start_line": 2,
