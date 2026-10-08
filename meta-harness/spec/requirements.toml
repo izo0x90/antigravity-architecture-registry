@@ -1165,3 +1165,107 @@ id = "E.3"
 slice = "E"
 title = "Notes on any item"
 acceptance = "The user can leave questions or notes on any item or workflow step, resolve and delete them; anyone local can read them (the agent too), only the user's cockpit session can write them."
+
+# ---- M: the simplification (spec/simplification-plan.md) ----
+
+[[req]]
+id = "M.1"
+slice = "M"
+title = "Performance is measured on this repo and a big one"
+acceptance = "Tests index this repo and a pinned big repo and time a full index, a one-file update, every view at depths 1, 4 and 12, expand, context and search, failing when any goes over its limit from config; the numbers are kept in spec/perf-baseline.md."
+
+[[req]]
+id = "M.2"
+slice = "M"
+title = "Code means code; a plan means one plan"
+acceptance = "Every read (views, details, file margins, search, at-line) takes Source::Code or Source::Plan(id); Code shows no plan anywhere; an agent can switch the user back to Code; a deleted plan falls back to Code and says so."
+
+[[req]]
+id = "M.3"
+slice = "M"
+title = "No copies of the graph per request"
+acceptance = "The service holds the code graph as one shared read-only snapshot and each plan's overlay built once (rebuilt only when that plan or the code changes); reads never copy the graph; plans are held in memory and reloaded per file change; adding a component no longer scans every file and name."
+
+[[req]]
+id = "M.4"
+slice = "M"
+title = "Three tree views with honest edges"
+acceptance = "Contains (boxes in boxes), Calls (functions in call order, down or up, data pills) and Data flow (types as cards, converting functions as pills, down or up) are trees from one root, cut to a card budget from config; cut cards carry how many more; a repeat is drawn once and referenced; a loop is a loop line; a cut answer says what was cut."
+
+[[req]]
+id = "M.5"
+slice = "M"
+title = "Load more and go out"
+acceptance = "Expand returns only the new cards under one card (N levels, either direction); context returns a card's parent, siblings and the lines connecting it; details returns one card's full information; expand plus context give the same cards as a deeper tree."
+
+[[req]]
+id = "M.6"
+slice = "M"
+title = "Picking a plan focuses on the plan"
+acceptance = "With a plan picked, each view starts from the plan's own top-level items, shows only the existing code they plug into, marks items new, changed, done or doesn't match (a mismatched call shows both lines), badges items other plans also change, and 'show in full code' puts the plan back in the whole codebase."
+
+[[req]]
+id = "M.7"
+slice = "M"
+title = "Layout on the server, spaced and fast"
+acceptance = "The server lays out every tree (a squarified treemap for Contains, a tidy tree for Calls and Data flow, curves for repeats and loops, pills on lines) using sizes from the theme config, within a time limit; on this repo and the big repo no cards overlap, gaps meet the minimum, labels sit off cards and lines don't cross cards."
+
+[[req]]
+id = "M.8"
+slice = "M"
+title = "One small set of graph actions"
+acceptance = "The cockpit graph has exactly: select (highlights what's connected), open/close in place, go in, back, depth, flip direction, switch view, pick source, show in full code, load more; keys come from config; nothing changes the screen on its own (zoom only zooms); the old levels, focus, show-all, markers, crowding, story, reached-by, follow and call stepping are gone."
+
+[[req]]
+id = "M.9"
+slice = "M"
+title = "The browser only holds what's on screen"
+acceptance = "The cockpit draws only cards on screen, keeps at most its card cap from config (dropping the furthest closed branches first, fetched again on return), fetches details only on click, and never lays out or searches the graph itself; on the big repo no frame goes over the frame limit."
+
+[[req]]
+id = "M.10"
+slice = "M"
+title = "The agent sees what the user sees"
+acceptance = "MCP view, navigate, search and inspect use the same tree builder, search and details as the cockpit; view returns the tree as text with the same counts and cut notes, can expand and give context; navigate can send the user to Code, a plan's roots, a view, a root."
+
+[[req]]
+id = "M.11"
+slice = "M"
+title = "Facts kept in SQLite"
+acceptance = "Per-file facts live in one SQLite file behind the store trait: replacing one file's facts is one transaction touching only its rows; a schema or reader version mismatch or a corrupt file rebuilds from the code; the JSON cache is gone."
+
+[[req]]
+id = "M.12"
+slice = "M"
+title = "Updates are incremental and parallel"
+acceptance = "Changed files are found by size and time before hashing, read in parallel, and only they plus the files calling names they define are linked again; a one-file change gives the same graph as a full index; an unchanged file is never re-read."
+
+[[req]]
+id = "M.13"
+slice = "M"
+title = "One search, everywhere"
+acceptance = "Symbols are matched with neo_frizbee, files and file contents with fff-search (confined to the repo); REST and MCP search and the cockpit's / and palette use the same matching; picking a result makes it the root."
+
+[[req]]
+id = "M.14"
+slice = "M"
+title = "Slowness is visible"
+acceptance = "Every stage (read, store, link, snapshot, tree, layout, encode, search) is timed with tracing; anything over its limit is logged with what was asked; /api/perf shows recent requests by stage, graph and store size and the last index run; the cockpit says when an answer was cut or slow."
+
+[[req]]
+id = "M.15"
+slice = "M"
+title = "Reading code uses ast-grep, not text tricks"
+acceptance = "Each file is parsed once for every rule; calls capture receiver and method, types come from the syntax tree, ancestor checks are inside/stopBy rules, regexes over code text remain only where the text is unstructured (with why); a local named like a function and same-named nested functions don't mislink."
+
+[[req]]
+id = "M.16"
+slice = "M"
+title = "Accurate calls when rust-analyzer is there"
+acceptance = "When rust-analyzer is installed its SCIP output confirms calls by position (proven); without it calls are matched by name and marked unconfirmed in views."
+
+[[req]]
+id = "M.17"
+slice = "M"
+title = "Docs match the new system"
+acceptance = "The explainer and README describe the three views, the actions, plan focus, the architecture and /api/perf; the explainer's generated data is current and names nothing deleted."

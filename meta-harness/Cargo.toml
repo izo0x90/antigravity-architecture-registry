@@ -18,6 +18,22 @@ members = [
     "crates/arch-service",
 ]
 
+# Debug builds (tests, and the server as run in development) optimize the
+# parsing, graph and service code and every dependency: unoptimized
+# tree-sitter and graph walks are ten times slower, which hides real
+# performance and makes the dev server freeze-prone.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.arch-graph]
+opt-level = 2
+
+[profile.dev.package.arch-index]
+opt-level = 2
+
+[profile.dev.package.arch-service]
+opt-level = 2
+
 [lib]
 crate-type = ["rlib"]
 

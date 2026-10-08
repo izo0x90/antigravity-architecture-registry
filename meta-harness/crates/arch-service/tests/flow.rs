@@ -119,7 +119,7 @@ fn service_merges_code_and_plans_and_announces_changes() {
     add_validate(&r, "v");
     let observed = r.service.observed().unwrap();
     assert!(observed.component(&id("sample::validate")).is_none(), "plans never touch the observed graph");
-    let merged = r.service.graph(Some(&pid("v"))).unwrap();
+    let merged = r.service.graph(&arch_graph::Source::Plan(pid("v"))).unwrap();
     assert_eq!(merged.provenance(&id("sample::validate")), Provenance::PLANNED);
     assert_eq!(merged.provenance(&id("sample::run")), Provenance::OBSERVED);
     let events = r.events.lock().unwrap();
@@ -161,7 +161,7 @@ fn referenced_components_and_subtrees_stay_existing_with_real_anchors() {
         assert!(scope.contains(&id(expected)), "{expected} in scope: {scope:?}");
     }
     assert!(!scope.contains(&id("sample::later")));
-    let graph = r.service.graph(Some(&pid("p"))).unwrap();
+    let graph = r.service.graph(&arch_graph::Source::Plan(pid("p"))).unwrap();
     for c in scope.iter().map(|i| graph.component(i).unwrap()) {
         assert_eq!((c.status, c.stage), (Status::Existing, Stage::Implemented), "{}", c.id);
         assert!(c.anchor.is_some());
@@ -435,7 +435,7 @@ fn planned_calls_must_happen_inside_the_body() {
     let v = r.service.verify(&pid("c"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert!(!v.report.has_errors(), "{:?}", v.report);
     assert_eq!(v.advanced_to, Some(Stage::Implemented));
-    let graph: Graph = r.service.graph(Some(&pid("c"))).unwrap();
+    let graph: std::sync::Arc<Graph> = r.service.graph(&arch_graph::Source::Plan(pid("c"))).unwrap();
     let calls: Vec<_> = graph.outgoing(&id("sample::validate"), Some(RelationKind::Calls)).collect();
     assert!(calls.iter().any(|c| c.target == id("sample::store::Store::new") && c.provenance.is_both() && !c.sites.is_empty()), "call site recorded");
 }
@@ -468,7 +468,7 @@ fn skeleton_verifies_with_placeholders_and_blocks_implemented_until_they_are_gon
     write(&r, "src/lib.rs", &std::fs::read_to_string(r.root.join("src/lib.rs")).unwrap().replace("    todo!()\n", "    !input.is_empty()\n"));
     let v = r.service.verify(&pid("k"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert_eq!(v.advanced_to, Some(Stage::Implemented), "{:?}", v.report);
-    let merged = r.service.graph(Some(&pid("k"))).unwrap();
+    let merged = r.service.graph(&arch_graph::Source::Plan(pid("k"))).unwrap();
     merged.component(&id("sample::validate")).unwrap().check_location().unwrap();
 }
 
@@ -478,19 +478,19 @@ fn view_requests_are_checked_and_announced() {
     assert!(r.service.request_view(ViewRequest { view: Some("nonsense".into()), ..Default::default() }, Requester::Agent).is_err());
     r.service.request_view(ViewRequest { view: Some("calls".into()), focus: Some(id("sample::run")), ..Default::default() }, Requester::Agent).unwrap();
     assert!(matches!(r.events.lock().unwrap().last(), Some(ArchEvent::ViewRequested { by: Requester::Agent, .. })));
-    let view = r.service.named_view("calls", None, vec![id("sample::run")], Some(1)).unwrap();
+    let view = r.service.named_view("calls", &arch_graph::Source::Code, vec![id("sample::run")], Some(1)).unwrap();
     assert!(view.text.contains("run [function"));
     assert!(view.view.nodes.iter().any(|n| n.id == id("sample::run")));
-    let found = r.service.search("store", None, 10).unwrap();
+    let found = r.service.search("store", &arch_graph::Source::Code, 10).unwrap();
     let top: Vec<_> = found.iter().take(2).map(|c| c.id.clone()).collect();
     assert_eq!(top, vec![id("sample::store"), id("sample::store::Store")], "exact name matches first, ties by id");
-    let detail = r.service.component(&id("sample::log"), None).unwrap();
+    let detail = r.service.component(&id("sample::log"), &arch_graph::Source::Code).unwrap();
     assert!(detail.code.unwrap().contains("println!"));
     assert!(view.components.contains_key(&id("sample::run")), "views carry their components");
-    assert_eq!(r.service.component_at("src/store.rs", 11, None).unwrap().id, id("sample::store::Store::save"));
-    assert_eq!(r.service.component_at("src/store.rs", 2, None).unwrap().id, id("sample::store::Store"));
-    assert!(r.service.component_at("src/none.rs", 1, None).is_err());
-    let file = r.service.file_view("src/store.rs", None).unwrap();
+    assert_eq!(r.service.component_at("src/store.rs", 11, &arch_graph::Source::Code).unwrap().id, id("sample::store::Store::save"));
+    assert_eq!(r.service.component_at("src/store.rs", 2, &arch_graph::Source::Code).unwrap().id, id("sample::store::Store"));
+    assert!(r.service.component_at("src/none.rs", 1, &arch_graph::Source::Code).is_err());
+    let file = r.service.file_view("src/store.rs", &arch_graph::Source::Code).unwrap();
     assert_eq!(file.components.len(), 7, "module, Store, new, save, check, helper, store_each");
     assert!(file.relations.iter().any(|(rel, _)| rel.kind == RelationKind::Calls && rel.target == id("sample::store::Store::check")));
 }
@@ -880,7 +880,7 @@ fn indexing_reports_progress_and_files_changed_since_they_were_read() {
     let util = r.root.join("src/util.rs");
     std::fs::write(&util, std::fs::read_to_string(&util).unwrap() + "\npub fn later() {}\n").unwrap();
     assert!(r.service.is_stale("src/util.rs").unwrap(), "content no longer matches the index");
-    assert!(r.service.file_view("src/util.rs", None).unwrap().stale);
+    assert!(r.service.file_view("src/util.rs", &arch_graph::Source::Code).unwrap().stale);
     r.service.mark_stale(&[util.clone()]).unwrap();
     assert_eq!(r.service.index_status().stale, vec!["src/util.rs".to_owned()]);
     assert!(!r.service.is_stale("src/lib.rs").unwrap());
@@ -895,4 +895,70 @@ fn indexing_reports_progress_and_files_changed_since_they_were_read() {
     let report = r.service.reindex().unwrap();
     assert_eq!((report.parsed, report.cached), (3, 0));
     assert_eq!(r.service.index_status().last.unwrap().parsed, 3);
+}
+
+// req: M.2
+#[test]
+fn code_shows_no_plan_and_a_plan_shows_only_itself() {
+    let r = repo();
+    r.service.create_plan("p", "P", "").unwrap();
+    add_validate(&r, "p");
+    r.service.create_plan("other", "Other", "").unwrap();
+    r.service
+        .apply(&pid("other"), PlanOp::AddComponent { name: "audit".into(), type_name: "function".into(), description: "Logs.".into(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None })
+        .unwrap();
+    let code = arch_graph::Source::Code;
+    let p = arch_graph::Source::Plan(pid("p"));
+    // Code: nothing planned anywhere (views, search, details, file margins).
+    assert!(r.service.graph(&code).unwrap().component(&id("sample::validate")).is_none());
+    assert!(r.service.graph(&code).unwrap().component(&id("sample::audit")).is_none());
+    assert!(r.service.search("validate", &code, 10).unwrap().is_empty(), "search under Code finds no planned component");
+    assert!(r.service.component(&id("sample::validate"), &code).is_err());
+    let planned_file = r.service.graph(&p).unwrap().component(&id("sample::validate")).unwrap().file().unwrap().as_str().to_owned();
+    let margin = r.service.file_view(&planned_file, &code).unwrap();
+    assert!(margin.components.iter().all(|(c, a)| *a == arch_graph::Alignment::Observed && c.id != id("sample::validate")), "the code margin shows code only");
+    // A plan: itself and the code, not the other plan.
+    let with_p = r.service.graph(&p).unwrap();
+    assert!(with_p.component(&id("sample::validate")).is_some());
+    assert!(with_p.component(&id("sample::audit")).is_none(), "one plan at a time");
+    assert_eq!(r.service.search("validate", &p, 10).unwrap()[0].id, id("sample::validate"));
+    assert!(r.service.file_view(&planned_file, &p).unwrap().components.iter().any(|(c, _)| c.id == id("sample::validate")));
+    // An agent can switch the user back to the code.
+    let request: ViewRequest = serde_json::from_value(serde_json::json!({ "source": "code" })).unwrap();
+    assert_eq!(request.source, Some(code.clone()));
+    r.service.request_view(request, Requester::Agent).unwrap();
+    assert!(r.events.lock().unwrap().iter().any(|e| matches!(e, ArchEvent::ViewRequested { request, .. } if request.source == Some(arch_graph::Source::Code))));
+    // A deleted plan is gone: reading it says so (the cockpit then shows the code).
+    r.service.delete_plan(&pid("other")).unwrap();
+    assert!(matches!(r.service.graph(&arch_graph::Source::Plan(pid("other"))), Err(ServiceError::NotFound(_))));
+}
+
+// req: M.3
+#[test]
+fn reads_share_the_graph_and_a_plan_overlay_is_rebuilt_only_when_it_changes() {
+    let r = repo();
+    r.service.create_plan("p", "P", "").unwrap();
+    add_validate(&r, "p");
+    let code = arch_graph::Source::Code;
+    let p = arch_graph::Source::Plan(pid("p"));
+    assert!(Arc::ptr_eq(&r.service.graph(&code).unwrap(), &r.service.graph(&code).unwrap()), "the code graph is shared, never copied");
+    let first = r.service.graph(&p).unwrap();
+    assert!(Arc::ptr_eq(&first, &r.service.graph(&p).unwrap()), "a plan's overlay is built once");
+    // Reads in between change nothing.
+    r.service.search("run", &p, 5).unwrap();
+    r.service.component(&id("sample::validate"), &p).unwrap();
+    assert!(Arc::ptr_eq(&first, &r.service.graph(&p).unwrap()));
+    // The plan changes: rebuilt.
+    relate(&r, "p", RelationKind::Calls, "sample::validate", "sample::log");
+    let edited = r.service.graph(&p).unwrap();
+    assert!(!Arc::ptr_eq(&first, &edited));
+    assert!(edited.outgoing(&id("sample::validate"), Some(RelationKind::Calls)).next().is_some());
+    // The code changes: rebuilt, and the code graph is a new one too.
+    let code_before = r.service.graph(&code).unwrap();
+    append(&r, "src/lib.rs", "\npub fn added_later() {}\n");
+    r.service.ingest(&r.root).unwrap();
+    assert!(!Arc::ptr_eq(&code_before, &r.service.graph(&code).unwrap()));
+    let after = r.service.graph(&p).unwrap();
+    assert!(!Arc::ptr_eq(&edited, &after));
+    assert!(after.component(&id("sample::added_later")).is_some() && after.component(&id("sample::validate")).is_some());
 }

@@ -418,11 +418,11 @@ fn actionable_work_comes_in_dependency_order_and_changes_cascade_in_waves() {
     relate(&r, "q", "sample::d", "sample::util::shout");
     let next = |action| {
         let plan = r.service.plan(&pid("q")).unwrap();
-        let graph = r.service.graph(Some(&pid("q"))).unwrap();
+        let graph = r.service.graph(&arch_graph::Source::Plan(pid("q"))).unwrap();
         arch_service::next_actionable(&plan, &graph, r.service.types(), action).into_iter().map(|i| i.0).collect::<Vec<_>>()
     };
     assert_eq!(
-        arch_service::topological(&r.service.plan(&pid("q")).unwrap(), &r.service.graph(Some(&pid("q"))).unwrap(), r.service.types()),
+        arch_service::topological(&r.service.plan(&pid("q")).unwrap(), &r.service.graph(&arch_graph::Source::Plan(pid("q"))).unwrap(), r.service.types()),
         vec![id("sample::a"), id("sample::d"), id("sample::b"), id("sample::c")],
         "dependencies first, ties by id"
     );
@@ -436,7 +436,7 @@ fn actionable_work_comes_in_dependency_order_and_changes_cascade_in_waves() {
     assert_eq!(next(arch_service::Action::Build), vec!["rust:sample::a", "rust:sample::d"], "b and c wait for the structure they call");
     // Changing a's design sends it back for approval and its dependents back a step, in waves.
     let plan = r.service.plan(&pid("q")).unwrap();
-    let graph = r.service.graph(Some(&pid("q"))).unwrap();
+    let graph = r.service.graph(&arch_graph::Source::Plan(pid("q"))).unwrap();
     let waves: Vec<(String, Stage, Stage, u32)> =
         arch_service::cascade(&mut plan.clone(), &graph, r.service.types(), &id("sample::a")).into_iter().map(|d| (d.id.0, d.from, d.to, d.wave)).collect();
     assert_eq!(
@@ -593,7 +593,7 @@ fn the_data_flow_view_is_a_pipeline_of_typed_steps_with_planned_and_unconfirmed_
     use arch_graph::view::scene::{Measure, Metrics, Options, build, problems};
     let r = repo();
     // Types are nodes in the flow: Store::new makes a Store.
-    let flow = r.service.named_view("data_flow", None, vec![], None).unwrap();
+    let flow = r.service.named_view("data_flow", &arch_graph::Source::Code, vec![], None).unwrap();
     let edge = |v: &arch_graph::ViewResult, a: &str, b: &str| v.view.edges.iter().find(|e| e.source == id(a) && e.target == id(b) && e.unconfirmed.is_none()).cloned();
     let made = edge(&flow, "sample::store::Store::new", "sample::store::Store").expect("the type is in the flow");
     assert_eq!(made.carries.as_deref(), Some("Store"));
@@ -641,7 +641,7 @@ fn the_data_flow_view_is_a_pipeline_of_typed_steps_with_planned_and_unconfirmed_
     FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
     append_lib(&r, "\npub fn produce() -> String {\n    String::new()\n}\n\npub fn opaque() {\n}\n\npub fn consume(text: &str) {\n    let _ = text;\n}\n\npub fn sink(x: &str) {\n    let _ = x;\n}\n\npub fn pipeline() {\n    let s = produce();\n    consume(&s);\n    let v = opaque();\n    sink(v);\n}\n");
     r.service.ingest(&r.root).unwrap();
-    let path = r.service.named_view("data_path", Some(&pid("flows")), vec![id("sample::sink"), id("sample::consume")], Some(2)).unwrap();
+    let path = r.service.named_view("data_path", &arch_graph::Source::Plan(pid("flows")), vec![id("sample::sink"), id("sample::consume")], Some(2)).unwrap();
     assert_eq!(edge(&path, "sample::produce", "sample::consume").map(|e| e.alignment), Some(arch_graph::Alignment::Present), "planned and in the code");
     assert_eq!(edge(&path, "sample::produce", "sample::sink").map(|e| e.alignment), Some(arch_graph::Alignment::Missing), "planned, not in the code");
     let unconfirmed = path.view.edges.iter().find(|e| e.source == id("sample::opaque") && e.target == id("sample::sink") && e.unconfirmed.is_some()).expect("the unconfirmed flow is shown");

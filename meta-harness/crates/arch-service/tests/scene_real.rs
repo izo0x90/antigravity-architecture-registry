@@ -109,21 +109,21 @@ fn every_level_of_this_repository_lays_out_cleanly() {
     let none = BTreeSet::new();
 
     // The top level: every part shut, lines between them counted.
-    let top = service.named_view("structure", None, vec![], None).unwrap();
+    let top = service.named_view("structure", &arch_graph::Source::Code, vec![], None).unwrap();
     let s = scene(&top, &none);
     check("top level", &top, &s);
     assert!(s.lines.iter().any(|l| l.count > 1), "relations between parts merge");
 
     // The biggest part, as its own level.
     let biggest = top.view.nodes.iter().filter(|n| n.depth == Some(0)).max_by_key(|n| n.members).unwrap().id.clone();
-    let level = service.named_view("structure", None, vec![biggest.clone()], None).unwrap();
+    let level = service.named_view("structure", &arch_graph::Source::Code, vec![biggest.clone()], None).unwrap();
     let s = scene(&level, &none);
     check(&format!("inside {biggest}"), &level, &s);
     assert_eq!(s.frame.as_ref(), Some(&biggest));
     assert!(!s.outside.is_empty(), "it reaches outside itself");
 
     // Its modules opened in place, a level deeper.
-    let deeper = service.named_view("structure", None, vec![biggest.clone()], Some(2)).unwrap();
+    let deeper = service.named_view("structure", &arch_graph::Source::Code, vec![biggest.clone()], Some(2)).unwrap();
     let modules: BTreeSet<ComponentId> = deeper.view.edges.iter().filter(|e| e.kind == arch_graph::RelationKind::Contains && e.source != biggest).map(|e| e.source.clone()).take(4).collect();
     assert!(!modules.is_empty());
     let s = scene(&deeper, &modules);
@@ -131,7 +131,7 @@ fn every_level_of_this_repository_lays_out_cleanly() {
 
     // Calls, left to right.
     let entry = ComponentId::for_symbol("rust", "arch_service::service::ArchitectureService::validate");
-    let calls = service.named_view("calls", None, vec![entry.clone()], Some(3)).unwrap();
+    let calls = service.named_view("calls", &arch_graph::Source::Code, vec![entry.clone()], Some(3)).unwrap();
     let s = scene(&calls, &none);
     check("calls from validate", &calls, &s);
     let x = |id: &ComponentId| s.rects[id].x;
@@ -141,7 +141,7 @@ fn every_level_of_this_repository_lays_out_cleanly() {
 
     // The same as a story, both ways.
     for view in ["story", "reached_by"] {
-        let told = service.named_view(view, None, vec![entry.clone()], Some(4)).unwrap();
+        let told = service.named_view(view, &arch_graph::Source::Code, vec![entry.clone()], Some(4)).unwrap();
         let s = scene(&told, &none);
         check(&format!("{view} of validate"), &told, &s);
         assert!(!s.bands.is_empty(), "{view}: module bands");

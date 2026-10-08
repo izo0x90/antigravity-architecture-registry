@@ -13,6 +13,7 @@ mod plan;
 mod queue;
 mod relation;
 mod report;
+mod source;
 pub mod index;
 pub mod review;
 pub mod schema;
@@ -31,6 +32,7 @@ pub use plan::{Approval, ApprovalKind, Plan, REVOKED_BY, PlanId, Reference, SCHE
 pub use relation::{Provenance, Relation, RelationId, RelationKind};
 pub use schema::{Dsl, RefError, SchemaSet};
 pub use review::{Answer, Author, Change, Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, PlanDiff, Reply, ReviewSnapshot};
+pub use source::Source;
 pub use report::{CodeRef, Finding, FindingCode, Report, Severity, Target};
 pub use types::{RequiredField, ResolvedType, TypeDef, TypeSystem};
 pub use view::{View, ViewCatalog, ViewSpec};

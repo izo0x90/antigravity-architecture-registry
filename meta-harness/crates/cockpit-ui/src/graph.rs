@@ -380,8 +380,8 @@ impl GraphState {
                 if let Some(view) = request.view {
                     self.nav.view = view;
                 }
-                if request.plan.is_some() {
-                    self.nav.plan = request.plan;
+                if let Some(source) = request.source {
+                    self.nav.plan = source.plan().cloned();
                 }
                 if !request.roots.is_empty() {
                     self.nav.roots = request.roots;
@@ -529,8 +529,8 @@ impl GraphState {
     fn describe(&self, request: &ViewRequest) -> String {
         let name = |id: &ComponentId| self.component(id).map_or_else(|| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned(), |c| c.name.clone());
         let mut parts = vec![format!("{} view", request.view.as_deref().unwrap_or(&self.nav.view))];
-        if let Some(plan) = &request.plan {
-            parts.push(format!("plan {plan}"));
+        if let Some(source) = &request.source {
+            parts.push(source.to_string());
         }
         if !request.roots.is_empty() {
             parts.push(format!("from {}", request.roots.iter().map(name).collect::<Vec<_>>().join(", ")));

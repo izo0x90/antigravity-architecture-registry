@@ -68,7 +68,11 @@ impl Graph {
     /// wins for facts (anchor, placeholders).
     pub fn upsert_component(&mut self, component: Component, provenance: Provenance) {
         let id = component.id.clone();
-        let merged = match self.components.remove(&id) {
+        let previous = self.components.remove(&id);
+        if let Some(old) = &previous {
+            self.unindex_component(old);
+        }
+        let merged = match previous {
             Some(existing) => {
                 let existing_prov = self.provenance.get(&id).copied().unwrap_or_default();
                 let (plan, code) = if provenance.planned && !existing_prov.planned { (component, existing) } else { (existing, component) };
@@ -84,7 +88,6 @@ impl Graph {
             }
             None => component,
         };
-        self.unindex_component(&id);
         if let Some(file) = merged.file() {
             self.by_file.entry(file.as_str().to_owned()).or_default().insert(id.clone());
         }
@@ -94,9 +97,21 @@ impl Graph {
         self.components.insert(id, merged);
     }
 
-    fn unindex_component(&mut self, id: &ComponentId) {
-        for set in self.by_file.values_mut().chain(self.by_name.values_mut()) {
-            set.remove(id);
+    /// Drops `old` from the file and name lookups (only the two sets it's in).
+    fn unindex_component(&mut self, old: &Component) {
+        if let Some(file) = old.file()
+            && let Some(set) = self.by_file.get_mut(file.as_str())
+        {
+            set.remove(&old.id);
+            if set.is_empty() {
+                self.by_file.remove(file.as_str());
+            }
+        }
+        if let Some(set) = self.by_name.get_mut(&old.name) {
+            set.remove(&old.id);
+            if set.is_empty() {
+                self.by_name.remove(&old.name);
+            }
         }
     }
 
@@ -391,6 +406,30 @@ mod tests {
         g2.upsert_component(inner, Provenance::OBSERVED);
         assert_eq!(g2.enclosing("src/lib.rs", 15).unwrap().id, id("m::f"));
         assert_eq!(g2.enclosing("src/lib.rs", 50).unwrap().id, id("m"));
+    }
+
+    // req: M.3
+    #[test]
+    fn adding_components_keeps_lookups_right_and_takes_linear_time() {
+        let mut g = Graph::new();
+        let mut moved = observed("m::f");
+        g.upsert_component(moved.clone(), Provenance::OBSERVED);
+        // The same component found again in another file.
+        moved.anchor.as_mut().unwrap().file = crate::RepoPath::new("src/other.rs").unwrap();
+        g.upsert_component(moved, Provenance::OBSERVED);
+        assert_eq!(g.in_file("src/lib.rs").count(), 0, "gone from its old file");
+        assert_eq!(g.in_file("src/other.rs").count(), 1);
+        assert_eq!(g.named("f").count(), 1, "found once by name");
+        // Many files and names: each add touches only its own two sets.
+        let started = std::time::Instant::now();
+        let mut big = Graph::new();
+        for i in 0..40_000 {
+            let mut c = observed(&format!("m{}::f{i}", i % 400));
+            c.anchor.as_mut().unwrap().file = crate::RepoPath::new(&format!("src/m{}.rs", i % 4000)).unwrap();
+            big.upsert_component(c, Provenance::OBSERVED);
+        }
+        assert_eq!(big.len().0, 40_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
     }
 
     // req: P2.7

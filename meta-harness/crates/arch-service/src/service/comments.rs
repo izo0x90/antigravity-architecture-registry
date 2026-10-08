@@ -90,7 +90,7 @@ impl ArchitectureService {
     pub fn add_comment(&self, plan_id: &PlanId, new: NewComment, actor: &Actor) -> Result<Comment, ServiceError> {
         user_only(actor, "raises review comments")?;
         let (comment, touched) = self.edit_plan(plan_id, |plan| {
-            let graph = self.graph(Some(plan_id))?;
+            let graph = self.graph(&arch_graph::Source::Plan(plan_id.clone()))?;
             let exists = |id: &ComponentId| graph.component(id).is_some();
             match &new.anchor {
                 CommentAnchor::Plan => {}

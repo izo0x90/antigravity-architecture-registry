@@ -6,6 +6,7 @@ mod chain;
 mod checks;
 mod contract;
 mod import;
+mod limits;
 mod ops;
 mod progress;
 mod queue;
@@ -17,6 +18,7 @@ mod verify;
 
 pub use contract::{ContractSlice, EffectiveData, FlowNeighbor, HeldInvariant, Neighbor};
 pub use import::{ImportReport, ImportedComponent, Unmapped};
+pub use limits::{Limits, PerfLimits};
 pub use ops::PlanOp;
 pub use queue::{BriefContext, Outcome, Queue, QueueConfig, QueueSettings, job_for, render_brief};
 pub use progress::{Action, Downgrade, cascade, next_actionable, topological};

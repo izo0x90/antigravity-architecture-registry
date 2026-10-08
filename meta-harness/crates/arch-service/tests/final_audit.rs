@@ -295,7 +295,7 @@ fn loops_come_after_what_they_depend_on_and_before_their_dependents() {
         relate(&r, &rs(&format!("app::{from}")), &rs(&format!("app::{to}")));
     }
     let plan = r.s.plan(&pid()).unwrap();
-    let graph = r.s.graph(Some(&pid())).unwrap();
+    let graph = r.s.graph(&arch_graph::Source::Plan(pid())).unwrap();
     let order: Vec<String> = arch_service::topological(&plan, &graph, r.s.types()).into_iter().map(|i| i.0).collect();
     assert_eq!(order, vec!["rust:app::z", "rust:app::x", "rust:app::y", "rust:app::a"]);
     let mut lone = Plan::new("lone", "Lone");

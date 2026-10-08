@@ -5,7 +5,7 @@
 use std::fmt::Write;
 use std::sync::Arc;
 
-use arch_graph::{Comment, CommentId, CommentKind, CommentStatus, ComponentId, Graph, Plan, PlanId, Requester, Severity, Stage, TypeSystem, ViewRequest};
+use arch_graph::{Comment, CommentId, CommentKind, CommentStatus, ComponentId, Graph, Plan, PlanId, Requester, Severity, Source, Stage, TypeSystem, ViewRequest};
 use arch_service::{Actor, ArchitectureService, PlanOp, ServiceError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -145,8 +145,9 @@ struct ViewArgs {
 struct NavigateArgs {
     #[serde(default)]
     view: Option<String>,
+    /// "code", or "plan:<id>" (absent: leave it as it is).
     #[serde(default)]
-    plan: Option<String>,
+    source: Option<String>,
     #[serde(default)]
     roots: Vec<String>,
     #[serde(default)]
@@ -255,6 +256,15 @@ fn opt_plan(raw: &Option<String>) -> Result<Option<PlanId>, ServiceError> {
     raw.as_deref().filter(|p| !p.is_empty()).map(plan_id).transpose()
 }
 
+/// "code", or "plan:<id>".
+fn parse_source(raw: &str) -> Result<Source, ServiceError> {
+    match raw.strip_prefix("plan:") {
+        Some(id) => Ok(Source::Plan(plan_id(id)?)),
+        None if raw == "code" => Ok(Source::Code),
+        None => Err(ServiceError::InvalidOp(format!("source '{raw}': use \"code\" or \"plan:<id>\""))),
+    }
+}
+
 impl McpService {
     pub fn new(arch: Arc<ArchitectureService>) -> Self {
         Self { arch }
@@ -296,7 +306,7 @@ impl McpService {
     async fn steps(&self, plan: PlanId, only: Option<ComponentId>) -> Result<String, ServiceError> {
         blocking(&self.arch, move |s| {
             let current = s.plan(&plan)?;
-            let graph = s.graph(Some(&plan))?;
+            let graph = s.graph(&Source::Plan(plan.clone()))?;
             Ok(next_steps(&current, &graph, s.types(), only.as_ref()))
         })
         .await
@@ -327,7 +337,7 @@ impl McpService {
             "search" => {
                 let a: SearchArgs = parse(args)?;
                 let plan = opt_plan(&a.plan)?;
-                let hits = blocking(&self.arch, move |s| s.search(&a.query, plan.as_ref(), a.limit.unwrap_or(20))).await?;
+                let hits = blocking(&self.arch, move |s| s.search(&a.query, &Source::from_plan(plan), a.limit.unwrap_or(20))).await?;
                 let mut out = String::new();
                 for c in &hits {
                     let at = c.anchor.as_ref().map(|x| format!("{}:{}", x.file, x.span.start_line)).or(c.proposed.as_ref().map(|p| format!("-> {}", p.file))).unwrap_or_default();
@@ -344,7 +354,7 @@ impl McpService {
                 let plan = opt_plan(&a.plan)?;
                 let cid = ComponentId::new(a.id);
                 let (p, c) = (plan.clone(), cid.clone());
-                let detail = blocking(&self.arch, move |s| s.component(&c, p.as_ref())).await?;
+                let detail = blocking(&self.arch, move |s| s.component(&c, &Source::from_plan(p))).await?;
                 let mut out = pretty(&detail)?;
                 match plan.filter(|_| detail.component.status != arch_graph::Status::Existing || detail.alignment != arch_graph::Alignment::Observed) {
                     Some(plan) => out.push_str(&self.steps(plan, Some(cid)).await?),
@@ -356,7 +366,7 @@ impl McpService {
                 let a: ViewArgs = parse(args)?;
                 let plan = opt_plan(&a.plan)?;
                 let p = plan.clone();
-                let result = blocking(&self.arch, move |s| s.named_view(&a.name, p.as_ref(), a.roots.into_iter().map(ComponentId::new).collect(), a.depth)).await?;
+                let result = blocking(&self.arch, move |s| s.named_view(&a.name, &Source::from_plan(p), a.roots.into_iter().map(ComponentId::new).collect(), a.depth)).await?;
                 let mut out = result.text;
                 match plan {
                     Some(plan) => out.push_str(&self.steps(plan, None).await?),
@@ -369,7 +379,7 @@ impl McpService {
                 let request = ViewRequest {
                     view: a.view,
                     spec: None,
-                    plan: opt_plan(&a.plan)?,
+                    source: a.source.as_deref().map(parse_source).transpose()?,
                     roots: a.roots.into_iter().map(ComponentId::new).collect(),
                     depth: a.depth,
                     focus: a.focus.map(ComponentId::new),

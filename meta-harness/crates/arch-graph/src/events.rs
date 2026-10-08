@@ -29,8 +29,9 @@ pub struct ViewRequest {
     pub view: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec: Option<ViewSpec>,
+    /// Switch what's shown: the code, or a plan (none: leave it as it is).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<PlanId>,
+    pub source: Option<crate::Source>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roots: Vec<ComponentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

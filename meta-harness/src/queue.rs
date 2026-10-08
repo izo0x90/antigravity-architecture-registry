@@ -141,7 +141,7 @@ impl QueueRunner {
     pub async fn snapshot(&self, plan: &PlanId) -> Result<QueueSnapshot, ServiceError> {
         let handle = self.handle(plan);
         let id = plan.clone();
-        let (current, graph) = blocking(&self.arch, move |a| Ok((a.plan(&id)?, a.graph(Some(&id))?))).await?;
+        let (current, graph) = blocking(&self.arch, move |a| Ok((a.plan(&id)?, a.graph(&arch_graph::Source::Plan(id.clone()))?))).await?;
         let snapshot = lock(&handle.queue).snapshot(&current, &graph, self.arch.types());
         Ok(snapshot)
     }
@@ -212,7 +212,7 @@ impl QueueRunner {
                 return Ok(());
             }
             let id = plan.clone();
-            let (current, graph) = blocking(&self.arch, move |a| Ok((a.plan(&id)?, a.graph(Some(&id))?))).await?;
+            let (current, graph) = blocking(&self.arch, move |a| Ok((a.plan(&id)?, a.graph(&arch_graph::Source::Plan(id.clone()))?))).await?;
             let next = lock(&handle.queue).next(&current, &graph, self.arch.types());
             let Some((component, kind)) = next else {
                 let snapshot = self.announce(plan).await?;
@@ -265,7 +265,7 @@ impl QueueRunner {
             if kind.needs_approval() {
                 let report = a.validate(&p)?;
                 let current = a.plan(&p)?;
-                let graph = a.graph(Some(&p))?;
+                let graph = a.graph(&arch_graph::Source::Plan(p.clone()))?;
                 let touches = |f: &Finding| match &f.target {
                     Target::Component { id } => id == &c,
                     Target::Relation { id } => graph.relation(id).is_some_and(|r| r.source == c || r.target == c),

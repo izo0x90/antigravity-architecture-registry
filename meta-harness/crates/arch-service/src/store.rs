@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use arch_graph::{Plan, PlanId, RepoPath};
 use arch_index::FileExtract;
@@ -13,7 +13,9 @@ use crate::ServiceError;
 
 pub trait PlanRepository: Send + Sync {
     fn list(&self) -> Result<Vec<PlanId>, ServiceError>;
-    fn get(&self, id: &PlanId) -> Result<Option<Plan>, ServiceError>;
+    /// The plan as last saved. The same `Arc` comes back until it changes,
+    /// so callers can tell an unchanged plan by pointer.
+    fn get(&self, id: &PlanId) -> Result<Option<Arc<Plan>>, ServiceError>;
     /// Saves the whole plan atomically.
     fn save(&self, plan: &Plan) -> Result<(), ServiceError>;
     /// Removes a plan; `NotFound` if there is none.
@@ -33,17 +35,17 @@ pub trait CodeIndexStore: Send + Sync {
 
 /// In-memory plans (embedding and tests).
 #[derive(Default)]
-pub struct MemoryPlans(Mutex<BTreeMap<PlanId, Plan>>);
+pub struct MemoryPlans(Mutex<BTreeMap<PlanId, Arc<Plan>>>);
 
 impl PlanRepository for MemoryPlans {
     fn list(&self) -> Result<Vec<PlanId>, ServiceError> {
         Ok(self.0.lock().map_err(ServiceError::poisoned)?.keys().cloned().collect())
     }
-    fn get(&self, id: &PlanId) -> Result<Option<Plan>, ServiceError> {
+    fn get(&self, id: &PlanId) -> Result<Option<Arc<Plan>>, ServiceError> {
         Ok(self.0.lock().map_err(ServiceError::poisoned)?.get(id).cloned())
     }
     fn save(&self, plan: &Plan) -> Result<(), ServiceError> {
-        self.0.lock().map_err(ServiceError::poisoned)?.insert(plan.id.clone(), plan.clone());
+        self.0.lock().map_err(ServiceError::poisoned)?.insert(plan.id.clone(), Arc::new(plan.clone()));
         Ok(())
     }
     fn delete(&self, id: &PlanId) -> Result<(), ServiceError> {
@@ -133,11 +135,33 @@ fn ensure_nah_gitignore(nah: &Path) -> Result<(), ServiceError> {
     Ok(())
 }
 
-/// Plans as `<repo>/.nah/plans/<id>.json`.
+/// Plans as `<repo>/.nah/plans/<id>.json`, each kept in memory once read
+/// and read again only when its file changes (by size or time), whoever
+/// changed it.
 pub struct FsPlans {
     dir: PathBuf,
     /// One writer at a time within this process (the server is the writer).
     write: Mutex<()>,
+    read: Mutex<BTreeMap<PlanId, Read>>,
+}
+
+/// A plan as read, and the file it was read from as it was then.
+struct Read {
+    stamp: Stamp,
+    plan: Arc<Plan>,
+}
+
+/// What tells a file changed without reading it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl Stamp {
+    fn of(meta: &std::fs::Metadata) -> Self {
+        Self { len: meta.len(), modified: meta.modified().ok() }
+    }
 }
 
 impl FsPlans {
@@ -146,7 +170,7 @@ impl FsPlans {
         let dir = nah.join("plans");
         std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
         ensure_nah_gitignore(&nah)?;
-        Ok(Self { dir, write: Mutex::new(()) })
+        Ok(Self { dir, write: Mutex::new(()), read: Mutex::new(BTreeMap::new()) })
     }
 
     fn path(&self, id: &PlanId) -> PathBuf {
@@ -171,19 +195,34 @@ impl PlanRepository for FsPlans {
         Ok(ids)
     }
 
-    fn get(&self, id: &PlanId) -> Result<Option<Plan>, ServiceError> {
+    fn get(&self, id: &PlanId) -> Result<Option<Arc<Plan>>, ServiceError> {
         let path = self.path(id);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                let plan = Plan::from_json(&text).map_err(|e| ServiceError::Corrupt(format!("{}: {e}", path.display())))?;
-                if &plan.id != id {
-                    return Err(ServiceError::Corrupt(format!("{}: holds plan '{}', not '{id}'", path.display(), plan.id)));
-                }
-                Ok(Some(plan))
+        let stamp = match std::fs::metadata(&path) {
+            Ok(meta) => Stamp::of(&meta),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.read.lock().map_err(ServiceError::poisoned)?.remove(id);
+                return Ok(None);
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(io(&path, e)),
+            Err(e) => return Err(io(&path, e)),
+        };
+        if let Some(known) = self.read.lock().map_err(ServiceError::poisoned)?.get(id)
+            && known.stamp == stamp
+        {
+            return Ok(Some(known.plan.clone()));
         }
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(io(&path, e)),
+        };
+        let plan = Plan::from_json(&text).map_err(|e| ServiceError::Corrupt(format!("{}: {e}", path.display())))?;
+        if &plan.id != id {
+            return Err(ServiceError::Corrupt(format!("{}: holds plan '{}', not '{id}'", path.display(), plan.id)));
+        }
+        let plan = Arc::new(plan);
+        // Stamped as before the read: a write racing the read is seen next time.
+        self.read.lock().map_err(ServiceError::poisoned)?.insert(id.clone(), Read { stamp, plan: plan.clone() });
+        Ok(Some(plan))
     }
 
     fn save(&self, plan: &Plan) -> Result<(), ServiceError> {
@@ -315,7 +354,7 @@ mod tests {
         repo.save(&plan("b")).unwrap();
         repo.save(&plan("a")).unwrap();
         assert_eq!(repo.list().unwrap(), vec![PlanId::new("a").unwrap(), PlanId::new("b").unwrap()]);
-        assert_eq!(repo.get(&PlanId::new("a").unwrap()).unwrap().unwrap(), plan("a"));
+        assert_eq!(*repo.get(&PlanId::new("a").unwrap()).unwrap().unwrap(), plan("a"));
         repo.delete(&PlanId::new("a").unwrap()).unwrap();
         assert!(matches!(repo.delete(&PlanId::new("a").unwrap()), Err(ServiceError::NotFound(_))), "nothing left to delete");
         assert!(repo.get(&PlanId::new("a").unwrap()).unwrap().is_none());
@@ -327,6 +366,26 @@ mod tests {
         exercise_plans(&MemoryPlans::default());
         let dir = tempfile::tempdir().unwrap();
         exercise_plans(&FsPlans::new(dir.path()).unwrap());
+    }
+
+    // req: M.3
+    #[test]
+    fn file_plans_are_read_once_and_again_when_their_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = FsPlans::new(dir.path()).unwrap();
+        repo.save(&plan("p")).unwrap();
+        let id = PlanId::new("p").unwrap();
+        let first = repo.get(&id).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&first, &repo.get(&id).unwrap().unwrap()), "unchanged: the same plan, not read again");
+        // Someone else (an agent, an editor) rewrites the file.
+        let mut edited = plan("p");
+        edited.title = "edited by hand, a longer title".into();
+        std::fs::write(dir.path().join(".nah/plans/p.json"), edited.to_json().unwrap()).unwrap();
+        let again = repo.get(&id).unwrap().unwrap();
+        assert_eq!(again.title, "edited by hand, a longer title");
+        assert!(!Arc::ptr_eq(&first, &again));
+        std::fs::remove_file(dir.path().join(".nah/plans/p.json")).unwrap();
+        assert!(repo.get(&id).unwrap().is_none(), "a removed file is a removed plan");
     }
 
     // req: P3.3

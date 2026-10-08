@@ -1,0 +1,21 @@
+# Limits the service keeps to, so that nothing it answers can freeze the
+# cockpit or stall an agent. A project can override any of them in
+# .nah/limits.toml. Times are in milliseconds.
+
+[limits]
+# Plans whose overlay on the code is kept built (the most recently used).
+plans_kept_laid_over = 4
+# Cards in one tree answer. A bigger tree is cut at a whole level, and the
+# answer says what was cut.
+cards_per_answer = 400
+# How long building and laying out one tree may take before it's cut.
+tree_ms = 200
+# Slower than this, a request is logged with what was asked.
+slow_request_ms = 200
+
+# What the performance tests hold the code to (this repo and tokio).
+[limits.perf]
+full_index_ms = 20000
+one_file_ms = 1500
+tree_ms = 200
+search_ms = 50

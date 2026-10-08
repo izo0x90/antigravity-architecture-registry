@@ -10,7 +10,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use arch_graph::view::{query, render_text};
 use arch_graph::{
     Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
-    RepoPath, Severity, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult, schema::Dsl,
+    RepoPath, Severity, Source, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult, schema::Dsl,
     IndexState, IndexStatus, IndexSummary,
 };
 use arch_index::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk, UnverifiedFlow};
@@ -94,14 +94,26 @@ pub struct Refresh {
     pub downgraded: Vec<(PlanId, Downgrade)>,
 }
 
+/// The code as last indexed: read-only once built. Each index run builds a
+/// new one and swaps it in; readers hold the one they started with.
 #[derive(Default)]
 struct Observed {
-    graph: Graph,
+    graph: Arc<Graph>,
     ambiguous: Vec<AmbiguousCall>,
     unproven: Vec<AmbiguousCall>,
     external: Vec<ExternalCall>,
     /// Data handed from one call to another that types couldn't confirm.
     unverified: Vec<UnverifiedFlow>,
+    /// Counts up with every swap (a plan's overlay is built for one).
+    generation: u64,
+}
+
+/// A plan laid over the code, kept until the plan or the code changes.
+struct Merged {
+    generation: u64,
+    plan: Arc<Plan>,
+    graph: Arc<Graph>,
+    used: Instant,
 }
 
 type Listener = Arc<dyn Fn(&ArchEvent) + Send + Sync>;
@@ -115,7 +127,10 @@ pub struct ArchitectureService {
     rules: CodeRules,
     plans: Box<dyn PlanRepository>,
     index: Box<dyn CodeIndexStore>,
-    observed: RwLock<Observed>,
+    observed: RwLock<Arc<Observed>>,
+    /// Plans laid over the code, by plan (the most recently used few).
+    merged: Mutex<HashMap<PlanId, Merged>>,
+    limits: crate::Limits,
     listeners: RwLock<Vec<Listener>>,
     tools: ToolCatalog,
     runner: Arc<dyn ToolRunner>,
@@ -162,7 +177,9 @@ impl ArchitectureService {
             rules,
             plans,
             index,
-            observed: RwLock::new(Observed::default()),
+            observed: RwLock::new(Arc::new(Observed::default())),
+            merged: Mutex::new(HashMap::new()),
+            limits: crate::Limits::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in limits: {e}")))?,
             listeners: RwLock::new(Vec::new()),
             tools: ToolCatalog::default(),
             runner: Arc::new(ProcessRunner),
@@ -266,9 +283,33 @@ impl ArchitectureService {
     fn rebuild_observed(&self) -> Result<(), ServiceError> {
         let extracts: Vec<FileExtract> = self.index.all()?;
         let resolved = resolve(&extracts, &self.packs, &self.types);
-        let mut observed = self.observed.write().map_err(ServiceError::poisoned)?;
-        *observed = Observed { graph: resolved.graph, ambiguous: resolved.ambiguous, unproven: resolved.unproven, external: resolved.external, unverified: resolved.unverified_flows };
+        let generation = self.snapshot()?.generation + 1;
+        let next = Arc::new(Observed {
+            graph: Arc::new(resolved.graph),
+            ambiguous: resolved.ambiguous,
+            unproven: resolved.unproven,
+            external: resolved.external,
+            unverified: resolved.unverified_flows,
+            generation,
+        });
+        *self.observed.write().map_err(ServiceError::poisoned)? = next;
         Ok(())
+    }
+
+    /// The code as last indexed (shared, never copied).
+    fn snapshot(&self) -> Result<Arc<Observed>, ServiceError> {
+        Ok(self.observed.read().map_err(ServiceError::poisoned)?.clone())
+    }
+
+    /// The service's limits (from config).
+    pub fn limits(&self) -> &crate::Limits {
+        &self.limits
+    }
+
+    /// Replaces the limits (a project's own, or a test's).
+    pub fn with_limits(mut self, limits: crate::Limits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// Re-reads `scope` (a path inside the repo): parses changed files, drops
@@ -327,7 +368,7 @@ impl ArchitectureService {
             self.index_scope(scope, files, &mut report, &mut progress)?;
         }
         self.rebuild_observed()?;
-        let observed = self.observed.read().map_err(ServiceError::poisoned)?;
+        let observed = self.snapshot()?;
         (report.components, report.relations) = observed.graph.len();
         report.ambiguous = observed.ambiguous.len();
         report.unproven = observed.unproven.len();
@@ -476,9 +517,12 @@ impl ArchitectureService {
         if scopes.is_empty() {
             return Ok(Refresh::default());
         }
-        let before: BTreeMap<PlanId, Graph> = {
-            let observed = self.observed()?;
-            self.plans()?.into_iter().map(|p| (p.id.clone(), Graph::merge(observed.clone(), std::slice::from_ref(&p)))).collect()
+        let before: BTreeMap<PlanId, Arc<Graph>> = {
+            let mut before = BTreeMap::new();
+            for id in self.plans.list()? {
+                before.insert(id.clone(), self.graph(&Source::Plan(id))?);
+            }
+            before
         };
         let ingest = self.ingest_scopes(&scopes)?;
         let changed: BTreeSet<&str> = ingest.changed.iter().map(RepoPath::as_str).collect();
@@ -489,7 +533,7 @@ impl ArchitectureService {
             // Under the plan's lock, on the plan as it is now (an approval or
             // edit made while the files were read isn't lost).
             let (sent_back, checked) = self.edit_plan(plan_id, |plan| {
-                let after = Graph::merge(observed.clone(), std::slice::from_ref(plan));
+                let after = Graph::merge((*observed).clone(), std::slice::from_ref(plan));
                 // Existing code the plan builds on changed its signature: what
                 // was designed against the old one needs another look.
                 let reshaped: Vec<ComponentId> = observed
@@ -548,34 +592,58 @@ impl ArchitectureService {
         Ok(!prefix.is_empty() && self.index.all()?.iter().any(|e| Self::under(&e.file, &prefix)))
     }
 
-    pub fn observed(&self) -> Result<Graph, ServiceError> {
-        Ok(self.observed.read().map_err(ServiceError::poisoned)?.graph.clone())
+    /// The code as last indexed (shared: reading it copies nothing).
+    pub fn observed(&self) -> Result<Arc<Graph>, ServiceError> {
+        Ok(self.snapshot()?.graph.clone())
     }
 
     pub fn ambiguous_calls(&self) -> Result<Vec<AmbiguousCall>, ServiceError> {
-        Ok(self.observed.read().map_err(ServiceError::poisoned)?.ambiguous.clone())
+        Ok(self.snapshot()?.ambiguous.clone())
     }
 
     /// Calls the code makes that couldn't be tied to a component (unknown
     /// receiver type, or a name neither local nor imported), with candidates.
     pub fn unproven_calls(&self) -> Result<Vec<AmbiguousCall>, ServiceError> {
-        Ok(self.observed.read().map_err(ServiceError::poisoned)?.unproven.clone())
+        Ok(self.snapshot()?.unproven.clone())
     }
 
-    /// The code with one plan (or all plans) laid over it.
-    pub fn graph(&self, plan: Option<&PlanId>) -> Result<Graph, ServiceError> {
-        let plans: Vec<Plan> = match plan {
-            Some(id) => vec![self.plan(id)?],
-            None => self.plans()?,
+    /// The code alone, or the code with one plan laid over it. A plan's
+    /// overlay is built once and kept (shared) until the plan or the code
+    /// changes; only the most recently used few are kept.
+    pub fn graph(&self, source: &Source) -> Result<Arc<Graph>, ServiceError> {
+        let id = match source {
+            Source::Code => return self.observed(),
+            Source::Plan(id) => id,
         };
-        Ok(Graph::merge(self.observed()?, &plans))
+        let plan = self.plan_shared(id)?;
+        let observed = self.snapshot()?;
+        let mut merged = self.merged.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(m) = merged.get_mut(id)
+            && m.generation == observed.generation
+            && Arc::ptr_eq(&m.plan, &plan)
+        {
+            m.used = Instant::now();
+            return Ok(m.graph.clone());
+        }
+        let graph = Arc::new(Graph::merge((*observed.graph).clone(), std::slice::from_ref(&*plan)));
+        merged.insert(id.clone(), Merged { generation: observed.generation, plan, graph: graph.clone(), used: Instant::now() });
+        while merged.len() > self.limits.plans_kept_laid_over.max(1) {
+            let Some(oldest) = merged.iter().min_by_key(|(_, m)| m.used).map(|(id, _)| id.clone()) else { break };
+            merged.remove(&oldest);
+        }
+        Ok(graph)
     }
 
     pub fn plans(&self) -> Result<Vec<Plan>, ServiceError> {
-        self.plans.list()?.iter().filter_map(|id| self.plans.get(id).transpose()).collect()
+        self.plans.list()?.iter().filter_map(|id| self.plans.get(id).transpose()).map(|p| p.map(|p| (*p).clone())).collect()
     }
 
     pub fn plan(&self, id: &PlanId) -> Result<Plan, ServiceError> {
+        Ok((*self.plan_shared(id)?).clone())
+    }
+
+    /// The plan as saved (shared, not copied).
+    pub fn plan_shared(&self, id: &PlanId) -> Result<Arc<Plan>, ServiceError> {
         self.plans.get(id)?.ok_or_else(|| ServiceError::NotFound(format!("plan {id}")))
     }
 
@@ -605,7 +673,7 @@ impl ArchitectureService {
             return Err(ServiceError::InvalidOp(format!("plan {id} already exists")));
         }
         let input = crate::import::ImportInput { plan: plan_id.clone(), title: title.to_owned(), json, language: language.map(str::to_owned) };
-        let (plan, report) = crate::import::import(input, &self.observed()?, &self.root, &self.packs, &self.types)?;
+        let (plan, report) = crate::import::import(input, &*self.observed()?, &self.root, &self.packs, &self.types)?;
         self.plans.save(&plan)?;
         drop(held);
         self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id], components: plan.components.iter().map(|c| c.id.clone()).collect() });
@@ -632,14 +700,14 @@ impl ArchitectureService {
     pub fn apply(&self, plan_id: &PlanId, op: PlanOp) -> Result<Plan, ServiceError> {
         let observed = self.observed()?;
         let (plan, touched) = self.edit_plan(plan_id, |plan| {
-            let graph = Graph::merge(observed.clone(), std::slice::from_ref(plan));
+            let graph = Graph::merge((*observed).clone(), std::slice::from_ref(plan));
             let changed = op.design_change().cloned();
             let removes = matches!(op, PlanOp::Remove { .. });
             let mut touched = apply(plan, op, &graph, &self.root, &self.packs, &self.types, &self.dsl)?;
             // A design change sends it (if approved) and what builds on it back.
             if let Some(changed) = changed {
                 // A removed component's dependents are only visible before removal.
-                let basis = if removes { graph } else { Graph::merge(observed, std::slice::from_ref(plan)) };
+                let basis = if removes { graph } else { Graph::merge((*observed).clone(), std::slice::from_ref(plan)) };
                 let downgrades = cascade(plan, &basis, &self.types, &changed);
                 revoke(plan, &downgrades);
                 touched.extend(downgrades.into_iter().map(|d| d.id));
@@ -653,7 +721,7 @@ impl ArchitectureService {
     /// The components a plan covers: its own plus referenced neighborhoods.
     pub fn scope(&self, plan_id: &PlanId) -> Result<Vec<ComponentId>, ServiceError> {
         let plan = self.plan(plan_id)?;
-        let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let graph = self.graph(&Source::Plan(plan_id.clone()))?;
         let mut ids: BTreeSet<ComponentId> = plan.components.iter().map(|c| c.id.clone()).collect();
         for reference in &plan.references {
             ids.insert(reference.id.clone());
@@ -680,7 +748,7 @@ impl ArchitectureService {
     /// Plan checks (before any code is written).
     pub fn validate(&self, plan_id: &PlanId) -> Result<Report, ServiceError> {
         let plan = self.plan(plan_id)?;
-        let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let graph = self.graph(&Source::Plan(plan_id.clone()))?;
         let mut report = checks::check_plan(&plan, &graph, &self.check_cx());
         // Code rules over the plan's scope as it exists in code.
         let scope = self.scope(plan_id)?;
@@ -720,7 +788,7 @@ impl ArchitectureService {
             if let Some(c) = plan.component_mut(id) {
                 c.stage = to;
             }
-            let graph = Graph::merge(observed, std::slice::from_ref(plan));
+            let graph = Graph::merge((*observed).clone(), std::slice::from_ref(plan));
             let mut report = checks::check_plan(plan, &graph, &self.check_cx());
             // The same blocking set validation shows for it: code rules on its
             // code and its logic steps' own checks.
@@ -742,7 +810,7 @@ impl ArchitectureService {
     pub fn contract(&self, plan_id: &PlanId, id: &ComponentId) -> Result<ContractSlice, ServiceError> {
         let plan = self.plan(plan_id)?;
         let planned = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?;
-        let graph = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let graph = self.graph(&Source::Plan(plan_id.clone()))?;
         Ok(slice(&plan, planned, &graph, &checks::schema_set(&graph, &self.types)))
     }
 
@@ -759,7 +827,7 @@ impl ArchitectureService {
         let planned = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?.clone();
         // Re-read everything the checks look at, including files that are gone
         // (re-reading a vanished file drops it from the index).
-        let merged = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let merged = self.graph(&Source::Plan(plan_id.clone()))?;
         let scopes: Vec<PathBuf> = match verification_files(&plan, id, &merged) {
             Some(files) => files.iter().map(|f| self.root.join(f)).collect(),
             // Something it depends on isn't where the index last saw it: re-read
@@ -771,7 +839,7 @@ impl ArchitectureService {
         }
         let observed = self.observed()?;
         let mut report = self.check(&plan, &planned, &observed, goal, goal == Stage::Implemented)?;
-        let merged = Graph::merge(observed, std::slice::from_ref(&plan));
+        let merged = Graph::merge((*observed).clone(), std::slice::from_ref(&plan));
         for f in checks::stage_gate(&plan, &merged, &self.types, id, goal) {
             report.push(f);
         }
@@ -859,7 +927,7 @@ impl ArchitectureService {
 
     fn review_with(&self, plan: &Plan, component: &Component, merged: &Graph) -> Result<ReviewsReport, ServiceError> {
         let contract = plan.component(&component.id).map(|p| slice(plan, p, merged, &checks::schema_set(merged, &self.types)).to_markdown()).unwrap_or_default();
-        let code = self.component(&component.id, Some(&plan.id))?.code;
+        let code = self.component(&component.id, &Source::Plan(plan.id.clone()))?.code;
         let subject = Subject { plan, component, observed: merged, contract, code };
         Ok(review::review(&self.reviewers, &self.types, self.review_provider.as_deref(), &subject))
     }
@@ -868,7 +936,7 @@ impl ArchitectureService {
     /// component that's in the code.
     pub fn run_tools(&self, plan_id: &PlanId, only: Option<&ComponentId>) -> Result<ToolsReport, ServiceError> {
         let plan = self.plan(plan_id)?;
-        let merged = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let merged = self.graph(&Source::Plan(plan_id.clone()))?;
         let mut out = ToolsReport::default();
         for planned in plan.components.iter().filter(|c| only.is_none_or(|id| &c.id == id)) {
             let component = merged.component(&planned.id).unwrap_or(planned);
@@ -896,7 +964,7 @@ impl ArchitectureService {
     pub fn review(&self, plan_id: &PlanId, id: &ComponentId) -> Result<ReviewsReport, ServiceError> {
         let plan = self.plan(plan_id)?;
         let planned = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?;
-        let merged = Graph::merge(self.observed()?, std::slice::from_ref(&plan));
+        let merged = self.graph(&Source::Plan(plan_id.clone()))?;
         let component = merged.component(id).unwrap_or(planned);
         let mut out = self.review_with(&plan, component, &merged)?;
         out.report = out.report.sorted();
@@ -904,8 +972,8 @@ impl ArchitectureService {
         Ok(out)
     }
 
-    pub fn view(&self, spec: &ViewSpec, plan: Option<&PlanId>) -> Result<ViewResult, ServiceError> {
-        let graph = self.graph(plan)?;
+    pub fn view(&self, spec: &ViewSpec, source: &Source) -> Result<ViewResult, ServiceError> {
+        let graph = self.graph(source)?;
         // Filtering on a type keeps its specializations.
         let mut spec = spec.clone();
         spec.filters = spec.filters.with_specializations(&self.types);
@@ -913,7 +981,8 @@ impl ArchitectureService {
         // Flows the code shows but the types can't confirm, between what's shown.
         if spec.kinds.contains(&arch_graph::RelationKind::DataFlow) || spec.overlays.contains(&arch_graph::RelationKind::DataFlow) {
             let shown: BTreeSet<ComponentId> = view.nodes.iter().map(|n| n.id.clone()).collect();
-            let unverified = self.observed.read().map_err(ServiceError::poisoned)?.unverified.clone();
+            let snapshot = self.snapshot()?;
+            let unverified = &snapshot.unverified;
             let touching: Vec<&arch_index::UnverifiedFlow> = unverified.iter().filter(|u| shown.contains(&u.source) || shown.contains(&u.target)).collect();
             // The other end comes into the view with it.
             for u in &touching {
@@ -953,7 +1022,7 @@ impl ArchitectureService {
         Ok(ViewResult { view, text, components })
     }
 
-    pub fn named_view(&self, name: &str, plan: Option<&PlanId>, roots: Vec<ComponentId>, depth: Option<u32>) -> Result<ViewResult, ServiceError> {
+    pub fn named_view(&self, name: &str, source: &Source, roots: Vec<ComponentId>, depth: Option<u32>) -> Result<ViewResult, ServiceError> {
         let mut spec = self.views.get(name).cloned().ok_or_else(|| ServiceError::NotFound(format!("view '{name}'")))?;
         if !roots.is_empty() {
             spec.roots = roots;
@@ -961,11 +1030,11 @@ impl ArchitectureService {
         if let Some(depth) = depth {
             spec.depth = depth;
         }
-        self.view(&spec, plan)
+        self.view(&spec, source)
     }
 
-    pub fn component(&self, id: &ComponentId, plan: Option<&PlanId>) -> Result<ComponentDetail, ServiceError> {
-        let graph = self.graph(plan)?;
+    pub fn component(&self, id: &ComponentId, source: &Source) -> Result<ComponentDetail, ServiceError> {
+        let graph = self.graph(source)?;
         let component = graph.component(id).cloned().ok_or_else(|| ServiceError::NotFound(id.to_string()))?;
         let code = component.anchor.as_ref().and_then(|a| {
             let text = std::fs::read_to_string(self.root.join(a.file.as_str())).ok()?;
@@ -988,8 +1057,8 @@ impl ArchitectureService {
     }
 
     /// Components whose name, symbol or file matches `query` (case-insensitive).
-    pub fn search(&self, query: &str, plan: Option<&PlanId>, limit: usize) -> Result<Vec<Component>, ServiceError> {
-        let graph = self.graph(plan)?;
+    pub fn search(&self, query: &str, source: &Source, limit: usize) -> Result<Vec<Component>, ServiceError> {
+        let graph = self.graph(source)?;
         let q = query.to_lowercase();
         let mut hits: Vec<(usize, Component)> = graph
             .components()
@@ -1016,8 +1085,8 @@ impl ArchitectureService {
 
     /// Every component in `file` (in code or planned there) with the relations
     /// leaving them.
-    pub fn file_view(&self, file: &str, plan: Option<&PlanId>) -> Result<arch_graph::FileView, ServiceError> {
-        let graph = self.graph(plan)?;
+    pub fn file_view(&self, file: &str, source: &Source) -> Result<arch_graph::FileView, ServiceError> {
+        let graph = self.graph(source)?;
         let components: Vec<(Component, Alignment)> = graph
             .in_file(file)
             .map(|c| (c.clone(), graph.alignment(&c.id).unwrap_or(Alignment::Observed)))
@@ -1031,8 +1100,8 @@ impl ArchitectureService {
     }
 
     /// The innermost component whose code contains `line` of `file`.
-    pub fn component_at(&self, file: &str, line: u32, plan: Option<&PlanId>) -> Result<Component, ServiceError> {
-        let graph = self.graph(plan)?;
+    pub fn component_at(&self, file: &str, line: u32, source: &Source) -> Result<Component, ServiceError> {
+        let graph = self.graph(source)?;
         graph.enclosing(file, line).cloned().ok_or_else(|| ServiceError::NotFound(format!("no component at {file}:{line}")))
     }
 
@@ -1044,7 +1113,7 @@ impl ArchitectureService {
             return Err(ServiceError::NotFound(format!("view '{name}'")));
         }
         if let Some(focus) = &request.focus
-            && self.graph(request.plan.as_ref())?.component(focus).is_none()
+            && self.graph(request.source.as_ref().unwrap_or(&Source::Code))?.component(focus).is_none()
         {
             return Err(ServiceError::NotFound(focus.to_string()));
         }

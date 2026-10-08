@@ -123,7 +123,7 @@ fn comments_on_nodes_sections_and_relations_persist_with_the_plan() {
     assert_eq!(stored.comments[0].replies[0].text, "Because callers only branch on it.");
     let again = open(&root);
     assert_eq!(again.comments(&pid(), false).unwrap().len(), 3);
-    assert!(Plan::from_json(&stored.to_json().unwrap()).unwrap() == stored);
+    assert!(Plan::from_json(&stored.to_json().unwrap()).unwrap() == *stored);
 }
 
 // req: R.2

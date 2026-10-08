@@ -86,7 +86,7 @@ pub fn list_tools(views: &ViewCatalog) -> Vec<McpTool> {
         tool(
             "navigate",
             &format!("Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing.\n{view_help}"),
-            json!({ "type": "object", "properties": { "view": { "type": "string", "enum": views.views.keys().collect::<Vec<_>>() }, "plan": plan, "roots": { "type": "array", "items": id }, "depth": { "type": "integer" }, "focus": id } }),
+            json!({ "type": "object", "properties": { "view": { "type": "string", "enum": views.views.keys().collect::<Vec<_>>() }, "source": { "type": "string", "description": "\"code\" (the code alone) or \"plan:<id>\" (the code with that plan); leave out to keep what the user sees" }, "roots": { "type": "array", "items": id }, "depth": { "type": "integer" }, "focus": id } }),
         ),
         tool("plan_list", "All plans, with their components and stages.", json!({ "type": "object", "properties": {} })),
         tool(

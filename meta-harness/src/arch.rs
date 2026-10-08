@@ -4,7 +4,7 @@
 use crate::cockpit::CockpitUser;
 use std::sync::Arc;
 
-use arch_graph::{Comment, CommentId, ComponentId, PlanId, Requester, Stage, ViewRequest, ViewSpec};
+use arch_graph::{Comment, CommentId, ComponentId, PlanId, Requester, Source, Stage, ViewRequest, ViewSpec};
 use arch_service::{Actor, ArchitectureService, NewComment, PlanOp, ServiceError};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -87,8 +87,9 @@ pub fn plan_id(raw: &str) -> Result<PlanId, ArchError> {
     PlanId::new(raw).map_err(|e| ArchError(ServiceError::InvalidOp(e.to_string())))
 }
 
-fn plan_param(raw: &Option<String>) -> Result<Option<PlanId>, ArchError> {
-    raw.as_deref().filter(|p| !p.is_empty()).map(plan_id).transpose()
+/// What a read shows: the plan named (`plan=<id>`), else the code alone.
+fn source_param(raw: &Option<String>) -> Result<Source, ArchError> {
+    Ok(Source::from_plan(raw.as_deref().filter(|p| !p.is_empty()).map(plan_id).transpose()?))
 }
 
 async fn types(State(state): State<AppState>) -> Json<arch_graph::TypeSystem> {
@@ -112,9 +113,9 @@ struct ViewQuery {
 }
 
 async fn named_view(State(state): State<AppState>, Query(q): Query<ViewQuery>) -> ArchResult<arch_service::ViewResult> {
-    let plan = plan_param(&q.plan)?;
+    let source = source_param(&q.plan)?;
     let roots: Vec<ComponentId> = q.roots.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(ComponentId::new).collect();
-    Ok(Json(blocking(&state.arch, move |a| a.named_view(&q.name, plan.as_ref(), roots, q.depth)).await?))
+    Ok(Json(blocking(&state.arch, move |a| a.named_view(&q.name, &source, roots, q.depth)).await?))
 }
 
 #[derive(Deserialize)]
@@ -125,8 +126,8 @@ struct CustomView {
 }
 
 async fn custom_view(State(state): State<AppState>, Json(body): Json<CustomView>) -> ArchResult<arch_service::ViewResult> {
-    let plan = plan_param(&body.plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.view(&body.spec, plan.as_ref())).await?))
+    let source = source_param(&body.plan)?;
+    Ok(Json(blocking(&state.arch, move |a| a.view(&body.spec, &source)).await?))
 }
 
 #[derive(Deserialize)]
@@ -139,8 +140,8 @@ struct SearchQuery {
 }
 
 async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> ArchResult<Vec<arch_graph::Component>> {
-    let plan = plan_param(&q.plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.search(&q.q, plan.as_ref(), q.limit.unwrap_or(25))).await?))
+    let source = source_param(&q.plan)?;
+    Ok(Json(blocking(&state.arch, move |a| a.search(&q.q, &source, q.limit.unwrap_or(25))).await?))
 }
 
 #[derive(Deserialize)]
@@ -150,8 +151,8 @@ struct PlanQuery {
 }
 
 async fn component(State(state): State<AppState>, Path(id): Path<String>, Query(q): Query<PlanQuery>) -> ArchResult<arch_service::ComponentDetail> {
-    let plan = plan_param(&q.plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.component(&ComponentId::new(id), plan.as_ref())).await?))
+    let source = source_param(&q.plan)?;
+    Ok(Json(blocking(&state.arch, move |a| a.component(&ComponentId::new(id), &source)).await?))
 }
 
 #[derive(Deserialize)]
@@ -164,8 +165,8 @@ struct AtQuery {
 
 /// The component enclosing a code location (reveal-in-graph from the code view).
 async fn component_at(State(state): State<AppState>, Query(q): Query<AtQuery>) -> ArchResult<arch_graph::Component> {
-    let plan = plan_param(&q.plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.component_at(&q.file, q.line, plan.as_ref())).await?))
+    let source = source_param(&q.plan)?;
+    Ok(Json(blocking(&state.arch, move |a| a.component_at(&q.file, q.line, &source)).await?))
 }
 
 #[derive(Deserialize)]
@@ -176,8 +177,8 @@ struct FileQuery {
 }
 
 async fn file_view(State(state): State<AppState>, Query(q): Query<FileQuery>) -> ArchResult<arch_graph::FileView> {
-    let plan = plan_param(&q.plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.file_view(&q.path, plan.as_ref())).await?))
+    let source = source_param(&q.plan)?;
+    Ok(Json(blocking(&state.arch, move |a| a.file_view(&q.path, &source)).await?))
 }
 
 #[derive(Deserialize, Default)]
@@ -330,7 +331,7 @@ async fn next_actionable(State(state): State<AppState>, Path(plan): Path<String>
     Ok(Json(
         blocking(&state.arch, move |a| {
             let current = a.plan(&plan)?;
-            let graph = a.graph(Some(&plan))?;
+            let graph = a.graph(&Source::Plan(plan.clone()))?;
             Ok(arch_service::next_actionable(&current, &graph, a.types(), q.action))
         })
         .await?,
