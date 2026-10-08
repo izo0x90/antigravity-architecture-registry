@@ -89,11 +89,16 @@ pub struct Relation {
     /// DataFlow: what flows (a type, a type's field, a boundary's key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
+    /// Links found in the code (calls, data flow, implements): the
+    /// language's own indexer that confirmed this one ("rust-analyzer
+    /// 1.90.0"); None when it was only matched by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proven_by: Option<String>,
 }
 
 impl Relation {
     pub fn new(kind: RelationKind, source: ComponentId, target: ComponentId, provenance: Provenance) -> Self {
-        Self { kind, source, target, provenance, order: None, sites: Vec::new(), ports: None, note: String::new(), expects: None, deferred: false, data: None }
+        Self { kind, source, target, provenance, order: None, sites: Vec::new(), ports: None, note: String::new(), expects: None, deferred: false, data: None, proven_by: None }
     }
 
     /// One relation per kind and endpoint pair (data flows also per port pair).
@@ -129,6 +134,10 @@ impl Relation {
         }
         if self.data.is_none() {
             self.data = other.data.clone();
+        }
+        // Proven once any observation of it is.
+        if self.proven_by.is_none() {
+            self.proven_by = other.proven_by.clone();
         }
     }
 

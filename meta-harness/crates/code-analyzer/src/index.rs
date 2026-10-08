@@ -23,6 +23,8 @@ pub const ROLE_READ: u32 = 8;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct IndexedFile {
     pub path: RepoPath,
+    /// The indexer and its version ("rust-analyzer 1.90.0").
+    pub indexer: String,
     /// The file's content hash when it was indexed.
     pub content_hash: String,
     /// The symbols named in this file (occurrences point into this list).
@@ -107,6 +109,13 @@ pub fn run(catalog: &nah_packs::Catalog, lock: &nah_packs::Lock, indexer: &str, 
     let _ = std::fs::remove_file(&out);
     let bytes = read?;
     let mut run = read_index(&bytes, root, hashes)?;
+    let label = match &tool_version {
+        Some(v) => format!("{indexer} {v}"),
+        None => indexer.to_owned(),
+    };
+    for file in &mut run.files {
+        file.indexer = label.clone();
+    }
     run.indexer = indexer.to_owned();
     run.tool_version = tool_version;
     run.millis = started.elapsed().as_millis() as u64;
@@ -127,7 +136,7 @@ pub fn read_index(bytes: &[u8], root: &Path, hashes: &BTreeMap<RepoPath, String>
         }
         let encoding = doc.position_encoding.enum_value_or_default();
         let lines = LineStarts::new(&text);
-        let mut file = IndexedFile { path, content_hash: expected.clone(), symbols: Vec::new(), occurrences: Vec::new(), defined: Vec::new() };
+        let mut file = IndexedFile { path, indexer: String::new(), content_hash: expected.clone(), symbols: Vec::new(), occurrences: Vec::new(), defined: Vec::new() };
         let mut ids: BTreeMap<&str, u32> = BTreeMap::new();
         for occ in &doc.occurrences {
             if occ.symbol.is_empty() || occ.symbol.starts_with("local ") {

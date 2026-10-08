@@ -21,7 +21,7 @@ use arch_graph::TypeSystem;
 pub use expr::Expr;
 pub use extract::{FileExtract, FlowKind, MacroDef, RawArg, RawCall, RawDef, RawFlow, RawScope, content_hash, extract_file};
 pub use pack::{AliasSpec, BindingSpec, CallSpec, DefinitionSpec, ExpressionShape, ExpressionSpec, LanguageSpec, Pack, PackSet, PackSpec, ParamSpec, MacroSpec, DeadCodeSpec, ConditionSpec, ConstantLogic, RuleSpec, ScopeSpec};
-pub use resolve::{AmbiguousCall, ExternalCall, Resolved, UnverifiedFlow, resolve};
+pub use resolve::{AmbiguousCall, ExternalCall, Occurrence, Resolved, UnverifiedFlow, combine};
 pub use rules::{CodeRule, CodeRuleSpec, CodeRules, RuleHit, RuleKind, RuleSeverity};
 pub use walk::{SourceFile, ignored, module_symbol, walk};
 
@@ -48,6 +48,6 @@ pub fn ingest(root: &Path, scope: &Path, packs: &PackSet, rules: &CodeRules, typ
         let content = std::fs::read_to_string(&file.absolute).map_err(|e| IndexError::Io(format!("{}: {e}", file.path)))?;
         extracts.push(extract_file(pack, rules, file.path, file.module, &content));
     }
-    let resolved = resolve(&extracts, packs, types);
+    let resolved = combine(&extracts, &[], packs, types);
     Ok((extracts, resolved))
 }

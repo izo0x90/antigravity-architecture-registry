@@ -28,7 +28,7 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
         "arch_service::service::ArchitectureService",
         "arch_service::service::ArchitectureService::validate",
         "arch_service::checks::check_plan",
-        "code_analyzer::resolve::resolve",
+        "code_analyzer::resolve::combine",
         "arch_graph::graph::Graph",
         "arch_graph::tree::build",
     ] {
@@ -37,7 +37,7 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
     let calls = |from: &str, to: &str| graph.outgoing(&id(from), Some(RelationKind::Calls)).any(|r| r.target == id(to));
     assert!(calls("arch_service::service::ArchitectureService::validate", "arch_service::checks::check_plan"));
     assert!(calls("arch_service::service::ArchitectureService::read_file", "code_analyzer::extract::extract_file"));
-    assert!(calls("code_analyzer::ingest", "code_analyzer::resolve::resolve"));
+    assert!(calls("code_analyzer::ingest", "code_analyzer::resolve::combine"));
     // The Python scripts come in through the Python pack.
     assert!(graph.component(&ComponentId::for_symbol("python", "scripts.req_status")).is_some());
     // Nothing changed: the second run parses nothing.

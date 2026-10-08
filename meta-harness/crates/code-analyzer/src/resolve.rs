@@ -12,6 +12,7 @@ use arch_graph::{CodeAnchor, Component, ComponentId, Graph, Provenance, Relation
 use serde::{Deserialize, Serialize};
 
 use crate::pack::LanguageSpec;
+use crate::index::{IndexedFile, ROLE_DEFINITION};
 use crate::{Expr, FileExtract, FlowKind, PackSet, RawCall};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,9 +43,28 @@ pub struct UnverifiedFlow {
     pub reason: String,
 }
 
+/// One place in a file that names a component (for the code viewer: jump
+/// to its definition, list its references).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Occurrence {
+    pub start: u32,
+    pub end: u32,
+    /// The component it names, when it's one of ours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<ComponentId>,
+    /// The indexer's symbol, when an indexer said what it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// It's where the component is defined.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub definition: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct Resolved {
     pub graph: Graph,
+    /// Per file, what each named place refers to.
+    pub occurrences: BTreeMap<RepoPath, Vec<Occurrence>>,
     /// Calls proven to mean one of several components.
     pub ambiguous: Vec<AmbiguousCall>,
     /// Calls whose target can't be proven (a receiver of unknown type, a
@@ -292,7 +312,13 @@ fn placeholder_sites(extracts: &[FileExtract], packs: &PackSet) -> Vec<Vec<Span>
         .collect()
 }
 
-pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) -> Resolved {
+/// The combine stage: every file's facts from our reading, and what the
+/// languages' own indexers said (`indexed`, per file), into one graph. A
+/// call an indexer resolved at the called name's position is *proven*
+/// (whatever our name matching would have said); the rest are matched by
+/// name and unconfirmed. Files an indexer describes as they were before a
+/// change are matched by name only.
+pub fn combine(extracts: &[FileExtract], indexed: &[IndexedFile], packs: &PackSet, types: &TypeSystem) -> Resolved {
     let mut out = Resolved::default();
     let mut entries: Vec<Entry> = Vec::new();
     let mut index = Index::default();
@@ -493,34 +519,99 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
         }
     }
 
-    // Calls.
+    // What the languages' own indexers say, for files as they are now.
+    let by_path: HashMap<&RepoPath, &IndexedFile> = indexed.iter().map(|f| (&f.path, f)).collect();
+    let current: Vec<Option<&IndexedFile>> = extracts.iter().map(|ex| by_path.get(&ex.file).copied().filter(|f| f.content_hash == ex.content_hash)).collect();
+    // Their symbols are our definitions where they're defined at our names.
+    let mut symbol_entry: HashMap<&str, usize> = HashMap::new();
+    for (fi, ix) in current.iter().enumerate() {
+        let Some(ix) = ix else { continue };
+        let named: HashMap<(u32, u32), usize> =
+            extracts[fi].definitions.iter().enumerate().filter_map(|(di, d)| d.name_span.map(|s| ((s.start_byte, s.end_byte), di))).collect();
+        for o in ix.occurrences.iter().filter(|o| o[3] & ROLE_DEFINITION != 0) {
+            if let Some(&e) = named.get(&(o[0], o[1])).and_then(|di| def_entry.get(&(fi, *di))) {
+                symbol_entry.insert(ix.symbols[o[2] as usize].as_str(), e);
+            }
+        }
+    }
+    // What they say each reference is: (start, end) -> symbol.
+    let references: Vec<HashMap<(u32, u32), &str>> = current
+        .iter()
+        .map(|ix| ix.map(|ix| ix.occurrences.iter().filter(|o| o[3] & ROLE_DEFINITION == 0).map(|o| ((o[0], o[1]), ix.symbols[o[2] as usize].as_str())).collect()).unwrap_or_default())
+        .collect();
+    // Implements, as the indexers have it.
+    for ix in current.iter().flatten() {
+        for defined in &ix.defined {
+            let Some(&a) = symbol_entry.get(defined.symbol.as_str()) else { continue };
+            for other in &defined.implements {
+                if let Some(&b) = symbol_entry.get(other.as_str())
+                    && a != b
+                    && entries[a].is_type
+                    && entries[b].is_type
+                {
+                    let mut relation = Relation::new(RelationKind::Implements, entries[a].id.clone(), entries[b].id.clone(), Provenance::OBSERVED);
+                    relation.proven_by = Some(ix.indexer.clone());
+                    out.graph.upsert_relation(relation);
+                }
+            }
+        }
+    }
+
+    // Calls: each one's target first (an argument's producer is a call
+    // inside it), then the relations.
     let cx = Cx { entries: &entries, index: &index, extracts, packs, implements: &implements_of };
+    let target_of = |fi: usize, caller: usize, call: &RawCall| -> (CallTarget, Option<String>) {
+        let indexed = call.name_span.and_then(|s| references[fi].get(&(s.start_byte, s.end_byte)));
+        match (indexed, current[fi]) {
+            // The indexer knows: one of ours, or code outside the repo.
+            (Some(symbol), Some(ix)) => (symbol_entry.get(symbol).map_or(CallTarget::External, |&e| CallTarget::One(e)), Some(ix.indexer.clone())),
+            _ => (cx.resolve_call(caller, &call.callee, Some(call), 0), None),
+        }
+    };
+    // (file, call span) -> its target, for flows that start at a call.
+    let mut call_targets: HashMap<(usize, u32, u32), (usize, Option<String>)> = HashMap::new();
     let mut seen_external: BTreeSet<(ComponentId, String)> = BTreeSet::new();
     for (fi, ex) in extracts.iter().enumerate() {
         let Some(pack) = packs.by_name(&ex.language) else { continue };
-        let mut order: BTreeMap<ComponentId, u32> = BTreeMap::new();
-        for call in &ex.calls {
-            let caller = match call.caller {
+        let callers: Vec<Option<usize>> = ex
+            .calls
+            .iter()
+            .map(|call| match call.caller {
                 Some(di) => def_entry.get(&(fi, di)).copied(),
                 None => Some(module_entry[&fi]),
-            };
-            let Some(caller) = caller else { continue };
+            })
+            .collect();
+        let targets: Vec<(CallTarget, Option<String>)> = ex
+            .calls
+            .iter()
+            .zip(&callers)
+            .map(|(call, caller)| caller.map_or((CallTarget::External, None), |caller| target_of(fi, caller, call)))
+            .collect();
+        for (call, (target, proven)) in ex.calls.iter().zip(&targets) {
+            if let CallTarget::One(t) = target {
+                call_targets.insert((fi, call.span.start_byte, call.span.end_byte), (*t, proven.clone()));
+            }
+        }
+        let mut order: BTreeMap<ComponentId, u32> = BTreeMap::new();
+        for ((call, caller), (target, proven)) in ex.calls.iter().zip(&callers).zip(targets) {
+            let Some(caller) = *caller else { continue };
             let caller_id = entries[caller].id.clone();
             if call.reference {
                 // A function named as a value may be called later: a deferred
                 // edge when the name is a known function, nothing otherwise.
-                if let CallTarget::One(target) = cx.resolve_call(caller, &call.callee, Some(call), 0)
+                if let CallTarget::One(target) = target
                     && entries[target].def.is_some()
                     && !entries[target].is_type
                 {
                     let mut relation = Relation::new(RelationKind::Calls, caller_id, entries[target].id.clone(), Provenance::OBSERVED);
                     relation.sites.push(call.span);
                     relation.deferred = true;
+                    relation.proven_by = proven;
                     out.graph.upsert_relation(relation);
                 }
                 continue;
             }
-            match cx.resolve_call(caller, &call.callee, Some(call), 0) {
+            match target {
                 CallTarget::One(target) => {
                     let mut relation = Relation::new(RelationKind::Calls, caller_id.clone(), entries[target].id.clone(), Provenance::OBSERVED);
                     let next = order.entry(caller_id).or_insert(0);
@@ -528,6 +619,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     *next += 1;
                     relation.sites.push(call.span);
                     relation.deferred = call.deferred;
+                    relation.proven_by = proven.clone();
                     out.graph.upsert_relation(relation);
                     // Calling a type makes a value of it (`Report(...)`, `new Store()`).
                     if entries[target].holds_data {
@@ -535,17 +627,28 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                         made.ports = Some(("makes".to_owned(), "value".to_owned()));
                         made.data = Some(entries[target].name.clone());
                         made.sites.push(call.span);
+                        made.proven_by = proven.clone();
                         out.graph.upsert_relation(made);
                     }
-                    // Outputs of other repo calls passed in as arguments.
+                    // Outputs of other repo calls passed in as arguments: the
+                    // producing call's target.
                     for arg in &call.args {
-                        let CallTarget::One(source) = cx.resolve_call(caller, &arg.producer, None, 0) else { continue };
+                        let source = match call_targets.get(&(fi, arg.producer_span.start_byte, arg.producer_span.end_byte)) {
+                            Some((s, p)) => Some((*s, p.clone())),
+                            None => match cx.resolve_call(caller, &arg.producer, None, 0) {
+                                CallTarget::One(s) => Some((s, None)),
+                                _ => None,
+                            },
+                        };
+                        let Some((source, source_proven)) = source else { continue };
                         match flow(&entries, extracts, source, target, arg.position, &pack.spec.language) {
                             Ok((ports, carried)) => {
                                 let mut relation = Relation::new(RelationKind::DataFlow, entries[source].id.clone(), entries[target].id.clone(), Provenance::OBSERVED);
                                 relation.ports = Some(ports);
                                 relation.data = Some(carried);
                                 relation.sites.push(call.span);
+                                // Proven only when both ends are.
+                                relation.proven_by = proven.clone().filter(|_| source_proven.is_some());
                                 out.graph.upsert_relation(relation);
                             }
                             Err(reason) => out.unverified_flows.push(UnverifiedFlow {
@@ -581,6 +684,37 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                 }
             }
         }
+        // What each named place refers to (for the code viewer).
+        let occurrences = match current[fi] {
+            Some(ix) => ix
+                .occurrences
+                .iter()
+                .map(|o| {
+                    let symbol = ix.symbols[o[2] as usize].as_str();
+                    Occurrence { start: o[0], end: o[1], target: symbol_entry.get(symbol).map(|&e| entries[e].id.clone()), symbol: Some(symbol.to_owned()), definition: o[3] & ROLE_DEFINITION != 0 }
+                })
+                .collect(),
+            None => {
+                let mut own: Vec<Occurrence> = ex
+                    .definitions
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(di, d)| {
+                        let s = d.name_span?;
+                        let e = def_entry.get(&(fi, di))?;
+                        Some(Occurrence { start: s.start_byte, end: s.end_byte, target: Some(entries[*e].id.clone()), symbol: None, definition: true })
+                    })
+                    .collect();
+                own.extend(ex.calls.iter().filter_map(|call| {
+                    let s = call.name_span?;
+                    let (t, _) = call_targets.get(&(fi, call.span.start_byte, call.span.end_byte))?;
+                    Some(Occurrence { start: s.start_byte, end: s.end_byte, target: Some(entries[*t].id.clone()), symbol: None, definition: false })
+                }));
+                own.sort_by_key(|o| (o.start, o.end));
+                own
+            }
+        };
+        out.occurrences.insert(ex.file.clone(), occurrences);
     }
 
     // Data flow beyond arguments: results returned or kept, values made,
@@ -596,7 +730,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                 None => Some(module_entry[&fi]),
             };
             let Some(at) = at else { continue };
-            let mut add = |source: usize, target: usize, ports: (String, String), data: Option<String>| {
+            let mut add = |source: usize, target: usize, ports: (String, String), data: Option<String>, proven_by: Option<String>| {
                 if source == target {
                     return;
                 }
@@ -604,32 +738,41 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                 relation.ports = Some(ports);
                 relation.data = data;
                 relation.sites.push(raw.span);
+                relation.proven_by = proven_by;
                 out.graph.upsert_relation(relation);
             };
             match raw.kind {
                 FlowKind::Returned | FlowKind::Bound => {
                     let Some(call) = &raw.call else { continue };
-                    let CallTarget::One(source) = cx.resolve_call(at, call, None, 0) else { continue };
+                    // The producing call's target, as the calls above found it.
+                    let found = raw.call_span.and_then(|s| call_targets.get(&(fi, s.start_byte, s.end_byte)).cloned());
+                    let (source, proven) = match found {
+                        Some(found) => found,
+                        None => match cx.resolve_call(at, call, None, 0) {
+                            CallTarget::One(source) => (source, None),
+                            _ => continue,
+                        },
+                    };
                     if entries[source].is_type {
                         continue;
                     }
                     // What comes back, as written (`Result<Report, Error>`, `(u32, u32)`).
                     let carried = signature(&entries, extracts, source).and_then(|s| s.returns.as_deref()).map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "));
                     let into = if raw.kind == FlowKind::Returned { "returns".to_owned() } else { format!("kept as {}", raw.names.join(", ")) };
-                    add(source, at, ("return".to_owned(), into), carried);
+                    add(source, at, ("return".to_owned(), into), carried, proven);
                 }
                 FlowKind::Constructs => {
                     if let Some(ty) = find_type(&entries, &index, &raw.what, ex, lang).found().filter(|t| entries[*t].holds_data) {
-                        add(at, ty, ("makes".to_owned(), "value".to_owned()), Some(entries[ty].name.clone()));
+                        add(at, ty, ("makes".to_owned(), "value".to_owned()), Some(entries[ty].name.clone()), None);
                     }
                 }
                 FlowKind::Writes | FlowKind::Reads => {
                     let Some(owner) = entries[at].owner.filter(|o| entries[*o].holds_data) else { continue };
                     let data = Some(format!("{}.{}", entries[owner].name, raw.what));
                     if raw.kind == FlowKind::Writes {
-                        add(at, owner, ("writes".to_owned(), raw.what.clone()), data);
+                        add(at, owner, ("writes".to_owned(), raw.what.clone()), data, None);
                     } else {
-                        add(owner, at, (raw.what.clone(), "reads".to_owned()), data);
+                        add(owner, at, (raw.what.clone(), "reads".to_owned()), data, None);
                     }
                 }
                 FlowKind::Sends => {

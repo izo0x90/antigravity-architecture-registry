@@ -28,6 +28,9 @@ pub struct RawDef {
     pub type_name: String,
     pub syntax_kind: String,
     pub span: Span,
+    /// Where its name is written (what an indexer's definition is matched with).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_span: Option<Span>,
     /// Index of the enclosing definition in this file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<usize>,
@@ -103,6 +106,9 @@ pub struct RawFlow {
     /// Returned/Bound: the producing call's callee.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call: Option<Expr>,
+    /// Returned/Bound: where the producing call is (its target is that call's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_span: Option<Span>,
     /// Bound: the names; Receives: the handlers named (route handlers).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<String>,
@@ -393,11 +399,11 @@ fn dead(pack: &Pack, node: &AstNode<'_>) -> bool {
 /// boundary.
 fn flows(pack: &Pack, node: &AstNode<'_>, ctx: &Ctx, bound: &std::collections::HashMap<(Option<usize>, String), Bound>, defs: &[RawDef], out: &mut Vec<RawFlow>) {
     let lang = &pack.spec.language;
-    let push = |out: &mut Vec<RawFlow>, kind, what: String, names: Vec<String>, boundary: Option<String>| out.push(RawFlow { kind, at: ctx.parent, what, call: None, names, boundary, span: span(node) });
+    let push = |out: &mut Vec<RawFlow>, kind, what: String, names: Vec<String>, boundary: Option<String>| out.push(RawFlow { kind, at: ctx.parent, what, call: None, call_span: None, names, boundary, span: span(node) });
     if pack.returns.iter().any(|rule| node.matches(rule))
-        && let Some((callee, _)) = producer(pack, node, bound, ctx.parent)
+        && let Some((callee, call_span)) = producer(pack, node, bound, ctx.parent)
     {
-        out.push(RawFlow { kind: FlowKind::Returned, at: ctx.parent, what: callee.render(), call: Some(callee), names: Vec::new(), boundary: None, span: span(node) });
+        out.push(RawFlow { kind: FlowKind::Returned, at: ctx.parent, what: callee.render(), call: Some(callee), call_span: Some(call_span), names: Vec::new(), boundary: None, span: span(node) });
     }
     for (rule, spec) in pack.constructions.iter().zip(&pack.spec.constructions) {
         if node.matches(rule)
@@ -503,6 +509,7 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
                     type_name: def.type_name.clone(),
                     syntax_kind: node.kind().into_owned(),
                     span: span(&node),
+                    name_span: node.field(&def.name_field).map(|n| span(&n)),
                     parent: ctx.parent,
                     scope,
                     signature: signature(pack, def, &node),
@@ -538,10 +545,10 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
                 bound.insert((ctx.parent, name.clone()), entry.clone());
             }
             // A call's result kept in locals flows into this definition.
-            if let Some((callee, _)) = produced
+            if let Some((callee, call_span)) = produced
                 && !names.is_empty()
             {
-                out.flows.push(RawFlow { kind: FlowKind::Bound, at: ctx.parent, what: callee.render(), call: Some(callee), names, boundary: None, span: span(&node) });
+                out.flows.push(RawFlow { kind: FlowKind::Bound, at: ctx.parent, what: callee.render(), call: Some(callee), call_span: Some(call_span), names, boundary: None, span: span(&node) });
             }
         }
         if !ctx.dead {

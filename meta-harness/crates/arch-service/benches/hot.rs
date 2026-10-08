@@ -6,7 +6,7 @@ use std::path::Path;
 
 use arch_graph::TypeSystem;
 use arch_graph::tree::{TreeRequest, ViewKind};
-use code_analyzer::{CodeRules, FileExtract, PackSet, extract_file, resolve, walk};
+use code_analyzer::{CodeRules, FileExtract, PackSet, combine, extract_file, walk};
 use arch_service::{ArchitectureService, MemoryPlans, MemoryStore};
 use criterion::{Criterion, criterion_group, criterion_main};
 
@@ -32,7 +32,7 @@ fn hot(c: &mut Criterion) {
     let types = TypeSystem::defaults().unwrap();
     let rules = CodeRules::defaults(&packs, &types).unwrap();
     let facts = extracts(&root, &packs, &rules);
-    c.bench_function("link", |b| b.iter(|| resolve(&facts, &packs, &types)));
+    c.bench_function("link", |b| b.iter(|| combine(&facts, &[], &packs, &types)));
 
     let service = ArchitectureService::open(&root, code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), types.clone(), Box::new(MemoryPlans::default()), Box::new(MemoryStore::default())).unwrap();
     service.ingest(&root).unwrap();

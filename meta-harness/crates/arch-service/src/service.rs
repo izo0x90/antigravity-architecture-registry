@@ -17,7 +17,7 @@ use arch_graph::{
     RepoPath, Severity, Source, Stage, Target, TypeSystem, ViewRequest, can_transition, ComponentDetail, schema::Dsl,
     IndexState, IndexStatus, IndexSummary,
 };
-use code_analyzer::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk, UnverifiedFlow};
+use code_analyzer::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, combine, content_hash, extract_file, walk, UnverifiedFlow};
 use serde::{Deserialize, Serialize};
 
 use crate::progress::{Downgrade, cascade};
@@ -380,7 +380,7 @@ impl ArchitectureService {
 
     fn rebuild_observed(&self, t: &mut Timing) -> Result<(), ServiceError> {
         let files = self.files.read().map_err(ServiceError::poisoned)?;
-        let resolved = t.stage("link", || resolve(&files.extracts, &self.packs, &self.types));
+        let resolved = t.stage("link", || combine(&files.extracts, &[], &self.packs, &self.types));
         drop(files);
         let _snapshot = tracing::info_span!("stage", what = "snapshot").entered();
         let generation = self.snapshot()?.generation + 1;
