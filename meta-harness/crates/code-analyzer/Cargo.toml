@@ -13,6 +13,8 @@ ast-grep-language = "0.45.3"
 # The same tree-sitter ast-grep parses with: highlight queries run on its tree.
 tree-sitter = "0.27"
 streaming-iterator = "0.1"
+scip = "0.10"
+protobuf = "3"
 serde = { version = "1.0.229", features = ["derive"] }
 ignore = "0.4"
 regex = "1"
@@ -22,5 +24,6 @@ thiserror = "2.0"
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 
 [dev-dependencies]
+tempfile = "3"
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 serde = { version = "1.0", features = ["derive"] }

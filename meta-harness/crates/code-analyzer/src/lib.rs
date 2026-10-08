@@ -7,6 +7,7 @@
 mod expr;
 mod extract;
 pub mod highlight;
+pub mod index;
 mod pack;
 mod resolve;
 mod rules;
