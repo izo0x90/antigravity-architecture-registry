@@ -1,0 +1,8 @@
+[pack]
+name = "go"
+kind = "language"
+version = "1.0.0"
+description = "Go, for tests only: proves a language can be added as data, as a project's own pack."
+
+[language]
+syntax = "syntax.toml"

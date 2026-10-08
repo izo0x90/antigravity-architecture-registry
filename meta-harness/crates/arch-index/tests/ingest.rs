@@ -21,11 +21,31 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-/// Built-ins plus the packs that exist only as test data (tests/packs).
-fn packs_with_test_data() -> PackSet {
-    let mut packs = PackSet::built_in().unwrap();
-    packs.load_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/packs")).unwrap();
+fn shipped_packs_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")
+}
+
+/// The shipped packs plus a project's own (`files`: path under the
+/// project's `.nah/packs`, text), loaded the way the server loads them.
+fn with_project_packs(files: &[(&str, String)]) -> Result<PackSet, arch_index::IndexError> {
+    let dir = std::env::temp_dir().join(format!("nah-project-packs-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let places = nah_packs::Places::isolated(&dir);
+    for (path, text) in files {
+        let file = places.project.join(".nah/packs").join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    }
+    let shipped = nah_packs::Distribution::from_dir(&shipped_packs_dir()).unwrap();
+    let packs = nah_packs::Catalog::load(&shipped, &places).map_err(|e| arch_index::IndexError::Pack(e.to_string())).and_then(|c| PackSet::from_catalog(&c));
+    std::fs::remove_dir_all(&dir).unwrap();
     packs
+}
+
+/// The shipped packs plus Go, which exists only as test data: added the way
+/// a project adds a language.
+fn packs_with_test_data() -> PackSet {
+    let go = |file: &str| std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/packs/go").join(file)).unwrap();
+    with_project_packs(&[("go/pack.toml", go("pack.toml")), ("go/syntax.toml", go("syntax.toml"))]).unwrap()
 }
 
 fn run(root: &Path, packs: &PackSet) -> (Vec<FileExtract>, Resolved) {
@@ -73,7 +93,7 @@ fn assert_matches(lang: &str, resolved: &Resolved, expected_file: &Path) {
 // req: P4.3, P4.9
 #[test]
 fn rust_fixture_ingests_to_exactly_the_expected_graph() {
-    let packs = PackSet::built_in().unwrap();
+    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     let (extracts, resolved) = run(&fixtures().join("rust/sample"), &packs);
     assert_eq!(extracts.len(), 3);
     assert_matches("rust", &resolved, &fixtures().join("rust/expected.toml"));
@@ -91,7 +111,7 @@ fn rust_fixture_ingests_to_exactly_the_expected_graph() {
 // req: P4.6
 #[test]
 fn calls_resolve_by_evidence_with_order_and_sites() {
-    let packs = PackSet::built_in().unwrap();
+    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     let (_, resolved) = run(&fixtures().join("rust/sample"), &packs);
     let id = |s: &str| ComponentId::for_symbol("rust", s);
     let run_calls: Vec<_> = resolved.graph.outgoing(&id("sample::run"), Some(RelationKind::Calls)).collect();
@@ -112,7 +132,7 @@ fn calls_resolve_by_evidence_with_order_and_sites() {
 // req: P4.4
 #[test]
 fn python_fixture_ingests_to_exactly_the_expected_graph() {
-    let packs = PackSet::built_in().unwrap();
+    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     let (_, resolved) = run(&fixtures().join("python/app"), &packs);
     assert_matches("python", &resolved, &fixtures().join("python/expected.toml"));
     let format = resolved.graph.component(&ComponentId::for_symbol("python", "app.Greeter.format")).unwrap();
@@ -127,7 +147,7 @@ fn python_fixture_ingests_to_exactly_the_expected_graph() {
 // req: P4.5
 #[test]
 fn typescript_fixture_ingests_to_exactly_the_expected_graph() {
-    let packs = PackSet::built_in().unwrap();
+    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     let (extracts, resolved) = run(&fixtures().join("typescript/app"), &packs);
     assert_eq!(extracts.len(), 3, ".ts files and the .tsx one (its own grammar)");
     assert_matches("typescript", &resolved, &fixtures().join("typescript/expected.toml"));
@@ -147,7 +167,7 @@ fn typescript_fixture_ingests_to_exactly_the_expected_graph() {
 #[test]
 fn a_pack_defined_only_as_data_ingests_its_language() {
     // Go has no built-in pack and no engine code: only tests/packs/go.toml.
-    assert!(PackSet::built_in().unwrap().by_name("go").is_none());
+    assert!(PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap().by_name("go").is_none());
     let packs = packs_with_test_data();
     let (extracts, resolved) = run(&fixtures().join("go/app"), &packs);
     assert!(extracts.iter().all(|e| e.language == "go"));
@@ -176,12 +196,12 @@ fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
     };
     let row = |lang: &str, a: &str, b: &str, to: &str| (ComponentId::for_symbol(lang, a).to_string(), ComponentId::for_symbol(lang, b).to_string(), "return".to_owned(), to.to_owned());
     // Rust: through a local binding and a borrow, String into &str.
-    let (_, rust) = run(&fixtures().join("rust/sample"), &PackSet::built_in().unwrap());
+    let (_, rust) = run(&fixtures().join("rust/sample"), &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
     assert_eq!(flows(&rust), BTreeSet::from([row("rust", "sample::Upper::apply", "sample::store::Store::save", "item"), row("rust", "sample::Upper::apply", "sample::log", "msg")]));
     assert!(rust.unverified_flows.is_empty(), "{:?}", rust.unverified_flows);
     // Python and TypeScript: a nested call is typed; load() has no return type.
     for (lang, fixture, untyped_targets) in [("python", "python/app", vec!["app.Greeter.greet"]), ("typescript", "typescript/app", vec!["app.Greeter.greet", "app.show", "helpers.shout"])] {
-        let (_, resolved) = run(&fixtures().join(fixture), &PackSet::built_in().unwrap());
+        let (_, resolved) = run(&fixtures().join(fixture), &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
         assert_eq!(flows(&resolved), BTreeSet::from([row(lang, "helpers.clean", "app.Greeter.format", "text")]), "{lang}");
         let reported: Vec<(String, String)> = resolved.unverified_flows.iter().map(|u| (u.source.to_string(), u.target.to_string())).collect();
         let expected: Vec<(String, String)> =
@@ -197,7 +217,7 @@ fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("src/app.ts"), "function make(): number { return 1; }\nfunction take(s: string): void {}\nfunction run(): void { take(make()); }\n").unwrap();
-    let (_, mismatch) = run(&dir, &PackSet::built_in().unwrap());
+    let (_, mismatch) = run(&dir, &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
     assert!(flows(&mismatch).is_empty());
     assert_eq!(mismatch.unverified_flows.len(), 1);
     assert!(mismatch.unverified_flows[0].reason.contains("number doesn't match parameter 's': string"), "{:?}", mismatch.unverified_flows);
@@ -235,7 +255,7 @@ fn fetch(url: &str) -> String { url.to_owned() }
             ),
         ],
     );
-    let (_, resolved) = run(&dir, &PackSet::built_in().unwrap());
+    let (_, resolved) = run(&dir, &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
     let id = |s: &str| ComponentId::for_symbol("rust", s).to_string();
     let flows: BTreeSet<(String, String, String, String, String)> = resolved
         .graph
@@ -266,7 +286,7 @@ fn fetch(url: &str) -> String { url.to_owned() }
 // req: P4.2
 #[test]
 fn malformed_packs_are_rejected_with_a_reason() {
-    let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("packs/python.toml")).unwrap();
+    let base = std::fs::read_to_string(shipped_packs_dir().join("language/python/syntax.toml")).unwrap();
     let cases = [
         (base.replace("ast_grep = \"python\"", "ast_grep = \"klingon\""), "unknown ast-grep language"),
         (base.replace("rule = { kind = \"call\" }", "rule = { kind = \"call\", nonsense = 1 }"), "calls[0]"),
@@ -281,7 +301,7 @@ fn malformed_packs_are_rejected_with_a_reason() {
 // req: P2.10
 #[test]
 fn index_entries_round_trip_and_reject_other_versions() {
-    let packs = PackSet::built_in().unwrap();
+    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     let (extracts, _) = run(&fixtures().join("rust/sample"), &packs);
     let util = extracts.iter().find(|e| e.file.as_str() == "src/util.rs").unwrap();
     let golden_path = fixtures().join("rust/golden_util_extract.json");
@@ -320,7 +340,7 @@ fn calls_stay_within_their_language_and_unknown_receivers_are_never_guessed() {
             ("src/lib.ts", "export function helper(): void {}\nexport class Widget extends Store {}\nfunction go(): void { run(); }\n"),
         ],
     );
-    let (_, resolved) = run(&dir, &PackSet::built_in().unwrap());
+    let (_, resolved) = run(&dir, &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
     let crossing: Vec<_> = resolved.graph.relations().filter(|r| r.source.as_str().split(':').next() != r.target.as_str().split(':').next()).collect();
     assert!(crossing.is_empty(), "no relation crosses languages: {crossing:?}");
     let external: BTreeSet<&str> = resolved.external.iter().map(|e| e.callee.as_str()).collect();
@@ -334,7 +354,7 @@ fn calls_stay_within_their_language_and_unknown_receivers_are_never_guessed() {
 
 #[test]
 fn observed_calls_carry_deferral_and_dead_code_is_not_observed() {
-    let (_, resolved) = run(&fixtures().join("rust/sample"), &PackSet::built_in().unwrap());
+    let (_, resolved) = run(&fixtures().join("rust/sample"), &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
     let id = |s: &str| ComponentId::for_symbol("rust", s);
     let later: Vec<_> = resolved.graph.outgoing(&id("sample::later_log"), Some(RelationKind::Calls)).collect();
     assert_eq!(later.len(), 1, "the dead branches add no calls: {later:?}");
@@ -342,7 +362,7 @@ fn observed_calls_carry_deferral_and_dead_code_is_not_observed() {
     let run_calls: Vec<_> = resolved.graph.outgoing(&id("sample::run"), Some(RelationKind::Calls)).collect();
     assert!(run_calls.iter().all(|r| !r.deferred));
     for (lang, fixture, caller, callee) in [("python", "python/app", "app.fetch", "helpers.load"), ("typescript", "typescript/app", "app.fetch", "helpers.load")] {
-        let (_, resolved) = run(&fixtures().join(fixture), &PackSet::built_in().unwrap());
+        let (_, resolved) = run(&fixtures().join(fixture), &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
         let call = resolved.graph.outgoing(&ComponentId::for_symbol(lang, caller), Some(RelationKind::Calls)).find(|r| r.target == ComponentId::for_symbol(lang, callee)).unwrap();
         assert!(call.deferred, "{lang}: inside a lambda/arrow");
         let external: BTreeSet<&str> = resolved.external.iter().map(|e| e.callee.as_str()).collect();
@@ -360,12 +380,12 @@ fn module_symbols_come_from_the_manifest_not_the_checkout_directory() {
         .collect();
     let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
     let dir = temp_repo("fx", &refs);
-    let (extracts, _) = run(&dir, &PackSet::built_in().unwrap());
+    let (extracts, _) = run(&dir, &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
     let modules: BTreeSet<&str> = extracts.iter().map(|e| e.module.as_str()).collect();
     assert_eq!(modules, BTreeSet::from(["sample", "sample::store", "sample::util"]));
     std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
     // A root given as "." names the package from its manifest, with no empty segments.
-    let packs = PackSet::built_in().unwrap();
+    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     let rust = packs.by_name("rust").unwrap();
     assert_eq!(arch_index::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/lib.rs").unwrap(), rust), "arch_index");
     assert_eq!(arch_index::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/walk.rs").unwrap(), rust), "arch_index::walk");
@@ -378,7 +398,7 @@ fn module_symbols_come_from_the_manifest_not_the_checkout_directory() {
 // req: P4.6
 #[test]
 fn imports_match_whole_module_paths_and_inherited_members_resolve() {
-    let packs = PackSet::built_in().unwrap();
+    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     // Python: `from other.helpers import clean` is not this repo's helpers module,
     // even though the words overlap; `from helpers import clean` is.
     let root = temp_repo(
@@ -417,25 +437,27 @@ fn imports_match_whole_module_paths_and_inherited_members_resolve() {
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
-// req: P4.2
+// req: P4.2, AP.5
 #[test]
 fn packs_are_strict_about_fields_and_the_types_they_map_onto() {
-    let rust = include_str!("../packs/rust.toml");
+    let rust = std::fs::read_to_string(shipped_packs_dir().join("language/rust/syntax.toml")).unwrap();
+    let manifest = std::fs::read_to_string(shipped_packs_dir().join("language/rust/pack.toml")).unwrap();
+    let highlights = std::fs::read_to_string(shipped_packs_dir().join("language/rust/highlights.scm")).unwrap();
+    // A project's own Rust pack replaces the shipped one, checked the same way.
     let typo = rust.replacen("separator = \"::\"", "seperator = \"::\"", 1);
-    let err = arch_index::Pack::from_toml(&typo).unwrap_err().to_string();
+    let err = with_project_packs(&[("rust/pack.toml", manifest.clone()), ("rust/highlights.scm", highlights.clone()), ("rust/syntax.toml", typo)]).unwrap_err().to_string();
     assert!(err.contains("seperator"), "unknown fields are rejected: {err}");
     let widget = rust.replacen("type = \"interface\"", "type = \"widget\"", 1);
-    let mut packs = PackSet::default();
-    packs.add(arch_index::Pack::from_toml(&widget).unwrap());
+    let packs = with_project_packs(&[("rust/pack.toml", manifest), ("rust/highlights.scm", highlights), ("rust/syntax.toml", widget)]).unwrap();
     let err = packs.check_types(&TypeSystem::defaults().unwrap()).unwrap_err().to_string();
     assert!(err.contains("'widget'"), "{err}");
-    assert!(PackSet::built_in().unwrap().check_types(&TypeSystem::defaults().unwrap()).is_ok());
+    assert!(PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap().check_types(&TypeSystem::defaults().unwrap()).is_ok());
 }
 
 // req: P4.6
 #[test]
 fn types_resolve_only_through_scope_and_imports() {
-    let packs = PackSet::built_in().unwrap();
+    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     // Python: a parameter typed with a library's `Session` isn't the repo's
     // `client.Session`; one typed with a name that's neither local nor
     // imported proves nothing.
@@ -483,7 +505,7 @@ fn types_resolve_only_through_scope_and_imports() {
 // req: P4.7
 #[test]
 fn scoped_walks_honor_ignores_from_the_root() {
-    let packs = PackSet::built_in().unwrap();
+    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     let root = temp_repo(
         "scoped",
         &[
@@ -524,7 +546,7 @@ fn locals_named_like_functions_and_same_named_nested_functions_dont_mislink() {
             ),
         ],
     );
-    let (_, resolved) = run(&dir, &PackSet::built_in().unwrap());
+    let (_, resolved) = run(&dir, &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
     let id = |s: &str| ComponentId::for_symbol("rust", s);
     let calls: BTreeSet<(String, String)> = resolved.graph.relations().filter(|r| r.kind == RelationKind::Calls).map(|r| (r.source.to_string(), r.target.to_string())).collect();
     let call = |a: &str, b: &str| (id(a).to_string(), id(b).to_string());
@@ -544,7 +566,7 @@ fn locals_named_like_functions_and_same_named_nested_functions_dont_mislink() {
 #[test]
 fn call_targets_are_read_from_the_syntax_tree() {
     use arch_index::{CodeRules, Expr, extract_file};
-    let packs = PackSet::built_in().unwrap();
+    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
     let read = |lang: &str, file: &str, code: &str| -> Vec<Expr> {
         extract_file(packs.by_name(lang).unwrap(), &CodeRules::default(), arch_graph::RepoPath::new(file).unwrap(), "m".into(), code).calls.into_iter().filter(|c| !c.reference).map(|c| c.callee).collect()
     };

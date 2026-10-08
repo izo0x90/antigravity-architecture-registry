@@ -228,7 +228,7 @@ mod tests {
     // req: P5.6
     #[test]
     fn receivers_aren_t_arguments_and_optional_parameters_may_be_left_out() {
-        let packs = PackSet::built_in().unwrap();
+        let packs = arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
         let callee = method();
         assert!(against_signature(&callee, Some(&inputs(json!({"item": "str"}))), None, &packs).is_empty(), "&mut self is the receiver; flush is optional");
         assert!(against_signature(&callee, Some(&inputs(json!({"item": "str", "flush": "bool"}))), None, &packs).is_empty());

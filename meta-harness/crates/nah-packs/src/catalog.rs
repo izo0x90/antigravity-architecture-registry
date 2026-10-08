@@ -80,6 +80,12 @@ impl Places {
         })
     }
 
+    /// Every folder under `root` (which needn't exist): sees no project's
+    /// or user's own packs, for runs that mustn't depend on the machine.
+    pub fn isolated(root: &Path) -> Self {
+        Self { project: root.join("project"), home: root.join("home"), config_home: root.join("config"), data_home: root.join("data") }
+    }
+
     fn path(&self, template: &str) -> Result<PathBuf, PackError> {
         let values: BTreeMap<&str, &str> = [
             ("project", self.project.to_str()),

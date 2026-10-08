@@ -8,7 +8,6 @@ use arch_graph::{
     Component, ComponentId, FindingCode, ImplementationSpec, Invariant, InvariantKind, LogicStep, Plan, PlanId, ProposedLocation, Provenance,
     Relation, RelationKind, RepoPath, Report, Schemas, SideEffect, Signature, Stage, Status, ToolRef, TypeSystem,
 };
-use arch_index::PackSet;
 use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, PlanRepository};
 use serde_json::{Value, json};
 
@@ -40,7 +39,7 @@ fn repo_with(types: TypeSystem, rules_toml: &str) -> Repo {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("sample");
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample"), &root);
-    let packs = PackSet::built_in().unwrap();
+    let packs = arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
     let mut rules = arch_index::CodeRules::defaults(&packs, &types).unwrap();
     rules.add_toml(rules_toml, &packs, &types).unwrap();
     let service = ArchitectureService::open(
@@ -1012,7 +1011,7 @@ fn calls_that_cant_be_proven_are_reported_not_linked() {
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample"), &root);
     let service = ArchitectureService::open(
         &root,
-        PackSet::built_in().unwrap(),
+        arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
         TypeSystem::defaults().unwrap(),
         Box::new(arch_service::MemoryPlans::default()),
         Box::new(arch_service::MemoryStore::default()),

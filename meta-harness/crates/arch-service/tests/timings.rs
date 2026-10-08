@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use arch_graph::TypeSystem;
 use arch_graph::tree::{TreeRequest, ViewKind};
-use arch_index::PackSet;
 use arch_service::{ArchitectureService, Limits, MemoryPlans, SearchKind, open_facts};
 
 fn sample() -> PathBuf {
@@ -20,7 +19,7 @@ fn sample() -> PathBuf {
 
 fn open(root: &Path, limits: Limits) -> ArchitectureService {
     let facts = open_facts(root, &limits).unwrap();
-    ArchitectureService::open(root, PackSet::built_in().unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(facts)).unwrap().with_limits(limits)
+    ArchitectureService::open(root, arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(facts)).unwrap().with_limits(limits)
 }
 
 fn stages(timed: &arch_service::Timed) -> Vec<&str> {

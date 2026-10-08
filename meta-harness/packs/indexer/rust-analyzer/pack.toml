@@ -1,0 +1,25 @@
+[pack]
+name = "rust-analyzer"
+kind = "indexer"
+version = "1.0.0"
+description = "Rust's own analyzer (the Rust project's language server): exact links and types for Rust, written as SCIP."
+
+[tool]
+name = "rust-analyzer"
+# Installed as a rustup component, so it follows the toolchain's version.
+supports = ">=1.80.0, <2.0.0"
+[tool.check]
+command = "rust-analyzer"
+args = ["--version"]
+version = '^rust-analyzer (\d+\.\d+\.\d+)'
+
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "macos-arm64", "macos-x86_64"]
+[[install.steps]]
+run = { command = "rustup", args = ["component", "add", "rust-analyzer"] }
+
+[run]
+command = "rust-analyzer"
+args = ["scip", "{root}", "--output", "{out}"]
+output = "scip"
+timeout_s = 1800

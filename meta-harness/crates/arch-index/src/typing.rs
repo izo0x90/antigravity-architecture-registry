@@ -120,12 +120,11 @@ fn unwrap_null(schema: &Value) -> (&Value, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PackSet;
     use serde_json::json;
 
     #[test]
     fn written_types_are_judged_from_pack_tables() {
-        let packs = PackSet::built_in().unwrap();
+        let packs = crate::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
         let rust = &packs.by_name("rust").unwrap().spec.language;
         assert_eq!(carries(rust, "&str", &json!({"type": "string"})), Some(Ok(())));
         assert_eq!(carries(rust, "&mut Vec<u8>", &json!({"type": "array"})), Some(Ok(())));

@@ -649,7 +649,7 @@ mod tests {
         })
         .to_string();
         let input = ImportInput { plan: PlanId::new("mapped").unwrap(), title: "Mapped".into(), json: &old, language: Some("rust".into()) };
-        let (plan, report) = import(input, &Graph::new(), dir.path(), &PackSet::built_in().unwrap(), &types).unwrap();
+        let (plan, report) = import(input, &Graph::new(), dir.path(), &arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), &types).unwrap();
         let type_of = |old: &str| plan.component(&report.components.iter().find(|c| c.old_id == old).unwrap().id).unwrap().type_name.clone();
         assert_eq!((type_of("act"), type_of("spec_op"), type_of("dto")), ("routine".to_owned(), "contract_op".to_owned(), "record".to_owned()), "the most general type with the same rules");
         let reasons: Vec<String> = report.unmapped.iter().map(|u| format!("{}: {}", u.item, u.reason)).collect();

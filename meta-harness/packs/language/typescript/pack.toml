@@ -1,0 +1,10 @@
+[pack]
+name = "typescript"
+kind = "language"
+version = "1.0.0"
+description = "TypeScript and JavaScript: syntax rules for the reader, highlight queries, and scip-typescript for exact links."
+
+[language]
+syntax = "syntax.toml"
+highlights = "highlights.scm"
+indexer = "scip-typescript"

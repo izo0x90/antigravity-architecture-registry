@@ -42,7 +42,7 @@ fn copy_sources(root: &Path, packs: &PackSet) -> tempfile::TempDir {
 
 fn open(root: &Path) -> ArchitectureService {
     let facts = arch_service::open_facts(root, &arch_service::Limits::defaults().unwrap()).unwrap();
-    ArchitectureService::open(root, PackSet::built_in().unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(facts)).unwrap()
+    ArchitectureService::open(root, arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(facts)).unwrap()
 }
 
 fn ms(since: Instant) -> u64 {
@@ -83,7 +83,7 @@ fn trees(name: &str, service: &ArchitectureService) {
 }
 
 fn measure(name: &str, root: &Path) {
-    let packs = PackSet::built_in().unwrap();
+    let packs = arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
     let copy = copy_sources(root, &packs);
     let root = copy.path();
     let service = open(root);

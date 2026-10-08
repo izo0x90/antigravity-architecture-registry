@@ -57,3 +57,34 @@ fn no_install_scripts_or_hard_coded_harness_paths_remain() {
     let driver = std::fs::read_to_string(root.join("crates/provider-antigravity/src/driver.rs")).unwrap();
     assert!(!driver.contains(".local/share") && !driver.contains("AGY_EXECUTABLE"));
 }
+
+// req: AP.5
+#[test]
+fn languages_and_indexers_are_shipped_packs() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = Catalog::load(&distribution(), &places(dir.path())).unwrap();
+    let languages = arch_index::PackSet::from_catalog(&catalog).unwrap();
+    for (language, indexer) in [("rust", "rust-analyzer"), ("python", "scip-python"), ("typescript", "scip-typescript")] {
+        let pack = languages.by_name(language).unwrap_or_else(|| panic!("{language} is a shipped language pack"));
+        assert_eq!(pack.indexer.as_deref(), Some(indexer));
+        assert!(pack.highlights.as_deref().is_some_and(|h| h.contains("@")), "{language} has highlight queries");
+        let indexer = catalog.get(indexer).unwrap();
+        assert_eq!(indexer.kind(), nah_packs::Kind::Indexer);
+        // The run contract fills in the project, where the index goes, and
+        // (for an indexer installed in its own folder) that folder.
+        let run = |lock: &Lock| nah_packs::invocation(&catalog, lock, indexer.name(), Path::new("/repo"), Path::new("/tmp/out.scip"));
+        let installed = run(&Lock::default()).is_ok();
+        let mut lock = Lock::default();
+        if !installed {
+            assert!(run(&lock).unwrap_err().to_string().contains("dest"), "can't run before it's installed");
+            lock.packs.insert(indexer.name().into(), Installed { pack_version: "1.0.0".into(), tool_version: None, platform: "x".into(), dest: "/packs/x".into(), sha256: vec![], installed_at: 0 });
+        }
+        let run = run(&lock).unwrap();
+        assert!(run.args.iter().any(|a| a == "/repo") && run.args.iter().any(|a| a == "/tmp/out.scip"), "{run:?}");
+        assert!(installed || run.program.starts_with("/packs/x/"), "{run:?}");
+        // Checking it never fails: it's ready, out of range, or missing.
+        assert!(nah_packs::state(&catalog, &Lock::default(), indexer.name()).is_ok());
+    }
+    let rust = nah_packs::invocation(&catalog, &Lock::default(), "rust-analyzer", Path::new("/repo"), Path::new("/tmp/out.scip")).unwrap();
+    assert_eq!((rust.program.as_str(), rust.args.as_slice()), ("rust-analyzer", ["scip", "/repo", "--output", "/tmp/out.scip"].map(String::from).as_slice()));
+}

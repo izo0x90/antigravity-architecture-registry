@@ -28,13 +28,13 @@ fn extracts(root: &Path, packs: &PackSet, rules: &CodeRules) -> Vec<FileExtract>
 
 fn hot(c: &mut Criterion) {
     let root = repo();
-    let packs = PackSet::built_in().unwrap();
+    let packs = arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
     let types = TypeSystem::defaults().unwrap();
     let rules = CodeRules::defaults(&packs, &types).unwrap();
     let facts = extracts(&root, &packs, &rules);
     c.bench_function("link", |b| b.iter(|| resolve(&facts, &packs, &types)));
 
-    let service = ArchitectureService::open(&root, PackSet::built_in().unwrap(), types.clone(), Box::new(MemoryPlans::default()), Box::new(MemoryStore::default())).unwrap();
+    let service = ArchitectureService::open(&root, arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), types.clone(), Box::new(MemoryPlans::default()), Box::new(MemoryStore::default())).unwrap();
     service.ingest(&root).unwrap();
     for (view, depth) in [(ViewKind::Contains, 4), (ViewKind::Calls, 4), (ViewKind::DataFlow, 4)] {
         let request = TreeRequest { view, depth: Some(depth), ..TreeRequest::default() };

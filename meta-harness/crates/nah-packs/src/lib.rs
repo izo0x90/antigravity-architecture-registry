@@ -12,7 +12,7 @@ pub mod platform;
 pub mod template;
 
 pub use catalog::{Catalog, Distribution, Pack, Places};
-pub use engine::{State, executable, install, state, tool_version};
+pub use engine::{Invocation, State, executable, install, invocation, state, tool_version};
 pub use lock::{Installed, Lock};
 pub use manifest::{Kind, Manifest};
 pub use platform::{PlatformDef, Platforms};

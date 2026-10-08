@@ -8,7 +8,6 @@
 use std::path::PathBuf;
 
 use arch_graph::{Component, ComponentId, FindingCode, Param, Plan, PlanId, Provenance, ProposedLocation, Relation, RelationKind, RepoPath, Schemas, Signature, Stage, Status, TypeSystem};
-use arch_index::PackSet;
 use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, PlanRepository};
 
 struct Repo {
@@ -31,7 +30,7 @@ fn repo_typed(files: &[(&str, &str)], types: TypeSystem) -> Repo {
     }
     let s = ArchitectureService::open(
         &root,
-        PackSet::built_in().unwrap(),
+        arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
         types,
         Box::new(FsPlans::new(&root).unwrap()),
         Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),

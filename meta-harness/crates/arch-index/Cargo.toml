@@ -5,6 +5,7 @@ edition = "2024"
 description = "Language-generic code ingestion: language packs (ast-grep rules as data), extraction, call and data-flow resolution into the observed architecture graph, and code rules over components."
 
 [dependencies]
+nah-packs = { path = "../nah-packs" }
 arch-graph = { version = "0.1.0", path = "../arch-graph" }
 ast-grep-config = "0.45.3"
 ast-grep-core = "0.45.3"

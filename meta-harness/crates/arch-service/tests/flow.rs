@@ -8,7 +8,7 @@ use arch_graph::{
     ArchEvent, ChangeReason, ComponentId, FindingCode, Graph, Param, Plan, PlanId, ProposedLocation, Provenance, Relation, RelationKind, RepoPath,
     Requester, Severity, Signature, Stage, Status, TypeSystem, ViewRequest,
 };
-use arch_index::{CodeRules, PackSet};
+use arch_index::CodeRules;
 use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, PlanRepository, ServiceError};
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -45,7 +45,7 @@ fn repo_with(rules_toml: &str, setup: impl FnOnce(ArchitectureService) -> Archit
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("sample");
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../arch-index/tests/fixtures/rust/sample"), &root);
-    let (packs, types) = (PackSet::built_in().unwrap(), TypeSystem::defaults().unwrap());
+    let (packs, types) = (arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap());
     let mut rules = CodeRules::defaults(&packs, &types).unwrap();
     rules.add_toml(rules_toml, &packs, &types).unwrap();
     let service = ArchitectureService::open(

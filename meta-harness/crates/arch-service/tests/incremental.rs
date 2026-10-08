@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use arch_graph::{Graph, TypeSystem};
-use arch_index::PackSet;
 use arch_service::{ArchitectureService, Limits, MemoryPlans, MemoryStore, open_facts};
 
 fn sample() -> PathBuf {
@@ -45,7 +44,7 @@ fn open(root: &Path, kept: bool) -> ArchitectureService {
         true => Box::new(open_facts(root, &Limits::defaults().unwrap()).unwrap()),
         false => Box::new(MemoryStore::default()),
     };
-    ArchitectureService::open(root, PackSet::built_in().unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap()
+    ArchitectureService::open(root, arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap()
 }
 
 /// The graph as text, in a fixed order.

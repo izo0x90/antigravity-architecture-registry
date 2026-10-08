@@ -1,6 +1,7 @@
 //! Language packs: data that maps a language's syntax onto the generic
-//! component types via ast-grep rules. Built-in packs ship in `packs/`; more
-//! can be loaded from any directory.
+//! component types via ast-grep rules. They come from the pack catalog
+//! (`nah-packs`): each language pack holds its syntax rules, its highlight
+//! queries and the name of its indexer.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -11,11 +12,6 @@ use serde::Deserialize;
 
 use crate::IndexError;
 
-const BUILT_IN: &[(&str, &str)] = &[
-    ("rust.toml", include_str!("../packs/rust.toml")),
-    ("python.toml", include_str!("../packs/python.toml")),
-    ("typescript.toml", include_str!("../packs/typescript.toml")),
-];
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -674,8 +670,12 @@ pub struct Pack {
     pub state: Option<CompiledState>,
     pub boundaries: Vec<CompiledBoundary>,
     pub package_name_regex: Option<regex::Regex>,
-    /// Hash of the pack's text: extracts made with another version are stale.
+    /// Hash of the pack's files: facts read with another version are stale.
     pub fingerprint: String,
+    /// tree-sitter highlight queries (from the language pack).
+    pub highlights: Option<String>,
+    /// The indexer pack that knows this language exactly.
+    pub indexer: Option<String>,
     /// The same pack compiled for its other grammars (by extension).
     pub dialects: Vec<Pack>,
 }
@@ -858,6 +858,8 @@ impl Pack {
                 .collect::<Result<_, IndexError>>()?,
             package_name_regex,
             fingerprint: fingerprint.to_owned(),
+            highlights: None,
+            indexer: None,
             dialects: Vec::new(),
             lang,
             spec,
@@ -890,37 +892,51 @@ impl Pack {
     }
 }
 
-/// The packs in effect: built-ins plus any loaded from directories (a loaded
-/// pack replaces a built-in of the same language name).
+/// The language packs in effect.
 #[derive(Debug, Default)]
 pub struct PackSet {
     pub packs: Vec<Pack>,
 }
 
 impl PackSet {
-    pub fn built_in() -> Result<Self, IndexError> {
+    /// The language packs in a pack catalog: each one's syntax rules,
+    /// highlight queries and indexer.
+    pub fn from_catalog(catalog: &nah_packs::Catalog) -> Result<Self, IndexError> {
         let mut set = PackSet::default();
-        for (file, text) in BUILT_IN {
-            set.add(Pack::from_toml(text).map_err(|e| IndexError::Pack(format!("built-in {file}: {e}")))?);
+        for language in catalog.of_kind(nah_packs::Kind::Language) {
+            let files = language.manifest.language.as_ref().ok_or_else(|| IndexError::Pack(format!("{}: no [language]", language.name())))?;
+            let text = |file: &str| language.text(file).map_err(|e| IndexError::Pack(e.to_string()));
+            let syntax = text(&files.syntax)?;
+            let highlights = files.highlights.as_deref().map(text).transpose()?;
+            let mut pack = Pack::from_toml(syntax).map_err(|e| IndexError::Pack(format!("{} ({}): {e}", language.name(), files.syntax)))?;
+            if pack.name() != language.name() {
+                return Err(IndexError::Pack(format!("pack '{}' describes language '{}'", language.name(), pack.name())));
+            }
+            let fingerprint = crate::content_hash(&format!("{}\n{syntax}\n{}", language.manifest.pack.version, highlights.unwrap_or_default()));
+            let mut dialects = std::mem::take(&mut pack.dialects);
+            for p in std::iter::once(&mut pack).chain(dialects.iter_mut()) {
+                p.fingerprint = fingerprint.clone();
+                p.highlights = highlights.map(str::to_owned);
+                p.indexer = files.indexer.clone();
+            }
+            pack.dialects = dialects;
+            set.add(pack);
         }
         Ok(set)
     }
 
-    pub fn add(&mut self, pack: Pack) {
-        self.packs.retain(|p| p.name() != pack.name());
-        self.packs.push(pack);
+    /// The language packs shipped in a packs folder, without any project's
+    /// or user's own (tests and tools that must not depend on the machine).
+    pub fn from_shipped_dir(dir: &Path) -> Result<Self, IndexError> {
+        let distribution = nah_packs::Distribution::from_dir(dir).map_err(|e| IndexError::Pack(e.to_string()))?;
+        let places = nah_packs::Places::isolated(&std::env::temp_dir().join(format!("nah-isolated-{}", std::process::id())));
+        let catalog = nah_packs::Catalog::load(&distribution, &places).map_err(|e| IndexError::Pack(e.to_string()))?;
+        Self::from_catalog(&catalog)
     }
 
-    /// Loads every `*.toml` pack in a directory.
-    pub fn load_dir(&mut self, dir: &Path) -> Result<(), IndexError> {
-        let entries = std::fs::read_dir(dir).map_err(|e| IndexError::Io(format!("{}: {e}", dir.display())))?;
-        let mut paths: Vec<_> = entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|e| e == "toml")).collect();
-        paths.sort();
-        for path in paths {
-            let text = std::fs::read_to_string(&path).map_err(|e| IndexError::Io(format!("{}: {e}", path.display())))?;
-            self.add(Pack::from_toml(&text).map_err(|e| IndexError::Pack(format!("{}: {e}", path.display())))?);
-        }
-        Ok(())
+    fn add(&mut self, pack: Pack) {
+        self.packs.retain(|p| p.name() != pack.name());
+        self.packs.push(pack);
     }
 
     pub fn for_path(&self, path: &Path) -> Option<&Pack> {
@@ -943,7 +959,7 @@ mod tests {
 
     #[test]
     fn constant_conditions_are_decided_only_when_built_from_constants() {
-        let rust = PackSet::built_in().unwrap();
+        let rust = PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
         let logic = &rust.by_name("rust").unwrap().spec.constant_logic;
         for (text, value) in [
             ("false", Some(false)),

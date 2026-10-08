@@ -13,7 +13,7 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
     let service = ArchitectureService::open(
         &root,
-        PackSet::built_in().unwrap(),
+        arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
         TypeSystem::defaults().unwrap(),
         Box::new(MemoryPlans::default()),
         Box::new(arch_service::MemoryStore::default()),
@@ -75,14 +75,20 @@ fn cached_extracts_from_another_pack_version_are_parsed_again() {
         )
         .unwrap()
     };
-    let first = open(PackSet::built_in().unwrap()).ingest(&root).unwrap();
+    let first = open(arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap()).ingest(&root).unwrap();
     assert_eq!((first.parsed, first.cached), (3, 0));
-    let same = open(PackSet::built_in().unwrap()).ingest(&root).unwrap();
+    let same = open(arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap()).ingest(&root).unwrap();
     assert_eq!((same.parsed, same.cached), (0, 3), "same pack: served from the cache");
-    // The same language pack, edited: everything it extracted is stale.
-    let text = include_str!("../../arch-index/packs/rust.toml").to_owned() + "\n# edited\n";
-    let mut edited = PackSet::built_in().unwrap();
-    edited.add(arch_index::Pack::from_toml(&text).unwrap());
+    // The project's own Rust pack, edited: everything the shipped one read is stale.
+    let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
+    let own = root.join(".nah/packs/rust");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::copy(shipped.join("language/rust/pack.toml"), own.join("pack.toml")).unwrap();
+    std::fs::copy(shipped.join("language/rust/highlights.scm"), own.join("highlights.scm")).unwrap();
+    std::fs::write(own.join("syntax.toml"), std::fs::read_to_string(shipped.join("language/rust/syntax.toml")).unwrap() + "\n# edited\n").unwrap();
+    let places = nah_packs::Places { project: root.clone(), ..nah_packs::Places::isolated(&dir.path().join("elsewhere")) };
+    let catalog = nah_packs::Catalog::load(&nah_packs::Distribution::from_dir(&shipped).unwrap(), &places).unwrap();
+    let edited = arch_index::PackSet::from_catalog(&catalog).unwrap();
     let again = open(edited).ingest(&root).unwrap();
     assert_eq!((again.parsed, again.cached), (3, 0), "another pack version: parsed again");
 }

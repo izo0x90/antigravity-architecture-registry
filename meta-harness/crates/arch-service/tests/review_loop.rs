@@ -7,7 +7,6 @@ use std::path::Path;
 use arch_graph::{
     Change, CommentAnchor, CommentId, CommentKind, CommentStatus, ComponentId, Param, Plan, PlanId, RelationKind, Signature, Stage, TypeSystem,
 };
-use arch_index::PackSet;
 use arch_service::{Actor, ArchitectureService, FsPlans, NewComment, PlanOp, PlanRepository, ServiceError};
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -26,7 +25,7 @@ fn copy_dir(from: &Path, to: &Path) {
 fn open(root: &Path) -> ArchitectureService {
     ArchitectureService::open(
         root,
-        PackSet::built_in().unwrap(),
+        arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
         TypeSystem::defaults().unwrap(),
         Box::new(FsPlans::new(root).unwrap()),
         Box::new(arch_service::open_facts(root, &arch_service::Limits::defaults().unwrap()).unwrap()),

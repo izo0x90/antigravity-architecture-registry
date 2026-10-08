@@ -78,7 +78,7 @@ pub(crate) mod tests {
 
     pub fn extract(file: &str, hash: &str) -> FileExtract {
         let mut e = arch_index::extract_file(
-            arch_index::PackSet::built_in().unwrap().by_name("rust").unwrap(),
+            arch_index::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap().by_name("rust").unwrap(),
             &arch_index::CodeRules::default(),
             RepoPath::new(file).unwrap(),
             "m".into(),

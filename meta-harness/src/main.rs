@@ -145,7 +145,8 @@ fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig,
 }
 
 /// The architecture service over the repo at `NAH_REPO_ROOT` (default: the
-/// working directory). Projects can add language packs (`.nah/packs/*.toml`),
+/// working directory). Languages come from the packs (shipped, then the
+/// project's `.nah/packs/` and the user's); projects can add
 /// types (`.nah/types.toml`), the views (`.nah/trees.toml`), limits
 /// (`.nah/limits.toml`), validation tools
 /// (`.nah/tools.toml`), reviewers (`.nah/reviewers.toml`) and schema
@@ -153,10 +154,7 @@ fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig,
 fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>> {
     let root = repo_root()?;
     let nah = root.join(".nah");
-    let mut packs = PackSet::built_in()?;
-    if nah.join("packs").is_dir() {
-        packs.load_dir(&nah.join("packs"))?;
-    }
+    let packs = PackSet::from_catalog(&meta_harness::packs::catalog(&root)?)?;
     let mut types = TypeSystem::defaults()?;
     if let Ok(text) = std::fs::read_to_string(nah.join("types.toml")) {
         types.extend_from_toml(&text)?;

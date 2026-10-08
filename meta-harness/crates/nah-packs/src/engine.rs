@@ -80,6 +80,10 @@ pub fn state(catalog: &Catalog, lock: &Lock, name: &str) -> Result<State, PackEr
 /// nothing the pattern finds).
 pub fn tool_version(pack: &Pack, dest: Option<&Path>) -> Result<Option<String>, PackError> {
     let Some(check) = pack.manifest.tool.as_ref().and_then(|t| t.check.as_ref()) else { return Ok(None) };
+    // A check that runs a program inside the install folder: nothing to run before it's installed.
+    if dest.is_none() && std::iter::once(&check.command).chain(&check.args).any(|t| template::names(t).contains(&"dest")) {
+        return Ok(None);
+    }
     let values = base_values(pack, dest);
     let fill = |t: &str| template::expand(t, &values).map_err(|reason| PackError::Manifest { pack: pack.name().to_owned(), reason });
     let command = fill(&check.command)?;
@@ -280,3 +284,27 @@ pub fn executable(catalog: &Catalog, lock: &Lock, name: &str) -> Result<PathBuf,
     let installed = lock.packs.get(name).ok_or_else(|| PackError::NotInstalled(name.to_owned()))?;
     Ok(installed.dest.join(&provides.executable))
 }
+
+/// An indexer's run contract, filled in: the program, its arguments, and
+/// how long it may take.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Invocation {
+    pub program: String,
+    pub args: Vec<String>,
+    pub timeout: std::time::Duration,
+}
+
+/// How to run indexer `name` over `root`, writing to `out` (`dest` is its
+/// install folder, when it has one).
+pub fn invocation(catalog: &Catalog, lock: &Lock, name: &str, root: &Path, out: &Path) -> Result<Invocation, PackError> {
+    let pack = catalog.get(name)?;
+    let run = pack.manifest.run.as_ref().ok_or_else(|| PackError::Manifest { pack: name.to_owned(), reason: "it has no [run]".into() })?;
+    let dest = lock.packs.get(name).map(|i| i.dest.clone());
+    let mut values = base_values(pack, dest.as_deref());
+    let (root, out) = (root.to_string_lossy(), out.to_string_lossy());
+    values.insert("root", &root);
+    values.insert("out", &out);
+    let fill = |t: &str| template::expand(t, &values).map_err(|reason| PackError::Manifest { pack: name.to_owned(), reason });
+    Ok(Invocation { program: fill(&run.command)?, args: run.args.iter().map(|a| fill(a)).collect::<Result<_, _>>()?, timeout: std::time::Duration::from_secs(run.timeout_s) })
+}
+

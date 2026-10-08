@@ -1,0 +1,10 @@
+[pack]
+name = "rust"
+kind = "language"
+version = "1.0.0"
+description = "Rust: syntax rules for the reader, highlight queries, and rust-analyzer for exact links."
+
+[language]
+syntax = "syntax.toml"
+highlights = "highlights.scm"
+indexer = "rust-analyzer"

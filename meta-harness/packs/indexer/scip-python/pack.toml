@@ -1,0 +1,25 @@
+[pack]
+name = "scip-python"
+kind = "indexer"
+version = "1.0.0"
+description = "scip-python (built on Pyright): exact links and types for Python, written as SCIP. The least maintained of the indexers (last release 2025). Installed into its pack folder with npm."
+
+[tool]
+name = "scip-python"
+version = "0.6.6"
+supports = ">=0.6.0, <0.7.0"
+[tool.check]
+command = "{dest}/node_modules/.bin/scip-python"
+args = ["--version"]
+version = '^(\d+\.\d+\.\d+)'
+
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "macos-arm64", "macos-x86_64"]
+[[install.steps]]
+run = { command = "npm", args = ["install", "--prefix", ".", "--no-save", "--no-audit", "--no-fund", "@sourcegraph/scip-python@{tool_version}"] }
+
+[run]
+command = "{dest}/node_modules/.bin/scip-python"
+args = ["index", "--cwd", "{root}", "--quiet", "--output", "{out}"]
+output = "scip"
+timeout_s = 1800
