@@ -392,6 +392,15 @@ impl NetClient {
         self.call("GET", &path, None, ctx, on_done);
     }
 
+    /// Symbols, files or lines matching `query` (in the code, or with a plan).
+    pub fn search(&self, query: &str, kind: arch_search::SearchKind, plan: Option<&arch_graph::PlanId>, limit: usize, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_search::Found>) + Send + 'static) {
+        let mut path = format!("/api/search?q={}&kind={}&limit={limit}", urlencoding::encode(query), kind.name());
+        if let Some(plan) = plan {
+            path.push_str(&format!("&plan={}", urlencoding::encode(&plan.0)));
+        }
+        self.call("GET", &path, None, ctx, on_done);
+    }
+
     /// The views' settings: descriptions, depths and the sizes trees are laid out with.
     pub fn graph_config(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::tree::TreeConfig>) + Send + 'static) {
         self.call("GET", "/api/graph/config", None, ctx, on_done);

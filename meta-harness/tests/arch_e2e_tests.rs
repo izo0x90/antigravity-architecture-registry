@@ -43,9 +43,15 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     let (status, body) = http(addr, "GET", "/api/arch/unproven", None).await;
     assert_eq!(status, 200, "{body}");
     assert!(parse(&body).as_array().unwrap().iter().any(|c| c["caller"] == "rust:sample::store::store_each"), "{body}");
-    let (status, body) = http(addr, "GET", "/api/arch/search?q=shout", None).await;
+    let (status, body) = http(addr, "GET", "/api/search?q=shout", None).await;
     assert_eq!(status, 200);
-    assert_eq!(parse(&body)[0]["id"], "rust:sample::util::shout");
+    assert_eq!(parse(&body)["hits"][0]["key"], "rust:sample::util::shout");
+    let (status, body) = http(addr, "GET", "/api/search?q=util&kind=files", None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(parse(&body)["hits"][0]["label"], "src/util.rs");
+    let (status, body) = http(addr, "GET", "/api/search?q=to_uppercase&kind=text", None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(parse(&body)["hits"][0]["key"], "rust:sample::util::shout", "a line names what it's inside of: {body}");
 
     let (status, body) = http(addr, "POST", "/api/arch/plans", Some(r#"{"id":"val","title":"Validate input"}"#)).await;
     assert_eq!(status, 200, "{body}");

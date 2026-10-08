@@ -29,7 +29,11 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     assert!(!err && text.contains("\"function\""));
 
     let (err, text) = mcp.tool("search", json!({ "query": "save" })).await;
-    assert!(!err && text.contains("rust:sample::store::Store::save [function Existing/Implemented] src/store.rs:10"), "{text}");
+    assert!(!err && text.contains("rust:sample::store::Store::save [function · src/store.rs:10 Existing/Implemented] save"), "{text}");
+    let (err, text) = mcp.tool("search", json!({ "query": "to_uppercase", "kind": "text" })).await;
+    assert!(!err && text.contains("src/util.rs:2 · in shout: s.to_uppercase()  (card rust:sample::util::shout Existing/Implemented)"), "{text}");
+    let (err, text) = mcp.tool("search", json!({ "query": "util", "kind": "files" })).await;
+    assert!(!err && text.contains("src/util.rs"), "{text}");
     let (err, text) = mcp.tool("search", json!({ "query": "zzz" })).await;
     assert!(!err && text.contains("No matches"));
 

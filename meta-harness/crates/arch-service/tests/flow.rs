@@ -482,9 +482,9 @@ fn view_requests_are_checked_and_announced() {
     let view = r.service.tree(&TreeRequest { view: ViewKind::Calls, root: Some(id("sample::run").0), depth: Some(1), ..TreeRequest::default() }).unwrap();
     assert!(arch_graph::tree::render(&view, r.service.trees()).contains("run [function"));
     assert!(view.card(id("sample::run").as_str()).is_some());
-    let found = r.service.search("store", &arch_graph::Source::Code, 10).unwrap();
-    let top: Vec<_> = found.iter().take(2).map(|c| c.id.clone()).collect();
-    assert_eq!(top, vec![id("sample::store"), id("sample::store::Store")], "exact name matches first, ties by id");
+    let found = r.service.search("store", arch_service::SearchKind::Symbols, &arch_graph::Source::Code, Some(10)).unwrap();
+    let top: Vec<_> = found.hits.iter().take(2).map(|h| h.key.clone().unwrap()).collect();
+    assert_eq!(top, vec![id("sample::store").0, id("sample::store::Store").0], "whole names first, ties in order");
     let detail = r.service.component(&id("sample::log"), &arch_graph::Source::Code).unwrap();
     assert!(detail.code.unwrap().contains("println!"));
     assert_eq!(r.service.component_at("src/store.rs", 11, &arch_graph::Source::Code).unwrap().id, id("sample::store::Store::save"));
@@ -912,7 +912,7 @@ fn code_shows_no_plan_and_a_plan_shows_only_itself() {
     // Code: nothing planned anywhere (views, search, details, file margins).
     assert!(r.service.graph(&code).unwrap().component(&id("sample::validate")).is_none());
     assert!(r.service.graph(&code).unwrap().component(&id("sample::audit")).is_none());
-    assert!(r.service.search("validate", &code, 10).unwrap().is_empty(), "search under Code finds no planned component");
+    assert!(r.service.search("validate", arch_service::SearchKind::Symbols, &code, Some(10)).unwrap().hits.is_empty(), "search under Code finds no planned component");
     assert!(r.service.component(&id("sample::validate"), &code).is_err());
     let planned_file = r.service.graph(&p).unwrap().component(&id("sample::validate")).unwrap().file().unwrap().as_str().to_owned();
     let margin = r.service.file_view(&planned_file, &code).unwrap();
@@ -921,7 +921,7 @@ fn code_shows_no_plan_and_a_plan_shows_only_itself() {
     let with_p = r.service.graph(&p).unwrap();
     assert!(with_p.component(&id("sample::validate")).is_some());
     assert!(with_p.component(&id("sample::audit")).is_none(), "one plan at a time");
-    assert_eq!(r.service.search("validate", &p, 10).unwrap()[0].id, id("sample::validate"));
+    assert_eq!(r.service.search("validate", arch_service::SearchKind::Symbols, &p, Some(10)).unwrap().hits[0].key.as_deref(), Some(id("sample::validate").as_str()));
     assert!(r.service.file_view(&planned_file, &p).unwrap().components.iter().any(|(c, _)| c.id == id("sample::validate")));
     // An agent can switch the user back to the code.
     let request: ViewRequest = serde_json::from_value(serde_json::json!({ "source": "code" })).unwrap();
@@ -945,7 +945,7 @@ fn reads_share_the_graph_and_a_plan_overlay_is_rebuilt_only_when_it_changes() {
     let first = r.service.graph(&p).unwrap();
     assert!(Arc::ptr_eq(&first, &r.service.graph(&p).unwrap()), "a plan's overlay is built once");
     // Reads in between change nothing.
-    r.service.search("run", &p, 5).unwrap();
+    r.service.search("run", arch_service::SearchKind::Symbols, &p, Some(5)).unwrap();
     r.service.component(&id("sample::validate"), &p).unwrap();
     assert!(Arc::ptr_eq(&first, &r.service.graph(&p).unwrap()));
     // The plan changes: rebuilt.

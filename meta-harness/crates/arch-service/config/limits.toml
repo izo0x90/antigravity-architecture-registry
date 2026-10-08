@@ -16,6 +16,19 @@ tree_ms = 200
 # Slower than this, a request is logged with what was asked.
 slow_request_ms = 200
 
+# Searching symbols, files and lines.
+[limits.search]
+# Hits in an answer when the asker doesn't say.
+results = 25
+# The most hits in one answer, whatever is asked.
+most = 200
+# A search through file contents answers with what it found after this long.
+text_ms = 150
+# Lines kept from one file.
+text_per_file = 3
+# Bigger files aren't searched.
+text_max_file_kib = 2048
+
 # Where the facts read from the code are kept between runs (SQLite).
 [limits.store]
 # "normal" is safe with its write-ahead log, and much faster than "full".

@@ -57,3 +57,16 @@ was kept isn't read; the facts are kept in `.nah/cache/index.sqlite`.
 Linking (tying calls and names across files) is now about 0.44 s on tokio,
 down from 2.55 s, after its name lookups were indexed; it's redone whole
 after a change, which is what a one-file change costs.
+
+### Search (slice P6)
+
+Symbols are matched in memory with neo_frizbee; files and lines with
+fff-search (its file list is read once, ~0.1 s here, and kept up to date
+from the watcher).
+
+| | this repo | tokio |
+|---|---|---|
+| Symbols ("view") | <1 ms | <1 ms |
+| Symbols, qualified ("servce::serch") | 2 ms | 4 ms |
+| Files ("service") | 2 ms | 4 ms |
+| Lines ("fn new") | 2 ms | 1 ms |

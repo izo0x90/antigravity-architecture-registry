@@ -49,7 +49,7 @@ pub async fn blocking<T: Send + 'static>(
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/arch/types", get(types))
-        .route("/api/arch/search", get(search))
+        .route("/api/search", get(search))
         .route("/api/arch/components/{id}", get(component))
         .route("/api/arch/at", get(component_at))
         .route("/api/arch/file", get(file_view))
@@ -97,15 +97,19 @@ async fn types(State(state): State<AppState>) -> Json<arch_graph::TypeSystem> {
 #[derive(Deserialize)]
 struct SearchQuery {
     q: String,
+    /// symbols (the default), files or text.
+    #[serde(default)]
+    kind: arch_service::SearchKind,
     #[serde(default)]
     plan: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
 }
 
-async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> ArchResult<Vec<arch_graph::Component>> {
+/// Symbols, files or lines matching `q`; each hit names the card it stands for.
+async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> ArchResult<arch_service::Found> {
     let source = source_param(&q.plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.search(&q.q, &source, q.limit.unwrap_or(25))).await?))
+    Ok(Json(blocking(&state.arch, move |a| a.search(&q.q, q.kind, &source, q.limit)).await?))
 }
 
 #[derive(Deserialize)]

@@ -183,6 +183,7 @@ I = "Index"
 "graph.refresh" = { leader = "g ." }
 "graph.legend" = { leader = "g ?", keys = ["g ?"] }
 "graph.agent_return" = { leader = "g a", keys = ["g a"] }
+"graph.find" = { leader = "g /", keys = ["g /"] }
 
 # Spec view (when focused). j/k walk every item; J/K (and ]] / [[) jump
 # between sections. Review: comment on (or ask for a change to) the item
@@ -512,6 +513,12 @@ readable_zoom = 0.85
 min_text_px = 6.0
 # Details kept for cards selected before (fetched again after that).
 details_kept = 64
+
+# "Find in the code": results listed per kind, best first.
+[graph.find]
+symbols = 12
+files = 6
+text = 8
 
 [graph.touch]
 # Points a finger may wander and still tap or long-press.

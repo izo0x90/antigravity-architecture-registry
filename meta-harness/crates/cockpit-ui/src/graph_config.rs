@@ -40,6 +40,15 @@ pub struct GraphUi {
     pub min_text_px: f32,
     /// Details kept for cards selected before.
     pub details_kept: usize,
+    /// Results listed by "Find in the code", per kind.
+    pub find: FindLimits,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct FindLimits {
+    pub symbols: usize,
+    pub files: usize,
+    pub text: usize,
 }
 
 impl Default for GraphUi {
@@ -56,6 +65,7 @@ impl Default for GraphUi {
             readable_zoom: 1.0,
             min_text_px: 6.0,
             details_kept: 64,
+            find: FindLimits::default(),
         })
     }
 }

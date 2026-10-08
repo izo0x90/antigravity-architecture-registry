@@ -25,6 +25,9 @@ pub enum Param {
     Toggle { on: bool },
     /// Free text (opens ready for typing or dictation).
     Text { hint: String },
+    /// Typed text looked up as it's typed: the provider gets each query
+    /// (`ActionProvider::search`) and lists what it found for it here.
+    Search { hint: String, found: Vec<Choice>, waiting: bool },
 }
 
 impl Param {
@@ -33,6 +36,7 @@ impl Param {
         match self {
             Self::Choice(choices) => choices.clone(),
             Self::Toggle { on } => vec![Choice::new("true", "On").current(*on), Choice::new("false", "Off").current(!*on)],
+            Self::Search { found, .. } => found.clone(),
             Self::None | Self::Text { .. } => Vec::new(),
         }
     }
@@ -355,6 +359,9 @@ pub trait ActionProvider {
     fn take_palette_request(&mut self) -> Option<String> {
         None
     }
+
+    /// What's typed for a `Param::Search` action, as it changes.
+    fn search(&mut self, _action: &str, _query: &str) {}
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -404,29 +411,6 @@ pub fn is_primary(entry: &LeaderEntry, bound: &[Bound], path: &[char], focused: 
             bound.iter().any(|b| b.origin == focused && b.leader.as_ref().is_some_and(|l| l.starts_with(&prefix)))
         }
     }
-}
-
-/// Subsequence fuzzy match; higher is better, `None` means no match.
-pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
-    if query.is_empty() {
-        return Some(0);
-    }
-    let text = text.to_lowercase();
-    let mut score = 0;
-    let mut last = None;
-    let mut chars = text.char_indices();
-    for q in query.to_lowercase().chars().filter(|c| !c.is_whitespace()) {
-        let (pos, _) = chars.find(|(_, c)| *c == q)?;
-        score += match last {
-            Some(prev) if pos == prev + 1 => 3,
-            _ => 1,
-        };
-        if pos == 0 {
-            score += 2;
-        }
-        last = Some(pos);
-    }
-    Some(score)
 }
 
 /// What the user did with a toolbar control.
@@ -538,12 +522,5 @@ mod tests {
         let action = Action::new("x", "X", Mine::Go);
         assert_eq!(action.command::<Mine>(), Some(&Mine::Go));
         assert_eq!(action.command::<u8>(), None);
-    }
-
-    #[test]
-    fn fuzzy_prefers_contiguous_and_prefix_matches() {
-        assert!(fuzzy_score("res", "Resume session") > fuzzy_score("res", "Close session (resets)"));
-        assert_eq!(fuzzy_score("xyz", "Resume session"), None);
-        assert_eq!(fuzzy_score("", "anything"), Some(0));
     }
 }

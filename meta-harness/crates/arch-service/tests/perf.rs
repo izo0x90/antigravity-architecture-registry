@@ -7,7 +7,7 @@ use std::time::Instant;
 use arch_graph::tree::{TreeRequest, ViewKind, Way, problems};
 use arch_graph::TypeSystem;
 use arch_index::PackSet;
-use arch_service::{ArchitectureService, MemoryPlans};
+use arch_service::{ArchitectureService, MemoryPlans, SearchKind};
 
 /// The big repository: tokio at a fixed tag, fetched once into the cache.
 const BIG_REPO: &str = "https://github.com/tokio-rs/tokio.git";
@@ -120,11 +120,13 @@ fn measure(name: &str, root: &Path) {
     assert!(took <= limits.perf.full_index_ms, "{name}: restart took {took} ms");
 
     trees(name, &service);
-    let t = Instant::now();
-    let hits = service.search("view", &arch_graph::Source::Code, 25).unwrap();
-    let took = ms(t);
-    println!("perf {name} search ms={took} hits={}", hits.len());
-    assert!(took <= limits.perf.search_ms, "{name}: search took {took} ms");
+    for (kind, query) in [(SearchKind::Symbols, "view"), (SearchKind::Symbols, "servce::serch"), (SearchKind::Files, "service"), (SearchKind::Text, "fn new")] {
+        let t = Instant::now();
+        let found = service.search(query, kind, &arch_graph::Source::Code, None).unwrap();
+        let took = ms(t);
+        println!("perf {name} search kind={} query={query:?} ms={took} hits={} total={}", kind.name(), found.hits.len(), found.total);
+        assert!(took <= limits.perf.search_ms, "{name}: searching {} for {query:?} took {took} ms", kind.name());
+    }
 }
 
 // req: M.1, M.7, G.7, G.9

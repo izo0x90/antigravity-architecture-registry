@@ -30,6 +30,7 @@ use crate::tools::{ProcessRunner, ToolCatalog, ToolRunner, ToolsReport};
 use crate::{ServiceError, chain, checks, review, tools, verify};
 
 mod comments;
+mod search;
 pub use comments::{NewComment, approval_blocker};
 
 /// Who is asking. Approvals are for users only.
@@ -194,6 +195,8 @@ pub struct ArchitectureService {
     facts: Box<dyn FactStore>,
     /// Every file's facts, as last read.
     files: RwLock<Files>,
+    /// The repo's file list for searching files and lines (read on first use).
+    repo_files: RwLock<Option<arch_search::RepoFiles>>,
     observed: RwLock<Arc<Observed>>,
     /// Plans laid over the code, by plan (the most recently used few).
     merged: Mutex<HashMap<PlanId, Merged>>,
@@ -253,6 +256,7 @@ impl ArchitectureService {
             plans,
             facts,
             files,
+            repo_files: RwLock::new(None),
             observed: RwLock::new(Arc::new(Observed::default())),
             merged: Mutex::new(HashMap::new()),
             limits: crate::Limits::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in limits: {e}")))?,
@@ -406,6 +410,7 @@ impl ArchitectureService {
     pub fn reindex(&self) -> Result<IngestReport, ServiceError> {
         let _one = self.ingest_lock.lock().unwrap_or_else(PoisonError::into_inner);
         self.facts.clear()?;
+        self.forget_files();
         *self.files.write().map_err(ServiceError::poisoned)? = Files::default();
         self.ingest_locked(&[self.root.clone()])
     }
@@ -651,6 +656,7 @@ impl ArchitectureService {
     /// call. Re-verification checks the code (location, calls, signature,
     /// call chain); tools and reviewers run on explicit verification only.
     pub fn refresh(&self, paths: &[PathBuf]) -> Result<Refresh, ServiceError> {
+        self.files_changed(paths);
         let mut scopes: Vec<PathBuf> = Vec::new();
         for p in paths {
             if self.watches(p)? {
@@ -1123,33 +1129,6 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             code,
             stale,
         })
-    }
-
-    /// Components whose name, symbol or file matches `query` (case-insensitive).
-    pub fn search(&self, query: &str, source: &Source, limit: usize) -> Result<Vec<Component>, ServiceError> {
-        let graph = self.graph(source)?;
-        let q = query.to_lowercase();
-        let mut hits: Vec<(usize, Component)> = graph
-            .components()
-            .filter_map(|c| {
-                let symbol = c.anchor.as_ref().map(|a| a.symbol.clone()).or(c.proposed.as_ref().map(|p| p.symbol.clone())).unwrap_or_default();
-                let file = c.file().map(|f| f.as_str().to_owned()).unwrap_or_default();
-                let rank = if c.name.to_lowercase() == q {
-                    0
-                } else if c.name.to_lowercase().contains(&q) {
-                    1
-                } else if symbol.to_lowercase().contains(&q) {
-                    2
-                } else if file.to_lowercase().contains(&q) {
-                    3
-                } else {
-                    return None;
-                };
-                Some((rank, c.clone()))
-            })
-            .collect();
-        hits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.id.cmp(&b.1.id)));
-        Ok(hits.into_iter().take(limit).map(|(_, c)| c).collect())
     }
 
     /// Every component in `file` (in code or planned there) with the relations

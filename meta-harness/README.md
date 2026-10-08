@@ -93,6 +93,11 @@ all of them:
 - **Find:**
   - `f` labels what's on screen (type a label to go there; `F` opens it);
   - `/` searches the view, `n`/`N` step through matches;
+  - `g /` in the graph finds anything in the code (symbols, file names,
+    lines) as you type; picking one makes it the root. The same search is
+    `GET /api/search?q=&kind=symbols|files|text` and the agent's `search`;
+    names match letters in order (neo_frizbee), files and lines come from
+    fff-search;
   - `z o`/`z c`/`z a`/`z R`/`z M` fold.
 - **Go to**, from whatever the cursor is on:
   - `g d` code, `g s` spec, `g m` graph, `g t` outline, `g q` queue job;

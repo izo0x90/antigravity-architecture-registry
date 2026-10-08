@@ -118,6 +118,8 @@ struct ScopeArgs {
 struct SearchArgs {
     query: String,
     #[serde(default)]
+    kind: arch_service::SearchKind,
+    #[serde(default)]
     plan: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
@@ -351,16 +353,33 @@ impl McpService {
             "search" => {
                 let a: SearchArgs = parse(args)?;
                 let plan = opt_plan(&a.plan)?;
-                let hits = blocking(&self.arch, move |s| s.search(&a.query, &Source::from_plan(plan), a.limit.unwrap_or(20))).await?;
+                let (found, states) = blocking(&self.arch, move |s| {
+                    let source = Source::from_plan(plan);
+                    let found = s.search(&a.query, a.kind, &source, a.limit)?;
+                    // Each card's status and stage, as the agent works by them.
+                    let graph = s.graph(&source)?;
+                    let states: Vec<String> = found
+                        .hits
+                        .iter()
+                        .map(|h| h.key.as_ref().and_then(|k| graph.component(&arch_graph::ComponentId::new(k.as_str()))).map(|c| format!(" {:?}/{:?}", c.status, c.stage)).unwrap_or_default())
+                        .collect();
+                    Ok((found, states))
+                })
+                .await?;
                 let mut out = String::new();
-                for c in &hits {
-                    let at = c.anchor.as_ref().map(|x| format!("{}:{}", x.file, x.span.start_line)).or(c.proposed.as_ref().map(|p| format!("-> {}", p.file))).unwrap_or_default();
-                    let _ = writeln!(out, "{} [{} {:?}/{:?}] {at}", c.id, c.type_name, c.status, c.stage);
+                for (h, state) in found.hits.iter().zip(&states) {
+                    let card = h.key.as_deref().unwrap_or("(no card)");
+                    let _ = match found.kind {
+                        arch_service::SearchKind::Symbols | arch_service::SearchKind::Files => writeln!(out, "{card} [{}{state}] {}", h.detail, h.label),
+                        arch_service::SearchKind::Text => writeln!(out, "{}: {}  (card {card}{state})", h.detail, h.label),
+                    };
                 }
-                if hits.is_empty() {
-                    out.push_str("No matches. Try a shorter query, or ingest first.\n");
+                if found.hits.is_empty() {
+                    out.push_str("No matches. Try fewer letters, another kind (symbols, files, text), or ingest first.\n");
+                } else if found.total > found.hits.len() || found.partial {
+                    let _ = writeln!(out, "({} of {}{} shown; give a bigger limit or a narrower query.)", found.hits.len(), found.total, if found.partial { "+" } else { "" });
                 }
-                out.push_str("\nNext: inspect a match, or view it (e.g. view name=calls roots=[id]) to see what it touches.");
+                out.push_str("\nNext: inspect a card, or view it (e.g. view view=calls root=<card>) to see what it touches.");
                 Ok(out)
             }
             "inspect" => {

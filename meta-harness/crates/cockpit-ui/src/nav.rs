@@ -249,9 +249,9 @@ pub enum Step {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
     pub key: String,
-    /// Ranked first: exact, then prefix matches of the name.
+    /// Matched first, fuzzily (letters in order).
     pub name: String,
-    /// Also searched (anywhere in it).
+    /// Also searched: every word as written.
     pub text: String,
 }
 
@@ -268,33 +268,21 @@ pub struct Spot {
     pub rect: egui::Rect,
 }
 
-/// Indices of the items matching `query` (any case): exact names first, then
-/// names starting with it, then anything containing it; ties keep document
-/// order.
+/// Indices of the items matching `query`, the way search matches everywhere
+/// (`arch_search`): names first, best first (letters in order, the whole
+/// name before part of it); then items whose text has every word as
+/// written, best first.
 pub fn rank_matches(items: &[Item], query: &str) -> Vec<usize> {
-    if query.is_empty() {
+    if query.trim().is_empty() {
         return Vec::new();
     }
-    let q = query.to_lowercase();
-    let mut hits: Vec<(u8, usize)> = items
-        .iter()
-        .enumerate()
-        .filter_map(|(i, item)| {
-            let name = item.name.to_lowercase();
-            let rank = if !name.is_empty() && name == q {
-                0
-            } else if !name.is_empty() && name.starts_with(&q) {
-                1
-            } else if name.contains(&q) || item.text.to_lowercase().contains(&q) {
-                2
-            } else {
-                return None;
-            };
-            Some((rank, i))
-        })
-        .collect();
-    hits.sort_by_key(|(rank, _)| *rank);
-    hits.into_iter().map(|(_, i)| i).collect()
+    let matching = arch_search::Matching::shared();
+    let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+    let texts: Vec<&str> = items.iter().map(|i| i.text.as_str()).collect();
+    let mut out: Vec<usize> = arch_search::rank(query, &names, matching).into_iter().filter(|r| !names[r.index].is_empty()).map(|r| r.index).collect();
+    let named: std::collections::HashSet<usize> = out.iter().copied().collect();
+    out.extend(arch_search::rank_text(query, &texts).into_iter().map(|r| r.index).filter(|i| !named.contains(i)));
+    out
 }
 
 /// The match to step to from the cursor. On a match: the next (or previous)
@@ -475,9 +463,12 @@ mod tests {
 
     // req: N.9
     #[test]
-    fn matches_rank_exact_then_prefix_then_anywhere_and_step_from_the_cursor() {
+    fn matches_rank_names_then_text_and_step_from_the_cursor() {
         let items = vec![Item::new("0", "stepper", ""), Item::new("1", "run", "calls step"), Item::new("2", "step", ""), Item::new("3", "log", "")];
-        assert_eq!(rank_matches(&items, "STEP"), vec![2, 0, 1]);
+        assert_eq!(rank_matches(&items, "step"), vec![2, 0, 1], "the whole name, then names, then text");
+        assert!(rank_matches(&items, "STEP").is_empty(), "capitals ask for case (as everywhere)");
+        assert_eq!(rank_matches(&items, "spr"), vec![0], "names: letters in order");
+        assert!(rank_matches(&items, "cls").is_empty(), "text: words as written");
         assert!(rank_matches(&items, "").is_empty());
         let found = rank_matches(&items, "step");
         assert_eq!(step_match(&found, Some(2), true), Some(0), "on a match: next in rank order");

@@ -101,7 +101,7 @@ fn the_graph_offers_one_small_set_of_actions() {
     let mut g = showing(sample_tree());
     let mut all = ids(&g);
     all.sort();
-    assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.fit", "graph.flip", "graph.legend", "graph.next_view", "graph.plan", "graph.refresh", "graph.view", "graph.zoom_in", "graph.zoom_out"]);
+    assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.find", "graph.fit", "graph.flip", "graph.legend", "graph.next_view", "graph.plan", "graph.refresh", "graph.view", "graph.zoom_in", "graph.zoom_out"]);
     // A selection adds going into it (and closing its details).
     g.select(Some("rust:a::step".into()));
     assert!(ids(&g).contains(&"graph.go_in".to_owned()) && ids(&g).contains(&"graph.close_inspector".to_owned()));

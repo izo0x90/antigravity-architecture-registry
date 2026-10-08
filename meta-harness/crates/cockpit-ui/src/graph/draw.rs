@@ -453,7 +453,8 @@ impl GraphState {
         }
         match used {
             Some((action, ToolbarUse::Run(value))) => self.use_action(&action, value, cx),
-            Some((_, ToolbarUse::OpenPalette)) | None => {}
+            Some((action, ToolbarUse::OpenPalette)) => self.palette_request = Some(action.id.clone()),
+            None => {}
         }
     }
 

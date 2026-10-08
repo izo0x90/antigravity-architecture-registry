@@ -400,6 +400,20 @@
   },
   {
     "choice": false,
+    "group": "Navigate",
+    "id": "graph.find",
+    "keys": [
+      "g /"
+    ],
+    "label": "Find in the code (symbols, files, lines)",
+    "leader": "SPC g /",
+    "toolbar": true,
+    "views": [
+      "graph"
+    ]
+  },
+  {
+    "choice": false,
     "group": "View",
     "id": "graph.fit",
     "keys": [

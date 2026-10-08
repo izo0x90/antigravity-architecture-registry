@@ -1,0 +1,19 @@
+[package]
+name = "arch-search"
+version = "0.1.0"
+edition = "2024"
+description = "One way of matching what's typed, everywhere: symbols, actions and lines matched with neo_frizbee; files and file contents found with fff-search (server only)."
+
+[features]
+default = ["files"]
+# Files and their contents, through fff-search (not in the browser).
+files = ["dep:fff-search"]
+
+[dependencies]
+neo_frizbee = "0.13.3"
+serde = { version = "1.0", features = ["derive"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+fff-search = { version = "0.11", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

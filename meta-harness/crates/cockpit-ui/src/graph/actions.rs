@@ -24,6 +24,7 @@ pub(crate) enum GraphCommand {
     Legend,
     CloseInspector,
     AgentReturn,
+    Find,
 }
 
 impl GraphState {
@@ -101,6 +102,9 @@ impl ActionProvider for GraphState {
         {
             out.push(f("graph.go_in", &format!("Go into {}", card.label), G::GoIn).icon(egui_phosphor::regular::ARROW_SQUARE_IN).group(Group::Navigate).importance(SECONDARY).jump());
         }
+        let (found, waiting) = self.find_choices();
+        let find = Param::Search { hint: "a name, a file, or words in a line".into(), found, waiting };
+        out.push(f("graph.find", "Find in the code (symbols, files, lines)", G::Find).param(find).toolbar(Button, "", Some(egui_phosphor::regular::MAGNIFYING_GLASS)).group(Group::Navigate).importance(SECONDARY).jump());
         out.push(f("graph.fit", "Fit to screen", G::Fit).toolbar(Button, "", Some(egui_phosphor::regular::CORNERS_OUT)).group(Group::View).importance(MINOR));
         out.push(f("graph.zoom_in", "Zoom in", G::Zoom(1.2)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS).group(Group::View).importance(MINOR));
         out.push(f("graph.zoom_out", "Zoom out", G::Zoom(1.0 / 1.2)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS).group(Group::View).importance(MINOR));
@@ -118,6 +122,16 @@ impl ActionProvider for GraphState {
     fn run(&mut self, action: &Action, value: Option<String>, _cx: &mut RunCx<'_>) {
         if let Some(command) = action.command::<GraphCommand>().cloned() {
             self.command(command, value);
+        }
+    }
+
+    fn take_palette_request(&mut self) -> Option<String> {
+        self.palette_request.take()
+    }
+
+    fn search(&mut self, action: &str, query: &str) {
+        if action == "graph.find" {
+            self.find_query(query);
         }
     }
 }
@@ -173,6 +187,11 @@ impl GraphState {
                 };
             }
             GraphCommand::CloseInspector => self.drawer_open = false,
+            GraphCommand::Find => {
+                if let Some(value) = value {
+                    self.pick_found(&value);
+                }
+            }
             GraphCommand::AgentReturn => {
                 if let Some(agent) = self.agent.take() {
                     self.navigate(NavChange::Restore(Box::new(agent.return_to)));

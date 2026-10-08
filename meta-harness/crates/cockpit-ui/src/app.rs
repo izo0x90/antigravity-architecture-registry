@@ -540,6 +540,17 @@ impl CockpitApp {
         }
     }
 
+    fn provider_mut(&mut self, kind: BufferKind) -> &mut dyn ActionProvider {
+        match kind {
+            BufferKind::Chat => &mut self.chat,
+            BufferKind::Code => &mut self.code,
+            BufferKind::Graph => &mut self.graph,
+            BufferKind::Tree => &mut self.tree,
+            BufferKind::Spec => &mut self.spec,
+            BufferKind::Queue => &mut self.queue,
+        }
+    }
+
     fn view(&self, kind: BufferKind) -> &dyn Navigable {
         match kind {
             BufferKind::Chat => &self.chat,
@@ -2044,21 +2055,19 @@ impl CockpitApp {
         let bound = self.palette_actions();
         // A view asked for an action's picker (e.g. Resume once sessions loaded).
         for kind in BufferKind::ALL {
-            let request = match kind {
-                BufferKind::Chat => self.chat.take_palette_request(),
-                BufferKind::Code => self.code.take_palette_request(),
-                BufferKind::Graph => self.graph.take_palette_request(),
-                BufferKind::Tree => self.tree.take_palette_request(),
-                BufferKind::Spec => self.spec.take_palette_request(),
-                BufferKind::Queue => self.queue.take_palette_request(),
-            };
-            if let Some(id) = request
+            if let Some(id) = self.provider_mut(kind).take_palette_request()
                 && let Some(action) = bound.iter().find(|b| b.action.id == id)
             {
                 self.open_palette(Some(action));
             }
         }
-        if let Some(invocation) = self.palette.render(ctx, &bound, &self.config.keymap) {
+        let picked = self.palette.render(ctx, &bound, &self.config.keymap);
+        if let Some(ask) = self.palette.take_search()
+            && let Origin::View(kind) = ask.origin
+        {
+            self.provider_mut(kind).search(&ask.action, &ask.query);
+        }
+        if let Some(invocation) = picked {
             self.input_mode = InputMode::Normal;
             release_keyboard(ctx);
             self.invoke(invocation, ctx);
@@ -3409,6 +3418,21 @@ mod tests {
         let line = app.palette_actions().into_iter().find(|b| b.action.id == "nav.line").unwrap();
         app.invoke(Invocation { action: line.action, origin: line.origin, value: Some("7".into()) }, &ctx);
         assert_eq!(app.code.target_line, Some(7));
+    }
+
+    // req: M.13
+    #[test]
+    fn find_in_the_code_asks_the_graph_as_its_typed() {
+        let (ctx, mut app) = full_app();
+        focus(&ctx, &mut app, BufferKind::Graph);
+        let find = app.palette_actions().into_iter().find(|b| b.action.id == "graph.find").expect("the graph offers find");
+        app.open_palette(Some(&find));
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![egui::Event::Text("run".into())]);
+        assert_eq!(app.graph.find_choices(), (Vec::new(), true), "the query went to the graph, which waits for answers");
+        // The palette's own list is matched the same way as everywhere.
+        let ranked = arch_search::rank("grph fnd", &["Graph · Find in the code", "Code · Reveal"], arch_search::Matching::shared());
+        assert_eq!(ranked.first().map(|r| r.index), Some(0));
     }
 
     // req: N.6, N.16

@@ -71,8 +71,13 @@ pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
         tool("list_types", "The component types available (generic defaults and any specializations), with their rules.", json!({ "type": "object", "properties": {} })),
         tool(
             "search",
-            "Find components by name, symbol or file. Use it to find the existing code your work will touch.",
-            json!({ "type": "object", "properties": { "query": { "type": "string" }, "plan": plan, "limit": { "type": "integer" } }, "required": ["query"] }),
+            "Find what your work will touch: symbols by name (fuzzy, a typo forgiven; `a::b` matches whole symbols), files by path, or lines by text (as written; `*.rs` or `src/` narrows the files). Each hit gives the card to inspect or view. Query words all must match; 'word matches as written, ^word starts, word$ ends, !word excludes.",
+            json!({ "type": "object", "properties": {
+                "query": { "type": "string" },
+                "kind": { "type": "string", "enum": ["symbols", "files", "text"], "description": "symbols (the default), files or text" },
+                "plan": plan,
+                "limit": { "type": "integer" }
+            }, "required": ["query"] }),
         ),
         tool(
             "inspect",

@@ -1,10 +1,12 @@
 //! Command palette: fuzzy search over every available action, then (if the action
-//! takes one) its parameter: a filterable choice list or a text field. Opens with
-//! the input focused, so it works for typing, dictation and touch alike.
+//! takes one) its parameter: a filterable choice list, a text field, or a search
+//! whose results the action's view looks up as you type. Opens with the input
+//! focused, so it works for typing, dictation and touch alike. Matching is the
+//! same everywhere (`arch_search::rank`).
 
 use egui::{Color32, Frame, RichText, Stroke};
 
-use crate::actions::{Bound, Choice, Invocation, Param, fuzzy_score};
+use crate::actions::{Bound, Choice, Invocation, Origin, Param};
 use crate::keymap::KeymapConfig;
 use crate::theme::colors;
 
@@ -13,6 +15,17 @@ enum Stage {
     Actions,
     Choose { action: Box<Bound>, from_list: bool },
     Text { action: Box<Bound>, from_list: bool },
+    /// Looked up as it's typed: the action is read afresh each frame (its
+    /// results come in after the query goes out).
+    Search { action: Box<Bound>, from_list: bool },
+}
+
+/// What a search stage is asking its view for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchAsk {
+    pub origin: Origin,
+    pub action: String,
+    pub query: String,
 }
 
 pub struct Palette {
@@ -22,11 +35,13 @@ pub struct Palette {
     selected: usize,
     /// Scroll the selected row into view (only after keyboard moves).
     scroll: bool,
+    /// A search query to hand to its view (taken by the app each frame).
+    ask: Option<SearchAsk>,
 }
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None }
     }
 }
 
@@ -61,13 +76,22 @@ impl Palette {
         let action = Box::new(action);
         self.stage = match &action.action.param {
             Param::Text { .. } => Stage::Text { action, from_list },
+            Param::Search { .. } => {
+                self.ask = Some(SearchAsk { origin: action.origin, action: action.action.id.clone(), query: String::new() });
+                Stage::Search { action, from_list }
+            }
             _ => Stage::Choose { action, from_list },
         };
     }
 
+    /// The query a search stage wants looked up, once per change.
+    pub fn take_search(&mut self) -> Option<SearchAsk> {
+        self.ask.take()
+    }
+
     fn back(&mut self) {
         match &self.stage {
-            Stage::Choose { from_list: true, .. } | Stage::Text { from_list: true, .. } => {
+            Stage::Choose { from_list: true, .. } | Stage::Text { from_list: true, .. } | Stage::Search { from_list: true, .. } => {
                 self.stage = Stage::Actions;
                 self.filter.clear();
                 self.selected = 0;
@@ -107,6 +131,12 @@ impl Palette {
 
         let mut picked: Option<Invocation> = None;
         let mut next_stage: Option<(Bound, bool)> = None;
+        // A search's results arrive after it's asked: read the action afresh.
+        if let Stage::Search { action, .. } = &mut self.stage
+            && let Some(fresh) = actions.iter().find(|b| b.origin == action.origin && b.action.id == action.action.id)
+        {
+            **action = fresh.clone();
+        }
         let stage = self.stage.clone();
 
         egui::Area::new(egui::Id::new("command_palette"))
@@ -122,12 +152,12 @@ impl Palette {
                         ui.set_width(width - 20.0);
                         let title = match &stage {
                             Stage::Actions => "Run an action".to_owned(),
-                            Stage::Choose { action, .. } | Stage::Text { action, .. } => action.action.label.clone(),
+                            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Search { action, .. } => action.action.label.clone(),
                         };
                         ui.label(RichText::new(title).strong().size(crate::theme::look().text_label).color(colors().info));
                         let hint = match &stage {
-                            Stage::Text { action, .. } => match &action.action.param {
-                                Param::Text { hint } => hint.clone(),
+                            Stage::Text { action, .. } | Stage::Search { action, .. } => match &action.action.param {
+                                Param::Text { hint } | Param::Search { hint, .. } => hint.clone(),
                                 _ => String::new(),
                             },
                             _ => "Type to filter…".to_owned(),
@@ -136,6 +166,9 @@ impl Palette {
                         edit.request_focus();
                         if edit.changed() {
                             self.selected = 0;
+                            if let Stage::Search { action, .. } = &stage {
+                                self.ask = Some(SearchAsk { origin: action.origin, action: action.action.id.clone(), query: self.filter.clone() });
+                            }
                         }
                         ui.add_space(crate::theme::look().space_s);
 
@@ -143,15 +176,16 @@ impl Palette {
                             Stage::Actions => {
                                 // `:42` goes to line (or row) 42 of the focused view.
                                 let line = self.filter.trim().parse::<usize>().ok().filter(|n| *n > 0).and_then(|n| actions.iter().find(|b| b.action.id == "nav.line").map(|b| (n, b)));
-                                let mut ranked: Vec<(i32, &Bound)> = actions
+                                let mut listed: Vec<&Bound> = actions.iter().collect();
+                                listed.sort_by(|a, b| a.action.label.cmp(&b.action.label));
+                                let haystacks: Vec<String> = listed
                                     .iter()
-                                    .filter_map(|b| {
+                                    .map(|b| {
                                         let group = b.leader.as_ref().filter(|l| l.len() > 1).and_then(|l| keymap.group_label(&l[..1])).unwrap_or("");
-                                        let haystack = format!("{} {} {group}", b.action.label, b.action.id);
-                                        fuzzy_score(&self.filter, &haystack).map(|s| (s, b))
+                                        format!("{} {} {group}", b.action.label, b.action.id)
                                     })
                                     .collect();
-                                ranked.sort_by_key(|(s, b)| (-s, b.action.label.clone()));
+                                let ranked: Vec<&Bound> = arch_search::rank(&self.filter, &haystacks, arch_search::Matching::shared()).into_iter().map(|r| listed[r.index]).collect();
                                 let first = usize::from(line.is_some());
                                 self.move_selection(up, down, ranked.len() + first);
                                 egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
@@ -161,7 +195,7 @@ impl Palette {
                                             picked = Some(invocation(bound, Some(n.to_string())));
                                         }
                                     }
-                                    for (row, (_, bound)) in ranked.iter().enumerate() {
+                                    for (row, bound) in ranked.iter().enumerate() {
                                         let row = row + first;
                                         let selected = row == self.selected;
                                         let clicked = palette_row(ui, selected, self.scroll, &bound.action.label, bound.action.detail.as_deref(), &bound.key_hint());
@@ -179,14 +213,11 @@ impl Palette {
                             }
                             Stage::Choose { action, .. } => {
                                 let choices: Vec<Choice> = action.action.param.choices();
-                                let mut ranked: Vec<(i32, &Choice)> = choices
-                                    .iter()
-                                    .filter_map(|c| fuzzy_score(&self.filter, &format!("{} {}", c.label, c.value)).map(|s| (s, c)))
-                                    .collect();
-                                ranked.sort_by_key(|(s, _)| -s);
+                                let haystacks: Vec<String> = choices.iter().map(|c| format!("{} {}", c.label, c.value)).collect();
+                                let ranked: Vec<&Choice> = arch_search::rank(&self.filter, &haystacks, arch_search::Matching::shared()).into_iter().map(|r| &choices[r.index]).collect();
                                 self.move_selection(up, down, ranked.len());
                                 egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
-                                    for (row, (_, choice)) in ranked.iter().enumerate() {
+                                    for (row, choice) in ranked.iter().enumerate() {
                                         let selected = row == self.selected;
                                         let label = if choice.current { format!("{} {}", egui_phosphor::regular::CHECK, choice.label) } else { choice.label.clone() };
                                         let clicked = palette_row(ui, selected, self.scroll, &label, choice.detail.as_deref(), "");
@@ -196,6 +227,30 @@ impl Palette {
                                     }
                                     if ranked.is_empty() {
                                         ui.label(RichText::new("Nothing to choose").size(crate::theme::look().text_body).color(colors().muted));
+                                    }
+                                });
+                            }
+                            Stage::Search { action, .. } => {
+                                let (found, waiting) = match &action.action.param {
+                                    Param::Search { found, waiting, .. } => (found.clone(), *waiting),
+                                    _ => (Vec::new(), false),
+                                };
+                                self.move_selection(up, down, found.len());
+                                egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
+                                    for (row, choice) in found.iter().enumerate() {
+                                        let selected = row == self.selected;
+                                        let clicked = palette_row(ui, selected, self.scroll, &choice.label, choice.detail.as_deref(), "");
+                                        if clicked || (selected && enter) {
+                                            picked = Some(invocation(action, Some(choice.value.clone())));
+                                        }
+                                    }
+                                    if found.is_empty() {
+                                        let note = match (waiting, self.filter.trim().is_empty()) {
+                                            (true, _) => "Looking…",
+                                            (false, true) => "Type to search",
+                                            (false, false) => "Nothing found",
+                                        };
+                                        ui.label(RichText::new(note).size(crate::theme::look().text_body).color(colors().muted));
                                     }
                                 });
                             }

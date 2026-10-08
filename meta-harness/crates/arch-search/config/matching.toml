@@ -1,0 +1,10 @@
+# How typed text is matched against names, everywhere: the server's symbol
+# search, the cockpit's palette and its / search.
+
+[matching]
+# When nothing matches as typed, one typo is forgiven for every this many
+# letters typed ("sevrice" finds "service"); 0 forgives none.
+letters_per_typo = 4
+# Names matching much worse than the best one are left out: those scoring
+# under this share of its score (letters strewn across a long name).
+keep_within = 0.7

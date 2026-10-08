@@ -17,10 +17,23 @@ pub struct Limits {
     pub tree_ms: u64,
     /// A request slower than this is logged.
     pub slow_request_ms: u64,
+    /// Searching symbols, files and lines.
+    pub search: SearchLimits,
     /// Where the facts read from the code are kept.
     pub store: StoreLimits,
     /// What the performance tests hold the code to.
     pub perf: PerfLimits,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SearchLimits {
+    /// Hits in an answer when the asker doesn't say.
+    pub results: usize,
+    /// The most hits in one answer.
+    pub most: usize,
+    pub text_ms: u64,
+    pub text_per_file: usize,
+    pub text_max_file_kib: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

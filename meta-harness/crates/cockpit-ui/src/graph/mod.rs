@@ -12,9 +12,10 @@
 //!
 //! Nothing changes on screen unless the user (or the agent) did something.
 
-mod actions;
+pub(crate) mod actions;
 mod details;
 mod draw;
+mod find;
 mod navigable;
 pub mod request;
 mod select;
@@ -73,6 +74,7 @@ enum Reply {
     Plans(NetResult<Vec<arch_graph::Plan>>),
     Tree(u64, Box<NetResult<Tree>>),
     Card(String, Option<PlanId>, Box<NetResult<ComponentDetail>>),
+    Found(u64, arch_search::SearchKind, Box<NetResult<arch_search::Found>>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -157,6 +159,10 @@ pub struct GraphState {
     pub legend_open: bool,
     /// Something the graph has to say (a branch that didn't fit, a plan gone).
     pub note: Option<String>,
+    /// Finding anything in the code (typed in the palette).
+    pub(crate) find: find::Find,
+    /// A toolbar button whose action needs input: open the palette at it.
+    palette_request: Option<String>,
 }
 
 impl Default for GraphState {
@@ -200,6 +206,8 @@ impl Default for GraphState {
             saved_view: None,
             legend_open: false,
             note: None,
+            find: find::Find::default(),
+            palette_request: None,
         }
     }
 }
@@ -505,6 +513,7 @@ impl GraphState {
                     };
                     self.details.insert((key, plan), detail);
                 }
+                Reply::Found(asked, kind, found) => self.found(asked, kind, *found),
                 Reply::Tree(generation, tree) => {
                     if generation != self.generation {
                         continue;
@@ -534,6 +543,7 @@ impl GraphState {
             net.graph_tree(&self.nav.request(), ctx.clone(), move |r| push(&inbox, Reply::Tree(generation, Box::new(r))));
         }
         self.want_details(net, ctx);
+        self.send_find(net, ctx);
     }
 
     /// A tree that couldn't be had: a plan that's gone shows the code, a

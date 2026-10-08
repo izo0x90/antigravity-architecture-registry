@@ -22,6 +22,7 @@ web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElemen
 js-sys = "0.3"
 harness-contracts = { path = "../harness-contracts" }
 arch-graph = { path = "../arch-graph" }
+arch-search = { path = "../arch-search", default-features = false }
 petgraph = "0.6"
 egui_graphs = "0.29.0"
 getrandom = { version = "0.3", features = ["wasm_js"] }

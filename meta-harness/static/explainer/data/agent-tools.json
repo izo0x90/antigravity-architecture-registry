@@ -17,13 +17,19 @@
     "params": []
   },
   {
-    "description": "Find components by name, symbol or file. Use it to find the existing code your work will touch.",
+    "description": "Find what your work will touch: symbols by name (fuzzy, a typo forgiven; `a::b` matches whole symbols), files by path, or lines by text (as written; `*.rs` or `src/` narrows the files). Each hit gives the card to inspect or view. Query words all must match; 'word matches as written, ^word starts, word$ ends, !word excludes.",
     "name": "search",
     "params": [
       {
         "description": null,
         "name": "query",
         "required": true,
+        "type": "string"
+      },
+      {
+        "description": "symbols (the default), files or text",
+        "name": "kind",
+        "required": false,
         "type": "string"
       },
       {
