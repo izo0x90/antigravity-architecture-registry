@@ -1,0 +1,142 @@
+{
+  "grains": [
+    {
+      "name": "types",
+      "pick": "nearest",
+      "types": [
+        "class",
+        "interface"
+      ]
+    },
+    {
+      "name": "modules",
+      "pick": "nearest",
+      "types": [
+        "module"
+      ]
+    },
+    {
+      "name": "packages",
+      "pick": "outermost",
+      "types": [
+        "module"
+      ]
+    },
+    {
+      "name": "folders",
+      "pick": "nearest",
+      "types": [
+        "folder"
+      ]
+    }
+  ],
+  "views": {
+    "calls": {
+      "depth": 4,
+      "description": "Dynamic behavior: who calls whom, left to right in call order. Read it as what happens at runtime.",
+      "direction": "out",
+      "filters": {},
+      "include_ancestors": false,
+      "kinds": [
+        "calls"
+      ],
+      "layout": "layered",
+      "name": "calls",
+      "overlays": [],
+      "roots": []
+    },
+    "combined": {
+      "depth": 3,
+      "description": "Calls as the backbone, with structure and data flow drawn on top: how runtime behavior maps onto the code's shape.",
+      "direction": "out",
+      "filters": {},
+      "include_ancestors": true,
+      "kinds": [
+        "calls"
+      ],
+      "layout": "layered",
+      "name": "combined",
+      "overlays": [
+        "contains",
+        "implements",
+        "data_flow"
+      ],
+      "roots": []
+    },
+    "data_flow": {
+      "depth": 4,
+      "description": "Data as a pipeline: from sources on the left to sinks on the right, each line saying what flows, each step its shape, and where the shape changes.",
+      "direction": "out",
+      "filters": {},
+      "include_ancestors": false,
+      "kinds": [
+        "data_flow"
+      ],
+      "layout": "layered",
+      "name": "data_flow",
+      "overlays": [],
+      "roots": []
+    },
+    "data_path": {
+      "depth": 8,
+      "description": "One value's whole path: where it comes from and where it goes, both ways from where you start.",
+      "direction": "both",
+      "filters": {},
+      "include_ancestors": false,
+      "kinds": [
+        "data_flow"
+      ],
+      "layout": "layered",
+      "name": "data_path",
+      "overlays": [],
+      "roots": []
+    },
+    "reached_by": {
+      "depth": 6,
+      "description": "The story backwards: what reaches a function, its callers to the right.",
+      "direction": "in",
+      "filters": {},
+      "include_ancestors": false,
+      "kinds": [
+        "calls"
+      ],
+      "layout": "story",
+      "name": "reached_by",
+      "overlays": [],
+      "roots": []
+    },
+    "story": {
+      "depth": 6,
+      "description": "Calls as a story: from an entry, what it calls top to bottom in call order, deeper to the right. Each function once (others just count), loops marked, branches fold.",
+      "direction": "out",
+      "filters": {},
+      "include_ancestors": false,
+      "kinds": [
+        "calls"
+      ],
+      "layout": "story",
+      "name": "story",
+      "overlays": [],
+      "roots": []
+    },
+    "structure": {
+      "depth": 1,
+      "description": "Static structure: what contains what, and what implements which interface. Read it as the shape of the code.",
+      "direction": "out",
+      "filters": {},
+      "include_ancestors": false,
+      "kinds": [
+        "contains",
+        "implements"
+      ],
+      "layout": "nested",
+      "links": [
+        "calls",
+        "data_flow"
+      ],
+      "name": "structure",
+      "overlays": [],
+      "roots": []
+    }
+  }
+}

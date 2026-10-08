@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How the cockpit works</title>
+<link rel="stylesheet" href="explainer.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#map"><span class="brand-mark"></span>NAH <span class="muted">explainer</span></a>
+  <span id="search-slot"></span>
+  <button id="all-notes" class="demo-btn" type="button"><span class="bubble"></span> Notes <span id="notes-total" class="muted"></span></button>
+</header>
+<div class="layout">
+  <nav id="rail" class="rail"></nav>
+  <main id="main"><p class="muted">Loading…</p></main>
+</div>
+<aside id="drawer" class="drawer-panel" aria-label="Notes"></aside>
+<script src="content.js"></script>
+<script src="demos.js"></script>
+<script src="explainer.js"></script>
+</body>
+</html>

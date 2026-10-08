@@ -1,0 +1,366 @@
+[
+  {
+    "description": "Read the code into the architecture graph (incremental: only changed files are parsed). Run it after editing code, or with a path to refresh just that part.",
+    "name": "ingest",
+    "params": [
+      {
+        "description": "Repo-relative path; the whole repo when absent",
+        "name": "scope",
+        "required": false,
+        "type": "string"
+      }
+    ]
+  },
+  {
+    "description": "The component types available (generic defaults and any specializations), with their rules.",
+    "name": "list_types",
+    "params": []
+  },
+  {
+    "description": "Find components by name, symbol or file. Use it to find the existing code your work will touch.",
+    "name": "search",
+    "params": [
+      {
+        "description": null,
+        "name": "query",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "limit",
+        "required": false,
+        "type": "integer"
+      }
+    ]
+  },
+  {
+    "description": "One component: type, stage, location (file:symbol), signature, relations in and out, and its source code.",
+    "name": "inspect",
+    "params": [
+      {
+        "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run",
+        "name": "id",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": false,
+        "type": "string"
+      }
+    ]
+  },
+  {
+    "description": "A view of the graph as text: nodes with locations and stage, edges with whether plan and code agree.\nViews (each a lens on the same graph):\n- calls: Dynamic behavior: who calls whom, left to right in call order. Read it as what happens at runtime.\n- combined: Calls as the backbone, with structure and data flow drawn on top: how runtime behavior maps onto the code's shape.\n- data_flow: Data as a pipeline: from sources on the left to sinks on the right, each line saying what flows, each step its shape, and where the shape changes.\n- data_path: One value's whole path: where it comes from and where it goes, both ways from where you start.\n- reached_by: The story backwards: what reaches a function, its callers to the right.\n- story: Calls as a story: from an entry, what it calls top to bottom in call order, deeper to the right. Each function once (others just count), loops marked, branches fold.\n- structure: Static structure: what contains what, and what implements which interface. Read it as the shape of the code.",
+    "name": "view",
+    "params": [
+      {
+        "description": null,
+        "name": "name",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "roots",
+        "required": false,
+        "type": "array"
+      },
+      {
+        "description": null,
+        "name": "depth",
+        "required": false,
+        "type": "integer"
+      }
+    ]
+  },
+  {
+    "description": "Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing.\nViews (each a lens on the same graph):\n- calls: Dynamic behavior: who calls whom, left to right in call order. Read it as what happens at runtime.\n- combined: Calls as the backbone, with structure and data flow drawn on top: how runtime behavior maps onto the code's shape.\n- data_flow: Data as a pipeline: from sources on the left to sinks on the right, each line saying what flows, each step its shape, and where the shape changes.\n- data_path: One value's whole path: where it comes from and where it goes, both ways from where you start.\n- reached_by: The story backwards: what reaches a function, its callers to the right.\n- story: Calls as a story: from an entry, what it calls top to bottom in call order, deeper to the right. Each function once (others just count), loops marked, branches fold.\n- structure: Static structure: what contains what, and what implements which interface. Read it as the shape of the code.",
+    "name": "navigate",
+    "params": [
+      {
+        "description": null,
+        "name": "view",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "roots",
+        "required": false,
+        "type": "array"
+      },
+      {
+        "description": null,
+        "name": "depth",
+        "required": false,
+        "type": "integer"
+      },
+      {
+        "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run",
+        "name": "focus",
+        "required": false,
+        "type": "string"
+      }
+    ]
+  },
+  {
+    "description": "All plans, with their components and stages.",
+    "name": "plan_list",
+    "params": []
+  },
+  {
+    "description": "Start a plan for one change (a feature, a fix). Plans hold only what's new or changing; existing code is referenced, never re-described.",
+    "name": "plan_create",
+    "params": [
+      {
+        "description": "letters, digits, - and _",
+        "name": "id",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "title",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "description",
+        "required": false,
+        "type": "string"
+      }
+    ]
+  },
+  {
+    "description": "Create a plan from the old registry document (system_architecture.json): components are matched to the code where possible, everything else is reported. Approvals aren't carried over.",
+    "name": "plan_import",
+    "params": [
+      {
+        "description": "new plan id",
+        "name": "id",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "title",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "description": "repo-relative path (default system_architecture.json)",
+        "name": "file",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "description": "language for components with no location and no code to match",
+        "name": "language",
+        "required": false,
+        "type": "string"
+      }
+    ]
+  },
+  {
+    "description": "Apply operations to a plan, in order (stops at the first that fails). Add new components under a real parent (they get a proposed location), modify planned or existing ones, reference existing code you build on, and relate components (calls with expectations, data flow, implements). New work must connect to existing code. Changing an approved component's design sends it, and what depends on it, back for approval.",
+    "name": "plan_edit",
+    "params": [
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "ops",
+        "required": true,
+        "type": "array"
+      }
+    ]
+  },
+  {
+    "description": "Check a plan before any code is written: references, proposed locations, type rules, loops, schema fit (also against existing code's real signatures), spec rules, required details per type, dependency gates and touch points; runs logic-step checks.",
+    "name": "plan_validate",
+    "params": [
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": true,
+        "type": "string"
+      }
+    ]
+  },
+  {
+    "description": "Everything needed to implement one component: where it goes, its signature and spec, what it must call (with the callees' real signatures and locations) and who calls it.",
+    "name": "contract",
+    "params": [
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run",
+        "name": "id",
+        "required": true,
+        "type": "string"
+      }
+    ]
+  },
+  {
+    "description": "Check the code against the plan for one component and, when it passes, move it to the goal stage. goal=skeleton accepts placeholder bodies (todo!(), raise NotImplementedError...); goal=implemented requires them gone.",
+    "name": "verify",
+    "params": [
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run",
+        "name": "id",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "goal",
+        "required": true,
+        "type": "string"
+      }
+    ]
+  },
+  {
+    "description": "Run the project's validation tools (linters, type checkers, tests) on one planned component, or on every planned component already in the code. Shows each command, whether it passed, and the end of its output.",
+    "name": "run_tools",
+    "params": [
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run",
+        "name": "id",
+        "required": false,
+        "type": "string"
+      }
+    ]
+  },
+  {
+    "description": "The user's review points on a plan: comments and change requests on components, spec sections, relations or the whole plan, with their threads, plus what changed since the user last reviewed it. Answer every open point (answer_comment); approval waits until the user accepts each answer.",
+    "name": "review_comments",
+    "params": [
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": "Include resolved points too",
+        "name": "all",
+        "required": false,
+        "type": "boolean"
+      }
+    ]
+  },
+  {
+    "description": "Answer one review point. For a change request, first change the plan (plan_edit), then link the components you changed; the answer carries those changes so the user can check them. Questions can be answered without changes.",
+    "name": "answer_comment",
+    "params": [
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": "Comment id, e.g. c3",
+        "name": "comment",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "answer",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": "Components you changed for it (since the last review)",
+        "name": "changes",
+        "required": false,
+        "type": "array"
+      }
+    ]
+  },
+  {
+    "description": "Reply in a review point's thread without answering it (e.g. to ask the user a clarifying question).",
+    "name": "reply_comment",
+    "params": [
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "comment",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "text",
+        "required": true,
+        "type": "string"
+      }
+    ]
+  },
+  {
+    "description": "Run the reviewers that apply to one planned component (faithfulness to the plan, anti-patterns, logic...). Blocking points must be fixed before it can be verified as implemented.",
+    "name": "review",
+    "params": [
+      {
+        "description": "Plan id",
+        "name": "plan",
+        "required": true,
+        "type": "string"
+      },
+      {
+        "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run",
+        "name": "id",
+        "required": true,
+        "type": "string"
+      }
+    ]
+  }
+]

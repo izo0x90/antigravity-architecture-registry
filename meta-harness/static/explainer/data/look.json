@@ -1,0 +1,312 @@
+{
+  "detail": {
+    "mid": 0.85,
+    "near": 1.3
+  },
+  "graph_style": {
+    "edges": {
+      "missing": {
+        "color": "error",
+        "dashed": true,
+        "width": 1.8
+      },
+      "observed": {
+        "width": 1.4
+      },
+      "planned": {
+        "dashed": true,
+        "width": 1.4
+      },
+      "present": {
+        "width": 1.6
+      }
+    },
+    "kinds": {
+      "calls": "accent",
+      "contains": "faint",
+      "data_flow": "info",
+      "implements": "special"
+    },
+    "nodes": {
+      "agent": "special",
+      "fill": "card",
+      "outline": {
+        "missing": {
+          "color": "error",
+          "width": 1.6
+        },
+        "observed": {
+          "color": "border_strong",
+          "width": 1.2
+        },
+        "planned": {
+          "color": "warn",
+          "dashed": true,
+          "width": 1.2
+        },
+        "present": {
+          "color": "ok",
+          "width": 1.4
+        }
+      },
+      "selected_fill": "card_selected",
+      "selected_outline": "focus",
+      "selected_width": 2.5,
+      "stages": {
+        "arch_approved": "info",
+        "declared": "faint",
+        "implemented": "ok",
+        "plan_approved": "accent",
+        "skeleton": "warn"
+      }
+    },
+    "overlay": {
+      "alpha": 0.6,
+      "width": 0.65
+    },
+    "provenance": {
+      "both": 1.3,
+      "observed": 1.0,
+      "planned": 1.0
+    },
+    "unconfirmed": {
+      "color": "warn",
+      "dashed": true,
+      "width": 1.2
+    }
+  },
+  "levels": {
+    "enter_fill": 0.5,
+    "leave_fill": 0.25,
+    "max_cards": 60,
+    "max_markers": 14
+  },
+  "links": {
+    "follow_debounce_ms": 250
+  },
+  "look": {
+    "dash_speed": 18.0,
+    "dim": 0.78,
+    "fade": 0.6,
+    "glow_alpha": 0.35,
+    "glow_width": 6.0,
+    "grid_step": 32.0,
+    "line_bold": 2.0,
+    "line_count_gain": 0.5,
+    "line_count_max": 3.0,
+    "line_thin": 1.0,
+    "move_seconds": 0.35,
+    "pulse_seconds": 1.6,
+    "radius_l": 6.0,
+    "radius_m": 4.0,
+    "radius_pill": 16.0,
+    "radius_s": 3.0,
+    "radius_xl": 8.0,
+    "space_hair": 1.0,
+    "space_huge": 48.0,
+    "space_l": 12.0,
+    "space_m": 8.0,
+    "space_ml": 10.0,
+    "space_s": 4.0,
+    "space_sm": 6.0,
+    "space_xl": 16.0,
+    "space_xs": 2.0,
+    "space_xxl": 24.0,
+    "space_xxxl": 32.0,
+    "text_body": 11.0,
+    "text_display": 16.0,
+    "text_heading": 14.0,
+    "text_label": 12.0,
+    "text_small": 10.0,
+    "text_tiny": 9.0,
+    "text_title": 13.0
+  },
+  "status": {
+    "changed": {
+      "color": "info",
+      "icon": "pencil-simple",
+      "word": "changed since review"
+    },
+    "following": {
+      "color": "focus",
+      "icon": "path",
+      "word": "following"
+    },
+    "index_failed": {
+      "color": "error",
+      "icon": "warning-octagon",
+      "word": "indexing failed"
+    },
+    "index_fresh": {
+      "color": "ok",
+      "icon": "check-circle",
+      "word": "up to date"
+    },
+    "indexing": {
+      "color": "info",
+      "icon": "arrows-clockwise",
+      "word": "indexing"
+    },
+    "job_awaiting_approval": {
+      "color": "warn",
+      "icon": "hand",
+      "word": "needs your approval"
+    },
+    "job_done": {
+      "color": "ok",
+      "icon": "check-circle",
+      "word": "done"
+    },
+    "job_failed": {
+      "color": "error",
+      "icon": "x-circle",
+      "word": "failed"
+    },
+    "job_queued": {
+      "color": "muted",
+      "icon": "circle",
+      "word": "queued"
+    },
+    "job_retrying": {
+      "color": "warn",
+      "icon": "arrows-clockwise",
+      "word": "retrying"
+    },
+    "job_running": {
+      "color": "info",
+      "icon": "play",
+      "word": "running"
+    },
+    "missing": {
+      "color": "error",
+      "icon": "warning-circle",
+      "word": "planned, missing in code"
+    },
+    "observed": {
+      "color": "muted",
+      "icon": "code",
+      "word": "in code (no plan)"
+    },
+    "open_comments": {
+      "color": "warn",
+      "icon": "chat-circle-dots",
+      "word": "open comments"
+    },
+    "placeholders": {
+      "color": "warn",
+      "icon": "hourglass",
+      "word": "placeholders"
+    },
+    "planned": {
+      "color": "warn",
+      "icon": "circle-dashed",
+      "word": "planned, not built yet"
+    },
+    "present": {
+      "color": "ok",
+      "icon": "seal-check",
+      "word": "planned and in code"
+    },
+    "required_missing": {
+      "color": "error",
+      "icon": "flag",
+      "word": "required, missing"
+    },
+    "reshapes": {
+      "color": "special",
+      "icon": "shuffle",
+      "word": "reshapes the data"
+    },
+    "severity_error": {
+      "color": "error",
+      "icon": "warning-octagon",
+      "word": "error"
+    },
+    "severity_info": {
+      "color": "muted",
+      "icon": "eye",
+      "word": "note"
+    },
+    "severity_warning": {
+      "color": "warn",
+      "icon": "warning",
+      "word": "warning"
+    },
+    "stage_arch_approved": {
+      "color": "info",
+      "icon": "check-circle",
+      "word": "architecture approved"
+    },
+    "stage_declared": {
+      "color": "faint",
+      "icon": "lightbulb",
+      "word": "declared"
+    },
+    "stage_implemented": {
+      "color": "ok",
+      "icon": "seal-check",
+      "word": "implemented"
+    },
+    "stage_plan_approved": {
+      "color": "accent",
+      "icon": "list-checks",
+      "word": "plan approved"
+    },
+    "stage_skeleton": {
+      "color": "warn",
+      "icon": "stack",
+      "word": "skeleton"
+    },
+    "stale": {
+      "color": "warn",
+      "icon": "clock-counter-clockwise",
+      "word": "out of date"
+    },
+    "unconfirmed": {
+      "color": "warn",
+      "icon": "question",
+      "word": "unconfirmed flow (the types don't confirm it)"
+    }
+  },
+  "theme": {
+    "accent": "#3ee6ff",
+    "bg": "#080a0f",
+    "border": "#1a202b",
+    "border_strong": "#283244",
+    "card": "#0f141d",
+    "card_ok": "#0e1914",
+    "card_ok_selected": "#12241b",
+    "card_selected": "#0c2630",
+    "card_special": "#141022",
+    "card_special_selected": "#1c1630",
+    "chrome": "#0b0e14",
+    "error": "#f87171",
+    "error_bg": "#2c1216",
+    "faint": "#4f5b6d",
+    "focus": "#3ee6ff",
+    "grid": "#3ee6ff12",
+    "highlight": "#3ee6ff1c",
+    "info": "#7cc4ff",
+    "info_bg": "#0e1c2c",
+    "key": "#ffd166",
+    "link": "#5fdcff",
+    "muted": "#8a96a8",
+    "ok": "#4ade80",
+    "ok_bg": "#0f2418",
+    "on_bright": "#041016",
+    "overlay": "#0b0f17f2",
+    "overlay_raised": "#1d2a3cdc",
+    "panel": "#0b0e14",
+    "raised": "#182030",
+    "selection": "#0d2f3a",
+    "special": "#c084fc",
+    "special_bg": "#1c1530",
+    "surface": "#10141c",
+    "text": "#c6d3e3",
+    "text_strong": "#f4f8ff",
+    "warn": "#fbbf24",
+    "warn_bg": "#241c0c",
+    "widget_selection": "#0b4f5f"
+  },
+  "view_menu": ","
+}

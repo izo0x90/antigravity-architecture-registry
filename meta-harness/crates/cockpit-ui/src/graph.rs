@@ -3101,6 +3101,32 @@ pub(crate) mod tests {
         r
     }
 
+    /// The sample's functions inside modules `a` (all four) and `b` (one
+    /// more, called from two of them): a calls view with a level to see it at.
+    pub(crate) fn leveled_result() -> ViewResult {
+        let mut r = sample_result();
+        for id in ["rust:a", "rust:b"] {
+            let mut c = r.components[&ComponentId::new("rust:a::run")].clone();
+            c.id = ComponentId::new(id);
+            c.name = id.trim_start_matches("rust:").into();
+            c.type_name = "module".into();
+            r.components.insert(c.id.clone(), c);
+        }
+        r.components.get_mut(&ComponentId::new("rust:a::step")).unwrap().signature = Some(arch_graph::Signature { params: vec![], returns: Some("Report".into()), qualifiers: vec![] });
+        let mut extra = r.components[&ComponentId::new("rust:a::run")].clone();
+        extra.id = ComponentId::new("rust:b::keep");
+        extra.name = "keep".into();
+        r.components.insert(extra.id.clone(), extra);
+        r.view.nodes.push(ViewNode { id: ComponentId::new("rust:b::keep"), depth: Some(2), truncated: false, alignment: Alignment::Observed, members: 0, ancestors: vec![ComponentId::new("rust:b")] });
+        for n in r.view.nodes.iter_mut().filter(|n| n.id.as_str().starts_with("rust:a::")) {
+            n.ancestors = vec![ComponentId::new("rust:a")];
+        }
+        for (from, to) in [("rust:a::save", "rust:b::keep"), ("rust:a::log", "rust:b::keep")] {
+            r.view.edges.push(ViewEdge { id: arch_graph::RelationId(format!("calls:{from}->{to}")), kind: RelationKind::Calls, source: ComponentId::new(from), target: ComponentId::new(to), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None });
+        }
+        r
+    }
+
     /// `nested_result` with module `a` open in place.
     pub(crate) fn opened() -> GraphState {
         let mut g = showing(nested_result());

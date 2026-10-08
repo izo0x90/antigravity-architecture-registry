@@ -163,7 +163,7 @@ pub struct SpecState {
     pub folded: BTreeSet<Section>,
     /// Scroll the cursor's item into view next frame.
     scroll: bool,
-    loaded: Option<(ComponentId, Option<PlanId>)>,
+    pub(crate) loaded: Option<(ComponentId, Option<PlanId>)>,
     error: Option<String>,
     pub requests: SpecRequests,
     /// The cockpit user (author of comments and reviews).
