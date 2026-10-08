@@ -1300,7 +1300,7 @@ acceptance = "Every stage (read, store, link, snapshot, tree, layout, encode, se
 id = "M.15"
 slice = "M"
 title = "Reading code uses ast-grep, not text tricks"
-acceptance = "Each file is parsed once for every rule; calls capture receiver and method, types come from the syntax tree, ancestor checks are inside/stopBy rules, regexes over code text remain only where the text is unstructured (with why); a local named like a function and same-named nested functions don't mislink."
+acceptance = "Each file is parsed once for every rule (its facts and the code rules' matches, kept together; checks don't read or parse files again); a call's target (receiver and method) is read from the syntax tree by the pack's expression shapes, not split as text; bases are taken during the one traversal, with no ancestor walk; text is matched only where it isn't syntax, each with why: written types (plans write types as text, so code and plans match the same way), cfg conditions and macro bodies (token runs), boundary keys inside strings; a local or parameter named like a function, same-named nested functions and helpers in a test module don't mislink."
 
 [[req]]
 id = "M.16"

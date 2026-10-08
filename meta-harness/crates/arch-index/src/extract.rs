@@ -289,18 +289,6 @@ fn is_local(pack: &Pack, name: &str, at: Option<usize>, defs: &[RawDef], bound: 
     param || bound.contains_key(&(Some(at), name.to_owned()))
 }
 
-/// Whether `inner` sits directly in `def` (no other definition in between).
-fn directly_in(pack: &Pack, inner: &AstNode<'_>, def: &AstNode<'_>) -> bool {
-    for ancestor in inner.ancestors() {
-        if ancestor.node_id() == def.node_id() {
-            return true;
-        }
-        if pack.definitions.iter().any(|rule| ancestor.matches(rule)) {
-            return false;
-        }
-    }
-    false
-}
 fn signature(pack: &Pack, def: &crate::pack::DefinitionSpec, node: &AstNode<'_>) -> Option<Signature> {
     // Parameters and return type may live on a child (`const f = (x) => ...`).
     let holder = match &def.signature_field {
@@ -367,6 +355,9 @@ struct Ctx {
     /// The node that is the enclosing definition's own body (an arrow
     /// function bound to a name): not a deferred scope.
     own_body: Option<usize>,
+    /// Which of the pack's definitions the enclosing one is (its bases rule
+    /// applies to what's directly in it).
+    def_spec: Option<usize>,
 }
 
 /// Whether `node` never runs: it matches a dead-code rule whose condition,
@@ -419,6 +410,9 @@ fn flows(pack: &Pack, node: &AstNode<'_>, ctx: &Ctx, bound: &std::collections::H
             push(out, if written { FlowKind::Writes } else { FlowKind::Reads }, field, Vec::new(), None);
         }
     }
+    // A boundary's key sits inside a string or a path as written (`"/api/x"`,
+    // `ArchEvent::Changed`): the rule finds the node, a pattern takes the key
+    // out of its text.
     for (compiled, spec) in pack.boundaries.iter().zip(&pack.spec.boundaries) {
         if node.matches(&compiled.send) {
             let text = node.text();
@@ -467,7 +461,7 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
     let lang = &pack.spec.language;
     // Local names bound to a call's output (or a declared type), per enclosing definition.
     let mut bound: std::collections::HashMap<(Option<usize>, String), Bound> = std::collections::HashMap::new();
-    let mut stack: Vec<(AstNode<'_>, Ctx)> = vec![(root.root(), Ctx { parent: None, scope: None, deferred: false, dead: false, own_body: None })];
+    let mut stack: Vec<(AstNode<'_>, Ctx)> = vec![(root.root(), Ctx { parent: None, scope: None, deferred: false, dead: false, own_body: None, def_spec: None })];
     while let Some((node, mut ctx)) = stack.pop() {
         if !ctx.dead && dead(pack, &node) {
             ctx.dead = true;
@@ -484,9 +478,6 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
                     .and_then(|f| node.field(f))
                     .map(|b| b.children().filter(|c| c.is_named() && !lang.ignored(&c.kind())).map(|c| c.text().trim().to_owned()).collect())
                     .unwrap_or_default();
-                if let Some(rule) = &pack.bases[di] {
-                    bases.extend(node.find_all(rule).map(|m| m.get_node().clone()).filter(|m| directly_in(pack, m, &node)).map(|m| m.text().trim().to_owned()));
-                }
                 // Declared outside its type (e.g. a method with a receiver).
                 let owner = match (&def.owner_field, &def.owner_kind) {
                     (Some(field), Some(kind)) => node.field(field).and_then(|f| f.dfs().find(|n| n.kind() == kind.as_str())).map(|n| n.text().trim().to_owned()),
@@ -513,13 +504,20 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
                 });
                 // A definition is its own caller: not deferred by what encloses it.
                 let own_body = def.signature_field.as_ref().and_then(|f| node.field(f)).map(|b| b.node_id());
-                child_ctx = Ctx { parent: Some(out.definitions.len() - 1), scope: None, deferred: false, dead: ctx.dead, own_body };
+                child_ctx = Ctx { parent: Some(out.definitions.len() - 1), scope: None, deferred: false, dead: ctx.dead, own_body, def_spec: Some(di) };
             }
         } else if let Some(scope) = pack.scopes.iter().zip(&pack.spec.scopes).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
             && let Some(target) = field_text(&node, &scope.target_field)
         {
             let implements = scope.implements_field.as_ref().and_then(|f| field_text(&node, f));
             child_ctx = Ctx { scope: Some(RawScope { target, implements }), ..ctx.clone() };
+        }
+        // A base named directly in a definition (not in one nested in it):
+        // the traversal knows the innermost definition, so no walk up is needed.
+        if let (Some(parent), Some(di)) = (ctx.parent, ctx.def_spec)
+            && pack.bases[di].as_ref().is_some_and(|rule| node.matches(rule))
+        {
+            out.definitions[parent].bases.push(node.text().trim().to_owned());
         }
         if !ctx.dead
             && let Some(binding) = pack.bindings.iter().zip(&pack.spec.bindings).find_map(|(rule, spec)| node.matches(rule).then_some(spec))

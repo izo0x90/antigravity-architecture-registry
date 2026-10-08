@@ -575,6 +575,16 @@ same commit as its replacement: no leftovers.
 75. Tests: the same facts as before on the ingest fixtures, plus the
     mislink cases.
 
+Done (2026-10-08), with two decisions:
+- Types stay text (item 70): plans write types as text, and code and plans
+  must be matched the same way, so one text normalizer serves both.
+- The cfg evaluator stays text (item 73): tree-sitter gives a `cfg(...)`
+  attribute as a flat run of tokens, not an expression. It only calls code
+  dead when every part is constant; anything unclear counts as live.
+- The ancestor walk (item 71) went away entirely rather than becoming an
+  `inside`/`stopBy` rule: the one traversal already knows the enclosing
+  definition, so bases are collected there.
+
 ### Phase 10. Accurate calls (after the rest works)
 76. Run `rust-analyzer scip` when it's installed, and read the result with
     the `scip` crate.

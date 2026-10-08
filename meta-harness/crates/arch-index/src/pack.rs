@@ -400,6 +400,12 @@ pub struct DeadCodeSpec {
 /// How constant conditions are written: enough to tell code that can never
 /// run from code that might. Anything not built only from these is unknown
 /// (and never treated as dead).
+/// Decides whether a condition is constant, from its text. Text, not the
+/// syntax tree: a `cfg(...)` attribute's contents are a flat run of tokens
+/// (tree-sitter doesn't parse them as an expression), and `if` conditions
+/// are judged the same way so both follow one set of rules. It only says
+/// "false" when every part is a constant; anything it can't read is
+/// undecided, and undecided code counts as live.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConstantLogic {
