@@ -41,9 +41,6 @@ pub struct LanguageSpec {
     /// (`&`, `*`); stripped along with leading `type_noise` words.
     #[serde(default)]
     pub reference_markers: Vec<String>,
-    /// Words before a constructor call (`new`).
-    #[serde(default)]
-    pub constructor_prefixes: Vec<String>,
     /// Marks an import of everything in a module (`*`).
     #[serde(default)]
     pub glob_import: Option<String>,
@@ -187,32 +184,6 @@ impl LanguageSpec {
         (self.path_separators.is_empty() && self.member_separators.is_empty()) || self.member_separators.iter().any(|s| s == sep)
     }
 
-    /// Splits a callee at its last separator outside brackets:
-    /// (qualifier, separator, name). `Greeter().greet` -> (`Greeter()`, `.`, `greet`).
-    pub fn split_last<'a>(&self, text: &'a str) -> Option<(&'a str, &'a str, &'a str)> {
-        let mut depth = 0i32;
-        let mut found: Option<(usize, &str)> = None;
-        let mut skip_until = 0;
-        for (i, ch) in text.char_indices() {
-            if i < skip_until {
-                continue;
-            }
-            match ch {
-                '(' | '[' | '<' | '{' => depth += 1,
-                ')' | ']' | '>' | '}' => depth -= 1,
-                _ if depth == 0 => {
-                    if let Some(sep) = self.call_separators.iter().filter(|s| text[i..].starts_with(s.as_str())).max_by_key(|s| s.len()) {
-                        found = Some((i, sep.as_str()));
-                        skip_until = i + sep.len();
-                    }
-                }
-                _ => {}
-            }
-        }
-        let (at, sep) = found?;
-        Some((&text[..at], &text[at..at + sep.len()], &text[at + sep.len()..]))
-    }
-
     /// `text` without leading reference markers and noise words (`&mut x` -> `x`).
     pub fn strip_references<'a>(&self, text: &'a str) -> &'a str {
         let mut rest = text.trim();
@@ -303,6 +274,40 @@ pub struct ParamSpec {
     /// A parameter with this field (a default value) may be left out.
     #[serde(default)]
     pub default_field: Option<String>,
+}
+
+/// What an expression of some syntax kinds is, for reading a call's target
+/// (see `Expr`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpressionSpec {
+    pub kinds: Vec<String>,
+    pub shape: ExpressionShape,
+    /// Path: the qualifier; member: the value; call: what's called; unwrap:
+    /// what's inside (default: the first named child).
+    #[serde(default)]
+    pub of: Option<String>,
+    /// Path or member: the field holding the last name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Path or member: how it's written between the parts.
+    #[serde(default)]
+    pub separator: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpressionShape {
+    /// A name as written.
+    Name,
+    /// Names joined by a path separator.
+    Path,
+    /// A member of a value.
+    Member,
+    /// What calling something gives.
+    Call,
+    /// Only wraps another expression (`&x`, `x?`, `await x`, `(x)`).
+    Unwrap,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -606,6 +611,9 @@ pub struct PackSpec {
     pub params: Vec<ParamSpec>,
     #[serde(default)]
     pub calls: Vec<CallSpec>,
+    /// How a call's target reads from the syntax tree.
+    #[serde(default)]
+    pub expressions: Vec<ExpressionSpec>,
     #[serde(default)]
     pub bindings: Vec<BindingSpec>,
     #[serde(default)]
@@ -740,6 +748,20 @@ impl Pack {
             && let Some(sep) = spec.language.call_separators.iter().find(|s| !spec.language.is_path_separator(s) && !spec.language.is_member_separator(s))
         {
             return Err(IndexError::Pack(format!("pack '{name}': call separator '{sep}' is neither a path nor a member separator")));
+        }
+        if !spec.calls.is_empty() && spec.expressions.is_empty() {
+            return Err(IndexError::Pack(format!("pack '{name}': calls need expressions (how a call's target reads)")));
+        }
+        for (i, e) in spec.expressions.iter().enumerate() {
+            let what = format!("pack '{name}' expressions[{i}]");
+            let needs = match e.shape {
+                ExpressionShape::Path | ExpressionShape::Member => e.name.is_some() && e.separator.as_ref().is_some_and(|s| spec.language.call_separators.contains(s)),
+                ExpressionShape::Call => e.of.is_some(),
+                ExpressionShape::Name | ExpressionShape::Unwrap => true,
+            };
+            if e.kinds.is_empty() || !needs {
+                return Err(IndexError::Pack(format!("{what}: a path or member needs a name field and one of call_separators; a call needs `of`")));
+            }
         }
         for (i, alias) in spec.aliases.iter().enumerate() {
             if alias.alias_field.is_none() == alias.alias_child_kind.is_none() {

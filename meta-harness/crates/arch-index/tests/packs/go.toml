@@ -68,6 +68,26 @@ rule = { kind = "call_expression" }
 callee_field = "function"
 args_field = "arguments"
 
+[[expressions]]
+kinds = ["identifier", "field_identifier", "package_identifier", "type_identifier"]
+shape = "name"
+
+[[expressions]]
+kinds = ["selector_expression"]
+shape = "member"
+of = "operand"
+name = "field"
+separator = "."
+
+[[expressions]]
+kinds = ["call_expression"]
+shape = "call"
+of = "function"
+
+[[expressions]]
+kinds = ["parenthesized_expression"]
+shape = "unwrap"
+
 [[bindings]]
 rule = { kind = "short_var_declaration" }
 name_field = "left"

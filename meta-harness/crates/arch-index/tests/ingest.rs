@@ -539,3 +539,38 @@ fn locals_named_like_functions_and_same_named_nested_functions_dont_mislink() {
     assert!(calls.contains(&call("m::tests::t", "m::tests::observed")) && calls.contains(&call("m::tests::t", "m::merge")));
     std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
 }
+
+// req: M.15
+#[test]
+fn call_targets_are_read_from_the_syntax_tree() {
+    use arch_index::{CodeRules, Expr, extract_file};
+    let packs = PackSet::built_in().unwrap();
+    let read = |lang: &str, file: &str, code: &str| -> Vec<Expr> {
+        extract_file(packs.by_name(lang).unwrap(), &CodeRules::default(), arch_graph::RepoPath::new(file).unwrap(), "m".into(), code).calls.into_iter().filter(|c| !c.reference).map(|c| c.callee).collect()
+    };
+    let name = |n: &str| Expr::Name(n.into());
+    let member = |of: Expr, n: &str| Expr::Member(Box::new(of), n.into(), ".".into());
+    let call = |e: Expr| Expr::Call(Box::new(e));
+    let path = |parts: &[&str]| Expr::Path(parts.iter().map(|p| (*p).to_owned()).collect(), "::".into());
+
+    let rust = read("rust", "src/lib.rs", "fn f(&self) { self.store.get(x).save(); Vec::<u8>::new(); crate::a::run(); make()?.go(); helper::<T>(); }");
+    assert_eq!(
+        rust,
+        [
+            member(call(member(member(name("self"), "store"), "get")), "save"),
+            member(member(name("self"), "store"), "get"),
+            path(&["Vec", "new"]),
+            path(&["crate", "a", "run"]),
+            member(call(name("make")), "go"),
+            name("make"),
+            name("helper"),
+        ]
+    );
+    assert_eq!(rust[0].render(), "self.store.get().save", "as it reads, arguments left out");
+
+    let ts = read("typescript", "src/a.ts", "function f() { new Greeter().greet(); this.save(); }");
+    assert_eq!(ts, [member(call(name("Greeter")), "greet"), name("Greeter"), member(name("this"), "save")]);
+
+    let py = read("python", "a.py", "def f(self):\n    super().run()\n    Greeter().greet()\n");
+    assert_eq!(py, [member(call(name("super")), "run"), name("super"), member(call(name("Greeter")), "greet"), name("Greeter")]);
+}

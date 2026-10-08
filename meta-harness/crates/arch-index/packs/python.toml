@@ -78,6 +78,28 @@ rule = { kind = "call" }
 callee_field = "function"
 args_field = "arguments"
 
+# How a call's target reads from the syntax tree: `helper`, `self.save`,
+# `Greeter().greet`, `super().run`.
+[[expressions]]
+kinds = ["identifier"]
+shape = "name"
+
+[[expressions]]
+kinds = ["attribute"]
+shape = "member"
+of = "object"
+name = "attribute"
+separator = "."
+
+[[expressions]]
+kinds = ["call"]
+shape = "call"
+of = "function"
+
+[[expressions]]
+kinds = ["parenthesized_expression", "await"]
+shape = "unwrap"
+
 [[bindings]]
 rule = { kind = "assignment" }
 name_field = "left"

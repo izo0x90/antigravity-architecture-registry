@@ -95,6 +95,51 @@ rule = { kind = "call_expression" }
 callee_field = "function"
 args_field = "arguments"
 
+# How a call's target reads from the syntax tree: `helper`, `Store::new`,
+# `self.store.save`, `make().run`.
+[[expressions]]
+kinds = ["identifier", "type_identifier", "field_identifier", "primitive_type", "self", "crate", "super", "metavariable"]
+shape = "name"
+
+[[expressions]]
+kinds = ["scoped_identifier", "scoped_type_identifier"]
+shape = "path"
+of = "path"
+name = "name"
+separator = "::"
+
+[[expressions]]
+kinds = ["field_expression"]
+shape = "member"
+of = "value"
+name = "field"
+separator = "."
+
+[[expressions]]
+kinds = ["call_expression"]
+shape = "call"
+of = "function"
+
+# `f::<T>`, `Vec::<u8>`: the generic arguments don't change what's named.
+[[expressions]]
+kinds = ["generic_function"]
+shape = "unwrap"
+of = "function"
+
+[[expressions]]
+kinds = ["generic_type"]
+shape = "unwrap"
+of = "type"
+
+[[expressions]]
+kinds = ["reference_expression"]
+shape = "unwrap"
+of = "value"
+
+[[expressions]]
+kinds = ["try_expression", "await_expression", "parenthesized_expression"]
+shape = "unwrap"
+
 [[bindings]]
 rule = { kind = "let_declaration" }
 name_field = "pattern"

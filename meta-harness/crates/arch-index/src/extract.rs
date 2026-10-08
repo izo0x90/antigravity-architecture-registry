@@ -9,9 +9,9 @@ use ast_grep_language::{LanguageExt, SupportLang};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{IndexError, Pack};
+use crate::{Expr, IndexError, Pack};
 
-type AstNode<'r> = Node<'r, StrDoc<SupportLang>>;
+pub(crate) type AstNode<'r> = Node<'r, StrDoc<SupportLang>>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RawScope {
@@ -48,8 +48,8 @@ pub struct RawDef {
 pub struct RawCall {
     /// Index of the innermost enclosing definition (None: module level).
     pub caller: Option<usize>,
-    /// The callee expression as written.
-    pub callee: String,
+    /// What's called, read from the syntax tree.
+    pub callee: Expr,
     pub span: Span,
     /// Arguments produced by another call (directly or through a local name).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -59,7 +59,7 @@ pub struct RawCall {
     pub deferred: bool,
     /// The receiver is a local bound to this call's output (`let s = Store::new(); s.save()`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub receiver_producer: Option<String>,
+    pub receiver_producer: Option<Expr>,
     /// The receiver is a local declared with this type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receiver_type: Option<String>,
@@ -94,9 +94,12 @@ pub struct RawFlow {
     pub kind: FlowKind,
     /// The definition it's in (None: module level).
     pub at: Option<usize>,
-    /// Returned/Bound: the producing call's callee; Constructs: the type as
-    /// written; Writes/Reads: the field; Sends/Receives: the key.
+    /// Returned/Bound: the producing call's callee, as it reads; Constructs:
+    /// the type as written; Writes/Reads: the field; Sends/Receives: the key.
     pub what: String,
+    /// Returned/Bound: the producing call's callee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<Expr>,
     /// Bound: the names; Receives: the handlers named (route handlers).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<String>,
@@ -122,8 +125,8 @@ pub struct MacroDef {
 pub struct RawArg {
     /// Position among the call's arguments (0 = first).
     pub position: u32,
-    /// The producing call's callee expression as written.
-    pub producer: String,
+    /// The producing call's callee.
+    pub producer: Expr,
     pub producer_span: Span,
 }
 
@@ -214,9 +217,9 @@ fn type_text(pack: &Pack, node: &AstNode<'_>, field: &str) -> Option<String> {
 }
 
 /// The callee and span when `node` is a call (or wraps exactly one).
-fn as_call(pack: &Pack, node: &AstNode<'_>) -> Option<(String, Span)> {
+fn as_call(pack: &Pack, node: &AstNode<'_>) -> Option<(Expr, Span)> {
     let direct = |n: &AstNode<'_>| {
-        pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| n.matches(rule).then(|| field_text(n, &spec.callee_field)).flatten()).map(|c| (c, span(n)))
+        pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| n.matches(rule).then(|| n.field(&spec.callee_field)).flatten()).map(|c| (Expr::read(pack, &c), span(n)))
     };
     direct(node).or_else(|| {
         let mut named = node.named_children();
@@ -229,7 +232,7 @@ fn as_call(pack: &Pack, node: &AstNode<'_>) -> Option<(String, Span)> {
 
 /// The call that produces `node`'s value: the call itself, through calls
 /// that just wrap their argument (`Ok(f(x))`), or a local bound to a call.
-fn producer(pack: &Pack, node: &AstNode<'_>, bound: &std::collections::HashMap<(Option<usize>, String), Bound>, at: Option<usize>) -> Option<(String, Span)> {
+fn producer(pack: &Pack, node: &AstNode<'_>, bound: &std::collections::HashMap<(Option<usize>, String), Bound>, at: Option<usize>) -> Option<(Expr, Span)> {
     let lang = &pack.spec.language;
     fn call<'r, 'p>(pack: &'p Pack, n: &AstNode<'r>) -> Option<(AstNode<'r>, &'p crate::pack::CallSpec)> {
         pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| n.matches(rule).then_some(spec)).map(|spec| (n.clone(), spec))
@@ -242,9 +245,9 @@ fn producer(pack: &Pack, node: &AstNode<'_>, bound: &std::collections::HashMap<(
         }
     });
     if let Some((n, spec)) = found {
-        let callee = field_text(&n, &spec.callee_field)?;
-        let last = lang.split_last(&callee).map_or(callee.as_str(), |(_, _, name)| name);
-        if lang.transparent_calls.iter().any(|t| *t == callee || *t == last) {
+        let callee = Expr::read(pack, &n.field(&spec.callee_field)?);
+        let written = callee.render();
+        if lang.transparent_calls.iter().any(|t| *t == written || Some(t.as_str()) == callee.last_name()) {
             let arg = spec.args_field.as_ref().and_then(|f| n.field(f)).and_then(|list| list.named_children().find(|c| !lang.ignored(&c.kind())))?;
             return producer(pack, &arg, bound, at);
         }
@@ -349,7 +352,7 @@ fn qualifiers(pack: &Pack, node: &AstNode<'_>) -> Vec<String> {
 /// What a local was last bound to in its definition.
 #[derive(Clone, Default)]
 struct Bound {
-    producer: Option<(String, Span)>,
+    producer: Option<(Expr, Span)>,
     ty: Option<String>,
 }
 
@@ -393,17 +396,17 @@ fn dead(pack: &Pack, node: &AstNode<'_>) -> bool {
 /// boundary.
 fn flows(pack: &Pack, node: &AstNode<'_>, ctx: &Ctx, bound: &std::collections::HashMap<(Option<usize>, String), Bound>, defs: &[RawDef], out: &mut Vec<RawFlow>) {
     let lang = &pack.spec.language;
-    let mut push = |kind, what: String, names: Vec<String>, boundary: Option<String>| out.push(RawFlow { kind, at: ctx.parent, what, names, boundary, span: span(node) });
+    let push = |out: &mut Vec<RawFlow>, kind, what: String, names: Vec<String>, boundary: Option<String>| out.push(RawFlow { kind, at: ctx.parent, what, call: None, names, boundary, span: span(node) });
     if pack.returns.iter().any(|rule| node.matches(rule))
         && let Some((callee, _)) = producer(pack, node, bound, ctx.parent)
     {
-        push(FlowKind::Returned, callee, Vec::new(), None);
+        out.push(RawFlow { kind: FlowKind::Returned, at: ctx.parent, what: callee.render(), call: Some(callee), names: Vec::new(), boundary: None, span: span(node) });
     }
     for (rule, spec) in pack.constructions.iter().zip(&pack.spec.constructions) {
         if node.matches(rule)
             && let Some(ty) = field_text(node, &spec.type_field)
         {
-            push(FlowKind::Constructs, ty, Vec::new(), None);
+            push(out, FlowKind::Constructs, ty, Vec::new(), None);
         }
     }
     if let (Some(state), Some(spec)) = (&pack.state, &pack.spec.state)
@@ -413,14 +416,14 @@ fn flows(pack: &Pack, node: &AstNode<'_>, ctx: &Ctx, bound: &std::collections::H
         let own = ctx.parent.and_then(|p| defs.get(p)).and_then(|d| d.self_name.clone());
         if lang.self_names.contains(&object) || own.as_deref() == Some(object.as_str()) {
             let written = node.parent().is_some_and(|p| state.assignments.iter().any(|a| p.matches(a)) && p.field(&spec.left_field).is_some_and(|l| l.node_id() == node.node_id()));
-            push(if written { FlowKind::Writes } else { FlowKind::Reads }, field, Vec::new(), None);
+            push(out, if written { FlowKind::Writes } else { FlowKind::Reads }, field, Vec::new(), None);
         }
     }
     for (compiled, spec) in pack.boundaries.iter().zip(&pack.spec.boundaries) {
         if node.matches(&compiled.send) {
             let text = node.text();
             if let Some(key) = compiled.send_key.captures(&text).and_then(|c| c.get(1)) {
-                push(FlowKind::Sends, compiled.key(key.as_str()), Vec::new(), Some(spec.name.clone()));
+                push(out, FlowKind::Sends, compiled.key(key.as_str()), Vec::new(), Some(spec.name.clone()));
             }
         }
         if node.matches(&compiled.receive) {
@@ -429,7 +432,7 @@ fn flows(pack: &Pack, node: &AstNode<'_>, ctx: &Ctx, bound: &std::collections::H
                 // Handlers from the same part as the key (a chain of
                 // `.route(..)` calls holds every route's handlers).
                 let handlers = compiled.receive_handlers.as_ref().map(|re| re.captures_iter(&keyed).filter_map(|c| c.get(1).map(|g| g.as_str().to_owned())).collect()).unwrap_or_default();
-                push(FlowKind::Receives, compiled.key(key.as_str()), handlers, Some(spec.name.clone()));
+                push(out, FlowKind::Receives, compiled.key(key.as_str()), handlers, Some(spec.name.clone()));
             }
         }
     }
@@ -533,7 +536,7 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
             if let Some((callee, _)) = produced
                 && !names.is_empty()
             {
-                out.flows.push(RawFlow { kind: FlowKind::Bound, at: ctx.parent, what: callee, names, boundary: None, span: span(&node) });
+                out.flows.push(RawFlow { kind: FlowKind::Bound, at: ctx.parent, what: callee.render(), call: Some(callee), names, boundary: None, span: span(&node) });
             }
         }
         if !ctx.dead {
@@ -541,8 +544,8 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
         }
         if !ctx.dead
             && let Some(call) = pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
-            && let Some(callee) = field_text(&node, &call.callee_field)
-            && !is_local(pack, &callee, ctx.parent, &out.definitions, &bound)
+            && let Some(callee) = node.field(&call.callee_field).map(|c| Expr::read(pack, &c))
+            && !matches!(&callee, Expr::Name(n) if is_local(pack, n, ctx.parent, &out.definitions, &bound))
         {
             let mut args = Vec::new();
             if let Some(list) = call.args_field.as_ref().and_then(|f| node.field(f)) {
@@ -555,7 +558,10 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
                 }
             }
             // A receiver that is a local: what it was bound to.
-            let receiver = lang.split_last(&callee).and_then(|(qualifier, _, _)| local_name(pack, qualifier)).and_then(|n| bound.get(&(ctx.parent, n.to_owned())));
+            let receiver = match callee.split() {
+                Some((Expr::Name(n), _, _)) => local_name(pack, &n).and_then(|n| bound.get(&(ctx.parent, n.to_owned()))),
+                _ => None,
+            };
             out.calls.push(RawCall {
                 caller: ctx.parent,
                 callee,
@@ -570,7 +576,7 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
         if !ctx.dead && pack.references.iter().any(|rule| node.matches(rule)) && !is_local(pack, node.text().trim(), ctx.parent, &out.definitions, &bound) {
             out.calls.push(RawCall {
                 caller: ctx.parent,
-                callee: node.text().trim().to_owned(),
+                callee: Expr::read(pack, &node),
                 span: span(&node),
                 args: Vec::new(),
                 deferred: true,
@@ -610,10 +616,12 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
         out.placeholders.extend(root_node.find_all(rule).map(|m| span(m.get_node())));
     }
     if let (Some(macros), Some(spec)) = (&pack.macros, &pack.spec.macros) {
-        let last = |name: &str| lang.split_last(name).map_or(name, |(_, _, n)| n).to_owned();
+        // A macro's name read from the syntax tree; the uses inside a macro's
+        // body are tokens, not syntax, so those are matched as text.
+        let last = |name: &str| lang.words(name).last().map_or(name, |w| w).to_owned();
         for m in root_node.find_all(&macros.invocation) {
-            if let Some(name) = field_text(m.get_node(), &spec.name_field) {
-                out.macro_uses.push((last(&name), span(m.get_node())));
+            if let Some(name) = m.get_node().field(&spec.name_field).map(|n| Expr::read(pack, &n)).and_then(|e| e.last_name().map(str::to_owned)) {
+                out.macro_uses.push((name, span(m.get_node())));
             }
         }
         for m in root_node.find_all(&macros.definition) {

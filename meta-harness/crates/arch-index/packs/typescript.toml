@@ -9,7 +9,6 @@ separator = "."
 call_separators = ["."]
 path_separators = ["."]
 member_separators = ["."]
-constructor_prefixes = ["new"]
 glob_import = "*"
 source_roots = ["src"]
 index_files = ["index.ts"]
@@ -102,6 +101,33 @@ args_field = "arguments"
 rule = { kind = "new_expression" }
 callee_field = "constructor"
 args_field = "arguments"
+
+# How a call's target reads from the syntax tree: `helper`, `this.save`,
+# `new Greeter().greet`.
+[[expressions]]
+kinds = ["identifier", "this", "super", "type_identifier", "property_identifier"]
+shape = "name"
+
+[[expressions]]
+kinds = ["member_expression"]
+shape = "member"
+of = "object"
+name = "property"
+separator = "."
+
+[[expressions]]
+kinds = ["call_expression"]
+shape = "call"
+of = "function"
+
+[[expressions]]
+kinds = ["new_expression"]
+shape = "call"
+of = "constructor"
+
+[[expressions]]
+kinds = ["parenthesized_expression", "await_expression", "non_null_expression"]
+shape = "unwrap"
 
 [[bindings]]
 rule = { kind = "variable_declarator" }

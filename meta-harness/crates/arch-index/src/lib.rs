@@ -4,6 +4,7 @@
 //! across files into the observed architecture graph. Code rules (also data)
 //! check components for forbidden or required patterns.
 
+mod expr;
 mod extract;
 mod pack;
 mod resolve;
@@ -15,8 +16,9 @@ use std::path::Path;
 
 use arch_graph::TypeSystem;
 
+pub use expr::Expr;
 pub use extract::{FileExtract, FlowKind, MacroDef, RawArg, RawCall, RawDef, RawFlow, RawScope, content_hash, extract_file};
-pub use pack::{AliasSpec, BindingSpec, CallSpec, DefinitionSpec, LanguageSpec, Pack, PackSet, PackSpec, ParamSpec, MacroSpec, DeadCodeSpec, ConditionSpec, ConstantLogic, RuleSpec, ScopeSpec};
+pub use pack::{AliasSpec, BindingSpec, CallSpec, DefinitionSpec, ExpressionShape, ExpressionSpec, LanguageSpec, Pack, PackSet, PackSpec, ParamSpec, MacroSpec, DeadCodeSpec, ConditionSpec, ConstantLogic, RuleSpec, ScopeSpec};
 pub use resolve::{AmbiguousCall, ExternalCall, Resolved, UnverifiedFlow, resolve};
 pub use rules::{CodeRule, CodeRuleSpec, CodeRules, RuleHit, RuleKind, RuleSeverity};
 pub use walk::{SourceFile, ignored, module_symbol, walk};
@@ -24,7 +26,7 @@ pub use walk::{SourceFile, ignored, module_symbol, walk};
 /// Bumped whenever what extraction reads from a file changes (not the
 /// packs: their fingerprint is kept with each file). Facts kept from an
 /// older reader are read again.
-pub const EXTRACTOR_VERSION: u32 = 3;
+pub const EXTRACTOR_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum IndexError {

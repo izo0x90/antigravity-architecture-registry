@@ -12,7 +12,7 @@ use arch_graph::{CodeAnchor, Component, ComponentId, Graph, Provenance, Relation
 use serde::{Deserialize, Serialize};
 
 use crate::pack::LanguageSpec;
-use crate::{FileExtract, FlowKind, PackSet, RawCall};
+use crate::{Expr, FileExtract, FlowKind, PackSet, RawCall};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AmbiguousCall {
@@ -225,20 +225,16 @@ fn split(text: &str, lang: &LanguageSpec) -> Vec<String> {
     parts.into_iter().map(|p| p.trim().to_owned()).filter(|p| !p.is_empty()).collect()
 }
 
-/// `text` without a leading constructor keyword (`new Greeter` -> `Greeter`).
-fn strip_constructor<'a>(text: &'a str, lang: &LanguageSpec) -> &'a str {
-    let text = text.trim();
-    for prefix in &lang.constructor_prefixes {
-        if let Some(rest) = text.strip_prefix(prefix.as_str())
-            && rest.starts_with(char::is_whitespace)
-        {
-            return rest.trim_start();
-        }
+/// A callee with a leading alias replaced by what it stands for (its last name).
+fn de_alias_expr(callee: &Expr, aliases: &[(String, String)], lang: &LanguageSpec) -> Expr {
+    let original = callee.head().and_then(|head| aliases.iter().find(|(alias, _)| alias == head)).and_then(|(_, original)| lang.words(original).last().map(|w| (*w).to_owned()));
+    match original {
+        Some(original) => callee.with_head(&original),
+        None => callee.clone(),
     }
-    text
 }
 
-/// `text` with a leading alias replaced by what it stands for (its last name).
+/// A written type with a leading alias replaced by what it stands for (its last name).
 fn de_alias(text: &str, aliases: &[(String, String)], lang: &LanguageSpec) -> String {
     let text = text.trim();
     let head_end = lang.call_separators.iter().filter_map(|sep| text.find(sep.as_str())).min().unwrap_or(text.len());
@@ -266,7 +262,7 @@ fn placeholder_sites(extracts: &[FileExtract], packs: &PackSet) -> Vec<Vec<Span>
             let (Some(pack), Some(set)) = (packs.by_name(&ex.language), names.get_mut(ex.language.as_str())) else { continue };
             let lang = &pack.spec.language;
             for (alias, original) in &ex.aliases {
-                let last = lang.split_last(original).map_or(original.as_str(), |(_, _, n)| n);
+                let last = lang.words(original).last().copied().unwrap_or(original.as_str());
                 if set.contains(last) && !set.contains(alias) {
                     set.insert(alias.clone());
                     changed = true;
@@ -571,15 +567,16 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     };
                     list.push(AmbiguousCall {
                         caller: caller_id,
-                        callee: call.callee.clone(),
+                        callee: call.callee.render(),
                         file: ex.file.clone(),
                         span: call.span,
                         candidates: candidates.iter().map(|&c| entries[c].id.clone()).collect(),
                     });
                 }
                 CallTarget::External => {
-                    if seen_external.insert((caller_id.clone(), call.callee.clone())) {
-                        out.external.push(ExternalCall { caller: caller_id, callee: call.callee.clone() });
+                    let callee = call.callee.render();
+                    if seen_external.insert((caller_id.clone(), callee.clone())) {
+                        out.external.push(ExternalCall { caller: caller_id, callee });
                     }
                 }
             }
@@ -611,7 +608,8 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
             };
             match raw.kind {
                 FlowKind::Returned | FlowKind::Bound => {
-                    let CallTarget::One(source) = cx.resolve_call(at, &raw.what, None, 0) else { continue };
+                    let Some(call) = &raw.call else { continue };
+                    let CallTarget::One(source) = cx.resolve_call(at, call, None, 0) else { continue };
                     if entries[source].is_type {
                         continue;
                     }
@@ -647,7 +645,7 @@ pub fn resolve(extracts: &[FileExtract], packs: &PackSet, types: &TypeSystem) ->
                     }
                     // Named handlers (route handlers) receive, wherever they're registered.
                     for handler in &raw.names {
-                        if let CallTarget::One(h) = cx.resolve_call(at, handler, None, 0) {
+                        if let CallTarget::One(h) = cx.resolve_call(at, &Expr::from_written(handler, lang), None, 0) {
                             list.push(h);
                         }
                     }
@@ -893,7 +891,7 @@ impl Cx<'_> {
         }
     }
 
-    fn call_output(&self, caller: usize, callee: &str, depth: u32) -> Receiver {
+    fn call_output(&self, caller: usize, callee: &Expr, depth: u32) -> Receiver {
         if depth >= MAX_DEPTH {
             return Receiver::Unknown;
         }
@@ -905,50 +903,46 @@ impl Cx<'_> {
     }
 
     /// What the receiver `qualifier` of a call made in `caller` is.
-    fn receiver(&self, caller: usize, qualifier: &str, call: Option<&RawCall>, depth: u32) -> Receiver {
+    fn receiver(&self, caller: usize, qualifier: &Expr, call: Option<&RawCall>, depth: u32) -> Receiver {
         let Some(lang) = self.lang(caller) else { return Receiver::Unknown };
-        let q = qualifier.trim();
-        // super: the enclosing type's bases.
-        if lang.super_receivers.iter().any(|s| s == q) {
+        let written = qualifier.render();
+        // super: the enclosing type's bases (`super`, `super()`).
+        if lang.super_receivers.iter().any(|s| *s == written) {
             return self_type(self.entries, caller).map_or(Receiver::Unknown, Receiver::Base);
         }
-        // self / this / the method's named receiver.
-        if lang.self_names.iter().any(|s| s == q) || self.entries[caller].self_name.as_deref() == Some(q) {
-            return self_type(self.entries, caller).map_or(Receiver::Unknown, Receiver::Typed);
-        }
-        // A call's result: `Greeter().greet`, `new Greeter().greet`.
-        if let Some(inner) = q.strip_suffix(')').and_then(|rest| {
-            let mut depth = 1;
-            rest.char_indices().rev().find_map(|(i, ch)| {
-                match ch {
-                    ')' => depth += 1,
-                    '(' => depth -= 1,
-                    _ => {}
+        match qualifier {
+            // A call's result: `Greeter().greet`, `new Greeter().greet`.
+            Expr::Call(inner) => return self.call_output(caller, inner, depth),
+            Expr::Name(q) => {
+                // self / this / the method's named receiver.
+                if lang.self_names.iter().any(|s| s == q) || self.entries[caller].self_name.as_deref() == Some(q.as_str()) {
+                    return self_type(self.entries, caller).map_or(Receiver::Unknown, Receiver::Typed);
                 }
-                (depth == 0).then(|| &rest[..i])
-            })
-        }) {
-            return self.call_output(caller, inner, depth);
-        }
-        // A local: its declared type, else what it was bound to.
-        if let Some(call) = call {
-            if let Some(ty) = &call.receiver_type {
-                return self.written_type(caller, ty);
+                // A local: its declared type, else what it was bound to.
+                if let Some(call) = call {
+                    if let Some(ty) = &call.receiver_type {
+                        return self.written_type(caller, ty);
+                    }
+                    if let Some(producer) = &call.receiver_producer {
+                        return self.call_output(caller, producer, depth);
+                    }
+                }
+                // A parameter with a written type.
+                let name = lang.strip_references(q);
+                if let Some(param) = signature(self.entries, self.extracts, caller).and_then(|s| s.params.iter().find(|p| lang.strip_references(&p.name) == name)) {
+                    return match &param.ty {
+                        Some(ty) => self.written_type(caller, ty),
+                        None => Receiver::Unknown,
+                    };
+                }
             }
-            if let Some(producer) = &call.receiver_producer {
-                return self.call_output(caller, producer, depth);
-            }
+            _ => {}
         }
-        // A parameter with a written type.
-        let name = lang.strip_references(q);
-        if let Some(param) = signature(self.entries, self.extracts, caller).and_then(|s| s.params.iter().find(|p| lang.strip_references(&p.name) == name)) {
-            return match &param.ty {
-                Some(ty) => self.written_type(caller, ty),
-                None => Receiver::Unknown,
-            };
+        // A type named directly (associated calls on a type value, `ns.Store`).
+        if qualifier.names().is_none() {
+            return Receiver::Unknown;
         }
-        // A type named directly (associated calls on a type value).
-        match find_type(self.entries, self.index, q, &self.extracts[self.entries[caller].file], lang) {
+        match find_type(self.entries, self.index, &written, &self.extracts[self.entries[caller].file], lang) {
             TypeRef::Found(t) => Receiver::Typed(t),
             TypeRef::Outside | TypeRef::Unknown => Receiver::Unknown,
         }
@@ -997,31 +991,36 @@ impl Cx<'_> {
             .unwrap_or_default()
     }
 
-    fn resolve_call(&self, caller: usize, callee: &str, call: Option<&RawCall>, depth: u32) -> CallTarget {
+    fn resolve_call(&self, caller: usize, callee: &Expr, call: Option<&RawCall>, depth: u32) -> CallTarget {
         let Some(lang) = self.lang(caller) else { return CallTarget::External };
         let ex = &self.extracts[self.entries[caller].file];
-        let callee = de_alias(strip_constructor(callee, lang), &ex.aliases, lang);
+        let callee = de_alias_expr(callee, &ex.aliases, lang);
         let is_member = |c: usize| self.entries[c].owner.is_some_and(|o| self.entries[o].is_type);
-        let Some((qualifier, sep, name)) = lang.split_last(&callee) else {
-            return self.bare(caller, &clean(&callee, lang), &ex.imports, lang);
+        let Some((qualifier, sep, name)) = callee.split() else {
+            return match &callee {
+                Expr::Name(name) => self.bare(caller, name, &ex.imports, lang),
+                // What a call gives, called (`make()()`), or something else: not a component.
+                _ => CallTarget::External,
+            };
         };
-        let name = clean(name, lang);
-        let candidates: Vec<usize> = self.index.named(&lang.name, &name).to_vec();
+        let candidates: Vec<usize> = self.index.named(&lang.name, name).to_vec();
         let mut receiver = Receiver::Unknown;
         if lang.is_member_separator(sep) {
-            receiver = self.receiver(caller, qualifier, call, depth);
+            receiver = self.receiver(caller, &qualifier, call, depth);
             match receiver {
-                Receiver::Typed(t) => return narrow(self.members(t, &name)).unwrap_or(CallTarget::External),
+                Receiver::Typed(t) => return narrow(self.members(t, name)).unwrap_or(CallTarget::External),
                 Receiver::Base(t) => {
                     let bases = self.bases(t);
-                    return narrow(self.members_of(&bases, &name)).unwrap_or(CallTarget::External);
+                    return narrow(self.members_of(&bases, name)).unwrap_or(CallTarget::External);
                 }
                 Receiver::Outside => return CallTarget::External,
                 Receiver::Unknown => {}
             }
         }
-        if lang.is_path_separator(sep) {
-            let raw = split(&callee, lang);
+        if lang.is_path_separator(sep)
+            && let Some(raw) = callee.names()
+        {
+            let raw: Vec<String> = raw.into_iter().map(str::to_owned).collect();
             let anchored = raw.first().is_some_and(|w| lang.relative_prefixes.contains(w));
             let path: Vec<String> = raw.into_iter().filter(|p| !lang.relative_prefixes.contains(p)).collect();
             let matches = path_matches(self.entries, &candidates, &path, lang);

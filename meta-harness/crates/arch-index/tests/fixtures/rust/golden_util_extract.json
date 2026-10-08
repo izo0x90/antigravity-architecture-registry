@@ -3,7 +3,7 @@
   "file": "src/util.rs",
   "language": "rust",
   "content_hash": "e89e522065f3289107993bcc509c88050a3ae5348cbd3920a94f61624afd6abb",
-  "pack_fingerprint": "873a670a7f86b41492ea90038cb29b78cb33b6c29d651f2a8bb7ad243f2e7858",
+  "pack_fingerprint": "554b02092dd5d52de70499f136f21609cd50da6f378530c519bfff9aed1e0e86",
   "module": "sample::util",
   "root_kind": "source_file",
   "lines": 5,
@@ -47,7 +47,15 @@
   "calls": [
     {
       "caller": 0,
-      "callee": "s.to_uppercase",
+      "callee": {
+        "Member": [
+          {
+            "Name": "s"
+          },
+          "to_uppercase",
+          "."
+        ]
+      },
       "span": {
         "start_line": 2,
         "end_line": 2,
@@ -63,6 +71,15 @@
       "kind": "returned",
       "at": 0,
       "what": "s.to_uppercase",
+      "call": {
+        "Member": [
+          {
+            "Name": "s"
+          },
+          "to_uppercase",
+          "."
+        ]
+      },
       "span": {
         "start_line": 2,
         "end_line": 2,
@@ -70,5 +87,6 @@
         "end_byte": 54
       }
     }
-  ]
+  ],
+  "rules_fingerprint": ""
 }
