@@ -47,14 +47,25 @@ fn id(s: &str) -> ComponentId {
     ComponentId::for_symbol("rust", s)
 }
 
-// req: P6.12
+// req: P6.12, M.15
 #[test]
 fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
     let packs = PackSet::built_in().unwrap();
     let mut types = TypeSystem::defaults().unwrap();
     types.extend_with(toml::from_str("[types.handler]\nextends = \"function\"\ndescription = \"Handles a request.\"\n").unwrap()).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/rust/sample");
-    let (_, resolved) = ingest(&root, Path::new("."), &packs, &types).unwrap();
+    let dir = tempfile_dir();
+    std::fs::write(dir.join("project.toml"), PROJECT_RULES).unwrap();
+    let mut rules = CodeRules::defaults(&packs, &types).unwrap();
+    let defaults = rules.rules.len();
+    rules.load_dir(&dir, &packs, &types).unwrap();
+    assert_eq!(rules.rules.len(), defaults + 3, "no-dbg replaced, three added");
+    let dbg: Vec<_> = rules.rules.iter().filter(|r| r.spec.id == "no-dbg").collect();
+    assert_eq!((dbg.len(), dbg[0].spec.severity), (1, RuleSeverity::Error));
+    // The rules match while the files are read, on the same parse.
+    let (extracts, resolved) = ingest(&root, Path::new("."), &packs, &rules, &types).unwrap();
+    assert!(extracts.iter().any(|e| !e.rule_hits.is_empty()) && extracts.iter().all(|e| e.rules_fingerprint == rules.fingerprint("rust")));
+    let facts = |file: &arch_graph::RepoPath| extracts.iter().find(|e| &e.file == file);
     // The project treats Store's methods as handlers (a specialization of function).
     let mut graph = Graph::default();
     for c in resolved.graph.components() {
@@ -68,16 +79,8 @@ fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
         graph.upsert_relation(r.clone());
     }
 
-    let dir = tempfile_dir();
-    std::fs::write(dir.join("project.toml"), PROJECT_RULES).unwrap();
-    let mut rules = CodeRules::defaults(&packs, &types).unwrap();
-    let defaults = rules.rules.len();
-    rules.load_dir(&dir, &packs, &types).unwrap();
-    assert_eq!(rules.rules.len(), defaults + 3, "no-dbg replaced, three added");
-    let dbg: Vec<_> = rules.rules.iter().filter(|r| r.spec.id == "no-dbg").collect();
-    assert_eq!((dbg.len(), dbg[0].spec.severity), (1, RuleSeverity::Error));
-
-    let findings = rules.check(graph.components(), &graph, &root, &packs, &types);
+    // Checking reads no file: the matches kept with the facts are enough.
+    let findings = rules.check(graph.components(), &graph, &facts, &types);
     let got: Vec<(FindingCode, ComponentId, Severity, Option<u32>)> =
         findings.iter().map(|f| (f.code, f.component().unwrap().clone(), f.severity, f.at.as_ref().map(|a| a.span.start_line))).collect();
     assert_eq!(
@@ -97,8 +100,11 @@ fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
         anchor.content_hash = "indexed-before-the-last-edit".into();
     }
     stale.upsert_component(log, Provenance::OBSERVED);
-    let findings = rules.check(stale.components(), &stale, &root, &packs, &types);
+    let findings = rules.check(stale.components(), &stale, &facts, &types);
     assert!(findings.iter().all(|f| f.component() != Some(&id("sample::log"))), "{findings:?}");
+    // Facts read with other rules aren't judged by these.
+    let other = CodeRules::defaults(&packs, &types).unwrap();
+    assert!(other.check(graph.components(), &graph, &facts, &types).is_empty(), "read with other rules: nothing said");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

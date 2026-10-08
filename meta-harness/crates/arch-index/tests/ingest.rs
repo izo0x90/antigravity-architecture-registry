@@ -29,7 +29,8 @@ fn packs_with_test_data() -> PackSet {
 }
 
 fn run(root: &Path, packs: &PackSet) -> (Vec<FileExtract>, Resolved) {
-    ingest(root, Path::new("."), packs, &TypeSystem::defaults().unwrap()).unwrap()
+    let types = TypeSystem::defaults().unwrap();
+    ingest(root, Path::new("."), packs, &arch_index::CodeRules::default(), &types).unwrap()
 }
 
 /// Compares the ingested graph with an expected file, exactly.

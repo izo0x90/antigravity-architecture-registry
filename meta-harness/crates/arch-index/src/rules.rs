@@ -1,17 +1,18 @@
 //! Code rules: ast-grep patterns that are forbidden in, or required of,
-//! components of given types. Rules are data (defaults plus project files);
-//! they're checked over each component's code and produce report findings.
+//! components of given types. Rules are data (defaults plus project files).
+//! They're matched while a file is read, on the same parse as everything
+//! else (`hits`); checking a component looks at the matches kept with its
+//! file's facts, without reading or parsing the file again.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use arch_graph::{Component, Finding, FindingCode, Graph, RelationKind, Severity, Span, Target, TypeSystem};
+use arch_graph::{Component, Finding, FindingCode, Graph, RelationKind, RepoPath, Severity, Span, Target, TypeSystem};
 use ast_grep_config::RuleCore;
-use ast_grep_language::LanguageExt;
 use serde::Deserialize;
 
 use crate::pack::compile;
-use crate::{IndexError, PackSet};
+use crate::{FileExtract, IndexError, PackSet};
 
 const DEFAULTS: &str = include_str!("../rules/defaults.toml");
 
@@ -65,6 +66,16 @@ impl std::fmt::Debug for CodeRule {
 #[derive(Debug, Default)]
 pub struct CodeRules {
     pub rules: Vec<CodeRule>,
+    /// Per language: what its rules match, as a hash (facts read with other
+    /// rules are read again).
+    fingerprints: BTreeMap<String, String>,
+}
+
+/// Where a rule matched in a file.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Deserialize)]
+pub struct RuleHit {
+    pub rule: String,
+    pub span: Span,
 }
 
 impl CodeRules {
@@ -90,7 +101,29 @@ impl CodeRules {
             self.rules.retain(|r| r.spec.id != spec.id);
             self.rules.push(CodeRule { spec, matcher });
         }
+        self.fingerprints.clear();
+        for rule in &self.rules {
+            let entry = self.fingerprints.entry(rule.spec.language.clone()).or_default();
+            entry.push_str(&format!("{}={:?};", rule.spec.id, rule.spec.rule));
+        }
+        for text in self.fingerprints.values_mut() {
+            *text = crate::content_hash(text);
+        }
         Ok(())
+    }
+
+    /// What `language`'s rules match, as a hash ("" when it has none).
+    pub fn fingerprint(&self, language: &str) -> &str {
+        self.fingerprints.get(language).map_or("", String::as_str)
+    }
+
+    /// Every match of `language`'s rules in a parsed file.
+    pub(crate) fn hits(&self, language: &str, root: &ast_grep_core::Node<'_, ast_grep_core::tree_sitter::StrDoc<ast_grep_language::SupportLang>>) -> Vec<RuleHit> {
+        let mut out = Vec::new();
+        for rule in self.rules.iter().filter(|r| r.spec.language == language) {
+            out.extend(root.find_all(&rule.matcher).map(|m| RuleHit { rule: rule.spec.id.clone(), span: crate::extract::span(m.get_node()) }));
+        }
+        out
     }
 
     /// Loads every `*.toml` rule file in a directory (sorted by name).
@@ -106,27 +139,24 @@ impl CodeRules {
     }
 
     /// Checks `components` (as they are in `graph`) against the rules that
-    /// apply to their language and type. Files are read from `root`.
-    pub fn check<'a>(&self, components: impl IntoIterator<Item = &'a Component>, graph: &Graph, root: &Path, packs: &PackSet, types: &TypeSystem) -> Vec<Finding> {
+    /// apply to their language and type, from the matches kept with each
+    /// file's facts (`facts` finds a file's).
+    pub fn check<'a, 'f>(&self, components: impl IntoIterator<Item = &'a Component>, graph: &Graph, facts: &dyn Fn(&RepoPath) -> Option<&'f FileExtract>, types: &TypeSystem) -> Vec<Finding> {
         let mut findings = Vec::new();
-        let mut files: BTreeMap<String, Option<String>> = BTreeMap::new();
         for c in components {
             let Some(anchor) = &c.anchor else { continue };
             let Ok(ty) = types.resolve(&c.type_name) else { continue };
             let rules: Vec<&CodeRule> =
                 self.rules.iter().filter(|r| r.spec.language == anchor.language && r.spec.types.iter().any(|t| ty.is_a(t))).collect();
-            let Some(pack) = packs.for_path(Path::new(anchor.file.as_str())) else { continue };
             if rules.is_empty() {
                 continue;
             }
-            let content = files.entry(anchor.file.as_str().to_owned()).or_insert_with(|| std::fs::read_to_string(root.join(anchor.file.as_str())).ok());
-            let Some(content) = content else { continue };
-            // The file changed since it was indexed: its spans point at other
-            // code. Nothing is judged until it's read again.
-            if crate::content_hash(content) != anchor.content_hash {
+            // Facts read from other content (or with other rules) say nothing
+            // about the code the anchor points at.
+            let Some(extract) = facts(&anchor.file) else { continue };
+            if extract.content_hash != anchor.content_hash || extract.rules_fingerprint != self.fingerprint(&anchor.language) {
                 continue;
             }
-            let doc = pack.lang.ast_grep(content.as_str());
             let own = anchor.span.start_byte as usize..anchor.span.end_byte as usize;
             // Code of nested components (in the same file) isn't this one's own.
             let nested: Vec<Span> = graph
@@ -134,18 +164,11 @@ impl CodeRules {
                 .filter_map(|r| graph.component(&r.target)?.anchor.as_ref().filter(|a| a.file == anchor.file).map(|a| a.span))
                 .collect();
             for rule in rules {
-                let hits: Vec<Span> = doc
-                    .root()
-                    .find_all(&rule.matcher)
-                    .map(|m| {
-                        let n = m.get_node();
-                        Span {
-                            start_line: n.start_pos().line() as u32 + 1,
-                            end_line: n.end_pos().line() as u32 + 1,
-                            start_byte: n.range().start as u32,
-                            end_byte: n.range().end as u32,
-                        }
-                    })
+                let hits: Vec<Span> = extract
+                    .rule_hits
+                    .iter()
+                    .filter(|h| h.rule == rule.spec.id)
+                    .map(|h| h.span)
                     .filter(|s| own.contains(&(s.start_byte as usize)) && s.end_byte as usize <= own.end)
                     .collect();
                 let severity = match rule.spec.severity {

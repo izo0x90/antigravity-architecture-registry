@@ -656,7 +656,8 @@ impl ArchitectureService {
         if stamp.modified > trusted_before {
             stamp.modified = 0;
         }
-        let kept = files.get(&file.path).filter(|(e, _)| e.module == file.module && e.pack_fingerprint == pack.fingerprint);
+        // Kept facts count only if read the same way: the same module, pack and code rules.
+        let kept = files.get(&file.path).filter(|(e, _)| e.module == file.module && e.pack_fingerprint == pack.fingerprint && e.rules_fingerprint == self.rules.fingerprint(pack.name()));
         if let Some((_, was)) = kept
             && was.modified != 0
             && was == stamp
@@ -669,7 +670,7 @@ impl ArchitectureService {
                 true => Read::Same,
                 false => Read::Changed(Change::Restamp { file: file.path.clone(), stamp }),
             },
-            _ => Read::Changed(Change::Put(Box::new(Stored { extract: extract_file(pack, file.path.clone(), file.module.clone(), &content), stamp }))),
+            _ => Read::Changed(Change::Put(Box::new(Stored { extract: extract_file(pack, &self.rules, file.path.clone(), file.module.clone(), &content), stamp }))),
         })
     }
 
@@ -923,7 +924,7 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
         let mut report = checks::check_plan(&plan, &graph, &self.check_cx());
         // Code rules over the plan's scope as it exists in code.
         let scope = self.scope(plan_id)?;
-        report.findings.extend(self.rules.check(scope.iter().filter_map(|id| graph.component(id)), &graph, &self.root, &self.packs, &self.types));
+        report.findings.extend(self.rule_findings(scope.iter().filter_map(|id| graph.component(id)), &graph));
         // Logic blocks are tested on their own.
         let planned = plan.components.iter().filter_map(|c| graph.component(&c.id));
         report.findings.extend(tools::run_logic_checks(planned, &self.tools.logic_checks, self.runner.as_ref(), &self.root));
@@ -963,7 +964,7 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             let mut report = checks::check_plan(plan, &graph, &self.check_cx());
             // The same blocking set validation shows for it: code rules on its
             // code and its logic steps' own checks.
-            report.findings.extend(self.rules.check(graph.component(id), &graph, &self.root, &self.packs, &self.types));
+            report.findings.extend(self.rule_findings(graph.component(id), &graph));
             report.findings.extend(tools::run_logic_checks(graph.component(id).into_iter(), &self.tools.logic_checks, self.runner.as_ref(), &self.root));
             // Errors on it, on its relations, or on the plan as a whole.
             let blocking: Vec<String> = checks::blocking_for(&report, plan, id).into_iter().map(|f| f.message.clone()).collect();
@@ -1075,7 +1076,7 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
     /// adds its validation tools and reviewers (once the code checks pass).
     fn check(&self, plan: &Plan, planned: &Component, observed: &Graph, goal: Stage, deep: bool) -> Result<Report, ServiceError> {
         let mut report = verify::verify_component(plan, planned, observed, goal, &self.packs, &self.types);
-        report.findings.extend(self.rules.check(observed.component(&planned.id), observed, &self.root, &self.packs, &self.types));
+        report.findings.extend(self.rule_findings(observed.component(&planned.id), observed));
         report.extend(chain::recheck(plan, &planned.id, observed));
         let unverified = self.observed.read().map_err(ServiceError::poisoned)?.unverified.clone();
         report.findings.extend(verify::planned_flows(plan, &planned.id, observed, &unverified));
@@ -1284,6 +1285,14 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             tracing::warn!(ms = timed.ms as u64, size = ?timed.size, stages = %stages.join(", "), "slow {}: {}", timed.what, timed.asked);
         }
         self.recent.lock().unwrap_or_else(PoisonError::into_inner).push(timed, self.limits.perf_kept);
+    }
+
+    /// The code rules' findings on `components`, from the matches kept with
+    /// each file's facts (no file is read or parsed again).
+    fn rule_findings<'a>(&self, components: impl IntoIterator<Item = &'a Component>, graph: &Graph) -> Vec<arch_graph::Finding> {
+        let files = self.files.read().unwrap_or_else(PoisonError::into_inner);
+        let facts = |file: &RepoPath| files.get(file).map(|(extract, _)| extract);
+        self.rules.check(components, graph, &facts, &self.types)
     }
 
     /// The last answers' timings, the graph's and the store's size, and the

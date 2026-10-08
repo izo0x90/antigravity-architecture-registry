@@ -6,7 +6,7 @@ use std::path::Path;
 
 use arch_graph::TypeSystem;
 use arch_graph::tree::{TreeRequest, ViewKind};
-use arch_index::{FileExtract, PackSet, extract_file, resolve, walk};
+use arch_index::{CodeRules, FileExtract, PackSet, extract_file, resolve, walk};
 use arch_service::{ArchitectureService, MemoryPlans, MemoryStore};
 use criterion::{Criterion, criterion_group, criterion_main};
 
@@ -14,14 +14,14 @@ fn repo() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap()
 }
 
-fn extracts(root: &Path, packs: &PackSet) -> Vec<FileExtract> {
+fn extracts(root: &Path, packs: &PackSet, rules: &CodeRules) -> Vec<FileExtract> {
     walk(root, root, packs)
         .unwrap()
         .into_iter()
         .filter_map(|f| {
             let pack = packs.for_path(&f.absolute)?;
             let content = std::fs::read_to_string(&f.absolute).ok()?;
-            Some(extract_file(pack, f.path, f.module, &content))
+            Some(extract_file(pack, rules, f.path, f.module, &content))
         })
         .collect()
 }
@@ -30,7 +30,8 @@ fn hot(c: &mut Criterion) {
     let root = repo();
     let packs = PackSet::built_in().unwrap();
     let types = TypeSystem::defaults().unwrap();
-    let facts = extracts(&root, &packs);
+    let rules = CodeRules::defaults(&packs, &types).unwrap();
+    let facts = extracts(&root, &packs, &rules);
     c.bench_function("link", |b| b.iter(|| resolve(&facts, &packs, &types)));
 
     let service = ArchitectureService::open(&root, PackSet::built_in().unwrap(), types.clone(), Box::new(MemoryPlans::default()), Box::new(MemoryStore::default())).unwrap();

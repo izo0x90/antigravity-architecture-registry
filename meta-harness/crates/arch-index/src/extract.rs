@@ -160,6 +160,12 @@ pub struct FileExtract {
     /// Returns, bindings, construction, state and boundaries.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flows: Vec<RawFlow>,
+    /// Where the code rules matched (on the same parse).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rule_hits: Vec<crate::RuleHit>,
+    /// The code rules it was read with (see `CodeRules::fingerprint`).
+    #[serde(default)]
+    pub rules_fingerprint: String,
 }
 
 impl FileExtract {
@@ -183,7 +189,7 @@ pub fn content_hash(content: &str) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn span(node: &AstNode<'_>) -> Span {
+pub(crate) fn span(node: &AstNode<'_>) -> Span {
     let range = node.range();
     Span {
         start_line: node.start_pos().line() as u32 + 1,
@@ -429,8 +435,10 @@ fn flows(pack: &Pack, node: &AstNode<'_>, ctx: &Ctx, bound: &std::collections::H
     }
 }
 
-/// Extracts one file. `module` is its module symbol (see `walk::module_symbol`).
-pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) -> FileExtract {
+/// Extracts one file, parsing it once: definitions, calls, flows,
+/// placeholders and the code rules' matches all come from that one parse.
+/// `module` is its module symbol (see `walk::module_symbol`).
+pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, module: String, content: &str) -> FileExtract {
     let root = pack.lang.ast_grep(content);
     let mut out = FileExtract {
         schema_version: SCHEMA_VERSION,
@@ -450,6 +458,8 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
         macro_uses: Vec::new(),
         macro_defs: Vec::new(),
         flows: Vec::new(),
+        rule_hits: Vec::new(),
+        rules_fingerprint: rules.fingerprint(pack.name()).to_owned(),
     };
     let lang = &pack.spec.language;
     // Local names bound to a call's output (or a declared type), per enclosing definition.
@@ -617,6 +627,7 @@ pub fn extract_file(pack: &Pack, file: RepoPath, module: String, content: &str) 
             out.macro_defs.push(MacroDef { name, uses, placeholder });
         }
     }
+    out.rule_hits = rules.hits(pack.name(), &root_node);
     out.placeholders.sort_by_key(|s| s.start_byte);
     out.placeholders.dedup();
     // A field read many times in one definition is one flow.

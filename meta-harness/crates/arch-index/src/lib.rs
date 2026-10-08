@@ -18,13 +18,13 @@ use arch_graph::TypeSystem;
 pub use extract::{FileExtract, FlowKind, MacroDef, RawArg, RawCall, RawDef, RawFlow, RawScope, content_hash, extract_file};
 pub use pack::{AliasSpec, BindingSpec, CallSpec, DefinitionSpec, LanguageSpec, Pack, PackSet, PackSpec, ParamSpec, MacroSpec, DeadCodeSpec, ConditionSpec, ConstantLogic, RuleSpec, ScopeSpec};
 pub use resolve::{AmbiguousCall, ExternalCall, Resolved, UnverifiedFlow, resolve};
-pub use rules::{CodeRule, CodeRuleSpec, CodeRules, RuleKind, RuleSeverity};
+pub use rules::{CodeRule, CodeRuleSpec, CodeRules, RuleHit, RuleKind, RuleSeverity};
 pub use walk::{SourceFile, ignored, module_symbol, walk};
 
 /// Bumped whenever what extraction reads from a file changes (not the
 /// packs: their fingerprint is kept with each file). Facts kept from an
 /// older reader are read again.
-pub const EXTRACTOR_VERSION: u32 = 2;
+pub const EXTRACTOR_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum IndexError {
@@ -37,12 +37,12 @@ pub enum IndexError {
 }
 
 /// Ingests `scope` (inside `root`) without a cache: walk, extract, resolve.
-pub fn ingest(root: &Path, scope: &Path, packs: &PackSet, types: &TypeSystem) -> Result<(Vec<FileExtract>, Resolved), IndexError> {
+pub fn ingest(root: &Path, scope: &Path, packs: &PackSet, rules: &CodeRules, types: &TypeSystem) -> Result<(Vec<FileExtract>, Resolved), IndexError> {
     let mut extracts = Vec::new();
     for file in walk(root, scope, packs)? {
         let Some(pack) = packs.for_path(&file.absolute) else { continue };
         let content = std::fs::read_to_string(&file.absolute).map_err(|e| IndexError::Io(format!("{}: {e}", file.path)))?;
-        extracts.push(extract_file(pack, file.path, file.module, &content));
+        extracts.push(extract_file(pack, rules, file.path, file.module, &content));
     }
     let resolved = resolve(&extracts, packs, types);
     Ok((extracts, resolved))
