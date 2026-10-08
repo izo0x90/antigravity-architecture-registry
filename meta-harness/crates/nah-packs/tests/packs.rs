@@ -67,6 +67,7 @@ run = {{ command = "touch", args = ["made-by-a-step"] }}
 
 [provides]
 executable = "server.bin"
+driver = "fake"
 "#,
         url = url.display()
     )
@@ -90,7 +91,7 @@ fn manifests_are_checked_strictly_when_loaded() {
 
     let with = |from: &str, to: &str| good.replacen(from, to, 1);
     assert!(bad(&w, &with("[provides]", "[provides]\nextra = 1")).contains("unknown field"));
-    assert!(bad(&w, &with("executable = \"server.bin\"", "").replace("[provides]", "")).contains("harness packs need [provides]"));
+    assert!(bad(&w, &with("[provides]\nexecutable = \"server.bin\"\ndriver = \"fake\"\n", "")).contains("harness packs need [provides]"));
     assert!(bad(&w, &with(&"a".repeat(64), "abc")).contains("64 lowercase hex"));
     assert!(bad(&w, &with(&format!(", sha256 = \"{}\"", "a".repeat(64)), "")).contains("missing field `sha256`"), "a download needs a checksum");
     assert!(bad(&w, &with("file:///x.zip", "file:///{nope}.zip")).contains("unknown placeholder {nope}"));

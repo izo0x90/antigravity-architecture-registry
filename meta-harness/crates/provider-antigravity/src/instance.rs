@@ -20,7 +20,8 @@ pub(crate) const DRIVER_KIND: &str = "antigravity";
 
 pub struct AntigravityInstance {
     id: InstanceId,
-    executable: PathBuf,
+    /// None: no program configured and no harness pack installed.
+    executable: Option<PathBuf>,
     launcher: Arc<dyn AcpLauncher>,
     adapter: Arc<AcpAdapter>,
     auth: Arc<AcpAuthController>,
@@ -30,9 +31,9 @@ pub struct AntigravityInstance {
 
 impl AntigravityInstance {
     pub(crate) fn create(id: InstanceId, config: AntigravityConfig) -> Arc<Self> {
-        let executable = config.executable.clone().or_else(crate::driver::find_acp_server).unwrap_or_default();
+        let executable = config.executable.clone();
         let launcher: Arc<dyn AcpLauncher> =
-            Arc::new(ProcessLauncher { program: executable.clone(), args: config.args, env: config.env });
+            Arc::new(ProcessLauncher { program: executable.clone().unwrap_or_default(), args: config.args, env: config.env });
         let flavor = Arc::new(AntigravityFlavor);
         let adapter = Arc::new(AcpAdapter::new(id.clone(), flavor, launcher.clone()));
         let (snapshot, _) = watch::channel(ProviderSnapshot {
@@ -98,12 +99,13 @@ impl ProviderInstance for AntigravityInstance {
     }
 
     async fn refresh(&self) -> Result<()> {
-        if !self.executable.is_file() {
-            self.snapshot.send_modify(|s| {
-                s.status = ProviderStatus::Unavailable {
-                    reason: format!("Antigravity ACP server not found ({})", self.executable.display()),
-                };
-            });
+        let missing = match &self.executable {
+            None => Some("no Antigravity ACP server: install its harness pack (meta-harness pack list)".to_owned()),
+            Some(path) if !path.is_file() => Some(format!("Antigravity ACP server not found ({})", path.display())),
+            Some(_) => None,
+        };
+        if let Some(reason) = missing {
+            self.snapshot.send_modify(|s| s.status = ProviderStatus::Unavailable { reason });
             return Ok(());
         }
         let skills = self.discover_skills();

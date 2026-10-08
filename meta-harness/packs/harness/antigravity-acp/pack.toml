@@ -1,0 +1,38 @@
+[pack]
+name = "antigravity-acp"
+kind = "harness"
+version = "1.0.0"
+description = "Google Antigravity's ACP server: the agent harness the cockpit drives."
+
+[tool]
+name = "agy_acp_server"
+version = "1.1.1"
+supports = ">=1.1.0, <1.2.0"
+# The server has no version command (it reports its version in the ACP
+# handshake), so what was installed is what's recorded.
+
+# Google publishes Linux (x86_64, arm64) and macOS (arm64) builds.
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "macos-arm64"]
+
+[install.vars.linux-x86_64]
+folder = "linux"
+asset = "linux-x86_64"
+sha256 = "38f62d01b32deb0907b3d39a71ec301fd36369f6ffd1cf262d4af385177f79df"
+
+[install.vars.linux-arm64]
+folder = "linux"
+asset = "linux-arm64"
+sha256 = "ed69e64b308fcb123ab54bf3277bf9cb0d651064f885ea5aab0ff520c7175398"
+
+[install.vars.macos-arm64]
+folder = "macos"
+asset = "darwin-arm64"
+sha256 = "fdfa915652cdb7ba8085cc8fffed072cbe009251aa2c951aabdda07a8c28a189"
+
+[[install.steps]]
+download = { url = "https://dl.google.com/agy-extensions/releases/{folder}/agy-acp-server-agy_acp_server_{tool_version}-{asset}.zip", sha256 = "{sha256}", unpack = "zip" }
+
+[provides]
+executable = "agy_acp_server.par"
+driver = "antigravity"

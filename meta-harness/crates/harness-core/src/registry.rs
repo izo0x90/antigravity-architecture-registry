@@ -29,13 +29,16 @@ impl InstanceRegistry {
 
     /// One instance per registered driver, with the driver's default config and
     /// the driver kind as instance id.
-    pub fn default_configs(&self) -> Vec<InstanceConfig> {
+    /// One instance per driver, each given the program its harness pack
+    /// installed (`programs`, by driver kind).
+    pub fn default_configs(&self, programs: &std::collections::BTreeMap<String, std::path::PathBuf>) -> Vec<InstanceConfig> {
         let mut configs: Vec<InstanceConfig> = self
             .drivers
             .values()
             .map(|d| {
                 let kind = d.metadata().kind;
-                InstanceConfig { id: InstanceId::new(kind.as_str()), driver: kind, config: d.default_config() }
+                let config = d.default_config(programs.get(kind.as_str()).map(std::path::PathBuf::as_path));
+                InstanceConfig { id: InstanceId::new(kind.as_str()), driver: kind, config }
             })
             .collect();
         configs.sort_by(|a, b| a.id.cmp(&b.id));

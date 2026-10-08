@@ -163,6 +163,8 @@ pub enum Output {
 pub struct Provides {
     /// The program, relative to the install folder.
     pub executable: String,
+    /// The harness driver that runs it (its kind, e.g. "antigravity").
+    pub driver: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]

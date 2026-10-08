@@ -47,6 +47,9 @@ provider-antigravity = { path = "crates/provider-antigravity" }
 arch-graph = { path = "crates/arch-graph" }
 arch-index = { path = "crates/arch-index" }
 arch-service = { path = "crates/arch-service" }
+nah-packs = { path = "crates/nah-packs" }
+include_dir = "0.7"
+clap = { version = "4", features = ["derive"] }
 async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["ws"] }
 futures = "0.3.34"

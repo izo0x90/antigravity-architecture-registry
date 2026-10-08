@@ -16,9 +16,60 @@ fn built_in_drivers() -> Vec<Arc<dyn ProviderDriver>> {
     vec![Arc::new(AntigravityDriver)]
 }
 
+/// The meta-harness: with no command, the server.
+#[derive(clap::Parser)]
+#[command(version, about)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Cmd>,
+}
+
+#[derive(clap::Subcommand)]
+enum Cmd {
+    /// Packs: harnesses, languages and indexers.
+    Pack {
+        #[command(subcommand)]
+        action: PackCmd,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum PackCmd {
+    /// Every pack: kind, version, supported tool versions, state.
+    List,
+    /// One pack's state (or every pack's).
+    Check { name: Option<String> },
+    /// Install a pack.
+    Install { name: String },
+    /// Reinstall what's outdated or out of range.
+    Update { name: Option<String> },
+    /// Where an installed pack's program is.
+    Which { name: String },
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
+    let cli = <Cli as clap::Parser>::parse();
+    if let Some(Cmd::Pack { action }) = cli.command {
+        use meta_harness::packs::Command as C;
+        let command = match action {
+            PackCmd::List => C::List,
+            PackCmd::Check { name } => C::Check(name),
+            PackCmd::Install { name } => C::Install(name),
+            PackCmd::Update { name } => C::Update(name),
+            PackCmd::Which { name } => C::Which(name),
+        };
+        let catalog = meta_harness::packs::catalog(&repo_root()?)?;
+        match meta_harness::packs::run(&command, &catalog) {
+            Ok(out) => print!("{out}"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
 
     let port: u16 = std::env::var("PORT")
         .or_else(|_| std::env::var("METAHARNESS_PORT"))
@@ -56,7 +107,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     let instances = Arc::new(InstanceRegistry::new(built_in_drivers(), hub.clone()));
-    instances.configure(instances.default_configs()).await?;
+    // Each harness gets the program its pack installed.
+    let programs = meta_harness::packs::harness_programs(&meta_harness::packs::catalog(arch.root())?)?;
+    instances.configure(instances.default_configs(&programs)).await?;
 
     // Every session gets the architecture tools.
     let mcp_servers = vec![McpServer {
@@ -76,6 +129,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// The repo worked on: `NAH_REPO_ROOT`, else the working directory.
+fn repo_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let root = std::env::var("NAH_REPO_ROOT").map(PathBuf::from).or_else(|_| std::env::current_dir())?;
+    Ok(root.canonicalize()?)
+}
+
 /// How the work queue runs: defaults plus the project's `.nah/queue.toml`.
 fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig, Box<dyn std::error::Error>> {
     let mut config = arch_service::QueueConfig::defaults()?;
@@ -92,8 +151,7 @@ fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig,
 /// (`.nah/tools.toml`), reviewers (`.nah/reviewers.toml`) and schema
 /// shorthand aliases (`.nah/schema_dsl.toml`).
 fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>> {
-    let root = std::env::var("NAH_REPO_ROOT").map(PathBuf::from).or_else(|_| std::env::current_dir())?;
-    let root = root.canonicalize()?;
+    let root = repo_root()?;
     let nah = root.join(".nah");
     let mut packs = PackSet::built_in()?;
     if nah.join("packs").is_dir() {

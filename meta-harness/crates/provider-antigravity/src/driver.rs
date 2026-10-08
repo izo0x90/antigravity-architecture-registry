@@ -16,23 +16,11 @@ use crate::instance::{AntigravityInstance, DRIVER_KIND};
 #[serde(rename_all = "camelCase", default)]
 pub struct AntigravityConfig {
     pub display_name: Option<String>,
-    /// Path to `agy_acp_server.par` (or a wrapper that runs it).
+    /// Path to `agy_acp_server.par` (or a wrapper that runs it); by
+    /// default the program its harness pack installed.
     pub executable: Option<PathBuf>,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
-}
-
-/// `AGY_EXECUTABLE`, else the ACP server under the user's local install dirs.
-/// (The `agy` CLI is not an ACP server and is deliberately not considered.)
-pub(crate) fn find_acp_server() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("AGY_EXECUTABLE") {
-        return Some(PathBuf::from(path));
-    }
-    let home = PathBuf::from(std::env::var("HOME").ok()?);
-    [".local/share/antigravity-acp/agy_acp_server.par", ".local/bin/agy_acp_server.par"]
-        .into_iter()
-        .map(|rel| home.join(rel))
-        .find(|p| p.is_file())
 }
 
 pub struct AntigravityDriver;
@@ -47,8 +35,8 @@ impl ProviderDriver for AntigravityDriver {
         }
     }
 
-    fn default_config(&self) -> serde_json::Value {
-        serde_json::to_value(AntigravityConfig::default()).unwrap_or_default()
+    fn default_config(&self, program: Option<&std::path::Path>) -> serde_json::Value {
+        serde_json::to_value(AntigravityConfig { executable: program.map(std::path::Path::to_path_buf), ..AntigravityConfig::default() }).unwrap_or_default()
     }
 
     async fn create(&self, id: InstanceId, config: serde_json::Value) -> Result<Arc<dyn ProviderInstance>> {

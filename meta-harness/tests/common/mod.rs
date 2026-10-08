@@ -178,7 +178,7 @@ impl ProviderDriver for FakeDriver {
         DriverMetadata { kind: DriverKind::new(FAKE), display_name: "Fake".into(), supports_multiple_instances: false }
     }
 
-    fn default_config(&self) -> serde_json::Value {
+    fn default_config(&self, _program: Option<&std::path::Path>) -> serde_json::Value {
         serde_json::Value::Null
     }
 
@@ -249,7 +249,7 @@ pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppS
     bridge_architecture_events(&arch, &hub);
     let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone())));
     let registry = Arc::new(InstanceRegistry::new(vec![Arc::new(FakeDriver)], hub.clone()));
-    registry.configure(registry.default_configs()).await.unwrap();
+    registry.configure(registry.default_configs(&Default::default())).await.unwrap();
     let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone(), Vec::new()));
     let queue = meta_harness::server::queue_runner(&arch, arch_service::QueueConfig::defaults().unwrap(), &hub);
     let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue };

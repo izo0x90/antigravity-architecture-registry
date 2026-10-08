@@ -472,7 +472,7 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
         let mut child_ctx = ctx.clone();
         if let Some((di, def)) = pack.definitions.iter().zip(&pack.spec.definitions).enumerate().find_map(|(i, (rule, def))| node.matches(rule).then_some((i, def))) {
             if let Some(name) = field_text(&node, &def.name_field) {
-                let mut bases: Vec<String> = def
+                let bases: Vec<String> = def
                     .bases_field
                     .as_ref()
                     .and_then(|f| node.field(f))

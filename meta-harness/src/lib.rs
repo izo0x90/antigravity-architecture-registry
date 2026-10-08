@@ -3,6 +3,7 @@ pub mod cockpit;
 pub mod explainer;
 pub mod graph;
 pub mod mcp;
+pub mod packs;
 pub mod queue;
 pub mod server;
 pub mod watch;
