@@ -61,9 +61,10 @@ pub struct IndexRun {
 }
 
 /// Runs `program args` with a time limit; the output file is the caller's.
-fn run_with_limit(program: &str, args: &[String], cwd: &Path, limit: Duration) -> Result<(), IndexError> {
+fn run_with_limit(program: &str, args: &[String], env: &[(String, String)], cwd: &Path, limit: Duration) -> Result<(), IndexError> {
     let mut child = std::process::Command::new(program)
         .args(args)
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -104,7 +105,7 @@ pub fn run(catalog: &nah_packs::Catalog, lock: &nah_packs::Lock, indexer: &str, 
     };
     let out = std::env::temp_dir().join(format!("nah-index-{}-{}-{}.scip", pack.name(), std::process::id(), started.elapsed().as_nanos()));
     let invocation = nah_packs::invocation(catalog, lock, indexer, root, &out).map_err(|e| IndexError::Pack(e.to_string()))?;
-    let ran = run_with_limit(&invocation.program, &invocation.args, root, invocation.timeout);
+    let ran = run_with_limit(&invocation.program, &invocation.args, &invocation.env, root, invocation.timeout);
     let read = ran.and_then(|()| std::fs::read(&out).map_err(|e| IndexError::Io(format!("{}: {e}", out.display()))));
     let _ = std::fs::remove_file(&out);
     let bytes = read?;

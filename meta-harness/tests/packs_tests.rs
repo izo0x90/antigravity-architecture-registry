@@ -87,4 +87,5 @@ fn languages_and_indexers_are_shipped_packs() {
     }
     let rust = nah_packs::invocation(&catalog, &Lock::default(), "rust-analyzer", Path::new("/repo"), Path::new("/tmp/out.scip")).unwrap();
     assert_eq!((rust.program.as_str(), rust.args.as_slice()), ("rust-analyzer", ["scip", "/repo", "--output", "/tmp/out.scip"].map(String::from).as_slice()));
+    assert_eq!(rust.env, [("CARGO_TARGET_DIR".to_owned(), "/repo/.nah/cache/rust-analyzer/target".to_owned())], "its build goes under the project's cache, not target/");
 }

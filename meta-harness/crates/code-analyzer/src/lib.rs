@@ -21,7 +21,7 @@ use arch_graph::TypeSystem;
 pub use expr::Expr;
 pub use extract::{FileExtract, FlowKind, MacroDef, RawArg, RawCall, RawDef, RawFlow, RawScope, content_hash, extract_file};
 pub use pack::{AliasSpec, BindingSpec, CallSpec, DefinitionSpec, ExpressionShape, ExpressionSpec, LanguageSpec, Pack, PackSet, PackSpec, ParamSpec, MacroSpec, DeadCodeSpec, ConditionSpec, ConstantLogic, RuleSpec, ScopeSpec};
-pub use resolve::{AmbiguousCall, ExternalCall, Occurrence, Resolved, UnverifiedFlow, combine};
+pub use resolve::{AmbiguousCall, Combined, ExternalCall, Occurrence, Resolved, UnverifiedFlow, combine};
 pub use rules::{CodeRule, CodeRuleSpec, CodeRules, RuleHit, RuleKind, RuleSeverity};
 pub use walk::{SourceFile, ignored, module_symbol, walk};
 
@@ -29,6 +29,10 @@ pub use walk::{SourceFile, ignored, module_symbol, walk};
 /// packs: their fingerprint is kept with each file). Facts kept from an
 /// older reader are read again.
 pub const EXTRACTOR_VERSION: u32 = 7;
+
+/// Bumped whenever what the combine stage makes of the facts changes: a
+/// combined result kept from an older one is made again.
+pub const COMBINE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum IndexError {

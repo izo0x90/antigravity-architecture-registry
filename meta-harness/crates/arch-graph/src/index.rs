@@ -46,6 +46,43 @@ pub struct IndexStatus {
     /// directory for everything under it).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stale: Vec<String>,
+    /// Each language's own indexer: whether it's there, and how its last
+    /// run went.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub indexers: Vec<IndexerStatus>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexerStatus {
+    pub language: String,
+    /// The indexer pack.
+    pub indexer: String,
+    pub state: IndexerState,
+    /// The tool's version, as checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Files it described in its last run (as they are now).
+    #[serde(default)]
+    pub files: usize,
+    /// Links it confirmed.
+    #[serde(default)]
+    pub proven: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexerState {
+    /// Its pack isn't installed (or its tool is out of range): links in
+    /// this language are matched by name.
+    #[default]
+    Missing,
+    Ready,
+    Running,
+    Failed,
 }
 
 impl IndexStatus {

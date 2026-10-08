@@ -1,13 +1,18 @@
-//! The store as one SQLite file (`.nah/cache/index.sqlite`): one row per
-//! source file. WAL mode, one connection (the service writes from one place
-//! at a time, and reads it whole once, at start-up).
+//! The store as one SQLite file (`.nah/cache/index.sqlite`): per source
+//! file its facts, its indexer output and its occurrences; one row for the
+//! combined result. WAL mode, one connection (the service writes from one
+//! place at a time, reads it whole at start-up, and reads one file's
+//! occurrences on request).
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rusqlite::{Connection, params};
 
-use crate::{Change, FactStore, STORE_VERSION, Stamp, StoreError, Stored};
+use arch_graph::RepoPath;
+use code_analyzer::Occurrence;
+
+use crate::{Change, Commit, FactStore, Loaded, STORE_VERSION, Stamp, StoreError, Stored};
 
 /// SQLite settings (from the service's config).
 #[derive(Clone, Debug, PartialEq)]
@@ -67,7 +72,7 @@ impl SqliteStore {
         c.execute_batch("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);").map_err(failed)?;
         let written_by: Option<String> = c.query_row("SELECT value FROM meta WHERE key = 'writer'", [], |r| r.get(0)).ok();
         if written_by.as_deref() != Some(writer().as_str()) {
-            c.execute_batch("DROP TABLE IF EXISTS files;").map_err(failed)?;
+            c.execute_batch("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS indexed; DROP TABLE IF EXISTS combined; DROP TABLE IF EXISTS occurrences;").map_err(failed)?;
         }
         c.execute_batch(
             "CREATE TABLE IF NOT EXISTS files (
@@ -75,6 +80,19 @@ impl SqliteStore {
                 size INTEGER NOT NULL,
                 modified INTEGER NOT NULL,
                 facts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS indexed (
+                path TEXT PRIMARY KEY,
+                data TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS combined (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                key TEXT NOT NULL,
+                data TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS occurrences (
+                path TEXT PRIMARY KEY,
+                data TEXT NOT NULL
             );",
         )
         .map_err(failed)?;
@@ -94,27 +112,35 @@ impl SqliteStore {
 }
 
 impl FactStore for SqliteStore {
-    fn load(&self) -> Result<Vec<Stored>, StoreError> {
+    fn load(&self) -> Result<Loaded, StoreError> {
         let c = self.connection()?;
+        let mut loaded = Loaded::default();
         let mut statement = c.prepare("SELECT size, modified, facts FROM files").map_err(failed)?;
         let rows = statement
             .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))
             .map_err(failed)?;
-        let mut out = Vec::new();
         for row in rows {
             let (size, modified, facts) = row.map_err(failed)?;
             // A row that doesn't read is as good as missing: its file is read again.
             if let Ok(extract) = serde_json::from_str(&facts) {
-                out.push(Stored { extract, stamp: Stamp { size: size as u64, modified } });
+                loaded.files.push(Stored { extract, stamp: Stamp { size: size as u64, modified } });
             }
         }
-        Ok(out)
+        let mut statement = c.prepare("SELECT data FROM indexed").map_err(failed)?;
+        for row in statement.query_map([], |r| r.get::<_, String>(0)).map_err(failed)? {
+            if let Ok(file) = serde_json::from_str(&row.map_err(failed)?) {
+                loaded.indexed.push(file);
+            }
+        }
+        let combined: Option<(String, String)> = c.query_row("SELECT key, data FROM combined WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).ok();
+        loaded.combined = combined.and_then(|(key, data)| serde_json::from_str(&data).ok().map(|c| (key, c)));
+        Ok(loaded)
     }
 
-    fn apply(&self, changes: &[Change]) -> Result<(), StoreError> {
+    fn commit(&self, commit: &Commit<'_>) -> Result<(), StoreError> {
         let mut c = self.connection()?;
         let tx = c.transaction().map_err(failed)?;
-        for change in changes {
+        for change in commit.files {
             match change {
                 Change::Put(stored) => {
                     let facts = serde_json::to_string(&stored.extract).map_err(failed)?;
@@ -132,7 +158,33 @@ impl FactStore for SqliteStore {
                 }
             }
         }
+        if let Some(indexed) = commit.indexed {
+            for file in indexed.drop {
+                tx.execute("DELETE FROM indexed WHERE path = ?1", params![file.as_str()]).map_err(failed)?;
+            }
+            for file in indexed.put {
+                let data = serde_json::to_string(file).map_err(failed)?;
+                tx.execute("INSERT OR REPLACE INTO indexed (path, data) VALUES (?1, ?2)", params![file.path.as_str(), data]).map_err(failed)?;
+            }
+        }
+        if let Some(rows) = commit.combined {
+            let data = serde_json::to_string(rows.combined).map_err(failed)?;
+            tx.execute("INSERT OR REPLACE INTO combined (id, key, data) VALUES (1, ?1, ?2)", params![rows.key, data]).map_err(failed)?;
+            tx.execute("DELETE FROM occurrences", []).map_err(failed)?;
+            {
+                let mut insert = tx.prepare("INSERT INTO occurrences (path, data) VALUES (?1, ?2)").map_err(failed)?;
+                for (path, list) in rows.occurrences {
+                    insert.execute(params![path.as_str(), serde_json::to_string(list).map_err(failed)?]).map_err(failed)?;
+                }
+            }
+        }
         tx.commit().map_err(failed)
+    }
+
+    fn occurrences(&self, file: &RepoPath) -> Result<Option<Vec<Occurrence>>, StoreError> {
+        let c = self.connection()?;
+        let data: Option<String> = c.query_row("SELECT data FROM occurrences WHERE path = ?1", params![file.as_str()], |r| r.get(0)).ok();
+        data.map(|d| serde_json::from_str(&d).map_err(failed)).transpose()
     }
 
     /// The file and its write-ahead log.
@@ -148,7 +200,7 @@ impl FactStore for SqliteStore {
     }
 
     fn clear(&self) -> Result<(), StoreError> {
-        self.connection()?.execute("DELETE FROM files", []).map_err(failed)?;
+        self.connection()?.execute_batch("DELETE FROM files; DELETE FROM indexed; DELETE FROM combined; DELETE FROM occurrences;").map_err(failed)?;
         Ok(())
     }
 }
@@ -162,17 +214,22 @@ mod tests {
         Settings { synchronous: "normal".into(), cache_kib: 8192 }
     }
 
-    // req: M.11
+    fn put(file: &str) -> Commit<'static> {
+        let change = Box::leak(Box::new([Change::Put(Box::new(Stored { extract: extract(file, "h1"), stamp: Stamp::default() }))]));
+        Commit { files: change, ..Commit::default() }
+    }
+
+    // req: M.11, AP.7
     #[test]
     fn the_sqlite_store_keeps_the_contract_and_survives_a_restart() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".nah/cache/index.sqlite");
         exercise(&SqliteStore::open(&path, &settings()).unwrap());
         let store = SqliteStore::open(&path, &settings()).unwrap();
-        store.apply(&[Change::Put(Box::new(Stored { extract: extract("src/a.rs", "h1"), stamp: Stamp::default() }))]).unwrap();
+        store.commit(&put("src/a.rs")).unwrap();
         drop(store);
         let again = SqliteStore::open(&path, &settings()).unwrap();
-        assert_eq!(again.load().unwrap().len(), 1, "kept across a restart");
+        assert_eq!(again.load().unwrap().files.len(), 1, "kept across a restart");
     }
 
     // req: M.11
@@ -181,17 +238,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("index.sqlite");
         let store = SqliteStore::open(&path, &settings()).unwrap();
-        store.apply(&[Change::Put(Box::new(Stored { extract: extract("src/a.rs", "h1"), stamp: Stamp::default() }))]).unwrap();
+        store.commit(&put("src/a.rs")).unwrap();
         // Written by another reader: its facts can't be trusted.
         store.connection().unwrap().execute("UPDATE meta SET value = 'an older reader' WHERE key = 'writer'", []).unwrap();
         drop(store);
-        assert!(SqliteStore::open(&path, &settings()).unwrap().load().unwrap().is_empty(), "thrown away");
+        assert_eq!(SqliteStore::open(&path, &settings()).unwrap().load().unwrap(), Loaded::default(), "thrown away");
         // Not a database at all.
         SqliteStore::remove(&path);
         std::fs::write(&path, "this is not a database, just bytes, enough of them to look like a header").unwrap();
         let store = SqliteStore::open(&path, &settings()).unwrap();
-        assert!(store.load().unwrap().is_empty(), "started again");
-        store.apply(&[Change::Put(Box::new(Stored { extract: extract("src/a.rs", "h1"), stamp: Stamp::default() }))]).unwrap();
-        assert_eq!(store.load().unwrap().len(), 1, "and works");
+        assert_eq!(store.load().unwrap(), Loaded::default(), "started again");
+        store.commit(&put("src/a.rs")).unwrap();
+        assert_eq!(store.load().unwrap().files.len(), 1, "and works");
     }
 }

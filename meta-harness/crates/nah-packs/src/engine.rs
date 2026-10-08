@@ -291,6 +291,7 @@ pub fn executable(catalog: &Catalog, lock: &Lock, name: &str) -> Result<PathBuf,
 pub struct Invocation {
     pub program: String,
     pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
     pub timeout: std::time::Duration,
 }
 
@@ -305,6 +306,11 @@ pub fn invocation(catalog: &Catalog, lock: &Lock, name: &str, root: &Path, out: 
     values.insert("root", &root);
     values.insert("out", &out);
     let fill = |t: &str| template::expand(t, &values).map_err(|reason| PackError::Manifest { pack: name.to_owned(), reason });
-    Ok(Invocation { program: fill(&run.command)?, args: run.args.iter().map(|a| fill(a)).collect::<Result<_, _>>()?, timeout: std::time::Duration::from_secs(run.timeout_s) })
+    Ok(Invocation {
+        program: fill(&run.command)?,
+        args: run.args.iter().map(|a| fill(a)).collect::<Result<_, _>>()?,
+        env: run.env.iter().map(|(k, v)| Ok((k.clone(), fill(v)?))).collect::<Result<_, PackError>>()?,
+        timeout: std::time::Duration::from_secs(run.timeout_s),
+    })
 }
 

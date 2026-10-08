@@ -43,7 +43,7 @@ fn every_answer_is_timed_by_stage_and_kept_for_the_perf_page() {
     let whats: Vec<&str> = perf.recent.iter().map(|t| t.what.as_str()).collect();
     assert_eq!(whats, ["open", "ingest", "tree", "search", "card"]);
     let index = perf.last_index.as_ref().expect("the last index run");
-    assert_eq!(stages(index), ["find files", "read", "store", "link"]);
+    assert_eq!(stages(index), ["find files", "read", "combine", "store", "graph"]);
     assert_eq!(index.size, Some((3, "files".into())));
     let tree_timing = &perf.recent[2];
     assert_eq!(stages(tree_timing), ["source", "check", "walk", "layout", "encode"]);

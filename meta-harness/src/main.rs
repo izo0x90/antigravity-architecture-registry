@@ -96,6 +96,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(r) => info!("Ingested {} files ({} parsed) in {} ms: {} components", r.files, r.parsed, r.millis, r.components),
                 Err(e) => tracing::warn!("Initial ingest failed: {e}"),
             }
+            // Each language's own indexer, where its pack is installed: slow,
+            // so in its own thread; calls it resolves become proven.
+            meta_harness::watch::index_in_background(arch.clone());
             // Then follow the code: NAH_WATCH_MS is the quiet time before a
             // burst of changes is read (0 turns watching off).
             let quiet = std::env::var("NAH_WATCH_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(300);
@@ -154,7 +157,8 @@ fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig,
 fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>> {
     let root = repo_root()?;
     let nah = root.join(".nah");
-    let packs = PackSet::from_catalog(&meta_harness::packs::catalog(&root)?)?;
+    let catalog = meta_harness::packs::catalog(&root)?;
+    let packs = PackSet::from_catalog(&catalog)?;
     let mut types = TypeSystem::defaults()?;
     if let Ok(text) = std::fs::read_to_string(nah.join("types.toml")) {
         types.extend_from_toml(&text)?;
@@ -199,6 +203,7 @@ fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>
         .with_dsl(dsl)
         .with_rules(rules)
         .with_tools(tools, Arc::new(ProcessRunner))
+        .with_indexers(catalog)
         .with_reviewers(reviewers, None))
 }
 

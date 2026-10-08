@@ -50,6 +50,7 @@ pub fn watch(arch: Arc<ArchitectureService>, quiet: Duration) -> notify::Result<
                     Ok(r) if !r.ingest.changed.is_empty() => {
                         let broken = r.reverified.iter().filter(|v| v.report.has_errors()).count();
                         info!("{} files changed; re-verified {} components ({broken} failing)", r.ingest.changed.len(), r.reverified.len());
+                        index_in_background(arch.clone());
                     }
                     Ok(_) => {}
                     Err(e) => warn!("refresh after file changes failed: {e}"),
@@ -58,6 +59,19 @@ pub fn watch(arch: Arc<ArchitectureService>, quiet: Duration) -> notify::Result<
         })
         .map_err(|e| notify::Error::generic(&e.to_string()))?;
     Ok(())
+}
+
+/// Runs the languages' own indexers in a thread of their own (the service
+/// runs one at a time and repeats if asked again meanwhile).
+pub fn index_in_background(arch: Arc<ArchitectureService>) {
+    let spawned = std::thread::Builder::new().name("nah-index".into()).spawn(move || {
+        if let Err(e) = arch.index_languages() {
+            warn!("indexing with the languages' own indexers failed: {e}");
+        }
+    });
+    if let Err(e) = spawned {
+        warn!("couldn't start the indexers: {e}");
+    }
 }
 
 /// Shows a changed file as out of date until it's read again.

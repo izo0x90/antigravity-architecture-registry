@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use arch_store::{Change, FactStore, Stamp, Stored};
+use arch_store::{Change, CombinedRows, Commit, FactStore, IndexedChange, Stamp, Stored};
 use rayon::prelude::*;
 
 use arch_graph::tree::{Tree, TreeRequest};
@@ -17,7 +17,8 @@ use arch_graph::{
     RepoPath, Severity, Source, Stage, Target, TypeSystem, ViewRequest, can_transition, ComponentDetail, schema::Dsl,
     IndexState, IndexStatus, IndexSummary,
 };
-use code_analyzer::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, combine, content_hash, extract_file, walk, UnverifiedFlow};
+use code_analyzer::index::IndexedFile;
+use code_analyzer::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, Occurrence, PackSet, Resolved, combine, content_hash, extract_file, walk, UnverifiedFlow};
 use serde::{Deserialize, Serialize};
 
 use crate::progress::{Downgrade, cascade};
@@ -196,6 +197,13 @@ pub struct ArchitectureService {
     facts: Box<dyn FactStore>,
     /// Every file's facts, as last read.
     files: RwLock<Files>,
+    /// What the languages' own indexers said, per file, as of their last runs.
+    indexed: RwLock<BTreeMap<RepoPath, IndexedFile>>,
+    /// The packs, for the languages' indexers (none: names only).
+    indexers: Option<nah_packs::Catalog>,
+    /// One indexer run at a time; one asked for meanwhile runs after it.
+    indexing: Mutex<()>,
+    index_again: std::sync::atomic::AtomicBool,
     /// The repo's file list for searching files and lines (read on first use).
     repo_files: RwLock<Option<arch_search::RepoFiles>>,
     observed: RwLock<Arc<Observed>>,
@@ -230,6 +238,14 @@ fn asked(request: &TreeRequest, card: Option<&str>) -> String {
     out
 }
 
+/// Replaces (or adds) one language's indexer status.
+fn upsert_indexer(list: &mut Vec<arch_graph::IndexerStatus>, status: arch_graph::IndexerStatus) {
+    match list.iter_mut().find(|s| s.language == status.language) {
+        Some(existing) => *existing = status,
+        None => list.push(status),
+    }
+}
+
 fn change_file(change: &Change) -> &RepoPath {
     match change {
         Change::Put(stored) => &stored.extract.file,
@@ -257,7 +273,9 @@ impl ArchitectureService {
     /// Opens the service over `root`, loading the facts kept from the last
     /// run (no file is read). Code rules start as the defaults; see `with_rules`.
     pub fn open(root: &Path, packs: PackSet, types: TypeSystem, plans: Box<dyn PlanRepository>, facts: Box<dyn FactStore>) -> Result<Self, ServiceError> {
-        let files = RwLock::new(Files::new(facts.load()?));
+        let loaded = facts.load()?;
+        let files = RwLock::new(Files::new(loaded.files));
+        let indexed = RwLock::new(loaded.indexed.into_iter().map(|f| (f.path.clone(), f)).collect());
         // Packs map onto types: every one they name must exist.
         packs.check_types(&types).map_err(|e| ServiceError::Index(e.to_string()))?;
         let rules = CodeRules::defaults(&packs, &types).map_err(|e| ServiceError::Index(e.to_string()))?;
@@ -271,6 +289,10 @@ impl ArchitectureService {
             plans,
             facts,
             files,
+            indexed,
+            indexers: None,
+            indexing: Mutex::new(()),
+            index_again: std::sync::atomic::AtomicBool::new(false),
             repo_files: RwLock::new(None),
             observed: RwLock::new(Arc::new(Observed::default())),
             merged: Mutex::new(HashMap::new()),
@@ -285,9 +307,13 @@ impl ArchitectureService {
             ingest_lock: Mutex::new(()),
             recent: Mutex::new(crate::perf::Recent::default()),
         };
-        // Linked from the facts kept from the last run (no file is read).
+        // The result kept from the last run, if it was made the way it would
+        // be made now; else combined again from the kept facts. No file is read.
         service.timed("open", format!("{} files kept", service.files.read().map_err(ServiceError::poisoned)?.extracts.len()), |t| {
-            service.rebuild_observed(t)?;
+            match loaded.combined.filter(|(key, _)| *key == service.combine_key()) {
+                Some((_, kept)) => service.swap(t.stage("load", || Resolved::from_kept(kept)))?,
+                None => service.recombine(t, Vec::new(), None)?,
+            }
             t.size(service.snapshot()?.graph.len().0, "components");
             Ok(())
         })?;
@@ -378,11 +404,46 @@ impl ArchitectureService {
         Ok(out)
     }
 
-    fn rebuild_observed(&self, t: &mut Timing) -> Result<(), ServiceError> {
-        let files = self.files.read().map_err(ServiceError::poisoned)?;
-        let resolved = t.stage("link", || combine(&files.extracts, &[], &self.packs, &self.types));
-        drop(files);
-        let _snapshot = tracing::info_span!("stage", what = "snapshot").entered();
+    /// What a combined result depends on beyond the files: the types, the
+    /// language packs and the combine stage's version. One made under
+    /// another key is made again.
+    fn combine_key(&self) -> String {
+        let packs: Vec<&str> = self.packs.packs.iter().map(|p| p.fingerprint.as_str()).collect();
+        content_hash(&format!("{}|{}|{}", code_analyzer::COMBINE_VERSION, serde_json::to_string(&self.types).unwrap_or_default(), packs.join(",")))
+    }
+
+    /// The one way the stored result changes: `changes` to the files' facts
+    /// and an indexer's run (`indexed`: the files it ran over, what it
+    /// said) are applied, everything is combined, and the lot is written in
+    /// one transaction; then the new result is what everyone reads.
+    fn recombine(&self, t: &mut Timing, changes: Vec<Change>, indexed: Option<(Vec<RepoPath>, Vec<IndexedFile>)>) -> Result<(), ServiceError> {
+        if let Some((covered, said)) = &indexed {
+            let mut kept = self.indexed.write().map_err(ServiceError::poisoned)?;
+            for path in covered {
+                kept.remove(path);
+            }
+            kept.extend(said.iter().map(|f| (f.path.clone(), f.clone())));
+        }
+        self.files.write().map_err(ServiceError::poisoned)?.apply(changes.clone());
+        let resolved = {
+            let files = self.files.read().map_err(ServiceError::poisoned)?;
+            let indexed = self.indexed.read().map_err(ServiceError::poisoned)?;
+            let said: Vec<IndexedFile> = indexed.values().cloned().collect();
+            t.stage("combine", || combine(&files.extracts, &said, &self.packs, &self.types))
+        };
+        let (kept, occurrences) = resolved.into_kept();
+        let key = self.combine_key();
+        let commit = Commit {
+            files: &changes,
+            indexed: indexed.as_ref().map(|(covered, said)| IndexedChange { drop: covered, put: said }),
+            combined: Some(CombinedRows { key: &key, combined: &kept, occurrences: &occurrences }),
+        };
+        t.stage("store", || self.facts.commit(&commit))?;
+        self.swap(t.stage("graph", || Resolved::from_kept(kept)))
+    }
+
+    /// Makes `resolved` what everyone reads (in-flight reads finish on the old one).
+    fn swap(&self, resolved: Resolved) -> Result<(), ServiceError> {
         let generation = self.snapshot()?.generation + 1;
         let next = Arc::new(Observed {
             graph: Arc::new(resolved.graph),
@@ -394,6 +455,84 @@ impl ArchitectureService {
         });
         *self.observed.write().map_err(ServiceError::poisoned)? = next;
         Ok(())
+    }
+
+    /// What each named place in `file` refers to, as of the last result.
+    pub fn occurrences(&self, file: &RepoPath) -> Result<Vec<Occurrence>, ServiceError> {
+        Ok(self.facts.occurrences(file)?.unwrap_or_default())
+    }
+
+    /// Runs each language's own indexer (when its pack is installed and
+    /// ready) over that language's files, then combines again: calls it
+    /// resolves become proven. Slow (it builds the project's types), so the
+    /// server runs it in the background after changes settle. One run at a
+    /// time: asked for during one, it runs again right after.
+    pub fn index_languages(&self) -> Result<(), ServiceError> {
+        let Some(catalog) = &self.indexers else { return Ok(()) };
+        let Ok(_one) = self.indexing.try_lock() else {
+            self.index_again.store(true, Ordering::SeqCst);
+            return Ok(());
+        };
+        loop {
+            self.index_again.store(false, Ordering::SeqCst);
+            let lock = nah_packs::Lock::read(&catalog.lock_path).map_err(|e| ServiceError::Index(e.to_string()))?;
+            let mut statuses = Vec::new();
+            for pack in &self.packs.packs {
+                let Some(indexer) = &pack.indexer else { continue };
+                let mut status = arch_graph::IndexerStatus { language: pack.name().to_owned(), indexer: indexer.clone(), ..Default::default() };
+                let state = nah_packs::state(catalog, &lock, indexer).map_err(|e| ServiceError::Index(e.to_string()))?;
+                let nah_packs::State::Ready { tool_version } = state else {
+                    statuses.push(status);
+                    continue;
+                };
+                status.version = tool_version;
+                // This language's files as they are now: what it's run over.
+                let hashes: BTreeMap<RepoPath, String> =
+                    self.files.read().map_err(ServiceError::poisoned)?.extracts.iter().filter(|e| e.language == pack.name()).map(|e| (e.file.clone(), e.content_hash.clone())).collect();
+                if hashes.is_empty() {
+                    status.state = arch_graph::IndexerState::Ready;
+                    statuses.push(status);
+                    continue;
+                }
+                let running = arch_graph::IndexerStatus { state: arch_graph::IndexerState::Running, ..status.clone() };
+                self.set_index_status(|s| upsert_indexer(&mut s.indexers, running));
+                let outcome = self.timed("index", format!("{} with {indexer}", pack.name()), |t| {
+                    let run = t.stage("indexer", || code_analyzer::index::run(catalog, &lock, indexer, &self.root, &hashes)).map_err(|e| ServiceError::Index(e.to_string()))?;
+                    t.size(run.files.len(), "files");
+                    let covered: Vec<RepoPath> = hashes.keys().cloned().collect();
+                    let files = run.files.len();
+                    let millis = run.millis;
+                    self.recombine(t, Vec::new(), Some((covered, run.files)))?;
+                    Ok((files, millis))
+                });
+                match outcome {
+                    Ok((files, millis)) => {
+                        status.state = arch_graph::IndexerState::Ready;
+                        status.files = files;
+                        status.last_ms = Some(millis);
+                        let label = status.version.as_ref().map_or_else(|| indexer.clone(), |v| format!("{indexer} {v}"));
+                        status.proven = self.snapshot()?.graph.relations().filter(|r| r.proven_by.as_deref() == Some(label.as_str())).count();
+                    }
+                    Err(e) => {
+                        tracing::warn!("indexing {} with {indexer} failed: {e}", pack.name());
+                        status.state = arch_graph::IndexerState::Failed;
+                        status.error = Some(e.to_string());
+                    }
+                }
+                statuses.push(status);
+            }
+            self.set_index_status(|s| s.indexers = statuses.clone());
+            self.emit(ArchEvent::Changed { reason: ChangeReason::Ingested, plans: Vec::new(), components: Vec::new() });
+            if !self.index_again.swap(false, Ordering::SeqCst) {
+                return Ok(());
+            }
+        }
+    }
+
+    /// The packs, so each language's own indexer can run (see `index_languages`).
+    pub fn with_indexers(mut self, catalog: nah_packs::Catalog) -> Self {
+        self.indexers = Some(catalog);
+        self
     }
 
     /// The code as last indexed (shared, never copied).
@@ -436,6 +575,7 @@ impl ArchitectureService {
         self.facts.clear()?;
         self.forget_files();
         *self.files.write().map_err(ServiceError::poisoned)? = Files::default();
+        self.indexed.write().map_err(ServiceError::poisoned)?.clear();
         self.ingest_locked(&[self.root.clone()])
     }
 
@@ -484,8 +624,11 @@ impl ArchitectureService {
             s.total = total;
             s.error = None;
         });
-        self.read_files(t, &found, &mut report)?;
-        self.rebuild_observed(t)?;
+        let changes = self.read_files(t, &found, &mut report)?;
+        // Nothing changed: the result is as it was.
+        if !changes.is_empty() {
+            self.recombine(t, changes, None)?;
+        }
         let observed = self.snapshot()?;
         (report.components, report.relations) = observed.graph.len();
         report.ambiguous = observed.ambiguous.len();
@@ -592,7 +735,9 @@ impl ArchitectureService {
     /// on many threads at once, and only those whose content changed are
     /// read for facts again. Files under a scope that are gone (or now
     /// ignored) are dropped. The changes are kept together, all or none.
-    fn read_files(&self, t: &mut Timing, found: &[(PathBuf, Vec<code_analyzer::SourceFile>)], report: &mut IngestReport) -> Result<(), ServiceError> {
+    /// Reads what changed under the scopes walked: the changes to the
+    /// files' facts (not applied yet).
+    fn read_files(&self, t: &mut Timing, found: &[(PathBuf, Vec<code_analyzer::SourceFile>)], report: &mut IngestReport) -> Result<Vec<Change>, ServiceError> {
         let mut unique: BTreeMap<&RepoPath, &code_analyzer::SourceFile> = BTreeMap::new();
         for (_, files) in found {
             report.files += files.len();
@@ -641,9 +786,7 @@ impl ArchitectureService {
         report.changed.sort();
         changes.sort_by(|a, b| change_file(a).cmp(change_file(b)));
         t.size(report.files, "files");
-        t.stage("store", || self.facts.apply(&changes))?;
-        self.files.write().map_err(ServiceError::poisoned)?.apply(changes);
-        Ok(())
+        Ok(changes)
     }
 
     /// One file: skipped if its size and time match what was kept (and that

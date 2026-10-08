@@ -21,5 +21,9 @@ run = { command = "rustup", args = ["component", "add", "rust-analyzer"] }
 [run]
 command = "rust-analyzer"
 args = ["scip", "{root}", "--output", "{out}"]
+# It checks the project (build scripts, proc macros) as it indexes: into a
+# folder of its own under the project's cache, not the project's target/,
+# so it never waits on (or for) the user's own builds.
+env = { CARGO_TARGET_DIR = "{root}/.nah/cache/rust-analyzer/target" }
 output = "scip"
 timeout_s = 1800

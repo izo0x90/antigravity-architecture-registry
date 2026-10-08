@@ -148,6 +148,10 @@ pub struct RunContract {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Environment for the run (e.g. where a build it does goes), with the
+    /// same placeholders as the arguments.
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
     pub output: Output,
     pub timeout_s: u64,
 }
@@ -318,7 +322,7 @@ impl Manifest {
                 return Err(fail("run.timeout_s must be more than 0".into()));
             }
             let allowed: BTreeSet<&str> = RUN_PLACEHOLDERS.into_iter().filter(|n| *n != "tool_version" || known.contains("tool_version")).collect();
-            for text in std::iter::once(&run.command).chain(&run.args) {
+            for text in std::iter::once(&run.command).chain(&run.args).chain(run.env.values()) {
                 template::check(text, &allowed).map_err(|e| fail(format!("run: {e}")))?;
             }
             for needed in ["root", "out"] {

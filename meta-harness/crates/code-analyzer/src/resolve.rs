@@ -60,6 +60,45 @@ pub struct Occurrence {
     pub definition: bool,
 }
 
+/// The combine stage's result as it's kept: the graph's components and
+/// relations, and what couldn't be linked. Occurrences are kept per file.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Combined {
+    pub components: Vec<Component>,
+    pub relations: Vec<Relation>,
+    pub ambiguous: Vec<AmbiguousCall>,
+    pub unproven: Vec<AmbiguousCall>,
+    pub external: Vec<ExternalCall>,
+    pub unverified_flows: Vec<UnverifiedFlow>,
+}
+
+impl Resolved {
+    /// The result as it's kept, and its occurrences per file.
+    pub fn into_kept(self) -> (Combined, BTreeMap<RepoPath, Vec<Occurrence>>) {
+        let combined = Combined {
+            components: self.graph.components().cloned().collect(),
+            relations: self.graph.relations().cloned().collect(),
+            ambiguous: self.ambiguous,
+            unproven: self.unproven,
+            external: self.external,
+            unverified_flows: self.unverified_flows,
+        };
+        (combined, self.occurrences)
+    }
+
+    /// A kept result, its graph rebuilt (occurrences stay in the store).
+    pub fn from_kept(kept: Combined) -> Self {
+        let mut graph = Graph::default();
+        for c in kept.components {
+            graph.upsert_component(c, Provenance::OBSERVED);
+        }
+        for r in kept.relations {
+            graph.upsert_relation(r);
+        }
+        Self { graph, occurrences: BTreeMap::new(), ambiguous: kept.ambiguous, unproven: kept.unproven, external: kept.external, unverified_flows: kept.unverified_flows }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Resolved {
     pub graph: Graph,
