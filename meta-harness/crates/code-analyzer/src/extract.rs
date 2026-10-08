@@ -50,6 +50,9 @@ pub struct RawCall {
     pub caller: Option<usize>,
     /// What's called, read from the syntax tree.
     pub callee: Expr,
+    /// Where the called name itself is written (`save` in `x.save()`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_span: Option<Span>,
     pub span: Span,
     /// Arguments produced by another call (directly or through a local name).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -169,6 +172,9 @@ pub struct FileExtract {
     /// The code rules it was read with (see `CodeRules::fingerprint`).
     #[serde(default)]
     pub rules_fingerprint: String,
+    /// Syntax colouring, from the language pack's highlight query.
+    #[serde(default, skip_serializing_if = "crate::highlight::Highlights::is_empty")]
+    pub highlights: crate::highlight::Highlights,
 }
 
 impl FileExtract {
@@ -457,6 +463,7 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
         flows: Vec::new(),
         rule_hits: Vec::new(),
         rules_fingerprint: rules.fingerprint(pack.name()).to_owned(),
+        highlights: crate::highlight::Highlights::default(),
     };
     let lang = &pack.spec.language;
     // Local names bound to a call's output (or a declared type), per enclosing definition.
@@ -542,9 +549,11 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
         }
         if !ctx.dead
             && let Some(call) = pack.calls.iter().zip(&pack.spec.calls).find_map(|(rule, spec)| node.matches(rule).then_some(spec))
-            && let Some(callee) = node.field(&call.callee_field).map(|c| Expr::read(pack, &c))
+            && let Some(callee_node) = node.field(&call.callee_field)
+            && let callee = Expr::read(pack, &callee_node)
             && !matches!(&callee, Expr::Name(n) if is_local(pack, n, ctx.parent, &out.definitions, &bound))
         {
+            let name_span = Expr::name_node(pack, &callee_node).map(|n| span(&n));
             let mut args = Vec::new();
             if let Some(list) = call.args_field.as_ref().and_then(|f| node.field(f)) {
                 for (position, arg) in list.named_children().filter(|c| !lang.ignored(&c.kind())).enumerate() {
@@ -563,6 +572,7 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
             out.calls.push(RawCall {
                 caller: ctx.parent,
                 callee,
+                name_span,
                 span: span(&node),
                 args,
                 deferred: ctx.deferred,
@@ -575,6 +585,7 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
             out.calls.push(RawCall {
                 caller: ctx.parent,
                 callee: Expr::read(pack, &node),
+                name_span: Expr::name_node(pack, &node).map(|n| span(&n)),
                 span: span(&node),
                 args: Vec::new(),
                 deferred: true,
@@ -634,6 +645,9 @@ pub fn extract_file(pack: &Pack, rules: &crate::CodeRules, file: RepoPath, modul
         }
     }
     out.rule_hits = rules.hits(pack.name(), &root_node);
+    if let Some(query) = &pack.highlight_query {
+        out.highlights = query.runs(root_node.get_inner_node(), content);
+    }
     out.placeholders.sort_by_key(|s| s.start_byte);
     out.placeholders.dedup();
     // A field read many times in one definition is one flow.

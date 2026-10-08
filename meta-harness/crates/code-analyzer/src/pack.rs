@@ -672,8 +672,10 @@ pub struct Pack {
     pub package_name_regex: Option<regex::Regex>,
     /// Hash of the pack's files: facts read with another version are stale.
     pub fingerprint: String,
-    /// tree-sitter highlight queries (from the language pack).
+    /// tree-sitter highlight queries (from the language pack), as written.
     pub highlights: Option<String>,
+    /// The same, compiled for this pack's grammar.
+    pub highlight_query: Option<crate::highlight::HighlightQuery>,
     /// The indexer pack that knows this language exactly.
     pub indexer: Option<String>,
     /// The same pack compiled for its other grammars (by extension).
@@ -859,6 +861,7 @@ impl Pack {
             package_name_regex,
             fingerprint: fingerprint.to_owned(),
             highlights: None,
+            highlight_query: None,
             indexer: None,
             dialects: Vec::new(),
             lang,
@@ -917,6 +920,10 @@ impl PackSet {
             for p in std::iter::once(&mut pack).chain(dialects.iter_mut()) {
                 p.fingerprint = fingerprint.clone();
                 p.highlights = highlights.map(str::to_owned);
+                p.highlight_query = highlights
+                    .map(|h| crate::highlight::HighlightQuery::compile(&ast_grep_language::LanguageExt::get_ts_language(&p.lang), h))
+                    .transpose()
+                    .map_err(|e| IndexError::Pack(format!("{} ({}): {e}", language.name(), p.lang)))?;
                 p.indexer = files.indexer.clone();
             }
             pack.dialects = dialects;

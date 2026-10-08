@@ -57,6 +57,24 @@ impl Expr {
         }
     }
 
+    /// The node holding the name `read` ends in (`f` in `a::b::f`, `save`
+    /// in `x.save`): where the call's target is written, for matching it
+    /// with an indexer's references by position. None for a call's result.
+    pub(crate) fn name_node<'r>(pack: &Pack, node: &AstNode<'r>) -> Option<AstNode<'r>> {
+        let kind = node.kind();
+        let spec = pack.spec.expressions.iter().find(|e| e.kinds.iter().any(|k| *k == kind))?;
+        let inner = || match &spec.of {
+            Some(field) => node.field(field),
+            None => node.named_children().next(),
+        };
+        match spec.shape {
+            ExpressionShape::Name => Some(node.clone()),
+            ExpressionShape::Unwrap => Self::name_node(pack, &inner()?),
+            ExpressionShape::Path | ExpressionShape::Member => spec.name.as_ref().and_then(|f| node.field(f)),
+            ExpressionShape::Call => None,
+        }
+    }
+
     /// A name or path written as text where there's no syntax to read (a
     /// route's handler captured from a string of code): split at the
     /// language's separators. Only names and separators are expected.

@@ -596,3 +596,41 @@ fn call_targets_are_read_from_the_syntax_tree() {
     let py = read("python", "a.py", "def f(self):\n    super().run()\n    Greeter().greet()\n");
     assert_eq!(py, [member(call(name("super")), "run"), name("super"), member(call(name("Greeter")), "greet"), name("Greeter")]);
 }
+
+// req: AP.8, AP.11
+#[test]
+fn each_call_records_where_its_name_is_and_each_file_its_colours() {
+    use code_analyzer::{CodeRules, extract_file};
+    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+    let read = |lang: &str, file: &str, code: &str| extract_file(packs.by_name(lang).unwrap(), &CodeRules::default(), arch_graph::RepoPath::new(file).unwrap(), "m".into(), code);
+
+    let code = "fn run(&self) { self.store.save(); Store::new(); helper::<u8>(); make()(); }\n";
+    let rust = read("rust", "src/lib.rs", code);
+    let named = |text: &str| -> Option<String> {
+        rust.calls.iter().filter(|c| !c.reference).find(|c| c.callee.render() == text).and_then(|c| c.name_span).map(|s| code[s.start_byte as usize..s.end_byte as usize].to_owned())
+    };
+    assert_eq!(named("self.store.save").as_deref(), Some("save"), "the member's name, not the whole call");
+    assert_eq!(named("Store::new").as_deref(), Some("new"));
+    assert_eq!(named("helper").as_deref(), Some("helper"), "generic arguments aside");
+    assert_eq!(rust.calls.iter().find(|c| c.callee.render() == "make()").and_then(|c| c.name_span), None, "a call's result has no name");
+
+    // Colours from the language's highlight query, on the same parse.
+    let colour = |e: &code_analyzer::FileExtract, text: &str, code: &str| -> Vec<String> {
+        let at = code.find(text).unwrap() as u32;
+        e.highlights.runs.iter().filter(|r| r[0] <= at && at < r[1]).map(|r| e.highlights.names[r[2] as usize].clone()).collect()
+    };
+    assert_eq!(colour(&rust, "fn", code), ["keyword"]);
+    assert!(colour(&rust, "run", code)[0].starts_with("function"), "{:?}", colour(&rust, "run", code));
+    let py_code = "def greet(name):\n    return \"hi \" + name\n";
+    let py = read("python", "a.py", py_code);
+    assert_eq!(colour(&py, "def", py_code), ["keyword"]);
+    assert_eq!(colour(&py, "\"hi", py_code), ["string"]);
+    let ts_code = "export function twice(n: number): number { return n * 2; }\n";
+    let ts = read("typescript", "a.ts", ts_code);
+    assert_eq!(colour(&ts, "function", ts_code), ["keyword"]);
+    assert!(colour(&ts, "number", ts_code)[0].starts_with("type"), "{:?}", colour(&ts, "number", ts_code));
+    // Runs don't overlap and stay inside the file.
+    for e in [&rust, &py, &ts] {
+        assert!(e.highlights.runs.windows(2).all(|w| w[0][1] <= w[1][0]));
+    }
+}

@@ -3,7 +3,7 @@
   "file": "src/util.rs",
   "language": "rust",
   "content_hash": "e89e522065f3289107993bcc509c88050a3ae5348cbd3920a94f61624afd6abb",
-  "pack_fingerprint": "554b02092dd5d52de70499f136f21609cd50da6f378530c519bfff9aed1e0e86",
+  "pack_fingerprint": "b482c0c7474fb80f9236a412bc4f9523953026b1978a8c9e56451c02027afeb3",
   "module": "sample::util",
   "root_kind": "source_file",
   "lines": 5,
@@ -56,6 +56,12 @@
           "."
         ]
       },
+      "name_span": {
+        "start_line": 2,
+        "end_line": 2,
+        "start_byte": 40,
+        "end_byte": 52
+      },
       "span": {
         "start_line": 2,
         "end_line": 2,
@@ -88,5 +94,120 @@
       }
     }
   ],
-  "rules_fingerprint": ""
+  "rules_fingerprint": "",
+  "highlights": {
+    "names": [
+      "keyword",
+      "function",
+      "punctuation.bracket",
+      "variable.parameter",
+      "punctuation.delimiter",
+      "operator",
+      "type.builtin",
+      "type",
+      "property"
+    ],
+    "runs": [
+      [
+        0,
+        3,
+        0
+      ],
+      [
+        4,
+        6,
+        0
+      ],
+      [
+        7,
+        12,
+        1
+      ],
+      [
+        12,
+        13,
+        2
+      ],
+      [
+        13,
+        14,
+        3
+      ],
+      [
+        14,
+        15,
+        4
+      ],
+      [
+        16,
+        17,
+        5
+      ],
+      [
+        17,
+        20,
+        6
+      ],
+      [
+        20,
+        21,
+        2
+      ],
+      [
+        25,
+        31,
+        7
+      ],
+      [
+        32,
+        33,
+        2
+      ],
+      [
+        39,
+        40,
+        4
+      ],
+      [
+        40,
+        52,
+        8
+      ],
+      [
+        52,
+        54,
+        2
+      ],
+      [
+        55,
+        56,
+        2
+      ],
+      [
+        58,
+        61,
+        0
+      ],
+      [
+        62,
+        64,
+        0
+      ],
+      [
+        65,
+        71,
+        1
+      ],
+      [
+        71,
+        73,
+        2
+      ],
+      [
+        74,
+        76,
+        2
+      ]
+    ]
+  }
 }

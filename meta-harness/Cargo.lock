@@ -959,8 +959,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "streaming-iterator",
  "thiserror 2.0.20",
  "toml",
+ "tree-sitter",
 ]
 
 [[package]]
