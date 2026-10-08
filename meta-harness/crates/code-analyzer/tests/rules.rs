@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use arch_graph::{ComponentId, FindingCode, Graph, Provenance, Severity, TypeSystem};
-use code_analyzer::{CodeRules, RuleSeverity, ingest};
+use code_analyzer::{CodeRules, RuleSeverity, analyze};
 
 const PROJECT_RULES: &str = r#"
 [[rule]]
@@ -63,7 +63,8 @@ fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
     let dbg: Vec<_> = rules.rules.iter().filter(|r| r.spec.id == "no-dbg").collect();
     assert_eq!((dbg.len(), dbg[0].spec.severity), (1, RuleSeverity::Error));
     // The rules match while the files are read, on the same parse.
-    let (extracts, resolved) = ingest(&root, Path::new("."), &packs, &rules, &types).unwrap();
+    let analysis = analyze(&root, Path::new("."), &packs, &rules, &types, None).unwrap();
+    let (extracts, resolved) = (analysis.extracts, analysis.resolved);
     assert!(extracts.iter().any(|e| !e.rule_hits.is_empty()) && extracts.iter().all(|e| e.rules_fingerprint == rules.fingerprint("rust")));
     let facts = |file: &arch_graph::RepoPath| extracts.iter().find(|e| &e.file == file);
     // The project treats Store's methods as handlers (a specialization of function).

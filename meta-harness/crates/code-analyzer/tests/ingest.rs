@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use arch_graph::{ComponentId, RelationKind, TypeSystem};
-use code_analyzer::{FileExtract, PackSet, Resolved, ingest};
+use code_analyzer::{FileExtract, PackSet, Resolved, analyze};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -50,7 +50,8 @@ fn packs_with_test_data() -> PackSet {
 
 fn run(root: &Path, packs: &PackSet) -> (Vec<FileExtract>, Resolved) {
     let types = TypeSystem::defaults().unwrap();
-    ingest(root, Path::new("."), packs, &code_analyzer::CodeRules::default(), &types).unwrap()
+    let analysis = analyze(root, Path::new("."), packs, &code_analyzer::CodeRules::default(), &types, None).unwrap();
+    (analysis.extracts, analysis.resolved)
 }
 
 /// Compares the ingested graph with an expected file, exactly.

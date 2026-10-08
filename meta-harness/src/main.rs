@@ -3,8 +3,6 @@ use std::sync::Arc;
 
 use harness_contracts::{McpServer, McpTransport};
 use harness_core::{EventHub, InstanceRegistry, ProviderDriver, SessionManager};
-use arch_graph::TypeSystem;
-use code_analyzer::{CodeRules, PackSet};
 use arch_service::{ArchitectureService, FsPlans, ProcessRunner, ReviewerCatalog, ToolCatalog};
 use meta_harness::mcp::{McpServerState, McpService};
 use meta_harness::server::{AppState, create_router};
@@ -26,6 +24,15 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Cmd {
+    /// Every analysis stage over a project (read, its languages' own
+    /// indexers where installed, combine); writes the result as JSON.
+    Analyze {
+        /// The project (default: NAH_REPO_ROOT, else the working directory).
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Packs: harnesses, languages and indexers.
     Pack {
         #[command(subcommand)]
@@ -51,6 +58,20 @@ enum PackCmd {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     let cli = <Cli as clap::Parser>::parse();
+    if let Some(Cmd::Analyze { root, out }) = &cli.command {
+        let root = match root {
+            Some(r) => r.canonicalize()?,
+            None => repo_root()?,
+        };
+        match meta_harness::project::analyze_to(&root, out) {
+            Ok(summary) => println!("{summary}"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
     if let Some(Cmd::Pack { action }) = cli.command {
         use meta_harness::packs::Command as C;
         let command = match action {
@@ -157,16 +178,7 @@ fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig,
 fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>> {
     let root = repo_root()?;
     let nah = root.join(".nah");
-    let catalog = meta_harness::packs::catalog(&root)?;
-    let packs = PackSet::from_catalog(&catalog)?;
-    let mut types = TypeSystem::defaults()?;
-    if let Ok(text) = std::fs::read_to_string(nah.join("types.toml")) {
-        types.extend_from_toml(&text)?;
-    }
-    let mut rules = CodeRules::defaults(&packs, &types)?;
-    if nah.join("rules").is_dir() {
-        rules.load_dir(&nah.join("rules"), &packs, &types)?;
-    }
+    let meta_harness::project::AnalysisSetup { catalog, packs, types, rules } = meta_harness::project::analysis_setup(&root).map_err(|e| e.to_string())?;
     let mut tools = ToolCatalog::default();
     if let Ok(text) = std::fs::read_to_string(nah.join("tools.toml")) {
         tools.extend_with(ToolCatalog::from_toml(&text)?);

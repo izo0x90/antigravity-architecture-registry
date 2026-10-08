@@ -4,6 +4,7 @@ pub mod explainer;
 pub mod graph;
 pub mod mcp;
 pub mod packs;
+pub mod project;
 pub mod queue;
 pub mod server;
 pub mod watch;

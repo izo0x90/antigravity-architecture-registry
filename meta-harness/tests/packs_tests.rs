@@ -89,3 +89,33 @@ fn languages_and_indexers_are_shipped_packs() {
     assert_eq!((rust.program.as_str(), rust.args.as_slice()), ("rust-analyzer", ["scip", "/repo", "--output", "/tmp/out.scip"].map(String::from).as_slice()));
     assert_eq!(rust.env, [("CARGO_TARGET_DIR".to_owned(), "/repo/.nah/cache/rust-analyzer/target".to_owned())], "its build goes under the project's cache, not target/");
 }
+
+// req: AP.6
+#[test]
+fn meta_harness_analyze_writes_what_the_server_keeps() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("sample");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/code-analyzer/tests/fixtures/rust/sample");
+    for file in ["Cargo.toml", "src/lib.rs", "src/store.rs", "src/util.rs"] {
+        std::fs::create_dir_all(root.join(file).parent().unwrap()).unwrap();
+        std::fs::copy(fixture.join(file), root.join(file)).unwrap();
+    }
+    let out = dir.path().join("analysis.json");
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_meta-harness")).args(["analyze", "--root"]).arg(&root).arg("--out").arg(&out).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert!(String::from_utf8_lossy(&run.stdout).contains("3 files read"), "{}", String::from_utf8_lossy(&run.stdout));
+    let written: serde_json::Value = serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
+
+    // The server, over the same project, keeps the same result.
+    let setup = meta_harness::project::analysis_setup(&root).unwrap();
+    let facts = arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap();
+    let service = arch_service::ArchitectureService::open(&root, setup.packs, setup.types, Box::new(arch_service::MemoryPlans::default()), Box::new(facts)).unwrap().with_indexers(setup.catalog);
+    service.ingest(&root).unwrap();
+    service.index_languages().unwrap();
+    let relations = |list: &serde_json::Value| -> std::collections::BTreeSet<String> {
+        list.as_array().unwrap().iter().map(|r| format!("{} {} {} {}", r["kind"], r["source"], r["target"], r["proven_by"])).collect()
+    };
+    let kept: Vec<serde_json::Value> = service.observed().unwrap().relations().map(|r| serde_json::to_value(r).unwrap()).collect();
+    assert_eq!(relations(&written["combined"]["relations"]), relations(&serde_json::Value::Array(kept)));
+    assert!(written["combined"]["relations"].as_array().unwrap().iter().any(|r| r["proven_by"].as_str().is_some_and(|p| p.starts_with("rust-analyzer"))));
+}

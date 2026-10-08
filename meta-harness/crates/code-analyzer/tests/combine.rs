@@ -43,7 +43,7 @@ fn indexed(ex: &FileExtract, places: &[(&str, usize, &str, bool)]) -> IndexedFil
 fn read() -> (Vec<FileExtract>, PackSet, TypeSystem) {
     let packs = packs();
     let types = TypeSystem::defaults().unwrap();
-    let (extracts, _) = code_analyzer::ingest(&sample(), Path::new("."), &packs, &CodeRules::default(), &types).unwrap();
+    let extracts = code_analyzer::analyze(&sample(), Path::new("."), &packs, &CodeRules::default(), &types, None).unwrap().extracts;
     (extracts, packs, types)
 }
 
