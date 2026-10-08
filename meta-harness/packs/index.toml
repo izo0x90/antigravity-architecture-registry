@@ -1,0 +1,23 @@
+# Where packs come from, in order. A pack in a later source replaces one of
+# the same name from an earlier source. Paths may use {project} (the repo
+# being worked on), {home}, {config_home} and {data_home} (the user's
+# folders, as the platform names them).
+
+# The packs shipped with this build.
+[[source]]
+kind = "distribution"
+
+# A project's own packs.
+[[source]]
+kind = "folder"
+path = "{project}/.nah/packs"
+
+# The user's own packs.
+[[source]]
+kind = "folder"
+path = "{config_home}/nah/packs"
+
+# Where packs are installed (<root>/<name>/<version>) and recorded.
+[install]
+root = "{data_home}/nah/packs"
+lock = "{data_home}/nah/packs.lock"

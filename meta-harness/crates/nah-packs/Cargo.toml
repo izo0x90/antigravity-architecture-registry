@@ -1,0 +1,22 @@
+[package]
+name = "nah-packs"
+version = "0.1.0"
+edition = "2024"
+description = "Packs: everything the tool installs or reads per language (harnesses, language syntax, indexers) as versioned data, and one generic installer that runs their steps. No tool, URL or path is written in code."
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "1"
+thiserror = "2.0"
+semver = "1"
+regex = "1"
+sha2 = "0.10"
+ureq = "3"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1"
+dirs = "7"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

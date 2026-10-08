@@ -1,0 +1,24 @@
+# Platform names packs use, by what the running binary reports
+# (Rust's std::env::consts OS and ARCH). `vars` are values packs can use as
+# placeholders ({os}, {arch}); names a single tool spells its own way belong
+# in that tool's pack, not here.
+
+[[platform]]
+name = "linux-x86_64"
+matches = { os = "linux", arch = "x86_64" }
+vars = { os = "linux", arch = "x86_64" }
+
+[[platform]]
+name = "linux-arm64"
+matches = { os = "linux", arch = "aarch64" }
+vars = { os = "linux", arch = "arm64" }
+
+[[platform]]
+name = "macos-arm64"
+matches = { os = "macos", arch = "aarch64" }
+vars = { os = "macos", arch = "arm64" }
+
+[[platform]]
+name = "macos-x86_64"
+matches = { os = "macos", arch = "x86_64" }
+vars = { os = "macos", arch = "x86_64" }
