@@ -132,13 +132,25 @@ struct IdArgs {
 
 #[derive(Deserialize)]
 struct ViewArgs {
-    name: String,
+    view: String,
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    way: Option<arch_graph::tree::Way>,
+    #[serde(default)]
+    depth: Option<u32>,
     #[serde(default)]
     plan: Option<String>,
     #[serde(default)]
-    roots: Vec<String>,
+    full_code: bool,
     #[serde(default)]
-    depth: Option<u32>,
+    open: Vec<String>,
+    #[serde(default)]
+    expand: Option<String>,
+    #[serde(default)]
+    levels: Option<u32>,
+    #[serde(default)]
+    context: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -283,7 +295,7 @@ impl McpService {
                 }),
             ),
             "notifications/initialized" | "initialized" | "ping" => JsonRpcResponse::success(req_id, json!({})),
-            "tools/list" => JsonRpcResponse::success(req_id, json!({ "tools": list_tools(self.arch.views()) })),
+            "tools/list" => JsonRpcResponse::success(req_id, json!({ "tools": list_tools(self.arch.views(), self.arch.trees()) })),
             "tools/call" => {
                 let params = req.params.unwrap_or(Value::Null);
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
@@ -365,12 +377,30 @@ impl McpService {
             "view" => {
                 let a: ViewArgs = parse(args)?;
                 let plan = opt_plan(&a.plan)?;
-                let p = plan.clone();
-                let result = blocking(&self.arch, move |s| s.named_view(&a.name, &Source::from_plan(p), a.roots.into_iter().map(ComponentId::new).collect(), a.depth)).await?;
-                let mut out = result.text;
+                let view = arch_graph::tree::ViewKind::from_name(&a.view).ok_or_else(|| ServiceError::InvalidOp(format!("view '{}': use contains, calls or data_flow", a.view)))?;
+                let request = arch_graph::tree::TreeRequest {
+                    view,
+                    source: Source::from_plan(plan.clone()),
+                    root: a.root,
+                    way: a.way.unwrap_or_default(),
+                    depth: a.depth,
+                    opened: a.open.into_iter().map(|card| arch_graph::tree::Opened { card, levels: 1 }).collect(),
+                    closed: Vec::new(),
+                    full_code: a.full_code,
+                };
+                let (expand, levels, context) = (a.expand, a.levels.unwrap_or(1), a.context);
+                let mut out = blocking(&self.arch, move |s| {
+                    let tree = match (expand, context) {
+                        (Some(card), _) => s.expand(&request, &card, levels)?,
+                        (None, Some(card)) => s.context(&request, &card)?,
+                        (None, None) => s.tree(&request)?,
+                    };
+                    Ok(arch_graph::tree::render(&tree, s.trees()))
+                })
+                .await?;
                 match plan {
                     Some(plan) => out.push_str(&self.steps(plan, None).await?),
-                    None => out.push_str("\nNext: inspect a node, widen with depth, or navigate to show the user the same view."),
+                    None => out.push_str("\nNext: inspect a card, go into one (root=<key>), flip the way, or navigate to show the user the same view."),
                 }
                 Ok(out)
             }

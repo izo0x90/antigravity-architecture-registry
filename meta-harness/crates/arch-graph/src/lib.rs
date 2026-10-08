@@ -17,6 +17,7 @@ mod source;
 pub mod index;
 pub mod review;
 pub mod schema;
+pub mod tree;
 mod types;
 pub mod view;
 mod wire;

@@ -34,7 +34,7 @@ fn up_to_date(name: &str, value: &Value) {
 #[test]
 fn the_explainer_lists_every_agent_tool_and_view() {
     let views = arch_graph::ViewCatalog::defaults().unwrap();
-    let tools: Vec<Value> = meta_harness::mcp::list_tools(&views)
+    let tools: Vec<Value> = meta_harness::mcp::list_tools(&views, &arch_graph::tree::TreeConfig::defaults().unwrap())
         .into_iter()
         .map(|t| {
             let required: Vec<&str> = t.input_schema["required"].as_array().map(|r| r.iter().filter_map(Value::as_str).collect()).unwrap_or_default();

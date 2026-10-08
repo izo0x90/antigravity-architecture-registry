@@ -8,6 +8,9 @@ plans_kept_laid_over = 4
 # Cards in one tree answer. A bigger tree is cut at a whole level, and the
 # answer says what was cut.
 cards_per_answer = 400
+# Lines in one tree answer that go to a card shown elsewhere (a repeat or a
+# loop). Past this, a card counts the ones left out instead.
+links_per_answer = 300
 # How long building and laying out one tree may take before it's cut.
 tree_ms = 200
 # Slower than this, a request is logged with what was asked.

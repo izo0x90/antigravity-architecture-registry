@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use arch_graph::tree::{Tree, TreeRequest};
 use arch_graph::view::{query, render_text};
 use arch_graph::{
     Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
@@ -124,6 +125,7 @@ pub struct ArchitectureService {
     types: TypeSystem,
     dsl: Dsl,
     views: ViewCatalog,
+    trees: arch_graph::tree::TreeConfig,
     rules: CodeRules,
     plans: Box<dyn PlanRepository>,
     index: Box<dyn CodeIndexStore>,
@@ -174,6 +176,7 @@ impl ArchitectureService {
             types,
             dsl: Dsl::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in schema DSL: {e}")))?,
             views,
+            trees: arch_graph::tree::TreeConfig::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in tree config: {e}")))?,
             rules,
             plans,
             index,
@@ -304,6 +307,17 @@ impl ArchitectureService {
     /// The service's limits (from config).
     pub fn limits(&self) -> &crate::Limits {
         &self.limits
+    }
+
+    /// The three views' settings.
+    pub fn trees(&self) -> &arch_graph::tree::TreeConfig {
+        &self.trees
+    }
+
+    /// Replaces the views' settings (a project's own).
+    pub fn with_trees(mut self, trees: arch_graph::tree::TreeConfig) -> Self {
+        self.trees = trees;
+        self
     }
 
     /// Replaces the limits (a project's own, or a test's).
@@ -1103,6 +1117,107 @@ impl ArchitectureService {
     pub fn component_at(&self, file: &str, line: u32, source: &Source) -> Result<Component, ServiceError> {
         let graph = self.graph(source)?;
         graph.enclosing(file, line).cloned().ok_or_else(|| ServiceError::NotFound(format!("no component at {file}:{line}")))
+    }
+
+    /// One of the three views as a tree, cut to the card budget and laid out.
+    pub fn tree(&self, request: &TreeRequest) -> Result<Tree, ServiceError> {
+        self.with_tree_input(request, |input| {
+            let started = Instant::now();
+            let tree = arch_graph::tree::build(input, request);
+            self.note_slow("tree", request, started, tree.cards.len());
+            Ok(tree)
+        })
+    }
+
+    /// The cards opening `card` `levels` further adds (only those).
+    pub fn expand(&self, request: &TreeRequest, card: &str, levels: u32) -> Result<Tree, ServiceError> {
+        self.with_tree_input(request, |input| {
+            self.check_card(input, request, card)?;
+            Ok(arch_graph::tree::expand(input, request, card, levels))
+        })
+    }
+
+    /// Where `card` sits: what holds it, what else is in there, its lines to those.
+    pub fn context(&self, request: &TreeRequest, card: &str) -> Result<Tree, ServiceError> {
+        self.with_tree_input(request, |input| {
+            self.check_card(input, request, card)?;
+            Ok(arch_graph::tree::context(input, request, card))
+        })
+    }
+
+    /// Everything about one card: its component's details (a data card's
+    /// type, a flow's start or end function).
+    pub fn card(&self, key: &str, source: &Source) -> Result<ComponentDetail, ServiceError> {
+        let id = match key.split_once(':') {
+            Some(("type", name)) => {
+                let graph = self.graph(source)?;
+                let data = checks::is_data_type(&self.types);
+                let mut named = graph.named(name).filter(|c| data(c));
+                match (named.next(), named.next()) {
+                    (Some(c), None) => c.id.clone(),
+                    (Some(_), Some(_)) => return Err(ServiceError::NotFound(format!("{name}: more than one data type has that name"))),
+                    _ => return Err(ServiceError::NotFound(format!("{name}: no data type in the code has that name"))),
+                }
+            }
+            Some(("start" | "end", function)) => ComponentId::new(function),
+            _ => ComponentId::new(key),
+        };
+        self.component(&id, source)
+    }
+
+    /// NotFound unless the view `request` asks for can show `card`.
+    fn check_card(&self, input: &arch_graph::tree::Input<'_, Graph>, request: &TreeRequest, card: &str) -> Result<(), ServiceError> {
+        let probe = TreeRequest { root: Some(card.to_owned()), depth: Some(0), opened: Vec::new(), closed: Vec::new(), ..request.clone() };
+        if arch_graph::tree::build(input, &probe).cards.is_empty() {
+            return Err(ServiceError::NotFound(format!("{card} isn't in the {} view ({})", request.view.name(), request.source)));
+        }
+        Ok(())
+    }
+
+    /// Runs `f` with what building a tree for `request` needs.
+    fn with_tree_input<T>(&self, request: &TreeRequest, f: impl FnOnce(&arch_graph::tree::Input<'_, Graph>) -> Result<T, ServiceError>) -> Result<T, ServiceError> {
+        let graph = self.graph(&request.source)?;
+        let plan = match &request.source {
+            Source::Plan(id) => Some(self.plan_shared(id)?),
+            Source::Code => None,
+        };
+        // Which other plans change each component (shown as badges).
+        let mut other_plans: BTreeMap<ComponentId, Vec<PlanId>> = BTreeMap::new();
+        for id in self.plans.list()? {
+            if request.source.plan() == Some(&id) {
+                continue;
+            }
+            if let Some(other) = self.plans.get(&id)? {
+                for c in other.components.iter().filter(|c| c.status != arch_graph::Status::Existing) {
+                    other_plans.entry(c.id.clone()).or_default().push(id.clone());
+                }
+            }
+        }
+        let started = Instant::now();
+        let limit = std::time::Duration::from_millis(self.limits.tree_ms);
+        let out_of_time = move || started.elapsed() > limit;
+        let input = arch_graph::tree::Input {
+            graph: &*graph,
+            plan: plan.as_deref(),
+            other_plans: &other_plans,
+            config: &self.trees,
+            types: &self.types,
+            budget: self.limits.cards_per_answer,
+            link_budget: self.limits.links_per_answer,
+            out_of_time: &out_of_time,
+        };
+        if let Some(root) = &request.root {
+            self.check_card(&input, request, root)?;
+        }
+        f(&input)
+    }
+
+    /// Logs a request that went over its time limit, with what was asked.
+    fn note_slow(&self, what: &str, request: &TreeRequest, started: Instant, cards: usize) {
+        let ms = started.elapsed().as_millis() as u64;
+        if ms > self.limits.slow_request_ms {
+            tracing::warn!(ms, cards, view = request.view.name(), source = %request.source, root = ?request.root, depth = ?request.depth, "slow {what}");
+        }
     }
 
     /// Asks clients to show something (the agent driving the user's view).

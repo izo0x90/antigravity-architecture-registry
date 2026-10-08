@@ -132,7 +132,17 @@ fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>
     if let Ok(text) = std::fs::read_to_string(nah.join("schema_dsl.toml")) {
         dsl.extend_with(arch_graph::Dsl::from_toml(&text)?)?;
     }
+    let trees = match std::fs::read_to_string(nah.join("trees.toml")) {
+        Ok(text) => arch_graph::tree::TreeConfig::with_overrides(&text)?,
+        Err(_) => arch_graph::tree::TreeConfig::defaults()?,
+    };
+    let limits = match std::fs::read_to_string(nah.join("limits.toml")) {
+        Ok(text) => arch_service::Limits::with_overrides(&text)?,
+        Err(_) => arch_service::Limits::defaults()?,
+    };
     Ok(ArchitectureService::open(&root, packs, types, views, Box::new(FsPlans::new(&root)?), Box::new(FsIndex::new(&root)?))?
+        .with_trees(trees)
+        .with_limits(limits)
         .with_dsl(dsl)
         .with_rules(rules)
         .with_tools(tools, Arc::new(ProcessRunner))

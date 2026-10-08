@@ -1,6 +1,7 @@
 pub mod arch;
 pub mod cockpit;
 pub mod explainer;
+pub mod graph;
 pub mod mcp;
 pub mod queue;
 pub mod server;

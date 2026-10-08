@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use arch_graph::tree::{TreeRequest, ViewKind, Way, problems};
 use arch_graph::{TypeSystem, ViewCatalog};
 use arch_index::PackSet;
 use arch_service::{ArchitectureService, MemoryIndex, MemoryPlans};
@@ -43,8 +44,41 @@ fn open(root: &Path) -> ArchitectureService {
     ArchitectureService::open(root, PackSet::built_in().unwrap(), TypeSystem::defaults().unwrap(), ViewCatalog::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(MemoryIndex::default())).unwrap()
 }
 
-fn ms(since: Instant) -> u128 {
-    since.elapsed().as_millis()
+fn ms(since: Instant) -> u64 {
+    since.elapsed().as_millis() as u64
+}
+
+/// Every view, both ways, at depths 1, 4 and 12, from its natural starting
+/// points and from the card with the most under it: within the time limit,
+/// the card budget, and laid out clean.
+fn trees(name: &str, service: &ArchitectureService) {
+    let limits = service.limits().clone();
+    let check = |request: TreeRequest| {
+        let t = Instant::now();
+        let tree = service.tree(&request).unwrap();
+        let took = ms(t);
+        let bytes = serde_json::to_vec(&tree).unwrap().len();
+        println!("perf {name} tree view={} way={:?} root={} depth={:?} ms={took} cards={} lines={} bytes={bytes} cut={:?}", request.view.name(), request.way, request.root.is_some(), request.depth, tree.cards.len(), tree.lines.len(), tree.cut.as_ref().map(|c| (c.shown, c.asked, c.hidden)));
+        assert!(took <= limits.perf.tree_ms, "{name}: {request:?} took {took} ms (limit {})", limits.perf.tree_ms);
+        assert!(tree.cards.len() <= limits.cards_per_answer, "{name}: {} cards", tree.cards.len());
+        let found = problems(&tree, &service.trees().layout);
+        assert!(found.is_empty(), "{name}: {request:?}: {:#?}", &found[..found.len().min(10)]);
+        tree
+    };
+    for view in ViewKind::ALL {
+        for way in [Way::Down, Way::Up] {
+            for depth in [1, 4, 12] {
+                let tree = check(TreeRequest { view, way, depth: Some(depth), ..TreeRequest::default() });
+                // The busiest card as a root.
+                if let Some(busiest) = tree.cards.iter().max_by_key(|c| c.more).filter(|c| c.more > 0) {
+                    check(TreeRequest { view, way, depth: Some(depth), root: Some(busiest.key.clone()), ..TreeRequest::default() });
+                    let t = Instant::now();
+                    service.expand(&TreeRequest { view, way, depth: Some(1), root: Some(busiest.key.clone()), ..TreeRequest::default() }, &busiest.key, 1).unwrap();
+                    assert!(ms(t) <= limits.perf.tree_ms * 2, "{name}: expanding {} took {} ms", busiest.key, ms(t));
+                }
+            }
+        }
+    }
 }
 
 fn measure(name: &str, root: &Path) {
@@ -52,9 +86,12 @@ fn measure(name: &str, root: &Path) {
     let copy = copy_sources(root, &packs);
     let root = copy.path();
     let service = open(root);
+    let limits = service.limits().clone();
     let t = Instant::now();
     let report = service.ingest(root).unwrap();
-    println!("perf {name} full_index ms={} files={} components={} relations={}", ms(t), report.files, report.components, report.relations);
+    let took = ms(t);
+    println!("perf {name} full_index ms={took} files={} components={} relations={}", report.files, report.components, report.relations);
+    assert!(took <= limits.perf.full_index_ms, "{name}: full index took {took} ms");
 
     // One file changed: the biggest Rust file gets a comment.
     let file = arch_index::walk(root, root, &packs).unwrap().into_iter().filter(|f| f.path.as_str().ends_with(".rs")).max_by_key(|f| std::fs::metadata(&f.absolute).map(|m| m.len()).unwrap_or(0)).unwrap();
@@ -64,21 +101,17 @@ fn measure(name: &str, root: &Path) {
     service.ingest(&file.absolute).unwrap();
     println!("perf {name} one_file ms={} file={}", ms(t), file.path);
 
-    for view in ["structure", "calls", "data_flow"] {
-        for depth in [1, 4, 12] {
-            let t = Instant::now();
-            let result = service.named_view(view, &arch_graph::Source::Code, vec![], Some(depth)).unwrap();
-            let bytes = serde_json::to_vec(&result).unwrap().len();
-            println!("perf {name} view={view} depth={depth} ms={} nodes={} edges={} bytes={bytes}", ms(t), result.view.nodes.len(), result.view.edges.len());
-        }
-    }
+    trees(name, &service);
     let t = Instant::now();
     let hits = service.search("view", &arch_graph::Source::Code, 25).unwrap();
-    println!("perf {name} search ms={} hits={}", ms(t), hits.len());
+    let took = ms(t);
+    println!("perf {name} search ms={took} hits={}", hits.len());
+    assert!(took <= limits.perf.search_ms, "{name}: search took {took} ms");
 }
 
+// req: M.1, M.7
 #[test]
-fn baseline() {
+fn this_repo_and_tokio_stay_within_their_limits() {
     let this = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
     measure("this_repo", &this);
     measure("tokio", &big_repo());

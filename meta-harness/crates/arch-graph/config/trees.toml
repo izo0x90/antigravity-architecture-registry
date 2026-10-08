@@ -1,0 +1,61 @@
+# The three views. Each is a tree that starts from one root (or, with no
+# root picked, from the view's natural starting points), shown to a depth
+# you choose. A project can override any value in .nah/trees.toml.
+
+# For each view: its default depth, and how many starting points it shows
+# when no root is picked (the rest are counted, not shown).
+[views.contains]
+description = "What's inside what: boxes inside boxes, no lines. Go into a box to make it the whole screen."
+depth = 2
+starts = 60
+
+[views.calls]
+description = "Who calls whom, in the order the calls happen. Down: what it calls. Up: what calls it. The data going in and coming back sits on the selected card's lines."
+depth = 3
+starts = 30
+
+[views.data_flow]
+description = "Where data goes: cards are data types, the functions that turn one into another sit on the lines. Down: where it goes. Up: where it came from."
+depth = 3
+starts = 30
+
+# Where Calls starts when no root is picked: functions nothing calls that
+# call something. Code under these paths, or inside a module with one of
+# these names, isn't a starting point (tests, benchmarks, examples).
+[entries]
+skip_paths = ["tests/", "benches/", "examples/"]
+skip_modules = ["tests", "test"]
+
+[data]
+# What a flow can carry that isn't data worth a card.
+ignore = ["None", "()", "Self", "self", "&self", "&mut self"]
+# Written around a type without changing what it is: `&Plan`, `mut x`.
+strip = ["&", "mut ", "dyn ", "impl "]
+
+# Card and line sizes for laying trees out. The cockpit draws with the same
+# numbers, so text fits the cards it's given.
+[layout]
+# Text: width of one character as a share of the font size, and the line
+# height as a multiple of it.
+char_width = 0.6
+line_height = 1.4
+# Font sizes: a card's name, and its smaller lines.
+name_size = 14.0
+small_size = 11.0
+# Cards: padding inside, smallest and largest width.
+pad = 16.0
+card_min_w = 120.0
+card_max_w = 320.0
+# Space between columns (a level) and between cards in a column.
+gap_x = 120.0
+gap_y = 28.0
+# Boxes (Contains): the header holding a box's name, the space between
+# boxes, and how wide a row of boxes grows before it wraps (as a share of
+# its height: 1.6 means a little wider than tall).
+header = 32.0
+box_gap = 16.0
+row_aspect = 1.6
+# Lines that go back (repeats, loops) travel in lanes this far apart.
+lane = 10.0
+# Points along each curved line.
+curve_steps = 16

@@ -164,11 +164,11 @@ impl Graph {
         self.by_name.get(name).into_iter().flatten().filter_map(|id| self.components.get(id))
     }
 
-    pub fn outgoing(&self, id: &ComponentId, kind: Option<RelationKind>) -> impl Iterator<Item = &Relation> {
+    pub fn outgoing<'a>(&'a self, id: &ComponentId, kind: Option<RelationKind>) -> impl Iterator<Item = &'a Relation> + use<'a> {
         self.outgoing.get(id).into_iter().flatten().filter_map(|r| self.relations.get(r)).filter(move |r| kind.is_none_or(|k| r.kind == k))
     }
 
-    pub fn incoming(&self, id: &ComponentId, kind: Option<RelationKind>) -> impl Iterator<Item = &Relation> {
+    pub fn incoming<'a>(&'a self, id: &ComponentId, kind: Option<RelationKind>) -> impl Iterator<Item = &'a Relation> + use<'a> {
         self.incoming.get(id).into_iter().flatten().filter_map(|r| self.relations.get(r)).filter(move |r| kind.is_none_or(|k| r.kind == k))
     }
 

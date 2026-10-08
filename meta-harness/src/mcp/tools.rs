@@ -4,6 +4,7 @@
 //! approves in the cockpit.
 
 use arch_graph::ViewCatalog;
+use arch_graph::tree::{TreeConfig, ViewKind};
 use serde_json::json;
 
 use crate::mcp::protocol::McpTool;
@@ -12,7 +13,10 @@ fn tool(name: &str, description: &str, input_schema: serde_json::Value) -> McpTo
     McpTool { name: name.into(), description: description.into(), input_schema }
 }
 
-pub fn list_tools(views: &ViewCatalog) -> Vec<McpTool> {
+pub fn list_tools(views: &ViewCatalog, trees: &TreeConfig) -> Vec<McpTool> {
+    let tree_list: Vec<String> = ViewKind::ALL.iter().map(|v| format!("- {}: {}", v.name(), trees.view(*v).description)).collect();
+    let tree_help = format!("Views (each a tree from one root, cut to a size limit that it reports):\n{}", tree_list.join("\n"));
+    let card = json!({ "type": "string", "description": "A card: a component id (rust:my_crate::server::run), or in data_flow a data type as type:<Name>" });
     let view_list: Vec<String> = views.views.iter().map(|(name, v)| format!("- {name}: {}", v.description)).collect();
     let view_help = format!("Views (each a lens on the same graph):\n{}", view_list.join("\n"));
     let id = json!({ "type": "string", "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run" });
@@ -80,8 +84,19 @@ pub fn list_tools(views: &ViewCatalog) -> Vec<McpTool> {
         ),
         tool(
             "view",
-            &format!("A view of the graph as text: nodes with locations and stage, edges with whether plan and code agree.\n{view_help}"),
-            json!({ "type": "object", "properties": { "name": { "type": "string", "enum": views.views.keys().collect::<Vec<_>>() }, "plan": plan, "roots": { "type": "array", "items": id }, "depth": { "type": "integer" } }, "required": ["name"] }),
+            &format!("One of the three views as a text tree, the same one the user sees: each card with where it is, what it hides (+N more), what sits on its line, and lines back to cards shown elsewhere. With a plan: its own items first, marked NEW / CHANGED / DONE / DOESN'T MATCH. Give `expand` to get only what opening one card adds, or `context` to see what holds a card and what's beside it.\n{tree_help}"),
+            json!({ "type": "object", "properties": {
+                "view": { "type": "string", "enum": ViewKind::ALL.iter().map(|v| v.name()).collect::<Vec<_>>() },
+                "root": card,
+                "way": { "type": "string", "enum": ["down", "up"], "description": "down: what it calls, holds, turns into; up: what calls it, holds it, it came from" },
+                "depth": { "type": "integer" },
+                "plan": plan,
+                "full_code": { "type": "boolean", "description": "With a plan: show it in the whole codebase, not only its items and what they plug into" },
+                "open": { "type": "array", "items": card, "description": "Cards to open one level further" },
+                "expand": card,
+                "levels": { "type": "integer", "description": "With expand: how many levels (default 1)" },
+                "context": card
+            }, "required": ["view"] }),
         ),
         tool(
             "navigate",

@@ -11,6 +11,8 @@ pub struct Limits {
     pub plans_kept_laid_over: usize,
     /// Cards in one tree answer.
     pub cards_per_answer: usize,
+    /// Lines to cards shown elsewhere in one tree answer.
+    pub links_per_answer: usize,
     /// Time for building and laying out one tree.
     pub tree_ms: u64,
     /// A request slower than this is logged.

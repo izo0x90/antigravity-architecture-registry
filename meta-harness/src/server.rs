@@ -134,6 +134,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/ws/events", get(ws_events_handler))
         .merge(crate::arch::routes())
         .merge(crate::explainer::routes())
+        .merge(crate::graph::routes())
         .merge(crate::queue::routes());
 
     if std::path::Path::new(&static_dir).exists() {
@@ -141,7 +142,11 @@ pub fn create_router(state: AppState) -> Router {
     }
 
     // Same-origin only: no CORS layer, so other sites can't call the API.
-    router.layer(axum::middleware::map_response(json_errors)).layer(TraceLayer::new_for_http()).with_state(state)
+    router
+        .layer(axum::middleware::map_response(json_errors))
+        .layer(tower_http::compression::CompressionLayer::new())
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
 }
 
 /// Errors from extractors (bad JSON, bad paths) come back as plain text;

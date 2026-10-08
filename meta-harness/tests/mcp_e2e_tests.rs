@@ -38,9 +38,9 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     let (err, _) = mcp.tool("inspect", json!({ "id": "rust:nope" })).await;
     assert!(err);
 
-    let (err, text) = mcp.tool("view", json!({ "name": "structure", "roots": ["rust:sample::store"] })).await;
-    assert!(!err && text.contains("View 'structure'") && text.contains("Store [class"), "{text}");
-    let (err, _) = mcp.tool("view", json!({ "name": "teleport" })).await;
+    let (err, text) = mcp.tool("view", json!({ "view": "contains", "root": "rust:sample::store" })).await;
+    assert!(!err && text.contains("contains (code)") && text.contains("Store [class"), "{text}");
+    let (err, _) = mcp.tool("view", json!({ "view": "teleport" })).await;
     assert!(err);
 
     let (mut events, _) = (state.hub.subscribe().1, ());
