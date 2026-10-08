@@ -109,23 +109,29 @@ palette (`:42` goes to line 42).
 
 Views also have their own keys:
 
-- **Graph:**
-  - levels: the repo reads as folders, crates, modules and members; zoom
-    into a module (or `Enter`) to go in, zoom out (or `Backspace`) to go up;
-    the breadcrumb above shows where you are; `z o`/`z c` open a module in place;
-  - views: `structure` (what's in what, with counted lines between parts),
-    `calls` (left to right), `story` and `reached_by` (a function's calls top to
-    bottom in order, or what reaches it), `data_flow` (a pipeline: what each
-    line carries, each step's shape) and `data_path` (one value's whole path);
-  - levels in every view of relations: `<` / `>` see calls or data flow by
-    type, module, package or folder (lines merge with counts), and
-    `z o` / `z c` open one group in place to see its parts;
-  - select something and what it links to lights up while the rest dims;
-    where its lines leave the screen, markers name the other end (click to go);
-  - on a selected function: tell its story, see what reaches it, or follow
-    its data through the code (from the view menu or the palette);
-  - `]e`/`[e` step through calls in order; `v` switches view, `+`/`-` set the depth;
-  - text keeps its size at every zoom, a legend (`g ?`), touch gestures.
+- **Graph:** three views, each a tree from one root that the server
+  builds and lays out (the browser only draws it):
+  - `contains`: boxes inside boxes, no lines;
+  - `calls`: functions in the order they're called; down is what it
+    calls, up is what calls it;
+  - `data_flow`: data types as cards, with the functions that turn one
+    into another on the lines; down is where it goes, up is where it came from.
+
+  The same actions in all three:
+  - select (click, or `h`/`j`/`k`/`l`): what it's tied to stays bright,
+    the rest dims, and the details card opens; the pills on its lines say
+    what goes in and comes back;
+  - open or close a card in place (`z o` / `z c`, or click its `+N`);
+  - go in (`Enter`, double-click): the card becomes the root; back
+    (`Backspace`) returns along the trail shown above the graph;
+  - more or fewer levels (`+` / `-`), flip down and up (`r`), next view (`v`);
+  - pick the code or one plan (the Source picker). A plan starts from its
+    own items, shows only the code they plug into, and marks cards new,
+    changed, done or doesn't match; "Full code" shows it in the whole codebase.
+
+  Nothing changes on its own: zoom only zooms. A tree bigger than one
+  answer holds is cut at a whole level and says so ("showing 2 of 3
+  levels"); every cut card says how much is under it.
 - **Code:** `]f`/`[f` move between definitions.
 - **Spec:**
   - `J`/`K` move between sections;
@@ -166,7 +172,8 @@ overrides them in its own `.nah/` folder:
 | File | What it sets |
 |---|---|
 | `.nah/types.toml` | component types (`extends` a built-in to specialize it) |
-| `.nah/views.toml` | named views (partial overrides merge) |
+| `.nah/trees.toml` | the three views: default depth, starting points, layout sizes |
+| `.nah/limits.toml` | cards per answer, time limits, performance limits |
 | `.nah/packs/*.toml` | more language packs |
 | `.nah/rules/*.toml` | forbidden or required ast-grep patterns, per type |
 | `.nah/tools.toml` | validation tools, and the shell for logic-step checks |

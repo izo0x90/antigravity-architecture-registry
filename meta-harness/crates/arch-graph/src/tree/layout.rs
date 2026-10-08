@@ -1,10 +1,11 @@
-//! Laying trees out. Calls and Data flow are tidy trees, left to right: each
-//! level a column, each card centred on the block its children fill, so
-//! cards never overlap and siblings are evenly spaced. Contains is boxes in
+//! Laying trees out. Calls and Data flow are trees left to right: each
+//! level a column, each card at the top of the block its children fill
+//! (level with its first child), so cards never overlap, siblings are
+//! evenly spaced and a big branch reads from the top. Contains is boxes in
 //! boxes, packed in rows. Tree lines are curves across the gap between two
-//! columns; lines back to a card shown elsewhere travel in lanes above the
-//! drawing and down the gaps, so no line runs through a card. Time grows
-//! with the number of cards.
+//! columns; a line to a card drawn further away is a stub in the gap (its
+//! whole way is drawn while one of its ends is selected), so no line runs
+//! through a card. Time grows with the number of cards.
 
 use std::collections::BTreeMap;
 
@@ -62,11 +63,18 @@ pub fn card_lines(card: &Card, view: ViewKind, config: &LayoutConfig) -> Vec<(St
     lines
 }
 
-/// A card's size from its text.
+/// The clickable count of what a card hides ("+6"), drawn inside the
+/// card at its right edge; none when it hides nothing.
+pub fn count_text(card: &Card) -> Option<String> {
+    (card.more > 0).then(|| format!("+{}", card.more))
+}
+
+/// A card's size from its text (and room for its count).
 fn card_size(card: &Card, view: ViewKind, config: &LayoutConfig) -> (f32, f32) {
     let lines = card_lines(card, view, config);
     let widest = lines.iter().map(|(t, s)| config.text_width(t, *s)).fold(0.0, f32::max);
-    let w = (widest + config.pad * 2.0).clamp(config.card_min_w, config.card_max_w);
+    let count = count_text(card).map_or(0.0, |c| config.text_width(&c, config.small_size) + config.pad);
+    let w = (widest + count + config.pad * 2.0).clamp(config.card_min_w, config.card_max_w);
     let h = config.pad * 2.0 + lines.iter().map(|(_, s)| s * config.line_height).sum::<f32>();
     (w, h)
 }
@@ -119,20 +127,21 @@ fn columns(tree: &mut Tree, view: ViewKind, config: &LayoutConfig) {
     while let Some((i, block_top)) = stack.pop() {
         let (w, h) = sizes[i];
         let level = tree.cards[i].level as usize;
-        tree.cards[i].rect = Rect { x: column_x[level], y: block_top + (block[i] - h) / 2.0, w, h };
+        // Level with its first child, at the top of its block (a big
+        // branch reads from the top, like a file tree).
+        tree.cards[i].rect = Rect { x: column_x[level], y: block_top, w, h };
         if let Some(k) = kids.get(&i) {
-            let inner: f32 = k.iter().map(|&c| block[c]).sum::<f32>() + config.gap_y * (k.len().saturating_sub(1)) as f32;
-            let mut y = block_top + (block[i] - inner) / 2.0;
+            let mut y = block_top;
             for &c in k {
                 stack.push((c, y));
                 y += block[c] + config.gap_y;
             }
         }
     }
-    let width = column_x.last().copied().unwrap_or(0.0) + widths.last().copied().unwrap_or(0.0);
+    let width = column_x.last().copied().unwrap_or(0.0) + widths.last().copied().unwrap_or(0.0) + config.gap_x / 4.0;
     let height = (top - config.gap_y * 2.0).max(0.0);
-    let lanes = route(tree, &column_x, &widths, config);
-    tree.size = (width, height + lanes);
+    route(tree, &column_x, &widths, config);
+    tree.size = (width, height);
 }
 
 fn curve(a: Point, b: Point, steps: usize) -> Vec<Point> {
@@ -149,71 +158,51 @@ fn curve(a: Point, b: Point, steps: usize) -> Vec<Point> {
         .collect()
 }
 
-/// Gives every line its path, and returns how far the lanes for lines that
-/// skip columns or go back reach above the drawing (cards move down by it).
+/// A cubic from `a` to `b` leaving and arriving horizontally, `reach` out
+/// from each end first (so a line going back loops round).
+fn reach_curve(a: Point, b: Point, reach: f32, steps: usize) -> Vec<Point> {
+    let (c1, c2) = ((a.0 + reach, a.1), (b.0 - reach, b.1));
+    (0..=steps.max(2))
+        .map(|s| {
+            let t = s as f32 / steps.max(2) as f32;
+            let u = 1.0 - t;
+            let x = u * u * u * a.0 + 3.0 * u * u * t * c1.0 + 3.0 * u * t * t * c2.0 + t * t * t * b.0;
+            let y = u * u * u * a.1 + 3.0 * u * u * t * c1.1 + 3.0 * u * t * t * c2.1 + t * t * t * b.1;
+            (x, y)
+        })
+        .collect()
+}
+
+/// Gives every line its path.
 ///
 /// A line to the next column (a child, or a card reached again from the
-/// level before it) is a curve across the gap. Any other line goes down the
-/// gap after its start's column, along a lane above every card, and down
-/// the gap before its end's column; lines whose stretches don't overlap
-/// share a lane.
-fn route(tree: &mut Tree, column_x: &[f32], widths: &[f32], config: &LayoutConfig) -> f32 {
+/// level before it) is a curve across the gap. A line to a card drawn
+/// further away (reached again, or back up its own path) is a short stub
+/// out of its card's lower right, in the gap: drawn always, it never
+/// crosses a card. Its whole way to the other card (`reach`) is drawn only
+/// while either end is selected.
+fn route(tree: &mut Tree, column_x: &[f32], widths: &[f32], config: &LayoutConfig) {
     let index: BTreeMap<String, usize> = tree.cards.iter().enumerate().map(|(i, c)| (c.key.clone(), i)).collect();
-    let ends: Vec<Option<(usize, usize)>> = tree.lines.iter().map(|l| Some((*index.get(&l.from)?, *index.get(&l.to)?))).collect();
     let levels: Vec<u32> = tree.cards.iter().map(|c| c.level).collect();
-    let next_column = |a: usize, b: usize| levels[b] == levels[a] + 1;
-    // Lanes: the stretch each lane-going line covers, packed greedily.
-    let gap_in = |level: usize| column_x[level] + widths[level] + config.lane;
-    let gap_before = |level: usize| column_x[level] - config.lane;
-    let mut lane_of: Vec<usize> = vec![0; tree.lines.len()];
-    let mut wanting: Vec<(f32, f32, usize)> = Vec::new();
-    for (i, e) in ends.iter().enumerate() {
-        let Some((a, b)) = *e else { continue };
-        if tree.lines[i].kind == LineKind::Tree || next_column(a, b) {
-            continue;
-        }
-        let (x1, x2) = (gap_in(tree.cards[a].level as usize), gap_before(tree.cards[b].level as usize));
-        wanting.push((x1.min(x2), x1.max(x2), i));
-    }
-    wanting.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut lane_ends: Vec<f32> = Vec::new();
-    for (from, to, i) in wanting {
-        let free = lane_ends.iter().position(|end| *end + config.lane < from);
-        let lane = match free {
-            Some(l) => l,
-            None => {
-                lane_ends.push(f32::MIN);
-                lane_ends.len() - 1
-            }
-        };
-        lane_ends[lane] = to;
-        lane_of[i] = lane;
-    }
-    let lanes = if lane_ends.is_empty() { 0.0 } else { config.lane * (lane_ends.len() as f32 + 1.0) };
-    for c in &mut tree.cards {
-        c.rect.y += lanes;
-    }
-    for (i, e) in ends.iter().enumerate() {
-        let Some((a, b)) = *e else { continue };
+    for line in &mut tree.lines {
+        let (Some(&a), Some(&b)) = (index.get(&line.from), index.get(&line.to)) else { continue };
         let (from, to) = (tree.cards[a].rect, tree.cards[b].rect);
-        let start = (from.right(), from.center().1);
+        let level = levels[a] as usize;
+        let edge = column_x[level] + widths[level];
         let end = (to.x, to.center().1);
-        let line = &mut tree.lines[i];
-        line.path = if line.kind == LineKind::Tree || next_column(a, b) {
+        if line.kind == LineKind::Tree || levels[b] == levels[a] + 1 {
             // Straight to the edge of the start's column (past the wider
             // cards in it), then a curve across the gap.
-            let level = tree.cards[a].level as usize;
-            let edge = (column_x[level] + widths[level], start.1);
+            let start = (from.right(), from.center().1);
             let mut path = vec![start];
-            path.extend(curve(edge, end, config.curve_steps));
-            path
+            path.extend(curve((edge, start.1), end, config.curve_steps));
+            line.path = path;
         } else {
-            let y = lanes - config.lane * (lane_of[i] as f32 + 1.0);
-            let (out_x, in_x) = (gap_in(tree.cards[a].level as usize), gap_before(tree.cards[b].level as usize));
-            vec![start, (out_x, start.1), (out_x, y), (in_x, y), (in_x, end.1), end]
-        };
+            let start = (from.right(), from.bottom() - config.pad);
+            line.path = vec![start, (edge + config.gap_x / 4.0, start.1)];
+            line.reach = reach_curve(start, end, config.gap_x / 2.0, config.curve_steps * 2);
+        }
     }
-    lanes
 }
 
 /// Boxes in boxes: each open card holds its children packed in rows; the

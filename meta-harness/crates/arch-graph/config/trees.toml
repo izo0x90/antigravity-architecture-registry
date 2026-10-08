@@ -55,7 +55,5 @@ gap_y = 28.0
 header = 32.0
 box_gap = 16.0
 row_aspect = 1.6
-# Lines that go back (repeats, loops) travel in lanes this far apart.
-lane = 10.0
 # Points along each curved line.
 curve_steps = 16

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use arch_graph::{
     ArchEvent, ChangeReason, ComponentId, FindingCode, Graph, Param, Plan, PlanId, ProposedLocation, Provenance, Relation, RelationKind, RepoPath,
-    Requester, Severity, Signature, Stage, Status, TypeSystem, ViewCatalog, ViewRequest,
+    Requester, Severity, Signature, Stage, Status, TypeSystem, ViewRequest,
 };
 use arch_index::{CodeRules, PackSet};
 use arch_service::{Actor, ArchitectureService, FsIndex, FsPlans, PlanOp, PlanRepository, ServiceError};
@@ -52,7 +52,6 @@ fn repo_with(rules_toml: &str, setup: impl FnOnce(ArchitectureService) -> Archit
         &root,
         packs,
         types,
-        ViewCatalog::defaults().unwrap(),
         Box::new(FsPlans::new(&root).unwrap()),
         Box::new(FsIndex::new(&root).unwrap()),
     )
@@ -475,18 +474,19 @@ fn skeleton_verifies_with_placeholders_and_blocks_implemented_until_they_are_gon
 #[test]
 fn view_requests_are_checked_and_announced() {
     let r = repo();
-    assert!(r.service.request_view(ViewRequest { view: Some("nonsense".into()), ..Default::default() }, Requester::Agent).is_err());
-    r.service.request_view(ViewRequest { view: Some("calls".into()), focus: Some(id("sample::run")), ..Default::default() }, Requester::Agent).unwrap();
+    use arch_graph::tree::{TreeRequest, ViewKind};
+    assert!(r.service.request_view(ViewRequest { root: Some(id("sample::nonsense").0), ..Default::default() }, Requester::Agent).is_err());
+    assert!(r.service.request_view(ViewRequest { select: Some(id("sample::nonsense").0), ..Default::default() }, Requester::Agent).is_err());
+    r.service.request_view(ViewRequest { view: Some(ViewKind::Calls), select: Some(id("sample::run").0), ..Default::default() }, Requester::Agent).unwrap();
     assert!(matches!(r.events.lock().unwrap().last(), Some(ArchEvent::ViewRequested { by: Requester::Agent, .. })));
-    let view = r.service.named_view("calls", &arch_graph::Source::Code, vec![id("sample::run")], Some(1)).unwrap();
-    assert!(view.text.contains("run [function"));
-    assert!(view.view.nodes.iter().any(|n| n.id == id("sample::run")));
+    let view = r.service.tree(&TreeRequest { view: ViewKind::Calls, root: Some(id("sample::run").0), depth: Some(1), ..TreeRequest::default() }).unwrap();
+    assert!(arch_graph::tree::render(&view, r.service.trees()).contains("run [function"));
+    assert!(view.card(id("sample::run").as_str()).is_some());
     let found = r.service.search("store", &arch_graph::Source::Code, 10).unwrap();
     let top: Vec<_> = found.iter().take(2).map(|c| c.id.clone()).collect();
     assert_eq!(top, vec![id("sample::store"), id("sample::store::Store")], "exact name matches first, ties by id");
     let detail = r.service.component(&id("sample::log"), &arch_graph::Source::Code).unwrap();
     assert!(detail.code.unwrap().contains("println!"));
-    assert!(view.components.contains_key(&id("sample::run")), "views carry their components");
     assert_eq!(r.service.component_at("src/store.rs", 11, &arch_graph::Source::Code).unwrap().id, id("sample::store::Store::save"));
     assert_eq!(r.service.component_at("src/store.rs", 2, &arch_graph::Source::Code).unwrap().id, id("sample::store::Store"));
     assert!(r.service.component_at("src/none.rs", 1, &arch_graph::Source::Code).is_err());

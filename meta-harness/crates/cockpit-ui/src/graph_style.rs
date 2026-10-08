@@ -1,19 +1,21 @@
 //! How graph elements look, from the `[graph_style]` section of the UI
 //! config: every color is a theme token name, so restyling is config only.
-//! Relations get their color from their kind, their line from how plan and
-//! code line up (alignment) and their weight from where they're known
-//! (provenance); nodes get their outline from alignment.
+//! A line takes its color from what it is (a call, a data flow) and its
+//! stroke from its plan mark; a card's outline comes from its plan mark;
+//! lines to cards shown elsewhere (repeats, loops) and the pills on lines
+//! have their own looks.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use arch_graph::{Alignment, Provenance, RelationKind, Stage};
+use arch_graph::RelationKind;
+use arch_graph::tree::{LineKind, Mark, PillRole};
 use egui::Color32;
 use serde::Deserialize;
 
 use crate::theme::Theme;
 
-/// A theme token per relation kind.
+/// A theme token per relation kind (a line's color unless its mark says).
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct KindColors {
     pub contains: String,
@@ -22,7 +24,7 @@ pub struct KindColors {
     pub data_flow: String,
 }
 
-/// A line: optional color override (a theme token), width and dashing.
+/// A line or outline: optional color (a theme token), width and dashing.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Look {
     #[serde(default)]
@@ -32,89 +34,71 @@ pub struct Look {
     pub dashed: bool,
 }
 
+/// One look per plan mark.
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct AlignmentLooks {
-    pub observed: Look,
-    pub planned: Look,
-    pub missing: Look,
-    pub present: Look,
+pub struct MarkLooks {
+    pub code: Look,
+    pub new: Look,
+    pub changed: Look,
+    pub done: Look,
+    pub mismatch: Look,
 }
 
-impl AlignmentLooks {
-    fn get(&self, alignment: Alignment) -> &Look {
-        match alignment {
-            Alignment::Observed => &self.observed,
-            Alignment::Planned => &self.planned,
-            Alignment::Missing => &self.missing,
-            Alignment::Present => &self.present,
+impl MarkLooks {
+    fn get(&self, mark: Mark) -> &Look {
+        match mark {
+            Mark::Code => &self.code,
+            Mark::New => &self.new,
+            Mark::Changed => &self.changed,
+            Mark::Done => &self.done,
+            Mark::Mismatch => &self.mismatch,
         }
     }
 
-    fn all(&self) -> [&Look; 4] {
-        [&self.observed, &self.planned, &self.missing, &self.present]
+    fn all(&self) -> [(&'static str, &Look); 5] {
+        [("code", &self.code), ("new", &self.new), ("changed", &self.changed), ("done", &self.done), ("mismatch", &self.mismatch)]
     }
 }
 
-/// Width multipliers by where a relation is known from.
+/// Lines to a card shown elsewhere.
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct ProvenanceWeights {
-    pub planned: f32,
-    pub observed: f32,
-    pub both: f32,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct OverlayLook {
-    /// Width multiplier for overlay edges.
-    pub width: f32,
-    /// Opacity multiplier for overlay edges.
-    pub alpha: f32,
-}
-
-/// A theme token per lifecycle stage (the stripe on a card's left edge).
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct StageColors {
-    pub declared: String,
-    pub arch_approved: String,
-    pub plan_approved: String,
-    pub skeleton: String,
-    pub implemented: String,
-}
-
-impl StageColors {
-    fn get(&self, stage: Stage) -> &str {
-        match stage {
-            Stage::Declared => &self.declared,
-            Stage::ArchApproved => &self.arch_approved,
-            Stage::PlanApproved => &self.plan_approved,
-            Stage::Skeleton => &self.skeleton,
-            Stage::Implemented => &self.implemented,
-        }
-    }
+pub struct BackLooks {
+    pub repeat: Look,
+    #[serde(rename = "loop")]
+    pub loops: Look,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct NodeLooks {
-    /// Outline per alignment; `color` is required here.
-    pub outline: AlignmentLooks,
+    /// Outline per plan mark; `color` is required here.
+    pub outline: MarkLooks,
     pub selected_outline: String,
     pub selected_width: f32,
     pub fill: String,
     pub selected_fill: String,
-    pub stages: StageColors,
-    /// Ring around the node the agent pointed at.
+    /// Ring around the card the agent pointed at.
     pub agent: String,
+    /// How strongly code a plan only plugs into shows (0..1).
+    pub outside_plan_alpha: f32,
+}
+
+/// A theme token per pill role.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PillColors {
+    #[serde(rename = "in")]
+    pub takes: String,
+    #[serde(rename = "out")]
+    pub gives: String,
+    pub step: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct GraphStyle {
     pub kinds: KindColors,
-    pub edges: AlignmentLooks,
-    /// A data flow the code shows but the types can't confirm.
-    pub unconfirmed: Look,
-    pub provenance: ProvenanceWeights,
-    pub overlay: OverlayLook,
+    pub lines: MarkLooks,
+    pub back: BackLooks,
     pub nodes: NodeLooks,
+    pub pills: PillColors,
 }
 
 /// A resolved line.
@@ -126,45 +110,44 @@ pub struct Line {
 }
 
 impl GraphStyle {
-    /// Every token names a theme color, node outlines have colors, and every
-    /// width, weight and opacity is positive (a zero would hide lines).
+    /// Every token names a theme color, outlines have colors, and every
+    /// width is positive (a zero would hide lines).
     pub fn check(&self, theme: &Theme) -> Result<(), String> {
-        let (e, n, p, o) = (&self.edges, &self.nodes, &self.provenance, &self.overlay);
-        let sizes = [
-            ("edges.observed.width", e.observed.width),
-            ("edges.planned.width", e.planned.width),
-            ("edges.missing.width", e.missing.width),
-            ("edges.present.width", e.present.width),
-            ("unconfirmed.width", self.unconfirmed.width),
-            ("nodes.outline.observed.width", n.outline.observed.width),
-            ("nodes.outline.planned.width", n.outline.planned.width),
-            ("nodes.outline.missing.width", n.outline.missing.width),
-            ("nodes.outline.present.width", n.outline.present.width),
-            ("nodes.selected_width", n.selected_width),
-            ("provenance.planned", p.planned),
-            ("provenance.observed", p.observed),
-            ("provenance.both", p.both),
-            ("overlay.width", o.width),
-            ("overlay.alpha", o.alpha),
-        ];
+        let mut sizes: Vec<(String, f32)> = Vec::new();
+        for (name, look) in self.lines.all() {
+            sizes.push((format!("lines.{name}.width"), look.width));
+        }
+        for (name, look) in self.nodes.outline.all() {
+            sizes.push((format!("nodes.outline.{name}.width"), look.width));
+        }
+        sizes.push(("back.repeat.width".into(), self.back.repeat.width));
+        sizes.push(("back.loop.width".into(), self.back.loops.width));
+        sizes.push(("nodes.selected_width".into(), self.nodes.selected_width));
         if let Some((at, value)) = sizes.into_iter().find(|(_, v)| !(*v > 0.0 && v.is_finite())) {
             return Err(format!("graph_style.{at}: must be a positive number, got {value}"));
         }
-        let k = &self.kinds;
-        let mut tokens: Vec<(&str, &str)> = vec![("kinds.contains", &k.contains), ("kinds.implements", &k.implements), ("kinds.calls", &k.calls), ("kinds.data_flow", &k.data_flow)];
-        tokens.extend(self.edges.all().into_iter().filter_map(|l| l.color.as_deref()).map(|t| ("edges", t)));
-        match self.unconfirmed.color.as_deref() {
-            Some(t) => tokens.push(("unconfirmed", t)),
-            None => return Err("graph_style.unconfirmed: needs a color".into()),
+        if !(self.nodes.outside_plan_alpha > 0.0 && self.nodes.outside_plan_alpha <= 1.0) {
+            return Err("graph_style.nodes.outside_plan_alpha: must be in (0, 1]".into());
         }
-        for look in self.nodes.outline.all() {
+        let k = &self.kinds;
+        let mut tokens: Vec<(String, &str)> = vec![("kinds.contains".into(), &k.contains), ("kinds.implements".into(), &k.implements), ("kinds.calls".into(), &k.calls), ("kinds.data_flow".into(), &k.data_flow)];
+        tokens.extend(self.lines.all().into_iter().filter_map(|(n, l)| l.color.as_deref().map(|t| (format!("lines.{n}"), t))));
+        tokens.extend([&self.back.repeat, &self.back.loops].into_iter().filter_map(|l| l.color.as_deref().map(|t| ("back".to_owned(), t))));
+        for (name, look) in self.nodes.outline.all() {
             match look.color.as_deref() {
-                Some(t) => tokens.push(("nodes.outline", t)),
-                None => return Err("graph_style.nodes.outline: every alignment needs a color".into()),
+                Some(t) => tokens.push((format!("nodes.outline.{name}"), t)),
+                None => return Err(format!("graph_style.nodes.outline.{name}: needs a color")),
             }
         }
-        tokens.extend([("nodes.selected_outline", self.nodes.selected_outline.as_str()), ("nodes.fill", &self.nodes.fill), ("nodes.selected_fill", &self.nodes.selected_fill), ("nodes.agent", &self.nodes.agent)]);
-        tokens.extend(Stage::ALL.into_iter().map(|stage| ("nodes.stages", self.nodes.stages.get(stage))));
+        tokens.extend([
+            ("nodes.selected_outline".to_owned(), self.nodes.selected_outline.as_str()),
+            ("nodes.fill".into(), &self.nodes.fill),
+            ("nodes.selected_fill".into(), &self.nodes.selected_fill),
+            ("nodes.agent".into(), &self.nodes.agent),
+            ("pills.in".into(), &self.pills.takes),
+            ("pills.out".into(), &self.pills.gives),
+            ("pills.step".into(), &self.pills.step),
+        ]);
         match tokens.into_iter().find(|(_, t)| theme.token(t).is_none()) {
             Some((at, t)) => Err(format!("graph_style.{at}: '{t}' is not a theme color")),
             None => Ok(()),
@@ -185,20 +168,19 @@ impl GraphStyle {
         Self::color(theme, token)
     }
 
-    pub fn edge(&self, theme: &Theme, kind: RelationKind, provenance: Provenance, alignment: Alignment, overlay: bool) -> Line {
-        let look = self.edges.get(alignment);
-        let color = look.color.as_deref().map_or_else(|| self.kind_color(theme, kind), |t| Self::color(theme, t));
-        let weight = match (provenance.planned, provenance.observed) {
-            (true, true) => self.provenance.both,
-            (true, false) => self.provenance.planned,
-            _ => self.provenance.observed,
+    /// A line: tree lines by their plan mark, lines back by repeat or loop.
+    pub fn line(&self, theme: &Theme, kind: RelationKind, line: LineKind, mark: Mark) -> Line {
+        let look = match line {
+            LineKind::Tree => self.lines.get(mark),
+            LineKind::Repeat => &self.back.repeat,
+            LineKind::Loop => &self.back.loops,
         };
-        let (width, color) = if overlay { (look.width * weight * self.overlay.width, color.gamma_multiply(self.overlay.alpha)) } else { (look.width * weight, color) };
-        Line { color, width, dashed: look.dashed }
+        let color = look.color.as_deref().map_or_else(|| self.kind_color(theme, kind), |t| Self::color(theme, t));
+        Line { color, width: look.width, dashed: look.dashed }
     }
 
-    pub fn node_outline(&self, theme: &Theme, alignment: Alignment, selected: bool) -> Line {
-        let look = self.nodes.outline.get(alignment);
+    pub fn node_outline(&self, theme: &Theme, mark: Mark, selected: bool) -> Line {
+        let look = self.nodes.outline.get(mark);
         if selected {
             return Line { color: Self::color(theme, &self.nodes.selected_outline), width: self.nodes.selected_width, dashed: look.dashed };
         }
@@ -209,49 +191,57 @@ impl GraphStyle {
         Self::color(theme, if selected { &self.nodes.selected_fill } else { &self.nodes.fill })
     }
 
-    pub fn stage_color(&self, theme: &Theme, stage: Stage) -> Color32 {
-        Self::color(theme, self.nodes.stages.get(stage))
-    }
-
     pub fn agent_color(&self, theme: &Theme) -> Color32 {
         Self::color(theme, &self.nodes.agent)
     }
 
-    /// What every style means, generated from this table (the legend draws
-    /// exactly these).
-    /// A flow seen in the code that the types can't confirm.
-    pub fn unconfirmed(&self, theme: &Theme) -> Line {
-        let look = &self.unconfirmed;
-        Line { color: look.color.as_deref().map_or(theme.warn, |t| Self::color(theme, t)), width: look.width, dashed: look.dashed }
+    pub fn pill_color(&self, theme: &Theme, role: PillRole) -> Color32 {
+        Self::color(
+            theme,
+            match role {
+                PillRole::In => &self.pills.takes,
+                PillRole::Out => &self.pills.gives,
+                PillRole::Step => &self.pills.step,
+            },
+        )
     }
 
+    /// What every look means, generated from this table (the legend draws
+    /// exactly these).
     pub fn legend(&self, theme: &Theme) -> Vec<LegendEntry> {
         let mut out = Vec::new();
-        for kind in RelationKind::ALL {
-            out.push(LegendEntry { section: "Relations", label: kind.name().replace('_', " "), swatch: Swatch::Line(self.edge(theme, kind, Provenance::OBSERVED, Alignment::Observed, false)) });
+        for kind in [RelationKind::Calls, RelationKind::DataFlow] {
+            out.push(LegendEntry { section: "Lines", label: kind.name().replace('_', " "), swatch: Swatch::Line(self.line(theme, kind, LineKind::Tree, Mark::Code)) });
         }
-        for alignment in ALIGNMENTS {
-            out.push(LegendEntry { section: "Plan vs code", label: alignment_label(alignment), swatch: Swatch::Line(self.edge(theme, RelationKind::Calls, provenance_of(alignment), alignment, false)) });
+        out.push(LegendEntry { section: "Lines", label: "to a card shown elsewhere".into(), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Repeat, Mark::Code)) });
+        out.push(LegendEntry { section: "Lines", label: "back up its own path (a loop)".into(), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Loop, Mark::Code)) });
+        for mark in MARKS {
+            out.push(LegendEntry { section: "Plan", label: mark_label(mark), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Tree, mark)) });
         }
-        out.push(LegendEntry { section: "Plan vs code", label: "overlay (another kind drawn over the view)".to_owned(), swatch: Swatch::Line(self.edge(theme, RelationKind::Calls, Provenance::OBSERVED, Alignment::Observed, true)) });
-        out.push(LegendEntry { section: "Plan vs code", label: crate::status::look("unconfirmed").1, swatch: Swatch::Line(self.unconfirmed(theme)) });
-        for alignment in ALIGNMENTS {
-            out.push(LegendEntry { section: "Nodes", label: alignment_label(alignment), swatch: Swatch::Outline(self.node_outline(theme, alignment, false)) });
+        for mark in MARKS {
+            out.push(LegendEntry { section: "Cards", label: mark_label(mark), swatch: Swatch::Outline(self.node_outline(theme, mark, false)) });
         }
-        out.push(LegendEntry { section: "Nodes", label: "selected".to_owned(), swatch: Swatch::Outline(self.node_outline(theme, Alignment::Observed, true)) });
-        out.push(LegendEntry { section: "Nodes", label: "the agent pointed here".to_owned(), swatch: Swatch::Outline(Line { color: self.agent_color(theme), width: self.nodes.selected_width, dashed: false }) });
-        for stage in Stage::ALL {
-            out.push(LegendEntry { section: "Stage", label: crate::status::look(crate::status::stage(stage)).1, swatch: Swatch::Stripe(self.stage_color(theme, stage)) });
+        out.push(LegendEntry { section: "Cards", label: "selected".to_owned(), swatch: Swatch::Outline(self.node_outline(theme, Mark::Code, true)) });
+        out.push(LegendEntry { section: "Cards", label: "the agent pointed here".to_owned(), swatch: Swatch::Outline(Line { color: self.agent_color(theme), width: self.nodes.selected_width, dashed: false }) });
+        for (role, label) in [(PillRole::In, "goes in"), (PillRole::Out, "comes back"), (PillRole::Step, "the step that turns one into the next")] {
+            out.push(LegendEntry { section: "On the selection's lines", label: label.into(), swatch: Swatch::Pill(self.pill_color(theme, role)) });
         }
         out
     }
 }
 
-const ALIGNMENTS: [Alignment; 4] = [Alignment::Observed, Alignment::Planned, Alignment::Missing, Alignment::Present];
+pub const MARKS: [Mark; 5] = [Mark::Code, Mark::New, Mark::Changed, Mark::Done, Mark::Mismatch];
 
-/// How plan and code line up, in the status vocabulary's words.
-pub fn alignment_label(alignment: Alignment) -> String {
-    crate::status::look(crate::status::alignment(alignment)).1
+/// A plan mark in words.
+pub fn mark_label(mark: Mark) -> String {
+    match mark {
+        Mark::Code => "code (the plan doesn't touch it)",
+        Mark::New => "new: planned, not in the code yet",
+        Mark::Changed => "changed: the plan changes it",
+        Mark::Done => "done: the code matches the plan",
+        Mark::Mismatch => "doesn't match: the code differs from the plan",
+    }
+    .to_owned()
 }
 
 /// How a legend entry is drawn.
@@ -259,7 +249,7 @@ pub fn alignment_label(alignment: Alignment) -> String {
 pub enum Swatch {
     Line(Line),
     Outline(Line),
-    Stripe(Color32),
+    Pill(Color32),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -267,15 +257,6 @@ pub struct LegendEntry {
     pub section: &'static str,
     pub label: String,
     pub swatch: Swatch,
-}
-
-/// Where a view edge is known from, by how it lines up.
-pub fn provenance_of(alignment: Alignment) -> Provenance {
-    match alignment {
-        Alignment::Observed => Provenance::OBSERVED,
-        Alignment::Planned | Alignment::Missing => Provenance::PLANNED,
-        Alignment::Present => Provenance { planned: true, observed: true },
-    }
 }
 
 thread_local! {
@@ -296,48 +277,36 @@ mod tests {
     use super::*;
     use crate::config::UiConfig;
 
-    // req: P7.4
+    // req: M.8, P9.10
     #[test]
-    fn every_kind_provenance_and_alignment_has_a_style_from_theme_tokens() {
+    fn every_mark_line_and_pill_has_a_look_from_theme_tokens() {
         let config = UiConfig::with_overrides("").unwrap();
         let (style, theme) = (&config.graph_style, &config.theme);
         let tokens: Vec<Color32> = Theme::TOKENS.iter().filter_map(|t| theme.token(t)).collect();
-        let alignments = [Alignment::Observed, Alignment::Planned, Alignment::Missing, Alignment::Present];
-        let provenances = [Provenance::OBSERVED, Provenance::PLANNED, Provenance { planned: true, observed: true }, Provenance::default()];
-        let mut seen = std::collections::BTreeSet::new();
         for kind in RelationKind::ALL {
-            for provenance in provenances {
-                for alignment in alignments {
-                    for overlay in [false, true] {
-                        let line = style.edge(theme, kind, provenance, alignment, overlay);
-                        assert!(line.width > 0.0, "{kind:?} {provenance:?} {alignment:?}");
-                        let base = style.edge(theme, kind, provenance, alignment, false).color;
-                        assert!(tokens.contains(&base), "{kind:?} {alignment:?}: color comes from a theme token");
-                        seen.insert((format!("{:?}", line.color), (line.width * 100.0) as u32, line.dashed));
-                    }
+            for line in [LineKind::Tree, LineKind::Repeat, LineKind::Loop] {
+                for mark in MARKS {
+                    let l = style.line(theme, kind, line, mark);
+                    assert!(l.width > 0.0 && tokens.contains(&l.color), "{kind:?} {line:?} {mark:?}");
                 }
             }
         }
-        // The dimensions are actually distinguishable.
-        let line = |k, p, a| style.edge(theme, k, p, a, false);
-        assert_ne!(line(RelationKind::Calls, Provenance::OBSERVED, Alignment::Observed).color, line(RelationKind::Implements, Provenance::OBSERVED, Alignment::Observed).color, "kinds differ");
-        assert!(line(RelationKind::Calls, Provenance::PLANNED, Alignment::Planned).dashed && !line(RelationKind::Calls, Provenance::OBSERVED, Alignment::Observed).dashed, "planned is dashed");
-        assert_eq!(line(RelationKind::Calls, Provenance::PLANNED, Alignment::Missing).color, theme.error, "missing stands out");
-        let both = Provenance { planned: true, observed: true };
-        assert!(line(RelationKind::Calls, both, Alignment::Present).width > line(RelationKind::Calls, Provenance::OBSERVED, Alignment::Observed).width, "agreed relations are heavier");
-        assert!(style.edge(theme, RelationKind::Calls, Provenance::OBSERVED, Alignment::Observed, true).width < line(RelationKind::Calls, Provenance::OBSERVED, Alignment::Observed).width, "overlays are lighter");
-        for alignment in alignments {
+        for mark in MARKS {
             for selected in [false, true] {
-                assert!(tokens.contains(&style.node_outline(theme, alignment, selected).color));
-                assert!(tokens.contains(&style.node_fill(theme, selected)));
+                assert!(tokens.contains(&style.node_outline(theme, mark, selected).color));
             }
         }
-        assert!(seen.len() > 8);
+        // The marks are told apart.
+        let tree = |m| style.line(theme, RelationKind::Calls, LineKind::Tree, m);
+        assert!(tree(Mark::New).dashed && !tree(Mark::Code).dashed, "planned is dashed");
+        assert_eq!(tree(Mark::Mismatch).color, theme.error, "doesn't match stands out");
+        assert_ne!(style.line(theme, RelationKind::Calls, LineKind::Loop, Mark::Code), tree(Mark::Code));
+        assert_ne!(style.kind_color(theme, RelationKind::Calls), style.kind_color(theme, RelationKind::DataFlow));
+        assert_eq!(style.legend(theme).iter().filter(|e| e.section == "Cards").count(), 7);
         // Restyling is config: tokens are checked when the config loads.
         let custom = UiConfig::with_overrides("[graph_style.kinds]\ncalls = \"warn\"").unwrap();
         assert_eq!(custom.graph_style.kind_color(&custom.theme, RelationKind::Calls), custom.theme.warn);
         assert!(UiConfig::with_overrides("[graph_style.kinds]\ncalls = \"chartreuse\"").unwrap_err().contains("'chartreuse' is not a theme color"));
-        assert!(UiConfig::with_overrides("[graph_style.provenance]\nplanned = 0.0\nobserved = 1.0\nboth = 1.5").unwrap_err().contains("provenance.planned: must be a positive number"));
-        assert!(UiConfig::with_overrides("[graph_style.overlay]\nwidth = -1.0\nalpha = 0.5").unwrap_err().contains("overlay.width"));
+        assert!(UiConfig::with_overrides("[graph_style.lines.code]\nwidth = 0.0").unwrap_err().contains("lines.code.width"));
     }
 }

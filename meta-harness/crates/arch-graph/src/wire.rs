@@ -1,19 +1,8 @@
-//! What the server sends the UI (and agents) about views and components.
-
-use std::collections::BTreeMap;
+//! What the server sends the UI (and agents) about components and files.
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Alignment, Component, ComponentId, Relation, View};
-
-/// A view ready to draw: the subgraph, its layout, the shown components, and
-/// the same view as text.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ViewResult {
-    pub view: View,
-    pub text: String,
-    pub components: BTreeMap<ComponentId, Component>,
-}
+use crate::{Alignment, Component, Relation};
 
 /// One component with its relations and source.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

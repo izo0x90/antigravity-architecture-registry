@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ComponentId, PlanId, ViewSpec};
+use crate::{ComponentId, PlanId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -21,23 +21,26 @@ pub enum Requester {
     User,
 }
 
-/// What to show: a named view (or a full spec), optionally scoped to a plan,
-/// rooted somewhere, with a component selected.
+/// What to show (the agent pointing the user's graph somewhere): a view,
+/// the code or a plan, a root and a way, a depth, a card to select. What
+/// isn't given stays as the user had it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ViewRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub view: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spec: Option<ViewSpec>,
-    /// Switch what's shown: the code, or a plan (none: leave it as it is).
+    pub view: Option<crate::tree::ViewKind>,
+    /// The code, or a plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::Source>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub roots: Vec<ComponentId>,
+    /// The card to start from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub way: Option<crate::tree::Way>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth: Option<u32>,
+    /// The card to select (and point at) once it shows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub focus: Option<ComponentId>,
+    pub select: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

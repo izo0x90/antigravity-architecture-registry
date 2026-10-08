@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use arch_graph::{
-    Change, CommentAnchor, CommentId, CommentKind, CommentStatus, ComponentId, Param, Plan, PlanId, RelationKind, Signature, Stage, TypeSystem, ViewCatalog,
+    Change, CommentAnchor, CommentId, CommentKind, CommentStatus, ComponentId, Param, Plan, PlanId, RelationKind, Signature, Stage, TypeSystem,
 };
 use arch_index::PackSet;
 use arch_service::{Actor, ArchitectureService, FsIndex, FsPlans, NewComment, PlanOp, PlanRepository, ServiceError};
@@ -28,7 +28,6 @@ fn open(root: &Path) -> ArchitectureService {
         root,
         PackSet::built_in().unwrap(),
         TypeSystem::defaults().unwrap(),
-        ViewCatalog::defaults().unwrap(),
         Box::new(FsPlans::new(root).unwrap()),
         Box::new(FsIndex::new(root).unwrap()),
     )

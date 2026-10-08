@@ -250,13 +250,18 @@ pub fn font_definitions() -> egui::FontDefinitions {
 #[cfg(test)]
 mod glyph_tests {
     /// Every UI source file: whatever text they draw must have glyphs.
-    const SOURCES: [(&str, &str); 15] = [
+    const SOURCES: [(&str, &str); 20] = [
         ("actions.rs", include_str!("actions.rs")),
         ("app.rs", include_str!("app.rs")),
         ("chat.rs", include_str!("chat.rs")),
         ("code.rs", include_str!("code.rs")),
         ("feedback.rs", include_str!("feedback.rs")),
-        ("graph.rs", include_str!("graph.rs")),
+        ("graph/mod.rs", include_str!("graph/mod.rs")),
+        ("graph/actions.rs", include_str!("graph/actions.rs")),
+        ("graph/details.rs", include_str!("graph/details.rs")),
+        ("graph/draw.rs", include_str!("graph/draw.rs")),
+        ("graph/navigable.rs", include_str!("graph/navigable.rs")),
+        ("graph/select.rs", include_str!("graph/select.rs")),
         ("graph_style.rs", include_str!("graph_style.rs")),
         ("keymap.rs", include_str!("keymap.rs")),
         ("palette.rs", include_str!("palette.rs")),

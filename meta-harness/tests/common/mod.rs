@@ -229,7 +229,6 @@ pub fn fixture_architecture_with(setup: impl FnOnce(ArchitectureService) -> Arch
         &root,
         arch_index::PackSet::built_in().unwrap(),
         arch_graph::TypeSystem::defaults().unwrap(),
-        arch_graph::ViewCatalog::defaults().unwrap(),
         Box::new(FsPlans::new(&root).unwrap()),
         Box::new(FsIndex::new(&root).unwrap()),
     )

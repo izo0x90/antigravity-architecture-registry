@@ -22,7 +22,7 @@ pub use limits::{Limits, PerfLimits};
 pub use ops::PlanOp;
 pub use queue::{BriefContext, Outcome, Queue, QueueConfig, QueueSettings, job_for, render_brief};
 pub use progress::{Action, Downgrade, cascade, next_actionable, topological};
-pub use arch_graph::{ComponentDetail, ViewResult};
+pub use arch_graph::ComponentDetail;
 pub use review::{ReviewNote, ReviewProvider, ReviewRequest, ReviewRun, ReviewerCatalog, ReviewerDef, ReviewerKind, ReviewsReport, Rule};
 pub use service::{Actor, ArchitectureService, IngestReport, NewComment, Refresh, Reverified, Verification, affected, approval_blocker};
 pub use tools::{Invocation, LogicChecks, ProcessRunner, ToolCatalog, ToolDef, ToolOutput, ToolRun, ToolRunner, ToolsReport};

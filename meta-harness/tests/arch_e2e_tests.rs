@@ -19,19 +19,16 @@ fn parse(body: &str) -> Value {
 #[tokio::test]
 async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval() {
     let (addr, state) = spawn_app().await;
-    let (status, body) = http(addr, "GET", "/api/arch/views", None).await;
+    let (status, body) = http(addr, "GET", "/api/graph/config", None).await;
     assert_eq!(status, 200);
     assert!(parse(&body)["views"]["calls"]["description"].is_string());
 
-    let (status, body) = http(addr, "GET", "/api/arch/view?name=calls&roots=rust:sample::run&depth=1", None).await;
+    let (status, body) = http(addr, "POST", "/api/graph/tree", Some(r#"{"view":"calls","root":"rust:sample::run","depth":1}"#)).await;
     assert_eq!(status, 200, "{body}");
     let view = parse(&body);
-    assert!(view["text"].as_str().unwrap().contains("run [function"));
-    // The view itself (the cockpit lays it out): what's shown, and their components.
-    assert!(view["view"]["nodes"].as_array().unwrap().iter().any(|n| n["id"] == "rust:sample::run"));
-    assert!(view["components"]["rust:sample::run"]["name"].is_string());
-    let (status, _) = http(addr, "GET", "/api/arch/view?name=nope", None).await;
-    assert_eq!(status, 404);
+    assert!(view["cards"].as_array().unwrap().iter().any(|c| c["key"] == "rust:sample::run"));
+    let (status, _) = http(addr, "POST", "/api/graph/tree", Some(r#"{"view":"nope"}"#)).await;
+    assert_eq!(status, 422);
 
     let (status, body) = http(addr, "GET", "/api/arch/components/rust:sample::log", None).await;
     assert_eq!(status, 200);
@@ -159,12 +156,12 @@ async fn changes_checks_and_navigation_arrive_on_the_event_socket() {
         }
     }
     assert_eq!((index_states.first(), index_states.last()), (Some(&arch_graph::IndexState::Indexing), Some(&arch_graph::IndexState::Idle)));
-    let (status, _) = http(addr, "POST", "/api/arch/navigate", Some(r#"{"view":"calls","focus":"rust:sample::run"}"#)).await;
+    let (status, _) = http(addr, "POST", "/api/arch/navigate", Some(r#"{"view":"calls","select":"rust:sample::run"}"#)).await;
     assert_eq!(status, 204);
     match next_architecture_event(&mut ws).await {
         ArchEvent::ViewRequested { request, by } => {
             assert_eq!(by, Requester::User);
-            assert_eq!(request.focus.unwrap().as_str(), "rust:sample::run");
+            assert_eq!(request.select.as_deref(), Some("rust:sample::run"));
         }
         other => panic!("{other:?}"),
     }

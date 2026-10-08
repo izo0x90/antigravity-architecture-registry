@@ -121,7 +121,7 @@ fn contains_is_boxes_in_boxes_from_the_top() {
     assert_eq!(f.tree(ask(ViewKind::Contains, Some("app::step"), Way::Down, 1)).path.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), vec!["app"]);
 }
 
-// req: M.4
+// req: M.4, C.2
 #[test]
 fn calls_go_down_in_order_and_up_with_repeats_loops_and_pills() {
     let f = Fixture::new(sample());

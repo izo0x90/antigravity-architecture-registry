@@ -4,7 +4,7 @@
 use crate::cockpit::CockpitUser;
 use std::sync::Arc;
 
-use arch_graph::{Comment, CommentId, ComponentId, PlanId, Requester, Source, Stage, ViewRequest, ViewSpec};
+use arch_graph::{Comment, CommentId, ComponentId, PlanId, Requester, Source, Stage, ViewRequest};
 use arch_service::{Actor, ArchitectureService, NewComment, PlanOp, ServiceError};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -49,8 +49,6 @@ pub async fn blocking<T: Send + 'static>(
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/arch/types", get(types))
-        .route("/api/arch/views", get(views))
-        .route("/api/arch/view", get(named_view).post(custom_view))
         .route("/api/arch/search", get(search))
         .route("/api/arch/components/{id}", get(component))
         .route("/api/arch/at", get(component_at))
@@ -94,40 +92,6 @@ fn source_param(raw: &Option<String>) -> Result<Source, ArchError> {
 
 async fn types(State(state): State<AppState>) -> Json<arch_graph::TypeSystem> {
     Json(state.arch.types().clone())
-}
-
-async fn views(State(state): State<AppState>) -> Json<arch_graph::ViewCatalog> {
-    Json(state.arch.views().clone())
-}
-
-#[derive(Deserialize)]
-struct ViewQuery {
-    name: String,
-    #[serde(default)]
-    plan: Option<String>,
-    /// Comma-separated component ids.
-    #[serde(default)]
-    roots: Option<String>,
-    #[serde(default)]
-    depth: Option<u32>,
-}
-
-async fn named_view(State(state): State<AppState>, Query(q): Query<ViewQuery>) -> ArchResult<arch_service::ViewResult> {
-    let source = source_param(&q.plan)?;
-    let roots: Vec<ComponentId> = q.roots.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(ComponentId::new).collect();
-    Ok(Json(blocking(&state.arch, move |a| a.named_view(&q.name, &source, roots, q.depth)).await?))
-}
-
-#[derive(Deserialize)]
-struct CustomView {
-    spec: ViewSpec,
-    #[serde(default)]
-    plan: Option<String>,
-}
-
-async fn custom_view(State(state): State<AppState>, Json(body): Json<CustomView>) -> ArchResult<arch_service::ViewResult> {
-    let source = source_param(&body.plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.view(&body.spec, &source)).await?))
 }
 
 #[derive(Deserialize)]

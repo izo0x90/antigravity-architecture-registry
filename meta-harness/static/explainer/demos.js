@@ -94,490 +94,6 @@
     el.innerHTML = html;
   }
 
-  // ── The make-believe codebase ───────────────────────────────────────
-  const WORLD = (() => {
-    const packages = [
-      { id: "server", name: "server" },
-      { id: "arch-service", name: "arch-service" },
-      { id: "arch-index", name: "arch-index" },
-    ];
-    const modules = [
-      { id: "http", name: "http", pkg: "server" },
-      { id: "mcp", name: "mcp", pkg: "server" },
-      { id: "service", name: "service", pkg: "arch-service" },
-      { id: "store", name: "store", pkg: "arch-service" },
-      { id: "extract", name: "extract", pkg: "arch-index" },
-      { id: "resolve", name: "resolve", pkg: "arch-index" },
-    ];
-    const f = (id, mod, shape, type = "function") => ({ id, name: id, mod, shape, type });
-    const fns = [
-      f("serve", "http", "Config → ()"),
-      f("get_view", "http", "Query → View"),
-      f("post_plan", "http", "Ops → Plan"),
-      f("view_tool", "mcp", "Args → Text"),
-      f("navigate_tool", "mcp", "Args → Event"),
-      f("view", "service", "Spec → View"),
-      f("ingest", "service", "Path → Graph"),
-      f("plan_edit", "service", "Ops → Plan"),
-      f("publish", "service", "Event → ()"),
-      f("load_index", "store", "() → Graph"),
-      f("save_index", "store", "Graph → ()"),
-      f("save_plan", "store", "Plan → ()"),
-      f("parse_file", "extract", "Path → RawFile"),
-      f("capture", "extract", "Node → Flow"),
-      f("link_calls", "resolve", "RawFile → Graph"),
-      f("folders", "resolve", "Graph → Graph"),
-    ];
-    const calls = [
-      ["serve", "get_view", 0], ["serve", "post_plan", 1], ["serve", "ingest", 2],
-      ["get_view", "view", 0], ["view_tool", "view", 0], ["navigate_tool", "publish", 0],
-      ["post_plan", "plan_edit", 0], ["view", "load_index", 0],
-      ["ingest", "parse_file", 0], ["ingest", "link_calls", 1], ["ingest", "save_index", 2], ["ingest", "publish", 3],
-      ["parse_file", "capture", 0], ["link_calls", "folders", 0], ["folders", "link_calls", 0],
-      ["plan_edit", "save_plan", 0], ["plan_edit", "publish", 1],
-    ];
-    const flows = [
-      ["parse_file", "link_calls", "RawFile"], ["link_calls", "folders", "Graph"], ["folders", "save_index", "Graph"],
-      ["load_index", "view", "Graph"], ["view", "get_view", "View"], ["view", "view_tool", "View"],
-      ["post_plan", "plan_edit", "Ops"], ["plan_edit", "save_plan", "Plan"], ["navigate_tool", "publish", "Event"],
-    ];
-    const fn = Object.fromEntries(fns.map((x) => [x.id, x]));
-    const mod = Object.fromEntries(modules.map((x) => [x.id, x]));
-    const pkg = Object.fromEntries(packages.map((x) => [x.id, x]));
-    const holder = (id, grain) => (grain === "fn" ? id : grain === "module" ? fn[id].mod : mod[fn[id].mod].pkg);
-    const nameOf = (id) => (fn[id] || mod[id] || pkg[id] || { name: id }).name;
-    const typeOf = (id) => (fn[id] ? fn[id].type : mod[id] ? "module" : pkg[id] ? "package" : "");
-    const partsOf = (group) => fns.filter((x) => x.mod === group || mod[x.mod].pkg === group).map((x) => x.id);
-    return { packages, modules, fns, calls, flows, fn, mod, pkg, holder, nameOf, typeOf, partsOf };
-  })();
-
-  // ── The graph engine ────────────────────────────────────────────────
-  // state: kinds, grain ("fn" | "module" | "package"), wrap (draw units
-  // inside their holder at this grain), open (groups shown with their parts),
-  // only (function filter), roots + depth + direction, selection, trace,
-  // maxCards / showAll, labels ("selection" | "all"), plan (overlay),
-  // detail, camera (null: fit), markers.
-  function MiniGraph(host, init) {
-    const st = Object.assign({ kinds: ["calls"], grain: "fn", wrap: null, open: new Set(), only: null, roots: null, depth: 99, direction: "out", selection: null, trace: null, maxCards: Infinity, showAll: false, labels: "selection", plan: null, detail: false, camera: null, markers: false, height: 300, columns: false, onSelect: null, onChange: null, order: false }, init);
-    const wrapEl = h("div", { class: "mg" });
-    const svgEl = document.createElementNS(NS, "svg");
-    svgEl.setAttribute("class", "mg-svg");
-    svgEl.style.height = st.height + "px";
-    wrapEl.append(svgEl);
-    host.append(wrapEl);
-    let scene = null;
-    let shown = new Map(); // id -> {x,y,w,h} as drawn now
-    let anim = null;
-    let view = { x: 0, y: 0, w: 600, h: st.height };
-
-    const kindRel = () => {
-      const out = [];
-      if (st.kinds.includes("calls")) for (const [a, b, o] of WORLD.calls) out.push({ kind: "calls", from: a, to: b, order: o });
-      if (st.kinds.includes("data_flow")) for (const [a, b, c] of WORLD.flows) out.push({ kind: "data_flow", from: a, to: b, carries: c });
-      if (st.plan) for (const r of st.plan.relations) out.push(r);
-      return out;
-    };
-    const allFns = () => WORLD.fns.concat(st.plan ? st.plan.components : []);
-    const fnById = (id) => WORLD.fn[id] || (st.plan && st.plan.components.find((c) => c.id === id));
-    const holderOf = (id, grain) => {
-      const f = fnById(id);
-      if (grain === "fn") return id;
-      if (grain === "module") return f.mod;
-      return WORLD.mod[f.mod].pkg;
-    };
-
-    function compute() {
-      const rels = kindRel();
-      // Which functions: from the roots, so many hops; else every one with a relation.
-      let fns = allFns().map((x) => x.id);
-      if (st.only) fns = fns.filter(st.only);
-      if (st.roots) {
-        const keep = new Set(st.roots);
-        let edge = [...st.roots];
-        for (let d = 0; d < st.depth && edge.length; d++) {
-          const next = [];
-          for (const r of rels) {
-            const fwd = st.direction !== "in" && edge.includes(r.from) && !keep.has(r.to);
-            const back = st.direction !== "out" && edge.includes(r.to) && !keep.has(r.from);
-            if (fwd) { keep.add(r.to); next.push(r.to); }
-            if (back) { keep.add(r.from); next.push(r.from); }
-          }
-          edge = next;
-        }
-        fns = fns.filter((x) => keep.has(x));
-      } else {
-        const linked = new Set(rels.flatMap((r) => [r.from, r.to]));
-        fns = fns.filter((x) => linked.has(x));
-      }
-      const fset = new Set(fns);
-      // Units: a function's holder at the level, unless that holder is open.
-      const unitOf = (id) => {
-        const g = holderOf(id, st.grain);
-        if (st.grain !== "fn" && st.open.has(g)) return id;
-        return g;
-      };
-      const parentOf = (u) => {
-        if (fnById(u) && st.grain !== "fn" && st.open.has(holderOf(u, st.grain))) return holderOf(u, st.grain);
-        if (st.wrap) return holderOf(fnById(u) ? u : WORLD.partsOf(u)[0], st.wrap);
-        return null;
-      };
-      let units = [...new Set(fns.map(unitOf))];
-      // Lines: one per pair, merged with counts.
-      const pairs = new Map();
-      for (const r of rels) {
-        if (!fset.has(r.from) || !fset.has(r.to)) continue;
-        const a = unitOf(r.from), b = unitOf(r.to);
-        if (a === b) continue;
-        const key = a < b ? a + "|" + b : b + "|" + a;
-        let p = pairs.get(key);
-        if (!p) pairs.set(key, (p = { id: key, from: a, to: b, kinds: new Set(), count: 0, carries: new Set(), back: false, fwd: false, order: r.order, state: r.state || null }));
-        p.kinds.add(r.kind);
-        p.count++;
-        if (r.carries) p.carries.add(r.carries);
-        if (a === p.from) p.fwd = true; else p.back = true;
-        if (r.state) p.state = r.state;
-      }
-      let lines = [...pairs.values()];
-      // Crowded: keep the selection's neighbourhood, hold the rest.
-      let held = [];
-      if (units.length > st.maxCards && !st.showAll) {
-        const near = new Set(st.selection ? [st.selection] : units.slice(0, st.maxCards));
-        if (st.selection) for (const l of lines) if (l.from === st.selection || l.to === st.selection) { near.add(l.from); near.add(l.to); }
-        held = units.filter((u) => !near.has(u));
-        units = units.filter((u) => near.has(u));
-        lines = lines.filter((l) => near.has(l.from) && near.has(l.to));
-      }
-      // Containers: open groups and wrapping holders.
-      const parent = new Map();
-      for (const u of units) {
-        const p = parentOf(u);
-        if (p && p !== u) parent.set(u, p);
-      }
-      const containers = [...new Set(parent.values())];
-      // Columns by dependency, on top-level boxes.
-      const top = (u) => (parent.has(u) ? top(parent.get(u)) : u);
-      const tops = [...new Set(units.map(top))];
-      const succ = new Map(tops.map((t) => [t, new Set()]));
-      for (const l of lines) {
-        const a = top(l.from), b = top(l.to);
-        if (a !== b) (l.fwd || !l.back ? succ.get(a).add(b) : succ.get(b).add(a));
-      }
-      const col = new Map();
-      const visiting = new Set();
-      const depthOf = (t) => {
-        if (col.has(t)) return col.get(t);
-        if (visiting.has(t)) return 0;
-        visiting.add(t);
-        let d = 0;
-        for (const [p, s] of succ) if (s.has(t)) d = Math.max(d, depthOf(p) + 1);
-        visiting.delete(t);
-        col.set(t, d);
-        return d;
-      };
-      tops.forEach(depthOf);
-      // Sizes: cards fit their text; containers fit their parts.
-      const CW = (u) => Math.max(92, Math.min(260, 22 + WORLD.nameOf(u).length * 7.4 + (fnById(u) ? 0 : WORLD.typeOf(u).length * 6.6 + 12)));
-      const CH = st.detail ? 54 : 30;
-      const size = new Map();
-      const kidsOf = (c) => units.filter((u) => parent.get(u) === c).concat(containers.filter((k) => parent.get(k) === c));
-      const measure = (u) => {
-        if (size.has(u)) return size.get(u);
-        const kids = kidsOf(u);
-        let s;
-        if (kids.length) {
-          const ks = kids.map(measure);
-          const w = Math.max(CW(u) + 10, ...ks.map((k) => k.w)) + 20;
-          const hgt = 28 + ks.reduce((a, k) => a + k.h + 8, 0) + 4;
-          s = { w, h: hgt };
-        } else s = { w: CW(u), h: CH };
-        size.set(u, s);
-        return s;
-      };
-      tops.forEach(measure);
-      // Place columns left to right, boxes top to bottom (ordered by the
-      // average row of what leads to them, to cut crossings).
-      const byCol = new Map();
-      for (const t of tops) {
-        const c = col.get(t);
-        if (!byCol.has(c)) byCol.set(c, []);
-        byCol.get(c).push(t);
-      }
-      const pos = new Map();
-      const cols = [...byCol.keys()].sort((a, b) => a - b);
-      let x = 20;
-      const GAPX = 96, GAPY = 16;
-      const rowOf = new Map();
-      const colRects = [];
-      for (const c of cols) {
-        const list = byCol.get(c);
-        list.sort((a, b) => bary(a) - bary(b) || WORLD.nameOf(a).localeCompare(WORLD.nameOf(b)));
-        function bary(t) {
-          const preds = [...succ].filter(([, s]) => s.has(t)).map(([p]) => rowOf.get(p)).filter((r) => r != null);
-          return preds.length ? preds.reduce((a, b) => a + b, 0) / preds.length : 0;
-        }
-        let y = 20;
-        let w = 0;
-        list.forEach((t, i) => {
-          rowOf.set(t, i);
-          const s = size.get(t);
-          pos.set(t, { x, y, w: s.w, h: s.h });
-          y += s.h + GAPY;
-          w = Math.max(w, s.w);
-        });
-        colRects.push({ x, w });
-        x += w + GAPX;
-      }
-      // Parts inside their containers.
-      const placeKids = (c) => {
-        const p = pos.get(c);
-        let y = p.y + 28;
-        for (const k of kidsOf(c)) {
-          const s = size.get(k);
-          pos.set(k, { x: p.x + 10, y, w: p.w - 20, h: s.h });
-          y += s.h + 8;
-          placeKids(k);
-        }
-      };
-      tops.forEach(placeKids);
-      const more = held.length ? { id: "__more", n: held.length } : null;
-      if (more) {
-        const maxY = Math.max(...[...pos.values()].map((p) => p.y + p.h));
-        pos.set("__more", { x: 20, y: maxY + 20, w: 120, h: 30 });
-      }
-      return { units, lines, parent, containers, pos, held, more, colRects };
-    }
-
-    function related() {
-      if (!st.selection || !scene) return null;
-      const out = new Set([st.selection]);
-      for (const l of scene.lines) if (l.from === st.selection || l.to === st.selection) { out.add(l.from); out.add(l.to); }
-      let p = scene.parent.get(st.selection);
-      while (p) { out.add(p); p = scene.parent.get(p); }
-      for (const [k, v] of scene.parent) if (v === st.selection) out.add(k);
-      return out;
-    }
-
-    function bounds() {
-      const ps = [...scene.pos.values()];
-      if (!ps.length) return { x: 0, y: 0, w: 400, h: st.height };
-      const x0 = Math.min(...ps.map((p) => p.x)) - 16, y0 = Math.min(...ps.map((p) => p.y)) - 16;
-      const x1 = Math.max(...ps.map((p) => p.x + p.w)) + 16, y1 = Math.max(...ps.map((p) => p.y + p.h)) + 16;
-      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-    }
-
-    function update() {
-      const before = new Map(shown);
-      const prevScene = scene;
-      scene = compute();
-      // Where each box starts: where it was, or where its group / parts were.
-      const from = new Map();
-      for (const [id, p] of scene.pos) {
-        if (before.has(id)) { from.set(id, before.get(id)); continue; }
-        const f = fnById(id);
-        const grp = f && [holderOf(id, "module"), holderOf(id, "package")].find((g) => before.has(g));
-        if (grp) { const g = before.get(grp); from.set(id, { x: g.x, y: g.y, w: Math.min(p.w, g.w), h: p.h, fade: true }); continue; }
-        const parts = WORLD.partsOf(id).filter((k) => before.has(k));
-        if (parts.length) {
-          const ps = parts.map((k) => before.get(k));
-          const cx = ps.reduce((a, q) => a + q.x, 0) / ps.length, cy = ps.reduce((a, q) => a + q.y, 0) / ps.length;
-          from.set(id, { x: cx, y: cy, w: p.w, h: p.h, fade: true });
-          continue;
-        }
-        from.set(id, { ...p, fade: true });
-      }
-      let target = st.camera ? { ...st.camera } : bounds();
-      const cw = svgEl.clientWidth, chh = svgEl.clientHeight;
-      if (cw && chh) {
-        const ar = cw / chh;
-        const cx = target.x + target.w / 2, cy = target.y + target.h / 2;
-        if (st.camera) {
-          // The camera is the box on screen: same shape as it.
-          target = { ...target, w: target.h * ar, x: cx - (target.h * ar) / 2 };
-        } else {
-          // Fitting never magnifies: a small drawing stays at its own size.
-          const w = Math.max(target.w, cw, target.h * ar), hh = Math.max(target.h, chh, w / ar);
-          const w2 = Math.max(w, hh * ar);
-          target = { x: cx - w2 / 2, y: cy - hh / 2, w: w2, h: hh };
-        }
-      }
-      const fromView = { ...view };
-      const secs = prevScene ? (look().look.move_seconds || 0.35) : 0;
-      const t0 = performance.now();
-      cancelAnimationFrame(anim);
-      const step = (now) => {
-        const k = secs ? Math.min(1, (now - t0) / (secs * 1000)) : 1;
-        const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-        shown = new Map();
-        for (const [id, p] of scene.pos) {
-          const s = from.get(id) || p;
-          shown.set(id, { x: s.x + (p.x - s.x) * e, y: s.y + (p.y - s.y) * e, w: s.w + (p.w - s.w) * e, h: s.h + (p.h - s.h) * e, alpha: s.fade ? e : 1 });
-        }
-        view = { x: fromView.x + (target.x - fromView.x) * e, y: fromView.y + (target.y - fromView.y) * e, w: fromView.w + (target.w - fromView.w) * e, h: fromView.h + (target.h - fromView.h) * e };
-        draw();
-        if (k < 1) anim = requestAnimationFrame(step);
-      };
-      anim = requestAnimationFrame(step);
-      if (st.onChange) st.onChange(api);
-    }
-
-    function curve(a, b) {
-      const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 }, bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
-      let p1, p2, dx;
-      if (b.x >= a.x + a.w - 4) {
-        p1 = { x: a.x + a.w, y: ac.y }; p2 = { x: b.x, y: bc.y }; dx = Math.max(30, (p2.x - p1.x) / 2);
-        return { d: `M${p1.x},${p1.y} C${p1.x + dx},${p1.y} ${p2.x - dx},${p2.y} ${p2.x},${p2.y}`, mid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }, p1, p2 };
-      }
-      if (a.x >= b.x + b.w - 4) {
-        p1 = { x: a.x, y: ac.y }; p2 = { x: b.x + b.w, y: bc.y }; dx = Math.max(30, (p1.x - p2.x) / 2);
-        return { d: `M${p1.x},${p1.y} C${p1.x - dx},${p1.y} ${p2.x + dx},${p2.y} ${p2.x},${p2.y}`, mid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }, p1, p2 };
-      }
-      // Same column: bow out to the right.
-      const down = bc.y > ac.y;
-      p1 = { x: a.x + a.w, y: ac.y + (down ? 4 : -4) }; p2 = { x: b.x + b.w, y: bc.y };
-      const bow = Math.max(a.x + a.w, b.x + b.w) + 40;
-      return { d: `M${p1.x},${p1.y} C${bow},${p1.y} ${bow},${p2.y} ${p2.x},${p2.y}`, mid: { x: bow - 10, y: (p1.y + p2.y) / 2 }, p1, p2 };
-    }
-
-    function draw() {
-      const L = look();
-      const dim = st.selection ? L.look.dim : 0;
-      const rel = related();
-      const parts = [];
-      const vb = `${view.x} ${view.y} ${view.w} ${view.h}`;
-      svgEl.setAttribute("viewBox", vb);
-      svgEl.setAttribute("preserveAspectRatio", "xMidYMid meet");
-      parts.push(`<defs>${["calls", "data_flow", "contains", "implements", "planned", "missing", "unconfirmed"].map((k) => `<marker id="ah-${k}-${uid}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" class="mk mk-${k}"/></marker>`).join("")}</defs>`);
-      if (st.columns && scene.colRects) for (const c of scene.colRects) parts.push(`<rect class="mg-col" x="${c.x - 8}" y="${view.y}" width="${c.w + 16}" height="${view.h}"/>`);
-      // Containers first (behind), deepest last.
-      const depthIn = (u) => { let d = 0, p = scene.parent.get(u); while (p) { d++; p = scene.parent.get(p); } return d; };
-      for (const c of [...scene.containers].sort((a, b) => depthIn(a) - depthIn(b))) {
-        const p = shown.get(c);
-        if (!p) continue;
-        const faded = rel && !rel.has(c) ? 1 - dim : 1;
-        parts.push(`<g class="mg-box ${st.selection === c ? "sel" : ""}" data-id="${esc(c)}" style="opacity:${faded * (p.alpha ?? 1)}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="7"/><text x="${p.x + 10}" y="${p.y + 18}" class="mg-box-title">${esc(WORLD.nameOf(c))}<tspan class="mg-sub"> ${esc(WORLD.typeOf(c))}</tspan></text></g>`);
-      }
-      // Lines.
-      const labels = [];
-      for (const l of scene.lines) {
-        const a = shown.get(l.from), b = shown.get(l.to);
-        if (!a || !b) continue;
-        const kind = l.kinds.has("calls") ? "calls" : l.kinds.has("data_flow") ? "data_flow" : [...l.kinds][0];
-        const touches = st.selection && (l.from === st.selection || l.to === st.selection);
-        const carriesTrace = st.trace && l.carries.has(st.trace);
-        let op = 1;
-        if (st.trace) op = carriesTrace ? 1 : (1 - L.look.dim) * (1 - L.look.fade);
-        else if (st.selection && !touches) op = 1 - dim;
-        const c = curve(a, b);
-        const w = 1.6 * Math.min(L.look.line_count_max, 1 + L.look.line_count_gain * Math.log2(l.count));
-        const style = l.state || kind;
-        const ends = `${l.fwd ? `marker-end="url(#ah-${style}-${uid})"` : ""} ${l.back ? `marker-start="url(#ah-${style}-${uid})"` : ""}`;
-        parts.push(`<path class="mg-line k-${kind} s-${l.state || "none"} ${touches ? "hot" : ""}" d="${c.d}" style="stroke-width:${w};opacity:${op * Math.min(a.alpha ?? 1, b.alpha ?? 1)}" ${ends}/>`);
-        const wantLabel = st.labels === "all" || touches || carriesTrace;
-        if (wantLabel) {
-          const ordered = !l.carries.size && l.count === 1 && st.order && l.order != null;
-          const text = l.carries.size ? [...l.carries].join(", ") : l.count > 1 ? `${l.count} calls` : ordered ? `${l.order + 1}` : "";
-          // A call's position sits just before the card it calls; other labels mid-line.
-          const at = ordered ? { x: c.p2.x + (c.p2.x > c.p1.x ? -22 : 22), y: c.p2.y - 11 } : c.mid;
-          if (text) labels.push(`<g class="mg-lab ${ordered ? "order" : ""}" style="opacity:${op}"><rect x="${at.x - text.length * 3.4 - 5}" y="${at.y - 9}" width="${text.length * 6.8 + 10}" height="16" rx="${ordered ? 8 : 4}"/><text x="${at.x}" y="${at.y + 3}" text-anchor="middle">${esc(text)}</text></g>`);
-        }
-      }
-      // Cards.
-      for (const u of scene.units) {
-        if (scene.containers.includes(u)) continue;
-        const p = shown.get(u);
-        if (!p) continue;
-        const faded = rel && !rel.has(u) ? 1 - dim : 1;
-        const comp = fnById(u);
-        const plan = st.plan && st.plan.marks[u];
-        const stage = st.plan && st.plan.stages[u];
-        const sub = st.detail && comp ? `<text x="${p.x + 10}" y="${p.y + 36}" class="mg-sub">${esc(comp.shape)}</text>` : !comp ? `<text x="${p.x + p.w - 8}" y="${p.y + 19}" text-anchor="end" class="mg-sub">${esc(WORLD.typeOf(u))}</text>` : "";
-        parts.push(`<rect class="mg-back" x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="6" style="opacity:${p.alpha ?? 1}"/>`);
-        parts.push(`<g class="mg-card ${st.selection === u ? "sel" : ""} ${plan ? "plan-" + plan : ""} ${st.agent === u ? "agent" : ""}" data-id="${esc(u)}" style="opacity:${faded * (p.alpha ?? 1)}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="6"/>${stage ? `<rect class="stripe st-${stage}" x="${p.x}" y="${p.y + 3}" width="4" height="${p.h - 6}" rx="2"/>` : ""}<text x="${p.x + 10}" y="${p.y + 19}">${esc(WORLD.nameOf(u))}</text>${sub}</g>`);
-      }
-      if (scene.more) {
-        const p = shown.get("__more");
-        if (p) parts.push(`<g class="mg-more" data-more="1"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="15"/><text x="${p.x + p.w / 2}" y="${p.y + 19}" text-anchor="middle">+${scene.more.n} more</text></g>`);
-      }
-      parts.push(labels.join(""));
-      // Markers where the selection's lines leave the camera.
-      if (st.markers && st.selection && shown.get(st.selection)) {
-        const s = shown.get(st.selection);
-        const sc = { x: s.x + s.w / 2, y: s.y + s.h / 2 };
-        const pad = 6;
-        const box = { x0: view.x + pad, y0: view.y + pad, x1: view.x + view.w - pad, y1: view.y + view.h - pad };
-        const inside = (q) => q.x >= box.x0 && q.x <= box.x1 && q.y >= box.y0 && q.y <= box.y1;
-        const out = [];
-        for (const l of scene.lines) {
-          if (l.from !== st.selection && l.to !== st.selection) continue;
-          const other = l.from === st.selection ? l.to : l.from;
-          const o = shown.get(other);
-          if (!o) continue;
-          const oc = { x: o.x + o.w / 2, y: o.y + o.h / 2 };
-          const onScreen = o.x + o.w > box.x0 && o.x < box.x1 && o.y + o.h > box.y0 && o.y < box.y1;
-          if (onScreen) continue;
-          // Where the line from the selection towards it meets the edge.
-          const from = inside(sc) ? sc : { x: Math.min(Math.max(sc.x, box.x0), box.x1), y: Math.min(Math.max(sc.y, box.y0), box.y1) };
-          let t = 1;
-          const dx = oc.x - from.x, dy = oc.y - from.y;
-          if (dx > 0) t = Math.min(t, (box.x1 - from.x) / dx);
-          if (dx < 0) t = Math.min(t, (box.x0 - from.x) / dx);
-          if (dy > 0) t = Math.min(t, (box.y1 - from.y) / dy);
-          if (dy < 0) t = Math.min(t, (box.y0 - from.y) / dy);
-          out.push({ other, x: from.x + dx * t, y: from.y + dy * t, ang: Math.atan2(dy, dx) });
-        }
-        const max = L.levels.max_markers;
-        for (const m of out.slice(0, max)) {
-          const name = WORLD.nameOf(m.other);
-          const w = name.length * 6.6 + 26;
-          const mx = Math.min(Math.max(m.x - w / 2, view.x + 4), view.x + view.w - w - 4);
-          const my = Math.min(Math.max(m.y - 10, view.y + 4), view.y + view.h - 24);
-          const arrow = Math.abs(m.ang) < Math.PI / 4 ? "→" : Math.abs(m.ang) > (3 * Math.PI) / 4 ? "←" : m.ang > 0 ? "↓" : "↑";
-          parts.push(`<g class="mg-marker" data-go="${esc(m.other)}"><rect x="${mx}" y="${my}" width="${w}" height="20" rx="10"/><text x="${mx + w / 2}" y="${my + 14}" text-anchor="middle">${arrow} ${esc(name)}</text></g>`);
-        }
-        if (out.length > max) parts.push(`<g class="mg-marker more"><text x="${view.x + view.w - 8}" y="${view.y + view.h - 8}" text-anchor="end">+${out.length - max} more off screen</text></g>`);
-      }
-      svgEl.innerHTML = parts.join("");
-    }
-    const uid = Math.random().toString(36).slice(2, 7);
-
-    // Lay out again once the box has its real size (and when it changes).
-    let seen = "";
-    new ResizeObserver(() => {
-      const size = `${svgEl.clientWidth}x${svgEl.clientHeight}`;
-      if (size !== seen && svgEl.clientWidth) { seen = size; update(); }
-    }).observe(svgEl);
-    svgEl.addEventListener("click", (e) => {
-      const go = e.target.closest("[data-go]");
-      if (go) { api.panTo(go.getAttribute("data-go")); return; }
-      const more = e.target.closest("[data-more]");
-      if (more) { st.showAll = true; update(); return; }
-      const card = e.target.closest("[data-id]");
-      const id = card ? card.getAttribute("data-id") : null;
-      if (st.onSelect) st.onSelect(id, api);
-      else api.select(id);
-    });
-
-    const api = {
-      st, world: WORLD,
-      set(changes) { Object.assign(st, changes); update(); return api; },
-      select(id) { st.selection = id; update(); },
-      panTo(id) {
-        const p = scene.pos.get(id);
-        if (!p || !st.camera) return;
-        const hgt = Math.min(st.camera.h, 150), w = st.camera.w * (hgt / st.camera.h);
-        st.camera = { w, h: hgt, x: p.x + p.w / 2 - w / 2, y: p.y + p.h / 2 - hgt / 2 };
-        st.selection = id;
-        update();
-      },
-      scene: () => scene,
-      bounds: () => bounds(),
-      redraw: update,
-      el: wrapEl,
-    };
-    update();
-    return api;
-  }
-
   // ── Flow: steps in order ────────────────────────────────────────────
   // steps: [{ title, say, flag? }]. Click a step (or press Next) to read it.
   function Flow(host, steps, opts = {}) {
@@ -738,6 +254,11 @@
   // ── The demos ───────────────────────────────────────────────────────
   const D = {};
 
+  // A few made-up functions for the frame demos (the graph demos use the
+  // real code, from the server).
+  const CALLS = [["serve", "get_view"], ["serve", "ingest"], ["get_view", "view"], ["view", "load_index"], ["ingest", "parse_file"], ["ingest", "link_calls"], ["ingest", "save_index"], ["ingest", "publish"]];
+  const SHAPES = { serve: "Config → ()", get_view: "Query → View", view: "Spec → View", load_index: "() → Graph", ingest: "Path → Graph", parse_file: "Path → RawFile", link_calls: "RawFile → Graph", save_index: "Graph → ()", publish: "Event → ()" };
+
   D.slots = (host, demo) => {
     let cols = 3, focused = 1;
     const slots = ["code", "graph", "spec"];
@@ -826,11 +347,11 @@
       const other = h("div", { class: "frame-slot" + (state.slot !== "code" ? " on" : "") }, h("div", { class: "frame-tab" }, "slot 2", h("b", {}, otherView)), h("div", { class: "frame-body", id: "" }));
       frame.append(code, other);
       const body = other.querySelector(".frame-body");
-      if (state.slot === "spec" && state.spec) body.append(...["▸ " + state.spec, "  " + WORLD.fn[state.spec].shape, "  Calls: " + WORLD.calls.filter((c) => c[0] === state.spec).map((c) => c[1]).join(", ")].map((t) => h("div", { class: "frame-line" }, t)));
+      if (state.slot === "spec" && state.spec) body.append(...["▸ " + state.spec, "  " + SHAPES[state.spec], "  Calls: " + CALLS.filter((c) => c[0] === state.spec).map((c) => c[1]).join(", ")].map((t) => h("div", { class: "frame-line" }, t)));
       else {
         const g = h("div", { class: "goto-graph" });
         body.append(g);
-        const near = state.graphSel ? [state.graphSel, ...WORLD.calls.filter((c) => c[0] === state.graphSel || c[1] === state.graphSel).flatMap((c) => [c[0], c[1]])] : [];
+        const near = state.graphSel ? [state.graphSel, ...CALLS.filter((c) => c[0] === state.graphSel || c[1] === state.graphSel).flatMap((c) => [c[0], c[1]])] : [];
         [...new Set(near)].forEach((id) => g.append(h("span", { class: "chip" + (id === state.graphSel ? " sel" : "") }, id)));
         if (!near.length) g.append(h("span", { class: "muted" }, "(nothing selected)"));
       }
@@ -851,7 +372,7 @@
       { a: "goto.graph", run: withFn((f) => { jump(`code:${state.line + 1}`); state.graphSel = f; state.slot = "graph"; draw(`Shown in the graph, selected, with what it connects to. The place you left went on the jump list.`); }) },
       { a: "goto.spec", run: withFn((f) => { jump(`code:${state.line + 1}`); state.spec = f; state.slot = "spec"; draw(`Its spec opens in the other slot.`); }) },
       { a: "goto.callees", run: withFn((f) => {
-        const callees = WORLD.calls.filter((c) => c[0] === f).map((c) => c[1]);
+        const callees = CALLS.filter((c) => c[0] === f).map((c) => c[1]);
         if (!callees.length) return draw(`${f} calls nothing.`);
         if (callees.length === 1) { jump(`code:${state.line + 1}`); state.graphSel = callees[0]; state.slot = "graph"; return draw(`One callee: straight there.`); }
         picker.hidden = false;
@@ -937,7 +458,7 @@
   D.menus = (host, demo) => {
     const data = window.DATA.actions;
     const targets = {
-      "a graph card": ["goto.code", "goto.spec", "goto.callers", "goto.callees", "graph.focus", "graph.story", "graph.follow", "nav.fold_open", "graph.coarser"],
+      "a graph card": ["nav.enter", "nav.fold_open", "graph.flip", "graph.depth_more", "goto.code", "goto.spec", "goto.callers", "goto.callees"],
       "a spec item": ["spec.comment", "spec.request_change", "spec.next_section", "goto.graph", "goto.code", "spec.pin"],
       "a code line": ["goto.graph", "goto.spec", "goto.callers", "code.next_def", "nav.search", "nav.hint"],
     };
@@ -984,25 +505,24 @@
   };
 
   D.linkfollow = (host, demo) => {
-    let on = true, line = 3, timer = null;
+    let on = true, line = 3, timer = null, selected = "view";
     const ms = look().links.follow_debounce_ms;
     const frame = h("div", { class: "frame", style: "grid-template-columns: 1.2fr 1fr" });
-    const graphHost = h("div");
     const cap = caption("");
-    let g;
     function fnAt() { let at = null; for (const [l, f] of Object.entries(CODE_DEFS)) if (+l <= line) at = f; return at; }
     function draw() {
       frame.innerHTML = "";
-      frame.append(h("div", { class: "frame-slot on" }, h("div", { class: "frame-tab" }, "slot 1", h("b", {}, "CODE")), h("div", { class: "frame-body code" }, CODE.map((l, i) => h("div", { class: "frame-line" + (i === line ? " cur" : "") }, l)))), h("div", { class: "frame-slot" }, h("div", { class: "frame-tab" }, "slot 2", h("b", {}, "GRAPH")), graphHost));
-      if (!g) g = MiniGraph(graphHost, { height: 180, roots: ["serve"], depth: 2 });
-      else graphHost.append(g.el);
+      const near = [...new Set([selected, ...CALLS.filter((c) => c[0] === selected || c[1] === selected).flat()])];
+      frame.append(
+        h("div", { class: "frame-slot on" }, h("div", { class: "frame-tab" }, "slot 1", h("b", {}, "CODE")), h("div", { class: "frame-body code" }, CODE.map((l, i) => h("div", { class: "frame-line" + (i === line ? " cur" : "") }, l)))),
+        h("div", { class: "frame-slot" }, h("div", { class: "frame-tab" }, "slot 2", h("b", {}, "GRAPH")), h("div", { class: "frame-body goto-graph" }, near.map((id) => h("span", { class: "chip" + (id === selected ? " sel" : "") }, id)))));
       cap.innerHTML = on ? `Linked. The graph selects what the code cursor rests on, after ${ms} ms.` : "Not linked. Moving the code cursor leaves the graph alone.";
     }
     const move = (d) => () => {
       line = Math.max(0, Math.min(CODE.length - 1, line + d));
       draw();
       clearTimeout(timer);
-      if (on) timer = setTimeout(() => { const f = fnAt(); if (f) g.set({ roots: [f], selection: f }); }, ms);
+      if (on) timer = setTimeout(() => { const f = fnAt(); if (f) { selected = f; draw(); } }, ms);
     };
     host.append(controls(demo, [
       { a: "nav.down", run: move(1) },
@@ -1037,407 +557,17 @@
       ],
     });
 
-  // Graph demos.
-  D.views = (host, demo) => {
-    const cap = caption("");
-    const views = window.DATA.views.views;
-    const set = {
-      structure: { kinds: ["calls", "data_flow"], grain: "module", wrap: "package", labels: "all", roots: null, depth: 99, direction: "out", order: false },
-      calls: { kinds: ["calls"], grain: "fn", wrap: null, labels: "selection", roots: ["serve"], depth: 4, direction: "out", order: true },
-      data_flow: { kinds: ["data_flow"], grain: "fn", wrap: null, labels: "all", roots: null, depth: 99, direction: "out", order: false },
-      data_path: { kinds: ["data_flow"], grain: "fn", wrap: null, labels: "all", roots: ["link_calls"], depth: 8, direction: "both", order: false },
-      combined: { kinds: ["calls", "data_flow"], grain: "fn", wrap: null, labels: "selection", roots: ["serve"], depth: 3, direction: "out", order: false },
-    };
-    const graphHost = h("div");
-    const storyHost = h("div", { hidden: true });
-    const g = MiniGraph(graphHost, { height: 300, ...set.calls, selection: "ingest" });
-    let story = null;
-    let current = "calls";
-    const names = Object.keys(views);
-    function show(name) {
-      current = name;
-      const isStory = name === "story" || name === "reached_by";
-      graphHost.hidden = isStory;
-      storyHost.hidden = !isStory;
-      if (isStory) {
-        storyHost.innerHTML = "";
-        story = Story(storyHost, { root: name === "story" ? "serve" : "publish", backwards: name === "reached_by" });
-      } else g.set({ ...set[name], open: new Set(), showAll: false });
-      cap.innerHTML = `<b>${name}</b>: ${esc(views[name].description)}`;
-      tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("primary", b.dataset.v === name));
-    }
-    const tabs = h("div", { class: "demo-controls" }, names.map((n) => h("button", { class: "demo-btn", type: "button", "data-v": n, onclick: () => show(n) }, n)));
-    host.append(controls(demo, [{ a: "graph.next_view", run: () => show(names[(names.indexOf(current) + 1) % names.length]) }]), tabs, graphHost, storyHost, cap);
-    show("calls");
-  };
-
-  D.structurelevels = (host, demo) => {
-    let at = [];
-    const crumbs = h("div", { class: "crumbs" });
-    const gauge = h("div", { class: "gauge" });
-    const cap = caption("");
-    const L = look().levels;
-    let fill = 0.2;
-    const g = MiniGraph(h("div"), { height: 260 });
-    const graphHost = h("div");
-    graphHost.append(g.el);
-    function level() {
-      const where = at[at.length - 1];
-      if (!where) return { grain: "package", only: null };
-      if (WORLD.pkg[where]) return { grain: "module", only: (id) => WORLD.mod[WORLD.fn[id].mod].pkg === where };
-      return { grain: "fn", only: (id) => WORLD.fn[id].mod === where };
-    }
-    function draw(said) {
-      const lv = level();
-      g.set({ kinds: ["calls"], grain: lv.grain, only: lv.only, labels: "all", open: new Set(), selection: g.st.selection && (lv.grain === "fn" ? WORLD.fn[g.st.selection] : lv.grain === "module" ? WORLD.mod[g.st.selection] : WORLD.pkg[g.st.selection]) ? g.st.selection : null });
-      crumbs.innerHTML = "";
-      crumbs.append(h("button", { class: "crumb", type: "button", onclick: () => { at = []; fill = 0.2; draw(); } }, "repo"));
-      at.forEach((p, i) => crumbs.append(h("span", { class: "crumb-sep" }, "›"), h("button", { class: "crumb", type: "button", onclick: () => { at = at.slice(0, i + 1); fill = 0.2; draw(); } }, WORLD.nameOf(p))));
-      const sel = g.st.selection;
-      gauge.innerHTML = sel && !WORLD.fn[sel] ? `Zoom: <b>${sel}</b> fills ${Math.round(fill * 100)}% of the screen. At ${Math.round(L.enter_fill * 100)}% you go in.<span class="bar"><span style="width:${Math.min(100, (fill / L.enter_fill) * 100)}%"></span></span>` : at.length ? `Zoom out until this level fills under ${Math.round(L.leave_fill * 100)}% of the screen to go up.` : "Select a card, then go in or zoom in.";
-      cap.innerHTML = said || `You stand ${at.length ? "inside <b>" + WORLD.nameOf(at[at.length - 1]) + "</b>" : "at the top"}. The view shows what's in here.`;
-    }
-    function enter() {
-      const sel = g.st.selection;
-      if (!sel || WORLD.fn[sel]) return draw("Select a crate or module to go into.");
-      at.push(sel);
-      g.st.selection = null;
-      fill = 0.2;
-      draw(`Went into <b>${sel}</b>. The breadcrumb grew.`);
-    }
-    function up() {
-      if (!at.length) return draw("Already at the top.");
-      const left = at.pop();
-      fill = 0.2;
-      g.st.selection = left;
-      draw(`Up a level. <b>${left}</b> stays selected, so you see where you were.`);
-    }
-    g.st.onSelect = (id, api) => { api.st.selection = id; fill = 0.2; draw(); };
-    host.append(controls(demo, [
-      { a: "nav.enter", run: enter },
-      { a: "nav.leave", run: up, alsoKeys: [keyOf("graph.up")].filter(Boolean) },
-      { sep: true },
-      { a: "graph.zoom_in", run: () => { fill += 0.12; if (fill >= L.enter_fill && g.st.selection && !WORLD.fn[g.st.selection]) return enter(); draw(); } },
-      { a: "graph.zoom_out", run: () => { fill -= 0.12; if (fill < L.leave_fill && at.length) return up(); draw(); } },
-    ]), crumbs, graphHost, gauge, cap);
-    host.append();
-    draw();
-  };
-
-  D.relationlevels = (host, demo) => {
-    const order = ["fn", "module", "package"];
-    const names = { fn: "the parts (functions)", module: "modules", package: "packages" };
-    const cap = caption("");
-    const g = MiniGraph(host, { height: 300, kinds: ["calls"], grain: "fn", selection: "view" });
-    function to(grain) {
-      const sel = g.st.selection;
-      const keep = sel ? (WORLD.fn[sel] ? WORLD.holder(sel, grain) : grain === "fn" ? null : sel) : null;
-      g.set({ grain, open: new Set(), selection: keep && (grain === "fn" || !WORLD.fn[keep]) ? keep : null });
-      cap.innerHTML = `Seen by <b>${names[grain]}</b>. ${grain === "fn" ? "Each function is a card." : "Each line stands for every call between two groups. Its label counts them; it's thicker when there are more."}`;
-    }
-    host.prepend(controls(demo, [
-      { a: "graph.coarser", run: () => to(order[Math.min(2, order.indexOf(g.st.grain) + 1)]) },
-      { a: "graph.finer", run: () => to(order[Math.max(0, order.indexOf(g.st.grain) - 1)]) },
-      { sep: true },
-      ...order.map((o) => ({ label: o === "fn" ? "parts" : o + "s", key: "", run: () => to(o) })),
-    ]));
-    host.append(cap);
-    to("fn");
-  };
-
-  D.openinplace = (host, demo) => {
-    const cap = caption("");
-    const g = MiniGraph(host, { height: 320, kinds: ["calls"], grain: "module", selection: "service" });
-    const say = () => (cap.innerHTML = g.st.open.size ? `Open: <b>${[...g.st.open].join(", ")}</b>. Its lines now end at the functions they really connect. The rest stay modules.` : "Every module is shut. Select one and open it.");
-    const sel = () => { const s = g.st.selection; return s && WORLD.fn[s] ? WORLD.fn[s].mod : s; };
-    host.prepend(controls(demo, [
-      { a: "nav.fold_open", run: () => { const s = sel(); if (s) g.st.open.add(s); g.redraw(); say(); } },
-      { a: "nav.fold_close", run: () => { const s = sel(); if (s) { g.st.open.delete(s); g.st.selection = s; } g.redraw(); say(); } },
-      { a: "nav.fold_toggle", run: () => { const s = sel(); if (!s) return; g.st.open.has(s) ? g.st.open.delete(s) : g.st.open.add(s); g.redraw(); say(); } },
-      { a: "nav.fold_close_all", run: () => { g.st.open.clear(); g.redraw(); say(); } },
-    ]));
-    host.append(cap);
-    say();
-  };
-
-  D.neighbourhood = (host, demo) => {
-    const max = 7;
-    const cap = caption(`This demo crowds at ${max} cards. The cockpit's limit is ${look().levels.max_cards}.`);
-    const g = MiniGraph(host, { height: 300, kinds: ["calls"], grain: "fn", selection: "ingest", maxCards: max });
-    host.prepend(controls(demo, [
-      { a: "graph.show_all", label: "Show every part", run: () => g.set({ showAll: true }) },
-      { label: "Hold them back again", key: "", run: () => g.set({ showAll: false }) },
-      { a: "graph.coarser", run: () => g.set({ grain: "module", selection: "service", showAll: false }) },
-      { a: "graph.finer", run: () => g.set({ grain: "fn", selection: "ingest", showAll: false }) },
-    ]));
-    host.append(cap);
-  };
-
-  D.selection = (host) => {
-    const cap = caption("Click any card. Click empty space to clear.");
-    MiniGraph(host, { height: 300, kinds: ["calls", "data_flow"], grain: "fn", selection: "view", onChange: (api) => (cap.innerHTML = api.st.selection ? `<b>${api.st.selection}</b> and everything it connects to stay bright. Only its lines are labelled.` : "Nothing selected: nothing dims.") });
-    host.append(cap);
-  };
-
-  D.markers = (host, demo) => {
-    const cap = caption("The box is the screen. Select a card: its partners off screen get markers. Click one to go there.");
-    const g = MiniGraph(host, { height: 260, kinds: ["calls"], grain: "fn", selection: "ingest", markers: true, camera: { x: 260, y: 40, w: 300, h: 150 } });
-    const pan = (dx, dy) => () => g.set({ camera: { ...g.st.camera, x: g.st.camera.x + dx, y: g.st.camera.y + dy } });
-    g.panTo("ingest");
-    host.prepend(controls(demo, [
-      { label: "Pan left", key: "h", run: pan(-90, 0) },
-      { label: "Pan right", key: "l", run: pan(90, 0) },
-      { label: "Pan up", key: "k", run: pan(0, -60) },
-      { label: "Pan down", key: "j", run: pan(0, 60) },
-      { a: "graph.fit", run: () => { const b = g.bounds(); g.set({ camera: { x: b.x, y: b.y, w: b.w, h: b.h } }); } },
-      { label: "Zoom back in", key: "", run: () => g.panTo(g.st.selection || "ingest") },
-    ]));
-    host.append(cap);
-  };
-
-  D.zoom = (host, demo) => {
-    const L = look().detail;
-    let z = 1.0;
-    const stage = h("div", { class: "zoomstage" });
-    const cap = caption("");
-    function draw() {
-      const w = 150 * z, hgt = 34 * z + (z >= L.mid ? 26 * z : 0) + (z >= L.near ? 26 * z : 0);
-      const lines = [h("div", { class: "zc-name" }, "view")];
-      if (z >= L.mid) lines.push(h("div", { class: "zc-line" }, "function · implemented"), h("div", { class: "zc-line muted" }, "service.rs:42"));
-      if (z >= L.near) lines.push(h("div", { class: "zc-line" }, "fn view(spec: Spec) -> View"), h("div", { class: "zc-line ok" }, "planned and in code"), h("div", { class: "zc-line warn" }, "1 open review point"));
-      stage.innerHTML = "";
-      stage.append(h("div", { class: "zcard", style: `width:${w}px;min-height:${hgt}px` }, lines));
-      cap.innerHTML = `Zoom ${z.toFixed(2)}. ${z < L.mid ? `The name only. More from ${L.mid}.` : z < L.near ? `Type, stage and place. More from ${L.near}.` : "Everything."} The text stays the same size; the card grows.`;
-    }
-    host.append(controls(demo, [
-      { a: "graph.zoom_in", run: () => { z = Math.min(2.2, z * 1.2); draw(); } },
-      { a: "graph.zoom_out", run: () => { z = Math.max(0.5, z / 1.2); draw(); } },
-      { a: "graph.fit", label: "Reset", run: () => { z = 1; draw(); } },
-    ]), stage, cap);
-    draw();
-  };
-
-  D.depth = (host, demo) => {
-    const cap = caption("");
-    const g = MiniGraph(host, { height: 300, kinds: ["calls"], roots: ["serve"], depth: 1, selection: "serve", labels: "selection" });
-    const say = () => (cap.innerHTML = `From <b>serve</b>, ${g.st.depth} hop${g.st.depth > 1 ? "s" : ""} out: ${g.scene().units.length} cards.`);
-    host.prepend(controls(demo, [
-      { a: "graph.depth_more", run: () => { g.set({ depth: Math.min(5, g.st.depth + 1) }); say(); } },
-      { a: "graph.depth_less", run: () => { g.set({ depth: Math.max(1, g.st.depth - 1) }); say(); } },
-    ]));
-    host.append(cap);
-    say();
-  };
-
-  D.lines = (host) => {
-    const S = look().graph_style;
-    const rows = [
-      { cls: "k-calls", say: "calls", why: `colour: ${S.kinds.calls}` },
-      { cls: "k-data_flow", say: "data flow, saying what it carries", label: "Graph", why: `colour: ${S.kinds.data_flow}` },
-      { cls: "k-implements", say: "implements", why: `colour: ${S.kinds.implements}` },
-      { cls: "k-contains", say: "contains", why: `colour: ${S.kinds.contains}` },
-      { cls: "k-calls s-planned", say: "planned, not built yet", why: "dashed, its kind's colour" },
-      { cls: "k-calls s-missing", say: "planned, missing in the code", why: `dashed, ${S.edges.missing.color}` },
-      { cls: "k-data_flow s-unconfirmed", say: "a flow the types can't confirm", why: `dashed, ${S.unconfirmed.color}` },
-      { cls: "k-calls", say: "12 calls merged into one line", label: "12 calls", width: 1.6 * Math.min(look().look.line_count_max, 1 + look().look.line_count_gain * Math.log2(12)), why: "wider with the count" },
-      { cls: "k-calls", say: "calls both ways: one line, two heads", both: true, why: "never two lines for one pair" },
-    ];
-    const svgEl = document.createElementNS(NS, "svg");
-    const H = rows.length * 34 + 10;
-    svgEl.setAttribute("viewBox", `0 0 640 ${H}`);
-    svgEl.setAttribute("class", "mg-svg");
-    svgEl.style.height = H + "px";
-    const id = Math.random().toString(36).slice(2, 7);
-    svgEl.innerHTML = `<defs>${["calls", "data_flow", "contains", "implements", "planned", "missing", "unconfirmed"].map((k) => `<marker id="lh-${k}-${id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" class="mk mk-${k}"/></marker>`).join("")}</defs>` +
-      rows.map((r, i) => {
-        const y = 22 + i * 34;
-        const kind = r.cls.split(" ")[0].slice(2);
-        const st = (r.cls.split(" ")[1] || "").slice(2) || kind;
-        return `<path class="mg-line ${r.cls}" d="M20,${y} C80,${y - 10} 140,${y + 10} 200,${y}" style="stroke-width:${r.width || 1.6}" marker-end="url(#lh-${st}-${id})" ${r.both ? `marker-start="url(#lh-${st}-${id})"` : ""}/>` +
-          (r.label ? `<g class="mg-lab"><rect x="${110 - r.label.length * 3.4 - 5}" y="${y - 9}" width="${r.label.length * 6.8 + 10}" height="16" rx="4"/><text x="110" y="${y + 3}" text-anchor="middle">${esc(r.label)}</text></g>` : "") +
-          `<text x="224" y="${y + 4}" class="lines-say">${esc(r.say)}</text><text x="630" y="${y + 4}" text-anchor="end" class="mg-sub">${esc(r.why)}</text>`;
-      }).join("");
-    host.append(h("div", { class: "mg" }, svgEl), caption("These are the cockpit's own line styles, read from its config."));
-  };
-
-  function Story(host, { root, backwards }) {
-    const shut = new Set();
-    const list = h("div", { class: "story" });
-    const cap = caption("");
-    host.append(list, cap);
-    function tell() {
-      const next = new Map();
-      for (const [a, b, o] of WORLD.calls) {
-        const [from, to] = backwards ? [b, a] : [a, b];
-        if (!next.has(from)) next.set(from, []);
-        next.get(from).push([backwards ? 0 : o, to]);
-      }
-      for (const l of next.values()) l.sort((x, y) => x[0] - y[0] || x[1].localeCompare(y[1]));
-      const rows = [], told = new Set(), loops = new Map(), inside = new Map(), path = [];
-      const walk = (id, depth, under) => {
-        if (path.includes(id)) { if (under) loops.set(under, (loops.get(under) || []).concat(id)); return; }
-        if (told.has(id)) return;
-        told.add(id);
-        rows.push({ id, depth, under });
-        if (shut.has(id)) {
-          const seen = new Set(), stack = (next.get(id) || []).map((x) => x[1]);
-          while (stack.length) { const s = stack.pop(); if (s !== id && !seen.has(s)) { seen.add(s); stack.push(...(next.get(s) || []).map((x) => x[1])); } }
-          if (seen.size) inside.set(id, seen.size);
-          seen.forEach((s) => told.add(s));
-          return;
-        }
-        path.push(id);
-        for (const [, s] of next.get(id) || []) walk(s, depth + 1, id);
-        path.pop();
-      };
-      walk(root, 0, null);
-      const also = new Map();
-      for (const r of rows) {
-        const n = rows.filter((p) => p.id !== r.under && p.id !== r.id && (next.get(p.id) || []).some((x) => x[1] === r.id)).length;
-        if (n) also.set(r.id, n);
-      }
-      return { rows, loops, inside, also };
-    }
-    let cur = 0;
-    function draw() {
-      const s = tell();
-      cur = Math.min(cur, s.rows.length - 1);
-      list.innerHTML = "";
-      s.rows.forEach((r, i) => {
-        list.append(h("div", { class: "story-row" + (i === cur ? " cur" : ""), style: `--d:${r.depth}`, onclick: () => { cur = i; draw(); } },
-          h("span", { class: "story-elbow" }, r.depth ? "└" : "●"),
-          h("span", { class: "story-name" }, r.id),
-          s.inside.has(r.id) ? h("span", { class: "tag" }, `${s.inside.get(r.id)} inside`) : null,
-          s.also.has(r.id) ? h("span", { class: "tag muted" }, `also from ${s.also.get(r.id)} more place${s.also.get(r.id) > 1 ? "s" : ""}`) : null,
-          s.loops.has(r.id) ? h("span", { class: "tag warn" }, `↩ loops back to ${s.loops.get(r.id).join(", ")}`) : null,
-        ));
-      });
-      cap.innerHTML = backwards ? `What reaches <b>${root}</b>: its callers, then theirs, outwards.` : `What <b>${root}</b> does, in call order. Deeper calls are further right.`;
-    }
-    draw();
-    return {
-      fold(open) { const s = tell(); const id = s.rows[cur].id; open ? shut.delete(id) : shut.add(id); draw(); },
-      move(d) { cur = Math.max(0, cur + d); draw(); },
-    };
-  }
-
-  D.story = (host, demo) => {
-    const area = h("div");
-    let s;
-    let back = false;
-    const make = () => { area.innerHTML = ""; s = Story(area, back ? { root: "publish", backwards: true } : { root: "serve", backwards: false }); };
-    host.append(controls(demo, [
-      { a: "graph.story", label: "Story of serve", run: () => { back = false; make(); } },
-      { a: "graph.reached_by", label: "What reaches publish", run: () => { back = true; make(); } },
-      { sep: true },
-      { a: "nav.down", run: () => s.move(1) },
-      { a: "nav.up", run: () => s.move(-1) },
-      { a: "nav.fold_close", run: () => s.fold(false) },
-      { a: "nav.fold_open", run: () => s.fold(true) },
-    ]), area);
-    make();
-  };
-
-  D.callwalk = (host, demo) => {
-    const caller = "ingest";
-    const callees = WORLD.calls.filter((c) => c[0] === caller).sort((a, b) => a[2] - b[2]).map((c) => c[1]);
-    let i = -1;
-    const cap = caption("");
-    const g = MiniGraph(host, { height: 260, kinds: ["calls"], roots: [caller], depth: 1, order: true, labels: "all" });
-    const say = () => (cap.innerHTML = i < 0 ? `Nothing selected. Step into <b>${caller}</b>'s calls in order.` : `Call ${i + 1} of ${callees.length}: <b>${callees[i]}</b>.`);
-    host.prepend(controls(demo, [
-      { a: "graph.next_call", run: () => { i = Math.min(callees.length - 1, i + 1); g.set({ selection: callees[i] }); say(); } },
-      { a: "graph.prev_call", run: () => { i = Math.max(0, i - 1); g.set({ selection: callees[i] }); say(); } },
-    ]));
-    host.append(cap);
-    say();
-  };
-
-  D.followvalue = (host, demo) => {
-    const cap = caption("");
-    const chip = h("div", { class: "following", hidden: true });
-    const g = MiniGraph(host, { height: 300, kinds: ["data_flow"], grain: "fn", labels: "all", selection: "link_calls" });
-    host.prepend(chip);
-    const choicesFor = (id) => [...new Set(WORLD.flows.filter((f) => f[0] === id || f[1] === id).map((f) => f[2]))];
-    const ctr = h("div");
-    function draw() {
-      ctr.innerHTML = "";
-      const sel = g.st.selection;
-      const values = sel ? choicesFor(sel) : [];
-      ctr.append(controls(demo, [
-        ...values.map((v) => ({ a: "graph.follow", label: `Follow ${v}`, key: values.indexOf(v) ? "" : undefined, run: () => { g.set({ roots: [sel], direction: "both", depth: 8, trace: v }); chip.hidden = false; chip.innerHTML = `${esc(word("following"))} <b>${esc(v)}</b>`; cap.innerHTML = `The view switched to data_path from <b>${sel}</b>. Lines not carrying ${v} fade.`; draw(); } })),
-        { a: "graph.unfollow", run: () => { g.set({ roots: null, trace: null }); chip.hidden = true; cap.innerHTML = "Back to the whole pipeline."; draw(); } },
-      ]));
-    }
-    g.st.onChange = () => {};
-    g.st.onSelect = (id, api) => { api.set({ selection: id }); draw(); };
-    host.prepend(ctr);
-    host.append(cap);
-    cap.innerHTML = "Select a step, then follow one of the values it makes or takes.";
-    draw();
-  };
-
-  D.planoverlay = (host, demo) => {
-    const plan = {
-      components: [{ id: "cache_view", name: "cache_view", mod: "service", shape: "View → ()", type: "function" }, { id: "warm_cache", name: "warm_cache", mod: "store", shape: "() → ()", type: "function" }],
-      relations: [{ kind: "calls", from: "view", to: "cache_view", state: "planned" }, { kind: "calls", from: "cache_view", to: "warm_cache", state: "missing" }],
-      marks: { view: "present", load_index: "present", cache_view: "planned", warm_cache: "missing" },
-      stages: { view: "implemented", load_index: "implemented", cache_view: "plan_approved", warm_cache: "skeleton" },
-    };
-    WORLD.fn.cache_view = plan.components[0];
-    WORLD.fn.warm_cache = plan.components[1];
-    const cap = caption("");
-    const g = MiniGraph(host, { height: 280, kinds: ["calls"], roots: ["get_view", "view_tool"], depth: 3 });
-    const legend = h("div", { class: "legend-row" });
-    function set(on) {
-      g.set({ plan: on ? plan : null });
-      legend.innerHTML = "";
-      const marks = on ? ["observed", "planned", "missing", "present"] : ["observed"];
-      for (const m of marks) legend.append(h("span", { class: "chip", style: `--c:var(--t-${colorOf(m)})` }, h("i", { class: "dot" }), word(m)));
-      cap.innerHTML = on ? "A plan adds <b>cache_view</b> (approved, not built) and <b>warm_cache</b> (should be a skeleton, but the code doesn't have it). The stripe on each card is its stage." : "Code only: everything is just code.";
-    }
-    host.prepend(controls(demo, [
-      { a: "graph.plan", label: "Lay the plan over the code", run: () => set(true) },
-      { a: "graph.plan", label: "Code only", key: "", run: () => set(false) },
-    ]));
-    host.append(legend, cap);
-    set(true);
-  };
-
-  D.inspector = (host) => {
-    const row = h("div", { class: "inspector-demo" });
-    const gHost = h("div");
-    const drawer = h("div", { class: "drawer" });
-    row.append(gHost, drawer);
-    host.append(row);
-    const fill = (id) => {
-      drawer.innerHTML = "";
-      if (!id) { drawer.append(h("div", { class: "muted" }, "Select a card.")); return; }
-      const f = WORLD.fn[id];
-      const callers = WORLD.calls.filter((c) => c[1] === id).map((c) => c[0]);
-      const callees = WORLD.calls.filter((c) => c[0] === id).map((c) => c[1]);
-      drawer.append(
-        h("div", { class: "drawer-name" }, id),
-        h("div", { class: "mono muted" }, `rust:${f ? f.mod + "::" + id : id}`),
-        h("div", { class: "muted" }, `${f ? f.type : WORLD.typeOf(id)} · ${word("observed")}`),
-        h("div", { class: "mono" }, f ? `▤ ${f.mod}.rs` : ""),
-        h("div", { class: "drawer-links" }, [["goto.code", ""], ["goto.spec", ""], ["goto.callers", callers.length], ["goto.callees", callees.length]].map(([a, n]) => h("span", { class: "chip" }, h("kbd", {}, keyOf(a)), action(a).label.replace(/^Go to (a |its )?/, ""), n !== "" ? ` (${n})` : ""))),
-      );
-    };
-    MiniGraph(gHost, { height: 240, kinds: ["calls"], roots: ["serve"], depth: 2, selection: "ingest", onChange: (api) => fill(api.st.selection) });
-  };
-
   D.lifecycle = (host) => {
-    const S = look().graph_style.nodes.stages;
+    const S = (stage) => colorOf("stage_" + stage);
     Machine(host, {
       width: 680, height: 190, start: "declared",
-      intro: "Stages, coloured as the stripe on graph cards. Click what moves it on.",
+      intro: "Stages, in the cockpit's own words and colours (the details card shows a component's stage). Click what moves it on.",
       states: [
-        { id: "declared", word: "declared", color: S.declared, x: 70, y: 60 },
-        { id: "arch_approved", word: "arch approved", color: S.arch_approved, x: 205, y: 140 },
-        { id: "plan_approved", word: "plan approved", color: S.plan_approved, x: 340, y: 60 },
-        { id: "skeleton", word: "skeleton", color: S.skeleton, x: 475, y: 140 },
-        { id: "implemented", word: "implemented", color: S.implemented, x: 610, y: 60 },
+        { id: "declared", word: word("stage_declared"), color: S("declared"), x: 70, y: 60 },
+        { id: "arch_approved", word: word("stage_arch_approved"), color: S("arch_approved"), x: 205, y: 140 },
+        { id: "plan_approved", word: word("stage_plan_approved"), color: S("plan_approved"), x: 340, y: 60 },
+        { id: "skeleton", word: word("stage_skeleton"), color: S("skeleton"), x: 475, y: 140 },
+        { id: "implemented", word: word("stage_implemented"), color: S("implemented"), x: 610, y: 60 },
       ],
       moves: [
         { from: "declared", to: "arch_approved", by: { a: "queue.approve" }, say: "You approved the architecture. Only you can." },
@@ -1512,23 +642,12 @@
     host.append(grid, detail);
   };
 
-  D.agentmoves = (host, demo) => {
-    const banner = h("div", { class: "agent-banner", hidden: true });
-    const cap = caption("");
-    const g = MiniGraph(h("div"), { height: 240, kinds: ["calls"], roots: ["serve"], depth: 2, selection: "get_view" });
-    let before = null;
-    host.append(controls(demo, [
-      { label: "Agent: navigate to publish", key: "", run: () => { before = { roots: g.st.roots, selection: g.st.selection, depth: g.st.depth }; g.set({ roots: ["publish"], direction: "in", depth: 2, selection: "publish", agent: "publish" }); banner.hidden = false; banner.innerHTML = `The agent showed you <b>publish</b> and what reaches it. <span class="muted">Return: ${esc(keyOf("graph.agent_return"))}</span>`; cap.innerHTML = "Your view switched. A ring marks what the agent pointed at."; } },
-      { a: "graph.agent_return", run: () => { if (!before) return; g.set({ ...before, direction: "out", agent: null }); before = null; banner.hidden = true; cap.innerHTML = "Back exactly where you were."; } },
-    ]), banner, g.el, cap);
-  };
-
   D.events = (host) => {
     const evs = [
-      ["Changed", "Code or plans changed.", ["graph", "spec", "tree"], "refetch what they show"],
+      ["Changed", "Code or plans changed.", ["graph", "spec", "tree"], "ask for the same tree (or item) again, where they are"],
       ["Validated", "A check ran.", ["spec"], "shows the result"],
-      ["ViewRequested", "The agent wants to show you something.", ["graph"], "moves and rings it"],
-      ["QueueUpdated", "A job moved.", ["queue", "graph"], "updates the job; stages on cards"],
+      ["ViewRequested", "The agent wants to show you something.", ["graph"], "goes there and rings the card it pointed at"],
+      ["QueueUpdated", "A job moved.", ["queue"], "updates the job"],
       ["Index", "Reading started, moved on, finished or failed; or files changed.", ["light", "graph", "code"], "light colour; stale marks"],
     ];
     const targets = ["light", "graph", "spec", "tree", "queue", "code"];
@@ -1555,39 +674,602 @@
       { title: "Track it", say: `The issues window (${esc(keyOf("issues.toggle"))}) lists them; mark each one done.` },
     ]);
 
+
+  // ── The tree demo: the real graph, from the server ──────────────────
+  // It sends the server the same request the cockpit sends (POST
+  // /api/graph/tree) and draws what comes back where the server placed
+  // it. Nothing is laid out here, just as nothing is laid out in the
+  // cockpit.
+  const VIEWS = ["contains", "calls", "data_flow"];
+  const viewWord = (v) => v.replace("_", " ");
+  const shortName = (key) => (key.startsWith("type:") ? key.slice(5) : key.split(/::|\.|:/).pop());
+  let treeIds = 0;
+
+  // A card's lines of text, as the server sized the card for them (the
+  // cockpit draws exactly these too).
+  function cardLines(card, view) {
+    const L = window.DATA.views.layout;
+    let kind = card.kind;
+    if (card.more > 0) kind += ` · ${card.more} ${view === "contains" ? "inside" : "more"}`;
+    const lines = [[card.label, L.name_size], [kind, L.small_size]];
+    if (card.detail) lines.push([card.detail, L.small_size]);
+    return lines;
+  }
+
+  function wayWord(view, way) {
+    return {
+      contains: { down: "what's inside", up: "what holds it" },
+      calls: { down: "what it calls", up: "what calls it" },
+      data_flow: { down: "where it goes", up: "where it came from" },
+    }[view][way];
+  }
+
+  function TreeDemo(host, init = {}) {
+    const uid = ++treeIds;
+    const st = Object.assign({ view: "calls", plan: null, root: null, way: "down", depth: null, opened: [], closed: [], full_code: false, selection: null, pending: null, height: 340, agent: null, columns: false }, init);
+    const trail = [];
+    let tree = null, cam = null, err = null, loading = false, said = "";
+    const wrapEl = h("div", { class: "mg tree-demo" });
+    const status = h("div", { class: "tree-status" });
+    const svgEl = document.createElementNS(NS, "svg");
+    svgEl.setAttribute("class", "mg-svg");
+    svgEl.style.height = st.height + "px";
+    wrapEl.append(status, svgEl);
+    host.append(wrapEl);
+    const listeners = [];
+    const byKey = (k) => tree && tree.cards.find((c) => c.key === k);
+
+    function request() {
+      const r = { view: st.view, source: st.plan ? { plan: st.plan } : "code", way: st.way, opened: st.opened, closed: st.closed, full_code: st.full_code };
+      if (st.root) r.root = st.root;
+      if (st.depth != null) r.depth = st.depth;
+      return r;
+    }
+    async function load() {
+      loading = true;
+      drawStatus();
+      try {
+        const res = await fetch("/api/graph/tree", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request()) });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (res.status === 404 && st.root) {
+            const gone = st.root;
+            st.root = null;
+            await load();
+            say(`${esc(shortName(gone))} isn't in this view, so it shows where the view starts.`);
+            return;
+          }
+          throw new Error(body.error || `the server answered ${res.status}`);
+        }
+        tree = body;
+        err = null;
+        st.depth = tree.request.depth;
+        st.opened = st.opened.filter((o) => !(tree.dropped || []).includes(o.card));
+        if (st.pending && byKey(st.pending)) st.selection = st.pending;
+        st.pending = null;
+        if (st.selection && !byKey(st.selection)) st.selection = null;
+        fit();
+      } catch (e) {
+        tree = null;
+        err = `The demo couldn't get a tree from the server (${e.message}). It needs the NAH server this page came from.`;
+      }
+      loading = false;
+      draw();
+      listeners.forEach((f) => f(api));
+    }
+    function fit() {
+      const aspect = (svgEl.clientWidth || 680) / st.height;
+      const [w, hgt] = tree.size;
+      const W = Math.max(w, 200) + 40, H = Math.max(hgt, 100) + 40;
+      // The whole tree when it reads at that size; else readable, from the top left.
+      const vw = Math.min(Math.max(W, H * aspect), 1500);
+      cam = { x: -20, y: -20, w: vw, h: vw / aspect };
+      const sel = byKey(st.selection);
+      if (sel && (sel.rect.x + sel.rect.w > cam.x + cam.w || sel.rect.y + sel.rect.h > cam.y + cam.h)) {
+        cam.x = sel.rect.x - 40;
+        cam.y = sel.rect.y + sel.rect.h / 2 - cam.h / 2;
+      }
+    }
+    function say(text) {
+      said = text;
+      drawStatus();
+    }
+
+    // With something selected: it, every card a line joins it to, what it
+    // hangs from, and (boxes) what holds it and what's inside it.
+    function related() {
+      if (!st.selection || !tree) return null;
+      const s = st.selection;
+      const out = new Set([s]);
+      for (const l of tree.lines || []) {
+        if (l.from === s) out.add(l.to);
+        if (l.to === s) out.add(l.from);
+      }
+      const card = byKey(s);
+      if (card && card.parent) out.add(card.parent);
+      for (const c of tree.cards) if (c.parent === s) out.add(c.key);
+      if (tree.request.view === "contains") {
+        for (let p = card && card.parent; p; p = (byKey(p) || {}).parent) out.add(p);
+        const stack = [s];
+        while (stack.length) {
+          const k = stack.pop();
+          for (const c of tree.cards) if (c.parent === k) { out.add(c.key); stack.push(c.key); }
+        }
+      }
+      return out;
+    }
+
+    function drawStatus() {
+      status.innerHTML = "";
+      if (loading) return status.append(h("span", { class: "muted" }, "Asking the server…"));
+      if (!tree) return;
+      const source = st.plan ? (st.full_code ? `plan ${st.plan} in the full code` : `plan ${st.plan}`) : "code";
+      const parts = [`${source} · ${viewWord(st.view)} · ${wayWord(st.view, st.way)}`];
+      const crumbs = trail.map((t) => (t.root ? shortName(t.root) : "start")).concat(st.root ? [shortName(st.root)] : ["start"]);
+      parts.push(crumbs.join(" › "));
+      parts.push(`${tree.request.depth} levels · ${tree.cards.length} cards`);
+      status.append(h("span", {}, parts.join(" · ")));
+      if (tree.cut) {
+        const c = tree.cut;
+        const text = c.shown < c.asked ? `showing ${c.shown} of ${c.asked} levels: ${c.hidden} more` : `${tree.roots.length} of ${tree.roots.length + c.starts_left_out} starting points`;
+        status.append(h("span", { class: "tree-cut" }, " · " + text));
+      }
+      if (tree.dropped && tree.dropped.length) status.append(h("span", { class: "tree-cut" }, ` · closed ${tree.dropped.map(shortName).join(", ")} again: it didn't fit`));
+      if (said) {
+        const note = h("div", { class: "tree-said" });
+        note.innerHTML = said;
+        status.append(note);
+      }
+    }
+
+    function draw() {
+      drawStatus();
+      if (!tree) {
+        svgEl.setAttribute("viewBox", `0 0 680 ${st.height}`);
+        svgEl.innerHTML = `<text x="20" y="40" class="mg-sub">${esc(err || "Loading the tree…")}</text>`;
+        return;
+      }
+      svgEl.setAttribute("viewBox", `${cam.x} ${cam.y} ${cam.w} ${cam.h}`);
+      const view = tree.request.view;
+      const L = window.DATA.views.layout;
+      const rel = related();
+      const parts = [`<defs><marker id="tah${uid}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" class="mk"/></marker></defs>`];
+      if (st.columns && view !== "contains") {
+        const cols = new Map();
+        for (const c of tree.cards) {
+          const col = cols.get(c.level) || { x: Infinity, r: -Infinity };
+          col.x = Math.min(col.x, c.rect.x);
+          col.r = Math.max(col.r, c.rect.x + c.rect.w);
+          cols.set(c.level, col);
+        }
+        for (const [level, col] of cols) parts.push(`<rect class="mg-col" x="${col.x - 6}" y="${-10}" width="${col.r - col.x + 12}" height="${tree.size[1] + 20}"/><text class="mg-sub" x="${col.x}" y="-14">level ${level}</text>`);
+      }
+      for (const l of tree.lines || []) {
+        const lit = st.selection && (l.from === st.selection || l.to === st.selection);
+        const cls = `mg-line k-${l.relation} m-${l.mark} b-${l.kind}${rel && !lit ? " dim" : ""}${lit ? " hot" : ""}`;
+        // Down, the arrow points at the child; up, the child calls (or
+        // makes) the card it hangs from.
+        const head = st.way === "up" && l.kind === "tree" ? `marker-start="url(#tah${uid})"` : `marker-end="url(#tah${uid})"`;
+        parts.push(`<polyline class="${cls}" points="${l.path.map((p) => p.join(",")).join(" ")}" ${head}/>`);
+      }
+      const cards = tree.cards.slice();
+      if (view === "contains") cards.sort((a, b) => a.level - b.level);
+      for (const c of cards) {
+        const r = c.rect;
+        const isBox = view === "contains" && c.open;
+        const cls = ["mg-card", "m-" + c.mark, isBox ? "box" : "", c.key === st.selection ? "sel" : "", c.outside_plan ? "outside" : "", rel && !rel.has(c.key) && !isBox ? "dim" : "", st.agent === c.key ? "agent" : ""].filter(Boolean).join(" ");
+        let y = L.pad;
+        const lines = (isBox ? cardLines(c, view).slice(0, 1) : cardLines(c, view)).map(([t, size], k) => {
+          y += size;
+          const out = `<text x="${L.pad}" y="${y}" class="${k ? "mg-sub" : "mg-name"}" style="font-size:${size}px">${esc(t)}</text>`;
+          y += size * (L.line_height - 1);
+          return out;
+        });
+        parts.push(`<g class="${cls}" data-key="${esc(c.key)}"><rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="6"/><svg x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}">${lines.join("")}</svg></g>`);
+        if (c.more > 0 && !c.open) {
+          const w = 18 + String(c.more).length * 7;
+          parts.push(`<g class="mg-more" data-more="${esc(c.key)}"><rect x="${r.x + r.w + 6}" y="${r.y + r.h / 2 - 10}" width="${w}" height="20" rx="10"/><text x="${r.x + r.w + 6 + w / 2}" y="${r.y + r.h / 2 + 4}" text-anchor="middle">+${c.more}</text></g>`);
+        }
+        if (c.other_plans && c.other_plans.length) parts.push(`<text class="mg-badge" x="${r.x + 6}" y="${r.y - 4}">also ${esc(c.other_plans.join(", "))}</text>`);
+        if (c.links_left_out) parts.push(`<text class="mg-sub" x="${r.x + r.w + 6}" y="${r.y + r.h}">⇉ ${c.links_left_out} not drawn</text>`);
+      }
+      // The pills on the selection's lines.
+      for (const l of tree.lines || []) {
+        if (!st.selection || (l.from !== st.selection && l.to !== st.selection) || !l.pills || !l.pills.length) continue;
+        const mid = l.path[Math.floor(l.path.length / 2)];
+        let py = mid[1] - (l.pills.length * 18) / 2;
+        for (const p of l.pills) {
+          const w = 14 + p.text.length * 6.2;
+          parts.push(`<g class="mg-pill p-${p.role}"><rect x="${mid[0] - w / 2}" y="${py}" width="${w}" height="16" rx="8"/><text x="${mid[0]}" y="${py + 12}" text-anchor="middle">${esc(p.text)}</text></g>`);
+          py += 18;
+        }
+      }
+      svgEl.innerHTML = parts.join("");
+    }
+
+    // The moves, the same as the cockpit's.
+    function select(key) {
+      st.selection = key;
+      draw();
+      listeners.forEach((f) => f(api));
+    }
+    function goIn(key) {
+      key = key || st.selection;
+      if (!key) return say("Select a card first.");
+      if (key === st.root) return say("It's the root already.");
+      trail.push({ view: st.view, root: st.root, way: st.way, depth: st.depth, plan: st.plan, full_code: st.full_code, selection: st.selection });
+      Object.assign(st, { root: key, opened: [], closed: [], pending: key });
+      said = "";
+      return load();
+    }
+    function back() {
+      const step = trail.pop();
+      if (step) {
+        const pending = step.selection;
+        Object.assign(st, step, { opened: [], closed: [], pending });
+        said = "";
+        return load();
+      }
+      if (!st.root) return say("Already at the view's starting points.");
+      const holder = st.view === "contains" && tree && tree.path && tree.path.length ? tree.path[tree.path.length - 1].key : null;
+      Object.assign(st, { pending: st.root, root: holder, opened: [], closed: [] });
+      said = "";
+      return load();
+    }
+    function depth(delta) {
+      st.depth = Math.max(0, (st.depth == null ? 0 : st.depth) + delta);
+      st.opened = [];
+      st.closed = [];
+      said = "";
+      return load();
+    }
+    function flip() {
+      st.way = st.way === "down" ? "up" : "down";
+      st.opened = [];
+      st.closed = [];
+      said = "";
+      return load();
+    }
+    function setView(view) {
+      const card = byKey(st.selection || st.root);
+      const key = st.selection || st.root;
+      let root = null;
+      if (view === "data_flow") root = key && key.startsWith("type:") ? key : null;
+      else root = card && card.component ? card.component : key && !key.includes("type:") ? key : null;
+      Object.assign(st, { view, root, opened: [], closed: [] });
+      said = "";
+      return load();
+    }
+    function open(key) {
+      const card = byKey(key || st.selection);
+      if (!card) return say("Select a card first.");
+      if (card.open || !card.more) return say(`${esc(card.label)} has nothing more to show.`);
+      st.closed = st.closed.filter((c) => c !== card.key);
+      st.opened = st.opened.filter((o) => o.card !== card.key).concat([{ card: card.key, levels: 1 }]);
+      said = "";
+      return load();
+    }
+    function close(key) {
+      const card = byKey(key || st.selection);
+      if (!card) return say("Select a card first.");
+      if (!card.open) return say(`${esc(card.label)} is closed already.`);
+      st.opened = st.opened.filter((o) => o.card !== card.key);
+      if (!st.closed.includes(card.key)) st.closed.push(card.key);
+      said = "";
+      return load();
+    }
+    function zoom(f) {
+      if (!cam) return;
+      const cx = cam.x + cam.w / 2, cy = cam.y + cam.h / 2;
+      cam.w /= f;
+      cam.h /= f;
+      cam.x = cx - cam.w / 2;
+      cam.y = cy - cam.h / 2;
+      draw();
+    }
+    function refit() {
+      if (!tree) return;
+      fit();
+      draw();
+    }
+
+    // Pointer: click selects (or opens a "+N"), double click goes in, drag pans.
+    let drag = null, moved = false;
+    svgEl.addEventListener("mousedown", (e) => { drag = { x: e.clientX, y: e.clientY }; moved = false; });
+    window.addEventListener("mousemove", (e) => {
+      if (!drag || !cam) return;
+      const k = cam.w / (svgEl.clientWidth || 1);
+      const dx = (e.clientX - drag.x) * k, dy = (e.clientY - drag.y) * k;
+      if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
+      cam.x -= dx;
+      cam.y -= dy;
+      drag = { x: e.clientX, y: e.clientY };
+      if (moved) svgEl.setAttribute("viewBox", `${cam.x} ${cam.y} ${cam.w} ${cam.h}`);
+    });
+    window.addEventListener("mouseup", () => (drag = null));
+    svgEl.addEventListener("click", (e) => {
+      if (moved) return;
+      const more = e.target.closest("[data-more]");
+      if (more) return open(more.getAttribute("data-more"));
+      const card = e.target.closest("[data-key]");
+      select(card ? card.getAttribute("data-key") : null);
+    });
+    svgEl.addEventListener("dblclick", (e) => {
+      const card = e.target.closest("[data-key]");
+      if (card) goIn(card.getAttribute("data-key"));
+    });
+
+    const api = {
+      st, el: wrapEl,
+      get tree() { return tree; },
+      selected: () => byKey(st.selection),
+      set(patch) { Object.assign(st, patch); return load(); },
+      onChange(f) { listeners.push(f); },
+      select, goIn, back, depth, flip, setView, open, close, zoom, refit, say, draw, load,
+      trail: () => trail,
+    };
+    load();
+    return api;
+  }
+
+  // The keys every tree demo understands, as buttons with the real keys.
+  function moves(t, also = []) {
+    return [
+      { a: "nav.enter", run: () => t.goIn() },
+      { a: "nav.leave", run: () => t.back() },
+      { a: "graph.depth_less", run: () => t.depth(-1) },
+      { a: "graph.depth_more", run: () => t.depth(1) },
+      { a: "graph.flip", run: () => t.flip() },
+      { a: "graph.next_view", run: () => t.setView(VIEWS[(VIEWS.indexOf(t.st.view) + 1) % VIEWS.length]) },
+      ...also,
+    ];
+  }
+  const ROOT = "rust:arch_service::service::ArchitectureService::tree";
+
+  D.views = (host, demo) => {
+    const cap = caption("");
+    const holder = h("div");
+    const t = TreeDemo(holder, { view: "calls", root: ROOT, depth: 2 });
+    t.onChange(() => (cap.innerHTML = `<b>${viewWord(t.st.view)}</b>: ${esc((window.DATA.views.views[t.st.view] || {}).description || "")}`));
+    host.append(controls(demo, [
+      ...VIEWS.map((v) => ({ a: "graph.view", label: viewWord(v), key: "", run: () => t.setView(v) })),
+      { a: "graph.next_view", run: () => t.setView(VIEWS[(VIEWS.indexOf(t.st.view) + 1) % VIEWS.length]) },
+      { a: "graph.refresh", run: () => t.load() },
+    ]), holder, cap);
+  };
+
+  D.goin = (host, demo) => {
+    const holder = h("div");
+    const cap = caption("Select a box and go in. The path above the drawing grows; back walks it.");
+    const t = TreeDemo(holder, { view: "contains", depth: 1 });
+    t.onChange(() => { if (t.tree && t.tree.path && t.tree.path.length) cap.innerHTML = `The root sits inside <b>${t.tree.path.map((c) => esc(c.label)).join(" › ")}</b>. With no way back left, back goes out to the box holding it.`; });
+    host.append(controls(demo, [
+      { a: "nav.enter", run: () => t.goIn() },
+      { a: "graph.go_in", run: () => t.goIn() },
+      { a: "nav.leave", run: () => t.back() },
+    ]), holder, cap);
+  };
+
+  D.depth = (host, demo) => {
+    const holder = h("div");
+    const cap = caption("");
+    const t = TreeDemo(holder, { view: "calls", root: ROOT, depth: 1 });
+    t.onChange(() => (cap.innerHTML = t.tree ? `${t.tree.request.depth} levels below the root: <b>${t.tree.cards.length}</b> cards. Each card at the edge says how many more it hides.` : ""));
+    host.append(controls(demo, [
+      { a: "graph.depth_less", run: () => t.depth(-1) },
+      { a: "graph.depth_more", run: () => t.depth(1) },
+    ]), holder, cap);
+  };
+
+  D.flip = (host, demo) => {
+    const holder = h("div");
+    const cap = caption("");
+    const t = TreeDemo(holder, { view: "calls", root: "rust:arch_graph::tree::build", way: "up", depth: 2 });
+    t.onChange(() => (cap.innerHTML = `Showing <b>${wayWord(t.st.view, t.st.way)}</b>. Flip shows the other way from the same root.`));
+    host.append(controls(demo, [{ a: "graph.flip", run: () => t.flip() }, { a: "graph.next_view", run: () => t.setView(VIEWS[(VIEWS.indexOf(t.st.view) + 1) % VIEWS.length]) }]), holder, cap);
+  };
+
+  D.openclose = (host, demo) => {
+    const holder = h("div");
+    const cap = caption("Select a card with a “+N” count (or click the count) and open it. Only that branch grows.");
+    const t = TreeDemo(holder, { view: "calls", root: ROOT, depth: 1 });
+    host.append(controls(demo, [
+      { a: "nav.fold_open", run: () => t.open() },
+      { a: "nav.fold_close", run: () => t.close() },
+      { a: "nav.fold_toggle", run: () => { const c = t.selected(); return c && c.open ? t.close() : t.open(); } },
+      { a: "nav.fold_open_all", run: () => t.depth(1) },
+      { a: "nav.fold_close_all", run: () => t.set({ opened: [], closed: [] }) },
+    ]), holder, cap);
+  };
+
+  D.honest = (host, demo) => {
+    const holder = h("div");
+    const cap = caption("");
+    const t = TreeDemo(holder, { view: "calls", root: ROOT, depth: 3 });
+    t.onChange(() => {
+      if (!t.tree) return;
+      const lines = t.tree.lines || [];
+      const n = (k) => lines.filter((l) => l.kind === k).length;
+      const hidden = t.tree.cards.reduce((a, c) => a + (c.open ? 0 : c.more), 0);
+      const left = t.tree.cards.reduce((a, c) => a + (c.links_left_out || 0), 0);
+      cap.innerHTML = `${t.tree.cards.length} cards, each drawn once. <b>${n("repeat")}</b> dashed lines point at a card already shown elsewhere; <b>${n("loop")}</b> go back up their own path. <b>${hidden}</b> more cards are counted on the cards they hang from.${left ? ` ${left} lines to cards shown elsewhere went over the line limit and are counted instead.` : ""}${t.tree.cut ? " The answer was cut: the line above says what." : ""}`;
+    });
+    host.append(controls(demo, [{ a: "graph.depth_less", run: () => t.depth(-1) }, { a: "graph.depth_more", run: () => t.depth(1) }]), holder, cap);
+  };
+
+  D.selection = (host, demo) => {
+    const holder = h("div");
+    const cap = caption("Click a card.");
+    const t = TreeDemo(holder, { view: "calls", root: ROOT, depth: 2, selection: ROOT });
+    t.onChange((api) => {
+      const c = api.selected();
+      cap.innerHTML = c ? `<b>${esc(c.label)}</b> and what its lines join stay bright; the rest dims. Its lines show their pills: what goes in and what comes back.` : "Nothing selected: nothing dims, no pills.";
+    });
+    host.append(controls(demo, [{ a: "graph.close_inspector", run: () => t.select(null) }]), holder, cap);
+  };
+
+  D.details = (host, demo) => {
+    const row = h("div", { class: "inspector-demo" });
+    const gHost = h("div");
+    const drawer = h("div", { class: "drawer" }, h("div", { class: "muted" }, "Select a card."));
+    row.append(gHost, drawer);
+    const t = TreeDemo(gHost, { view: "calls", root: ROOT, depth: 1, height: 280 });
+    let asked = null;
+    t.onChange(async (api) => {
+      const c = api.selected();
+      if (!c) { drawer.innerHTML = '<div class="muted">Select a card.</div>'; asked = null; return; }
+      if (asked === c.key) return;
+      asked = c.key;
+      drawer.innerHTML = `<div class="drawer-name">${esc(c.label)}</div><div class="muted">Fetching its details…</div>`;
+      const q = `/api/graph/card?key=${encodeURIComponent(c.key)}${api.st.plan ? "&plan=" + encodeURIComponent(api.st.plan) : ""}`;
+      const res = await fetch(q).catch(() => null);
+      if (asked !== c.key) return;
+      if (!res || !res.ok) { drawer.innerHTML = `<div class="drawer-name">${esc(c.label)}</div><div class="muted">No details: ${res ? res.status : "the server didn't answer"}.</div>`; return; }
+      const d = await res.json();
+      const comp = d.component;
+      const where = comp.anchor ? `${comp.anchor.file}:${comp.anchor.span.start_line}–${comp.anchor.span.end_line}` : comp.proposed ? `planned in ${comp.proposed.file}` : "not placed yet";
+      const sig = comp.signature ? `(${comp.signature.params.map((p) => (p.ty ? `${p.name}: ${p.ty}` : p.name)).join(", ")})${comp.signature.returns ? " -> " + comp.signature.returns : ""}` : "";
+      const count = (list, kind) => list.filter((r) => r.kind === kind).length;
+      drawer.innerHTML = "";
+      drawer.append(
+        h("div", { class: "drawer-name" }, comp.name),
+        h("div", { class: "mono muted" }, comp.id),
+        h("div", { class: "muted" }, `${comp.type} · ${comp.status} · ${comp.stage}`),
+        h("div", { class: "mono" }, where),
+        sig ? h("div", { class: "mono muted" }, sig) : null,
+        h("div", { class: "drawer-links" }, h("span", { class: "chip" }, `calls ${count(d.outgoing, "calls")}`), h("span", { class: "chip" }, `called by ${count(d.incoming, "calls")}`), h("span", { class: "chip" }, h("kbd", {}, keyOf("goto.code")), " code"), h("span", { class: "chip" }, h("kbd", {}, keyOf("goto.spec")), " spec")),
+      );
+    });
+    host.append(controls(demo, [{ a: "graph.close_inspector", run: () => t.select(null) }, { a: "drawer.close", run: () => t.select(null) }]), row);
+  };
+
+  D.plansource = async (host, demo) => {
+    const holder = h("div");
+    const cap = caption("");
+    const plans = await fetch("/api/arch/plans").then((r) => (r.ok ? r.json() : [])).catch(() => []);
+    const first = plans.length ? plans[0].id : null;
+    const t = TreeDemo(holder, { view: "contains", plan: first });
+    t.onChange(() => {
+      if (!t.tree) return;
+      const marks = {};
+      for (const c of t.tree.cards) marks[c.mark] = (marks[c.mark] || 0) + 1;
+      const outside = t.tree.cards.filter((c) => c.outside_plan).length;
+      cap.innerHTML = t.st.plan
+        ? `Plan <b>${esc(t.st.plan)}</b>${t.st.full_code ? " in the full code" : ": its own items, and only the code they plug into (faint)"}. Marks: ${Object.entries(marks).map(([m, n]) => `${n} ${m}`).join(", ")}${outside ? `; ${outside} cards are code it plugs into` : ""}.`
+        : first ? "The code alone: no plan anywhere." : "The code alone. This repo has no plans yet, so there's nothing to lay over it.";
+    });
+    host.append(controls(demo, [
+      { a: "graph.plan", label: "code", key: "", run: () => t.set({ plan: null, full_code: false, root: null, opened: [], closed: [] }) },
+      ...plans.slice(0, 3).map((p) => ({ a: "graph.plan", label: `plan ${p.id}`, key: "", run: () => t.set({ plan: p.id, full_code: false, root: null, opened: [], closed: [] }) })),
+      { a: "graph.full_code", run: () => (t.st.plan ? t.set({ full_code: !t.st.full_code, opened: [], closed: [] }) : t.say("Pick a plan first: “full code” is about showing a plan.")) },
+      { a: "graph.next_view", run: () => t.setView(VIEWS[(VIEWS.indexOf(t.st.view) + 1) % VIEWS.length]) },
+    ]), holder, cap);
+  };
+
+  D.zoom = (host, demo) => {
+    const holder = h("div");
+    const cap = caption(`Zoom and drag only move the camera: the same cards, nothing asked of the server. Fitting never goes below ${look().readable_zoom}× (text stays readable); smaller than ${look().min_text_px} px, text isn't drawn.`);
+    const t = TreeDemo(holder, { view: "calls", root: ROOT, depth: 3 });
+    host.append(controls(demo, [{ a: "graph.zoom_in", run: () => t.zoom(1.25) }, { a: "graph.zoom_out", run: () => t.zoom(0.8) }, { a: "graph.fit", run: () => t.refit() }]), holder, cap);
+  };
+
+  D.lines = (host, demo) => {
+    const G = look().graph_style;
+    const tok = (name) => `var(--t-${name})`;
+    const row = (svg, label) => {
+      const sw = h("span", { class: "legend-sw" });
+      sw.innerHTML = svg;
+      return h("div", { class: "legend-row" }, sw, label);
+    };
+    const line = (color, l) => `<svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="${color}" stroke-width="${l.width}" ${l.dashed ? 'stroke-dasharray="5 3"' : ""}/></svg>`;
+    const box = (color, l) => `<svg width="40" height="16"><rect x="2" y="2" width="36" height="12" rx="3" fill="none" stroke="${color}" stroke-width="${l.width}" ${l.dashed ? 'stroke-dasharray="4 3"' : ""}/></svg>`;
+    const words = { code: "code (the plan doesn't touch it)", new: "new: planned, not in the code yet", changed: "changed: the plan changes it", done: "done: the code matches the plan", mismatch: "doesn't match: the code differs from the plan" };
+    const legend = h("div", { class: "legend-grid" },
+      h("div", { class: "area-title" }, "Lines"),
+      row(line(tok(G.kinds.calls), G.lines.code), "calls"),
+      row(line(tok(G.kinds.data_flow), G.lines.code), "data flow"),
+      row(line(tok(G.back.repeat.color || G.kinds.calls), G.back.repeat), "to a card shown elsewhere"),
+      row(line(tok(G.back.loop.color || G.kinds.calls), G.back.loop), "back up its own path (a loop)"),
+      h("div", { class: "area-title" }, "Plan marks on lines"),
+      ...Object.keys(words).map((m) => row(line(tok(G.lines[m].color || G.kinds.calls), G.lines[m]), words[m])),
+      h("div", { class: "area-title" }, "Cards"),
+      ...Object.keys(words).map((m) => row(box(tok(G.nodes.outline[m].color), G.nodes.outline[m]), words[m])),
+      h("div", { class: "area-title" }, "On the selection's lines"),
+      row(`<span class="pill-sw" style="border-color:${tok(G.pills.in)}">in</span>`, "goes in"),
+      row(`<span class="pill-sw" style="border-color:${tok(G.pills.out)}">out</span>`, "comes back"),
+      row(`<span class="pill-sw" style="border-color:${tok(G.pills.step)}">step</span>`, "the step that turns one data type into the next"));
+    host.append(controls(demo, [{ a: "graph.legend", run: () => (legend.hidden = !legend.hidden) }]), legend, caption("Drawn from the same style table the cockpit's legend uses."));
+  };
+
+  D.outline = (host) =>
+    Flow(host, [
+      { title: "Open the outline", say: "The tree view shows the Contains view as a list you can fold." },
+      { title: "What's loaded", say: "It holds what the server sent: the view's depth, plus the rows you opened further." },
+      { title: "Unfold", say: "Unfolding a row whose parts aren't here yet asks the server for just that branch." },
+      { title: "Fold", say: "Folding only hides rows; nothing is asked." },
+      { title: "Enter", say: "Selects the row's component in the graph; focus stays in the outline." },
+    ]);
+
+  D.agentmoves = (host, demo) => {
+    const banner = h("div", { class: "agent-banner", hidden: true });
+    const holder = h("div");
+    const cap = caption("");
+    const t = TreeDemo(holder, { view: "contains", depth: 1 });
+    let before = null;
+    host.append(controls(demo, [
+      { label: "Agent: navigate (calls up to build, select it)", key: "", run: () => { before = { view: t.st.view, root: t.st.root, way: t.st.way, depth: t.st.depth, selection: t.st.selection, plan: t.st.plan }; t.set({ view: "calls", root: "rust:arch_graph::tree::build", way: "up", depth: 2, pending: "rust:arch_graph::tree::build", agent: "rust:arch_graph::tree::build", opened: [], closed: [] }); banner.hidden = false; banner.innerHTML = `The agent moved the view: calls view · from build · what calls it. <span class="muted">Return: ${esc(keyOf("graph.agent_return"))}</span>`; cap.innerHTML = "Your graph went where the agent pointed. A ring marks the card."; } },
+      { a: "graph.agent_return", run: () => { if (!before) return; const sel = before.selection; t.set({ ...before, agent: null, pending: sel, opened: [], closed: [] }); before = null; banner.hidden = true; cap.innerHTML = "Back exactly where you were."; } },
+    ]), banner, holder, cap);
+  };
+
+  // ── Under the hood ──────────────────────────────────────────────────
+  D.treebuild = (host) =>
+    Flow(host, [
+      { title: "Request", say: "View, source (the code or one plan), root, way, depth, and the cards opened or closed by hand. From your keys, or the agent's view and navigate tools." },
+      { title: "The graph", say: "The server reads from one shared copy of the code's graph (and the plan laid over it, built once per plan). Nothing is copied per request." },
+      { title: "Starting points", say: "The root; or, with no root, the view's natural starts (only the first few are shown; the rest are counted). With a plan, the plan's own top-level items." },
+      { title: "Walk", flag: "can cut", say: "Level by level from the roots. A card met again is a line to it; one above on the same path is a loop. If the next level would go over the card budget, the walk stops at a whole level and says so." },
+      { title: "Counts", say: "Every card that isn't open counts the cards opening it would add (the “+N”)." },
+      { title: "Layout", say: "Positions for every card and a path for every line, on the server, in time that grows with the number of cards." },
+      { title: "Answer", say: "A few hundred kilobytes at most, gzipped. The cockpit only draws it." },
+    ]);
+
+  D.layout = (host, demo) => {
+    const holder = h("div");
+    const cap = caption("Each level is a column. Every card is centred on the block its children fill, so cards never overlap. Lines to a card further away run in lanes above the drawing.");
+    const t = TreeDemo(holder, { view: "calls", root: ROOT, depth: 3, columns: true });
+    host.append(controls(demo, [
+      { label: "Show columns", key: "", run: () => { t.st.columns = true; t.draw(); } },
+      { label: "Hide columns", key: "", run: () => { t.st.columns = false; t.draw(); } },
+      { a: "graph.next_view", run: () => t.setView(VIEWS[(VIEWS.indexOf(t.st.view) + 1) % VIEWS.length]) },
+    ]), holder, cap);
+  };
+
+  D.perf = (host) => {
+    // From spec/perf-baseline.md: the old views against the trees, on tokio
+    // (159k lines) and on this repo.
+    const rows = [
+      ["Calls, no root", "5.4–6.0 MB, 2,991–3,323 nodes", "about 66 KB, 73 cards"],
+      ["Data flow, no root", "5.0–7.7 MB, 2,818–4,285 nodes", "about 100 KB, up to 400 cards"],
+      ["Structure / Contains, depth 12", "11.6 MB, 7,977 nodes", "the budget: at most 400 cards"],
+      ["Slowest answer", "183 ms on the server, then the browser laid it all out", "about 20 ms, already laid out"],
+    ];
+    host.append(h("table", { class: "ref-table" }, h("thead", {}, h("tr", {}, h("th", {}, "On tokio"), h("th", {}, "Old views"), h("th", {}, "Trees now"))), h("tbody", {}, rows.map((r) => h("tr", {}, r.map((c) => h("td", { class: "small" }, c)))))), caption("The performance tests check every view, both ways, at depths 1, 4 and 12 on this repo and on tokio, and fail if any answer goes over its time or size limit."));
+  };
+
   D.indexing = (host) =>
     Flow(host, [
       { title: "Files", say: "Every source file in the repo. After the first read, only files that changed." },
       { title: "Language packs", say: "Data files (TOML) of ast-grep patterns: what a module, type, function, call, return or data flow looks like in Rust, Python or TypeScript." },
       { title: "Extract", say: "Finds components, containment, calls (with their order), implements, data flow and placeholders in each file." },
-      { title: "Resolve", flag: "gaps", say: "Links each call to what it calls, only on evidence. <b>Gap:</b> a method called on a value whose type can't be proven stays unresolved (about 2,800 here). Same-named functions can be mixed up." },
-      { title: "Graph", say: "Components and relations. Folders become containers. Data flows whose types don't match are kept, marked unconfirmed (about 780)." },
-      { title: "Cache", say: "Saved under .nah/cache. The watcher marks files that change; re-reading reads just those." },
+      { title: "Resolve", flag: "gaps", say: "Links each call to what it calls by name, only on evidence. <b>Gap:</b> a method called on a value whose type can't be proven stays unresolved, and same-named functions can be mixed up, until the compiler-backed calls (rust-analyzer's SCIP) land." },
+      { title: "Graph", say: "Components and relations, kept in memory as one shared copy. Data flows whose type isn't known can't be placed in the data flow view (its cards are types)." },
+      { title: "Cache", say: "Saved under .nah/cache. The watcher marks files that change; re-reading reads just those, then links the whole repo again." },
     ]);
-
-  D.viewpipeline = (host) =>
-    Flow(host, [
-      { title: "Request", say: "View name, roots, depth, plan. From your keys, or the agent's navigate." },
-      { title: "Walk", flag: "can hide", say: "The server walks out from the roots, so many hops, through the view's relation kinds. Anything further isn't sent." },
-      { title: "Plan", say: "The plan, if any, is laid over: alignment and stages per card and line." },
-      { title: "Level", say: "The cockpit regroups the parts at the chosen level, merging lines with counts." },
-      { title: "Scene", flag: "can hide", say: "Cards sized, placed in columns, lines routed. A crowded level keeps the selection's neighbourhood and holds the rest in '+N more'." },
-      { title: "Draw", say: "Dims what isn't related, labels the selection's lines, adds edge markers, picks card detail by zoom." },
-    ]);
-
-  D.layout = (host, demo) => {
-    const cap = caption("Bands are columns. A card sits right of what calls it.");
-    const g = MiniGraph(host, { height: 300, kinds: ["calls"], grain: "fn", columns: true });
-    host.prepend(controls(demo, [
-      { label: "Show columns", key: "", run: () => g.set({ columns: true }) },
-      { label: "Hide columns", key: "", run: () => g.set({ columns: false }) },
-    ]));
-    host.append(cap);
-  };
 
   D.actions = (host) =>
     Flow(host, [
-      { title: "View state", say: "What the view has right now: a selection, a plan, levels, a running job." },
+      { title: "View state", say: "What the view has right now: a selection, a plan, the agent having moved it, a running job." },
       { title: "Actions", say: "Each view lists what it can do in that state: id, label, group, and whether it takes a choice." },
       { title: "Keymap", say: "Binds keys by action id, from config. Leader paths are fixed, or the next free letter." },
       { title: "Everywhere", say: "The same list feeds the key bar, the leader menu, the palette, toolbars, touch chips and this page's reference." },
@@ -1595,12 +1277,12 @@
 
   D.config = (host) =>
     Flow(host, [
-      { title: "Built in", say: "Each crate's config folder: views, types, packs, queue, the cockpit's keys and look." },
-      { title: "Project", say: "The repo's .nah folder adds to or overrides them: views.toml, types.toml, packs, rules, tools, reviewers, queue." },
+      { title: "Built in", say: "Each crate's config folder: the three views and the layout sizes (trees.toml), the server's limits (limits.toml), types, packs, queue, the cockpit's keys and look." },
+      { title: "Project", say: "The repo's .nah folder adds to or overrides them, key by key: trees.toml, limits.toml, types.toml, packs, rules, tools, reviewers, queue." },
       { title: "You", say: "Your own cockpit file: keys, theme, a preset. Only what you set changes." },
-      { title: "Live", say: "The cockpit reads the merged result. This page reads the built-in look." },
-    ], { vertical: false });
+      { title: "Live", say: "The cockpit reads the merged result, and asks the server for the layout sizes so its text fits the cards the server sized." },
+    ]);
 
   window.DEMOS = D;
-  window.DEMO_KIT = { h, MiniGraph, Flow, Machine, Lanes, controls, WORLD };
+  window.DEMO_KIT = { h, Flow, Machine, Lanes, controls, TreeDemo };
 })();

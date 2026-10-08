@@ -254,6 +254,30 @@ impl Graph {
         deps
     }
 
+    /// What `from` reaches along `kinds` (outgoing) within `depth` steps,
+    /// itself included.
+    pub fn reach(&self, from: &ComponentId, kinds: &[RelationKind], depth: u32) -> BTreeSet<ComponentId> {
+        let mut seen: BTreeSet<ComponentId> = BTreeSet::from([from.clone()]);
+        let mut frontier = vec![from.clone()];
+        for _ in 0..depth {
+            let mut next = Vec::new();
+            for id in &frontier {
+                for kind in kinds {
+                    for r in self.outgoing(id, Some(*kind)) {
+                        if seen.insert(r.target.clone()) {
+                            next.push(r.target.clone());
+                        }
+                    }
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+        seen
+    }
+
     /// Loops along one relation kind (e.g. containment or implements), each
     /// once, as a path back to its smallest member.
     pub fn cycles(&self, kind: RelationKind) -> Vec<Vec<ComponentId>> {
@@ -430,6 +454,16 @@ mod tests {
         }
         assert_eq!(big.len().0, 40_000);
         assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    // req: P2.9
+    #[test]
+    fn reach_follows_kinds_to_a_depth() {
+        let g = code();
+        let id = |s: &str| ComponentId::new(format!("rust:{s}"));
+        assert_eq!(g.reach(&id("app"), &[RelationKind::Contains], 1), BTreeSet::from([id("app"), id("app::run")]));
+        assert_eq!(g.reach(&id("app"), &[RelationKind::Contains, RelationKind::Calls], 2).len(), 3);
+        assert_eq!(g.reach(&id("app"), &[RelationKind::Calls], 5), BTreeSet::from([id("app")]));
     }
 
     // req: P2.7

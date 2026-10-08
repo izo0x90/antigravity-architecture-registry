@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use harness_contracts::{McpServer, McpTransport};
 use harness_core::{EventHub, InstanceRegistry, ProviderDriver, SessionManager};
-use arch_graph::{TypeSystem, ViewCatalog};
+use arch_graph::TypeSystem;
 use arch_index::{CodeRules, PackSet};
 use arch_service::{ArchitectureService, FsIndex, FsPlans, ProcessRunner, ReviewerCatalog, ToolCatalog};
 use meta_harness::mcp::{McpServerState, McpService};
@@ -87,7 +87,8 @@ fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig,
 
 /// The architecture service over the repo at `NAH_REPO_ROOT` (default: the
 /// working directory). Projects can add language packs (`.nah/packs/*.toml`),
-/// types (`.nah/types.toml`), views (`.nah/views.toml`), validation tools
+/// types (`.nah/types.toml`), the views (`.nah/trees.toml`), limits
+/// (`.nah/limits.toml`), validation tools
 /// (`.nah/tools.toml`), reviewers (`.nah/reviewers.toml`) and schema
 /// shorthand aliases (`.nah/schema_dsl.toml`).
 fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>> {
@@ -101,10 +102,6 @@ fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>
     let mut types = TypeSystem::defaults()?;
     if let Ok(text) = std::fs::read_to_string(nah.join("types.toml")) {
         types.extend_from_toml(&text)?;
-    }
-    let mut views = ViewCatalog::defaults()?;
-    if let Ok(text) = std::fs::read_to_string(nah.join("views.toml")) {
-        views.extend_from_toml(&text)?;
     }
     let mut rules = CodeRules::defaults(&packs, &types)?;
     if nah.join("rules").is_dir() {
@@ -140,7 +137,7 @@ fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>
         Ok(text) => arch_service::Limits::with_overrides(&text)?,
         Err(_) => arch_service::Limits::defaults()?,
     };
-    Ok(ArchitectureService::open(&root, packs, types, views, Box::new(FsPlans::new(&root)?), Box::new(FsIndex::new(&root)?))?
+    Ok(ArchitectureService::open(&root, packs, types, Box::new(FsPlans::new(&root)?), Box::new(FsIndex::new(&root)?))?
         .with_trees(trees)
         .with_limits(limits)
         .with_dsl(dsl)

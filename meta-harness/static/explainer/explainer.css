@@ -7,7 +7,7 @@
   --t-key: #ffd166; --t-ok: #4ade80; --t-warn: #fbbf24; --t-error: #f87171; --t-info: #7cc4ff; --t-special: #c084fc;
   --t-card: #0f141d; --t-card_selected: #0c2630; --t-on_bright: #041016;
   --k-calls: var(--t-accent); --k-data_flow: var(--t-info); --k-contains: var(--t-faint); --k-implements: var(--t-special);
-  --k-missing: var(--t-error); --k-unconfirmed: var(--t-warn);
+
   --rail: 236px; --drawer: 380px; --top: 52px;
   --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -195,54 +195,52 @@ body.drawer-open .drawer-panel { transform: none; }
 .tag.muted { color: var(--t-muted); }
 .tag.warn { color: var(--t-warn); }
 
-/* The graph engine. */
+/* The tree demos: the server's own trees, drawn where it placed them. */
 .mg { border: 1px solid var(--t-border); border-radius: 10px; background: var(--t-bg) radial-gradient(color-mix(in srgb, var(--t-accent) 9%, transparent) 1px, transparent 1px) 0 0 / 24px 24px; overflow: hidden; }
-.mg-svg { display: block; width: 100%; font: 12px var(--font); user-select: none; }
+.mg-svg { display: block; width: 100%; font: 12px var(--font); user-select: none; cursor: grab; }
+.tree-status { font-size: 12px; color: var(--t-muted); padding: 6px 10px; border-bottom: 1px solid var(--t-border); }
+.tree-cut { color: var(--t-warn); }
+.tree-said { color: var(--t-warn); margin-top: 2px; }
 .mg-card { cursor: pointer; }
-.mg-card rect:first-child { fill: var(--t-card); stroke: var(--t-border_strong); stroke-width: 1.2; }
-.mg-card text { fill: var(--t-text_strong); }
-.mg-card.sel rect:first-child { fill: var(--t-card_selected); stroke: var(--t-focus); stroke-width: 2.2; filter: drop-shadow(0 0 5px color-mix(in srgb, var(--t-focus) 50%, transparent)); }
-.mg-card.agent rect:first-child { stroke: var(--t-special); stroke-width: 2.4; animation: agentring 1.6s infinite; }
+.mg-card > rect { fill: var(--t-card); stroke: var(--mark-code, var(--t-border_strong)); stroke-width: 1.2; }
+.mg-card.box > rect { fill: color-mix(in srgb, var(--t-surface) 60%, transparent); }
+.mg-card .mg-name { fill: var(--t-text_strong); }
+.mg-card .mg-sub { fill: var(--t-muted); }
+.mg-card.m-new > rect { stroke: var(--mark-new); stroke-dasharray: 5 4; stroke-width: 1.4; }
+.mg-card.m-changed > rect { stroke: var(--mark-changed); stroke-width: 1.6; }
+.mg-card.m-done > rect { stroke: var(--mark-done); stroke-width: 1.4; }
+.mg-card.m-mismatch > rect { stroke: var(--mark-mismatch); stroke-width: 1.8; }
+.mg-card.outside { opacity: var(--outside-plan, 0.55); }
+.mg-card.sel > rect { fill: var(--t-card_selected); stroke: var(--t-focus); stroke-width: 2.4; filter: drop-shadow(0 0 5px color-mix(in srgb, var(--t-focus) 50%, transparent)); }
+.mg-card.agent > rect { stroke: var(--t-special); stroke-width: 2.4; animation: agentring 1.6s infinite; }
 @keyframes agentring { 50% { stroke-width: 5; } }
-.mg-card.plan-planned rect:first-child { stroke: var(--plan-planned, var(--t-warn)); stroke-dasharray: 5 4; }
-.mg-card.plan-missing rect:first-child { stroke: var(--plan-missing, var(--t-error)); stroke-width: 1.8; }
-.mg-card.plan-present rect:first-child { stroke: var(--plan-present, var(--t-ok)); stroke-width: 1.6; }
-.stripe.st-declared { fill: var(--stage-declared); }
-.stripe.st-arch_approved { fill: var(--stage-arch_approved); }
-.stripe.st-plan_approved { fill: var(--stage-plan_approved); }
-.stripe.st-skeleton { fill: var(--stage-skeleton); }
-.stripe.st-implemented { fill: var(--stage-implemented); }
+.mg-card.dim, .mg-line.dim { opacity: calc(1 - var(--dim, 0.78)); }
 .mg-sub { fill: var(--t-muted); font-size: 11px; }
-.mg-box rect { fill: color-mix(in srgb, var(--t-surface) 70%, transparent); stroke: var(--t-border_strong); stroke-dasharray: 0; }
-.mg-box.sel rect { stroke: var(--t-focus); }
-.mg-box { cursor: pointer; }
-.mg-box-title { fill: var(--t-text); font-weight: 700; font-size: 12px; }
+.mg-badge { fill: var(--t-special); font-size: 10px; }
 .mg-col { fill: color-mix(in srgb, var(--t-accent) 5%, transparent); stroke: color-mix(in srgb, var(--t-accent) 18%, transparent); stroke-dasharray: 3 4; }
-.mg-line { fill: none; stroke: var(--k-calls); }
+.mg-line { fill: none; stroke: var(--k-calls); stroke-width: 1.4; }
 .mg-line.k-data_flow { stroke: var(--k-data_flow); }
 .mg-line.k-contains { stroke: var(--k-contains); }
-.mg-line.k-implements { stroke: var(--k-implements); }
-.mg-line.s-planned { stroke-dasharray: 6 4; }
-.mg-line.s-missing { stroke: var(--k-missing); stroke-dasharray: 6 4; }
-.mg-line.s-unconfirmed { stroke: var(--k-unconfirmed); stroke-dasharray: 4 4; }
-.mg-line.hot { filter: drop-shadow(0 0 3px color-mix(in srgb, currentColor 40%, transparent)); }
-.mk { fill: var(--k-calls); }
-.mk-data_flow { fill: var(--k-data_flow); }
-.mk-contains { fill: var(--k-contains); }
-.mk-implements { fill: var(--k-implements); }
-.mk-planned { fill: var(--k-calls); }
-.mk-missing { fill: var(--k-missing); }
-.mk-unconfirmed { fill: var(--k-unconfirmed); }
+.mg-line.m-new { stroke-dasharray: 6 4; }
+.mg-line.m-changed { stroke: var(--line-changed, var(--k-calls)); stroke-width: 1.6; }
+.mg-line.m-done { stroke: var(--line-done, var(--k-calls)); stroke-width: 1.6; }
+.mg-line.m-mismatch { stroke: var(--line-mismatch, var(--t-error)); stroke-dasharray: 6 4; stroke-width: 1.8; }
+.mg-line.b-repeat { stroke-dasharray: 5 3; stroke-width: 1; }
+.mg-line.b-loop { stroke: var(--back-loop, var(--t-warn)); stroke-dasharray: 5 3; stroke-width: 1.2; }
+.mg-line.hot { stroke-width: 2.4; }
+.mk { fill: var(--t-muted); }
 .mk-machine { fill: var(--t-muted); }
-.mg-lab rect { fill: var(--t-raised); stroke: var(--t-border_strong); }
-.mg-lab text { fill: var(--t-text_strong); font-size: 11px; }
+.mg-pill rect { fill: var(--t-bg); stroke: var(--pill-step); }
+.mg-pill.p-in rect { stroke: var(--pill-in); }
+.mg-pill.p-out rect { stroke: var(--pill-out); }
+.mg-pill text { fill: var(--t-text_strong); font-size: 10px; }
 .mg-more { cursor: pointer; }
-.mg-more rect { fill: var(--t-surface); stroke: var(--t-muted); stroke-dasharray: 4 3; }
-.mg-more text { fill: var(--t-text); }
-.mg-marker { cursor: pointer; }
-.mg-marker rect { fill: var(--t-raised); stroke: var(--t-accent); }
-.mg-marker text { fill: var(--t-text_strong); font-size: 11px; }
-.mg-marker.more text { fill: var(--t-muted); }
+.mg-more rect { fill: var(--t-bg); stroke: var(--t-accent); }
+.mg-more text { fill: var(--t-accent); font-size: 11px; }
+.legend-grid { display: grid; gap: 4px; font-size: 13px; }
+.legend-row { display: flex; align-items: center; gap: 10px; }
+.legend-sw { display: inline-flex; width: 44px; }
+.pill-sw { border: 1px solid; border-radius: 8px; padding: 0 6px; font-size: 10px; }
 .lines-say { fill: var(--t-text_strong); font-size: 13px; }
 
 /* Flow diagrams. */

@@ -1,142 +1,61 @@
 {
-  "grains": [
-    {
-      "name": "types",
-      "pick": "nearest",
-      "types": [
-        "class",
-        "interface"
-      ]
-    },
-    {
-      "name": "modules",
-      "pick": "nearest",
-      "types": [
-        "module"
-      ]
-    },
-    {
-      "name": "packages",
-      "pick": "outermost",
-      "types": [
-        "module"
-      ]
-    },
-    {
-      "name": "folders",
-      "pick": "nearest",
-      "types": [
-        "folder"
-      ]
-    }
-  ],
+  "data": {
+    "ignore": [
+      "None",
+      "()",
+      "Self",
+      "self",
+      "&self",
+      "&mut self"
+    ],
+    "strip": [
+      "&",
+      "mut ",
+      "dyn ",
+      "impl "
+    ]
+  },
+  "entries": {
+    "skip_modules": [
+      "tests",
+      "test"
+    ],
+    "skip_paths": [
+      "tests/",
+      "benches/",
+      "examples/"
+    ]
+  },
+  "layout": {
+    "box_gap": 16.0,
+    "card_max_w": 320.0,
+    "card_min_w": 120.0,
+    "char_width": 0.6000000238418579,
+    "curve_steps": 16,
+    "gap_x": 120.0,
+    "gap_y": 28.0,
+    "header": 32.0,
+    "line_height": 1.399999976158142,
+    "name_size": 14.0,
+    "pad": 16.0,
+    "row_aspect": 1.600000023841858,
+    "small_size": 11.0
+  },
   "views": {
     "calls": {
-      "depth": 4,
-      "description": "Dynamic behavior: who calls whom, left to right in call order. Read it as what happens at runtime.",
-      "direction": "out",
-      "filters": {},
-      "include_ancestors": false,
-      "kinds": [
-        "calls"
-      ],
-      "layout": "layered",
-      "name": "calls",
-      "overlays": [],
-      "roots": []
-    },
-    "combined": {
       "depth": 3,
-      "description": "Calls as the backbone, with structure and data flow drawn on top: how runtime behavior maps onto the code's shape.",
-      "direction": "out",
-      "filters": {},
-      "include_ancestors": true,
-      "kinds": [
-        "calls"
-      ],
-      "layout": "layered",
-      "name": "combined",
-      "overlays": [
-        "contains",
-        "implements",
-        "data_flow"
-      ],
-      "roots": []
+      "description": "Who calls whom, in the order the calls happen. Down: what it calls. Up: what calls it. The data going in and coming back sits on the selected card's lines.",
+      "starts": 30
+    },
+    "contains": {
+      "depth": 2,
+      "description": "What's inside what: boxes inside boxes, no lines. Go into a box to make it the whole screen.",
+      "starts": 60
     },
     "data_flow": {
-      "depth": 4,
-      "description": "Data as a pipeline: from sources on the left to sinks on the right, each line saying what flows, each step its shape, and where the shape changes.",
-      "direction": "out",
-      "filters": {},
-      "include_ancestors": false,
-      "kinds": [
-        "data_flow"
-      ],
-      "layout": "layered",
-      "name": "data_flow",
-      "overlays": [],
-      "roots": []
-    },
-    "data_path": {
-      "depth": 8,
-      "description": "One value's whole path: where it comes from and where it goes, both ways from where you start.",
-      "direction": "both",
-      "filters": {},
-      "include_ancestors": false,
-      "kinds": [
-        "data_flow"
-      ],
-      "layout": "layered",
-      "name": "data_path",
-      "overlays": [],
-      "roots": []
-    },
-    "reached_by": {
-      "depth": 6,
-      "description": "The story backwards: what reaches a function, its callers to the right.",
-      "direction": "in",
-      "filters": {},
-      "include_ancestors": false,
-      "kinds": [
-        "calls"
-      ],
-      "layout": "story",
-      "name": "reached_by",
-      "overlays": [],
-      "roots": []
-    },
-    "story": {
-      "depth": 6,
-      "description": "Calls as a story: from an entry, what it calls top to bottom in call order, deeper to the right. Each function once (others just count), loops marked, branches fold.",
-      "direction": "out",
-      "filters": {},
-      "include_ancestors": false,
-      "kinds": [
-        "calls"
-      ],
-      "layout": "story",
-      "name": "story",
-      "overlays": [],
-      "roots": []
-    },
-    "structure": {
-      "depth": 1,
-      "description": "Static structure: what contains what, and what implements which interface. Read it as the shape of the code.",
-      "direction": "out",
-      "filters": {},
-      "include_ancestors": false,
-      "kinds": [
-        "contains",
-        "implements"
-      ],
-      "layout": "nested",
-      "links": [
-        "calls",
-        "data_flow"
-      ],
-      "name": "structure",
-      "overlays": [],
-      "roots": []
+      "depth": 3,
+      "description": "Where data goes: cards are data types, the functions that turn one into another sit on the lines. Down: where it goes. Up: where it came from.",
+      "starts": 30
     }
   }
 }

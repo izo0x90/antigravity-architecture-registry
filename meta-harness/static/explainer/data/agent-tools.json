@@ -59,14 +59,32 @@
     ]
   },
   {
-    "description": "A view of the graph as text: nodes with locations and stage, edges with whether plan and code agree.\nViews (each a lens on the same graph):\n- calls: Dynamic behavior: who calls whom, left to right in call order. Read it as what happens at runtime.\n- combined: Calls as the backbone, with structure and data flow drawn on top: how runtime behavior maps onto the code's shape.\n- data_flow: Data as a pipeline: from sources on the left to sinks on the right, each line saying what flows, each step its shape, and where the shape changes.\n- data_path: One value's whole path: where it comes from and where it goes, both ways from where you start.\n- reached_by: The story backwards: what reaches a function, its callers to the right.\n- story: Calls as a story: from an entry, what it calls top to bottom in call order, deeper to the right. Each function once (others just count), loops marked, branches fold.\n- structure: Static structure: what contains what, and what implements which interface. Read it as the shape of the code.",
+    "description": "One of the three views as a text tree, the same one the user sees: each card with where it is, what it hides (+N more), what sits on its line, and lines back to cards shown elsewhere. With a plan: its own items first, marked NEW / CHANGED / DONE / DOESN'T MATCH. Give `expand` to get only what opening one card adds, or `context` to see what holds a card and what's beside it.\nViews (each a tree from one root, cut to a size limit that it reports):\n- contains: What's inside what: boxes inside boxes, no lines. Go into a box to make it the whole screen.\n- calls: Who calls whom, in the order the calls happen. Down: what it calls. Up: what calls it. The data going in and coming back sits on the selected card's lines.\n- data_flow: Where data goes: cards are data types, the functions that turn one into another sit on the lines. Down: where it goes. Up: where it came from.",
     "name": "view",
     "params": [
       {
         "description": null,
-        "name": "name",
+        "name": "view",
         "required": true,
         "type": "string"
+      },
+      {
+        "description": "A card: a component id (rust:my_crate::server::run), or in data_flow a data type as type:<Name>",
+        "name": "root",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "description": "down: what it calls, holds, turns into; up: what calls it, holds it, it came from",
+        "name": "way",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "description": null,
+        "name": "depth",
+        "required": false,
+        "type": "integer"
       },
       {
         "description": "Plan id",
@@ -75,21 +93,39 @@
         "type": "string"
       },
       {
-        "description": null,
-        "name": "roots",
+        "description": "With a plan: show it in the whole codebase, not only its items and what they plug into",
+        "name": "full_code",
+        "required": false,
+        "type": "boolean"
+      },
+      {
+        "description": "Cards to open one level further",
+        "name": "open",
         "required": false,
         "type": "array"
       },
       {
-        "description": null,
-        "name": "depth",
+        "description": "A card: a component id (rust:my_crate::server::run), or in data_flow a data type as type:<Name>",
+        "name": "expand",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "description": "With expand: how many levels (default 1)",
+        "name": "levels",
         "required": false,
         "type": "integer"
+      },
+      {
+        "description": "A card: a component id (rust:my_crate::server::run), or in data_flow a data type as type:<Name>",
+        "name": "context",
+        "required": false,
+        "type": "string"
       }
     ]
   },
   {
-    "description": "Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing.\nViews (each a lens on the same graph):\n- calls: Dynamic behavior: who calls whom, left to right in call order. Read it as what happens at runtime.\n- combined: Calls as the backbone, with structure and data flow drawn on top: how runtime behavior maps onto the code's shape.\n- data_flow: Data as a pipeline: from sources on the left to sinks on the right, each line saying what flows, each step its shape, and where the shape changes.\n- data_path: One value's whole path: where it comes from and where it goes, both ways from where you start.\n- reached_by: The story backwards: what reaches a function, its callers to the right.\n- story: Calls as a story: from an entry, what it calls top to bottom in call order, deeper to the right. Each function once (others just count), loops marked, branches fold.\n- structure: Static structure: what contains what, and what implements which interface. Read it as the shape of the code.",
+    "description": "Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it.\nViews (each a tree from one root, cut to a size limit that it reports):\n- contains: What's inside what: boxes inside boxes, no lines. Go into a box to make it the whole screen.\n- calls: Who calls whom, in the order the calls happen. Down: what it calls. Up: what calls it. The data going in and coming back sits on the selected card's lines.\n- data_flow: Where data goes: cards are data types, the functions that turn one into another sit on the lines. Down: where it goes. Up: where it came from.",
     "name": "navigate",
     "params": [
       {
@@ -99,16 +135,22 @@
         "type": "string"
       },
       {
-        "description": "Plan id",
-        "name": "plan",
+        "description": "\"code\" (the code alone) or \"plan:<id>\" (the code with that plan)",
+        "name": "source",
+        "required": false,
+        "type": "string"
+      },
+      {
+        "description": "A card: a component id (rust:my_crate::server::run), or in data_flow a data type as type:<Name>",
+        "name": "root",
         "required": false,
         "type": "string"
       },
       {
         "description": null,
-        "name": "roots",
+        "name": "way",
         "required": false,
-        "type": "array"
+        "type": "string"
       },
       {
         "description": null,
@@ -117,8 +159,8 @@
         "type": "integer"
       },
       {
-        "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run",
-        "name": "focus",
+        "description": "A card: a component id (rust:my_crate::server::run), or in data_flow a data type as type:<Name>",
+        "name": "select",
         "required": false,
         "type": "string"
       }

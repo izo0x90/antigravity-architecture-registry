@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub use layout::{Point, Rect, card_lines, problems};
+pub use layout::{Point, Rect, card_lines, count_text, problems};
 pub use read::GraphRead;
 pub use text::render;
 
@@ -159,6 +159,9 @@ pub struct Card {
     /// Other plans that also change it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub other_plans: Vec<PlanId>,
+    /// It can be called (a function, a method): what Calls can start from.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub callable: bool,
     /// The component behind it (for details), if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component: Option<ComponentId>,
@@ -212,9 +215,13 @@ pub struct Line {
     pub mark: Mark,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pills: Vec<Pill>,
-    /// Where it runs, once laid out.
+    /// Where it runs, once laid out (what's always drawn).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub path: Vec<Point>,
+    /// A line to a card drawn further away: its whole way there, drawn
+    /// while either end is selected (`path` is then only a stub).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reach: Vec<Point>,
 }
 
 /// Why a tree was cut.
@@ -311,7 +318,6 @@ pub struct LayoutConfig {
     pub header: f32,
     pub box_gap: f32,
     pub row_aspect: f32,
-    pub lane: f32,
     pub curve_steps: usize,
 }
 

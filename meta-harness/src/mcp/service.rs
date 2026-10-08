@@ -161,11 +161,13 @@ struct NavigateArgs {
     #[serde(default)]
     source: Option<String>,
     #[serde(default)]
-    roots: Vec<String>,
+    root: Option<String>,
+    #[serde(default)]
+    way: Option<arch_graph::tree::Way>,
     #[serde(default)]
     depth: Option<u32>,
     #[serde(default)]
-    focus: Option<String>,
+    select: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -295,7 +297,7 @@ impl McpService {
                 }),
             ),
             "notifications/initialized" | "initialized" | "ping" => JsonRpcResponse::success(req_id, json!({})),
-            "tools/list" => JsonRpcResponse::success(req_id, json!({ "tools": list_tools(self.arch.views(), self.arch.trees()) })),
+            "tools/list" => JsonRpcResponse::success(req_id, json!({ "tools": list_tools(self.arch.trees()) })),
             "tools/call" => {
                 let params = req.params.unwrap_or(Value::Null);
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
@@ -406,14 +408,8 @@ impl McpService {
             }
             "navigate" => {
                 let a: NavigateArgs = parse(args)?;
-                let request = ViewRequest {
-                    view: a.view,
-                    spec: None,
-                    source: a.source.as_deref().map(parse_source).transpose()?,
-                    roots: a.roots.into_iter().map(ComponentId::new).collect(),
-                    depth: a.depth,
-                    focus: a.focus.map(ComponentId::new),
-                };
+                let view = a.view.as_deref().map(|v| arch_graph::tree::ViewKind::from_name(v).ok_or_else(|| ServiceError::InvalidOp(format!("view '{v}': use contains, calls or data_flow")))).transpose()?;
+                let request = ViewRequest { view, source: a.source.as_deref().map(parse_source).transpose()?, root: a.root, way: a.way, depth: a.depth, select: a.select };
                 blocking(&self.arch, move |s| s.request_view(request, Requester::Agent)).await?;
                 Ok("The user's graph now shows it (they can go back).\n\nNext: explain what they're looking at, or continue with the plan.".into())
             }

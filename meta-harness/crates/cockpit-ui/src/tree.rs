@@ -1,12 +1,15 @@
-//! The outline: the structure view as a collapsible tree (what contains
+//! The outline: the Contains view as a collapsible list (what contains
 //! what), driven by keys like every view: a cursor row, folds, a filter that
 //! `/` types into. Enter (or a click) selects the row's component in the
-//! graph.
+//! graph. It holds what the server sent (the view's depth, plus the rows
+//! opened further), and unfolding a row whose parts aren't here yet loads
+//! them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
-use arch_graph::{ComponentId, PlanId, RelationKind, ViewResult};
+use arch_graph::tree::{Card, Opened, Tree, TreeRequest, ViewKind};
+use arch_graph::{ComponentId, PlanId, Source};
 use egui::{RichText, Sense};
 
 use crate::actions::{Action, ActionProvider, RunCx};
@@ -31,13 +34,17 @@ pub struct ArchitectureTreeState {
     /// Rows the search being typed opened (closed again as it changes).
     opened_by_search: BTreeSet<ComponentId>,
     plan: Option<PlanId>,
-    result: Option<ViewResult>,
+    result: Option<Tree>,
+    /// Cards by key in what was sent.
+    cards: BTreeMap<ComponentId, Card>,
+    /// Rows unfolded past the view's depth (their parts loaded), oldest first.
+    opened: Vec<String>,
     stale: bool,
     loaded_once: bool,
     error: Option<String>,
     /// Select this in the graph.
     pub select: Option<ComponentId>,
-    inbox: Arc<Mutex<Vec<NetResult<ViewResult>>>>,
+    inbox: Arc<Mutex<Vec<NetResult<Tree>>>>,
     children: BTreeMap<ComponentId, Vec<ComponentId>>,
     parent: BTreeMap<ComponentId, ComponentId>,
     roots: Vec<ComponentId>,
@@ -58,22 +65,49 @@ impl ArchitectureTreeState {
     pub fn set_plan(&mut self, plan: Option<&PlanId>) {
         if self.plan.as_ref() != plan {
             self.plan = plan.cloned();
+            self.opened.clear();
             self.stale = true;
         }
+    }
+
+    /// Loads a row's parts (it's unfolded past what was sent).
+    fn load(&mut self, id: &ComponentId) {
+        if !self.opened.iter().any(|o| o == id.as_str()) {
+            self.opened.push(id.0.clone());
+            self.stale = true;
+        }
+    }
+
+    /// Unfolds a row: folded rows open; rows whose parts aren't here load
+    /// them. Returns whether there was anything to unfold.
+    fn unfold(&mut self, id: &ComponentId) -> bool {
+        if self.closed.remove(id) {
+            return true;
+        }
+        if self.children.get(id).is_none_or(Vec::is_empty) && self.cards.get(id).is_some_and(|c| c.more > 0) {
+            self.load(id);
+            return true;
+        }
+        false
     }
 
     pub fn invalidate(&mut self) {
         self.stale = true;
     }
 
-    /// Takes a fetched structure view: who contains whom, in view order.
-    pub fn set_result(&mut self, result: ViewResult) {
+    /// Takes a fetched Contains tree: who contains whom, in tree order.
+    pub fn set_result(&mut self, result: Tree) {
         self.children.clear();
         self.parent.clear();
-        for e in result.view.edges.iter().filter(|e| e.kind == RelationKind::Contains) {
-            if !self.parent.contains_key(&e.target) && e.source != e.target {
-                self.parent.insert(e.target.clone(), e.source.clone());
-                self.children.entry(e.source.clone()).or_default().push(e.target.clone());
+        self.opened.retain(|o| !result.dropped.contains(o));
+        self.cards = result.cards.iter().map(|c| (ComponentId::new(c.key.clone()), c.clone())).collect();
+        for c in &result.cards {
+            if let Some(p) = &c.parent
+                && p != &c.key
+            {
+                let (id, p) = (ComponentId::new(c.key.clone()), ComponentId::new(p.clone()));
+                self.parent.insert(id.clone(), p.clone());
+                self.children.entry(p).or_default().push(id);
             }
         }
         // Containment loops: whatever can't reach a root becomes one.
@@ -88,7 +122,7 @@ impl ArchitectureTreeState {
             }
             true
         };
-        let looped: Vec<ComponentId> = result.view.nodes.iter().map(|n| n.id.clone()).filter(|id| !reaches_root(id)).collect();
+        let looped: Vec<ComponentId> = self.cards.keys().filter(|id| !reaches_root(id)).cloned().collect();
         for id in looped {
             if let Some(p) = self.parent.remove(&id)
                 && let Some(kids) = self.children.get_mut(&p)
@@ -96,9 +130,9 @@ impl ArchitectureTreeState {
                 kids.retain(|k| k != &id);
             }
         }
-        self.roots = result.view.nodes.iter().map(|n| n.id.clone()).filter(|id| !self.parent.contains_key(id)).collect();
-        self.closed.retain(|id| result.components.contains_key(id));
-        if self.cursor.as_ref().is_some_and(|c| !result.components.contains_key(c)) {
+        self.roots = result.cards.iter().map(|c| ComponentId::new(c.key.clone())).filter(|id| !self.parent.contains_key(id)).collect();
+        self.closed.retain(|id| self.cards.contains_key(id));
+        if self.cursor.as_ref().is_some_and(|c| !self.cards.contains_key(c)) {
             self.cursor = None;
         }
         self.result = Some(result);
@@ -117,7 +151,15 @@ impl ArchitectureTreeState {
             self.stale = false;
             self.loaded_once = true;
             let inbox = self.inbox.clone();
-            net.arch_view("structure", self.plan.as_ref(), &[], Some(12), ctx.clone(), move |r| {
+            let request = TreeRequest {
+                view: ViewKind::Contains,
+                source: Source::from_plan(self.plan.clone()),
+                opened: self.opened.iter().map(|card| Opened { card: card.clone(), levels: 1 }).collect(),
+                // With a plan: the plan inside the whole codebase.
+                full_code: true,
+                ..TreeRequest::default()
+            };
+            net.graph_tree(&request, ctx.clone(), move |r| {
                 if let Ok(mut i) = inbox.lock() {
                     i.push(r);
                 }
@@ -126,7 +168,7 @@ impl ArchitectureTreeState {
     }
 
     fn name(&self, id: &ComponentId) -> String {
-        self.result.as_ref().and_then(|r| r.components.get(id)).map_or_else(|| id.to_string(), |c| c.name.clone())
+        self.cards.get(id).map_or_else(|| id.to_string(), |c| c.label.clone())
     }
 
     fn matches(&self, id: &ComponentId) -> bool {
@@ -190,8 +232,9 @@ impl ArchitectureTreeState {
         out
     }
 
+    /// Whether a row holds parts (here, or still to load).
     fn has_children(&self, id: &ComponentId) -> bool {
-        self.children.get(id).is_some_and(|k| !k.is_empty())
+        self.children.get(id).is_some_and(|k| !k.is_empty()) || self.cards.get(id).is_some_and(|c| c.more > 0)
     }
 
     /// Opens what contains `id`, so its row shows.
@@ -205,7 +248,7 @@ impl ArchitectureTreeState {
 
     /// Puts the cursor on `id` (opening what contains it) and scrolls to it.
     pub fn reveal(&mut self, id: &ComponentId, how: Scroll) {
-        if self.result.as_ref().is_some_and(|r| r.components.contains_key(id)) || self.parent.contains_key(id) || self.roots.contains(id) {
+        if self.cards.contains_key(id) || self.parent.contains_key(id) || self.roots.contains(id) {
             self.open_to(id);
             if !self.rows().iter().any(|r| &r.id == id) {
                 // Filtered out: the filter goes so the row can show.
@@ -272,7 +315,7 @@ impl ArchitectureTreeState {
                         ui.set_min_height(row_h);
                         ui.add_space(row.depth as f32 * crate::theme::look().space_xl);
                         if self.has_children(&row.id) {
-                            let open = !self.closed.contains(&row.id);
+                            let open = !self.closed.contains(&row.id) && self.children.get(&row.id).is_some_and(|k| !k.is_empty());
                             let icon = if open { egui_phosphor::regular::CARET_DOWN } else { egui_phosphor::regular::CARET_RIGHT };
                             if ui.add(egui::Label::new(RichText::new(icon).size(crate::theme::look().text_body).color(colors().muted)).sense(Sense::click())).clicked() {
                                 toggled = Some(row.id.clone());
@@ -280,8 +323,8 @@ impl ArchitectureTreeState {
                         } else {
                             ui.add_space(crate::theme::look().space_xl);
                         }
-                        let c = self.result.as_ref().and_then(|r| r.components.get(&row.id));
-                        let (name, kind) = c.map_or_else(|| (row.id.to_string(), String::new()), |c| (c.name.clone(), c.type_name.clone()));
+                        let c = self.cards.get(&row.id);
+                        let (name, kind) = c.map_or_else(|| (row.id.to_string(), String::new()), |c| (c.label.clone(), c.kind.clone()));
                         let color = if self.matches(&row.id) { colors().text } else { colors().faint };
                         let text = RichText::new(format!("{name} ")).size(crate::theme::look().text_label).color(if on_cursor { colors().text_strong } else { color });
                         let label = ui.selectable_label(on_cursor, text);
@@ -303,7 +346,7 @@ impl ArchitectureTreeState {
         self.view_h = output.inner_rect.height();
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
         if let Some(id) = toggled
-            && !self.closed.remove(&id)
+            && !self.unfold(&id)
         {
             self.closed.insert(id);
         }
@@ -367,7 +410,7 @@ impl Navigable for ArchitectureTreeState {
             Motion::Right => {
                 for _ in 0..count {
                     let Some(id) = self.cursor.clone() else { return };
-                    if self.closed.remove(&id) {
+                    if self.unfold(&id) {
                         continue;
                     }
                     if let Some(first) = self.children.get(&id).and_then(|k| k.first()).cloned() {
@@ -394,7 +437,7 @@ impl Navigable for ArchitectureTreeState {
     /// Unfolds a folded row; otherwise selects it in the graph.
     fn enter(&mut self) -> Step {
         let Some(id) = self.cursor.clone() else { return Step::Nothing("The outline is empty.".into()) };
-        if self.closed.remove(&id) {
+        if self.closed.contains(&id) && self.unfold(&id) {
             return Step::Done;
         }
         self.select = Some(id);
@@ -417,7 +460,7 @@ impl Navigable for ArchitectureTreeState {
     /// Folds an open row; otherwise goes to what contains it.
     fn leave(&mut self) -> Step {
         let Some(id) = self.cursor.clone() else { return Step::Nothing("The outline is empty.".into()) };
-        if self.has_children(&id) && !self.closed.contains(&id) {
+        if self.children.get(&id).is_some_and(|k| !k.is_empty()) && !self.closed.contains(&id) {
             self.closed.insert(id);
             return Step::Done;
         }
@@ -452,10 +495,10 @@ impl Navigable for ArchitectureTreeState {
                 let open = match fold {
                     Fold::Open => true,
                     Fold::Close => false,
-                    _ => self.closed.contains(&row),
+                    _ => self.closed.contains(&row) || self.children.get(&row).is_none_or(Vec::is_empty),
                 };
                 if open {
-                    self.closed.remove(&row);
+                    self.unfold(&row);
                 } else {
                     self.closed.insert(row.clone());
                     if self.cursor.as_ref() != Some(&row) {
@@ -527,24 +570,20 @@ impl Navigable for ArchitectureTreeState {
 pub(crate) mod tests {
     use super::*;
     use crate::nav::rank_matches;
-    use arch_graph::view::ViewEdge;
-    use arch_graph::{Alignment, RelationId};
+    use arch_graph::tree::{TreeRequest, ViewKind};
+    use arch_graph::{Graph, Provenance, Relation, RelationKind};
 
     /// Two modules: `a` holds run, step and save (and run holds log); `b` is empty.
-    pub(crate) fn outline() -> ViewResult {
-        let mut r = crate::graph::tests::sample_result();
-        for module in ["rust:a", "rust:b"] {
-            let mut c = r.components[&ComponentId::new("rust:a::run")].clone();
-            c.id = ComponentId::new(module);
-            c.name = module.trim_start_matches("rust:").into();
-            c.type_name = "module".into();
-            r.components.insert(c.id.clone(), c);
+    pub(crate) fn outline() -> Tree {
+        let sample = crate::graph::tests::sample_graph();
+        let mut g = Graph::new();
+        for id in ["rust:a", "rust:b", "rust:a::run", "rust:a::step", "rust:a::save", "rust:a::log"] {
+            g.upsert_component(sample.component(&ComponentId::new(id)).unwrap().clone(), Provenance::OBSERVED);
         }
-        let contains = |a: &str, b: &str| ViewEdge { id: RelationId(format!("contains:{a}->{b}")), kind: RelationKind::Contains, source: ComponentId::new(a), target: ComponentId::new(b), alignment: Alignment::Observed, overlay: false, order: None, carries: None, unconfirmed: None };
-        r.view.nodes.insert(0, arch_graph::view::ViewNode { id: ComponentId::new("rust:a"), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, ancestors: vec![] });
-        r.view.nodes.push(arch_graph::view::ViewNode { id: ComponentId::new("rust:b"), depth: Some(0), truncated: false, alignment: Alignment::Observed, members: 0, ancestors: vec![] });
-        r.view.edges = vec![contains("rust:a", "rust:a::run"), contains("rust:a", "rust:a::step"), contains("rust:a", "rust:a::save"), contains("rust:a::run", "rust:a::log")];
-        r
+        for (a, b) in [("rust:a", "rust:a::run"), ("rust:a", "rust:a::step"), ("rust:a", "rust:a::save"), ("rust:a::run", "rust:a::log")] {
+            g.upsert_relation(Relation::new(RelationKind::Contains, ComponentId::new(a), ComponentId::new(b), Provenance::OBSERVED));
+        }
+        crate::graph::tests::tree_of(&g, None, TreeRequest { view: ViewKind::Contains, depth: Some(3), ..TreeRequest::default() })
     }
 
     fn ids(rows: &[Row]) -> Vec<String> {
@@ -560,7 +599,7 @@ pub(crate) mod tests {
     fn the_outline_is_driven_by_keys() {
         let mut t = ArchitectureTreeState::default();
         t.set_result(outline());
-        assert_eq!(ids(&t.rows()), ["a", "  a::run", "    a::log", "  a::step", "  a::save", "b"]);
+        assert_eq!(ids(&t.rows()), ["a", "  a::run", "    a::log", "  a::save", "  a::step", "b"], "parts by name");
         // j/k with counts, gg/G.
         t.motion(Motion::Down, 1);
         assert_eq!(cursor(&t), "a");
@@ -577,7 +616,7 @@ pub(crate) mod tests {
         assert_eq!(cursor(&t), "a::run");
         t.motion(Motion::Left, 1);
         assert_eq!(cursor(&t), "a::run", "h on an open row folds it");
-        assert_eq!(ids(&t.rows()), ["a", "  a::run", "  a::step", "  a::save", "b"]);
+        assert_eq!(ids(&t.rows()), ["a", "  a::run", "  a::save", "  a::step", "b"]);
         t.motion(Motion::Left, 1);
         assert_eq!(cursor(&t), "a", "h on a folded row goes up");
         t.motion(Motion::Right, 1);
@@ -587,7 +626,7 @@ pub(crate) mod tests {
         assert_eq!(t.rows().len(), 6);
         // ]] / [[: siblings.
         t.motion(Motion::NextSibling, 1);
-        assert_eq!(cursor(&t), "a::step");
+        assert_eq!(cursor(&t), "a::save");
         t.motion(Motion::PrevSibling, 5);
         assert_eq!(cursor(&t), "a::run");
         // Enter selects in the graph; Backspace goes up (folding first).

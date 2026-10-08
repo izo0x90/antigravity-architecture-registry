@@ -1,6 +1,6 @@
 //! The architecture graph's domain model: a language-generic type system,
 //! components anchored to code, relations by kind with provenance, plans laid
-//! over the code, validation reports, and views. Pure data and logic: no I/O,
+//! over the code, validation reports, and the three views as trees. Pure data and logic: no I/O,
 //! so the server and the WASM cockpit share it.
 
 mod anchor;
@@ -19,7 +19,6 @@ pub mod review;
 pub mod schema;
 pub mod tree;
 mod types;
-pub mod view;
 mod wire;
 
 pub use anchor::{CodeAnchor, ProposedLocation, RepoPath, Span};
@@ -36,8 +35,7 @@ pub use review::{Answer, Author, Change, Comment, CommentAnchor, CommentId, Comm
 pub use source::Source;
 pub use report::{CodeRef, Finding, FindingCode, Report, Severity, Target};
 pub use types::{RequiredField, ResolvedType, TypeDef, TypeSystem};
-pub use view::{View, ViewCatalog, ViewSpec};
-pub use wire::{ComponentDetail, FileView, ViewResult};
+pub use wire::{ComponentDetail, FileView};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ModelError {

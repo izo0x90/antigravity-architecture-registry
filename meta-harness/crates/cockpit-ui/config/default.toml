@@ -166,19 +166,16 @@ I = "Index"
 "request.decline" = { leader = "r n", keys = ["d"] }
 "request.cancel" = { leader = "r c" }
 
-# Graph (when focused).
-"graph.focus" = { leader = "g f" }
-"graph.unfocus" = { leader = "g u" }
+# Graph (when focused). Select with the moves (h j k l), open or close a
+# card with the folds (z o, z c), go in with Enter, back with Backspace.
+"graph.go_in" = { leader = "g f" }
 "graph.depth_more" = { leader = "g +", keys = ["+"] }
 "graph.depth_less" = { leader = "g -", keys = ["-"] }
+"graph.flip" = { leader = "g r", keys = ["r"] }
 "graph.view" = { leader = "g v" }
 "graph.next_view" = { keys = ["v"] }
-"graph.level" = { leader = "g L" }
-"graph.coarser" = { leader = "g <", keys = ["<"] }
-"graph.finer" = { leader = "g >", keys = [">"] }
 "graph.plan" = { leader = "g P" }
-"graph.next_call" = { keys = ["] e"] }
-"graph.prev_call" = { keys = ["[ e"] }
+"graph.full_code" = { leader = "g F" }
 "graph.zoom_in" = { keys = ["z +"] }
 "graph.zoom_out" = { keys = ["z -"] }
 "graph.fit" = { leader = "g z", keys = ["z z"] }
@@ -472,47 +469,49 @@ implements = "special"
 calls = "accent"
 data_flow = "info"
 
-# Relation lines by how plan and code line up. Without `color`, a line takes
-# its kind's color.
-[graph_style.edges]
-observed = { width = 1.4 }
-planned = { width = 1.4, dashed = true }
-missing = { color = "error", width = 1.8, dashed = true }
-present = { width = 1.6 }
+# Lines by their plan mark. Without `color`, a line takes its kind's color.
+[graph_style.lines]
+code = { width = 1.4 }
+new = { width = 1.4, dashed = true }
+changed = { color = "info", width = 1.6 }
+done = { color = "ok", width = 1.6 }
+mismatch = { color = "error", width = 1.8, dashed = true }
 
-# A data flow the code shows but the types can't confirm (mismatched or
-# missing types).
-[graph_style.unconfirmed]
-color = "warn"
-width = 1.2
-dashed = true
-
-# Width multipliers by where a relation is known from.
-[graph_style.provenance]
-observed = 1.0
-planned = 1.0
-both = 1.3
-
-# Overlay relations (drawn over a view's own kinds) are lighter.
-[graph_style.overlay]
-width = 0.65
-alpha = 0.6
+# Lines to a card shown elsewhere: one reached again, and one going back up
+# its own path (a loop).
+[graph_style.back]
+repeat = { width = 1.0, dashed = true }
+loop = { color = "warn", width = 1.2, dashed = true }
 
 [graph_style.nodes]
-outline = { observed = { color = "border_strong", width = 1.2 }, planned = { color = "warn", width = 1.2, dashed = true }, missing = { color = "error", width = 1.6 }, present = { color = "ok", width = 1.4 } }
+outline = { code = { color = "border_strong", width = 1.2 }, new = { color = "warn", width = 1.4, dashed = true }, changed = { color = "info", width = 1.6 }, done = { color = "ok", width = 1.4 }, mismatch = { color = "error", width = 1.8 } }
 selected_outline = "focus"
 selected_width = 2.5
 fill = "card"
 selected_fill = "card_selected"
-# A stripe on the card's left edge by lifecycle stage.
-stages = { declared = "faint", arch_approved = "info", plan_approved = "accent", skeleton = "warn", implemented = "ok" }
-# Ring around the node the agent pointed at.
+# Ring around the card the agent pointed at.
 agent = "special"
+# Code a plan only plugs into shows fainter than the plan's own cards.
+outside_plan_alpha = 0.55
+
+# The pills on the selection's lines: what goes in, what comes back, and
+# (data flow) the step that turns one type into the next.
+[graph_style.pills]
+in = "info"
+out = "ok"
+step = "accent"
 
 # How the graph behaves.
 [graph]
-# Long-press a node: these actions (the ones that apply) as chips.
-context = ["graph.focus", "goto.spec", "goto.code", "goto.callees", "goto.callers", "goto.parent", "goto.members", "goto.implements", "goto.flows"]
+# Long-press a card: these actions (the ones that apply) as chips.
+context = ["graph.go_in", "goto.spec", "goto.code", "goto.callees", "goto.callers", "goto.parent", "goto.members", "goto.implements", "goto.flows"]
+# Fitting the drawing to the screen never zooms out past this (text stays
+# readable; what doesn't fit is panned to).
+readable_zoom = 0.85
+# Text smaller than this many pixels on screen isn't drawn (the card is).
+min_text_px = 6.0
+# Details kept for cards selected before (fetched again after that).
+details_kept = 64
 
 [graph.touch]
 # Points a finger may wander and still tap or long-press.
@@ -528,47 +527,7 @@ swipe_max_ms = 450.0
 show = "auto"
 narrow_below = 480.0
 size = 32.0
-actions = ["nav.back", "nav.forward", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.next_view", "nav.hint_open", "graph.legend"]
-
-# Semantic zoom: card detail by zoom level. Below `mid`: the name; from `mid`:
-# type, stage and location; from `near`: signature, alignment, placeholders
-# and review points. Text keeps its size at every zoom: a card shows the
-# lines that fit it, and below the name's own size its label floats over it.
-[graph.detail]
-mid = 0.85
-near = 1.3
-
-# How the graph is arranged. Positions and sizes snap to half of `grid`;
-# `gap_x` / `gap_y` between columns and between cards; `pad` inside cards and
-# open modules; `header` an open module's title band; `column` most cards in a
-# column before it wraps; `lane` how far apart lines run (and the step they're
-# routed on); `bend` what a turn costs a route, in lanes; card width limits;
-# and how wide text is (glyph width and line height as shares of font size).
-[graph.arrange]
-grid = 32.0
-gap_x = 96.0
-gap_y = 32.0
-pad = 16.0
-header = 32.0
-column = 12
-lane = 16.0
-bend = 3.0
-card_min_w = 96.0
-card_max_w = 320.0
-char_width = 0.6
-line_height = 1.4
-
-# Levels: zooming in until a shut module fills `enter_fill` of the view goes
-# into it; zooming out until the level fills less than `leave_fill` goes up to
-# the one above. A level with more than `max_cards` parts shows the
-# selection's neighbourhood and holds the rest in "+N more".
-[graph.levels]
-enter_fill = 0.5
-leave_fill = 0.25
-max_cards = 60
-# Most markers at the screen's edge naming where the selection's lines go
-# off screen; the rest are summed up in one ("+N more off screen").
-max_markers = 14
+actions = ["nav.back", "nav.forward", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.next_view", "graph.flip", "nav.hint_open", "graph.legend"]
 
 # The event socket: when it drops, try again after `reconnect_min_ms`, doubling
 # up to `reconnect_max_ms`; views refetch once it's back.

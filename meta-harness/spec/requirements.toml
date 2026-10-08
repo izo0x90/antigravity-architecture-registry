@@ -531,30 +531,40 @@ id = "P7.1"
 slice = "S1"
 title = "View specs and named views from config"
 acceptance = "Named views load from config and user overrides merge."
+manual = true
+done = "2026-10-08: superseded by M.4: three views from trees.toml replace named view specs"
 
 [[req]]
 id = "P7.2"
 slice = "S1"
 title = "View query engine"
 acceptance = "Kinds, direction, depth and filters select a deterministic subgraph with truncation markers."
+manual = true
+done = "2026-10-08: superseded by M.4: the tree builder replaces the view query engine"
 
 [[req]]
 id = "P7.3"
 slice = "S1"
 title = "Layouts per view"
 acceptance = "Layouts have no overlaps, respect edge direction, nest children and are stable."
+manual = true
+done = "2026-10-08: superseded by M.7: server layout (tidy tree columns, boxes in rows) replaces per-view layouts"
 
 [[req]]
 id = "P7.4"
 slice = "S2"
 title = "Styling by kind, provenance and alignment"
 acceptance = "Every kind x provenance x alignment combination has a style from theme tokens."
+manual = true
+done = "2026-10-08: superseded by M.8: lines and cards are styled by plan mark (graph_style.lines/nodes)"
 
 [[req]]
 id = "P7.5"
 slice = "S1"
 title = "Text views for the agent"
 acceptance = "Each view renders as text with anchors, stage, provenance, alignment and an explanation of the view."
+manual = true
+done = "2026-10-08: superseded by M.10: the agent reads the same trees as text"
 
 [[req]]
 id = "P7.6"
@@ -719,6 +729,8 @@ id = "P9.17"
 slice = "S3"
 title = "Semantic zoom"
 acceptance = "Node cards show more detail at closer zoom, per config thresholds."
+manual = true
+done = "2026-10-08: superseded by M.8: text scales with zoom and isn't drawn below min_text_px; no detail levels"
 
 # ---- review loop ----
 [[req]]
@@ -1015,36 +1027,48 @@ id = "G.1"
 slice = "G"
 title = "Levels instead of shrinking"
 acceptance = "The graph works in containment levels (repo, crates, modules, members): zooming into a module moves into its own full-size layout (contents unfold from the block); zooming out folds them back with the module highlighted; transitions animate."
+manual = true
+done = "2026-10-08: superseded by M.8: levels were removed; go in / depth / open replace them"
 
 [[req]]
 id = "G.2"
 slice = "G"
 title = "Text stays readable"
 acceptance = "Labels keep a constant on-screen size at every zoom; when they don't all fit, the most important (selection, its neighbours, larger items) are drawn and the rest appear on hover; no label overlaps another."
+manual = true
+done = "2026-10-08: superseded by M.7, M.8: cards are sized for their text on the server; text scales with zoom"
 
 [[req]]
 id = "G.3"
 slice = "G"
 title = "Names shortened by context, breadcrumb"
 acceptance = "Inside a module its members show their short names; the full path of where you are shows as a clickable breadcrumb."
+manual = true
+done = "2026-10-08: superseded by M.8: the trail of roots and the containment path replace the breadcrumb"
 
 [[req]]
 id = "G.4"
 slice = "G"
 title = "Arranged by meaning"
 acceptance = "Structure layouts place callers before what they depend on (by dependency) and keep modules that talk a lot near each other, instead of an alphabetical grid."
+manual = true
+done = "2026-10-08: superseded by M.7: trees in call order and boxes in rows replace arranging by meaning"
 
 [[req]]
 id = "G.5"
 slice = "G"
 title = "Focus with surroundings"
 acceptance = "Around the focus, things outside it are summarised into blocks ('12 more in arch_index') that open on demand; large views open on the neighbourhood of the selection with '+N more' handles."
+manual = true
+done = "2026-10-08: superseded by M.6, M.8: going in and plan focus replace focus with surroundings"
 
 [[req]]
 id = "G.6"
 slice = "G"
 title = "Edge stubs and merged lines"
 acceptance = "Connections leaving what's shown appear as stubs on its edge with counts; between modules, many relations merge into one line whose thickness shows the count; only the selection's own lines are drawn in full, the rest fade."
+manual = true
+done = "2026-10-08: superseded by M.4, M.7: one line per pair; lines to cards elsewhere are stubs with counts"
 
 [[req]]
 id = "G.7"
@@ -1057,6 +1081,8 @@ id = "G.8"
 slice = "G"
 title = "Stable positions"
 acceptance = "A component keeps its place across refreshes and small code changes (incremental layout); changes animate."
+manual = true
+done = "2026-10-08: superseded by M.8: nothing re-lays itself out on its own; the camera stays on refresh"
 
 [[req]]
 id = "G.9"
@@ -1075,18 +1101,24 @@ id = "G.11"
 slice = "G"
 title = "Readable, not squeezed"
 acceptance = "A view opens at a readable size around the selection (or where it starts) rather than shrinking everything onto one screen; fitting all is a button. Lines are smooth curves between facing sides, one per pair of things (arrows at both ends when it goes both ways), never on top of each other or through a card."
+manual = true
+done = "2026-10-08: superseded by M.7: layout spacing comes from trees.toml and is checked by problems()"
 
 [[req]]
 id = "G.13"
 slice = "G"
 title = "Every relation view by level"
 acceptance = "Calls, data flow and the other relation views can be seen by level (types, modules, packages, folders, whichever the code has): each part drawn as what holds it at that level, the lines between them merged with counts; a group opens in place (a level finer) and closes again with the fold keys; keys step a level up or down; the toolbar says the level."
+manual = true
+done = "2026-10-08: superseded by M.8: levels by type/module/package were removed"
 
 [[req]]
 id = "G.14"
 slice = "G"
 title = "Edge markers stay readable"
 acceptance = "However many of the selection's lines go off screen, their markers stay on screen and never overlap (wrapping inward when an edge fills up); past a set number, the busiest lines keep theirs and one marker says how many more."
+manual = true
+done = "2026-10-08: superseded by M.4: off-screen markers were removed; lines elsewhere are stubs drawn whole on selection"
 
 [[req]]
 id = "G.12"
@@ -1101,6 +1133,8 @@ id = "C.1"
 slice = "C"
 title = "Calls as a story"
 acceptance = "A call view lays out from an entry: what it calls stacked top to bottom in call order, depth to the right; any branch collapses or expands in place ('load_file: 12 calls inside')."
+manual = true
+done = "2026-10-08: superseded by M.4: the calls tree (down, in call order) replaces the story view"
 
 [[req]]
 id = "C.2"
@@ -1113,6 +1147,8 @@ id = "C.3"
 slice = "C"
 title = "Both directions, module bands"
 acceptance = "The same view in reverse shows what reaches a function; bands show which module each step belongs to."
+manual = true
+done = "2026-10-08: superseded by M.4: the calls tree flips up (what calls it); module bands were removed"
 
 # ---- D: data flow ----
 
@@ -1133,12 +1169,16 @@ id = "D.3"
 slice = "D"
 title = "Flow as a pipeline"
 acceptance = "A data-flow view reads left to right from sources to sinks, marking each place the data's shape changes."
+manual = true
+done = "2026-10-08: superseded by M.4: the data flow tree (types as cards, steps on lines) replaces the pipeline"
 
 [[req]]
 id = "D.4"
 slice = "D"
 title = "Follow one value"
 acceptance = "Picking a value or type traces its whole path through the code."
+manual = true
+done = "2026-10-08: superseded by M.4: going into a data card shows its whole way, up or down"
 
 [[req]]
 id = "D.5"

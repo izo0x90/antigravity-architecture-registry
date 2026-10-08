@@ -6,7 +6,7 @@ use std::path::Path;
 
 use arch_graph::{
     Component, ComponentId, FindingCode, ImplementationSpec, Invariant, InvariantKind, LogicStep, Plan, PlanId, ProposedLocation, Provenance,
-    Relation, RelationKind, RepoPath, Report, Schemas, SideEffect, Signature, Stage, Status, ToolRef, TypeSystem, ViewCatalog,
+    Relation, RelationKind, RepoPath, Report, Schemas, SideEffect, Signature, Stage, Status, ToolRef, TypeSystem,
 };
 use arch_index::PackSet;
 use arch_service::{Actor, ArchitectureService, FsIndex, FsPlans, PlanOp, PlanRepository};
@@ -47,7 +47,6 @@ fn repo_with(types: TypeSystem, rules_toml: &str) -> Repo {
         &root,
         packs,
         types,
-        ViewCatalog::defaults().unwrap(),
         Box::new(FsPlans::new(&root).unwrap()),
         Box::new(FsIndex::new(&root).unwrap()),
     )
@@ -587,46 +586,24 @@ fn planned_data_flows_are_confirmed_missing_or_explicitly_unverifiable() {
     assert_eq!(flows("sample::produce").len(), 1, "produce -> sink missing; produce -> consume confirmed");
 }
 
-// req: D.2, D.3, D.5
+// req: D.2, D.5, M.4, M.6
 #[test]
-fn the_data_flow_view_is_a_pipeline_of_typed_steps_with_planned_and_unconfirmed_flows() {
-    use arch_graph::view::scene::{Measure, Metrics, Options, build, problems};
+fn the_data_flow_view_shows_data_with_its_steps_and_marks_planned_flows() {
+    use arch_graph::tree::{LineKind, Mark, TreeRequest, ViewKind, Way};
     let r = repo();
-    // Types are nodes in the flow: Store::new makes a Store.
-    let flow = r.service.named_view("data_flow", &arch_graph::Source::Code, vec![], None).unwrap();
-    let edge = |v: &arch_graph::ViewResult, a: &str, b: &str| v.view.edges.iter().find(|e| e.source == id(a) && e.target == id(b) && e.unconfirmed.is_none()).cloned();
-    let made = edge(&flow, "sample::store::Store::new", "sample::store::Store").expect("the type is in the flow");
-    assert_eq!(made.carries.as_deref(), Some("Store"));
-    assert!(flow.view.edges.iter().filter(|e| e.unconfirmed.is_none()).all(|e| e.carries.is_some()), "every flow says what flows");
-    assert!(flow.text.contains("carries Store"), "{}", flow.text);
-    // A pipeline: what feeds a step sits left of it.
-    struct Sized;
-    impl Measure for Sized {
-        fn card(&self, _: &ComponentId, _: bool) -> (f32, f32) {
-            (160.0, 64.0)
-        }
-        fn outside(&self, _: &ComponentId, _: u32) -> (f32, f32) {
-            (160.0, 32.0)
-        }
-        fn more(&self, _: usize) -> (f32, f32) {
-            (96.0, 32.0)
-        }
-    }
-    let metrics = Metrics { grid: 32.0, gap_x: 96.0, gap_y: 32.0, pad: 16.0, header: 32.0, column: 12, lane: 16.0, bend: 3.0, card_min_w: 96.0, card_max_w: 320.0, char_width: 0.6, line_height: 1.4 };
-    let none = std::collections::BTreeSet::new();
-    let scene = build(&flow.view, &Options { open: &none, selection: None, max_cards: 60, show_all: false, shut: &none }, &Sized, &metrics, None);
-    assert!(problems(&scene).is_empty(), "{:?}", problems(&scene));
-    let x = |c: &ComponentId| scene.rects[c].x;
-    assert!(x(&made.source) < x(&made.target), "the maker before what it makes");
-
-    // Planned flows beside observed ones; unconfirmed ones stand out.
+    let tree = |request: TreeRequest| r.service.tree(&request).unwrap();
+    // Data is the cards: where a Store comes from is Store::new, which takes nothing.
+    let store = tree(TreeRequest { view: ViewKind::DataFlow, root: Some("type:Store".into()), way: Way::Up, depth: Some(1), ..TreeRequest::default() });
+    assert_eq!(store.cards[0].kind, "data");
+    assert!(store.card(&format!("start:{}", id("sample::store::Store::new"))).is_some(), "{:#?}", store.cards);
+    // Planned flows beside the code's: one the code makes, one it doesn't.
     let mut plan = Plan::new("flows", "Flows");
-    for name in ["produce", "opaque", "consume", "sink"] {
+    for name in ["produce", "consume", "sink"] {
         let mut c = comp(&format!("sample::{name}"), "function");
-        // produce is far enough along that its code is expected: a flow
-        // planned from it but not in the code is missing.
         if name == "produce" {
+            // Its planned shape says what flows out of it.
             c.stage = Stage::Skeleton;
+            c.signature = Some(Signature { params: vec![], returns: Some("String".into()), qualifiers: vec![] });
         }
         plan.components.push(c);
         plan.relations.push(rel(RelationKind::Contains, "sample", &format!("sample::{name}")));
@@ -639,14 +616,13 @@ fn the_data_flow_view_is_a_pipeline_of_typed_steps_with_planned_and_unconfirmed_
     plan.relations.push(planned("sample::produce", "sample::consume", "text"));
     plan.relations.push(planned("sample::produce", "sample::sink", "x"));
     FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
-    append_lib(&r, "\npub fn produce() -> String {\n    String::new()\n}\n\npub fn opaque() {\n}\n\npub fn consume(text: &str) {\n    let _ = text;\n}\n\npub fn sink(x: &str) {\n    let _ = x;\n}\n\npub fn pipeline() {\n    let s = produce();\n    consume(&s);\n    let v = opaque();\n    sink(v);\n}\n");
+    append_lib(&r, "\npub fn produce() -> String {\n    String::new()\n}\n\npub fn consume(text: &str) {\n    let _ = text;\n}\n\npub fn sink(x: &str) {\n    let _ = x;\n}\n\npub fn pipeline() {\n    let s = produce();\n    consume(&s);\n}\n");
     r.service.ingest(&r.root).unwrap();
-    let path = r.service.named_view("data_path", &arch_graph::Source::Plan(pid("flows")), vec![id("sample::sink"), id("sample::consume")], Some(2)).unwrap();
-    assert_eq!(edge(&path, "sample::produce", "sample::consume").map(|e| e.alignment), Some(arch_graph::Alignment::Present), "planned and in the code");
-    assert_eq!(edge(&path, "sample::produce", "sample::sink").map(|e| e.alignment), Some(arch_graph::Alignment::Missing), "planned, not in the code");
-    let unconfirmed = path.view.edges.iter().find(|e| e.source == id("sample::opaque") && e.target == id("sample::sink") && e.unconfirmed.is_some()).expect("the unconfirmed flow is shown");
-    assert!(unconfirmed.unconfirmed.as_deref().unwrap().contains("no return type"));
-    assert!(path.text.contains("UNCONFIRMED"), "{}", path.text);
+    let flows = tree(TreeRequest { view: ViewKind::DataFlow, source: arch_graph::Source::Plan(pid("flows")), depth: Some(1), ..TreeRequest::default() });
+    assert_eq!(flows.roots, vec!["type:String".to_owned()], "the plan's data: what produce returns");
+    let to = |f: &str| flows.lines.iter().find(|l| l.kind == LineKind::Tree && l.to == format!("end:{}", id(f))).map(|l| l.mark);
+    assert_eq!(to("sample::consume"), Some(Mark::Done), "planned and in the code");
+    assert_eq!(to("sample::sink"), Some(Mark::Mismatch), "planned, not in the code");
 }
 
 fn lib_rs(r: &Repo) -> std::path::PathBuf {
@@ -1038,7 +1014,6 @@ fn calls_that_cant_be_proven_are_reported_not_linked() {
         &root,
         PackSet::built_in().unwrap(),
         TypeSystem::defaults().unwrap(),
-        ViewCatalog::defaults().unwrap(),
         Box::new(arch_service::MemoryPlans::default()),
         Box::new(arch_service::MemoryIndex::default()),
     )

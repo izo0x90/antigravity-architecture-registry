@@ -601,7 +601,7 @@ impl CockpitApp {
         self.focused_slot = slot;
         match &jump.place {
             Place::Code { file, line } if *file != self.code.current_file => self.code.load_file(file, Some(*line), &self.net, ctx.clone()),
-            Place::Spec { component: Some(id), .. } if !self.spec.pinned && self.graph.selection.as_ref() != Some(id) => {
+            Place::Spec { component: Some(id), .. } if !self.spec.pinned && self.graph.selection.as_deref() != Some(id.as_str()) => {
                 // The spec shows the graph's selection: move that first.
                 self.graph.reveal(id.clone());
                 self.spec.restore(&jump.place);
@@ -671,7 +671,7 @@ impl CockpitApp {
     fn link_views(&mut self, ctx: &egui::Context) {
         self.graph.tick(&self.net, ctx);
         let plan = self.graph.nav.plan.clone();
-        self.spec.follow(self.graph.current(), plan.as_ref());
+        self.spec.follow(self.graph.current().as_ref(), plan.as_ref());
         // One truth for where code is: if the spec fetched a newer anchor for
         // the selection than the view on screen has, the view is stale.
         if let (Some(detail), Some(shown)) = (&self.spec.detail, self.graph.selected())
@@ -766,8 +766,8 @@ impl CockpitApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(self.config.links.follow_debounce_ms));
         }
         // Follow mode, graph to code: the code view tracks the graph selection.
-        if self.follow && self.graph.selection != self.follow_last {
-            self.follow_last = self.graph.selection.clone();
+        if self.follow && self.graph.current() != self.follow_last {
+            self.follow_last = self.graph.current();
             if let Some(c) = self.graph.selected()
                 && let Some(a) = c.anchor.as_ref().filter(|a| !crate::status::is_folder(a))
             {
@@ -2313,8 +2313,8 @@ fn describe_jump(jump: &Jump) -> String {
     let place = match &jump.place {
         Place::Chat { message } => message.map_or("latest".to_owned(), |m| format!("message {}", m + 1)),
         Place::Code { file, line } => format!("{file}:{line}"),
-        Place::Graph { selection: Some(id), .. } => short(id),
-        Place::Graph { selection: None, nav } => format!("{} view", nav.view),
+        Place::Graph { selection: Some(key), .. } => short(&ComponentId::new(key.clone())),
+        Place::Graph { selection: None, nav } => format!("{} view", nav.view.name().replace('_', " ")),
         Place::Tree { cursor } | Place::Queue { component: cursor } => cursor.as_ref().map_or_else(String::new, short),
         Place::Spec { component, .. } => component.as_ref().map_or_else(String::new, short),
     };
@@ -2373,7 +2373,7 @@ impl CockpitApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::tests::{loading, sample_result, showing};
+    use crate::graph::tests::{loading, sample_tree, showing};
     use arch_graph::{CodeAnchor, PlanId, Provenance, Relation, RelationKind, RepoPath, Span};
 
     fn texts(output: &egui::FullOutput) -> String {
@@ -2399,7 +2399,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = CockpitApp::new("http://127.0.0.1:9");
         app.initialized = true; // skip network bootstrapping
-        app.graph = showing(sample_result());
+        app.graph = showing(sample_tree());
         app.focused_slot = 1;
         (ctx, app)
     }
@@ -2439,17 +2439,6 @@ mod tests {
 
     fn selected(app: &CockpitApp) -> &str {
         app.graph.selection.as_ref().map_or("", |s| s.as_str())
-    }
-
-    fn anchored(result: &mut arch_graph::ViewResult, symbol: &str, file: &str, start: u32, end: u32) {
-        result.components.get_mut(&ComponentId::new(symbol)).unwrap().anchor = Some(CodeAnchor {
-            language: "rust".into(),
-            file: RepoPath::new(file).unwrap(),
-            symbol: symbol.into(),
-            syntax_kind: "function_item".into(),
-            span: Span { start_line: start, end_line: end, start_byte: 0, end_byte: 1 },
-            content_hash: String::new(),
-        });
     }
 
     fn call(a: &str, b: &str, order: u32, line: u32) -> Relation {
@@ -2504,10 +2493,10 @@ mod tests {
         }
         let (ctx, mut app) = app_with_graph();
         // Every view in a state where its actions are offered: a graph with
-        // levels and something selected, a loaded spec under a plan, a queue.
+        // something selected, a loaded spec under a plan, a queue.
         let plan = PlanId::new("p").unwrap();
-        app.graph.set_result(crate::graph::tests::leveled_result());
-        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        app.graph.set_tree(sample_tree());
+        app.graph.select(Some("rust:a::step".into()));
         let (id, other) = (ComponentId::new("rust:a::step"), ComponentId::new("rust:a::run"));
         app.spec.follow(Some(&id), Some(&plan));
         app.spec.detail = Some(crate::spec::tests::detail(&id, &other));
@@ -2516,13 +2505,12 @@ mod tests {
         app.queue.tick(&app.net, &ctx, Some(&plan));
         app.queue.on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(crate::queue::tests::snapshot(arch_graph::QueueStatus::Running)) });
         let mut all: BTreeMap<String, Listed> = BTreeMap::new();
-        // With a selection, a value followed and the agent having moved the
-        // view; then with nothing selected (stepping through calls).
-        let moved = crate::graph::AgentMove { what: "a view".into(), focus: None, return_to: app.graph.nav.clone(), return_selection: None };
+        // With a selection and the agent having moved the view; then with
+        // nothing selected.
+        let moved = crate::graph::AgentMove { what: "a view".into(), select: None, return_to: app.graph.nav.clone(), return_selection: None };
         let states = [(true, true), (false, false)];
         for (kind, (selected, moved_by_agent)) in BufferKind::ALL.into_iter().flat_map(|k| states.into_iter().map(move |s| (k, s))) {
-            app.graph.select(selected.then(|| ComponentId::new("rust:a::step")));
-            app.graph.trace = selected.then(|| "Report".to_owned());
+            app.graph.select(selected.then(|| "rust:a::step".to_owned()));
             app.graph.agent = moved_by_agent.then(|| moved.clone());
             focus(&ctx, &mut app, kind);
             for b in app.bound_actions() {
@@ -2552,12 +2540,22 @@ mod tests {
         // with sign-in, saved sessions, review answers...): read from where
         // they're made, keys from the same keymap.
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files: Vec<_> = std::fs::read_dir(&src).unwrap().map(|e| e.unwrap().path()).collect();
+        // Each source file, and those in a view's own folder (graph/).
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for entry in std::fs::read_dir(&src).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "rs")));
+            } else {
+                files.push(path);
+            }
+        }
         files.sort();
         for file in files {
             let text = std::fs::read_to_string(&file).unwrap();
             let code = text.split("#[cfg(test)]").next().unwrap_or_default();
-            let stem = file.file_stem().unwrap().to_string_lossy().to_string();
+            let folder = file.parent().filter(|p| *p != src).and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+            let stem = folder.unwrap_or_else(|| file.file_stem().unwrap().to_string_lossy().to_string());
             let origin = BufferKind::ALL.into_iter().find(|k| k.name() == stem || (stem == "code" && *k == BufferKind::Code)).map_or(Origin::Shell, Origin::View);
             for line in code.lines() {
                 for (id, label) in made_actions(line) {
@@ -2582,7 +2580,7 @@ mod tests {
         }
         let listed: Vec<&Listed> = all.values().collect();
         assert!(listed.len() > 80, "{}", listed.len());
-        for wanted in ["graph.coarser", "graph.follow", "graph.story", "graph.show_all", "goto.pick", "nav.hint", "goto.graph", "index.changed", "spec.comment", "queue.approve"] {
+        for wanted in ["graph.flip", "graph.go_in", "graph.full_code", "graph.agent_return", "goto.pick", "nav.hint", "goto.graph", "index.changed", "spec.comment", "queue.approve"] {
             assert!(all.contains_key(wanted), "{wanted} listed");
         }
         explainer_file("actions.json", &serde_json::to_value(&listed).unwrap());
@@ -2592,7 +2590,7 @@ mod tests {
         for section in ["theme", "status", "graph_style", "look"] {
             look.insert(section.to_owned(), serde_json::to_value(&defaults[section]).unwrap());
         }
-        for part in ["levels", "detail"] {
+        for part in ["readable_zoom", "min_text_px"] {
             look.insert(part.to_owned(), serde_json::to_value(&defaults["graph"][part]).unwrap());
         }
         look.insert("links".to_owned(), serde_json::to_value(&defaults["links"]).unwrap());
@@ -2677,13 +2675,11 @@ mod tests {
         for name in ["run", "step", "save", "log"] {
             assert!(text.contains(name), "node {name} drawn: {text}");
         }
-        assert!(text.contains("· 4 nodes"), "{text}");
+        assert!(text.contains("· 4 cards"), "{text}");
         app.graph = loading();
         let text = texts(&frame(&ctx, &mut app, vec![]));
         assert!(text.contains("Loading the architecture"), "{text}");
-        let mut empty = sample_result();
-        empty.view.nodes.clear();
-        empty.view.edges.clear();
+        let empty = crate::graph::tests::tree_of(&arch_graph::Graph::new(), None, arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() });
         app.graph = showing(empty);
         let text = texts(&frame(&ctx, &mut app, vec![]));
         assert!(text.contains("Nothing to show in this view yet"), "{text}");
@@ -2707,12 +2703,12 @@ mod tests {
         assert_eq!(app.input_mode, InputMode::Normal, "Escape closes the palette");
         frame(&ctx, &mut app, vec![]);
         assert!(!text_input_focused(&ctx), "the palette's field let go of the keyboard");
-        app.graph.select(Some(ComponentId::new("rust:a::run")));
+        app.graph.select(Some("rust:a::run".into()));
         frame(&ctx, &mut app, key("l"));
         assert_eq!(selected(&app), "rust:a::step", "keys work right after the palette");
         // A button holding the keyboard (Tab) doesn't swallow keys either.
         ctx.memory_mut(|m| m.request_focus(egui::Id::new("a button")));
-        app.graph.select(Some(ComponentId::new("rust:a::run")));
+        app.graph.select(Some("rust:a::run".into()));
         frame(&ctx, &mut app, key("l"));
         assert_eq!(selected(&app), "rust:a::step", "keys work while a button has focus");
         assert!(ctx.memory(|m| m.focused()).is_none(), "and the button gave the keyboard back");
@@ -2726,11 +2722,11 @@ mod tests {
         // The leader menu lists the graph's own under g.
         let bound = app.bound_actions();
         let entries = leader_entries(&bound, &['g'], Origin::View(BufferKind::Graph));
-        assert!(entries.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'f', index } if bound[*index].action.id == "graph.focus")));
+        assert!(entries.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'f', index } if bound[*index].action.id == "graph.go_in")));
         assert!(entries.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'v', index } if bound[*index].action.id == "graph.view")));
         // Rebinding from config takes effect.
         app.config = UiConfig::with_overrides("[keymap.bind]\n\"nav.right\" = { keys = [\"w\"] }\n").unwrap();
-        app.graph.select(Some(ComponentId::new("rust:a::run")));
+        app.graph.select(Some("rust:a::run".into()));
         frame(&ctx, &mut app, key("w"));
         assert_eq!(selected(&app), "rust:a::step");
     }
@@ -2756,10 +2752,9 @@ mod tests {
     #[test]
     fn inspector_summarizes_the_selection_and_links_onward() {
         let (ctx, mut app) = app_with_graph();
-        let mut result = sample_result();
-        anchored(&mut result, "rust:a::step", "src/a.rs", 10, 20);
-        app.graph = showing(result);
-        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        app.graph = showing(sample_tree());
+        crate::graph::tests::with_detail(&mut app.graph, "rust:a::step", "src/a.rs", 10, 20);
+        app.graph.select(Some("rust:a::step".into()));
         let text = texts(&frame(&ctx, &mut app, vec![]));
         for expected in ["rust:a::step", "function · Existing", "implemented", "src/a.rs:10–20", "Spec view", "Code", "calls", "save", "run"] {
             assert!(text.contains(expected), "drawer shows {expected}: {text}");
@@ -2772,11 +2767,10 @@ mod tests {
     #[test]
     fn graph_and_code_link_both_ways_and_follow() {
         let (ctx, mut app) = app_with_graph();
-        let mut result = sample_result();
-        anchored(&mut result, "rust:a::step", "src/a.rs", 10, 20);
-        anchored(&mut result, "rust:a::save", "src/b.rs", 3, 5);
-        app.graph = showing(result);
-        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        app.graph = showing(sample_tree());
+        crate::graph::tests::with_detail(&mut app.graph, "rust:a::step", "src/a.rs", 10, 20);
+        crate::graph::tests::with_detail(&mut app.graph, "rust:a::save", "src/b.rs", 3, 5);
+        app.graph.select(Some("rust:a::step".into()));
         frame(&ctx, &mut app, vec![]);
         // Graph -> code: lands on the symbol's span, the code view appears and has focus.
         keys(&ctx, &mut app, "gd");
@@ -2789,10 +2783,10 @@ mod tests {
         assert_eq!(selected(&app), "rust:a::save");
         // Follow mode: the code view tracks the selection.
         app.run_shell(ShellCommand::ToggleFollow, None, 1, &ctx);
-        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        app.graph.select(Some("rust:a::step".into()));
         frame(&ctx, &mut app, vec![]);
         assert_eq!(app.code.current_file, "src/a.rs");
-        app.graph.select(Some(ComponentId::new("rust:a::save")));
+        app.graph.select(Some("rust:a::save".into()));
         frame(&ctx, &mut app, vec![]);
         assert_eq!((app.code.current_file.as_str(), app.code.highlight), ("src/b.rs", Some((3, 5))));
         // ...and the graph tracks the code cursor once it rests: the lookup
@@ -2801,12 +2795,12 @@ mod tests {
         app.code.move_cursor(4, -10.0);
         frame(&ctx, &mut app, vec![]);
         assert!(app.following_code, "the cursor rested: its component is being looked up");
-        app.reveal_inbox.lock().unwrap().push(Ok(app.graph.result.as_ref().unwrap().components[&ComponentId::new("rust:a::step")].clone()));
+        app.reveal_inbox.lock().unwrap().push(Ok(crate::graph::tests::sample_graph().component(&ComponentId::new("rust:a::step")).unwrap().clone()));
         frame(&ctx, &mut app, vec![]);
         assert_eq!(selected(&app), "rust:a::step");
         assert_eq!((app.code.current_file.as_str(), app.code.target_line), ("src/b.rs", Some(4)), "following the code doesn't move the code");
         // Gutter marks come from the file's components.
-        let mut file_comp = sample_result().components[&ComponentId::new("rust:a::log")].clone();
+        let mut file_comp = crate::graph::tests::sample_graph().component(&ComponentId::new("rust:a::log")).unwrap().clone();
         file_comp.anchor = Some(CodeAnchor { language: "rust".into(), file: RepoPath::new("src/b.rs").unwrap(), symbol: "a::log".into(), syntax_kind: "function_item".into(), span: Span { start_line: 7, end_line: 9, start_byte: 70, end_byte: 90 }, content_hash: String::new() });
         file_comp.placeholders.push(Span { start_line: 8, end_line: 8, start_byte: 80, end_byte: 87 });
         let mut missing = Relation::new(RelationKind::Calls, ComponentId::new("rust:a::log"), ComponentId::new("rust:a::save"), Provenance::PLANNED);
@@ -2828,20 +2822,19 @@ mod tests {
         assert!(texts(&frame(&ctx, &mut app, vec![])).contains("NORMAL 2"), "the count shows");
         frame(&ctx, &mut app, key("l"));
         assert_eq!((selected(&app), app.pending_count), ("rust:a::step", None));
-        // ... and repeats a view's own actions: 2+ adds two hops, as one jump.
+        // ... and repeats a view's own actions: 2+ adds two levels, as one jump.
         keys(&ctx, &mut app, "2+");
-        let base = arch_graph::ViewCatalog::defaults().unwrap().get(&app.graph.nav.view).unwrap().depth;
-        assert_eq!(app.graph.nav.depth, Some(base + 2));
+        assert_eq!(app.graph.nav.depth, Some(5));
         ctrl(&ctx, &mut app, egui::Key::O);
-        assert_eq!(app.graph.nav.depth, None, "back undoes both hops");
-        app.graph.set_result(sample_result());
-        // G / gg: last and first node in view order, as jumps.
+        assert_eq!(app.graph.nav.depth, Some(3), "back undoes both");
+        app.graph.set_tree(sample_tree());
+        // G / gg: last and first card in tree order, as jumps.
         frame(&ctx, &mut app, key("G"));
-        assert_eq!(selected(&app), "rust:a::log");
+        assert_eq!(selected(&app), "rust:a::save");
         keys(&ctx, &mut app, "gg");
         assert_eq!(selected(&app), "rust:a::run");
         ctrl(&ctx, &mut app, egui::Key::O);
-        assert_eq!(selected(&app), "rust:a::log", "ctrl+o returns to where the jump left");
+        assert_eq!(selected(&app), "rust:a::save", "ctrl+o returns to where the jump left");
         ctrl(&ctx, &mut app, egui::Key::I);
         assert_eq!(selected(&app), "rust:a::run", "ctrl+i goes forward again");
         // / searches incrementally; Enter jumps; Escape gives up.
@@ -2869,29 +2862,28 @@ mod tests {
         // Marks: m<letter> sets, '<letter> jumps back (through the jump list).
         keys(&ctx, &mut app, "ma");
         frame(&ctx, &mut app, key("G"));
-        assert_eq!(selected(&app), "rust:a::log");
+        assert_eq!(selected(&app), "rust:a::save");
         keys(&ctx, &mut app, "'a");
         assert_eq!(selected(&app), "rust:a::step");
         ctrl(&ctx, &mut app, egui::Key::O);
-        assert_eq!(selected(&app), "rust:a::log");
+        assert_eq!(selected(&app), "rust:a::save");
         keys(&ctx, &mut app, "'z");
-        assert_eq!((selected(&app), app.input_mode), ("rust:a::log", InputMode::Normal), "an unset mark goes nowhere");
+        assert_eq!((selected(&app), app.input_mode), ("rust:a::save", InputMode::Normal), "an unset mark goes nowhere");
         assert!(app.note.as_deref().unwrap_or_default().contains("No mark z"), "and says so");
         // Keys come from config.
         app.config = UiConfig::with_overrides("[keymap.bind]\n\"nav.last\" = { keys = [\"E\"] }\n").unwrap();
         keys(&ctx, &mut app, "gg");
         frame(&ctx, &mut app, key("E"));
-        assert_eq!(selected(&app), "rust:a::log");
+        assert_eq!(selected(&app), "rust:a::save");
     }
 
     // req: N.2, N.14
     #[test]
     fn the_jump_list_crosses_views_and_slots() {
         let (ctx, mut app) = app_with_graph();
-        let mut result = sample_result();
-        anchored(&mut result, "rust:a::step", "src/a.rs", 10, 20);
-        app.graph = showing(result);
-        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        app.graph = showing(sample_tree());
+        crate::graph::tests::with_detail(&mut app.graph, "rust:a::step", "src/a.rs", 10, 20);
+        app.graph.select(Some("rust:a::step".into()));
         frame(&ctx, &mut app, vec![]);
         keys(&ctx, &mut app, "gd");
         assert_eq!((app.focused_kind(), app.focused_slot), (BufferKind::Code, 0), "the code opened beside the graph, with focus");
@@ -2905,7 +2897,7 @@ mod tests {
         ctrl(&ctx, &mut app, egui::Key::I);
         assert_eq!((app.focused_kind(), app.code.target_line), (BufferKind::Code, Some(10)));
         // Pointer jumps in the graph are in it too.
-        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        app.graph.select(Some("rust:a::step".into()));
         app.graph.jumped = Some(app.graph.place());
         frame(&ctx, &mut app, vec![]);
         assert!(app.jumps.can_back());
@@ -2952,7 +2944,7 @@ mod tests {
         }
         // Live: whatever each view offers, no key runs two things.
         let (ctx, mut app) = full_app();
-        app.graph.select(Some(ComponentId::new("rust:a::run")));
+        app.graph.select(Some("rust:a::run".into()));
         for kind in BufferKind::ALL {
             focus(&ctx, &mut app, kind);
             let bound = app.bound_actions();
@@ -2979,23 +2971,23 @@ mod tests {
         assert!(bar.len() <= app.config.keymap.bar.max);
         assert!(!bar.iter().any(|id| id.starts_with("goto.")), "nothing selected: no go-tos: {bar:?}");
         assert!(bar.contains(&"nav.hint".to_owned()) && bar.contains(&"nav.search".to_owned()));
-        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        app.graph.select(Some("rust:a::step".into()));
         let bound = app.bound_actions();
         let bar: Vec<&Bound> = app.bar_keys(&bound);
         let ids: Vec<&str> = bar.iter().map(|b| b.action.id.as_str()).collect();
         assert!(ids.contains(&"nav.enter") && ids.contains(&"goto.code"), "{ids:?}");
         assert!(bar.windows(2).all(|w| w[0].action.importance <= w[1].action.importance), "most important first");
-        assert_eq!(bar.iter().find(|b| b.action.id == "nav.enter").unwrap().action.label, "Focus on step", "says what it does to the target");
+        assert_eq!(bar.iter().find(|b| b.action.id == "nav.enter").unwrap().action.label, "Into step", "says what it does to the target");
         assert!(!ids.contains(&"nav.search_next"), "nothing searched yet");
         app.searches.insert(BufferKind::Graph, "s".into());
         assert!(When::Searched.holds(&app.situation()));
         // The bar draws them, keys first; tappable.
         let text = texts(&frame(&ctx, &mut app, vec![]));
-        assert!(text.contains("Enter Focus on step") && text.contains("f Jump to something on screen"), "{text}");
+        assert!(text.contains("Enter Into step") && text.contains("f Jump to something on screen"), "{text}");
         // Narrow screens get big chips; the bar can be turned off.
         app.config = UiConfig::with_overrides("[keymap.bar]\nshow = false\n").unwrap();
         let text = texts(&frame(&ctx, &mut app, vec![]));
-        assert!(!text.contains("Enter Focus on step"));
+        assert!(!text.contains("Enter Into step"));
         // A spec item: the review verbs lead.
         let (ctx, mut app) = full_app();
         focus(&ctx, &mut app, BufferKind::Spec);
@@ -3055,14 +3047,35 @@ mod tests {
         frame(&ctx, &mut app, key("h"));
         assert_eq!(selected(&app), "rust:a::run");
         keys(&ctx, &mut app, "G");
-        assert_eq!(selected(&app), "rust:a::log");
+        assert_eq!(selected(&app), "rust:a::save");
+    }
+
+    // req: M.8
+    #[test]
+    fn the_graph_keys_flip_change_depth_switch_view_go_in_and_back() {
+        let (ctx, mut app) = app_with_graph();
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, key("r"));
+        assert_eq!(app.graph.nav.way, arch_graph::tree::Way::Up, "r flips");
+        frame(&ctx, &mut app, key("r"));
+        frame(&ctx, &mut app, key("+"));
+        assert_eq!(app.graph.nav.depth, Some(4), "+ shows a level more");
+        frame(&ctx, &mut app, key("-"));
+        assert_eq!(app.graph.nav.depth, Some(3));
+        app.graph.select(Some("rust:a::step".into()));
+        frame(&ctx, &mut app, press(egui::Key::Enter, false));
+        assert_eq!(app.graph.nav.root.as_deref(), Some("rust:a::step"), "Enter goes in");
+        frame(&ctx, &mut app, press(egui::Key::Backspace, false));
+        assert_eq!(app.graph.nav.root.as_deref(), Some("rust:a::run"), "Backspace comes back");
+        frame(&ctx, &mut app, key("v"));
+        assert_eq!(app.graph.nav.view, arch_graph::tree::ViewKind::DataFlow, "v: the next view");
     }
 
     // req: N.8, P9.13
     #[test]
     fn f_labels_what_is_on_screen_in_every_view() {
         let (ctx, mut app) = full_app();
-        app.graph.set_result(sample_result());
+        app.graph.set_tree(sample_tree());
         for kind in BufferKind::ALL {
             focus(&ctx, &mut app, kind);
             let spots = app.view(kind).spots();
@@ -3078,13 +3091,13 @@ mod tests {
             let at = cursor(&app).unwrap_or_default();
             assert!(spot.key == at || spot.key.starts_with(&format!("{at}:")), "{kind:?}: the cursor went to {} (at {at})", spot.key);
         }
-        // F opens: in the graph, it focuses on the node.
+        // F opens: in the graph, it goes into the card.
         focus(&ctx, &mut app, BufferKind::Graph);
         frame(&ctx, &mut app, key("F"));
         let Some(Capture::Hint(hint)) = &app.capture else { panic!() };
         let (label, spot) = hint.labels.last().unwrap().clone();
         keys(&ctx, &mut app, &label);
-        assert_eq!((selected(&app), app.graph.nav.roots.clone()), (spot.key.as_str(), vec![ComponentId::new(&spot.key)]));
+        assert_eq!((selected(&app), app.graph.nav.root.as_deref()), (spot.key.as_str(), Some(spot.key.as_str())));
         // A key no label starts with gives up; Escape too.
         frame(&ctx, &mut app, key("f"));
         frame(&ctx, &mut app, key("z"));
@@ -3134,14 +3147,14 @@ mod tests {
             frame(ctx, app, press(egui::Key::Backspace, false));
             frame(ctx, app, vec![])
         };
-        // Graph: focus, unfocus.
+        // Graph: go in, back.
         focus(&ctx, &mut app, BufferKind::Graph);
-        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        app.graph.select(Some("rust:a::step".into()));
         enter(&ctx, &mut app);
-        assert_eq!(app.graph.nav.roots, vec![ComponentId::new("rust:a::step")]);
+        assert_eq!(app.graph.nav.root.as_deref(), Some("rust:a::step"));
         leave(&ctx, &mut app);
-        assert!(app.graph.nav.roots.is_empty());
-        app.graph.set_result(sample_result());
+        assert_eq!(app.graph.nav.root.as_deref(), Some("rust:a::run"), "back where going in started");
+        app.graph.set_tree(sample_tree());
         // Tree: Enter selects in the graph (focus stays).
         focus(&ctx, &mut app, BufferKind::Tree);
         app.tree.move_to("rust:a::save");
@@ -3269,7 +3282,7 @@ mod tests {
         keys(&ctx, &mut app, "gm");
         assert_eq!((app.focused_kind(), selected(&app)), (BufferKind::Graph, "rust:a::step"));
         // Graph -> outline: g t.
-        app.graph.select(Some(ComponentId::new("rust:a::log")));
+        app.graph.select(Some("rust:a::log".into()));
         keys(&ctx, &mut app, "gt");
         assert_eq!((app.focused_kind(), app.tree.cursor.as_ref().map(|c| c.as_str())), (BufferKind::Tree, Some("rust:a::log")));
         // Queue -> spec: g s (a pinned spec shows it anyway).
@@ -3286,7 +3299,7 @@ mod tests {
         assert_eq!((app.focused_kind(), app.chat.active_thread.as_ref().map(|t| t.as_str())), (BufferKind::Chat, Some("t1")));
         // Graph -> queue: g q finds the component's job, or says there isn't one.
         focus(&ctx, &mut app, BufferKind::Graph);
-        app.graph.select(Some(ComponentId::new("rust:a::run")));
+        app.graph.select(Some("rust:a::run".into()));
         keys(&ctx, &mut app, "gq");
         assert!(app.note.as_deref().unwrap_or_default().contains("no job"), "{:?}", app.note);
         // Code: g r on a definition lists its callers; one: straight to the call.
@@ -3344,7 +3357,7 @@ mod tests {
     #[test]
     fn a_pause_on_a_prefix_shows_what_can_follow() {
         let (ctx, mut app) = app_with_graph();
-        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        app.graph.select(Some("rust:a::step".into()));
         frame_at(&ctx, &mut app, vec![], 10.0);
         frame_at(&ctx, &mut app, key("g"), 10.0);
         // The popup: its title is the keys so far, and it says how to cancel.
@@ -3483,7 +3496,7 @@ mod tests {
         assert_eq!((app.tree.search_filter.as_str(), app.tree.rows().len()), ("", 6));
         // A graph search that finds nothing puts the view back as it was.
         focus(&ctx, &mut app, BufferKind::Graph);
-        app.graph.set_result(crate::graph::tests::nested_result());
+        app.graph.set_tree(crate::graph::tests::boxes_tree());
         let before = app.graph.place();
         keys(&ctx, &mut app, "/zzz");
         assert_eq!(app.graph.place(), before);
@@ -3495,11 +3508,12 @@ mod tests {
         frame(&ctx, &mut app, key("c"));
         assert!(app.note.as_deref().unwrap_or_default().contains("pick one in the graph"), "{:?}", app.note);
         assert_eq!(app.input_mode, InputMode::Normal);
-        // ]e where nothing is called says why too.
+        // z o on a card with nothing more under it says why too.
         focus(&ctx, &mut app, BufferKind::Graph);
-        app.graph.select(Some(ComponentId::new("rust:a::save")));
-        keys(&ctx, &mut app, "]e");
-        assert!(app.note.as_deref().unwrap_or_default().contains("calls nothing"), "{:?}", app.note);
+        app.graph.set_tree(sample_tree());
+        app.graph.select(Some("rust:a::save".into()));
+        keys(&ctx, &mut app, "zo");
+        assert!(app.graph.note.as_deref().unwrap_or_default().contains("nothing more"), "{:?}", app.graph.note);
         // A key that runs clears the last note.
         frame(&ctx, &mut app, key("j"));
         assert!(app.note.is_none());
@@ -3518,12 +3532,14 @@ mod tests {
             let bound = app.bound_actions();
             app.bar_keys(&bound).iter().any(|b| b.action.id == id)
         };
-        // Graph: Backspace only once focused somewhere.
+        // Graph: Backspace only once gone in somewhere.
         focus(&ctx, &mut app, BufferKind::Graph);
-        app.graph.select(Some(ComponentId::new("rust:a::run")));
-        assert!(!app.situation().can_leave, "the whole view already");
+        app.graph = showing(crate::graph::tests::tree_of(&crate::graph::tests::sample_graph(), None, arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() }));
+        app.graph.nav.plan = Some(PlanId::new("p").unwrap());
+        app.graph.select(Some("rust:a::run".into()));
+        assert!(!app.situation().can_leave, "the starting points already");
         assert!(!offered(&app, "nav.leave"));
-        app.graph.navigate(crate::graph::NavChange::Focus(ComponentId::new("rust:a::run")));
+        app.graph.navigate(crate::graph::NavChange::GoIn("rust:a::run".into()));
         assert!(app.situation().can_leave);
         // Code: Enter on a call, Backspace inside a definition.
         focus(&ctx, &mut app, BufferKind::Code);
@@ -3609,7 +3625,7 @@ mod tests {
         let (ctx, mut app) = full_app();
         // Escape after a search leaves a closed inspector closed.
         focus(&ctx, &mut app, BufferKind::Graph);
-        app.graph.select(Some(ComponentId::new("rust:a::run")));
+        app.graph.select(Some("rust:a::run".into()));
         app.graph.drawer_open = false;
         keys(&ctx, &mut app, "/sa");
         frame(&ctx, &mut app, press(egui::Key::Escape, false));
@@ -3644,7 +3660,7 @@ mod tests {
         assert!(app.spec.composer.is_none(), "the second discards it");
         // Go-tos are offered only where they lead, once the relations are known.
         focus(&ctx, &mut app, BufferKind::Graph);
-        app.graph.select(Some(ComponentId::new("rust:a::save")));
+        app.graph.select(Some("rust:a::save".into()));
         app.details.insert(crate::goto::tests::detail("rust:a::save", vec![], vec![call("rust:a::step", "rust:a::save", 0, 5)]), app.graph.nav.plan.as_ref());
         let situation = app.situation();
         assert!(When::Reaches(GoTo::Callers).holds(&situation) && !When::Reaches(GoTo::Callees).holds(&situation));
@@ -3662,28 +3678,26 @@ mod tests {
     fn the_selection_survives_a_view_without_it() {
         let (ctx, mut app) = full_app();
         focus(&ctx, &mut app, BufferKind::Graph);
-        app.graph.select(Some(ComponentId::new("rust:a::step")));
+        app.graph.select(Some("rust:a::step".into()));
         frame(&ctx, &mut app, vec![]);
         assert_eq!(app.spec.target.as_ref().map(|t| t.as_str()), Some("rust:a::step"));
         // A view without it: nothing selected there, but it's remembered (the spec keeps it).
         app.spec.pinned = false;
-        app.graph.navigate(crate::graph::NavChange::View("calls".into()));
-        let mut without = sample_result();
-        without.components.remove(&ComponentId::new("rust:a::step"));
-        without.view.nodes.retain(|n| n.id.as_str() != "rust:a::step");
-        without.view.edges.retain(|e| e.source.as_str() != "rust:a::step" && e.target.as_str() != "rust:a::step");
-        app.graph.set_result(without);
+        // Flipped: what calls run (nothing does), so step isn't there.
+        app.graph.navigate(crate::graph::NavChange::Flip);
+        let without = crate::graph::tests::tree_of(&crate::graph::tests::sample_graph(), None, app.graph.nav.request());
+        app.graph.set_tree(without);
         frame(&ctx, &mut app, vec![]);
-        assert_eq!((app.graph.selection.clone(), app.graph.current().map(|c| c.as_str())), (None, Some("rust:a::step")));
+        assert_eq!((app.graph.selection.clone(), app.graph.current().map(|c| c.0)), (None, Some("rust:a::step".to_owned())));
         assert_eq!(app.spec.target.as_ref().map(|t| t.as_str()), Some("rust:a::step"), "the spec still shows it");
         // Back in a view that has it: selected again.
-        app.graph.navigate(crate::graph::NavChange::View("structure".into()));
-        app.graph.set_result(sample_result());
+        app.graph.navigate(crate::graph::NavChange::Flip);
+        app.graph.set_tree(sample_tree());
         assert_eq!(selected(&app), "rust:a::step");
-        // ]e and ]c with nothing to step through say so.
+        // Enter and ]c with nothing to act on say so.
         app.graph.select(None);
-        keys(&ctx, &mut app, "]e");
-        assert!(app.note.as_deref().unwrap_or_default().contains("Select a node first"), "{:?}", app.note);
+        frame(&ctx, &mut app, press(egui::Key::Enter, false));
+        assert!(app.note.as_deref().unwrap_or_default().contains("Select a card first"), "{:?}", app.note);
         focus(&ctx, &mut app, BufferKind::Spec);
         app.spec.comments.clear();
         keys(&ctx, &mut app, "]c");

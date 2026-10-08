@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use arch_graph::{ComponentId, InvariantKind, RelationKind, Stage, Status, TypeSystem, ViewCatalog};
+use arch_graph::{ComponentId, InvariantKind, RelationKind, Stage, Status, TypeSystem};
 use arch_index::PackSet;
 use arch_service::{ArchitectureService, MemoryIndex, MemoryPlans};
 
@@ -11,7 +11,6 @@ fn service(root: &Path) -> ArchitectureService {
         root,
         PackSet::built_in().unwrap(),
         TypeSystem::defaults().unwrap(),
-        ViewCatalog::defaults().unwrap(),
         Box::new(MemoryPlans::default()),
         Box::new(MemoryIndex::default()),
     )

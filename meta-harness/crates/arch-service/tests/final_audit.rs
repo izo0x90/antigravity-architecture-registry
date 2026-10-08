@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use arch_graph::{Component, ComponentId, FindingCode, Param, Plan, PlanId, Provenance, ProposedLocation, Relation, RelationKind, RepoPath, Schemas, Signature, Stage, Status, TypeSystem, ViewCatalog};
+use arch_graph::{Component, ComponentId, FindingCode, Param, Plan, PlanId, Provenance, ProposedLocation, Relation, RelationKind, RepoPath, Schemas, Signature, Stage, Status, TypeSystem};
 use arch_index::PackSet;
 use arch_service::{Actor, ArchitectureService, FsIndex, FsPlans, PlanOp, PlanRepository};
 
@@ -33,7 +33,6 @@ fn repo_typed(files: &[(&str, &str)], types: TypeSystem) -> Repo {
         &root,
         PackSet::built_in().unwrap(),
         types,
-        ViewCatalog::defaults().unwrap(),
         Box::new(FsPlans::new(&root).unwrap()),
         Box::new(FsIndex::new(&root).unwrap()),
     )

@@ -28,6 +28,7 @@ pub(super) struct Face {
     pub component: Option<ComponentId>,
     pub mark: Mark,
     pub other_plans: Vec<crate::PlanId>,
+    pub callable: bool,
 }
 
 /// Data flow seen by type: which functions take and produce each type.
@@ -129,13 +130,7 @@ impl<'a, G: GraphRead> Lens<'a, G> {
             for id in &items {
                 held.extend(lens.ancestors(id));
             }
-            let mut types: BTreeSet<String> = plan
-                .relations
-                .iter()
-                .filter(|r| r.kind == RelationKind::DataFlow)
-                .filter_map(|r| r.data.as_deref())
-                .filter_map(|d| lens.type_key(d))
-                .collect();
+            let mut types: BTreeSet<String> = plan.relations.iter().filter(|r| r.kind == RelationKind::DataFlow).filter_map(|r| lens.flow_type(r)).collect();
             types.extend(plan.components.iter().filter(|c| lens.is_data(c)).map(|c| format!("{TYPE}{}", c.name)));
             lens.focus = Some(Focus { items, held, types });
         }
@@ -172,19 +167,43 @@ impl<'a, G: GraphRead> Lens<'a, G> {
         (!t.is_empty() && !data.ignore.iter().any(|i| i == t)).then(|| format!("{TYPE}{t}"))
     }
 
+    /// What a flow carries, as a data card's key: what it says it carries,
+    /// else what its ports name (the source's return type, or the type of
+    /// the target's parameter it goes into).
+    fn flow_type(&self, r: &crate::Relation) -> Option<String> {
+        if let Some(data) = &r.data {
+            return self.type_key(data);
+        }
+        let (from, to) = r.ports.as_ref()?;
+        let written = if from == "return" {
+            self.graph().component(&r.source)?.signature.as_ref()?.returns.clone()
+        } else {
+            None
+        }
+        .or_else(|| self.graph().component(&r.target)?.signature.as_ref()?.params.iter().find(|p| &p.name == to)?.ty.clone())?;
+        self.type_key(&written)
+    }
+
     fn index_flows(&self) -> Flows {
         let mut flows = Flows::default();
         let mut observed_types: BTreeSet<String> = BTreeSet::new();
         let mut planned_types: BTreeSet<String> = BTreeSet::new();
+        // A data type at either end is the type itself (made, or taken
+        // apart), not a step: its card stands for it.
+        let step = |id: &ComponentId| self.graph().component(id).is_none_or(|c| !self.is_data(c));
         for r in self.graph().relations().filter(|r| r.kind == RelationKind::DataFlow) {
-            let Some(key) = r.data.as_deref().and_then(|d| self.type_key(d)) else { continue };
-            flows.consumers.entry(key.clone()).or_default().insert(r.target.clone());
-            flows.producers.entry(key.clone()).or_default().insert(r.source.clone());
-            flows.takes.entry(r.target.clone()).or_default().insert(key.clone());
-            flows.produces.entry(r.source.clone()).or_default().insert(key.clone());
+            let Some(key) = self.flow_type(r) else { continue };
             let mark = relation_mark(self.graph().relation_alignment(r));
-            for f in [&r.source, &r.target] {
-                let m = flows.marks.entry((f.clone(), key.clone())).or_insert(mark);
+            if step(&r.target) {
+                flows.consumers.entry(key.clone()).or_default().insert(r.target.clone());
+                flows.takes.entry(r.target.clone()).or_default().insert(key.clone());
+                let m = flows.marks.entry((r.target.clone(), key.clone())).or_insert(mark);
+                *m = worse(*m, mark);
+            }
+            if step(&r.source) {
+                flows.producers.entry(key.clone()).or_default().insert(r.source.clone());
+                flows.produces.entry(r.source.clone()).or_default().insert(key.clone());
+                let m = flows.marks.entry((r.source.clone(), key.clone())).or_insert(mark);
                 *m = worse(*m, mark);
             }
             if r.provenance.observed {
@@ -506,14 +525,16 @@ impl<'a, G: GraphRead> Lens<'a, G> {
             match self.graph().component(&id) {
                 Some(c) => {
                     let detail = match (&c.anchor, &c.proposed) {
+                        // A folder has no line.
+                        (Some(a), _) if a.span.start_line == 0 => a.file.to_string(),
                         (Some(a), _) => format!("{}:{}", a.file, a.span.start_line),
                         (None, Some(p)) => format!("→ {}", p.file),
                         (None, None) => String::new(),
                     };
                     let mark = if self.input.plan.is_some() { component_mark(self.graph().alignment(&id), c) } else { Mark::Code };
-                    Face { label: c.name.clone(), kind: kind.unwrap_or(&c.type_name).to_owned(), detail, mark, other_plans: others(&id), component: Some(id) }
+                    Face { label: c.name.clone(), kind: kind.unwrap_or(&c.type_name).to_owned(), detail, mark, other_plans: others(&id), callable: self.is_callable(c), component: Some(id) }
                 }
-                None => Face { label: id.0.clone(), kind: kind.unwrap_or("unknown").to_owned(), detail: String::new(), mark: Mark::Code, other_plans: Vec::new(), component: None },
+                None => Face { label: id.0.clone(), kind: kind.unwrap_or("unknown").to_owned(), detail: String::new(), mark: Mark::Code, other_plans: Vec::new(), callable: false, component: None },
             }
         };
         if let Some(t) = key.strip_prefix(TYPE) {
@@ -526,7 +547,7 @@ impl<'a, G: GraphRead> Lens<'a, G> {
                 _ => Mark::Code,
             };
             let other_plans = component.as_ref().map(others).unwrap_or_default();
-            return Face { label: t.to_owned(), kind: "data".into(), detail: format!("{makers} make it · {users} use it"), component, mark, other_plans };
+            return Face { label: t.to_owned(), kind: "data".into(), detail: format!("{makers} make it · {users} use it"), component, mark, other_plans, callable: false };
         }
         if let Some(f) = key.strip_prefix(START) {
             return of_component(ComponentId::new(f), Some("start"));

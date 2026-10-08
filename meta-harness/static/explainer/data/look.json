@@ -1,24 +1,14 @@
 {
-  "detail": {
-    "mid": 0.85,
-    "near": 1.3
-  },
   "graph_style": {
-    "edges": {
-      "missing": {
-        "color": "error",
+    "back": {
+      "loop": {
+        "color": "warn",
         "dashed": true,
-        "width": 1.8
+        "width": 1.2
       },
-      "observed": {
-        "width": 1.4
-      },
-      "planned": {
+      "repeat": {
         "dashed": true,
-        "width": 1.4
-      },
-      "present": {
-        "width": 1.6
+        "width": 1.0
       }
     },
     "kinds": {
@@ -27,59 +17,64 @@
       "data_flow": "info",
       "implements": "special"
     },
+    "lines": {
+      "changed": {
+        "color": "info",
+        "width": 1.6
+      },
+      "code": {
+        "width": 1.4
+      },
+      "done": {
+        "color": "ok",
+        "width": 1.6
+      },
+      "mismatch": {
+        "color": "error",
+        "dashed": true,
+        "width": 1.8
+      },
+      "new": {
+        "dashed": true,
+        "width": 1.4
+      }
+    },
     "nodes": {
       "agent": "special",
       "fill": "card",
       "outline": {
-        "missing": {
-          "color": "error",
+        "changed": {
+          "color": "info",
           "width": 1.6
         },
-        "observed": {
+        "code": {
           "color": "border_strong",
           "width": 1.2
         },
-        "planned": {
+        "done": {
+          "color": "ok",
+          "width": 1.4
+        },
+        "mismatch": {
+          "color": "error",
+          "width": 1.8
+        },
+        "new": {
           "color": "warn",
           "dashed": true,
-          "width": 1.2
-        },
-        "present": {
-          "color": "ok",
           "width": 1.4
         }
       },
+      "outside_plan_alpha": 0.55,
       "selected_fill": "card_selected",
       "selected_outline": "focus",
-      "selected_width": 2.5,
-      "stages": {
-        "arch_approved": "info",
-        "declared": "faint",
-        "implemented": "ok",
-        "plan_approved": "accent",
-        "skeleton": "warn"
-      }
+      "selected_width": 2.5
     },
-    "overlay": {
-      "alpha": 0.6,
-      "width": 0.65
-    },
-    "provenance": {
-      "both": 1.3,
-      "observed": 1.0,
-      "planned": 1.0
-    },
-    "unconfirmed": {
-      "color": "warn",
-      "dashed": true,
-      "width": 1.2
+    "pills": {
+      "in": "info",
+      "out": "ok",
+      "step": "accent"
     }
-  },
-  "levels": {
-    "enter_fill": 0.5,
-    "leave_fill": 0.25,
-    "max_cards": 60,
-    "max_markers": 14
   },
   "links": {
     "follow_debounce_ms": 250
@@ -121,6 +116,8 @@
     "text_tiny": 9.0,
     "text_title": 13.0
   },
+  "min_text_px": 6.0,
+  "readable_zoom": 0.85,
   "status": {
     "changed": {
       "color": "info",

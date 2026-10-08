@@ -69,7 +69,8 @@ impl Target {
 pub enum Place {
     Chat { message: Option<usize> },
     Code { file: String, line: usize },
-    Graph { nav: Nav, selection: Option<ComponentId> },
+    /// The graph: where it looks, and the selected card's key.
+    Graph { nav: Nav, selection: Option<String> },
     Tree { cursor: Option<ComponentId> },
     /// The item by its key (indexes shift as the spec loads).
     Spec { component: Option<ComponentId>, item: Option<String> },

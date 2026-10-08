@@ -241,10 +241,10 @@
         return h("tr", {}, h("td", {}, itemLink(r.item), h("div", { class: "muted small" }, r.note)), r.does.map((d) => h("td", { class: "dotcell" }, d ? h("span", { class: "yes" }, "●") : h("span", { class: "no" }, "·"))), h("td", { class: "keys" }, keys), h("td", {}, h("span", { class: "pill st-" + it.status[0] }, statusWord(it.status[0]))));
       })));
     return h("section", { class: "block", id: "ways" },
-      h("h2", {}, "Seven ways to see more or less"),
-      h("p", { class: "lede" }, "This is the heart of the confusion. Each row changes something different. Rows that change the same columns are candidates to merge."),
+      h("h2", {}, "Ways to see more or less"),
+      h("p", { class: "lede" }, "Each row changes one thing. None of them happens on its own: the screen changes only because you did something."),
       h("div", { class: "table-scroll" }, table),
-      h("div", { class: "block-notes" }, noteButton("ways", "Seven ways to see more or less"), h("span", { class: "muted" }, "Ideas for merging these?")));
+      h("div", { class: "block-notes" }, noteButton("ways", "Ways to see more or less"), h("span", { class: "muted" }, "Anything here still unclear?")));
   }
   function clashes() {
     return h("section", { class: "block", id: "clashes" },
@@ -326,8 +326,9 @@
     filter.addEventListener("input", () => { const q = filter.value.toLowerCase(); rows.forEach((r) => (r.hidden = q && !r.dataset.text.includes(q))); });
     const unexplained = DATA.actions.filter((a) => !usedIn.has(a.id)).length;
     const toolRows = DATA.tools.map((t) => h("tr", {}, h("td", { class: "mono" }, t.name), h("td", { class: "small" }, t.description), h("td", { class: "small" }, t.params.map((p) => h("div", {}, h("span", { class: "mono" }, p.name), p.required ? "" : h("span", { class: "muted" }, " (optional)"))), t.params.length ? null : h("span", { class: "muted" }, "nothing")), h("td", { class: "small" }, [...(usedIn.get("tool:" + t.name) || [])].map((w) => h("div", {}, itemLink(w))))));
-    const viewRows = Object.entries(DATA.views.views).map(([n, v]) => h("tr", {}, h("td", { class: "mono" }, n), h("td", { class: "small" }, v.description), h("td", { class: "small" }, v.kinds.join(", "), v.overlays && v.overlays.length ? h("div", { class: "muted" }, "over: " + v.overlays.join(", ")) : null, v.links ? h("div", { class: "muted" }, "counted: " + v.links.join(", ")) : null), h("td", { class: "small" }, `${v.layout}, ${v.direction}, ${v.depth} hops`)));
-    const levels = DATA.views.grains.map((g) => h("span", { class: "chip" }, g.name, h("span", { class: "muted" }, ` (${g.types.join(", ")}, ${g.pick})`)));
+    const viewRows = Object.entries(DATA.views.views).map(([n, v]) => h("tr", {}, h("td", { class: "mono" }, n), h("td", { class: "small" }, v.description), h("td", { class: "small" }, `${v.depth} levels`), h("td", { class: "small" }, `the first ${v.starts}`)));
+    const L = DATA.views.layout;
+    const sizes = `Cards ${L.card_min_w}–${L.card_max_w} wide; names at ${L.name_size} px, other lines at ${L.small_size} px; ${L.gap_x} between columns, ${L.gap_y} between cards.`;
     return h("section", { class: "block", id: "reference" },
       h("h2", {}, "Reference"),
       h("p", { class: "lede" }, "Generated from the cockpit and the server by their tests, so it can't drift. Rows marked in amber aren't explained by any item above."),
@@ -336,9 +337,9 @@
       h("div", { class: "table-scroll" }, h("table", { class: "ref-table" }, h("thead", {}, h("tr", {}, h("th", {}, "Action"), h("th", {}, "Keys"), h("th", {}, "Where"), h("th", {}, "Kind"), h("th", {}, "Explained in"))), h("tbody", {}, rows))),
       h("h3", { class: "ref-h" }, `Agent tools (${DATA.tools.length})`),
       h("div", { class: "table-scroll" }, h("table", { class: "ref-table" }, h("thead", {}, h("tr", {}, h("th", {}, "Tool"), h("th", {}, "What it does"), h("th", {}, "Takes"), h("th", {}, "Explained in"))), h("tbody", {}, toolRows))),
-      h("h3", { class: "ref-h" }, `Views (${Object.keys(DATA.views.views).length}) and levels`),
-      h("div", { class: "table-scroll" }, h("table", { class: "ref-table" }, h("thead", {}, h("tr", {}, h("th", {}, "View"), h("th", {}, "What it shows"), h("th", {}, "Relations"), h("th", {}, "Shape"))), h("tbody", {}, viewRows))),
-      h("p", { class: "small" }, "Levels relation views can be seen at, finest first: ", levels));
+      h("h3", { class: "ref-h" }, `Views (${Object.keys(DATA.views.views).length})`),
+      h("div", { class: "table-scroll" }, h("table", { class: "ref-table" }, h("thead", {}, h("tr", {}, h("th", {}, "View"), h("th", {}, "What it shows"), h("th", {}, "Default depth"), h("th", {}, "Starting points shown without a root"))), h("tbody", {}, viewRows))),
+      h("p", { class: "small" }, "Layout sizes (from trees.toml; the cockpit draws with the same): ", sizes));
   }
 
   // ── Page ────────────────────────────────────────────────────────────
@@ -346,10 +347,13 @@
     const root = document.documentElement.style;
     for (const [k, v] of Object.entries(look.theme)) root.setProperty(`--t-${k}`, v);
     for (const [k, v] of Object.entries(look.graph_style.kinds)) root.setProperty(`--k-${k}`, `var(--t-${v})`);
-    root.setProperty("--k-missing", `var(--t-${look.graph_style.edges.missing.color})`);
-    root.setProperty("--k-unconfirmed", `var(--t-${look.graph_style.unconfirmed.color})`);
-    for (const [k, v] of Object.entries(look.graph_style.nodes.stages)) root.setProperty(`--stage-${k}`, `var(--t-${v})`);
-    for (const [k, v] of Object.entries(look.graph_style.nodes.outline)) root.setProperty(`--plan-${k}`, `var(--t-${v.color})`);
+    // Plan marks: card outlines and line colours (a line without a colour of
+    // its own takes its kind's).
+    for (const [k, v] of Object.entries(look.graph_style.nodes.outline)) root.setProperty(`--mark-${k}`, `var(--t-${v.color})`);
+    for (const [k, v] of Object.entries(look.graph_style.lines)) if (v.color) root.setProperty(`--line-${k}`, `var(--t-${v.color})`);
+    for (const [k, v] of Object.entries(look.graph_style.back)) if (v.color) root.setProperty(`--back-${k}`, `var(--t-${v.color})`);
+    for (const [k, v] of Object.entries(look.graph_style.pills)) root.setProperty(`--pill-${k}`, `var(--t-${v})`);
+    root.setProperty("--outside-plan", look.graph_style.nodes.outside_plan_alpha);
     root.setProperty("--dim", look.look.dim);
   }
   function nav() {

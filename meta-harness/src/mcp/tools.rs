@@ -3,7 +3,6 @@
 //! user's graph at things. There is deliberately no approval tool: the user
 //! approves in the cockpit.
 
-use arch_graph::ViewCatalog;
 use arch_graph::tree::{TreeConfig, ViewKind};
 use serde_json::json;
 
@@ -13,12 +12,10 @@ fn tool(name: &str, description: &str, input_schema: serde_json::Value) -> McpTo
     McpTool { name: name.into(), description: description.into(), input_schema }
 }
 
-pub fn list_tools(views: &ViewCatalog, trees: &TreeConfig) -> Vec<McpTool> {
+pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
     let tree_list: Vec<String> = ViewKind::ALL.iter().map(|v| format!("- {}: {}", v.name(), trees.view(*v).description)).collect();
     let tree_help = format!("Views (each a tree from one root, cut to a size limit that it reports):\n{}", tree_list.join("\n"));
     let card = json!({ "type": "string", "description": "A card: a component id (rust:my_crate::server::run), or in data_flow a data type as type:<Name>" });
-    let view_list: Vec<String> = views.views.iter().map(|(name, v)| format!("- {name}: {}", v.description)).collect();
-    let view_help = format!("Views (each a lens on the same graph):\n{}", view_list.join("\n"));
     let id = json!({ "type": "string", "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run" });
     let plan = json!({ "type": "string", "description": "Plan id" });
     let kind = json!({ "type": "string", "enum": ["contains", "implements", "calls", "data_flow"] });
@@ -100,8 +97,15 @@ pub fn list_tools(views: &ViewCatalog, trees: &TreeConfig) -> Vec<McpTool> {
         ),
         tool(
             "navigate",
-            &format!("Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing.\n{view_help}"),
-            json!({ "type": "object", "properties": { "view": { "type": "string", "enum": views.views.keys().collect::<Vec<_>>() }, "source": { "type": "string", "description": "\"code\" (the code alone) or \"plan:<id>\" (the code with that plan); leave out to keep what the user sees" }, "roots": { "type": "array", "items": id }, "depth": { "type": "integer" }, "focus": id } }),
+            &format!("Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it.\n{tree_help}"),
+            json!({ "type": "object", "properties": {
+                "view": { "type": "string", "enum": ViewKind::ALL.iter().map(|v| v.name()).collect::<Vec<_>>() },
+                "source": { "type": "string", "description": "\"code\" (the code alone) or \"plan:<id>\" (the code with that plan)" },
+                "root": card,
+                "way": { "type": "string", "enum": ["down", "up"] },
+                "depth": { "type": "integer" },
+                "select": card
+            } }),
         ),
         tool("plan_list", "All plans, with their components and stages.", json!({ "type": "object", "properties": {} })),
         tool(

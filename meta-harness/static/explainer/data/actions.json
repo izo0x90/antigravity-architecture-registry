@@ -363,22 +363,8 @@
       "x",
       "Escape"
     ],
-    "label": "Close the inspector",
+    "label": "Close the details",
     "leader": "SPC g x",
-    "toolbar": false,
-    "views": [
-      "graph"
-    ]
-  },
-  {
-    "choice": false,
-    "group": "View",
-    "id": "graph.coarser",
-    "keys": [
-      "<"
-    ],
-    "label": "A level up: group into what holds them",
-    "leader": "SPC g <",
     "toolbar": false,
     "views": [
       "graph"
@@ -391,7 +377,7 @@
     "keys": [
       "-"
     ],
-    "label": "Show fewer hops",
+    "label": "Show fewer levels",
     "leader": "SPC g -",
     "toolbar": true,
     "views": [
@@ -405,23 +391,9 @@
     "keys": [
       "+"
     ],
-    "label": "Show more hops",
+    "label": "Show more levels",
     "leader": "SPC g +",
     "toolbar": true,
-    "views": [
-      "graph"
-    ]
-  },
-  {
-    "choice": false,
-    "group": "View",
-    "id": "graph.finer",
-    "keys": [
-      ">"
-    ],
-    "label": "A level down: open into the parts",
-    "leader": "SPC g >",
-    "toolbar": false,
     "views": [
       "graph"
     ]
@@ -443,22 +415,36 @@
   {
     "choice": false,
     "group": "View",
-    "id": "graph.focus",
-    "keys": [],
-    "label": "Focus on the selection",
-    "leader": "SPC g f",
-    "toolbar": false,
+    "id": "graph.flip",
+    "keys": [
+      "r"
+    ],
+    "label": "Flip: show what calls it",
+    "leader": "SPC g r",
+    "toolbar": true,
     "views": [
       "graph"
     ]
   },
   {
-    "choice": true,
+    "choice": false,
     "group": "View",
-    "id": "graph.follow",
+    "id": "graph.full_code",
     "keys": [],
-    "label": "Follow this data through the code",
-    "leader": null,
+    "label": "Show the plan in the full code",
+    "leader": "SPC g F",
+    "toolbar": true,
+    "views": [
+      "graph"
+    ]
+  },
+  {
+    "choice": false,
+    "group": "Navigate",
+    "id": "graph.go_in",
+    "keys": [],
+    "label": "Go into step",
+    "leader": "SPC g f",
     "toolbar": false,
     "views": [
       "graph"
@@ -479,39 +465,13 @@
     ]
   },
   {
-    "choice": true,
-    "group": "View",
-    "id": "graph.level",
-    "keys": [],
-    "label": "See it by level (functions, types, modules, packages, folders)",
-    "leader": "SPC g L",
-    "toolbar": true,
-    "views": [
-      "graph"
-    ]
-  },
-  {
-    "choice": false,
-    "group": "Navigate",
-    "id": "graph.next_call",
-    "keys": [
-      "] e"
-    ],
-    "label": "Next call, in call order",
-    "leader": null,
-    "toolbar": false,
-    "views": [
-      "graph"
-    ]
-  },
-  {
     "choice": false,
     "group": "View",
     "id": "graph.next_view",
     "keys": [
       "v"
     ],
-    "label": "Next view",
+    "label": "Next view (data flow)",
     "leader": null,
     "toolbar": false,
     "views": [
@@ -523,35 +483,9 @@
     "group": "View",
     "id": "graph.plan",
     "keys": [],
-    "label": "Lay a plan over the code",
+    "label": "Show the code, or one plan",
     "leader": "SPC g P",
     "toolbar": true,
-    "views": [
-      "graph"
-    ]
-  },
-  {
-    "choice": false,
-    "group": "Navigate",
-    "id": "graph.prev_call",
-    "keys": [
-      "[ e"
-    ],
-    "label": "Previous call, in call order",
-    "leader": null,
-    "toolbar": false,
-    "views": [
-      "graph"
-    ]
-  },
-  {
-    "choice": false,
-    "group": "View",
-    "id": "graph.reached_by",
-    "keys": [],
-    "label": "What reaches it (its callers, outwards)",
-    "leader": null,
-    "toolbar": false,
     "views": [
       "graph"
     ]
@@ -569,71 +503,11 @@
     ]
   },
   {
-    "choice": false,
-    "group": "View",
-    "id": "graph.show_all",
-    "keys": [],
-    "label": "Show every part (… more)",
-    "leader": null,
-    "toolbar": false,
-    "views": [
-      "graph"
-    ]
-  },
-  {
-    "choice": false,
-    "group": "View",
-    "id": "graph.story",
-    "keys": [],
-    "label": "Tell its story (what it calls, in order)",
-    "leader": null,
-    "toolbar": false,
-    "views": [
-      "graph"
-    ]
-  },
-  {
-    "choice": false,
-    "group": "View",
-    "id": "graph.unfocus",
-    "keys": [],
-    "label": "Back to the view's entry points",
-    "leader": "SPC g u",
-    "toolbar": true,
-    "views": [
-      "graph"
-    ]
-  },
-  {
-    "choice": false,
-    "group": "View",
-    "id": "graph.unfollow",
-    "keys": [],
-    "label": "Stop following",
-    "leader": null,
-    "toolbar": true,
-    "views": [
-      "graph"
-    ]
-  },
-  {
-    "choice": false,
-    "group": "View",
-    "id": "graph.up",
-    "keys": [],
-    "label": "Up a level",
-    "leader": null,
-    "toolbar": true,
-    "views": [
-      "graph"
-    ]
-  },
-  {
     "choice": true,
     "group": "View",
     "id": "graph.view",
     "keys": [],
-    "label": "Switch view",
+    "label": "Switch view (contains, calls, data flow)",
     "leader": "SPC g v",
     "toolbar": true,
     "views": [

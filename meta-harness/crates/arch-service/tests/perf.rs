@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use arch_graph::tree::{TreeRequest, ViewKind, Way, problems};
-use arch_graph::{TypeSystem, ViewCatalog};
+use arch_graph::TypeSystem;
 use arch_index::PackSet;
 use arch_service::{ArchitectureService, MemoryIndex, MemoryPlans};
 
@@ -41,7 +41,7 @@ fn copy_sources(root: &Path, packs: &PackSet) -> tempfile::TempDir {
 }
 
 fn open(root: &Path) -> ArchitectureService {
-    ArchitectureService::open(root, PackSet::built_in().unwrap(), TypeSystem::defaults().unwrap(), ViewCatalog::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(MemoryIndex::default())).unwrap()
+    ArchitectureService::open(root, PackSet::built_in().unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(MemoryIndex::default())).unwrap()
 }
 
 fn ms(since: Instant) -> u64 {
@@ -109,7 +109,7 @@ fn measure(name: &str, root: &Path) {
     assert!(took <= limits.perf.search_ms, "{name}: search took {took} ms");
 }
 
-// req: M.1, M.7
+// req: M.1, M.7, G.7, G.9
 #[test]
 fn this_repo_and_tokio_stay_within_their_limits() {
     let this = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();

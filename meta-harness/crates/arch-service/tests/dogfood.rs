@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use arch_graph::{ComponentId, RelationKind, TypeSystem, ViewCatalog};
+use arch_graph::{ComponentId, RelationKind, TypeSystem};
 use arch_index::PackSet;
 use arch_service::{ArchitectureService, MemoryIndex, MemoryPlans};
 
@@ -15,7 +15,6 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
         &root,
         PackSet::built_in().unwrap(),
         TypeSystem::defaults().unwrap(),
-        ViewCatalog::defaults().unwrap(),
         Box::new(MemoryPlans::default()),
         Box::new(MemoryIndex::default()),
     )
@@ -31,7 +30,7 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
         "arch_service::checks::check_plan",
         "arch_index::resolve::resolve",
         "arch_graph::graph::Graph",
-        "arch_graph::view::query",
+        "arch_graph::tree::build",
     ] {
         assert!(graph.component(&id(known)).is_some(), "{known} was ingested");
     }
@@ -71,7 +70,6 @@ fn cached_extracts_from_another_pack_version_are_parsed_again() {
             &root,
             packs,
             TypeSystem::defaults().unwrap(),
-            ViewCatalog::defaults().unwrap(),
             Box::new(MemoryPlans::default()),
             Box::new(arch_service::FsIndex::new(&root).unwrap()),
         )

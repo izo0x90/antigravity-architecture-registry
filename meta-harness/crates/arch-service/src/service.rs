@@ -8,10 +8,9 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use arch_graph::tree::{Tree, TreeRequest};
-use arch_graph::view::{query, render_text};
 use arch_graph::{
     Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
-    RepoPath, Severity, Source, Stage, Target, TypeSystem, ViewCatalog, ViewRequest, ViewSpec, can_transition, ComponentDetail, ViewResult, schema::Dsl,
+    RepoPath, Severity, Source, Stage, Target, TypeSystem, ViewRequest, can_transition, ComponentDetail, schema::Dsl,
     IndexState, IndexStatus, IndexSummary,
 };
 use arch_index::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, PackSet, content_hash, extract_file, resolve, walk, UnverifiedFlow};
@@ -124,7 +123,6 @@ pub struct ArchitectureService {
     packs: PackSet,
     types: TypeSystem,
     dsl: Dsl,
-    views: ViewCatalog,
     trees: arch_graph::tree::TreeConfig,
     rules: CodeRules,
     plans: Box<dyn PlanRepository>,
@@ -166,7 +164,7 @@ fn now_rfc3339() -> String {
 impl ArchitectureService {
     /// Opens the service over `root`, loading the cached index (no parsing).
     /// Code rules start as the defaults; see `with_rules`.
-    pub fn open(root: &Path, packs: PackSet, types: TypeSystem, views: ViewCatalog, plans: Box<dyn PlanRepository>, index: Box<dyn CodeIndexStore>) -> Result<Self, ServiceError> {
+    pub fn open(root: &Path, packs: PackSet, types: TypeSystem, plans: Box<dyn PlanRepository>, index: Box<dyn CodeIndexStore>) -> Result<Self, ServiceError> {
         // Packs map onto types: every one they name must exist.
         packs.check_types(&types).map_err(|e| ServiceError::Index(e.to_string()))?;
         let rules = CodeRules::defaults(&packs, &types).map_err(|e| ServiceError::Index(e.to_string()))?;
@@ -175,7 +173,6 @@ impl ArchitectureService {
             packs,
             types,
             dsl: Dsl::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in schema DSL: {e}")))?,
-            views,
             trees: arch_graph::tree::TreeConfig::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in tree config: {e}")))?,
             rules,
             plans,
@@ -246,9 +243,6 @@ impl ArchitectureService {
         &self.types
     }
 
-    pub fn views(&self) -> &ViewCatalog {
-        &self.views
-    }
 
     pub fn subscribe(&self, listener: impl Fn(&ArchEvent) + Send + Sync + 'static) {
         if let Ok(mut l) = self.listeners.write() {
@@ -740,20 +734,7 @@ impl ArchitectureService {
         for reference in &plan.references {
             ids.insert(reference.id.clone());
             if reference.depth > 0 && !reference.kinds.is_empty() {
-                let spec = ViewSpec {
-                    name: String::new(),
-                    description: String::new(),
-                    kinds: reference.kinds.clone(),
-                    direction: arch_graph::view::Direction::Out,
-                    depth: reference.depth,
-                    layout: arch_graph::view::LayoutKind::Layered,
-                    overlays: Vec::new(),
-                    include_ancestors: false,
-                    links: Vec::new(),
-                    roots: vec![reference.id.clone()],
-                    filters: Default::default(),
-                };
-                ids.extend(query(&graph, &spec).nodes.into_iter().map(|n| n.id));
+ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             }
         }
         Ok(ids.into_iter().collect())
@@ -986,67 +967,6 @@ impl ArchitectureService {
         Ok(out)
     }
 
-    pub fn view(&self, spec: &ViewSpec, source: &Source) -> Result<ViewResult, ServiceError> {
-        let graph = self.graph(source)?;
-        // Filtering on a type keeps its specializations.
-        let mut spec = spec.clone();
-        spec.filters = spec.filters.with_specializations(&self.types);
-        let mut view = query(&graph, &spec);
-        // Flows the code shows but the types can't confirm, between what's shown.
-        if spec.kinds.contains(&arch_graph::RelationKind::DataFlow) || spec.overlays.contains(&arch_graph::RelationKind::DataFlow) {
-            let shown: BTreeSet<ComponentId> = view.nodes.iter().map(|n| n.id.clone()).collect();
-            let snapshot = self.snapshot()?;
-            let unverified = &snapshot.unverified;
-            let touching: Vec<&arch_index::UnverifiedFlow> = unverified.iter().filter(|u| shown.contains(&u.source) || shown.contains(&u.target)).collect();
-            // The other end comes into the view with it.
-            for u in &touching {
-                for end in [&u.source, &u.target] {
-                    if !shown.contains(end) && view.node(end).is_none() && graph.component(end).is_some() {
-                        view.nodes.push(arch_graph::view::ViewNode {
-                            id: end.clone(),
-                            depth: None,
-                            truncated: false,
-                            alignment: graph.alignment(end).unwrap_or(arch_graph::Alignment::Observed),
-                            members: 0,
-                            ancestors: graph.parent(end).map(|_| arch_graph::view::ancestors_of(&graph, end)).unwrap_or_default(),
-                        });
-                    }
-                }
-            }
-            let mut extra = Vec::new();
-            for u in touching {
-                extra.push(arch_graph::view::ViewEdge {
-                    id: arch_graph::RelationId(format!("data_flow:{}->{}:unconfirmed:{}", u.source, u.target, u.position)),
-                    kind: arch_graph::RelationKind::DataFlow,
-                    source: u.source.clone(),
-                    target: u.target.clone(),
-                    alignment: arch_graph::Alignment::Observed,
-                    overlay: !spec.kinds.contains(&arch_graph::RelationKind::DataFlow),
-                    order: None,
-                    carries: None,
-                    unconfirmed: Some(u.reason.clone()),
-                });
-            }
-            view.edges.extend(extra);
-        }
-        let text = render_text(&graph, &view);
-        // What's shown, what holds the focus, and what it reaches outside.
-        let named = view.nodes.iter().map(|n| &n.id).chain(&view.trail).chain(view.outside.iter().map(|o| &o.group)).chain(view.nodes.iter().flat_map(|n| n.ancestors.iter()));
-        let components = named.filter_map(|id| graph.component(id).map(|c| (id.clone(), c.clone()))).collect();
-        Ok(ViewResult { view, text, components })
-    }
-
-    pub fn named_view(&self, name: &str, source: &Source, roots: Vec<ComponentId>, depth: Option<u32>) -> Result<ViewResult, ServiceError> {
-        let mut spec = self.views.get(name).cloned().ok_or_else(|| ServiceError::NotFound(format!("view '{name}'")))?;
-        if !roots.is_empty() {
-            spec.roots = roots;
-        }
-        if let Some(depth) = depth {
-            spec.depth = depth;
-        }
-        self.view(&spec, source)
-    }
-
     pub fn component(&self, id: &ComponentId, source: &Source) -> Result<ComponentDetail, ServiceError> {
         let graph = self.graph(source)?;
         let component = graph.component(id).cloned().ok_or_else(|| ServiceError::NotFound(id.to_string()))?;
@@ -1222,15 +1142,20 @@ impl ArchitectureService {
 
     /// Asks clients to show something (the agent driving the user's view).
     pub fn request_view(&self, request: ViewRequest, by: Requester) -> Result<(), ServiceError> {
-        if let Some(name) = &request.view
-            && self.views.get(name).is_none()
-        {
-            return Err(ServiceError::NotFound(format!("view '{name}'")));
+        // What it points at has to be there: the root in the view asked for,
+        // the card to select anywhere in the graph.
+        let source = request.source.clone().unwrap_or_default();
+        if let Some(root) = &request.root {
+            let tree = TreeRequest { view: request.view.unwrap_or_default(), source: source.clone(), root: Some(root.clone()), depth: Some(0), ..TreeRequest::default() };
+            self.with_tree_input(&tree, |_| Ok(()))?;
         }
-        if let Some(focus) = &request.focus
-            && self.graph(request.source.as_ref().unwrap_or(&Source::Code))?.component(focus).is_none()
+        if let Some(select) = &request.select
+            && !select.starts_with("type:")
         {
-            return Err(ServiceError::NotFound(focus.to_string()));
+            let id = ComponentId::new(select.strip_prefix("start:").or(select.strip_prefix("end:")).unwrap_or(select));
+            if self.graph(&source)?.component(&id).is_none() {
+                return Err(ServiceError::NotFound(format!("{select} ({source})")));
+            }
         }
         self.emit(ArchEvent::ViewRequested { request: Box::new(request), by });
         Ok(())

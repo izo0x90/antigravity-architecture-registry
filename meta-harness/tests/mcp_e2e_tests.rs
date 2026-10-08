@@ -44,11 +44,11 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     assert!(err);
 
     let (mut events, _) = (state.hub.subscribe().1, ());
-    let (err, _) = mcp.tool("navigate", json!({ "view": "calls", "focus": "rust:sample::run" })).await;
+    let (err, _) = mcp.tool("navigate", json!({ "view": "calls", "select": "rust:sample::run" })).await;
     assert!(!err);
     let event = events.recv().await.unwrap();
     assert!(matches!(event, harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::ViewRequested { by: arch_graph::Requester::Agent, .. } }));
-    let (err, _) = mcp.tool("navigate", json!({ "focus": "rust:ghost" })).await;
+    let (err, _) = mcp.tool("navigate", json!({ "select": "rust:ghost" })).await;
     assert!(err);
 
     let (err, text) = mcp.tool("plan_list", json!({})).await;

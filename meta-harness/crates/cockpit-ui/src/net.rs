@@ -378,31 +378,23 @@ impl NetClient {
         self.call("GET", "/api/arch/types", None, ctx, on_done);
     }
 
-    pub fn arch_views(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::ViewCatalog>) + Send + 'static) {
-        self.call("GET", "/api/arch/views", None, ctx, on_done);
+    /// One of the three views as a laid-out tree.
+    pub fn graph_tree(&self, request: &arch_graph::tree::TreeRequest, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::tree::Tree>) + Send + 'static) {
+        self.call("POST", "/api/graph/tree", serde_json::to_value(request).ok(), ctx, on_done);
     }
 
-    pub fn arch_view(
-        &self,
-        name: &str,
-        plan: Option<&arch_graph::PlanId>,
-        roots: &[arch_graph::ComponentId],
-        depth: Option<u32>,
-        ctx: egui::Context,
-        on_done: impl FnOnce(NetResult<arch_graph::ViewResult>) + Send + 'static,
-    ) {
-        let mut path = format!("/api/arch/view?name={}", urlencoding::encode(name));
+    /// Everything about one card (its component's detail).
+    pub fn graph_card(&self, key: &str, plan: Option<&arch_graph::PlanId>, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::ComponentDetail>) + Send + 'static) {
+        let mut path = format!("/api/graph/card?key={}", urlencoding::encode(key));
         if let Some(plan) = plan {
             path.push_str(&format!("&plan={}", urlencoding::encode(&plan.0)));
         }
-        if !roots.is_empty() {
-            let joined: Vec<&str> = roots.iter().map(|r| r.as_str()).collect();
-            path.push_str(&format!("&roots={}", urlencoding::encode(&joined.join(","))));
-        }
-        if let Some(depth) = depth {
-            path.push_str(&format!("&depth={depth}"));
-        }
         self.call("GET", &path, None, ctx, on_done);
+    }
+
+    /// The views' settings: descriptions, depths and the sizes trees are laid out with.
+    pub fn graph_config(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::tree::TreeConfig>) + Send + 'static) {
+        self.call("GET", "/api/graph/config", None, ctx, on_done);
     }
 
     pub fn arch_component(
