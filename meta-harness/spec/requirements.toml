@@ -1307,9 +1307,86 @@ id = "M.16"
 slice = "M"
 title = "Accurate calls when rust-analyzer is there"
 acceptance = "When rust-analyzer is installed its SCIP output confirms calls by position (proven); without it calls are matched by name and marked unconfirmed in views."
+manual = true
+done = "2026-10-08: superseded by AP.9 (one analysis path: each language's own indexer, as a pack, confirms links)"
 
 [[req]]
 id = "M.17"
 slice = "M"
 title = "Docs match the new system"
 acceptance = "The explainer and README describe the three views, the actions, plan focus, the architecture and /api/perf; the explainer's generated data is current and names nothing deleted."
+manual = true
+done = "2026-10-08: superseded by AP.12 (docs, after the analysis and packs slice)"
+
+# ---- AP: packs and one analysis path (spec/analysis-packs-plan.md) ----
+[[req]]
+id = "AP.1"
+slice = "AP"
+title = "Pack manifests are data, strictly checked"
+acceptance = "harness, language and indexer packs share one manifest (pack version, tool, supported tool versions, check, per-platform install steps with checksums, run contract); bad manifests, unknown placeholders and downloads without a checksum are rejected when loaded."
+
+[[req]]
+id = "AP.2"
+slice = "AP"
+title = "Platforms and pack sources come from config"
+acceptance = "the platform name comes from packs/platforms.toml, and packs come from the sources packs/index.toml lists (the distribution's packs compiled in, then project and user folders, later ones overriding by name); no tool, URL or path is written in code."
+
+[[req]]
+id = "AP.3"
+slice = "AP"
+title = "One generic installer"
+acceptance = "meta-harness pack list/check/install/update/which run a pack's steps (download, verify, unpack, place, run a command without a shell); a wrong checksum installs nothing and keeps what was there; installs are recorded in a lock file; check compares the tool's version with the pack's range."
+
+[[req]]
+id = "AP.4"
+slice = "AP"
+title = "The harness is a pack"
+acceptance = "the Antigravity ACP server installs through its pack; the driver finds it through the instance config or the installed pack; the install scripts and hard-coded paths are gone."
+
+[[req]]
+id = "AP.5"
+slice = "AP"
+title = "Languages and indexers are packs"
+acceptance = "Rust, Python and TypeScript are language packs (syntax, highlight queries, their indexer) loaded through the pack sources; rust-analyzer, scip-typescript and scip-python are indexer packs with check and run contracts."
+
+[[req]]
+id = "AP.6"
+slice = "AP"
+title = "Our analyzer is its own crate"
+acceptance = "the reader, name linker and combiner live in the code-analyzer crate; the server uses it as a library and meta-harness analyze runs the same stages and writes the same result."
+
+[[req]]
+id = "AP.7"
+slice = "AP"
+title = "One pipeline: read, index, combine, store"
+acceptance = "every language goes through read (ours), index (its indexer pack when installed) and combine (ours) into SQLite in one transaction; start-up and every reader use only the stored result; without an indexer the graph is what it is today."
+
+[[req]]
+id = "AP.8"
+slice = "AP"
+title = "Combined by position, nothing lost"
+acceptance = "a SCIP reference at a call's name range makes that call proven (replacing a name match, or linking one we couldn't); other calls stay unconfirmed or unresolved with the reason; data flow, placeholders and rule matches are kept; a file changed since indexing uses no SCIP data."
+
+[[req]]
+id = "AP.9"
+slice = "AP"
+title = "Real indexer confirms calls"
+acceptance = "with rust-analyzer installed, indexing the Rust fixture marks its calls proven and they match the fixture's expected calls; the indexer runs in the background and its stage is timed and shown in the index status."
+
+[[req]]
+id = "AP.10"
+slice = "AP"
+title = "Views show proven and unconfirmed"
+acceptance = "the graph draws unconfirmed links with their own look and says so in the legend and details; the agent's view text marks them."
+
+[[req]]
+id = "AP.11"
+slice = "AP"
+title = "The code viewer uses the stored analysis"
+acceptance = "the code view colours text from the stored highlight runs and jumps to definitions and lists references from the stored occurrences, all served from SQLite."
+
+[[req]]
+id = "AP.12"
+slice = "AP"
+title = "Docs match the new system"
+acceptance = "the README and explainer describe the packs, the installer, the analysis path, proven and unconfirmed links, the code viewer, the three views, the actions, plan focus and /api/perf; the explainer's generated data is current and names nothing deleted."
