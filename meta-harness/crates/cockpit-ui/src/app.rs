@@ -3420,6 +3420,20 @@ mod tests {
         assert_eq!(app.code.target_line, Some(7));
     }
 
+    // req: M.14
+    #[test]
+    fn the_graph_says_when_an_answer_was_slow_or_cut() {
+        let (ctx, mut app) = full_app();
+        focus(&ctx, &mut app, BufferKind::Graph);
+        let mut tree = crate::graph::tests::sample_tree();
+        tree.slow_ms = Some(340);
+        tree.cut = Some(arch_graph::tree::Cut { reason: arch_graph::tree::CutReason::Time, starts_left_out: 0, shown: 2, asked: 3, hidden: 7 });
+        app.graph.set_tree(tree);
+        let shown = texts(&frame(&ctx, &mut app, vec![]));
+        assert!(shown.contains("slow: 340 ms"), "{shown}");
+        assert!(shown.contains("showing 2 of 3 levels: 7 more (out of time)"), "{shown}");
+    }
+
     // req: M.13
     #[test]
     fn find_in_the_code_asks_the_graph_as_its_typed() {

@@ -17,6 +17,8 @@ pub struct Limits {
     pub tree_ms: u64,
     /// A request slower than this is logged.
     pub slow_request_ms: u64,
+    /// Answers whose timings are kept for /api/perf.
+    pub perf_kept: usize,
     /// Searching symbols, files and lines.
     pub search: SearchLimits,
     /// Where the facts read from the code are kept.

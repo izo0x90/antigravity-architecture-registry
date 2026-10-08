@@ -135,6 +135,18 @@ impl FactStore for SqliteStore {
         tx.commit().map_err(failed)
     }
 
+    /// The file and its write-ahead log.
+    fn bytes(&self) -> u64 {
+        ["", "-wal"]
+            .iter()
+            .map(|suffix| {
+                let mut p = self.path.as_os_str().to_owned();
+                p.push(suffix);
+                std::fs::metadata(PathBuf::from(p)).map_or(0, |m| m.len())
+            })
+            .sum()
+    }
+
     fn clear(&self) -> Result<(), StoreError> {
         self.connection()?.execute("DELETE FROM files", []).map_err(failed)?;
         Ok(())

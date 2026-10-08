@@ -186,6 +186,12 @@ overrides them in its own `.nah/` folder:
 | `.nah/queue.toml` | queue settings and session brief templates |
 | `.nah/schema_dsl.toml` | extra shorthand type names for schemas |
 
+How long things take is visible: every answer is timed stage by stage
+(tracing spans), anything over `slow_request_ms` is logged and marked "slow"
+in the graph, and `GET /api/perf` lists the last answers by stage with the
+graph, store and memory sizes. Benchmarks: `cargo bench -p arch-service
+--bench hot`.
+
 Plans live in `.nah/plans/`. What was read from the code is kept in
 `.nah/cache/index.sqlite` (one row per file, with its size and time), which
 isn't committed: on start the graph is linked from it without reading a file,

@@ -274,6 +274,10 @@ pub struct Tree {
     pub dropped: Vec<String>,
     /// The laid-out drawing's size.
     pub size: (f32, f32),
+    /// Set when building it took longer than the server's slow limit: how
+    /// long it took, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slow_ms: Option<u64>,
 }
 
 impl Tree {
@@ -389,10 +393,22 @@ pub struct Input<'a, G: GraphRead> {
 
 /// Builds the tree a request asks for, cut to the budget, and lays it out.
 pub fn build<G: GraphRead>(input: &Input<G>, request: &TreeRequest) -> Tree {
-    let lens = lens::Lens::new(input, request);
-    let mut tree = walk::walk(&lens, input, request);
-    layout::lay_out(&mut tree, request.view, &input.config.layout);
+    let mut tree = walk_tree(input, request);
+    lay_out(&mut tree, &input.config.layout);
     tree
+}
+
+/// The cards and lines, not yet placed (`build` without the layout, so the
+/// two can be timed apart).
+pub fn walk_tree<G: GraphRead>(input: &Input<G>, request: &TreeRequest) -> Tree {
+    let lens = lens::Lens::new(input, request);
+    walk::walk(&lens, input, request)
+}
+
+/// Places a walked tree's cards and lines.
+pub fn lay_out(tree: &mut Tree, config: &LayoutConfig) {
+    let view = tree.request.view;
+    layout::lay_out(tree, view, config);
 }
 
 /// The cards `card` adds when opened `levels` further: only the new ones

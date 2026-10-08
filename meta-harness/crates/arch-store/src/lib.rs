@@ -66,6 +66,10 @@ pub trait FactStore: Send + Sync {
     fn apply(&self, changes: &[Change]) -> Result<(), StoreError>;
     /// Forgets everything (the next read reads every file).
     fn clear(&self) -> Result<(), StoreError>;
+    /// Its size on disk (0 in memory).
+    fn bytes(&self) -> u64 {
+        0
+    }
 }
 
 #[cfg(test)]

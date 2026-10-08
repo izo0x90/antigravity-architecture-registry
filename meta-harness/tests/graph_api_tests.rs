@@ -101,3 +101,19 @@ async fn the_agent_sees_the_same_tree_as_text() {
     let (err, text) = mcp.tool("view", json!({ "view": "data_flow" })).await;
     assert!(!err && text.contains("data_flow (code)"), "{text}");
 }
+
+// req: M.14
+#[tokio::test]
+async fn the_perf_page_shows_recent_answers_by_stage() {
+    let (addr, _) = spawn_app().await;
+    let (status, _) = http(addr, "POST", "/api/graph/tree", Some(&json!({ "view": "contains", "depth": 2 }).to_string())).await;
+    assert_eq!(status, 200);
+    let (status, body) = http(addr, "GET", "/api/perf", None).await;
+    assert_eq!(status, 200, "{body}");
+    let perf = parse(&body);
+    let tree = perf["recent"].as_array().unwrap().iter().rev().find(|t| t["what"] == "tree").expect("the tree answer is there");
+    let stages: Vec<&str> = tree["stages"].as_array().unwrap().iter().map(|s| s["stage"].as_str().unwrap()).collect();
+    assert_eq!(stages, ["source", "walk", "layout", "encode"]);
+    assert_eq!(tree["size"][1], "bytes");
+    assert!(perf["graph"]["components"].as_u64().unwrap() > 0 && perf["last_index"]["what"] == "ingest", "{body}");
+}

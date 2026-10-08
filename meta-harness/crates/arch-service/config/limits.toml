@@ -13,8 +13,11 @@ cards_per_answer = 400
 links_per_answer = 300
 # How long building and laying out one tree may take before it's cut.
 tree_ms = 200
-# Slower than this, a request is logged with what was asked.
+# Slower than this, a request is logged with what was asked (and the
+# cockpit says so).
 slow_request_ms = 200
+# Answers whose stage-by-stage timings are kept for /api/perf.
+perf_kept = 200
 
 # Searching symbols, files and lines.
 [limits.search]

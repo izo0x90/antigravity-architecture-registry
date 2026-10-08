@@ -522,17 +522,21 @@ window.EXPLAINER = {
     {
       id: "performance", group: "engine", title: "Size and speed", demo: "perf",
       intent: "What one answer costs, measured on this repo and on tokio (159,000 lines).",
-      status: ["works", "Measured by tests that fail when an answer goes over its limit."],
+      status: ["works", "Measured by tests that fail when an answer goes over its limit, and visible while it runs."],
       behaviour: [
         "The old views sent everything they found: 2.6 to 11.6 MB per answer, which the browser then laid out on its one thread. That's what froze it.",
         "Trees send at most the card budget: a few hundred kilobytes at most (about 480 KB in the worst case measured), gzipped on the way.",
         "On tokio, building and laying out a tree takes at most about 20 milliseconds.",
+        "Every answer (a tree, a search, a card, an index run) is timed stage by stage: finding files, reading, storing, linking; the source, the walk, the layout, encoding. Each stage is a tracing span.",
+        "One slower than the limit is logged with what was asked and each stage's time, and the graph's header says \"slow: N ms\". A tree cut for time says so too.",
+        "/api/perf lists the last answers with their stages and sizes, the graph's and the store's size, the server's memory and the last index run.",
+        "Benchmarks for the hot spots (linking, each view's tree, matching names) run with cargo bench -p arch-service --bench hot.",
         "The numbers are kept in spec/perf-baseline.md.",
       ],
       user: [],
       agent: [],
       ties: [["tree-build", "where the budget is applied"], ["config", "the limits are config"]],
-      files: ["crates/arch-service/tests/perf.rs", "spec/perf-baseline.md", "crates/arch-service/config/limits.toml"],
+      files: ["crates/arch-service/tests/perf.rs", "crates/arch-service/src/perf.rs", "crates/arch-service/benches/hot.rs", "spec/perf-baseline.md", "crates/arch-service/config/limits.toml"],
     },
     {
       id: "actions-keymap", group: "engine", title: "Actions and keys", demo: "actions",

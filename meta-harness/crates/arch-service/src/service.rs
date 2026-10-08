@@ -25,6 +25,7 @@ use crate::import::ImportReport;
 use crate::contract::{ContractSlice, slice};
 use crate::ops::{PlanOp, apply};
 use crate::review::{ReviewProvider, ReviewerCatalog, ReviewsReport, Subject};
+use crate::perf::{GraphSize, PerfReport, StoreSize, Timing};
 use crate::store::PlanRepository;
 use crate::tools::{ProcessRunner, ToolCatalog, ToolRunner, ToolsReport};
 use crate::{ServiceError, chain, checks, review, tools, verify};
@@ -213,6 +214,20 @@ pub struct ArchitectureService {
     /// One indexing run at a time (the watcher, agents and the user can all
     /// start one).
     ingest_lock: Mutex<()>,
+    /// The last answers' timings.
+    recent: Mutex<crate::perf::Recent>,
+}
+
+/// A tree request in words (for timings and the slow log).
+fn asked(request: &TreeRequest, card: Option<&str>) -> String {
+    let mut out = format!("{} {:?} from {} depth {:?} ({})", request.view.name(), request.way, request.root.as_deref().unwrap_or("the start"), request.depth, request.source);
+    if let Some(card) = card {
+        out.push_str(&format!(", card {card}"));
+    }
+    if !request.opened.is_empty() {
+        out.push_str(&format!(", {} opened", request.opened.len()));
+    }
+    out
 }
 
 fn change_file(change: &Change) -> &RepoPath {
@@ -268,8 +283,14 @@ impl ArchitectureService {
             plan_locks: Mutex::new(HashMap::new()),
             index_status: RwLock::new(IndexStatus::default()),
             ingest_lock: Mutex::new(()),
+            recent: Mutex::new(crate::perf::Recent::default()),
         };
-        service.rebuild_observed()?;
+        // Linked from the facts kept from the last run (no file is read).
+        service.timed("open", format!("{} files kept", service.files.read().map_err(ServiceError::poisoned)?.extracts.len()), |t| {
+            service.rebuild_observed(t)?;
+            t.size(service.snapshot()?.graph.len().0, "components");
+            Ok(())
+        })?;
         Ok(service)
     }
 
@@ -357,8 +378,11 @@ impl ArchitectureService {
         Ok(out)
     }
 
-    fn rebuild_observed(&self) -> Result<(), ServiceError> {
-        let resolved = resolve(&self.files.read().map_err(ServiceError::poisoned)?.extracts, &self.packs, &self.types);
+    fn rebuild_observed(&self, t: &mut Timing) -> Result<(), ServiceError> {
+        let files = self.files.read().map_err(ServiceError::poisoned)?;
+        let resolved = t.stage("link", || resolve(&files.extracts, &self.packs, &self.types));
+        drop(files);
+        let _snapshot = tracing::info_span!("stage", what = "snapshot").entered();
         let generation = self.snapshot()?.generation + 1;
         let next = Arc::new(Observed {
             graph: Arc::new(resolved.graph),
@@ -434,17 +458,25 @@ impl ArchitectureService {
     }
 
     fn run_ingest(&self, scopes: &[PathBuf]) -> Result<IngestReport, ServiceError> {
+        let asked = scopes.iter().map(|s| self.scope_prefix(s)).map(|p| if p.is_empty() { "the repo".to_owned() } else { p }).collect::<Vec<_>>().join(", ");
+        self.timed("ingest", asked, |t| self.run_ingest_timed(t, scopes))
+    }
+
+    fn run_ingest_timed(&self, t: &mut Timing, scopes: &[PathBuf]) -> Result<IngestReport, ServiceError> {
         let started = Instant::now();
         let mut report = IngestReport::default();
         // Every file first, so progress has a total.
-        let mut found = Vec::new();
-        for scope in scopes {
-            let files = match scope.exists() {
-                true => walk(&self.root, scope, &self.packs).map_err(|e| ServiceError::Index(e.to_string()))?,
-                false => Vec::new(),
-            };
-            found.push((scope.clone(), files));
-        }
+        let found = t.stage("find files", || -> Result<Vec<_>, ServiceError> {
+            let mut found = Vec::new();
+            for scope in scopes {
+                let files = match scope.exists() {
+                    true => walk(&self.root, scope, &self.packs).map_err(|e| ServiceError::Index(e.to_string()))?,
+                    false => Vec::new(),
+                };
+                found.push((scope.clone(), files));
+            }
+            Ok(found)
+        })?;
         let total = found.iter().map(|(_, f)| f.len()).sum();
         self.set_index_status(|s| {
             s.state = IndexState::Indexing;
@@ -452,8 +484,8 @@ impl ArchitectureService {
             s.total = total;
             s.error = None;
         });
-        self.read_files(&found, &mut report)?;
-        self.rebuild_observed()?;
+        self.read_files(t, &found, &mut report)?;
+        self.rebuild_observed(t)?;
         let observed = self.snapshot()?;
         (report.components, report.relations) = observed.graph.len();
         report.ambiguous = observed.ambiguous.len();
@@ -560,7 +592,7 @@ impl ArchitectureService {
     /// on many threads at once, and only those whose content changed are
     /// read for facts again. Files under a scope that are gone (or now
     /// ignored) are dropped. The changes are kept together, all or none.
-    fn read_files(&self, found: &[(PathBuf, Vec<arch_index::SourceFile>)], report: &mut IngestReport) -> Result<(), ServiceError> {
+    fn read_files(&self, t: &mut Timing, found: &[(PathBuf, Vec<arch_index::SourceFile>)], report: &mut IngestReport) -> Result<(), ServiceError> {
         let mut unique: BTreeMap<&RepoPath, &arch_index::SourceFile> = BTreeMap::new();
         for (_, files) in found {
             report.files += files.len();
@@ -571,11 +603,13 @@ impl ArchitectureService {
         let progress = Progress { done: AtomicUsize::new(0), last: Mutex::new(Instant::now()) };
         let mut changes: Vec<Change> = {
             let files = self.files.read().map_err(ServiceError::poisoned)?;
-            let read: Vec<Result<Read, ServiceError>> = unique.values().collect::<Vec<_>>().par_iter().map(|file| {
-                let read = self.read_file(file, &files, trusted_before);
-                self.tick(&progress);
-                read
-            }).collect();
+            let read: Vec<Result<Read, ServiceError>> = t.stage("read", || {
+                unique.values().collect::<Vec<_>>().par_iter().map(|file| {
+                    let read = self.read_file(file, &files, trusted_before);
+                    self.tick(&progress);
+                    read
+                }).collect()
+            });
             let mut changes = Vec::new();
             for r in read {
                 match r? {
@@ -606,7 +640,8 @@ impl ArchitectureService {
         };
         report.changed.sort();
         changes.sort_by(|a, b| change_file(a).cmp(change_file(b)));
-        self.facts.apply(&changes)?;
+        t.size(report.files, "files");
+        t.stage("store", || self.facts.apply(&changes))?;
         self.files.write().map_err(ServiceError::poisoned)?.apply(changes);
         Ok(())
     }
@@ -1155,33 +1190,127 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
 
     /// One of the three views as a tree, cut to the card budget and laid out.
     pub fn tree(&self, request: &TreeRequest) -> Result<Tree, ServiceError> {
-        self.with_tree_input(request, |input| {
-            let started = Instant::now();
-            let tree = arch_graph::tree::build(input, request);
-            self.note_slow("tree", request, started, tree.cards.len());
-            Ok(tree)
+        self.timed("tree", asked(request, None), |t| self.tree_in(t, request))
+    }
+
+    /// The tree, as the JSON sent to the browser (encoding timed too).
+    pub fn tree_json(&self, request: &TreeRequest) -> Result<Vec<u8>, ServiceError> {
+        self.timed("tree", asked(request, None), |t| {
+            let tree = self.tree_in(t, request)?;
+            self.encode(t, &tree)
         })
+    }
+
+    fn tree_in(&self, t: &mut Timing, request: &TreeRequest) -> Result<Tree, ServiceError> {
+        let mut tree = self.with_tree_input(t, request, |t, input| {
+            let mut tree = t.stage("walk", || arch_graph::tree::walk_tree(input, request));
+            t.stage("layout", || arch_graph::tree::lay_out(&mut tree, &input.config.layout));
+            Ok(tree)
+        })?;
+        t.size(tree.cards.len(), "cards");
+        tree.slow_ms = self.slow(t);
+        Ok(tree)
     }
 
     /// The cards opening `card` `levels` further adds (only those).
     pub fn expand(&self, request: &TreeRequest, card: &str, levels: u32) -> Result<Tree, ServiceError> {
-        self.with_tree_input(request, |input| {
-            self.check_card(input, request, card)?;
-            Ok(arch_graph::tree::expand(input, request, card, levels))
+        self.timed("expand", asked(request, Some(card)), |t| self.expand_in(t, request, card, levels))
+    }
+
+    pub fn expand_json(&self, request: &TreeRequest, card: &str, levels: u32) -> Result<Vec<u8>, ServiceError> {
+        self.timed("expand", asked(request, Some(card)), |t| {
+            let tree = self.expand_in(t, request, card, levels)?;
+            self.encode(t, &tree)
         })
+    }
+
+    fn expand_in(&self, t: &mut Timing, request: &TreeRequest, card: &str, levels: u32) -> Result<Tree, ServiceError> {
+        let mut tree = self.with_tree_input(t, request, |t, input| {
+            t.stage("check", || self.check_card(input, request, card))?;
+            Ok(t.stage("build", || arch_graph::tree::expand(input, request, card, levels)))
+        })?;
+        t.size(tree.cards.len(), "cards");
+        tree.slow_ms = self.slow(t);
+        Ok(tree)
     }
 
     /// Where `card` sits: what holds it, what else is in there, its lines to those.
     pub fn context(&self, request: &TreeRequest, card: &str) -> Result<Tree, ServiceError> {
-        self.with_tree_input(request, |input| {
-            self.check_card(input, request, card)?;
-            Ok(arch_graph::tree::context(input, request, card))
+        self.timed("context", asked(request, Some(card)), |t| self.context_in(t, request, card))
+    }
+
+    pub fn context_json(&self, request: &TreeRequest, card: &str) -> Result<Vec<u8>, ServiceError> {
+        self.timed("context", asked(request, Some(card)), |t| {
+            let tree = self.context_in(t, request, card)?;
+            self.encode(t, &tree)
+        })
+    }
+
+    fn context_in(&self, t: &mut Timing, request: &TreeRequest, card: &str) -> Result<Tree, ServiceError> {
+        let mut tree = self.with_tree_input(t, request, |t, input| {
+            t.stage("check", || self.check_card(input, request, card))?;
+            Ok(t.stage("build", || arch_graph::tree::context(input, request, card)))
+        })?;
+        t.size(tree.cards.len(), "cards");
+        tree.slow_ms = self.slow(t);
+        Ok(tree)
+    }
+
+    /// An answer as JSON, its encoding timed and its size kept.
+    fn encode(&self, t: &mut Timing, value: &impl Serialize) -> Result<Vec<u8>, ServiceError> {
+        let bytes = t.stage("encode", || serde_json::to_vec(value)).map_err(|e| ServiceError::Corrupt(e.to_string()))?;
+        t.size(bytes.len(), "bytes");
+        Ok(bytes)
+    }
+
+    /// How long so far, if that's over the slow limit.
+    fn slow(&self, t: &Timing) -> Option<u64> {
+        let ms = t.elapsed_ms();
+        (ms > self.limits.slow_request_ms as f64).then(|| ms.ceil() as u64)
+    }
+
+    /// Runs `answer` timed, and keeps (and, when slow, logs) its timing.
+    pub(crate) fn timed<T>(&self, what: &'static str, asked: String, answer: impl FnOnce(&mut Timing) -> Result<T, ServiceError>) -> Result<T, ServiceError> {
+        let mut t = Timing::start(what, asked);
+        let out = answer(&mut t);
+        self.finish(t);
+        out
+    }
+
+    fn finish(&self, t: Timing) {
+        let timed = t.done(self.limits.slow_request_ms, now_rfc3339());
+        if timed.slow {
+            let stages: Vec<String> = timed.stages.iter().map(|s| format!("{} {:.1} ms", s.stage, s.ms)).collect();
+            tracing::warn!(ms = timed.ms as u64, size = ?timed.size, stages = %stages.join(", "), "slow {}: {}", timed.what, timed.asked);
+        }
+        self.recent.lock().unwrap_or_else(PoisonError::into_inner).push(timed, self.limits.perf_kept);
+    }
+
+    /// The last answers' timings, the graph's and the store's size, and the
+    /// last index run.
+    pub fn perf(&self) -> Result<PerfReport, ServiceError> {
+        let observed = self.snapshot()?;
+        let (components, relations) = observed.graph.len();
+        let overlays = self.merged.lock().unwrap_or_else(PoisonError::into_inner).len();
+        let files = self.files.read().map_err(ServiceError::poisoned)?.extracts.len();
+        let recent = self.recent.lock().unwrap_or_else(PoisonError::into_inner);
+        Ok(PerfReport {
+            recent: recent.list(),
+            last_index: recent.last_index.clone(),
+            graph: GraphSize { components, relations, overlays },
+            store: StoreSize { files, bytes: self.facts.bytes() },
+            memory_bytes: memory_stats::memory_stats().map(|m| m.physical_mem as u64),
+            slow_request_ms: self.limits.slow_request_ms,
         })
     }
 
     /// Everything about one card: its component's details (a data card's
     /// type, a flow's start or end function).
     pub fn card(&self, key: &str, source: &Source) -> Result<ComponentDetail, ServiceError> {
+        self.timed("card", format!("{key} ({source})"), |t| t.stage("details", || self.card_in(key, source)))
+    }
+
+    fn card_in(&self, key: &str, source: &Source) -> Result<ComponentDetail, ServiceError> {
         let id = match key.split_once(':') {
             Some(("type", name)) => {
                 let graph = self.graph(source)?;
@@ -1209,8 +1338,8 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
     }
 
     /// Runs `f` with what building a tree for `request` needs.
-    fn with_tree_input<T>(&self, request: &TreeRequest, f: impl FnOnce(&arch_graph::tree::Input<'_, Graph>) -> Result<T, ServiceError>) -> Result<T, ServiceError> {
-        let graph = self.graph(&request.source)?;
+    fn with_tree_input<T>(&self, t: &mut Timing, request: &TreeRequest, f: impl FnOnce(&mut Timing, &arch_graph::tree::Input<'_, Graph>) -> Result<T, ServiceError>) -> Result<T, ServiceError> {
+        let graph = t.stage("source", || self.graph(&request.source))?;
         let plan = match &request.source {
             Source::Plan(id) => Some(self.plan_shared(id)?),
             Source::Code => None,
@@ -1241,17 +1370,9 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             out_of_time: &out_of_time,
         };
         if let Some(root) = &request.root {
-            self.check_card(&input, request, root)?;
+            t.stage("check", || self.check_card(&input, request, root))?;
         }
-        f(&input)
-    }
-
-    /// Logs a request that went over its time limit, with what was asked.
-    fn note_slow(&self, what: &str, request: &TreeRequest, started: Instant, cards: usize) {
-        let ms = started.elapsed().as_millis() as u64;
-        if ms > self.limits.slow_request_ms {
-            tracing::warn!(ms, cards, view = request.view.name(), source = %request.source, root = ?request.root, depth = ?request.depth, "slow {what}");
-        }
+        f(t, &input)
     }
 
     /// Asks clients to show something (the agent driving the user's view).
@@ -1261,7 +1382,7 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
         let source = request.source.clone().unwrap_or_default();
         if let Some(root) = &request.root {
             let tree = TreeRequest { view: request.view.unwrap_or_default(), source: source.clone(), root: Some(root.clone()), depth: Some(0), ..TreeRequest::default() };
-            self.with_tree_input(&tree, |_| Ok(()))?;
+            self.timed("navigate", asked(&tree, None), |t| self.with_tree_input(t, &tree, |_, _| Ok(())))?;
         }
         if let Some(select) = &request.select
             && !select.starts_with("type:")

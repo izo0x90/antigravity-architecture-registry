@@ -70,3 +70,13 @@ from the watcher).
 | Symbols, qualified ("servce::serch") | 2 ms | 4 ms |
 | Files ("service") | 2 ms | 4 ms |
 | Lines ("fn new") | 2 ms | 1 ms |
+
+### Hot spots (slice P7, `cargo bench -p arch-service --bench hot`, release)
+
+| On this repo | Time |
+|---|---|
+| Linking every file's facts | 127 ms |
+| Contains tree, depth 4 | 2.5 ms |
+| Calls tree, depth 4 | 4.8 ms |
+| Data flow tree, depth 4 | 8.4 ms |
+| Matching a name against every component | 10 µs |

@@ -17,17 +17,22 @@ impl ArchitectureService {
     /// match `query`, best first, at most `limit` (the configured default
     /// when none is given, never more than the configured most).
     pub fn search(&self, query: &str, kind: SearchKind, source: &Source, limit: Option<usize>) -> Result<Found, ServiceError> {
-        let limits = &self.limits.search;
-        let limit = limit.unwrap_or(limits.results).clamp(1, limits.most);
-        let graph = self.graph(source)?;
-        let mut found = match kind {
-            SearchKind::Symbols => self.find_symbols(query, &graph, limit),
-            SearchKind::Files => self.find_files(query, &graph, limit)?,
-            SearchKind::Text => self.find_lines(query, &graph, limit)?,
-        };
-        found.query = query.to_owned();
-        found.kind = kind;
-        Ok(found)
+        self.timed("search", format!("{} {query:?} ({source})", kind.name()), |t| {
+            let limits = &self.limits.search;
+            let limit = limit.unwrap_or(limits.results).clamp(1, limits.most);
+            let graph = t.stage("source", || self.graph(source))?;
+            let mut found = t.stage(kind.name(), || -> Result<Found, ServiceError> {
+                Ok(match kind {
+                    SearchKind::Symbols => self.find_symbols(query, &graph, limit),
+                    SearchKind::Files => self.find_files(query, &graph, limit)?,
+                    SearchKind::Text => self.find_lines(query, &graph, limit)?,
+                })
+            })?;
+            t.size(found.hits.len(), "hits");
+            found.query = query.to_owned();
+            found.kind = kind;
+            Ok(found)
+        })
     }
 
     fn find_symbols(&self, query: &str, graph: &Graph, limit: usize) -> Found {

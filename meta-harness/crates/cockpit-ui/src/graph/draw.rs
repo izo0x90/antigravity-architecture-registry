@@ -412,12 +412,19 @@ impl GraphState {
                 }
                 ui.label(muted(format!("· {} levels · {} cards", self.depth(), tree.cards.len())));
                 if let Some(cut) = &tree.cut {
-                    let text = match (cut.shown < cut.asked, cut.starts_left_out) {
+                    let mut text = match (cut.shown < cut.asked, cut.starts_left_out) {
                         (true, _) => format!("showing {} of {} levels: {} more", cut.shown, cut.asked, cut.hidden),
                         (false, n) => format!("{} of {} starting points", tree.roots.len(), tree.roots.len() as u32 + n),
                     };
+                    if cut.reason == arch_graph::tree::CutReason::Time {
+                        text.push_str(" (out of time)");
+                    }
                     let (glyph, _, color) = crate::status::look("stale");
                     ui.label(RichText::new(format!("{glyph} {text}")).size(look.text_body).color(color)).on_hover_text("Go into a card, or show fewer levels (-)");
+                }
+                if let Some(ms) = tree.slow_ms {
+                    ui.label(RichText::new(format!("· slow: {ms} ms")).size(look.text_body).color(colors().warn))
+                        .on_hover_text("The server took longer than its limit to build this. Each stage's time is at /api/perf.");
                 }
             }
             if !self.stale_files.is_empty() {

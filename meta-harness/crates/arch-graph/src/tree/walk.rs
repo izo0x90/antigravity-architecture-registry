@@ -238,7 +238,7 @@ pub(super) fn walk<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request: &Tre
         (Some(root), _) => lens.path(root),
         (None, _) => Vec::new(),
     };
-    Tree { request, roots, cards: grow.cards, lines: grow.lines, cut, path, dropped, size: (0.0, 0.0) }
+    Tree { request, roots, cards: grow.cards, lines: grow.lines, cut, path, dropped, size: (0.0, 0.0), slow_ms: None }
 }
 
 /// Where a card sits: what holds it, what else is in there, and the card's
