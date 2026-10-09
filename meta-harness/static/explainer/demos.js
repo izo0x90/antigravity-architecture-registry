@@ -1181,7 +1181,7 @@
       sw.innerHTML = svg;
       return h("div", { class: "legend-row" }, sw, label);
     };
-    const line = (color, l) => `<svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="${color}" stroke-width="${l.width}" ${l.dashed ? 'stroke-dasharray="5 3"' : ""}/></svg>`;
+    const line = (color, l) => `<svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="${color}" stroke-width="${l.width}" stroke-opacity="${l.opacity ?? 1}" ${l.dashed ? 'stroke-dasharray="5 3"' : ""}/></svg>`;
     const box = (color, l) => `<svg width="40" height="16"><rect x="2" y="2" width="36" height="12" rx="3" fill="none" stroke="${color}" stroke-width="${l.width}" ${l.dashed ? 'stroke-dasharray="4 3"' : ""}/></svg>`;
     const words = { code: "code (the plan doesn't touch it)", new: "new: planned, not in the code yet", changed: "changed: the plan changes it", done: "done: the code matches the plan", mismatch: "doesn't match: the code differs from the plan" };
     const legend = h("div", { class: "legend-grid" },
@@ -1190,6 +1190,7 @@
       row(line(tok(G.kinds.data_flow), G.lines.code), "data flow"),
       row(line(tok(G.back.repeat.color || G.kinds.calls), G.back.repeat), "to a card shown elsewhere"),
       row(line(tok(G.back.loop.color || G.kinds.calls), G.back.loop), "back up its own path (a loop)"),
+      row(line(tok(G.kinds.calls), { ...G.lines.code, width: G.evidence.named.width, opacity: G.evidence.named.fade }), "matched by name, not confirmed by the language's indexer"),
       h("div", { class: "area-title" }, "Plan marks on lines"),
       ...Object.keys(words).map((m) => row(line(tok(G.lines[m].color || G.kinds.calls), G.lines[m]), words[m])),
       h("div", { class: "area-title" }, "Cards"),
@@ -1260,11 +1261,11 @@
   D.indexing = (host) =>
     Flow(host, [
       { title: "Files", say: "Every source file in the repo. After the first read, only files that changed." },
-      { title: "Language packs", say: "Data files (TOML) of ast-grep patterns: what a module, type, function, call, return or data flow looks like in Rust, Python or TypeScript." },
-      { title: "Extract", say: "Finds components, containment, calls (with their order), implements, data flow and placeholders in each file." },
-      { title: "Resolve", flag: "gaps", say: "Links each call to what it calls by name, only on evidence. <b>Gap:</b> a method called on a value whose type can't be proven stays unresolved, and same-named functions can be mixed up, until the compiler-backed calls (rust-analyzer's SCIP) land." },
+      { title: "Read", say: "Our analyzer parses each file once with ast-grep, by its language pack: components, containment, calls (with where each called name is), implements, data flow, placeholders, code rule hits and syntax colours." },
+      { title: "Index", say: "If the language's indexer pack is installed, it runs in the background and writes a SCIP index. Each file's part is kept with the file's content, so an edited file never uses an old one." },
+      { title: "Combine", flag: "gaps", say: "Joined by position, once. A call the indexer resolved is <b>proven</b>; the rest are linked by name, only on evidence, and stay <b>unconfirmed</b>. Nothing read is dropped. <b>Gap:</b> data flow types and field reads and writes don't use the indexer yet." },
+      { title: "Store", say: "The result and each file's named places go into .nah/cache/index.sqlite in one transaction. The graph, the views, the agent and the code view only read it." },
       { title: "Graph", say: "Components and relations, kept in memory as one shared copy. Data flows whose type isn't known can't be placed in the data flow view (its cards are types)." },
-      { title: "Cache", say: "Saved under .nah/cache. The watcher marks files that change; re-reading reads just those, then links the whole repo again." },
     ]);
 
   D.actions = (host) =>
@@ -1277,10 +1278,26 @@
 
   D.config = (host) =>
     Flow(host, [
-      { title: "Built in", say: "Each crate's config folder: the three views and the layout sizes (trees.toml), the server's limits (limits.toml), types, packs, queue, the cockpit's keys and look." },
+      { title: "Built in", say: "Each crate's config folder: the three views and the layout sizes (trees.toml), the server's limits (limits.toml), types, queue, the cockpit's keys and look. Languages, indexers and harnesses are packs, shipped in the binary." },
       { title: "Project", say: "The repo's .nah folder adds to or overrides them, key by key: trees.toml, limits.toml, types.toml, packs, rules, tools, reviewers, queue." },
       { title: "You", say: "Your own cockpit file: keys, theme, a preset. Only what you set changes." },
       { title: "Live", say: "The cockpit reads the merged result, and asks the server for the layout sizes so its text fits the cards the server sized." },
+    ]);
+
+  D.codeview = (host) =>
+    Flow(host, [
+      { title: "Open", say: "A file opens from a go-to, a search or a click on a card. The cockpit asks for its text and its analysis." },
+      { title: "Analysis", say: "From the stored result: colour runs (the pack's highlight query over our parse) and every named place with what it refers to." },
+      { title: "Colour", say: "Each kind of name maps to a theme colour, from [code.highlight] in the cockpit's config." },
+      { title: "Jump", say: "Hover says what a name is; go to code or ctrl/cmd-click opens its definition. A stale file shows plain text until it's read again." },
+    ]);
+
+  D.packs = (host) =>
+    Flow(host, [
+      { title: "Sources", say: "packs/index.toml: the packs in the binary, then the project's .nah/packs, then the user's. Later ones replace earlier ones of the same name." },
+      { title: "Manifest", say: "pack.toml: version, supported tool versions, how to check it, install steps per platform (downloads checksummed), how to run it. Checked strictly when loaded." },
+      { title: "Install", say: "One generic installer: downloads, unpacks and runs steps as the pack says, into a staging folder, then swaps it in and records it in the lock file." },
+      { title: "Use", say: "Harness packs give drivers their program; language packs how to read and colour a language; indexer packs a SCIP index of the project." },
     ]);
 
   window.DEMOS = D;

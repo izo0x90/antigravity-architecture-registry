@@ -80,3 +80,32 @@ from the watcher).
 | Calls tree, depth 4 | 4.8 ms |
 | Data flow tree, depth 4 | 8.4 ms |
 | Matching a name against every component | 10 µs |
+
+### One analysis path (slice AP, 2026-10-09)
+
+Reading now also takes syntax colours and code rule hits from the same
+parse, and every change ends with the combine stage and one store
+transaction. Measured the same way (`cargo test -p arch-service --test
+perf`, no indexer installed in the test):
+
+| | this repo (197 files) | tokio (717 files) |
+|---|---|---|
+| Full index | 0.90 s | 1.32 s |
+| One file changed | 0.52 s | 0.78 s |
+| The same, found by re-checking the whole repo | 0.52 s | 0.82 s |
+| Restart from the stored result | 0.36 s | 0.44 s |
+
+On this repo's live server (`/api/perf`), a change costs about 0.1 s to
+combine and 0.7 to 1.1 s to store, because the store rewrites the whole
+combined result and every file's named places. Narrowing it to what
+changed is the next step.
+
+The languages' own indexers run in the background after a change:
+
+| On this repo | Indexer | Combine | Store | Files | Links proven |
+|---|---|---|---|---|---|
+| rust-analyzer 1.90.0 | 42 to 45 s (76 s cold) | 0.1 s | 1.0 s | 184 | about 7,600 |
+| scip-typescript 0.4.0 | 1.9 s | 0.1 s | 0.8 s | 5 | 21 |
+
+With rust-analyzer, calls names couldn't prove went from about 2,850 to 9,
+and relations from 11,780 to 13,627 (links names couldn't find at all).

@@ -28,17 +28,25 @@ approvals and other user-only actions need. The token is kept in
 Agents connect to the MCP endpoint at `/api/mcp/sse`, which every session
 NAH opens is given automatically.
 
+The agent harness and each language's indexer are packs, installed by the
+binary itself (see [Packs](#packs)). To build and install the ones you need:
+
+```sh
+scripts/bootstrap.sh antigravity-acp rust-analyzer
+```
+
 ## How work flows
 
-1. **Ingest.** The repo is read with ast-grep through language packs: Rust,
-   Python and TypeScript are built in. Packs are pure data, so a new
-   language needs no engine code. NAH finds:
+1. **Ingest.** Our analyzer reads the repo and, where the language's own
+   indexer is installed, combines what it says (see [Analysis](#analysis)).
+   NAH finds:
    - components (modules, types, interfaces, functions, operations);
    - containment;
-   - calls, resolved only on evidence;
+   - calls, each marked proven (by the language's indexer) or matched by
+     name;
    - implements;
    - typed data flow;
-   - placeholders.
+   - placeholders and code rule hits.
 
    After the first read, ingestion is incremental, and a file watcher keeps
    the graph current.
@@ -77,6 +85,74 @@ NAH opens is given automatically.
 
    Only a clean verification moves a component to Implemented. A later
    change that breaks the code demotes it again.
+
+## Analysis
+
+There is one path from code to graph, the same for every language:
+
+1. **Read.** Our analyzer (`code-analyzer`, built into the binary) parses
+   each file once with ast-grep, by its language pack. From that parse it
+   takes definitions, calls with the exact span of the called name, data
+   flow, placeholders, code rule hits, and syntax colours (the pack's
+   `highlights.scm`, run over the same tree). This always runs.
+2. **Index.** If the language's indexer pack is installed (rust-analyzer,
+   scip-typescript, scip-python), it runs in the background and writes a
+   SCIP index. Each file's part is kept with the file's content hash at the
+   time, so an edited file never uses an old index.
+3. **Combine.** Both are joined by position, once. A call whose name the
+   indexer resolved is **proven**, by that indexer and version, even where
+   names alone couldn't choose. Otherwise names link it, and it stays
+   **unconfirmed**. Data flows through a call follow the call's target, and
+   are proven only when both ends are. Nothing read in step 1 is dropped.
+4. **Store.** The result, and what each name in each file refers to, goes
+   into SQLite (`.nah/cache/index.sqlite`) in one transaction. The graph,
+   the views, the agent's tools and the code view only read that result.
+   Nothing is filled in later.
+
+Without an indexer everything still works; links are just unconfirmed. On
+this repo, rust-analyzer takes about 76 s and proves about 7,600 links;
+unproven calls go from about 2,850 to 9.
+
+`meta-harness analyze --root <repo> --out <file.json>` runs the same steps
+once and writes the result, for checking from outside.
+
+## Packs
+
+Everything NAH installs or reads a language with is a versioned pack: a
+folder with a `pack.toml`.
+
+| Kind | What it gives | Shipped |
+|---|---|---|
+| `harness` | an agent harness's program, for a driver | `antigravity-acp` |
+| `language` | how to read a language (`syntax.toml`), its colours (`highlights.scm`), and its indexer | `rust`, `python`, `typescript` |
+| `indexer` | a program that writes a SCIP index, and how to run it | `rust-analyzer`, `scip-typescript`, `scip-python` |
+
+A manifest says:
+
+- the pack's version and the tool versions it supports;
+- how to check the installed tool's version;
+- the install steps for each platform (downloads carry a checksum);
+- how to run it: command, arguments, environment, output, time limit.
+
+Manifests are checked strictly when loaded. The installer is generic: it
+knows kinds of steps, not tools. Every URL, version, path, checksum and
+platform name is in pack or config files. It installs into a staging
+folder, swaps it in, and records it in a lock file.
+
+Packs come from `packs/index.toml`, in order: the ones shipped in the
+binary, then `<project>/.nah/packs/`, then `nah/packs/` in your config
+folder (`~/.config` on Linux). Any folder holding a `pack.toml` is a pack. A
+later pack of the same name replaces an earlier one. Platform names are in
+`packs/platforms.toml`. Installed packs and their lock file live in
+`nah/` under your data folder (`~/.local/share` on Linux).
+
+```sh
+meta-harness pack list            # every pack: kind, version, state
+meta-harness pack check [name]    # installed, out of range, outdated or broken
+meta-harness pack install <name>
+meta-harness pack update [name]   # reinstall what's outdated or out of range
+meta-harness pack which <name>    # where its program is
+```
 
 ## The cockpit
 
@@ -136,8 +212,15 @@ Views also have their own keys:
 
   Nothing changes on its own: zoom only zooms. A tree bigger than one
   answer holds is cut at a whole level and says so ("showing 2 of 3
-  levels"); every cut card says how much is under it.
-- **Code:** `]f`/`[f` move between definitions.
+  levels"); every cut card says how much is under it. A line matched only
+  by name is drawn faded, and its details say so; a proven one names the
+  indexer that confirmed it.
+- **Code:** coloured by the language pack, from the stored analysis
+  (`GET /api/code/analysis?path=`). Hovering a name says what it refers
+  to. `g d` on a name, or ctrl/cmd-click, goes to its definition.
+  `]f`/`[f` move between definitions. A file edited since it was analysed
+  is marked stale until it's read again. Colours map to theme tokens in
+  `[code.highlight]`.
 - **Spec:**
   - `J`/`K` move between sections;
   - `c`/`C` comment on or ask for a change to the item under the cursor;
@@ -179,7 +262,7 @@ overrides them in its own `.nah/` folder:
 | `.nah/types.toml` | component types (`extends` a built-in to specialize it) |
 | `.nah/trees.toml` | the three views: default depth, starting points, layout sizes |
 | `.nah/limits.toml` | cards per answer, time limits, the fact store, performance limits |
-| `.nah/packs/*.toml` | more language packs |
+| `.nah/packs/**/pack.toml` | more packs, or replacements for shipped ones |
 | `.nah/rules/*.toml` | forbidden or required ast-grep patterns, per type |
 | `.nah/tools.toml` | validation tools, and the shell for logic-step checks |
 | `.nah/reviewers.toml` | reviewers: rule-based, or run as agent sessions |
@@ -192,10 +275,13 @@ in the graph, and `GET /api/perf` lists the last answers by stage with the
 graph, store and memory sizes. Benchmarks: `cargo bench -p arch-service
 --bench hot`.
 
-Plans live in `.nah/plans/`. What was read from the code is kept in
-`.nah/cache/index.sqlite` (one row per file, with its size and time), which
-isn't committed: on start the graph is linked from it without reading a file,
-and afterwards only files whose size or time changed are read again, in
+Plans live in `.nah/plans/`. The analysis is kept in
+`.nah/cache/index.sqlite`, which isn't committed. It holds what was read
+from each file (with its size and time), what the indexers said about
+each file, the combined result, and each file's named places, all written together in one transaction. On
+start, the stored result is loaded as it is unless the packs, the types or
+the combine step changed; then it's combined again without reading a file.
+Afterwards only files whose size or time changed are read again, in
 parallel. It's thrown away and rebuilt when the reader changes.
 
 ## Agent tools (MCP)
@@ -214,13 +300,15 @@ Every result ends with next steps, given in dependency order.
 | Crate | What it holds |
 |---|---|
 | `arch-graph` | the domain: types, components, relations, plans, schemas, views, scenes (how a view is laid out and routed), queue shapes (no I/O; shared with the cockpit) |
-| `code-analyzer` | our analyzer: reads each file with ast-grep by its language pack, links names, code rules |
+| `code-analyzer` | our analyzer: reads each file with ast-grep by its language pack (with syntax colours and code rules), runs indexer packs and reads their SCIP, combines both by position |
 | `nah-packs` | packs (harnesses, languages, indexers) and the one installer |
-| `arch-store` | where the facts read from the code are kept between runs (SQLite) |
+| `arch-store` | where the analysis is kept between runs (SQLite) |
+| `arch-search` | one way of matching what's typed: names with neo_frizbee, files and lines with fff-search |
 | `arch-service` | plans and cache, plan operations and checks, verification, tools, reviewers, review loop, queue state |
 | `src/` (server) | REST (`/api/arch/...`), MCP, events over WebSocket, the queue runner, the cockpit session |
 | `cockpit-ui` | the egui/WASM cockpit |
 | `harness-*`, `provider-antigravity` | driving agent harnesses over ACP |
+| `workspace-fs` | file access confined to the workspace (no path or symlink escapes) |
 
 ## Progress and what's left out
 

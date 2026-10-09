@@ -1853,6 +1853,10 @@ impl CockpitApp {
         if let Some(e) = &self.index.error {
             hover.push_str(&format!("\nThe last run failed: {e}"));
         }
+        for i in &self.index.indexers {
+            hover.push('\n');
+            hover.push_str(&indexer_line(i));
+        }
         if !self.index.stale.is_empty() {
             hover.push_str(&format!("\nChanged since read: {}", self.index.stale.join(", ")));
         }
@@ -2310,6 +2314,23 @@ pub fn index_state(index: &arch_graph::IndexStatus) -> &'static str {
         arch_graph::IndexState::Failed => "index_failed",
         arch_graph::IndexState::Idle if !index.stale.is_empty() => "stale",
         arch_graph::IndexState::Idle => "index_fresh",
+    }
+}
+
+/// One language's indexer in words: whether its links are proven, and by what.
+fn indexer_line(i: &arch_graph::IndexerStatus) -> String {
+    let tool = match &i.version {
+        Some(v) => format!("{} {v}", i.indexer),
+        None => i.indexer.clone(),
+    };
+    match i.state {
+        arch_graph::IndexerState::Missing => format!("{}: links matched by name ({} isn't ready: meta-harness pack check {})", i.language, i.indexer, i.indexer),
+        arch_graph::IndexerState::Running => format!("{}: {tool} is running", i.language),
+        arch_graph::IndexerState::Failed => format!("{}: {tool} failed: {}", i.language, i.error.as_deref().unwrap_or("no reason given")),
+        arch_graph::IndexerState::Ready => match i.last_ms {
+            Some(ms) => format!("{}: {tool} confirmed {} links in {} files ({} ms)", i.language, i.proven, i.files, ms),
+            None => format!("{}: {tool} is ready", i.language),
+        },
     }
 }
 
