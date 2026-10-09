@@ -85,11 +85,14 @@ pub struct Def {
 
 /// A call in the file: where, and what it calls.
 #[derive(Clone, Debug, PartialEq)]
-pub struct CallSite {
+pub struct Named {
     pub line: usize,
-    /// Characters into the line.
+    /// Characters into the line, and how many.
     pub col: usize,
-    pub callee: ComponentId,
+    pub len: usize,
+    pub target: ComponentId,
+    /// Where it's defined (rather than a reference to it).
+    pub definition: bool,
 }
 
 /// A symbol a hint can land on: a definition's name or a call.
@@ -121,7 +124,15 @@ pub struct CodeViewerState {
     file_view: Option<FileView>,
     /// Definitions in the file, by start line.
     pub defs: Vec<Def>,
-    pub calls: Vec<CallSite>,
+    /// What each named place refers to (from the analysis), in order.
+    pub names: Vec<Named>,
+    /// The file as the analysis has it: colours, named places.
+    analysis: Option<arch_graph::code::CodeAnalysis>,
+    analysis_inbox: Arc<Mutex<Option<NetResult<arch_graph::code::CodeAnalysis>>>>,
+    /// Syntax colours (from the UI config).
+    pub ui: crate::config::CodeUi,
+    /// Asks the app to open this component's code (a name ctrl-clicked).
+    pub open: Option<ComponentId>,
     /// Folded definitions, by start line.
     folds: BTreeSet<usize>,
     /// Where to scroll once the right file's lines are in.
@@ -164,7 +175,11 @@ impl Default for CodeViewerState {
             marks_inbox: Arc::default(),
             file_view: None,
             defs: Vec::new(),
-            calls: Vec::new(),
+            names: Vec::new(),
+            analysis: None,
+            analysis_inbox: Arc::default(),
+            ui: crate::config::CodeUi::default(),
+            open: None,
             folds: BTreeSet::new(),
             scroll: None,
             offset_y: 0.0,
@@ -186,9 +201,10 @@ impl CodeViewerState {
         if path != self.current_file {
             self.folds.clear();
             self.defs.clear();
-            self.calls.clear();
+            self.names.clear();
             self.marks.clear();
             self.file_view = None;
+            self.analysis = None;
         }
         self.current_file = path.to_string();
         self.target_line = target_line;
@@ -201,6 +217,12 @@ impl CodeViewerState {
         net.arch_file(path, None, ctx.clone(), move |r| {
             if let Ok(mut m) = marks.lock() {
                 *m = Some(r);
+            }
+        });
+        let analysis = self.analysis_inbox.clone();
+        net.code_analysis(path, ctx.clone(), move |r| {
+            if let Ok(mut a) = analysis.lock() {
+                *a = Some(r);
             }
         });
 
@@ -251,11 +273,90 @@ impl CodeViewerState {
         if let Some(view) = self.file_view.take() {
             self.set_file_view(view);
         }
+        if let Some(analysis) = self.analysis.take() {
+            self.set_analysis(analysis);
+        }
     }
 
     pub fn set_error(&mut self, err: String) {
         self.error_message = Some(err);
         self.is_loading = false;
+    }
+
+    /// Takes what the analysis says about the file: its colours and what
+    /// each named place refers to (worked out again when the text arrives
+    /// after it).
+    pub fn set_analysis(&mut self, analysis: arch_graph::code::CodeAnalysis) {
+        let starts = line_starts(&self.content);
+        let mut names: Vec<Named> = analysis
+            .occurrences
+            .iter()
+            .filter_map(|o| {
+                let target = o.target.clone()?;
+                let (start, end) = (o.start as usize, o.end as usize);
+                let line = starts.partition_point(|s| *s <= start);
+                let col = column(&self.content, &starts, line, start);
+                let len = self.content.get(start..end)?.chars().count();
+                Some(Named { line, col, len, target, definition: o.definition })
+            })
+            .collect();
+        names.sort_by(|a, b| (a.line, a.col).cmp(&(b.line, b.col)).then_with(|| a.target.cmp(&b.target)));
+        names.dedup();
+        self.names = names;
+        self.analysis = Some(analysis);
+    }
+
+    /// The named place under column `col` of `line`, if any.
+    fn name_at(&self, line: usize, col: usize) -> Option<&Named> {
+        self.names.iter().find(|n| n.line == line && n.col <= col && col < n.col + n.len.max(1))
+    }
+
+    /// What a name's target is, in words (for hover).
+    fn describe(&self, id: &ComponentId) -> String {
+        let target = self.analysis.as_ref().and_then(|a| a.targets.iter().find(|t| &t.id == id));
+        match target {
+            Some(t) => {
+                let at = t.at.as_ref().map(|(f, l)| format!("\n{f}:{l}")).unwrap_or_default();
+                let sig = t.signature.as_ref().map(|s| format!("\n{s}")).unwrap_or_default();
+                format!("{} ({}){sig}{at}\nCtrl+click: go to it", t.name, t.type_name)
+            }
+            None => id.as_str().to_owned(),
+        }
+    }
+
+    /// A line drawn with its syntax colours (base color where nothing says).
+    fn coloured(&self, idx: usize, base: egui::Color32, background: Option<egui::Color32>) -> egui::text::LayoutJob {
+        let font = egui::FontId::monospace(crate::theme::look().text_body);
+        let line = &self.lines[idx];
+        let mut job = egui::text::LayoutJob::default();
+        let format = |color: egui::Color32| egui::TextFormat { font_id: font.clone(), color, background: background.unwrap_or(egui::Color32::TRANSPARENT), ..Default::default() };
+        let Some(analysis) = self.analysis.as_ref().filter(|a| !a.stale) else {
+            job.append(line, 0.0, format(base));
+            return job;
+        };
+        let starts = line_starts(&self.content);
+        let line_start = starts.get(idx).copied().unwrap_or(0);
+        let line_end = line_start + line.len();
+        let first = analysis.highlights.runs.partition_point(|r| (r[1] as usize) <= line_start);
+        let mut at = line_start;
+        for run in &analysis.highlights.runs[first..] {
+            let (s, e) = ((run[0] as usize).max(line_start), (run[1] as usize).min(line_end));
+            if s >= line_end {
+                break;
+            }
+            if s > at {
+                job.append(&self.content[at..s], 0.0, format(base));
+            }
+            let color = analysis.highlights.names.get(run[2] as usize).and_then(|n| self.ui.token(n)).and_then(|t| colors().token(t)).unwrap_or(base);
+            if e > s.max(at) {
+                job.append(&self.content[s.max(at)..e], 0.0, format(color));
+                at = e;
+            }
+        }
+        if at < line_end {
+            job.append(&self.content[at..line_end], 0.0, format(base));
+        }
+        job
     }
 
     /// Takes what the index knows about the file: marks, definitions, calls.
@@ -268,23 +369,6 @@ impl CodeViewerState {
             .collect();
         defs.sort_by_key(|d| (d.start, std::cmp::Reverse(d.end)));
         self.defs = defs;
-        let line_starts = line_starts(&self.content);
-        let in_file: BTreeSet<&ComponentId> = view.components.iter().map(|(c, _)| &c.id).collect();
-        let mut calls: Vec<CallSite> = view
-            .relations
-            .iter()
-            .filter(|(r, _)| r.kind == RelationKind::Calls && in_file.contains(&r.source))
-            .flat_map(|(r, _)| {
-                r.sites.iter().map(|site| {
-                    let line = site.start_line as usize;
-                    let col = column(&self.content, &line_starts, line, site.start_byte as usize);
-                    CallSite { line, col, callee: r.target.clone() }
-                })
-            })
-            .collect();
-        calls.sort_by(|a, b| (a.line, a.col).cmp(&(b.line, b.col)).then_with(|| a.callee.cmp(&b.callee)));
-        calls.dedup();
-        self.calls = calls;
         self.file_view = Some(view);
     }
 
@@ -293,16 +377,17 @@ impl CodeViewerState {
         self.defs.iter().filter(|d| d.start <= line && line <= d.end).min_by_key(|d| d.end - d.start)
     }
 
-    /// What's called on `line` (the call a hint picked first).
-    pub fn calls_at(&self, line: usize) -> Vec<ComponentId> {
-        let mut here: Vec<&CallSite> = self.calls.iter().filter(|c| c.line == line).collect();
+    /// The components named on `line` (calls, types: not what's defined
+    /// there), the one under the cursor first.
+    pub fn refs_at(&self, line: usize) -> Vec<ComponentId> {
+        let mut here: Vec<&Named> = self.names.iter().filter(|n| n.line == line && !n.definition).collect();
         if let Some(col) = self.cursor_col {
-            here.sort_by_key(|c| c.col != col);
+            here.sort_by_key(|n| !(n.col <= col && col < n.col + n.len.max(1)));
         }
         let mut out: Vec<ComponentId> = Vec::new();
-        for c in here {
-            if !out.contains(&c.callee) {
-                out.push(c.callee.clone());
+        for n in here {
+            if !out.contains(&n.target) {
+                out.push(n.target.clone());
             }
         }
         out
@@ -341,9 +426,9 @@ impl CodeViewerState {
                 out.push(Symbol { line, col: text[..byte].chars().count(), len: d.name.chars().count() });
             }
         }
-        for c in self.calls.iter().filter(|c| c.line == line) {
-            if !out.iter().any(|s| s.col == c.col) {
-                out.push(Symbol { line, col: c.col, len: 1 });
+        for n in self.names.iter().filter(|n| n.line == line && !n.definition) {
+            if !out.iter().any(|s| s.col == n.col) {
+                out.push(Symbol { line, col: n.col, len: n.len.max(1) });
             }
         }
         out.sort_by_key(|s| s.col);
@@ -398,6 +483,11 @@ impl CodeViewerState {
             && view.file == self.current_file
         {
             self.set_file_view(view);
+        }
+        if let Some(Ok(analysis)) = self.analysis_inbox.lock().ok().and_then(|mut a| a.take())
+            && analysis.file == self.current_file
+        {
+            self.set_analysis(analysis);
         }
 
         ui.vertical(|ui| {
@@ -482,6 +572,7 @@ impl CodeViewerState {
             self.char_w = ui.fonts_mut(|f| f.glyph_width(&egui::FontId::monospace(crate::theme::look().text_body), 'x'));
             let mut clicked: Option<ComponentId> = None;
             let mut put_cursor: Option<usize> = None;
+            let mut go_to: Option<ComponentId> = None;
             let mut unfold: Option<usize> = None;
             let visible = self.visible_lines();
             // Rows are laid out only when visible, so scrolling to a line is
@@ -521,17 +612,22 @@ impl CodeViewerState {
                             }
                         });
                         ui.separator();
-                        let line = &self.lines[idx];
-                        let mut text = RichText::new(line).monospace().size(crate::theme::look().text_body).color(if highlighted { colors().warn } else { colors().text });
-                        if highlighted {
-                            text = text.background_color(colors().warn_bg);
-                        } else if on_cursor {
-                            text = text.background_color(colors().selection);
-                        }
-                        let label = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+                        let background = if highlighted { Some(colors().warn_bg) } else if on_cursor { Some(colors().selection) } else { None };
+                        let job = self.coloured(idx, if highlighted { colors().warn } else { colors().text }, background);
+                        let label = ui.add(egui::Label::new(job).sense(egui::Sense::click()));
                         drawn.push((line_no, label.rect.left_top()));
+                        // The name under the pointer: what it is; ctrl+click goes to it.
+                        let col_at = |x: f32| ((x - label.rect.left()) / self.char_w.max(1.0)).floor().max(0.0) as usize;
+                        let hovered = label.hover_pos().and_then(|p| self.name_at(line_no, col_at(p.x))).filter(|n| !n.definition).map(|n| n.target.clone());
+                        let label = match &hovered {
+                            Some(id) => label.on_hover_text(self.describe(id)),
+                            None => label,
+                        };
                         if label.clicked() {
-                            put_cursor = Some(line_no);
+                            match (&hovered, ui.input(|i| i.modifiers.command)) {
+                                (Some(id), true) => go_to = Some(id.clone()),
+                                _ => put_cursor = Some(line_no),
+                            }
                         }
                         if let Some(hidden) = folded
                             && ui.add(egui::Label::new(RichText::new(format!("  … {hidden} lines")).monospace().size(crate::theme::look().text_small).color(colors().muted)).sense(egui::Sense::click())).on_hover_text("Unfold (z o)").clicked()
@@ -563,6 +659,9 @@ impl CodeViewerState {
             }
             if let Some(line) = put_cursor {
                 self.move_cursor(line, ui.input(|i| i.time));
+            }
+            if go_to.is_some() {
+                self.open = go_to;
             }
             if let Some(start) = unfold {
                 self.folds.remove(&start);
@@ -638,7 +737,7 @@ impl Navigable for CodeViewerState {
 
     fn target(&self) -> Option<Target> {
         let line = self.target_line?;
-        Some(Target::Line { file: self.current_file.clone(), line, within: self.def_at(line).map(|d| d.id.clone()), calls: self.calls_at(line) })
+        Some(Target::Line { file: self.current_file.clone(), line, within: self.def_at(line).map(|d| d.id.clone()), refs: self.refs_at(line) })
     }
 
     fn motion(&mut self, motion: Motion, count: usize) {
@@ -664,20 +763,20 @@ impl Navigable for CodeViewerState {
         }
     }
 
-    /// On a call: its definition (the shell opens it). On a folded line: unfold.
+    /// On a name: its definition (the shell opens it). On a folded line: unfold.
     fn enter(&mut self) -> Step {
         match self.target_line {
-            Some(line) if !self.calls_at(line).is_empty() => Step::GoTo(crate::nav::GoTo::Code),
+            Some(line) if !self.refs_at(line).is_empty() => Step::GoTo(crate::nav::GoTo::Code),
             Some(line) if self.folds.contains(&line) => {
                 self.folds.remove(&line);
                 Step::Done
             }
-            _ => Step::Nothing("No call on this line.".into()),
+            _ => Step::Nothing("Nothing named here goes anywhere.".into()),
         }
     }
 
     fn can_enter(&self) -> bool {
-        self.target_line.is_some_and(|line| !self.calls_at(line).is_empty() || self.folds.contains(&line))
+        self.target_line.is_some_and(|line| !self.refs_at(line).is_empty() || self.folds.contains(&line))
     }
 
     fn can_leave(&self) -> bool {
@@ -690,12 +789,12 @@ impl Navigable for CodeViewerState {
         if self.folds.contains(&line) {
             return Some("Unfold".into());
         }
-        let calls = self.calls_at(line);
+        let refs = self.refs_at(line);
         let name = |id: &ComponentId| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned();
-        match calls.as_slice() {
+        match refs.as_slice() {
             [one] => Some(format!("Go to {}", name(one))),
             [] => None,
-            _ => Some(format!("Go to one of {} calls", calls.len())),
+            _ => Some(format!("Go to one of {} named here", refs.len())),
         }
     }
 
@@ -939,18 +1038,29 @@ pub(crate) mod tests {
             stale: false,
         };
         code.set_file_view(view);
+        // The analysis: where each name is and what it refers to.
+        let at = |line: usize, col: usize| (starts[line - 1] + col) as u32;
+        let named = |line, col, len: u32, id: &str, definition| arch_graph::code::Occurrence { start: at(line, col), end: at(line, col) + len, target: Some(ComponentId::new(id)), symbol: None, definition };
+        code.set_analysis(arch_graph::code::CodeAnalysis {
+            file: "src/a.rs".into(),
+            stale: false,
+            highlights: arch_graph::code::Highlights { names: vec!["keyword".into()], runs: vec![[at(2, 4), at(2, 6), 0]] },
+            occurrences: vec![named(2, 7, 3, "rust:a::run", true), named(3, 8, 4, "rust:a::step", false), named(4, 8, 3, "rust:x::log", false), named(6, 7, 4, "rust:a::step", true)],
+            targets: vec![arch_graph::code::CodeTarget { id: ComponentId::new("rust:a::step"), name: "step".into(), type_name: "function".into(), at: Some(("src/a.rs".into(), 6)), signature: Some("step()".into()) }],
+        });
         code
     }
 
-    // req: N.16, N.10
+    // req: N.16, N.10, AP.11
     #[test]
     fn the_cursor_knows_its_definition_and_calls_and_steps_between_definitions() {
         let mut code = sample();
         assert_eq!(code.defs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["run", "step"], "the file itself isn't a definition");
-        assert_eq!(code.calls, vec![CallSite { line: 3, col: 8, callee: ComponentId::new("rust:a::step") }, CallSite { line: 4, col: 8, callee: ComponentId::new("rust:x::log") }]);
+        let refs: Vec<(usize, usize, usize, &str)> = code.names.iter().filter(|n| !n.definition).map(|n| (n.line, n.col, n.len, n.target.as_str())).collect();
+        assert_eq!(refs, [(3, 8, 4, "rust:a::step"), (4, 8, 3, "rust:x::log")], "where each name is, from the analysis");
         code.motion(Motion::Line(3), 1);
-        let Some(Target::Line { within, calls, .. }) = code.target() else { panic!() };
-        assert_eq!((within.unwrap().as_str(), calls), ("rust:a::run", vec![ComponentId::new("rust:a::step")]));
+        let Some(Target::Line { within, refs, .. }) = code.target() else { panic!() };
+        assert_eq!((within.unwrap().as_str(), refs), ("rust:a::run", vec![ComponentId::new("rust:a::step")]));
         assert_eq!(code.enter(), Step::GoTo(crate::nav::GoTo::Code), "Enter on a call goes to what it calls");
         code.motion(Motion::Line(7), 1);
         assert!(matches!(code.enter(), Step::Nothing(_)), "no call here");
@@ -975,8 +1085,16 @@ pub(crate) mod tests {
         assert_eq!(code.target_line, Some(4));
         // A hint on a call puts the cursor there.
         code.move_to("4:8");
-        let Some(Target::Line { calls, .. }) = code.target() else { panic!() };
-        assert_eq!(calls, vec![ComponentId::new("rust:x::log")]);
+        let Some(Target::Line { refs, .. }) = code.target() else { panic!() };
+        assert_eq!(refs, vec![ComponentId::new("rust:x::log")]);
+        // What a name is, for hover; and the colours.
+        assert!(code.describe(&ComponentId::new("rust:a::step")).contains("step()"));
+        assert_eq!(code.name_at(3, 9).map(|n| n.target.as_str()), Some("rust:a::step"));
+        assert_eq!(code.name_at(3, 2), None);
+        code.ui = crate::config::UiConfig::with_overrides("").unwrap().code;
+        let job = code.coloured(1, egui::Color32::WHITE, None);
+        let keyword = colors().token(code.ui.token("keyword").unwrap()).unwrap();
+        assert!(job.sections.iter().any(|s| s.format.color == keyword && &job.text[s.byte_range.clone()] == "fn"), "fn is coloured as a keyword");
     }
 
     // req: N.11, N.16, N.8

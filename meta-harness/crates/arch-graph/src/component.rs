@@ -57,6 +57,31 @@ pub struct Signature {
     pub qualifiers: Vec<String>,
 }
 
+impl Signature {
+    /// As one line: `async name(a: A, b?: B) -> R` (the same shape for
+    /// every language; types as written).
+    pub fn written(&self, name: &str) -> String {
+        let params: Vec<String> = self
+            .params
+            .iter()
+            .map(|p| {
+                let rest = if p.variadic { "..." } else { "" };
+                let opt = if p.optional { "?" } else { "" };
+                match &p.ty {
+                    Some(ty) => format!("{rest}{}{opt}: {ty}", p.name),
+                    None => format!("{rest}{}{opt}", p.name),
+                }
+            })
+            .collect();
+        let mut out = self.qualifiers.iter().map(|q| format!("{q} ")).collect::<String>();
+        out.push_str(&format!("{name}({})", params.join(", ")));
+        if let Some(r) = &self.returns {
+            out.push_str(&format!(" -> {r}"));
+        }
+        out
+    }
+}
+
 /// The shape of the data a component holds and takes/returns, as JSON
 /// Schema (written in the shorthand DSL or as full schema), and what it
 /// touches outside itself.

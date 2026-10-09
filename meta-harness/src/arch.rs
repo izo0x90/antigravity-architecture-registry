@@ -53,6 +53,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/arch/components/{id}", get(component))
         .route("/api/arch/at", get(component_at))
         .route("/api/arch/file", get(file_view))
+        .route("/api/code/analysis", get(code_analysis))
         .route("/api/arch/ingest", post(ingest))
         .route("/api/arch/index", get(index_status))
         .route("/api/arch/refresh", post(refresh))
@@ -110,6 +111,17 @@ struct SearchQuery {
 async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> ArchResult<arch_service::Found> {
     let source = source_param(&q.plan)?;
     Ok(Json(blocking(&state.arch, move |a| a.search(&q.q, q.kind, &source, q.limit)).await?))
+}
+
+#[derive(Deserialize)]
+struct CodeQuery {
+    path: String,
+}
+
+/// One file as the analysis has it: colours and what each named place
+/// refers to, from what's kept (nothing when the file changed since).
+async fn code_analysis(State(state): State<AppState>, Query(q): Query<CodeQuery>) -> ArchResult<arch_graph::code::CodeAnalysis> {
+    Ok(Json(blocking(&state.arch, move |a| a.code_analysis(&q.path)).await?))
 }
 
 #[derive(Deserialize)]

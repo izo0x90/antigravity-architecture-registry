@@ -4,7 +4,7 @@
 //! with a capture name such as `keyword` or `function`), innermost and
 //! earliest pattern winning, as tree-sitter's own highlighter decides.
 
-use serde::{Deserialize, Serialize};
+pub use arch_graph::code::Highlights;
 use streaming_iterator::StreamingIterator;
 
 use crate::IndexError;
@@ -69,18 +69,5 @@ impl HighlightQuery {
             out.runs.push([start as u32, i as u32, at as u32]);
         }
         out
-    }
-}
-
-/// Coloured runs over a file: `[start byte, end byte, index into names]`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Highlights {
-    pub names: Vec<String>,
-    pub runs: Vec<[u32; 3]>,
-}
-
-impl Highlights {
-    pub fn is_empty(&self) -> bool {
-        self.runs.is_empty()
     }
 }

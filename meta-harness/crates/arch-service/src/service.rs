@@ -462,6 +462,43 @@ impl ArchitectureService {
         Ok(self.facts.occurrences(file)?.unwrap_or_default())
     }
 
+    /// One file as the analysis has it, for the code viewer: its colours
+    /// and what each named place refers to, all from what's kept. A file
+    /// changed since (or never read) says so and carries nothing.
+    pub fn code_analysis(&self, file: &str) -> Result<arch_graph::code::CodeAnalysis, ServiceError> {
+        self.timed("code", file.to_owned(), |t| {
+            let path = RepoPath::new(file).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
+            let mut out = arch_graph::code::CodeAnalysis { file: path.as_str().to_owned(), ..Default::default() };
+            let kept = {
+                let files = self.files.read().map_err(ServiceError::poisoned)?;
+                files.get(&path).map(|(e, _)| (e.content_hash.clone(), e.highlights.clone()))
+            };
+            let current = std::fs::read_to_string(self.root.join(path.as_str())).map(|text| content_hash(&text)).ok();
+            let Some((hash, highlights)) = kept.filter(|(hash, _)| Some(hash) == current.as_ref()) else {
+                out.stale = true;
+                return Ok(out);
+            };
+            let _ = hash;
+            out.highlights = highlights;
+            out.occurrences = t.stage("occurrences", || self.occurrences(&path))?;
+            let graph = self.observed()?;
+            let ids: BTreeSet<&ComponentId> = out.occurrences.iter().filter_map(|o| o.target.as_ref()).collect();
+            out.targets = ids
+                .into_iter()
+                .filter_map(|id| graph.component(id))
+                .map(|c| arch_graph::code::CodeTarget {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    type_name: c.type_name.clone(),
+                    at: c.anchor.as_ref().map(|a| (a.file.as_str().to_owned(), a.span.start_line)),
+                    signature: c.signature.as_ref().map(|s| s.written(&c.name)),
+                })
+                .collect();
+            t.size(out.occurrences.len(), "occurrences");
+            Ok(out)
+        })
+    }
+
     /// Runs each language's own indexer (when its pack is installed and
     /// ready) over that language's files, then combines again: calls it
     /// resolves become proven. Slow (it builds the project's types), so the

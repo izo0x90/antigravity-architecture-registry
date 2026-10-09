@@ -127,8 +127,8 @@ pub enum When {
     Component,
     /// The target is code, or a component that may have some.
     Code,
-    /// The cursor is on a line that calls something.
-    Call,
+    /// The cursor is on a line that names a component (a call, a type).
+    Named,
     /// The view has a search to step through.
     Searched,
     /// There is somewhere to go back (or forward) to.
@@ -169,7 +169,7 @@ impl When {
             // A line of code is in some component, even before the index says which.
             Self::Component => s.target.as_ref().is_some_and(|t| t.component().is_some() || matches!(t, Target::Line { .. })),
             Self::Code => s.target.as_ref().is_some_and(|t| t.code().is_some() || t.component().is_some()),
-            Self::Call => matches!(&s.target, Some(Target::Line { calls, .. }) if !calls.is_empty()),
+            Self::Named => matches!(&s.target, Some(Target::Line { refs, .. }) if !refs.is_empty()),
             Self::Searched => s.searched,
             Self::Back => s.can_back,
             Self::Forward => s.can_forward,

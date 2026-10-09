@@ -15,7 +15,7 @@ fn parse(body: &str) -> Value {
     serde_json::from_str(body).unwrap_or_else(|e| panic!("{e}: {body}"))
 }
 
-// req: P8.1
+// req: P8.1, AP.11
 #[tokio::test]
 async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval() {
     let (addr, state) = spawn_app().await;
@@ -52,6 +52,23 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     let (status, body) = http(addr, "GET", "/api/search?q=to_uppercase&kind=text", None).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(parse(&body)["hits"][0]["key"], "rust:sample::util::shout", "a line names what it's inside of: {body}");
+
+    // The code viewer's analysis of a file: colours and named places, from what's kept.
+    let (status, body) = http(addr, "GET", "/api/code/analysis?path=src/lib.rs", None).await;
+    assert_eq!(status, 200, "{body}");
+    let code = parse(&body);
+    assert_eq!(code["stale"], false);
+    assert!(code["highlights"]["names"].as_array().unwrap().iter().any(|n| n == "keyword"), "{body}");
+    let named = code["occurrences"].as_array().unwrap();
+    assert!(named.iter().any(|o| o["target"] == "rust:sample::run" && o["definition"] == true), "{body}");
+    assert!(named.iter().any(|o| o["target"] == "rust:sample::store::Store::save" && o.get("definition").is_none()), "{body}");
+    assert!(code["targets"].as_array().unwrap().iter().any(|t| t["id"] == "rust:sample::store::Store::save" && t["signature"].as_str().is_some_and(|s| s.contains("save("))), "{body}");
+    // Edited since it was read: nothing it says applies.
+    let root = state.arch.root().to_path_buf();
+    std::fs::write(root.join("src/util.rs"), std::fs::read_to_string(root.join("src/util.rs")).unwrap() + "\n// edited\n").unwrap();
+    let (_, body) = http(addr, "GET", "/api/code/analysis?path=src/util.rs", None).await;
+    let code = parse(&body);
+    assert_eq!((code["stale"].as_bool(), code["occurrences"].as_array().map(Vec::len)), (Some(true), Some(0)), "{body}");
 
     let (status, body) = http(addr, "POST", "/api/arch/plans", Some(r#"{"id":"val","title":"Validate input"}"#)).await;
     assert_eq!(status, 200, "{body}");

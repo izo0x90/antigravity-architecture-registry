@@ -4,6 +4,7 @@
 //! so the server and the WASM cockpit share it.
 
 mod anchor;
+pub mod code;
 mod component;
 mod cycles;
 mod events;

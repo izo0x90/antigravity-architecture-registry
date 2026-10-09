@@ -60,6 +60,7 @@ pub struct UiConfig {
     pub graph: GraphUi,
     pub net: NetUi,
     pub links: LinksUi,
+    pub code: CodeUi,
     /// Every state's word, icon and colour.
     #[serde(default)]
     pub status: crate::status::Statuses,
@@ -73,6 +74,27 @@ fn merge(base: &mut toml::Table, over: toml::Table) {
             (_, value) => {
                 base.insert(key, value);
             }
+        }
+    }
+}
+
+/// The code view.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct CodeUi {
+    /// Syntax colours: a highlight capture (`keyword`, `function.method`)
+    /// or its first part (`function`) -> a theme color.
+    pub highlight: std::collections::BTreeMap<String, String>,
+}
+
+impl CodeUi {
+    /// The theme token for a capture name, by its most specific known part.
+    pub fn token(&self, capture: &str) -> Option<&str> {
+        let mut name = capture;
+        loop {
+            if let Some(t) = self.highlight.get(name) {
+                return Some(t);
+            }
+            name = &name[..name.rfind('.')?];
         }
     }
 }
@@ -92,6 +114,9 @@ impl UiConfig {
         config.graph_style.check(&config.theme).map_err(|e| format!("ui config: {e}"))?;
         crate::status::check(&config.status, &config.theme).map_err(|e| format!("ui config: {e}"))?;
         config.graph.check().map_err(|e| format!("ui config: {e}"))?;
+        if let Some((capture, token)) = config.code.highlight.iter().find(|(_, t)| config.theme.token(t).is_none()) {
+            return Err(format!("ui config: code.highlight.{capture}: '{token}' is not a theme color"));
+        }
         Ok(config)
     }
 }

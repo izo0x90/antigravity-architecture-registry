@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::pack::LanguageSpec;
 use crate::index::{IndexedFile, ROLE_DEFINITION};
+pub use arch_graph::code::Occurrence;
 use crate::{Expr, FileExtract, FlowKind, PackSet, RawCall};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,23 +42,6 @@ pub struct UnverifiedFlow {
     pub file: RepoPath,
     pub span: Span,
     pub reason: String,
-}
-
-/// One place in a file that names a component (for the code viewer: jump
-/// to its definition, list its references).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Occurrence {
-    pub start: u32,
-    pub end: u32,
-    /// The component it names, when it's one of ours.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<ComponentId>,
-    /// The indexer's symbol, when an indexer said what it is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    /// It's where the component is defined.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub definition: bool,
 }
 
 /// The combine stage's result as it's kept: the graph's components and

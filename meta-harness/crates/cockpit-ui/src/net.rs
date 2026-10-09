@@ -401,6 +401,11 @@ impl NetClient {
         self.call("GET", &path, None, ctx, on_done);
     }
 
+    /// One file as the analysis has it: colours and what each named place refers to.
+    pub fn code_analysis(&self, path: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::code::CodeAnalysis>) + Send + 'static) {
+        self.call("GET", &format!("/api/code/analysis?path={}", urlencoding::encode(path)), None, ctx, on_done);
+    }
+
     /// The views' settings: descriptions, depths and the sizes trees are laid out with.
     pub fn graph_config(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::tree::TreeConfig>) + Send + 'static) {
         self.call("GET", "/api/graph/config", None, ctx, on_done);

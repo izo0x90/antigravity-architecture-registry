@@ -379,6 +379,7 @@ impl CockpitApp {
             crate::theme::set_look(self.config.look.clone());
             self.net.set_backoff(self.config.net.reconnect_min_ms, self.config.net.reconnect_max_ms);
             self.graph.ui = self.config.graph.clone();
+            self.code.ui = self.config.code.clone();
         }
 
         // Poll WebSocket messages
@@ -734,6 +735,11 @@ impl CockpitApp {
             self.focused_slot = slot;
             self.input_mode = InputMode::Insert { slot };
         }
+        // A name ctrl-clicked in the code: its definition.
+        if let Some(id) = self.code.open.take() {
+            let from = self.jump_of(BufferKind::Code);
+            self.goto_component(GoTo::Code, id, from, BufferKind::Code, ctx);
+        }
         for (kind, id) in [(BufferKind::Spec, self.spec.requests.select.take()), (BufferKind::Code, self.code.select.take())] {
             if let Some(id) = id {
                 self.jumps.record(self.jump_of(kind));
@@ -874,7 +880,7 @@ impl CockpitApp {
         let (enter, leave) = match kind {
             K::Graph => ("Focus on it", "Back to the whole view"),
             K::Tree => ("Unfold, or select in the graph", "Fold, or up to what holds it"),
-            K::Code => ("Go to what this line calls", "Out to the definition's start"),
+            K::Code => ("Go to what's named here", "Out to the definition's start"),
             K::Spec => ("Open: fold a section, follow a relation, reply", "Up to the section title"),
             K::Queue => ("Show why it failed", "Hide that again"),
             K::Chat => ("Open the file it points to", "Follow the latest again"),
@@ -1329,11 +1335,11 @@ impl CockpitApp {
         };
         if op == GoTo::Code {
             // A call goes to what it calls; a file link opens as it is.
-            if let Target::Line { calls, .. } = &target
-                && !calls.is_empty()
+            if let Target::Line { refs, .. } = &target
+                && !refs.is_empty()
             {
-                let calls = calls.iter().map(|id| Candidate { id: id.clone(), line: None }).collect();
-                self.choose(op, calls, from, origin, ctx);
+                let refs = refs.iter().map(|id| Candidate { id: id.clone(), line: None }).collect();
+                self.choose(op, refs, from, origin, ctx);
                 return;
             }
             if let (Target::Message { .. }, Some((file, line))) = (&target, target.code()) {
@@ -3003,7 +3009,7 @@ mod tests {
         let bound = app.bound_actions();
         let ids: Vec<String> = app.bar_keys(&bound).into_iter().map(|b| b.action.id.clone()).collect();
         assert!(ids[..4].contains(&"spec.comment".to_owned()), "{ids:?}");
-        assert!(!When::Call.holds(&app.situation()), "not a code line");
+        assert!(!When::Named.holds(&app.situation()), "not a code line");
     }
 
     // req: N.5, N.6, N.7

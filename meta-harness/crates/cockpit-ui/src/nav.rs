@@ -15,8 +15,9 @@ use crate::spec::Section;
 pub enum Target {
     /// A component (a graph node, an outline row).
     Component(ComponentId),
-    /// A line of code: the component it's in and what it calls there.
-    Line { file: String, line: usize, within: Option<ComponentId>, calls: Vec<ComponentId> },
+    /// A line of code: the component it's in, and the components named on
+    /// it (what it calls, the types it uses), the one under the cursor first.
+    Line { file: String, line: usize, within: Option<ComponentId>, refs: Vec<ComponentId> },
     /// An item in a component's spec.
     Spec { component: ComponentId, section: Section, item: SpecItem },
     /// A job in the work queue.
@@ -507,7 +508,7 @@ mod tests {
         let a = ComponentId::new("rust:a::run");
         let b = ComponentId::new("rust:a::step");
         assert_eq!(Target::Component(a.clone()).component(), Some(&a));
-        let line = Target::Line { file: "src/a.rs".into(), line: 4, within: Some(a.clone()), calls: vec![b.clone()] };
+        let line = Target::Line { file: "src/a.rs".into(), line: 4, within: Some(a.clone()), refs: vec![b.clone()] };
         assert_eq!((line.component(), line.code()), (Some(&a), Some(("src/a.rs".into(), Some(4)))));
         let relation = Target::Spec { component: a.clone(), section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: b.clone(), outgoing: true } };
         assert_eq!(relation.component(), Some(&b), "a relation points at its other end");

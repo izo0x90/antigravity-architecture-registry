@@ -541,6 +541,27 @@ narrow_below = 480.0
 size = 32.0
 actions = ["nav.back", "nav.forward", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.next_view", "graph.flip", "nav.hint_open", "graph.legend"]
 
+# The code view's syntax colours: a tree-sitter highlight capture (or its
+# first part) -> a theme color. Captures not listed keep the text color.
+[code.highlight]
+keyword = "accent"
+function = "info"
+"function.macro" = "special"
+type = "special"
+constructor = "special"
+string = "ok"
+"string.special" = "ok"
+escape = "warn"
+number = "warn"
+constant = "warn"
+"constant.builtin" = "warn"
+comment = "faint"
+attribute = "muted"
+label = "muted"
+operator = "muted"
+"punctuation" = "muted"
+property = "text"
+
 # The event socket: when it drops, try again after `reconnect_min_ms`, doubling
 # up to `reconnect_max_ms`; views refetch once it's back.
 [net]
