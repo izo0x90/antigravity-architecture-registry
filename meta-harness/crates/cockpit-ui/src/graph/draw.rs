@@ -676,7 +676,7 @@ impl GraphState {
         }
         let look = crate::theme::look();
         let theme = colors();
-        let st = style().line(&theme, line.relation, line.kind, line.mark);
+        let st = style().line(&theme, line.relation, line.kind, line.mark, line.evidence.as_ref());
         let color = if selecting && !lit { st.color.gamma_multiply(1.0 - look.dim) } else { st.color };
         let width = st.width * self.camera.zoom.clamp(0.5, 1.5) + if lit { look.line_thin } else { 0.0 };
         let stroke = Stroke::new(width, color);

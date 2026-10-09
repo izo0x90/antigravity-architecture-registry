@@ -87,6 +87,9 @@ pub fn render(tree: &Tree, config: &TreeConfig) -> String {
             if l.mark != Mark::Code {
                 let _ = write!(line, " (line{})", mark(l.mark));
             }
+            if l.evidence == Some(super::Evidence::Named) {
+                line.push_str(" (matched by name, unconfirmed)");
+            }
             if !l.pills.is_empty() {
                 let pills: Vec<String> = l
                     .pills

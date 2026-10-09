@@ -18,6 +18,7 @@ pub(super) struct Child {
     pub order: Option<u32>,
     pub mark: Mark,
     pub pills: Vec<Pill>,
+    pub evidence: Option<super::Evidence>,
 }
 
 /// How a card reads.
@@ -419,7 +420,7 @@ impl<'a, G: GraphRead> Lens<'a, G> {
 
     fn contained(&self, key: &str) -> Vec<Child> {
         let id = ComponentId::new(key);
-        let child = |k: &ComponentId, mark| Child { key: k.0.clone(), relation: RelationKind::Contains, order: None, mark, pills: Vec::new() };
+        let child = |k: &ComponentId, mark| Child { key: k.0.clone(), relation: RelationKind::Contains, order: None, mark, pills: Vec::new(), evidence: None };
         match self.way {
             Way::Down => {
                 let mut kids: Vec<(&str, &ComponentId, Mark)> = self
@@ -468,7 +469,7 @@ impl<'a, G: GraphRead> Lens<'a, G> {
                 calls.sort_by(|a, b| a.order.unwrap_or(u32::MAX).cmp(&b.order.unwrap_or(u32::MAX)).then_with(|| a.target.cmp(&b.target)));
                 calls
                     .into_iter()
-                    .map(|r| Child { key: r.target.0.clone(), relation: RelationKind::Calls, order: r.order, mark: relation_mark(self.graph().relation_alignment(r)), pills: self.call_pills(&r.target, r) })
+                    .map(|r| Child { key: r.target.0.clone(), relation: RelationKind::Calls, order: r.order, mark: relation_mark(self.graph().relation_alignment(r)), pills: self.call_pills(&r.target, r), evidence: super::Evidence::of(r) })
                     .collect()
             }
             Way::Up => {
@@ -476,7 +477,7 @@ impl<'a, G: GraphRead> Lens<'a, G> {
                 callers.sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.source.cmp(&b.1.source)));
                 callers
                     .into_iter()
-                    .map(|(_, r)| Child { key: r.source.0.clone(), relation: RelationKind::Calls, order: r.order, mark: relation_mark(self.graph().relation_alignment(r)), pills: self.call_pills(&id, r) })
+                    .map(|(_, r)| Child { key: r.source.0.clone(), relation: RelationKind::Calls, order: r.order, mark: relation_mark(self.graph().relation_alignment(r)), pills: self.call_pills(&id, r), evidence: super::Evidence::of(r) })
                     .collect()
             }
         }
@@ -501,7 +502,7 @@ impl<'a, G: GraphRead> Lens<'a, G> {
             let mark = self.flows.marks.get(&(function.clone(), key.to_owned())).copied().unwrap_or_default();
             let next: Vec<String> = onward.get(function).map(|n| n.iter().cloned().collect()).unwrap_or_default();
             if next.is_empty() {
-                kids.push(Child { key: format!("{end}{function}"), relation: RelationKind::DataFlow, order: None, mark, pills: Vec::new() });
+                kids.push(Child { key: format!("{end}{function}"), relation: RelationKind::DataFlow, order: None, mark, pills: Vec::new(), evidence: None });
                 continue;
             }
             for t in next {
@@ -511,7 +512,7 @@ impl<'a, G: GraphRead> Lens<'a, G> {
                         k.mark = worse(k.mark, mark);
                         k.pills.push(pill);
                     }
-                    None => kids.push(Child { key: t, relation: RelationKind::DataFlow, order: None, mark, pills: vec![pill] }),
+                    None => kids.push(Child { key: t, relation: RelationKind::DataFlow, order: None, mark, pills: vec![pill], evidence: None }),
                 }
             }
         }

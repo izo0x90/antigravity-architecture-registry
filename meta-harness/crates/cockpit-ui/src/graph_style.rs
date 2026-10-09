@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use arch_graph::RelationKind;
-use arch_graph::tree::{LineKind, Mark, PillRole};
+use arch_graph::tree::{Evidence, LineKind, Mark, PillRole};
 use egui::Color32;
 use serde::Deserialize;
 
@@ -24,7 +24,8 @@ pub struct KindColors {
     pub data_flow: String,
 }
 
-/// A line or outline: optional color (a theme token), width and dashing.
+/// A line or outline: optional color (a theme token), width, dashing, and
+/// how strongly it shows (0..1, default fully).
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Look {
     #[serde(default)]
@@ -32,6 +33,15 @@ pub struct Look {
     pub width: f32,
     #[serde(default)]
     pub dashed: bool,
+    #[serde(default)]
+    pub fade: Option<f32>,
+}
+
+/// Calls found in the code, by how they're known: a call only matched by
+/// name (no language analyzer confirmed it) has its own look.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct EvidenceLooks {
+    pub named: Look,
 }
 
 /// One look per plan mark.
@@ -99,6 +109,7 @@ pub struct GraphStyle {
     pub back: BackLooks,
     pub nodes: NodeLooks,
     pub pills: PillColors,
+    pub evidence: EvidenceLooks,
 }
 
 /// A resolved line.
@@ -123,6 +134,12 @@ impl GraphStyle {
         sizes.push(("back.repeat.width".into(), self.back.repeat.width));
         sizes.push(("back.loop.width".into(), self.back.loops.width));
         sizes.push(("nodes.selected_width".into(), self.nodes.selected_width));
+        sizes.push(("evidence.named.width".into(), self.evidence.named.width));
+        if let Some(fade) = self.evidence.named.fade
+            && !(fade > 0.0 && fade <= 1.0)
+        {
+            return Err("graph_style.evidence.named.fade: must be in (0, 1]".into());
+        }
         if let Some((at, value)) = sizes.into_iter().find(|(_, v)| !(*v > 0.0 && v.is_finite())) {
             return Err(format!("graph_style.{at}: must be a positive number, got {value}"));
         }
@@ -133,6 +150,7 @@ impl GraphStyle {
         let mut tokens: Vec<(String, &str)> = vec![("kinds.contains".into(), &k.contains), ("kinds.implements".into(), &k.implements), ("kinds.calls".into(), &k.calls), ("kinds.data_flow".into(), &k.data_flow)];
         tokens.extend(self.lines.all().into_iter().filter_map(|(n, l)| l.color.as_deref().map(|t| (format!("lines.{n}"), t))));
         tokens.extend([&self.back.repeat, &self.back.loops].into_iter().filter_map(|l| l.color.as_deref().map(|t| ("back".to_owned(), t))));
+        tokens.extend(self.evidence.named.color.as_deref().map(|t| ("evidence.named".to_owned(), t)));
         for (name, look) in self.nodes.outline.all() {
             match look.color.as_deref() {
                 Some(t) => tokens.push((format!("nodes.outline.{name}"), t)),
@@ -168,14 +186,17 @@ impl GraphStyle {
         Self::color(theme, token)
     }
 
-    /// A line: tree lines by their plan mark, lines back by repeat or loop.
-    pub fn line(&self, theme: &Theme, kind: RelationKind, line: LineKind, mark: Mark) -> Line {
+    /// A line: tree lines by their plan mark (a call in the code only
+    /// matched by name has its own look), lines back by repeat or loop.
+    pub fn line(&self, theme: &Theme, kind: RelationKind, line: LineKind, mark: Mark, evidence: Option<&Evidence>) -> Line {
         let look = match line {
+            LineKind::Tree if mark == Mark::Code && evidence == Some(&Evidence::Named) => &self.evidence.named,
             LineKind::Tree => self.lines.get(mark),
             LineKind::Repeat => &self.back.repeat,
             LineKind::Loop => &self.back.loops,
         };
         let color = look.color.as_deref().map_or_else(|| self.kind_color(theme, kind), |t| Self::color(theme, t));
+        let color = look.fade.map_or(color, |f| color.gamma_multiply(f));
         Line { color, width: look.width, dashed: look.dashed }
     }
 
@@ -211,12 +232,17 @@ impl GraphStyle {
     pub fn legend(&self, theme: &Theme) -> Vec<LegendEntry> {
         let mut out = Vec::new();
         for kind in [RelationKind::Calls, RelationKind::DataFlow] {
-            out.push(LegendEntry { section: "Lines", label: kind.name().replace('_', " "), swatch: Swatch::Line(self.line(theme, kind, LineKind::Tree, Mark::Code)) });
+            out.push(LegendEntry { section: "Lines", label: kind.name().replace('_', " "), swatch: Swatch::Line(self.line(theme, kind, LineKind::Tree, Mark::Code, None)) });
         }
-        out.push(LegendEntry { section: "Lines", label: "to a card shown elsewhere".into(), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Repeat, Mark::Code)) });
-        out.push(LegendEntry { section: "Lines", label: "back up its own path (a loop)".into(), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Loop, Mark::Code)) });
+        out.push(LegendEntry {
+            section: "Lines",
+            label: "a call only matched by name (the language's analyzer didn't confirm it)".into(),
+            swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Tree, Mark::Code, Some(&Evidence::Named))),
+        });
+        out.push(LegendEntry { section: "Lines", label: "to a card shown elsewhere".into(), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Repeat, Mark::Code, None)) });
+        out.push(LegendEntry { section: "Lines", label: "back up its own path (a loop)".into(), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Loop, Mark::Code, None)) });
         for mark in MARKS {
-            out.push(LegendEntry { section: "Plan", label: mark_label(mark), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Tree, mark)) });
+            out.push(LegendEntry { section: "Plan", label: mark_label(mark), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Tree, mark, None)) });
         }
         for mark in MARKS {
             out.push(LegendEntry { section: "Cards", label: mark_label(mark), swatch: Swatch::Outline(self.node_outline(theme, mark, false)) });
@@ -277,6 +303,23 @@ mod tests {
     use super::*;
     use crate::config::UiConfig;
 
+    // req: AP.10
+    #[test]
+    fn a_call_only_matched_by_name_looks_different_and_the_legend_says_so() {
+        let config = UiConfig::with_overrides("").unwrap();
+        let (style, theme) = (&config.graph_style, &config.theme);
+        let named = Evidence::Named;
+        let proven = Evidence::Proven("rust-analyzer 1.90.0".into());
+        let line = |e: Option<&Evidence>| style.line(theme, RelationKind::Calls, LineKind::Tree, Mark::Code, e);
+        assert_eq!(line(Some(&proven)), line(None), "confirmed: the ordinary look");
+        assert_ne!(line(Some(&named)), line(Some(&proven)), "matched by name: its own look");
+        assert!(line(Some(&named)).width < line(Some(&proven)).width);
+        // A plan's marks win over it (what a plan says matters more there).
+        assert_eq!(style.line(theme, RelationKind::Calls, LineKind::Tree, Mark::Changed, Some(&named)), style.line(theme, RelationKind::Calls, LineKind::Tree, Mark::Changed, None));
+        assert!(style.legend(theme).iter().any(|e| e.label.contains("only matched by name") && e.swatch == Swatch::Line(line(Some(&named)))));
+        assert!(UiConfig::with_overrides("[graph_style.evidence.named]\nwidth = 1.0\nfade = 2.0").unwrap_err().contains("fade"));
+    }
+
     // req: M.8, P9.10
     #[test]
     fn every_mark_line_and_pill_has_a_look_from_theme_tokens() {
@@ -286,7 +329,7 @@ mod tests {
         for kind in RelationKind::ALL {
             for line in [LineKind::Tree, LineKind::Repeat, LineKind::Loop] {
                 for mark in MARKS {
-                    let l = style.line(theme, kind, line, mark);
+                    let l = style.line(theme, kind, line, mark, None);
                     assert!(l.width > 0.0 && tokens.contains(&l.color), "{kind:?} {line:?} {mark:?}");
                 }
             }
@@ -297,10 +340,10 @@ mod tests {
             }
         }
         // The marks are told apart.
-        let tree = |m| style.line(theme, RelationKind::Calls, LineKind::Tree, m);
+        let tree = |m| style.line(theme, RelationKind::Calls, LineKind::Tree, m, None);
         assert!(tree(Mark::New).dashed && !tree(Mark::Code).dashed, "planned is dashed");
         assert_eq!(tree(Mark::Mismatch).color, theme.error, "doesn't match stands out");
-        assert_ne!(style.line(theme, RelationKind::Calls, LineKind::Loop, Mark::Code), tree(Mark::Code));
+        assert_ne!(style.line(theme, RelationKind::Calls, LineKind::Loop, Mark::Code, None), tree(Mark::Code));
         assert_ne!(style.kind_color(theme, RelationKind::Calls), style.kind_color(theme, RelationKind::DataFlow));
         assert_eq!(style.legend(theme).iter().filter(|e| e.section == "Cards").count(), 7);
         // Restyling is config: tokens are checked when the config loads.

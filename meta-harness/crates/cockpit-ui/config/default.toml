@@ -478,6 +478,11 @@ changed = { color = "info", width = 1.6 }
 done = { color = "ok", width = 1.6 }
 mismatch = { color = "error", width = 1.8, dashed = true }
 
+# A call found in the code that the language's own analyzer didn't confirm
+# (only matched by name): thinner and fainter than a confirmed one.
+[graph_style.evidence]
+named = { width = 1.0, fade = 0.45 }
+
 # Lines to a card shown elsewhere: one reached again, and one going back up
 # its own path (a loop).
 [graph_style.back]

@@ -363,3 +363,24 @@ fn project_config_overrides_some_tree_settings() {
     assert_eq!(c.view(ViewKind::Contains).depth, TreeConfig::defaults().unwrap().view(ViewKind::Contains).depth);
     assert!(TreeConfig::with_overrides("[layout]\ngap_x = \"wide\"\n").is_err());
 }
+
+// req: AP.10
+#[test]
+fn call_lines_say_how_theyre_known_and_the_text_marks_name_matches() {
+    let mut g = sample();
+    // run -> step was confirmed by the language's analyzer; the rest only matched by name.
+    let mut proven = call("app::run", "app::step", 0);
+    proven.proven_by = Some("rust-analyzer 1.90.0".into());
+    g.upsert_relation(proven);
+    let f = Fixture::new(g);
+    let tree = f.tree(ask(ViewKind::Calls, Some("app::run"), Way::Down, 1));
+    assert_eq!(line(&tree, "run", "step").unwrap().evidence, Some(Evidence::Proven("rust-analyzer 1.90.0".into())));
+    assert_eq!(line(&tree, "run", "log").unwrap().evidence, Some(Evidence::Named));
+    let text = render(&tree, &f.config);
+    let said = |name: &str| text.lines().find(|l| l.trim_start().starts_with(name)).unwrap().to_owned();
+    assert!(said("log").contains("(matched by name, unconfirmed)"), "{text}");
+    assert!(!said("step").contains("matched by name"), "{text}");
+    // Structure isn't a matter of evidence.
+    let boxes = f.tree(ask(ViewKind::Contains, Some("app"), Way::Down, 1));
+    assert!(boxes.lines.iter().all(|l| l.evidence.is_none()));
+}

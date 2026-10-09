@@ -173,10 +173,16 @@ impl GraphState {
                 for r in list {
                     let other = if outward { &r.target } else { &r.source };
                     let name = other.as_str().rsplit([':', '.']).next().unwrap_or(other.as_str());
-                    // A planned relation the code doesn't have is said so.
+                    // A planned relation the code doesn't have is said so; a
+                    // call found in the code, how it's known.
                     let planned_only = r.provenance.planned && !r.provenance.observed;
-                    let text = if planned_only { format!("{name} (planned)") } else { name.to_owned() };
-                    if ui.link(RichText::new(text).size(look.text_body)).on_hover_text(other.as_str()).clicked() {
+                    let (text, how) = match arch_graph::tree::Evidence::of(r) {
+                        _ if planned_only => (format!("{name} (planned)"), String::new()),
+                        Some(arch_graph::tree::Evidence::Named) if r.kind == RelationKind::Calls => (format!("{name} (matched by name)"), "\nNot confirmed by the language's own analyzer.".to_owned()),
+                        Some(arch_graph::tree::Evidence::Proven(by)) => (name.to_owned(), format!("\nConfirmed by {by}.")),
+                        _ => (name.to_owned(), String::new()),
+                    };
+                    if ui.link(RichText::new(text).size(look.text_body)).on_hover_text(format!("{}{how}", other.as_str())).clicked() {
                         go = Some(other.0.clone());
                     }
                 }

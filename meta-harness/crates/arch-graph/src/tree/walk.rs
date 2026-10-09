@@ -120,7 +120,7 @@ impl<G: GraphRead> Growing<'_, '_, G> {
                 self.links_left -= 1;
             }
             self.cards[from].open = true;
-            self.lines.push(Line { from: pair.0, to: pair.1, kind, relation: child.relation, order: child.order, mark: child.mark, pills: child.pills, path: Vec::new(), reach: Vec::new() });
+            self.lines.push(Line { from: pair.0, to: pair.1, kind, relation: child.relation, order: child.order, mark: child.mark, pills: child.pills, path: Vec::new(), reach: Vec::new(), evidence: child.evidence });
         }
         true
     }
@@ -257,7 +257,7 @@ pub(super) fn context<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request: &
     if request.view != ViewKind::Contains {
         for child in lens.children(&id.0) {
             if beside.contains(&child.key) && child.key != id.0 {
-                tree.lines.push(Line { from: id.0.clone(), to: child.key, kind: LineKind::Repeat, relation: child.relation, order: child.order, mark: child.mark, pills: child.pills, path: Vec::new(), reach: Vec::new() });
+                tree.lines.push(Line { from: id.0.clone(), to: child.key, kind: LineKind::Repeat, relation: child.relation, order: child.order, mark: child.mark, pills: child.pills, path: Vec::new(), reach: Vec::new(), evidence: child.evidence });
             }
         }
     }

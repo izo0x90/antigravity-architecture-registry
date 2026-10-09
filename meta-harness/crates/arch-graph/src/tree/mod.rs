@@ -222,6 +222,27 @@ pub struct Line {
     /// while either end is selected (`path` is then only a stub).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reach: Vec<Point>,
+    /// A call found in the code: how it's known (none for structure and
+    /// for what only a plan says).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<Evidence>,
+}
+
+/// How a link found in the code is known.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Evidence {
+    /// The language's own analyzer confirmed it (its name and version).
+    Proven(String),
+    /// Only matched by name: likely, not confirmed.
+    Named,
+}
+
+impl Evidence {
+    /// How a relation is known, when it was found in the code.
+    pub fn of(relation: &crate::Relation) -> Option<Self> {
+        relation.provenance.observed.then(|| relation.proven_by.clone().map_or(Evidence::Named, Evidence::Proven))
+    }
 }
 
 /// Why a tree was cut.

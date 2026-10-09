@@ -11,6 +11,12 @@
         "width": 1.0
       }
     },
+    "evidence": {
+      "named": {
+        "fade": 0.45,
+        "width": 1.0
+      }
+    },
     "kinds": {
       "calls": "accent",
       "contains": "faint",
