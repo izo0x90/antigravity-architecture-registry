@@ -133,7 +133,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/messages", post(mcp_messages_proxy))
         .route("/ws/events", get(ws_events_handler))
         .merge(crate::arch::routes())
-        .merge(crate::explainer::routes())
         .merge(crate::graph::routes())
         .merge(crate::queue::routes());
 

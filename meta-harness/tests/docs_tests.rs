@@ -1,4 +1,4 @@
-//! The README and the explainer describe the system as it is: every crate,
+//! The README describes the system as it is: every crate,
 //! every shipped pack and pack command, the analysis path and its endpoints,
 //! and nothing that's been deleted.
 
@@ -16,10 +16,8 @@ fn folders(path: &str) -> Vec<String> {
 
 // req: AP.12
 #[test]
-fn the_readme_and_explainer_describe_the_system_as_it_is() {
+fn the_readme_describes_the_system_as_it_is() {
     let readme = read("README.md");
-    let explainer = read("static/explainer/content.js");
-    let demos = read("static/explainer/demos.js");
 
     // Every crate has a row in the code map (`harness-*` covers its family).
     for krate in folders("crates") {
@@ -41,13 +39,8 @@ fn the_readme_and_explainer_describe_the_system_as_it_is() {
     for words in ["meta-harness analyze", "proven", "unconfirmed", "/api/code/analysis", "/api/perf", "highlights.scm", "contains", "calls", "data_flow"] {
         assert!(readme.contains(words), "the README doesn't mention {words}");
     }
-    for item in ["id: \"indexing\"", "id: \"packs\"", "id: \"code-view\"", "id: \"lines\"", "id: \"source\""] {
-        assert!(explainer.contains(item), "the explainer has no {item}");
-    }
     // Nothing deleted is named.
-    for gone in ["arch-index", "arch_index", "install-antigravity-acp.sh", "AGY_EXECUTABLE", "find_acp_server", "aren't built yet"] {
-        for (name, text) in [("README", &readme), ("explainer", &explainer), ("demos", &demos)] {
-            assert!(!text.contains(gone), "the {name} still names {gone}");
-        }
+    for gone in ["arch-index", "arch_index", "install-antigravity-acp.sh", "AGY_EXECUTABLE", "find_acp_server", "aren't built yet", "/explainer/", "UPDATE_EXPLAINER"] {
+        assert!(!readme.contains(gone), "the README still names {gone}");
     }
 }
