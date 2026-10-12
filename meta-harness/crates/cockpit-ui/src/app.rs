@@ -94,8 +94,6 @@ enum ShellCommand {
     ToggleIssues,
     CloseDrawer,
     OpenPalette,
-    /// Graph selection and code view follow each other.
-    ToggleFollow,
     Motion(Motion),
     /// Row or line N (its value).
     Line,
@@ -162,7 +160,25 @@ const MAX_SLOTS: usize = 3;
 /// Largest count a key takes (`999j`).
 const MAX_COUNT: u32 = 999;
 
+/// Which actions keys were given to: each one's view, name and aliases, in
+/// order, and the focused view (its actions get the view menu's letters).
+type KeyedActions = (BufferKind, Vec<(Origin, String, Vec<String>)>);
+/// One action's keys: its leader path and direct sequences.
+type Keys = (Option<Vec<char>>, Vec<Vec<Chord>>);
+
 pub struct CockpitApp {
+    /// The keys as last given out, and the actions they were given to (by
+    /// view, name and aliases, in order): keys are given out again only when
+    /// those change. Labels and commands are always the current ones.
+    bound_cache: std::cell::RefCell<Option<(KeyedActions, Vec<Keys>)>>,
+    /// Within a frame, the actions as gathered once (dropped when one runs;
+    /// none between frames, so the next one gathers them afresh).
+    frame_actions: std::cell::RefCell<Option<Vec<Bound>>>,
+    /// Drawing a frame now.
+    in_frame: std::cell::Cell<bool>,
+    /// How many times the actions were gathered (counted for the tests).
+    #[cfg(test)]
+    gathered: std::cell::Cell<usize>,
     pub net: NetClient,
     pub chat: ChatStreamState,
     pub code: CodeViewerState,
@@ -225,12 +241,6 @@ pub struct CockpitApp {
     slot_rects: [egui::Rect; MAX_SLOTS],
     /// The slots before fewer columns moved the focused view into view.
     slots_before_shrink: Option<[BufferKind; MAX_SLOTS]>,
-    /// Graph selection and code view follow each other.
-    pub follow: bool,
-    follow_last: Option<ComponentId>,
-    /// A code-cursor lookup is on its way: its answer moves the graph but
-    /// mustn't move the code back.
-    following_code: bool,
     /// The spec's anchor we last refetched the view for (so a mismatch the
     /// server itself holds doesn't refetch every frame).
     anchor_checked: Option<Option<arch_graph::CodeAnchor>>,
@@ -284,6 +294,11 @@ impl CockpitApp {
             Err(err) => (UiConfig::default(), Some(format!("built-in defaults: {err}"))),
         };
         Self {
+            bound_cache: Default::default(),
+            frame_actions: Default::default(),
+            in_frame: Default::default(),
+            #[cfg(test)]
+            gathered: Default::default(),
             net: NetClient::new(host_origin),
             chat: ChatStreamState::default(),
             code: CodeViewerState::default(),
@@ -327,9 +342,6 @@ impl CockpitApp {
             key_sheet: None,
             slot_rects: [egui::Rect::NOTHING; MAX_SLOTS],
             slots_before_shrink: None,
-            follow: false,
-            follow_last: None,
-            following_code: false,
             anchor_checked: None,
             reveal_inbox: Arc::default(),
             palette: crate::palette::Palette::default(),
@@ -433,8 +445,8 @@ impl CockpitApp {
         // The focused target's relations, so the bar and popup offer only
         // the go-tos that lead somewhere.
         if let Some(id) = self.view(self.focused_kind()).target().and_then(|t| t.component().cloned()) {
-            let plan = self.graph.nav.plan.clone();
-            self.details.want(&id, plan.as_ref(), &self.net, ctx);
+            let source = self.graph.nav.source.clone();
+            self.details.want(&id, &source, &self.net, ctx);
         }
 
         // Notes fade.
@@ -641,8 +653,8 @@ impl CockpitApp {
     /// its relations are here.
     fn reaches(&self) -> Option<Vec<GoTo>> {
         let target = self.view(self.focused_kind()).target()?;
-        let detail = self.details.get(target.component()?, self.graph.nav.plan.as_ref())?;
-        let ops = [GoTo::Callers, GoTo::Callees, GoTo::Parent, GoTo::Members, GoTo::Implements, GoTo::Flows];
+        let detail = self.details.get(target.component()?, &self.graph.nav.source)?;
+        let ops = [GoTo::Uses, GoTo::Callers, GoTo::Callees, GoTo::Parent, GoTo::Members, GoTo::Implements, GoTo::Flows];
         Some(ops.into_iter().filter(|op| !candidates(*op, detail).is_empty()).collect())
     }
 
@@ -682,8 +694,9 @@ impl CockpitApp {
     /// Each one that sends the user somewhere is a jump.
     fn link_views(&mut self, ctx: &egui::Context) {
         self.graph.tick(&self.net, ctx);
-        let plan = self.graph.nav.plan.clone();
-        self.spec.follow(self.graph.current().as_ref(), plan.as_ref());
+        let source = self.graph.nav.source.clone();
+        let plan = source.plan().cloned();
+        self.spec.follow(self.graph.current().as_ref(), &source);
         // One truth for where code is: if the spec fetched a newer anchor for
         // the selection than the view on screen has, the view is stale.
         if let (Some(detail), Some(shown)) = (&self.spec.detail, self.graph.selected())
@@ -695,7 +708,7 @@ impl CockpitApp {
         }
         self.link_review(plan.as_ref(), ctx);
         self.link_queue(plan.as_ref(), ctx);
-        self.tree.set_plan(plan.as_ref());
+        self.tree.set_source(&source);
         // Jumps made in the graph with the pointer or a finger.
         if let Some(place) = self.graph.jumped.take() {
             self.jumps.record(Jump { slot: self.slot_of(BufferKind::Graph), kind: BufferKind::Graph, place });
@@ -759,38 +772,8 @@ impl CockpitApp {
         }
         let found = std::mem::take(&mut *self.reveal_inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for component in found.into_iter().flatten() {
-            if std::mem::take(&mut self.following_code) {
-                self.follow_last = Some(component.id.clone());
-            }
             self.graph.reveal(component.id);
             self.ensure_visible(BufferKind::Graph);
-        }
-        // Follow mode, code to graph: once the code cursor rests, the graph
-        // selects the component under it.
-        let now = ctx.input(|i| i.time);
-        if let Some((file, line)) = self.code.settled_cursor(now, self.config.links.follow_debounce_ms as f64 / 1000.0)
-            && self.follow
-        {
-            self.following_code = true;
-            let inbox = self.reveal_inbox.clone();
-            self.net.arch_at(&file, line, plan.as_ref(), ctx.clone(), move |r| {
-                if let Ok(mut i) = inbox.lock() {
-                    i.push(r);
-                }
-            });
-        }
-        if self.code.cursor_moved_at.is_some() && self.follow {
-            ctx.request_repaint_after(std::time::Duration::from_millis(self.config.links.follow_debounce_ms));
-        }
-        // Follow mode, graph to code: the code view tracks the graph selection.
-        if self.follow && self.graph.current() != self.follow_last {
-            self.follow_last = self.graph.current();
-            if let Some(c) = self.graph.selected()
-                && let Some(a) = c.anchor.as_ref().filter(|a| !crate::status::is_folder(a))
-            {
-                let (file, start, end) = (a.file.to_string(), a.span.start_line, a.span.end_line);
-                self.show_code(&file, start, end, ctx);
-            }
         }
     }
 
@@ -832,8 +815,6 @@ impl CockpitApp {
         actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), S::ToggleInspector));
         actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), S::ToggleIssues));
         actions.push(admin("drawer.close".into(), "Close side drawer".into(), S::CloseDrawer));
-        let follow = if self.follow { "Stop following (graph and code)" } else { "Follow: code tracks the graph selection" };
-        actions.push(admin("link.follow".into(), follow.into(), S::ToggleFollow));
         actions.push(admin("palette.open".into(), "Command palette".into(), S::OpenPalette));
         let index = |id: &str, label: &str, op: IndexOp| Action::new(id, label, S::Index(op)).group(Group::Act).importance(MINOR);
         actions.push(index("index.changed", "Re-read the code that changed", IndexOp::Changed));
@@ -921,6 +902,7 @@ impl CockpitApp {
             let has_job = self.view(kind).target().and_then(|t| t.component().cloned()).is_none_or(|id| self.queue.has_job(&id));
             out.push(go("goto.queue", "Go to its queue job", GoTo::Queue, if has_job { When::Component } else { When::Unavailable }, MINOR));
         }
+        out.push(go("goto.uses", "Go to a use", GoTo::Uses, When::Reaches(GoTo::Uses), SECONDARY));
         out.push(go("goto.callers", "Go to a caller", GoTo::Callers, When::Reaches(GoTo::Callers), SECONDARY));
         out.push(go("goto.callees", "Go to a callee", GoTo::Callees, When::Reaches(GoTo::Callees), SECONDARY));
         out.push(go("goto.parent", "Go to what holds it", GoTo::Parent, When::Reaches(GoTo::Parent), MINOR));
@@ -939,6 +921,23 @@ impl CockpitApp {
     /// actions first (they win key conflicts), then the shell, then the global
     /// actions of every other view.
     pub(crate) fn bound_actions(&self) -> Vec<Bound> {
+        // Gathered once a frame: the key bar, the hints, the palette and the
+        // keys all read the same list.
+        if self.in_frame.get()
+            && let Some(kept) = self.frame_actions.borrow().as_ref()
+        {
+            return kept.clone();
+        }
+        let bound = self.gather_actions();
+        if self.in_frame.get() {
+            *self.frame_actions.borrow_mut() = Some(bound.clone());
+        }
+        bound
+    }
+
+    fn gather_actions(&self) -> Vec<Bound> {
+        #[cfg(test)]
+        self.gathered.set(self.gathered.get() + 1);
         let focused = self.focused_kind();
         let view = |kind: BufferKind, all: bool| self.provider(kind).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(kind), a));
         let mut actions: Vec<(Origin, Action)> = view(focused, true).collect();
@@ -946,6 +945,20 @@ impl CockpitApp {
         for kind in BufferKind::ALL.into_iter().filter(|k| *k != focused) {
             actions.extend(view(kind, false));
         }
+        let keyed: KeyedActions = (focused, actions.iter().map(|(origin, a)| (*origin, a.id.clone(), a.aliases.clone())).collect());
+        let mut cache = self.bound_cache.borrow_mut();
+        if cache.as_ref().is_none_or(|(kept, _)| *kept != keyed) {
+            let keys = self.bind_actions(actions.clone()).into_iter().map(|b| (b.leader, b.keys)).collect();
+            *cache = Some((keyed, keys));
+        }
+        let keys = cache.as_ref().map(|(_, keys)| keys.clone()).unwrap_or_default();
+        actions.into_iter().zip(keys).map(|((origin, action), (leader, keys))| Bound { action, origin, leader, keys }).collect()
+    }
+
+    /// The actions bound to their keys, the focused view's own getting the
+    /// view menu's free letters.
+    fn bind_actions(&self, actions: Vec<(Origin, Action)>) -> Vec<Bound> {
+        let focused = self.focused_kind();
         let mut bound = self.config.keymap.bind(actions);
         // The focused view's own menu: its actions without a leader path get
         // the next free keys under the view-menu key.
@@ -981,6 +994,15 @@ impl CockpitApp {
     /// Runs an action `count` times (a count before its key): moves take the
     /// count, a view's own actions repeat, anything else runs once.
     fn invoke_counted(&mut self, invocation: Invocation, count: u32, ctx: &egui::Context) {
+        // An action changes what can run as it goes: it sees the actions as
+        // they are, and what's drawn after it sees what it left.
+        let drawing = self.in_frame.replace(false);
+        self.run_counted(invocation, count, ctx);
+        self.in_frame.set(drawing);
+        self.frame_actions.borrow_mut().take();
+    }
+
+    fn run_counted(&mut self, invocation: Invocation, count: u32, ctx: &egui::Context) {
         let Invocation { action, origin, value } = invocation;
         match origin {
             Origin::Shell => {
@@ -1076,10 +1098,6 @@ impl CockpitApp {
                 }
             }
             ShellCommand::CloseDrawer => self.graph.drawer_open = false,
-            ShellCommand::ToggleFollow => {
-                self.follow = !self.follow;
-                self.follow_last = None;
-            }
             ShellCommand::OpenPalette => self.open_palette(None),
             ShellCommand::Motion(motion) => {
                 let before = self.jump_here();
@@ -1354,7 +1372,7 @@ impl CockpitApp {
             // A line the index has nothing on yet: ask the server what's there.
             (None, Target::Line { file, line, .. }) => {
                 let inbox = self.at_inbox.clone();
-                self.net.arch_at(file, *line, self.graph.nav.plan.as_ref(), ctx.clone(), move |r| {
+                self.net.arch_at(file, *line, &self.graph.nav.source, ctx.clone(), move |r| {
                     if let Ok(mut i) = inbox.lock() {
                         i.push(r);
                     }
@@ -1373,8 +1391,8 @@ impl CockpitApp {
             GoTo::Tree => self.show_in(BufferKind::Tree, id, from),
             GoTo::Queue => self.show_in(BufferKind::Queue, id, from),
             _ => {
-                let plan = self.graph.nav.plan.clone();
-                match self.details.get(&id, plan.as_ref()) {
+                let source = self.graph.nav.source.clone();
+                match self.details.get(&id, &source) {
                     Some(detail) => {
                         let found = candidates(op, detail);
                         if found.is_empty() {
@@ -1384,7 +1402,7 @@ impl CockpitApp {
                         }
                     }
                     None => {
-                        self.details.want(&id, plan.as_ref(), &self.net, ctx);
+                        self.details.want(&id, &source, &self.net, ctx);
                         self.pending_goto = Some(Pending { wait: Wait::Relations { op, component: id }, from, origin });
                     }
                 }
@@ -1474,7 +1492,7 @@ impl CockpitApp {
             (None, None) => None,
         };
         let in_file = self.code.defs.iter().find(|d| &d.id == id).map(|d| Some((self.code.current_file.clone(), d.start as u32, d.end as u32)));
-        let known = [in_file, self.graph.component(id).map(of), self.details.get(id, self.graph.nav.plan.as_ref()).map(|d| of(&d.component))];
+        let known = [in_file, self.graph.component(id).map(of), self.details.get(id, &self.graph.nav.source).map(|d| of(&d.component))];
         let mut answer = None;
         for found in known.into_iter().flatten() {
             if found.is_some() {
@@ -1496,14 +1514,14 @@ impl CockpitApp {
                 self.after_jump(from);
                 // Planned, not written: the file it's planned in.
                 let planned = |c: &arch_graph::Component| c.anchor.is_none() && c.proposed.is_some();
-                if self.graph.component(&id).is_some_and(planned) || self.details.get(&id, self.graph.nav.plan.as_ref()).is_some_and(|d| planned(&d.component)) {
+                if self.graph.component(&id).is_some_and(planned) || self.details.get(&id, &self.graph.nav.source).is_some_and(|d| planned(&d.component)) {
                     self.note = Some(format!("{} isn't written yet: this is the file it's planned in.", self.component_name(&id)));
                 }
             }
             Some(None) => self.note = Some(format!("{} isn't in the code yet.", self.component_name(&id))),
             None => {
-                let plan = self.graph.nav.plan.clone();
-                self.details.want(&id, plan.as_ref(), &self.net, ctx);
+                let source = self.graph.nav.source.clone();
+                self.details.want(&id, &source, &self.net, ctx);
                 self.pending_goto = Some(Pending { wait: Wait::Code { component: id, line }, from, origin: self.focused_kind() });
             }
         }
@@ -1528,9 +1546,9 @@ impl CockpitApp {
                 Err(_) => self.note = Some("No component at this line.".into()),
             }
         }
-        let plan = self.graph.nav.plan.clone();
+        let source = self.graph.nav.source.clone();
         let ready = match &self.pending_goto {
-            Some(Pending { wait: Wait::Relations { component, .. } | Wait::Code { component, .. }, .. }) => self.details.get(component, plan.as_ref()).is_some(),
+            Some(Pending { wait: Wait::Relations { component, .. } | Wait::Code { component, .. }, .. }) => self.details.get(component, &source).is_some(),
             _ => false,
         };
         if ready && let Some(Pending { wait, from, origin }) = self.pending_goto.take() {
@@ -1742,7 +1760,10 @@ impl CockpitApp {
 
                 ui.add_space(crate::theme::look().space_sm);
                 let (agent_color, agent_hint) = match &self.chat.session_status() {
-                    SessionStatus::Idle => (colors().faint, "Agent: not connected".to_string()),
+                    SessionStatus::Idle => match self.chat.harness_problem() {
+                        Some(problem) => (colors().error, format!("Agent: unavailable — {problem}")),
+                        None => (colors().faint, "Agent: not connected".to_string()),
+                    },
                     SessionStatus::Connecting => (colors().warn, "Agent: connecting…".to_string()),
                     SessionStatus::Connected(tid) => (colors().ok, format!("Agent: connected [{}]", tid)),
                     SessionStatus::Failed(err) => (colors().error, format!("Agent: failed — {}", err)),
@@ -1787,6 +1808,11 @@ impl CockpitApp {
                 Frame::NONE.fill(mode_bg).stroke(Stroke::new(crate::theme::look().line_thin, mode_color)).corner_radius(crate::theme::look().radius_s).inner_margin(crate::theme::margin2(crate::theme::look().space_sm, crate::theme::look().space_xs)).show(ui, |ui| {
                     ui.label(RichText::new(mode_label).monospace().strong().size(crate::theme::look().text_small).color(mode_color));
                 });
+
+                // An answer cut short or slow, whichever view is showing it.
+                if let Some((words, more)) = self.graph.answer_status() {
+                    ui.label(RichText::new(format!("{} {words}", egui_phosphor::regular::WARNING)).size(crate::theme::look().text_body).color(colors().warn)).on_hover_text(more);
+                }
 
                 if let Some(err) = &self.config_error {
                     ui.label(RichText::new(format!("{} config", egui_phosphor::regular::WARNING)).size(crate::theme::look().text_body).color(colors().warn))
@@ -1853,9 +1879,9 @@ impl CockpitApp {
         if let Some(e) = &self.index.error {
             hover.push_str(&format!("\nThe last run failed: {e}"));
         }
-        for i in &self.index.indexers {
+        for s in &self.index.servers {
             hover.push('\n');
-            hover.push_str(&indexer_line(i));
+            hover.push_str(&server_line(s));
         }
         if !self.index.stale.is_empty() {
             hover.push_str(&format!("\nChanged since read: {}", self.index.stale.join(", ")));
@@ -2317,21 +2343,27 @@ pub fn index_state(index: &arch_graph::IndexStatus) -> &'static str {
     }
 }
 
-/// One language's indexer in words: whether its links are proven, and by what.
-fn indexer_line(i: &arch_graph::IndexerStatus) -> String {
-    let tool = match &i.version {
-        Some(v) => format!("{} {v}", i.indexer),
-        None => i.indexer.clone(),
+/// One language's server in words: whether it confirms links, and if not, why.
+fn server_line(s: &arch_graph::ServerStatus) -> String {
+    let tool = match &s.version {
+        Some(v) => format!("{} {v}", s.server),
+        None => s.server.clone(),
     };
-    match i.state {
-        arch_graph::IndexerState::Missing => format!("{}: links matched by name ({} isn't ready: meta-harness pack check {})", i.language, i.indexer, i.indexer),
-        arch_graph::IndexerState::Running => format!("{}: {tool} is running", i.language),
-        arch_graph::IndexerState::Failed => format!("{}: {tool} failed: {}", i.language, i.error.as_deref().unwrap_or("no reason given")),
-        arch_graph::IndexerState::Ready => match i.last_ms {
-            Some(ms) => format!("{}: {tool} confirmed {} links in {} files ({} ms)", i.language, i.proven, i.files, ms),
-            None => format!("{}: {tool} is ready", i.language),
-        },
-    }
+    let why = s.reason.as_deref().unwrap_or("no reason given");
+    let dropped = match s.dropped_positions {
+        0 => String::new(),
+        n => format!(" ({n} places it gave couldn't be read)"),
+    };
+    // The count is shown in every state (a server that failed may have
+    // answered before).
+    let line = match s.state {
+        arch_graph::ServerState::Ready => format!("{}: {tool} confirms links", s.language),
+        arch_graph::ServerState::Starting => format!("{}: {tool} is starting ({why}); links are unconfirmed until it's ready", s.language),
+        arch_graph::ServerState::NotInstalled | arch_graph::ServerState::OutOfRange | arch_graph::ServerState::Broken | arch_graph::ServerState::Failed => {
+            format!("{}: links unconfirmed: {tool}: {why}", s.language)
+        }
+    };
+    format!("{line}{dropped}")
 }
 
 /// An action's keys as the key sheet lists them ("g d", "SPC g v").
@@ -2366,6 +2398,14 @@ impl eframe::App for CockpitApp {
 impl CockpitApp {
     /// One UI frame.
     pub fn frame(&mut self, ctx: &egui::Context) {
+        self.frame_actions.borrow_mut().take();
+        self.in_frame.set(true);
+        self.draw_frame(ctx);
+        self.in_frame.set(false);
+        self.frame_actions.borrow_mut().take();
+    }
+
+    fn draw_frame(&mut self, ctx: &egui::Context) {
         self.update_lifecycle(ctx);
         self.feedback.begin_frame();
 
@@ -2409,8 +2449,16 @@ impl CockpitApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn places_a_server_gave_that_couldnt_be_read_are_shown_in_every_state() {
+        for state in [arch_graph::ServerState::Ready, arch_graph::ServerState::Starting, arch_graph::ServerState::Failed] {
+            let s = arch_graph::ServerStatus { language: "rust".into(), server: "rust-analyzer".into(), state, reason: Some("why".into()), dropped_positions: 3, ..Default::default() };
+            assert!(server_line(&s).contains("3 places it gave couldn't be read"), "{state:?}: {}", server_line(&s));
+        }
+    }
     use crate::graph::tests::{loading, sample_tree, showing};
-    use arch_graph::{CodeAnchor, PlanId, Provenance, Relation, RelationKind, RepoPath, Span};
+    use arch_graph::{CodeAnchor, PlanId, Provenance, Relation, RelationKind, RepoPath, Source, Span};
 
     fn texts(output: &egui::FullOutput) -> String {
         fn collect(shape: &egui::Shape, out: &mut String) {
@@ -2428,6 +2476,41 @@ mod tests {
             collect(&clipped.shape, &mut out);
         }
         out
+    }
+
+    /// Clicks the drawn text `label` (a button's or a link's).
+    fn click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
+        fn find(shape: &egui::Shape, label: &str) -> Option<egui::Rect> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.text() == label => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
+                egui::Shape::Vec(list) => list.iter().find_map(|s| find(s, label)),
+                _ => None,
+            }
+        }
+        let output = frame(ctx, app, vec![]);
+        let at = output.shapes.iter().find_map(|c| find(&c.shape, label)).unwrap_or_else(|| panic!("{label:?} isn't drawn: {}", texts(&output))).center();
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(ctx, app, vec![egui::Event::PointerMoved(at)]);
+        frame(ctx, app, vec![button(true)]);
+        frame(ctx, app, vec![button(false)]);
+    }
+
+    #[test]
+    fn the_size_note_offers_its_fixes_as_buttons() {
+        let (ctx, mut app) = full_app();
+        focus(&ctx, &mut app, BufferKind::Graph);
+        let cut_tree = || {
+            let mut tree = crate::graph::tests::sample_tree();
+            tree.cut = Some(arch_graph::tree::Cut { reason: arch_graph::tree::CutReason::Budget, starts_left_out: 0, shown: 2, asked: 3, hidden: 7 });
+            tree
+        };
+        app.graph.set_tree(cut_tree());
+        click_on(&ctx, &mut app, "Show 2 levels");
+        assert_eq!(app.graph.nav.depth, Some(2), "only the levels that fit");
+        app.graph.set_tree(cut_tree());
+        app.graph.select(Some("rust:a::step".into()));
+        click_on(&ctx, &mut app, "Go into step");
+        assert_eq!(app.graph.nav.root.as_deref(), Some("rust:a::step"), "started from the card");
     }
 
     /// An app with the graph in slot 2 (focused) showing the sample view.
@@ -2490,13 +2573,13 @@ mod tests {
     fn full_app() -> (egui::Context, CockpitApp) {
         let (ctx, mut app) = app_with_graph();
         let plan = PlanId::new("p").unwrap();
-        app.graph.nav.plan = Some(plan.clone());
+        app.graph.nav.source = Source::Plan(plan.clone());
         app.tree.set_result(crate::tree::tests::outline());
         app.code = crate::code::tests::sample();
         let step = ComponentId::new("rust:a::step");
         app.spec.pinned = true;
         app.spec.show(step.clone());
-        app.spec.plan = Some(plan.clone());
+        app.spec.source = Source::Plan(plan.clone());
         app.spec.detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
         app.queue.tick(&app.net, &ctx, Some(&plan));
         // Enough jobs and messages that half a page means something.
@@ -2525,7 +2608,6 @@ mod tests {
         app.view(app.focused_kind()).cursor_key()
     }
 
-    // req: P9.1
     #[test]
     fn graph_draws_server_views_with_loading_and_empty_states() {
         assert!(!std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/samples.rs").exists(), "sample graphs are gone");
@@ -2539,20 +2621,19 @@ mod tests {
         app.graph = loading();
         let text = texts(&frame(&ctx, &mut app, vec![]));
         assert!(text.contains("Loading the architecture"), "{text}");
-        let empty = crate::graph::tests::tree_of(&arch_graph::Graph::new(), None, arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() });
+        let empty = crate::graph::tests::tree_of(&arch_graph::Graph::default(), None, arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() });
         app.graph = showing(empty);
         let text = texts(&frame(&ctx, &mut app, vec![]));
         assert!(text.contains("Nothing to show in this view yet"), "{text}");
     }
 
-    // req: P9.5, P9.4
     #[test]
     fn vim_sequences_and_leader_drive_the_graph_and_are_rebindable() {
         let (ctx, mut app) = app_with_graph();
         frame(&ctx, &mut app, vec![]);
         frame(&ctx, &mut app, key("l"));
         assert_eq!(selected(&app), "rust:a::run");
-        app.details.insert(crate::goto::tests::detail("rust:a::run", vec![call("rust:a::run", "rust:a::step", 0, 2), call("rust:a::run", "rust:a::log", 1, 3)], vec![]), None);
+        app.details.insert(crate::goto::tests::detail("rust:a::run", vec![call("rust:a::run", "rust:a::step", 0, 2), call("rust:a::run", "rust:a::log", 1, 3)], vec![]), &Source::Code);
         frame(&ctx, &mut app, key("g"));
         assert_eq!(app.pending_keys.len(), 1, "waiting for the second key");
         frame(&ctx, &mut app, key("c"));
@@ -2572,7 +2653,7 @@ mod tests {
         frame(&ctx, &mut app, key("l"));
         assert_eq!(selected(&app), "rust:a::step", "keys work while a button has focus");
         assert!(ctx.memory(|m| m.focused()).is_none(), "and the button gave the keyboard back");
-        app.details.insert(crate::goto::tests::detail("rust:a::step", vec![call("rust:a::step", "rust:a::save", 0, 5)], vec![]), None);
+        app.details.insert(crate::goto::tests::detail("rust:a::step", vec![call("rust:a::step", "rust:a::save", 0, 5)], vec![]), &Source::Code);
         keys(&ctx, &mut app, "gc");
         assert_eq!(selected(&app), "rust:a::save", "single callee: straight there");
         ctrl(&ctx, &mut app, egui::Key::O);
@@ -2591,7 +2672,6 @@ mod tests {
         assert_eq!(selected(&app), "rust:a::step");
     }
 
-    // req: V.6
     #[test]
     fn tabs_are_icons_that_name_themselves_and_their_key() {
         let (ctx, mut app) = app_with_graph();
@@ -2608,7 +2688,23 @@ mod tests {
         }
     }
 
-    // req: P9.8
+    #[test]
+    fn the_details_card_says_how_each_kind_of_link_is_known() {
+        let (ctx, mut app) = app_with_graph();
+        app.graph = showing(sample_tree());
+        crate::graph::tests::with_detail(&mut app.graph, "rust:a::step", "src/a.rs", 10, 20);
+        // A data flow out of it, matched by name; one call confirmed.
+        let key = ("rust:a::step".to_owned(), Source::Code);
+        let Some(crate::graph::Detail::Ready(detail)) = app.graph.details.get_mut(&key) else { panic!("no detail") };
+        detail.outgoing.push(Relation::new(RelationKind::DataFlow, ComponentId::new("rust:a::step"), ComponentId::new("rust:a::log"), Provenance::OBSERVED));
+        detail.incoming.iter_mut().for_each(|r| r.proven_by = Some("rust-analyzer 1.90.0".into()));
+        app.graph.select(Some("rust:a::step".into()));
+        let text = texts(&frame(&ctx, &mut app, vec![]));
+        assert!(text.contains("save (matched by name)"), "a call: {text}");
+        assert!(text.contains("log (matched by name)"), "a data flow too: {text}");
+        assert!(text.contains("run") && !text.contains("run (matched by name)"), "the confirmed one reads plainly: {text}");
+    }
+
     #[test]
     fn inspector_summarizes_the_selection_and_links_onward() {
         let (ctx, mut app) = app_with_graph();
@@ -2619,13 +2715,14 @@ mod tests {
         for expected in ["rust:a::step", "function · Existing", "implemented", "src/a.rs:10–20", "Spec view", "Code", "calls", "save", "run"] {
             assert!(text.contains(expected), "drawer shows {expected}: {text}");
         }
-        frame(&ctx, &mut app, key("x"));
-        assert!(!app.graph.drawer_open, "x closes it");
+        let close = app.bound_actions().into_iter().find(|b| b.action.id == "drawer.close").unwrap();
+        assert_eq!(close.key_hint(), "SPC x");
+        app.invoke(Invocation { action: close.action, origin: close.origin, value: None }, &ctx);
+        assert!(!app.graph.drawer_open, "SPC x closes it");
     }
 
-    // req: P9.15
     #[test]
-    fn graph_and_code_link_both_ways_and_follow() {
+    fn graph_and_code_link_both_ways() {
         let (ctx, mut app) = app_with_graph();
         app.graph = showing(sample_tree());
         crate::graph::tests::with_detail(&mut app.graph, "rust:a::step", "src/a.rs", 10, 20);
@@ -2641,24 +2738,11 @@ mod tests {
         app.code.select = Some(ComponentId::new("rust:a::save"));
         frame(&ctx, &mut app, vec![]);
         assert_eq!(selected(&app), "rust:a::save");
-        // Follow mode: the code view tracks the selection.
-        app.run_shell(ShellCommand::ToggleFollow, None, 1, &ctx);
+        // No follow mode: selecting in the graph leaves the code where it is.
         app.graph.select(Some("rust:a::step".into()));
         frame(&ctx, &mut app, vec![]);
         assert_eq!(app.code.current_file, "src/a.rs");
-        app.graph.select(Some("rust:a::save".into()));
-        frame(&ctx, &mut app, vec![]);
-        assert_eq!((app.code.current_file.as_str(), app.code.highlight), ("src/b.rs", Some((3, 5))));
-        // ...and the graph tracks the code cursor once it rests: the lookup
-        // goes out, its answer selects the component, the code stays put.
-        app.code.set_content((1..=30).map(|i| format!("line {i}\n")).collect());
-        app.code.move_cursor(4, -10.0);
-        frame(&ctx, &mut app, vec![]);
-        assert!(app.following_code, "the cursor rested: its component is being looked up");
-        app.reveal_inbox.lock().unwrap().push(Ok(crate::graph::tests::sample_graph().component(&ComponentId::new("rust:a::step")).unwrap().clone()));
-        frame(&ctx, &mut app, vec![]);
-        assert_eq!(selected(&app), "rust:a::step");
-        assert_eq!((app.code.current_file.as_str(), app.code.target_line), ("src/b.rs", Some(4)), "following the code doesn't move the code");
+        assert!(!app.bound_actions().iter().any(|b| b.action.id == "link.follow"), "no follow action");
         // Gutter marks come from the file's components.
         let mut file_comp = crate::graph::tests::sample_graph().component(&ComponentId::new("rust:a::log")).unwrap().clone();
         file_comp.anchor = Some(CodeAnchor { language: "rust".into(), file: RepoPath::new("src/b.rs").unwrap(), symbol: "a::log".into(), syntax_kind: "function_item".into(), span: Span { start_line: 7, end_line: 9, start_byte: 70, end_byte: 90 }, content_hash: String::new() });
@@ -2671,7 +2755,6 @@ mod tests {
         assert!(matches!(marks[&8][..], [crate::code::Mark::Placeholder(_)]));
     }
 
-    // req: P9.14, P9.3, N.9, N.12
     #[test]
     fn search_marks_counts_and_ends_work_through_the_keys() {
         let (ctx, mut app) = app_with_graph();
@@ -2737,7 +2820,6 @@ mod tests {
         assert_eq!(selected(&app), "rust:a::save");
     }
 
-    // req: N.2, N.14
     #[test]
     fn the_jump_list_crosses_views_and_slots() {
         let (ctx, mut app) = app_with_graph();
@@ -2768,7 +2850,6 @@ mod tests {
         assert!(fresh.note.as_deref().unwrap_or_default().contains("Nothing to go back to"));
     }
 
-    // req: N.3
     #[test]
     fn every_key_comes_from_config_and_no_two_actions_in_a_view_share_one() {
         let config = UiConfig::with_overrides("").unwrap();
@@ -2797,7 +2878,8 @@ mod tests {
         let keys_of = |id: &str| config.keymap.bind.get(id).map(|b| b.keys.iter().map(label).collect::<Vec<_>>()).unwrap_or_default();
         assert_eq!(keys_of("nav.first"), ["g g"]);
         assert_eq!(keys_of("goto.graph"), ["g m"]);
-        assert_eq!(keys_of("goto.callers"), ["g r"]);
+        assert_eq!(keys_of("goto.uses"), ["g r"], "g r lists every use");
+        assert_eq!(keys_of("goto.callers"), ["g R"]);
         assert_eq!(keys_of("spec.reopen"), ["x"]);
         for gone in ["spec.show_in_graph", "queue.show_in_graph", "code.reveal", "graph.back", "graph.search", "graph.hint"] {
             assert!(!config.keymap.bind.contains_key(gone), "{gone} is replaced");
@@ -2820,7 +2902,6 @@ mod tests {
         }
     }
 
-    // req: N.4, N.21
     #[test]
     fn actions_rank_by_importance_and_apply_to_the_target() {
         let (ctx, mut app) = app_with_graph();
@@ -2857,7 +2938,43 @@ mod tests {
         assert!(!When::Named.holds(&app.situation()), "not a code line");
     }
 
-    // req: N.5, N.6, N.7
+    /// Where the kept keys live (moves when they're given out again).
+    fn kept_keys(app: &CockpitApp) -> *const Keys {
+        app.bound_cache.borrow().as_ref().map(|(_, keys)| keys.as_ptr()).unwrap()
+    }
+
+    #[test]
+    fn a_frame_gathers_the_actions_once_and_again_only_after_one_runs() {
+        let (ctx, mut app) = app_with_graph();
+        frame(&ctx, &mut app, vec![]);
+        let before = app.gathered.get();
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.gathered.get() - before, 1, "once for the key bar, the hints, the palette and the keys");
+        // A key that runs an action: gathered for the key, then once more
+        // for what it left.
+        let before = app.gathered.get();
+        frame(&ctx, &mut app, key("j"));
+        assert!(app.gathered.get() - before <= 2, "{} times", app.gathered.get() - before);
+    }
+
+    #[test]
+    fn keys_are_given_out_again_only_when_the_actions_change() {
+        let (ctx, mut app) = app_with_graph();
+        frame(&ctx, &mut app, vec![]);
+        let first = app.bound_actions();
+        let kept = kept_keys(&app);
+        // Nothing changed: the same keys, not given out again.
+        let again = app.bound_actions();
+        assert_eq!(kept_keys(&app), kept);
+        assert!(first.iter().zip(&again).all(|(a, b)| a.action.id == b.action.id && a.leader == b.leader && a.keys == b.keys));
+        // A selection changes what can run: given out again, current labels.
+        app.graph.select(Some("rust:a::step".into()));
+        let selected = app.bound_actions();
+        assert_ne!(kept_keys(&app), kept);
+        assert_eq!(selected.iter().find(|b| b.action.id == "nav.enter").unwrap().action.label, "Into step");
+        assert!(selected.iter().any(|b| b.action.id == "goto.code" && !b.keys.is_empty()), "the new go-to has its keys");
+    }
+
     #[test]
     fn the_same_moves_work_in_every_view() {
         let (ctx, mut app) = full_app();
@@ -2910,7 +3027,6 @@ mod tests {
         assert_eq!(selected(&app), "rust:a::save");
     }
 
-    // req: M.8
     #[test]
     fn the_graph_keys_flip_change_depth_switch_view_go_in_and_back() {
         let (ctx, mut app) = app_with_graph();
@@ -2927,11 +3043,15 @@ mod tests {
         assert_eq!(app.graph.nav.root.as_deref(), Some("rust:a::step"), "Enter goes in");
         frame(&ctx, &mut app, press(egui::Key::Backspace, false));
         assert_eq!(app.graph.nav.root.as_deref(), Some("rust:a::run"), "Backspace comes back");
+        // v: the views to pick from.
         frame(&ctx, &mut app, key("v"));
-        assert_eq!(app.graph.nav.view, arch_graph::tree::ViewKind::DataFlow, "v: the next view");
+        assert_eq!(app.input_mode, InputMode::Palette, "v offers the views");
+        let switch = app.bound_actions().into_iter().find(|b| b.action.id == "graph.view").unwrap();
+        frame(&ctx, &mut app, press(egui::Key::Escape, false));
+        app.invoke(Invocation { action: switch.action, origin: switch.origin, value: Some("data_flow".into()) }, &ctx);
+        assert_eq!(app.graph.nav.view, arch_graph::tree::ViewKind::DataFlow, "the view picked");
     }
 
-    // req: N.8, P9.13
     #[test]
     fn f_labels_what_is_on_screen_in_every_view() {
         let (ctx, mut app) = full_app();
@@ -2964,7 +3084,6 @@ mod tests {
         assert!(app.capture.is_none() && app.input_mode == InputMode::Normal);
     }
 
-    // req: N.9
     #[test]
     fn slash_searches_every_view() {
         let (ctx, mut app) = full_app();
@@ -2994,7 +3113,6 @@ mod tests {
         assert_eq!(cursor(&app).as_deref(), Some("3"));
     }
 
-    // req: N.10
     #[test]
     fn enter_goes_in_and_backspace_comes_out_in_every_view() {
         let (ctx, mut app) = full_app();
@@ -3052,7 +3170,6 @@ mod tests {
         assert!(app.note.as_deref().unwrap_or_default().contains("No file"));
     }
 
-    // req: N.11
     #[test]
     fn z_keys_fold_in_every_view_that_folds() {
         let (ctx, mut app) = full_app();
@@ -3077,7 +3194,6 @@ mod tests {
         assert_eq!(app.spec.folded.len(), crate::spec::Section::ALL.len() - 1);
     }
 
-    // req: N.12
     #[test]
     fn marks_work_across_views() {
         let (ctx, mut app) = full_app();
@@ -3106,7 +3222,6 @@ mod tests {
         assert_eq!(app.input_mode, InputMode::Normal);
     }
 
-    // req: N.13
     #[test]
     fn question_mark_lists_this_views_keys_grouped_and_searchable() {
         let (ctx, mut app) = full_app();
@@ -3132,7 +3247,6 @@ mod tests {
         assert!(app.graph.drawer_open, "Escape closed the sheet and nothing else");
     }
 
-    // req: N.14, N.19
     #[test]
     fn go_to_keys_work_from_every_view() {
         let (ctx, mut app) = full_app();
@@ -3162,17 +3276,19 @@ mod tests {
         app.graph.select(Some("rust:a::run".into()));
         keys(&ctx, &mut app, "gq");
         assert!(app.note.as_deref().unwrap_or_default().contains("no job"), "{:?}", app.note);
-        // Code: g r on a definition lists its callers; one: straight to the call.
+        // Code: g r on a definition lists every use of it; one: straight to it.
         focus(&ctx, &mut app, BufferKind::Code);
         app.code.move_to("6");
-        app.details.insert(crate::goto::tests::detail("rust:a::step", vec![], vec![call("rust:a::run", "rust:a::step", 0, 3)]), app.graph.nav.plan.as_ref());
+        let mut step = crate::goto::tests::detail("rust:a::step", vec![], vec![call("rust:a::run", "rust:a::step", 0, 3)]);
+        step.references = vec![arch_graph::code::Reference { file: "src/a.rs".into(), line: 3, start: 0, end: 4, kind: "call".into(), within: Some(arch_graph::ComponentId::new("rust:a::run")), evidence: "name".into(), stale: false }];
+        app.details.insert(step, &app.graph.nav.source);
         keys(&ctx, &mut app, "gr");
-        assert_eq!(app.code.target_line, Some(3), "at the call in run");
+        assert_eq!(app.code.target_line, Some(3), "at the use in run");
         // A detail not here yet: the go-to waits for it.
         app.code.move_to("2");
         keys(&ctx, &mut app, "gc");
         assert!(app.pending_goto.is_some(), "waiting for run's relations");
-        app.details.insert(crate::goto::tests::detail("rust:a::run", vec![call("rust:a::run", "rust:a::step", 0, 3), call("rust:a::run", "rust:x::log", 1, 4)], vec![]), app.graph.nav.plan.as_ref());
+        app.details.insert(crate::goto::tests::detail("rust:a::run", vec![call("rust:a::run", "rust:a::step", 0, 3), call("rust:a::run", "rust:x::log", 1, 4)], vec![]), &app.graph.nav.source);
         frame(&ctx, &mut app, vec![]);
         assert!(app.pending_goto.is_none() && app.input_mode == InputMode::Palette, "two callees: pick one");
         let pick = app.bound_actions().into_iter().find(|b| b.action.id == "goto.pick").unwrap();
@@ -3194,7 +3310,6 @@ mod tests {
         assert!(empty.note.as_deref().unwrap_or_default().contains("Nothing under the cursor"));
     }
 
-    // req: N.18
     #[test]
     fn spec_keys_walk_items_and_review_them() {
         let (ctx, mut app) = full_app();
@@ -3213,7 +3328,6 @@ mod tests {
         assert_eq!(app.input_mode, InputMode::Normal);
     }
 
-    // req: N.22
     #[test]
     fn a_pause_on_a_prefix_shows_what_can_follow() {
         let (ctx, mut app) = app_with_graph();
@@ -3240,7 +3354,7 @@ mod tests {
         assert!(!popup(&texts(&frame_at(&ctx, &mut app, vec![], 31.0)), "z"));
         frame_at(&ctx, &mut app, vec![], 32.05);
         let text = texts(&frame_at(&ctx, &mut app, vec![], 32.1));
-        assert!(popup(&text, "z") && text.contains("Fit to screen") && text.contains("Fold everything"), "{text}");
+        assert!(popup(&text, "z") && text.contains("Fold everything"), "{text}");
         // With nothing selected, the go-tos that need a target aren't listed.
         frame_at(&ctx, &mut app, press(egui::Key::Escape, false), 33.0);
         app.graph.select(None);
@@ -3250,7 +3364,6 @@ mod tests {
         assert!(popup(&text, "g") && text.contains("First") && !text.contains("Go to what holds it"), "{text}");
     }
 
-    // req: N.23
     #[test]
     fn the_palette_still_reaches_other_views_actions() {
         let (ctx, mut app) = full_app();
@@ -3271,7 +3384,6 @@ mod tests {
         assert_eq!(app.code.target_line, Some(7));
     }
 
-    // req: M.14
     #[test]
     fn the_graph_says_when_an_answer_was_slow_or_cut() {
         let (ctx, mut app) = full_app();
@@ -3283,9 +3395,13 @@ mod tests {
         let shown = texts(&frame(&ctx, &mut app, vec![]));
         assert!(shown.contains("slow: 340 ms"), "{shown}");
         assert!(shown.contains("showing 2 of 3 levels: 7 more (out of time)"), "{shown}");
+        // The status line says it too, with the graph out of sight.
+        focus(&ctx, &mut app, BufferKind::Code);
+        app.slot_buffers.iter_mut().for_each(|b| *b = BufferKind::Code);
+        let shown = texts(&frame(&ctx, &mut app, vec![]));
+        assert!(shown.contains("graph cut (out of time), slow: 340 ms"), "{shown}");
     }
 
-    // req: M.13
     #[test]
     fn find_in_the_code_asks_the_graph_as_its_typed() {
         let (ctx, mut app) = full_app();
@@ -3300,7 +3416,6 @@ mod tests {
         assert_eq!(ranked.first().map(|r| r.index), Some(0));
     }
 
-    // req: N.6, N.16
     #[test]
     fn the_code_view_scrolls_with_a_chat_beside_it() {
         let (ctx, mut app) = full_app();
@@ -3323,7 +3438,6 @@ mod tests {
         assert!(text.contains("fn line_500() {}"));
     }
 
-    // req: N.23
     #[test]
     fn the_leader_menu_opens_with_the_focused_views_own_menu() {
         let (ctx, mut app) = full_app();
@@ -3335,7 +3449,7 @@ mod tests {
             assert_eq!(entries.first(), Some(&LeaderEntry::Group { key: menu }), "{kind:?}: its own menu first");
             assert!(is_primary(&entries[0], &bound, &[], Origin::View(kind)));
             assert!(!entries[1..].iter().any(|e| is_primary(e, &bound, &[], Origin::View(kind))) || kind == BufferKind::Graph);
-            assert!(!entries.iter().any(|e| *e == LeaderEntry::Group { key: 'g' }), "{kind:?}: the graph's menu isn't here");
+            assert!(!entries.contains(&LeaderEntry::Group { key: 'g' }), "{kind:?}: the graph's menu isn't here");
             // Inside it: that view's actions.
             let own = leader_entries(&bound, &[menu], Origin::View(kind));
             assert!(own.iter().all(|e| matches!(e, LeaderEntry::Action { index, .. } if bound[*index].origin == Origin::View(kind))));
@@ -3351,7 +3465,6 @@ mod tests {
         assert!(text.contains("LEADER > ALL SPEC ACTIONS") && text.contains("Unpin (follow the graph)"), "{text}");
     }
 
-    // req: N.22, N.4
     #[test]
     fn a_code_line_offers_every_go_to() {
         let (ctx, mut app) = full_app();
@@ -3370,7 +3483,6 @@ mod tests {
         assert!(!app.shell_actions().iter().any(|a| a.id == "goto.queue"));
     }
 
-    // req: N.9, N.17, N.18, N.15
     #[test]
     fn what_the_audit_found_stays_fixed() {
         let (ctx, mut app) = full_app();
@@ -3393,7 +3505,7 @@ mod tests {
         assert_eq!(app.graph.place(), before);
         // c in the spec without a plan says why.
         focus(&ctx, &mut app, BufferKind::Spec);
-        app.spec.plan = None;
+        app.spec.source = Source::Code;
         frame(&ctx, &mut app, key("c"));
         assert!(app.note.as_deref().unwrap_or_default().contains("pick one in the graph"), "{:?}", app.note);
         assert_eq!(app.input_mode, InputMode::Normal);
@@ -3413,7 +3525,6 @@ mod tests {
         assert_eq!((app.focused_slot, app.slot_buffers[0]), (0, BufferKind::Spec));
     }
 
-    // req: N.4, N.10, N.21, N.18
     #[test]
     fn enter_and_backspace_are_only_offered_where_they_act() {
         let (ctx, mut app) = full_app();
@@ -3424,7 +3535,7 @@ mod tests {
         // Graph: Backspace only once gone in somewhere.
         focus(&ctx, &mut app, BufferKind::Graph);
         app.graph = showing(crate::graph::tests::tree_of(&crate::graph::tests::sample_graph(), None, arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() }));
-        app.graph.nav.plan = Some(PlanId::new("p").unwrap());
+        app.graph.nav.source = Source::Plan(PlanId::new("p").unwrap());
         app.graph.select(Some("rust:a::run".into()));
         assert!(!app.situation().can_leave, "the starting points already");
         assert!(!offered(&app, "nav.leave"));
@@ -3453,7 +3564,6 @@ mod tests {
         assert!(!bar.contains(&"spec.comment".to_owned()) || bar.iter().position(|b| b == "spec.reply") < bar.iter().position(|b| b == "spec.comment"));
     }
 
-    // req: N.8
     #[test]
     fn hint_labels_sit_beside_their_items() {
         let slot = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(400.0, 400.0));
@@ -3469,7 +3579,6 @@ mod tests {
         assert!(!crowded.intersects(room_left) && crowded.left() >= 180.0, "{crowded:?}");
     }
 
-    // req: N.9, N.2, N.21
     #[test]
     fn searches_and_restores_put_things_back_exactly() {
         let (ctx, mut app) = full_app();
@@ -3508,7 +3617,6 @@ mod tests {
         assert_eq!((app.slot_buffers, app.focused_slot), ([BufferKind::Code, BufferKind::Graph, BufferKind::Queue], 2));
     }
 
-    // req: N.9, N.18, N.2, N.22, N.19, N.13
     #[test]
     fn what_the_final_audit_found_stays_fixed() {
         let (ctx, mut app) = full_app();
@@ -3540,7 +3648,7 @@ mod tests {
         app.spec.restore(&Place::Spec { component: Some(step.clone()), item: Some(relation.clone()) });
         assert_eq!(app.spec.cursor_key().as_deref(), Some(relation.as_str()));
         // A second Escape throws a draft away.
-        app.spec.plan = Some(PlanId::new("p").unwrap());
+        app.spec.source = Source::Plan(PlanId::new("p").unwrap());
         frame(&ctx, &mut app, key("c"));
         frame(&ctx, &mut app, vec![]);
         frame(&ctx, &mut app, press(egui::Key::Escape, false));
@@ -3550,7 +3658,7 @@ mod tests {
         // Go-tos are offered only where they lead, once the relations are known.
         focus(&ctx, &mut app, BufferKind::Graph);
         app.graph.select(Some("rust:a::save".into()));
-        app.details.insert(crate::goto::tests::detail("rust:a::save", vec![], vec![call("rust:a::step", "rust:a::save", 0, 5)]), app.graph.nav.plan.as_ref());
+        app.details.insert(crate::goto::tests::detail("rust:a::save", vec![], vec![call("rust:a::step", "rust:a::save", 0, 5)]), &app.graph.nav.source);
         let situation = app.situation();
         assert!(When::Reaches(GoTo::Callers).holds(&situation) && !When::Reaches(GoTo::Callees).holds(&situation));
         // The queue's verbs are always in its key sheet, applying or not.
@@ -3562,7 +3670,6 @@ mod tests {
         assert!(app.note.as_deref().unwrap_or_default().contains("waiting for your approval"), "and says why: {:?}", app.note);
     }
 
-    // req: N.1, N.15, N.18
     #[test]
     fn the_selection_survives_a_view_without_it() {
         let (ctx, mut app) = full_app();
@@ -3597,7 +3704,6 @@ mod tests {
         harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::Index { status: Box::new(status) } }
     }
 
-    // req: I.1, I.2, I.3, I.4, I.5
     #[test]
     fn indexing_shows_its_state_everywhere_and_can_be_run_from_the_cockpit() {
         let (ctx, mut app) = full_app();

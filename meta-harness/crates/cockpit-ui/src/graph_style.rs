@@ -234,10 +234,23 @@ impl GraphStyle {
         for kind in [RelationKind::Calls, RelationKind::DataFlow] {
             out.push(LegendEntry { section: "Lines", label: kind.name().replace('_', " "), swatch: Swatch::Line(self.line(theme, kind, LineKind::Tree, Mark::Code, None)) });
         }
+        // How each kind of link is known.
+        for (kind, what) in [(RelationKind::Calls, "a call"), (RelationKind::DataFlow, "a data flow"), (RelationKind::Implements, "an implementation (listed in the details card)")] {
+            out.push(LegendEntry {
+                section: "How it's known",
+                label: format!("{what} only matched by name (the language's analyzer didn't confirm it)"),
+                swatch: Swatch::Line(self.line(theme, kind, LineKind::Tree, Mark::Code, Some(&Evidence::Named))),
+            });
+        }
         out.push(LegendEntry {
-            section: "Lines",
-            label: "a call only matched by name (the language's analyzer didn't confirm it)".into(),
-            swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Tree, Mark::Code, Some(&Evidence::Named))),
+            section: "How it's known",
+            label: "confirmed by the language's analyzer: the plain line".into(),
+            swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Tree, Mark::Code, Some(&Evidence::Proven(String::new())))),
+        });
+        out.push(LegendEntry {
+            section: "How it's known",
+            label: "a box inside a box: read from the code's structure (exact)".into(),
+            swatch: Swatch::Outline(self.node_outline(theme, Mark::Code, false)),
         });
         out.push(LegendEntry { section: "Lines", label: "to a card shown elsewhere".into(), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Repeat, Mark::Code, None)) });
         out.push(LegendEntry { section: "Lines", label: "back up its own path (a loop)".into(), swatch: Swatch::Line(self.line(theme, RelationKind::Calls, LineKind::Loop, Mark::Code, None)) });
@@ -303,7 +316,15 @@ mod tests {
     use super::*;
     use crate::config::UiConfig;
 
-    // req: AP.10
+    #[test]
+    fn the_legend_says_how_every_kind_of_link_is_known() {
+        let config = UiConfig::with_overrides("").unwrap();
+        let labels: Vec<String> = config.graph_style.legend(&config.theme).into_iter().map(|e| e.label).collect();
+        for needle in ["a call only matched by name", "a data flow only matched by name", "an implementation (listed in the details card) only matched by name", "confirmed by the language's analyzer", "read from the code's structure"] {
+            assert!(labels.iter().any(|l| l.contains(needle)), "{needle}: {labels:?}");
+        }
+    }
+
     #[test]
     fn a_call_only_matched_by_name_looks_different_and_the_legend_says_so() {
         let config = UiConfig::with_overrides("").unwrap();
@@ -320,7 +341,6 @@ mod tests {
         assert!(UiConfig::with_overrides("[graph_style.evidence.named]\nwidth = 1.0\nfade = 2.0").unwrap_err().contains("fade"));
     }
 
-    // req: M.8, P9.10
     #[test]
     fn every_mark_line_and_pill_has_a_look_from_theme_tokens() {
         let config = UiConfig::with_overrides("").unwrap();

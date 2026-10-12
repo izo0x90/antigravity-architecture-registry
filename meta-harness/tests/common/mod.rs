@@ -178,7 +178,7 @@ impl ProviderDriver for FakeDriver {
         DriverMetadata { kind: DriverKind::new(FAKE), display_name: "Fake".into(), supports_multiple_instances: false }
     }
 
-    fn default_config(&self, _program: Option<&std::path::Path>) -> serde_json::Value {
+    fn default_config(&self, _harness: &harness_contracts::HarnessLaunch) -> serde_json::Value {
         serde_json::Value::Null
     }
 
@@ -223,14 +223,14 @@ pub fn fixture_architecture() -> Arc<ArchitectureService> {
 /// The fixture repo's service, set up further (tools, reviewers) before the
 /// first ingest.
 pub fn fixture_architecture_with(setup: impl FnOnce(ArchitectureService) -> ArchitectureService) -> Arc<ArchitectureService> {
-    let root = tempfile::tempdir().unwrap().keep().join("sample");
+    let root = lasting_dir().join("sample");
     copy_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/code-analyzer/tests/fixtures/rust/sample"), &root);
     let arch = ArchitectureService::open(
         &root,
-        code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packs")).unwrap(),
+        shipped_packs(),
         arch_graph::TypeSystem::defaults().unwrap(),
         Box::new(FsPlans::new(&root).unwrap()),
-        Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),
+        arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap(),
     )
     .unwrap();
     let arch = setup(arch);
@@ -372,4 +372,36 @@ impl Mcp {
         let result = &v["result"];
         (result["isError"].as_bool().unwrap_or(false), result["content"][0]["text"].as_str().unwrap_or_default().to_owned())
     }
+}
+
+/// The language packs shipped in this repo, without any project's or
+/// user's own (tests must not depend on the machine).
+pub fn shipped_packs() -> code_analyzer::PackSet {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packs");
+    let places = nah_packs::Places::isolated(&std::env::temp_dir().join(format!("nah-test-packs-{}", std::process::id())));
+    let catalog = nah_packs::Catalog::load(&nah_packs::Distribution::from_dir(&dir).unwrap(), &places).unwrap();
+    code_analyzer::PackSet::from_catalog(&catalog).unwrap()
+}
+
+/// A folder for a fixture copy that lives as long as the test process, in
+/// the build's own scratch folder: one per process, and copies left by runs
+/// that ended over an hour ago are removed.
+#[allow(dead_code)]
+pub fn lasting_dir() -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let all = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(env!("CARGO_CRATE_NAME"));
+    if n == 0
+        && let Ok(entries) = std::fs::read_dir(&all)
+    {
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        for entry in entries.flatten() {
+            if entry.metadata().and_then(|m| m.modified()).is_ok_and(|t| t < hour_ago) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let dir = all.join(format!("{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
 }

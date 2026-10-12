@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
-use arch_graph::{ComponentDetail, ComponentId, PlanId, RelationKind};
+use arch_graph::{ComponentDetail, ComponentId, RelationKind, Source};
 
 use crate::app::BufferKind;
 use crate::nav::{GoTo, Jump};
@@ -22,6 +22,11 @@ pub struct Candidate {
 /// The components a relational go-to reaches from `detail`, in order (calls
 /// in call order), each once.
 pub fn candidates(op: GoTo, detail: &ComponentDetail) -> Vec<Candidate> {
+    // Every use of it: each opens the code of what it's in, at its line.
+    if op == GoTo::Uses {
+        // A use in a file changed since it was read: its component, not a line.
+        return detail.references.iter().filter_map(|r| r.within.clone().map(|id| Candidate { id, line: (!r.stale).then_some(r.line) })).collect();
+    }
     let Some((kind, outgoing)) = op.relation() else { return Vec::new() };
     let list = if outgoing { &detail.outgoing } else { &detail.incoming };
     let mut relations: Vec<&arch_graph::Relation> = list.iter().filter(|r| r.kind == kind).collect();
@@ -71,38 +76,38 @@ pub struct Choosing {
     pub candidates: Vec<Candidate>,
 }
 
-type DetailReply = (ComponentId, Option<PlanId>, NetResult<ComponentDetail>);
+type DetailReply = (ComponentId, Source, NetResult<ComponentDetail>);
 
-/// Component details by (component, plan), fetched once each.
+/// Component details by (component, source), fetched once each.
 #[derive(Default)]
 pub struct Details {
-    cache: BTreeMap<(ComponentId, Option<PlanId>), ComponentDetail>,
-    asked: BTreeSet<(ComponentId, Option<PlanId>)>,
+    cache: BTreeMap<(ComponentId, Source), ComponentDetail>,
+    asked: BTreeSet<(ComponentId, Source)>,
     inbox: Arc<Mutex<Vec<DetailReply>>>,
     /// Lookups that failed, by component (said once, then dropped).
     pub failed: Vec<(ComponentId, String)>,
 }
 
 impl Details {
-    pub fn get(&self, id: &ComponentId, plan: Option<&PlanId>) -> Option<&ComponentDetail> {
-        self.cache.get(&(id.clone(), plan.cloned()))
+    pub fn get(&self, id: &ComponentId, source: &Source) -> Option<&ComponentDetail> {
+        self.cache.get(&(id.clone(), source.clone()))
     }
 
-    pub fn insert(&mut self, detail: ComponentDetail, plan: Option<&PlanId>) {
-        self.cache.insert((detail.component.id.clone(), plan.cloned()), detail);
+    pub fn insert(&mut self, detail: ComponentDetail, source: &Source) {
+        self.cache.insert((detail.component.id.clone(), source.clone()), detail);
     }
 
     /// Fetches a detail unless it's here or on its way.
-    pub fn want(&mut self, id: &ComponentId, plan: Option<&PlanId>, net: &NetClient, ctx: &egui::Context) {
-        let key = (id.clone(), plan.cloned());
+    pub fn want(&mut self, id: &ComponentId, source: &Source, net: &NetClient, ctx: &egui::Context) {
+        let key = (id.clone(), source.clone());
         if self.cache.contains_key(&key) || !self.asked.insert(key) {
             return;
         }
         let inbox = self.inbox.clone();
-        let (for_id, for_plan) = (id.clone(), plan.cloned());
-        net.arch_component(id, plan, ctx.clone(), move |r| {
+        let (for_id, for_source) = (id.clone(), source.clone());
+        net.arch_component(id, source, ctx.clone(), move |r| {
             if let Ok(mut i) = inbox.lock() {
-                i.push((for_id, for_plan, r));
+                i.push((for_id, for_source, r));
             }
         });
     }
@@ -110,15 +115,15 @@ impl Details {
     /// Takes the replies in.
     pub fn tick(&mut self) {
         let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        for (id, plan, reply) in replies {
+        for (id, source, reply) in replies {
             match reply {
                 Ok(detail) => {
-                    self.asked.remove(&(id.clone(), plan.clone()));
-                    self.cache.insert((id, plan), detail);
+                    self.asked.remove(&(id.clone(), source.clone()));
+                    self.cache.insert((id, source), detail);
                 }
                 // A failed one isn't asked again until the architecture changes.
                 // A late failure for something already here changes nothing.
-                Err(e) if !self.cache.contains_key(&(id.clone(), plan)) => self.failed.push((id, e)),
+                Err(e) if !self.cache.contains_key(&(id.clone(), source)) => self.failed.push((id, e.into())),
                 Err(_) => {}
             }
         }
@@ -157,10 +162,10 @@ pub(crate) mod tests {
             incoming,
             code: None,
             stale: false,
+            references: Vec::new(),
         }
     }
 
-    // req: N.14
     #[test]
     fn relational_go_tos_follow_the_components_relations_in_order() {
         let call = |a: &str, b: &str, order: u32, line: u32| {
@@ -180,5 +185,14 @@ pub(crate) mod tests {
         assert_eq!(ids(GoTo::Parent), ["rust:a"]);
         assert!(ids(GoTo::Implements).is_empty());
         assert!(candidates(GoTo::Code, &d).is_empty(), "not relational");
+    }
+
+    #[test]
+    fn uses_are_every_ref_to_it_across_files_each_at_its_line() {
+        let mut d = detail("rust:a::Store", vec![], vec![]);
+        let at = |file: &str, line: u32, kind: &str, within: &str| arch_graph::code::Reference { file: file.into(), line, start: 0, end: 1, kind: kind.into(), within: Some(ComponentId::new(within)), evidence: "name".into(), stale: false };
+        d.references = vec![at("src/a.rs", 3, "import", "rust:a"), at("src/b.rs", 9, "type", "rust:b::keep"), at("src/b.rs", 12, "call", "rust:b::keep")];
+        let found: Vec<(String, Option<u32>)> = candidates(GoTo::Uses, &d).into_iter().map(|c| (c.id.to_string(), c.line)).collect();
+        assert_eq!(found, [("rust:a".to_owned(), Some(3)), ("rust:b::keep".to_owned(), Some(9)), ("rust:b::keep".to_owned(), Some(12))], "every use, each at its own line");
     }
 }

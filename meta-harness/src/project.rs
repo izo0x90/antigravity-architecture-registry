@@ -1,11 +1,12 @@
 //! A project's analysis settings, the same for the server and for
 //! `meta-harness analyze`: its packs (shipped, then the project's and the
-//! user's), its types (`.nah/types.toml`) and code rules (`.nah/rules/`).
+//! user's), its types (`.nah/types.toml`), code rules (`.nah/rules/`) and
+//! limits (`.nah/limits.toml`).
 
 use std::path::Path;
 
 use arch_graph::TypeSystem;
-use code_analyzer::{CodeRules, Indexers, PackSet};
+use code_analyzer::{CodeRules, PackSet};
 use serde::Serialize;
 
 pub struct AnalysisSetup {
@@ -13,6 +14,7 @@ pub struct AnalysisSetup {
     pub packs: PackSet,
     pub types: TypeSystem,
     pub rules: CodeRules,
+    pub limits: arch_service::Limits,
 }
 
 pub type SetupError = Box<dyn std::error::Error + Send + Sync>;
@@ -29,36 +31,42 @@ pub fn analysis_setup(root: &Path) -> Result<AnalysisSetup, SetupError> {
     if nah.join("rules").is_dir() {
         rules.load_dir(&nah.join("rules"), &packs, &types)?;
     }
-    Ok(AnalysisSetup { catalog, packs, types, rules })
+    let limits = match std::fs::read_to_string(nah.join("limits.toml")) {
+        Ok(text) => arch_service::Limits::with_overrides(&text)?,
+        Err(_) => arch_service::Limits::defaults()?,
+    };
+    Ok(AnalysisSetup { catalog, packs, types, rules, limits })
 }
 
-/// What `meta-harness analyze` writes: what the server keeps.
+/// What `meta-harness analyze` writes: every file's rows, as the server's
+/// pipeline stored them.
 #[derive(Serialize)]
 pub struct AnalysisOutput {
-    pub combined: code_analyzer::Combined,
-    pub occurrences: std::collections::BTreeMap<arch_graph::RepoPath, Vec<code_analyzer::Occurrence>>,
-    pub indexed: Vec<code_analyzer::index::IndexedFile>,
-    /// Indexers that couldn't run, and why.
-    pub skipped: Vec<(String, String)>,
+    pub files: Vec<std::sync::Arc<code_analyzer::rows::FileRows>>,
 }
 
-/// Every stage over `root` (its languages' indexers included, where
-/// installed); writes the result to `out` as JSON and says what it did.
+/// The server's pipeline over `root` (read, link, wait for the languages'
+/// servers to confirm, store, in a store of its own); writes the rows to
+/// `out` as JSON and says what it did.
 pub fn analyze_to(root: &Path, out: &Path) -> Result<String, SetupError> {
     let setup = analysis_setup(root)?;
-    let lock = nah_packs::Lock::read(&setup.catalog.lock_path)?;
-    let analysis = code_analyzer::analyze(root, root, &setup.packs, &setup.rules, &setup.types, Some(Indexers { catalog: &setup.catalog, lock: &lock }))?;
-    let files = analysis.extracts.len();
-    let indexed = analysis.indexed.len();
-    let (combined, occurrences) = analysis.resolved.into_kept();
+    let store = arch_service::temporary_facts(&setup.limits)?;
+    let ready = std::time::Duration::from_secs(setup.limits.servers.ready_s);
+    let service = arch_service::ArchitectureService::open(root, setup.packs, setup.types, Box::new(arch_service::MemoryPlans::default()), store)?
+        .with_limits(setup.limits)
+        .with_rules(setup.rules)
+        .with_servers(&setup.catalog);
+    let report = service.ingest(root)?;
+    let waited = service.wait_for_servers(ready)?;
+    let proven = service.observed()?.relations().filter(|r| r.proven_by.is_some()).count();
+    let servers: String = service.index_status().servers.iter().map(|s| format!("\n{}: {:?}{}", s.language, s.state, s.reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default())).collect();
     let summary = format!(
-        "{files} files read, {indexed} indexed; {} components, {} relations ({} proven){}",
-        combined.components.len(),
-        combined.relations.len(),
-        combined.relations.iter().filter(|r| r.proven_by.is_some()).count(),
-        analysis.skipped.iter().map(|(l, why)| format!("\n{l}: not indexed: {why}")).collect::<String>()
+        "{} files read; {} components, {} relations, {proven} confirmed by the languages' servers{}{servers}",
+        report.files,
+        report.components,
+        report.relations,
+        if waited { "" } else { " (some servers didn't answer in time)" }
     );
-    let output = AnalysisOutput { combined, occurrences, indexed: analysis.indexed, skipped: analysis.skipped };
-    std::fs::write(out, serde_json::to_vec(&output)?)?;
+    std::fs::write(out, serde_json::to_vec(&AnalysisOutput { files: service.file_rows() })?)?;
     Ok(summary)
 }

@@ -24,7 +24,8 @@ impl Distribution {
         Self { files: files.into_iter().collect() }
     }
 
-    /// A packs folder on disk, as a distribution (development and tests).
+    /// A packs folder on disk, as a distribution (for tests).
+    #[cfg(any(test, feature = "testing"))]
     pub fn from_dir(dir: &Path) -> Result<Self, PackError> {
         Ok(Self { files: read_tree(dir)? })
     }
@@ -40,6 +41,13 @@ impl Distribution {
 struct Index {
     source: Vec<SourceSpec>,
     install: InstallSpec,
+    harnesses: HarnessesSpec,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HarnessesSpec {
+    overrides: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +64,18 @@ enum SourceSpec {
 struct InstallSpec {
     root: String,
     lock: String,
+    download_timeout_s: u64,
+    run_timeout_s: u64,
+    check_timeout_s: u64,
+}
+
+/// How long install steps may take, unless a step says.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Timeouts {
+    pub download: std::time::Duration,
+    pub run: std::time::Duration,
+    /// A tool's version check (its command), stopped past this.
+    pub check: std::time::Duration,
 }
 
 /// The folders source and install paths may name: `{project}`, `{home}`,
@@ -82,6 +102,7 @@ impl Places {
 
     /// Every folder under `root` (which needn't exist): sees no project's
     /// or user's own packs, for runs that mustn't depend on the machine.
+    #[cfg(any(test, feature = "testing"))]
     pub fn isolated(root: &Path) -> Self {
         Self { project: root.join("project"), home: root.join("home"), config_home: root.join("config"), data_home: root.join("data") }
     }
@@ -134,6 +155,11 @@ pub struct Catalog {
     /// Packs are installed under `<root>/<name>/<version>`.
     pub root: PathBuf,
     pub lock_path: PathBuf,
+    pub timeouts: Timeouts,
+    /// Files with instances' own launches, in order (a later one wins).
+    pub harness_overrides: Vec<PathBuf>,
+    /// The project it was loaded for.
+    pub project: PathBuf,
 }
 
 impl Catalog {
@@ -151,7 +177,14 @@ impl Catalog {
                     if !dir.is_dir() {
                         continue;
                     }
-                    (read_tree(&dir)?, dir.display().to_string())
+                    let files = read_tree(&dir)?;
+                    let origin = dir.display().to_string();
+                    // Everything in a folder of packs belongs to one: a
+                    // file beside them is a mistake, not something to skip.
+                    if let Some(stray) = files.keys().find(|f| !in_a_pack(&files, f)) {
+                        return Err(PackError::Config(format!("{origin}/{stray} isn't in a pack: a pack is a folder holding {MANIFEST}")));
+                    }
+                    (files, origin)
                 }
             };
             let mut here = BTreeSet::new();
@@ -162,15 +195,18 @@ impl Catalog {
                 packs.insert(pack.name().to_owned(), pack);
             }
         }
-        // A language names its indexer: that pack must exist and be one.
+        // A language names its server: that pack must exist and be one.
         for pack in packs.values() {
-            if let Some(indexer) = pack.manifest.language.as_ref().and_then(|l| l.indexer.as_ref())
-                && packs.get(indexer).map(Pack::kind) != Some(Kind::Indexer)
+            if let Some(server) = pack.manifest.language.as_ref().and_then(|l| l.server.as_ref())
+                && packs.get(server).map(Pack::kind) != Some(Kind::Server)
             {
-                return Err(PackError::Manifest { pack: pack.name().to_owned(), reason: format!("its indexer '{indexer}' isn't an indexer pack") });
+                return Err(PackError::Manifest { pack: pack.name().to_owned(), reason: format!("its server '{server}' isn't a server pack") });
             }
         }
-        Ok(Self { platforms, packs, root: places.path(&index.install.root)?, lock_path: places.path(&index.install.lock)? })
+        let secs = std::time::Duration::from_secs;
+        let timeouts = Timeouts { download: secs(index.install.download_timeout_s), run: secs(index.install.run_timeout_s), check: secs(index.install.check_timeout_s) };
+        let harness_overrides = index.harnesses.overrides.iter().map(|p| places.path(p)).collect::<Result<_, _>>()?;
+        Ok(Self { platforms, packs, root: places.path(&index.install.root)?, lock_path: places.path(&index.install.lock)?, timeouts, harness_overrides, project: places.project.clone() })
     }
 
     pub fn get(&self, name: &str) -> Result<&Pack, PackError> {
@@ -206,10 +242,24 @@ fn read_tree(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, PackError> {
     Ok(out)
 }
 
+/// The file that makes a folder a pack.
+const MANIFEST: &str = "pack.toml";
+
+/// Whether `file` is inside a folder (of `files`) holding a pack manifest.
+fn in_a_pack(files: &BTreeMap<String, Vec<u8>>, file: &str) -> bool {
+    let mut folder = file;
+    while let Some((up, _)) = folder.rsplit_once('/') {
+        if files.contains_key(&format!("{up}/{MANIFEST}")) {
+            return true;
+        }
+        folder = up;
+    }
+    files.contains_key(MANIFEST)
+}
+
 /// The packs among `files`: each folder holding a `pack.toml`, with the
 /// files under it. Packs don't nest.
 fn packs_in(files: &BTreeMap<String, Vec<u8>>, origin: &str, platforms: &Platforms) -> Result<Vec<Pack>, PackError> {
-    const MANIFEST: &str = "pack.toml";
     let folders: Vec<String> = files.keys().filter_map(|f| f.strip_suffix(MANIFEST)).filter(|d| d.is_empty() || d.ends_with('/')).map(str::to_owned).collect();
     for a in &folders {
         if let Some(b) = folders.iter().find(|b| *b != a && b.starts_with(a.as_str())) {

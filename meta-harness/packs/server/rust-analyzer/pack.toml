@@ -1,0 +1,34 @@
+[pack]
+name = "rust-analyzer"
+kind = "server"
+version = "1.0.0"
+description = "Rust's own language server: exact links and types for Rust, asked per changed file."
+
+[tool]
+name = "rust-analyzer"
+# Installed as a rustup component, so it follows the toolchain's version.
+supports = ">=1.80.0, <2.0.0"
+[tool.check]
+command = "rust-analyzer"
+args = ["--version"]
+version = '^rust-analyzer (\d+\.\d+\.\d+)'
+
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "macos-arm64", "macos-x86_64"]
+[[install.steps]]
+run = { command = "rustup", args = ["component", "add", "rust-analyzer"] }
+
+[server]
+command = "rust-analyzer"
+# It checks the project (build scripts, proc macros) as it loads: into its
+# own folder under the user's data folder, never the project's target/.
+env = { CARGO_TARGET_DIR = "{cache}/target" }
+requires = ["textDocument/definition"]
+# The first load builds build scripts (47 s on this repo).
+ready_timeout_s = 120
+request_timeout_s = 30
+# Ready once it has looked ready this long (it announces its loading
+# just after `initialized`).
+settle_ms = 300
+[server.initialization_options]
+checkOnSave = false

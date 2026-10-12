@@ -260,7 +260,7 @@ mod glyph_tests {
         ("graph/actions.rs", include_str!("graph/actions.rs")),
         ("graph/details.rs", include_str!("graph/details.rs")),
         ("graph/draw.rs", include_str!("graph/draw.rs")),
-        ("graph/navigable.rs", include_str!("graph/navigable.rs")),
+        ("graph/source.rs", include_str!("graph/source.rs")),
         ("graph/select.rs", include_str!("graph/select.rs")),
         ("graph_style.rs", include_str!("graph_style.rs")),
         ("keymap.rs", include_str!("keymap.rs")),
@@ -296,17 +296,46 @@ mod glyph_tests {
         assert!(missing.is_empty(), "characters the fonts can't draw:\n{}", missing.join("\n"));
     }
 
-    // req: V.7
+    #[test]
+    fn card_widths_are_what_the_theme_draws() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(super::font_definitions());
+        let _ = ctx.run(Default::default(), |_| {});
+        let texts = ["CockpitApp", "fn · 12 more", "iiii", "WWWW", "AVATAR Tokyo", "arch_graph::tree::lay_out", "café → naïve", "ok ✅ done", "+6"];
+        for size in [11.0, 14.0, 23.5] {
+            for text in texts {
+                let drawn = ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), egui::FontId::proportional(size), egui::Color32::WHITE).size().x);
+                let measured = arch_graph::tree::measure::text_width(text, size);
+                // egui rounds the last glyph's place to a quarter pixel, puts
+                // the whole pixel in the galley and draws the quarters into
+                // the glyph: its width is up to an eighth over, under a pixel short.
+                assert!(drawn - measured <= 0.13 && measured - drawn < 1.0, "{text:?} at {size}: drawn {drawn}, measured {measured}");
+            }
+        }
+    }
+
     #[test]
     fn no_view_writes_its_own_colours_or_sizes() {
         // Calls whose first argument must be a theme or look value, never a number.
         let sized = [".size(", "FontId::proportional(", "FontId::monospace(", "add_space(", "Margin::same(", "Margin::symmetric(", "inner_margin(", "corner_radius(", "Stroke::new("];
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut found = Vec::new();
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            if name == "theme.rs" || path.extension().is_none_or(|e| e != "rs") {
+        // Every file below src (the graph's own folder too).
+        let mut files = Vec::new();
+        let mut dirs = vec![src.clone()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        for path in files {
+            let name = path.strip_prefix(&src).unwrap().to_string_lossy().into_owned();
+            if name == "theme.rs" || name.ends_with("tests.rs") || path.extension().is_none_or(|e| e != "rs") {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();

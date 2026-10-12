@@ -4,8 +4,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use arch_graph::{ComponentId, RelationKind, TypeSystem};
-use code_analyzer::{FileExtract, PackSet, Resolved, analyze};
+use code_analyzer::{FileExtract, PackSet, Observed};
 use serde::Deserialize;
+
+mod common;
 
 #[derive(Deserialize)]
 struct Expected {
@@ -21,9 +23,6 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-fn shipped_packs_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")
-}
 
 /// The shipped packs plus a project's own (`files`: path under the
 /// project's `.nah/packs`, text), loaded the way the server loads them.
@@ -35,7 +34,7 @@ fn with_project_packs(files: &[(&str, String)]) -> Result<PackSet, code_analyzer
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(file, text).unwrap();
     }
-    let shipped = nah_packs::Distribution::from_dir(&shipped_packs_dir()).unwrap();
+    let shipped = nah_packs::Distribution::from_dir(&common::shipped_packs_dir()).unwrap();
     let packs = nah_packs::Catalog::load(&shipped, &places).map_err(|e| code_analyzer::IndexError::Pack(e.to_string())).and_then(|c| PackSet::from_catalog(&c));
     std::fs::remove_dir_all(&dir).unwrap();
     packs
@@ -48,14 +47,35 @@ fn packs_with_test_data() -> PackSet {
     with_project_packs(&[("go/pack.toml", go("pack.toml")), ("go/syntax.toml", go("syntax.toml"))]).unwrap()
 }
 
-fn run(root: &Path, packs: &PackSet) -> (Vec<FileExtract>, Resolved) {
-    let types = TypeSystem::defaults().unwrap();
-    let analysis = analyze(root, Path::new("."), packs, &code_analyzer::CodeRules::default(), &types, None).unwrap();
-    (analysis.extracts, analysis.resolved)
+fn run(root: &Path, packs: &PackSet) -> (Vec<FileExtract>, Observed) {
+    read_all(root, packs, &code_analyzer::CodeRules::default(), &TypeSystem::defaults().unwrap())
+}
+
+/// Every file under `root` read with its pack, then linked.
+fn read_all(root: &Path, packs: &PackSet, rules: &code_analyzer::CodeRules, types: &TypeSystem) -> (Vec<FileExtract>, Observed) {
+    let extracts: Vec<FileExtract> = code_analyzer::walk(root, root, packs)
+        .unwrap()
+        .into_iter()
+        .filter_map(|f| {
+            let pack = packs.for_path(&f.absolute)?;
+            Some(code_analyzer::extract_file(pack, rules, f.path, f.module, &std::fs::read_to_string(&f.absolute).unwrap()))
+        })
+        .collect();
+    let read = extracts
+        .iter()
+        .map(|e| {
+            let file = code_analyzer::rows::FileRow { path: e.file.clone(), language: e.language.clone(), size: 0, modified: 0, content_hash: e.content_hash.clone(), read_version: String::new() };
+            (file, e.clone())
+        })
+        .collect();
+    let mut model = code_analyzer::Model::default();
+    model.apply(packs, types, code_analyzer::Change { read, ..code_analyzer::Change::default() });
+    let observed = code_analyzer::observed(model.files(), packs);
+    (extracts, observed)
 }
 
 /// Compares the ingested graph with an expected file, exactly.
-fn assert_matches(lang: &str, resolved: &Resolved, expected_file: &Path) {
+fn assert_matches(lang: &str, resolved: &Observed, expected_file: &Path) {
     let expected: Expected = toml::from_str(&std::fs::read_to_string(expected_file).unwrap()).unwrap();
     let id = |s: &str| if s.starts_with("folder:") { ComponentId::new(s) } else { ComponentId::for_symbol(lang, s) };
     let got: BTreeSet<(String, String)> = resolved.graph.components().map(|c| (c.id.to_string(), c.type_name.clone())).collect();
@@ -91,10 +111,9 @@ fn assert_matches(lang: &str, resolved: &Resolved, expected_file: &Path) {
     }
 }
 
-// req: P4.3, P4.9
 #[test]
 fn rust_fixture_ingests_to_exactly_the_expected_graph() {
-    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+    let packs = common::shipped_packs();
     let (extracts, resolved) = run(&fixtures().join("rust/sample"), &packs);
     assert_eq!(extracts.len(), 3);
     assert_matches("rust", &resolved, &fixtures().join("rust/expected.toml"));
@@ -109,10 +128,9 @@ fn rust_fixture_ingests_to_exactly_the_expected_graph() {
     assert_eq!(fetch.signature.as_ref().unwrap().qualifiers, ["async"], "qualifiers from the pack");
 }
 
-// req: P4.6
 #[test]
 fn calls_resolve_by_evidence_with_order_and_sites() {
-    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+    let packs = common::shipped_packs();
     let (_, resolved) = run(&fixtures().join("rust/sample"), &packs);
     let id = |s: &str| ComponentId::for_symbol("rust", s);
     let run_calls: Vec<_> = resolved.graph.outgoing(&id("sample::run"), Some(RelationKind::Calls)).collect();
@@ -130,10 +148,9 @@ fn calls_resolve_by_evidence_with_order_and_sites() {
     assert_eq!(resolved.ambiguous[0].candidates.len(), 2);
 }
 
-// req: P4.4
 #[test]
 fn python_fixture_ingests_to_exactly_the_expected_graph() {
-    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+    let packs = common::shipped_packs();
     let (_, resolved) = run(&fixtures().join("python/app"), &packs);
     assert_matches("python", &resolved, &fixtures().join("python/expected.toml"));
     let format = resolved.graph.component(&ComponentId::for_symbol("python", "app.Greeter.format")).unwrap();
@@ -145,10 +162,9 @@ fn python_fixture_ingests_to_exactly_the_expected_graph() {
     assert_eq!(fetch.signature.as_ref().unwrap().qualifiers, ["async"]);
 }
 
-// req: P4.5
 #[test]
 fn typescript_fixture_ingests_to_exactly_the_expected_graph() {
-    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+    let packs = common::shipped_packs();
     let (extracts, resolved) = run(&fixtures().join("typescript/app"), &packs);
     assert_eq!(extracts.len(), 3, ".ts files and the .tsx one (its own grammar)");
     assert_matches("typescript", &resolved, &fixtures().join("typescript/expected.toml"));
@@ -164,11 +180,10 @@ fn typescript_fixture_ingests_to_exactly_the_expected_graph() {
     assert_eq!(sig.params.iter().map(|p| (p.name.as_str(), p.optional)).collect::<Vec<_>>(), [("items", false), ("loud", true), ("times", true)]);
 }
 
-// req: P4.2, P4.13
 #[test]
 fn a_pack_defined_only_as_data_ingests_its_language() {
     // Go has no built-in pack and no engine code: only tests/packs/go.toml.
-    assert!(PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap().by_name("go").is_none());
+    assert!(common::shipped_packs().by_name("go").is_none());
     let packs = packs_with_test_data();
     let (extracts, resolved) = run(&fixtures().join("go/app"), &packs);
     assert!(extracts.iter().all(|e| e.language == "go"));
@@ -179,10 +194,9 @@ fn a_pack_defined_only_as_data_ingests_its_language() {
     assert_eq!(sig.returns.as_deref(), Some("error"));
 }
 
-// req: P4.8
 #[test]
 fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
-    let flows = |resolved: &Resolved| -> BTreeSet<(String, String, String, String)> {
+    let flows = |resolved: &Observed| -> BTreeSet<(String, String, String, String)> {
         resolved
             .graph
             .relations()
@@ -197,12 +211,12 @@ fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
     };
     let row = |lang: &str, a: &str, b: &str, to: &str| (ComponentId::for_symbol(lang, a).to_string(), ComponentId::for_symbol(lang, b).to_string(), "return".to_owned(), to.to_owned());
     // Rust: through a local binding and a borrow, String into &str.
-    let (_, rust) = run(&fixtures().join("rust/sample"), &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
+    let (_, rust) = run(&fixtures().join("rust/sample"), &common::shipped_packs());
     assert_eq!(flows(&rust), BTreeSet::from([row("rust", "sample::Upper::apply", "sample::store::Store::save", "item"), row("rust", "sample::Upper::apply", "sample::log", "msg")]));
     assert!(rust.unverified_flows.is_empty(), "{:?}", rust.unverified_flows);
     // Python and TypeScript: a nested call is typed; load() has no return type.
     for (lang, fixture, untyped_targets) in [("python", "python/app", vec!["app.Greeter.greet"]), ("typescript", "typescript/app", vec!["app.Greeter.greet", "app.show", "helpers.shout"])] {
-        let (_, resolved) = run(&fixtures().join(fixture), &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
+        let (_, resolved) = run(&fixtures().join(fixture), &common::shipped_packs());
         assert_eq!(flows(&resolved), BTreeSet::from([row(lang, "helpers.clean", "app.Greeter.format", "text")]), "{lang}");
         let reported: Vec<(String, String)> = resolved.unverified_flows.iter().map(|u| (u.source.to_string(), u.target.to_string())).collect();
         let expected: Vec<(String, String)> =
@@ -218,14 +232,13 @@ fn typed_values_between_calls_become_data_flow_and_untyped_ones_are_reported() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("src/app.ts"), "function make(): number { return 1; }\nfunction take(s: string): void {}\nfunction run(): void { take(make()); }\n").unwrap();
-    let (_, mismatch) = run(&dir, &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
+    let (_, mismatch) = run(&dir, &common::shipped_packs());
     assert!(flows(&mismatch).is_empty());
     assert_eq!(mismatch.unverified_flows.len(), 1);
     assert!(mismatch.unverified_flows[0].reason.contains("number doesn't match parameter 's': string"), "{:?}", mismatch.unverified_flows);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-// req: D.1
 #[test]
 fn data_flow_covers_results_kept_values_made_state_and_boundaries() {
     let dir = temp_repo(
@@ -256,7 +269,7 @@ fn fetch(url: &str) -> String { url.to_owned() }
             ),
         ],
     );
-    let (_, resolved) = run(&dir, &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
+    let (_, resolved) = run(&dir, &common::shipped_packs());
     let id = |s: &str| ComponentId::for_symbol("rust", s).to_string();
     let flows: BTreeSet<(String, String, String, String, String)> = resolved
         .graph
@@ -281,13 +294,12 @@ fn fetch(url: &str) -> String { url.to_owned() }
     assert!(!flows.iter().any(|f| f.0 == id("shop::routes") && f.2 == "http"), "registering a route isn't a request");
     has("shop::asks_other", "shop::other", "http", "/api/other", "/api/other");
     assert!(!flows.iter().any(|f| f.0 == id("shop::asks_other") && f.1 == id("shop::item")), "a request reaches only its own route's handler, however routes chain");
-    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
 }
 
-// req: P4.2
 #[test]
 fn malformed_packs_are_rejected_with_a_reason() {
-    let base = std::fs::read_to_string(shipped_packs_dir().join("language/python/syntax.toml")).unwrap();
+    let base = std::fs::read_to_string(common::shipped_packs_dir().join("language/python/syntax.toml")).unwrap();
     let cases = [
         (base.replace("ast_grep = \"python\"", "ast_grep = \"klingon\""), "unknown ast-grep language"),
         (base.replace("rule = { kind = \"call\" }", "rule = { kind = \"call\", nonsense = 1 }"), "calls[0]"),
@@ -299,24 +311,22 @@ fn malformed_packs_are_rejected_with_a_reason() {
     }
 }
 
-// req: P2.10
+/// A file's reading matches the golden file (the reader's output doesn't
+/// drift unseen; `UPDATE_GOLDEN=1` writes it again).
 #[test]
-fn index_entries_round_trip_and_reject_other_versions() {
-    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+fn a_files_reading_matches_its_golden_file() {
+    let packs = common::shipped_packs();
     let (extracts, _) = run(&fixtures().join("rust/sample"), &packs);
     let util = extracts.iter().find(|e| e.file.as_str() == "src/util.rs").unwrap();
     let golden_path = fixtures().join("rust/golden_util_extract.json");
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::write(&golden_path, util.to_json().unwrap()).unwrap();
+        std::fs::write(&golden_path, serde_json::to_string_pretty(util).unwrap()).unwrap();
     }
     let golden = std::fs::read_to_string(golden_path).unwrap();
     // The pack fingerprint moves with every pack edit; everything else is fixed.
-    let golden_extract = FileExtract::from_json(&golden).unwrap();
+    let golden_extract: FileExtract = serde_json::from_str(&golden).unwrap();
     assert!(!golden_extract.pack_fingerprint.is_empty() && !util.pack_fingerprint.is_empty());
     assert_eq!(FileExtract { pack_fingerprint: util.pack_fingerprint.clone(), ..golden_extract }, *util, "the util.rs extract matches the golden file");
-    assert_eq!(FileExtract::from_json(&util.to_json().unwrap()).unwrap(), *util);
-    let future = golden.replacen("\"schema_version\": 1", "\"schema_version\": 7", 1);
-    assert!(FileExtract::from_json(&future).unwrap_err().to_string().contains("schema version 7"));
 }
 
 fn temp_repo(name: &str, files: &[(&str, &str)]) -> PathBuf {
@@ -330,7 +340,6 @@ fn temp_repo(name: &str, files: &[(&str, &str)]) -> PathBuf {
     dir
 }
 
-// req: P4.6
 #[test]
 fn calls_stay_within_their_language_and_unknown_receivers_are_never_guessed() {
     // A Python run() and a TypeScript Store share names with the other language.
@@ -341,7 +350,7 @@ fn calls_stay_within_their_language_and_unknown_receivers_are_never_guessed() {
             ("src/lib.ts", "export function helper(): void {}\nexport class Widget extends Store {}\nfunction go(): void { run(); }\n"),
         ],
     );
-    let (_, resolved) = run(&dir, &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
+    let (_, resolved) = run(&dir, &common::shipped_packs());
     let crossing: Vec<_> = resolved.graph.relations().filter(|r| r.source.as_str().split(':').next() != r.target.as_str().split(':').next()).collect();
     assert!(crossing.is_empty(), "no relation crosses languages: {crossing:?}");
     let external: BTreeSet<&str> = resolved.external.iter().map(|e| e.callee.as_str()).collect();
@@ -355,7 +364,7 @@ fn calls_stay_within_their_language_and_unknown_receivers_are_never_guessed() {
 
 #[test]
 fn observed_calls_carry_deferral_and_dead_code_is_not_observed() {
-    let (_, resolved) = run(&fixtures().join("rust/sample"), &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
+    let (_, resolved) = run(&fixtures().join("rust/sample"), &common::shipped_packs());
     let id = |s: &str| ComponentId::for_symbol("rust", s);
     let later: Vec<_> = resolved.graph.outgoing(&id("sample::later_log"), Some(RelationKind::Calls)).collect();
     assert_eq!(later.len(), 1, "the dead branches add no calls: {later:?}");
@@ -363,7 +372,7 @@ fn observed_calls_carry_deferral_and_dead_code_is_not_observed() {
     let run_calls: Vec<_> = resolved.graph.outgoing(&id("sample::run"), Some(RelationKind::Calls)).collect();
     assert!(run_calls.iter().all(|r| !r.deferred));
     for (lang, fixture, caller, callee) in [("python", "python/app", "app.fetch", "helpers.load"), ("typescript", "typescript/app", "app.fetch", "helpers.load")] {
-        let (_, resolved) = run(&fixtures().join(fixture), &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
+        let (_, resolved) = run(&fixtures().join(fixture), &common::shipped_packs());
         let call = resolved.graph.outgoing(&ComponentId::for_symbol(lang, caller), Some(RelationKind::Calls)).find(|r| r.target == ComponentId::for_symbol(lang, callee)).unwrap();
         assert!(call.deferred, "{lang}: inside a lambda/arrow");
         let external: BTreeSet<&str> = resolved.external.iter().map(|e| e.callee.as_str()).collect();
@@ -381,12 +390,12 @@ fn module_symbols_come_from_the_manifest_not_the_checkout_directory() {
         .collect();
     let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
     let dir = temp_repo("fx", &refs);
-    let (extracts, _) = run(&dir, &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
+    let (extracts, _) = run(&dir, &common::shipped_packs());
     let modules: BTreeSet<&str> = extracts.iter().map(|e| e.module.as_str()).collect();
     assert_eq!(modules, BTreeSet::from(["sample", "sample::store", "sample::util"]));
     std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
     // A root given as "." names the package from its manifest, with no empty segments.
-    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+    let packs = common::shipped_packs();
     let rust = packs.by_name("rust").unwrap();
     assert_eq!(code_analyzer::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/lib.rs").unwrap(), rust), "code_analyzer");
     assert_eq!(code_analyzer::module_symbol(Path::new("."), &arch_graph::RepoPath::new("src/walk.rs").unwrap(), rust), "code_analyzer::walk");
@@ -396,10 +405,9 @@ fn module_symbols_come_from_the_manifest_not_the_checkout_directory() {
     assert!(extracts.iter().all(|e| e.module.starts_with("app.")), "{:?}", extracts.iter().map(|e| &e.module).collect::<Vec<_>>());
 }
 
-// req: P4.6
 #[test]
 fn imports_match_whole_module_paths_and_inherited_members_resolve() {
-    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+    let packs = common::shipped_packs();
     // Python: `from other.helpers import clean` is not this repo's helpers module,
     // even though the words overlap; `from helpers import clean` is.
     let root = temp_repo(
@@ -438,12 +446,11 @@ fn imports_match_whole_module_paths_and_inherited_members_resolve() {
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
-// req: P4.2, AP.5
 #[test]
 fn packs_are_strict_about_fields_and_the_types_they_map_onto() {
-    let rust = std::fs::read_to_string(shipped_packs_dir().join("language/rust/syntax.toml")).unwrap();
-    let manifest = std::fs::read_to_string(shipped_packs_dir().join("language/rust/pack.toml")).unwrap();
-    let highlights = std::fs::read_to_string(shipped_packs_dir().join("language/rust/highlights.scm")).unwrap();
+    let rust = std::fs::read_to_string(common::shipped_packs_dir().join("language/rust/syntax.toml")).unwrap();
+    let manifest = std::fs::read_to_string(common::shipped_packs_dir().join("language/rust/pack.toml")).unwrap();
+    let highlights = std::fs::read_to_string(common::shipped_packs_dir().join("language/rust/highlights.scm")).unwrap();
     // A project's own Rust pack replaces the shipped one, checked the same way.
     let typo = rust.replacen("separator = \"::\"", "seperator = \"::\"", 1);
     let err = with_project_packs(&[("rust/pack.toml", manifest.clone()), ("rust/highlights.scm", highlights.clone()), ("rust/syntax.toml", typo)]).unwrap_err().to_string();
@@ -452,13 +459,12 @@ fn packs_are_strict_about_fields_and_the_types_they_map_onto() {
     let packs = with_project_packs(&[("rust/pack.toml", manifest), ("rust/highlights.scm", highlights), ("rust/syntax.toml", widget)]).unwrap();
     let err = packs.check_types(&TypeSystem::defaults().unwrap()).unwrap_err().to_string();
     assert!(err.contains("'widget'"), "{err}");
-    assert!(PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap().check_types(&TypeSystem::defaults().unwrap()).is_ok());
+    assert!(common::shipped_packs().check_types(&TypeSystem::defaults().unwrap()).is_ok());
 }
 
-// req: P4.6
 #[test]
 fn types_resolve_only_through_scope_and_imports() {
-    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+    let packs = common::shipped_packs();
     // Python: a parameter typed with a library's `Session` isn't the repo's
     // `client.Session`; one typed with a name that's neither local nor
     // imported proves nothing.
@@ -503,10 +509,9 @@ fn types_resolve_only_through_scope_and_imports() {
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
-// req: P4.7
 #[test]
 fn scoped_walks_honor_ignores_from_the_root() {
-    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+    let packs = common::shipped_packs();
     let root = temp_repo(
         "scoped",
         &[
@@ -523,13 +528,13 @@ fn scoped_walks_honor_ignores_from_the_root() {
     assert!(files(".github").is_empty(), "so does a hidden one");
     assert_eq!(files("github"), vec!["github/real.py"]);
     assert_eq!(files("src/keep.py"), vec!["src/keep.py"], "a single file");
+    let ignores = code_analyzer::Ignores::new(&root);
     for (path, ignored) in [("gen/out.py", true), ("gen/new.py", true), (".github/hook.py", true), ("src/keep.py", false), ("src/new.py", false)] {
-        assert_eq!(code_analyzer::ignored(&root, &root.join(path)), ignored, "{path}");
+        assert_eq!(ignores.is_ignored(&root.join(path)), ignored, "{path}");
     }
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
-// req: M.15
 #[test]
 fn locals_named_like_functions_and_same_named_nested_functions_dont_mislink() {
     let dir = temp_repo(
@@ -547,7 +552,7 @@ fn locals_named_like_functions_and_same_named_nested_functions_dont_mislink() {
             ),
         ],
     );
-    let (_, resolved) = run(&dir, &PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap());
+    let (_, resolved) = run(&dir, &common::shipped_packs());
     let id = |s: &str| ComponentId::for_symbol("rust", s);
     let calls: BTreeSet<(String, String)> = resolved.graph.relations().filter(|r| r.kind == RelationKind::Calls).map(|r| (r.source.to_string(), r.target.to_string())).collect();
     let call = |a: &str, b: &str| (id(a).to_string(), id(b).to_string());
@@ -563,11 +568,10 @@ fn locals_named_like_functions_and_same_named_nested_functions_dont_mislink() {
     std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
 }
 
-// req: M.15
 #[test]
 fn call_targets_are_read_from_the_syntax_tree() {
     use code_analyzer::{CodeRules, Expr, extract_file};
-    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+    let packs = common::shipped_packs();
     let read = |lang: &str, file: &str, code: &str| -> Vec<Expr> {
         extract_file(packs.by_name(lang).unwrap(), &CodeRules::default(), arch_graph::RepoPath::new(file).unwrap(), "m".into(), code).calls.into_iter().filter(|c| !c.reference).map(|c| c.callee).collect()
     };
@@ -598,11 +602,10 @@ fn call_targets_are_read_from_the_syntax_tree() {
     assert_eq!(py, [member(call(name("super")), "run"), name("super"), member(call(name("Greeter")), "greet"), name("Greeter")]);
 }
 
-// req: AP.8, AP.11
 #[test]
 fn each_call_records_where_its_name_is_and_each_file_its_colours() {
     use code_analyzer::{CodeRules, extract_file};
-    let packs = PackSet::from_shipped_dir(&shipped_packs_dir()).unwrap();
+    let packs = common::shipped_packs();
     let read = |lang: &str, file: &str, code: &str| extract_file(packs.by_name(lang).unwrap(), &CodeRules::default(), arch_graph::RepoPath::new(file).unwrap(), "m".into(), code);
 
     let code = "fn run(&self) { self.store.save(); Store::new(); helper::<u8>(); make()(); }\n";

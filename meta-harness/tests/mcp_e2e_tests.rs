@@ -6,7 +6,6 @@ mod common;
 use common::{Mcp, spawn_app};
 use serde_json::json;
 
-// req: P8.3, P8.4
 #[tokio::test]
 async fn every_tool_works_through_the_mcp_endpoint() {
     let (addr, state) = spawn_app().await;
@@ -103,7 +102,6 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     assert!(err);
 }
 
-// req: P8.7
 #[tokio::test]
 async fn tool_results_end_with_stage_specific_next_steps() {
     use arch_graph::{Component, ComponentId, Plan, ProposedLocation, RepoPath, Stage, Status};
@@ -125,7 +123,7 @@ async fn tool_results_end_with_stage_specific_next_steps() {
         });
     }
     let types = arch_graph::TypeSystem::defaults().unwrap();
-    let steps = |plan: &Plan, only: Option<&ComponentId>| meta_harness::mcp::service::next_steps(plan, &arch_graph::Graph::merge(arch_graph::Graph::new(), std::slice::from_ref(plan)), &types, only);
+    let steps = |plan: &Plan, only: Option<&ComponentId>| meta_harness::mcp::service::next_steps(plan, &arch_graph::Graph::merge(arch_graph::Graph::default(), std::slice::from_ref(plan)), &types, only);
     let text = steps(&plan, None);
     assert!(text.contains("rust:x::a (Declared): write its spec") && text.contains("let the user approve the architecture in the cockpit"));
     assert!(text.contains("rust:x::b (ArchApproved): either lay the skeleton in src/x.rs"));
@@ -141,7 +139,6 @@ async fn tool_results_end_with_stage_specific_next_steps() {
     assert!(text.find("rust:x::a").unwrap() < text.find("rust:x::c").unwrap(), "what c calls comes first");
 }
 
-// req: P8.4
 #[tokio::test]
 async fn tools_report_failures_as_errors_the_agent_can_act_on() {
     let (addr, _) = spawn_app().await;
@@ -172,7 +169,6 @@ async fn tools_report_failures_as_errors_the_agent_can_act_on() {
     assert_eq!(status, 400);
 }
 
-// req: P8.3
 #[tokio::test]
 async fn notifications_are_taken_but_never_answered() {
     let (addr, _) = spawn_app().await;
@@ -182,4 +178,92 @@ async fn notifications_are_taken_but_never_answered() {
     // Nothing was put on the stream for them: the next message answers the next request.
     let next = mcp.rpc_next("ping").await;
     assert!(next["id"].is_number() && next.get("error").is_none(), "{next}");
+}
+
+#[tokio::test]
+async fn inspect_opens_any_card_a_view_shows_and_says_how_links_are_known() {
+    let (addr, _state) = spawn_app().await;
+    let mut mcp = Mcp::connect(addr).await;
+    mcp.rpc("initialize", json!({})).await;
+    let (err, text) = mcp.tool("ingest", json!({})).await;
+    assert!(!err, "{text}");
+    // A data type's card, and a flow's start and end.
+    let (err, text) = mcp.tool("inspect", json!({ "id": "type:Store" })).await;
+    assert!(!err && text.contains("\"rust:sample::store::Store\""), "{text}");
+    for end in ["start", "end"] {
+        let (err, text) = mcp.tool("inspect", json!({ "id": format!("{end}:rust:sample::run") })).await;
+        assert!(!err && text.contains("\"rust:sample::run\""), "{end}: {text}");
+    }
+    // No language server here: the calls it found were matched by name.
+    let (err, text) = mcp.tool("inspect", json!({ "id": "rust:sample::run" })).await;
+    assert!(!err && text.contains("\"known\": \"matched by name, unconfirmed\""), "{text}");
+    let (err, text) = mcp.tool("inspect", json!({ "id": "type:Nothing" })).await;
+    assert!(err && text.contains("no data type"), "{text}");
+}
+
+/// The next view request the server sends the user.
+async fn next_view(events: &mut tokio::sync::broadcast::Receiver<harness_contracts::ClientEvent>) -> arch_graph::ArchEvent {
+    loop {
+        if let harness_contracts::ClientEvent::Architecture { event: event @ arch_graph::ArchEvent::ViewRequested { .. } } = events.recv().await.unwrap() {
+            return event;
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_agent_moves_the_users_view_to_a_plan_and_back_to_code() {
+    let (addr, state) = spawn_app().await;
+    let mut mcp = Mcp::connect(addr).await;
+    mcp.rpc("initialize", json!({})).await;
+    assert!(!mcp.tool("ingest", json!({})).await.0);
+    assert!(!mcp.tool("plan_create", json!({ "id": "val", "title": "Validate input" })).await.0);
+    // The user's graph, as the cockpit holds it.
+    let mut graph = cockpit_ui::graph::GraphState::default();
+    let mut events = state.hub.subscribe().1;
+    let (err, text) = mcp.tool("navigate", json!({ "view": "calls", "source": "plan:val" })).await;
+    assert!(!err, "{text}");
+    graph.on_event(&next_view(&mut events).await);
+    assert_eq!(graph.nav.request().source, arch_graph::Source::Plan(arch_graph::PlanId::new("val").unwrap()), "the user sees the plan");
+    let (err, text) = mcp.tool("navigate", json!({ "source": "code" })).await;
+    assert!(!err, "{text}");
+    graph.on_event(&next_view(&mut events).await);
+    let request = graph.nav.request();
+    assert_eq!((request.source, request.view), (arch_graph::Source::Code, arch_graph::tree::ViewKind::Calls), "back to the code, in the same view");
+}
+
+#[tokio::test]
+async fn reads_take_a_source_over_rest_and_mcp() {
+    let (addr, _state) = spawn_app().await;
+    let mut mcp = Mcp::connect(addr).await;
+    mcp.rpc("initialize", json!({})).await;
+    assert!(!mcp.tool("ingest", json!({})).await.0);
+    assert!(!mcp.tool("plan_create", json!({ "id": "val", "title": "Validate input" })).await.0);
+    let ops = json!([{ "op": "add_component", "name": "validate", "type": "function", "parent": "rust:sample", "description": "Rejects empty input." }]);
+    assert!(!mcp.tool("plan_edit", json!({ "plan": "val", "ops": ops })).await.0);
+    // MCP: the plan's item is there with the plan as the source, not in the code.
+    let (err, text) = mcp.tool("inspect", json!({ "id": "rust:sample::validate", "source": "plan:val" })).await;
+    assert!(!err && text.contains("Rejects empty input."), "{text}");
+    let (err, _) = mcp.tool("inspect", json!({ "id": "rust:sample::validate", "source": "code" })).await;
+    assert!(err, "not in the code");
+    let (err, text) = mcp.tool("view", json!({ "view": "contains", "root": "rust:sample", "source": "plan:val" })).await;
+    assert!(!err && text.contains("validate"), "{text}");
+    // The old argument is refused, not ignored.
+    let (err, text) = mcp.tool("inspect", json!({ "id": "rust:sample::validate", "plan": "val" })).await;
+    assert!(err && text.contains("unknown field `plan`"), "{text}");
+    let (err, text) = mcp.tool("search", json!({ "query": "validate", "source": "val" })).await;
+    assert!(err && text.contains("use \"code\" or \"plan:<id>\""), "{text}");
+    // REST: the same, as a query parameter.
+    let (status, body) = common::http(addr, "GET", "/api/graph/details/rust:sample::validate?source=plan:val", None).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, _) = common::http(addr, "GET", "/api/graph/details/rust:sample::validate?source=code", None).await;
+    assert_eq!(status, 404);
+    let (status, body) = common::http(addr, "GET", "/api/arch/components/rust:sample::validate?source=plan:val", None).await;
+    assert!(status == 200 && body.contains("Rejects empty input."), "{status} {body}");
+    let (status, body) = common::http(addr, "GET", "/api/search?q=validate&source=plan:val", None).await;
+    assert!(status == 200 && body.contains("rust:sample::validate"), "{status} {body}");
+    // The old argument is refused over REST too, never quietly ignored.
+    for old in ["/api/arch/components/rust:sample::validate?plan=val", "/api/graph/details/rust:sample::validate?plan=val", "/api/search?q=validate&plan=val", "/api/arch/file?path=src/lib.rs&plan=val"] {
+        let (status, body) = common::http(addr, "GET", old, None).await;
+        assert!(status == 400 && body.contains("plan"), "{old}: {status} {body}");
+    }
 }

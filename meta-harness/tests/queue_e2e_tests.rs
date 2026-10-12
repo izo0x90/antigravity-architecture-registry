@@ -81,7 +81,6 @@ fn approve(arch: &ArchitectureService, plan: &PlanId, symbol: &str, to: Stage) {
     arch.approve(plan, &id(symbol), to, &Actor::User { name: "izo".into() }).unwrap();
 }
 
-// req: P8.8, P8.9
 #[tokio::test(flavor = "multi_thread")]
 async fn the_queue_runs_components_in_dependency_order_pauses_for_approvals_and_requeues_failures() {
     let arch = fixture_architecture();
@@ -104,13 +103,13 @@ async fn the_queue_runs_components_in_dependency_order_pauses_for_approvals_and_
 
     // Designs done, both wait for the user.
     let waiting = wait_for(&queue, &plan, QueueStatus::WaitingForUser).await;
-    assert_eq!(waiting.awaiting_approval().count(), 2, "{waiting:?}");
+    assert_eq!(waiting.jobs.iter().filter(|j| j.state == JobState::AwaitingApproval).count(), 2, "{waiting:?}");
     approve(&arch, &plan, "sample::b", Stage::ArchApproved);
     approve(&arch, &plan, "sample::a", Stage::ArchApproved);
     // Plans done, waiting again.
     for _ in 0..400 {
         let s = queue.snapshot(&plan).await.unwrap();
-        if s.status == QueueStatus::WaitingForUser && s.awaiting_approval().count() == 2 && s.jobs.iter().all(|j| j.kind == JobKind::Plan) {
+        if s.status == QueueStatus::WaitingForUser && s.jobs.iter().filter(|j| j.state == JobState::AwaitingApproval).count() == 2 && s.jobs.iter().all(|j| j.kind == JobKind::Plan) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -147,7 +146,6 @@ async fn the_queue_runs_components_in_dependency_order_pauses_for_approvals_and_
     assert!(announced.iter().any(|e| matches!(e, arch_graph::ArchEvent::QueueUpdated { snapshot } if snapshot.jobs.iter().any(|j| matches!(&j.state, JobState::Running { thread: Some(t) } if t.starts_with("thread-"))))));
 }
 
-// req: P8.9
 #[test]
 fn briefs_are_config_templates_checked_for_known_placeholders() {
     let mut config = QueueConfig::defaults().unwrap();
@@ -193,7 +191,6 @@ async fn queue_control_is_for_the_user_in_the_cockpit() {
     assert_eq!(status, 200, "{body}");
 }
 
-// req: P10.1
 #[tokio::test(flavor = "multi_thread")]
 async fn ingest_plan_validate_skeleton_implement_verify_break_and_detect_on_a_fixture_copy() {
     let arch = fixture_architecture();
@@ -218,7 +215,7 @@ async fn ingest_plan_validate_skeleton_implement_verify_break_and_detect_on_a_fi
     for to in [Stage::ArchApproved, Stage::PlanApproved] {
         for _ in 0..400 {
             let s = queue.snapshot(&plan).await.unwrap();
-            if s.status == QueueStatus::WaitingForUser && s.awaiting_approval().count() == 2 {
+            if s.status == QueueStatus::WaitingForUser && s.jobs.iter().filter(|j| j.state == JobState::AwaitingApproval).count() == 2 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -242,7 +239,6 @@ async fn ingest_plan_validate_skeleton_implement_verify_break_and_detect_on_a_fi
     assert_eq!(stage("sample::b"), Stage::Implemented, "b is untouched");
 }
 
-// req: P8.8
 #[tokio::test]
 async fn a_session_past_its_time_is_stopped_before_the_job_is_retried() {
     let (_, state) = common::spawn_app().await;
@@ -302,7 +298,7 @@ async fn a_failed_session_is_reported_as_such() {
     let queue = QueueRunner::new(arch.clone(), QueueConfig::defaults().unwrap(), |_| {});
     queue.start(plan.clone(), Arc::new(BrokenAgent)).await.unwrap();
     let snapshot = wait_for(&queue, &plan, QueueStatus::WaitingForUser).await;
-    let job = snapshot.job(&id("sample::a")).unwrap();
+    let job = snapshot.jobs.iter().find(|j| j.component == id("sample::a")).unwrap();
     assert_eq!(job.state, JobState::Failed, "out of attempts");
     assert_eq!(job.findings[0].code, arch_graph::FindingCode::SessionFailed);
     assert_eq!(job.findings[0].message, "the session was cancelled");

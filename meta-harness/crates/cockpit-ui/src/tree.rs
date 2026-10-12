@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use arch_graph::tree::{Card, Opened, Tree, TreeRequest, ViewKind};
-use arch_graph::{ComponentId, PlanId, Source};
+use arch_graph::{ComponentId, Source};
 use egui::{RichText, Sense};
 
 use crate::actions::{Action, ActionProvider, RunCx};
@@ -33,7 +33,7 @@ pub struct ArchitectureTreeState {
     filter_before: Option<String>,
     /// Rows the search being typed opened (closed again as it changes).
     opened_by_search: BTreeSet<ComponentId>,
-    plan: Option<PlanId>,
+    source: Source,
     result: Option<Tree>,
     /// Cards by key in what was sent.
     cards: BTreeMap<ComponentId, Card>,
@@ -62,9 +62,9 @@ pub struct ArchitectureTreeState {
 const ROW_H: f32 = 20.0;
 
 impl ArchitectureTreeState {
-    pub fn set_plan(&mut self, plan: Option<&PlanId>) {
-        if self.plan.as_ref() != plan {
-            self.plan = plan.cloned();
+    pub fn set_source(&mut self, source: &Source) {
+        if &self.source != source {
+            self.source = source.clone();
             self.opened.clear();
             self.stale = true;
         }
@@ -144,7 +144,7 @@ impl ArchitectureTreeState {
         for reply in replies {
             match reply {
                 Ok(result) => self.set_result(result),
-                Err(e) => self.error = Some(e),
+                Err(e) => self.error = Some(e.into()),
             }
         }
         if self.stale || !self.loaded_once {
@@ -153,7 +153,7 @@ impl ArchitectureTreeState {
             let inbox = self.inbox.clone();
             let request = TreeRequest {
                 view: ViewKind::Contains,
-                source: Source::from_plan(self.plan.clone()),
+                source: self.source.clone(),
                 opened: self.opened.iter().map(|card| Opened { card: card.clone(), levels: 1 }).collect(),
                 // With a plan: the plan inside the whole codebase.
                 full_code: true,
@@ -576,7 +576,7 @@ pub(crate) mod tests {
     /// Two modules: `a` holds run, step and save (and run holds log); `b` is empty.
     pub(crate) fn outline() -> Tree {
         let sample = crate::graph::tests::sample_graph();
-        let mut g = Graph::new();
+        let mut g = Graph::default();
         for id in ["rust:a", "rust:b", "rust:a::run", "rust:a::step", "rust:a::save", "rust:a::log"] {
             g.upsert_component(sample.component(&ComponentId::new(id)).unwrap().clone(), Provenance::OBSERVED);
         }
@@ -594,7 +594,6 @@ pub(crate) mod tests {
         t.cursor.as_ref().map_or("", |c| c.as_str().trim_start_matches("rust:"))
     }
 
-    // req: N.17, N.11
     #[test]
     fn the_outline_is_driven_by_keys() {
         let mut t = ArchitectureTreeState::default();
@@ -669,7 +668,6 @@ pub(crate) mod tests {
         assert!(t.rows().iter().any(|r| r.id.as_str() == "rust:a::log"));
     }
 
-    // req: N.8, N.6
     #[test]
     fn drawn_rows_take_hints_and_half_pages_follow_the_viewport() {
         let ctx = egui::Context::default();

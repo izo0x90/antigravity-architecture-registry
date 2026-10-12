@@ -224,4 +224,6 @@ reference/
 **/reference/
 # Claude Code personal settings and NAH local caches
 .claude/settings.local.json
-meta-harness/.nah/req_status.json
+
+# The cockpit build (make ui makes it).
+meta-harness/static/wasm/

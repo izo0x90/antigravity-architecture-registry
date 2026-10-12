@@ -234,7 +234,6 @@ impl TypeSystem {
 mod tests {
     use super::*;
 
-    // req: P2.1
     #[test]
     fn defaults_cover_the_generic_concepts() {
         let types = TypeSystem::defaults().unwrap();
@@ -247,7 +246,6 @@ mod tests {
         assert!(!types.may_contain("function", "module").unwrap());
     }
 
-    // req: P2.1
     #[test]
     fn specialized_types_inherit_and_override() {
         let mut types = TypeSystem::defaults().unwrap();
@@ -291,7 +289,6 @@ mod tests {
         assert!(types.may_contain("repository", "function").unwrap());
     }
 
-    // req: P2.1
     #[test]
     fn unknown_types_and_inheritance_cycles_are_errors() {
         let types = TypeSystem::defaults().unwrap();

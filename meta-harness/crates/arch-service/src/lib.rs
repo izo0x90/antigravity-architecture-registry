@@ -8,10 +8,12 @@ mod contract;
 mod import;
 mod limits;
 mod perf;
+mod pipeline;
 mod ops;
 mod progress;
 mod queue;
 mod review;
+mod servers;
 mod service;
 mod store;
 mod tools;
@@ -19,7 +21,7 @@ mod verify;
 
 pub use contract::{ContractSlice, EffectiveData, FlowNeighbor, HeldInvariant, Neighbor};
 pub use import::{ImportReport, ImportedComponent, Unmapped};
-pub use limits::{Limits, PerfLimits, SearchLimits, StoreLimits};
+pub use limits::{Limits, PerfLimits, PipelineLimits, SearchLimits, ServerLimits, StoreLimits, WatchLimits};
 pub use perf::{GraphSize, PerfReport, StageTime, StoreSize, Timed};
 pub use arch_search::{Found, Hit, SearchKind};
 pub use ops::PlanOp;
@@ -29,8 +31,8 @@ pub use arch_graph::ComponentDetail;
 pub use review::{ReviewNote, ReviewProvider, ReviewRequest, ReviewRun, ReviewerCatalog, ReviewerDef, ReviewerKind, ReviewsReport, Rule};
 pub use service::{Actor, ArchitectureService, IngestReport, NewComment, Refresh, Reverified, Verification, affected, approval_blocker};
 pub use tools::{Invocation, LogicChecks, ProcessRunner, ToolCatalog, ToolDef, ToolOutput, ToolRun, ToolRunner, ToolsReport};
-pub use store::{FsPlans, MemoryPlans, PlanRepository, open_facts};
-pub use arch_store::{FactStore, MemoryStore, SqliteStore};
+pub use store::{FsPlans, MemoryPlans, PlanRepository, open_facts, temporary_facts};
+pub use arch_store::SqliteStore;
 pub use chain::chain;
 pub use checks::{CheckCx, blocking_for, check_plan, is_data_type, missing_details, schema_set, stage_gate};
 pub use verify::signature_diff;
@@ -62,5 +64,19 @@ impl From<arch_store::StoreError> for ServiceError {
 impl ServiceError {
     fn poisoned<T>(_: T) -> Self {
         Self::Poisoned
+    }
+}
+#[cfg(test)]
+pub(crate) use test_packs::shipped_packs;
+
+#[cfg(test)]
+mod test_packs {
+    /// The language packs shipped in this repo, without any project's or
+    /// user's own (tests must not depend on the machine).
+    pub fn shipped_packs() -> code_analyzer::PackSet {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
+        let places = nah_packs::Places::isolated(&std::env::temp_dir().join(format!("nah-test-packs-{}", std::process::id())));
+        let catalog = nah_packs::Catalog::load(&nah_packs::Distribution::from_dir(&dir).unwrap(), &places).unwrap();
+        code_analyzer::PackSet::from_catalog(&catalog).unwrap()
     }
 }

@@ -19,6 +19,7 @@ members = [
     "crates/arch-store",
     "crates/arch-search",
     "crates/nah-packs",
+    "crates/nah-lsp",
 ]
 
 # Debug builds (tests, and the server as run in development) optimize the
@@ -35,6 +36,9 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.arch-service]
+opt-level = 2
+
+[profile.dev.package.arch-search]
 opt-level = 2
 
 [lib]
@@ -55,6 +59,7 @@ axum = { version = "0.8.9", features = ["ws"] }
 futures = "0.3.34"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+toml = "1"
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["full"] }
 tower-http = { version = "0.7.1", features = ["fs", "trace", "compression-gzip"] }
@@ -63,9 +68,12 @@ tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 uuid = { version = "1.26.1", features = ["v4", "serde"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
-notify = "8"
+
+notify-debouncer-full = "0.5"
 
 [dev-dependencies]
+nah-packs = { path = "crates/nah-packs", features = ["testing"] }
+cockpit-ui = { path = "crates/cockpit-ui" }
 ast-grep-config = "0.45.3"
 ast-grep-core = "0.45.3"
 tempfile = "3.27.0"

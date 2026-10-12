@@ -5,7 +5,15 @@ edition = "2024"
 description = "Domain model of the architecture graph: generic types, components, relations, plans, views. Pure data and logic, no I/O."
 
 [dependencies]
+epaint_default_fonts = "0.33.3"
+imbl = "6"
+lasso = { version = "0.7", features = ["multi-threaded"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
+ttf-parser = "0.25"
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+
+[features]
+# Counters and helpers only the tests use.
+testing = []

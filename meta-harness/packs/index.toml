@@ -21,3 +21,14 @@ path = "{config_home}/nah/packs"
 [install]
 root = "{data_home}/nah/packs"
 lock = "{data_home}/nah/packs.lock"
+# How long a download and a run step may take, unless the step says, and
+# a tool's version check (its command).
+download_timeout_s = 1800
+run_timeout_s = 600
+check_timeout_s = 60
+
+# Per harness instance, how it's started instead of its pack's launch:
+# files read in order, a later one's entry for an instance replacing an
+# earlier one's.
+[harnesses]
+overrides = ["{config_home}/nah/harnesses.toml", "{project}/.nah/harnesses.toml"]

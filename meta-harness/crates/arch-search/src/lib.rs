@@ -1,7 +1,6 @@
 //! One way of matching what's typed, everywhere. Names (symbols, actions,
-//! what's on screen) are matched with neo_frizbee, the matcher fff uses;
-//! files and their contents are found with fff-search (feature `files`,
-//! the server only). The cockpit and the server use the same `rank`.
+//! what's on screen) are matched with neo_frizbee; files and their contents
+//! are found with fff-search (feature `files`, the server only). The cockpit and the server use the same `rank`.
 //!
 //! A query is words; each must match. A word can say how: `'foo` contains
 //! it as written, `^foo` starts with it, `foo$` ends with it, `!foo` must
@@ -11,7 +10,7 @@
 mod files;
 
 #[cfg(feature = "files")]
-pub use files::{FoundFile, FoundLine, RepoFiles, TextLimits};
+pub use files::{FoundFile, FoundLine, Lines, RepoFiles, TextLimits};
 
 use serde::{Deserialize, Serialize};
 
@@ -116,6 +115,43 @@ fn rank_as<S: AsRef<str>>(query: &str, haystacks: &[S], letters_per_typo: usize,
     out
 }
 
+/// What one search found: the best first, at most the limit asked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Searched<T> {
+    pub found: Vec<T>,
+    /// How many matched in all (more than `found` when cut at the limit).
+    pub total: usize,
+    /// It stopped at its time limit: there may be more.
+    pub partial: bool,
+}
+
+/// Symbols, files and lines are each searched through this.
+pub trait Search {
+    type Found;
+    /// What matches `query`, best first, at most `limit`.
+    fn search(&self, query: &str, limit: usize) -> Searched<Self::Found>;
+}
+
+/// A snapshot's symbols: each one's name, and its whole symbol with its file.
+#[derive(Clone, Debug, Default)]
+pub struct Symbols {
+    pub names: Vec<String>,
+    pub qualified: Vec<String>,
+}
+
+impl Search for Symbols {
+    /// The place in the lists of each symbol that matched.
+    type Found = usize;
+
+    /// A qualified query (`service::search`, `a/b.rs`) is matched against
+    /// the whole symbol and file; a plain one against names.
+    fn search(&self, query: &str, limit: usize) -> Searched<usize> {
+        let qualified = query.contains("::") || query.contains('/') || query.contains('.');
+        let ranked = rank(query, if qualified { &self.qualified } else { &self.names }, Matching::shared());
+        Searched { total: ranked.len(), found: ranked.into_iter().take(limit).map(|r| r.index).collect(), partial: false }
+    }
+}
+
 /// What a search looks through.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -187,7 +223,6 @@ pub struct Found {
 mod tests {
     use super::*;
 
-    // req: M.13
     #[test]
     fn names_are_ranked_best_first_with_typos_forgiven_and_query_atoms() {
         let m = Matching::built_in();

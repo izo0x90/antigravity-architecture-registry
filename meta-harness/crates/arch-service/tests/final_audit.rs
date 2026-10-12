@@ -8,7 +8,9 @@
 use std::path::PathBuf;
 
 use arch_graph::{Component, ComponentId, FindingCode, Param, Plan, PlanId, Provenance, ProposedLocation, Relation, RelationKind, RepoPath, Schemas, Signature, Stage, Status, TypeSystem};
-use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, PlanRepository};
+use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp};
+
+mod common;
 
 struct Repo {
     _dir: tempfile::TempDir,
@@ -30,10 +32,10 @@ fn repo_typed(files: &[(&str, &str)], types: TypeSystem) -> Repo {
     }
     let s = ArchitectureService::open(
         &root,
-        code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
+        common::shipped_packs(),
         types,
         Box::new(FsPlans::new(&root).unwrap()),
-        Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),
+        arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap(),
     )
     .unwrap();
     s.ingest(&root).unwrap();
@@ -82,7 +84,6 @@ fn verify(r: &Repo, id: &ComponentId) -> (Option<Stage>, Vec<FindingCode>) {
     (v.advanced_to, v.report.findings.iter().filter(|f| f.severity == arch_graph::Severity::Error).map(|f| f.code).collect())
 }
 
-// req: P6.3
 #[test]
 fn methods_verify_without_their_receiver_in_the_plan() {
     // Rust: planned `flush(n: usize) -> usize`, written with `&self`.
@@ -110,7 +111,6 @@ fn methods_verify_without_their_receiver_in_the_plan() {
     assert_eq!(verify(&r, &py("counter.Counter.flush")), (Some(Stage::Implemented), vec![]));
 }
 
-// req: P6.1
 #[test]
 fn the_symbol_found_must_be_the_kind_planned() {
     let r = repo(&[("Cargo.toml", "[package]\nname = \"app\"\n"), ("src/lib.rs", "pub fn run() {}\n")]);
@@ -156,7 +156,6 @@ fn python_run_calls_clean() -> Repo {
     r
 }
 
-// req: P6.10, P6.2
 #[test]
 fn python_and_typescript_stubs_and_dead_calls_dont_pass() {
     let py = |s: &str| ComponentId::for_symbol("python", s);
@@ -224,7 +223,6 @@ fn rust_repo() -> Repo {
     ])
 }
 
-// req: P5.7
 #[test]
 fn ignored_or_hidden_files_cant_be_planned_into() {
     let r = rust_repo();
@@ -255,12 +253,11 @@ fn ignored_or_hidden_files_cant_be_planned_into() {
         spec: None,
         placeholders: vec![],
     });
-    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    common::put_plan(&r.s, &r.root, &plan);
     let report = r.s.validate(&pid()).unwrap();
     assert!(report.findings.iter().any(|f| f.code == FindingCode::InvalidLocation && f.message.contains("gen/x.rs is git-ignored or hidden")), "{report:?}");
 }
 
-// req: P5.1
 #[test]
 fn component_names_are_single_identifiers_of_the_language() {
     let r = rust_repo();
@@ -279,7 +276,6 @@ fn component_names_are_single_identifiers_of_the_language() {
     add(&r, "fn", "function", &py("m"), Some(Signature::default())).unwrap();
 }
 
-// req: P5.10
 #[test]
 fn loops_come_after_what_they_depend_on_and_before_their_dependents() {
     let r = rust_repo();
@@ -299,10 +295,9 @@ fn loops_come_after_what_they_depend_on_and_before_their_dependents() {
     let mut lone = Plan::new("lone", "Lone");
     lone.components.push(plan.component(&rs("app::a")).unwrap().clone());
     lone.relations.push(Relation::new(RelationKind::Calls, rs("app::a"), rs("app::a"), Provenance::PLANNED));
-    assert_eq!(arch_service::topological(&lone, &arch_graph::Graph::merge(arch_graph::Graph::new(), std::slice::from_ref(&lone)), r.s.types()).len(), 1);
+    assert_eq!(arch_service::topological(&lone, &arch_graph::Graph::merge(arch_graph::Graph::default(), std::slice::from_ref(&lone)), r.s.types()).len(), 1);
 }
 
-// req: P4.7
 #[test]
 fn scoped_rereads_follow_renamed_directories_and_honor_ignores() {
     let r = rust_repo();

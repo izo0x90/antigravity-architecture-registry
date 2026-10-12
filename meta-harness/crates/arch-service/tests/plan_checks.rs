@@ -8,8 +8,12 @@ use arch_graph::{
     Component, ComponentId, FindingCode, ImplementationSpec, Invariant, InvariantKind, LogicStep, Plan, PlanId, ProposedLocation, Provenance,
     Relation, RelationKind, RepoPath, Report, Schemas, SideEffect, Signature, Stage, Status, ToolRef, TypeSystem,
 };
-use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, PlanRepository};
+use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp};
 use serde_json::{Value, json};
+
+mod common;
+
+use common::Findings;
 
 struct Repo {
     _dir: tempfile::TempDir,
@@ -39,7 +43,7 @@ fn repo_with(types: TypeSystem, rules_toml: &str) -> Repo {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("sample");
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample"), &root);
-    let packs = code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
+    let packs = common::shipped_packs();
     let mut rules = code_analyzer::CodeRules::defaults(&packs, &types).unwrap();
     rules.add_toml(rules_toml, &packs, &types).unwrap();
     let service = ArchitectureService::open(
@@ -47,7 +51,7 @@ fn repo_with(types: TypeSystem, rules_toml: &str) -> Repo {
         packs,
         types,
         Box::new(FsPlans::new(&root).unwrap()),
-        Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),
+        arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap(),
     )
     .unwrap()
     .with_rules(rules);
@@ -100,7 +104,7 @@ fn schema(v: Value) -> Option<Value> {
 /// Saves `plan` (greenfield unless it says otherwise) and validates it.
 fn check(r: &Repo, mut plan: Plan) -> Report {
     plan.greenfield = true;
-    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    common::put_plan(&r.service, &r.root, &plan);
     r.service.validate(&plan.id).unwrap()
 }
 
@@ -108,7 +112,6 @@ fn messages(report: &Report, code: FindingCode) -> Vec<String> {
     report.findings.iter().filter(|f| f.code == code).map(|f| f.message.clone()).collect()
 }
 
-// req: P5.2
 #[test]
 fn type_rules_are_findings() {
     let r = repo();
@@ -155,7 +158,6 @@ fn type_rules_are_findings() {
     assert!(parents[0].starts_with("a handler can't sit in rust:sample (a module)"));
 }
 
-// req: P5.4
 #[test]
 fn containment_implements_and_schema_ref_cycles_are_reported_with_their_loop() {
     let r = repo();
@@ -185,7 +187,6 @@ fn containment_implements_and_schema_ref_cycles_are_reported_with_their_loop() {
     assert_eq!(messages(&report, FindingCode::MissingSchemaRef), vec!["its properties reference Ghost, which isn't a data type here"]);
 }
 
-// req: P5.5
 #[test]
 fn schema_mismatches_are_reported_for_implements_calls_and_data_flow() {
     let r = repo();
@@ -225,7 +226,6 @@ fn schema_mismatches_are_reported_for_implements_calls_and_data_flow() {
     assert_eq!(found.len(), 6, "{found:?}");
 }
 
-// req: P5.6
 #[test]
 fn planned_calls_are_checked_against_the_callees_real_signature() {
     let r = repo();
@@ -257,7 +257,6 @@ fn planned_calls_are_checked_against_the_callees_real_signature() {
     assert_eq!(about("returns"), vec!["returns String: String doesn't carry integer"]);
 }
 
-// req: P5.8
 #[test]
 fn spec_rules_cover_step_order_invariant_inheritance_tools_and_side_effects() {
     let r = repo();
@@ -326,7 +325,6 @@ fn relate(r: &Repo, plan: &str, a: &str, b: &str) {
     r.service.apply(&pid(plan), PlanOp::Relate { kind: RelationKind::Calls, source: id(a), target: id(b), order: None, ports: None, note: None, expects: None }).unwrap();
 }
 
-// req: P5.15
 #[test]
 fn missing_required_details_block_approval_with_a_precise_list() {
     let mut types = TypeSystem::defaults().unwrap();
@@ -353,7 +351,6 @@ fn missing_required_details_block_approval_with_a_precise_list() {
     r.service.approve(&pid("gate"), &id("sample::bare"), Stage::ArchApproved, &user()).unwrap();
 }
 
-// req: P5.9
 #[test]
 fn stage_transitions_enforce_validation_location_and_dependencies() {
     let r = repo();
@@ -388,7 +385,7 @@ fn stage_transitions_enforce_validation_location_and_dependencies() {
     nowhere.proposed = None;
     plan.components.push(nowhere);
     plan.relations.push(rel(RelationKind::Contains, "sample", "sample::Bad"));
-    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    common::put_plan(&r.service, &r.root, &plan);
     let err = approve("sample::Bad", Stage::ArchApproved).unwrap_err().to_string();
     assert!(err.contains("a class can't have signature"), "{err}");
     approve("sample::nowhere", Stage::ArchApproved).unwrap();
@@ -400,7 +397,6 @@ fn stage(r: &Repo, plan: &str, symbol: &str) -> Stage {
     r.service.plan(&pid(plan)).unwrap().component(&id(symbol)).unwrap().stage
 }
 
-// req: P5.10
 #[test]
 fn actionable_work_comes_in_dependency_order_and_changes_cascade_in_waves() {
     let r = repo();
@@ -458,7 +454,6 @@ fn actionable_work_comes_in_dependency_order_and_changes_cascade_in_waves() {
     assert_eq!(stage(&r, "q", "sample::d"), Stage::ArchApproved);
 }
 
-// req: P5.11
 #[test]
 fn contracts_carry_location_signature_interfaces_invariants_steps_and_real_callees() {
     let r = repo();
@@ -483,7 +478,7 @@ fn contracts_carry_location_signature_interfaces_invariants_steps_and_real_calle
     call.expects = Some(Schemas { inputs: schema(json!({"s": "str"})), ..Schemas::default() });
     plan.components.extend([port, base, write]);
     plan.relations.extend([rel(RelationKind::Implements, "sample::write", "sample::base_write"), rel(RelationKind::Implements, "sample::base_write", "sample::Port"), call]);
-    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    common::put_plan(&r.service, &r.root, &plan);
     let slice = r.service.contract(&pid("contract"), &id("sample::write")).unwrap();
     assert_eq!(slice.interface_chain.iter().map(|n| n.id.0.as_str()).collect::<Vec<_>>(), vec!["rust:sample::base_write", "rust:sample::Port"]);
     assert_eq!(slice.invariants.iter().map(|h| (h.from.0.as_str(), h.invariant.name.as_str())).collect::<Vec<_>>(), vec![("rust:sample::write", "atomic"), ("rust:sample::base_write", "durable")]);
@@ -512,7 +507,6 @@ fn contracts_carry_location_signature_interfaces_invariants_steps_and_real_calle
     }
 }
 
-// req: P5.18
 #[test]
 fn logic_step_checks_run_during_validation_and_record_pass_or_fail() {
     let r = repo();
@@ -543,7 +537,6 @@ fn logic_step_checks_run_during_validation_and_record_pass_or_fail() {
     assert!(arch_service::ToolCatalog::from_toml("[logic_checks]\nshell = []\ntimeout_secs = 5").is_err());
 }
 
-// req: P6.4
 #[test]
 fn planned_data_flows_are_confirmed_missing_or_explicitly_unverifiable() {
     let r = repo();
@@ -560,7 +553,7 @@ fn planned_data_flows_are_confirmed_missing_or_explicitly_unverifiable() {
     plan.relations.push(flow("sample::produce", "sample::consume", "text"));
     plan.relations.push(flow("sample::opaque", "sample::sink", "x"));
     plan.relations.push(flow("sample::produce", "sample::sink", "x"));
-    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    common::put_plan(&r.service, &r.root, &plan);
     let lib = r.root.join("src/lib.rs");
     std::fs::write(
         &lib,
@@ -585,7 +578,6 @@ fn planned_data_flows_are_confirmed_missing_or_explicitly_unverifiable() {
     assert_eq!(flows("sample::produce").len(), 1, "produce -> sink missing; produce -> consume confirmed");
 }
 
-// req: D.2, D.5, M.4, M.6
 #[test]
 fn the_data_flow_view_shows_data_with_its_steps_and_marks_planned_flows() {
     use arch_graph::tree::{LineKind, Mark, TreeRequest, ViewKind, Way};
@@ -614,7 +606,7 @@ fn the_data_flow_view_shows_data_with_its_steps_and_marks_planned_flows() {
     };
     plan.relations.push(planned("sample::produce", "sample::consume", "text"));
     plan.relations.push(planned("sample::produce", "sample::sink", "x"));
-    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    common::put_plan(&r.service, &r.root, &plan);
     append_lib(&r, "\npub fn produce() -> String {\n    String::new()\n}\n\npub fn consume(text: &str) {\n    let _ = text;\n}\n\npub fn sink(x: &str) {\n    let _ = x;\n}\n\npub fn pipeline() {\n    let s = produce();\n    consume(&s);\n}\n");
     r.service.ingest(&r.root).unwrap();
     let flows = tree(TreeRequest { view: ViewKind::DataFlow, source: arch_graph::Source::Plan(pid("flows")), depth: Some(1), ..TreeRequest::default() });
@@ -637,7 +629,6 @@ fn str_sig() -> Option<Signature> {
     Some(Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] })
 }
 
-// req: P5.9
 #[test]
 fn approval_is_blocked_by_errors_on_its_relations_and_on_the_plan() {
     let r = repo();
@@ -667,7 +658,6 @@ fn approval_is_blocked_by_errors_on_its_relations_and_on_the_plan() {
     assert!(err.contains("connect to existing code"), "{err}");
 }
 
-// req: P5.5
 #[test]
 fn callees_inherit_interface_schemas_calls_must_pass_required_inputs_and_ports_must_exist() {
     let r = repo();
@@ -700,7 +690,6 @@ fn callees_inherit_interface_schemas_calls_must_pass_required_inputs_and_ports_m
     assert_eq!(found.len(), 3, "{found:?}");
 }
 
-// req: P5.2
 #[test]
 fn side_effects_belong_to_types_that_run() {
     let r = repo();
@@ -728,7 +717,6 @@ fn references_to_a_name_two_data_types_share_are_ambiguous() {
     assert_eq!(messages(&report, FindingCode::AmbiguousSchemaRef), vec!["Config could be any of rust:sample::store::Config, rust:sample::util::Config"]);
 }
 
-// req: P5.17
 #[test]
 fn contracts_list_the_open_placeholders_in_the_code() {
     let r = repo();
@@ -741,7 +729,6 @@ fn contracts_list_the_open_placeholders_in_the_code() {
     assert!(slice.to_markdown().contains(&format!("## Open placeholders\nLines {line} still have placeholder bodies.")));
 }
 
-// req: P5.7
 #[test]
 fn proposed_files_outside_the_repo_are_rejected() {
     let r = repo();
@@ -760,10 +747,10 @@ fn proposed_files_outside_the_repo_are_rejected() {
     // A plan file edited by hand can't sneak one in either.
     let raw = r#"{"schema_version":1,"id":"hand","title":"Hand","components":[{"id":"rust:x","name":"x","type":"function","status":"new","stage":"declared","proposed":{"language":"rust","file":"../x.rs","symbol":"x"}}]}"#;
     std::fs::write(r.root.join(".nah/plans/hand.json"), raw).unwrap();
+    r.service.refresh(&[r.root.join(".nah/plans/hand.json")]).unwrap();
     assert!(matches!(r.service.plan(&pid("hand")), Err(arch_service::ServiceError::Corrupt(_))));
 }
 
-// req: P6.6
 #[test]
 fn implementing_needs_the_plan_approved_even_after_a_skeleton() {
     let r = repo();
@@ -783,7 +770,6 @@ fn implementing_needs_the_plan_approved_even_after_a_skeleton() {
     assert_eq!(r.service.verify(&pid("skip"), &id("sample::validate"), Stage::Implemented).unwrap().advanced_to, Some(Stage::Implemented));
 }
 
-// req: P6.6, P6.8
 #[test]
 fn verification_rereads_vanished_files_and_changed_callees() {
     let r = repo();
@@ -795,7 +781,7 @@ fn verification_rereads_vanished_files_and_changed_callees() {
     plan.components.push(extra);
     plan.relations.push(rel(RelationKind::Calls, "sample::validate", "sample::store::Store::new"));
     plan.approvals.push(arch_graph::Approval { component: id("sample::validate"), from: Stage::ArchApproved, to: Stage::PlanApproved, by: "izo".into(), at: "2026-10-03T00:00:00Z".into(), kind: arch_graph::ApprovalKind::Approved });
-    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    common::put_plan(&r.service, &r.root, &plan);
     append_lib(&r, "\npub fn validate(input: &str) -> bool {\n    crate::store::Store::new();\n    !input.is_empty()\n}\n");
     let verify = || r.service.verify(&pid("fresh"), &id("sample::validate"), Stage::Implemented).unwrap();
     assert_eq!(verify().advanced_to, Some(Stage::Implemented));
@@ -815,7 +801,6 @@ fn verification_rereads_vanished_files_and_changed_callees() {
     assert_eq!(v.report.codes(), vec![FindingCode::MissingSymbol]);
 }
 
-// req: P6.10, P6.11
 #[test]
 fn placeholders_hidden_in_unplanned_helpers_block_implemented() {
     let r = repo();
@@ -842,7 +827,6 @@ fn placeholders_hidden_in_unplanned_helpers_block_implemented() {
     assert_eq!(r.service.verify(&pid("hide"), &id("sample::validate"), Stage::Skeleton).unwrap().advanced_to, Some(Stage::Skeleton));
 }
 
-// req: P3.5
 #[test]
 fn concurrent_plan_edits_are_never_lost() {
     let r = repo();
@@ -864,7 +848,6 @@ fn concurrent_plan_edits_are_never_lost() {
     assert_eq!(plan.components.len(), 8, "every edit landed: {:?}", plan.components.iter().map(|c| &c.name).collect::<Vec<_>>());
 }
 
-// req: P6.3
 #[test]
 fn signatures_compare_qualifiers_and_ignore_spacing() {
     let sig = |ty: &str, returns: &str, qualifiers: &[&str]| Signature {
@@ -878,7 +861,6 @@ fn signatures_compare_qualifiers_and_ignore_spacing() {
     assert_eq!(arch_service::signature_diff(&sig("&str", "bool", &["unsafe"]), &sig("&str", "bool", &[]), &[]), vec!["qualifiers: planned unsafe, code has none"]);
 }
 
-// req: P5.5
 #[test]
 fn every_interface_in_the_chain_with_a_shape_must_fit() {
     let r = repo();
@@ -896,7 +878,6 @@ fn every_interface_in_the_chain_with_a_shape_must_fit() {
     assert!(found[0].starts_with("doesn't fit rust:sample::IB::go it implements: inputs: x: type string where integer is expected"), "{found:?}");
 }
 
-// req: P5.1, P5.2
 #[test]
 fn containment_follows_type_rules_and_each_component_has_one_container() {
     let r = repo();
@@ -917,7 +898,6 @@ fn containment_follows_type_rules_and_each_component_has_one_container() {
     assert!(found.iter().any(|m| m == "sits in more than one container (rust:sample, rust:sample::run); a component has one"), "{found:?}");
 }
 
-// req: P5.6
 #[test]
 fn a_call_stating_expectations_without_inputs_passes_no_arguments() {
     let r = repo();
@@ -932,7 +912,6 @@ fn a_call_stating_expectations_without_inputs_passes_no_arguments() {
     assert!(found.iter().any(|m| m.contains("shout takes 1 argument(s); the call passes 0")), "{found:?}");
 }
 
-// req: P5.9, P5.18
 #[test]
 fn approval_blocks_on_failing_logic_checks_and_code_rule_errors() {
     let r = repo_with(
@@ -964,7 +943,6 @@ message = "log through the logger"
     assert!(err.contains("[no-println] log through the logger"), "{err}");
 }
 
-// req: P5.11, P5.17
 #[test]
 fn contracts_show_inherited_resolved_shapes_tools_effects_and_data_flows() {
     let r = repo();
@@ -984,7 +962,7 @@ fn contracts_show_inherited_resolved_shapes_tools_effects_and_data_flows() {
     let mut flow = rel(RelationKind::DataFlow, "sample::load_user", "sample::save_user");
     flow.ports = Some(("return".into(), "who".into()));
     plan.relations.extend([rel(RelationKind::Implements, "sample::save_user", "sample::Saver::save"), call, flow]);
-    FsPlans::new(&r.root).unwrap().save(&plan).unwrap();
+    common::put_plan(&r.service, &r.root, &plan);
     let slice = r.service.contract(&pid("k"), &id("sample::save_user")).unwrap();
     assert_eq!(slice.data.inputs_from, Some(id("sample::Saver::save")), "inherited from the interface");
     assert_eq!(slice.data.inputs.as_ref().unwrap()["properties"]["who"]["properties"]["name"], json!({"type": "string"}), "the $ref is resolved");
@@ -1003,7 +981,6 @@ fn contracts_show_inherited_resolved_shapes_tools_effects_and_data_flows() {
     }
 }
 
-// req: P4.6
 #[test]
 fn calls_that_cant_be_proven_are_reported_not_linked() {
     let dir = tempfile::tempdir().unwrap();
@@ -1011,10 +988,10 @@ fn calls_that_cant_be_proven_are_reported_not_linked() {
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample"), &root);
     let service = ArchitectureService::open(
         &root,
-        code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
+        common::shipped_packs(),
         TypeSystem::defaults().unwrap(),
         Box::new(arch_service::MemoryPlans::default()),
-        Box::new(arch_service::MemoryStore::default()),
+        arch_service::temporary_facts(&arch_service::Limits::defaults().unwrap()).unwrap(),
     )
     .unwrap();
     let report = service.ingest(&root).unwrap();

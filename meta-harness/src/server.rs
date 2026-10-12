@@ -65,6 +65,7 @@ impl IntoResponse for ApiError {
 type ApiResult<T> = Result<T, ApiError>;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FsReadQuery {
     pub path: String,
 }
@@ -108,8 +109,16 @@ pub fn queue_runner(arch: &Arc<arch_service::ArchitectureService>, config: arch_
     crate::queue::QueueRunner::new(arch.clone(), config, move |event| hub.publish(harness_contracts::ClientEvent::Architecture { event }))
 }
 
+/// Where the cockpit's page and its build are served from (`STATIC_DIR`).
+pub fn static_dir() -> std::path::PathBuf {
+    std::env::var_os("STATIC_DIR").map_or_else(|| "static".into(), std::path::PathBuf::from)
+}
+
+/// The cockpit's build, as `make ui` leaves it in the static folder.
+pub const COCKPIT_BUILD: &str = "wasm/cockpit_ui_bg.wasm";
+
 pub fn create_router(state: AppState) -> Router {
-    let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string());
+    let static_dir = static_dir();
     let mut router = Router::new()
         .route("/health", get(health_check))
         .route("/api/ui/config", get(ui_config_handler))
@@ -136,7 +145,7 @@ pub fn create_router(state: AppState) -> Router {
         .merge(crate::graph::routes())
         .merge(crate::queue::routes());
 
-    if std::path::Path::new(&static_dir).exists() {
+    if static_dir.exists() {
         router = router.fallback_service(ServeDir::new(static_dir));
     }
 
@@ -171,12 +180,24 @@ async fn list_instances(State(state): State<AppState>) -> Json<Vec<harness_contr
     Json(state.registry.snapshots())
 }
 
+/// Re-probes an instance, first looking its harness's launch up again: a
+/// pack installed or fixed since makes the instance anew with it.
 async fn refresh_instance(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
-    state.registry.get(&InstanceId::new(id))?.refresh().await?;
+    let id = InstanceId::new(id);
+    let root = state.arch.root().to_path_buf();
+    let launches = tokio::task::spawn_blocking(move || crate::packs::catalog(&root).map(|c| crate::packs::harness_launches(&c))).await;
+    if let Ok(Ok(launches)) = launches
+        && let Some(config) = state.registry.default_configs(&launches).into_iter().find(|c| c.id == id)
+        && state.registry.reconfigure(config).await?
+    {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    state.registry.get(&id)?.refresh().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SavedSessionsQuery {
     pub cwd: String,
     pub cursor: Option<String>,

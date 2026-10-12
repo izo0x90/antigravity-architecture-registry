@@ -225,10 +225,9 @@ mod tests {
         arch_graph::Dsl::defaults().unwrap().compile(&v).unwrap()
     }
 
-    // req: P5.6
     #[test]
     fn receivers_aren_t_arguments_and_optional_parameters_may_be_left_out() {
-        let packs = code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
+        let packs = crate::shipped_packs();
         let callee = method();
         assert!(against_signature(&callee, Some(&inputs(json!({"item": "str"}))), None, &packs).is_empty(), "&mut self is the receiver; flush is optional");
         assert!(against_signature(&callee, Some(&inputs(json!({"item": "str", "flush": "bool"}))), None, &packs).is_empty());

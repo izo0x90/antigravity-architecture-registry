@@ -12,7 +12,7 @@ use ast_grep_config::RuleCore;
 use serde::Deserialize;
 
 use crate::pack::compile;
-use crate::{FileExtract, IndexError, PackSet};
+use crate::{IndexError, PackSet};
 
 const DEFAULTS: &str = include_str!("../rules/defaults.toml");
 
@@ -141,7 +141,7 @@ impl CodeRules {
     /// Checks `components` (as they are in `graph`) against the rules that
     /// apply to their language and type, from the matches kept with each
     /// file's facts (`facts` finds a file's).
-    pub fn check<'a, 'f>(&self, components: impl IntoIterator<Item = &'a Component>, graph: &Graph, facts: &dyn Fn(&RepoPath) -> Option<&'f FileExtract>, types: &TypeSystem) -> Vec<Finding> {
+    pub fn check<'a, 'f>(&self, components: impl IntoIterator<Item = &'a Component>, graph: &Graph, facts: &dyn Fn(&RepoPath) -> Option<&'f crate::rows::FileRows>, types: &TypeSystem) -> Vec<Finding> {
         let mut findings = Vec::new();
         for c in components {
             let Some(anchor) = &c.anchor else { continue };
@@ -153,8 +153,8 @@ impl CodeRules {
             }
             // Facts read from other content (or with other rules) say nothing
             // about the code the anchor points at.
-            let Some(extract) = facts(&anchor.file) else { continue };
-            if extract.content_hash != anchor.content_hash || extract.rules_fingerprint != self.fingerprint(&anchor.language) {
+            let Some(rows) = facts(&anchor.file) else { continue };
+            if rows.file.content_hash != anchor.content_hash || crate::rows::rules_read_with(&rows.file.read_version) != self.fingerprint(&anchor.language) {
                 continue;
             }
             let own = anchor.span.start_byte as usize..anchor.span.end_byte as usize;
@@ -164,7 +164,7 @@ impl CodeRules {
                 .filter_map(|r| graph.component(&r.target)?.anchor.as_ref().filter(|a| a.file == anchor.file).map(|a| a.span))
                 .collect();
             for rule in rules {
-                let hits: Vec<Span> = extract
+                let hits: Vec<Span> = rows
                     .rule_hits
                     .iter()
                     .filter(|h| h.rule == rule.spec.id)

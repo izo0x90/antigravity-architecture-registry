@@ -1,19 +1,26 @@
 [pack]
 name = "antigravity-acp"
 kind = "harness"
-version = "1.0.0"
+version = "1.1.0"
 description = "Google Antigravity's ACP server: the agent harness the cockpit drives."
 
 [tool]
 name = "agy_acp_server"
 version = "1.1.1"
 supports = ">=1.1.0, <1.2.0"
-# The server has no version command (it reports its version in the ACP
-# handshake), so what was installed is what's recorded.
+
+# The server has no version command: it's started and asked over ACP, and
+# answers with its version (`agy_acp_server_1.1.1`). Emulated (below) it
+# takes a while to answer.
+[tool.check]
+acp = { timeout_s = 300, version = 'agy_acp_server_(\d+\.\d+\.\d+)' }
 
 # Google publishes Linux (x86_64, arm64) and macOS (arm64) builds.
 [[install]]
 platforms = ["linux-x86_64", "linux-arm64", "macos-arm64"]
+# The harness the server starts for a session (its check, ACP initialize,
+# doesn't start it).
+holds = ["localharness_external"]
 
 [install.vars.linux-x86_64]
 folder = "linux"
@@ -33,6 +40,59 @@ sha256 = "fdfa915652cdb7ba8085cc8fffed072cbe009251aa2c951aabdda07a8c28a189"
 [[install.steps]]
 download = { url = "https://dl.google.com/agy-extensions/releases/{folder}/agy-acp-server-agy_acp_server_{tool_version}-{asset}.zip", sha256 = "{sha256}", unpack = "zip" }
 
+# The developer sandbox: Linux arm64 with 16 KiB pages, where Google's
+# linux-arm64 server aborts (it assumes 4 KiB pages). The x86_64 server runs
+# under QEMU user mode (>= 8.1, whose x86 guest has 4 KiB pages) with an
+# x86_64 glibc; the harness it starts stays native arm64 (a static Go binary
+# that breaks when emulated). Everything lands in the install folder.
+[[install]]
+platforms = ["linux-arm64-16k"]
+holds = ["libexec/localharness_external"]
+
+# The server drops privileges to group `nobody` and aborts without it.
+[[install.steps]]
+ensure_group = { name = "nobody" }
+
+# QEMU user mode, from Debian (static, so it needs nothing else); from the
+# snapshot archive, where a release stays after it leaves the pool.
+[[install.steps]]
+download = { url = "https://snapshot.debian.org/archive/debian/20260905T205002Z/pool/main/q/qemu/qemu-user_10.0.13%2Bds-0%2Bdeb13u1_arm64.deb", sha256 = "c73711af02b97cd5e2667e735d9c06890c57165517110ca4e646c95a7083158d", unpack = "deb", into = "qemu", extract = ["usr/bin/qemu-x86_64"] }
+
+# x86_64 glibc for the emulated server (it links only glibc); from
+# Launchpad's librarian, where a build stays.
+[[install.steps]]
+download = { url = "https://launchpadlibrarian.net/875852022/libc6_2.35-0ubuntu3.15_amd64.deb", sha256 = "79e35256227e16a607c154cdeb8d76ff12d20e31de286ea7fd9ad3b96fe0452d", unpack = "deb", into = "sysroot" }
+
+# The package's loader link is absolute; QEMU's -L prefix needs it relative.
+[[install.steps]]
+link = { path = "sysroot/lib64/ld-linux-x86-64.so.2", target = "../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" }
+
+# The x86_64 server and the native arm64 harness, from the same release,
+# side by side: the server finds the harness next to itself (checked on the
+# sandbox: a session starts and runs it with nothing set).
+[[install.steps]]
+download = { url = "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-agy_acp_server_{tool_version}-linux-x86_64.zip", sha256 = "38f62d01b32deb0907b3d39a71ec301fd36369f6ffd1cf262d4af385177f79df", unpack = "zip", into = "libexec", extract = ["agy_acp_server.par"] }
+
+[[install.steps]]
+download = { url = "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-agy_acp_server_{tool_version}-linux-arm64.zip", sha256 = "ed69e64b308fcb123ab54bf3277bf9cb0d651064f885ea5aab0ff520c7175398", unpack = "zip", into = "libexec", extract = ["localharness_external"] }
+
+# The sandbox's proxy re-signs HTTPS with its own CA, and some of the
+# server's calls trust only the CA bundles packed in the .par: the proxy's
+# CA goes into those. Not behind the proxy: nothing to add. The .par's
+# archive is a fixed-size section of the program, so each bundle keeps its
+# size: the CA first, trailing certificates dropped to make room.
+[[install.steps]]
+system_ca = { store = "/etc/ssl/certs/ca-certificates.crt", subject = "Docker Sandboxes Proxy CA", save_as = "proxy-ca.pem", optional = true }
+
+[[install.steps]]
+patch_archive = { file = "libexec/agy_acp_server.par", members = ["google3/third_party/py/certifi/cacert.pem", "google3/third_party/py/httplib2/cacerts.txt", "google3/net/grpc/python/_cython/_credentials/roots.pem", "google3/third_party/py/grpc/_cython/_credentials/roots.pem"], append = "proxy-ca.pem", optional = true, keep_size = { block = "-----BEGIN CERTIFICATE-----", pad = "#" } }
+
+# QEMU, the sysroot, the server; --uid: started as root, the server would
+# otherwise drop to `nobody`, which can't read the user's ~/.gemini.
+[install.launch]
+program = "{dest}/qemu/usr/bin/qemu-x86_64"
+args = ["-L", "{dest}/sysroot", "-E", "LD_LIBRARY_PATH={dest}/sysroot/lib/x86_64-linux-gnu", "{dest}/libexec/agy_acp_server.par", "--uid={user}"]
+
 [provides]
-executable = "agy_acp_server.par"
+launch = { program = "{dest}/agy_acp_server.par" }
 driver = "antigravity"

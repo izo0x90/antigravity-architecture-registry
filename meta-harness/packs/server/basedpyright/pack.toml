@@ -1,0 +1,29 @@
+[pack]
+name = "basedpyright"
+kind = "server"
+version = "1.0.0"
+description = "basedpyright (Pyright's maintained fork): exact links and types for Python. Installed into its pack folder with npm."
+
+[tool]
+name = "basedpyright"
+version = "1.40.2"
+supports = ">=1.40.0, <2.0.0"
+[tool.check]
+command = "{dest}/node_modules/.bin/basedpyright"
+args = ["--version"]
+version = '^basedpyright (\d+\.\d+\.\d+)'
+
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "macos-arm64", "macos-x86_64"]
+[[install.steps]]
+run = { command = "npm", args = ["install", "--prefix", ".", "--no-save", "--no-audit", "--no-fund", "basedpyright@{tool_version}"] }
+
+[server]
+command = "{dest}/node_modules/.bin/basedpyright-langserver"
+args = ["--stdio"]
+requires = ["textDocument/definition"]
+ready_timeout_s = 60
+request_timeout_s = 30
+# Ready once it has looked ready this long (it announces its loading
+# just after `initialized`).
+settle_ms = 300

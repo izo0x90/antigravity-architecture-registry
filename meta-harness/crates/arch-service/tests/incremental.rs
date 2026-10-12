@@ -5,10 +5,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use arch_graph::{Graph, TypeSystem};
-use arch_service::{ArchitectureService, Limits, MemoryPlans, MemoryStore, open_facts};
+use arch_service::{ArchitectureService, Limits, MemoryPlans, open_facts};
+
+mod common;
 
 fn sample() -> PathBuf {
-    let root = tempfile::tempdir().unwrap().keep().join("sample");
+    let root = common::lasting_dir().join("sample");
     let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample");
     for entry in walk(&from) {
         let to = root.join(entry.strip_prefix(&from).unwrap());
@@ -40,11 +42,11 @@ fn age(root: &Path, at: u64) {
 }
 
 fn open(root: &Path, kept: bool) -> ArchitectureService {
-    let facts: Box<dyn arch_service::FactStore> = match kept {
-        true => Box::new(open_facts(root, &Limits::defaults().unwrap()).unwrap()),
-        false => Box::new(MemoryStore::default()),
+    let facts = match kept {
+        true => open_facts(root, &Limits::defaults().unwrap()).unwrap(),
+        false => arch_service::temporary_facts(&Limits::defaults().unwrap()).unwrap(),
     };
-    ArchitectureService::open(root, code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap()
+    ArchitectureService::open(root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap()
 }
 
 /// The graph as text, in a fixed order.
@@ -56,7 +58,6 @@ fn text(graph: &Graph) -> String {
     format!("{}\n{}", components.join("\n"), relations.join("\n"))
 }
 
-// req: M.12
 #[test]
 fn a_one_file_change_reads_only_that_file_and_gives_the_same_graph_as_reading_everything() {
     let root = sample();
@@ -95,7 +96,6 @@ fn a_one_file_change_reads_only_that_file_and_gives_the_same_graph_as_reading_ev
     assert!(!text(&service.observed().unwrap()).contains("louder"));
 }
 
-// req: M.12
 #[test]
 fn facts_kept_from_the_last_run_give_the_graph_without_reading_a_file() {
     let root = sample();
@@ -110,17 +110,6 @@ fn facts_kept_from_the_last_run_give_the_graph_without_reading_a_file() {
     assert!(root.join(".nah/cache/index.sqlite").is_file());
 }
 
-// req: M.11
-#[test]
-fn the_old_json_cache_is_removed() {
-    let root = sample();
-    std::fs::create_dir_all(root.join(".nah/cache/index")).unwrap();
-    std::fs::write(root.join(".nah/cache/index/src_sa.rs.json"), "{}").unwrap();
-    open(&root, true);
-    assert!(!root.join(".nah/cache/index").exists());
-}
-
-// req: M.12
 #[test]
 fn a_file_changed_just_now_isnt_trusted_by_its_time() {
     let root = sample();

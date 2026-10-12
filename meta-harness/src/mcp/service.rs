@@ -27,6 +27,23 @@ fn pretty(value: &impl serde::Serialize) -> Result<String, ServiceError> {
     serde_json::to_string_pretty(value).map_err(|e| ServiceError::Corrupt(format!("unserializable result: {e}")))
 }
 
+/// A component's detail with each link found in the code saying how it's
+/// known: read from the code's structure, confirmed by the language's
+/// analyzer, or matched by name only.
+fn marked(detail: &arch_graph::ComponentDetail) -> Result<Value, ServiceError> {
+    let mut value = serde_json::to_value(detail).map_err(|e| ServiceError::Corrupt(format!("unserializable result: {e}")))?;
+    for (way, relations) in [("outgoing", &detail.outgoing), ("incoming", &detail.incoming)] {
+        let Some(Value::Array(out)) = value.get_mut(way) else { continue };
+        for (json, relation) in out.iter_mut().zip(relations) {
+            let Some(known) = arch_graph::tree::Evidence::of(relation).map(|e| e.describe()) else { continue };
+            if let Value::Object(fields) = json {
+                fields.insert("known".into(), Value::String(known));
+            }
+        }
+    }
+    Ok(value)
+}
+
 /// What the workflow expects next for each component in a plan.
 pub fn next_steps(plan: &Plan, graph: &Graph, types: &TypeSystem, only: Option<&ComponentId>) -> String {
     let mut out = String::from("\n\nNext:");
@@ -109,30 +126,34 @@ pub fn comments_text(comments: &[Comment], diff: &arch_graph::PlanDiff) -> Strin
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ScopeArgs {
     #[serde(default)]
     scope: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SearchArgs {
     query: String,
     #[serde(default)]
     kind: arch_service::SearchKind,
     #[serde(default)]
-    plan: Option<String>,
+    source: Source,
     #[serde(default)]
     limit: Option<usize>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct IdArgs {
     id: String,
     #[serde(default)]
-    plan: Option<String>,
+    source: Source,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ViewArgs {
     view: String,
     #[serde(default)]
@@ -142,7 +163,7 @@ struct ViewArgs {
     #[serde(default)]
     depth: Option<u32>,
     #[serde(default)]
-    plan: Option<String>,
+    source: Source,
     #[serde(default)]
     full_code: bool,
     #[serde(default)]
@@ -155,13 +176,15 @@ struct ViewArgs {
     context: Option<String>,
 }
 
+// An argument it doesn't know is refused, never ignored.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct NavigateArgs {
     #[serde(default)]
     view: Option<String>,
     /// "code", or "plan:<id>" (absent: leave it as it is).
     #[serde(default)]
-    source: Option<String>,
+    source: Option<Source>,
     #[serde(default)]
     root: Option<String>,
     #[serde(default)]
@@ -198,11 +221,13 @@ struct EditArgs {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PlanArgs {
     plan: String,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ComponentArgs {
     plan: String,
     id: String,
@@ -266,19 +291,6 @@ struct VerifyArgs {
 
 fn plan_id(raw: &str) -> Result<PlanId, ServiceError> {
     PlanId::new(raw).map_err(|e| ServiceError::InvalidOp(e.to_string()))
-}
-
-fn opt_plan(raw: &Option<String>) -> Result<Option<PlanId>, ServiceError> {
-    raw.as_deref().filter(|p| !p.is_empty()).map(plan_id).transpose()
-}
-
-/// "code", or "plan:<id>".
-fn parse_source(raw: &str) -> Result<Source, ServiceError> {
-    match raw.strip_prefix("plan:") {
-        Some(id) => Ok(Source::Plan(plan_id(id)?)),
-        None if raw == "code" => Ok(Source::Code),
-        None => Err(ServiceError::InvalidOp(format!("source '{raw}': use \"code\" or \"plan:<id>\""))),
-    }
 }
 
 impl McpService {
@@ -352,9 +364,8 @@ impl McpService {
             )),
             "search" => {
                 let a: SearchArgs = parse(args)?;
-                let plan = opt_plan(&a.plan)?;
+                let source = a.source.clone();
                 let (found, states) = blocking(&self.arch, move |s| {
-                    let source = Source::from_plan(plan);
                     let found = s.search(&a.query, a.kind, &source, a.limit)?;
                     // Each card's status and stage, as the agent works by them.
                     let graph = s.graph(&source)?;
@@ -384,24 +395,24 @@ impl McpService {
             }
             "inspect" => {
                 let a: IdArgs = parse(args)?;
-                let plan = opt_plan(&a.plan)?;
-                let cid = ComponentId::new(a.id);
-                let (p, c) = (plan.clone(), cid.clone());
-                let detail = blocking(&self.arch, move |s| s.component(&c, &Source::from_plan(p))).await?;
-                let mut out = pretty(&detail)?;
+                let (source, key) = (a.source.clone(), a.id);
+                let detail = blocking(&self.arch, move |s| s.card(&key, &source)).await?;
+                let plan = a.source.plan().cloned();
+                let cid = detail.component.id.clone();
+                let mut out = pretty(&marked(&detail)?)?;
                 match plan.filter(|_| detail.component.status != arch_graph::Status::Existing || detail.alignment != arch_graph::Alignment::Observed) {
                     Some(plan) => out.push_str(&self.steps(plan, Some(cid)).await?),
-                    None => out.push_str("\n\nNext: view its neighborhood (view name=calls roots=[id]), or reference it in a plan you're writing (plan_edit op=reference)."),
+                    None => out.push_str("\n\nNext: view its neighborhood (view view=calls root=<id>), or reference it in a plan you're writing (plan_edit op=reference)."),
                 }
                 Ok(out)
             }
             "view" => {
                 let a: ViewArgs = parse(args)?;
-                let plan = opt_plan(&a.plan)?;
+                let plan = a.source.plan().cloned();
                 let view = arch_graph::tree::ViewKind::from_name(&a.view).ok_or_else(|| ServiceError::InvalidOp(format!("view '{}': use contains, calls or data_flow", a.view)))?;
                 let request = arch_graph::tree::TreeRequest {
                     view,
-                    source: Source::from_plan(plan.clone()),
+                    source: a.source,
                     root: a.root,
                     way: a.way.unwrap_or_default(),
                     depth: a.depth,
@@ -412,7 +423,7 @@ impl McpService {
                 let (expand, levels, context) = (a.expand, a.levels.unwrap_or(1), a.context);
                 let mut out = blocking(&self.arch, move |s| {
                     let tree = match (expand, context) {
-                        (Some(card), _) => s.expand(&request, &card, levels)?,
+                        (Some(card), _) => s.expand(&request, &card, levels)?.added(),
                         (None, Some(card)) => s.context(&request, &card)?,
                         (None, None) => s.tree(&request)?,
                     };
@@ -428,7 +439,7 @@ impl McpService {
             "navigate" => {
                 let a: NavigateArgs = parse(args)?;
                 let view = a.view.as_deref().map(|v| arch_graph::tree::ViewKind::from_name(v).ok_or_else(|| ServiceError::InvalidOp(format!("view '{v}': use contains, calls or data_flow")))).transpose()?;
-                let request = ViewRequest { view, source: a.source.as_deref().map(parse_source).transpose()?, root: a.root, way: a.way, depth: a.depth, select: a.select };
+                let request = ViewRequest { view, source: a.source, root: a.root, way: a.way, depth: a.depth, select: a.select };
                 blocking(&self.arch, move |s| s.request_view(request, Requester::Agent)).await?;
                 Ok("The user's graph now shows it (they can go back).\n\nNext: explain what they're looking at, or continue with the plan.".into())
             }

@@ -90,6 +90,14 @@ impl PartialEq for CodeAnchor {
     }
 }
 
+impl CodeAnchor {
+    /// The same anchor as last seen too: its place in the file, kind and hash
+    /// (`==` asks only whether it names the same thing).
+    pub fn identical(&self, other: &Self) -> bool {
+        self == other && self.span == other.span && self.syntax_kind == other.syntax_kind && self.content_hash == other.content_hash
+    }
+}
+
 impl Eq for CodeAnchor {}
 
 /// Where a planned component is meant to go.
@@ -119,14 +127,12 @@ mod tests {
         }
     }
 
-    // req: P2.3
     #[test]
     fn anchors_are_identified_by_symbol_not_span() {
         assert_eq!(anchor("crate::run", 3), anchor("crate::run", 40), "same symbol, code moved");
         assert_ne!(anchor("crate::run", 3), anchor("crate::stop", 3));
     }
 
-    // req: P2.3
     #[test]
     fn repo_paths_are_normalized_and_confined_to_the_repo() {
         assert_eq!(RepoPath::new("./src\\lib.rs").unwrap().as_str(), "src/lib.rs");

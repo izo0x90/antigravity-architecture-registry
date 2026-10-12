@@ -9,7 +9,11 @@ use arch_graph::{
     Requester, Severity, Signature, Stage, Status, TypeSystem, ViewRequest,
 };
 use code_analyzer::CodeRules;
-use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, PlanRepository, ServiceError};
+use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, ServiceError};
+
+mod common;
+
+use common::Findings;
 
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
@@ -45,7 +49,7 @@ fn repo_with(rules_toml: &str, setup: impl FnOnce(ArchitectureService) -> Archit
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("sample");
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample"), &root);
-    let (packs, types) = (code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap());
+    let (packs, types) = (common::shipped_packs(), TypeSystem::defaults().unwrap());
     let mut rules = CodeRules::defaults(&packs, &types).unwrap();
     rules.add_toml(rules_toml, &packs, &types).unwrap();
     let service = ArchitectureService::open(
@@ -53,7 +57,7 @@ fn repo_with(rules_toml: &str, setup: impl FnOnce(ArchitectureService) -> Archit
         packs,
         types,
         Box::new(FsPlans::new(&root).unwrap()),
-        Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),
+        arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap(),
     )
     .unwrap()
     .with_rules(rules);
@@ -109,7 +113,6 @@ fn append(r: &Repo, file: &str, text: &str) {
     write(r, file, &current);
 }
 
-// req: P3.5
 #[test]
 fn service_merges_code_and_plans_and_announces_changes() {
     let r = repo();
@@ -125,7 +128,6 @@ fn service_merges_code_and_plans_and_announces_changes() {
     assert!(events.iter().any(|e| matches!(e, ArchEvent::Changed { reason: ChangeReason::PlanEdited, components, .. } if components.contains(&id("sample::validate")))));
 }
 
-// req: P4.7
 #[test]
 fn ingestion_is_incremental_and_follows_deletes_and_gitignore() {
     let r = repo();
@@ -149,7 +151,6 @@ fn ingestion_is_incremental_and_follows_deletes_and_gitignore() {
     assert!(r.service.observed().unwrap().component(&id("sample::run")).is_some());
 }
 
-// req: P4.11
 #[test]
 fn referenced_components_and_subtrees_stay_existing_with_real_anchors() {
     let r = repo();
@@ -169,7 +170,6 @@ fn referenced_components_and_subtrees_stay_existing_with_real_anchors() {
     assert!(matches!(err, ServiceError::InvalidOp(_)));
 }
 
-// req: P5.1
 #[test]
 fn plan_operations_validate_inputs_and_reject_bad_ones() {
     let r = repo();
@@ -218,7 +218,7 @@ fn plan_operations_validate_inputs_and_reject_bad_ones() {
 
 /// Saves a plan as-is (bypassing operations) to test checks on bad input.
 fn save_raw(r: &Repo, plan: &Plan) {
-    FsPlans::new(&r.root).unwrap().save(plan).unwrap();
+    common::put_plan(&r.service, &r.root, plan);
 }
 
 fn planned(symbol: &str, file: &str, parent: Option<&str>) -> arch_graph::Component {
@@ -238,7 +238,6 @@ fn planned(symbol: &str, file: &str, parent: Option<&str>) -> arch_graph::Compon
     }
 }
 
-// req: P5.3
 #[test]
 fn dangling_references_are_reported_with_ids_and_referrers() {
     let r = repo();
@@ -256,7 +255,6 @@ fn dangling_references_are_reported_with_ids_and_referrers() {
     assert!(dangling.iter().any(|m| m.contains("rust:sample::removed")));
 }
 
-// req: P5.7
 #[test]
 fn proposed_locations_are_checked() {
     let r = repo();
@@ -279,7 +277,6 @@ fn proposed_locations_are_checked() {
     assert!(!report.findings.iter().any(|f| f.component() == Some(&id("sample::fine"))), "{report:?}");
 }
 
-// req: P5.12
 #[test]
 fn findings_have_stable_codes_and_order() {
     let r = repo();
@@ -300,7 +297,6 @@ fn findings_have_stable_codes_and_order() {
     assert_eq!(report, r.service.validate(&pid("rep")).unwrap(), "deterministic");
 }
 
-// req: P5.14
 #[test]
 fn only_users_approve_and_only_legal_checked_moves() {
     let r = repo();
@@ -325,7 +321,6 @@ fn only_users_approve_and_only_legal_checked_moves() {
     assert!(err.to_string().contains("can't be approved yet"), "{err}");
 }
 
-// req: P5.16
 #[test]
 fn new_work_must_touch_existing_code_unless_greenfield() {
     let r = repo();
@@ -340,7 +335,6 @@ fn new_work_must_touch_existing_code_unless_greenfield() {
     assert!(!codes(&r).contains(&FindingCode::MissingTouchPoint));
 }
 
-// req: P5.17
 #[test]
 fn contract_slice_carries_real_signatures_and_neighbors() {
     let r = repo();
@@ -370,7 +364,6 @@ fn approved_validate(r: &Repo, plan: &str) {
     r.service.approve(&pid(plan), &id("sample::validate"), Stage::PlanApproved, &user()).unwrap();
 }
 
-// req: P6.1
 #[test]
 fn verification_finds_the_component_or_reports_moved_and_missing() {
     let r = repo();
@@ -387,7 +380,6 @@ fn verification_finds_the_component_or_reports_moved_and_missing() {
     assert_eq!(moved.at.as_ref().unwrap().file.as_str(), "src/util.rs");
 }
 
-// req: P6.12
 #[test]
 fn project_code_rules_report_in_checks_and_block_verification() {
     let r = repo_with_rules(
@@ -420,7 +412,6 @@ message = "log through the logger"
     assert_eq!(v.advanced_to, Some(Stage::Implemented), "{:?}", v.report);
 }
 
-// req: P6.2
 #[test]
 fn planned_calls_must_happen_inside_the_body() {
     let r = repo();
@@ -436,10 +427,9 @@ fn planned_calls_must_happen_inside_the_body() {
     assert_eq!(v.advanced_to, Some(Stage::Implemented));
     let graph: std::sync::Arc<Graph> = r.service.graph(&arch_graph::Source::Plan(pid("c"))).unwrap();
     let calls: Vec<_> = graph.outgoing(&id("sample::validate"), Some(RelationKind::Calls)).collect();
-    assert!(calls.iter().any(|c| c.target == id("sample::store::Store::new") && c.provenance.is_both() && !c.sites.is_empty()), "call site recorded");
+    assert!(calls.iter().any(|c| c.target == id("sample::store::Store::new") && (c.provenance.planned && c.provenance.observed) && !c.sites.is_empty()), "call site recorded");
 }
 
-// req: P6.3
 #[test]
 fn signatures_are_compared_with_the_plan() {
     let r = repo();
@@ -451,7 +441,6 @@ fn signatures_are_compared_with_the_plan() {
     assert!(msg.contains("named 'text'") && msg.contains("planned type &str, code has String") && msg.contains("returns: planned bool, code has u8"), "{msg}");
 }
 
-// req: P6.10
 #[test]
 fn skeleton_verifies_with_placeholders_and_blocks_implemented_until_they_are_gone() {
     let r = repo();
@@ -547,7 +536,6 @@ fn implemented_chain(r: &Repo, plan: &str) {
     }
 }
 
-// req: P6.5
 #[test]
 fn breaking_one_hop_of_a_chain_reports_exactly_that_hop() {
     let r = repo();
@@ -615,7 +603,6 @@ fn reviewers(text: &str) -> arch_service::ReviewerCatalog {
     arch_service::ReviewerCatalog::from_toml(text).unwrap()
 }
 
-// req: P6.6
 #[test]
 fn only_a_clean_verification_moves_a_component_to_implemented() {
     let runner = Arc::new(FakeRunner { failing: vec!["--strict".into()], ..Default::default() });
@@ -655,7 +642,6 @@ fn only_a_clean_verification_moves_a_component_to_implemented() {
     assert_eq!(stage_of(&r, "g", "sample::validate"), Stage::Implemented);
 }
 
-// req: P6.7
 #[test]
 fn validation_tools_expand_targets_apply_overrides_and_report() {
     let catalog = arch_service::ToolCatalog::from_toml(
@@ -724,7 +710,6 @@ impl arch_service::ToolRunner for Recording {
     }
 }
 
-// req: P6.8
 #[test]
 fn changing_a_file_reverifies_only_the_components_it_affects() {
     let r = repo();
@@ -799,7 +784,6 @@ fn changing_a_file_reverifies_only_the_components_it_affects() {
     assert_eq!(stage_of(&r, "w", "sample::util::quiet"), Stage::PlanApproved);
 }
 
-// req: P6.11
 #[test]
 fn reviewers_run_by_category_and_blocking_findings_block() {
     let provider = Arc::new(FakeReviewer { notes: vec![arch_service::ReviewNote { message: "step 2 is skipped".into(), blocking: true, line: Some(9) }], ..Default::default() });
@@ -863,7 +847,6 @@ rules = [{ rule = "max_lines", limit = 1 }]
     assert_eq!(v.report.findings.iter().map(|f| f.severity).collect::<Vec<_>>(), vec![Severity::Warning]);
 }
 
-// req: I.1, I.2, I.3, I.4
 #[test]
 fn indexing_reports_progress_and_files_changed_since_they_were_read() {
     let r = repo();
@@ -881,7 +864,7 @@ fn indexing_reports_progress_and_files_changed_since_they_were_read() {
     std::fs::write(&util, std::fs::read_to_string(&util).unwrap() + "\npub fn later() {}\n").unwrap();
     assert!(r.service.is_stale("src/util.rs").unwrap(), "content no longer matches the index");
     assert!(r.service.file_view("src/util.rs", &arch_graph::Source::Code).unwrap().stale);
-    r.service.mark_stale(&[util.clone()]).unwrap();
+    r.service.mark_stale(std::slice::from_ref(&util)).unwrap();
     assert_eq!(r.service.index_status().stale, vec!["src/util.rs".to_owned()]);
     assert!(!r.service.is_stale("src/lib.rs").unwrap());
     // What's shown meanwhile is the last good state (nothing waits).
@@ -897,7 +880,6 @@ fn indexing_reports_progress_and_files_changed_since_they_were_read() {
     assert_eq!(r.service.index_status().last.unwrap().parsed, 3);
 }
 
-// req: M.2
 #[test]
 fn code_shows_no_plan_and_a_plan_shows_only_itself() {
     let r = repo();
@@ -933,7 +915,6 @@ fn code_shows_no_plan_and_a_plan_shows_only_itself() {
     assert!(matches!(r.service.graph(&arch_graph::Source::Plan(pid("other"))), Err(ServiceError::NotFound(_))));
 }
 
-// req: M.3
 #[test]
 fn reads_share_the_graph_and_a_plan_overlay_is_rebuilt_only_when_it_changes() {
     let r = repo();

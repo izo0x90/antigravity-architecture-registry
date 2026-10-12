@@ -5,7 +5,6 @@ mod common;
 use common::{Mcp, fixture_architecture, http, spawn_app_with};
 use serde_json::{Value, json};
 
-// req: P3.6
 #[tokio::test]
 async fn the_old_registry_imports_through_rest_and_mcp() {
     let arch = fixture_architecture();

@@ -8,6 +8,8 @@ use arch_graph::{ComponentId, FindingCode, Param, PlanId, RelationKind, Severity
 use code_analyzer::CodeRules;
 use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp};
 
+mod common;
+
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for e in std::fs::read_dir(from).unwrap() {
@@ -31,9 +33,9 @@ fn repo() -> Repo {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("sample");
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample"), &root);
-    let (packs, types) = (code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap());
+    let (packs, types) = (common::shipped_packs(), TypeSystem::defaults().unwrap());
     let rules = CodeRules::defaults(&packs, &types).unwrap();
-    let s = ArchitectureService::open(&root, packs, types, Box::new(FsPlans::new(&root).unwrap()), Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()))
+    let s = ArchitectureService::open(&root, packs, types, Box::new(FsPlans::new(&root).unwrap()), arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap())
         .unwrap()
         .with_rules(rules);
     s.ingest(&root).unwrap();
@@ -100,7 +102,6 @@ fn body(code: &str) -> String {
 
 const CALLS: &str = "    crate::store::Store::new();";
 
-// req: P6.10
 #[test]
 fn placeholders_are_found_however_they_are_spelled() {
     assert!(attempt(&body(&format!("{CALLS}\n    !input.is_empty()")), &[]).is_empty(), "the honest version passes");
@@ -127,7 +128,6 @@ fn placeholders_are_found_however_they_are_spelled() {
     }
 }
 
-// req: P6.2
 #[test]
 fn calls_in_code_that_never_runs_dont_count() {
     let missing = |name: &str, code: &str| {
@@ -151,14 +151,12 @@ fn calls_in_code_that_never_runs_dont_count() {
     }
 }
 
-// req: P6.3
 #[test]
 fn signature_qualifiers_include_the_abi() {
     let errors = attempt(&format!("\npub extern \"C\" fn validate(input: &str) -> bool {{\n{CALLS}\n    !input.is_empty()\n}}\n"), &[]);
     assert_eq!(errors, vec![FindingCode::SignatureMismatch]);
 }
 
-// req: P6.6
 #[test]
 fn a_design_change_revokes_the_plan_approval_of_what_builds_on_it() {
     let r = repo();
@@ -200,7 +198,6 @@ fn a_design_change_revokes_the_plan_approval_of_what_builds_on_it() {
     assert!(plan.plan_approved(&id("sample::validate")), "code falling back doesn't revoke the design");
 }
 
-// req: P6.8
 #[test]
 fn helpers_regressing_after_implemented_are_caught_on_change() {
     let r = approved();

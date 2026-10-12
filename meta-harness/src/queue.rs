@@ -127,10 +127,6 @@ impl QueueRunner {
         runner
     }
 
-    pub fn config(&self) -> &QueueConfig {
-        &self.config
-    }
-
     fn handle(&self, plan: &PlanId) -> Arc<Running> {
         lock(&self.queues)
             .entry(plan.clone())

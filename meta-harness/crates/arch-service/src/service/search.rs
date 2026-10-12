@@ -1,13 +1,14 @@
 //! One search for symbols, files and lines. Symbols are matched with the
 //! same matcher the cockpit uses (`arch_search::rank`); files and lines
-//! come from fff-search over the repo. Every hit says which card it stands
+//! are found with fff-search (`arch_search::RepoFiles`), less what the one
+//! definition of ignored leaves out. Every hit says which card it stands
 //! for, so picking it can make that card the root.
 
 use std::path::PathBuf;
 use std::sync::PoisonError;
 
 use arch_graph::{Component, Graph, Source};
-use arch_search::{Found, Hit, RepoFiles, SearchKind, TextLimits};
+use arch_search::{Found, Hit, RepoFiles, Search, SearchKind, TextLimits};
 
 use super::ArchitectureService;
 use crate::{ServiceError, checks};
@@ -18,12 +19,12 @@ impl ArchitectureService {
     /// when none is given, never more than the configured most).
     pub fn search(&self, query: &str, kind: SearchKind, source: &Source, limit: Option<usize>) -> Result<Found, ServiceError> {
         self.timed("search", format!("{} {query:?} ({source})", kind.name()), |t| {
-            let limits = &self.limits.search;
+            let limits = &self.core.limits.search;
             let limit = limit.unwrap_or(limits.results).clamp(1, limits.most);
             let graph = t.stage("source", || self.graph(source))?;
             let mut found = t.stage(kind.name(), || -> Result<Found, ServiceError> {
                 Ok(match kind {
-                    SearchKind::Symbols => self.find_symbols(query, &graph, limit),
+                    SearchKind::Symbols => self.find_symbols(&self.symbol_list(&graph), query, &graph, limit),
                     SearchKind::Files => self.find_files(query, &graph, limit)?,
                     SearchKind::Text => self.find_lines(query, &graph, limit)?,
                 })
@@ -35,28 +36,17 @@ impl ArchitectureService {
         })
     }
 
-    fn find_symbols(&self, query: &str, graph: &Graph, limit: usize) -> Found {
-        let components: Vec<&Component> = graph.components().collect();
-        // A qualified query (`service::search`, `a/b.rs`) is matched against
-        // the whole symbol and file; a plain one against names.
-        let qualified = query.contains("::") || query.contains('/') || query.contains('.');
-        let haystacks: Vec<String> = components
-            .iter()
-            .map(|c| match qualified {
-                true => format!("{} {}", symbol(c), c.file().map(|f| f.as_str()).unwrap_or_default()),
-                false => c.name.clone(),
-            })
-            .collect();
-        let ranked = arch_search::rank(query, &haystacks, arch_search::Matching::shared());
-        let total = ranked.len();
-        let hits = ranked.into_iter().take(limit).map(|r| self.symbol_hit(components[r.index])).collect();
-        Found { hits, total, ..Found::default() }
+    fn find_symbols(&self, list: &super::SymbolList, query: &str, graph: &Graph, limit: usize) -> Found {
+        let found = list.symbols.search(query, limit);
+        let hits = found.found.into_iter().filter_map(|i| graph.component(&list.ids[i])).map(|c| self.symbol_hit(c)).collect();
+        Found { hits, total: found.total, ..Found::default() }
     }
 
     fn find_files(&self, query: &str, graph: &Graph, limit: usize) -> Result<Found, ServiceError> {
         self.with_repo_files(|files| {
-            let (found, total) = files.files(query, limit);
+            let found = files.search(query, limit);
             let hits = found
+                .found
                 .into_iter()
                 .map(|f| {
                     let card = file_card(graph, &f.path);
@@ -72,16 +62,17 @@ impl ArchitectureService {
                     }
                 })
                 .collect();
-            Found { hits, total, ..Found::default() }
+            Found { hits, total: found.total, ..Found::default() }
         })
     }
 
     fn find_lines(&self, query: &str, graph: &Graph, limit: usize) -> Result<Found, ServiceError> {
-        let limits = &self.limits.search;
+        let limits = &self.core.limits.search;
         let text = TextLimits { per_file: limits.text_per_file, budget_ms: limits.text_ms, max_file_bytes: limits.text_max_file_kib * 1024 };
         self.with_repo_files(|files| {
-            let (lines, partial) = files.text(query, limit, &text);
+            let lines = files.lines(text).search(query, limit);
             let hits: Vec<Hit> = lines
+                .found
                 .into_iter()
                 .map(|l| {
                     let inside = line_card(graph, &l.path, l.line);
@@ -106,7 +97,7 @@ impl ArchitectureService {
                     hit
                 })
                 .collect();
-            Found { total: hits.len(), hits, partial, ..Found::default() }
+            Found { total: lines.total, hits, partial: lines.partial, ..Found::default() }
         })
     }
 
@@ -140,17 +131,34 @@ impl ArchitectureService {
         }
         let mut files = self.repo_files.write().unwrap_or_else(PoisonError::into_inner);
         if files.is_none() {
-            *files = Some(RepoFiles::scan(self.root()).map_err(ServiceError::Io)?);
+            let ignores = self.ignores();
+            // Hidden files are searched as fff lists them (CI files, plans);
+            // the rules (`.gitignore`, `.nah/ignore`, ...) still leave out
+            // what they name.
+            let listed = RepoFiles::scan(self.root(), Box::new(move |p| ignores.rules_ignore(p))).map_err(ServiceError::Io)?;
+            *files = Some(listed);
         }
         Ok(use_files(files.as_ref().expect("just listed")))
     }
 
-    /// Tells the file list what changed (paths the walk would skip aside).
+    /// Tells the file list what changed (paths the walk would skip aside;
+    /// a folder that appeared, by the files in it).
     pub(super) fn files_changed(&self, paths: &[PathBuf]) {
         let mut files = self.repo_files.write().unwrap_or_else(PoisonError::into_inner);
-        if let Some(files) = files.as_mut() {
-            let kept: Vec<PathBuf> = paths.iter().filter(|p| !code_analyzer::ignored(self.root(), p)).cloned().collect();
-            files.changed(&kept);
+        if let Some(list) = files.as_mut() {
+            // A folder that appeared: the files in it (fff takes files).
+            let ignores = self.ignores();
+            let mut kept: Vec<PathBuf> = Vec::new();
+            for path in paths {
+                match path.is_dir() {
+                    true => kept.extend(ignores.files(path)),
+                    false => kept.push(path.clone()),
+                }
+            }
+            if let Err(e) = list.changed(&kept) {
+                tracing::warn!("search's file list: {e}");
+                *files = None;
+            }
         }
     }
 
@@ -160,7 +168,7 @@ impl ArchitectureService {
     }
 }
 
-fn symbol(c: &Component) -> &str {
+pub(super) fn symbol(c: &Component) -> &str {
     c.anchor.as_ref().map(|a| a.symbol.as_str()).or(c.proposed.as_ref().map(|p| p.symbol.as_str())).unwrap_or(&c.name)
 }
 

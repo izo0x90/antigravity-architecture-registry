@@ -1,36 +1,40 @@
 //! The graph: one of three views (Contains, Calls, Data flow) as a tree the
 //! server builds and lays out; this side only asks for it and draws it.
 //!
-//! - `request`: where it looks, and the one reducer that changes it.
+//! - `request`: what was asked (view, source, root, way, depth, the
+//!   branches opened and closed) and the back trail; the one way it changes.
+//! - `cards`: the cards held, as the server sends them and changes them.
 //! - `draw`: the canvas (cards, lines, the pills on the selection's lines),
 //!   only what's on screen.
-//! - `select`: the selection, what's tied to it, and moving between cards.
+//! - `select`: the selection, what's tied to it, and the universal moves
+//!   between cards (go in, back, folds, search and hints over cards).
 //! - `details`: the details card for the selection, fetched when selected.
+//! - `source`: the Code/plan picker and its "show in full code" switch.
 //! - `actions`: the graph's actions (its keys live in the keymap).
-//! - `navigable`: the universal keys (moves, go in, back, folds, search,
-//!   hints, the jump list).
+//! - this file: the state, and the one place answers are asked for and
+//!   taken in (`tick`).
 //!
 //! Nothing changes on screen unless the user (or the agent) did something.
 
 pub(crate) mod actions;
+mod cards;
 mod details;
 mod draw;
-mod find;
-mod navigable;
 pub mod request;
 mod select;
+mod source;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use arch_graph::tree::{Card, Tree, TreeConfig, ViewKind};
-use arch_graph::{ArchEvent, ChangeReason, Component, ComponentDetail, ComponentId, PlanId, Requester, ViewRequest};
+use arch_graph::{ArchEvent, ChangeReason, Component, ComponentDetail, ComponentId, PlanId, Requester, Source, ViewRequest};
 use egui::{Pos2, Rect, Vec2};
 
 pub use request::{Nav, NavChange};
 
 use crate::graph_config::GraphUi;
-use crate::nav::{Navigable, Place};
+use crate::nav::Place;
 use crate::net::{NetClient, NetResult};
 use crate::touch::Gestures;
 
@@ -73,7 +77,9 @@ enum Reply {
     Config(NetResult<TreeConfig>),
     Plans(NetResult<Vec<arch_graph::Plan>>),
     Tree(u64, Box<NetResult<Tree>>),
-    Card(String, Option<PlanId>, Box<NetResult<ComponentDetail>>),
+    /// What opening a card adds (for the tree of that generation).
+    Expanded(u64, Box<NetResult<arch_graph::tree::Expanded>>),
+    Card(String, Source, Box<NetResult<ComponentDetail>>),
     Found(u64, arch_search::SearchKind, Box<NetResult<arch_search::Found>>),
 }
 
@@ -92,22 +98,18 @@ pub(crate) enum Detail {
     Failed(String),
 }
 
-/// Where the user was before going into a card: back returns there.
-#[derive(Clone, Debug, PartialEq)]
-struct Step {
-    nav: Nav,
-    selection: Option<String>,
-}
-
 pub struct GraphState {
     /// The views' settings and layout sizes (from the server).
     pub(crate) config: Option<TreeConfig>,
     config_requested: bool,
     plans: Vec<PlanId>,
     plans_stale: bool,
+    /// A tree under this plan wasn't found: the plans are asked for again,
+    /// and only if it's not among them does the view say it's gone.
+    plan_unsure: Option<PlanId>,
     pub nav: Nav,
     /// Where going in started, latest last (back pops it).
-    trail: Vec<Step>,
+    trail: Vec<request::Step>,
     /// The tree on screen (the only graph data this side holds).
     pub tree: Option<Tree>,
     /// Card index by key.
@@ -119,13 +121,16 @@ pub struct GraphState {
     /// A selection the tree on screen doesn't have (it comes back with one that does).
     remembered: Option<String>,
     /// Details by card and plan, fetched for the selection.
-    details: BTreeMap<(String, Option<PlanId>), Detail>,
+    pub(crate) details: BTreeMap<(String, Source), Detail>,
     /// Files changed since they were indexed (their cards are marked).
     pub stale_files: Vec<String>,
     /// Review badges: changed since the last review, unaddressed comments.
     pub marks: BTreeMap<ComponentId, crate::review::NodeMark>,
     load: Load,
     stale: bool,
+    /// A card opened whose branch is to be fetched and merged in, and the
+    /// request the tree held answers.
+    expanding: Option<(String, arch_graph::tree::TreeRequest)>,
     generation: u64,
     camera: Camera,
     /// Fit the camera to the tree once it arrives (after the user moved).
@@ -160,9 +165,11 @@ pub struct GraphState {
     /// Something the graph has to say (a branch that didn't fit, a plan gone).
     pub note: Option<String>,
     /// Finding anything in the code (typed in the palette).
-    pub(crate) find: find::Find,
+    pub(crate) find: actions::Find,
     /// A toolbar button whose action needs input: open the palette at it.
     palette_request: Option<String>,
+    /// Card texts as they fit their cards, at the camera's zoom.
+    fitted: std::cell::RefCell<draw::Fitted>,
 }
 
 impl Default for GraphState {
@@ -172,6 +179,7 @@ impl Default for GraphState {
             config_requested: false,
             plans: Vec::new(),
             plans_stale: true,
+            plan_unsure: None,
             nav: Nav::default(),
             trail: Vec::new(),
             tree: None,
@@ -184,6 +192,7 @@ impl Default for GraphState {
             marks: BTreeMap::new(),
             load: Load::Idle,
             stale: true,
+            expanding: None,
             generation: 0,
             camera: Camera::default(),
             fit: true,
@@ -206,8 +215,9 @@ impl Default for GraphState {
             saved_view: None,
             legend_open: false,
             note: None,
-            find: find::Find::default(),
+            find: actions::Find::default(),
             palette_request: None,
+            fitted: Default::default(),
         }
     }
 }
@@ -231,7 +241,7 @@ impl GraphState {
 
     /// A component this side knows in full (fetched for a selection).
     pub fn component(&self, id: &ComponentId) -> Option<&Component> {
-        match self.details.get(&(id.0.clone(), self.nav.plan.clone())) {
+        match self.details.get(&(id.0.clone(), self.nav.source.clone())) {
             Some(Detail::Ready(d)) if d.component.id == *id => Some(&d.component),
             _ => self.details.values().find_map(|d| match d {
                 Detail::Ready(d) if d.component.id == *id => Some(&d.component),
@@ -243,7 +253,7 @@ impl GraphState {
     /// The selection's component, once its details are in.
     pub fn selected(&self) -> Option<&Component> {
         let key = self.selection.as_ref()?;
-        match self.details.get(&(key.clone(), self.nav.plan.clone())) {
+        match self.details.get(&(key.clone(), self.nav.source.clone())) {
             Some(Detail::Ready(d)) => Some(&d.component),
             _ => None,
         }
@@ -261,103 +271,6 @@ impl GraphState {
     /// The depth shown now (the view's own when none was picked).
     pub fn depth(&self) -> u32 {
         self.nav.depth.or_else(|| self.tree.as_ref().and_then(|t| t.request.depth)).or_else(|| self.config.as_ref().map(|c| c.view(self.nav.view).depth)).unwrap_or(0)
-    }
-
-    /// The one way where the graph looks changes: applies the change and
-    /// fetches the tree again if it changed. A user's move ends the agent's.
-    pub fn navigate(&mut self, change: NavChange) {
-        let user = !matches!(change, NavChange::Request(_));
-        let before = self.nav.clone();
-        if let NavChange::GoIn(card) = &change
-            && self.nav.root.as_ref() != Some(card)
-        {
-            self.trail.push(Step { nav: self.nav.clone(), selection: self.selection.clone() });
-            self.pending_select = Some(card.clone());
-        }
-        request::apply(&mut self.nav, change);
-        if self.nav != before {
-            self.stale = true;
-            self.refit = true;
-            self.note = None;
-        }
-        if user {
-            self.agent = None;
-        }
-    }
-
-    /// Back: to where the last "go in" started, else out to what holds the
-    /// root (or the view's starting points). False when there's nowhere back.
-    pub fn back(&mut self) -> bool {
-        if let Some(step) = self.trail.pop() {
-            self.nav = step.nav;
-            self.pending_select = step.selection;
-            self.stale = true;
-            self.refit = true;
-            self.agent = None;
-            return true;
-        }
-        let Some(root) = self.nav.root.clone() else { return false };
-        let holder = self.tree.as_ref().and_then(|t| t.path.last()).map(|c| c.key.clone());
-        let change = match (self.nav.view, holder) {
-            (ViewKind::Contains, Some(holder)) => NavChange::GoIn(holder),
-            _ => NavChange::Top,
-        };
-        self.navigate(change);
-        self.trail.clear();
-        self.pending_select = Some(root);
-        true
-    }
-
-    /// The roots gone through to get here, oldest first (each one a way back).
-    pub fn trail_roots(&self) -> Vec<Option<String>> {
-        self.trail.iter().map(|s| s.nav.root.clone()).collect()
-    }
-
-    /// Back to the `index`th step of the trail.
-    pub fn back_to(&mut self, index: usize) {
-        if index >= self.trail.len() {
-            return;
-        }
-        let step = self.trail[index].clone();
-        self.trail.truncate(index);
-        self.nav = step.nav;
-        self.pending_select = step.selection;
-        self.stale = true;
-        self.refit = true;
-        self.agent = None;
-    }
-
-    /// A jump made with the pointer or a finger: remembers where it left
-    /// from for the jump list, then navigates.
-    fn pointer_jump(&mut self, change: NavChange) {
-        if self.jumped.is_none() {
-            self.jumped = Some(self.place());
-        }
-        self.navigate(change);
-    }
-
-    pub fn select(&mut self, key: Option<String>) {
-        if key.is_some() {
-            self.drawer_open = true;
-        }
-        self.selection = key;
-        self.remembered = None;
-    }
-
-    /// Selects a component: here if the tree has it; otherwise the view
-    /// goes into it (data flow shows calls for it).
-    pub fn reveal(&mut self, id: ComponentId) {
-        let key = id.0.clone();
-        if self.card(&key).is_some() {
-            self.select(Some(key.clone()));
-            self.reveal_after_fit = Some(key);
-            return;
-        }
-        if self.nav.view == ViewKind::DataFlow {
-            self.navigate(NavChange::View { view: ViewKind::Calls, root: None });
-        }
-        self.navigate(NavChange::GoIn(key.clone()));
-        self.pending_select = Some(key);
     }
 
     pub fn on_event(&mut self, event: &ArchEvent) {
@@ -465,33 +378,17 @@ impl GraphState {
         }
     }
 
-    /// Asks for the selection's details (for each source it's compared in).
-    fn want_details(&mut self, net: &NetClient, ctx: &egui::Context) {
-        let Some(card) = self.selected_card().cloned() else { return };
-        if card.component.is_none() {
+    /// Asks the server for each kind (symbols, files, lines) at once.
+    fn send_find(&mut self, net: &NetClient, ctx: &egui::Context) {
+        if !std::mem::take(&mut self.find.send) {
             return;
         }
-        let mut wanted = vec![self.nav.plan.clone()];
-        // A planned change: the code as it is too, to show both.
-        if self.nav.plan.is_some() && matches!(card.mark, arch_graph::tree::Mark::Changed | arch_graph::tree::Mark::Mismatch) {
-            wanted.push(None);
+        let limits = &self.ui.find;
+        use arch_search::SearchKind;
+        for (kind, limit) in [(SearchKind::Symbols, limits.symbols), (SearchKind::Files, limits.files), (SearchKind::Text, limits.text)] {
+            let (inbox, asked) = (self.inbox.clone(), self.find.asked);
+            net.search(&self.find.query, kind, &self.nav.source, limit, ctx.clone(), move |r| push(&inbox, Reply::Found(asked, kind, Box::new(r))));
         }
-        for plan in wanted {
-            let key = (card.key.clone(), plan.clone());
-            if self.details.contains_key(&key) {
-                continue;
-            }
-            if self.details.len() >= self.ui.details_kept.max(1) {
-                self.details.clear();
-            }
-            self.details.insert(key, Detail::Loading);
-            let (inbox, k, asked) = (self.inbox.clone(), card.key.clone(), plan.clone());
-            net.graph_card(&card.key, asked.as_ref(), ctx.clone(), move |r| push(&inbox, Reply::Card(k, plan, Box::new(r))));
-        }
-    }
-
-    pub(crate) fn detail(&self, key: &str, plan: Option<&PlanId>) -> Option<&Detail> {
-        self.details.get(&(key.to_owned(), plan.cloned()))
     }
 
     /// Fetches what's missing or stale and applies replies. Call every frame.
@@ -502,18 +399,28 @@ impl GraphState {
                 Reply::Config(Ok(config)) => self.config = Some(config),
                 Reply::Config(Err(e)) => {
                     self.config_requested = false;
-                    self.load = Load::Failed(e);
+                    self.load = Load::Failed(e.into());
                 }
-                Reply::Plans(Ok(plans)) => self.plans = plans.into_iter().map(|p| p.id).collect(),
+                Reply::Plans(Ok(plans)) => self.plans_arrived(plans.into_iter().map(|p| p.id).collect()),
                 Reply::Plans(Err(_)) => {}
-                Reply::Card(key, plan, detail) => {
+                Reply::Card(key, source, detail) => {
                     let detail = match *detail {
                         Ok(d) => Detail::Ready(Box::new(d)),
-                        Err(e) => Detail::Failed(e),
+                        Err(e) => Detail::Failed(e.into()),
                     };
-                    self.details.insert((key, plan), detail);
+                    self.details.insert((key, source), detail);
                 }
                 Reply::Found(asked, kind, found) => self.found(asked, kind, *found),
+                Reply::Expanded(generation, change) => {
+                    if generation != self.generation {
+                        continue;
+                    }
+                    match *change {
+                        Ok(change) => self.take_change(change),
+                        // Couldn't be had alone: the whole tree, again.
+                        Err(_) => self.stale = true,
+                    }
+                }
                 Reply::Tree(generation, tree) => {
                     if generation != self.generation {
                         continue;
@@ -542,24 +449,50 @@ impl GraphState {
             let (inbox, generation) = (self.inbox.clone(), self.generation);
             net.graph_tree(&self.nav.request(), ctx.clone(), move |r| push(&inbox, Reply::Tree(generation, Box::new(r))));
         }
+        if let Some((card, held)) = self.expanding.take()
+            && self.tree.is_some()
+        {
+            let (inbox, generation) = (self.inbox.clone(), self.generation);
+            net.graph_expand(&held, &card, 1, ctx.clone(), move |r| push(&inbox, Reply::Expanded(generation, Box::new(r))));
+        }
         self.want_details(net, ctx);
         self.send_find(net, ctx);
     }
 
-    /// A tree that couldn't be had: a plan that's gone shows the code, a
-    /// root that isn't there shows the view's starting points; both say so.
-    fn failed(&mut self, error: String) {
-        let missing = error.to_lowercase().contains("not found");
-        if missing && let Some(plan) = self.nav.plan.clone() {
-            self.plans_stale = true;
-            self.navigate(NavChange::Plan(None));
-            self.note = Some(format!("Plan {plan} isn't there any more: showing the code."));
-            return;
+    /// The answer shown, when the server cut it or took longer than its
+    /// limit: a few words for the status line, and more on hover.
+    pub fn answer_status(&self) -> Option<(String, String)> {
+        let tree = self.tree.as_ref()?;
+        let mut words = Vec::new();
+        let mut more = Vec::new();
+        if let Some(cut) = &tree.cut {
+            let why = if cut.reason == arch_graph::tree::CutReason::Time { "out of time" } else { "too big" };
+            words.push(format!("cut ({why})"));
+            more.push(format!("The graph shows {} of {} levels ({} more left out). Go into a card, or show fewer levels.", cut.shown, cut.asked, cut.hidden));
         }
+        if let Some(ms) = tree.slow_ms {
+            words.push(format!("slow: {ms} ms"));
+            more.push("The server took longer than its limit to build it. Each stage's time is at /api/perf.".to_owned());
+        }
+        (!words.is_empty()).then(|| (format!("graph {}", words.join(", ")), more.join("\n")))
+    }
+
+    /// A tree that couldn't be had: a root that isn't there shows the
+    /// view's starting points and says so. Otherwise, under a plan, the
+    /// plans are asked for again (whether it's gone is theirs to say); the
+    /// error shows meanwhile.
+    fn failed(&mut self, error: crate::net::NetError) {
+        // The server's 404: there's no such thing (not a word in its message).
+        let missing = error.not_found();
+        let error = String::from(error);
         if missing && let Some(root) = self.nav.root.clone() {
             self.navigate(NavChange::Top);
             self.note = Some(format!("{root} isn't in this view: showing where it starts."));
             return;
+        }
+        if missing && let Source::Plan(plan) = self.nav.source.clone() {
+            self.plans_stale = true;
+            self.plan_unsure = Some(plan);
         }
         self.load = Load::Failed(error);
     }

@@ -2,11 +2,12 @@
 name = "nah-packs"
 version = "0.1.0"
 edition = "2024"
-description = "Packs: everything the tool installs or reads per language (harnesses, language syntax, indexers) as versioned data, and one generic installer that runs their steps. No tool, URL or path is written in code."
+description = "Packs: everything the tool installs or reads per language (harnesses, language syntax, language servers) as versioned data, and one generic installer that runs their steps. No tool, URL or path is written in code."
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 toml = "1"
+serde_json = "1"
 thiserror = "2.0"
 semver = "1"
 regex = "1"
@@ -17,6 +18,22 @@ tar = "0.4"
 flate2 = "1"
 dirs = "7"
 tracing = "0.1"
+rustix = { version = "1", features = ["param", "process"] }
+ar = "0.9"
+lzma-rs = "0.3"
+ruzstd = "0.8"
+x509-parser = "0.17"
+glob = "0.3"
+libc = "0.2"
+crc32fast = "1"
+tempfile = "3"
+
+[features]
+# Counters and helpers only the tests use.
+testing = []
 
 [dev-dependencies]
+nah-packs = { path = ".", features = ["testing"] }
 tempfile = "3"
+rcgen = "0.14"
+serde_json = "1"

@@ -1,0 +1,17 @@
+[package]
+name = "nah-lsp"
+version = "0.1.0"
+edition = "2024"
+description = "A generic language server client: one process per language, positions as bytes."
+
+[dependencies]
+lsp-types = "0.97"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+libc = "0.2"
+globset = "0.4"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

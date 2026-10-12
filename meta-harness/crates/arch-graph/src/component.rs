@@ -228,6 +228,17 @@ pub struct Component {
 }
 
 impl Component {
+    /// Equal in everything, its anchor's place in the code included (`==`
+    /// compares anchors by what they name).
+    pub fn identical(&self, other: &Component) -> bool {
+        self == other
+            && match (&self.anchor, &other.anchor) {
+                (Some(a), Some(b)) => a.identical(b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+
     /// The location rules:
     /// - anything in the code (existing, modifying, deprecated, implemented)
     ///   has a verified anchor;
@@ -294,7 +305,6 @@ pub(crate) mod tests {
         ProposedLocation { language: "rust".into(), file: RepoPath::new("src/lib.rs").unwrap(), parent: None, symbol: "app::run".into() }
     }
 
-    // req: P2.4
     #[test]
     fn implemented_needs_a_verified_anchor() {
         let mut c = planned("rust:app::run", Stage::Implemented);
@@ -308,7 +318,6 @@ pub(crate) mod tests {
         assert!(existing.check_location().is_err());
     }
 
-    // req: P2.4
     #[test]
     fn approved_plans_and_skeletons_need_a_location() {
         for stage in [Stage::PlanApproved, Stage::Skeleton] {
@@ -320,7 +329,6 @@ pub(crate) mod tests {
         assert!(planned("rust:app::run", Stage::Declared).check_location().is_ok(), "declared may be unplaced");
     }
 
-    // req: P2.4
     #[test]
     fn implemented_with_placeholders_is_rejected() {
         let mut c = planned("rust:app::run", Stage::Implemented);

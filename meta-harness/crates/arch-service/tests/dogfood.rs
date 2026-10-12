@@ -7,16 +7,17 @@ use arch_graph::{ComponentId, RelationKind, TypeSystem};
 use code_analyzer::PackSet;
 use arch_service::{ArchitectureService, MemoryPlans};
 
-// req: P4.10
+mod common;
+
 #[test]
 fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
     let service = ArchitectureService::open(
         &root,
-        code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
+        common::shipped_packs(),
         TypeSystem::defaults().unwrap(),
         Box::new(MemoryPlans::default()),
-        Box::new(arch_service::MemoryStore::default()),
+        arch_service::temporary_facts(&arch_service::Limits::defaults().unwrap()).unwrap(),
     )
     .unwrap();
     let first = service.ingest(&root).unwrap();
@@ -28,7 +29,7 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
         "arch_service::service::ArchitectureService",
         "arch_service::service::ArchitectureService::validate",
         "arch_service::checks::check_plan",
-        "code_analyzer::resolve::combine",
+        "code_analyzer::model::Model::apply",
         "arch_graph::graph::Graph",
         "arch_graph::tree::build",
     ] {
@@ -36,10 +37,10 @@ fn ingesting_this_repository_finds_known_code_and_reruns_from_cache() {
     }
     let calls = |from: &str, to: &str| graph.outgoing(&id(from), Some(RelationKind::Calls)).any(|r| r.target == id(to));
     assert!(calls("arch_service::service::ArchitectureService::validate", "arch_service::checks::check_plan"));
-    assert!(calls("arch_service::service::ArchitectureService::read_file", "code_analyzer::extract::extract_file"));
-    assert!(calls("code_analyzer::analyze", "code_analyzer::resolve::combine"));
+    assert!(calls("arch_service::pipeline::read_file", "code_analyzer::extract::extract_file"));
+    assert!(calls("code_analyzer::walk::walk", "code_analyzer::walk::walk_with"));
     // The Python scripts come in through the Python pack.
-    assert!(graph.component(&ComponentId::for_symbol("python", "scripts.req_status")).is_some());
+    assert!(graph.component(&ComponentId::for_symbol("python", "scripts.frame_check")).is_some());
     // Nothing changed: the second run parses nothing.
     let second = service.ingest(&root).unwrap();
     assert_eq!((second.files, second.parsed, second.cached, second.removed), (first.files, 0, first.files, 0), "{second:?}");
@@ -59,7 +60,6 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-// req: P4.7
 #[test]
 fn cached_extracts_from_another_pack_version_are_parsed_again() {
     let dir = tempfile::tempdir().unwrap();
@@ -71,13 +71,13 @@ fn cached_extracts_from_another_pack_version_are_parsed_again() {
             packs,
             TypeSystem::defaults().unwrap(),
             Box::new(MemoryPlans::default()),
-            Box::new(arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap()),
+            arch_service::open_facts(&root, &arch_service::Limits::defaults().unwrap()).unwrap(),
         )
         .unwrap()
     };
-    let first = open(code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap()).ingest(&root).unwrap();
+    let first = open(common::shipped_packs()).ingest(&root).unwrap();
     assert_eq!((first.parsed, first.cached), (3, 0));
-    let same = open(code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap()).ingest(&root).unwrap();
+    let same = open(common::shipped_packs()).ingest(&root).unwrap();
     assert_eq!((same.parsed, same.cached), (0, 3), "same pack: served from the cache");
     // The project's own Rust pack, edited: everything the shipped one read is stale.
     let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");

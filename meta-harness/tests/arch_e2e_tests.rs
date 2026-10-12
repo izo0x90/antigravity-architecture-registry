@@ -15,7 +15,6 @@ fn parse(body: &str) -> Value {
     serde_json::from_str(body).unwrap_or_else(|e| panic!("{e}: {body}"))
 }
 
-// req: P8.1, AP.11
 #[tokio::test]
 async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval() {
     let (addr, state) = spawn_app().await;
@@ -23,12 +22,12 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     assert_eq!(status, 200);
     assert!(parse(&body)["views"]["calls"]["description"].is_string());
 
-    let (status, body) = http(addr, "POST", "/api/graph/tree", Some(r#"{"view":"calls","root":"rust:sample::run","depth":1}"#)).await;
+    let (status, body) = http(addr, "GET", "/api/graph/tree?view=calls&root=rust:sample::run&depth=1", None).await;
     assert_eq!(status, 200, "{body}");
     let view = parse(&body);
     assert!(view["cards"].as_array().unwrap().iter().any(|c| c["key"] == "rust:sample::run"));
-    let (status, _) = http(addr, "POST", "/api/graph/tree", Some(r#"{"view":"nope"}"#)).await;
-    assert_eq!(status, 422);
+    let (status, _) = http(addr, "GET", "/api/graph/tree?view=nope", None).await;
+    assert_eq!(status, 400);
 
     let (status, body) = http(addr, "GET", "/api/arch/components/rust:sample::log", None).await;
     assert_eq!(status, 200);
@@ -159,7 +158,6 @@ async fn next_architecture_event(ws: &mut (impl StreamExt<Item = Result<tokio_tu
     }
 }
 
-// req: P8.2, I.2
 #[tokio::test]
 async fn changes_checks_and_navigation_arrive_on_the_event_socket() {
     let (addr, _) = spawn_app().await;
@@ -169,16 +167,21 @@ async fn changes_checks_and_navigation_arrive_on_the_event_socket() {
     http(addr, "POST", "/api/arch/plans/ev/validate", None).await;
     assert!(matches!(next_architecture_event(&mut ws).await, ArchEvent::Validated { errors: 0, .. }));
     http(addr, "POST", "/api/arch/ingest", Some("{}")).await;
-    // Indexing announces itself (started, progress, done), then the change.
+    // Indexing announces itself (started, progress, done); nothing changed,
+    // so no Changed follows.
     let mut index_states = Vec::new();
     loop {
         match next_architecture_event(&mut ws).await {
-            ArchEvent::Index { status } => index_states.push(status.state),
-            ArchEvent::Changed { reason: ChangeReason::Ingested, .. } => break,
-            other => panic!("{other:?}"),
+            ArchEvent::Index { status } => {
+                index_states.push(status.state);
+                if status.state == arch_graph::IndexState::Idle {
+                    break;
+                }
+            }
+            other => panic!("nothing changed, yet {other:?}"),
         }
     }
-    assert_eq!((index_states.first(), index_states.last()), (Some(&arch_graph::IndexState::Indexing), Some(&arch_graph::IndexState::Idle)));
+    assert_eq!(index_states.first(), Some(&arch_graph::IndexState::Indexing));
     let (status, _) = http(addr, "POST", "/api/arch/navigate", Some(r#"{"view":"calls","select":"rust:sample::run"}"#)).await;
     assert_eq!(status, 204);
     match next_architecture_event(&mut ws).await {

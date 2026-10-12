@@ -1,0 +1,28 @@
+# Lints, tests and the benchmarks (each run once, to keep them working) on
+# every push and pull request.
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The versions development uses (agy.yaml's RUST_VERSION), so new
+      # lints don't fail a build nothing changed in.
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: clippy, rust-analyzer
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: meta-harness
+      - name: ast-grep
+        run: cargo install ast-grep --version 0.45.3 --locked
+      - name: Lint and test
+        run: make check
+      - name: Benchmarks (layout, walk, link, search), each once
+        working-directory: meta-harness
+        run: cargo bench -p arch-service --bench hot -- --test

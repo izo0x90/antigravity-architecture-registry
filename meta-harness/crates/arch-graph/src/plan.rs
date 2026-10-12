@@ -176,7 +176,6 @@ mod tests {
 
     const GOLDEN: &str = include_str!("../tests/golden/plan.json");
 
-    // req: P2.10
     #[test]
     fn plans_round_trip_through_the_golden_file() {
         let plan = Plan::from_json(GOLDEN).unwrap();
@@ -191,7 +190,6 @@ mod tests {
         assert_eq!(written, golden, "the written form is exactly the golden file");
     }
 
-    // req: P2.10
     #[test]
     fn other_schema_majors_and_bad_ids_are_rejected() {
         let future = GOLDEN.replacen("\"schema_version\": 1", "\"schema_version\": 2", 1);

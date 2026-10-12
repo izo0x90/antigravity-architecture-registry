@@ -176,10 +176,6 @@ impl Queue {
         Self { plan, settings, attempts: BTreeMap::new(), findings: BTreeMap::new(), awaiting: BTreeSet::new(), running: None, stopping: false, active: false }
     }
 
-    pub fn settings(&self) -> &QueueSettings {
-        &self.settings
-    }
-
     fn attempts(&self, id: &ComponentId, kind: JobKind) -> u32 {
         self.attempts.get(&(id.clone(), kind)).copied().unwrap_or(0)
     }

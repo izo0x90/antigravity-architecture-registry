@@ -17,7 +17,6 @@ fn id(s: &str) -> ComponentId {
     ComponentId::new(format!("rust:{s}"))
 }
 
-// req: R.1, R.2, R.3
 #[tokio::test]
 async fn comments_reach_the_agent_and_answers_come_back_for_the_user() {
     let arch = fixture_architecture();

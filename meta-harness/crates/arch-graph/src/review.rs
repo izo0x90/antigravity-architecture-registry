@@ -63,12 +63,6 @@ pub enum Author {
     Agent { session: String },
 }
 
-impl Author {
-    pub fn is_user(&self) -> bool {
-        matches!(self, Self::User { .. })
-    }
-}
-
 impl std::fmt::Display for Author {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -420,7 +414,6 @@ mod tests {
         ComponentId::new(format!("rust:{s}"))
     }
 
-    // req: R.2
     #[test]
     fn diff_since_review_lists_component_relation_reference_and_workflow_changes() {
         let mut plan = Plan::new("p", "Add validation");

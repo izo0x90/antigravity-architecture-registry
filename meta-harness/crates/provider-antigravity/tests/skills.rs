@@ -1,10 +1,9 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 use provider_antigravity::skills::{
-    discover_antigravity_skills, resolve_antigravity_user_home, AntigravitySkillsProbeError,
+    discover_antigravity_skills, AntigravitySkillsProbeError,
     DiscoverSkillsInput, ServerProviderSkill,
 };
 
@@ -443,44 +442,4 @@ fn test_bounds_the_total_read_size_across_skills() {
             path: root.join("large-8").join("SKILL.md").display().to_string(),
         })
     );
-}
-
-/// Ported from AntigravitySkills.test.ts lines 345-360:
-/// "resolves the home the agent expands ~ against"
-#[test]
-fn test_resolves_the_home_the_agent_expands_tilde_against() {
-    let mut linux_env = HashMap::new();
-    linux_env.insert("HOME".to_string(), "/home/user".to_string());
-    linux_env.insert("USERPROFILE".to_string(), "C:\\Users\\user".to_string());
-    assert_eq!(
-        resolve_antigravity_user_home("linux", &linux_env),
-        "/home/user"
-    );
-
-    let mut win_env = HashMap::new();
-    win_env.insert("HOME".to_string(), "/home/user".to_string());
-    win_env.insert("USERPROFILE".to_string(), "C:\\Users\\user".to_string());
-    assert_eq!(
-        resolve_antigravity_user_home("win32", &win_env),
-        "C:\\Users\\user"
-    );
-
-    let mut win_homedrive = HashMap::new();
-    win_homedrive.insert("HOMEDRIVE".to_string(), "D:".to_string());
-    win_homedrive.insert("HOMEPATH".to_string(), "\\Users\\alice".to_string());
-    assert_eq!(
-        resolve_antigravity_user_home("win32", &win_homedrive),
-        "D:\\Users\\alice"
-    );
-
-    let mut darwin_space = HashMap::new();
-    darwin_space.insert("HOME".to_string(), "/Users/a b ".to_string());
-    assert_eq!(
-        resolve_antigravity_user_home("darwin", &darwin_space),
-        "/Users/a b "
-    );
-
-    let mut darwin_empty = HashMap::new();
-    darwin_empty.insert("HOME".to_string(), "".to_string());
-    assert!(!resolve_antigravity_user_home("darwin", &darwin_empty).is_empty());
 }

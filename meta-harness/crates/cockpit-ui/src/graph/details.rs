@@ -5,9 +5,10 @@
 use egui::{RichText, Stroke, Vec2};
 
 use arch_graph::tree::{Mark, PillRole};
-use arch_graph::{Component, ComponentDetail, RelationKind, Signature};
+use arch_graph::{Component, ComponentDetail, RelationKind, Signature, Source};
 
-use super::{Detail, GraphState};
+use super::{Detail, GraphState, Reply, push};
+use crate::net::NetClient;
 use crate::theme::colors;
 
 fn signature(sig: &Signature) -> String {
@@ -25,19 +26,50 @@ fn location(c: &Component) -> String {
 }
 
 impl GraphState {
+    /// Asks for the selection's details (for each source it's compared in).
+    pub(super) fn want_details(&mut self, net: &NetClient, ctx: &egui::Context) {
+        let Some(card) = self.selected_card().cloned() else { return };
+        if card.component.is_none() {
+            return;
+        }
+        let mut wanted = vec![self.nav.source.clone()];
+        // A planned change: the code as it is too, to show both.
+        if self.nav.source != Source::Code && matches!(card.mark, arch_graph::tree::Mark::Changed | arch_graph::tree::Mark::Mismatch) {
+            wanted.push(Source::Code);
+        }
+        for source in wanted {
+            let key = (card.key.clone(), source.clone());
+            if self.details.contains_key(&key) {
+                continue;
+            }
+            if self.details.len() >= self.ui.details_kept.max(1) {
+                self.details.clear();
+            }
+            self.details.insert(key, Detail::Loading);
+            let (inbox, k, asked) = (self.inbox.clone(), card.key.clone(), source.clone());
+            net.graph_card(&card.key, &source, ctx.clone(), move |r| push(&inbox, Reply::Card(k, asked, Box::new(r))));
+        }
+    }
+
+    pub(crate) fn detail(&self, key: &str, source: &Source) -> Option<&Detail> {
+        self.details.get(&(key.to_owned(), source.clone()))
+    }
+}
+
+impl GraphState {
     pub(crate) fn render_drawer(&mut self, ui: &mut egui::Ui) {
         let Some(card) = self.selected_card().cloned() else { return };
         let look = crate::theme::look();
-        let plan = self.nav.plan.clone();
-        let detail = self.detail(&card.key, plan.as_ref()).cloned();
+        let source = self.nav.source.clone();
+        let detail = self.detail(&card.key, &source).cloned();
         // The code as it is, beside the plan's version, when the plan changes it.
-        let in_code = (plan.is_some() && matches!(card.mark, Mark::Changed | Mark::Mismatch)).then(|| self.detail(&card.key, None).cloned()).flatten();
+        let in_code = (source != Source::Code && matches!(card.mark, Mark::Changed | Mark::Mismatch)).then(|| self.detail(&card.key, &Source::Code).cloned()).flatten();
         let mut go: Option<String> = None;
         egui::Frame::NONE.fill(colors().surface).stroke(Stroke::new(look.line_thin, colors().border_strong)).corner_radius(look.radius_l).inner_margin(crate::theme::margin(look.space_m)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             egui::ScrollArea::vertical().id_salt("graph_details").auto_shrink([false, false]).show(ui, |ui| {
                 ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button(egui_phosphor::regular::X).on_hover_text("Close (x)").clicked() {
+                    if ui.small_button(egui_phosphor::regular::X).on_hover_text("Close").clicked() {
                         self.drawer_open = false;
                     }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -173,14 +205,14 @@ impl GraphState {
                 for r in list {
                     let other = if outward { &r.target } else { &r.source };
                     let name = other.as_str().rsplit([':', '.']).next().unwrap_or(other.as_str());
-                    // A planned relation the code doesn't have is said so; a
-                    // call found in the code, how it's known.
+                    // A planned relation the code doesn't have is said so; one
+                    // found in the code, how it's known (whatever its kind).
                     let planned_only = r.provenance.planned && !r.provenance.observed;
                     let (text, how) = match arch_graph::tree::Evidence::of(r) {
                         _ if planned_only => (format!("{name} (planned)"), String::new()),
-                        Some(arch_graph::tree::Evidence::Named) if r.kind == RelationKind::Calls => (format!("{name} (matched by name)"), "\nNot confirmed by the language's own analyzer.".to_owned()),
-                        Some(arch_graph::tree::Evidence::Proven(by)) => (name.to_owned(), format!("\nConfirmed by {by}.")),
-                        _ => (name.to_owned(), String::new()),
+                        Some(e @ arch_graph::tree::Evidence::Named) => (format!("{name} (matched by name)"), format!("\n{}: not confirmed by the language's own analyzer.", capitalized(&e.describe()))),
+                        Some(e) => (name.to_owned(), format!("\n{}.", capitalized(&e.describe()))),
+                        None => (name.to_owned(), String::new()),
                     };
                     if ui.link(RichText::new(text).size(look.text_body)).on_hover_text(format!("{}{how}", other.as_str())).clicked() {
                         go = Some(other.0.clone());
@@ -190,6 +222,12 @@ impl GraphState {
         }
         go
     }
+}
+
+/// `text` with its first letter a capital.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
 }
 
 fn style_color(mark: Mark) -> egui::Color32 {

@@ -1,6 +1,6 @@
 //! The state of code indexing, as clients see it: whether the server is
 //! reading code (and how far it got), how the last run went, and which files
-//! changed on disk since they were last read.
+//! changed on disk since they were last read, and each language's server.
 
 use serde::{Deserialize, Serialize};
 
@@ -46,42 +46,48 @@ pub struct IndexStatus {
     /// directory for everything under it).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stale: Vec<String>,
-    /// Each language's own indexer: whether it's there, and how its last
-    /// run went.
+    /// Each language's server: whether it's running, and if not, why.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub indexers: Vec<IndexerStatus>,
+    pub servers: Vec<ServerStatus>,
 }
 
+/// One language's server, as clients see it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct IndexerStatus {
+pub struct ServerStatus {
     pub language: String,
-    /// The indexer pack.
-    pub indexer: String,
-    pub state: IndexerState,
-    /// The tool's version, as checked.
+    /// The server pack.
+    pub server: String,
+    pub state: ServerState,
+    /// The server's version, as it said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// Files it described in its last run (as they are now).
+    /// Why it isn't ready (every state but ready has one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Positions it gave that couldn't be turned into places in a file.
+    #[serde(default)]
+    pub dropped_positions: usize,
+    /// The language's files, and the links its server proved in them.
     #[serde(default)]
     pub files: usize,
-    /// Links it confirmed.
     #[serde(default)]
     pub proven: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum IndexerState {
-    /// Its pack isn't installed (or its tool is out of range): links in
-    /// this language are matched by name.
+pub enum ServerState {
+    /// Its pack isn't installed: links in this language stay unconfirmed.
     #[default]
-    Missing,
+    NotInstalled,
+    /// Installed, but its version isn't one the pack supports.
+    OutOfRange,
+    /// Installed, but its check fails.
+    Broken,
+    /// Running, still loading the project.
+    Starting,
     Ready,
-    Running,
+    /// It ended or couldn't start; started again after a wait.
     Failed,
 }
 

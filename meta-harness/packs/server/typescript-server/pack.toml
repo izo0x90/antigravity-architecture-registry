@@ -1,0 +1,40 @@
+[pack]
+name = "typescript-server"
+kind = "server"
+version = "1.0.0"
+description = "TypeScript 7's own language server (the native compiler, --lsp): exact links and types for TypeScript and JavaScript. Installed into its pack folder with npm."
+
+[tool]
+name = "typescript"
+version = "7.0.2"
+supports = ">=7.0.0, <8.0.0"
+[tool.check]
+command = "{dest}/tsc-native"
+args = ["--version"]
+version = '^Version (\d+\.\d+\.\d+)'
+
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "macos-arm64", "macos-x86_64"]
+[install.vars.linux-x86_64]
+native = "typescript-linux-x64"
+[install.vars.linux-arm64]
+native = "typescript-linux-arm64"
+[install.vars.macos-arm64]
+native = "typescript-darwin-arm64"
+[install.vars.macos-x86_64]
+native = "typescript-darwin-x64"
+[[install.steps]]
+run = { command = "npm", args = ["install", "--prefix", ".", "--no-save", "--no-audit", "--no-fund", "typescript@{tool_version}"] }
+# The native binary sits in a package named per platform: one name for it.
+[[install.steps]]
+run = { command = "ln", args = ["-s", "node_modules/@typescript/{native}/lib/tsc", "tsc-native"] }
+
+[server]
+command = "{dest}/tsc-native"
+args = ["--lsp", "--stdio"]
+requires = ["textDocument/definition"]
+ready_timeout_s = 60
+request_timeout_s = 30
+# Ready once it has looked ready this long (it announces its loading
+# just after `initialized`).
+settle_ms = 300

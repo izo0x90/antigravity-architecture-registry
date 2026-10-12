@@ -37,37 +37,6 @@ pub struct DiscoverSkillsInput {
     pub user_home: PathBuf,
 }
 
-/// Resolves user home directory matching Python's expanduser in launch environment
-pub fn resolve_antigravity_user_home(
-    platform: &str,
-    environment: &HashMap<String, String>,
-) -> String {
-    if platform == "win32" {
-        if let Some(userprofile) = environment.get("USERPROFILE")
-            && !userprofile.is_empty()
-        {
-            return userprofile.clone();
-        }
-        if let (Some(drive), Some(homepath)) =
-            (environment.get("HOMEDRIVE"), environment.get("HOMEPATH"))
-            && !drive.is_empty()
-            && !homepath.is_empty()
-        {
-            return format!("{}{}", drive, homepath);
-        }
-        std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_else(|_| "C:\\Users\\default".to_string())
-    } else {
-        if let Some(home) = environment.get("HOME")
-            && !home.is_empty()
-        {
-            return home.clone();
-        }
-        std::env::var("HOME").unwrap_or_else(|_| "/home/default".to_string())
-    }
-}
-
 /// The native loader orders child paths with Go's URL.EscapedPath encoding.
 pub fn skill_path_sort_key(entry: &str) -> String {
     let mut out = String::new();

@@ -1,5 +1,6 @@
 # Platform names packs use, by what the running binary reports
-# (Rust's std::env::consts OS and ARCH). `vars` are values packs can use as
+# (Rust's std::env::consts OS and ARCH, and the memory page size where only
+# some machines can run a build). The most specific match wins. `vars` are values packs can use as
 # placeholders ({os}, {arch}); names a single tool spells its own way belong
 # in that tool's pack, not here.
 
@@ -7,11 +8,23 @@
 name = "linux-x86_64"
 matches = { os = "linux", arch = "x86_64" }
 vars = { os = "linux", arch = "x86_64" }
+groups = { file = "/etc/group", create = ["groupadd", "-r"] }
 
 [[platform]]
 name = "linux-arm64"
 matches = { os = "linux", arch = "aarch64" }
 vars = { os = "linux", arch = "arm64" }
+groups = { file = "/etc/group", create = ["groupadd", "-r"] }
+
+# Linux arm64 with 16 KiB pages (VMs on Apple Silicon): Linux arm64 builds
+# that assume 4 KiB pages abort there. A developer platform: the sandbox
+# this tool is developed in, not one its users run.
+[[platform]]
+name = "linux-arm64-16k"
+matches = { os = "linux", arch = "aarch64", page_size = 16384 }
+vars = { os = "linux", arch = "arm64" }
+developer = true
+groups = { file = "/etc/group", create = ["groupadd", "-r"] }
 
 [[platform]]
 name = "macos-arm64"

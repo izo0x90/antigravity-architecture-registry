@@ -117,14 +117,15 @@ I = "Index"
 "nav.keys" = { leader = "?", keys = ["?"] }
 
 # Go to, from whatever the cursor is on: its code, spec, place in the graph
-# ("map"), outline row, queue job; who calls it, what it calls, what holds
+# ("map"), outline row, queue job; every use of it, who calls it, what it calls, what holds
 # it, its members, what it implements, where its data flows.
 "goto.code" = { keys = ["g d"] }
 "goto.spec" = { keys = ["g s"] }
 "goto.graph" = { keys = ["g m"] }
 "goto.tree" = { keys = ["g t"] }
 "goto.queue" = { keys = ["g q"] }
-"goto.callers" = { keys = ["g r"] }
+"goto.uses" = { keys = ["g r"] }
+"goto.callers" = { keys = ["g R"] }
 "goto.callees" = { keys = ["g c"] }
 "goto.parent" = { keys = ["g p"] }
 "goto.members" = { keys = ["g n"] }
@@ -172,16 +173,9 @@ I = "Index"
 "graph.depth_more" = { leader = "g +", keys = ["+"] }
 "graph.depth_less" = { leader = "g -", keys = ["-"] }
 "graph.flip" = { leader = "g r", keys = ["r"] }
-"graph.view" = { leader = "g v" }
-"graph.next_view" = { keys = ["v"] }
+"graph.view" = { leader = "g v", keys = ["v"] }
 "graph.plan" = { leader = "g P" }
 "graph.full_code" = { leader = "g F" }
-"graph.zoom_in" = { keys = ["z +"] }
-"graph.zoom_out" = { keys = ["z -"] }
-"graph.fit" = { leader = "g z", keys = ["z z"] }
-"graph.close_inspector" = { leader = "g x", keys = ["x", "Escape"] }
-"graph.refresh" = { leader = "g ." }
-"graph.legend" = { leader = "g ?", keys = ["g ?"] }
 "graph.agent_return" = { leader = "g a", keys = ["g a"] }
 "graph.find" = { leader = "g /", keys = ["g /"] }
 
@@ -213,7 +207,6 @@ I = "Index"
 # Code view: definitions in order.
 "code.next_def" = { keys = ["] f"] }
 "code.prev_def" = { keys = ["[ f"] }
-"link.follow" = { leader = "e f" }
 
 # Indexing: re-read what changed, rebuild everything, re-read the open file.
 "index.changed" = { leader = "I r" }
@@ -375,11 +368,6 @@ word = "reshapes the data"
 icon = "shuffle"
 color = "special"
 
-[status.following]
-word = "following"
-icon = "path"
-color = "focus"
-
 [status.changed]
 word = "changed since review"
 icon = "pencil-simple"
@@ -510,7 +498,7 @@ step = "accent"
 # How the graph behaves.
 [graph]
 # Long-press a card: these actions (the ones that apply) as chips.
-context = ["graph.go_in", "goto.spec", "goto.code", "goto.callees", "goto.callers", "goto.parent", "goto.members", "goto.implements", "goto.flows"]
+context = ["graph.go_in", "goto.spec", "goto.code", "goto.callees", "goto.uses", "goto.callers", "goto.parent", "goto.members", "goto.implements", "goto.flows"]
 # Fitting the drawing to the screen never zooms out past this (text stays
 # readable; what doesn't fit is panned to).
 readable_zoom = 0.85
@@ -524,6 +512,11 @@ details_kept = 64
 symbols = 12
 files = 6
 text = 8
+
+# The legend's width bounds (its text wraps to fit).
+[graph.legend]
+min_w = 160.0
+max_w = 400.0
 
 [graph.touch]
 # Points a finger may wander and still tap or long-press.
@@ -539,7 +532,7 @@ swipe_max_ms = 450.0
 show = "auto"
 narrow_below = 480.0
 size = 32.0
-actions = ["nav.back", "nav.forward", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.next_view", "graph.flip", "nav.hint_open", "graph.legend"]
+actions = ["nav.back", "nav.forward", "graph.view", "graph.flip", "nav.hint_open"]
 
 # The code view's syntax colours: a tree-sitter highlight capture (or its
 # first part) -> a theme color. Captures not listed keep the text color.
@@ -567,11 +560,6 @@ property = "text"
 [net]
 reconnect_min_ms = 500
 reconnect_max_ms = 10000
-
-# Follow mode (link.follow): the graph selects the code cursor's component
-# once the cursor has rested this long.
-[links]
-follow_debounce_ms = 250
 
 # Presets: whole looks you can switch to with one setting at the top of your
 # UI config, e.g. `preset = "classic"`. A preset's sections are laid over the

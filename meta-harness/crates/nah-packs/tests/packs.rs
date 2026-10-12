@@ -66,7 +66,7 @@ download = {{ url = "file://{url}", sha256 = "{sum}", unpack = "zip" }}
 run = {{ command = "touch", args = ["made-by-a-step"] }}
 
 [provides]
-executable = "server.bin"
+launch = {{ program = "{{dest}}/server.bin" }}
 driver = "fake"
 "#,
         url = url.display()
@@ -81,7 +81,6 @@ fn bad(world: &World, manifest: &str) -> String {
     load(world, &[("t/pack.toml", manifest)]).unwrap_err().to_string()
 }
 
-// req: AP.1
 #[test]
 fn manifests_are_checked_strictly_when_loaded() {
     let w = world();
@@ -91,19 +90,20 @@ fn manifests_are_checked_strictly_when_loaded() {
 
     let with = |from: &str, to: &str| good.replacen(from, to, 1);
     assert!(bad(&w, &with("[provides]", "[provides]\nextra = 1")).contains("unknown field"));
-    assert!(bad(&w, &with("[provides]\nexecutable = \"server.bin\"\ndriver = \"fake\"\n", "")).contains("harness packs need [provides]"));
+    assert!(bad(&w, &with("[provides]\nlaunch = { program = \"{dest}/server.bin\" }\ndriver = \"fake\"\n", "")).contains("harness packs need [provides]"));
+    assert!(bad(&w, &with("{dest}/server.bin", "{dest}/{nope}")).contains("provides.launch: unknown placeholder {nope}"));
     assert!(bad(&w, &with(&"a".repeat(64), "abc")).contains("64 lowercase hex"));
     assert!(bad(&w, &with(&format!(", sha256 = \"{}\"", "a".repeat(64)), "")).contains("missing field `sha256`"), "a download needs a checksum");
     assert!(bad(&w, &with("file:///x.zip", "file:///{nope}.zip")).contains("unknown placeholder {nope}"));
     assert!(bad(&w, &with("\"linux-arm64\"", "\"plan9-mips\"")).contains("no platform 'plan9-mips'"));
     assert!(bad(&w, &with("version = \"1.1.1\"", "version = \"3.0.0\"")).contains("isn't in tool.supports"));
-    let e = bad(&w, &with("kind = \"harness\"", "kind = \"indexer\""));
-    assert!(e.contains("indexer packs need [run]"), "{e}");
-    let indexer = r#"[pack]
-name = "fake-indexer"
-kind = "indexer"
+    let e = bad(&w, &with("kind = \"harness\"", "kind = \"server\""));
+    assert!(e.contains("server packs need [server]"), "{e}");
+    let server = r#"[pack]
+name = "fake-server"
+kind = "server"
 version = "1.0.0"
-description = "An indexer for tests."
+description = "A language server for tests."
 [tool]
 name = "fake"
 supports = ">=1.0.0"
@@ -114,29 +114,34 @@ version = '(\d+\.\d+\.\d+)'
 platforms = ["linux-x86_64"]
 [[install.steps]]
 run = { command = "true" }
-[run]
+[server]
 command = "fake"
-args = ["index", "{root}", "--to", "{out}"]
-output = "scip"
-timeout_s = 60
+args = ["--stdio"]
+requires = ["textDocument/definition"]
+ready_timeout_s = 60
+request_timeout_s = 10
 "#;
-    assert!(load(&w, &[("i/pack.toml", indexer)]).is_ok());
-    assert!(bad(&w, &indexer.replace(", \"--to\", \"{out}\"", "")).contains("where {out} goes"));
-    assert!(bad(&w, &indexer.replace("[tool.check]\ncommand = \"fake\"\nversion = '(\\d+\\.\\d+\\.\\d+)'\n", "")).contains("needs [tool.check]"));
-    let language = "[pack]\nname = \"fake-lang\"\nkind = \"language\"\nversion = \"1.0.0\"\ndescription = \"A language.\"\n[language]\nsyntax = \"syntax.toml\"\nindexer = \"fake-indexer\"\n";
+    assert!(load(&w, &[("s/pack.toml", server)]).is_ok());
+    assert!(bad(&w, &server.replace("[tool.check]\ncommand = \"fake\"\nversion = '(\\d+\\.\\d+\\.\\d+)'\n", "")).contains("needs [tool.check]"));
+    let language = "[pack]\nname = \"fake-lang\"\nkind = \"language\"\nversion = \"1.0.0\"\ndescription = \"A language.\"\n[language]\nsyntax = \"syntax.toml\"\nserver = \"fake-server\"\n";
     assert!(bad(&w, language).contains("no file 'syntax.toml'"));
-    assert!(load(&w, &[("l/pack.toml", language), ("l/syntax.toml", ""), ("i/pack.toml", indexer)]).is_ok());
-    assert!(load(&w, &[("l/pack.toml", language), ("l/syntax.toml", "")]).unwrap_err().to_string().contains("isn't an indexer pack"));
+    assert!(load(&w, &[("l/pack.toml", language), ("l/syntax.toml", ""), ("s/pack.toml", server)]).is_ok());
+    assert!(load(&w, &[("l/pack.toml", language), ("l/syntax.toml", "")]).unwrap_err().to_string().contains("isn't a server pack"));
 }
 
-// req: AP.2
 #[test]
 fn platforms_and_sources_come_from_config_and_later_sources_win() {
     let w = world();
     let catalog = load(&w, &[]).unwrap();
-    assert_eq!(catalog.platforms.for_target("linux", "aarch64").unwrap().name, "linux-arm64");
-    assert_eq!(catalog.platforms.for_target("macos", "aarch64").unwrap().vars["arch"], "arm64");
-    assert!(catalog.platforms.for_target("plan9", "mips").is_err());
+    assert_eq!(catalog.platforms.for_target("linux", "aarch64", 4096).unwrap().name, "linux-arm64");
+    assert_eq!(catalog.platforms.for_target("macos", "aarch64", 16384).unwrap().vars["arch"], "arm64");
+    assert!(catalog.platforms.for_target("plan9", "mips", 4096).is_err());
+    // The page size picks the more specific platform, a developer one.
+    let sandbox = catalog.platforms.for_target("linux", "aarch64", 16384).unwrap();
+    assert_eq!((sandbox.name.as_str(), sandbox.developer), ("linux-arm64-16k", true));
+    assert!(!catalog.platforms.for_target("linux", "aarch64", 65536).unwrap().developer, "other page sizes: the general one");
+    let names: Vec<&str> = catalog.platforms.and_general(sandbox).map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["linux-arm64-16k", "linux-arm64"], "a pack with no entry for it installs the general one");
     assert!(catalog.platforms.current().is_ok(), "this machine is one of them");
     assert_eq!(catalog.root, w.places.data_home.join("nah/packs"));
     assert_eq!(catalog.lock_path, w.places.data_home.join("nah/packs.lock"));
@@ -156,7 +161,6 @@ fn platforms_and_sources_come_from_config_and_later_sources_win() {
     assert!(err.contains("two packs named 'fake-harness'"), "{err}");
 }
 
-// req: AP.3
 #[test]
 fn installs_run_the_steps_verify_and_record_and_a_failure_keeps_what_was_there() {
     let w = world();
@@ -170,7 +174,7 @@ fn installs_run_the_steps_verify_and_record_and_a_failure_keeps_what_was_there()
     assert_eq!(nah_packs::state(&catalog, &lock(), "fake-harness").unwrap(), State::Missing);
 
     let installed = nah_packs::install(&catalog, "fake-harness", &platform).unwrap();
-    let program = nah_packs::executable(&catalog, &lock(), "fake-harness").unwrap();
+    let program = PathBuf::from(nah_packs::harness_launch(&catalog, &lock(), "fake-harness").unwrap().program);
     assert_eq!(std::fs::read_to_string(&program).unwrap(), "v1");
     assert!(installed.dest.join("made-by-a-step").is_file(), "a run step ran in the install folder");
     assert_eq!((installed.sha256.clone(), installed.tool_version.as_deref()), (vec![sum.clone()], Some("1.1.1")));
@@ -197,7 +201,7 @@ fn installs_run_the_steps_verify_and_record_and_a_failure_keeps_what_was_there()
     let good = zip(&tampered, &[("server.bin", "v2")]);
     let newer = load(&w, &[("harness/fake/pack.toml", &harness("2.0.0", &tampered, &good))]).unwrap();
     let updated = nah_packs::install(&newer, "fake-harness", &platform).unwrap();
-    assert_eq!(std::fs::read_to_string(nah_packs::executable(&newer, &lock(), "fake-harness").unwrap()).unwrap(), "v2");
+    assert_eq!(std::fs::read_to_string(nah_packs::harness_launch(&newer, &lock(), "fake-harness").unwrap().program).unwrap(), "v2");
     assert!(!installed.dest.exists() && updated.dest.exists(), "the old version's folder is gone");
 }
 
@@ -213,24 +217,23 @@ fn fake_tool(dir: &Path, prints: &str) -> PathBuf {
     path
 }
 
-// req: AP.3
 #[test]
 fn a_check_compares_the_tools_version_with_the_packs_range() {
     let w = world();
     std::fs::create_dir_all(&w.places.home).unwrap();
     let tool = fake_tool(&w.places.home, "fake-tool 1.4.2 (abc 2026-01-01)");
-    let indexer = |supports: &str| {
+    let server = |supports: &str| {
         format!(
-            "[pack]\nname = \"fake-indexer\"\nkind = \"indexer\"\nversion = \"1.0.0\"\ndescription = \"x\"\n[tool]\nname = \"fake\"\nsupports = \"{supports}\"\n[tool.check]\ncommand = \"{}\"\nargs = [\"--version\"]\nversion = '^fake-tool (\\d+\\.\\d+\\.\\d+)'\n[[install]]\nplatforms = [\"linux-x86_64\", \"linux-arm64\", \"macos-arm64\", \"macos-x86_64\"]\n[[install.steps]]\nrun = {{ command = \"true\" }}\n[run]\ncommand = \"{}\"\nargs = [\"{{root}}\", \"{{out}}\"]\noutput = \"scip\"\ntimeout_s = 5\n",
+            "[pack]\nname = \"fake-server\"\nkind = \"server\"\nversion = \"1.0.0\"\ndescription = \"x\"\n[tool]\nname = \"fake\"\nsupports = \"{supports}\"\n[tool.check]\ncommand = \"{}\"\nargs = [\"--version\"]\nversion = '^fake-tool (\\d+\\.\\d+\\.\\d+)'\n[[install]]\nplatforms = [\"linux-x86_64\", \"linux-arm64\", \"macos-arm64\", \"macos-x86_64\"]\n[[install.steps]]\nrun = {{ command = \"true\" }}\n[server]\ncommand = \"{}\"\nrequires = [\"textDocument/definition\"]\nready_timeout_s = 5\nrequest_timeout_s = 5\n",
             tool.display(),
             tool.display()
         )
     };
     let lock = Lock::default();
-    let ready = load(&w, &[("i/pack.toml", &indexer(">=1.0.0, <2.0.0"))]).unwrap();
-    assert_eq!(nah_packs::state(&ready, &lock, "fake-indexer").unwrap(), State::Ready { tool_version: Some("1.4.2".into()) }, "found on its own, already installed");
-    let old = load(&w, &[("i/pack.toml", &indexer(">=2.0.0"))]).unwrap();
-    assert_eq!(nah_packs::state(&old, &lock, "fake-indexer").unwrap(), State::OutOfRange { found: "1.4.2".into(), supports: ">=2.0.0".into() });
+    let ready = load(&w, &[("s/pack.toml", &server(">=1.0.0, <2.0.0"))]).unwrap();
+    assert_eq!(nah_packs::state(&ready, &lock, "fake-server").unwrap(), State::Ready { tool_version: Some("1.4.2".into()) }, "found on its own, already installed");
+    let old = load(&w, &[("s/pack.toml", &server(">=2.0.0"))]).unwrap();
+    assert_eq!(nah_packs::state(&old, &lock, "fake-server").unwrap(), State::OutOfRange { found: "1.4.2".into(), supports: ">=2.0.0".into() });
     std::fs::remove_file(&tool).unwrap();
-    assert_eq!(nah_packs::state(&ready, &lock, "fake-indexer").unwrap(), State::Missing);
+    assert_eq!(nah_packs::state(&ready, &lock, "fake-server").unwrap(), State::Missing);
 }

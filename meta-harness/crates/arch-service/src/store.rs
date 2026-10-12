@@ -2,7 +2,7 @@
 //! read from the code are kept between runs (a disposable cache, see
 //! `arch-store`). Both live under `<repo>/.nah/`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -19,6 +19,11 @@ pub trait PlanRepository: Send + Sync {
     fn save(&self, plan: &Plan) -> Result<(), ServiceError>;
     /// Removes a plan; `NotFound` if there is none.
     fn delete(&self, id: &PlanId) -> Result<(), ServiceError>;
+    /// Whether `path` is where a plan is kept (the watcher hands those in).
+    fn holds(&self, path: &Path) -> bool;
+    /// Reads the plans among `paths` again (someone else changed their
+    /// files); returns the plans that changed.
+    fn changed(&self, paths: &[PathBuf]) -> Result<Vec<PlanId>, ServiceError>;
 }
 
 /// In-memory plans (embedding and tests).
@@ -41,6 +46,12 @@ impl PlanRepository for MemoryPlans {
             Some(_) => Ok(()),
             None => Err(ServiceError::NotFound(format!("plan {id}"))),
         }
+    }
+    fn holds(&self, _path: &Path) -> bool {
+        false
+    }
+    fn changed(&self, _paths: &[PathBuf]) -> Result<Vec<PlanId>, ServiceError> {
+        Ok(Vec::new())
     }
 }
 
@@ -93,38 +104,28 @@ fn sync_dir(_dir: &Path) -> Result<(), ServiceError> {
 fn ensure_nah_gitignore(nah: &Path) -> Result<(), ServiceError> {
     let ignore = nah.join(".gitignore");
     if !ignore.exists() {
-        write_atomic(&ignore, "# Caches are rebuilt from the code; plans are kept.\ncache/\nreq_status.json\n")?;
+        write_atomic(&ignore, "# Caches are rebuilt from the code; plans are kept.\ncache/\n")?;
     }
     Ok(())
 }
 
-/// Plans as `<repo>/.nah/plans/<id>.json`, each kept in memory once read
-/// and read again only when its file changes (by size or time), whoever
-/// changed it.
+/// Plans as `<repo>/.nah/plans/<id>.json`, all kept in memory: read once
+/// when opened, and a file again only when the watcher says it changed.
+/// Nothing is listed or stat'ed per
+/// request.
 pub struct FsPlans {
     dir: PathBuf,
     /// One writer at a time within this process (the server is the writer).
     write: Mutex<()>,
-    read: Mutex<BTreeMap<PlanId, Read>>,
+    held: Mutex<Held>,
 }
 
-/// A plan as read, and the file it was read from as it was then.
-struct Read {
-    stamp: Stamp,
-    plan: Arc<Plan>,
-}
-
-/// What tells a file changed without reading it.
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Stamp {
-    len: u64,
-    modified: Option<std::time::SystemTime>,
-}
-
-impl Stamp {
-    fn of(meta: &std::fs::Metadata) -> Self {
-        Self { len: meta.len(), modified: meta.modified().ok() }
-    }
+#[derive(Default)]
+struct Held {
+    /// Each plan file as last read or saved: the plan, or why it can't be read.
+    plans: BTreeMap<PlanId, Result<Arc<Plan>, ServiceError>>,
+    /// Files in the folder whose names can't be plan ids (put there by hand).
+    misnamed: BTreeSet<String>,
 }
 
 impl FsPlans {
@@ -133,75 +134,123 @@ impl FsPlans {
         let dir = nah.join("plans");
         std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
         ensure_nah_gitignore(&nah)?;
-        Ok(Self { dir, write: Mutex::new(()), read: Mutex::new(BTreeMap::new()) })
+        let plans = Self { dir, write: Mutex::new(()), held: Mutex::new(Held::default()) };
+        let files: Vec<PathBuf> = std::fs::read_dir(&plans.dir).map_err(|e| io(&plans.dir, e))?.map(|e| e.map(|e| e.path()).map_err(|e| io(&plans.dir, e))).collect::<Result<_, _>>()?;
+        plans.changed(&files)?;
+        Ok(plans)
     }
 
     fn path(&self, id: &PlanId) -> PathBuf {
         self.dir.join(format!("{id}.json"))
     }
+
+    /// The plan file at `path` as it is now: none if it's gone.
+    fn read(&self, path: &Path, id: &PlanId) -> Option<Result<Plan, ServiceError>> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => return Some(Err(io(path, e))),
+        };
+        Some(Plan::from_json(&text).map_err(|e| ServiceError::Corrupt(format!("{}: {e}", path.display()))).and_then(|plan| {
+            if &plan.id == id { Ok(plan) } else { Err(ServiceError::Corrupt(format!("{}: holds plan '{}', not '{id}'", path.display(), plan.id))) }
+        }))
+    }
 }
 
 impl PlanRepository for FsPlans {
     fn list(&self) -> Result<Vec<PlanId>, ServiceError> {
-        let mut ids = Vec::new();
-        for entry in std::fs::read_dir(&self.dir).map_err(|e| io(&self.dir, e))? {
-            let path = entry.map_err(|e| io(&self.dir, e))?.path();
-            if path.extension().is_none_or(|e| e != "json") {
-                continue;
-            }
-            // A plan file whose name can't be a plan id was put there by hand.
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-            let id = PlanId::new(stem).map_err(|_| ServiceError::Corrupt(format!("{}: the file name isn't a plan id", path.display())))?;
-            ids.push(id);
+        let held = self.held.lock().map_err(ServiceError::poisoned)?;
+        // A plan file whose name can't be a plan id is reported, not skipped.
+        if let Some(name) = held.misnamed.first() {
+            return Err(ServiceError::Corrupt(format!("{}: the file name isn't a plan id", self.dir.join(name).display())));
         }
-        ids.sort();
-        Ok(ids)
+        Ok(held.plans.keys().cloned().collect())
     }
 
     fn get(&self, id: &PlanId) -> Result<Option<Arc<Plan>>, ServiceError> {
-        let path = self.path(id);
-        let stamp = match std::fs::metadata(&path) {
-            Ok(meta) => Stamp::of(&meta),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                self.read.lock().map_err(ServiceError::poisoned)?.remove(id);
-                return Ok(None);
-            }
-            Err(e) => return Err(io(&path, e)),
-        };
-        if let Some(known) = self.read.lock().map_err(ServiceError::poisoned)?.get(id)
-            && known.stamp == stamp
-        {
-            return Ok(Some(known.plan.clone()));
+        match self.held.lock().map_err(ServiceError::poisoned)?.plans.get(id) {
+            None => Ok(None),
+            Some(Ok(plan)) => Ok(Some(plan.clone())),
+            Some(Err(why)) => Err(why.clone()),
         }
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(io(&path, e)),
-        };
-        let plan = Plan::from_json(&text).map_err(|e| ServiceError::Corrupt(format!("{}: {e}", path.display())))?;
-        if &plan.id != id {
-            return Err(ServiceError::Corrupt(format!("{}: holds plan '{}', not '{id}'", path.display(), plan.id)));
-        }
-        let plan = Arc::new(plan);
-        // Stamped as before the read: a write racing the read is seen next time.
-        self.read.lock().map_err(ServiceError::poisoned)?.insert(id.clone(), Read { stamp, plan: plan.clone() });
-        Ok(Some(plan))
     }
 
     fn save(&self, plan: &Plan) -> Result<(), ServiceError> {
         let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
         let text = plan.to_json().map_err(|e| ServiceError::Corrupt(e.to_string()))?;
-        write_atomic(&self.path(&plan.id), &text)
+        write_atomic(&self.path(&plan.id), &text)?;
+        self.held.lock().map_err(ServiceError::poisoned)?.plans.insert(plan.id.clone(), Ok(Arc::new(plan.clone())));
+        Ok(())
     }
 
     fn delete(&self, id: &PlanId) -> Result<(), ServiceError> {
         let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
         match std::fs::remove_file(self.path(id)) {
-            Ok(()) => sync_dir(&self.dir),
+            Ok(()) => {
+                self.held.lock().map_err(ServiceError::poisoned)?.plans.remove(id);
+                sync_dir(&self.dir)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(ServiceError::NotFound(format!("plan {id}"))),
             Err(e) => Err(io(&self.path(id), e)),
         }
     }
+
+    fn holds(&self, path: &Path) -> bool {
+        path.parent() == Some(self.dir.as_path()) && path.extension().is_some_and(|e| e == "json")
+    }
+
+    fn changed(&self, paths: &[PathBuf]) -> Result<Vec<PlanId>, ServiceError> {
+        let mut changed = Vec::new();
+        for path in paths.iter().filter(|p| self.holds(p)) {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+            let Ok(id) = PlanId::new(stem) else {
+                let mut held = self.held.lock().map_err(ServiceError::poisoned)?;
+                if path.exists() {
+                    held.misnamed.insert(name);
+                } else {
+                    held.misnamed.remove(&name);
+                }
+                continue;
+            };
+            let now = self.read(path, &id);
+            let mut held = self.held.lock().map_err(ServiceError::poisoned)?;
+            let before = held.plans.get(&id);
+            let same = match (before, &now) {
+                (None, None) => true,
+                (Some(Ok(old)), Some(Ok(new))) => **old == *new,
+                (Some(Err(old)), Some(Err(new))) => old == new,
+                _ => false,
+            };
+            if same {
+                continue;
+            }
+            match now {
+                Some(read) => held.plans.insert(id.clone(), read.map(Arc::new)),
+                None => held.plans.remove(&id),
+            };
+            changed.push(id);
+        }
+        Ok(changed)
+    }
+}
+
+/// The analysis, kept in `<repo>/.nah/cache/index.sqlite`.
+pub fn open_facts(repo_root: &Path, limits: &crate::Limits) -> Result<arch_store::SqliteStore, ServiceError> {
+    let nah = repo_root.join(".nah");
+    ensure_nah_gitignore(&nah)?;
+    Ok(arch_store::SqliteStore::open(&nah.join("cache").join("index.sqlite"), &settings(limits)))
+}
+
+/// A store for one run, in a temporary file removed when it's dropped
+/// (`meta-harness analyze`, tests).
+pub fn temporary_facts(limits: &crate::Limits) -> Result<arch_store::SqliteStore, ServiceError> {
+    Ok(arch_store::SqliteStore::temporary(&settings(limits))?)
+}
+
+fn settings(limits: &crate::Limits) -> arch_store::Settings {
+    let store = &limits.store;
+    arch_store::Settings { synchronous: store.synchronous.clone(), cache_kib: store.cache_kib, busy_retry_us: store.busy_retry_us, busy_give_up_ms: store.busy_give_up_ms }
 }
 
 #[cfg(test)]
@@ -226,7 +275,6 @@ mod tests {
         assert!(repo.get(&PlanId::new("a").unwrap()).unwrap().is_none());
     }
 
-    // req: P3.1
     #[test]
     fn plan_repositories_share_one_contract() {
         exercise_plans(&MemoryPlans::default());
@@ -234,27 +282,39 @@ mod tests {
         exercise_plans(&FsPlans::new(dir.path()).unwrap());
     }
 
-    // req: M.3
     #[test]
-    fn file_plans_are_read_once_and_again_when_their_file_changes() {
+    fn file_plans_are_kept_in_memory_and_read_again_when_the_watcher_says() {
         let dir = tempfile::tempdir().unwrap();
         let repo = FsPlans::new(dir.path()).unwrap();
         repo.save(&plan("p")).unwrap();
         let id = PlanId::new("p").unwrap();
+        let file = dir.path().join(".nah/plans/p.json");
         let first = repo.get(&id).unwrap().unwrap();
         assert!(Arc::ptr_eq(&first, &repo.get(&id).unwrap().unwrap()), "unchanged: the same plan, not read again");
-        // Someone else (an agent, an editor) rewrites the file.
+        // Someone else (an agent, an editor) rewrites the file: nothing is
+        // read until the watcher says so.
         let mut edited = plan("p");
         edited.title = "edited by hand, a longer title".into();
-        std::fs::write(dir.path().join(".nah/plans/p.json"), edited.to_json().unwrap()).unwrap();
+        std::fs::write(&file, edited.to_json().unwrap()).unwrap();
+        assert!(Arc::ptr_eq(&first, &repo.get(&id).unwrap().unwrap()), "no stat per request");
+        assert!(repo.holds(&file) && !repo.holds(&dir.path().join("src/p.json")));
+        assert_eq!(repo.changed(std::slice::from_ref(&file)).unwrap(), std::slice::from_ref(&id));
         let again = repo.get(&id).unwrap().unwrap();
         assert_eq!(again.title, "edited by hand, a longer title");
-        assert!(!Arc::ptr_eq(&first, &again));
-        std::fs::remove_file(dir.path().join(".nah/plans/p.json")).unwrap();
+        // Our own save, seen again by the watcher, changes nothing.
+        repo.save(&edited).unwrap();
+        let saved = repo.get(&id).unwrap().unwrap();
+        assert!(repo.changed(std::slice::from_ref(&file)).unwrap().is_empty());
+        assert!(Arc::ptr_eq(&saved, &repo.get(&id).unwrap().unwrap()));
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(repo.changed(&[file]).unwrap(), std::slice::from_ref(&id));
         assert!(repo.get(&id).unwrap().is_none(), "a removed file is a removed plan");
+        // Plans already there are read once, when opened.
+        repo.save(&plan("q")).unwrap();
+        let reopened = FsPlans::new(dir.path()).unwrap();
+        assert_eq!(reopened.list().unwrap(), [PlanId::new("q").unwrap()]);
     }
 
-    // req: P3.3
     #[test]
     fn file_plans_are_atomic_serialized_and_report_corruption() {
         let dir = tempfile::tempdir().unwrap();
@@ -276,20 +336,27 @@ mod tests {
         assert!(got.title.starts_with("writer "), "one complete write wins");
         let leftovers: Vec<_> = std::fs::read_dir(dir.path().join(".nah/plans")).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).collect();
         assert!(leftovers.is_empty());
-        std::fs::write(dir.path().join(".nah/plans/broken.json"), "{ not json").unwrap();
+        let file = |name: &str| dir.path().join(".nah/plans").join(name);
+        std::fs::write(file("broken.json"), "{ not json").unwrap();
+        repo.changed(&[file("broken.json")]).unwrap();
         let err = repo.get(&PlanId::new("broken").unwrap()).unwrap_err();
         assert!(matches!(err, ServiceError::Corrupt(ref m) if m.contains("broken.json")), "{err}");
-        std::fs::remove_file(dir.path().join(".nah/plans/broken.json")).unwrap();
+        std::fs::remove_file(file("broken.json")).unwrap();
+        repo.changed(&[file("broken.json")]).unwrap();
         // A plan copied under another name holds the wrong id.
-        std::fs::copy(dir.path().join(".nah/plans/shared.json"), dir.path().join(".nah/plans/copy.json")).unwrap();
+        std::fs::copy(file("shared.json"), file("copy.json")).unwrap();
+        repo.changed(&[file("copy.json")]).unwrap();
         let err = repo.get(&PlanId::new("copy").unwrap()).unwrap_err();
         assert!(matches!(err, ServiceError::Corrupt(ref m) if m.contains("holds plan 'shared', not 'copy'")), "{err}");
-        std::fs::remove_file(dir.path().join(".nah/plans/copy.json")).unwrap();
+        std::fs::remove_file(file("copy.json")).unwrap();
+        repo.changed(&[file("copy.json")]).unwrap();
         // A file whose name can't be a plan id is reported, not skipped.
-        std::fs::write(dir.path().join(".nah/plans/my plan.json"), "{}").unwrap();
+        std::fs::write(file("my plan.json"), "{}").unwrap();
+        repo.changed(&[file("my plan.json")]).unwrap();
         let err = repo.list().unwrap_err();
         assert!(matches!(err, ServiceError::Corrupt(ref m) if m.contains("my plan.json")), "{err}");
-        std::fs::remove_file(dir.path().join(".nah/plans/my plan.json")).unwrap();
+        std::fs::remove_file(file("my plan.json")).unwrap();
+        repo.changed(&[file("my plan.json")]).unwrap();
         assert_eq!(repo.list().unwrap(), vec![PlanId::new("shared").unwrap()]);
         // Two stores on the same directory (e.g. two processes) don't trip over
         // each other's temp files.
@@ -312,17 +379,4 @@ mod tests {
         assert_eq!(leftovers, 0);
         assert!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap().contains("cache/"));
     }
-}
-
-/// The facts read from the code, kept in `<repo>/.nah/cache/index.sqlite`.
-/// The JSON folder older versions kept them in is removed.
-pub fn open_facts(repo_root: &Path, limits: &crate::Limits) -> Result<arch_store::SqliteStore, ServiceError> {
-    let nah = repo_root.join(".nah");
-    ensure_nah_gitignore(&nah)?;
-    let old = nah.join("cache").join("index");
-    if old.is_dir() {
-        std::fs::remove_dir_all(&old).map_err(|e| io(&old, e))?;
-    }
-    let settings = arch_store::Settings { synchronous: limits.store.synchronous.clone(), cache_kib: limits.store.cache_kib };
-    Ok(arch_store::SqliteStore::open(&nah.join("cache").join("index.sqlite"), &settings)?)
 }

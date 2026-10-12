@@ -24,8 +24,8 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Cmd {
-    /// Every analysis stage over a project (read, its languages' own
-    /// indexers where installed, combine); writes the result as JSON.
+    /// The server's pipeline over a project (read, link); writes the
+    /// result as JSON.
     Analyze {
         /// The project (default: NAH_REPO_ROOT, else the working directory).
         #[arg(long)]
@@ -33,7 +33,7 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Packs: harnesses, languages and indexers.
+    /// Packs: harnesses, languages and their servers.
     Pack {
         #[command(subcommand)]
         action: PackCmd,
@@ -98,6 +98,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8080);
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    // The cockpit is built, not kept in git: without a build there's
+    // nothing to serve.
+    let build = meta_harness::server::static_dir().join(meta_harness::server::COCKPIT_BUILD);
+    if !build.is_file() {
+        return Err(format!("the cockpit isn't built ({} is missing): run `make ui` in the repository first", build.display()).into());
+    }
 
     // Bind first so the base URL handed to harnesses is the real one.
     let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
@@ -117,23 +123,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(r) => info!("Ingested {} files ({} parsed) in {} ms: {} components", r.files, r.parsed, r.millis, r.components),
                 Err(e) => tracing::warn!("Initial ingest failed: {e}"),
             }
-            // Each language's own indexer, where its pack is installed: slow,
-            // so in its own thread; calls it resolves become proven.
-            meta_harness::watch::index_in_background(arch.clone());
-            // Then follow the code: NAH_WATCH_MS is the quiet time before a
-            // burst of changes is read (0 turns watching off).
-            let quiet = std::env::var("NAH_WATCH_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(300);
-            if quiet > 0
-                && let Err(e) = meta_harness::watch::watch(arch.clone(), std::time::Duration::from_millis(quiet))
-            {
+            // Then follow the code (limits.toml's watch.debounce_ms; 0: off).
+            if let Err(e) = meta_harness::watch::watch(arch.clone()) {
                 tracing::warn!("Not watching the repo for changes: {e}");
             }
         });
     }
     let instances = Arc::new(InstanceRegistry::new(built_in_drivers(), hub.clone()));
-    // Each harness gets the program its pack installed.
-    let programs = meta_harness::packs::harness_programs(&meta_harness::packs::catalog(arch.root())?)?;
-    instances.configure(instances.default_configs(&programs)).await?;
+    // Each harness gets its launch (its own, else its pack's once the pack
+    // passes its check, which can take a while emulated): set up in the
+    // background, so the server answers meanwhile.
+    let catalog = meta_harness::packs::catalog(arch.root())?;
+    let configuring = instances.clone();
+    tokio::spawn(async move {
+        let launches = match tokio::task::spawn_blocking(move || meta_harness::packs::harness_launches(&catalog)).await {
+            Ok(launches) => launches,
+            Err(e) => {
+                tracing::warn!("Checking the harness packs failed: {e}");
+                Default::default()
+            }
+        };
+        if let Err(e) = configuring.configure(configuring.default_configs(&launches)).await {
+            tracing::warn!("Couldn't set up the harnesses: {e}");
+        }
+    });
 
     // Every session gets the architecture tools.
     let mcp_servers = vec![McpServer {
@@ -145,10 +158,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let queue = meta_harness::server::queue_runner(&arch, queue_config(&arch)?, &hub);
     let cockpit = meta_harness::cockpit::CockpitAuth::for_user()?;
     let cockpit_path = cockpit.launch_path();
+    let streams = mcp_state.sessions.clone();
     let app = create_router(AppState { registry: instances, sessions, hub, mcp_state, arch, cockpit, queue });
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");
     info!("Open the cockpit: {base_url}{cockpit_path}");
-    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
+    // Stopping ends the agents' event streams, which would otherwise keep
+    // the graceful shutdown waiting.
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            streams.close_all().await;
+        })
+        .await?;
     info!("Meta-harness stopped.");
     Ok(())
 }
@@ -178,7 +199,7 @@ fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig,
 fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>> {
     let root = repo_root()?;
     let nah = root.join(".nah");
-    let meta_harness::project::AnalysisSetup { catalog, packs, types, rules } = meta_harness::project::analysis_setup(&root).map_err(|e| e.to_string())?;
+    let meta_harness::project::AnalysisSetup { catalog, packs, types, rules, limits } = meta_harness::project::analysis_setup(&root).map_err(|e| e.to_string())?;
     let mut tools = ToolCatalog::default();
     if let Ok(text) = std::fs::read_to_string(nah.join("tools.toml")) {
         tools.extend_with(ToolCatalog::from_toml(&text)?);
@@ -205,23 +226,38 @@ fn open_architecture() -> Result<ArchitectureService, Box<dyn std::error::Error>
         Ok(text) => arch_graph::tree::TreeConfig::with_overrides(&text)?,
         Err(_) => arch_graph::tree::TreeConfig::defaults()?,
     };
-    let limits = match std::fs::read_to_string(nah.join("limits.toml")) {
-        Ok(text) => arch_service::Limits::with_overrides(&text)?,
-        Err(_) => arch_service::Limits::defaults()?,
-    };
-    Ok(ArchitectureService::open(&root, packs, types, Box::new(FsPlans::new(&root)?), Box::new(arch_service::open_facts(&root, &limits)?))?
+    Ok(ArchitectureService::open(&root, packs, types, Box::new(FsPlans::new(&root)?), arch_service::open_facts(&root, &limits)?)?
         .with_trees(trees)
         .with_limits(limits)
         .with_dsl(dsl)
         .with_rules(rules)
         .with_tools(tools, Arc::new(ProcessRunner))
-        .with_indexers(catalog)
+        .with_servers(&catalog)
         .with_reviewers(reviewers, None))
 }
 
+/// Ctrl-C, or (on unix) a request to stop: the server stops cleanly, and
+/// the agents it started with it.
 async fn shutdown_signal() {
-    if tokio::signal::ctrl_c().await.is_err() {
-        std::future::pending::<()>().await;
+    let interrupted = async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let terminated = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut stop) => {
+                stop.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminated = std::future::pending::<()>();
+    tokio::select! {
+        _ = interrupted => {}
+        _ = terminated => {}
     }
     info!("Shutdown signal received");
 }

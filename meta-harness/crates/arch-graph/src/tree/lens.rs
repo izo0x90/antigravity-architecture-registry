@@ -2,7 +2,7 @@
 //! where a view starts without a root, and with a plan in focus, what's
 //! part of the plan and what's only the code it plugs into.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Crumb, GraphRead, Input, Mark, Pill, PillRole, TreeRequest, ViewKind, Way};
 use crate::{Alignment, Component, ComponentId, RelationKind, Stage, Status};
@@ -32,6 +32,18 @@ pub(super) struct Face {
     pub callable: bool,
 }
 
+/// The data-flow view's index: every type's producers and consumers, and
+/// data types by name. Built once per graph (a snapshot, or a plan laid
+/// over it) and shared by every request on it.
+#[derive(Default)]
+pub struct FlowIndex {
+    flows: Flows,
+    /// Data types by name (to link a data card to its component).
+    data_named: BTreeMap<String, ComponentId>,
+    /// Every data type's name (some shared by two types).
+    data_names: BTreeSet<String>,
+}
+
 /// Data flow seen by type: which functions take and produce each type.
 #[derive(Default)]
 struct Flows {
@@ -43,6 +55,8 @@ struct Flows {
     produces: BTreeMap<ComponentId, BTreeSet<String>>,
     /// The worst mark among the flows of a type through a function.
     marks: BTreeMap<(ComponentId, String), Mark>,
+    /// How the flows of a type through a function are known (the weakest).
+    evidence: BTreeMap<(ComponentId, String), super::Evidence>,
     /// Types only plans carry (no flow of them is in the code).
     planned_only: BTreeSet<String>,
 }
@@ -61,10 +75,8 @@ pub(super) struct Lens<'a, G: GraphRead> {
     input: &'a Input<'a, G>,
     pub view: ViewKind,
     pub way: Way,
-    flows: Flows,
+    index: std::sync::Arc<FlowIndex>,
     focus: Option<Focus>,
-    /// Data types by name (to link a data card to its component).
-    data_named: BTreeMap<String, ComponentId>,
 }
 
 /// Plan marks for a component.
@@ -108,22 +120,12 @@ fn worse(a: Mark, b: Mark) -> Mark {
 
 impl<'a, G: GraphRead> Lens<'a, G> {
     pub fn new(input: &'a Input<'a, G>, request: &TreeRequest) -> Self {
-        let mut lens = Lens { input, view: request.view, way: request.way, flows: Flows::default(), focus: None, data_named: BTreeMap::new() };
+        let mut lens = Lens { input, view: request.view, way: request.way, index: Default::default(), focus: None };
         if request.view == ViewKind::DataFlow {
-            lens.flows = lens.index_flows();
-            let data: Vec<&Component> = input.graph.components().filter(|c| lens.is_data(c)).collect();
-            for c in data {
-                // A name two data types share links to neither.
-                match lens.data_named.get(&c.name) {
-                    Some(other) if other != &c.id => {
-                        lens.data_named.insert(c.name.clone(), ComponentId::new(""));
-                    }
-                    _ => {
-                        lens.data_named.insert(c.name.clone(), c.id.clone());
-                    }
-                }
-            }
-            lens.data_named.retain(|_, id| !id.as_str().is_empty());
+            lens.index = match &input.flows {
+                Some(index) => index.clone(),
+                None => std::sync::Arc::new(lens.flow_index()),
+            };
         }
         if let Some(plan) = input.plan.filter(|_| !request.full_code) {
             let items: BTreeSet<ComponentId> = plan.components.iter().map(|c| c.id.clone()).collect();
@@ -185,6 +187,25 @@ impl<'a, G: GraphRead> Lens<'a, G> {
         self.type_key(&written)
     }
 
+    /// The data-flow index of this lens's graph (see `FlowIndex`).
+    pub(super) fn flow_index(&self) -> FlowIndex {
+        let mut data_named: BTreeMap<String, ComponentId> = BTreeMap::new();
+        for c in self.input.graph.components().filter(|c| self.is_data(c)) {
+            // A name two data types share links to neither.
+            match data_named.get(&c.name) {
+                Some(other) if other != &c.id => {
+                    data_named.insert(c.name.clone(), ComponentId::new(""));
+                }
+                _ => {
+                    data_named.insert(c.name.clone(), c.id.clone());
+                }
+            }
+        }
+        let data_names = data_named.keys().cloned().collect();
+        data_named.retain(|_, id| !id.as_str().is_empty());
+        FlowIndex { flows: self.index_flows(), data_named, data_names }
+    }
+
     fn index_flows(&self) -> Flows {
         let mut flows = Flows::default();
         let mut observed_types: BTreeSet<String> = BTreeSet::new();
@@ -195,17 +216,25 @@ impl<'a, G: GraphRead> Lens<'a, G> {
         for r in self.graph().relations().filter(|r| r.kind == RelationKind::DataFlow) {
             let Some(key) = self.flow_type(r) else { continue };
             let mark = relation_mark(self.graph().relation_alignment(r));
+            let evidence = super::Evidence::of(r);
+            let mut known = |function: &ComponentId| {
+                let m = flows.marks.entry((function.clone(), key.clone())).or_insert(mark);
+                *m = worse(*m, mark);
+                if let Some(e) = evidence.clone() {
+                    let slot = (function.clone(), key.clone());
+                    let combined = flows.evidence.remove(&slot).map_or(e.clone(), |had| had.weaker(e));
+                    flows.evidence.insert(slot, combined);
+                }
+            };
             if step(&r.target) {
+                known(&r.target);
                 flows.consumers.entry(key.clone()).or_default().insert(r.target.clone());
                 flows.takes.entry(r.target.clone()).or_default().insert(key.clone());
-                let m = flows.marks.entry((r.target.clone(), key.clone())).or_insert(mark);
-                *m = worse(*m, mark);
             }
             if step(&r.source) {
+                known(&r.source);
                 flows.producers.entry(key.clone()).or_default().insert(r.source.clone());
                 flows.produces.entry(r.source.clone()).or_default().insert(key.clone());
-                let m = flows.marks.entry((r.source.clone(), key.clone())).or_insert(mark);
-                *m = worse(*m, mark);
             }
             if r.provenance.observed {
                 observed_types.insert(key);
@@ -240,7 +269,7 @@ impl<'a, G: GraphRead> Lens<'a, G> {
         match self.view {
             ViewKind::DataFlow => {
                 if key.starts_with(TYPE) {
-                    return self.flows.consumers.contains_key(key) || self.flows.producers.contains_key(key) || self.focus.as_ref().is_some_and(|f| f.types.contains(key));
+                    return self.index.flows.consumers.contains_key(key) || self.index.flows.producers.contains_key(key) || self.focus.as_ref().is_some_and(|f| f.types.contains(key));
                 }
                 self.function_of(key).is_some_and(|f| self.graph().component(&ComponentId::new(f)).is_some())
             }
@@ -260,19 +289,34 @@ impl<'a, G: GraphRead> Lens<'a, G> {
                 tops.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
                 tops.into_iter().map(|c| c.id.0.clone()).collect()
             }
-            ViewKind::Calls => self.entries(),
+            // The entry points, to pick one from.
+            ViewKind::Calls => self.entries().map(|e| e.id.0.clone()).collect(),
+            // The data the entry points take in: what their parameters are,
+            // and what flows into them.
             ViewKind::DataFlow => {
-                // Down: data no step makes from other data (where it starts).
-                // Up: data no step turns into anything else (where it ends).
-                // The most used first.
-                let all: BTreeSet<&String> = self.flows.consumers.keys().chain(self.flows.producers.keys()).collect();
-                let mut ends: Vec<(&String, usize)> = all
-                    .into_iter()
-                    .filter(|t| !self.joined(t, |_| true))
-                    .map(|t| (t, self.flows.consumers.get(t).map_or(0, BTreeSet::len) + self.flows.producers.get(t).map_or(0, BTreeSet::len)))
-                    .collect();
-                ends.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-                ends.into_iter().map(|(t, _)| t.clone()).collect()
+                let mut types: Vec<String> = Vec::new();
+                for entry in self.entries() {
+                    let params = self.graph().component(&entry.id).and_then(|c| c.signature.as_ref()).into_iter().flat_map(|s| &s.params).filter_map(|p| p.ty.as_deref()).filter_map(|t| self.type_key(t));
+                    // The data types the code defines in them, wrapped or
+                    // not (`Json<ImportArgs>` takes `ImportArgs`): not a
+                    // primitive (`str`), not a framework's wrapper.
+                    for written in params {
+                        let Some(written) = written.strip_prefix(TYPE) else { continue };
+                        // A generic's head is the wrapper: what's in it is taken.
+                        let inside = written.split_once('<').map_or(written, |(_, rest)| rest);
+                        for word in inside.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| self.index.data_names.contains(*w)) {
+                            let t = format!("{TYPE}{word}");
+                            if !types.contains(&t) {
+                                types.push(t);
+                            }
+                        }
+                    }
+                }
+                // Those data flows through first: a start nothing makes or
+                // uses shows nothing to follow.
+                let flows = |t: &String| self.index.flows.consumers.contains_key(t) || self.index.flows.producers.contains_key(t);
+                types.sort_by_key(|t| !flows(t));
+                types
             }
         }
     }
@@ -281,63 +325,15 @@ impl<'a, G: GraphRead> Lens<'a, G> {
     /// data (looking down), or turns `t` into other data (looking up).
     fn joined(&self, t: &str, through: impl Fn(&ComponentId) -> bool) -> bool {
         let (makers, inputs) = match self.way {
-            Way::Down => (&self.flows.producers, &self.flows.takes),
-            Way::Up => (&self.flows.consumers, &self.flows.produces),
+            Way::Down => (&self.index.flows.producers, &self.index.flows.takes),
+            Way::Up => (&self.index.flows.consumers, &self.index.flows.produces),
         };
         makers.get(t).into_iter().flatten().filter(|f| through(f)).any(|f| inputs.get(f).is_some_and(|i| i.iter().any(|other| other != t)))
     }
 
-    /// Calls' natural starting points: functions nothing calls that call
-    /// something, outside tests and examples, those reaching most first.
-    fn entries(&self) -> Vec<String> {
-        let skip = &self.input.config.entries;
-        let skipped = |c: &Component| {
-            c.file().is_some_and(|f| skip.skip_paths.iter().any(|p| f.as_str().starts_with(p.as_str()) || f.as_str().contains(&format!("/{p}"))))
-                || self.ancestors(&c.id).iter().any(|a| self.graph().component(a).is_some_and(|m| skip.skip_modules.contains(&m.name)))
-        };
-        let (forward, back) = match self.way {
-            Way::Down => (true, false),
-            Way::Up => (false, true),
-        };
-        let has = |id: &ComponentId, out: bool| {
-            if out {
-                self.graph().outgoing(id, RelationKind::Calls).next().is_some()
-            } else {
-                self.graph().incoming(id, RelationKind::Calls).next().is_some()
-            }
-        };
-        let mut found: Vec<(usize, &Component)> = self
-            .graph()
-            .components()
-            .filter(|c| has(&c.id, forward) && !has(&c.id, back) && !skipped(c))
-            .map(|c| (self.reach(&c.id, forward), c))
-            .collect();
-        found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)).then_with(|| a.1.id.cmp(&b.1.id)));
-        found.into_iter().map(|(_, c)| c.id.0.clone()).collect()
-    }
-
-    /// How many functions a call walk from `id` reaches (counted up to the
-    /// card budget: enough to rank by).
-    fn reach(&self, id: &ComponentId, forward: bool) -> usize {
-        let cap = self.input.budget;
-        let mut seen: BTreeSet<&ComponentId> = BTreeSet::from([id]);
-        let mut queue: VecDeque<&ComponentId> = VecDeque::from([id]);
-        while let Some(at) = queue.pop_front() {
-            let next: Box<dyn Iterator<Item = &ComponentId>> = if forward {
-                Box::new(self.graph().outgoing(at, RelationKind::Calls).map(|r| &r.target))
-            } else {
-                Box::new(self.graph().incoming(at, RelationKind::Calls).map(|r| &r.source))
-            };
-            for n in next {
-                if seen.len() >= cap {
-                    return seen.len();
-                }
-                if seen.insert(n) {
-                    queue.push_back(n);
-                }
-            }
-        }
-        seen.len()
+    /// The entry points in this graph, in the order given.
+    fn entries(&self) -> impl Iterator<Item = &super::EntryPoint> {
+        self.input.entries.iter().filter(|e| self.graph().component(&e.id).is_some())
     }
 
     fn plan_starts(&self, focus: &Focus) -> Vec<String> {
@@ -445,16 +441,16 @@ impl<'a, G: GraphRead> Lens<'a, G> {
         match self.graph().component(callee).and_then(|c| c.signature.as_ref()) {
             Some(sig) => {
                 for p in &sig.params {
-                    pills.push(Pill { text: p.ty.as_ref().map_or_else(|| p.name.clone(), |t| format!("{}: {t}", p.name)), role: PillRole::In, component: None });
+                    pills.push(Pill { text: p.ty.as_ref().map_or_else(|| p.name.clone(), |t| format!("{}: {t}", p.name)), role: PillRole::In, component: None, rect: None });
                 }
                 if let Some(r) = &sig.returns {
-                    pills.push(Pill { text: r.clone(), role: PillRole::Out, component: None });
+                    pills.push(Pill { text: r.clone(), role: PillRole::Out, component: None, rect: None });
                 }
             }
             None => {
                 if let Some(expects) = &relation.expects {
-                    pills.extend(schema_names(&expects.inputs).into_iter().map(|text| Pill { text, role: PillRole::In, component: None }));
-                    pills.extend(schema_names(&expects.outputs).into_iter().map(|text| Pill { text, role: PillRole::Out, component: None }));
+                    pills.extend(schema_names(&expects.inputs).into_iter().map(|text| Pill { text, role: PillRole::In, component: None, rect: None }));
+                    pills.extend(schema_names(&expects.outputs).into_iter().map(|text| Pill { text, role: PillRole::Out, component: None, rect: None }));
                 }
             }
         }
@@ -485,7 +481,7 @@ impl<'a, G: GraphRead> Lens<'a, G> {
 
     fn step(&self, function: &ComponentId) -> Pill {
         let text = self.graph().component(function).map_or_else(|| function.0.clone(), |c| c.name.clone());
-        Pill { text, role: PillRole::Step, component: Some(function.clone()) }
+        Pill { text, role: PillRole::Step, component: Some(function.clone()), rect: None }
     }
 
     fn flow(&self, key: &str) -> Vec<Child> {
@@ -493,26 +489,37 @@ impl<'a, G: GraphRead> Lens<'a, G> {
             return Vec::new();
         }
         let (via, onward, end) = match self.way {
-            Way::Down => (&self.flows.consumers, &self.flows.produces, END),
-            Way::Up => (&self.flows.producers, &self.flows.takes, START),
+            Way::Down => (&self.index.flows.consumers, &self.index.flows.produces, END),
+            Way::Up => (&self.index.flows.producers, &self.index.flows.takes, START),
         };
         // One line per pair of types, with every function between them on it.
         let mut kids: Vec<Child> = Vec::new();
         for function in via.get(key).into_iter().flatten() {
-            let mark = self.flows.marks.get(&(function.clone(), key.to_owned())).copied().unwrap_or_default();
+            let mark = self.index.flows.marks.get(&(function.clone(), key.to_owned())).copied().unwrap_or_default();
+            let evidence = self.index.flows.evidence.get(&(function.clone(), key.to_owned())).cloned();
             let next: Vec<String> = onward.get(function).map(|n| n.iter().cloned().collect()).unwrap_or_default();
             if next.is_empty() {
-                kids.push(Child { key: format!("{end}{function}"), relation: RelationKind::DataFlow, order: None, mark, pills: Vec::new(), evidence: None });
+                kids.push(Child { key: format!("{end}{function}"), relation: RelationKind::DataFlow, order: None, mark, pills: Vec::new(), evidence });
                 continue;
             }
             for t in next {
                 let pill = self.step(function);
+                // Going on from the function: how that flow is known too.
+                let onward_evidence = self.index.flows.evidence.get(&(function.clone(), t.clone())).cloned();
+                let both = match (evidence.clone(), onward_evidence) {
+                    (Some(a), Some(b)) => Some(a.weaker(b)),
+                    (a, b) => a.or(b),
+                };
                 match kids.iter_mut().find(|k| k.key == t) {
                     Some(k) => {
                         k.mark = worse(k.mark, mark);
                         k.pills.push(pill);
+                        k.evidence = match (k.evidence.take(), both) {
+                            (Some(a), Some(b)) => Some(a.weaker(b)),
+                            (a, b) => a.or(b),
+                        };
                     }
-                    None => kids.push(Child { key: t, relation: RelationKind::DataFlow, order: None, mark, pills: vec![pill], evidence: None }),
+                    None => kids.push(Child { key: t, relation: RelationKind::DataFlow, order: None, mark, pills: vec![pill], evidence: both }),
                 }
             }
         }
@@ -539,12 +546,12 @@ impl<'a, G: GraphRead> Lens<'a, G> {
             }
         };
         if let Some(t) = key.strip_prefix(TYPE) {
-            let component = self.data_named.get(t).cloned();
-            let users = self.flows.consumers.get(key).map_or(0, BTreeSet::len);
-            let makers = self.flows.producers.get(key).map_or(0, BTreeSet::len);
+            let component = self.index.data_named.get(t).cloned();
+            let users = self.index.flows.consumers.get(key).map_or(0, BTreeSet::len);
+            let makers = self.index.flows.producers.get(key).map_or(0, BTreeSet::len);
             let mark = match &component {
                 Some(id) if self.input.plan.is_some() => self.graph().component(id).map_or(Mark::Code, |c| component_mark(self.graph().alignment(id), c)),
-                _ if self.input.plan.is_some() && self.flows.planned_only.contains(key) => Mark::New,
+                _ if self.input.plan.is_some() && self.index.flows.planned_only.contains(key) => Mark::New,
                 _ => Mark::Code,
             };
             let other_plans = component.as_ref().map(others).unwrap_or_default();
@@ -562,7 +569,7 @@ impl<'a, G: GraphRead> Lens<'a, G> {
     /// Where `key` sits: what holds it, outermost first.
     pub fn path(&self, key: &str) -> Vec<Crumb> {
         let id = match key.strip_prefix(TYPE) {
-            Some(t) => match self.data_named.get(t) {
+            Some(t) => match self.index.data_named.get(t) {
                 Some(id) => id.clone(),
                 None => return Vec::new(),
             },

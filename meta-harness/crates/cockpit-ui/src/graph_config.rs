@@ -42,6 +42,14 @@ pub struct GraphUi {
     pub details_kept: usize,
     /// Results listed by "Find in the code", per kind.
     pub find: FindLimits,
+    pub legend: LegendSize,
+}
+
+/// How wide the legend may be (its text wraps to fit).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct LegendSize {
+    pub min_w: f32,
+    pub max_w: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -66,6 +74,7 @@ impl Default for GraphUi {
             min_text_px: 6.0,
             details_kept: 64,
             find: FindLimits::default(),
+            legend: LegendSize::default(),
         })
     }
 }

@@ -46,14 +46,15 @@ pub(super) fn check(plan: &Plan, graph: &Graph, types: &TypeSystem, report: &mut
             if !missing.is_empty() {
                 let names: Vec<&str> = missing.iter().map(|f| f.name()).collect();
                 let msg = format!("{} needs {} before approval", a(&c.type_name), names.join(", "));
-                report.push(if c.stage == Stage::Declared {
+                report.push(if planned.stage == Stage::Declared {
                     Finding::warning(FindingCode::SpecIncomplete, component(&c.id), msg)
                 } else {
                     Finding::error(FindingCode::SpecIncomplete, component(&c.id), msg)
                 });
             }
         }
-        for f in stage_gate(plan, graph, types, &c.id, c.stage) {
+        // The stage is the plan's (what's being approved, in an approval).
+        for f in stage_gate(plan, graph, types, &c.id, planned.stage) {
             report.push(f);
         }
     }

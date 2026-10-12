@@ -35,19 +35,6 @@ impl Default for NetUi {
     }
 }
 
-/// Links between views.
-#[derive(Clone, Debug, Deserialize)]
-pub struct LinksUi {
-    /// Follow mode: how long the code cursor rests before the graph follows it.
-    pub follow_debounce_ms: u64,
-}
-
-impl Default for LinksUi {
-    fn default() -> Self {
-        Self { follow_debounce_ms: 250 }
-    }
-}
-
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct UiConfig {
     pub brand: Brand,
@@ -59,7 +46,6 @@ pub struct UiConfig {
     pub graph_style: GraphStyle,
     pub graph: GraphUi,
     pub net: NetUi,
-    pub links: LinksUi,
     pub code: CodeUi,
     /// Every state's word, icon and colour.
     #[serde(default)]

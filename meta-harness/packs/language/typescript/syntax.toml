@@ -12,6 +12,8 @@ member_separators = ["."]
 glob_import = "*"
 source_roots = ["src"]
 index_files = ["index.ts"]
+# Functions a program starts at: where the calls view begins.
+entry_names = ["main"]
 self_names = ["this"]
 schema_types = { string = ["string"], integer = ["number"], number = ["number"], boolean = ["boolean"], array = ["Array"], object = ["Record", "object"], null = ["null", "undefined"] }
 # `: string` annotations wrap the type itself.
@@ -185,6 +187,8 @@ rule = { inside = { kind = "arrow_function", field = "body" }, not = { kind = "s
 # (Not a method call's callee: `this.save()` calls, it doesn't read.)
 access = { kind = "member_expression", not = { inside = { kind = "call_expression", field = "function" } } }
 object_field = "object"
+# Fields of other named values too (`c.count`): the server says which type.
+other_object = { kind = "identifier" }
 field_field = "property"
 assignments = [{ kind = "assignment_expression" }, { kind = "augmented_assignment_expression" }]
 left_field = "left"

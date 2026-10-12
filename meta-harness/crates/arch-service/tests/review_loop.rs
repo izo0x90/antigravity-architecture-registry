@@ -9,6 +9,8 @@ use arch_graph::{
 };
 use arch_service::{Actor, ArchitectureService, FsPlans, NewComment, PlanOp, PlanRepository, ServiceError};
 
+mod common;
+
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
@@ -25,10 +27,10 @@ fn copy_dir(from: &Path, to: &Path) {
 fn open(root: &Path) -> ArchitectureService {
     ArchitectureService::open(
         root,
-        code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
+        common::shipped_packs(),
         TypeSystem::defaults().unwrap(),
         Box::new(FsPlans::new(root).unwrap()),
-        Box::new(arch_service::open_facts(root, &arch_service::Limits::defaults().unwrap()).unwrap()),
+        arch_service::open_facts(root, &arch_service::Limits::defaults().unwrap()).unwrap(),
     )
     .unwrap()
 }
@@ -80,7 +82,6 @@ fn comment(s: &ArchitectureService, anchor: CommentAnchor, kind: CommentKind, te
     s.add_comment(&pid(), NewComment { anchor, kind, text: text.into() }, &user()).unwrap().id
 }
 
-// req: R.1
 #[test]
 fn comments_on_nodes_sections_and_relations_persist_with_the_plan() {
     let (_dir, root, s) = setup();
@@ -124,7 +125,6 @@ fn comments_on_nodes_sections_and_relations_persist_with_the_plan() {
     assert!(Plan::from_json(&stored.to_json().unwrap()).unwrap() == *stored);
 }
 
-// req: R.2
 #[test]
 fn reviewing_snapshots_the_plan_and_later_changes_are_diffed() {
     let (_dir, _root, s) = setup();
@@ -142,7 +142,6 @@ fn reviewing_snapshots_the_plan_and_later_changes_are_diffed() {
     assert_eq!(diff.fields(&id("sample::run")), ["added".to_owned()].into_iter().collect());
 }
 
-// req: R.3
 #[test]
 fn agents_answer_with_linked_changes_and_unaddressed_points_block_approval() {
     let (_dir, _root, s) = setup();

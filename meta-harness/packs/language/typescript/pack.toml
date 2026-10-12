@@ -2,9 +2,9 @@
 name = "typescript"
 kind = "language"
 version = "1.0.0"
-description = "TypeScript and JavaScript: syntax rules for the reader, highlight queries, and scip-typescript for exact links."
+description = "TypeScript and JavaScript: syntax rules for the reader, highlight queries, and TypeScript 7's own language server for exact links."
 
 [language]
 syntax = "syntax.toml"
 highlights = "highlights.scm"
-indexer = "scip-typescript"
+server = "typescript-server"

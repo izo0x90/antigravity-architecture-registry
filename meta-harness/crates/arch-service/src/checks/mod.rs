@@ -23,6 +23,8 @@ pub(crate) use schemas::effective_with_source;
 /// What the checks need besides the plan and the graph.
 pub struct CheckCx<'a> {
     pub root: &'a Path,
+    /// What ingestion never reads (the one definition).
+    pub ignores: &'a code_analyzer::Ignores,
     pub packs: &'a PackSet,
     pub types: &'a TypeSystem,
     pub tools: &'a ToolCatalog,
@@ -42,7 +44,7 @@ pub(crate) fn component(id: &arch_graph::ComponentId) -> Target {
 pub fn check_plan(plan: &Plan, graph: &Graph, cx: &CheckCx) -> Report {
     let mut report = Report::default();
     basic::references(plan, graph, &mut report);
-    basic::components(plan, graph, cx.root, cx.packs, cx.types, &mut report);
+    basic::components(plan, graph, cx.root, cx.ignores, cx.packs, cx.types, &mut report);
     basic::touch_points(plan, graph, &mut report);
     types::rules(plan, graph, cx.types, &mut report);
     let set = schema_set(graph, cx.types);

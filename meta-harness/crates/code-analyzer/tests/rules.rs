@@ -4,7 +4,9 @@
 use std::path::Path;
 
 use arch_graph::{ComponentId, FindingCode, Graph, Provenance, Severity, TypeSystem};
-use code_analyzer::{CodeRules, RuleSeverity, analyze};
+use code_analyzer::{CodeRules, FileExtract, PackSet, Observed, RuleSeverity};
+
+mod common;
 
 const PROJECT_RULES: &str = r#"
 [[rule]]
@@ -47,10 +49,9 @@ fn id(s: &str) -> ComponentId {
     ComponentId::for_symbol("rust", s)
 }
 
-// req: P6.12, M.15
 #[test]
 fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
-    let packs = code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
+    let packs = common::shipped_packs();
     let mut types = TypeSystem::defaults().unwrap();
     types.extend_with(toml::from_str("[types.handler]\nextends = \"function\"\ndescription = \"Handles a request.\"\n").unwrap()).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/rust/sample");
@@ -63,10 +64,9 @@ fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
     let dbg: Vec<_> = rules.rules.iter().filter(|r| r.spec.id == "no-dbg").collect();
     assert_eq!((dbg.len(), dbg[0].spec.severity), (1, RuleSeverity::Error));
     // The rules match while the files are read, on the same parse.
-    let analysis = analyze(&root, Path::new("."), &packs, &rules, &types, None).unwrap();
-    let (extracts, resolved) = (analysis.extracts, analysis.resolved);
+    let (extracts, resolved, model) = read_all(&root, &packs, &rules, &types);
     assert!(extracts.iter().any(|e| !e.rule_hits.is_empty()) && extracts.iter().all(|e| e.rules_fingerprint == rules.fingerprint("rust")));
-    let facts = |file: &arch_graph::RepoPath| extracts.iter().find(|e| &e.file == file);
+    let facts = |file: &arch_graph::RepoPath| model.get(file);
     // The project treats Store's methods as handlers (a specialization of function).
     let mut graph = Graph::default();
     for c in resolved.graph.components() {
@@ -95,7 +95,7 @@ fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
     );
     assert!(findings[0].message.starts_with("[no-println]") && findings[1].message.starts_with("[handlers-check]"));
     // An anchor from an index that's behind its file isn't judged on code it no longer describes.
-    let mut stale = graph.clone();
+    let mut stale = graph.share();
     let mut log = graph.component(&id("sample::log")).unwrap().clone();
     if let Some(anchor) = log.anchor.as_mut() {
         anchor.content_hash = "indexed-before-the-last-edit".into();
@@ -109,10 +109,9 @@ fn code_rules_are_scoped_to_types_and_report_forbidden_and_missing_patterns() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-// req: P6.12
 #[test]
 fn bad_rules_are_rejected_with_a_reason() {
-    let packs = code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
+    let packs = common::shipped_packs();
     let types = TypeSystem::defaults().unwrap();
     let rule = |language: &str, types_list: &str, body: &str| {
         format!("[[rule]]\nid = \"r\"\nlanguage = \"{language}\"\ntypes = [{types_list}]\nkind = \"forbidden\"\nrule = {body}\nmessage = \"m\"\n")
@@ -134,4 +133,28 @@ fn tempfile_dir() -> std::path::PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+/// Every file under `root` read with its pack, then linked.
+fn read_all(root: &Path, packs: &PackSet, rules: &code_analyzer::CodeRules, types: &TypeSystem) -> (Vec<FileExtract>, Observed, code_analyzer::Model) {
+    let extracts: Vec<FileExtract> = code_analyzer::walk(root, root, packs)
+        .unwrap()
+        .into_iter()
+        .filter_map(|f| {
+            let pack = packs.for_path(&f.absolute)?;
+            Some(code_analyzer::extract_file(pack, rules, f.path, f.module, &std::fs::read_to_string(&f.absolute).unwrap()))
+        })
+        .collect();
+    let read = extracts
+        .iter()
+        .map(|e| {
+            let version = code_analyzer::rows::read_version(&e.pack_fingerprint, &e.rules_fingerprint);
+            let file = code_analyzer::rows::FileRow { path: e.file.clone(), language: e.language.clone(), size: 0, modified: 0, content_hash: e.content_hash.clone(), read_version: version };
+            (file, e.clone())
+        })
+        .collect();
+    let mut model = code_analyzer::Model::default();
+    model.apply(packs, types, code_analyzer::Change { read, ..code_analyzer::Change::default() });
+    let observed = code_analyzer::observed(model.files(), packs);
+    (extracts, observed, model)
 }

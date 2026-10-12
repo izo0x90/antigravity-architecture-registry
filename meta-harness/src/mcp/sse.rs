@@ -8,6 +8,7 @@ use axum::Json;
 use futures::Stream;
 use serde::Deserialize;
 use tokio::sync::Mutex;
+use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
@@ -30,8 +31,10 @@ impl SseSessionManager {
         self.sessions.lock().await.insert(session_id, sender);
     }
 
-    pub async fn unregister(&self, session_id: &str) {
-        self.sessions.lock().await.remove(session_id);
+    /// Ends every open event stream (the server is stopping: an agent's
+    /// open stream mustn't keep it running).
+    pub async fn close_all(&self) {
+        self.sessions.lock().await.clear();
     }
 
     pub async fn send_to(&self, session_id: &str, event: Event) -> bool {
@@ -60,6 +63,7 @@ impl McpServerState {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct McpMessagesQuery {
     pub session_id: Option<String>,
 }
@@ -76,8 +80,31 @@ pub async fn mcp_sse_handler(
 
     mcp_state.sessions.register(session_id.clone(), tx).await;
 
-    let stream = ReceiverStream::new(rx);
+    // The session is forgotten when its stream ends (the client went away).
+    let open = OpenStream { sessions: mcp_state.sessions.clone(), id: session_id };
+    let stream = ReceiverStream::new(rx).map(move |event| {
+        let _ = &open;
+        event
+    });
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// An open event stream; dropping it forgets its session.
+struct OpenStream {
+    sessions: Arc<SseSessionManager>,
+    id: String,
+}
+
+impl Drop for OpenStream {
+    fn drop(&mut self) {
+        let sessions = self.sessions.sessions.clone();
+        let id = std::mem::take(&mut self.id);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                sessions.lock().await.remove(&id);
+            });
+        }
+    }
 }
 
 pub async fn mcp_messages_handler(

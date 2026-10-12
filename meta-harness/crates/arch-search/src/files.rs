@@ -1,6 +1,10 @@
-//! The repo's files and their contents, found with fff-search. The file
-//! list is read once (respecting .gitignore) and kept up to date from the
-//! changes the server's watcher sees; nothing outside the repo is searched.
+//! The repo's files and their contents, found with fff-search. fff lists
+//! the files (its walk respects .gitignore) and the caller's one definition
+//! of "ignored" takes out what it leaves out (`.nah/ignore`, generated
+//! output); the list is kept up to date from the changes the server's
+//! watcher sees, and listed again whenever fff says it's time to (it holds a
+//! bounded number of files added since its walk). Nothing outside the repo
+//! is searched.
 
 use std::path::{Path, PathBuf};
 
@@ -34,14 +38,18 @@ pub struct FoundLine {
     pub text: String,
 }
 
+/// Whether the caller's one definition of "ignored" leaves a path out.
+pub type Ignored = Box<dyn Fn(&Path) -> bool + Send + Sync>;
+
 pub struct RepoFiles {
     root: PathBuf,
     picker: FilePicker,
+    ignored: Ignored,
 }
 
 impl RepoFiles {
-    /// Lists the repo's files (not those .gitignore leaves out).
-    pub fn scan(root: &Path) -> Result<Self, String> {
+    /// Lists the repo's files with fff, less what `ignored` leaves out.
+    pub fn scan(root: &Path, ignored: Ignored) -> Result<Self, String> {
         let options = FilePickerOptions {
             base_path: root.to_string_lossy().into_owned(),
             // The server's own watcher says what changed (see `changed`).
@@ -49,11 +57,23 @@ impl RepoFiles {
             git_recency: GitRecencyConfig { enabled: false, ..GitRecencyConfig::default() },
             ..FilePickerOptions::default()
         };
-        let mut picker = FilePicker::new(options).map_err(|e| format!("listing {}: {e}", root.display()))?;
-        picker.collect_files().map_err(|e| format!("listing {}: {e}", root.display()))?;
-        Ok(Self { root: root.to_path_buf(), picker })
+        let picker = FilePicker::new(options).map_err(|e| format!("listing {}: {e}", root.display()))?;
+        let mut files = Self { root: root.to_path_buf(), picker, ignored };
+        files.list()?;
+        Ok(files)
     }
 
+    /// fff's walk, then out with what the caller ignores.
+    fn list(&mut self) -> Result<(), String> {
+        self.picker.collect_files().map_err(|e| format!("listing {}: {e}", self.root.display()))?;
+        let left_out: Vec<PathBuf> = self.picker.get_files().iter().map(|f| f.absolute_path(&self.picker, &self.root)).filter(|p| (self.ignored)(p)).collect();
+        for path in left_out {
+            self.picker.remove_file_by_path(&path);
+        }
+        Ok(())
+    }
+
+    /// How many files are listed.
     pub fn len(&self) -> usize {
         self.picker.live_file_count()
     }
@@ -62,95 +82,190 @@ impl RepoFiles {
         self.len() == 0
     }
 
-    /// Files whose path matches `query`, best first, and how many matched.
-    pub fn files(&self, query: &str, limit: usize) -> (Vec<FoundFile>, usize) {
+    /// The lines of these files, searched within `limits`.
+    pub fn lines(&self, limits: TextLimits) -> Lines<'_> {
+        Lines { files: self, limits }
+    }
+
+    /// Takes in changed paths (created, modified, removed; files or
+    /// directories gone). Paths outside the repo, or ignored, are left out.
+    /// Fails only when listing again does.
+    pub fn changed(&mut self, paths: &[PathBuf]) -> Result<(), String> {
+        // fff's walk lists hidden files only in a git repository; one that
+        // arrives later is taken in the same way.
+        let hidden_ok = self.picker.has_git_repo();
+        let hidden = |p: &Path| p.strip_prefix(&self.root).is_ok_and(|rest| rest.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')));
+        let kept: Vec<&PathBuf> = paths.iter().filter(|p| p.starts_with(&self.root) && !(self.ignored)(p) && (hidden_ok || !hidden(p))).collect();
+        for path in kept {
+            if path.is_file() {
+                // fff holds only so many files added since its walk: when
+                // one more wouldn't fit, its walk lists them all again (this
+                // one with them).
+                let new = self.picker.get_file_by_path(path).is_none();
+                if new && self.picker.get_overflow_files().len() + 1 >= fff_search::constants::MAX_OVERFLOW_FILES {
+                    self.list()?;
+                } else {
+                    self.picker.handle_create_or_modify(path);
+                }
+            } else if !path.exists() && !self.picker.remove_file_by_path(path) {
+                self.picker.remove_all_files_in_dir(path);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl crate::Search for RepoFiles {
+    type Found = FoundFile;
+
+    /// Files whose path matches `query`, best first.
+    fn search(&self, query: &str, limit: usize) -> crate::Searched<FoundFile> {
         let parsed = QueryParser::new(FileSearchConfig).parse(query);
         let found = self.picker.fuzzy_search(&parsed, None, FuzzySearchOptions { max_threads: 0, current_file: None, pagination: PaginationArgs { offset: 0, limit }, ..FuzzySearchOptions::default() });
         let files = found.items.iter().map(|f| FoundFile { path: f.relative_path(&self.picker) }).collect();
-        (files, found.total_matched)
+        crate::Searched { found: files, total: found.total_matched, partial: false }
     }
+}
+
+/// The lines of a repo's files, searched within a time and size budget.
+pub struct Lines<'a> {
+    files: &'a RepoFiles,
+    limits: TextLimits,
+}
+
+impl crate::Search for Lines<'_> {
+    type Found = FoundLine;
 
     /// Lines containing `query` as written (case ignored unless it has
     /// capitals; `*.rs` and `src/` narrow the files), the first `limit`;
-    /// whether the time limit cut it short.
-    pub fn text(&self, query: &str, limit: usize, limits: &TextLimits) -> (Vec<FoundLine>, bool) {
+    /// partial when the time limit cut it short.
+    fn search(&self, query: &str, limit: usize) -> crate::Searched<FoundLine> {
+        let picker = &self.files.picker;
         let parsed = QueryParser::new(AiGrepConfig).parse(query);
         let options = GrepSearchOptions {
-            max_file_size: limits.max_file_bytes,
-            max_matches_per_file: limits.per_file,
+            max_file_size: self.limits.max_file_bytes,
+            max_matches_per_file: self.limits.per_file,
             page_limit: limit,
             mode: GrepMode::PlainText,
-            time_budget_ms: limits.budget_ms,
+            time_budget_ms: self.limits.budget_ms,
             enforce_time_budget: true,
             trim_whitespace: true,
             ..GrepSearchOptions::default()
         };
-        let found = self.picker.grep(&parsed, &options);
+        let found = picker.grep(&parsed, &options);
         let lines: Vec<FoundLine> = found
             .matches
             .iter()
             .filter_map(|m| {
                 let file = found.files.get(m.file_index)?;
-                Some(FoundLine { path: file.relative_path(&self.picker), line: m.line_number as u32, text: m.line_content.clone() })
+                Some(FoundLine { path: file.relative_path(picker), line: m.line_number as u32, text: m.line_content.clone() })
             })
             .collect();
         let partial = found.next_file_offset != 0 || found.total_files_searched < found.filtered_file_count;
-        (lines, partial)
-    }
-
-    /// Takes in changed paths (created, modified, removed; files or
-    /// directories). Paths outside the repo are ignored.
-    pub fn changed(&mut self, paths: &[PathBuf]) {
-        for path in paths.iter().filter(|p| p.starts_with(&self.root)) {
-            if path.is_file() {
-                self.picker.handle_create_or_modify(path);
-            } else if !path.exists() {
-                if !self.picker.remove_file_by_path(path) {
-                    self.picker.remove_all_files_in_dir(path);
-                }
-            }
-        }
+        crate::Searched { total: lines.len(), found: lines, partial }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Search;
 
     fn limits() -> TextLimits {
         TextLimits { per_file: 5, budget_ms: 1000, max_file_bytes: 1 << 20 }
     }
 
-    // req: M.13
     #[test]
     fn files_and_lines_are_found_in_the_repo_only_and_kept_up_to_date() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("repo");
         std::fs::create_dir_all(root.join("src")).unwrap();
-        // .gitignore counts in a git repo, as the server's always is.
-        assert!(std::process::Command::new("git").arg("init").arg("-q").arg(&root).status().unwrap().success());
         std::fs::write(root.join("src/service.rs"), "fn rebuild_observed() {}\nfn other() {}\n").unwrap();
         std::fs::write(root.join("src/store.rs"), "struct Store;\n").unwrap();
-        std::fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
+        // A file the caller's "ignored" leaves out isn't searched.
         std::fs::create_dir_all(root.join("ignored")).unwrap();
         std::fs::write(root.join("ignored/service.rs"), "fn rebuild_observed() {}\n").unwrap();
         std::fs::write(dir.path().join("outside.rs"), "fn rebuild_observed() {}\n").unwrap();
-        let mut files = RepoFiles::scan(&root).unwrap();
+        let skip = root.join("ignored");
+        let mut files = RepoFiles::scan(&root, Box::new(move |p| p.starts_with(&skip))).unwrap();
 
-        let (found, total) = files.files("servic", 10);
-        assert_eq!(found.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["src/service.rs"], "ignored and outside files aren't found");
-        assert_eq!(total, 1);
-        let (lines, partial) = files.text("rebuild_observed", 10, &limits());
-        assert_eq!(lines, [FoundLine { path: "src/service.rs".into(), line: 1, text: "fn rebuild_observed() {}".into() }]);
-        assert!(!partial);
+        let paths = files.search("servic", 10);
+        assert_eq!(paths.found.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["src/service.rs"], "ignored and outside files aren't found");
+        assert_eq!(paths.total, 1);
+        let lines = files.lines(limits()).search("rebuild_observed", 10);
+        assert_eq!(lines.found, [FoundLine { path: "src/service.rs".into(), line: 1, text: "fn rebuild_observed() {}".into() }]);
+        assert!(!lines.partial);
+        // Narrowed by kind and folder; case ignored unless asked for.
+        let count = |q: &str| files.lines(limits()).search(q, 10).found.len();
+        assert_eq!((count("STORE *.rs"), count("store src/"), count("store *.py")), (0, 1, 0));
 
         // A new file, a changed one, a removed one.
         std::fs::write(root.join("src/view.rs"), "fn rebuild_observed() {}\n").unwrap();
         std::fs::write(root.join("src/service.rs"), "fn other() {}\n").unwrap();
         std::fs::remove_file(root.join("src/store.rs")).unwrap();
-        files.changed(&[root.join("src/view.rs"), root.join("src/service.rs"), root.join("src/store.rs"), dir.path().join("outside.rs")]);
-        let (lines, _) = files.text("rebuild_observed", 10, &limits());
+        files.changed(&[root.join("src/view.rs"), root.join("src/service.rs"), root.join("src/store.rs"), dir.path().join("outside.rs"), root.join("ignored/service.rs")]).unwrap();
+        let lines = files.lines(limits()).search("rebuild_observed", 10).found;
         assert_eq!(lines.iter().map(|l| l.path.as_str()).collect::<Vec<_>>(), ["src/view.rs"]);
-        assert!(!files.files("store", 10).0.iter().any(|f| f.path == "src/store.rs"), "removed");
+        assert!(!files.search("store", 10).found.iter().any(|f| f.path == "src/store.rs"), "removed");
+    }
+
+    /// How many any kind of search finds: the one trait over all three.
+    fn how_many<S: Search>(search: &S, query: &str) -> usize {
+        search.search(query, 10).total
+    }
+
+    #[test]
+    fn symbols_files_and_lines_are_searched_through_one_trait() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/store.rs"), "struct Store;\nfn save() {}\n").unwrap();
+        let files = RepoFiles::scan(&root, Box::new(|_| false)).unwrap();
+        let symbols = crate::Symbols { names: vec!["Store".into(), "save".into()], qualified: vec!["store::Store src/store.rs".into(), "store::save src/store.rs".into()] };
+        assert_eq!(how_many(&symbols, "save"), 1);
+        assert_eq!(how_many(&symbols, "store::Store"), 1, "a qualified query matches the whole symbol");
+        assert_eq!(how_many(&files, "store"), 1);
+        assert_eq!(how_many(&files.lines(limits()), "fn save"), 1);
+        let first = symbols.search("s", 1);
+        assert_eq!((first.found.len(), first.total), (1, 2), "at most the limit, and how many in all");
+    }
+
+    /// `n` files under `root/src`, named so each is found by its own name.
+    fn many(root: &Path, from: usize, n: usize) -> Vec<PathBuf> {
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        (from..from + n)
+            .map(|i| {
+                let path = root.join(format!("src/file_{i:05}.rs"));
+                std::fs::write(&path, format!("fn only_in_{i:05}() {{}}\n")).unwrap();
+                path
+            })
+            .collect()
+    }
+
+    #[test]
+    fn however_many_files_the_list_has_and_however_they_arrive_all_are_searched() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        many(&root, 0, 1500);
+        // A file the caller ignores is never listed.
+        std::fs::write(root.join("src/ignored.rs"), "fn only_in_ignored() {}\n").unwrap();
+        let skip = root.join("src/ignored.rs");
+        let mut files = RepoFiles::scan(&root, Box::new(move |p| p == skip)).unwrap();
+        assert_eq!(files.len(), 1500);
+        assert_eq!(files.search("file_01499", 5).found.first().map(|f| f.path.as_str()), Some("src/file_01499.rs"));
+        assert!(!files.search("ignored", 5).found.iter().any(|f| f.path == "src/ignored.rs"));
+        assert_eq!(files.lines(limits()).search("only_in_01499", 5).found.len(), 1);
+        // Created one by one, as a watcher sees them: more than fff holds
+        // between walks.
+        for path in many(&root, 1500, 1100) {
+            files.changed(std::slice::from_ref(&path)).unwrap();
+        }
+        assert_eq!(files.len(), 2600);
+        assert!(!files.search("ignored", 5).found.iter().any(|f| f.path == "src/ignored.rs"), "still left out after listing again");
+        assert_eq!(files.search("file_02599", 5).found.first().map(|f| f.path.as_str()), Some("src/file_02599.rs"));
+        // A folder gone: everything under it.
+        std::fs::remove_dir_all(root.join("src")).unwrap();
+        files.changed(&[root.join("src")]).unwrap();
+        assert!(files.is_empty());
     }
 }

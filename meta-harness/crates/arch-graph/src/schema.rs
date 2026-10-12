@@ -206,14 +206,6 @@ impl SchemaSet {
         self.named.insert(title.into(), schema);
     }
 
-    pub fn contains(&self, title: &str) -> bool {
-        self.named.contains_key(title)
-    }
-
-    pub fn get(&self, title: &str) -> Option<&Value> {
-        self.named.get(title)
-    }
-
     /// Titles referenced by `schema` that aren't defined.
     pub fn missing(&self, schema: &Value) -> Vec<String> {
         let mut seen = BTreeSet::new();
@@ -353,7 +345,6 @@ fn describe(schema: &Value) -> String {
 mod tests {
     use super::*;
 
-    // req: P2.5
     #[test]
     fn shorthand_compiles_to_json_schema_and_refs_resolve_by_title() {
         let dsl = Dsl::defaults().unwrap();
@@ -399,7 +390,6 @@ mod tests {
         assert_eq!(set.resolve(&json!({"$ref": "Order"})), Err(RefError::Missing("Order".into())));
     }
 
-    // req: P2.5
     #[test]
     fn schema_ref_cycles_are_reported_with_their_loop() {
         let dsl = Dsl::defaults().unwrap();

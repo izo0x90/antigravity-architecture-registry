@@ -14,7 +14,6 @@ fn folders(path: &str) -> Vec<String> {
     out
 }
 
-// req: AP.12
 #[test]
 fn the_readme_describes_the_system_as_it_is() {
     let readme = read("README.md");
@@ -36,11 +35,11 @@ fn the_readme_describes_the_system_as_it_is() {
         assert!(readme.contains(&format!("meta-harness pack {command}")), "the README doesn't show `pack {command}`");
     }
     // The analysis path, its marks, and where to see it.
-    for words in ["meta-harness analyze", "proven", "unconfirmed", "/api/code/analysis", "/api/perf", "highlights.scm", "contains", "calls", "data_flow"] {
+    for words in ["meta-harness analyze", "confirmed", "unconfirmed", "/api/code/analysis", "/api/perf", "highlights.scm", "contains", "calls", "data_flow"] {
         assert!(readme.contains(words), "the README doesn't mention {words}");
     }
     // Nothing deleted is named.
-    for gone in ["arch-index", "arch_index", "install-antigravity-acp.sh", "AGY_EXECUTABLE", "find_acp_server", "aren't built yet", "/explainer/", "UPDATE_EXPLAINER"] {
+    for gone in ["SCIP", "scip-", "indexer", "arch-index", "arch_index", "install-antigravity-acp.sh", "AGY_EXECUTABLE", "find_acp_server", "aren't built yet", "/explainer/", "UPDATE_EXPLAINER"] {
         assert!(!readme.contains(gone), "the README still names {gone}");
     }
 }

@@ -56,7 +56,7 @@ impl ReviewState {
                     self.diff = diff;
                     self.generation += 1;
                 }
-                Reply::Comments(_, Err(e)) | Reply::Diff(_, Err(e)) => self.error = Some(e),
+                Reply::Comments(_, Err(e)) | Reply::Diff(_, Err(e)) => self.error = Some(e.into()),
                 _ => {}
             }
         }
@@ -125,7 +125,6 @@ pub(crate) mod tests {
         }
     }
 
-    // req: R.2
     #[test]
     fn graph_marks_changed_and_commented_nodes() {
         let id = |s: &str| ComponentId::new(format!("rust:{s}"));

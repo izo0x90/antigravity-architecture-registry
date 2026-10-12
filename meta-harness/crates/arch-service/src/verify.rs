@@ -283,12 +283,11 @@ mod tests {
     use super::*;
     use arch_graph::{Provenance, Severity};
 
-    // req: P6.2
     #[test]
     fn calls_only_in_deferred_code_are_flagged_but_dont_block() {
         let id = |s: &str| ComponentId::new(format!("rust:{s}"));
         let planned = Relation::new(RelationKind::Calls, id("a::run"), id("a::save"), Provenance::PLANNED);
-        let mut observed = Graph::new();
+        let mut observed = Graph::default();
         let mut call = Relation::new(RelationKind::Calls, id("a::run"), id("a::save"), Provenance::OBSERVED);
         call.deferred = true;
         observed.upsert_relation(call.clone());

@@ -61,7 +61,6 @@ pub fn can_transition(from: Stage, to: Stage) -> bool {
 mod tests {
     use super::*;
 
-    // req: P2.2
     #[test]
     fn status_and_stage_use_snake_case_names_and_reject_unknowns() {
         assert_eq!(serde_json::to_string(&Stage::ArchApproved).unwrap(), "\"arch_approved\"");
@@ -70,7 +69,6 @@ mod tests {
         assert!(serde_json::from_str::<Status>("\"New\"").is_err());
     }
 
-    // req: P2.2
     #[test]
     fn transition_table_allows_both_paths_into_skeleton() {
         use Stage::*;

@@ -59,7 +59,7 @@ impl Expr {
 
     /// The node holding the name `read` ends in (`f` in `a::b::f`, `save`
     /// in `x.save`): where the call's target is written, for matching it
-    /// with an indexer's references by position. None for a call's result.
+    /// with a language server's answers by position. None for a call's result.
     pub(crate) fn name_node<'r>(pack: &Pack, node: &AstNode<'r>) -> Option<AstNode<'r>> {
         let kind = node.kind();
         let spec = pack.spec.expressions.iter().find(|e| e.kinds.iter().any(|k| *k == kind))?;

@@ -203,6 +203,21 @@ impl ChatStreamState {
         }
     }
 
+    /// Why the chosen harness (else the only one) can't start, and how to
+    /// fix it, as its instance says.
+    pub fn harness_problem(&self) -> Option<String> {
+        let instance = match &self.active_instance {
+            Some(id) => self.store.instances.get(id),
+            None if self.store.instances.len() == 1 => self.store.instances.values().next(),
+            None => None,
+        }?;
+        match &instance.status {
+            ProviderStatus::Unavailable { reason } => Some(format!("{}: {reason}", instance.display_name)),
+            ProviderStatus::Error { message } => Some(format!("{}: {message}", instance.display_name)),
+            _ => None,
+        }
+    }
+
     pub fn agent_activity(&self) -> u64 {
         self.thread().map(|t| t.activity).unwrap_or(0)
     }
@@ -271,7 +286,7 @@ impl ChatStreamState {
                 }
                 Reply::Opened(Err(e)) => {
                     self.opening = false;
-                    self.error = Some(e);
+                    self.error = Some(e.into());
                 }
                 Reply::Saved(Ok(sessions)) => {
                     self.saved_sessions = Some(sessions);
@@ -284,7 +299,7 @@ impl ChatStreamState {
                     self.auth_instructions = Some(instructions);
                 }
                 Reply::Sent(Err(e)) | Reply::Saved(Err(e)) | Reply::AuthStarted(Err(e)) | Reply::Done(Err(e)) => {
-                    self.error = Some(e);
+                    self.error = Some(e.into());
                 }
                 Reply::Sent(Ok(())) | Reply::Done(Ok(())) => {}
             }
@@ -1286,7 +1301,30 @@ pub(crate) mod tests {
         chat
     }
 
-    // req: N.20
+    #[test]
+    fn a_harness_that_cant_start_says_why_and_the_fix() {
+        let mut chat = ChatStreamState::default();
+        assert_eq!(chat.harness_problem(), None);
+        let snapshot = |status: ProviderStatus| ProviderSnapshot {
+            instance_id: InstanceId::new("antigravity"),
+            driver: harness_contracts::DriverKind::new("antigravity"),
+            display_name: "Antigravity".into(),
+            status,
+            auth: harness_contracts::AuthState { status: harness_contracts::AuthStatus::Unknown, account: None, methods: Vec::new() },
+            capabilities: Default::default(),
+            models: Vec::new(),
+            commands: Vec::new(),
+            skills: Vec::new(),
+            runtime_modes: Vec::new(),
+            supports_plan_mode: false,
+        };
+        let reason = "antigravity-acp isn't installed (fix: meta-harness pack install antigravity-acp)";
+        chat.process_event(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Unavailable { reason: reason.into() }) });
+        assert_eq!(chat.harness_problem().as_deref(), Some(format!("Antigravity: {reason}").as_str()), "the AGENT light's hint");
+        chat.process_event(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Ready) });
+        assert_eq!(chat.harness_problem(), None);
+    }
+
     #[test]
     fn messages_take_a_cursor_and_their_links_open() {
         let mut chat = conversation();

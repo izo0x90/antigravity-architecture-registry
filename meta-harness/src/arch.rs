@@ -86,34 +86,33 @@ pub fn plan_id(raw: &str) -> Result<PlanId, ArchError> {
     PlanId::new(raw).map_err(|e| ArchError(ServiceError::InvalidOp(e.to_string())))
 }
 
-/// What a read shows: the plan named (`plan=<id>`), else the code alone.
-fn source_param(raw: &Option<String>) -> Result<Source, ArchError> {
-    Ok(Source::from_plan(raw.as_deref().filter(|p| !p.is_empty()).map(plan_id).transpose()?))
-}
-
 async fn types(State(state): State<AppState>) -> Json<arch_graph::TypeSystem> {
     Json(state.arch.types().clone())
 }
 
+// An argument it doesn't know is refused, never ignored.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SearchQuery {
     q: String,
     /// symbols (the default), files or text.
     #[serde(default)]
     kind: arch_service::SearchKind,
+    /// `code` (the default) or `plan:<id>`.
     #[serde(default)]
-    plan: Option<String>,
+    source: Source,
     #[serde(default)]
     limit: Option<usize>,
 }
 
 /// Symbols, files or lines matching `q`; each hit names the card it stands for.
 async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> ArchResult<arch_service::Found> {
-    let source = source_param(&q.plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.search(&q.q, q.kind, &source, q.limit)).await?))
+    Ok(Json(blocking(&state.arch, move |a| a.search(&q.q, q.kind, &q.source, q.limit)).await?))
 }
 
+// An argument it doesn't know is refused, never ignored.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CodeQuery {
     path: String,
 }
@@ -124,41 +123,45 @@ async fn code_analysis(State(state): State<AppState>, Query(q): Query<CodeQuery>
     Ok(Json(blocking(&state.arch, move |a| a.code_analysis(&q.path)).await?))
 }
 
+/// What a read shows: `code` (the default) or `plan:<id>`.
+// An argument it doesn't know is refused, never ignored.
 #[derive(Deserialize)]
-struct PlanQuery {
+#[serde(deny_unknown_fields)]
+struct SourceQuery {
     #[serde(default)]
-    plan: Option<String>,
+    source: Source,
 }
 
-async fn component(State(state): State<AppState>, Path(id): Path<String>, Query(q): Query<PlanQuery>) -> ArchResult<arch_service::ComponentDetail> {
-    let source = source_param(&q.plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.component(&ComponentId::new(id), &source)).await?))
+async fn component(State(state): State<AppState>, Path(id): Path<String>, Query(q): Query<SourceQuery>) -> ArchResult<arch_service::ComponentDetail> {
+    Ok(Json(blocking(&state.arch, move |a| a.component(&ComponentId::new(id), &q.source)).await?))
 }
 
+// An argument it doesn't know is refused, never ignored.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AtQuery {
     file: String,
     line: u32,
     #[serde(default)]
-    plan: Option<String>,
+    source: Source,
 }
 
 /// The component enclosing a code location (reveal-in-graph from the code view).
 async fn component_at(State(state): State<AppState>, Query(q): Query<AtQuery>) -> ArchResult<arch_graph::Component> {
-    let source = source_param(&q.plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.component_at(&q.file, q.line, &source)).await?))
+    Ok(Json(blocking(&state.arch, move |a| a.component_at(&q.file, q.line, &q.source)).await?))
 }
 
+// An argument it doesn't know is refused, never ignored.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileQuery {
     path: String,
     #[serde(default)]
-    plan: Option<String>,
+    source: Source,
 }
 
 async fn file_view(State(state): State<AppState>, Query(q): Query<FileQuery>) -> ArchResult<arch_graph::FileView> {
-    let source = source_param(&q.plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.file_view(&q.path, &source)).await?))
+    Ok(Json(blocking(&state.arch, move |a| a.file_view(&q.path, &q.source)).await?))
 }
 
 #[derive(Deserialize, Default)]
@@ -301,6 +304,7 @@ async fn validate(State(state): State<AppState>, Path(plan): Path<String>) -> Ar
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct NextQuery {
     action: arch_service::Action,
 }
@@ -406,6 +410,7 @@ fn user(by: &str) -> Result<Actor, ArchError> {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CommentsQuery {
     /// Include resolved comments too.
     #[serde(default)]

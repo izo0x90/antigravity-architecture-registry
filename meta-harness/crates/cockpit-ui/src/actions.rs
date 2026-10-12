@@ -499,10 +499,9 @@ mod tests {
         assert_eq!(session, vec![LeaderEntry::Action { key: 'n', index: 1 }, LeaderEntry::Action { key: 'r', index: 2 }]);
     }
 
-    // req: N.23
     #[test]
     fn the_focused_views_leader_entries_come_first() {
-        let mut all = vec![bound("slot", "1"), bound("new", "sn"), bound("graph.view", "gv"), bound("graph.fit", "z")];
+        let mut all = vec![bound("slot", "1"), bound("new", "sn"), bound("graph.view", "gv"), bound("graph.flip", "z")];
         all[2].origin = Origin::View(BufferKind::Graph);
         all[3].origin = Origin::View(BufferKind::Graph);
         let root = leader_entries(&all, &[], Origin::View(BufferKind::Graph));

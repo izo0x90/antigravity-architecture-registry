@@ -5,20 +5,17 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use arch_store::{Change, CombinedRows, Commit, FactStore, IndexedChange, Stamp, Stored};
-use rayon::prelude::*;
+use arch_store::{SqliteStore, Stamp};
 
 use arch_graph::tree::{Tree, TreeRequest};
 use arch_graph::{
     Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
     RepoPath, Severity, Source, Stage, Target, TypeSystem, ViewRequest, can_transition, ComponentDetail, schema::Dsl,
-    IndexState, IndexStatus, IndexSummary,
+    IndexStatus,
 };
-use code_analyzer::index::IndexedFile;
-use code_analyzer::{AmbiguousCall, CodeRules, ExternalCall, FileExtract, Occurrence, PackSet, Resolved, combine, content_hash, extract_file, walk, UnverifiedFlow};
+use code_analyzer::{AmbiguousCall, CodeRules, Occurrence, PackSet, content_hash};
 use serde::{Deserialize, Serialize};
 
 use crate::progress::{Downgrade, cascade};
@@ -27,6 +24,7 @@ use crate::contract::{ContractSlice, slice};
 use crate::ops::{PlanOp, apply};
 use crate::review::{ReviewProvider, ReviewerCatalog, ReviewsReport, Subject};
 use crate::perf::{GraphSize, PerfReport, StoreSize, Timing};
+use crate::pipeline::{Core, Pipeline, Snapshot};
 use crate::store::PlanRepository;
 use crate::tools::{ProcessRunner, ToolCatalog, ToolRunner, ToolsReport};
 use crate::{ServiceError, chain, checks, review, tools, verify};
@@ -65,71 +63,14 @@ pub struct IngestReport {
     /// Files whose content changed (parsed anew or removed).
     #[serde(default)]
     pub changed: Vec<RepoPath>,
+    /// Of those, the files that weren't there before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub created: Vec<RepoPath>,
+    /// Files linked again (the changed ones and those using them): what the
+    /// languages' servers are asked about.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linked: Vec<RepoPath>,
 }
-
-/// How far an indexing run got (progress is announced at most this often).
-/// Files are read on many threads at once, so both are shared.
-struct Progress {
-    done: AtomicUsize,
-    last: Mutex<Instant>,
-}
-
-/// Every source file's facts as last read: what the graph is linked from.
-#[derive(Default)]
-struct Files {
-    /// Sorted by file.
-    extracts: Vec<FileExtract>,
-    stamps: HashMap<RepoPath, Stamp>,
-}
-
-impl Files {
-    fn new(stored: Vec<Stored>) -> Self {
-        let mut files = Self::default();
-        files.apply(stored.into_iter().map(|s| Change::Put(Box::new(s))).collect());
-        files
-    }
-
-    fn get(&self, file: &RepoPath) -> Option<(&FileExtract, Stamp)> {
-        let at = self.extracts.binary_search_by(|e| e.file.cmp(file)).ok()?;
-        Some((&self.extracts[at], self.stamps.get(file).copied().unwrap_or_default()))
-    }
-
-    fn apply(&mut self, changes: Vec<Change>) {
-        if changes.is_empty() {
-            return;
-        }
-        let mut by_file: BTreeMap<RepoPath, FileExtract> = std::mem::take(&mut self.extracts).into_iter().map(|e| (e.file.clone(), e)).collect();
-        for change in changes {
-            match change {
-                Change::Put(stored) => {
-                    self.stamps.insert(stored.extract.file.clone(), stored.stamp);
-                    by_file.insert(stored.extract.file.clone(), stored.extract);
-                }
-                Change::Restamp { file, stamp } => {
-                    self.stamps.insert(file, stamp);
-                }
-                Change::Remove(file) => {
-                    self.stamps.remove(&file);
-                    by_file.remove(&file);
-                }
-            }
-        }
-        self.extracts = by_file.into_values().collect();
-    }
-}
-
-/// What reading one file came to.
-enum Read {
-    /// Not a file any pack reads.
-    Skipped,
-    /// Unchanged by size and time: not read.
-    Unread,
-    /// Read, and found the same.
-    Same,
-    Changed(Change),
-}
-
-const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(150);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Verification {
@@ -161,20 +102,6 @@ pub struct Refresh {
     pub downgraded: Vec<(PlanId, Downgrade)>,
 }
 
-/// The code as last indexed: read-only once built. Each index run builds a
-/// new one and swaps it in; readers hold the one they started with.
-#[derive(Default)]
-struct Observed {
-    graph: Arc<Graph>,
-    ambiguous: Vec<AmbiguousCall>,
-    unproven: Vec<AmbiguousCall>,
-    external: Vec<ExternalCall>,
-    /// Data handed from one call to another that types couldn't confirm.
-    unverified: Vec<UnverifiedFlow>,
-    /// Counts up with every swap (a plan's overlay is built for one).
-    generation: u64,
-}
-
 /// A plan laid over the code, kept until the plan or the code changes.
 struct Merged {
     generation: u64,
@@ -183,47 +110,86 @@ struct Merged {
     used: Instant,
 }
 
-type Listener = Arc<dyn Fn(&ArchEvent) + Send + Sync>;
-
 pub struct ArchitectureService {
-    root: PathBuf,
-    packs: PackSet,
-    types: TypeSystem,
+    /// The languages' servers (none until `with_servers`). Dropped first:
+    /// their threads stop before the pipeline does.
+    servers: crate::servers::Servers,
+    /// The one writer; dropping it waits for its thread.
+    pub(crate) pipeline: Pipeline,
+    /// What the pipeline thread shares (settings, the store, what readers see).
+    pub(crate) core: Arc<Core>,
     dsl: Dsl,
     trees: arch_graph::tree::TreeConfig,
-    rules: CodeRules,
     plans: Box<dyn PlanRepository>,
-    /// Where every file's facts are kept between runs.
-    facts: Box<dyn FactStore>,
-    /// Every file's facts, as last read.
-    files: RwLock<Files>,
-    /// What the languages' own indexers said, per file, as of their last runs.
-    indexed: RwLock<BTreeMap<RepoPath, IndexedFile>>,
-    /// The packs, for the languages' indexers (none: names only).
-    indexers: Option<nah_packs::Catalog>,
-    /// One indexer run at a time; one asked for meanwhile runs after it.
-    indexing: Mutex<()>,
-    index_again: std::sync::atomic::AtomicBool,
     /// The repo's file list for searching files and lines (read on first use).
     repo_files: RwLock<Option<arch_search::RepoFiles>>,
-    observed: RwLock<Arc<Observed>>,
     /// Plans laid over the code, by plan (the most recently used few).
     merged: Mutex<HashMap<PlanId, Merged>>,
-    limits: crate::Limits,
-    listeners: RwLock<Vec<Listener>>,
     tools: ToolCatalog,
     runner: Arc<dyn ToolRunner>,
     reviewers: ReviewerCatalog,
     review_provider: Option<Arc<dyn ReviewProvider>>,
     /// One lock per plan, held across load -> change -> save.
     plan_locks: Mutex<HashMap<PlanId, Arc<Mutex<()>>>>,
-    /// Indexing as clients see it (state, progress, last run, stale files).
-    index_status: RwLock<IndexStatus>,
-    /// One indexing run at a time (the watcher, agents and the user can all
-    /// start one).
-    ingest_lock: Mutex<()>,
-    /// The last answers' timings.
-    recent: Mutex<crate::perf::Recent>,
+    /// Built once per graph (the code's snapshot, or a plan's overlay) and
+    /// kept while it's in use.
+    flow_indexes: Mutex<Vec<Kept<arch_graph::tree::FlowIndex>>>,
+    /// Where the code is entered, found once per snapshot of the code.
+    entry_points: Mutex<Vec<Kept<Vec<arch_graph::tree::EntryPoint>>>>,
+    symbol_lists: Mutex<Vec<Kept<SymbolList>>>,
+    /// How many symbol lists were built (counted for the tests).
+    #[cfg(any(test, feature = "testing"))]
+    symbol_lists_built: std::sync::atomic::AtomicUsize,
+    /// Which other plans change each component (the plan badges), per
+    /// version of the plans and plan shown.
+    badges: Mutex<Option<(BadgesKey, Badges)>>,
+    /// Trees sent to clients (laid out), kept while their graph is: opening
+    /// a card merges its branch into the tree the client holds.
+    held: Mutex<std::collections::VecDeque<Held>>,
+}
+
+/// A tree a client holds, by the request it answers.
+struct Held {
+    graph: std::sync::Weak<Graph>,
+    request: TreeRequest,
+    tree: Arc<Tree>,
+}
+
+/// Something built from one graph, kept while the graph is.
+struct Kept<T> {
+    graph: std::sync::Weak<Graph>,
+    value: Arc<T>,
+}
+
+/// What the symbol search matches against, per component of one graph.
+pub(crate) struct SymbolList {
+    pub ids: Vec<ComponentId>,
+    /// Each one's name, and its whole symbol and file, in `ids`' order.
+    pub symbols: arch_search::Symbols,
+}
+
+/// The plans as they are (each one's id and version) and the plan shown.
+/// The plans the badges were built from (held, so none is freed and its
+/// address reused while kept), and the plan shown.
+type BadgesKey = (Vec<(PlanId, Arc<Plan>)>, Option<PlanId>);
+
+/// The plans that change each component.
+type Badges = Arc<BTreeMap<ComponentId, Vec<PlanId>>>;
+
+fn same_badges_key(a: &BadgesKey, b: &BadgesKey) -> bool {
+    a.1 == b.1 && a.0.len() == b.0.len() && a.0.iter().zip(&b.0).all(|((ia, pa), (ib, pb))| ia == ib && Arc::ptr_eq(pa, pb))
+}
+
+/// The one kept for `graph`, else `build`'s (kept from now on).
+fn kept<T>(list: &Mutex<Vec<Kept<T>>>, graph: &Arc<Graph>, build: impl FnOnce() -> T) -> Arc<T> {
+    let mut list = list.lock().unwrap_or_else(PoisonError::into_inner);
+    list.retain(|k| k.graph.strong_count() > 0);
+    if let Some(k) = list.iter().find(|k| std::ptr::eq(k.graph.as_ptr(), Arc::as_ptr(graph))) {
+        return k.value.clone();
+    }
+    let value = Arc::new(build());
+    list.push(Kept { graph: Arc::downgrade(graph), value: value.clone() });
+    value
 }
 
 /// A tree request in words (for timings and the slow log).
@@ -238,22 +204,7 @@ fn asked(request: &TreeRequest, card: Option<&str>) -> String {
     out
 }
 
-/// Replaces (or adds) one language's indexer status.
-fn upsert_indexer(list: &mut Vec<arch_graph::IndexerStatus>, status: arch_graph::IndexerStatus) {
-    match list.iter_mut().find(|s| s.language == status.language) {
-        Some(existing) => *existing = status,
-        None => list.push(status),
-    }
-}
-
-fn change_file(change: &Change) -> &RepoPath {
-    match change {
-        Change::Put(stored) => &stored.extract.file,
-        Change::Restamp { file, .. } | Change::Remove(file) => file,
-    }
-}
-
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
@@ -270,54 +221,55 @@ fn now_rfc3339() -> String {
 }
 
 impl ArchitectureService {
-    /// Opens the service over `root`, loading the facts kept from the last
-    /// run (no file is read). Code rules start as the defaults; see `with_rules`.
-    pub fn open(root: &Path, packs: PackSet, types: TypeSystem, plans: Box<dyn PlanRepository>, facts: Box<dyn FactStore>) -> Result<Self, ServiceError> {
-        let loaded = facts.load()?;
-        let files = RwLock::new(Files::new(loaded.files));
-        let indexed = RwLock::new(loaded.indexed.into_iter().map(|f| (f.path.clone(), f)).collect());
+    /// Opens the service over `root`, building the graph from the rows kept
+    /// from the last run (no file is read). Code rules start as the
+    /// defaults; see `with_rules`.
+    pub fn open(root: &Path, packs: PackSet, types: TypeSystem, plans: Box<dyn PlanRepository>, store: SqliteStore) -> Result<Self, ServiceError> {
         // Packs map onto types: every one they name must exist.
         packs.check_types(&types).map_err(|e| ServiceError::Index(e.to_string()))?;
         let rules = CodeRules::defaults(&packs, &types).map_err(|e| ServiceError::Index(e.to_string()))?;
-        let service = Self {
+        let core = Core {
             root: root.to_path_buf(),
+            ignores: Arc::new(code_analyzer::Ignores::new(root)),
             packs,
             types,
+            rules,
+            limits: crate::Limits::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in limits: {e}")))?,
+            store,
+            snapshot: Arc::new(RwLock::new(Arc::new(Snapshot::default()))),
+            retired: Mutex::new(Vec::new()),
+            status: RwLock::new(IndexStatus::default()),
+            listeners: RwLock::new(Vec::new()),
+            recent: Mutex::new(crate::perf::Recent::default()),
+        };
+        Ok(Self {
+            core: Arc::new(core),
+            pipeline: Pipeline::default(),
             dsl: Dsl::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in schema DSL: {e}")))?,
             trees: arch_graph::tree::TreeConfig::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in tree config: {e}")))?,
-            rules,
             plans,
-            facts,
-            files,
-            indexed,
-            indexers: None,
-            indexing: Mutex::new(()),
-            index_again: std::sync::atomic::AtomicBool::new(false),
+            servers: crate::servers::Servers::default(),
             repo_files: RwLock::new(None),
-            observed: RwLock::new(Arc::new(Observed::default())),
             merged: Mutex::new(HashMap::new()),
-            limits: crate::Limits::defaults().map_err(|e| ServiceError::Corrupt(format!("built-in limits: {e}")))?,
-            listeners: RwLock::new(Vec::new()),
             tools: ToolCatalog::default(),
             runner: Arc::new(ProcessRunner),
             reviewers: ReviewerCatalog::defaults()?,
             review_provider: None,
             plan_locks: Mutex::new(HashMap::new()),
-            index_status: RwLock::new(IndexStatus::default()),
-            ingest_lock: Mutex::new(()),
-            recent: Mutex::new(crate::perf::Recent::default()),
-        };
-        // The result kept from the last run, if it was made the way it would
-        // be made now; else combined again from the kept facts. No file is read.
-        service.timed("open", format!("{} files kept", service.files.read().map_err(ServiceError::poisoned)?.extracts.len()), |t| {
-            match loaded.combined.filter(|(key, _)| *key == service.combine_key()) {
-                Some((_, kept)) => service.swap(t.stage("load", || Resolved::from_kept(kept)))?,
-                None => service.recombine(t, Vec::new(), None)?,
-            }
-            t.size(service.snapshot()?.graph.len().0, "components");
-            Ok(())
-        })?;
-        Ok(service)
+            flow_indexes: Mutex::new(Vec::new()),
+            entry_points: Mutex::new(Vec::new()),
+            symbol_lists: Mutex::new(Vec::new()),
+            #[cfg(any(test, feature = "testing"))]
+            symbol_lists_built: std::sync::atomic::AtomicUsize::new(0),
+            badges: Mutex::new(None),
+            held: Mutex::default(),
+        })
+    }
+
+    /// The shared settings, to change while the service is being built
+    /// (before the pipeline thread starts).
+    fn core_mut(&mut self) -> &mut Core {
+        Arc::get_mut(&mut self.core).expect("settings change only while the service is built, before its first change")
     }
 
     /// Replaces the schema DSL's aliases (a project's own shorthand types).
@@ -326,13 +278,9 @@ impl ArchitectureService {
         self
     }
 
-    pub fn dsl(&self) -> &Dsl {
-        &self.dsl
-    }
-
     /// Replaces the code rules (e.g. defaults plus the project's .nah/rules).
     pub fn with_rules(mut self, rules: CodeRules) -> Self {
-        self.rules = rules;
+        self.core_mut().rules = rules;
         self
     }
 
@@ -358,30 +306,40 @@ impl ArchitectureService {
         &self.reviewers
     }
 
-    fn check_cx(&self) -> checks::CheckCx<'_> {
-        checks::CheckCx { root: &self.root, packs: &self.packs, types: &self.types, tools: &self.tools }
+    fn check_cx<'a>(&'a self, ignores: &'a code_analyzer::Ignores) -> checks::CheckCx<'a> {
+        checks::CheckCx { root: &self.core.root, ignores, packs: &self.core.packs, types: &self.core.types, tools: &self.tools }
+    }
+
+    /// What ingestion never reads (the one definition of "ignored").
+    pub fn ignores(&self) -> Arc<code_analyzer::Ignores> {
+        self.core.ignores.clone()
+    }
+
+    /// A changed ignore file changes which files search lists: the list is
+    /// read again.
+    fn ignore_rules_changed(&self, paths: &[PathBuf]) {
+        if paths.iter().any(|p| self.core.ignores.is_rule_file(p)) {
+            self.forget_files();
+        }
     }
 
     pub fn root(&self) -> &Path {
-        &self.root
+        &self.core.root
     }
 
     pub fn types(&self) -> &TypeSystem {
-        &self.types
+        &self.core.types
     }
 
 
     pub fn subscribe(&self, listener: impl Fn(&ArchEvent) + Send + Sync + 'static) {
-        if let Ok(mut l) = self.listeners.write() {
+        if let Ok(mut l) = self.core.listeners.write() {
             l.push(Arc::new(listener));
         }
     }
 
     fn emit(&self, event: ArchEvent) {
-        let listeners: Vec<Listener> = self.listeners.read().map(|l| l.clone()).unwrap_or_default();
-        for listener in listeners {
-            listener(&event);
-        }
+        self.core.emit(event);
     }
 
     fn plan_lock(&self, id: &PlanId) -> Arc<Mutex<()>> {
@@ -404,84 +362,42 @@ impl ArchitectureService {
         Ok(out)
     }
 
-    /// What a combined result depends on beyond the files: the types, the
-    /// language packs and the combine stage's version. One made under
-    /// another key is made again.
-    fn combine_key(&self) -> String {
-        let packs: Vec<&str> = self.packs.packs.iter().map(|p| p.fingerprint.as_str()).collect();
-        content_hash(&format!("{}|{}|{}", code_analyzer::COMBINE_VERSION, serde_json::to_string(&self.types).unwrap_or_default(), packs.join(",")))
-    }
-
-    /// The one way the stored result changes: `changes` to the files' facts
-    /// and an indexer's run (`indexed`: the files it ran over, what it
-    /// said) are applied, everything is combined, and the lot is written in
-    /// one transaction; then the new result is what everyone reads.
-    fn recombine(&self, t: &mut Timing, changes: Vec<Change>, indexed: Option<(Vec<RepoPath>, Vec<IndexedFile>)>) -> Result<(), ServiceError> {
-        if let Some((covered, said)) = &indexed {
-            let mut kept = self.indexed.write().map_err(ServiceError::poisoned)?;
-            for path in covered {
-                kept.remove(path);
-            }
-            kept.extend(said.iter().map(|f| (f.path.clone(), f.clone())));
-        }
-        self.files.write().map_err(ServiceError::poisoned)?.apply(changes.clone());
-        let resolved = {
-            let files = self.files.read().map_err(ServiceError::poisoned)?;
-            let indexed = self.indexed.read().map_err(ServiceError::poisoned)?;
-            let said: Vec<IndexedFile> = indexed.values().cloned().collect();
-            t.stage("combine", || combine(&files.extracts, &said, &self.packs, &self.types))
-        };
-        let (kept, occurrences) = resolved.into_kept();
-        let key = self.combine_key();
-        let commit = Commit {
-            files: &changes,
-            indexed: indexed.as_ref().map(|(covered, said)| IndexedChange { drop: covered, put: said }),
-            combined: Some(CombinedRows { key: &key, combined: &kept, occurrences: &occurrences }),
-        };
-        t.stage("store", || self.facts.commit(&commit))?;
-        self.swap(t.stage("graph", || Resolved::from_kept(kept)))
-    }
-
-    /// Makes `resolved` what everyone reads (in-flight reads finish on the old one).
-    fn swap(&self, resolved: Resolved) -> Result<(), ServiceError> {
-        let generation = self.snapshot()?.generation + 1;
-        let next = Arc::new(Observed {
-            graph: Arc::new(resolved.graph),
-            ambiguous: resolved.ambiguous,
-            unproven: resolved.unproven,
-            external: resolved.external,
-            unverified: resolved.unverified_flows,
-            generation,
-        });
-        *self.observed.write().map_err(ServiceError::poisoned)? = next;
-        Ok(())
+    /// Every file's rows, as last stored.
+    pub fn file_rows(&self) -> Vec<Arc<code_analyzer::rows::FileRows>> {
+        self.snapshot().map(|s| s.files.values().cloned().collect()).unwrap_or_default()
     }
 
     /// What each named place in `file` refers to, as of the last result.
     pub fn occurrences(&self, file: &RepoPath) -> Result<Vec<Occurrence>, ServiceError> {
-        Ok(self.facts.occurrences(file)?.unwrap_or_default())
+        Ok(self.snapshot()?.files.get(file).map(|rows| code_analyzer::occurrences(rows)).unwrap_or_default())
     }
 
-    /// One file as the analysis has it, for the code viewer: its colours
-    /// and what each named place refers to, all from what's kept. A file
-    /// changed since (or never read) says so and carries nothing.
+    /// One file for the code viewer, in one answer: its text and, for that
+    /// same text (by its content hash), its colours and what each named place
+    /// refers to, from what's kept. A file whose text isn't what was analysed
+    /// (changed since, or never read) comes with its text only, marked stale.
     pub fn code_analysis(&self, file: &str) -> Result<arch_graph::code::CodeAnalysis, ServiceError> {
         self.timed("code", file.to_owned(), |t| {
             let path = RepoPath::new(file).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
-            let mut out = arch_graph::code::CodeAnalysis { file: path.as_str().to_owned(), ..Default::default() };
-            let kept = {
-                let files = self.files.read().map_err(ServiceError::poisoned)?;
-                files.get(&path).map(|(e, _)| (e.content_hash.clone(), e.highlights.clone()))
-            };
-            let current = std::fs::read_to_string(self.root.join(path.as_str())).map(|text| content_hash(&text)).ok();
-            let Some((hash, highlights)) = kept.filter(|(hash, _)| Some(hash) == current.as_ref()) else {
-                out.stale = true;
-                return Ok(out);
-            };
-            let _ = hash;
-            out.highlights = highlights;
-            out.occurrences = t.stage("occurrences", || self.occurrences(&path))?;
+            // Only a file inside the repo, however it's linked.
+            let root = self.core.root.canonicalize().map_err(|e| ServiceError::Corrupt(format!("repository root: {e}")))?;
+            let real = self.core.root.join(path.as_str()).canonicalize().map_err(|e| ServiceError::NotFound(format!("{file}: {e}")))?;
+            if !real.starts_with(&root) || !real.is_file() {
+                return Err(ServiceError::InvalidOp(format!("{file} isn't a file inside the repository")));
+            }
+            let text = t.stage("read", || std::fs::read_to_string(&real)).map_err(|e| ServiceError::NotFound(format!("{file}: {e}")))?;
+            let hash = content_hash(&text);
+            let mut out = arch_graph::code::CodeAnalysis { file: path.as_str().to_owned(), text, content_hash: hash.clone(), ..Default::default() };
+            let kept = self.snapshot()?.files.get(&path).map(|rows| rows.file.content_hash.clone());
+            out.stale = kept.as_deref() != Some(hash.as_str());
             let graph = self.observed()?;
+            out.view = t.stage("components", || file_view_of(&graph, path.as_str(), kept.is_some() && out.stale));
+            if out.stale {
+                return Ok(out);
+            }
+            // The colours, from the store on a connection of their own.
+            out.highlights = t.stage("highlights", || self.core.store.highlights(&path))?.unwrap_or_default();
+            out.occurrences = t.stage("occurrences", || self.occurrences(&path))?;
             let ids: BTreeSet<&ComponentId> = out.occurrences.iter().filter_map(|o| o.target.as_ref()).collect();
             out.targets = ids
                 .into_iter()
@@ -499,87 +415,32 @@ impl ArchitectureService {
         })
     }
 
-    /// Runs each language's own indexer (when its pack is installed and
-    /// ready) over that language's files, then combines again: calls it
-    /// resolves become proven. Slow (it builds the project's types), so the
-    /// server runs it in the background after changes settle. One run at a
-    /// time: asked for during one, it runs again right after.
-    pub fn index_languages(&self) -> Result<(), ServiceError> {
-        let Some(catalog) = &self.indexers else { return Ok(()) };
-        let Ok(_one) = self.indexing.try_lock() else {
-            self.index_again.store(true, Ordering::SeqCst);
-            return Ok(());
-        };
-        loop {
-            self.index_again.store(false, Ordering::SeqCst);
-            let lock = nah_packs::Lock::read(&catalog.lock_path).map_err(|e| ServiceError::Index(e.to_string()))?;
-            let mut statuses = Vec::new();
-            for pack in &self.packs.packs {
-                let Some(indexer) = &pack.indexer else { continue };
-                let mut status = arch_graph::IndexerStatus { language: pack.name().to_owned(), indexer: indexer.clone(), ..Default::default() };
-                let state = nah_packs::state(catalog, &lock, indexer).map_err(|e| ServiceError::Index(e.to_string()))?;
-                let nah_packs::State::Ready { tool_version } = state else {
-                    statuses.push(status);
-                    continue;
-                };
-                status.version = tool_version;
-                // This language's files as they are now: what it's run over.
-                let hashes: BTreeMap<RepoPath, String> =
-                    self.files.read().map_err(ServiceError::poisoned)?.extracts.iter().filter(|e| e.language == pack.name()).map(|e| (e.file.clone(), e.content_hash.clone())).collect();
-                if hashes.is_empty() {
-                    status.state = arch_graph::IndexerState::Ready;
-                    statuses.push(status);
-                    continue;
-                }
-                let running = arch_graph::IndexerStatus { state: arch_graph::IndexerState::Running, ..status.clone() };
-                self.set_index_status(|s| upsert_indexer(&mut s.indexers, running));
-                let outcome = self.timed("index", format!("{} with {indexer}", pack.name()), |t| {
-                    let run = t.stage("indexer", || code_analyzer::index::run(catalog, &lock, indexer, &self.root, &hashes)).map_err(|e| ServiceError::Index(e.to_string()))?;
-                    t.size(run.files.len(), "files");
-                    let covered: Vec<RepoPath> = hashes.keys().cloned().collect();
-                    let files = run.files.len();
-                    let millis = run.millis;
-                    self.recombine(t, Vec::new(), Some((covered, run.files)))?;
-                    Ok((files, millis))
-                });
-                match outcome {
-                    Ok((files, millis)) => {
-                        status.state = arch_graph::IndexerState::Ready;
-                        status.files = files;
-                        status.last_ms = Some(millis);
-                        let label = status.version.as_ref().map_or_else(|| indexer.clone(), |v| format!("{indexer} {v}"));
-                        status.proven = self.snapshot()?.graph.relations().filter(|r| r.proven_by.as_deref() == Some(label.as_str())).count();
-                    }
-                    Err(e) => {
-                        tracing::warn!("indexing {} with {indexer} failed: {e}", pack.name());
-                        status.state = arch_graph::IndexerState::Failed;
-                        status.error = Some(e.to_string());
-                    }
-                }
-                statuses.push(status);
-            }
-            self.set_index_status(|s| s.indexers = statuses.clone());
-            self.emit(ArchEvent::Changed { reason: ChangeReason::Ingested, plans: Vec::new(), components: Vec::new() });
-            if !self.index_again.swap(false, Ordering::SeqCst) {
-                return Ok(());
-            }
-        }
+    /// Waits up to `timeout` for the languages' servers to be ready and to
+    /// have answered for everything linked so far (for runs that want the
+    /// confirmed result, like `meta-harness analyze`); false if it timed out.
+    pub fn wait_for_servers(&self, timeout: std::time::Duration) -> Result<bool, ServiceError> {
+        let done = self.servers.wait(timeout);
+        // Their answers are jobs ahead of this one.
+        self.pipeline.run(&self.core, |_, _| ())?;
+        Ok(done)
     }
 
-    /// The packs, so each language's own indexer can run (see `index_languages`).
-    pub fn with_indexers(mut self, catalog: nah_packs::Catalog) -> Self {
-        self.indexers = Some(catalog);
+    /// Starts each language's server whose pack is installed, in the
+    /// background (see `servers`).
+    pub fn with_servers(mut self, catalog: &nah_packs::Catalog) -> Self {
+        self.servers = crate::servers::Servers::start(catalog, &self.core.packs, &self.core.root, &self.core.limits.servers, self.core.snapshot.clone(), self.pipeline.jobs.clone());
         self
     }
 
     /// The code as last indexed (shared, never copied).
-    fn snapshot(&self) -> Result<Arc<Observed>, ServiceError> {
-        Ok(self.observed.read().map_err(ServiceError::poisoned)?.clone())
+    fn snapshot(&self) -> Result<Arc<Snapshot>, ServiceError> {
+        self.pipeline.open(&self.core)?;
+        Ok(self.core.snapshot())
     }
 
     /// The service's limits (from config).
     pub fn limits(&self) -> &crate::Limits {
-        &self.limits
+        &self.core.limits
     }
 
     /// The three views' settings.
@@ -595,129 +456,72 @@ impl ArchitectureService {
 
     /// Replaces the limits (a project's own, or a test's).
     pub fn with_limits(mut self, limits: crate::Limits) -> Self {
-        self.limits = limits;
+        self.core_mut().limits = limits;
         self
     }
 
-    /// Re-reads `scope` (a path inside the repo): parses changed files, drops
-    /// deleted ones, then re-resolves the whole graph.
+    /// Re-reads `scope` (a path inside the repo): reads changed files, drops
+    /// deleted ones, and links again only what they can affect.
     pub fn ingest(&self, scope: &Path) -> Result<IngestReport, ServiceError> {
-        self.ingest_scopes(&[scope.to_path_buf()])
+        self.ingest_scopes(&[scope.to_path_buf()], false, true)
     }
 
-    /// Rebuilds the whole index from scratch: the cache is dropped and every
+    /// Rebuilds everything from scratch: the rows are dropped and every
     /// file is read again.
     pub fn reindex(&self) -> Result<IngestReport, ServiceError> {
-        let _one = self.ingest_lock.lock().unwrap_or_else(PoisonError::into_inner);
-        self.facts.clear()?;
         self.forget_files();
-        *self.files.write().map_err(ServiceError::poisoned)? = Files::default();
-        self.indexed.write().map_err(ServiceError::poisoned)?.clear();
-        self.ingest_locked(&[self.root.clone()])
+        self.ingest_scopes(std::slice::from_ref(&self.core.root), true, true)
     }
 
-    fn ingest_scopes(&self, scopes: &[PathBuf]) -> Result<IngestReport, ServiceError> {
-        let _one = self.ingest_lock.lock().unwrap_or_else(PoisonError::into_inner);
-        self.ingest_locked(scopes)
-    }
-
-    fn ingest_locked(&self, scopes: &[PathBuf]) -> Result<IngestReport, ServiceError> {
-        match self.run_ingest(scopes) {
-            Ok(report) => Ok(report),
-            Err(e) => {
-                self.set_index_status(|s| {
-                    s.state = IndexState::Failed;
-                    s.error = Some(e.to_string());
-                });
-                Err(e)
-            }
-        }
-    }
-
-    fn run_ingest(&self, scopes: &[PathBuf]) -> Result<IngestReport, ServiceError> {
-        let asked = scopes.iter().map(|s| self.scope_prefix(s)).map(|p| if p.is_empty() { "the repo".to_owned() } else { p }).collect::<Vec<_>>().join(", ");
-        self.timed("ingest", asked, |t| self.run_ingest_timed(t, scopes))
-    }
-
-    fn run_ingest_timed(&self, t: &mut Timing, scopes: &[PathBuf]) -> Result<IngestReport, ServiceError> {
-        let started = Instant::now();
-        let mut report = IngestReport::default();
-        // Every file first, so progress has a total.
-        let found = t.stage("find files", || -> Result<Vec<_>, ServiceError> {
-            let mut found = Vec::new();
-            for scope in scopes {
-                let files = match scope.exists() {
-                    true => walk(&self.root, scope, &self.packs).map_err(|e| ServiceError::Index(e.to_string()))?,
-                    false => Vec::new(),
-                };
-                found.push((scope.clone(), files));
-            }
-            Ok(found)
-        })?;
-        let total = found.iter().map(|(_, f)| f.len()).sum();
-        self.set_index_status(|s| {
-            s.state = IndexState::Indexing;
-            s.done = 0;
-            s.total = total;
-            s.error = None;
-        });
-        let changes = self.read_files(t, &found, &mut report)?;
-        // Nothing changed: the result is as it was.
-        if !changes.is_empty() {
-            self.recombine(t, changes, None)?;
-        }
-        let observed = self.snapshot()?;
-        (report.components, report.relations) = observed.graph.len();
-        report.ambiguous = observed.ambiguous.len();
-        report.unproven = observed.unproven.len();
-        report.external = observed.external.len();
-        report.millis = started.elapsed().as_millis() as u64;
-        drop(observed);
-        // What was read is fresh again.
-        let read: Vec<String> = scopes.iter().map(|s| self.scope_prefix(s)).collect();
-        self.set_index_status(|s| {
-            s.state = IndexState::Idle;
-            s.done = total;
-            s.last = Some(IndexSummary {
-                millis: report.millis,
-                files: report.files,
-                parsed: report.parsed,
-                components: report.components,
-                relations: report.relations,
-                unresolved: report.ambiguous + report.unproven,
-                at: now_rfc3339(),
-            });
-            s.stale.retain(|stale| !read.iter().any(|scope| scope.is_empty() || stale == scope || stale.starts_with(&format!("{scope}/"))));
-        });
-        self.emit(ArchEvent::Changed { reason: ChangeReason::Ingested, plans: Vec::new(), components: Vec::new() });
+    /// One job for the pipeline thread (`asked`: someone asked for it, and
+    /// hears of it as it starts).
+    fn ingest_scopes(&self, scopes: &[PathBuf], fresh: bool, asked: bool) -> Result<IngestReport, ServiceError> {
+        let scopes = scopes.to_vec();
+        let report = self.pipeline.run(&self.core, move |core, model| crate::pipeline::ingest(core, model, &scopes, fresh, asked))??;
+        // The languages' servers hear which files changed (only those), then
+        // confirm what was linked again, in the background.
+        self.servers.changed(&self.core.packs, &report.changed, &report.created);
+        self.servers.confirm(&report.linked);
         Ok(report)
     }
 
     /// Indexing as clients see it.
     pub fn index_status(&self) -> IndexStatus {
-        self.index_status.read().map(|s| s.clone()).unwrap_or_default()
+        // Opening the kept rows sets it (a failure says so there).
+        let _ = self.pipeline.open(&self.core);
+        let mut status = self.core.status.read().map(|s| s.clone()).unwrap_or_default();
+        // Live, else as last kept.
+        status.servers = match self.servers.is_empty() {
+            true => self.core.store.servers().unwrap_or_default(),
+            false => self.servers.statuses(),
+        };
+        status
     }
 
     /// Changes the status and tells clients.
     fn set_index_status(&self, change: impl FnOnce(&mut IndexStatus)) {
-        let status = {
-            let mut s = self.index_status.write().unwrap_or_else(PoisonError::into_inner);
-            change(&mut s);
-            s.clone()
-        };
-        self.emit(ArchEvent::Index { status: Box::new(status) });
+        self.core.set_status(change);
     }
 
     /// Files changed on disk (the watcher saw them) that haven't been read
     /// since: shown as out of date until they are.
     pub fn mark_stale(&self, paths: &[PathBuf]) -> Result<(), ServiceError> {
+        self.ignore_rules_changed(paths);
         let mut changed: Vec<String> = Vec::new();
+        let snapshot = self.snapshot()?;
         for path in paths {
-            if self.watches(path)? {
-                let prefix = self.scope_prefix(path);
-                if !prefix.is_empty() {
-                    changed.push(prefix);
-                }
+            if !self.watches(path)? {
+                continue;
+            }
+            let prefix = self.scope_prefix(path);
+            // A file whose content is what was read (touched) isn't out of date.
+            let same = RepoPath::new(&prefix).ok().and_then(|p| snapshot.files.get(&p).map(|rows| rows.file.content_hash.clone())).is_some_and(|kept| {
+                path.is_file() && std::fs::read_to_string(path).is_ok_and(|text| content_hash(&text) == kept)
+            });
+            // Gone and never read (nor anything read under it): nothing to redo.
+            let gone_unknown = !path.exists() && !snapshot.files.keys().any(|f| f.as_str() == prefix || Core::under(f, &prefix));
+            if !prefix.is_empty() && !same && !gone_unknown {
+                changed.push(prefix);
             }
         }
         let known = self.index_status().stale;
@@ -742,127 +546,21 @@ impl ArchitectureService {
             return Ok(true);
         }
         let Ok(path) = RepoPath::new(file) else { return Ok(false) };
-        let absolute = self.root.join(path.as_str());
-        let files = self.files.read().map_err(ServiceError::poisoned)?;
-        let Some((extract, stamp)) = files.get(&path) else { return Ok(false) };
+        let absolute = self.core.root.join(path.as_str());
+        let snapshot = self.snapshot()?;
+        let Some(rows) = snapshot.files.get(&path) else { return Ok(false) };
         let Ok(meta) = std::fs::metadata(&absolute) else { return Ok(false) };
-        if stamp.modified != 0 && Stamp::of(&meta) == stamp {
+        if rows.file.modified != 0 && Stamp::of(&meta) == (Stamp { size: rows.file.size, modified: rows.file.modified }) {
             return Ok(false);
         }
         let Ok(content) = std::fs::read_to_string(&absolute) else { return Ok(false) };
-        Ok(extract.content_hash != content_hash(&content))
+        Ok(rows.file.content_hash != content_hash(&content))
     }
 
-    /// Brings the index up to date for one scope (a scope that no longer
-    /// exists just drops what was indexed under it).
     /// `scope` as a repo-relative prefix ("" for the whole repo), spelled the
     /// way index entries are.
     fn scope_prefix(&self, scope: &Path) -> String {
-        let absolute = if scope.is_absolute() { scope.to_path_buf() } else { self.root.join(scope) };
-        let relative = absolute.strip_prefix(&self.root).unwrap_or(&absolute).to_string_lossy().into_owned();
-        RepoPath::new(&relative).map(|p| p.as_str().to_owned()).unwrap_or_default()
-    }
-
-    fn under(file: &RepoPath, prefix: &str) -> bool {
-        prefix.is_empty() || file.as_str() == prefix || file.as_str().starts_with(&format!("{prefix}/"))
-    }
-
-    /// Brings every file's facts up to date for the scopes walked: a file
-    /// whose size and time match what was kept isn't read; the rest are read
-    /// on many threads at once, and only those whose content changed are
-    /// read for facts again. Files under a scope that are gone (or now
-    /// ignored) are dropped. The changes are kept together, all or none.
-    /// Reads what changed under the scopes walked: the changes to the
-    /// files' facts (not applied yet).
-    fn read_files(&self, t: &mut Timing, found: &[(PathBuf, Vec<code_analyzer::SourceFile>)], report: &mut IngestReport) -> Result<Vec<Change>, ServiceError> {
-        let mut unique: BTreeMap<&RepoPath, &code_analyzer::SourceFile> = BTreeMap::new();
-        for (_, files) in found {
-            report.files += files.len();
-            unique.extend(files.iter().map(|f| (&f.path, f)));
-        }
-        let recent = std::time::Duration::from_millis(self.limits.store.recent_change_ms);
-        let trusted_before = SystemTime::now().checked_sub(recent).unwrap_or(UNIX_EPOCH).duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos() as i64);
-        let progress = Progress { done: AtomicUsize::new(0), last: Mutex::new(Instant::now()) };
-        let mut changes: Vec<Change> = {
-            let files = self.files.read().map_err(ServiceError::poisoned)?;
-            let read: Vec<Result<Read, ServiceError>> = t.stage("read", || {
-                unique.values().collect::<Vec<_>>().par_iter().map(|file| {
-                    let read = self.read_file(file, &files, trusted_before);
-                    self.tick(&progress);
-                    read
-                }).collect()
-            });
-            let mut changes = Vec::new();
-            for r in read {
-                match r? {
-                    Read::Skipped => {}
-                    Read::Unread => report.cached += 1,
-                    Read::Same => {
-                        report.cached += 1;
-                        report.read += 1;
-                    }
-                    Read::Changed(change) => {
-                        report.read += 1;
-                        if let Change::Put(stored) = &change {
-                            report.parsed += 1;
-                            report.changed.push(stored.extract.file.clone());
-                        }
-                        changes.push(change);
-                    }
-                }
-            }
-            // Files under a scope that weren't found there leave.
-            let prefixes: Vec<String> = found.iter().map(|(scope, _)| self.scope_prefix(scope)).collect();
-            for extract in files.extracts.iter().filter(|e| !unique.contains_key(&e.file) && prefixes.iter().any(|p| Self::under(&e.file, p))) {
-                report.removed += 1;
-                report.changed.push(extract.file.clone());
-                changes.push(Change::Remove(extract.file.clone()));
-            }
-            changes
-        };
-        report.changed.sort();
-        changes.sort_by(|a, b| change_file(a).cmp(change_file(b)));
-        t.size(report.files, "files");
-        Ok(changes)
-    }
-
-    /// One file: skipped if its size and time match what was kept (and that
-    /// time was trusted), else read and compared by content.
-    fn read_file(&self, file: &code_analyzer::SourceFile, files: &Files, trusted_before: i64) -> Result<Read, ServiceError> {
-        let Some(pack) = self.packs.for_path(&file.absolute) else { return Ok(Read::Skipped) };
-        let io = |e: std::io::Error| ServiceError::Io(format!("{}: {e}", file.path));
-        let mut stamp = Stamp::of(&std::fs::metadata(&file.absolute).map_err(io)?);
-        // Changed too recently to tell a later change in the same tick of the clock.
-        if stamp.modified > trusted_before {
-            stamp.modified = 0;
-        }
-        // Kept facts count only if read the same way: the same module, pack and code rules.
-        let kept = files.get(&file.path).filter(|(e, _)| e.module == file.module && e.pack_fingerprint == pack.fingerprint && e.rules_fingerprint == self.rules.fingerprint(pack.name()));
-        if let Some((_, was)) = kept
-            && was.modified != 0
-            && was == stamp
-        {
-            return Ok(Read::Unread);
-        }
-        let content = std::fs::read_to_string(&file.absolute).map_err(io)?;
-        Ok(match kept {
-            Some((e, was)) if e.content_hash == content_hash(&content) => match was == stamp {
-                true => Read::Same,
-                false => Read::Changed(Change::Restamp { file: file.path.clone(), stamp }),
-            },
-            _ => Read::Changed(Change::Put(Box::new(Stored { extract: extract_file(pack, &self.rules, file.path.clone(), file.module.clone(), &content), stamp }))),
-        })
-    }
-
-    /// Counts one file done, and tells clients now and then.
-    fn tick(&self, progress: &Progress) {
-        let done = progress.done.fetch_add(1, Ordering::Relaxed) + 1;
-        if let Ok(mut last) = progress.last.try_lock()
-            && last.elapsed() >= PROGRESS_EVERY
-        {
-            *last = Instant::now();
-            self.set_index_status(|s| s.done = s.done.max(done));
-        }
+        self.core.scope_prefix(scope)
     }
 
     /// Reacts to changed paths (from a file watcher, say): re-reads the ones
@@ -872,10 +570,23 @@ impl ArchitectureService {
     /// call. Re-verification checks the code (location, calls, signature,
     /// call chain); tools and reviewers run on explicit verification only.
     pub fn refresh(&self, paths: &[PathBuf]) -> Result<Refresh, ServiceError> {
+        // Plans someone else changed are read again (the only time they are).
+        let edited = self.plans.changed(paths)?;
+        if !edited.is_empty() {
+            self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: edited, components: Vec::new() });
+        }
+        self.ignore_rules_changed(paths);
         self.files_changed(paths);
+        // Files no language reads that a server watches (its project's manifest).
+        let not_ignored: Vec<PathBuf> = paths.iter().filter(|p| p.starts_with(&self.core.root) && !self.ignores().is_ignored_as(p, p.is_dir())).cloned().collect();
+        self.servers.others_changed(&self.core.packs, &not_ignored);
         let mut scopes: Vec<PathBuf> = Vec::new();
         for p in paths {
-            if self.watches(p)? {
+            // A changed rule file: what it covers is read again (files it
+            // now ignores leave, files it no longer ignores come in).
+            if let Some(scope) = self.core.ignores.rules_scope(p) {
+                scopes.push(scope);
+            } else if self.watches(p)? {
                 scopes.push(p.clone());
             }
         }
@@ -889,7 +600,7 @@ impl ArchitectureService {
             }
             before
         };
-        let ingest = self.ingest_scopes(&scopes)?;
+        let ingest = self.ingest_scopes(&scopes, false, false)?;
         let changed: BTreeSet<&str> = ingest.changed.iter().map(RepoPath::as_str).collect();
         let observed = self.observed()?;
         let mut reverified = Vec::new();
@@ -898,7 +609,7 @@ impl ArchitectureService {
             // Under the plan's lock, on the plan as it is now (an approval or
             // edit made while the files were read isn't lost).
             let (sent_back, checked) = self.edit_plan(plan_id, |plan| {
-                let after = Graph::merge((*observed).clone(), std::slice::from_ref(plan));
+                let after = self.overlay(plan_id, plan)?;
                 // Existing code the plan builds on changed its signature: what
                 // was designed against the old one needs another look.
                 let reshaped: Vec<ComponentId> = observed
@@ -909,7 +620,7 @@ impl ArchitectureService {
                     .collect();
                 let mut sent_back = Vec::new();
                 for id in &reshaped {
-                    sent_back.extend(cascade(plan, &after, &self.types, id));
+                    sent_back.extend(cascade(plan, &after, &self.core.types, id));
                 }
                 revoke(plan, &sent_back);
                 let mut checked = Vec::new();
@@ -939,14 +650,20 @@ impl ArchitectureService {
         Ok(Refresh { ingest, reverified, downgraded })
     }
 
+    /// Whether `path` is a plan's file (the watcher hands those in, though
+    /// the walk ignores their folder).
+    pub fn is_plan_file(&self, path: &Path) -> bool {
+        self.plans.holds(path)
+    }
+
     /// Whether a changed path is something ingestion reads: inside the repo,
     /// not ignored by the walk, and a source file a pack handles, a directory,
     /// or a vanished path with indexed files under it (a renamed directory).
     fn watches(&self, path: &Path) -> Result<bool, ServiceError> {
-        if !path.starts_with(&self.root) || code_analyzer::ignored(&self.root, path) {
+        if !path.starts_with(&self.core.root) || self.ignores().is_ignored_as(path, path.is_dir()) {
             return Ok(false);
         }
-        if path.is_dir() || self.packs.for_path(path).is_some() {
+        if path.is_dir() || self.core.packs.for_path(path).is_some() {
             return Ok(true);
         }
         // A vanished directory (renamed or deleted) with indexed files under it.
@@ -954,7 +671,7 @@ impl ArchitectureService {
             return Ok(false);
         }
         let prefix = self.scope_prefix(path);
-        Ok(!prefix.is_empty() && self.files.read().map_err(ServiceError::poisoned)?.extracts.iter().any(|e| Self::under(&e.file, &prefix)))
+        Ok(!prefix.is_empty() && self.snapshot()?.files.keys().any(|f| Core::under(f, &prefix)))
     }
 
     /// The code as last indexed (shared: reading it copies nothing).
@@ -972,27 +689,38 @@ impl ArchitectureService {
         Ok(self.snapshot()?.unproven.clone())
     }
 
-    /// The code alone, or the code with one plan laid over it. A plan's
-    /// overlay is built once and kept (shared) until the plan or the code
-    /// changes; only the most recently used few are kept.
+    /// The code alone, or the code with one plan laid over it.
     pub fn graph(&self, source: &Source) -> Result<Arc<Graph>, ServiceError> {
-        let id = match source {
-            Source::Code => return self.observed(),
-            Source::Plan(id) => id,
-        };
-        let plan = self.plan_shared(id)?;
+        match source {
+            Source::Code => self.observed(),
+            Source::Plan(id) => {
+                let plan = self.plan_shared(id)?;
+                self.overlay(id, &plan)
+            }
+        }
+    }
+
+    /// The code with `plan` (plan `id` as it is now, or as it's being edited)
+    /// laid over it. Each plan's overlay is kept (shared) and, when the plan
+    /// changes, laid again by what changed (a thin layer: nothing is copied);
+    /// when the code changes, laid again whole. Only the most recently used
+    /// few are kept.
+    fn overlay(&self, id: &PlanId, plan: &Plan) -> Result<Arc<Graph>, ServiceError> {
         let observed = self.snapshot()?;
         let mut merged = self.merged.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(m) = merged.get_mut(id)
-            && m.generation == observed.generation
-            && Arc::ptr_eq(&m.plan, &plan)
+        let earlier = merged.get_mut(id).filter(|m| m.generation == observed.generation);
+        if let Some(m) = &earlier
+            && *m.plan == *plan
         {
-            m.used = Instant::now();
-            return Ok(m.graph.clone());
+            let graph = m.graph.clone();
+            if let Some(m) = merged.get_mut(id) {
+                m.used = Instant::now();
+            }
+            return Ok(graph);
         }
-        let graph = Arc::new(Graph::merge((*observed.graph).clone(), std::slice::from_ref(&*plan)));
-        merged.insert(id.clone(), Merged { generation: observed.generation, plan, graph: graph.clone(), used: Instant::now() });
-        while merged.len() > self.limits.plans_kept_laid_over.max(1) {
+        let graph = Arc::new(observed.graph.laid_over(plan, earlier.as_ref().map(|m| (&*m.plan, &*m.graph))));
+        merged.insert(id.clone(), Merged { generation: observed.generation, plan: Arc::new(plan.clone()), graph: graph.clone(), used: Instant::now() });
+        while merged.len() > self.core.limits.plans_kept_laid_over.max(1) {
             let Some(oldest) = merged.iter().min_by_key(|(_, m)| m.used).map(|(id, _)| id.clone()) else { break };
             merged.remove(&oldest);
         }
@@ -1038,7 +766,7 @@ impl ArchitectureService {
             return Err(ServiceError::InvalidOp(format!("plan {id} already exists")));
         }
         let input = crate::import::ImportInput { plan: plan_id.clone(), title: title.to_owned(), json, language: language.map(str::to_owned) };
-        let (plan, report) = crate::import::import(input, &*self.observed()?, &self.root, &self.packs, &self.types)?;
+        let (plan, report) = crate::import::import(input, &*self.observed()?, &self.core.root, &self.core.packs, &self.core.types)?;
         self.plans.save(&plan)?;
         drop(held);
         self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id], components: plan.components.iter().map(|c| c.id.clone()).collect() });
@@ -1048,7 +776,7 @@ impl ArchitectureService {
     /// `import_registry` from a repo file (relative to the root).
     pub fn import_registry_file(&self, id: &str, title: &str, file: &str, language: Option<&str>) -> Result<(Plan, ImportReport), ServiceError> {
         let path = arch_graph::RepoPath::new(file).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
-        let json = std::fs::read_to_string(self.root.join(path.as_str())).map_err(|e| ServiceError::NotFound(format!("{file}: {e}")))?;
+        let json = std::fs::read_to_string(self.core.root.join(path.as_str())).map_err(|e| ServiceError::NotFound(format!("{file}: {e}")))?;
         self.import_registry(id, title, &json, language)
     }
 
@@ -1063,17 +791,16 @@ impl ArchitectureService {
 
     /// Applies one operation to a plan.
     pub fn apply(&self, plan_id: &PlanId, op: PlanOp) -> Result<Plan, ServiceError> {
-        let observed = self.observed()?;
         let (plan, touched) = self.edit_plan(plan_id, |plan| {
-            let graph = Graph::merge((*observed).clone(), std::slice::from_ref(plan));
+            let graph = self.overlay(plan_id, plan)?;
             let changed = op.design_change().cloned();
             let removes = matches!(op, PlanOp::Remove { .. });
-            let mut touched = apply(plan, op, &graph, &self.root, &self.packs, &self.types, &self.dsl)?;
+            let mut touched = apply(plan, op, &graph, &self.core.root, &self.ignores(), &self.core.packs, &self.core.types, &self.dsl)?;
             // A design change sends it (if approved) and what builds on it back.
             if let Some(changed) = changed {
                 // A removed component's dependents are only visible before removal.
-                let basis = if removes { graph } else { Graph::merge((*observed).clone(), std::slice::from_ref(plan)) };
-                let downgrades = cascade(plan, &basis, &self.types, &changed);
+                let basis = if removes { graph } else { self.overlay(plan_id, plan)? };
+                let downgrades = cascade(plan, &basis, &self.core.types, &changed);
                 revoke(plan, &downgrades);
                 touched.extend(downgrades.into_iter().map(|d| d.id));
             }
@@ -1101,13 +828,13 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
     pub fn validate(&self, plan_id: &PlanId) -> Result<Report, ServiceError> {
         let plan = self.plan(plan_id)?;
         let graph = self.graph(&Source::Plan(plan_id.clone()))?;
-        let mut report = checks::check_plan(&plan, &graph, &self.check_cx());
+        let mut report = checks::check_plan(&plan, &graph, &self.check_cx(&self.ignores()));
         // Code rules over the plan's scope as it exists in code.
         let scope = self.scope(plan_id)?;
         report.findings.extend(self.rule_findings(scope.iter().filter_map(|id| graph.component(id)), &graph));
         // Logic blocks are tested on their own.
         let planned = plan.components.iter().filter_map(|c| graph.component(&c.id));
-        report.findings.extend(tools::run_logic_checks(planned, &self.tools.logic_checks, self.runner.as_ref(), &self.root));
+        report.findings.extend(tools::run_logic_checks(planned, &self.tools.logic_checks, self.runner.as_ref(), &self.core.root));
         let report = report.sorted();
         self.emit_validated(plan_id, None, &report);
         Ok(report)
@@ -1127,8 +854,10 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
         if !matches!(to, Stage::ArchApproved | Stage::PlanApproved) {
             return Err(ServiceError::InvalidOp(format!("{to:?} is reached by verification, not approval")));
         }
-        let observed = self.observed()?;
         let approval = self.edit_plan(plan_id, |plan| {
+            // The plan as it is: approving changes only its stage, which the
+            // checks read from the plan.
+            let graph = self.overlay(plan_id, plan)?;
             let from = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?.stage;
             if !can_transition(from, to) {
                 return Err(ServiceError::InvalidOp(format!("can't go from {from:?} to {to:?}")));
@@ -1140,12 +869,11 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             if let Some(c) = plan.component_mut(id) {
                 c.stage = to;
             }
-            let graph = Graph::merge((*observed).clone(), std::slice::from_ref(plan));
-            let mut report = checks::check_plan(plan, &graph, &self.check_cx());
+            let mut report = checks::check_plan(plan, &graph, &self.check_cx(&self.ignores()));
             // The same blocking set validation shows for it: code rules on its
             // code and its logic steps' own checks.
             report.findings.extend(self.rule_findings(graph.component(id), &graph));
-            report.findings.extend(tools::run_logic_checks(graph.component(id).into_iter(), &self.tools.logic_checks, self.runner.as_ref(), &self.root));
+            report.findings.extend(tools::run_logic_checks(graph.component(id).into_iter(), &self.tools.logic_checks, self.runner.as_ref(), &self.core.root));
             // Errors on it, on its relations, or on the plan as a whole.
             let blocking: Vec<String> = checks::blocking_for(&report, plan, id).into_iter().map(|f| f.message.clone()).collect();
             if !blocking.is_empty() {
@@ -1163,7 +891,7 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
         let plan = self.plan(plan_id)?;
         let planned = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?;
         let graph = self.graph(&Source::Plan(plan_id.clone()))?;
-        Ok(slice(&plan, planned, &graph, &checks::schema_set(&graph, &self.types)))
+        Ok(slice(&plan, planned, &graph, &checks::schema_set(&graph, &self.core.types)))
     }
 
     /// Re-reads the component's file (and its call chain's), verifies it for
@@ -1181,18 +909,18 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
         // (re-reading a vanished file drops it from the index).
         let merged = self.graph(&Source::Plan(plan_id.clone()))?;
         let scopes: Vec<PathBuf> = match verification_files(&plan, id, &merged) {
-            Some(files) => files.iter().map(|f| self.root.join(f)).collect(),
+            Some(files) => files.iter().map(|f| self.core.root.join(f)).collect(),
             // Something it depends on isn't where the index last saw it: re-read
             // the repo (incrementally: only changed files are parsed).
-            None => vec![self.root.clone()],
+            None => vec![self.core.root.clone()],
         };
         if !scopes.is_empty() {
-            self.ingest_scopes(&scopes)?;
+            self.ingest_scopes(&scopes, false, true)?;
         }
         let observed = self.observed()?;
         let mut report = self.check(&plan, &planned, &observed, goal, goal == Stage::Implemented)?;
-        let merged = Graph::merge((*observed).clone(), std::slice::from_ref(&plan));
-        for f in checks::stage_gate(&plan, &merged, &self.types, id, goal) {
+        let merged = self.overlay(plan_id, &plan)?;
+        for f in checks::stage_gate(&plan, &merged, &self.core.types, id, goal) {
             report.push(f);
         }
         if goal == Stage::Implemented && planned.stage != Stage::Implemented && !plan.plan_approved(id) {
@@ -1255,13 +983,13 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
     /// The code checks for one planned component against `observed`; `deep`
     /// adds its validation tools and reviewers (once the code checks pass).
     fn check(&self, plan: &Plan, planned: &Component, observed: &Graph, goal: Stage, deep: bool) -> Result<Report, ServiceError> {
-        let mut report = verify::verify_component(plan, planned, observed, goal, &self.packs, &self.types);
+        let mut report = verify::verify_component(plan, planned, observed, goal, &self.core.packs, &self.core.types);
         report.findings.extend(self.rule_findings(observed.component(&planned.id), observed));
         report.extend(chain::recheck(plan, &planned.id, observed));
-        let unverified = self.observed.read().map_err(ServiceError::poisoned)?.unverified.clone();
-        report.findings.extend(verify::planned_flows(plan, &planned.id, observed, &unverified));
+        let snapshot = self.snapshot()?;
+        report.findings.extend(verify::planned_flows(plan, &planned.id, observed, &snapshot.unverified));
         if deep && !report.has_errors() {
-            let merged = Graph::merge(observed.clone(), std::slice::from_ref(plan));
+            let merged = self.overlay(&plan.id, plan)?;
             let component = merged.component(&planned.id).unwrap_or(planned);
             report.extend(self.tools_for(component).report);
             report.extend(self.review_with(plan, component, &merged)?.report);
@@ -1270,18 +998,18 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
     }
 
     fn tools_for(&self, component: &Component) -> ToolsReport {
-        let (invocations, mut problems) = tools::invocations(&self.tools, &self.types, component, &self.root);
-        let mut out = tools::run(invocations, self.runner.as_ref(), &self.root);
+        let (invocations, mut problems) = tools::invocations(&self.tools, &self.core.types, component, &self.core.root);
+        let mut out = tools::run(invocations, self.runner.as_ref(), &self.core.root);
         problems.extend(out.report);
         out.report = problems;
         out
     }
 
     fn review_with(&self, plan: &Plan, component: &Component, merged: &Graph) -> Result<ReviewsReport, ServiceError> {
-        let contract = plan.component(&component.id).map(|p| slice(plan, p, merged, &checks::schema_set(merged, &self.types)).to_markdown()).unwrap_or_default();
+        let contract = plan.component(&component.id).map(|p| slice(plan, p, merged, &checks::schema_set(merged, &self.core.types)).to_markdown()).unwrap_or_default();
         let code = self.component(&component.id, &Source::Plan(plan.id.clone()))?.code;
         let subject = Subject { plan, component, observed: merged, contract, code };
-        Ok(review::review(&self.reviewers, &self.types, self.review_provider.as_deref(), &subject))
+        Ok(review::review(&self.reviewers, &self.core.types, self.review_provider.as_deref(), &subject))
     }
 
     /// Runs the validation tools for one planned component, or every planned
@@ -1328,7 +1056,7 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
         let graph = self.graph(source)?;
         let component = graph.component(id).cloned().ok_or_else(|| ServiceError::NotFound(id.to_string()))?;
         let code = component.anchor.as_ref().and_then(|a| {
-            let text = std::fs::read_to_string(self.root.join(a.file.as_str())).ok()?;
+            let text = std::fs::read_to_string(self.core.root.join(a.file.as_str())).ok()?;
             let lines: Vec<&str> = text.lines().collect();
             let (start, end) = (a.span.start_line.saturating_sub(1) as usize, (a.span.end_line as usize).min(lines.len()));
             (start < end).then(|| lines[start..end].join("\n"))
@@ -1341,26 +1069,42 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             alignment: graph.alignment(id).unwrap_or(Alignment::Observed),
             outgoing: graph.outgoing(id, None).cloned().collect(),
             incoming: graph.incoming(id, None).cloned().collect(),
+            references: self.references(id)?,
             component,
             code,
             stale,
         })
     }
 
+    /// Every use of `id` in the code, across files: the refs that link to it,
+    /// each with its line.
+    pub fn references(&self, id: &ComponentId) -> Result<Vec<arch_graph::code::Reference>, ServiceError> {
+        let rows = self.core.store.refs_to(id.as_str())?;
+        let snapshot = self.snapshot()?;
+        let mut out = Vec::with_capacity(rows.len());
+        // Each file's line starts, when it's still the text that was read
+        // (else where a use is now isn't known).
+        let mut lines: Option<(String, Option<Vec<usize>>)> = None;
+        for (file, start, end, kind, within, evidence) in rows {
+            if lines.as_ref().is_none_or(|(f, _)| *f != file) {
+                let kept = arch_graph::RepoPath::new(&file).ok().and_then(|p| snapshot.files.get(&p).map(|r| r.file.content_hash.clone()));
+                let starts = std::fs::read_to_string(self.core.root.join(&file))
+                    .ok()
+                    .filter(|text| kept.as_deref() == Some(code_analyzer::content_hash(text).as_str()))
+                    .map(|text| std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect());
+                lines = Some((file.clone(), starts));
+            }
+            let starts = lines.as_ref().and_then(|(_, s)| s.as_ref());
+            let line = starts.map_or(0, |starts| starts.partition_point(|s| *s <= start as usize)) as u32;
+            out.push(arch_graph::code::Reference { file, line, start, end, kind, within: within.map(ComponentId::new), evidence, stale: starts.is_none() });
+        }
+        Ok(out)
+    }
+
     /// Every component in `file` (in code or planned there) with the relations
     /// leaving them.
     pub fn file_view(&self, file: &str, source: &Source) -> Result<arch_graph::FileView, ServiceError> {
-        let graph = self.graph(source)?;
-        let components: Vec<(Component, Alignment)> = graph
-            .in_file(file)
-            .map(|c| (c.clone(), graph.alignment(&c.id).unwrap_or(Alignment::Observed)))
-            .collect();
-        let relations = components
-            .iter()
-            .flat_map(|(c, _)| graph.outgoing(&c.id, None))
-            .map(|r| (r.clone(), graph.relation_alignment(r)))
-            .collect();
-        Ok(arch_graph::FileView { file: file.to_owned(), components, relations, stale: self.is_stale(file)? })
+        Ok(file_view_of(&*self.graph(source)?, file, self.is_stale(file)?))
     }
 
     /// The innermost component whose code contains `line` of `file`.
@@ -1385,34 +1129,73 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
     fn tree_in(&self, t: &mut Timing, request: &TreeRequest) -> Result<Tree, ServiceError> {
         let mut tree = self.with_tree_input(t, request, |t, input| {
             let mut tree = t.stage("walk", || arch_graph::tree::walk_tree(input, request));
-            t.stage("layout", || arch_graph::tree::lay_out(&mut tree, &input.config.layout));
+            t.stage("layout", || arch_graph::tree::lay_out(&mut tree, &input.config.layout, input.layout_out_of_time));
             Ok(tree)
         })?;
         t.size(tree.cards.len(), "cards");
         tree.slow_ms = self.slow(t);
+        t.stage("keep", || self.keep_held(request, &tree))?;
         Ok(tree)
     }
 
-    /// The cards opening `card` `levels` further adds (only those).
-    pub fn expand(&self, request: &TreeRequest, card: &str, levels: u32) -> Result<Tree, ServiceError> {
+    /// Keeps a tree a client now holds, under what it asked and under the
+    /// request the tree answers (the most recent `trees_kept`).
+    fn keep_held(&self, asked: &TreeRequest, tree: &Tree) -> Result<(), ServiceError> {
+        let graph = Arc::downgrade(&self.graph(&asked.source)?);
+        let shared = Arc::new(tree.clone());
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        held.retain(|h| h.graph.strong_count() > 0 && h.request != *asked && h.request != tree.request);
+        held.push_back(Held { graph: graph.clone(), request: asked.clone(), tree: shared.clone() });
+        if tree.request != *asked {
+            held.push_back(Held { graph, request: tree.request.clone(), tree: shared });
+        }
+        let most = self.core.limits.trees_kept.max(1) * 2;
+        while held.len() > most {
+            held.pop_front();
+        }
+        Ok(())
+    }
+
+    /// The tree a client holding `request` was sent, if it's kept for the
+    /// graph shown now.
+    fn held_tree(&self, request: &TreeRequest) -> Result<Option<Arc<Tree>>, ServiceError> {
+        let graph = Arc::downgrade(&self.graph(&request.source)?);
+        let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        Ok(held.iter().rev().find(|h| h.request == *request && std::sync::Weak::ptr_eq(&h.graph, &graph)).map(|h| h.tree.clone()))
+    }
+
+    /// Opening `card` `levels` further in the tree a client holds (the one
+    /// `request` was answered with): only its branch is walked, merged in,
+    /// kept to `cards_held`, and the whole laid out again here. What
+    /// changed comes back: the new cards, every card's place, the lines.
+    pub fn expand(&self, request: &TreeRequest, card: &str, levels: u32) -> Result<arch_graph::tree::Expanded, ServiceError> {
         self.timed("expand", asked(request, Some(card)), |t| self.expand_in(t, request, card, levels))
     }
 
     pub fn expand_json(&self, request: &TreeRequest, card: &str, levels: u32) -> Result<Vec<u8>, ServiceError> {
         self.timed("expand", asked(request, Some(card)), |t| {
-            let tree = self.expand_in(t, request, card, levels)?;
-            self.encode(t, &tree)
+            let change = self.expand_in(t, request, card, levels)?;
+            self.encode(t, &change)
         })
     }
 
-    fn expand_in(&self, t: &mut Timing, request: &TreeRequest, card: &str, levels: u32) -> Result<Tree, ServiceError> {
-        let mut tree = self.with_tree_input(t, request, |t, input| {
+    fn expand_in(&self, t: &mut Timing, request: &TreeRequest, card: &str, levels: u32) -> Result<arch_graph::tree::Expanded, ServiceError> {
+        let kept = self.held_tree(request)?;
+        let cap = self.core.limits.cards_held;
+        let (now, mut change) = self.with_tree_input(t, request, |t, input| {
             t.stage("check", || self.check_card(input, request, card))?;
-            Ok(t.stage("build", || arch_graph::tree::expand(input, request, card, levels)))
+            // A tree not kept (sent before the code changed, or long ago)
+            // is walked again first (laid out once, with the branch).
+            let held = match kept {
+                Some(tree) => tree,
+                None => Arc::new(t.stage("held", || arch_graph::tree::walk_tree(input, request))),
+            };
+            Ok(t.stage("branch", || arch_graph::tree::expand(input, &held, card, levels, cap)))
         })?;
-        t.size(tree.cards.len(), "cards");
-        tree.slow_ms = self.slow(t);
-        Ok(tree)
+        t.size(change.cards.len(), "cards");
+        change.slow_ms = self.slow(t);
+        t.stage("keep", || self.keep_held(&now.request, &now))?;
+        Ok(change)
     }
 
     /// Where `card` sits: what holds it, what else is in there, its lines to those.
@@ -1447,32 +1230,20 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
     /// How long so far, if that's over the slow limit.
     fn slow(&self, t: &Timing) -> Option<u64> {
         let ms = t.elapsed_ms();
-        (ms > self.limits.slow_request_ms as f64).then(|| ms.ceil() as u64)
+        (ms > self.core.limits.slow_request_ms as f64).then(|| ms.ceil() as u64)
     }
 
     /// Runs `answer` timed, and keeps (and, when slow, logs) its timing.
     pub(crate) fn timed<T>(&self, what: &'static str, asked: String, answer: impl FnOnce(&mut Timing) -> Result<T, ServiceError>) -> Result<T, ServiceError> {
-        let mut t = Timing::start(what, asked);
-        let out = answer(&mut t);
-        self.finish(t);
-        out
-    }
-
-    fn finish(&self, t: Timing) {
-        let timed = t.done(self.limits.slow_request_ms, now_rfc3339());
-        if timed.slow {
-            let stages: Vec<String> = timed.stages.iter().map(|s| format!("{} {:.1} ms", s.stage, s.ms)).collect();
-            tracing::warn!(ms = timed.ms as u64, size = ?timed.size, stages = %stages.join(", "), "slow {}: {}", timed.what, timed.asked);
-        }
-        self.recent.lock().unwrap_or_else(PoisonError::into_inner).push(timed, self.limits.perf_kept);
+        self.core.timed(what, asked, answer)
     }
 
     /// The code rules' findings on `components`, from the matches kept with
     /// each file's facts (no file is read or parsed again).
     fn rule_findings<'a>(&self, components: impl IntoIterator<Item = &'a Component>, graph: &Graph) -> Vec<arch_graph::Finding> {
-        let files = self.files.read().unwrap_or_else(PoisonError::into_inner);
-        let facts = |file: &RepoPath| files.get(file).map(|(extract, _)| extract);
-        self.rules.check(components, graph, &facts, &self.types)
+        let snapshot = self.core.snapshot();
+        let facts = |file: &RepoPath| snapshot.files.get(file).map(|rows| &**rows);
+        self.core.rules.check(components, graph, &facts, &self.core.types)
     }
 
     /// The last answers' timings, the graph's and the store's size, and the
@@ -1481,15 +1252,15 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
         let observed = self.snapshot()?;
         let (components, relations) = observed.graph.len();
         let overlays = self.merged.lock().unwrap_or_else(PoisonError::into_inner).len();
-        let files = self.files.read().map_err(ServiceError::poisoned)?.extracts.len();
-        let recent = self.recent.lock().unwrap_or_else(PoisonError::into_inner);
+        let files = observed.files.len();
+        let recent = self.core.recent.lock().unwrap_or_else(PoisonError::into_inner);
         Ok(PerfReport {
             recent: recent.list(),
             last_index: recent.last_index.clone(),
             graph: GraphSize { components, relations, overlays },
-            store: StoreSize { files, bytes: self.facts.bytes() },
+            store: StoreSize { files, bytes: self.core.store.bytes() },
             memory_bytes: memory_stats::memory_stats().map(|m| m.physical_mem as u64),
-            slow_request_ms: self.limits.slow_request_ms,
+            slow_request_ms: self.core.limits.slow_request_ms,
         })
     }
 
@@ -1503,7 +1274,7 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
         let id = match key.split_once(':') {
             Some(("type", name)) => {
                 let graph = self.graph(source)?;
-                let data = checks::is_data_type(&self.types);
+                let data = checks::is_data_type(&self.core.types);
                 let mut named = graph.named(name).filter(|c| data(c));
                 match (named.next(), named.next()) {
                     (Some(c), None) => c.id.clone(),
@@ -1519,8 +1290,9 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
 
     /// NotFound unless the view `request` asks for can show `card`.
     fn check_card(&self, input: &arch_graph::tree::Input<'_, Graph>, request: &TreeRequest, card: &str) -> Result<(), ServiceError> {
+        // The card alone, walked and not laid out.
         let probe = TreeRequest { root: Some(card.to_owned()), depth: Some(0), opened: Vec::new(), closed: Vec::new(), ..request.clone() };
-        if arch_graph::tree::build(input, &probe).cards.is_empty() {
+        if arch_graph::tree::walk_tree(input, &probe).cards.is_empty() {
             return Err(ServiceError::NotFound(format!("{card} isn't in the {} view ({})", request.view.name(), request.source)));
         }
         Ok(())
@@ -1528,40 +1300,96 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
 
     /// Runs `f` with what building a tree for `request` needs.
     fn with_tree_input<T>(&self, t: &mut Timing, request: &TreeRequest, f: impl FnOnce(&mut Timing, &arch_graph::tree::Input<'_, Graph>) -> Result<T, ServiceError>) -> Result<T, ServiceError> {
-        let graph = t.stage("source", || self.graph(&request.source))?;
+        // The graph shown, and where the code is entered (found once per
+        // snapshot of the code).
+        let (graph, entries) = t.stage("source", || -> Result<_, ServiceError> {
+            let code = self.snapshot()?;
+            let entries = kept(&self.entry_points, &code.graph, || code_analyzer::entry_points(code.files.values().map(|f| &**f), &self.core.packs));
+            Ok((self.graph(&request.source)?, entries))
+        })?;
         let plan = match &request.source {
             Source::Plan(id) => Some(self.plan_shared(id)?),
             Source::Code => None,
         };
-        // Which other plans change each component (shown as badges).
-        let mut other_plans: BTreeMap<ComponentId, Vec<PlanId>> = BTreeMap::new();
-        for id in self.plans.list()? {
-            if request.source.plan() == Some(&id) {
-                continue;
-            }
-            if let Some(other) = self.plans.get(&id)? {
-                for c in other.components.iter().filter(|c| c.status != arch_graph::Status::Existing) {
-                    other_plans.entry(c.id.clone()).or_default().push(id.clone());
-                }
-            }
-        }
+        let other_plans = self.badges(t, request.source.plan())?;
         let started = Instant::now();
-        let limit = std::time::Duration::from_millis(self.limits.tree_ms);
+        let limit = std::time::Duration::from_millis(self.core.limits.tree_ms);
         let out_of_time = move || started.elapsed() > limit;
-        let input = arch_graph::tree::Input {
+        // The layout's own limit, counted from when it first asks.
+        let layout_started = std::cell::OnceCell::new();
+        let layout_limit = std::time::Duration::from_millis(self.core.limits.layout_ms);
+        let layout_out_of_time = move || layout_started.get_or_init(Instant::now).elapsed() > layout_limit;
+        let mut input = arch_graph::tree::Input {
             graph: &*graph,
             plan: plan.as_deref(),
             other_plans: &other_plans,
             config: &self.trees,
-            types: &self.types,
-            budget: self.limits.cards_per_answer,
-            link_budget: self.limits.links_per_answer,
+            types: &self.core.types,
+            budget: self.core.limits.cards_per_answer,
+            link_budget: self.core.limits.links_per_answer,
             out_of_time: &out_of_time,
+            layout_out_of_time: &layout_out_of_time,
+            flows: None,
+            entries: &entries,
         };
+        if request.view == arch_graph::tree::ViewKind::DataFlow {
+            input.flows = Some(kept(&self.flow_indexes, &graph, || t.stage("flow index", || arch_graph::tree::flow_index(&input))));
+        }
         if let Some(root) = &request.root {
             t.stage("check", || self.check_card(&input, request, root))?;
         }
         f(t, &input)
+    }
+
+    /// Which other plans than `shown` change each component (the badges),
+    /// built once per version of the plans.
+    fn badges(&self, t: &mut Timing, shown: Option<&PlanId>) -> Result<Badges, ServiceError> {
+        let mut plans = Vec::new();
+        for id in self.plans.list()? {
+            if let Some(plan) = self.plans.get(&id)? {
+                plans.push((id, plan));
+            }
+        }
+        let key: BadgesKey = (plans.clone(), shown.cloned());
+        let mut kept = self.badges.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((k, badges)) = kept.as_ref()
+            && same_badges_key(k, &key)
+        {
+            return Ok(badges.clone());
+        }
+        let badges = Arc::new(t.stage("badges", || {
+            let mut other_plans: BTreeMap<ComponentId, Vec<PlanId>> = BTreeMap::new();
+            for (id, plan) in plans.iter().filter(|(id, _)| Some(id) != shown) {
+                for c in plan.components.iter().filter(|c| c.status != arch_graph::Status::Existing) {
+                    other_plans.entry(c.id.clone()).or_default().push(id.clone());
+                }
+            }
+            other_plans
+        }));
+        *kept = Some((key, badges.clone()));
+        Ok(badges)
+    }
+
+    /// How many symbol lists this service built (one per snapshot searched).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn symbol_lists_built(&self) -> usize {
+        self.symbol_lists_built.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// What the symbol search matches against in `graph`, built once per graph.
+    pub(crate) fn symbol_list(&self, graph: &Arc<Graph>) -> Arc<SymbolList> {
+        kept(&self.symbol_lists, graph, || {
+            #[cfg(any(test, feature = "testing"))]
+            self.symbol_lists_built.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let components: Vec<&Component> = graph.components().collect();
+            SymbolList {
+                ids: components.iter().map(|c| c.id.clone()).collect(),
+                symbols: arch_search::Symbols {
+                    names: components.iter().map(|c| c.name.clone()).collect(),
+                    qualified: components.iter().map(|c| format!("{} {}", search::symbol(c), c.file().map(|f| f.as_str()).unwrap_or_default())).collect(),
+                },
+            }
+        })
     }
 
     /// Asks clients to show something (the agent driving the user's view).
@@ -1613,6 +1441,14 @@ pub fn affected(plan: &Plan, before: &Graph, after: &Graph, changed: &BTreeSet<&
 /// other ends of its planned data flows. Vanished files are included. None
 /// when a planned callee or flow end that should exist isn't in the index,
 /// since its file can't be known then.
+/// The components in `file` and the relations leaving them, with how plan
+/// and code line up.
+fn file_view_of(graph: &Graph, file: &str, stale: bool) -> arch_graph::FileView {
+    let components: Vec<(Component, Alignment)> = graph.in_file(file).map(|c| (c.clone(), graph.alignment(&c.id).unwrap_or(Alignment::Observed))).collect();
+    let relations = components.iter().flat_map(|(c, _)| graph.outgoing(&c.id, None)).map(|r| (r.clone(), graph.relation_alignment(r))).collect();
+    arch_graph::FileView { file: file.to_owned(), components, relations, stale }
+}
+
 fn verification_files(plan: &Plan, id: &ComponentId, merged: &Graph) -> Option<BTreeSet<String>> {
     let mut ids: BTreeSet<&ComponentId> = BTreeSet::from([id]);
     for r in &plan.relations {

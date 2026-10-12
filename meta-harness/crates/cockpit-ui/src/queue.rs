@@ -112,7 +112,7 @@ impl QueueState {
         for reply in replies {
             match reply {
                 Reply::Snapshot(p, Ok(s)) if Some(&p) == self.plan.as_ref() => self.set(s),
-                Reply::Snapshot(_, Err(e)) | Reply::Done(Err(e)) => self.error = Some(e),
+                Reply::Snapshot(_, Err(e)) | Reply::Done(Err(e)) => self.error = Some(e.into()),
                 Reply::Done(Ok(())) => {
                     self.error = None;
                     self.invalidate();
@@ -471,7 +471,6 @@ pub(crate) mod tests {
         q.actions().into_iter().filter(|a| a.when != When::Unavailable).map(|a| a.id).collect()
     }
 
-    // req: P9.12, N.19
     #[test]
     fn queue_sessions_approvals_and_findings_are_visible_and_actionable() {
         let ctx = egui::Context::default();
@@ -530,7 +529,6 @@ pub(crate) mod tests {
         });
     }
 
-    // req: V.5, V.1
     #[test]
     fn each_job_shows_its_four_steps_and_what_it_waits_for() {
         let config = crate::config::UiConfig::with_overrides("").unwrap();

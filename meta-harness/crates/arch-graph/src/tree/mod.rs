@@ -5,8 +5,11 @@
 //! logic over [`GraphRead`]: the server builds and lays trees out; the
 //! cockpit only draws them.
 
+mod held;
 mod layout;
 mod lens;
+pub mod measure;
+mod query;
 mod read;
 mod text;
 mod walk;
@@ -15,7 +18,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub use layout::{Point, Rect, card_lines, count_text, problems};
+pub use held::{Expanded, Place, apply};
+pub use layout::{Point, Rect, card_lines, count_text};
+#[cfg(any(test, feature = "testing"))]
+pub use layout::problems;
+pub use lens::FlowIndex;
+pub use query::EXTRA as QUERY_EXTRA;
 pub use read::GraphRead;
 pub use text::render;
 
@@ -200,6 +208,10 @@ pub struct Pill {
     pub role: PillRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component: Option<ComponentId>,
+    /// Where it sits on its line, once laid out: stacked just before
+    /// where the line arrives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect: Option<Rect>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -232,6 +244,8 @@ pub struct Line {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Evidence {
+    /// Read from the code's structure (what's written inside what): exact.
+    Read,
     /// The language's own analyzer confirmed it (its name and version).
     Proven(String),
     /// Only matched by name: likely, not confirmed.
@@ -239,9 +253,31 @@ pub enum Evidence {
 }
 
 impl Evidence {
-    /// How a relation is known, when it was found in the code.
+    /// How a relation is known, when it was found in the code: what holds
+    /// what is read; calls, data flow and implementations are confirmed by
+    /// the language's analyzer or matched by name.
     pub fn of(relation: &crate::Relation) -> Option<Self> {
-        relation.provenance.observed.then(|| relation.proven_by.clone().map_or(Evidence::Named, Evidence::Proven))
+        let found = relation.provenance.observed.then(|| relation.proven_by.clone().map_or(Evidence::Named, Evidence::Proven))?;
+        Some(if relation.kind == crate::RelationKind::Contains { Evidence::Read } else { found })
+    }
+
+    /// The weaker of two: what's only matched by name makes the whole only
+    /// matched by name.
+    pub fn weaker(self, other: Self) -> Self {
+        match (self, other) {
+            (Evidence::Named, _) | (_, Evidence::Named) => Evidence::Named,
+            (Evidence::Proven(a), _) => Evidence::Proven(a),
+            (_, other) => other,
+        }
+    }
+
+    /// In words, for a reader.
+    pub fn describe(&self) -> String {
+        match self {
+            Evidence::Read => "read from the code's structure".to_owned(),
+            Evidence::Proven(by) => format!("confirmed by {by}"),
+            Evidence::Named => "matched by name, unconfirmed".to_owned(),
+        }
     }
 }
 
@@ -276,7 +312,7 @@ pub struct Crumb {
     pub label: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Tree {
     /// What was asked, with the depth filled in.
     pub request: TreeRequest,
@@ -316,10 +352,13 @@ pub struct ViewConfig {
     pub starts: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct EntryConfig {
-    pub skip_paths: Vec<String>,
-    pub skip_modules: Vec<String>,
+/// Where a program is entered: a `main`, or a function that receives what
+/// is sent over a boundary (a route's handler, an event's).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryPoint {
+    pub id: ComponentId,
+    /// Why: `main`, or the boundary and the key received (`http /api/x`).
+    pub why: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -331,7 +370,6 @@ pub struct DataConfig {
 /// Sizes for laying trees out (the cockpit draws with the same).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LayoutConfig {
-    pub char_width: f32,
     pub line_height: f32,
     pub name_size: f32,
     pub small_size: f32,
@@ -344,12 +382,16 @@ pub struct LayoutConfig {
     pub box_gap: f32,
     pub row_aspect: f32,
     pub curve_steps: usize,
+    /// Pills on lines: the space inside around their text, and between
+    /// them and the card a line arrives at.
+    pub pill_pad: f32,
+    pub pill_gap: f32,
 }
 
 impl LayoutConfig {
-    /// How wide `text` is at `size`.
+    /// How wide `text` is at `size`, in the theme's font.
     pub fn text_width(&self, text: &str, size: f32) -> f32 {
-        text.chars().count() as f32 * size * self.char_width
+        measure::text_width(text, size)
     }
 }
 
@@ -357,7 +399,6 @@ impl LayoutConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TreeConfig {
     pub views: BTreeMap<ViewKind, ViewConfig>,
-    pub entries: EntryConfig,
     pub data: DataConfig,
     pub layout: LayoutConfig,
 }
@@ -410,12 +451,28 @@ pub struct Input<'a, G: GraphRead> {
     pub link_budget: usize,
     /// Asked between levels: true when building has taken too long.
     pub out_of_time: &'a dyn Fn() -> bool,
+    /// Asked between branches while laying out: true when laying out has
+    /// taken too long (its own limit, from when it's first asked).
+    pub layout_out_of_time: &'a dyn Fn() -> bool,
+    /// The graph's data-flow index, when it's kept (built once per graph);
+    /// else built for the request.
+    pub flows: Option<std::sync::Arc<FlowIndex>>,
+    /// Where the code is entered, mains first: Calls starts from these, and
+    /// Data flow from the types they take.
+    pub entries: &'a [EntryPoint],
+}
+
+/// The data-flow index of `input`'s graph, to keep for every request on it.
+pub fn flow_index<G: GraphRead>(input: &Input<G>) -> FlowIndex {
+    // A lens on another view builds none of its own.
+    let request = TreeRequest { view: ViewKind::Contains, ..TreeRequest::default() };
+    lens::Lens::new(input, &request).flow_index()
 }
 
 /// Builds the tree a request asks for, cut to the budget, and lays it out.
 pub fn build<G: GraphRead>(input: &Input<G>, request: &TreeRequest) -> Tree {
     let mut tree = walk_tree(input, request);
-    lay_out(&mut tree, &input.config.layout);
+    lay_out(&mut tree, &input.config.layout, input.layout_out_of_time);
     tree
 }
 
@@ -426,25 +483,33 @@ pub fn walk_tree<G: GraphRead>(input: &Input<G>, request: &TreeRequest) -> Tree 
     walk::walk(&lens, input, request)
 }
 
-/// Places a walked tree's cards and lines.
-pub fn lay_out(tree: &mut Tree, config: &LayoutConfig) {
+/// Places a walked tree's cards and lines; the branches it has no time
+/// for (`out_of_time`) are left out, and the tree says it was cut.
+pub fn lay_out(tree: &mut Tree, config: &LayoutConfig, out_of_time: &dyn Fn() -> bool) {
     let view = tree.request.view;
-    layout::lay_out(tree, view, config);
+    layout::lay_out(tree, view, config, out_of_time);
 }
 
-/// The cards `card` adds when opened `levels` further: only the new ones
-/// (what the tree already shows isn't sent again).
-pub fn expand<G: GraphRead>(input: &Input<G>, request: &TreeRequest, card: &str, levels: u32) -> Tree {
-    let before = build(input, request);
-    let mut wider = request.clone();
-    wider.closed.retain(|c| c != card);
-    wider.opened.push(Opened { card: card.to_owned(), levels });
-    let mut after = build(input, &wider);
-    let known: std::collections::BTreeSet<&str> = before.cards.iter().map(|c| c.key.as_str()).collect();
-    after.cards.retain(|c| !known.contains(c.key.as_str()));
-    let added: std::collections::BTreeSet<String> = after.cards.iter().map(|c| c.key.clone()).collect();
-    after.lines.retain(|l| added.contains(&l.to) || added.contains(&l.from));
-    after
+/// Opening `card` `levels` further in the tree a client holds (`held`, as
+/// the server sent it): only the card's branch is walked, merged in, kept to `cap` cards (the opened branches furthest
+/// from it closed again), and the whole laid out again. Returns the tree now
+/// held (to keep for the next change) and what changed (to send).
+pub fn expand<G: GraphRead>(input: &Input<G>, held: &Tree, card: &str, levels: u32, cap: usize) -> (Tree, Expanded) {
+    let request = held.request.opening(card, levels);
+    let known: Vec<String> = held.cards.iter().map(|c| c.key.clone()).collect();
+    let branch_request = TreeRequest { root: Some(card.to_owned()), depth: Some(levels), opened: Vec::new(), closed: request.closed.clone(), ..request.clone() };
+    let lens = lens::Lens::new(input, &branch_request);
+    let mut branch = walk::walk_known(&lens, input, &branch_request, &known);
+    // The card itself is held already.
+    branch.cards.retain(|c| c.key != card);
+    let mut now = held.clone();
+    now.request = request;
+    held::merge(&mut now, card, branch);
+    let closed = held::hold(&mut now, cap, card);
+    let view = now.request.view;
+    layout::lay_out(&mut now, view, &input.config.layout, input.layout_out_of_time);
+    let change = held::expanded(held, &now, closed);
+    (now, change)
 }
 
 /// Where a card sits: what holds it, what else is in there, and the card's
@@ -452,7 +517,7 @@ pub fn expand<G: GraphRead>(input: &Input<G>, request: &TreeRequest, card: &str,
 pub fn context<G: GraphRead>(input: &Input<G>, request: &TreeRequest, card: &str) -> Tree {
     let lens = lens::Lens::new(input, request);
     let mut tree = walk::context(&lens, input, request, card);
-    layout::lay_out(&mut tree, request.view, &input.config.layout);
+    layout::lay_out(&mut tree, request.view, &input.config.layout, input.layout_out_of_time);
     tree
 }
 

@@ -15,9 +15,10 @@ fn tool(name: &str, description: &str, input_schema: serde_json::Value) -> McpTo
 pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
     let tree_list: Vec<String> = ViewKind::ALL.iter().map(|v| format!("- {}: {}", v.name(), trees.view(*v).description)).collect();
     let tree_help = format!("Views (each a tree from one root, cut to a size limit that it reports):\n{}", tree_list.join("\n"));
-    let card = json!({ "type": "string", "description": "A card: a component id (rust:my_crate::server::run), or in data_flow a data type as type:<Name>" });
+    let card = json!({ "type": "string", "description": "A card: a component id (rust:my_crate::server::run), in data_flow a data type as type:<Name> or a flow's start or end as start:<id> / end:<id>" });
     let id = json!({ "type": "string", "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run" });
     let plan = json!({ "type": "string", "description": "Plan id" });
+    let source = json!({ "type": "string", "description": "What to read: \"code\" (the code alone, the default) or \"plan:<id>\" (the code with that plan)" });
     let kind = json!({ "type": "string", "enum": ["contains", "implements", "calls", "data_flow"] });
     let signature = json!({
         "type": "object",
@@ -75,14 +76,14 @@ pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
             json!({ "type": "object", "properties": {
                 "query": { "type": "string" },
                 "kind": { "type": "string", "enum": ["symbols", "files", "text"], "description": "symbols (the default), files or text" },
-                "plan": plan,
+                "source": source,
                 "limit": { "type": "integer" }
             }, "required": ["query"] }),
         ),
         tool(
             "inspect",
-            "One component: type, stage, location (file:symbol), signature, relations in and out, and its source code.",
-            json!({ "type": "object", "properties": { "id": id, "plan": plan }, "required": ["id"] }),
+            "One card's component: type, stage, location (file:symbol), signature, relations in and out (each link found in the code says whether the language's analyzer confirmed it or it was matched by name), and its source code. Any card a view shows: a component, a data type (type:<Name>), a flow's start or end (start:<id>, end:<id>).",
+            json!({ "type": "object", "properties": { "id": card, "source": source }, "required": ["id"] }),
         ),
         tool(
             "view",
@@ -92,7 +93,7 @@ pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
                 "root": card,
                 "way": { "type": "string", "enum": ["down", "up"], "description": "down: what it calls, holds, turns into; up: what calls it, holds it, it came from" },
                 "depth": { "type": "integer" },
-                "plan": plan,
+                "source": source,
                 "full_code": { "type": "boolean", "description": "With a plan: show it in the whole codebase, not only its items and what they plug into" },
                 "open": { "type": "array", "items": card, "description": "Cards to open one level further" },
                 "expand": card,
@@ -105,7 +106,7 @@ pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
             &format!("Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it.\n{tree_help}"),
             json!({ "type": "object", "properties": {
                 "view": { "type": "string", "enum": ViewKind::ALL.iter().map(|v| v.name()).collect::<Vec<_>>() },
-                "source": { "type": "string", "description": "\"code\" (the code alone) or \"plan:<id>\" (the code with that plan)" },
+                "source": source,
                 "root": card,
                 "way": { "type": "string", "enum": ["down", "up"] },
                 "depth": { "type": "integer" },

@@ -18,26 +18,28 @@ pub struct InstanceConfig {
 pub struct InstanceRegistry {
     drivers: HashMap<DriverKind, Arc<dyn ProviderDriver>>,
     instances: RwLock<BTreeMap<InstanceId, Arc<dyn ProviderInstance>>>,
+    /// The config each instance was made with.
+    configs: RwLock<BTreeMap<InstanceId, serde_json::Value>>,
     hub: Arc<EventHub>,
 }
 
 impl InstanceRegistry {
     pub fn new(drivers: Vec<Arc<dyn ProviderDriver>>, hub: Arc<EventHub>) -> Self {
         let drivers = drivers.into_iter().map(|d| (d.metadata().kind, d)).collect();
-        Self { drivers, instances: RwLock::default(), hub }
+        Self { drivers, instances: RwLock::default(), configs: RwLock::default(), hub }
     }
 
-    /// One instance per registered driver, with the driver's default config and
-    /// the driver kind as instance id.
-    /// One instance per driver, each given the program its harness pack
-    /// installed (`programs`, by driver kind).
-    pub fn default_configs(&self, programs: &std::collections::BTreeMap<String, std::path::PathBuf>) -> Vec<InstanceConfig> {
+    /// One instance per driver (the driver kind as its id), each given how
+    /// its harness is started (`harnesses`, by driver kind); a driver none
+    /// is given for says no harness pack provides it.
+    pub fn default_configs(&self, harnesses: &std::collections::BTreeMap<String, harness_contracts::HarnessLaunch>) -> Vec<InstanceConfig> {
         let mut configs: Vec<InstanceConfig> = self
             .drivers
             .values()
             .map(|d| {
                 let kind = d.metadata().kind;
-                let config = d.default_config(programs.get(kind.as_str()).map(std::path::PathBuf::as_path));
+                let none = harness_contracts::HarnessLaunch::Unavailable { reason: format!("no harness pack provides {kind}"), fix: None };
+                let config = d.default_config(harnesses.get(kind.as_str()).unwrap_or(&none));
                 InstanceConfig { id: InstanceId::new(kind.as_str()), driver: kind, config }
             })
             .collect();
@@ -52,7 +54,8 @@ impl InstanceRegistry {
                 .drivers
                 .get(&config.driver)
                 .ok_or_else(|| HarnessError::InvalidConfig { reason: format!("unknown driver {}", config.driver) })?;
-            let instance = driver.create(config.id.clone(), config.config).await?;
+            let instance = driver.create(config.id.clone(), config.config.clone()).await?;
+            self.configs.write().unwrap_or_else(std::sync::PoisonError::into_inner).insert(config.id.clone(), config.config);
             let mut snapshots = instance.snapshot();
             let hub = self.hub.clone();
             hub.publish(ClientEvent::InstanceUpdated { snapshot: snapshots.borrow_and_update().clone() });
@@ -65,6 +68,17 @@ impl InstanceRegistry {
             self.write().insert(config.id, instance);
         }
         Ok(())
+    }
+
+    /// Makes the instance again when its config differs from the one it was
+    /// made with (its harness was installed or fixed since); true if it was.
+    pub async fn reconfigure(&self, config: InstanceConfig) -> Result<bool> {
+        let same = self.configs.read().unwrap_or_else(std::sync::PoisonError::into_inner).get(&config.id) == Some(&config.config);
+        if same {
+            return Ok(false);
+        }
+        self.configure(vec![config]).await?;
+        Ok(true)
     }
 
     fn write(&self) -> std::sync::RwLockWriteGuard<'_, BTreeMap<InstanceId, Arc<dyn ProviderInstance>>> {

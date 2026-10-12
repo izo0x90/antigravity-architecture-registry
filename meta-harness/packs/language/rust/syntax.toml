@@ -17,9 +17,17 @@ package_name_key = ["package", "name"]
 package_name_replace = [["-", "_"]]
 source_roots = ["src"]
 index_files = ["lib.rs", "mod.rs"]
+# Functions a program starts at: where the calls view begins.
+entry_names = ["main"]
 self_names = ["self", "Self"]
+# A path starting with it names the enclosing type (`Self::new()`).
+self_type_names = ["Self"]
 # Leading path segments that mean "relative to here" in qualified calls.
 relative_prefixes = ["crate", "super", "self", "Self"]
+# Of those: the crate's root, the module above, this module.
+root_prefixes = ["crate"]
+parent_prefixes = ["super"]
+here_prefixes = ["self"]
 # Calls that just wrap their argument: a value returned or kept through
 # them is the argument's.
 transparent_calls = ["Ok", "Some", "Box::new", "Arc::new", "Rc::new"]
@@ -198,6 +206,8 @@ type_field = "name"
 # (Not a method call's callee: `self.save()` calls, it doesn't read.)
 access = { kind = "field_expression", not = { inside = { kind = "call_expression", field = "function" } } }
 object_field = "value"
+# Fields of other named values too (`c.count`): the server says which type.
+other_object = { kind = "identifier" }
 field_field = "field"
 assignments = [{ kind = "assignment_expression" }, { kind = "compound_assignment_expr" }]
 left_field = "left"
@@ -224,6 +234,28 @@ receive_field = "arguments"
 receive_key = "\"(/api/[^\"?#\\s]*)"
 receive_handlers = "(?:get|post|put|patch|delete)\\(\\s*([A-Za-z_][A-Za-z0-9_:]*)\\s*\\)"
 key_holes = "\\{[^}]*\\}"
+# A route's handlers are called from outside: where the code is entered.
+entry = "received"
+
+# MCP tools: a tool the server lists (`tool("plan_list", ...)`) is received
+# where a match arm takes its name. Each listed tool is where an agent
+# enters the code.
+[[boundaries]]
+name = "mcp"
+# (In a macro's arguments, like `vec![tool(..)]`, it's read as the name
+# `tool` followed by its arguments.)
+send = { any = [{ kind = "call_expression", has = { field = "function", regex = "^tool$" } }, { kind = "token_tree", follows = { kind = "identifier", regex = "^tool$" } }] }
+send_key = "^(?:tool)?\\(\\s*\"([a-z_][a-z0-9_]*)\""
+receive = { kind = "match_arm" }
+receive_field = "pattern"
+receive_key = "^\\s*\"([a-z_][a-z0-9_]*)\"\\s*$"
+entry = "declared"
+
+# Named items that aren't components: a use of one is of something the
+# repo has, though no card shows it.
+[[items]]
+rule = { any = [{ kind = "const_item" }, { kind = "static_item" }, { kind = "type_item" }] }
+name_field = "name"
 
 # A function named as a value may be called later (a deferred call).
 [[references]]

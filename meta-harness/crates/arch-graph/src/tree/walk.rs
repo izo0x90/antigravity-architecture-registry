@@ -20,6 +20,9 @@ struct Growing<'l, 'a, G: GraphRead> {
     /// Lines to cards shown elsewhere that may still be drawn.
     links_left: usize,
     closed: BTreeSet<String>,
+    /// Cards the asker already shows (an expansion's): lines to them, never
+    /// cards again.
+    known: BTreeSet<String>,
 }
 
 /// One level about to be added: new cards and the lines to every child.
@@ -79,7 +82,7 @@ impl<G: GraphRead> Growing<'_, '_, G> {
                 continue;
             }
             for child in self.lens.children(key) {
-                if !self.at.contains_key(&child.key) && new.insert(child.key.clone()) {
+                if !self.at.contains_key(&child.key) && !self.known.contains(&child.key) && new.insert(child.key.clone()) {
                     next.cards.push((child.key.clone(), f, self.cards[f].level + 1));
                 }
                 next.lines.push((f, child));
@@ -100,13 +103,12 @@ impl<G: GraphRead> Growing<'_, '_, G> {
             self.cards[*parent].open = true;
         }
         for (from, child) in next.lines {
-            let to = self.at[&child.key];
-            let kind = if self.cards[to].parent.as_deref() == Some(self.cards[from].key.as_str()) {
-                LineKind::Tree
-            } else if self.above(from, &child.key) {
-                LineKind::Loop
-            } else {
-                LineKind::Repeat
+            let kind = match self.at.get(&child.key) {
+                // Shown by the asker already: a line to it.
+                None => LineKind::Repeat,
+                Some(&to) if self.cards[to].parent.as_deref() == Some(self.cards[from].key.as_str()) => LineKind::Tree,
+                Some(_) if self.above(from, &child.key) => LineKind::Loop,
+                Some(_) => LineKind::Repeat,
             };
             let pair = (self.cards[from].key.clone(), child.key.clone());
             if !self.drawn.insert(pair.clone()) {
@@ -180,9 +182,15 @@ impl<G: GraphRead> Growing<'_, '_, G> {
 }
 
 pub(super) fn walk<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request: &TreeRequest) -> Tree {
+    walk_known(lens, input, request, &[])
+}
+
+/// `walk`, where `known` cards are already shown (lines to them, never cards).
+pub(super) fn walk_known<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request: &TreeRequest, known: &[String]) -> Tree {
     let depth = request.depth.unwrap_or_else(|| lens.default_depth());
     let budget = input.budget.max(1);
-    let mut grow = Growing { lens, cards: Vec::new(), at: BTreeMap::new(), lines: Vec::new(), drawn: BTreeSet::new(), budget, links_left: input.link_budget, closed: request.closed.iter().cloned().collect() };
+    let known: BTreeSet<String> = known.iter().filter(|k| request.root.as_ref() != Some(*k)).cloned().collect();
+    let mut grow = Growing { lens, cards: Vec::new(), at: BTreeMap::new(), lines: Vec::new(), drawn: BTreeSet::new(), budget, links_left: input.link_budget, closed: request.closed.iter().cloned().collect(), known };
     let mut request = request.clone();
     request.depth = Some(depth);
     let starts: Vec<String> = match &request.root {
@@ -242,7 +250,8 @@ pub(super) fn walk<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request: &Tre
 }
 
 /// Where a card sits: what holds it, what else is in there, and the card's
-/// lines (of the asked view) to those.
+/// lines (of the asked view) to those. Only that branch is walked: a card
+/// nothing holds is its own top (it and what it holds).
 pub(super) fn context<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request: &TreeRequest, card: &str) -> Tree {
     let contains = TreeRequest { view: ViewKind::Contains, way: super::Way::Down, depth: Some(1), root: None, opened: Vec::new(), closed: Vec::new(), ..request.clone() };
     let holder_lens = Lens::new(input, &contains);
@@ -250,7 +259,7 @@ pub(super) fn context<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request: &
     let holder = lens.ancestors(&id).into_iter().next();
     let mut tree = match &holder {
         Some(h) => walk(&holder_lens, input, &TreeRequest { root: Some(h.0.clone()), ..contains }),
-        None => walk(&holder_lens, input, &contains),
+        None => walk(&holder_lens, input, &TreeRequest { root: Some(id.0.clone()), ..contains }),
     };
     // The card's own lines (calls, flows) to what's beside it.
     let beside: BTreeSet<String> = tree.cards.iter().map(|c| c.key.clone()).collect();

@@ -24,9 +24,11 @@ mod wire;
 
 pub use anchor::{CodeAnchor, ProposedLocation, RepoPath, Span};
 pub use events::{ArchEvent, ChangeReason, Requester, ViewRequest};
-pub use index::{IndexState, IndexStatus, IndexSummary, IndexerState, IndexerStatus};
+pub use index::{IndexState, IndexStatus, IndexSummary, ServerState, ServerStatus};
 pub use component::{Component, ComponentId, ImplementationSpec, Invariant, InvariantKind, LogicStep, Param, Schemas, SideEffect, Signature, Task, ToolRef};
-pub use graph::{Alignment, CallChain, ChainStep, Graph};
+pub use graph::{Alignment, Graph};
+#[cfg(any(test, feature = "testing"))]
+pub use graph::inserts as graph_inserts;
 pub use lifecycle::{Stage, Status, can_transition};
 pub use queue::{Job, JobKind, JobState, QueueSnapshot, QueueStatus};
 pub use plan::{Approval, ApprovalKind, Plan, REVOKED_BY, PlanId, Reference, SCHEMA_VERSION, Workflow, check_schema_version};

@@ -26,7 +26,7 @@ fn component(symbol: &str, ty: &str) -> Component {
 
 /// a { run, step, save, log }, b { util }: run -> step -> save, run -> log.
 pub(crate) fn sample_graph() -> Graph {
-    let mut g = Graph::new();
+    let mut g = Graph::default();
     for (s, ty) in [("a", "module"), ("a::run", "function"), ("a::step", "function"), ("a::save", "function"), ("a::log", "function"), ("b", "module"), ("b::util", "function")] {
         g.upsert_component(component(s, ty), Provenance::OBSERVED);
     }
@@ -45,8 +45,21 @@ pub(crate) fn sample_graph() -> Graph {
 /// The tree the server would send for `request` over `graph`.
 pub(crate) fn tree_of(graph: &Graph, plan: Option<&Plan>, request: TreeRequest) -> Tree {
     let (config, types, others) = (TreeConfig::defaults().unwrap(), TypeSystem::defaults().unwrap(), BTreeMap::new());
-    let input = Input { graph, plan, other_plans: &others, config: &config, types: &types, budget: 400, link_budget: 300, out_of_time: &|| false };
+    let input = Input { graph, plan, other_plans: &others, config: &config, types: &types, budget: 400, link_budget: 300, flows: None, out_of_time: &|| false, layout_out_of_time: &|| false, entries: &entries() };
     arch_graph::tree::build(&input, &request)
+}
+
+/// What the server answers when `card` is opened one level in `held`,
+/// keeping to `cap` cards.
+pub(crate) fn change_of(graph: &Graph, held: &Tree, card: &str, cap: usize) -> arch_graph::tree::Expanded {
+    let (config, types, others) = (TreeConfig::defaults().unwrap(), TypeSystem::defaults().unwrap(), BTreeMap::new());
+    let input = Input { graph, plan: None, other_plans: &others, config: &config, types: &types, budget: 400, link_budget: 300, flows: None, out_of_time: &|| false, layout_out_of_time: &|| false, entries: &entries() };
+    arch_graph::tree::expand(&input, held, card, 1, cap).1
+}
+
+/// The sample's entry point: `run` is its main.
+fn entries() -> Vec<arch_graph::tree::EntryPoint> {
+    vec![arch_graph::tree::EntryPoint { id: ComponentId::new("rust:a::run"), why: "main".into() }]
 }
 
 /// Calls down from run, three levels.
@@ -73,8 +86,9 @@ pub(crate) fn with_detail(g: &mut GraphState, key: &str, file: &str, start: u32,
         component: c,
         code: None,
         stale: false,
+            references: Vec::new(),
     };
-    g.details.insert((key.to_owned(), g.nav.plan.clone()), Detail::Ready(Box::new(detail)));
+    g.details.insert((key.to_owned(), g.nav.source.clone()), Detail::Ready(Box::new(detail)));
 }
 
 /// A graph waiting for its first tree (nothing in flight, nothing shown).
@@ -85,7 +99,7 @@ pub(crate) fn loading() -> GraphState {
 /// A graph showing `tree`, settled where it asked (nothing to fetch).
 pub(crate) fn showing(tree: Tree) -> GraphState {
     let r = &tree.request;
-    let nav = Nav { view: r.view, plan: r.source.plan().cloned(), root: r.root.clone(), way: r.way, depth: r.depth, opened: r.opened.clone(), closed: r.closed.clone(), full_code: r.full_code };
+    let nav = Nav { view: r.view, source: r.source.clone(), root: r.root.clone(), way: r.way, depth: r.depth, opened: r.opened.clone(), closed: r.closed.clone(), full_code: r.full_code };
     let mut g = GraphState { config: Some(TreeConfig::defaults().unwrap()), config_requested: true, plans_stale: false, stale: false, nav, ..Default::default() };
     g.set_tree(tree);
     g
@@ -95,22 +109,22 @@ fn ids(g: &GraphState) -> Vec<String> {
     g.actions().into_iter().map(|a| a.id).collect()
 }
 
-// req: M.8
 #[test]
 fn the_graph_offers_one_small_set_of_actions() {
     let mut g = showing(sample_tree());
     let mut all = ids(&g);
     all.sort();
-    assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.find", "graph.fit", "graph.flip", "graph.legend", "graph.next_view", "graph.plan", "graph.refresh", "graph.view", "graph.zoom_in", "graph.zoom_out"]);
-    // A selection adds going into it (and closing its details).
+    // Depth, flip, switch view, pick source; and finding where to start.
+    assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.find", "graph.flip", "graph.plan", "graph.view"]);
+    // A selection adds going into it.
     g.select(Some("rust:a::step".into()));
-    assert!(ids(&g).contains(&"graph.go_in".to_owned()) && ids(&g).contains(&"graph.close_inspector".to_owned()));
+    assert!(ids(&g).contains(&"graph.go_in".to_owned()));
     // A plan adds the full-code switch; the agent's move, the way back.
-    g.nav.plan = Some(PlanId::new("p").unwrap());
+    g.nav.source = Source::Plan(PlanId::new("p").unwrap());
     g.agent = Some(AgentMove { what: "x".into(), select: None, return_to: Nav::default(), return_selection: None });
     assert!(ids(&g).contains(&"graph.full_code".to_owned()) && ids(&g).contains(&"graph.agent_return".to_owned()));
     // The old ways of seeing more or less are gone.
-    for gone in ["graph.focus", "graph.unfocus", "graph.level", "graph.coarser", "graph.finer", "graph.show_all", "graph.story", "graph.reached_by", "graph.follow", "graph.next_call", "graph.up"] {
+    for gone in ["graph.focus", "graph.unfocus", "graph.level", "graph.coarser", "graph.finer", "graph.show_all", "graph.story", "graph.reached_by", "graph.follow", "graph.next_call", "graph.up", "graph.next_view", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.refresh", "graph.legend", "graph.close_inspector"] {
         assert!(!ids(&g).contains(&gone.to_owned()), "{gone}");
     }
     // The keys for them are gone from the keymap too.
@@ -123,7 +137,6 @@ fn the_graph_offers_one_small_set_of_actions() {
     }
 }
 
-// req: M.8
 #[test]
 fn going_in_and_back_walk_a_trail_of_roots() {
     let mut g = showing(sample_tree());
@@ -151,17 +164,21 @@ fn going_in_and_back_walk_a_trail_of_roots() {
     assert_eq!((g.nav.root.as_deref(), g.trail_roots().len()), (Some("rust:a::run"), 0));
 }
 
-// req: M.8
 #[test]
 fn opening_and_closing_a_card_ask_the_server_and_nothing_moves_by_itself() {
     let mut g = showing(tree_of(&sample_graph(), None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(1), ..TreeRequest::default() }));
     g.select(Some("rust:a::step".into()));
     assert!(g.selected_card().unwrap().more > 0);
+    let before = g.tree.as_ref().unwrap().cards.len();
     g.fold(Fold::Open);
     assert_eq!(g.nav.opened.len(), 1);
-    assert!(g.stale);
-    g.set_tree(tree_of(&sample_graph(), None, g.nav.request()));
+    // Opening asks for its branch alone (against the tree held), not the
+    // whole tree again.
+    let held = g.tree.clone().unwrap();
+    assert!(!g.stale && g.expanding.as_ref().is_some_and(|(card, request)| card == "rust:a::step" && *request == held.request));
+    g.take_change(change_of(&sample_graph(), &held, "rust:a::step", 1000));
     assert!(g.card("rust:a::save").is_some(), "its branch is in");
+    assert!(g.tree.as_ref().unwrap().cards.len() > before && g.card("rust:a::step").unwrap().open);
     g.fold(Fold::Close);
     assert_eq!((g.nav.opened.len(), g.nav.closed.len()), (0, 1));
     g.set_tree(tree_of(&sample_graph(), None, g.nav.request()));
@@ -187,7 +204,6 @@ fn opening_and_closing_a_card_ask_the_server_and_nothing_moves_by_itself() {
     assert_eq!(g.nav.way, Way::Up);
 }
 
-// req: M.9
 #[test]
 fn the_cockpit_holds_one_tree_and_forgets_what_the_server_closed() {
     let mut g = showing(sample_tree());
@@ -211,7 +227,6 @@ fn the_cockpit_holds_one_tree_and_forgets_what_the_server_closed() {
     assert!(g.on_screen().is_empty(), "nothing on screen, nothing drawn");
 }
 
-// req: M.8, G.10
 #[test]
 fn selecting_lights_up_what_its_tied_to() {
     let mut g = showing(sample_tree());
@@ -228,22 +243,39 @@ fn selecting_lights_up_what_its_tied_to() {
     assert!(lit.contains("rust:a::run") && !lit.contains("rust:b::util"));
 }
 
-// req: M.2, M.8
 #[test]
 fn a_missing_plan_or_root_falls_back_and_says_so() {
     let mut g = showing(sample_tree());
-    g.nav.plan = Some(PlanId::new("gone").unwrap());
-    g.failed("not found: plan gone".into());
-    assert_eq!(g.nav.plan, None, "the code instead");
+    let (gone, kept) = (PlanId::new("gone").unwrap(), PlanId::new("kept").unwrap());
+    // Under a plan, a root that isn't there: the plan stays, the root goes.
+    g.nav.source = Source::Plan(kept.clone());
+    g.failed(missing("rust:a::run isn't in the calls view (plan kept)"));
+    assert_eq!((g.nav.source.plan(), g.nav.root.as_deref()), (Some(&kept), None), "the plan's starting points instead");
+    assert!(g.note.as_deref().is_some_and(|n| n.contains("isn't in this view") && !n.contains("Plan")));
+    // Not found with no root: the plans are asked; one that's still there stays.
+    g.note = None;
+    g.failed(missing("something"));
+    g.plans_arrived(vec![kept.clone()]);
+    assert_eq!(g.nav.source.plan(), Some(&kept), "a plan that's there isn't called gone");
+    assert!(g.note.is_none());
+    // A plan that's gone: the code instead, and it says so.
+    g.nav.source = Source::Plan(gone.clone());
+    g.failed(missing("plan gone"));
+    assert_eq!(g.nav.source.plan(), Some(&gone), "not before the plans say so");
+    g.plans_arrived(vec![kept]);
+    assert_eq!(g.nav.source, Source::Code, "the code instead");
     assert!(g.note.as_deref().is_some_and(|n| n.contains("Plan gone isn't there")));
-    g.failed("not found: rust:a::run isn't in the calls view (code)".into());
-    assert_eq!(g.nav.root, None, "the starting points instead");
-    assert!(g.note.as_deref().is_some_and(|n| n.contains("isn't in this view")));
-    g.failed("boom".into());
-    assert_eq!(g.load, Load::Failed("boom".into()));
+    // Any other failure says so; words in it don't make it "not found".
+    g.failed(crate::net::NetError { status: Some(500), message: "the file wasn't found on disk".into() });
+    assert_eq!(g.load, Load::Failed("the file wasn't found on disk".into()));
+    assert_eq!(g.nav.source, Source::Code);
 }
 
-// req: M.10, P9.7
+/// The server's 404, with its message.
+fn missing(message: &str) -> crate::net::NetError {
+    crate::net::NetError { status: Some(404), message: message.into() }
+}
+
 #[test]
 fn the_agent_moves_the_view_and_the_user_can_return() {
     let mut g = showing(sample_tree());
@@ -261,7 +293,6 @@ fn the_agent_moves_the_view_and_the_user_can_return() {
     assert_eq!(g.selection.as_deref(), Some("rust:a::log"), "back where the user was");
 }
 
-// req: M.8, G.12
 #[test]
 fn switching_views_keeps_what_the_new_view_can_show() {
     let mut g = showing(sample_tree());
@@ -284,7 +315,6 @@ fn switching_views_keeps_what_the_new_view_can_show() {
     assert_eq!(c.selection.as_deref(), Some("rust:a::log"), "selected there");
 }
 
-// req: M.6
 #[test]
 fn plan_marks_show_on_cards() {
     let mut plan = Plan::new("p", "P");
@@ -301,7 +331,6 @@ fn plan_marks_show_on_cards() {
     assert!(g.actions().iter().any(|a| a.id == "graph.full_code"));
 }
 
-// req: P9.6, M.8
 #[test]
 fn fingers_select_go_in_offer_actions_pan_zoom_and_walk_back() {
     use crate::touch::{Gesture, Swipe};
@@ -320,4 +349,73 @@ fn fingers_select_go_in_offer_actions_pan_zoom_and_walk_back() {
     assert!(g.camera() != before, "two fingers move the camera");
     g.on_gesture(Gesture::Swipe(Swipe::Right));
     assert_eq!(g.requests.run.as_ref().map(|(id, _)| id.as_str()), Some("nav.back"), "a swipe walks the jump list");
+}
+
+#[test]
+fn the_graph_is_split_as_agreed() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/graph");
+    let mut files: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    files.sort();
+    // What was asked, the cards held, drawing, the selection, the details
+    // card, the Code/plan picker, the actions; the state that ties them, and
+    // the tests.
+    assert_eq!(files, ["actions.rs", "cards.rs", "details.rs", "draw.rs", "mod.rs", "request.rs", "select.rs", "source.rs", "tests.rs"]);
+    // Each job in its file.
+    let read = |f: &str| std::fs::read_to_string(dir.join(f)).unwrap();
+    for (file, jobs) in [
+        ("request.rs", &["pub fn apply(", "pub fn navigate(", "pub fn back(", "pub fn back_to(", "struct Step"][..]),
+        ("cards.rs", &["pub fn take(", "fn take_change("][..]),
+        ("draw.rs", &["fn draw_pills(", "fn visible("][..]),
+        ("select.rs", &["pub fn select(", "pub fn reveal(", "fn related(", "pub fn move_selection("][..]),
+        ("details.rs", &["fn render_drawer(", "fn want_details("][..]),
+        ("source.rs", &["fn source_choices", "fn switch_full_code"][..]),
+        ("actions.rs", &["impl ActionProvider for GraphState", "fn command("][..]),
+    ] {
+        let text = read(file);
+        for job in jobs {
+            assert!(text.contains(job), "{job} lives in {file}");
+        }
+    }
+    // Answers are asked for and taken in one place (the tick), not by the
+    // actions, the selection or the drawing.
+    for file in ["actions.rs", "select.rs", "draw.rs", "request.rs", "cards.rs", "source.rs"] {
+        assert!(!read(file).contains("net."), "{file} asks the server for nothing");
+    }
+}
+
+#[test]
+fn a_tree_too_big_to_fit_opens_on_its_root() {
+    // A root that calls many: the tidy tree centres it on them, far below the top.
+    let mut graph = sample_graph();
+    let id = |s: &str| ComponentId::new(format!("rust:{s}"));
+    for i in 0..40 {
+        let name = format!("a::f{i}");
+        graph.upsert_component(component(&name, "function"), Provenance::OBSERVED);
+        let mut r = Relation::new(RelationKind::Calls, id("a::run"), id(&name), Provenance::OBSERVED);
+        r.order = Some(10 + i);
+        graph.upsert_relation(r);
+    }
+    let mut g = showing(tree_of(&graph, None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(1), ..TreeRequest::default() }));
+    g.canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    g.open_area = g.canvas;
+    g.fit_view();
+    let root = g.to_screen(&g.card("rust:a::run").unwrap().rect);
+    assert!(g.open_area.contains_rect(root), "the root is on screen: {root:?}");
+}
+
+#[test]
+fn a_card_text_is_measured_once_until_the_zoom_changes() {
+    let mut fitted = super::draw::Fitted::default();
+    let measured = std::cell::Cell::new(0);
+    let fit = |t: &str, _: f32| {
+        measured.set(measured.get() + 1);
+        Some(t.to_owned())
+    };
+    for _frame in 0..3 {
+        fitted.get("run", 12.0, 80.0, 1.0, fit);
+        fitted.get("step", 12.0, 80.0, 1.0, fit);
+    }
+    assert_eq!(measured.get(), 2, "each text once, however many frames");
+    fitted.get("run", 18.0, 120.0, 1.5, fit);
+    assert_eq!(measured.get(), 3, "zoomed: measured again");
 }

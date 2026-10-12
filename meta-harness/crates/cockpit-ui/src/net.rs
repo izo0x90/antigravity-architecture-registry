@@ -43,7 +43,39 @@ struct AuthChallenge {
     instructions: String,
 }
 
-pub type NetResult<T> = Result<T, String>;
+pub type NetResult<T> = Result<T, NetError>;
+
+/// Why an answer couldn't be had: what the server said (or the network),
+/// and the HTTP status when there was one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetError {
+    pub status: Option<u16>,
+    pub message: String,
+}
+
+impl NetError {
+    /// The network, or an answer that couldn't be read: no status.
+    pub fn other(message: impl Into<String>) -> Self {
+        Self { status: None, message: message.into() }
+    }
+
+    /// The server said it has no such thing (404).
+    pub fn not_found(&self) -> bool {
+        self.status == Some(404)
+    }
+}
+
+impl std::fmt::Display for NetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<NetError> for String {
+    fn from(e: NetError) -> Self {
+        e.message
+    }
+}
 
 pub struct NetClient {
     base_url: String,
@@ -68,14 +100,25 @@ pub struct NetClient {
 }
 
 /// Error text from a non-2xx response: the server's `{"error": ...}` or the status.
-fn http_error(response: &ehttp::Response) -> String {
+/// (name, value) pairs as a query string.
+fn query(pairs: Vec<(&'static str, String)>) -> String {
+    pairs.iter().map(|(k, v)| format!("{k}={}", urlencoding::encode(v))).collect::<Vec<_>>().join("&")
+}
+
+/// A source as a query parameter's value.
+fn source_param(source: &arch_graph::Source) -> String {
+    urlencoding::encode(&String::from(source.clone())).into_owned()
+}
+
+fn http_error(response: &ehttp::Response) -> NetError {
     let server_message = serde_json::from_slice::<serde_json::Value>(&response.bytes)
         .ok()
         .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned));
-    match server_message {
+    let message = match server_message {
         Some(message) => message,
         None => format!("HTTP {}", response.status),
-    }
+    };
+    NetError { status: Some(response.status), message }
 }
 
 impl NetClient {
@@ -106,11 +149,6 @@ impl NetClient {
     /// Reconnect delays from config (milliseconds).
     pub fn set_backoff(&mut self, min_ms: u64, max_ms: u64) {
         self.backoff = (min_ms as f64 / 1000.0, (max_ms.max(min_ms)) as f64 / 1000.0);
-    }
-
-    /// When the next reconnect attempt is due, if one is scheduled.
-    pub fn retry_at(&self) -> Option<f64> {
-        self.retry.map(|(at, _)| at)
     }
 
     fn set_ws_state(&self, state: WsState) {
@@ -158,10 +196,10 @@ impl NetClient {
             let outcome = match result {
                 Ok(resp) if resp.ok => {
                     let bytes: &[u8] = if resp.bytes.is_empty() { b"null" } else { &resp.bytes };
-                    serde_json::from_slice::<T>(bytes).map_err(|e| format!("Bad response: {e}"))
+                    serde_json::from_slice::<T>(bytes).map_err(|e| NetError::other(format!("Bad response: {e}")))
                 }
                 Ok(resp) => Err(http_error(&resp)),
-                Err(e) => Err(format!("Network error: {e}")),
+                Err(e) => Err(NetError::other(format!("Network error: {e}"))),
             };
             on_done(outcome);
             ctx.request_repaint();
@@ -338,39 +376,6 @@ impl NetClient {
         self.call::<()>("POST", &path, Some(serde_json::json!({ "response": response })), ctx, on_done);
     }
 
-    // ---- app-level ----
-
-    pub fn fetch_file<F>(&self, path: &str, ctx: egui::Context, on_done: F)
-    where
-        F: FnOnce(Result<String, String>) + Send + 'static,
-    {
-        let encoded_path = urlencoding::encode(path);
-        let url = format!("{}/api/fs/read?path={}", self.base_url, encoded_path);
-        let request = ehttp::Request::get(&url);
-
-        self.fetch(request, move |result| {
-            match result {
-                Ok(resp) => {
-                    if resp.ok {
-                        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&resp.bytes) {
-                            if let Some(content) = json.get("content").and_then(|c| c.as_str()) {
-                                on_done(Ok(content.to_string()));
-                            } else {
-                                on_done(Err("Invalid response format".into()));
-                            }
-                        } else {
-                            on_done(Err("Failed to parse JSON".into()));
-                        }
-                    } else {
-                        on_done(Err(format!("File read HTTP error {}", resp.status)));
-                    }
-                }
-                Err(e) => on_done(Err(format!("Network error: {}", e))),
-            }
-            ctx.request_repaint();
-        });
-    }
-
     // ---- architecture ----
 
     /// The component types and what each requires.
@@ -380,28 +385,29 @@ impl NetClient {
 
     /// One of the three views as a laid-out tree.
     pub fn graph_tree(&self, request: &arch_graph::tree::TreeRequest, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::tree::Tree>) + Send + 'static) {
-        self.call("POST", "/api/graph/tree", serde_json::to_value(request).ok(), ctx, on_done);
+        self.call("GET", &format!("/api/graph/tree?{}", query(request.query_pairs())), None, ctx, on_done);
+    }
+
+    /// What opening `card` `levels` further changes in the tree `request`
+    /// was answered with (the one held): new cards, every card's place, the
+    /// lines, all laid out by the server.
+    pub fn graph_expand(&self, request: &arch_graph::tree::TreeRequest, card: &str, levels: u32, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::tree::Expanded>) + Send + 'static) {
+        let mut pairs = request.query_pairs();
+        pairs.extend([("card", card.to_owned()), ("levels", levels.to_string())]);
+        self.call("GET", &format!("/api/graph/expand?{}", query(pairs)), None, ctx, on_done);
     }
 
     /// Everything about one card (its component's detail).
-    pub fn graph_card(&self, key: &str, plan: Option<&arch_graph::PlanId>, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::ComponentDetail>) + Send + 'static) {
-        let mut path = format!("/api/graph/card?key={}", urlencoding::encode(key));
-        if let Some(plan) = plan {
-            path.push_str(&format!("&plan={}", urlencoding::encode(&plan.0)));
-        }
-        self.call("GET", &path, None, ctx, on_done);
+    pub fn graph_card(&self, key: &str, source: &arch_graph::Source, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::ComponentDetail>) + Send + 'static) {
+        self.call("GET", &format!("/api/graph/details/{}?source={}", urlencoding::encode(key), source_param(source)), None, ctx, on_done);
     }
 
     /// Symbols, files or lines matching `query` (in the code, or with a plan).
-    pub fn search(&self, query: &str, kind: arch_search::SearchKind, plan: Option<&arch_graph::PlanId>, limit: usize, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_search::Found>) + Send + 'static) {
-        let mut path = format!("/api/search?q={}&kind={}&limit={limit}", urlencoding::encode(query), kind.name());
-        if let Some(plan) = plan {
-            path.push_str(&format!("&plan={}", urlencoding::encode(&plan.0)));
-        }
-        self.call("GET", &path, None, ctx, on_done);
+    pub fn search(&self, query: &str, kind: arch_search::SearchKind, source: &arch_graph::Source, limit: usize, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_search::Found>) + Send + 'static) {
+        self.call("GET", &format!("/api/search?q={}&kind={}&limit={limit}&source={}", urlencoding::encode(query), kind.name(), source_param(source)), None, ctx, on_done);
     }
 
-    /// One file as the analysis has it: colours and what each named place refers to.
+    /// A file's text and its analysis, in one answer.
     pub fn code_analysis(&self, path: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::code::CodeAnalysis>) + Send + 'static) {
         self.call("GET", &format!("/api/code/analysis?path={}", urlencoding::encode(path)), None, ctx, on_done);
     }
@@ -414,33 +420,16 @@ impl NetClient {
     pub fn arch_component(
         &self,
         id: &arch_graph::ComponentId,
-        plan: Option<&arch_graph::PlanId>,
+        source: &arch_graph::Source,
         ctx: egui::Context,
         on_done: impl FnOnce(NetResult<arch_graph::ComponentDetail>) + Send + 'static,
     ) {
-        let mut path = format!("/api/arch/components/{}", urlencoding::encode(id.as_str()));
-        if let Some(plan) = plan {
-            path.push_str(&format!("?plan={}", urlencoding::encode(&plan.0)));
-        }
-        self.call("GET", &path, None, ctx, on_done);
+        self.call("GET", &format!("/api/arch/components/{}?source={}", urlencoding::encode(id.as_str()), source_param(source)), None, ctx, on_done);
     }
 
     /// The component enclosing `file:line`.
-    pub fn arch_at(&self, file: &str, line: usize, plan: Option<&arch_graph::PlanId>, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::Component>) + Send + 'static) {
-        let mut path = format!("/api/arch/at?file={}&line={line}", urlencoding::encode(file));
-        if let Some(plan) = plan {
-            path.push_str(&format!("&plan={}", urlencoding::encode(&plan.0)));
-        }
-        self.call("GET", &path, None, ctx, on_done);
-    }
-
-    /// Components in one file (for the code view's gutter).
-    pub fn arch_file(&self, file: &str, plan: Option<&arch_graph::PlanId>, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::FileView>) + Send + 'static) {
-        let mut path = format!("/api/arch/file?path={}", urlencoding::encode(file));
-        if let Some(plan) = plan {
-            path.push_str(&format!("&plan={}", urlencoding::encode(&plan.0)));
-        }
-        self.call("GET", &path, None, ctx, on_done);
+    pub fn arch_at(&self, file: &str, line: usize, source: &arch_graph::Source, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::Component>) + Send + 'static) {
+        self.call("GET", &format!("/api/arch/at?file={}&line={line}&source={}", urlencoding::encode(file), source_param(source)), None, ctx, on_done);
     }
 
     /// Indexing state: running or not, progress, last run, stale files.
@@ -611,7 +600,6 @@ impl NetClient {
 mod tests {
     use super::*;
 
-    // req: P9.2
     #[test]
     fn a_dropped_event_socket_comes_back_with_backoff_and_asks_for_a_refresh() {
         let mut net = NetClient::new("http://127.0.0.1:9");
@@ -620,15 +608,15 @@ mod tests {
         assert!(!net.reconnected, "the first open isn't a reconnect");
         net.on_ws_event(WsEvent::Error("gone".into()), 10.0);
         assert_eq!(*net.ws_state.lock().unwrap(), WsState::Closed);
-        assert_eq!(net.retry_at(), Some(10.5), "first retry after the minimum delay");
+        assert_eq!(net.retry.map(|(at, _)| at), Some(10.5), "first retry after the minimum delay");
         // Each failed attempt waits twice as long, up to the cap.
         for (now, expected) in [(10.5, 11.5), (11.5, 13.5), (13.5, 17.5), (17.5, 21.5)] {
             net.retry = net.retry.map(|(_, d)| (f64::INFINITY, d));
             net.on_ws_event(WsEvent::Closed, now);
-            assert_eq!(net.retry_at(), Some(expected), "at {now}");
+            assert_eq!(net.retry.map(|(at, _)| at), Some(expected), "at {now}");
         }
         net.on_ws_event(WsEvent::Opened, 30.0);
-        assert_eq!(net.retry_at(), None);
+        assert_eq!(net.retry.map(|(at, _)| at), None);
         assert!(net.reconnected, "views refetch what they missed");
         assert_eq!(*net.ws_state.lock().unwrap(), WsState::Open);
     }

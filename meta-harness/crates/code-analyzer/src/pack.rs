@@ -1,7 +1,7 @@
 //! Language packs: data that maps a language's syntax onto the generic
 //! component types via ast-grep rules. They come from the pack catalog
 //! (`nah-packs`): each language pack holds its syntax rules, its highlight
-//! queries and the name of its indexer.
+//! queries and the name of its server.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -60,12 +60,26 @@ pub struct LanguageSpec {
     /// Files that stand for their directory's module (e.g. lib.rs, __init__.py).
     #[serde(default)]
     pub index_files: Vec<String>,
+    /// Names of functions a program starts at (e.g. "main").
+    #[serde(default)]
+    pub entry_names: Vec<String>,
     /// Receiver names meaning "the enclosing type" (self, this).
     #[serde(default)]
     pub self_names: Vec<String>,
+    /// A path's first word naming the enclosing type itself (`Self::new`).
+    #[serde(default)]
+    pub self_type_names: Vec<String>,
     /// Leading qualifier segments that are relative markers, not names.
     #[serde(default)]
     pub relative_prefixes: Vec<String>,
+    /// Of those, the ones meaning the package's root module (`crate`), the
+    /// module above (`super`, once per word) and this module (`self`).
+    #[serde(default)]
+    pub root_prefixes: Vec<String>,
+    #[serde(default)]
+    pub parent_prefixes: Vec<String>,
+    #[serde(default)]
+    pub here_prefixes: Vec<String>,
     /// Syntax kinds that wrap a type (e.g. `: string` annotations); the type
     /// is their first named child.
     #[serde(default)]
@@ -551,6 +565,14 @@ pub struct RuleSpec {
     pub rule: toml::Value,
 }
 
+/// A named item that isn't a component, and the field holding its name.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ItemSpec {
+    pub rule: toml::Value,
+    pub name_field: String,
+}
+
 /// Making a value of a type (`Report { .. }`, `new Store()`): the type is
 /// written in `type_field`.
 #[derive(Clone, Debug, Deserialize)]
@@ -560,15 +582,20 @@ pub struct ConstructSpec {
     pub type_field: String,
 }
 
-/// The fields of a definition's own value (`self.x`, `this.x`): written
-/// where they're assigned to, read anywhere else.
+/// Fields used: of a definition's own value (`self.x`, `this.x`), and of
+/// other values the `other_object` rule takes (`c.count`: which type `c` is,
+/// only the language's server can say). Written where they're assigned to,
+/// read anywhere else.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateSpec {
     /// A field access.
     pub access: toml::Value,
-    /// The value it's on (must be a self name) and the field's name.
+    /// The value it's on and the field's name.
     pub object_field: String,
+    /// Other values (not the definition's own) whose fields count.
+    #[serde(default)]
+    pub other_object: Option<toml::Value>,
     pub field_field: String,
     /// Assignments: an access in their `left_field` is written.
     #[serde(default)]
@@ -599,6 +626,21 @@ pub struct BoundarySpec {
     /// the same way on both sides before keys are compared.
     #[serde(default)]
     pub key_holes: Option<String>,
+    /// Whether its receivers are where the code is entered (a view's
+    /// starting points): none (an event handled inside), every one
+    /// ("received": a route's handlers, called from outside), or those
+    /// that take only keys the code declares ("declared": the call that
+    /// takes the tools a server lists; a match that also takes keys no one
+    /// declares reads keys of its own).
+    #[serde(default)]
+    pub entry: Option<BoundaryEntry>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundaryEntry {
+    Received,
+    Declared,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -636,6 +678,10 @@ pub struct PackSpec {
     /// recorded as a deferred call when it names a known function.
     #[serde(default)]
     pub references: Vec<RuleSpec>,
+    /// Named items that aren't components (constants, statics, type
+    /// aliases): only their names are kept, so a use of one says what it is.
+    #[serde(default)]
+    pub items: Vec<ItemSpec>,
     /// Where a definition's result leaves it: the matched node is (or
     /// wraps) the value returned.
     #[serde(default)]
@@ -665,6 +711,8 @@ pub struct Pack {
     /// Per dead-code rule: its rule, and the rule a preceding node must match.
     pub dead_code: Vec<(RuleCore, Option<RuleCore>, Option<regex::Regex>)>,
     pub references: Vec<RuleCore>,
+    /// Per item rule: its rule and the field holding the name.
+    pub items: Vec<(RuleCore, String)>,
     pub returns: Vec<RuleCore>,
     pub constructions: Vec<RuleCore>,
     pub state: Option<CompiledState>,
@@ -676,14 +724,15 @@ pub struct Pack {
     pub highlights: Option<String>,
     /// The same, compiled for this pack's grammar.
     pub highlight_query: Option<crate::highlight::HighlightQuery>,
-    /// The indexer pack that knows this language exactly.
-    pub indexer: Option<String>,
+    /// The server pack that knows this language exactly.
+    pub server: Option<String>,
     /// The same pack compiled for its other grammars (by extension).
     pub dialects: Vec<Pack>,
 }
 
 pub struct CompiledState {
     pub access: RuleCore,
+    pub other_object: Option<RuleCore>,
     pub assignments: Vec<RuleCore>,
 }
 
@@ -830,6 +879,7 @@ impl Pack {
                 })
                 .collect::<Result<_, IndexError>>()?,
             references: rules(spec.references.iter().map(|d| &d.rule).collect(), "references")?,
+            items: spec.items.iter().enumerate().map(|(i, item)| Ok((compile(lang, &item.rule, &format!("items[{i}]"))?, item.name_field.clone()))).collect::<Result<_, IndexError>>()?,
             returns: rules(spec.returns.iter().map(|d| &d.rule).collect(), "returns")?,
             constructions: rules(spec.constructions.iter().map(|d| &d.rule).collect(), "constructions")?,
             state: spec
@@ -838,6 +888,7 @@ impl Pack {
                 .map(|st| {
                     Ok::<_, IndexError>(CompiledState {
                         access: compile(lang, &st.access, &format!("pack '{name}' state.access"))?,
+                        other_object: st.other_object.as_ref().map(|r| compile(lang, r, &format!("pack '{name}' state.other_object"))).transpose()?,
                         assignments: st.assignments.iter().enumerate().map(|(i, a)| compile(lang, a, &format!("pack '{name}' state.assignments[{i}]"))).collect::<Result<_, _>>()?,
                     })
                 })
@@ -862,7 +913,7 @@ impl Pack {
             fingerprint: fingerprint.to_owned(),
             highlights: None,
             highlight_query: None,
-            indexer: None,
+            server: None,
             dialects: Vec::new(),
             lang,
             spec,
@@ -903,7 +954,7 @@ pub struct PackSet {
 
 impl PackSet {
     /// The language packs in a pack catalog: each one's syntax rules,
-    /// highlight queries and indexer.
+    /// highlight queries and server.
     pub fn from_catalog(catalog: &nah_packs::Catalog) -> Result<Self, IndexError> {
         let mut set = PackSet::default();
         for language in catalog.of_kind(nah_packs::Kind::Language) {
@@ -924,21 +975,12 @@ impl PackSet {
                     .map(|h| crate::highlight::HighlightQuery::compile(&ast_grep_language::LanguageExt::get_ts_language(&p.lang), h))
                     .transpose()
                     .map_err(|e| IndexError::Pack(format!("{} ({}): {e}", language.name(), p.lang)))?;
-                p.indexer = files.indexer.clone();
+                p.server = files.server.clone();
             }
             pack.dialects = dialects;
             set.add(pack);
         }
         Ok(set)
-    }
-
-    /// The language packs shipped in a packs folder, without any project's
-    /// or user's own (tests and tools that must not depend on the machine).
-    pub fn from_shipped_dir(dir: &Path) -> Result<Self, IndexError> {
-        let distribution = nah_packs::Distribution::from_dir(dir).map_err(|e| IndexError::Pack(e.to_string()))?;
-        let places = nah_packs::Places::isolated(&std::env::temp_dir().join(format!("nah-isolated-{}", std::process::id())));
-        let catalog = nah_packs::Catalog::load(&distribution, &places).map_err(|e| IndexError::Pack(e.to_string()))?;
-        Self::from_catalog(&catalog)
     }
 
     fn add(&mut self, pack: Pack) {
@@ -962,11 +1004,9 @@ impl PackSet {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn constant_conditions_are_decided_only_when_built_from_constants() {
-        let rust = PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap();
+        let rust = crate::shipped_packs();
         let logic = &rust.by_name("rust").unwrap().spec.constant_logic;
         for (text, value) in [
             ("false", Some(false)),

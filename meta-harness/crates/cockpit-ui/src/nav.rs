@@ -183,6 +183,8 @@ pub enum GoTo {
     Graph,
     Tree,
     Queue,
+    /// Every use of it in the code (calls, types named, imports, paths).
+    Uses,
     Callers,
     Callees,
     Parent,
@@ -208,6 +210,7 @@ impl GoTo {
     /// One of what it goes to, for pickers ("Go to which caller?").
     pub fn one(self) -> &'static str {
         match self {
+            Self::Uses => "use",
             Self::Callers => "caller",
             Self::Callees => "callee",
             Self::Parent => "container",
@@ -226,6 +229,7 @@ impl GoTo {
             Self::Graph => "graph node",
             Self::Tree => "outline row",
             Self::Queue => "queue job",
+            Self::Uses => "uses",
             Self::Callers => "callers",
             Self::Callees => "callees",
             Self::Parent => "container",
@@ -438,7 +442,6 @@ mod tests {
         Jump { slot: 0, kind: BufferKind::Code, place: Place::Code { file: "a.rs".into(), line } }
     }
 
-    // req: N.2
     #[test]
     fn the_jump_list_goes_back_and_forward_and_drops_what_was_ahead() {
         let mut list = JumpList::default();
@@ -462,7 +465,6 @@ mod tests {
         assert_eq!(list.back(at(3)), Some(graph));
     }
 
-    // req: N.9
     #[test]
     fn matches_rank_names_then_text_and_step_from_the_cursor() {
         let items = vec![Item::new("0", "stepper", ""), Item::new("1", "run", "calls step"), Item::new("2", "step", ""), Item::new("3", "log", "")];
@@ -481,7 +483,6 @@ mod tests {
         assert_eq!(step_match(&found, Some(2), false), Some(1), "and the one above");
     }
 
-    // req: N.8
     #[test]
     fn hint_labels_are_unique_minimal_and_prefix_free() {
         let alphabet: Vec<char> = "asdf".chars().collect();
@@ -502,7 +503,6 @@ mod tests {
         assert_eq!(scroll_offset(Scroll::KeepVisible, 4, 20.0, 500.0, 400.0), 40.0, "above: bring near the top, with context");
     }
 
-    // req: N.1
     #[test]
     fn targets_resolve_to_components_and_code() {
         let a = ComponentId::new("rust:a::run");

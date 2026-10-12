@@ -80,6 +80,9 @@ impl FeedbackCategory {
     }
 }
 
+/// The issues as loaded, or why not.
+type IssuesReply = Result<Vec<FeedbackIssue>, String>;
+
 pub struct FeedbackInspectorState {
     pub is_inspecting: bool,
     pub just_toggled: bool,
@@ -102,7 +105,7 @@ pub struct FeedbackInspectorState {
     pub editing_comment: String,
     pub status_filter: String,
     pub is_loading_issues: bool,
-    pub pending_issues_load: Arc<Mutex<Option<Result<Vec<FeedbackIssue>, String>>>>,
+    pub pending_issues_load: Arc<Mutex<Option<IssuesReply>>>,
     pub pending_issue_update: Arc<Mutex<Option<Result<String, String>>>>,
 }
 
@@ -155,8 +158,8 @@ impl FeedbackInspectorState {
         if !self.is_inspecting || id == "top_bar:inspector_button" {
             return;
         }
-        if let Some(hover_pos) = ui.input(|i| i.pointer.hover_pos()) {
-            if rect.contains(hover_pos) {
+        if let Some(hover_pos) = ui.input(|i| i.pointer.hover_pos())
+            && rect.contains(hover_pos) {
                 let should_replace = match &self.hovered_target {
                     Some((_, existing_rect)) => rect.area() <= existing_rect.area(),
                     None => true,
@@ -165,7 +168,6 @@ impl FeedbackInspectorState {
                     self.hovered_target = Some((id.to_string(), rect));
                 }
             }
-        }
     }
 
     /// Targets an element, immediately turns off inspection mode, and opens the feedback modal.
@@ -278,8 +280,8 @@ impl FeedbackInspectorState {
                     ui.add_space(crate::theme::look().space_l);
 
                     ui.horizontal(|ui| {
-                        if ui.button(RichText::new("🚀 Submit Feedback").strong().color(colors().ok)).clicked() {
-                            if !self.comment.trim().is_empty() {
+                        if ui.button(RichText::new("🚀 Submit Feedback").strong().color(colors().ok)).clicked()
+                            && !self.comment.trim().is_empty() {
                                 let payload = json!({
                                     "target": { "id": self.target_id },
                                     "category": self.selected_category.as_str(),
@@ -301,7 +303,6 @@ impl FeedbackInspectorState {
                                 self.comment.clear();
                                 close_modal = true;
                             }
-                        }
 
                         if ui.button("Cancel").clicked() {
                             close_modal = true;
@@ -340,19 +341,18 @@ impl FeedbackInspectorState {
     /// view, and edit all submitted feedback issues.
     pub fn render_issues_window(&mut self, ctx: &egui::Context, net: &NetClient) {
         // Drain pending loads
-        if let Ok(mut lock) = self.pending_issues_load.lock() {
-            if let Some(res) = lock.take() {
+        if let Ok(mut lock) = self.pending_issues_load.lock()
+            && let Some(res) = lock.take() {
                 self.is_loading_issues = false;
                 if let Ok(issues) = res {
                     self.issues = issues;
                 }
             }
-        }
 
         // Drain pending updates
         let mut should_reload = false;
-        if let Ok(mut lock) = self.pending_issue_update.lock() {
-            if let Some(res) = lock.take() {
+        if let Ok(mut lock) = self.pending_issue_update.lock()
+            && let Some(res) = lock.take() {
                 match res {
                     Ok(msg) => {
                         self.toast_message = Some((msg, ctx.input(|i| i.time)));
@@ -363,7 +363,6 @@ impl FeedbackInspectorState {
                     }
                 }
             }
-        }
         if should_reload {
             self.load_issues(net, ctx.clone());
         }
@@ -424,14 +423,13 @@ impl FeedbackInspectorState {
                                 if filtered.is_empty() {
                                     ui.add_space(crate::theme::look().space_xxl);
                                     ui.label(RichText::new("No issues match current filter.").italics().color(colors().muted));
-                                } else if self.selected_issue_id.is_none() {
-                                    if let Some(first) = filtered.first() {
+                                } else if self.selected_issue_id.is_none()
+                                    && let Some(first) = filtered.first() {
                                         self.selected_issue_id = Some(first.id.clone());
                                         self.editing_status = first.status.clone();
                                         self.editing_category = FeedbackCategory::from_str_lossy(&first.category);
                                         self.editing_comment = first.comment.clone();
                                     }
-                                }
 
                                 for issue in filtered {
                                     let is_selected = self.selected_issue_id.as_deref() == Some(&issue.id);

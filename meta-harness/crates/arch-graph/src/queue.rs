@@ -100,12 +100,3 @@ pub struct QueueSnapshot {
     pub jobs: Vec<Job>,
 }
 
-impl QueueSnapshot {
-    pub fn job(&self, id: &ComponentId) -> Option<&Job> {
-        self.jobs.iter().find(|j| &j.component == id)
-    }
-
-    pub fn awaiting_approval(&self) -> impl Iterator<Item = &Job> {
-        self.jobs.iter().filter(|j| j.state == JobState::AwaitingApproval)
-    }
-}

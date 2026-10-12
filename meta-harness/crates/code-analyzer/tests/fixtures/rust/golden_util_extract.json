@@ -33,7 +33,27 @@
           }
         ],
         "returns": "String"
-      }
+      },
+      "type_names": [
+        {
+          "text": "String",
+          "span": {
+            "start_line": 1,
+            "end_line": 1,
+            "start_byte": 25,
+            "end_byte": 31
+          }
+        },
+        {
+          "text": "&str",
+          "span": {
+            "start_line": 1,
+            "end_line": 1,
+            "start_byte": 16,
+            "end_byte": 20
+          }
+        }
+      ]
     },
     {
       "name": "helper",

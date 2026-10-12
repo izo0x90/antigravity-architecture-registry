@@ -58,9 +58,11 @@ impl GraphState {
             self.camera.pan = (area.min - self.canvas.min) + (area.size() - Vec2::new(w, h) * zoom) / 2.0;
             return;
         }
-        // A tree reads from the top: unless something below its roots is
-        // selected, start there.
-        let Some(focus) = self.selected_card().filter(|c| c.level > 0).map(|c| c.rect) else {
+        // Start from what's selected below the roots; else, in a tidy tree
+        // (its first card centred on what it holds), from the first root;
+        // boxes in boxes read from the top.
+        let first_root = (tree.request.view != ViewKind::Contains).then(|| tree.roots.first().and_then(|k| tree.card(k))).flatten();
+        let Some(focus) = self.selected_card().filter(|c| c.level > 0).or(first_root).map(|c| c.rect) else {
             self.start_at_the_top();
             return;
         };
@@ -157,7 +159,7 @@ impl GraphState {
             }
             (Some(tree), _) if tree.cards.is_empty() => {
                 let why = match (tree.request.view, &tree.request.source) {
-                    (_, arch_graph::Source::Plan(p)) if !tree.request.full_code => format!("Plan {p} has nothing for this view yet. Show it in the full code (g F), or pick another view."),
+                    (_, arch_graph::Source::Plan(p)) if !tree.request.full_code => format!("Plan {p} has nothing for this view yet. Show it in the full code, or pick another view."),
                     _ => "Nothing to show in this view yet. Read the code in (Space I) or pick another view.".to_owned(),
                 };
                 painter.text(canvas.center(), Align2::CENTER_CENTER, why, FontId::proportional(look.text_title), colors().muted);
@@ -191,6 +193,14 @@ impl GraphState {
                 }
                 self.select(hit);
             }
+        }
+        // The legend's switch, in the corner: it changes nothing in the view,
+        // so it's a button, not one of the graph's actions.
+        let (size, look) = (self.ui.chips.size, crate::theme::look());
+        let corner = Rect::from_min_size(Pos2::new(self.canvas.min.x + look.space_s, self.canvas.max.y - size - look.space_s), Vec2::splat(size));
+        let legend = ui.put(corner, egui::Button::new(RichText::new(egui_phosphor::regular::INFO).size(look.text_body)).corner_radius(size / 2.0).selected(self.legend_open));
+        if legend.on_hover_text(if self.legend_open { "Hide the legend" } else { "Show the legend" }).clicked() {
+            self.legend_open = !self.legend_open;
         }
         if self.legend_open {
             self.draw_legend(&painter);
@@ -369,12 +379,16 @@ impl GraphState {
             Back(usize),
             Into(String),
             Top,
+            /// The size note's fixes: show only the levels that fit, or go
+            /// into the selected card.
+            Levels(u32),
+            Enter(String),
         }
         let mut go: Option<Go> = None;
         ui.horizontal_wrapped(|ui| {
             let look = crate::theme::look();
             let muted = |t: String| RichText::new(t).size(look.text_body).color(colors().muted);
-            let source = self.nav.plan.as_ref().map_or("code".to_owned(), |p| if self.nav.full_code { format!("plan {p} in the full code") } else { format!("plan {p}") });
+            let source = self.source_label();
             let way = match (self.nav.view, self.nav.way) {
                 (ViewKind::Contains, Way::Down) => "what's inside",
                 (ViewKind::Contains, Way::Up) => "what holds it",
@@ -420,7 +434,16 @@ impl GraphState {
                         text.push_str(" (out of time)");
                     }
                     let (glyph, _, color) = crate::status::look("stale");
-                    ui.label(RichText::new(format!("{glyph} {text}")).size(look.text_body).color(color)).on_hover_text("Go into a card, or show fewer levels (-)");
+                    ui.label(RichText::new(format!("{glyph} {text}")).size(look.text_body).color(color));
+                    // Its fixes, as buttons.
+                    if cut.shown < cut.asked && cut.shown > 0 && ui.small_button(format!("Show {} levels", cut.shown)).on_hover_text("Only the levels that fit").clicked() {
+                        go = Some(Go::Levels(cut.shown));
+                    }
+                    if let Some(card) = self.selected_card().filter(|c| self.nav.root.as_deref() != Some(c.key.as_str()))
+                        && ui.small_button(format!("Go into {}", card.label)).on_hover_text("Start from it: what's under it fits").clicked()
+                    {
+                        go = Some(Go::Enter(card.key.clone()));
+                    }
                 }
                 if let Some(ms) = tree.slow_ms {
                     ui.label(RichText::new(format!("· slow: {ms} ms")).size(look.text_body).color(colors().warn))
@@ -430,7 +453,7 @@ impl GraphState {
             if !self.stale_files.is_empty() {
                 let count = self.stale_files.len().to_string();
                 crate::status::chip(ui, "stale", Some(&count)).on_hover_text(self.stale_files.join("\n"));
-                if ui.small_button("Re-read").on_hover_text("Read the code that changed again (SPC I r)").clicked() {
+                if ui.small_button("Re-read").on_hover_text("Read the code that changed again").clicked() {
                     self.requests.reindex = true;
                 }
             }
@@ -456,6 +479,11 @@ impl GraphState {
             }
             Some(Go::Into(key)) => self.pointer_jump(NavChange::View { view: ViewKind::Contains, root: Some(key) }),
             Some(Go::Top) => self.pointer_jump(NavChange::Top),
+            Some(Go::Levels(levels)) => {
+                let base = self.depth();
+                self.pointer_jump(NavChange::Depth { delta: levels as i32 - base as i32, base });
+            }
+            Some(Go::Enter(key)) => self.pointer_jump(NavChange::GoIn(key)),
             None => {}
         }
         match used {
@@ -590,7 +618,8 @@ impl GraphState {
                 }
                 let font = FontId::proportional(px);
                 let color = (if k == 0 { theme.text_strong } else { theme.muted }).gamma_multiply(fade);
-                if let Some(text) = fit_text(painter, text, &font, rect.width() - pad * 2.0) {
+                let fitted = self.fitted.borrow_mut().get(text, px, rect.width() - pad * 2.0, z, |t, w| fit_text(painter, t, &font, w));
+                if let Some(text) = fitted {
                     painter.with_clip_rect(rect).text(Pos2::new(rect.left() + pad, y), Align2::LEFT_TOP, text, font, color);
                 }
                 y += px * layout.line_height;
@@ -699,29 +728,25 @@ impl GraphState {
     }
 
     /// The pills on a selected card's line: what goes in and comes back
-    /// (calls), the steps between two data types (data flow).
+    /// (calls), the steps between two data types (data flow); where the
+    /// server's layout put them, at the camera's zoom.
     fn draw_pills(&self, painter: &egui::Painter, line: &TreeLine) {
-        let way = if line.reach.is_empty() { &line.path } else { &line.reach };
-        if line.pills.is_empty() || way.len() < 2 {
-            return;
-        }
+        let Some(layout) = self.config.as_ref().map(|c| &c.layout) else { return };
         let look = crate::theme::look();
         let theme = colors();
-        let points: Vec<Pos2> = way.iter().map(|p| self.world_to_screen(*p)).collect();
-        // Stacked just before where the line arrives (each card's own pills
-        // beside it, never piled with its siblings').
-        let end = points[points.len() - 1];
-        let font = FontId::proportional(look.text_tiny.max(look.text_small * self.camera.zoom.min(1.0)));
-        let galleys: Vec<_> = line.pills.iter().map(|p| (painter.layout_no_wrap(p.text.clone(), font.clone(), theme.text_strong), style().pill_color(&theme, p.role))).collect();
-        let row = galleys.iter().map(|(g, _)| g.size().y).fold(0.0f32, f32::max) + look.space_hair * 2.0 + look.space_xs;
-        let mut y = end.y - row * galleys.len() as f32 / 2.0;
-        for (galley, color) in galleys {
-            let size = galley.size() + Vec2::new(look.space_s * 2.0, look.space_hair * 2.0);
-            let rect = Rect::from_min_size(Pos2::new(end.x - look.space_m - size.x, y), size);
+        let px = layout.small_size * self.camera.zoom;
+        for pill in &line.pills {
+            let Some(at) = pill.rect else { continue };
+            let rect = Rect::from_min_max(self.world_to_screen((at.x, at.y)), self.world_to_screen((at.right(), at.bottom())));
+            if !self.visible(rect) {
+                continue;
+            }
+            let color = style().pill_color(&theme, pill.role);
             painter.rect_filled(rect, look.radius_pill, theme.bg);
             painter.rect_stroke(rect, look.radius_pill, Stroke::new(look.line_thin, color), StrokeKind::Inside);
-            painter.galley(rect.min + Vec2::new(look.space_s, look.space_hair), galley, theme.text_strong);
-            y += row;
+            if px >= self.ui.min_text_px {
+                painter.with_clip_rect(rect).text(rect.center(), Align2::CENTER_CENTER, &pill.text, FontId::proportional(px), theme.text_strong);
+            }
         }
     }
 
@@ -730,10 +755,11 @@ impl GraphState {
     fn draw_legend(&self, painter: &egui::Painter) {
         let theme = colors();
         let entries: Vec<LegendEntry> = style().legend(&theme);
-        let (pad, swatch_w, gap) = (10.0, 28.0, 8.0);
-        let max_w = (self.canvas.width() - 16.0).clamp(160.0, 400.0);
+        let look = crate::theme::look();
+        let (pad, swatch_w, gap) = (look.space_ml, look.space_xxl + look.space_s, look.space_m);
+        let max_w = (self.canvas.width() - look.space_xl).clamp(self.ui.legend.min_w, self.ui.legend.max_w);
         let text_w = max_w - pad * 2.0 - swatch_w - gap;
-        let font = FontId::proportional(crate::theme::look().text_body);
+        let font = FontId::proportional(look.text_body);
         let mut rows: Vec<(Option<&str>, Option<&LegendEntry>, std::sync::Arc<egui::Galley>)> = Vec::new();
         let mut section = "";
         for entry in &entries {
@@ -744,47 +770,48 @@ impl GraphState {
             rows.push((None, Some(entry), painter.layout(entry.label.clone(), font.clone(), theme.text, text_w)));
         }
         let width = rows.iter().map(|(head, _, g)| if head.is_some() { g.size().x + pad * 2.0 } else { g.size().x + pad * 2.0 + swatch_w + gap }).fold(0.0f32, f32::max).min(max_w);
-        let height: f32 = rows.iter().map(|(_, _, g)| g.size().y.max(14.0) + 4.0).sum::<f32>() + pad * 2.0;
-        let mut top = self.canvas.min.y + 8.0;
-        let left = self.canvas.max.x - width - 8.0;
+        let row_min = look.space_l + look.space_xs;
+        let height: f32 = rows.iter().map(|(_, _, g)| g.size().y.max(row_min) + look.space_s).sum::<f32>() + pad * 2.0;
+        let mut top = self.canvas.min.y + look.space_m;
+        let left = self.canvas.max.x - width - look.space_m;
         let footprint = Rect::from_min_size(Pos2::new(left, top), Vec2::new(width, height));
         for (_, chip) in &self.chip_rects {
             if chip.intersects(footprint) {
-                top = top.max(chip.max.y + 8.0);
+                top = top.max(chip.max.y + look.space_m);
             }
         }
         let rect = Rect::from_min_size(Pos2::new(left, top), Vec2::new(width, height)).intersect(self.canvas);
-        painter.rect_filled(rect, 6.0, theme.overlay);
+        painter.rect_filled(rect, look.radius_l, theme.overlay);
         let mut y = rect.min.y + pad;
         for (head, entry, galley) in rows {
-            let h = galley.size().y.max(14.0);
+            let h = galley.size().y.max(row_min);
             match (head, entry) {
                 (Some(_), _) => {
                     painter.galley(Pos2::new(rect.min.x + pad, y), galley, theme.muted);
                 }
                 (None, Some(entry)) => {
-                    let swatch = Rect::from_min_size(Pos2::new(rect.min.x + pad, y + 2.0), Vec2::new(swatch_w, 10.0));
+                    let swatch = Rect::from_min_size(Pos2::new(rect.min.x + pad, y + look.space_xs), Vec2::new(swatch_w, look.space_ml));
                     match entry.swatch {
                         Swatch::Line(line) => {
                             let points = [swatch.left_center(), swatch.right_center()];
                             if line.dashed {
-                                painter.extend(Shape::dashed_line(&points, Stroke::new(line.width, line.color), 5.0, 3.0));
+                                painter.extend(Shape::dashed_line(&points, Stroke::new(line.width, line.color), look.space_sm, look.space_s));
                             } else {
                                 painter.line_segment(points, Stroke::new(line.width, line.color));
                             }
                         }
                         Swatch::Outline(line) => {
-                            painter.rect_stroke(swatch, 3.0, Stroke::new(line.width, line.color), StrokeKind::Inside);
+                            painter.rect_stroke(swatch, look.radius_s, Stroke::new(line.width, line.color), StrokeKind::Inside);
                         }
                         Swatch::Pill(color) => {
-                            painter.rect_stroke(swatch, 5.0, Stroke::new(1.0, color), StrokeKind::Inside);
+                            painter.rect_stroke(swatch, look.radius_m, Stroke::new(look.line_thin, color), StrokeKind::Inside);
                         }
                     }
                     painter.galley(Pos2::new(swatch.max.x + gap, y), galley, theme.text);
                 }
                 (None, None) => {}
             }
-            y += h + 4.0;
+            y += h + look.space_s;
         }
     }
 
@@ -808,6 +835,24 @@ fn count_pill(painter: &egui::Painter, right_center: Pos2, text: &str, color: eg
     painter.rect_stroke(rect, look.radius_pill, Stroke::new(look.line_thin, color), StrokeKind::Inside);
     painter.galley(rect.min + Vec2::new(look.space_s, look.space_hair), galley, color);
     rect
+}
+
+/// Card texts as they fit, measured once per text, size and width; kept
+/// until the zoom changes (every size and width does then).
+#[derive(Default)]
+pub(super) struct Fitted {
+    zoom: f32,
+    texts: std::collections::HashMap<(String, u32, u32), Option<String>>,
+}
+
+impl Fitted {
+    pub(super) fn get(&mut self, text: &str, px: f32, width: f32, zoom: f32, fit: impl FnOnce(&str, f32) -> Option<String>) -> Option<String> {
+        if zoom != self.zoom {
+            self.texts.clear();
+            self.zoom = zoom;
+        }
+        self.texts.entry((text.to_owned(), px.to_bits(), width.to_bits())).or_insert_with(|| fit(text, width)).clone()
+    }
 }
 
 /// `text` as it fits in `width`: whole, shortened with an ellipsis, or not

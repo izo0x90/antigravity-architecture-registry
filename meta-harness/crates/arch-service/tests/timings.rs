@@ -7,8 +7,10 @@ use arch_graph::TypeSystem;
 use arch_graph::tree::{TreeRequest, ViewKind};
 use arch_service::{ArchitectureService, Limits, MemoryPlans, SearchKind, open_facts};
 
+mod common;
+
 fn sample() -> PathBuf {
-    let root = tempfile::tempdir().unwrap().keep().join("sample");
+    let root = common::lasting_dir().join("sample");
     let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample");
     std::fs::create_dir_all(root.join("src")).unwrap();
     for f in ["Cargo.toml", "src/lib.rs", "src/store.rs", "src/util.rs"] {
@@ -19,14 +21,13 @@ fn sample() -> PathBuf {
 
 fn open(root: &Path, limits: Limits) -> ArchitectureService {
     let facts = open_facts(root, &limits).unwrap();
-    ArchitectureService::open(root, code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), Box::new(facts)).unwrap().with_limits(limits)
+    ArchitectureService::open(root, common::shipped_packs(), TypeSystem::defaults().unwrap(), Box::new(MemoryPlans::default()), facts).unwrap().with_limits(limits)
 }
 
 fn stages(timed: &arch_service::Timed) -> Vec<&str> {
     timed.stages.iter().map(|s| s.stage.as_str()).collect()
 }
 
-// req: M.14
 #[test]
 fn every_answer_is_timed_by_stage_and_kept_for_the_perf_page() {
     let root = sample();
@@ -43,10 +44,10 @@ fn every_answer_is_timed_by_stage_and_kept_for_the_perf_page() {
     let whats: Vec<&str> = perf.recent.iter().map(|t| t.what.as_str()).collect();
     assert_eq!(whats, ["open", "ingest", "tree", "search", "card"]);
     let index = perf.last_index.as_ref().expect("the last index run");
-    assert_eq!(stages(index), ["find files", "read", "combine", "store", "graph"]);
+    assert_eq!(stages(index), ["find files", "read", "link", "store", "graph"]);
     assert_eq!(index.size, Some((3, "files".into())));
     let tree_timing = &perf.recent[2];
-    assert_eq!(stages(tree_timing), ["source", "check", "walk", "layout", "encode"]);
+    assert_eq!(stages(tree_timing), ["source", "badges", "check", "walk", "layout", "keep", "encode"]);
     assert_eq!(tree_timing.size, Some((json.len() as u64, "bytes".into())), "how big the answer was");
     assert!(tree_timing.asked.contains("calls") && tree_timing.asked.contains("rust:sample::run"), "what was asked: {}", tree_timing.asked);
     assert_eq!(stages(&perf.recent[3]), ["source", "symbols"]);
@@ -55,7 +56,6 @@ fn every_answer_is_timed_by_stage_and_kept_for_the_perf_page() {
     assert!(perf.memory_bytes.is_some_and(|m| m > 0));
 }
 
-// req: M.14
 #[test]
 fn an_answer_over_the_limit_says_so_and_only_the_last_few_are_kept() {
     let root = sample();

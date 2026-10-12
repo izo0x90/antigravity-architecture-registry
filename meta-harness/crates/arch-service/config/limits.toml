@@ -11,8 +11,19 @@ cards_per_answer = 400
 # Lines in one tree answer that go to a card shown elsewhere (a repeat or a
 # loop). Past this, a card counts the ones left out instead.
 links_per_answer = 300
-# How long building and laying out one tree may take before it's cut.
+# Cards a client holds at most: the tree it was sent and the branches
+# opened since. Over it, the opened branches furthest from the one just
+# opened close again. At least twice cards_per_answer, so a tree and the
+# branch opened in it always fit.
+cards_held = 1000
+# Trees sent to clients that are kept, so opening a card walks only its
+# branch and merges it in (the most recent ones).
+trees_kept = 16
+# How long walking one tree may take before it's cut.
 tree_ms = 200
+# How long laying one tree out may take: the branches it has no time for
+# are left out, and the answer says it was cut.
+layout_ms = 100
 # Slower than this, a request is logged with what was asked (and the
 # cockpit says so).
 slow_request_ms = 200
@@ -42,10 +53,54 @@ cache_kib = 16384
 # same tick of its clock: its time isn't trusted, so it's read again next
 # time (and re-linked only if its content changed).
 recent_change_ms = 2000
+# A connection that finds the file busy (the writer checkpointing as a
+# read starts) tries again after this many microseconds, until this many
+# milliseconds have passed. SQLite's own wait sleeps whole milliseconds,
+# growing, so a read would wait milliseconds for what takes microseconds.
+busy_retry_us = 50
+busy_give_up_ms = 10000
+
+# The one thread that reads, links and writes the code's facts.
+[limits.pipeline]
+# Its parallel work takes this share of the cores (at least one), so reads,
+# and everything else, never wait for one.
+cores_share = 0.5
+# How often progress is announced while files are read.
+progress_ms = 150
 
 # What the performance tests hold the code to (this repo and tokio).
 [limits.perf]
 full_index_ms = 20000
-one_file_ms = 1500
+# A one-file change on this repo, until the new graph is visible.
+one_file_ms = 360
+# The same on a big repo (tokio), as a share of its full index.
+one_file_share = 0.25
 tree_ms = 200
 search_ms = 50
+# The longest browser frame while panning a big tree (scripts/frame_check.py).
+frame_ms = 16
+
+# Language servers.
+[limits.servers]
+# Requests sent together: every ref of a busy file in one batch.
+requests_in_flight = 4096
+# One file's batch per server at a time.
+files_at_once = 1
+# A warm server confirms one changed file's links within this (the gate).
+confirm_ms = 1500
+# A server not ready by then shows as failed, with why.
+ready_s = 120
+# A server that ended is started again after this, doubling up to the most.
+restart_after_ms = 1000
+restart_after_most_ms = 60000
+# A refused file waits before it's asked again, doubling up to this.
+retry_most_ms = 10000
+# How often a confirmer looks again when nothing is ready or queued.
+poll_ms = 100
+# On shutdown: how long a server has to answer, then to exit.
+shutdown_ms = 2000
+
+# The file watcher.
+[limits.watch]
+# Saves this close together (in ms) are taken as one batch.
+debounce_ms = 300

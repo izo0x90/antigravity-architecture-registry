@@ -44,10 +44,6 @@ impl Provenance {
     pub fn merge(self, other: Provenance) -> Provenance {
         Provenance { planned: self.planned || other.planned, observed: self.observed || other.observed }
     }
-
-    pub fn is_both(self) -> bool {
-        self.planned && self.observed
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -90,7 +86,7 @@ pub struct Relation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
     /// Links found in the code (calls, data flow, implements): the
-    /// language's own indexer that confirmed this one ("rust-analyzer
+    /// language's server that confirmed this one ("rust-analyzer
     /// 1.90.0"); None when it was only matched by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proven_by: Option<String>,
@@ -147,7 +143,6 @@ impl Relation {
 mod tests {
     use super::*;
 
-    // req: P2.6
     #[test]
     fn relations_merge_provenance_and_sites() {
         let a = ComponentId::new("rust:app::run");
@@ -159,7 +154,7 @@ mod tests {
         observed.sites.push(Span { start_line: 4, end_line: 4, start_byte: 40, end_byte: 50 });
         assert_eq!(planned.id(), observed.id());
         planned.absorb(&observed);
-        assert!(planned.provenance.is_both());
+        assert!(planned.provenance.planned && planned.provenance.observed);
         assert_eq!(planned.order, Some(0));
         assert_eq!(planned.sites.len(), 1);
         let contains = Relation::new(RelationKind::Contains, a.clone(), b.clone(), Provenance::OBSERVED);

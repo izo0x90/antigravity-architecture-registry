@@ -4,7 +4,9 @@
 //! way, opening or closing a card. Nothing here changes on its own.
 
 use arch_graph::tree::{Opened, TreeRequest, ViewKind, Way};
-use arch_graph::{PlanId, Source, ViewRequest};
+use arch_graph::{Source, ViewRequest};
+
+use crate::nav::Navigable;
 
 /// What the graph shows: one view, over the code or one plan, from a root
 /// (or the view's starting points), one way, to a depth, with the cards
@@ -12,8 +14,8 @@ use arch_graph::{PlanId, Source, ViewRequest};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Nav {
     pub view: ViewKind,
-    /// The plan laid over the code; none: the code alone.
-    pub plan: Option<PlanId>,
+    /// The code alone, or the code with one plan laid over it.
+    pub source: Source,
     pub root: Option<String>,
     pub way: Way,
     /// None: the view's own depth.
@@ -29,7 +31,7 @@ impl Nav {
     pub fn request(&self) -> TreeRequest {
         TreeRequest {
             view: self.view,
-            source: Source::from_plan(self.plan.clone()),
+            source: self.source.clone(),
             root: self.root.clone(),
             way: self.way,
             depth: self.depth,
@@ -52,8 +54,8 @@ impl Nav {
 pub enum NavChange {
     /// Another view; `root` is the card it starts from there (if any).
     View { view: ViewKind, root: Option<String> },
-    /// The code (none) or a plan.
-    Plan(Option<PlanId>),
+    /// The code, or the code with a plan.
+    Source(Source),
     /// With a plan: in the whole codebase, or only the plan and what it
     /// plugs into.
     FullCode(bool),
@@ -83,8 +85,8 @@ pub fn apply(nav: &mut Nav, change: NavChange) {
             nav.root = root;
             nav.reset_folds();
         }
-        NavChange::Plan(plan) => {
-            nav.plan = plan;
+        NavChange::Source(source) => {
+            nav.source = source;
             nav.full_code = false;
             nav.reset_folds();
         }
@@ -124,7 +126,7 @@ pub fn apply(nav: &mut Nav, change: NavChange) {
                 nav.view = view;
             }
             if let Some(source) = request.source {
-                nav.plan = source.plan().cloned();
+                nav.source = source;
                 nav.full_code = false;
             }
             if request.root.is_some() {
@@ -147,15 +149,107 @@ pub fn forget_dropped(nav: &mut Nav, dropped: &[String]) {
     nav.opened.retain(|o| !dropped.contains(&o.card));
 }
 
+/// Where the user was before going into a card: back returns there.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Step {
+    pub nav: Nav,
+    pub selection: Option<String>,
+}
+
+impl super::GraphState {
+    /// The one way where the graph looks changes: applies the change and
+    /// fetches the tree again if it changed. A user's move ends the agent's.
+    pub fn navigate(&mut self, change: NavChange) {
+        let user = !matches!(change, NavChange::Request(_));
+        let before = self.nav.clone();
+        if let NavChange::GoIn(card) = &change
+            && self.nav.root.as_ref() != Some(card)
+        {
+            self.trail.push(Step { nav: self.nav.clone(), selection: self.selection.clone() });
+            self.pending_select = Some(card.clone());
+        }
+        // Opening a card that has more under it: just its branch, merged in.
+        let expand = match &change {
+            NavChange::Open(card) => self.tree.as_ref().and_then(|t| t.card(card)).filter(|c| c.more > 0 && !c.open).map(|c| c.key.clone()),
+            _ => None,
+        };
+        apply(&mut self.nav, change);
+        if self.nav != before {
+            match expand {
+                Some(card) if !self.stale => self.expanding = Some((card, before.request())),
+                _ => {
+                    self.stale = true;
+                    self.refit = true;
+                }
+            }
+            self.note = None;
+        }
+        if user {
+            self.agent = None;
+        }
+    }
+
+    /// Back: to where the last "go in" started, else out to what holds the
+    /// root (or the view's starting points). False when there's nowhere back.
+    pub fn back(&mut self) -> bool {
+        if let Some(step) = self.trail.pop() {
+            self.nav = step.nav;
+            self.pending_select = step.selection;
+            self.stale = true;
+            self.refit = true;
+            self.agent = None;
+            return true;
+        }
+        let Some(root) = self.nav.root.clone() else { return false };
+        let holder = self.tree.as_ref().and_then(|t| t.path.last()).map(|c| c.key.clone());
+        let change = match (self.nav.view, holder) {
+            (ViewKind::Contains, Some(holder)) => NavChange::GoIn(holder),
+            _ => NavChange::Top,
+        };
+        self.navigate(change);
+        self.trail.clear();
+        self.pending_select = Some(root);
+        true
+    }
+
+    /// The roots gone through to get here, oldest first (each one a way back).
+    pub fn trail_roots(&self) -> Vec<Option<String>> {
+        self.trail.iter().map(|s| s.nav.root.clone()).collect()
+    }
+
+    /// Back to the `index`th step of the trail.
+    pub fn back_to(&mut self, index: usize) {
+        if index >= self.trail.len() {
+            return;
+        }
+        let step = self.trail[index].clone();
+        self.trail.truncate(index);
+        self.nav = step.nav;
+        self.pending_select = step.selection;
+        self.stale = true;
+        self.refit = true;
+        self.agent = None;
+    }
+
+    /// A jump made with the pointer or a finger: remembers where it left
+    /// from for the jump list, then navigates.
+    pub(super) fn pointer_jump(&mut self, change: NavChange) {
+        if self.jumped.is_none() {
+            self.jumped = Some(self.place());
+        }
+        self.navigate(change);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arch_graph::PlanId;
 
     fn nav() -> Nav {
         Nav { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(3), ..Nav::default() }
     }
 
-    // req: M.8
     #[test]
     fn every_change_is_one_the_user_made_and_folds_belong_to_the_tree_they_were_made_in() {
         let mut n = nav();
@@ -172,7 +266,7 @@ mod tests {
             NavChange::Depth { delta: 1, base: 3 },
             NavChange::Flip,
             NavChange::GoIn("rust:a::step".into()),
-            NavChange::Plan(Some(PlanId::new("p").unwrap())),
+            NavChange::Source(Source::Plan(PlanId::new("p").unwrap())),
             NavChange::FullCode(true),
             NavChange::View { view: ViewKind::Contains, root: None },
         ] {
@@ -183,7 +277,7 @@ mod tests {
         assert_eq!((n.view, n.root.as_deref(), n.way, n.depth), (ViewKind::Contains, None, Way::Up, Some(4)));
         // Full code stays on (another view, same plan) until the plan changes.
         assert!(n.full_code);
-        apply(&mut n, NavChange::Plan(None));
+        apply(&mut n, NavChange::Source(Source::Code));
         assert_eq!(n.request().source, Source::Code);
         // Depth never goes below the root alone.
         apply(&mut n, NavChange::Depth { delta: -9, base: 2 });
@@ -195,13 +289,12 @@ mod tests {
         assert_eq!(n.opened, vec![Opened { card: "b".into(), levels: 1 }]);
     }
 
-    // req: M.10
     #[test]
     fn the_agent_can_send_the_user_to_the_code_a_plan_a_view_or_a_root() {
-        let mut n = Nav { plan: Some(PlanId::new("p").unwrap()), ..nav() };
+        let mut n = Nav { source: Source::Plan(PlanId::new("p").unwrap()), ..nav() };
         let request: ViewRequest = serde_json::from_value(serde_json::json!({ "source": "code", "view": "data_flow", "root": "type:Plan", "way": "up" })).unwrap();
         apply(&mut n, NavChange::Request(Box::new(request)));
-        assert_eq!((n.plan.as_ref(), n.view, n.root.as_deref(), n.way), (None, ViewKind::DataFlow, Some("type:Plan"), Way::Up));
+        assert_eq!((&n.source, n.view, n.root.as_deref(), n.way), (&Source::Code, ViewKind::DataFlow, Some("type:Plan"), Way::Up));
         // Nothing asked: nothing changes.
         let before = n.clone();
         apply(&mut n, NavChange::Request(Box::default()));

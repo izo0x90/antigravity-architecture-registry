@@ -14,6 +14,9 @@ use crate::nav::{Fold, Item, Motion, Navigable, Place, Scroll, Spot, Step, Targe
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
 
+/// A file's analysis, by the file it was asked for.
+type AnalysisReply = (String, NetResult<arch_graph::code::CodeAnalysis>);
+
 /// What the gutter shows on a line, linked to its component.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Mark {
@@ -33,7 +36,7 @@ fn definitions(view: &FileView) -> Vec<&Component> {
         let span = c.anchor.as_ref().map(|a| a.span).unwrap_or_default();
         in_file.iter().all(|o| o.anchor.as_ref().is_some_and(|a| span.contains(&a.span)))
     });
-    in_file.iter().filter(|c| in_file.len() == 1 || !whole_file.is_some_and(|w| w.id == c.id)).copied().collect()
+    in_file.iter().filter(|c| in_file.len() == 1 || whole_file.is_none_or(|w| w.id != c.id)).copied().collect()
 }
 
 /// Gutter marks by line, from the components in a file.
@@ -67,11 +70,6 @@ fn mark_look(mark: &Mark) -> (&'static str, egui::Color32, String, &ComponentId)
         Mark::Placeholder(id) => (egui_phosphor::regular::HOURGLASS, colors().warn, "placeholder body (skeleton)".to_owned(), id),
         Mark::MissingCall(id, target) => (egui_phosphor::regular::WARNING, colors().error, format!("planned call to {target} is missing"), id),
     }
-}
-
-/// The marks drawn on one row of the code view, next to that line's text.
-pub fn row_marks(marks: &BTreeMap<usize, Vec<Mark>>, line_no: usize) -> &[Mark] {
-    marks.get(&line_no).map(Vec::as_slice).unwrap_or_default()
 }
 
 /// A definition in the file: its component and lines.
@@ -116,9 +114,7 @@ pub struct CodeViewerState {
     pub is_loading: bool,
     pub error_message: Option<String>,
     /// The fetched file's contents, with the path they're for.
-    pending_result: Arc<Mutex<Option<(String, Result<String, String>)>>>,
     marks: BTreeMap<usize, Vec<Mark>>,
-    marks_inbox: Arc<Mutex<Option<NetResult<FileView>>>>,
     /// What the index knows about the file (kept: call columns are worked
     /// out again when the text arrives after it).
     file_view: Option<FileView>,
@@ -128,7 +124,8 @@ pub struct CodeViewerState {
     pub names: Vec<Named>,
     /// The file as the analysis has it: colours, named places.
     analysis: Option<arch_graph::code::CodeAnalysis>,
-    analysis_inbox: Arc<Mutex<Option<NetResult<arch_graph::code::CodeAnalysis>>>>,
+    /// The text and analysis asked for, by the file they were asked for.
+    analysis_inbox: Arc<Mutex<Option<AnalysisReply>>>,
     /// Syntax colours (from the UI config).
     pub ui: crate::config::CodeUi,
     /// Asks the app to open this component's code (a name ctrl-clicked).
@@ -154,9 +151,6 @@ pub struct CodeViewerState {
     pub out_of_date: bool,
     /// Asks the app to read this file again.
     pub reread: bool,
-    /// When the user last moved the cursor (follow mode syncs the graph
-    /// once it settles).
-    pub cursor_moved_at: Option<f64>,
 }
 
 impl Default for CodeViewerState {
@@ -170,9 +164,7 @@ impl Default for CodeViewerState {
             highlight: None,
             is_loading: false,
             error_message: None,
-            pending_result: Arc::new(Mutex::new(None)),
             marks: BTreeMap::new(),
-            marks_inbox: Arc::default(),
             file_view: None,
             defs: Vec::new(),
             names: Vec::new(),
@@ -191,7 +183,6 @@ impl Default for CodeViewerState {
             file_stale: false,
             out_of_date: false,
             reread: false,
-            cursor_moved_at: None,
         }
     }
 }
@@ -213,24 +204,13 @@ impl CodeViewerState {
         self.scroll = target_line.map(|_| Scroll::Center);
         self.is_loading = true;
         self.error_message = None;
-        let marks = self.marks_inbox.clone();
-        net.arch_file(path, None, ctx.clone(), move |r| {
-            if let Ok(mut m) = marks.lock() {
-                *m = Some(r);
-            }
-        });
+        // The text, its components and its analysis, in one answer (the
+        // same content).
         let analysis = self.analysis_inbox.clone();
-        net.code_analysis(path, ctx.clone(), move |r| {
-            if let Ok(mut a) = analysis.lock() {
-                *a = Some(r);
-            }
-        });
-
-        let pending = self.pending_result.clone();
         let for_path = path.to_owned();
-        net.fetch_file(path, ctx, move |result| {
-            if let Ok(mut lock) = pending.lock() {
-                *lock = Some((for_path, result));
+        net.code_analysis(path, ctx, move |r| {
+            if let Ok(mut a) = analysis.lock() {
+                *a = Some((for_path, r));
             }
         });
     }
@@ -241,24 +221,12 @@ impl CodeViewerState {
         self.highlight = Some((start, end.max(start)));
     }
 
-    /// Puts the cursor on `line` (the user moved it at `now`).
-    pub fn move_cursor(&mut self, line: usize, now: f64) {
+    /// Puts the cursor on `line`.
+    pub fn move_cursor(&mut self, line: usize) {
         let line = line.clamp(1, self.lines.len().max(1));
         self.target_line = Some(self.unfolded_row_line(line));
         self.cursor_col = None;
         self.highlight = None;
-        self.cursor_moved_at = Some(now);
-    }
-
-    /// The cursor's file and line once it has rested for `debounce` seconds
-    /// since the user moved it (taken once).
-    pub fn settled_cursor(&mut self, now: f64, debounce: f64) -> Option<(String, usize)> {
-        let moved = self.cursor_moved_at?;
-        if now - moved < debounce {
-            return None;
-        }
-        self.cursor_moved_at = None;
-        Some((self.current_file.clone(), self.target_line?))
     }
 
     fn in_highlight(&self, line: usize) -> bool {
@@ -435,8 +403,8 @@ impl CodeViewerState {
         out
     }
 
-    fn put_cursor(&mut self, line: usize, how: Scroll, now: f64) {
-        self.move_cursor(line, now);
+    fn put_cursor(&mut self, line: usize, how: Scroll) {
+        self.move_cursor(line);
         self.scroll = Some(how);
     }
 
@@ -448,7 +416,7 @@ impl CodeViewerState {
     /// The next (or previous) definition start from the cursor; `same_level`
     /// keeps to definitions in the same enclosing one. Says why not, when it
     /// can't.
-    fn step_def(&mut self, forward: bool, count: usize, same_level: bool, now: f64) -> Result<(), String> {
+    fn step_def(&mut self, forward: bool, count: usize, same_level: bool) -> Result<(), String> {
         let line = self.target_line.unwrap_or(1);
         let parent_of = |d: &Def| self.defs.iter().filter(|o| o.start <= d.start && d.end <= o.end && *o != d).min_by_key(|o| o.end - o.start).map(|o| o.start);
         let level = if same_level { self.def_at(line).map(parent_of) } else { None };
@@ -463,31 +431,27 @@ impl CodeViewerState {
                 None => break,
             }
         }
-        self.put_cursor(at, Scroll::KeepVisible, now);
+        self.put_cursor(at, Scroll::KeepVisible);
         Ok(())
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, net: &NetClient, feedback: &mut FeedbackInspectorState, slot_idx: usize) {
         // Replies for a file that's no longer the one shown (an earlier load
         // answering late) are dropped, so they can't use up its scroll.
-        let incoming = self.pending_result.lock().ok().and_then(|mut l| l.take());
+        let incoming = self.analysis_inbox.lock().ok().and_then(|mut a| a.take());
         if let Some((path, res)) = incoming
             && path == self.current_file
         {
             match res {
-                Ok(c) => self.set_content(c),
-                Err(e) => self.set_error(e),
+                Ok(mut analysis) => {
+                    self.set_content(analysis.text.clone());
+                    self.set_file_view(std::mem::take(&mut analysis.view));
+                    if !analysis.stale {
+                        self.set_analysis(analysis);
+                    }
+                }
+                Err(e) => self.set_error(e.to_string()),
             }
-        }
-        if let Some(Ok(view)) = self.marks_inbox.lock().ok().and_then(|mut m| m.take())
-            && view.file == self.current_file
-        {
-            self.set_file_view(view);
-        }
-        if let Some(Ok(analysis)) = self.analysis_inbox.lock().ok().and_then(|mut a| a.take())
-            && analysis.file == self.current_file
-        {
-            self.set_analysis(analysis);
         }
 
         ui.vertical(|ui| {
@@ -630,7 +594,7 @@ impl CodeViewerState {
                             }
                         }
                         if let Some(hidden) = folded
-                            && ui.add(egui::Label::new(RichText::new(format!("  … {hidden} lines")).monospace().size(crate::theme::look().text_small).color(colors().muted)).sense(egui::Sense::click())).on_hover_text("Unfold (z o)").clicked()
+                            && ui.add(egui::Label::new(RichText::new(format!("  … {hidden} lines")).monospace().size(crate::theme::look().text_small).color(colors().muted)).sense(egui::Sense::click())).on_hover_text("Unfold").clicked()
                         {
                             unfold = Some(line_no);
                         }
@@ -658,7 +622,7 @@ impl CodeViewerState {
                 self.select = clicked;
             }
             if let Some(line) = put_cursor {
-                self.move_cursor(line, ui.input(|i| i.time));
+                self.move_cursor(line);
             }
             if go_to.is_some() {
                 self.open = go_to;
@@ -714,7 +678,7 @@ impl ActionProvider for CodeViewerState {
 
     fn run(&mut self, action: &Action, _value: Option<String>, cx: &mut RunCx<'_>) {
         if let Some(CodeCommand::Def { forward }) = action.command::<CodeCommand>()
-            && let Err(why) = self.step_def(*forward, 1, false, cx.ctx.input(|i| i.time))
+            && let Err(why) = self.step_def(*forward, 1, false)
         {
             *cx.note = Some(why);
         }
@@ -741,7 +705,6 @@ impl Navigable for CodeViewerState {
     }
 
     fn motion(&mut self, motion: Motion, count: usize) {
-        let now = self.cursor_moved_at.unwrap_or(0.0);
         let visible = self.visible_lines();
         if visible.is_empty() {
             return;
@@ -749,15 +712,15 @@ impl Navigable for CodeViewerState {
         let row = self.target_line.and_then(|l| visible.iter().position(|v| *v >= l)).unwrap_or(0);
         let to_row = |r: usize| visible[r.min(visible.len() - 1)];
         match motion {
-            Motion::Down => self.put_cursor(if self.target_line.is_none() { visible[0] } else { to_row(row + count) }, Scroll::KeepVisible, now),
-            Motion::Up => self.put_cursor(to_row(row.saturating_sub(count)), Scroll::KeepVisible, now),
-            Motion::HalfDown => self.put_cursor(to_row(row + self.half_page_lines() * count), Scroll::KeepVisible, now),
-            Motion::HalfUp => self.put_cursor(to_row(row.saturating_sub(self.half_page_lines() * count)), Scroll::KeepVisible, now),
-            Motion::First => self.put_cursor(1, Scroll::KeepVisible, now),
-            Motion::Last => self.put_cursor(self.lines.len(), Scroll::KeepVisible, now),
-            Motion::Line(n) => self.put_cursor(n, Scroll::Center, now),
+            Motion::Down => self.put_cursor(if self.target_line.is_none() { visible[0] } else { to_row(row + count) }, Scroll::KeepVisible),
+            Motion::Up => self.put_cursor(to_row(row.saturating_sub(count)), Scroll::KeepVisible),
+            Motion::HalfDown => self.put_cursor(to_row(row + self.half_page_lines() * count), Scroll::KeepVisible),
+            Motion::HalfUp => self.put_cursor(to_row(row.saturating_sub(self.half_page_lines() * count)), Scroll::KeepVisible),
+            Motion::First => self.put_cursor(1, Scroll::KeepVisible),
+            Motion::Last => self.put_cursor(self.lines.len(), Scroll::KeepVisible),
+            Motion::Line(n) => self.put_cursor(n, Scroll::Center),
             Motion::NextSibling | Motion::PrevSibling => {
-                let _ = self.step_def(motion == Motion::NextSibling, count, true, now);
+                let _ = self.step_def(motion == Motion::NextSibling, count, true);
             }
             Motion::Left | Motion::Right => {}
         }
@@ -805,8 +768,7 @@ impl Navigable for CodeViewerState {
         let around = self.defs.iter().filter(|d| d.start < line && line <= d.end).min_by_key(|d| d.end - d.start).map(|d| d.start);
         match around {
             Some(start) => {
-                let now = self.cursor_moved_at.unwrap_or(0.0);
-                self.put_cursor(start, Scroll::KeepVisible, now);
+                self.put_cursor(start, Scroll::KeepVisible);
                 Step::Done
             }
             None => Step::Nothing("Not inside a definition.".into()),
@@ -868,10 +830,9 @@ impl Navigable for CodeViewerState {
         let mut parts = key.split(':');
         let Some(line) = parts.next().and_then(|l| l.parse::<usize>().ok()) else { return };
         let col = parts.next().and_then(|c| c.parse::<usize>().ok());
-        let now = self.cursor_moved_at.unwrap_or(0.0);
         let defs = &self.defs;
         self.folds.retain(|start| !defs.iter().any(|d| d.start == *start && d.start < line && line <= d.end));
-        self.put_cursor(line, Scroll::Center, now);
+        self.put_cursor(line, Scroll::Center);
         self.cursor_col = col;
     }
 }
@@ -880,6 +841,11 @@ impl Navigable for CodeViewerState {
 pub(crate) mod tests {
     use super::*;
     use arch_graph::{CodeAnchor, Relation, RepoPath, Span, Stage, Status};
+
+    /// The marks on one row of the code view.
+    fn row_marks(marks: &BTreeMap<usize, Vec<Mark>>, line_no: usize) -> &[Mark] {
+        marks.get(&line_no).map(Vec::as_slice).unwrap_or_default()
+    }
 
     /// Text drawn this frame with where it is.
     fn placed(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
@@ -906,7 +872,6 @@ pub(crate) mod tests {
         placed(&output)
     }
 
-    // req: P9.15
     #[test]
     fn gutter_marks_sit_on_the_row_of_their_line() {
         let ctx = egui::Context::default();
@@ -931,19 +896,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_cursor_settles_before_follow_syncs() {
-        let mut code = CodeViewerState::default();
-        code.set_content("a\nb\nc\n".into());
-        code.move_cursor(2, 10.0);
-        assert_eq!(code.settled_cursor(10.1, 0.25), None, "still moving");
-        assert_eq!(code.settled_cursor(10.3, 0.25), Some(("Cargo.toml".into(), 2)));
-        assert_eq!(code.settled_cursor(11.0, 0.25), None, "taken once");
-        code.move_cursor(99, 12.0);
-        assert_eq!(code.target_line, Some(3), "clamped to the file");
-    }
-
-    // req: P9.15, N.5, N.6, N.7
-    #[test]
     fn opening_a_target_off_screen_scrolls_it_into_view_and_the_cursor_stays_visible() {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::theme::font_definitions());
@@ -957,7 +909,7 @@ pub(crate) mod tests {
         // (as load_file leaves it; no network in tests). An earlier load's
         // reply arriving late for another file must not use up the scroll.
         code.current_file = "src/big.rs".into();
-        *code.pending_result.lock().unwrap() = Some(("Cargo.toml".into(), Ok("[package]\nname = \"x\"\n".into())));
+        *code.analysis_inbox.lock().unwrap() = Some(("Cargo.toml".into(), Ok(arch_graph::code::CodeAnalysis { file: "Cargo.toml".into(), text: "[package]\nname = \"x\"\n".into(), stale: true, ..Default::default() })));
         code.target_line = Some(700);
         code.highlight = Some((700, 700));
         code.scroll = Some(Scroll::Center);
@@ -1040,18 +992,20 @@ pub(crate) mod tests {
         code.set_file_view(view);
         // The analysis: where each name is and what it refers to.
         let at = |line: usize, col: usize| (starts[line - 1] + col) as u32;
-        let named = |line, col, len: u32, id: &str, definition| arch_graph::code::Occurrence { start: at(line, col), end: at(line, col) + len, target: Some(ComponentId::new(id)), symbol: None, definition };
+        let named = |line, col, len: u32, id: &str, definition| arch_graph::code::Occurrence { start: at(line, col), end: at(line, col) + len, target: Some(ComponentId::new(id)), definition };
         code.set_analysis(arch_graph::code::CodeAnalysis {
             file: "src/a.rs".into(),
+            text: code.content.clone(),
+            content_hash: String::new(),
             stale: false,
             highlights: arch_graph::code::Highlights { names: vec!["keyword".into()], runs: vec![[at(2, 4), at(2, 6), 0]] },
             occurrences: vec![named(2, 7, 3, "rust:a::run", true), named(3, 8, 4, "rust:a::step", false), named(4, 8, 3, "rust:x::log", false), named(6, 7, 4, "rust:a::step", true)],
             targets: vec![arch_graph::code::CodeTarget { id: ComponentId::new("rust:a::step"), name: "step".into(), type_name: "function".into(), at: Some(("src/a.rs".into(), 6)), signature: Some("step()".into()) }],
+            view: FileView::default(),
         });
         code
     }
 
-    // req: N.16, N.10, AP.11
     #[test]
     fn the_cursor_knows_its_definition_and_calls_and_steps_between_definitions() {
         let mut code = sample();
@@ -1068,12 +1022,12 @@ pub(crate) mod tests {
         assert_eq!(code.target_line, Some(6), "Backspace: out to the definition's first line");
         // ]f / [f: definitions in order.
         code.motion(Motion::First, 1);
-        assert!(code.step_def(true, 1, false, 0.0).is_ok());
+        assert!(code.step_def(true, 1, false).is_ok());
         assert_eq!(code.target_line, Some(2));
-        assert!(code.step_def(true, 1, false, 0.0).is_ok());
+        assert!(code.step_def(true, 1, false).is_ok());
         assert_eq!(code.target_line, Some(6));
-        assert!(code.step_def(true, 1, false, 0.0).is_err(), "no next one: says so");
-        assert!(code.step_def(false, 1, false, 0.0).is_ok());
+        assert!(code.step_def(true, 1, false).is_err(), "no next one: says so");
+        assert!(code.step_def(false, 1, false).is_ok());
         assert_eq!(code.target_line, Some(2));
         // ]] / [[: siblings (run and step share the module).
         code.motion(Motion::NextSibling, 1);
@@ -1097,7 +1051,6 @@ pub(crate) mod tests {
         assert!(job.sections.iter().any(|s| s.format.color == keyword && &job.text[s.byte_range.clone()] == "fn"), "fn is coloured as a keyword");
     }
 
-    // req: N.11, N.16, N.8
     #[test]
     fn definitions_fold_and_symbols_on_screen_take_hints() {
         let ctx = egui::Context::default();

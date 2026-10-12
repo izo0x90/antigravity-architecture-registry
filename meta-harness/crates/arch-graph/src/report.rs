@@ -156,14 +156,6 @@ impl Report {
         self.findings.iter().any(|f| f.severity == Severity::Error)
     }
 
-    pub fn errors_for<'a>(&'a self, id: &'a ComponentId) -> impl Iterator<Item = &'a Finding> {
-        self.findings.iter().filter(move |f| f.severity == Severity::Error && f.component() == Some(id))
-    }
-
-    pub fn codes(&self) -> Vec<FindingCode> {
-        self.findings.iter().map(|f| f.code).collect()
-    }
-
     /// Stable order: errors first, then by target and code.
     pub fn sorted(mut self) -> Self {
         self.findings.sort_by(|a, b| {

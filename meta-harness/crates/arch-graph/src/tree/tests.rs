@@ -37,7 +37,7 @@ fn flow(a: &str, b: &str, data: &str) -> Relation {
 /// step -> util and log -> util (util reached twice).
 /// Plan flows run -> step; step turns it into a Report for save.
 fn sample() -> Graph {
-    let mut g = Graph::new();
+    let mut g = Graph::default();
     for (s, ty) in [("app", "module"), ("app::run", "function"), ("app::step", "function"), ("app::save", "function"), ("app::log", "function"), ("lib", "module"), ("lib::util", "function"), ("lib::Plan", "class"), ("lib::Report", "class")] {
         let mut c = code(s, ty);
         if s == "app::step" {
@@ -65,15 +65,18 @@ struct Fixture {
     types: TypeSystem,
     budget: usize,
     link_budget: usize,
+    entries: Vec<EntryPoint>,
 }
 
 impl Fixture {
+    /// `app::run` is the program's main; `app::step` handles a route.
     fn new(graph: Graph) -> Self {
-        Fixture { graph, plan: None, others: BTreeMap::new(), config: TreeConfig::defaults().unwrap(), types: TypeSystem::defaults().unwrap(), budget: 400, link_budget: 300 }
+        let entries = vec![EntryPoint { id: id("app::run"), why: "main".into() }, EntryPoint { id: id("app::step"), why: "http /api/step".into() }];
+        Fixture { graph, plan: None, others: BTreeMap::new(), config: TreeConfig::defaults().unwrap(), types: TypeSystem::defaults().unwrap(), budget: 400, link_budget: 300, entries }
     }
 
     fn input(&self) -> Input<'_, Graph> {
-        Input { graph: &self.graph, plan: self.plan.as_ref(), other_plans: &self.others, config: &self.config, types: &self.types, budget: self.budget, link_budget: self.link_budget, out_of_time: &|| false }
+        Input { graph: &self.graph, plan: self.plan.as_ref(), other_plans: &self.others, config: &self.config, types: &self.types, budget: self.budget, link_budget: self.link_budget, out_of_time: &|| false, layout_out_of_time: &|| false, flows: None, entries: &self.entries }
     }
 
     fn tree(&self, request: TreeRequest) -> Tree {
@@ -100,7 +103,6 @@ fn clean(tree: &Tree) {
     assert!(found.is_empty(), "{found:#?}");
 }
 
-// req: M.4
 #[test]
 fn contains_is_boxes_in_boxes_from_the_top() {
     let f = Fixture::new(sample());
@@ -121,7 +123,6 @@ fn contains_is_boxes_in_boxes_from_the_top() {
     assert_eq!(f.tree(ask(ViewKind::Contains, Some("app::step"), Way::Down, 1)).path.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), vec!["app"]);
 }
 
-// req: M.4, C.2
 #[test]
 fn calls_go_down_in_order_and_up_with_repeats_loops_and_pills() {
     let f = Fixture::new(sample());
@@ -136,34 +137,37 @@ fn calls_go_down_in_order_and_up_with_repeats_loops_and_pills() {
     // Up: what calls it.
     let up = f.tree(ask(ViewKind::Calls, Some("lib::util"), Way::Up, 2));
     assert_eq!(keys(&up), vec!["util", "log", "step", "run", "save"]);
-    // Without a root: the entry points (nothing calls them).
+    // Without a root: the entry points to pick from (the main, the route's
+    // handler), not every function nothing calls.
     let entries = f.tree(ask(ViewKind::Calls, None, Way::Down, 1));
-    assert_eq!(entries.roots, vec![id("app::run").0]);
+    assert_eq!(entries.roots, vec![id("app::run").0, id("app::step").0]);
+    let none = Fixture { entries: Vec::new(), ..Fixture::new(sample()) };
+    assert!(none.tree(ask(ViewKind::Calls, None, Way::Down, 1)).roots.is_empty(), "no entry points: nothing to start from");
     // The depth cuts, and the cut cards say how much more there is.
     let one = f.tree(ask(ViewKind::Calls, Some("app::run"), Way::Down, 1));
     assert_eq!(one.card(&id("app::step").0).unwrap().more, 2);
     assert!(one.cut.is_none(), "depth isn't a cut: nothing went over a limit");
 }
 
-// req: M.4
 #[test]
 fn data_flow_has_types_as_cards_and_functions_on_the_lines() {
     let f = Fixture::new(sample());
     let starts = f.tree(ask(ViewKind::DataFlow, None, Way::Down, 3));
-    assert_eq!(starts.roots, vec!["type:Plan".to_owned()], "data nothing makes comes first; `()` isn't data");
+    assert_eq!(starts.roots, vec!["type:Plan".to_owned()], "the data the entry points take (the route's handler takes a Plan)");
     let labels = keys(&starts);
     assert_eq!(labels, vec!["Plan", "Report", "save"]);
     let plan_to_report = line(&starts, "Plan", "Report").unwrap();
     assert_eq!(plan_to_report.pills.iter().map(|p| (p.text.as_str(), p.role)).collect::<Vec<_>>(), vec![("step", PillRole::Step)]);
     assert_eq!(starts.cards[2].kind, "end", "save takes a Report and makes nothing: the flow ends there");
     assert_eq!(starts.card("type:Plan").unwrap().component, Some(id("lib::Plan")), "a data card links to its type");
+    // How a flow is known: these were matched by name (no analyzer said so).
+    assert_eq!(plan_to_report.evidence, Some(Evidence::Named));
     // Up: where it came from.
     let up = f.tree(TreeRequest { root: Some("type:Report".into()), ..ask(ViewKind::DataFlow, None, Way::Up, 3) });
     assert_eq!(keys(&up), vec!["Report", "Plan", "run"]);
     clean(&starts);
 }
 
-// req: M.4
 #[test]
 fn a_tree_bigger_than_the_budget_is_cut_at_a_whole_level_and_says_so() {
     let mut g = sample();
@@ -201,23 +205,27 @@ fn a_tree_bigger_than_the_budget_is_cut_at_a_whole_level_and_says_so() {
     assert!(render(&first, &f3.config).contains("first 1 starting points of 2"));
 }
 
-// req: M.5
 #[test]
 fn opening_a_card_adds_its_branch_and_expand_and_context_agree_with_a_deeper_tree() {
     let f = Fixture::new(sample());
     let base = ask(ViewKind::Calls, Some("app::run"), Way::Down, 1);
     let opened = f.tree(TreeRequest { opened: vec![Opened { card: id("app::step").0, levels: 1 }], ..base.clone() });
     assert!(opened.card(&id("app::save").0).is_some() && opened.card(&id("app::step").0).unwrap().open);
-    // Expand returns only what's new.
-    let added = expand(&f.input(), &base, &id("app::step").0, 1);
+    // Expand into the tree held: only what's new comes as cards, every
+    // card's place with it (laid out here, the whole tree again).
+    let held = f.tree(base.clone());
+    let (now, added) = expand(&f.input(), &held, &id("app::step").0, 1, 1000);
     let mut added_keys: Vec<String> = added.cards.iter().map(|c| c.label.clone()).collect();
     added_keys.sort();
     assert_eq!(added_keys, vec!["save", "util"]);
+    assert_eq!(added.places.len(), now.cards.len(), "every card held has its place");
+    assert_eq!(keys(&now), keys(&opened), "the same cards as the tree with it opened");
+    clean(&now);
     // The base plus every expanded card is the deeper tree.
     let deeper = f.tree(ask(ViewKind::Calls, Some("app::run"), Way::Down, 2));
-    let mut together: Vec<String> = f.tree(base.clone()).cards.iter().map(|c| c.key.clone()).collect();
+    let mut together: Vec<String> = held.cards.iter().map(|c| c.key.clone()).collect();
     for card in ["app::step", "app::log"] {
-        together.extend(expand(&f.input(), &base, &id(card).0, 1).cards.into_iter().map(|c| c.key));
+        together.extend(expand(&f.input(), &held, &id(card).0, 1, 1000).1.cards.into_iter().map(|c| c.key));
     }
     together.sort();
     together.dedup();
@@ -234,6 +242,11 @@ fn opening_a_card_adds_its_branch_and_expand_and_context_agree_with_a_deeper_tre
     beside.sort();
     assert_eq!(beside, vec!["app", "log", "run", "save", "step"]);
     assert!(around.lines.iter().any(|l| l.from == id("app::step").0 && l.to == id("app::save").0), "step's call to save, beside it");
+    // A card nothing holds: only its own branch, not every top.
+    let top = context(&f.input(), &base, &id("lib").0);
+    let mut held_by_lib = keys(&top);
+    held_by_lib.sort();
+    assert_eq!(held_by_lib, vec!["Plan", "Report", "lib", "util"]);
     // A branch that doesn't fit is closed again and reported.
     let mut tight = Fixture::new(sample());
     tight.budget = 3;
@@ -274,7 +287,6 @@ fn on_plan(view: ViewKind, depth: Option<u32>) -> TreeRequest {
     TreeRequest { view, source: Source::Plan(PlanId::new("p").unwrap()), depth, ..TreeRequest::default() }
 }
 
-// req: M.6
 #[test]
 fn picking_a_plan_starts_from_its_own_items_and_shows_only_the_code_it_plugs_into() {
     let f = with_plan();
@@ -305,7 +317,6 @@ fn picking_a_plan_starts_from_its_own_items_and_shows_only_the_code_it_plugs_int
     assert!(code_only.tree(ask(ViewKind::Calls, Some("app::run"), Way::Down, 2)).cards.iter().all(|c| c.mark == Mark::Code));
 }
 
-// req: M.6
 #[test]
 fn a_plans_data_flow_starts_from_the_data_it_brings() {
     let mut p = plan();
@@ -331,7 +342,6 @@ fn a_plans_data_flow_starts_from_the_data_it_brings() {
     assert!(report.outside_plan && !report.open, "step (not in the plan) makes a Report from it: shown, not walked");
 }
 
-// req: M.7
 #[test]
 fn trees_lay_out_spaced_and_lines_stay_out_of_cards() {
     let f = Fixture::new(sample());
@@ -354,7 +364,6 @@ fn trees_lay_out_spaced_and_lines_stay_out_of_cards() {
     assert!(lines_back >= 1);
 }
 
-// req: M.4
 #[test]
 fn project_config_overrides_some_tree_settings() {
     let c = TreeConfig::with_overrides("[views.calls]\ndepth = 7\n[layout]\ngap_x = 80.0\n").unwrap();
@@ -364,7 +373,6 @@ fn project_config_overrides_some_tree_settings() {
     assert!(TreeConfig::with_overrides("[layout]\ngap_x = \"wide\"\n").is_err());
 }
 
-// req: AP.10
 #[test]
 fn call_lines_say_how_theyre_known_and_the_text_marks_name_matches() {
     let mut g = sample();
@@ -383,4 +391,104 @@ fn call_lines_say_how_theyre_known_and_the_text_marks_name_matches() {
     // Structure isn't a matter of evidence.
     let boxes = f.tree(ask(ViewKind::Contains, Some("app"), Way::Down, 1));
     assert!(boxes.lines.iter().all(|l| l.evidence.is_none()));
+}
+
+#[test]
+fn every_kind_of_link_found_in_the_code_says_how_it_is_known() {
+    let mut contains = rel(RelationKind::Contains, "app", "app::run");
+    contains.provenance = Provenance::OBSERVED;
+    assert_eq!(Evidence::of(&contains), Some(Evidence::Read), "what holds what is read");
+    for kind in [RelationKind::Calls, RelationKind::DataFlow, RelationKind::Implements] {
+        let mut r = rel(kind, "app::run", "app::step");
+        r.provenance = Provenance::OBSERVED;
+        assert_eq!(Evidence::of(&r), Some(Evidence::Named), "{kind:?}: only matched by name");
+        r.proven_by = Some("rust-analyzer 1.90.0".into());
+        assert_eq!(Evidence::of(&r).map(|e| e.describe()), Some("confirmed by rust-analyzer 1.90.0".into()));
+    }
+    let planned = rel(RelationKind::Calls, "app::run", "app::step");
+    assert_eq!(Evidence::of(&Relation { provenance: Provenance::PLANNED, ..planned }), None, "only a plan says so: not found in the code");
+    assert_eq!(Evidence::Proven("x".into()).weaker(Evidence::Named), Evidence::Named);
+}
+
+#[test]
+fn calls_are_a_tidy_tree_and_contains_a_treemap() {
+    let f = Fixture::new(sample());
+    // Tidy: each card centred on its children; a small branch tucks in.
+    let down = f.tree(ask(ViewKind::Calls, Some("app::run"), Way::Down, 3));
+    clean(&down);
+    let centre = |label: &str| down.cards.iter().find(|c| c.label == label).unwrap().rect.center().1;
+    for parent in down.cards.iter() {
+        let kids: Vec<&Card> = down.cards.iter().filter(|c| c.parent.as_deref() == Some(parent.key.as_str())).collect();
+        if let (Some(first), Some(last)) = (kids.first(), kids.last()) {
+            let middle = (first.rect.center().1 + last.rect.center().1) / 2.0;
+            assert!((parent.rect.center().1 - middle).abs() < 0.5, "{} sits in the middle of its children", parent.label);
+        }
+    }
+    assert!(centre("log") > centre("step"), "in call order");
+    // Pills are placed by the layout: just before the card their line
+    // arrives at, as wide as their text.
+    let with_pills: Vec<&Line> = down.lines.iter().filter(|l| !l.pills.is_empty()).collect();
+    assert!(!with_pills.is_empty(), "the sample's calls carry what goes in and comes back");
+    for line in with_pills {
+        let to = down.card(&line.to).unwrap().rect;
+        for pill in &line.pills {
+            let at = pill.rect.unwrap_or_else(|| panic!("{} on {} -> {} is placed", pill.text, line.from, line.to));
+            assert!(at.right() <= to.x && at.right() > to.x - f.config.layout.gap_x, "{}: in the gap before {}", pill.text, line.to);
+            assert!(at.w >= f.config.layout.text_width(&pill.text, f.config.layout.small_size), "{}: as wide as its text", pill.text);
+        }
+    }
+    // Contains: every row of parts fills its box's width.
+    let boxes = f.tree(ask(ViewKind::Contains, None, Way::Down, 2));
+    clean(&boxes);
+    let layout = &f.config.layout;
+    for holder in boxes.cards.iter() {
+        let parts: Vec<&Card> = boxes.cards.iter().filter(|c| c.parent.as_deref() == Some(holder.key.as_str())).collect();
+        if parts.is_empty() {
+            continue;
+        }
+        let right = holder.rect.right() - layout.pad;
+        // The last part of each row (nothing to its right at its height) reaches the box's inner edge.
+        for p in &parts {
+            let last_in_row = !parts.iter().any(|q| q.rect.y == p.rect.y && q.rect.x > p.rect.x);
+            if last_in_row {
+                assert!((p.rect.right() - right).abs() < 0.5, "{} fills its row in {}", p.label, holder.label);
+            }
+        }
+    }
+}
+
+#[test]
+fn the_layout_has_its_own_time_limit_and_a_cut_answer_says_so() {
+    let f = Fixture::new(sample());
+    // Out of time from the start: the first starting point is still laid
+    // out (an answer always shows something), the rest are left out.
+    let late = || true;
+    for view in [ViewKind::Contains, ViewKind::Calls] {
+        let mut tree = walk_tree(&f.input(), &ask(view, None, Way::Down, 3));
+        let starts = tree.roots.len();
+        assert!(starts > 1, "{view:?}: more than one starting point to lay out");
+        lay_out(&mut tree, &f.config.layout, &late);
+        let cut = tree.cut.clone().expect("the layout cut it");
+        assert_eq!((cut.reason, cut.starts_left_out as usize), (CutReason::Time, starts - tree.roots.len()), "{view:?}");
+        assert!(tree.roots.len() < starts, "{view:?}: what had no time is left out");
+        clean(&tree);
+    }
+    // One starting point: time is checked at every level, so even one
+    // branch is cut where time ran out, and the cards that lost parts count
+    // them as more.
+    for view in [ViewKind::Contains, ViewKind::Calls] {
+        let root = if view == ViewKind::Contains { "app" } else { "app::run" };
+        let mut tree = walk_tree(&f.input(), &ask(view, Some(root), Way::Down, 3));
+        let (cards, more) = (tree.cards.len(), tree.cards.iter().map(|c| c.more).sum::<u32>());
+        lay_out(&mut tree, &f.config.layout, &late);
+        let cut = tree.cut.clone().expect("the layout cut it");
+        assert_eq!((cut.reason, cut.starts_left_out), (CutReason::Time, 0), "{view:?}");
+        assert!(tree.cards.len() < cards && cut.hidden as usize == cards - tree.cards.len(), "{view:?}: what had no time is left out and counted");
+        assert!(tree.cards.iter().map(|c| c.more).sum::<u32>() > more, "{view:?}: the cards it was under say there's more");
+        clean(&tree);
+    }
+    // In time: nothing left out.
+    let mut tree = walk_tree(&f.input(), &ask(ViewKind::Calls, None, Way::Down, 3));
+    lay_out(&mut tree, &f.config.layout, &|| false);
+    assert!(tree.cut.is_none());
 }

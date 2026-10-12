@@ -45,9 +45,10 @@ pub struct DriverMetadata {
 pub trait ProviderDriver: Send + Sync {
     fn metadata(&self) -> DriverMetadata;
 
-    /// Config used when the user has not configured this driver. `program`
-    /// is the harness program installed by its pack, if any.
-    fn default_config(&self, program: Option<&std::path::Path>) -> serde_json::Value;
+    /// Config used when the user has not configured this driver: how its
+    /// harness is started (its pack's launch, or an instance's override),
+    /// or why it can't be.
+    fn default_config(&self, harness: &harness_contracts::HarnessLaunch) -> serde_json::Value;
 
     /// Decodes `config` (driver-defined shape) and builds an instance.
     async fn create(&self, id: InstanceId, config: serde_json::Value) -> Result<Arc<dyn ProviderInstance>>;

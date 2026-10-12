@@ -9,6 +9,7 @@ arch-graph = { path = "../arch-graph" }
 code-analyzer = { path = "../code-analyzer" }
 arch-store = { path = "../arch-store" }
 nah-packs = { path = "../nah-packs" }
+nah-lsp = { path = "../nah-lsp" }
 arch-search = { path = "../arch-search" }
 rayon = "1"
 memory-stats = { version = "1", features = ["always_use_statm"] }
@@ -19,11 +20,17 @@ toml = { version = "1", default-features = false, features = ["parse", "serde", 
 ignore = "0.4"
 tracing = "0.1"
 
+[features]
+# Counters and helpers only the tests use.
+testing = []
+
 [dev-dependencies]
+arch-graph = { path = "../arch-graph", features = ["testing"] }
+nah-packs = { path = "../nah-packs", features = ["testing"] }
+arch-service = { path = ".", features = ["testing"] }
 tempfile = "3"
+rusqlite = { version = "0.40", features = ["bundled"] }
 criterion = { version = "0.8", default-features = false }
-scip = "0.10"
-protobuf = "3"
 
 [[bench]]
 name = "hot"

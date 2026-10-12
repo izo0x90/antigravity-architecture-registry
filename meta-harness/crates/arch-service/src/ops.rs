@@ -108,7 +108,8 @@ fn compile(schemas: Schemas, dsl: &Dsl) -> Result<Schemas, ServiceError> {
     Ok(Schemas { properties: one(schemas.properties, "properties")?, inputs: one(schemas.inputs, "inputs")?, outputs: one(schemas.outputs, "outputs")?, side_effects: schemas.side_effects })
 }
 
-pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path, packs: &PackSet, types: &TypeSystem, dsl: &Dsl) -> Result<Vec<ComponentId>, ServiceError> {
+#[allow(clippy::too_many_arguments)]
+pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path, ignores: &code_analyzer::Ignores, packs: &PackSet, types: &TypeSystem, dsl: &Dsl) -> Result<Vec<ComponentId>, ServiceError> {
     match op {
         PlanOp::AddComponent { name, type_name, description, parent, file, signature, schemas, spec } => {
             let schemas = compile(schemas.unwrap_or_default(), dsl)?;
@@ -149,7 +150,7 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
             if let Some(pack) = packs.by_name(&language) {
                 pack.spec.language.check_name(&name).map_err(|e| invalid(format!("component name: {e}")))?;
             }
-            if code_analyzer::ignored(root, std::path::Path::new(file.as_str())) {
+            if ignores.is_ignored(&root.join(file.as_str())) {
                 return Err(invalid(format!("{file} is git-ignored or hidden: ingestion never reads it, so code there could never be verified")));
             }
             let id = ComponentId::for_symbol(&language, &symbol);

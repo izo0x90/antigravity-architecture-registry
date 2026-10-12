@@ -9,13 +9,13 @@ LOG_FILE = mcp_server.log
 
 lint:
 	@echo "==> Running Cargo Clippy in meta-harness..."
-	cd meta-harness && cargo clippy --all-targets -- -D warnings
+	cd meta-harness && cargo clippy --workspace --all-targets -- -D warnings
 	@echo "==> Running ast-grep structural checks..."
 	$(AST_GREP) scan
 
 check: lint
 	@echo "==> Running Cargo Test in meta-harness..."
-	cd meta-harness && cargo test
+	cd meta-harness && cargo test --workspace
 
 ui:
 	@echo "==> Building Cockpit UI WASM..."

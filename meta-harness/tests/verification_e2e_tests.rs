@@ -135,7 +135,7 @@ async fn the_watcher_reverifies_when_a_file_changes() {
     let seen: Arc<Mutex<Vec<ArchEvent>>> = Arc::default();
     let sink = seen.clone();
     arch.subscribe(move |e| sink.lock().unwrap().push(e.clone()));
-    meta_harness::watch::watch(arch.clone(), Duration::from_millis(100)).unwrap();
+    meta_harness::watch::watch(arch.clone()).unwrap();
     // Give the watcher a moment to register, then break the planned call.
     tokio::time::sleep(Duration::from_millis(200)).await;
     let lib = arch.root().join("src/lib.rs");

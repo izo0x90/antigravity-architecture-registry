@@ -33,14 +33,22 @@ pub struct ProcessLauncher {
 #[async_trait]
 impl AcpLauncher for ProcessLauncher {
     async fn launch(&self, config: &SessionConfig) -> Result<AcpTransport> {
+        // A temp folder of its own, removed with it: what it leaves there
+        // (logs, unpacked files) doesn't pile up.
+        let temp = tempfile::Builder::new().prefix("nah-agent-").tempdir()?;
         let mut command = tokio::process::Command::new(&self.program);
         command
             .args(&self.args)
             .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .envs(["TMPDIR", "TMP", "TEMP"].map(|k| (k, temp.path())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // Its own process group: what it starts (a harness, an emulator's
+        // guest) goes with it.
+        #[cfg(unix)]
+        command.process_group(0);
         if let Some(cwd) = &config.policy.cwd {
             command.current_dir(cwd);
         }
@@ -58,7 +66,23 @@ impl AcpLauncher for ProcessLauncher {
         Ok(AcpTransport {
             reader: Box::new(stdout.compat()),
             writer: Box::new(stdin.compat_write()),
-            guard: Box::new(child),
+            guard: Box::new(ProcessTree { child, _temp: temp }),
         })
+    }
+}
+
+/// The agent's process and everything it started: all stopped when the
+/// session lets go of it, then its temp folder removed.
+struct ProcessTree {
+    child: tokio::process::Child,
+    _temp: tempfile::TempDir,
+}
+
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.child.id().and_then(|id| rustix::process::Pid::from_raw(id as i32)) {
+            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+        }
     }
 }

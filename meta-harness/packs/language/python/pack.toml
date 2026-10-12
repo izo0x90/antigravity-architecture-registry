@@ -2,9 +2,9 @@
 name = "python"
 kind = "language"
 version = "1.0.0"
-description = "Python: syntax rules for the reader, highlight queries, and scip-python for exact links."
+description = "Python: syntax rules for the reader, highlight queries, and basedpyright (its language server) for exact links."
 
 [language]
 syntax = "syntax.toml"
 highlights = "highlights.scm"
-indexer = "scip-python"
+server = "basedpyright"

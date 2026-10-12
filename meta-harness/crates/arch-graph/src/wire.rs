@@ -17,11 +17,14 @@ pub struct ComponentDetail {
     /// Its file changed on disk since it was indexed.
     #[serde(default)]
     pub stale: bool,
+    /// Every use of it in the code, across files (from the refs that link to it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<crate::code::Reference>,
 }
 
 /// The components in one file and the relations leaving them, each with how
 /// plan and code line up (for the code view's gutter).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FileView {
     pub file: String,
     pub components: Vec<(Component, Alignment)>,

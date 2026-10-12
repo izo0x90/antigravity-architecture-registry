@@ -1,25 +1,28 @@
 //! References resolve, locations are sound, the location rules hold, and
 //! new work is tied into the existing code.
 
+use arch_graph::{Finding, FindingCode, Graph, Plan, RelationKind, Report, Status, Target, TypeSystem};
 use std::path::Path;
 
-use arch_graph::{Finding, FindingCode, Graph, Plan, RelationKind, Report, Status, Target, TypeSystem};
-use code_analyzer::{PackSet, module_symbol};
+use code_analyzer::{Ignores, PackSet, module_symbol};
 
 use super::component;
 
 /// Unknown types and the location rules, per planned component.
-pub(super) fn components(plan: &Plan, graph: &Graph, root: &Path, packs: &PackSet, types: &TypeSystem, report: &mut Report) {
+pub(super) fn components(plan: &Plan, graph: &Graph, root: &Path, ignores: &Ignores, packs: &PackSet, types: &TypeSystem, report: &mut Report) {
     for planned in &plan.components {
         let Some(merged) = graph.component(&planned.id) else { continue };
         if !types.contains(&merged.type_name) {
             report.push(Finding::error(FindingCode::UnknownType, component(&merged.id), format!("unknown type '{}'", merged.type_name)));
         }
-        if let Err(err) = merged.check_location() {
+        // The stage is the plan's (what's being approved, in an approval).
+        let mut at_stage = merged.clone();
+        at_stage.stage = planned.stage;
+        if let Err(err) = at_stage.check_location() {
             report.push(Finding::error(FindingCode::LocationRule, component(&merged.id), err.to_string()));
         }
         if planned.status == Status::New {
-            location(planned, graph, root, packs, report);
+            location(planned, graph, root, ignores, packs, report);
         }
     }
 }
@@ -54,14 +57,14 @@ pub(super) fn references(plan: &Plan, graph: &Graph, report: &mut Report) {
     }
 }
 
-fn location(c: &arch_graph::Component, graph: &Graph, root: &Path, packs: &PackSet, report: &mut Report) {
+fn location(c: &arch_graph::Component, graph: &Graph, root: &Path, ignores: &Ignores, packs: &PackSet, report: &mut Report) {
     let Some(proposed) = &c.proposed else { return };
     let path = Path::new(proposed.file.as_str());
     let Some(pack) = packs.for_path(path) else {
         report.push(Finding::error(FindingCode::InvalidLocation, component(&c.id), format!("no language pack handles {}", proposed.file)));
         return;
     };
-    if code_analyzer::ignored(root, path) {
+    if ignores.is_ignored(&root.join(path)) {
         report.push(
             Finding::error(
                 FindingCode::InvalidLocation,

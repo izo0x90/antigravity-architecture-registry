@@ -19,13 +19,6 @@ description = "Where data goes: cards are data types, the functions that turn on
 depth = 3
 starts = 30
 
-# Where Calls starts when no root is picked: functions nothing calls that
-# call something. Code under these paths, or inside a module with one of
-# these names, isn't a starting point (tests, benchmarks, examples).
-[entries]
-skip_paths = ["tests/", "benches/", "examples/"]
-skip_modules = ["tests", "test"]
-
 [data]
 # What a flow can carry that isn't data worth a card.
 ignore = ["None", "()", "Self", "self", "&self", "&mut self"]
@@ -35,9 +28,8 @@ strip = ["&", "mut ", "dyn ", "impl "]
 # Card and line sizes for laying trees out. The cockpit draws with the same
 # numbers, so text fits the cards it's given.
 [layout]
-# Text: width of one character as a share of the font size, and the line
-# height as a multiple of it.
-char_width = 0.6
+# Text: the line height as a multiple of the font size (widths are measured
+# with the theme's font).
 line_height = 1.4
 # Font sizes: a card's name, and its smaller lines.
 name_size = 14.0
@@ -57,3 +49,7 @@ box_gap = 16.0
 row_aspect = 1.6
 # Points along each curved line.
 curve_steps = 16
+# Pills on lines (in the small font): the space around their text, and
+# between them and the card the line arrives at.
+pill_pad = 6.0
+pill_gap = 12.0

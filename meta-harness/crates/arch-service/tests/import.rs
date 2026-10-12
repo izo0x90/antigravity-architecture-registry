@@ -5,13 +5,15 @@ use std::path::Path;
 use arch_graph::{ComponentId, InvariantKind, RelationKind, Stage, Status, TypeSystem};
 use arch_service::{ArchitectureService, MemoryPlans};
 
+mod common;
+
 fn service(root: &Path) -> ArchitectureService {
     let s = ArchitectureService::open(
         root,
-        code_analyzer::PackSet::from_shipped_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs")).unwrap(),
+        common::shipped_packs(),
         TypeSystem::defaults().unwrap(),
         Box::new(MemoryPlans::default()),
-        Box::new(arch_service::MemoryStore::default()),
+        arch_service::temporary_facts(&arch_service::Limits::defaults().unwrap()).unwrap(),
     )
     .unwrap();
     s.ingest(root).unwrap();
@@ -24,7 +26,6 @@ fn write(root: &Path, file: &str, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
-// req: P3.6
 #[test]
 fn the_old_registry_imports_into_a_plan_matched_to_code() {
     let dir = tempfile::tempdir().unwrap();
@@ -79,7 +80,6 @@ fn the_old_registry_imports_into_a_plan_matched_to_code() {
     assert!(s.import_registry("calc", "again", &old, None).is_err(), "plan ids stay unique");
 }
 
-// req: P3.6
 #[test]
 fn unmappable_items_are_reported_not_dropped() {
     let dir = tempfile::tempdir().unwrap();

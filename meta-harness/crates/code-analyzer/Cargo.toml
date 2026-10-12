@@ -2,7 +2,7 @@
 name = "code-analyzer"
 version = "0.1.0"
 edition = "2024"
-description = "Our analyzer: reads each file once with ast-grep by its language pack (definitions, calls, data flow, placeholders, code-rule matches), links names across files, and combines that with a language indexer's SCIP output into one result."
+description = "Our analyzer: reads each file once with ast-grep by its language pack (definitions, calls, data flow, placeholders, code-rule matches), and links names across files into one result."
 
 [dependencies]
 nah-packs = { path = "../nah-packs" }
@@ -13,17 +13,23 @@ ast-grep-language = "0.45.3"
 # The same tree-sitter ast-grep parses with: highlight queries run on its tree.
 tree-sitter = "0.27"
 streaming-iterator = "0.1"
-scip = "0.10"
-protobuf = "3"
 serde = { version = "1.0.229", features = ["derive"] }
 ignore = "0.4"
+rayon = "1"
+imbl = "6"
 regex = "1"
 serde_json = "1.0"
 sha2 = "0.10"
 thiserror = "2.0"
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 
+[features]
+# Helpers only the tests use.
+testing = []
+
 [dev-dependencies]
+code-analyzer = { path = ".", features = ["testing"] }
+nah-packs = { path = "../nah-packs", features = ["testing"] }
 tempfile = "3"
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 serde = { version = "1.0", features = ["derive"] }

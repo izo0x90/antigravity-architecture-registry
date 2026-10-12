@@ -1,0 +1,32 @@
+profile: default
+project_name: antigravity-architecture-registry
+agent: claude
+auth_mode: sbx_persistent
+build_args:
+  PYTHON_VERSION: '3.12'
+  RUST_VERSION: 1.90.0
+  APT_PACKAGES: unzip libxkbcommon-dev libxkbcommon-x11-0 libgl1-mesa-dev libegl1
+    libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+setup_scripts:
+- uv sync
+- uv tool install ast-grep-cli
+- rustup component add clippy rustfmt
+- rustup target add wasm32-unknown-unknown
+- cd meta-harness && cargo install wasm-bindgen-cli --locked --version "$(grep -A1
+  'name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')"
+- bash meta-harness/scripts/bootstrap.sh antigravity-acp
+env:
+- HOST=0.0.0.0
+- METAHARNESS_PORT=8080
+- STATIC_DIR=static
+- AST_GREP=/home/agent/.local/bin/ast-grep
+- PATH=/home/agent/.cargo/bin:/home/agent/.local/bin:$PATH
+use_native_login: false
+sbx:
+  enabled: true
+  agent: claude
+  clone: false
+  kits:
+  - claude
+  - chrome-devtools
+  - 'git+https://github.com/shelajev/agy-sbx-kit.git#dir=agy-mixin'

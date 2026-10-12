@@ -18,10 +18,20 @@ use crate::skills::{DiscoverSkillsInput, discover_antigravity_skills};
 
 pub(crate) const DRIVER_KIND: &str = "antigravity";
 
+/// The launcher of a server that can't be started: it says why.
+struct Unavailable(String);
+
+#[async_trait]
+impl AcpLauncher for Unavailable {
+    async fn launch(&self, _config: &harness_contracts::SessionConfig) -> Result<harness_acp::AcpTransport> {
+        Err(harness_core::HarnessError::Provider { reason: self.0.clone() })
+    }
+}
+
 pub struct AntigravityInstance {
     id: InstanceId,
-    /// None: no program configured and no harness pack installed.
-    executable: Option<PathBuf>,
+    /// Why its server can't be started (no launch), if it can't.
+    unavailable: Option<String>,
     launcher: Arc<dyn AcpLauncher>,
     adapter: Arc<AcpAdapter>,
     auth: Arc<AcpAuthController>,
@@ -31,9 +41,15 @@ pub struct AntigravityInstance {
 
 impl AntigravityInstance {
     pub(crate) fn create(id: InstanceId, config: AntigravityConfig) -> Arc<Self> {
-        let executable = config.executable.clone();
-        let launcher: Arc<dyn AcpLauncher> =
-            Arc::new(ProcessLauncher { program: executable.clone().unwrap_or_default(), args: config.args, env: config.env });
+        let unavailable = match &config.launch {
+            Some(_) => None,
+            None => Some(config.unavailable.clone().unwrap_or_else(|| "no launch configured for the Antigravity ACP server".to_owned())),
+        };
+        // No launch: anything that would start the server says why instead.
+        let launcher: Arc<dyn AcpLauncher> = match (config.launch, &unavailable) {
+            (Some(launch), _) => Arc::new(ProcessLauncher { program: PathBuf::from(launch.program), args: launch.args, env: launch.env }),
+            (None, why) => Arc::new(Unavailable(why.clone().unwrap_or_default())),
+        };
         let flavor = Arc::new(AntigravityFlavor);
         let adapter = Arc::new(AcpAdapter::new(id.clone(), flavor, launcher.clone()));
         let (snapshot, _) = watch::channel(ProviderSnapshot {
@@ -61,7 +77,7 @@ impl AntigravityInstance {
             });
             Self {
                 id,
-                executable,
+                unavailable,
                 auth: Arc::new(AcpAuthController::new(launcher.clone(), on_auth)),
                 sessions: Arc::new(AcpSessionCatalog::new(launcher.clone())),
                 launcher,
@@ -99,13 +115,8 @@ impl ProviderInstance for AntigravityInstance {
     }
 
     async fn refresh(&self) -> Result<()> {
-        let missing = match &self.executable {
-            None => Some("no Antigravity ACP server: install its harness pack (meta-harness pack list)".to_owned()),
-            Some(path) if !path.is_file() => Some(format!("Antigravity ACP server not found ({})", path.display())),
-            Some(_) => None,
-        };
-        if let Some(reason) = missing {
-            self.snapshot.send_modify(|s| s.status = ProviderStatus::Unavailable { reason });
+        if let Some(reason) = &self.unavailable {
+            self.snapshot.send_modify(|s| s.status = ProviderStatus::Unavailable { reason: reason.clone() });
             return Ok(());
         }
         let skills = self.discover_skills();

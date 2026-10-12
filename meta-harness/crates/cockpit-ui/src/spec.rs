@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use arch_graph::{Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, ComponentDetail, ComponentId, Finding, PlanDiff, PlanId, RelationKind, Report, Severity};
+use arch_graph::{Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, ComponentDetail, ComponentId, Finding, PlanDiff, RelationKind, Report, Severity, Source};
 use egui::{Rect, RichText};
 
 use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, ToolbarStyle, ToolbarUse, When, toolbar_control};
@@ -152,7 +152,9 @@ impl Entry {
 pub struct SpecState {
     /// What it shows: the graph selection unless pinned.
     pub target: Option<ComponentId>,
-    pub plan: Option<PlanId>,
+    /// What it's read from: the code, or the code with a plan (where its
+    /// comments and checks live).
+    pub source: Source,
     pub pinned: bool,
     pub detail: Option<ComponentDetail>,
     pub findings: Vec<Finding>,
@@ -163,7 +165,7 @@ pub struct SpecState {
     pub folded: BTreeSet<Section>,
     /// Scroll the cursor's item into view next frame.
     scroll: bool,
-    pub(crate) loaded: Option<(ComponentId, Option<PlanId>)>,
+    pub(crate) loaded: Option<(ComponentId, Source)>,
     error: Option<String>,
     pub requests: SpecRequests,
     /// The cockpit user (author of comments and reviews).
@@ -191,7 +193,7 @@ impl Default for SpecState {
     fn default() -> Self {
         Self {
             target: None,
-            plan: None,
+            source: Source::Code,
             pinned: false,
             detail: None,
             findings: Vec::new(),
@@ -220,13 +222,13 @@ impl Default for SpecState {
 
 impl SpecState {
     /// Follows the graph (unless pinned).
-    pub fn follow(&mut self, selection: Option<&ComponentId>, plan: Option<&PlanId>) {
+    pub fn follow(&mut self, selection: Option<&ComponentId>, source: &Source) {
         if !self.pinned {
             if self.target.as_ref() != selection {
                 self.leave_component();
             }
             self.target = selection.cloned();
-            self.plan = plan.cloned();
+            self.source = source.clone();
         }
     }
 
@@ -266,7 +268,7 @@ impl SpecState {
                             self.move_to(&key);
                         }
                     }
-                    Err(e) => self.error = Some(e),
+                    Err(e) => self.error = Some(e.into()),
                 },
                 Reply::Report(id, Ok(report)) if Some(&id) == self.target.as_ref() => {
                     self.findings = report.findings.into_iter().filter(|f| f.component() == Some(&id)).collect();
@@ -287,7 +289,7 @@ impl SpecState {
         if self.detail.as_ref().is_some_and(|d| d.component.id != target) {
             self.detail = None;
         }
-        let key = (target.clone(), self.plan.clone());
+        let key = (target.clone(), self.source.clone());
         if self.loaded.as_ref() == Some(&key) {
             return;
         }
@@ -295,8 +297,8 @@ impl SpecState {
         self.findings.clear();
         let inbox = self.inbox.clone();
         let id = target.clone();
-        net.arch_component(&target, self.plan.as_ref(), ctx.clone(), move |r| push(&inbox, Reply::Detail(id, Box::new(r))));
-        if let Some(plan) = &self.plan {
+        net.arch_component(&target, &self.source, ctx.clone(), move |r| push(&inbox, Reply::Detail(id, Box::new(r))));
+        if let Some(plan) = self.source.plan() {
             let inbox = self.inbox.clone();
             net.arch_validate(plan, ctx.clone(), move |r| push(&inbox, Reply::Report(target, r)));
         }
@@ -443,7 +445,7 @@ impl SpecState {
             };
             match location {
                 Some(text) => {
-                    if ui.link(RichText::new(format!("{} {text}", egui_phosphor::regular::FILE_CODE)).monospace().size(look.text_small)).on_hover_text("Open in the code view (g d)").clicked() {
+                    if ui.link(RichText::new(format!("{} {text}", egui_phosphor::regular::FILE_CODE)).monospace().size(look.text_small)).on_hover_text("Open in the code view").clicked() {
                         clicked = Some(Click::OpenCode);
                     }
                 }
@@ -534,12 +536,12 @@ impl SpecState {
 
     fn posted<T: Send + 'static>(&self) -> impl FnOnce(NetResult<T>) + Send + 'static {
         let inbox = self.inbox.clone();
-        move |r: NetResult<T>| push(&inbox, Reply::Posted(r.map(|_| ())))
+        move |r: NetResult<T>| push(&inbox, Reply::Posted(r.map(|_| ()).map_err(String::from)))
     }
 
     /// Sends what the composer holds.
     pub fn send_composer(&mut self, net: &NetClient, ctx: &egui::Context) {
-        let (Some(composer), Some(plan)) = (self.composer.clone(), self.plan.clone()) else { return };
+        let (Some(composer), Some(plan)) = (self.composer.clone(), self.source.plan().cloned()) else { return };
         let text = composer.text.trim().to_owned();
         if text.is_empty() {
             return;
@@ -557,7 +559,7 @@ impl SpecState {
     }
 
     fn accept(&mut self, id: &CommentId, net: &NetClient, ctx: &egui::Context) {
-        if let Some(plan) = &self.plan {
+        if let Some(plan) = self.source.plan() {
             net.arch_comment_action(plan, id, "accept", serde_json::json!({ "by": self.author }), ctx.clone(), self.posted());
         }
     }
@@ -777,7 +779,7 @@ impl SpecState {
                                 let entry = Entry { section, item: SpecItem::Relation { kind: *kind, other: other.clone(), outgoing: *outgoing } };
                                 let mut followed = false;
                                 item(ui, entry, &mut |ui| {
-                                    followed |= ui.link(RichText::new(&name).monospace().size(crate::theme::look().text_body)).on_hover_text(format!("{} (Enter)", other.as_str())).clicked();
+                                    followed |= ui.link(RichText::new(&name).monospace().size(crate::theme::look().text_body)).on_hover_text(other.as_str()).clicked();
                                 });
                                 if followed {
                                     clicked = Some(Click::Follow(other.clone()));
@@ -821,7 +823,7 @@ impl SpecState {
                             }
                         }
                         Section::Findings => {
-                            if self.plan.is_none() {
+                            if self.source.plan().is_none() {
                                 ui.label(RichText::new("Pick a plan in the graph to see its checks.").color(colors().muted));
                             } else if self.findings.is_empty() {
                                 ui.label(RichText::new("No findings.").color(colors().ok));
@@ -937,9 +939,12 @@ enum Click {
     Compose(CommentId, Compose),
 }
 
+/// Draws one cursor stop (`Entry`), its contents drawn by the closure given.
+type ItemDrawer<'a> = dyn FnMut(&mut egui::Ui, Entry, &mut dyn FnMut(&mut egui::Ui)) -> egui::Response + 'a;
+
 /// One comment thread: the comment and its replies are cursor stops; its
 /// buttons name their keys.
-fn render_thread(ui: &mut egui::Ui, c: &Comment, point: Option<&CommentId>, section: Section, item: &mut dyn FnMut(&mut egui::Ui, Entry, &mut dyn FnMut(&mut egui::Ui)) -> egui::Response) -> Option<Click> {
+fn render_thread(ui: &mut egui::Ui, c: &Comment, point: Option<&CommentId>, section: Section, item: &mut ItemDrawer) -> Option<Click> {
     let mut clicked = None;
     let (label, color) = match c.status {
         CommentStatus::Open => ("OPEN", colors().warn),
@@ -1028,12 +1033,12 @@ impl ActionProvider for SpecState {
         ]);
         // On a comment, its own verbs lead; without a plan, commenting only says why not.
         let on_comment = self.comment_here().is_some();
-        let comment_rank = if self.plan.is_none() { MINOR } else if on_comment { SECONDARY } else { PRIMARY };
+        let comment_rank = if self.source.plan().is_none() { MINOR } else if on_comment { SECONDARY } else { PRIMARY };
         if self.detail.is_some() {
             out.push(f("spec.comment", "Comment on this item", S::Comment).importance(comment_rank));
             out.push(f("spec.request_change", "Ask for a change to this item", S::RequestChange).importance(comment_rank));
         }
-        if self.plan.is_some() {
+        if self.source.plan().is_some() {
             out.push(
                 f("spec.mark_reviewed", "Mark the plan reviewed (later changes are highlighted)", S::MarkReviewed)
                     .toolbar(ToolbarStyle::Button, "Reviewed", Some(egui_phosphor::regular::CHECK_SQUARE))
@@ -1057,11 +1062,11 @@ impl ActionProvider for SpecState {
     fn run(&mut self, action: &Action, _value: Option<String>, cx: &mut RunCx<'_>) {
         match action.command::<SpecCommand>() {
             // Comments live in a plan.
-            Some(SpecCommand::Comment | SpecCommand::RequestChange) if self.plan.is_none() => *cx.note = Some("Comments go in a plan: pick one in the graph first.".into()),
+            Some(SpecCommand::Comment | SpecCommand::RequestChange) if self.source.plan().is_none() => *cx.note = Some("Comments go in a plan: pick one in the graph first.".into()),
             Some(SpecCommand::Comment) => self.start_composing(Compose::New(CommentKind::Comment)),
             Some(SpecCommand::RequestChange) => self.start_composing(Compose::New(CommentKind::ChangeRequest)),
             Some(SpecCommand::MarkReviewed) => {
-                if let Some(plan) = self.plan.clone() {
+                if let Some(plan) = self.source.plan().cloned() {
                     cx.net.arch_mark_reviewed(&plan, &self.author, cx.ctx.clone(), self.posted());
                 }
             }
@@ -1218,11 +1223,10 @@ impl Navigable for SpecState {
         let section = self.current;
         if self.folded.contains(&section) {
             self.put_on_header_keeping_fold(section);
-        } else if let Some(i) = self.entries().iter().position(|e| e.section == section && e.item == SpecItem::Header) {
-            if self.entry().is_none_or(|e| e.section != section) {
+        } else if let Some(i) = self.entries().iter().position(|e| e.section == section && e.item == SpecItem::Header)
+            && self.entry().is_none_or(|e| e.section != section) {
                 self.put_cursor(i);
             }
-        }
     }
 
     fn items(&self) -> Vec<Item> {
@@ -1274,7 +1278,7 @@ impl SpecState {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use arch_graph::{Alignment, Component, ImplementationSpec, Invariant, LogicStep, Relation, Stage, Status};
+    use arch_graph::{Alignment, Component, ImplementationSpec, Invariant, LogicStep, PlanId, Relation, Stage, Status};
 
     pub(crate) fn detail(id: &ComponentId, other: &ComponentId) -> ComponentDetail {
         ComponentDetail {
@@ -1305,6 +1309,7 @@ pub(crate) mod tests {
             incoming: vec![],
             code: None,
             stale: false,
+            references: Vec::new(),
         }
     }
 
@@ -1318,20 +1323,19 @@ pub(crate) mod tests {
         });
     }
 
-    // req: P9.16
     #[test]
     fn spec_view_follows_unless_pinned_and_navigates_sections() {
         let mut s = SpecState::default();
         let a = ComponentId::new("rust:a::run");
         let b = ComponentId::new("rust:a::step");
-        s.follow(Some(&a), None);
+        s.follow(Some(&a), &Source::Code);
         assert_eq!(s.target.as_ref(), Some(&a));
         s.pinned = true;
-        s.follow(Some(&b), None);
+        s.follow(Some(&b), &Source::Code);
         assert_eq!(s.target.as_ref(), Some(&a), "pinned");
         s.pinned = false;
-        s.follow(Some(&b), Some(&PlanId::new("p").unwrap()));
-        assert_eq!((s.target.as_ref(), s.plan.is_some()), (Some(&b), true));
+        s.follow(Some(&b), &Source::Plan(PlanId::new("p").unwrap()));
+        assert_eq!((s.target.as_ref(), s.source.plan().is_some()), (Some(&b), true));
 
         s.step_section(1);
         s.step_section(1);
@@ -1348,7 +1352,7 @@ pub(crate) mod tests {
         // Full content renders: every section, with steps, invariants and code.
         s.detail = Some(detail(&b, &a));
         let ctx = egui::Context::default();
-        s.loaded = Some((b.clone(), s.plan.clone()));
+        s.loaded = Some((b.clone(), s.source.clone()));
         let mut mode = crate::keymap::InputMode::Normal;
         for _ in 0..2 {
             frame(&mut s, &ctx, &mut mode, 0);
@@ -1360,16 +1364,15 @@ pub(crate) mod tests {
         }
     }
 
-    // req: N.18
     #[test]
     fn the_cursor_walks_every_item_and_every_item_has_a_key() {
         use crate::review::tests::comment;
         let id = ComponentId::new("rust:a::step");
         let other = ComponentId::new("rust:a::save");
         let mut s = SpecState::default();
-        s.follow(Some(&id), Some(&PlanId::new("p").unwrap()));
+        s.follow(Some(&id), &Source::Plan(PlanId::new("p").unwrap()));
         s.detail = Some(detail(&id, &other));
-        s.loaded = Some((id.clone(), s.plan.clone()));
+        s.loaded = Some((id.clone(), s.source.clone()));
         let mut answered = comment(1, CommentAnchor::Section { id: id.clone(), section: "logic".into() }, CommentStatus::Answered);
         answered.replies.push(arch_graph::Reply { author: arch_graph::Author::User { name: "izo".into() }, text: "and?".into(), at: String::new() });
         s.comments = vec![answered];
@@ -1428,7 +1431,6 @@ pub(crate) mod tests {
         assert_eq!(s.current, Section::Code);
     }
 
-    // req: N.2, N.18
     #[test]
     fn a_restored_item_is_found_once_the_component_loads() {
         let step = ComponentId::new("rust:a::step");
@@ -1438,7 +1440,7 @@ pub(crate) mod tests {
         let relation = Entry { section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: save.clone(), outgoing: true } }.key();
         s.restore(&Place::Spec { component: Some(step.clone()), item: Some(relation.clone()) });
         assert_eq!(s.cursor, 0, "not loaded yet");
-        s.loaded = Some((step.clone(), None));
+        s.loaded = Some((step.clone(), Source::Code));
         push(&s.inbox, Reply::Detail(step.clone(), Box::new(Ok(detail(&step, &save)))));
         let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
         s.tick(&net, &ctx);
@@ -1446,7 +1448,6 @@ pub(crate) mod tests {
         assert_eq!(s.current, Section::Relations);
     }
 
-    // req: R.1, R.2
     #[test]
     fn spec_view_threads_comments_marks_changed_sections_and_composes_points() {
         use crate::review::tests::comment;
@@ -1454,7 +1455,7 @@ pub(crate) mod tests {
         let id = ComponentId::new("rust:a::step");
         let other = ComponentId::new("rust:a::run");
         let mut s = SpecState::default();
-        s.follow(Some(&id), Some(&PlanId::new("p").unwrap()));
+        s.follow(Some(&id), &Source::Plan(PlanId::new("p").unwrap()));
         s.author = "izo".into();
         // Diff fields land in the sections that show them.
         s.diff = PlanDiff {
@@ -1514,7 +1515,7 @@ pub(crate) mod tests {
             Some(Composer { purpose: Compose::New(CommentKind::ChangeRequest), anchor: Some(CommentAnchor::Section { id: id.clone(), section: "logic".into() }), section: Section::Logic, text: String::new() })
         );
         // It all renders: markers, threads with their buttons, the composer.
-        s.loaded = Some((id.clone(), s.plan.clone()));
+        s.loaded = Some((id.clone(), s.source.clone()));
         mode = crate::keymap::InputMode::Insert { slot: 1 };
         for _ in 0..2 {
             frame(&mut s, &ctx, &mut mode, 1);
@@ -1548,7 +1549,6 @@ pub(crate) mod tests {
         text
     }
 
-    // req: V.1, V.2, V.3, V.4
     #[test]
     fn the_spec_opens_with_a_header_says_whats_missing_and_marks_changed_items() {
         use crate::review::tests::comment;
@@ -1561,11 +1561,11 @@ pub(crate) mod tests {
         let (id, other) = (ComponentId::new("rust:a::step"), ComponentId::new("rust:a::run"));
         let plan = PlanId::new("p").unwrap();
         let mut s = SpecState::default();
-        s.follow(Some(&id), Some(&plan));
+        s.follow(Some(&id), &Source::Plan(plan.clone()));
         let mut d = detail(&id, &other);
         d.component.description.clear();
         s.detail = Some(d);
-        s.loaded = Some((id.clone(), Some(plan)));
+        s.loaded = Some((id.clone(), Source::Plan(plan)));
         // The type wants a description and a signature; this one has neither.
         s.types = Some(arch_graph::TypeSystem::from_toml("[types.function]\nrequired_fields = [\"description\", \"signature\", \"logic_steps\"]").unwrap());
         assert_eq!(s.missing_required(), [arch_graph::RequiredField::Description, arch_graph::RequiredField::Signature]);
