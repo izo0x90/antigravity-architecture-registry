@@ -103,21 +103,22 @@ pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
         ),
         tool(
             "navigate",
-            &format!("Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it.\n{tree_help}"),
+            &format!("Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it. The user may have several graphs, one per column: `column` picks one (counted from 1 on the left; a column that isn't a graph becomes one); without it, the graph they used last moves.\n{tree_help}"),
             json!({ "type": "object", "properties": {
                 "view": { "type": "string", "enum": ViewKind::ALL.iter().map(|v| v.name()).collect::<Vec<_>>() },
                 "source": source,
                 "root": card,
                 "way": { "type": "string", "enum": ["down", "up"] },
                 "depth": { "type": "integer" },
-                "select": card
+                "select": card,
+                "column": { "type": "integer", "description": "The user's column to show it in, from 1 on the left (default: the graph they used last)" }
             } }),
         ),
         tool("plan_list", "All plans, with their components and stages.", json!({ "type": "object", "properties": {} })),
         tool(
             "plan_create",
-            "Start a plan for one change (a feature, a fix). Plans hold only what's new or changing; existing code is referenced, never re-described.",
-            json!({ "type": "object", "properties": { "id": { "type": "string", "description": "letters, digits, - and _" }, "title": { "type": "string" }, "description": { "type": "string" } }, "required": ["id", "title"] }),
+            "Start a plan. kind \"change\" (the default) plans one change (a feature, a fix): it holds only what's new or changing, and existing code is referenced, never re-described. kind \"walkthrough\" explains existing code to the user: modify brings in each component the behavior goes through as it is, with a description and spec written from the code; nothing is added, related, approved or built, and navigate with source plan:<id> shows the user only those components.",
+            json!({ "type": "object", "properties": { "id": { "type": "string", "description": "letters, digits, - and _" }, "title": { "type": "string" }, "description": { "type": "string" }, "kind": { "type": "string", "enum": ["change", "walkthrough"], "description": "change (the default) or walkthrough" } }, "required": ["id", "title"] }),
         ),
         tool(
             "plan_import",
@@ -173,6 +174,36 @@ pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
             "review",
             "Run the reviewers that apply to one planned component (faithfulness to the plan, anti-patterns, logic...). Blocking points must be fixed before it can be verified as implemented.",
             json!({ "type": "object", "properties": { "plan": plan, "id": id }, "required": ["plan", "id"] }),
+        ),
+        tool(
+            "cockpit_read",
+            "What the user's cockpit shows now: the input mode, each column's view (which has focus), the note line, and every piece of text drawn, row by row with its x. Works while the user lets agents drive the cockpit. Read again after acting: the screen updates as results arrive.",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool(
+            "cockpit_actions",
+            "Everything the cockpit can run now (what the Space menu, keys and palette offer): id, label, keys, what it needs (a choice, text, on/off) with its choices, and whether it applies now.",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool(
+            "cockpit_run",
+            "Run a cockpit action by id, as its key would (see cockpit_actions). A choice is given by its value or label; on/off as on or off.",
+            json!({ "type": "object", "properties": { "id": { "type": "string" }, "value": { "type": "string" } }, "required": ["id"] }),
+        ),
+        tool(
+            "cockpit_click",
+            "Click in the cockpit: on drawn text (the topmost match, exact before containing), or at x, y (screen points, as cockpit_read gives them).",
+            json!({ "type": "object", "properties": { "text": { "type": "string" }, "x": { "type": "number" }, "y": { "type": "number" } } }),
+        ),
+        tool(
+            "cockpit_type",
+            "Type text into whatever has the keyboard in the cockpit (a text box in insert mode, the palette, a search).",
+            json!({ "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }),
+        ),
+        tool(
+            "cockpit_keys",
+            "Press keys in the cockpit, in order, space separated: names as in its key sheet, with modifiers joined by + (\"space s n\", \"i\", \"ctrl+enter\", \"escape\", \"G\").",
+            json!({ "type": "object", "properties": { "keys": { "type": "string" } }, "required": ["keys"] }),
         ),
     ]
 }

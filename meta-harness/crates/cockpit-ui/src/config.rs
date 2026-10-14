@@ -22,16 +22,18 @@ pub struct User {
     pub name: String,
 }
 
-/// The server connection: how the event socket comes back after a drop.
+/// The server connection: how the event socket comes back after a drop,
+/// and how soon the layout is saved after it changes.
 #[derive(Clone, Debug, Deserialize)]
 pub struct NetUi {
     pub reconnect_min_ms: u64,
     pub reconnect_max_ms: u64,
+    pub save_after_ms: u64,
 }
 
 impl Default for NetUi {
     fn default() -> Self {
-        Self { reconnect_min_ms: 500, reconnect_max_ms: 10_000 }
+        Self { reconnect_min_ms: 500, reconnect_max_ms: 10_000, save_after_ms: 500 }
     }
 }
 
@@ -47,6 +49,7 @@ pub struct UiConfig {
     pub graph: GraphUi,
     pub net: NetUi,
     pub code: CodeUi,
+    pub columns: ColumnsUi,
     /// Every state's word, icon and colour.
     #[serde(default)]
     pub status: crate::status::Statuses,
@@ -61,6 +64,18 @@ fn merge(base: &mut toml::Table, over: toml::Table) {
                 base.insert(key, value);
             }
         }
+    }
+}
+
+/// The columns: how many there may be.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ColumnsUi {
+    pub max: usize,
+}
+
+impl Default for ColumnsUi {
+    fn default() -> Self {
+        Self { max: 12 }
     }
 }
 

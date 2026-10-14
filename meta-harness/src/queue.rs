@@ -152,7 +152,8 @@ impl QueueRunner {
     /// Starts working through `plan` with sessions from `runner`.
     pub async fn start(self: &Arc<Self>, plan: PlanId, runner: Arc<dyn JobRunner>) -> Result<QueueSnapshot, ServiceError> {
         let id = plan.clone();
-        blocking(&self.arch, move |a| a.plan(&id)).await?;
+        let found = blocking(&self.arch, move |a| a.plan(&id)).await?;
+        arch_service::only_changes(&found, "built")?;
         let handle = self.handle(&plan);
         {
             let snapshot = self.snapshot(&plan).await?;

@@ -1,6 +1,5 @@
 //! Saved-session listing for any ACP agent (`session/list`, `session/delete`).
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1 as acp;
@@ -10,23 +9,26 @@ use harness_core::{Result, SessionCatalog};
 
 use crate::control::with_connection;
 use crate::launch::AcpLauncher;
+use crate::profile::Profile;
 
 pub struct AcpSessionCatalog {
     launcher: Arc<dyn AcpLauncher>,
+    profile: Arc<Profile>,
 }
 
 impl AcpSessionCatalog {
-    pub fn new(launcher: Arc<dyn AcpLauncher>) -> Self {
-        Self { launcher }
+    pub fn new(launcher: Arc<dyn AcpLauncher>, profile: Arc<Profile>) -> Self {
+        Self { launcher, profile }
     }
 }
 
 #[async_trait]
 impl SessionCatalog for AcpSessionCatalog {
+    /// The sessions saved in `cwd` (a relative one is in the project).
     async fn list(&self, cwd: &str, cursor: Option<&str>) -> Result<SavedSessionPage> {
-        let request = acp::ListSessionsRequest::new().cwd(PathBuf::from(cwd)).cursor(cursor.map(str::to_owned));
-        let response =
-            with_connection(&self.launcher, cwd, async move |cx, _init| cx.send_request(request).block_task().await).await?;
+        let cwd = self.profile.project.join(cwd);
+        let request = acp::ListSessionsRequest::new().cwd(cwd).cursor(cursor.map(str::to_owned));
+        let response = with_connection(&self.launcher, &self.profile, async move |cx, _| cx.send_request(request).block_task().await).await?;
         Ok(SavedSessionPage {
             sessions: response
                 .sessions
@@ -44,7 +46,6 @@ impl SessionCatalog for AcpSessionCatalog {
 
     async fn delete(&self, id: &NativeId) -> Result<()> {
         let request = acp::DeleteSessionRequest::new(acp::SessionId::new(id.as_str().to_owned()));
-        with_connection(&self.launcher, ".", async move |cx, _init| cx.send_request(request).block_task().await.map(|_| ()))
-            .await
+        with_connection(&self.launcher, &self.profile, async move |cx, _| cx.send_request(request).block_task().await.map(|_| ())).await
     }
 }

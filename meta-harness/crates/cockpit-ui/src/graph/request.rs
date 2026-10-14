@@ -11,7 +11,7 @@ use crate::nav::Navigable;
 /// What the graph shows: one view, over the code or one plan, from a root
 /// (or the view's starting points), one way, to a depth, with the cards
 /// opened or closed by hand. Two equal `Nav`s ask for the same tree.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Nav {
     pub view: ViewKind,
     /// The code alone, or the code with one plan laid over it.

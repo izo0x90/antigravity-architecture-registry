@@ -6,12 +6,12 @@ use harness_core::{EventHub, InstanceRegistry, ProviderDriver, SessionManager};
 use arch_service::{ArchitectureService, FsPlans, ProcessRunner, ReviewerCatalog, ToolCatalog};
 use meta_harness::mcp::{McpServerState, McpService};
 use meta_harness::server::{AppState, create_router};
-use provider_antigravity::AntigravityDriver;
 use tracing::info;
 
-/// Every harness the server can drive. Adding one means adding its driver here.
-fn built_in_drivers() -> Vec<Arc<dyn ProviderDriver>> {
-    vec![Arc::new(AntigravityDriver)]
+/// The drivers harness packs can name. Every ACP agent runs on the one
+/// ACP driver, configured by its pack.
+fn built_in_drivers(project: &std::path::Path) -> Vec<Arc<dyn ProviderDriver>> {
+    vec![Arc::new(harness_acp::AcpDriver::new(project.to_path_buf()))]
 }
 
 /// The meta-harness: with no command, the server.
@@ -113,8 +113,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let hub = Arc::new(EventHub::default());
     let arch = Arc::new(open_architecture()?);
+    let ui_state = Arc::new(arch_service::UiStateFile::open(arch.root())?);
     meta_harness::server::bridge_architecture_events(&arch, &hub);
-    let mcp_state = McpServerState::new(Arc::new(McpService::new(arch.clone())));
+    let remote = Arc::new(meta_harness::remote::Remote::default());
+    let mcp_state = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone())));
     // First read of the code in the background; later reads are incremental.
     {
         let arch = arch.clone();
@@ -129,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
-    let instances = Arc::new(InstanceRegistry::new(built_in_drivers(), hub.clone()));
+    let instances = Arc::new(InstanceRegistry::new(built_in_drivers(arch.root()), hub.clone()));
     // Each harness gets its launch (its own, else its pack's once the pack
     // passes its check, which can take a while emulated): set up in the
     // background, so the server answers meanwhile.
@@ -151,15 +153,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Every session gets the architecture tools.
     let mcp_servers = vec![McpServer {
         name: "nah-architecture".into(),
-        transport: McpTransport::Http { url: format!("{base_url}/api/mcp/sse"), headers: Vec::new() },
+        transport: McpTransport::Sse { url: format!("{base_url}/api/mcp/sse"), headers: Vec::new() },
     }];
+    let tool_servers = Arc::new(meta_harness::tool_servers::ToolServerState { ours: mcp_servers.clone(), file: meta_harness::tool_servers::ProjectToolServers::of(arch.root()) });
+    if let Err(e) = tool_servers.project() {
+        tracing::warn!("The project's tool servers can't be read: {e}");
+    }
     let sessions = Arc::new(SessionManager::new(instances.clone(), hub.clone(), mcp_servers));
 
     let queue = meta_harness::server::queue_runner(&arch, queue_config(&arch)?, &hub);
     let cockpit = meta_harness::cockpit::CockpitAuth::for_user()?;
     let cockpit_path = cockpit.launch_path();
     let streams = mcp_state.sessions.clone();
-    let app = create_router(AppState { registry: instances, sessions, hub, mcp_state, arch, cockpit, queue });
+    let app = create_router(AppState { registry: instances, sessions, hub, mcp_state, arch, cockpit, queue, ui_state, tool_servers, remote });
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");
     info!("Open the cockpit: {base_url}{cockpit_path}");
     // Stopping ends the agents' event streams, which would otherwise keep

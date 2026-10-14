@@ -11,7 +11,7 @@ use arch_store::{SqliteStore, Stamp};
 
 use arch_graph::tree::{Tree, TreeRequest};
 use arch_graph::{
-    Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, Report, Requester,
+    Alignment, Approval, ArchEvent, ChangeReason, Component, ComponentId, Finding, FindingCode, Graph, Plan, PlanId, PlanKind, Report, Requester,
     RepoPath, Severity, Source, Stage, Target, TypeSystem, ViewRequest, can_transition, ComponentDetail, schema::Dsl,
     IndexStatus,
 };
@@ -202,6 +202,15 @@ fn asked(request: &TreeRequest, card: Option<&str>) -> String {
         out.push_str(&format!(", {} opened", request.opened.len()));
     }
     out
+}
+
+/// Approving, verifying and building are for plans that change the code; a
+/// walkthrough only explains it.
+pub fn only_changes(plan: &Plan, what: &str) -> Result<(), ServiceError> {
+    match plan.kind {
+        PlanKind::Change => Ok(()),
+        PlanKind::Walkthrough => Err(ServiceError::InvalidOp(format!("{} is a walkthrough: it explains the code, so nothing in it is {what}", plan.id))),
+    }
 }
 
 pub(crate) fn now_rfc3339() -> String {
@@ -740,7 +749,7 @@ impl ArchitectureService {
         self.plans.get(id)?.ok_or_else(|| ServiceError::NotFound(format!("plan {id}")))
     }
 
-    pub fn create_plan(&self, id: &str, title: &str, description: &str) -> Result<Plan, ServiceError> {
+    pub fn create_plan(&self, id: &str, title: &str, description: &str, kind: PlanKind) -> Result<Plan, ServiceError> {
         let plan_id = PlanId::new(id).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
         let lock = self.plan_lock(&plan_id);
         let held = lock.lock().unwrap_or_else(PoisonError::into_inner);
@@ -749,6 +758,7 @@ impl ArchitectureService {
         }
         let mut plan = Plan::new(id, title);
         plan.description = description.to_owned();
+        plan.kind = kind;
         self.plans.save(&plan)?;
         drop(held);
         self.emit(ArchEvent::Changed { reason: ChangeReason::PlanEdited, plans: vec![plan_id], components: Vec::new() });
@@ -793,7 +803,8 @@ impl ArchitectureService {
     pub fn apply(&self, plan_id: &PlanId, op: PlanOp) -> Result<Plan, ServiceError> {
         let (plan, touched) = self.edit_plan(plan_id, |plan| {
             let graph = self.overlay(plan_id, plan)?;
-            let changed = op.design_change().cloned();
+            // A walkthrough has no stages to take back.
+            let changed = op.design_change().filter(|_| plan.kind == PlanKind::Change).cloned();
             let removes = matches!(op, PlanOp::Remove { .. });
             let mut touched = apply(plan, op, &graph, &self.core.root, &self.ignores(), &self.core.packs, &self.core.types, &self.dsl)?;
             // A design change sends it (if approved) and what builds on it back.
@@ -855,6 +866,7 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             return Err(ServiceError::InvalidOp(format!("{to:?} is reached by verification, not approval")));
         }
         let approval = self.edit_plan(plan_id, |plan| {
+            only_changes(plan, "approved")?;
             // The plan as it is: approving changes only its stage, which the
             // checks read from the plan.
             let graph = self.overlay(plan_id, plan)?;
@@ -904,6 +916,7 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             return Err(ServiceError::InvalidOp(format!("verification targets Skeleton or Implemented, not {goal:?}")));
         }
         let plan = self.plan(plan_id)?;
+        only_changes(&plan, "verified")?;
         let planned = plan.component(id).ok_or_else(|| ServiceError::NotFound(format!("{id} in plan {plan_id}")))?.clone();
         // Re-read everything the checks look at, including files that are gone
         // (re-reading a vanished file drops it from the index).

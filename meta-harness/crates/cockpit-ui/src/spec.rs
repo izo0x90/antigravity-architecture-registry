@@ -156,6 +156,8 @@ pub struct SpecState {
     /// comments and checks live).
     pub source: Source,
     pub pinned: bool,
+    /// Shown in the quick look (held on its card there, so no pinning).
+    pub floating: bool,
     pub detail: Option<ComponentDetail>,
     pub findings: Vec<Finding>,
     /// The section the cursor is in.
@@ -195,6 +197,7 @@ impl Default for SpecState {
             target: None,
             source: Source::Code,
             pinned: false,
+            floating: false,
             detail: None,
             findings: Vec::new(),
             current: Section::Overview,
@@ -777,9 +780,12 @@ impl SpecState {
                                 let symbol = other.as_str().split_once(':').map_or(other.as_str(), |(_, s)| s);
                                 let name = symbol.rsplit([':', '.']).next().unwrap_or(symbol).to_owned();
                                 let entry = Entry { section, item: SpecItem::Relation { kind: *kind, other: other.clone(), outgoing: *outgoing } };
+                                let list = if *outgoing { &detail.outgoing } else { &detail.incoming };
+                                let found = list.iter().find(|r| r.kind == *kind && (if *outgoing { &r.target } else { &r.source }) == other);
+                                let (text, how) = found.map_or_else(|| (name.clone(), String::new()), |r| how_known(r, &name));
                                 let mut followed = false;
                                 item(ui, entry, &mut |ui| {
-                                    followed |= ui.link(RichText::new(&name).monospace().size(crate::theme::look().text_body)).on_hover_text(other.as_str()).clicked();
+                                    followed |= ui.link(RichText::new(&text).monospace().size(crate::theme::look().text_body)).on_hover_text(format!("{}{how}", other.as_str())).clicked();
                                 });
                                 if followed {
                                     clicked = Some(Click::Follow(other.clone()));
@@ -994,6 +1000,27 @@ fn render_thread(ui: &mut egui::Ui, c: &Comment, point: Option<&CommentId>, sect
     clicked
 }
 
+/// A relation's name as listed, and how it's known (for its hover): a
+/// planned one the code doesn't have says so; one found in the code says
+/// what found it, and one only matched by name that nothing confirmed it.
+fn how_known(r: &arch_graph::Relation, name: &str) -> (String, String) {
+    use arch_graph::tree::Evidence;
+    if r.provenance.planned && !r.provenance.observed {
+        return (format!("{name} (planned)"), String::new());
+    }
+    match Evidence::of(r) {
+        Some(e @ Evidence::Named) => (format!("{name} (matched by name)"), format!("\n{}: not confirmed by the language's own analyzer.", capitalized(&e.describe()))),
+        Some(e) => (name.to_owned(), format!("\n{}.", capitalized(&e.describe()))),
+        None => (name.to_owned(), String::new()),
+    }
+}
+
+/// `text` with its first letter a capital.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
+}
+
 fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
     if let Ok(mut i) = inbox.lock() {
         i.push(reply);
@@ -1026,11 +1053,15 @@ impl ActionProvider for SpecState {
         out.extend([
             f("spec.next_section", "Next section", S::NextSection).group(Group::Navigate),
             f("spec.prev_section", "Previous section", S::PrevSection).group(Group::Navigate).importance(MINOR),
-            f("spec.pin", if self.pinned { "Unpin (follow the graph)" } else { "Pin this component" }, S::Pin)
-                .toolbar(ToolbarStyle::Button, if self.pinned { "Pinned" } else { "Pin" }, Some(egui_phosphor::regular::PUSH_PIN))
-                .group(Group::View)
-                .importance(MINOR),
         ]);
+        if !self.floating {
+            out.push(
+                f("spec.pin", if self.pinned { "Unpin (follow the graph)" } else { "Pin this component" }, S::Pin)
+                    .toolbar(ToolbarStyle::Button, if self.pinned { "Pinned" } else { "Pin" }, Some(egui_phosphor::regular::PUSH_PIN))
+                    .group(Group::View)
+                    .importance(MINOR),
+            );
+        }
         // On a comment, its own verbs lead; without a plan, commenting only says why not.
         let on_comment = self.comment_here().is_some();
         let comment_rank = if self.source.plan().is_none() { MINOR } else if on_comment { SECONDARY } else { PRIMARY };

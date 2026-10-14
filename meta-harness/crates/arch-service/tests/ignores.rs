@@ -56,7 +56,7 @@ fn the_service_skips_what_the_parent_repos_ignore_files_and_nah_ignore_skip() {
     assert!(found.hits.iter().all(|h| !format!("{h:?}").contains("generated/") && !format!("{h:?}").contains("target/")), "{:?}", found.hits);
     // Where a plan may put code.
     let plan = PlanId::new("p").unwrap();
-    service.create_plan("p", "P", "").unwrap();
+    service.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     let placed = service.apply(
         &plan,
         PlanOp::AddComponent { name: "later".into(), type_name: "function".into(), description: "x".into(), parent: None, file: Some("generated/later.rs".into()), signature: None, schemas: None, spec: None },

@@ -15,6 +15,10 @@ name = "user"
 leader = "Space"
 # Leaves insert mode, steps back out of leader menus, popups and the palette.
 back = "Escape"
+# The quick look's key (quicklook.toggle) held at least this long is a peek:
+# the quick look closes when it's let go. Tapped, it stays open until Escape
+# or the key again.
+peek_hold_ms = 250
 # Hint labels (`f`) are made of these, best first.
 hint_chars = "asdfghjkl"
 # How long a half-typed key sequence (g, z, [, ], m, ') waits before a popup
@@ -35,11 +39,13 @@ narrow_below = 600.0
 # Leader submenus, by key path.
 [keymap.groups]
 b = "Buffer"
+"b n" = "New view"
 l = "Layout"
+q = "Quick look"
 s = "Session"
 m = "Model & config"
 o = "Mode"
-p = "MCP servers"
+p = "Tools & skills"
 h = "Harness commands"
 a = "Account"
 r = "Requests"
@@ -65,6 +71,9 @@ I = "Index"
 "slot.focus.1" = { leader = "1" }
 "slot.focus.2" = { leader = "2" }
 "slot.focus.3" = { leader = "3" }
+"slot.focus.4" = { leader = "4" }
+"slot.focus.5" = { leader = "5" }
+"slot.focus.6" = { leader = "6" }
 "slot.next" = { keys = ["Tab"] }
 "slot.prev" = { keys = ["shift+Tab"] }
 "buffer.chat" = { leader = "b c" }
@@ -73,12 +82,32 @@ I = "Index"
 "buffer.tree" = { leader = "b t" }
 "buffer.spec" = { leader = "b s" }
 "buffer.queue" = { leader = "b q" }
+# Every open view (on screen or hidden), to show in this column; a new one
+# here; this column's view deleted for good (closing a column only hides it).
+"buffer.list" = { leader = "b b" }
+"buffer.delete" = { leader = "b d" }
+"buffer.new.code" = { leader = "b n v" }
+"buffer.new.graph" = { leader = "b n g" }
+"buffer.new.tree" = { leader = "b n t" }
+"buffer.new.spec" = { leader = "b n s" }
 "layout.1" = { leader = "l 1", keys = ["alt+1"] }
 "layout.2" = { leader = "l 2", keys = ["alt+2"] }
 "layout.3" = { leader = "l 3", keys = ["alt+3"] }
+"layout.4" = { leader = "l 4", keys = ["alt+4"] }
+"layout.5" = { leader = "l 5", keys = ["alt+5"] }
+"layout.6" = { leader = "l 6", keys = ["alt+6"] }
+"column.add" = { leader = "l a" }
+"column.close" = { leader = "l x" }
 "inspector.toggle" = { leader = "i", keys = ["ctrl+shift+c"] }
 "issues.toggle" = { leader = "d", keys = ["F2"] }
-"drawer.close" = { leader = "x" }
+# The quick look: the full card of what the cursor is on, over the view
+# (hold to peek, tap to keep it open), and the same card sent to a column.
+"quicklook.toggle" = { leader = "q q", keys = ["q"] }
+"quicklook.to_column" = { leader = "q c" }
+# A box over whatever is on screen for talking to the agent (Enter sends,
+# Escape closes).
+"talk.open" = { leader = "t", keys = ["t"] }
+"cockpit.agents" = { leader = "a d" }
 
 # Moving the cursor, in every view.
 "nav.left" = { keys = ["h"] }
@@ -140,6 +169,7 @@ I = "Index"
 "session.delete" = { leader = "s d" }
 "session.switch" = { leader = "s t" }
 "session.stop" = { leader = "s s" }
+"chat.inject" = { leader = "s a" }
 "session.close" = { leader = "s c" }
 "instance.select" = { leader = "s i" }
 
@@ -153,6 +183,7 @@ I = "Index"
 "mcp.list" = { leader = "p l" }
 "mcp.add" = { leader = "p a" }
 "mcp.remove" = { leader = "p r" }
+"harness.skills" = { leader = "p s" }
 
 "command.*" = { leader = "h #" }
 
@@ -178,6 +209,9 @@ I = "Index"
 "graph.full_code" = { leader = "g F" }
 "graph.agent_return" = { leader = "g a", keys = ["g a"] }
 "graph.find" = { leader = "g /", keys = ["g /"] }
+"graph.zoom_in" = { leader = "g =", keys = ["z +"] }
+"graph.zoom_out" = { leader = "g _", keys = ["z -"] }
+"graph.fit" = { leader = "g z", keys = ["z z"] }
 
 # Spec view (when focused). j/k walk every item; J/K (and ]] / [[) jump
 # between sections. Review: comment on (or ask for a change to) the item
@@ -261,6 +295,10 @@ line_count_gain = 0.5
 line_count_max = 3.0
 # How long cards take to move, and going into or out of a level, in seconds (0: at once).
 move_seconds = 0.35
+# The quick look: at least this wide (its column's width, when wider), and
+# this share of the screen's height.
+quick_look_width = 720.0
+quick_look_height = 0.8
 
 # Colors by role: "#rrggbb" or "#rrggbbaa". A deep background, one electric
 # accent kept for focus and selection, and status colors used for status only.
@@ -502,6 +540,8 @@ context = ["graph.go_in", "goto.spec", "goto.code", "goto.callees", "goto.uses",
 # Fitting the drawing to the screen never zooms out past this (text stays
 # readable; what doesn't fit is panned to).
 readable_zoom = 0.85
+# One zoom in (z +) or out (z -) changes the size by this factor.
+zoom_step = 1.2
 # Text smaller than this many pixels on screen isn't drawn (the card is).
 min_text_px = 6.0
 # Details kept for cards selected before (fetched again after that).
@@ -532,7 +572,7 @@ swipe_max_ms = 450.0
 show = "auto"
 narrow_below = 480.0
 size = 32.0
-actions = ["nav.back", "nav.forward", "graph.view", "graph.flip", "nav.hint_open"]
+actions = ["nav.back", "nav.forward", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.view", "graph.flip", "nav.hint_open"]
 
 # The code view's syntax colours: a tree-sitter highlight capture (or its
 # first part) -> a theme color. Captures not listed keep the text color.
@@ -557,9 +597,17 @@ property = "text"
 
 # The event socket: when it drops, try again after `reconnect_min_ms`, doubling
 # up to `reconnect_max_ms`; views refetch once it's back.
+# Each column shows its own view (graphs, code, specs, outlines; one chat and
+# one queue). How many columns there may be:
+[columns]
+max = 12
+
 [net]
 reconnect_min_ms = 500
 reconnect_max_ms = 10000
+# The layout (columns, where each view is, marks, unsent text) is saved on
+# the server this long after it last changed.
+save_after_ms = 500
 
 # Presets: whole looks you can switch to with one setting at the top of your
 # UI config, e.g. `preset = "classic"`. A preset's sections are laid over the

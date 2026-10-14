@@ -110,6 +110,8 @@ pub struct Turn {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnStatus {
+    /// Sent while another runs: it starts when those before it end.
+    Queued,
     Running,
     Completed,
     Interrupted,
@@ -119,7 +121,7 @@ pub enum TurnStatus {
 
 impl TurnStatus {
     pub fn is_terminal(self) -> bool {
-        !matches!(self, Self::Running)
+        !matches!(self, Self::Queued | Self::Running)
     }
 }
 
@@ -200,10 +202,22 @@ pub struct McpServer {
     pub transport: McpTransport,
 }
 
+/// The tool servers every session gets, besides any added for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolServers {
+    /// The meta-harness's own (its architecture tools).
+    pub ours: Vec<McpServer>,
+    /// The project's (`.nah/mcp.toml`).
+    pub project: Vec<McpServer>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum McpTransport {
     Http { url: String, headers: Vec<(String, String)> },
+    /// The older HTTP transport: events on a stream, messages posted back.
+    Sse { url: String, headers: Vec<(String, String)> },
     Stdio { command: String, args: Vec<String>, env: Vec<(String, String)> },
 }
 

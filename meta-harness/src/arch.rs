@@ -219,10 +219,12 @@ struct NewPlan {
     title: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    kind: arch_graph::PlanKind,
 }
 
 async fn create_plan(State(state): State<AppState>, Json(body): Json<NewPlan>) -> ArchResult<arch_graph::Plan> {
-    Ok(Json(blocking(&state.arch, move |a| a.create_plan(&body.id, &body.title, &body.description)).await?))
+    Ok(Json(blocking(&state.arch, move |a| a.create_plan(&body.id, &body.title, &body.description, body.kind)).await?))
 }
 
 fn old_registry_file() -> String {

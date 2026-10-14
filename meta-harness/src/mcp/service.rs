@@ -17,6 +17,8 @@ use crate::mcp::tools::list_tools;
 #[derive(Clone)]
 pub struct McpService {
     arch: Arc<ArchitectureService>,
+    /// The cockpit, for the cockpit_* tools.
+    remote: Arc<crate::remote::Remote>,
 }
 
 fn parse<T: for<'de> Deserialize<'de>>(args: Value) -> Result<T, ServiceError> {
@@ -46,6 +48,9 @@ fn marked(detail: &arch_graph::ComponentDetail) -> Result<Value, ServiceError> {
 
 /// What the workflow expects next for each component in a plan.
 pub fn next_steps(plan: &Plan, graph: &Graph, types: &TypeSystem, only: Option<&ComponentId>) -> String {
+    if plan.kind == arch_graph::PlanKind::Walkthrough {
+        return walkthrough_steps(plan, only);
+    }
     let mut out = String::from("\n\nNext:");
     let mut any = false;
     // Dependency order: what others build on comes first.
@@ -82,6 +87,29 @@ pub fn next_steps(plan: &Plan, graph: &Graph, types: &TypeSystem, only: Option<&
     if !open.is_empty() {
         let ids: Vec<&str> = open.iter().map(|c| c.id.0.as_str()).collect();
         let _ = write!(out, "\n- review: {} open point(s) from the user ({}): read them (review_comments) and answer each (answer_comment); approval waits on them", open.len(), ids.join(", "));
+    }
+    out
+}
+
+/// A walkthrough's next steps: what's still to be explained, then showing it.
+fn walkthrough_steps(plan: &Plan, only: Option<&ComponentId>) -> String {
+    let mut out = String::from("\n\nNext:");
+    let mut any = false;
+    for c in plan.components.iter().filter(|c| only.is_none_or(|o| *o == c.id)) {
+        let mut missing = Vec::new();
+        if c.description.trim().is_empty() {
+            missing.push("a description");
+        }
+        if c.spec.as_ref().is_none_or(|s| s.logic_steps.is_empty()) {
+            missing.push("logic steps");
+        }
+        if !missing.is_empty() {
+            any = true;
+            let _ = write!(out, "\n- {}: write {} from its code (plan_edit modify)", c.id, missing.join(" and "));
+        }
+    }
+    if !any {
+        let _ = write!(out, " every component is explained; navigate with source plan:{} (and a root at the entry point) to show the user only these components.", plan.id);
     }
     out
 }
@@ -193,6 +221,8 @@ struct NavigateArgs {
     depth: Option<u32>,
     #[serde(default)]
     select: Option<String>,
+    #[serde(default)]
+    column: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -201,6 +231,8 @@ struct CreateArgs {
     title: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    kind: arch_graph::PlanKind,
 }
 
 #[derive(Deserialize)]
@@ -294,8 +326,28 @@ fn plan_id(raw: &str) -> Result<PlanId, ServiceError> {
 }
 
 impl McpService {
-    pub fn new(arch: Arc<ArchitectureService>) -> Self {
-        Self { arch }
+    pub fn new(arch: Arc<ArchitectureService>, remote: Arc<crate::remote::Remote>) -> Self {
+        Self { arch, remote }
+    }
+
+    /// A cockpit_* tool: the call goes to the cockpit, its answer comes back as text.
+    async fn drive(&self, op: &str, args: Value) -> Result<String, ServiceError> {
+        let mut call = match args {
+            Value::Object(fields) => fields,
+            _ => Default::default(),
+        };
+        call.insert("op".into(), op.into());
+        let answer = self.remote.call(Value::Object(call)).await.map_err(ServiceError::InvalidOp)?;
+        Ok(match op {
+            "read" => crate::remote::screen_text(&answer),
+            "actions" => crate::remote::actions_text(&answer),
+            "run" => match answer["note"].as_str() {
+                Some(note) => format!("Ran it. The cockpit says: {note}"),
+                None => "Ran it. cockpit_read shows what changed.".into(),
+            },
+            "click" => format!("Clicked {}. cockpit_read shows what changed.", answer["clicked"].as_str().map_or_else(|| format!("at {}, {}", answer["x"], answer["y"]), |t| format!("{t:?}"))),
+            _ => "Done. cockpit_read shows what changed.".into(),
+        })
     }
 
     /// Answers a request; notifications (no id) get no answer, as JSON-RPC requires.
@@ -342,6 +394,9 @@ impl McpService {
 
     /// Runs a tool; the text is what the agent sees.
     pub async fn call(&self, name: &str, args: Value) -> Result<String, ServiceError> {
+        if let Some(op) = name.strip_prefix("cockpit_") {
+            return self.drive(op, args).await;
+        }
         match name {
             "ingest" => {
                 let a: ScopeArgs = parse(args)?;
@@ -439,7 +494,7 @@ impl McpService {
             "navigate" => {
                 let a: NavigateArgs = parse(args)?;
                 let view = a.view.as_deref().map(|v| arch_graph::tree::ViewKind::from_name(v).ok_or_else(|| ServiceError::InvalidOp(format!("view '{v}': use contains, calls or data_flow")))).transpose()?;
-                let request = ViewRequest { view, source: a.source, root: a.root, way: a.way, depth: a.depth, select: a.select };
+                let request = ViewRequest { view, source: a.source, root: a.root, way: a.way, depth: a.depth, select: a.select, column: a.column };
                 blocking(&self.arch, move |s| s.request_view(request, Requester::Agent)).await?;
                 Ok("The user's graph now shows it (they can go back).\n\nNext: explain what they're looking at, or continue with the plan.".into())
             }
@@ -447,7 +502,7 @@ impl McpService {
                 let plans = blocking(&self.arch, |s| s.plans()).await?;
                 let mut out = String::new();
                 for p in &plans {
-                    let _ = writeln!(out, "{} — {}{}", p.id, p.title, if p.greenfield { " (greenfield)" } else { "" });
+                    let _ = writeln!(out, "{} — {} ({}){}", p.id, p.title, p.kind.name(), if p.greenfield { " (greenfield)" } else { "" });
                     for c in &p.components {
                         let _ = writeln!(out, "  {} [{} {:?}/{:?}]", c.id, c.type_name, c.status, c.stage);
                     }
@@ -463,11 +518,17 @@ impl McpService {
             }
             "plan_create" => {
                 let a: CreateArgs = parse(args)?;
-                let plan = blocking(&self.arch, move |s| s.create_plan(&a.id, &a.title, &a.description)).await?;
-                Ok(format!(
-                    "Created plan {}.\n\nNext: reference the existing components it builds on, add new components under real parents, relate them to where they integrate, then plan_validate.",
-                    plan.id
-                ))
+                let plan = blocking(&self.arch, move |s| s.create_plan(&a.id, &a.title, &a.description, a.kind)).await?;
+                Ok(match plan.kind {
+                    arch_graph::PlanKind::Change => format!(
+                        "Created plan {}.\n\nNext: reference the existing components it builds on, add new components under real parents, relate them to where they integrate, then plan_validate.",
+                        plan.id
+                    ),
+                    arch_graph::PlanKind::Walkthrough => format!(
+                        "Created walkthrough {}.\n\nNext: plan_edit modify each component the behavior goes through (functions, and the data types it passes), writing its description and spec (logic steps, invariants) from what the code does; then navigate with source plan:{} to show the user only those components, from the entry point.",
+                        plan.id, plan.id
+                    ),
+                })
             }
             "plan_import" => {
                 let a: ImportArgs = parse(args)?;

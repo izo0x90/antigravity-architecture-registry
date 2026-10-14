@@ -65,6 +65,8 @@ pub struct Pending {
     pub wait: Wait,
     pub from: Jump,
     pub origin: BufferKind,
+    /// The column it lands in, when a count named one.
+    pub column: Option<usize>,
 }
 
 /// A go-to with several places to land: the user picks one.
@@ -74,6 +76,8 @@ pub struct Choosing {
     pub from: Jump,
     pub origin: BufferKind,
     pub candidates: Vec<Candidate>,
+    /// The column it lands in, when a count named one.
+    pub column: Option<usize>,
 }
 
 type DetailReply = (ComponentId, Source, NetResult<ComponentDetail>);

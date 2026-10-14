@@ -2416,16 +2416,21 @@ dependencies = [
  "agent-client-protocol",
  "async-trait",
  "futures",
+ "harness-acp",
  "harness-contracts",
  "harness-core",
+ "regex",
  "rustix 1.1.4",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "toml",
  "tracing",
  "uuid",
+ "workspace-fs",
 ]
 
 [[package]]
@@ -2445,9 +2450,13 @@ dependencies = [
  "async-trait",
  "futures",
  "harness-contracts",
+ "serde",
  "serde_json",
+ "serde_yaml",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -3301,12 +3310,12 @@ dependencies = [
  "cockpit-ui",
  "code-analyzer",
  "futures",
+ "harness-acp",
  "harness-contracts",
  "harness-core",
  "include_dir",
  "nah-packs",
  "notify-debouncer-full",
- "provider-antigravity",
  "serde",
  "serde_json",
  "tempfile",
@@ -4247,24 +4256,6 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
-
-[[package]]
-name = "provider-antigravity"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "harness-acp",
- "harness-contracts",
- "harness-core",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "workspace-fs",
-]
 
 [[package]]
 name = "pulldown-cmark"

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use harness_contracts::{HarnessLaunch, Launch};
+use harness_contracts::{DriverKind, HarnessEntry, HarnessLaunch, HarnessProfile, InstanceId, Launch};
 
 use include_dir::{Dir, include_dir};
 use nah_packs::{Catalog, Distribution, Lock, PackError, Places, State};
@@ -38,6 +38,8 @@ struct OwnLaunch {
     args: Vec<String>,
     #[serde(default)]
     env: BTreeMap<String, String>,
+    #[serde(default)]
+    env_remove: Vec<String>,
 }
 
 /// The instances' own launches, by instance, and the file each came from:
@@ -52,32 +54,50 @@ fn own_launches(catalog: &Catalog) -> Result<BTreeMap<String, (Launch, PathBuf)>
         };
         let entries: BTreeMap<String, OwnLaunch> = toml::from_str(&text).map_err(|e| PackError::Config(format!("{}: {e}", file.display())))?;
         for (instance, own) in entries {
-            out.insert(instance, (Launch { program: own.program, args: own.args, env: own.env.into_iter().collect() }, file.clone()));
+            out.insert(instance, (Launch { program: own.program, args: own.args, env: own.env.into_iter().collect(), env_remove: own.env_remove }, file.clone()));
         }
     }
     Ok(out)
 }
 
-/// How each driver's harness is started, by its instance (a driver's
-/// default instance is named after it): the instance's own launch
-/// (`harnesses.toml`), else its installed pack's when the pack passes its
-/// check; else why not and the command that fixes it. Something that can't
-/// be read (the lock, an override file) is each driver's reason.
-pub fn harness_launches(catalog: &Catalog) -> BTreeMap<String, HarnessLaunch> {
+/// The instance a harness pack is (its own name for it, else the pack's).
+fn instance_of(pack: &nah_packs::Pack, provides: &nah_packs::Provides) -> String {
+    provides.instance.clone().unwrap_or_else(|| pack.name().to_owned())
+}
+
+/// Every harness pack as an instance the server runs: its profile (the
+/// instance, its driver, its name, the driver's settings) and how it's
+/// started: the instance's own launch (`harnesses.toml`), else its
+/// installed pack's when the pack passes its check; else why not and the
+/// command that fixes it. Something that can't be read (the lock, an
+/// override file) is each one's reason. Two packs naming one instance: the
+/// later one's left out, and logged.
+pub fn harness_launches(catalog: &Catalog) -> Vec<HarnessEntry> {
     let lock = Lock::read(&catalog.lock_path);
     let own = own_launches(catalog);
-    let mut out = BTreeMap::new();
+    let mut out: Vec<HarnessEntry> = Vec::new();
     for pack in catalog.of_kind(nah_packs::Kind::Harness) {
         let Some(provides) = &pack.manifest.provides else { continue };
-        let instance = provides.driver.clone();
+        let instance = instance_of(pack, provides);
+        if out.iter().any(|e| e.profile.instance.as_str() == instance) {
+            tracing::warn!("harness packs name instance {instance} twice: {} is left out", pack.name());
+            continue;
+        }
         let launch = match (&own, &lock) {
             (Err(e), _) => HarnessLaunch::Unavailable { reason: e.to_string(), fix: Some("fix the file it names".into()) },
             (Ok(own), _) if own.contains_key(&instance) => HarnessLaunch::Ready { launch: own[&instance].0.clone() },
             (Ok(_), Err(e)) => HarnessLaunch::Unavailable { reason: format!("can't read the packs' lock: {e}"), fix: Some(format!("meta-harness pack install {}", pack.name())) },
             (Ok(_), Ok(lock)) => pack_launch(catalog, lock, pack.name()).unwrap_or_else(|e| HarnessLaunch::Unavailable { reason: e.to_string(), fix: Some(format!("meta-harness pack install {}", pack.name())) }),
         };
-        out.insert(instance, launch);
+        let profile = HarnessProfile {
+            instance: InstanceId::new(&instance),
+            driver: DriverKind::new(&provides.driver),
+            display_name: provides.display_name.clone().unwrap_or_else(|| pack.name().to_owned()),
+            settings: serde_json::to_value(&provides.settings).unwrap_or_default(),
+        };
+        out.push(HarnessEntry { profile, launch });
     }
+    out.sort_by(|a, b| a.profile.instance.cmp(&b.profile.instance));
     out
 }
 
@@ -89,7 +109,7 @@ fn pack_launch(catalog: &Catalog, lock: &Lock, name: &str) -> Result<HarnessLaun
     Ok(match nah_packs::state(catalog, lock, name)? {
         State::Ready { .. } => {
             let l = nah_packs::harness_launch(catalog, lock, name)?;
-            HarnessLaunch::Ready { launch: Launch { program: l.program, args: l.args, env: l.env } }
+            HarnessLaunch::Ready { launch: Launch { program: l.program, args: l.args, env: l.env, env_remove: l.env_remove } }
         }
         State::Missing => HarnessLaunch::Unavailable { reason: format!("{name} isn't installed"), fix: install },
         State::Broken(why) => HarnessLaunch::Unavailable { reason: format!("{name} fails its check: {why}"), fix: install },
@@ -217,22 +237,25 @@ pub fn run(command: &Command, catalog: &Catalog) -> Result<String, PackError> {
         Command::Which(name) => {
             let pack = catalog.get(name)?;
             let (launch, from) = match (&pack.manifest.provides, &pack.manifest.server) {
-                (Some(provides), _) => match own_launches(catalog)?.remove(&provides.driver) {
-                    Some((launch, file)) => (launch, format!("{} for {}", file.display(), provides.driver)),
+                (Some(provides), _) => match own_launches(catalog)?.remove(&instance_of(pack, provides)) {
+                    Some((launch, file)) => (launch, format!("{} for {}", file.display(), instance_of(pack, provides))),
                     None => {
                         let l = nah_packs::harness_launch(catalog, &lock, name)?;
-                        (Launch { program: l.program, args: l.args, env: l.env }, format!("the pack, installed for {}", lock.packs[name].platform))
+                        (Launch { program: l.program, args: l.args, env: l.env, env_remove: l.env_remove }, format!("the pack, installed for {}", lock.packs[name].platform))
                     }
                 },
                 (None, Some(_)) => {
                     let l = nah_packs::server_launch(catalog, &lock, name, &catalog.project)?;
-                    (Launch { program: l.program, args: l.args, env: l.env }, "the pack".to_owned())
+                    (Launch { program: l.program, args: l.args, env: l.env, env_remove: Vec::new() }, "the pack".to_owned())
                 }
                 (None, None) => return Err(PackError::Manifest { pack: name.clone(), reason: "it starts no program".into() }),
             };
             let _ = writeln!(out, "{} {}", launch.program, launch.args.join(" "));
             for (k, v) in &launch.env {
                 let _ = writeln!(out, "  {k}={v}");
+            }
+            for k in &launch.env_remove {
+                let _ = writeln!(out, "  (without {k})");
             }
             let _ = writeln!(out, "  (from {from})");
         }

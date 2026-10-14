@@ -1,0 +1,99 @@
+[pack]
+name = "claude-code"
+kind = "harness"
+version = "1.0.0"
+description = "Claude Code through its ACP adapter (Zed's claude-agent-acp, which brings its own Claude Code). Installed into its pack folder with npm; signs in with a Claude account."
+
+[tool]
+name = "claude-agent-acp"
+version = "0.89.1"
+supports = ">=0.89.0, <0.90.0"
+
+# Started and asked over ACP; it answers with its version.
+[tool.check]
+acp = { timeout_s = 60 }
+
+# Node 22 or later. npm brings the Claude Code build for the platform.
+[[install]]
+platforms = ["linux-x86_64", "linux-arm64", "linux-arm64-16k", "macos-arm64", "macos-x86_64"]
+[[install.steps]]
+run = { command = "npm", args = ["install", "--prefix", ".", "--no-save", "--no-audit", "--no-fund", "@agentclientprotocol/claude-agent-acp@{tool_version}"], timeout_s = 600 }
+
+# An API key in the server's environment would win over the account it's
+# signed in with; the remote-shell variables would make it offer only a
+# login in a terminal, which can't be run from here.
+[provides]
+launch = { program = "{dest}/node_modules/.bin/claude-agent-acp", env_remove = ["ANTHROPIC_API_KEY", "NO_BROWSER", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "CLAUDE_CODE_REMOTE"] }
+driver = "acp"
+instance = "claude-code"
+display_name = "Claude Code"
+
+[provides.settings]
+# It queues prompts sent while one runs, and takes messages into the
+# running turn.
+queueing = "/agentCapabilities/_meta/claudeCode/promptQueueing"
+steering = "/_meta/steering/supported"
+
+[provides.settings.modes]
+approval_required = "default"
+auto_accept_edits = "acceptEdits"
+auto = "auto"
+full_access = "bypassPermissions"
+plan = "plan"
+
+# We run its login commands, and show its questions as forms.
+[provides.settings.advertise]
+auth_terminal = true
+elicitation_form = true
+
+# Each question in its forms has an "Other" box: `question_<n>_custom`.
+[provides.settings.questions]
+custom_suffix = "_custom"
+
+# It says who it's signed in as after starting, and when that changes.
+[provides.settings.sign_in]
+notification = "_auth/status_update"
+declared = "/agentCapabilities/_meta/authStatus"
+status = "/authStatus/kind"
+signed_out = ["none"]
+label = "/authStatus/label"
+email = "/authStatus/account/email"
+plan = "/authStatus/account/plan"
+organization = "/authStatus/account/organization"
+
+# `claude auth login` prints a link; the page shows a code to paste back.
+[provides.settings.login]
+link = 'https://\S+'
+expects = "the code the page shows"
+
+# Its folder, and where its .claude.json is: both moved by CLAUDE_CONFIG_DIR.
+[provides.settings.dirs.claude]
+env = "CLAUDE_CONFIG_DIR"
+default = "{home}/.claude"
+
+[provides.settings.dirs.claude_json]
+env = "CLAUDE_CONFIG_DIR"
+default = "{home}"
+
+# A skill is a folder with a SKILL.md (named by the folder unless it says).
+[provides.settings.skills]
+roots = [
+    { path = "{claude}/skills", scope = "user" },
+    { path = "{project}/.claude/skills", scope = "project" },
+]
+
+# Its tool servers: the user's, the user's for this project, the project's.
+[[provides.settings.tool_config]]
+file = "{claude_json}/.claude.json"
+pointer = "/mcpServers"
+scope = "user"
+
+[[provides.settings.tool_config]]
+file = "{claude_json}/.claude.json"
+pointer = "/projects/{project}/mcpServers"
+scope = "project"
+
+[[provides.settings.tool_config]]
+file = "{project}/.mcp.json"
+pointer = "/mcpServers"
+scope = "project"

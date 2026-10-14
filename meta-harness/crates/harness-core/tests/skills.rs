@@ -2,10 +2,38 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-use provider_antigravity::skills::{
-    discover_antigravity_skills, AntigravitySkillsProbeError,
-    DiscoverSkillsInput, ServerProviderSkill,
+use harness_contracts::{Scope, Skill};
+use harness_core::skills::{
+    discover_skills, FileRule, NameRule, OrderRule, SkillRoot, SkillRules, SkillsError,
 };
+
+/// Where Antigravity looks, in its order.
+struct DiscoverSkillsInput {
+    cwd: PathBuf,
+    user_home: PathBuf,
+}
+
+fn discover_antigravity_skills(input: &DiscoverSkillsInput) -> Result<Vec<Skill>, SkillsError> {
+    let (home, cwd) = (&input.user_home, &input.cwd);
+    let roots = [
+        (home.join(".gemini/config/skills"), Scope::User),
+        (cwd.join(".gemini/skills"), Scope::Project),
+        (home.join(".gemini/antigravity-cli/skills"), Scope::User),
+        (cwd.join(".agents/skills"), Scope::Project),
+        (cwd.join(".agent/skills"), Scope::Project),
+    ]
+    .map(|(path, scope)| SkillRoot { path, scope });
+    discover_skills(&roots, SkillRules { name: NameRule::File, file: FileRule::AnyCase, order: OrderRule::EscapedPath })
+}
+
+/// Where Claude Code looks: its user folder, then the project's.
+fn discover_claude_skills(input: &DiscoverSkillsInput) -> Result<Vec<Skill>, SkillsError> {
+    let roots = [
+        SkillRoot { path: input.user_home.join(".claude/skills"), scope: Scope::User },
+        SkillRoot { path: input.cwd.join(".claude/skills"), scope: Scope::Project },
+    ];
+    discover_skills(&roots, SkillRules::default())
+}
 
 fn write_skill(directory: &Path, contents: &str) -> PathBuf {
     fs::create_dir_all(directory).expect("create dir");
@@ -67,12 +95,11 @@ fn test_does_not_read_user_skills_from_nested_project_or_from_dot_agents() {
     let skills = discover_antigravity_skills(&nested_input).expect("discover");
     assert_eq!(
         skills,
-        vec![ServerProviderSkill {
+        vec![Skill {
             name: "review".to_string(),
             description: Some("Review changes.".to_string()),
-            path: skill_path.display().to_string(),
-            scope: "user".to_string(),
-            enabled: true,
+            path: Some(skill_path.display().to_string()),
+            scope: Scope::User,
         }]
     );
 
@@ -82,15 +109,15 @@ fn test_does_not_read_user_skills_from_nested_project_or_from_dot_agents() {
         user_home: ws.user_home.clone(),
     };
     let home_skills = discover_antigravity_skills(&home_input).expect("discover home");
-    let mapped: Vec<(String, String)> = home_skills
+    let mapped: Vec<(String, Scope)> = home_skills
         .into_iter()
         .map(|s| (s.name, s.scope))
         .collect();
     assert_eq!(
         mapped,
         vec![
-            ("ignored".to_string(), "project".to_string()),
-            ("review".to_string(), "user".to_string()),
+            ("ignored".to_string(), Scope::Project),
+            ("review".to_string(), Scope::User),
         ]
     );
 }
@@ -103,17 +130,17 @@ fn test_reads_skill_names_descriptions_and_paths_from_native_roots() {
     let roots = [
         (
             ws.user_home.join(".gemini").join("config").join("skills"),
-            "user",
+            Scope::User,
         ),
-        (ws.cwd.join(".gemini").join("skills"), "project"),
+        (ws.cwd.join(".gemini").join("skills"), Scope::Project),
         (
             ws.user_home
                 .join(".gemini")
                 .join("antigravity-cli")
                 .join("skills"),
-            "user",
+            Scope::User,
         ),
-        (ws.cwd.join(".agents").join("skills"), "project"),
+        (ws.cwd.join(".agents").join("skills"), Scope::Project),
     ];
 
     let mut expected = Vec::new();
@@ -124,12 +151,11 @@ fn test_reads_skill_names_descriptions_and_paths_from_native_roots() {
             &dir.join(&name),
             &format!("---\nname: {}\ndescription: {}\n---\n# Review\n", name, description),
         );
-        expected.push(ServerProviderSkill {
+        expected.push(Skill {
             name,
             description: Some(description),
-            path: skill_path.display().to_string(),
-            scope: scope.to_string(),
-            enabled: true,
+            path: Some(skill_path.display().to_string()),
+            scope: *scope,
         });
     }
 
@@ -161,12 +187,11 @@ fn test_discovers_skills_from_legacy_workspace_root() {
     let skills = discover_antigravity_skills(&ws.input()).expect("discover");
     assert_eq!(
         skills,
-        vec![ServerProviderSkill {
+        vec![Skill {
             name: "review".to_string(),
             description: Some("Review changes.".to_string()),
-            path: skill_path.display().to_string(),
-            scope: "project".to_string(),
-            enabled: true,
+            path: Some(skill_path.display().to_string()),
+            scope: Scope::Project,
         }]
     );
 }
@@ -198,7 +223,7 @@ fn test_uses_native_root_order_for_duplicate_names() {
         let skills = discover_antigravity_skills(&ws.input()).expect("discover");
         assert_eq!(skills.len(), 1);
         let expected_path = root.join(format!("copy-{}", index)).join("SKILL.md");
-        assert_eq!(skills[0].path, expected_path.display().to_string());
+        assert_eq!(skills[0].path, Some(expected_path.display().to_string()));
         fs::remove_dir_all(root).expect("remove root");
     }
 }
@@ -215,12 +240,11 @@ fn test_loads_root_skill_without_scanning_its_children() {
     let skills = discover_antigravity_skills(&ws.input()).expect("discover");
     assert_eq!(
         skills,
-        vec![ServerProviderSkill {
+        vec![Skill {
             name: "root-skill".to_string(),
             description: None,
-            path: skill_path.display().to_string(),
-            scope: "project".to_string(),
-            enabled: true,
+            path: Some(skill_path.display().to_string()),
+            scope: Scope::Project,
         }]
     );
 
@@ -241,12 +265,11 @@ fn test_uses_the_filename_when_valid_frontmatter_has_no_name() {
     let skills = discover_antigravity_skills(&ws.input()).expect("discover");
     assert_eq!(
         skills,
-        vec![ServerProviderSkill {
+        vec![Skill {
             name: "SKILL".to_string(),
             description: None,
-            path: skill_path.display().to_string(),
-            scope: "project".to_string(),
-            enabled: true,
+            path: Some(skill_path.display().to_string()),
+            scope: Scope::Project,
         }]
     );
 
@@ -256,12 +279,11 @@ fn test_uses_the_filename_when_valid_frontmatter_has_no_name() {
     let skills_lower = discover_antigravity_skills(&ws.input()).expect("discover lower");
     assert_eq!(
         skills_lower,
-        vec![ServerProviderSkill {
+        vec![Skill {
             name: "skill".to_string(),
             description: None,
-            path: lowercase_path.display().to_string(),
-            scope: "project".to_string(),
-            enabled: true,
+            path: Some(lowercase_path.display().to_string()),
+            scope: Scope::Project,
         }]
     );
 
@@ -285,12 +307,11 @@ fn test_accepts_native_metadata_delimiters_after_leading_text() {
     let skills = discover_antigravity_skills(&ws.input()).expect("discover");
     assert_eq!(
         skills,
-        vec![ServerProviderSkill {
+        vec![Skill {
             name: "review".to_string(),
             description: None,
-            path: skill_path.display().to_string(),
-            scope: "project".to_string(),
-            enabled: true,
+            path: Some(skill_path.display().to_string()),
+            scope: Scope::Project,
         }]
     );
 }
@@ -330,12 +351,11 @@ fn test_ignores_invalid_files_and_deeper_directories_but_keeps_native_hidden_ski
     let skills = discover_antigravity_skills(&ws.input()).expect("discover");
     assert_eq!(
         skills,
-        vec![ServerProviderSkill {
+        vec![Skill {
             name: "native-name".to_string(),
             description: Some("Review the code and run tests.".to_string()),
-            path: skill_path.display().to_string(),
-            scope: "project".to_string(),
-            enabled: true,
+            path: Some(skill_path.display().to_string()),
+            scope: Scope::Project,
         }]
     );
 }
@@ -361,12 +381,11 @@ fn test_uses_native_uri_order_within_a_root_and_skips_invalid_higher_root() {
         let skills = discover_antigravity_skills(&ws.input()).expect("discover");
         assert_eq!(
             skills,
-            vec![ServerProviderSkill {
+            vec![Skill {
                 name: "review".to_string(),
                 description: None,
-                path: root.join(name).join("SKILL.md").display().to_string(),
-                scope: "project".to_string(),
-                enabled: true,
+                path: Some(root.join(name).join("SKILL.md").display().to_string()),
+                scope: Scope::Project,
             }]
         );
         fs::remove_dir_all(root.join(name)).expect("remove copy");
@@ -390,12 +409,11 @@ fn test_follows_directory_symlinks_used_to_install_shared_skills() {
     let skills = discover_antigravity_skills(&ws.input()).expect("discover");
     assert_eq!(
         skills,
-        vec![ServerProviderSkill {
+        vec![Skill {
             name: "review".to_string(),
             description: None,
-            path: linked_dir.join("SKILL.md").display().to_string(),
-            scope: "project".to_string(),
-            enabled: true,
+            path: Some(linked_dir.join("SKILL.md").display().to_string()),
+            scope: Scope::Project,
         }]
     );
 }
@@ -416,7 +434,7 @@ fn test_rejects_oversized_skill_instead_of_returning_incomplete_catalog() {
     let result = discover_antigravity_skills(&ws.input());
     assert_eq!(
         result,
-        Err(AntigravitySkillsProbeError::ScanBudgetExhausted {
+        Err(SkillsError::OverBudget {
             path: skill_path.display().to_string(),
         })
     );
@@ -438,8 +456,52 @@ fn test_bounds_the_total_read_size_across_skills() {
     let result = discover_antigravity_skills(&ws.input());
     assert_eq!(
         result,
-        Err(AntigravitySkillsProbeError::ScanBudgetExhausted {
+        Err(SkillsError::OverBudget {
             path: root.join("large-8").join("SKILL.md").display().to_string(),
         })
     );
+}
+
+/// Claude Code names a skill by its folder unless its frontmatter names
+/// it, reads only `SKILL.md`, and its user skills win over the project's.
+#[test]
+fn claude_names_skills_by_folder_and_reads_only_exact_skill_files() {
+    let ws = TestWorkspace::new();
+    let user = ws.user_home.join(".claude").join("skills");
+    let project = ws.cwd.join(".claude").join("skills");
+    let unnamed = write_skill(&user.join("tidy"), "---\ndescription: Tidy imports.\n---\n");
+    let named = write_skill(&user.join("folder"), "---\nname: review\n---\n");
+    write_skill(&project.join("review"), "---\nname: review\ndescription: The project's.\n---\n");
+    let own = write_skill(&project.join("deploy"), "---\n---\n");
+    // Not `SKILL.md`: not a skill to Claude.
+    fs::create_dir_all(project.join("lower")).unwrap();
+    fs::write(project.join("lower").join("skill.md"), "---\nname: lower\n---\n").unwrap();
+
+    let skills = discover_claude_skills(&ws.input()).expect("discover");
+    let skill = |name: &str, description: Option<&str>, path: &Path, scope| Skill {
+        name: name.into(),
+        description: description.map(str::to_owned),
+        path: Some(path.display().to_string()),
+        scope,
+    };
+    assert_eq!(
+        skills,
+        vec![
+            skill("deploy", None, &own, Scope::Project),
+            skill("review", None, &named, Scope::User),
+            skill("tidy", Some("Tidy imports."), &unnamed, Scope::User),
+        ]
+    );
+}
+
+/// Byte order, not escaped-path order: of two folders with one name the
+/// first by bytes wins.
+#[test]
+fn claude_reads_folders_in_plain_order() {
+    let ws = TestWorkspace::new();
+    let root = ws.user_home.join(".claude").join("skills");
+    write_skill(&root.join("b-copy"), "---\nname: review\n---\n");
+    let first = write_skill(&root.join(" space-copy"), "---\nname: review\n---\n");
+    let skills = discover_claude_skills(&ws.input()).expect("discover");
+    assert_eq!(skills.iter().map(|s| s.path.clone()).collect::<Vec<_>>(), vec![Some(first.display().to_string())]);
 }

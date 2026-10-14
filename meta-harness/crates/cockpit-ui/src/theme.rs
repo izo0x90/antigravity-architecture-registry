@@ -183,6 +183,10 @@ look! {
     /// How long things take to move (cards rearranging, going into a
     /// level or out of it), in seconds (0: at once).
     move_seconds,
+    /// The quick look: at least this wide (or its column's width, when
+    /// wider), and this share of the screen's height.
+    quick_look_width,
+    quick_look_height,
 }
 
 /// The built-in look (the `defaults_parse` test keeps it loadable).
@@ -233,6 +237,31 @@ mod tests {
         assert_eq!(parse_hex("#ffffff80"), Ok(Color32::from_rgba_unmultiplied(255, 255, 255, 128)));
         assert!(parse_hex("#fab4").is_err());
         assert!(parse_hex("#zzzzzz").is_err());
+    }
+
+    /// WCAG contrast of `fg` drawn on `bg` (both opaque here).
+    fn contrast(fg: Color32, bg: Color32) -> f32 {
+        let lum = |c: Color32| {
+            let ch = |v: u8| {
+                let v = v as f32 / 255.0;
+                if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * ch(c.r()) + 0.7152 * ch(c.g()) + 0.0722 * ch(c.b())
+        };
+        let (a, b) = (lum(fg), lum(bg));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn keys_on_pills_are_readable_in_every_theme() {
+        for preset in ["", "preset = \"classic\"\n"] {
+            let theme = crate::config::UiConfig::with_overrides(preset).unwrap().theme;
+            let opaque = |c: Color32| Color32::from_rgb(c.r(), c.g(), c.b());
+            // A highlighted key (a bright pill), a plain one, a label on the popup.
+            for (fg, bg, what) in [(theme.on_bright, theme.focus, "on_bright on focus"), (theme.key, opaque(theme.overlay_raised), "key on overlay_raised"), (theme.text_strong, opaque(theme.overlay), "text_strong on overlay")] {
+                assert!(contrast(fg, bg) >= 4.5, "{preset}: {what} is {:.1}:1", contrast(fg, bg));
+            }
+        }
     }
 }
 

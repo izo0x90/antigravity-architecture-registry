@@ -5,5 +5,7 @@ pub mod mcp;
 pub mod packs;
 pub mod project;
 pub mod queue;
+pub mod remote;
 pub mod server;
+pub mod tool_servers;
 pub mod watch;

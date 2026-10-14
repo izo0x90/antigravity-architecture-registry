@@ -1,191 +1,62 @@
-//! AcpAdapter against an in-process mock ACP agent (official crate, agent side),
-//! connected through an in-memory pipe.
+//! The adapter, sessions, checks and saved sessions against the mock agent.
 
-use std::sync::{Arc, Mutex};
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
-use agent_client_protocol::schema::v1 as acp;
-use agent_client_protocol::{ByteStreams, Client, ConnectionTo};
-use async_trait::async_trait;
 use futures::StreamExt;
-use harness_acp::{AcpAdapter, AcpFlavor, AcpLauncher, AcpSessionCatalog, AcpTransport};
+use harness_acp::testing::{MockAgent, MockSetup};
+use harness_acp::{AcpAdapter, AcpSessionCatalog, AcpSettings, Profile, acp, probe};
 use harness_contracts::*;
-use harness_core::{ProviderAdapter, Result, SessionCatalog, SessionRuntime};
-use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use harness_core::{ProviderAdapter, SessionCatalog, SessionRuntime};
 
-/// Records which permission option the client selected.
-type Selection = Arc<Mutex<Option<String>>>;
+const PROJECT: &str = "/work/project";
 
-struct MockLauncher {
-    selection: Selection,
+fn settings(toml_text: &str) -> AcpSettings {
+    let table: toml::Table = toml::from_str(toml_text).unwrap();
+    AcpSettings::parse(&serde_json::to_value(table).unwrap()).unwrap()
 }
 
-fn notify(cx: &ConnectionTo<Client>, update: acp::SessionUpdate) -> agent_client_protocol::Result<()> {
-    cx.send_notification(acp::SessionNotification::new(acp::SessionId::new("s1"), update))
+fn profile(toml_text: &str) -> Arc<Profile> {
+    Arc::new(Profile::new(settings(toml_text), Path::new(PROJECT), None))
 }
 
-fn text(t: &str) -> acp::ContentChunk {
-    acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(t)))
-}
+const MODES: &str = r#"
+[modes]
+approval_required = "default"
+full_access = "yolo"
+"#;
 
-async fn run_turn(cx: ConnectionTo<Client>, selection: Selection) -> agent_client_protocol::Result<acp::PromptResponse> {
-    notify(&cx, acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(vec![
-        acp::AvailableCommand::new("plan", "Plan before acting"),
-    ])))?;
-    notify(&cx, acp::SessionUpdate::AgentThoughtChunk(text("thinking…")))?;
-    notify(&cx, acp::SessionUpdate::ToolCall(
-        acp::ToolCall::new("tool-1", "Edit main.rs").kind(acp::ToolKind::Edit).status(acp::ToolCallStatus::Pending),
-    ))?;
-    let options = vec![
-        acp::PermissionOption::new("allow", "Allow once", acp::PermissionOptionKind::AllowOnce),
-        acp::PermissionOption::new("always", "Allow for session", acp::PermissionOptionKind::AllowAlways),
-        acp::PermissionOption::new("deny", "Deny", acp::PermissionOptionKind::RejectOnce),
-    ];
-    let request = acp::RequestPermissionRequest::new(
-        acp::SessionId::new("s1"),
-        acp::ToolCallUpdate::new("tool-1", acp::ToolCallUpdateFields::new().title("Edit main.rs")),
-        options,
-    );
-    let response = cx.send_request(request).block_task().await?;
-    if let acp::RequestPermissionOutcome::Selected(s) = &response.outcome {
-        *selection.lock().unwrap() = Some(s.option_id.to_string());
-    }
-    notify(&cx, acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        "tool-1",
-        acp::ToolCallUpdateFields::new()
-            .status(acp::ToolCallStatus::Completed)
-            .content(vec![acp::ToolCallContent::Diff(acp::Diff::new("main.rs", "fn main() {}").old_text("".to_string()))]),
-    )))?;
-    notify(&cx, acp::SessionUpdate::AgentMessageChunk(text("Hello ")))?;
-    notify(&cx, acp::SessionUpdate::AgentMessageChunk(text("world")))?;
-    notify(&cx, acp::SessionUpdate::Plan(acp::Plan::new(vec![acp::PlanEntry::new(
-        "Write main",
-        acp::PlanEntryPriority::High,
-        acp::PlanEntryStatus::Completed,
-    )])))?;
-    notify(&cx, acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(1200, 200_000)))?;
-    Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
-}
-
-#[async_trait]
-impl AcpLauncher for MockLauncher {
-    async fn launch(&self, _config: &SessionConfig) -> Result<AcpTransport> {
-        let (client_side, agent_side) = tokio::io::duplex(64 * 1024);
-        let (client_read, client_write) = tokio::io::split(client_side);
-        let (agent_read, agent_write) = tokio::io::split(agent_side);
-        let selection = self.selection.clone();
-        tokio::spawn(async move {
-            let _ = agent_client_protocol::Agent
-                .builder()
-                .on_receive_request(
-                    async move |req: acp::InitializeRequest, responder, _cx| {
-                        responder.respond(acp::InitializeResponse::new(req.protocol_version))
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_request(
-                    async move |_req: acp::NewSessionRequest, responder, _cx| {
-                        responder.respond(
-                            acp::NewSessionResponse::new("s1")
-                                .modes(acp::SessionModeState::new(
-                                    "default",
-                                    vec![acp::SessionMode::new("default", "Default"), acp::SessionMode::new("yolo", "YOLO")],
-                                ))
-                                .config_options(vec![
-                                    acp::SessionConfigOption::select(
-                                        "model",
-                                        "Model",
-                                        "flash",
-                                        vec![
-                                            acp::SessionConfigSelectOption::new("flash", "Flash"),
-                                            acp::SessionConfigSelectOption::new("pro", "Pro"),
-                                        ],
-                                    )
-                                    .category(acp::SessionConfigOptionCategory::Model),
-                                    acp::SessionConfigOption::boolean("verbose", "Verbose", false),
-                                ]),
-                        )
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_request(
-                    async move |req: acp::ListSessionsRequest, responder, _cx| {
-                        let cwd = req.cwd.unwrap_or_default();
-                        responder.respond(acp::ListSessionsResponse::new(vec![
-                            acp::SessionInfo::new("old-1", cwd).title("Earlier work".to_string()),
-                        ]))
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_request(
-                    async move |_req: acp::SetSessionConfigOptionRequest, responder, _cx| {
-                        responder.respond(acp::SetSessionConfigOptionResponse::new(Vec::new()))
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_request(
-                    async move |_req: acp::SetSessionModeRequest, responder, _cx| {
-                        responder.respond(acp::SetSessionModeResponse::new())
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .on_receive_request(
-                    async move |_req: acp::PromptRequest, responder, cx: ConnectionTo<Client>| {
-                        let selection = selection.clone();
-                        cx.spawn({
-                            let cx = cx.clone();
-                            async move { responder.respond(run_turn(cx, selection).await?) }
-                        })
-                    },
-                    agent_client_protocol::on_receive_request!(),
-                )
-                .connect_to(ByteStreams::new(agent_write.compat_write(), agent_read.compat()))
-                .await;
-        });
-        Ok(AcpTransport {
-            reader: Box::new(client_read.compat()),
-            writer: Box::new(client_write.compat_write()),
-            guard: Box::new(()),
-        })
-    }
-}
-
-struct TestFlavor;
-
-impl AcpFlavor for TestFlavor {
-    fn native_mode(&self, policy: &RuntimePolicy, available: &[String]) -> Option<String> {
-        let want = if policy.runtime_mode == RuntimeMode::FullAccess { "yolo" } else { "default" };
-        available.iter().find(|m| *m == want).cloned()
-    }
+fn agent(setup: MockSetup) -> MockAgent {
+    MockAgent::new(MockSetup { modes: vec!["default".into(), "yolo".into()], ..setup })
 }
 
 fn config(mode: RuntimeMode) -> SessionConfig {
     SessionConfig {
         thread_id: ThreadId::new("thread-1"),
-        policy: RuntimePolicy { runtime_mode: mode, cwd: Some("/tmp".into()), ..RuntimePolicy::default() },
+        policy: RuntimePolicy { runtime_mode: mode, ..RuntimePolicy::default() },
         model: None,
         resume: None,
         mcp_servers: Vec::new(),
     }
 }
 
-async fn open(mode: RuntimeMode) -> (Box<dyn SessionRuntime>, Selection) {
-    let selection: Selection = Arc::default();
-    let adapter = AcpAdapter::new(
-        InstanceId::new("mock"),
-        Arc::new(TestFlavor),
-        Arc::new(MockLauncher { selection: selection.clone() }),
-    );
-    let session = adapter.open_session(config(mode)).await.expect("open session");
-    (session, selection)
+async fn open_with(agent: &MockAgent, profile: Arc<Profile>, config: SessionConfig) -> Box<dyn SessionRuntime> {
+    let adapter = AcpAdapter::new(InstanceId::new("mock"), profile, Arc::new(agent.clone()));
+    adapter.open_session(config).await.expect("open session")
+}
+
+async fn open(mode: RuntimeMode) -> (Box<dyn SessionRuntime>, MockAgent) {
+    let agent = agent(MockSetup::default());
+    (open_with(&agent, profile(MODES), config(mode)).await, agent)
+}
+
+fn say(text: &str) -> TurnInput {
+    TurnInput { text: text.into(), attachments: Vec::new() }
 }
 
 /// Collects events until `done` matches one (or times out).
-async fn collect_until(
-    events: &mut (impl futures::Stream<Item = AdapterEvent> + Unpin),
-    seen: &mut Vec<AdapterEvent>,
-    done: impl Fn(&AdapterEvent) -> bool,
-) {
+async fn collect_until(events: &mut (impl futures::Stream<Item = AdapterEvent> + Unpin), seen: &mut Vec<AdapterEvent>, done: impl Fn(&AdapterEvent) -> bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(event) = events.next().await {
             let stop = done(&event);
@@ -199,8 +70,16 @@ async fn collect_until(
     .expect("timed out waiting for event");
 }
 
-fn turn_finished(e: &AdapterEvent) -> bool {
-    matches!(e, AdapterEvent::TurnUpdated { turn } if turn.status.is_terminal() && turn.ordinal == 1)
+fn turn_ended(ordinal: u32) -> impl Fn(&AdapterEvent) -> bool {
+    move |e| matches!(e, AdapterEvent::TurnUpdated { turn } if turn.status.is_terminal() && turn.ordinal == ordinal)
+}
+
+fn pending_request(e: &AdapterEvent) -> bool {
+    matches!(e, AdapterEvent::RequestUpdated { request } if request.status == RequestStatus::Pending)
+}
+
+fn last_request(seen: &[AdapterEvent]) -> RuntimeRequest {
+    seen.iter().rev().find_map(|e| match e { AdapterEvent::RequestUpdated { request } => Some(request.clone()), _ => None }).unwrap()
 }
 
 fn latest_items(seen: &[AdapterEvent]) -> Vec<TurnItem> {
@@ -216,42 +95,42 @@ fn latest_items(seen: &[AdapterEvent]) -> Vec<TurnItem> {
     items
 }
 
+fn said(seen: &[AdapterEvent], turn: &TurnId) -> Vec<String> {
+    latest_items(seen)
+        .into_iter()
+        .filter(|i| &i.turn_id == turn)
+        .filter_map(|i| match i.body {
+            ItemBody::UserMessage { text } => Some(format!("> {text}")),
+            ItemBody::AssistantMessage { content, .. } => Some(content.iter().map(|c| if let ContentBlock::Text { text } = c { text.clone() } else { String::new() }).collect()),
+            _ => None,
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn full_turn_maps_every_update_and_waits_for_approval() {
-    let (session, selection) = open(RuntimeMode::ApprovalRequired).await;
+    let (session, agent) = open(RuntimeMode::ApprovalRequired).await;
     let mut events = session.events();
     let mut seen = Vec::new();
+    session.start_turn(say("[tour] write main")).await.unwrap();
 
-    session.start_turn(TurnInput { text: "write main".into(), attachments: Vec::new() }).await.unwrap();
-
-    collect_until(&mut events, &mut seen, |e| matches!(e, AdapterEvent::RequestUpdated { request } if request.status == RequestStatus::Pending)).await;
-    let request = seen
-        .iter()
-        .find_map(|e| match e { AdapterEvent::RequestUpdated { request } => Some(request.clone()), _ => None })
-        .unwrap();
+    collect_until(&mut events, &mut seen, pending_request).await;
+    let request = last_request(&seen);
     assert_eq!(request.kind, RequestKind::FileChange);
-    assert_eq!(request.options.iter().map(|o| o.decision).collect::<Vec<_>>(), vec![
-        ApprovalDecision::Accept,
-        ApprovalDecision::AcceptForSession,
-        ApprovalDecision::Decline
-    ]);
+    assert_eq!(request.options.iter().map(|o| o.decision).collect::<Vec<_>>(), vec![ApprovalDecision::Accept, ApprovalDecision::AcceptForSession, ApprovalDecision::Decline]);
 
     session.respond(&request.id, RequestResponse { option_id: Some("always".into()), ..Default::default() }).await.unwrap();
-    collect_until(&mut events, &mut seen, turn_finished).await;
-    assert_eq!(selection.lock().unwrap().as_deref(), Some("always"));
+    collect_until(&mut events, &mut seen, turn_ended(1)).await;
+    assert_eq!(agent.seen().permission.as_deref(), Some("always"));
 
     let items = latest_items(&seen);
     let bodies: Vec<&ItemBody> = items.iter().map(|i| &i.body).collect();
-    assert!(matches!(bodies[0], ItemBody::UserMessage { text } if text == "write main"));
+    assert!(matches!(bodies[0], ItemBody::UserMessage { text } if text == "[tour] write main"));
     assert!(bodies.iter().any(|b| matches!(b, ItemBody::Reasoning { text, streaming: false } if text == "thinking…")));
     assert!(items.iter().any(|i| i.status == ItemStatus::Completed
-        && matches!(&i.body, ItemBody::ToolCall { kind: ToolKind::Edit, output, .. }
-            if matches!(output.as_slice(), [ContentBlock::Diff(d)] if d.new_text == "fn main() {}"))));
-    assert!(bodies.iter().any(|b| matches!(b, ItemBody::AssistantMessage { content, streaming: false }
-        if content == &vec![ContentBlock::Text { text: "Hello world".into() }])));
-
-    assert!(seen.iter().any(|e| matches!(e, AdapterEvent::CatalogUpdated { update }
-        if update.commands.as_ref().is_some_and(|c| c[0].name == "plan"))));
+        && matches!(&i.body, ItemBody::ToolCall { kind: ToolKind::Edit, output, .. } if matches!(output.as_slice(), [ContentBlock::Diff(d)] if d.new_text == "fn main() {}"))));
+    assert!(bodies.iter().any(|b| matches!(b, ItemBody::AssistantMessage { content, streaming: false } if content == &vec![ContentBlock::Text { text: "Hello world".into() }])));
+    assert!(seen.iter().any(|e| matches!(e, AdapterEvent::CatalogUpdated { update } if update.commands.as_ref().is_some_and(|c| c[0].name == "plan"))));
     assert!(seen.iter().any(|e| matches!(e, AdapterEvent::PlanUpdated { plan } if plan.status == PlanStatus::Completed)));
     assert!(seen.iter().any(|e| matches!(e, AdapterEvent::UsageUpdated { usage, .. } if usage.context_used_tokens == Some(1200))));
     assert!(seen.iter().any(|e| matches!(e, AdapterEvent::RequestUpdated { request } if request.status == RequestStatus::Resolved)));
@@ -259,12 +138,13 @@ async fn full_turn_maps_every_update_and_waits_for_approval() {
 
 #[tokio::test]
 async fn full_access_auto_approves_without_asking() {
-    let (session, selection) = open(RuntimeMode::FullAccess).await;
+    let (session, agent) = open(RuntimeMode::FullAccess).await;
     let mut events = session.events();
     let mut seen = Vec::new();
-    session.start_turn(TurnInput { text: "go".into(), attachments: Vec::new() }).await.unwrap();
-    collect_until(&mut events, &mut seen, turn_finished).await;
-    assert_eq!(selection.lock().unwrap().as_deref(), Some("allow"));
+    session.start_turn(say("[tour]")).await.unwrap();
+    collect_until(&mut events, &mut seen, turn_ended(1)).await;
+    assert_eq!(agent.seen().permission.as_deref(), Some("allow"));
+    assert_eq!(agent.seen().modes, ["yolo"], "its mode for full access");
     assert!(!seen.iter().any(|e| matches!(e, AdapterEvent::RequestUpdated { .. })));
 }
 
@@ -274,30 +154,30 @@ async fn late_subscriber_gets_replay() {
     {
         let mut events = session.events();
         let mut seen = Vec::new();
-        session.start_turn(TurnInput { text: "go".into(), attachments: Vec::new() }).await.unwrap();
-        collect_until(&mut events, &mut seen, turn_finished).await;
+        session.start_turn(say("go")).await.unwrap();
+        collect_until(&mut events, &mut seen, turn_ended(1)).await;
     }
     let replay: Vec<AdapterEvent> = session.events().take(3).collect().await;
-    assert!(matches!(&replay[0], AdapterEvent::ThreadUpdated { thread }
-        if thread.native_id.as_ref().map(NativeId::as_str) == Some("s1") && thread.status == ThreadStatus::Idle));
+    assert!(matches!(&replay[0], AdapterEvent::ThreadUpdated { thread } if thread.native_id.as_ref().map(NativeId::as_str) == Some("s1") && thread.status == ThreadStatus::Idle));
     assert!(matches!(&replay[1], AdapterEvent::TurnUpdated { turn } if turn.status == TurnStatus::Completed));
 }
 
 #[tokio::test]
-async fn catalog_lists_saved_sessions() {
-    let catalog = AcpSessionCatalog::new(Arc::new(MockLauncher { selection: Arc::default() }));
-    let page = catalog.list("/work", None).await.unwrap();
-    assert_eq!(page.sessions.len(), 1);
-    assert_eq!(page.sessions[0].native_id.as_str(), "old-1");
-    assert_eq!(page.sessions[0].title.as_deref(), Some("Earlier work"));
-    assert_eq!(page.sessions[0].cwd.as_deref(), Some("/work"));
+async fn sessions_and_saved_sessions_work_in_the_project() {
+    let agent = agent(MockSetup::default());
+    let _session = open_with(&agent, profile(MODES), config(RuntimeMode::ApprovalRequired)).await;
+    assert_eq!(agent.seen().cwd.as_deref(), Some(Path::new(PROJECT)), "no folder asked for: the project");
+
+    let catalog = AcpSessionCatalog::new(Arc::new(agent.clone()), profile(MODES));
+    let page = catalog.list(".", None).await.unwrap();
+    assert_eq!(agent.seen().cwd.as_deref(), Some(Path::new("/work/project/.")));
+    assert_eq!((page.sessions[0].native_id.as_str(), page.sessions[0].title.as_deref()), ("old-1", Some("Earlier work")));
+    catalog.list("/elsewhere", None).await.unwrap();
+    assert_eq!(agent.seen().cwd.as_deref(), Some(Path::new("/elsewhere")));
 }
 
 fn controls_of(seen: &[AdapterEvent]) -> SessionControls {
-    seen.iter()
-        .rev()
-        .find_map(|e| match e { AdapterEvent::ThreadUpdated { thread } => Some(thread.controls.clone()), _ => None })
-        .unwrap()
+    seen.iter().rev().find_map(|e| match e { AdapterEvent::ThreadUpdated { thread } => Some(thread.controls.clone()), _ => None }).unwrap()
 }
 
 #[tokio::test]
@@ -309,12 +189,9 @@ async fn session_controls_expose_and_steer_every_config_option() {
 
     let controls = controls_of(&replay);
     assert_eq!(controls.modes.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["default", "yolo"]);
-    assert_eq!(controls.current_mode.as_deref(), Some("default"));
     let model = controls.model_control().expect("model control");
     assert!(matches!(&model.kind, ConfigKind::Select { choices, current } if choices.len() == 2 && current == "flash"));
     assert!(controls.config.iter().any(|c| c.id == "verbose" && c.kind == ConfigKind::Boolean { current: false }));
-    assert!(replay.iter().any(|e| matches!(e, AdapterEvent::CatalogUpdated { update }
-        if update.models.as_ref().is_some_and(|m| m.iter().map(|x| x.id.as_str()).collect::<Vec<_>>() == vec!["flash", "pro"]))));
 
     session
         .steer(SteerInput {
@@ -330,4 +207,155 @@ async fn session_controls_expose_and_steer_every_config_option() {
     let controls = controls_of(&seen);
     assert!(matches!(&controls.model_control().unwrap().kind, ConfigKind::Select { current, .. } if current == "pro"));
     assert!(controls.config.iter().any(|c| c.id == "verbose" && c.kind == ConfigKind::Boolean { current: true }));
+}
+
+#[tokio::test]
+async fn messages_sent_while_a_turn_runs_wait_here_for_an_agent_that_doesnt_queue() {
+    let (session, agent) = open(RuntimeMode::ApprovalRequired).await;
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    let first = session.start_turn(say("[hold] first")).await.unwrap();
+    let second = session.start_turn(say("second")).await.unwrap();
+    collect_until(&mut events, &mut seen, |e| matches!(e, AdapterEvent::TurnUpdated { turn } if turn.status == TurnStatus::Queued)).await;
+    agent.prompted(1).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(agent.seen().prompts, ["[hold] first"], "the second waits for the first");
+    agent.release();
+    collect_until(&mut events, &mut seen, turn_ended(2)).await;
+    assert_eq!(agent.seen().prompts, ["[hold] first", "second"]);
+    assert_eq!(agent.seen().overlapping, 0);
+    assert_eq!(said(&seen, &first), ["> [hold] first", "echo: [hold] first"]);
+    assert_eq!(said(&seen, &second), ["> second", "echo: second"]);
+}
+
+#[tokio::test]
+async fn an_agent_that_queues_gets_them_at_once() {
+    let agent = agent(MockSetup { queues: true, declares: serde_json::json!({ "agentCapabilities": { "_meta": { "queue": { "on": true } } } }), ..MockSetup::default() });
+    let session = open_with(&agent, profile(&format!("queueing = \"/agentCapabilities/_meta/queue/on\"\n{MODES}")), config(RuntimeMode::ApprovalRequired)).await;
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    session.start_turn(say("[hold] first")).await.unwrap();
+    let second = session.start_turn(say("second")).await.unwrap();
+    agent.prompted(1).await;
+    let started = std::time::Instant::now();
+    while agent.seen().overlapping == 0 {
+        assert!(started.elapsed() < Duration::from_secs(5), "the second was sent while the first ran");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    agent.release();
+    collect_until(&mut events, &mut seen, turn_ended(2)).await;
+    assert_eq!(said(&seen, &second), ["> second", "echo: second"]);
+}
+
+#[tokio::test]
+async fn a_message_goes_into_the_running_turn_when_the_agent_takes_steering() {
+    let agent = agent(MockSetup { declares: serde_json::json!({ "_meta": { "steering": { "supported": true } } }), ..MockSetup::default() });
+    let session = open_with(&agent, profile(&format!("steering = \"/_meta/steering/supported\"\n{MODES}")), config(RuntimeMode::ApprovalRequired)).await;
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    let first = session.start_turn(say("[hold] first")).await.unwrap();
+    agent.prompted(1).await;
+    assert_eq!(session.inject(say("and this")).await.unwrap(), first);
+    agent.release();
+    collect_until(&mut events, &mut seen, turn_ended(1)).await;
+    assert_eq!(agent.seen().steered, ["and this"]);
+    assert_eq!(said(&seen, &first), ["> [hold] first", "> and this", "steered: and thisecho: [hold] first"], "one reply, streamed");
+    // Nothing running: it's a turn of its own.
+    let next = session.inject(say("later")).await.unwrap();
+    collect_until(&mut events, &mut seen, turn_ended(2)).await;
+    assert_eq!(said(&seen, &next), ["> later", "echo: later"]);
+}
+
+#[tokio::test]
+async fn steering_an_agent_that_doesnt_take_it_is_refused() {
+    let (session, _) = open(RuntimeMode::ApprovalRequired).await;
+    assert!(matches!(session.inject(say("x")).await, Err(harness_core::HarnessError::Unsupported { .. })));
+}
+
+#[tokio::test]
+async fn questions_are_asked_and_their_answers_go_back_in_the_form() {
+    let agent = agent(MockSetup::default());
+    let session = open_with(&agent, profile(&format!("[questions]\ncustom_suffix = \"_custom\"\n[advertise]\nelicitation_form = true\n{MODES}")), config(RuntimeMode::FullAccess)).await;
+    assert!(agent.seen().client.unwrap().elicitation.is_some_and(|e| e.form.is_some()), "we say we take forms");
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    session.start_turn(say("[question]")).await.unwrap();
+    collect_until(&mut events, &mut seen, pending_request).await;
+    let request = last_request(&seen);
+    assert_eq!(request.kind, RequestKind::UserInput);
+    assert_eq!(request.questions.iter().map(|q| (q.header.as_str(), q.multi_select)).collect::<Vec<_>>(), [("Store", false), ("Checks", true)]);
+    let answers = [("question_0", vec!["Postgres"]), ("question_1", vec!["test", "fmt"])].map(|(k, v)| (k.to_owned(), v.into_iter().map(String::from).collect())).into();
+    session.respond(&request.id, RequestResponse { option_id: Some("submit".into()), answers }).await.unwrap();
+    collect_until(&mut events, &mut seen, turn_ended(1)).await;
+    let answer = serde_json::to_value(agent.seen().answers.unwrap()).unwrap();
+    assert_eq!(answer, serde_json::json!({ "action": "accept", "content": { "question_0": "Postgres", "question_1": ["test"], "question_1_custom": "fmt" } }));
+}
+
+#[tokio::test]
+async fn a_skipped_form_is_declined() {
+    let (session, agent) = open(RuntimeMode::FullAccess).await;
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    session.start_turn(say("[question]")).await.unwrap();
+    collect_until(&mut events, &mut seen, pending_request).await;
+    session.respond(&last_request(&seen).id, RequestResponse { option_id: Some("decline".into()), ..Default::default() }).await.unwrap();
+    collect_until(&mut events, &mut seen, turn_ended(1)).await;
+    assert!(matches!(agent.seen().answers.unwrap().action, acp::ElicitationAction::Decline));
+}
+
+const SIGN_IN: &str = r#"
+[sign_in]
+notification = "_auth/status_update"
+declared = "/agentCapabilities/_meta/authStatus"
+wait_s = 2
+status = "/authStatus/kind"
+signed_out = ["none"]
+label = "/authStatus/label"
+email = "/authStatus/account/email"
+"#;
+
+fn signing_agent() -> MockAgent {
+    agent(MockSetup {
+        declares: serde_json::json!({ "agentCapabilities": { "_meta": { "authStatus": {} } } }),
+        signed_in: Some(("_auth/status_update".into(), serde_json::json!({ "authStatus": { "kind": "account", "label": "Claude Team", "account": { "email": "me@x.io" } } }))),
+        auth_methods: vec![acp::AuthMethod::Terminal(acp::AuthMethodTerminal::new("claude-ai-login", "Claude account").args(vec!["--cli".into(), "auth".into(), "login".into()]))],
+        ..MockSetup::default()
+    })
+}
+
+#[tokio::test]
+async fn a_check_finds_who_the_agent_is_signed_in_as_and_its_login_commands() {
+    let agent = signing_agent();
+    let profile = profile(&format!("[advertise]\nauth_terminal = true\n{SIGN_IN}"));
+    let found = probe(&(Arc::new(agent.clone()) as Arc<dyn harness_acp::AcpLauncher>), &profile).await.unwrap();
+    assert!(agent.seen().client.unwrap().auth.terminal, "we say we run login commands");
+    let sign_in = found.sign_in.unwrap();
+    let account = sign_in.account.unwrap();
+    assert_eq!((sign_in.status, account.label.as_str(), account.email.as_deref()), (AuthStatus::SignedIn, "Claude Team", Some("me@x.io")));
+    assert_eq!(found.auth_methods.iter().map(|m| (m.id.as_str(), m.kind)).collect::<Vec<_>>(), [("claude-ai-login", AuthMethodKind::Command)]);
+    assert_eq!(found.logins[0].args, ["--cli", "auth", "login"]);
+}
+
+#[tokio::test]
+async fn a_session_reports_who_the_agent_is_signed_in_as() {
+    let agent = signing_agent();
+    let session = open_with(&agent, profile(&format!("{SIGN_IN}{MODES}")), config(RuntimeMode::ApprovalRequired)).await;
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    collect_until(&mut events, &mut seen, |e| matches!(e, AdapterEvent::CatalogUpdated { update } if update.sign_in.is_some())).await;
+}
+
+#[tokio::test]
+async fn session_meta_and_tool_servers_go_to_the_agent_as_it_takes_them() {
+    let servers = vec![McpServer { name: "nah".into(), transport: McpTransport::Sse { url: "http://127.0.0.1:8080/api/mcp/sse".into(), headers: Vec::new() } }];
+    let with_servers = SessionConfig { mcp_servers: servers, ..config(RuntimeMode::ApprovalRequired) };
+    let takes_sse = agent(MockSetup { sse: true, ..MockSetup::default() });
+    let meta = "[session_meta.claudeCode.options]\nsettingSources = [\"user\"]\n";
+    open_with(&takes_sse, profile(&format!("{meta}{MODES}")), with_servers.clone()).await;
+    assert!(matches!(takes_sse.seen().mcp_servers.as_slice(), [acp::McpServer::Sse(s)] if s.name == "nah"));
+    assert_eq!(takes_sse.seen().session_meta, Some(serde_json::json!({ "claudeCode": { "options": { "settingSources": ["user"] } } }).as_object().unwrap().clone()));
+    let http_only = agent(MockSetup::default());
+    open_with(&http_only, profile(MODES), with_servers).await;
+    assert!(matches!(http_only.seen().mcp_servers.as_slice(), [acp::McpServer::Http(_)]));
+    assert_eq!(http_only.seen().session_meta, None);
 }

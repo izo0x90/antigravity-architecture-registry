@@ -32,6 +32,19 @@ pub struct AppState {
     pub arch: Arc<arch_service::ArchitectureService>,
     pub cockpit: crate::cockpit::CockpitAuth,
     pub queue: Arc<crate::queue::QueueRunner>,
+    /// What the cockpit shows and where (it saves it here, and reads it back
+    /// when it opens).
+    pub ui_state: Arc<arch_service::UiStateFile>,
+    /// The tool servers every session gets (ours and the project's).
+    pub tool_servers: Arc<crate::tool_servers::ToolServerState>,
+    /// The cockpit, for agents driving it.
+    pub remote: Arc<crate::remote::Remote>,
+}
+
+impl axum::extract::FromRef<AppState> for Arc<crate::remote::Remote> {
+    fn from_ref(state: &AppState) -> Self {
+        state.remote.clone()
+    }
 }
 
 impl axum::extract::FromRef<AppState> for crate::cockpit::CockpitAuth {
@@ -122,6 +135,7 @@ pub fn create_router(state: AppState) -> Router {
     let mut router = Router::new()
         .route("/health", get(health_check))
         .route("/api/ui/config", get(ui_config_handler))
+        .route("/api/ui/state", get(get_ui_state).put(put_ui_state))
         .route("/cockpit", get(crate::cockpit::launch))
         .route("/api/instances", get(list_instances))
         .route("/api/instances/{id}/refresh", post(refresh_instance))
@@ -133,14 +147,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/threads", post(open_thread))
         .route("/api/threads/{thread}", delete(close_thread))
         .route("/api/threads/{thread}/turns", post(start_turn))
+        .route("/api/threads/{thread}/inject", post(inject))
         .route("/api/threads/{thread}/steer", post(steer))
         .route("/api/threads/{thread}/interrupt", post(interrupt))
         .route("/api/threads/{thread}/requests/{request}", post(respond_request))
         .route("/api/fs/read", get(fs_read_handler))
         .route("/api/dev/feedback", get(get_dev_feedback_handler).post(dev_feedback_handler).put(update_dev_feedback_handler))
+        .route("/api/mcp/servers", get(get_tool_servers).put(put_tool_servers))
         .route("/api/mcp/sse", get(mcp_sse_proxy).post(mcp_messages_proxy))
         .route("/api/mcp/messages", post(mcp_messages_proxy))
         .route("/ws/events", get(ws_events_handler))
+        .route("/ws/cockpit", get(crate::remote::socket))
+        .route("/api/cockpit/ticket", post(crate::remote::ticket))
         .merge(crate::arch::routes())
         .merge(crate::graph::routes())
         .merge(crate::queue::routes());
@@ -199,7 +217,9 @@ async fn refresh_instance(State(state): State<AppState>, Path(id): Path<String>)
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SavedSessionsQuery {
-    pub cwd: String,
+    /// The folder (relative: in the project; none: the project).
+    #[serde(default)]
+    pub cwd: Option<String>,
     pub cursor: Option<String>,
 }
 
@@ -209,7 +229,7 @@ async fn list_saved_sessions(
     Query(query): Query<SavedSessionsQuery>,
 ) -> ApiResult<Json<harness_contracts::SavedSessionPage>> {
     let catalog = state.registry.get(&InstanceId::new(id))?.sessions().ok_or(HarnessError::Unsupported { operation: "saved sessions" })?;
-    Ok(Json(catalog.list(&query.cwd, query.cursor.as_deref()).await?))
+    Ok(Json(catalog.list(query.cwd.as_deref().unwrap_or("."), query.cursor.as_deref()).await?))
 }
 
 async fn delete_saved_session(
@@ -221,13 +241,6 @@ async fn delete_saved_session(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthChallengeResponse {
-    pub url: Option<String>,
-    pub instructions: String,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct CompleteAuthRequest {
     pub response: String,
@@ -237,9 +250,8 @@ fn auth_controller(state: &AppState, id: String) -> ApiResult<Arc<dyn harness_co
     Ok(state.registry.get(&InstanceId::new(id))?.auth().ok_or(HarnessError::Unsupported { operation: "login" })?)
 }
 
-async fn begin_auth(State(state): State<AppState>, Path((id, method)): Path<(String, String)>) -> ApiResult<Json<AuthChallengeResponse>> {
-    let challenge = auth_controller(&state, id)?.begin(&method).await?;
-    Ok(Json(AuthChallengeResponse { url: challenge.url, instructions: challenge.instructions }))
+async fn begin_auth(State(state): State<AppState>, Path((id, method)): Path<(String, String)>) -> ApiResult<Json<harness_core::AuthChallenge>> {
+    Ok(Json(auth_controller(&state, id)?.begin(&method).await?))
 }
 
 async fn complete_auth(
@@ -284,18 +296,19 @@ pub struct TurnStarted {
 }
 
 async fn open_thread(State(state): State<AppState>, Json(body): Json<OpenThreadRequest>) -> ApiResult<Json<ThreadOpened>> {
-    let mut policy = body.policy;
-    if policy.cwd.is_none() {
-        policy.cwd = std::env::current_dir().ok().map(|p| p.display().to_string());
-    }
+    // No folder asked for: the harness works in the project. It gets the
+    // project's tool servers, then any added for this thread.
+    let mut extra = state.tool_servers.project().map_err(|reason| HarnessError::InvalidConfig { reason })?;
+    extra.retain(|p| !body.mcp_servers.iter().any(|b| b.name == p.name));
+    extra.extend(body.mcp_servers);
     let thread_id = state
         .sessions
         .open(OpenThread {
             instance_id: body.instance_id,
-            policy,
+            policy: body.policy,
             model: body.model,
             resume: body.resume,
-            extra_mcp_servers: body.mcp_servers,
+            extra_mcp_servers: extra,
         })
         .await?;
     Ok(Json(ThreadOpened { thread_id }))
@@ -312,6 +325,16 @@ async fn start_turn(
     Json(input): Json<TurnInput>,
 ) -> ApiResult<Json<TurnStarted>> {
     let turn_id = state.sessions.get(&ThreadId::new(thread))?.start_turn(input).await?;
+    Ok(Json(TurnStarted { turn_id }))
+}
+
+/// Adds a message to the running turn (else it starts one).
+async fn inject(
+    State(state): State<AppState>,
+    Path(thread): Path<String>,
+    Json(input): Json<TurnInput>,
+) -> ApiResult<Json<TurnStarted>> {
+    let turn_id = state.sessions.get(&ThreadId::new(thread))?.inject(input).await?;
     Ok(Json(TurnStarted { turn_id }))
 }
 
@@ -334,6 +357,28 @@ async fn respond_request(
 ) -> ApiResult<StatusCode> {
     state.sessions.get(&ThreadId::new(thread))?.respond(&RequestId::new(request), response).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---- tool servers ----
+
+async fn get_tool_servers(State(state): State<AppState>) -> ApiResult<Json<harness_contracts::ToolServers>> {
+    let tools = state.tool_servers.clone();
+    let current = tokio::task::spawn_blocking(move || tools.current()).await.map_err(|e| HarnessError::Provider { reason: e.to_string() })?;
+    Ok(Json(current.map_err(|reason| HarnessError::InvalidConfig { reason })?))
+}
+
+/// Replaces the project's list (only the cockpit's user can); new sessions
+/// get it.
+async fn put_tool_servers(
+    _: crate::cockpit::CockpitUser,
+    State(state): State<AppState>,
+    Json(project): Json<Vec<harness_contracts::McpServer>>,
+) -> ApiResult<Json<harness_contracts::ToolServers>> {
+    let tools = state.tool_servers.clone();
+    let current = tokio::task::spawn_blocking(move || tools.file.write(&project).and_then(|()| tools.current()))
+        .await
+        .map_err(|e| HarnessError::Provider { reason: e.to_string() })?;
+    Ok(Json(current.map_err(|reason| HarnessError::InvalidConfig { reason })?))
 }
 
 // ---- event stream ----
@@ -404,6 +449,19 @@ fn ui_config_path() -> Option<std::path::PathBuf> {
 
 /// Serves the user's UI config text (merged over the UI's defaults client-side);
 /// `text` is null when there is none.
+/// The cockpit's state as it last saved it (`null` before it ever has).
+async fn get_ui_state(State(state): State<AppState>) -> crate::arch::ArchResult<Option<serde_json::Value>> {
+    let file = state.ui_state.clone();
+    Ok(Json(tokio::task::spawn_blocking(move || file.read()).await.map_err(|e| arch_service::ServiceError::Io(e.to_string()))??))
+}
+
+/// The cockpit saves its state (only the cockpit's user can).
+async fn put_ui_state(_: crate::cockpit::CockpitUser, State(state): State<AppState>, Json(body): Json<serde_json::Value>) -> Result<StatusCode, crate::arch::ArchError> {
+    let file = state.ui_state.clone();
+    tokio::task::spawn_blocking(move || file.write(&body)).await.map_err(|e| arch_service::ServiceError::Io(e.to_string()))??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn ui_config_handler() -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let Some(path) = ui_config_path() else {
         return Ok(Json(serde_json::json!({ "text": null })));

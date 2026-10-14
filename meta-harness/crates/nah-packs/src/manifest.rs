@@ -291,6 +291,16 @@ pub struct Provides {
     pub launch: Launch,
     /// The harness driver that runs it (its kind).
     pub driver: String,
+    /// The instance it is (default: the pack's name).
+    #[serde(default)]
+    pub instance: Option<String>,
+    /// Its name in the cockpit (default: the pack's name).
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// The driver's settings for it: their shape is the driver's, which
+    /// checks them.
+    #[serde(default)]
+    pub settings: toml::Table,
 }
 
 /// A program, its arguments and environment, with placeholders.
@@ -302,6 +312,9 @@ pub struct Launch {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Variables of the server's environment it doesn't get.
+    #[serde(default)]
+    pub env_remove: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]

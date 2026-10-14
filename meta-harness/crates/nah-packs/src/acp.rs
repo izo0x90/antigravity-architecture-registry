@@ -14,7 +14,11 @@ pub fn version(launch: &HarnessLaunch, limit: Duration) -> Result<String, String
     // A temp folder of its own, removed after: what it leaves there doesn't
     // pile up with every check.
     let temp = tempfile::Builder::new().prefix("nah-check-").tempdir().map_err(|e| format!("a temp folder for the check: {e}"))?;
-    let mut child = Command::new(&launch.program)
+    let mut command = Command::new(&launch.program);
+    for name in &launch.env_remove {
+        command.env_remove(name);
+    }
+    let mut child = command
         .args(&launch.args)
         .envs(launch.env.iter().map(|(k, v)| (k, v)))
         .envs(["TMPDIR", "TMP", "TEMP"].map(|k| (k, temp.path())))

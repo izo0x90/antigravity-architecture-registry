@@ -28,6 +28,14 @@ pub struct ProcessLauncher {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// The server's variables it doesn't get.
+    pub env_remove: Vec<String>,
+}
+
+impl From<&harness_contracts::Launch> for ProcessLauncher {
+    fn from(launch: &harness_contracts::Launch) -> Self {
+        Self { program: PathBuf::from(&launch.program), args: launch.args.clone(), env: launch.env.clone(), env_remove: launch.env_remove.clone() }
+    }
 }
 
 #[async_trait]
@@ -37,6 +45,9 @@ impl AcpLauncher for ProcessLauncher {
         // (logs, unpacked files) doesn't pile up.
         let temp = tempfile::Builder::new().prefix("nah-agent-").tempdir()?;
         let mut command = tokio::process::Command::new(&self.program);
+        for name in &self.env_remove {
+            command.env_remove(name);
+        }
         command
             .args(&self.args)
             .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))

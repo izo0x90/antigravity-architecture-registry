@@ -85,7 +85,7 @@ fn approve(arch: &ArchitectureService, plan: &PlanId, symbol: &str, to: Stage) {
 async fn the_queue_runs_components_in_dependency_order_pauses_for_approvals_and_requeues_failures() {
     let arch = fixture_architecture();
     let plan = PlanId::new("q").unwrap();
-    arch.create_plan("q", "Queue", "").unwrap();
+    arch.create_plan("q", "Queue", "", arch_graph::PlanKind::Change).unwrap();
     arch.apply(&plan, PlanOp::SetGreenfield { greenfield: true }).unwrap();
     // Added as bare names: the design jobs fill them in. a calls b.
     for name in ["a", "b"] {
@@ -178,7 +178,7 @@ fn briefs_are_config_templates_checked_for_known_placeholders() {
 #[tokio::test]
 async fn queue_control_is_for_the_user_in_the_cockpit() {
     let arch = fixture_architecture();
-    arch.create_plan("q", "Queue", "").unwrap();
+    arch.create_plan("q", "Queue", "", arch_graph::PlanKind::Change).unwrap();
     let (addr, _) = spawn_app_with(arch).await;
     let (status, body) = http(addr, "GET", "/api/arch/plans/q/queue", None).await;
     assert_eq!(status, 200, "{body}");
@@ -198,7 +198,7 @@ async fn ingest_plan_validate_skeleton_implement_verify_break_and_detect_on_a_fi
     let ingested = arch.ingest(arch.root()).unwrap();
     assert!(ingested.components > 0);
     let plan = PlanId::new("e2e").unwrap();
-    arch.create_plan("e2e", "End to end", "").unwrap();
+    arch.create_plan("e2e", "End to end", "", arch_graph::PlanKind::Change).unwrap();
     arch.apply(&plan, PlanOp::SetGreenfield { greenfield: true }).unwrap();
     for name in ["a", "b"] {
         arch.apply(&plan, PlanOp::AddComponent { name: name.into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None }).unwrap();
@@ -292,7 +292,7 @@ impl JobRunner for BrokenAgent {
 async fn a_failed_session_is_reported_as_such() {
     let arch = fixture_architecture();
     let plan = PlanId::new("broken").unwrap();
-    arch.create_plan("broken", "Broken", "").unwrap();
+    arch.create_plan("broken", "Broken", "", arch_graph::PlanKind::Change).unwrap();
     arch.apply(&plan, PlanOp::SetGreenfield { greenfield: true }).unwrap();
     arch.apply(&plan, PlanOp::AddComponent { name: "a".into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None }).unwrap();
     let queue = QueueRunner::new(arch.clone(), QueueConfig::defaults().unwrap(), |_| {});

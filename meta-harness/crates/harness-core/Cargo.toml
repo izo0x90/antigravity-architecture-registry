@@ -9,7 +9,13 @@ arch-graph = { path = "../arch-graph" }
 harness-contracts = { path = "../harness-contracts" }
 async-trait = "0.1.92"
 futures = "0.3.34"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9.34"
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["sync", "rt"] }
 uuid = { version = "1.26.1", features = ["v4"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+tempfile = "3.27.0"

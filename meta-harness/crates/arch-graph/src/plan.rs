@@ -1,6 +1,7 @@
 //! Plans: the only persisted part of the architecture. A plan lays new or
 //! changed components over the code, references existing components it builds
-//! on, and records who approved what.
+//! on, and records who approved what. A walkthrough is the same document the
+//! other way round: it changes nothing, and explains existing code.
 
 use serde::{Deserialize, Serialize};
 
@@ -77,6 +78,44 @@ pub struct Approval {
     pub kind: ApprovalKind,
 }
 
+/// What a plan is for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanKind {
+    /// Changes to the code: new components and planned changes, approved
+    /// and built through the lifecycle.
+    #[default]
+    Change,
+    /// An explanation of code that exists: its components as they are in
+    /// the code, described and specified from it. Nothing is added, changed,
+    /// approved or built.
+    Walkthrough,
+}
+
+impl PlanKind {
+    pub const ALL: [PlanKind; 2] = [PlanKind::Change, PlanKind::Walkthrough];
+
+    pub fn is_change(&self) -> bool {
+        *self == PlanKind::Change
+    }
+
+    /// The word for it, as written in JSON and arguments.
+    pub fn name(&self) -> &'static str {
+        match self {
+            PlanKind::Change => "change",
+            PlanKind::Walkthrough => "walkthrough",
+        }
+    }
+}
+
+impl std::str::FromStr for PlanKind {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Self::ALL.into_iter().find(|k| k.name() == text).ok_or_else(|| format!("plan kind '{text}': use \"change\" or \"walkthrough\""))
+    }
+}
+
 /// A named end-to-end behavior: the call chain from `entry`, derived from
 /// ordered Calls relations (planned and observed), never stored as a tree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +131,9 @@ pub struct Plan {
     pub schema_version: u32,
     pub id: PlanId,
     pub title: String,
+    /// A change to the code, or a walkthrough of it.
+    #[serde(default, skip_serializing_if = "PlanKind::is_change")]
+    pub kind: PlanKind,
     #[serde(default)]
     pub description: String,
     /// A plan with nothing to integrate with in the existing code.
@@ -123,6 +165,7 @@ impl Plan {
             schema_version: SCHEMA_VERSION,
             id: PlanId(id.to_owned()),
             title: title.to_owned(),
+            kind: PlanKind::Change,
             description: String::new(),
             greenfield: false,
             components: Vec::new(),

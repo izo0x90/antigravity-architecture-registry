@@ -12,7 +12,6 @@ members = [
     "crates/harness-core",
     "crates/harness-acp",
     "crates/workspace-fs",
-    "crates/provider-antigravity",
     "crates/arch-graph",
     "crates/code-analyzer",
     "crates/arch-service",
@@ -47,7 +46,7 @@ crate-type = ["rlib"]
 [dependencies]
 harness-contracts = { path = "crates/harness-contracts" }
 harness-core = { path = "crates/harness-core" }
-provider-antigravity = { path = "crates/provider-antigravity" }
+harness-acp = { path = "crates/harness-acp" }
 arch-graph = { path = "crates/arch-graph" }
 code-analyzer = { path = "crates/code-analyzer" }
 arch-service = { path = "crates/arch-service" }
@@ -73,6 +72,7 @@ notify-debouncer-full = "0.5"
 
 [dev-dependencies]
 nah-packs = { path = "crates/nah-packs", features = ["testing"] }
+harness-acp = { path = "crates/harness-acp", features = ["testing"] }
 cockpit-ui = { path = "crates/cockpit-ui" }
 ast-grep-config = "0.45.3"
 ast-grep-core = "0.45.3"

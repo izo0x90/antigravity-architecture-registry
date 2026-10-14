@@ -330,7 +330,7 @@ fn missing_required_details_block_approval_with_a_precise_list() {
     let mut types = TypeSystem::defaults().unwrap();
     types.extend_from_toml("[types.handler]\nextends = \"function\"\nrequired_fields = [\"logic_steps\", \"invariants\"]").unwrap();
     let r = repo_with_types(types);
-    r.service.create_plan("gate", "Gate", "").unwrap();
+    r.service.create_plan("gate", "Gate", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "gate", "bare", "function", "", None);
     add(&r, "gate", "on_event", "handler", "Handles events.", Some(Signature::default()));
     relate(&r, "gate", "sample::run", "sample::bare");
@@ -354,7 +354,7 @@ fn missing_required_details_block_approval_with_a_precise_list() {
 #[test]
 fn stage_transitions_enforce_validation_location_and_dependencies() {
     let r = repo();
-    r.service.create_plan("life", "Lifecycle", "").unwrap();
+    r.service.create_plan("life", "Lifecycle", "", arch_graph::PlanKind::Change).unwrap();
     let sig = || Some(Signature { params: vec![], returns: Some("bool".into()), qualifiers: vec![] });
     add(&r, "life", "outer", "function", "Calls inner.", sig());
     add(&r, "life", "inner", "function", "Does the work.", sig());
@@ -400,7 +400,7 @@ fn stage(r: &Repo, plan: &str, symbol: &str) -> Stage {
 #[test]
 fn actionable_work_comes_in_dependency_order_and_changes_cascade_in_waves() {
     let r = repo();
-    r.service.create_plan("q", "Queue", "").unwrap();
+    r.service.create_plan("q", "Queue", "", arch_graph::PlanKind::Change).unwrap();
     let sig = || Some(Signature { params: vec![], returns: Some("bool".into()), qualifiers: vec![] });
     // Added in reverse: c calls b, b calls a; d builds on existing util::shout.
     for name in ["c", "b", "a", "d"] {
@@ -632,7 +632,7 @@ fn str_sig() -> Option<Signature> {
 #[test]
 fn approval_is_blocked_by_errors_on_its_relations_and_on_the_plan() {
     let r = repo();
-    r.service.create_plan("rel", "Relations", "").unwrap();
+    r.service.create_plan("rel", "Relations", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "rel", "shouter", "function", "Calls shout.", Some(Signature::default()));
     // The planned call doesn't fit shout's real signature: an error on the relation, not the component.
     r.service
@@ -652,7 +652,7 @@ fn approval_is_blocked_by_errors_on_its_relations_and_on_the_plan() {
     let err = r.service.approve(&pid("rel"), &id("sample::shouter"), Stage::ArchApproved, &user()).unwrap_err().to_string();
     assert!(err.contains("parameter 's' isn't among the planned inputs"), "{err}");
     // A plan-wide error (no touch point with existing code) blocks every approval in it.
-    r.service.create_plan("alone", "Alone", "").unwrap();
+    r.service.create_plan("alone", "Alone", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "alone", "lonely", "function", "Talks to no one.", Some(Signature::default()));
     let err = r.service.approve(&pid("alone"), &id("sample::lonely"), Stage::ArchApproved, &user()).unwrap_err().to_string();
     assert!(err.contains("connect to existing code"), "{err}");
@@ -720,7 +720,7 @@ fn references_to_a_name_two_data_types_share_are_ambiguous() {
 #[test]
 fn contracts_list_the_open_placeholders_in_the_code() {
     let r = repo();
-    r.service.create_plan("later", "Later", "").unwrap();
+    r.service.create_plan("later", "Later", "", arch_graph::PlanKind::Change).unwrap();
     // `later` exists in the code with a todo!() body.
     r.service.apply(&pid("later"), PlanOp::Modify { id: id("sample::later"), description: Some("Finish it.".into()), signature: None, schemas: None, spec: None }).unwrap();
     let slice = r.service.contract(&pid("later"), &id("sample::later")).unwrap();
@@ -732,7 +732,7 @@ fn contracts_list_the_open_placeholders_in_the_code() {
 #[test]
 fn proposed_files_outside_the_repo_are_rejected() {
     let r = repo();
-    r.service.create_plan("out", "Out", "").unwrap();
+    r.service.create_plan("out", "Out", "", arch_graph::PlanKind::Change).unwrap();
     for file in ["../outside.rs", "/etc/evil.rs", "src/../../x.rs"] {
         let err = r
             .service
@@ -754,7 +754,7 @@ fn proposed_files_outside_the_repo_are_rejected() {
 #[test]
 fn implementing_needs_the_plan_approved_even_after_a_skeleton() {
     let r = repo();
-    r.service.create_plan("skip", "Skip", "").unwrap();
+    r.service.create_plan("skip", "Skip", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "skip", "validate", "function", "Validates input.", str_sig());
     relate(&r, "skip", "sample::run", "sample::validate");
     r.service.approve(&pid("skip"), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap();
@@ -804,7 +804,7 @@ fn verification_rereads_vanished_files_and_changed_callees() {
 #[test]
 fn placeholders_hidden_in_unplanned_helpers_block_implemented() {
     let r = repo();
-    r.service.create_plan("hide", "Hide", "").unwrap();
+    r.service.create_plan("hide", "Hide", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "hide", "validate", "function", "Validates input.", str_sig());
     relate(&r, "hide", "sample::run", "sample::validate");
     r.service.approve(&pid("hide"), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap();
@@ -830,7 +830,7 @@ fn placeholders_hidden_in_unplanned_helpers_block_implemented() {
 #[test]
 fn concurrent_plan_edits_are_never_lost() {
     let r = repo();
-    r.service.create_plan("busy", "Busy", "").unwrap();
+    r.service.create_plan("busy", "Busy", "", arch_graph::PlanKind::Change).unwrap();
     std::thread::scope(|s| {
         for i in 0..8 {
             let service = &r.service;
@@ -881,7 +881,7 @@ fn every_interface_in_the_chain_with_a_shape_must_fit() {
 #[test]
 fn containment_follows_type_rules_and_each_component_has_one_container() {
     let r = repo();
-    r.service.create_plan("c", "Containment", "").unwrap();
+    r.service.create_plan("c", "Containment", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "c", "helper2", "function", "Helps.", str_sig());
     let relate_contains = |a: &str, b: &str| {
         r.service.apply(&pid("c"), PlanOp::Relate { kind: RelationKind::Contains, source: id(a), target: id(b), order: None, ports: None, note: None, expects: None })
@@ -927,7 +927,7 @@ message = "log through the logger"
 "#,
     );
     // A failing logic-step check blocks the design's approval.
-    r.service.create_plan("l", "Logic", "").unwrap();
+    r.service.create_plan("l", "Logic", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "l", "parse2", "function", "Parses.", str_sig());
     relate(&r, "l", "sample::run", "sample::parse2");
     let step = LogicStep { sequence: 1, name: "split".into(), description: String::new(), algorithm: None, complexity: None, check: Some("echo nope; exit 1".into()) };
@@ -937,7 +937,7 @@ message = "log through the logger"
     let err = r.service.approve(&pid("l"), &id("sample::parse2"), Stage::ArchApproved, &user()).unwrap_err().to_string();
     assert!(err.contains("logic step 1 'split' check failed: nope"), "{err}");
     // Changes to code that breaks a project rule can't be approved either.
-    r.service.create_plan("m", "Modify log", "").unwrap();
+    r.service.create_plan("m", "Modify log", "", arch_graph::PlanKind::Change).unwrap();
     r.service.apply(&pid("m"), PlanOp::Modify { id: id("sample::log"), description: Some("Logs.".into()), signature: None, schemas: None, spec: None }).unwrap();
     let err = r.service.approve(&pid("m"), &id("sample::log"), Stage::ArchApproved, &user()).unwrap_err().to_string();
     assert!(err.contains("[no-println] log through the logger"), "{err}");

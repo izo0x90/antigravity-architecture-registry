@@ -29,18 +29,19 @@ impl InstanceRegistry {
         Self { drivers, instances: RwLock::default(), configs: RwLock::default(), hub }
     }
 
-    /// One instance per driver (the driver kind as its id), each given how
-    /// its harness is started (`harnesses`, by driver kind); a driver none
-    /// is given for says no harness pack provides it.
-    pub fn default_configs(&self, harnesses: &std::collections::BTreeMap<String, harness_contracts::HarnessLaunch>) -> Vec<InstanceConfig> {
-        let mut configs: Vec<InstanceConfig> = self
-            .drivers
-            .values()
-            .map(|d| {
-                let kind = d.metadata().kind;
-                let none = harness_contracts::HarnessLaunch::Unavailable { reason: format!("no harness pack provides {kind}"), fix: None };
-                let config = d.default_config(harnesses.get(kind.as_str()).unwrap_or(&none));
-                InstanceConfig { id: InstanceId::new(kind.as_str()), driver: kind, config }
+    /// One instance per harness (its profile names the instance and the
+    /// driver), configured by its driver. A harness whose driver isn't
+    /// built in is left out, and logged.
+    pub fn default_configs(&self, harnesses: &[harness_contracts::HarnessEntry]) -> Vec<InstanceConfig> {
+        let mut configs: Vec<InstanceConfig> = harnesses
+            .iter()
+            .filter_map(|entry| {
+                let profile = &entry.profile;
+                let Some(driver) = self.drivers.get(&profile.driver) else {
+                    tracing::warn!(target: "harness_core", "{} needs driver {}, which isn't built in", profile.instance, profile.driver);
+                    return None;
+                };
+                Some(InstanceConfig { id: profile.instance.clone(), driver: profile.driver.clone(), config: driver.default_config(entry) })
             })
             .collect();
         configs.sort_by(|a, b| a.id.cmp(&b.id));

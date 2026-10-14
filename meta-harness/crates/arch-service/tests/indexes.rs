@@ -64,7 +64,7 @@ fn the_data_flow_index_the_symbol_list_and_the_badges_are_built_once_per_snapsho
     let found = service.search("added", SearchKind::Symbols, &Source::Code, None).unwrap();
     assert!(found.hits.iter().any(|h| h.label.contains("added")), "the new snapshot's list");
     // A plan edited: the badges again.
-    service.create_plan("p", "P", "").unwrap();
+    service.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     service.tree(&flows).unwrap();
     assert!(stages(&service, "tree").contains(&"badges".to_owned()), "the plans changed");
     service.tree(&flows).unwrap();

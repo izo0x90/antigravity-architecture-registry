@@ -2,8 +2,9 @@
 //! back are the universal moves (in `select`); these go in, set the depth,
 //! flip the way, switch the view and pick the source (with its "show in full
 //! code" switch). Besides them: finding something to start from, and going
-//! back to where you were before the agent moved the view. Nothing else:
-//! the camera moves with the pointer and fingers. Keys live in the keymap.
+//! back to where you were before the agent moved the view, and the camera:
+//! zoom in or out, or fit the drawing to the screen (it also moves with the
+//! pointer and fingers). Keys live in the keymap.
 //!
 //! Finding anything in the code from the graph: symbols, files and lines,
 //! through the server's one search, listed in the palette as they're typed.
@@ -30,6 +31,9 @@ pub(crate) enum GraphCommand {
     GoIn,
     AgentReturn,
     Find,
+    /// The camera: zoom by this factor (around the selection), or fit.
+    Zoom(f32),
+    Fit,
 }
 
 impl GraphState {
@@ -98,6 +102,9 @@ impl ActionProvider for GraphState {
         {
             out.push(f("graph.go_in", &format!("Go into {}", card.label), G::GoIn).icon(egui_phosphor::regular::ARROW_SQUARE_IN).group(Group::Navigate).importance(SECONDARY).jump());
         }
+        out.push(f("graph.fit", "Fit the drawing to the screen", G::Fit).toolbar(Button, "", Some(egui_phosphor::regular::CORNERS_OUT)).group(Group::View).importance(MINOR));
+        out.push(f("graph.zoom_in", "Zoom in", G::Zoom(self.ui.zoom_step)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS).group(Group::View).importance(MINOR));
+        out.push(f("graph.zoom_out", "Zoom out", G::Zoom(1.0 / self.ui.zoom_step)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS).group(Group::View).importance(MINOR));
         let (found, waiting) = self.find_choices();
         let find = Param::Search { hint: "a name, a file, or words in a line".into(), found, waiting };
         out.push(f("graph.find", "Find in the code (symbols, files, lines)", G::Find).param(find).toolbar(Button, "", Some(egui_phosphor::regular::MAGNIFYING_GLASS)).group(Group::Navigate).importance(SECONDARY).jump());
@@ -137,6 +144,11 @@ impl GraphState {
             GraphCommand::SetPlan => self.pick_source(value),
             GraphCommand::FullCode => self.switch_full_code(value),
             GraphCommand::Flip => self.navigate(NavChange::Flip),
+            GraphCommand::Zoom(factor) => {
+                let center = self.selected_card().map_or(self.canvas.center(), |c| self.to_screen(&c.rect).center());
+                self.zoom_by(factor, center);
+            }
+            GraphCommand::Fit => self.fit_view(),
             GraphCommand::Depth(delta) => {
                 let base = self.depth();
                 self.navigate(NavChange::Depth { delta, base });

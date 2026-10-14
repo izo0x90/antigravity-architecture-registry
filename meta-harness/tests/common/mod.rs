@@ -123,7 +123,7 @@ impl ProviderAdapter for FakeAdapter {
         session.emit(AdapterEvent::CatalogUpdated {
             update: CatalogUpdate {
                 commands: Some(vec![SlashCommand { name: "plan".into(), description: "Plan first".into(), input_hint: None }]),
-                models: None,
+                ..CatalogUpdate::default()
             },
         });
         Ok(Box::new(session))
@@ -172,13 +172,21 @@ impl ProviderInstance for FakeInstance {
 
 pub struct FakeDriver;
 
+/// The harness the fake driver runs, as instance "fake".
+pub fn fake_harness() -> harness_contracts::HarnessEntry {
+    harness_contracts::HarnessEntry {
+        profile: harness_contracts::HarnessProfile { instance: InstanceId::new(FAKE), driver: DriverKind::new(FAKE), display_name: "Fake".into(), settings: serde_json::Value::Null },
+        launch: harness_contracts::HarnessLaunch::Unavailable { reason: "fake".into(), fix: None },
+    }
+}
+
 #[async_trait]
 impl ProviderDriver for FakeDriver {
     fn metadata(&self) -> DriverMetadata {
         DriverMetadata { kind: DriverKind::new(FAKE), display_name: "Fake".into(), supports_multiple_instances: false }
     }
 
-    fn default_config(&self, _harness: &harness_contracts::HarnessLaunch) -> serde_json::Value {
+    fn default_config(&self, _harness: &harness_contracts::HarnessEntry) -> serde_json::Value {
         serde_json::Value::Null
     }
 
@@ -195,6 +203,8 @@ impl ProviderDriver for FakeDriver {
             skills: Vec::new(),
             runtime_modes: vec![RuntimeMode::ApprovalRequired],
             supports_plan_mode: false,
+            tool_servers: Vec::new(),
+            problems: Vec::new(),
         });
         Ok(Arc::new(FakeInstance { id, snapshot }))
     }
@@ -247,12 +257,15 @@ pub async fn spawn_app() -> (SocketAddr, AppState) {
 pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppState) {
     let hub = Arc::new(EventHub::default());
     bridge_architecture_events(&arch, &hub);
-    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone())));
+    let remote = Arc::new(meta_harness::remote::Remote::default());
+    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone())));
     let registry = Arc::new(InstanceRegistry::new(vec![Arc::new(FakeDriver)], hub.clone()));
-    registry.configure(registry.default_configs(&Default::default())).await.unwrap();
+    registry.configure(registry.default_configs(&[fake_harness()])).await.unwrap();
     let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone(), Vec::new()));
     let queue = meta_harness::server::queue_runner(&arch, arch_service::QueueConfig::defaults().unwrap(), &hub);
-    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue };
+    let ui_state = Arc::new(arch_service::UiStateFile::open(arch.root()).unwrap());
+    let tool_servers = Arc::new(meta_harness::tool_servers::ToolServerState { ours: Vec::new(), file: meta_harness::tool_servers::ProjectToolServers::of(arch.root()) });
+    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, ui_state, tool_servers, remote };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = create_router(state.clone());

@@ -2,7 +2,7 @@
 //! against the code and the plan, and rejects what can't be right.
 
 use arch_graph::{
-    Component, ComponentId, Graph, ImplementationSpec, Plan, Provenance, ProposedLocation, Reference, Relation, RelationKind, RepoPath,
+    Component, ComponentId, Graph, ImplementationSpec, Plan, PlanKind, Provenance, ProposedLocation, Reference, Relation, RelationKind, RepoPath,
     Schemas, Signature, Stage, Status, TypeSystem,
     schema::Dsl,
 };
@@ -97,6 +97,20 @@ impl PlanOp {
     }
 }
 
+impl PlanOp {
+    /// What this op would do to the code, in words, if it changes it (a
+    /// walkthrough explains the code and changes none of it).
+    fn code_change(&self) -> Option<&'static str> {
+        match self {
+            PlanOp::AddComponent { .. } => Some("add components"),
+            PlanOp::Modify { signature: Some(_), .. } => Some("change a signature"),
+            PlanOp::Relate { .. } | PlanOp::Unrelate { .. } => Some("plan relations"),
+            PlanOp::SetGreenfield { .. } => Some("be greenfield"),
+            PlanOp::Modify { .. } | PlanOp::Reference { .. } | PlanOp::Remove { .. } | PlanOp::Describe { .. } => None,
+        }
+    }
+}
+
 fn invalid(msg: impl Into<String>) -> ServiceError {
     ServiceError::InvalidOp(msg.into())
 }
@@ -110,6 +124,11 @@ fn compile(schemas: Schemas, dsl: &Dsl) -> Result<Schemas, ServiceError> {
 
 #[allow(clippy::too_many_arguments)]
 pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path, ignores: &code_analyzer::Ignores, packs: &PackSet, types: &TypeSystem, dsl: &Dsl) -> Result<Vec<ComponentId>, ServiceError> {
+    if plan.kind == PlanKind::Walkthrough
+        && let Some(what) = op.code_change()
+    {
+        return Err(invalid(format!("{} is a walkthrough: it explains the code as it is, so it can't {what}", plan.id)));
+    }
     match op {
         PlanOp::AddComponent { name, type_name, description, parent, file, signature, schemas, spec } => {
             let schemas = compile(schemas.unwrap_or_default(), dsl)?;
@@ -186,10 +205,14 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
             }
             if plan.component(&id).is_none() {
                 let mut planned = code.clone();
-                planned.status = if code.status == Status::New { Status::New } else { Status::Modifying };
-                planned.stage = Stage::Declared;
-                planned.anchor = None;
-                planned.placeholders.clear();
+                // A walkthrough takes it as it is in the code; a change plans
+                // a new version of it.
+                if plan.kind == PlanKind::Change {
+                    planned.status = if code.status == Status::New { Status::New } else { Status::Modifying };
+                    planned.stage = Stage::Declared;
+                    planned.anchor = None;
+                    planned.placeholders.clear();
+                }
                 plan.components.push(planned);
             }
             let planned = plan.component_mut(&id).ok_or_else(|| invalid(format!("{id} vanished")))?;

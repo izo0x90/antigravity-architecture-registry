@@ -73,7 +73,7 @@ fn append(r: &Repo, file: &str, text: &str) {
 /// The plan, approved by the user: validate calls Store::new.
 fn approved() -> Repo {
     let r = repo();
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "validate");
     relate(&r, "sample::validate", "sample::store::Store::new");
     r.s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap();
@@ -160,7 +160,7 @@ fn signature_qualifiers_include_the_abi() {
 #[test]
 fn a_design_change_revokes_the_plan_approval_of_what_builds_on_it() {
     let r = repo();
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "check_all");
     add(&r, "validate");
     relate(&r, "sample::validate", "sample::check_all");

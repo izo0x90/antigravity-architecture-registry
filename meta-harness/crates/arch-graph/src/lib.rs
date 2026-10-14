@@ -31,7 +31,7 @@ pub use graph::{Alignment, Graph};
 pub use graph::inserts as graph_inserts;
 pub use lifecycle::{Stage, Status, can_transition};
 pub use queue::{Job, JobKind, JobState, QueueSnapshot, QueueStatus};
-pub use plan::{Approval, ApprovalKind, Plan, REVOKED_BY, PlanId, Reference, SCHEMA_VERSION, Workflow, check_schema_version};
+pub use plan::{Approval, ApprovalKind, Plan, PlanId, PlanKind, REVOKED_BY, Reference, SCHEMA_VERSION, Workflow, check_schema_version};
 pub use relation::{Provenance, Relation, RelationId, RelationKind};
 pub use schema::{Dsl, RefError, SchemaSet};
 pub use review::{Answer, Author, Change, Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, PlanDiff, Reply, ReviewSnapshot};

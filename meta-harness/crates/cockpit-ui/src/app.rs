@@ -9,6 +9,10 @@ use arch_graph::ComponentId;
 use crate::actions::{Action, ActionProvider, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, When, is_primary, leader_entries};
 use crate::chat::{ChatStreamState, SessionStatus};
 use crate::code::CodeViewerState;
+use crate::columns::{Columns, Pane};
+use crate::panes::{Parked, swap_view};
+use crate::quick_look::QuickLook;
+use crate::saved::SavedUi;
 use crate::config::UiConfig;
 use crate::feedback::FeedbackInspectorState;
 use crate::goto::{Candidate, Choosing, Details, Pending, Wait, candidates};
@@ -34,7 +38,8 @@ fn release_keyboard(ctx: &egui::Context) {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BufferKind {
     Chat,
     Code,
@@ -56,6 +61,12 @@ impl BufferKind {
             Self::Spec => "SPEC",
             Self::Queue => "QUEUE",
         }
+    }
+
+    /// There is one of these (a chat, a queue); of the others, each column
+    /// can have its own.
+    pub fn one_only(&self) -> bool {
+        matches!(self, Self::Chat | Self::Queue)
     }
 
     /// Lowercase name used in action ids ("buffer.chat").
@@ -90,9 +101,23 @@ enum ShellCommand {
     CycleSlot(i32),
     ShowBuffer(BufferKind),
     SetLayout(usize),
+    CloseColumn,
+    /// The focused column's view, gone for good.
+    DeleteView,
+    /// A new view of this kind in the focused column.
+    NewView(BufferKind),
+    /// An open view (its value: `kind:number`) in the focused column.
+    PickView,
     ToggleInspector,
     ToggleIssues,
-    CloseDrawer,
+    /// The quick look on what the cursor is on (or closed, when open).
+    QuickLook,
+    /// The quick look's card in a column instead.
+    QuickLookToColumn,
+    /// The box for talking to the agent, over whatever is on screen.
+    Talk,
+    /// Lets agents drive the cockpit (its value: on or off).
+    Agents,
     OpenPalette,
     Motion(Motion),
     /// Row or line N (its value).
@@ -156,7 +181,6 @@ pub enum Capture {
 /// How long a note stays in the key bar, in seconds.
 const NOTE_SECONDS: f64 = 4.0;
 
-const MAX_SLOTS: usize = 3;
 /// Largest count a key takes (`999j`).
 const MAX_COUNT: u32 = 999;
 
@@ -191,10 +215,30 @@ pub struct CockpitApp {
     pub queue: crate::queue::QueueState,
     review_seen: u64,
 
-    // Layout configuration
-    pub column_count: usize, // 1, 2, or 3
-    pub slot_buffers: [BufferKind; MAX_SLOTS],
-    pub focused_slot: usize,
+    /// The columns: the view each shows, and which has focus.
+    pub columns: Columns,
+    /// The views not in use now (each column's own; see `panes`).
+    parked: Parked,
+    /// For each kind with a view per column: the view in use now, and the
+    /// one used last (what keys, links and the agent act on).
+    active: BTreeMap<BufferKind, u32>,
+    last_used: BTreeMap<BufferKind, u32>,
+    /// New views, to start where the view of their kind used before was.
+    fresh: Vec<(Pane, Place)>,
+    /// The column a go-to lands in (a count before its keys).
+    landing: Option<usize>,
+    /// A column whose × was clicked (closed after drawing).
+    closing: Option<usize>,
+    /// The component types, for each spec view.
+    types: Option<arch_graph::TypeSystem>,
+    /// The quick look, while it's open.
+    pub quick_look: Option<QuickLook>,
+    /// The box for talking to the agent, while it's open.
+    pub talk: Option<crate::talk::Talk>,
+    /// Loads and saves the cockpit's state on the server.
+    keeper: crate::saved::Keeper,
+    /// Calls from outside: scripts in the page, and agents while allowed.
+    pub remote: crate::remote::Remote,
     pub initialized: bool,
 
     pub config: UiConfig,
@@ -238,9 +282,7 @@ pub struct CockpitApp {
     /// The key sheet (`?`) is open, with this filter.
     pub key_sheet: Option<String>,
     /// Where each slot was drawn last frame (hint labels stay inside theirs).
-    slot_rects: [egui::Rect; MAX_SLOTS],
-    /// The slots before fewer columns moved the focused view into view.
-    slots_before_shrink: Option<[BufferKind; MAX_SLOTS]>,
+    slot_rects: Vec<egui::Rect>,
     /// The spec's anchor we last refetched the view for (so a mismatch the
     /// server itself holds doesn't refetch every frame).
     anchor_checked: Option<Option<arch_graph::CodeAnchor>>,
@@ -310,9 +352,18 @@ impl CockpitApp {
             queue: crate::queue::QueueState::default(),
             review_seen: 0,
 
-            column_count: 2,
-            slot_buffers: [BufferKind::Chat, BufferKind::Graph, BufferKind::Code],
-            focused_slot: 0,
+            columns: Columns::default(),
+            parked: Parked::default(),
+            active: BTreeMap::new(),
+            last_used: BTreeMap::new(),
+            fresh: Vec::new(),
+            landing: None,
+            closing: None,
+            types: None,
+            quick_look: None,
+            talk: None,
+            keeper: Default::default(),
+            remote: crate::remote::Remote::new(host_origin),
             initialized: false,
 
             config,
@@ -340,8 +391,7 @@ impl CockpitApp {
             note: None,
             note_since: None,
             key_sheet: None,
-            slot_rects: [egui::Rect::NOTHING; MAX_SLOTS],
-            slots_before_shrink: None,
+            slot_rects: Vec::new(),
             anchor_checked: None,
             reveal_inbox: Arc::default(),
             palette: crate::palette::Palette::default(),
@@ -366,8 +416,9 @@ impl CockpitApp {
                 }
             });
 
-            // Auto-load default file Cargo.toml into code viewer
-            self.code.load_file("Cargo.toml", None, &self.net, ctx.clone());
+            // The layout as it was saved (the code view opens Cargo.toml
+            // when nothing was).
+            self.keeper.load(&self.net, ctx);
 
             // Auto-load dev feedback issues
             self.feedback.load_issues(&self.net, ctx.clone());
@@ -382,7 +433,11 @@ impl CockpitApp {
 
         self.apply_user_config();
         if let Some(Ok(types)) = self.types_inbox.lock().ok().and_then(|mut t| t.take()) {
-            self.spec.types = Some(types);
+            self.types = Some(types);
+            let types = self.types.clone();
+            for spec in self.specs() {
+                spec.types.clone_from(&types);
+            }
         }
         if std::mem::take(&mut self.theme_dirty) {
             crate::theme::set(self.config.theme.clone(), ctx);
@@ -390,17 +445,27 @@ impl CockpitApp {
             crate::status::set(self.config.status.clone());
             crate::theme::set_look(self.config.look.clone());
             self.net.set_backoff(self.config.net.reconnect_min_ms, self.config.net.reconnect_max_ms);
-            self.graph.ui = self.config.graph.clone();
-            self.code.ui = self.config.code.clone();
+            let (graph_ui, code_ui) = (self.config.graph.clone(), self.config.code.clone());
+            for graph in self.graphs() {
+                graph.ui = graph_ui.clone();
+            }
+            for code in self.codes() {
+                code.ui = code_ui.clone();
+            }
         }
+        self.start_fresh(ctx);
+        self.use_focused();
 
         // Poll WebSocket messages
         self.net.poll_ws(ctx);
+        self.chat.tick(&self.net, ctx);
         if std::mem::take(&mut self.net.reconnected) {
+            self.keeper.reconnected();
+            self.keeper.load(&self.net, ctx);
             // Back after a drop: what changed meanwhile wasn't heard.
-            self.graph.invalidate();
-            self.spec.invalidate();
-            self.tree.invalidate();
+            self.graphs().for_each(GraphState::invalidate);
+            self.specs().for_each(SpecState::invalidate);
+            self.trees().for_each(ArchitectureTreeState::invalidate);
             self.review.invalidate();
             self.queue.invalidate();
             self.details.clear();
@@ -413,20 +478,25 @@ impl CockpitApp {
                 self.index = (**status).clone();
             }
             if let harness_contracts::ClientEvent::Architecture { event } = &event {
-                // The agent moving the graph is a jump: back returns from it.
-                let before = matches!(event, arch_graph::ArchEvent::ViewRequested { .. }).then(|| self.jump_of(BufferKind::Graph));
-                self.graph.on_event(event);
-                if let Some(before) = before
-                    && self.jump_of(BufferKind::Graph) != before
-                {
-                    self.jumps.record(before);
+                match event {
+                    // The agent moves one graph (the one it names, else the
+                    // one used last); that's a jump: back returns from it.
+                    arch_graph::ArchEvent::ViewRequested { request, .. } => {
+                        self.agents_graph(request.column);
+                        let before = self.jump_of(BufferKind::Graph);
+                        self.graph.on_event(event);
+                        if self.jump_of(BufferKind::Graph) != before {
+                            self.jumps.record(before);
+                        }
+                    }
+                    _ => self.graphs().for_each(|g| g.on_event(event)),
                 }
                 self.queue.on_event(event);
                 // Only real changes refetch: a check result (often the spec
                 // view's own validation) must not trigger another round.
                 if matches!(event, arch_graph::ArchEvent::Changed { .. }) {
-                    self.spec.invalidate();
-                    self.tree.invalidate();
+                    self.specs().for_each(SpecState::invalidate);
+                    self.trees().for_each(ArchitectureTreeState::invalidate);
                     self.review.invalidate();
                     self.details.clear();
                 }
@@ -462,37 +532,416 @@ impl CockpitApp {
         }
 
         self.handle_keys(ctx);
+        self.quick_look_tick(ctx);
+        self.use_focused();
+        self.keep_state(ctx);
+    }
+
+    // ---- each column's own view ----
+
+    /// The view of `kind` in use: the one used last.
+    fn used_pane(&self, kind: BufferKind) -> Pane {
+        Pane::new(kind, self.last_used.get(&kind).copied().unwrap_or(0))
+    }
+
+    /// Puts `pane`'s view where the cockpit works on it, parking the one
+    /// there. A new view starts (next frame) where the one before it was.
+    fn swap_in(&mut self, pane: Pane) {
+        let current = self.active.get(&pane.kind).copied().unwrap_or(0);
+        if pane.kind.one_only() || current == pane.id {
+            return;
+        }
+        let place = self.view(pane.kind).place();
+        let new = match pane.kind {
+            BufferKind::Graph => swap_view(&mut self.graph, &mut self.parked.graphs, current, pane.id),
+            BufferKind::Code => swap_view(&mut self.code, &mut self.parked.codes, current, pane.id),
+            BufferKind::Spec => swap_view(&mut self.spec, &mut self.parked.specs, current, pane.id),
+            BufferKind::Tree => swap_view(&mut self.tree, &mut self.parked.trees, current, pane.id),
+            BufferKind::Chat | BufferKind::Queue => false,
+        };
+        self.active.insert(pane.kind, pane.id);
+        if new {
+            self.set_up(pane.kind);
+            if pane.id != crate::quick_look::PANE {
+                self.fresh.push((pane, place));
+            }
+        }
+    }
+
+    /// The cockpit uses `pane` from now on: keys, links and go-tos act on it.
+    fn use_pane(&mut self, pane: Pane) {
+        self.swap_in(pane);
+        if !pane.kind.one_only() {
+            self.last_used.insert(pane.kind, pane.id);
+        }
+    }
+
+    /// The focused column's view is the one in use (the quick look's card
+    /// is, while it's open).
+    fn use_focused(&mut self) {
+        if self.quick_look.is_none() {
+            self.use_pane(self.columns.focused_pane());
+        }
+    }
+
+    /// The views used last back in use (after drawing the others).
+    fn back_to_used(&mut self) {
+        for kind in BufferKind::ALL.into_iter().filter(|k| !k.one_only()) {
+            self.swap_in(self.used_pane(kind));
+        }
+    }
+
+    /// A new view gets what every view of its kind has.
+    fn set_up(&mut self, kind: BufferKind) {
+        match kind {
+            BufferKind::Graph => self.graph.ui = self.config.graph.clone(),
+            BufferKind::Code => self.code.ui = self.config.code.clone(),
+            BufferKind::Spec => {
+                self.spec.types.clone_from(&self.types);
+                self.spec.author.clone_from(&self.config.user.name);
+                self.spec.comments.clone_from(&self.review.comments);
+                self.spec.diff.clone_from(&self.review.diff);
+            }
+            BufferKind::Tree | BufferKind::Chat | BufferKind::Queue => {}
+        }
+    }
+
+    /// New views start where the view of their kind used before them was.
+    fn start_fresh(&mut self, ctx: &egui::Context) {
+        for (pane, place) in std::mem::take(&mut self.fresh) {
+            self.swap_in(pane);
+            self.restore_place(pane.kind, &place, ctx);
+        }
+        self.back_to_used();
+    }
+
+    /// The graph the agent moves: column `column` (made a graph if it isn't
+    /// one), else the one used last.
+    fn agents_graph(&mut self, column: Option<u32>) {
+        let Some(slot) = column.and_then(|c| (c as usize).checked_sub(1)) else { return };
+        if slot >= self.columns.len() {
+            self.note = Some(format!("The agent asked for column {}; there are {}: it moved the graph used last.", slot + 1, self.columns.len()));
+            return;
+        }
+        let pane = self.columns.show(slot, BufferKind::Graph);
+        self.use_pane(pane);
+    }
+
+    /// Closes column `slot`: its view is hidden, not lost.
+    fn close_column(&mut self, slot: usize) {
+        if !self.columns.close(slot) {
+            self.note = Some("The last column stays.".into());
+        }
+        self.use_focused();
+    }
+
+    /// Deletes the focused column's view for good: the column shows the
+    /// view hidden last, else a new one of its kind. The chat and the queue
+    /// (there's one of each) aren't deleted.
+    fn delete_view(&mut self) {
+        let slot = self.columns.focused();
+        let pane = self.columns.pane(slot);
+        if pane.kind.one_only() {
+            self.note = Some(format!("There's one {}: close its column to hide it.", pane.kind.name()));
+            return;
+        }
+        let (gone, now) = self.columns.delete(slot);
+        if now == gone {
+            // A new one took its number: the view itself starts over.
+            self.swap_in(gone);
+            self.reset(gone.kind);
+        }
+        self.use_pane(now);
+        self.fresh.retain(|(p, _)| *p != now);
+        // The view of its kind used last, if that was the one deleted.
+        if self.used_pane(gone.kind) == gone && now != gone {
+            let next = self.columns.other_of(gone.kind, gone).unwrap_or_else(|| Pane::new(gone.kind, 0));
+            self.last_used.insert(gone.kind, next.id);
+        }
+        self.drop_unheld();
+    }
+
+    /// Views no column shows or hides any more are dropped.
+    fn drop_unheld(&mut self) {
+        let (columns, quick) = (&self.columns, crate::quick_look::PANE);
+        self.parked.keep_only(|kind, id| id == quick || columns.has(Pane::new(kind, id)));
+        self.fresh.retain(|(p, _)| p.id == quick || self.columns.has(*p));
+    }
+
+    /// A new view of `kind` in the focused column (the one there is hidden).
+    fn new_view(&mut self, kind: BufferKind) {
+        let pane = self.columns.new_pane(kind);
+        let slot = self.columns.place(self.columns.focused(), pane);
+        self.columns.focus(slot);
+        self.use_pane(pane);
+        // New, not a copy of the last one.
+        self.fresh.retain(|(p, _)| *p != pane);
+    }
+
+    /// Shows `pane` (shown elsewhere, or hidden) in the focused column; the
+    /// view there is hidden (or swaps places with it).
+    fn show_view(&mut self, pane: Pane) {
+        let slot = self.columns.place(self.columns.focused(), pane);
+        self.columns.focus(slot);
+        self.use_pane(pane);
+    }
+
+    /// What a view shows, in words (the buffer list's lines).
+    fn describe(&self, pane: Pane) -> String {
+        let name = |id: &ComponentId| self.component_name(id);
+        let what = match self.place_of(pane) {
+            Some(Place::Graph { nav, selection }) => {
+                let mut out = format!("{} view", nav.view.name().replace('_', " "));
+                if nav.source != arch_graph::Source::Code {
+                    out.push_str(&format!(", {}", nav.source));
+                }
+                if let Some(root) = &nav.root {
+                    out.push_str(&format!(", from {}", name(&ComponentId::new(root.clone()))));
+                }
+                if let Some(at) = &selection {
+                    out.push_str(&format!(", at {}", name(&ComponentId::new(at.clone()))));
+                }
+                out
+            }
+            Some(Place::Code { file, line }) => format!("{file}:{line}"),
+            Some(Place::Spec { component, .. }) => {
+                let card = component.as_ref().map_or_else(|| "following the graph".to_owned(), &name);
+                if self.pinned(pane) { format!("{card} (pinned)") } else { card }
+            }
+            Some(Place::Tree { cursor }) => cursor.as_ref().map_or_else(|| "the outline".to_owned(), |id| format!("at {}", name(id))),
+            Some(Place::Chat { .. }) => "the agent's session".to_owned(),
+            Some(Place::Queue { .. }) => "the plan's jobs".to_owned(),
+            None => "new".to_owned(),
+        };
+        format!("{} · {what}", pane.kind.name())
+    }
+
+    /// The view of `kind` in use, new again.
+    fn reset(&mut self, kind: BufferKind) {
+        match kind {
+            BufferKind::Graph => self.graph = GraphState::default(),
+            BufferKind::Code => self.code = CodeViewerState::default(),
+            BufferKind::Spec => self.spec = SpecState::default(),
+            BufferKind::Tree => self.tree = ArchitectureTreeState::default(),
+            BufferKind::Chat | BufferKind::Queue => return,
+        }
+        self.set_up(kind);
+    }
+
+    /// Every graph (the one in use first).
+    fn graphs(&mut self) -> impl Iterator<Item = &mut GraphState> {
+        std::iter::once(&mut self.graph).chain(self.parked.graphs.values_mut())
+    }
+
+    fn codes(&mut self) -> impl Iterator<Item = &mut CodeViewerState> {
+        std::iter::once(&mut self.code).chain(self.parked.codes.values_mut())
+    }
+
+    fn specs(&mut self) -> impl Iterator<Item = &mut SpecState> {
+        std::iter::once(&mut self.spec).chain(self.parked.specs.values_mut())
+    }
+
+    fn trees(&mut self) -> impl Iterator<Item = &mut ArchitectureTreeState> {
+        std::iter::once(&mut self.tree).chain(self.parked.trees.values_mut())
+    }
+
+    /// Where `pane`'s view is, wherever it's kept.
+    fn place_of(&self, pane: Pane) -> Option<Place> {
+        if pane.kind.one_only() || self.active.get(&pane.kind).copied().unwrap_or(0) == pane.id {
+            return Some(self.view(pane.kind).place());
+        }
+        match pane.kind {
+            BufferKind::Graph => self.parked.graphs.get(&pane.id).map(|v| v.place()),
+            BufferKind::Code => self.parked.codes.get(&pane.id).map(|v| v.place()),
+            BufferKind::Spec => self.parked.specs.get(&pane.id).map(|v| v.place()),
+            BufferKind::Tree => self.parked.trees.get(&pane.id).map(|v| v.place()),
+            BufferKind::Chat | BufferKind::Queue => None,
+        }
+    }
+
+    /// Whether `pane`'s spec view is pinned.
+    fn pinned(&self, pane: Pane) -> bool {
+        if self.active.get(&BufferKind::Spec).copied().unwrap_or(0) == pane.id { self.spec.pinned } else { self.parked.specs.get(&pane.id).is_some_and(|s| s.pinned) }
+    }
+
+    // ---- what's kept on the server ----
+
+    /// The cockpit's state now, as it's saved.
+    pub fn saved_ui(&self) -> SavedUi {
+        let panes: Vec<Pane> = self.columns.panes().iter().copied().chain(self.columns.put_away()).collect();
+        let used = BufferKind::ALL.iter().filter(|k| !k.one_only()).map(|k| match (&self.quick_look, k) {
+            (Some(look), BufferKind::Spec) => Pane::new(*k, look.previous_spec),
+            _ => self.used_pane(*k),
+        });
+        SavedUi {
+            version: crate::saved::VERSION,
+            columns: self.columns.clone(),
+            views: panes.iter().filter_map(|p| self.place_of(*p).map(|place| (*p, place))).collect(),
+            pinned: panes.iter().filter(|p| p.kind == BufferKind::Spec && self.pinned(**p)).map(|p| p.id).collect(),
+            used: used.collect(),
+            marks: self.marks.clone(),
+            jumps: self.jumps.clone(),
+            thread: self.chat.active_thread.clone(),
+            draft: self.chat.input_buffer.clone(),
+            agents: self.remote.agents,
+        }
+    }
+
+    /// Saves the state a moment after it changed, and puts back what was
+    /// saved once it's read.
+    fn keep_state(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        let after = self.config.net.save_after_ms as f64 / 1000.0;
+        let state = self.saved_ui();
+        for event in self.keeper.tick(&state, now, after, &self.net, ctx) {
+            match event {
+                crate::saved::Event::Restore(saved) => self.restore_saved(*saved, ctx),
+                crate::saved::Event::Fresh => self.code.load_file("Cargo.toml", None, &self.net, ctx.clone()),
+                crate::saved::Event::Note(note) => self.note = Some(note),
+            }
+        }
+    }
+
+    /// Puts the saved state back: the columns, each view where it was, the
+    /// marks and jumps, the chat's session (if it's still there) and its
+    /// unsent text.
+    fn restore_saved(&mut self, saved: SavedUi, ctx: &egui::Context) {
+        self.close_quick_look();
+        self.columns = saved.columns.clone().checked();
+        self.marks = saved.marks.clone();
+        self.jumps = saved.jumps.clone().checked();
+        self.remote.agents = saved.agents;
+        for (pane, place) in &saved.views {
+            self.swap_in(*pane);
+            if pane.kind == BufferKind::Spec {
+                self.spec.pinned = saved.pinned.contains(&pane.id);
+                // One not pinned follows the graph's selection (put back with the graph).
+                if !self.spec.pinned {
+                    continue;
+                }
+            }
+            self.restore_place(pane.kind, place, ctx);
+        }
+        // Put back as saved: not started from another view's place.
+        self.fresh.retain(|(pane, _)| !saved.views.iter().any(|(p, _)| p == pane));
+        for pane in &saved.used {
+            self.last_used.insert(pane.kind, pane.id);
+        }
+        self.back_to_used();
+        self.use_focused();
+        if let Some(thread) = saved.thread.clone().filter(|t| self.chat.store.threads.contains_key(t)) {
+            self.chat.active_thread = Some(thread);
+        }
+        if self.chat.input_buffer.is_empty() {
+            self.chat.input_buffer = saved.draft.clone();
+        }
+        self.keeper.restored(&saved);
+    }
+
+    // ---- the quick look ----
+
+    /// Opens the quick look on what the cursor is on, or closes it.
+    fn toggle_quick_look(&mut self, ctx: &egui::Context) {
+        if let Some(open) = &self.quick_look {
+            // Its own key, still down: repeating, not pressed again.
+            if !open.held() {
+                self.close_quick_look();
+            }
+            return;
+        }
+        let kind = self.columns.focused_kind();
+        if kind == BufferKind::Spec {
+            self.note = Some("The spec view shows the full card already.".into());
+            return;
+        }
+        let Some(id) = self.view(kind).target().and_then(|t| t.component().cloned()) else {
+            self.note = Some("Nothing here to look at: put the cursor on a component.".into());
+            return;
+        };
+        // The key that opened it, if it's down (a menu or the palette has none).
+        let key = ctx.input(|i| {
+            self.bound_actions().into_iter().find(|b| b.action.id == "quicklook.toggle").and_then(|b| b.keys.into_iter().filter(|seq| seq.len() == 1).map(|mut seq| seq.remove(0)).find(|chord| chord.key_down(i)))
+        });
+        let now = ctx.input(|i| i.time);
+        self.quick_look = Some(QuickLook::open(self.columns.focused(), kind, self.used_pane(BufferKind::Spec).id, key, now));
+        // Its own spec view, held on the card.
+        self.use_pane(Pane::new(BufferKind::Spec, crate::quick_look::PANE));
+        self.spec.pinned = true;
+        self.spec.floating = true;
+        self.spec.show(id);
+    }
+
+    /// Closes the quick look: the spec view used before is used again.
+    fn close_quick_look(&mut self) {
+        if let Some(look) = self.quick_look.take() {
+            self.use_pane(Pane::new(BufferKind::Spec, look.previous_spec));
+        }
+    }
+
+    /// Its card in a column: it becomes that column's spec view (the
+    /// nearest spec column's, else beside the focused column).
+    fn quick_look_to_column(&mut self) {
+        if self.quick_look.take().is_none() {
+            return;
+        }
+        let from = self.jump_here();
+        let pane = self.columns.new_pane(BufferKind::Spec);
+        self.spec.floating = false;
+        self.active.insert(BufferKind::Spec, pane.id);
+        self.last_used.insert(BufferKind::Spec, pane.id);
+        let slot = self.columns.ensure_visible(pane);
+        self.columns.focus(slot);
+        self.after_jump(from);
+    }
+
+    /// A peek closes when its key is let go; the quick look closes when
+    /// focus moved to a column (a go-to landed there).
+    fn quick_look_tick(&mut self, ctx: &egui::Context) {
+        let Some(look) = &mut self.quick_look else { return };
+        let moved = self.columns.focused() != look.slot || self.columns.kind(look.slot) != look.over;
+        let hold = self.config.keymap.peek_hold_ms as f64 / 1000.0;
+        let (released, now) = ctx.input(|i| (look.key().is_some_and(|k| k.released(i)), i.time));
+        if moved || (released && look.let_go(now, hold)) {
+            self.close_quick_look();
+        }
     }
 
     // ---- slots ----
 
+    /// The view the keys go to: the spec, while the quick look shows it;
+    /// else the focused column's.
     fn focused_kind(&self) -> BufferKind {
-        self.slot_buffers[self.focused_slot]
+        if self.quick_look.is_some() { BufferKind::Spec } else { self.columns.focused_kind() }
     }
 
-    /// The slot showing `kind` (the focused one if it does), else the
-    /// focused slot.
+    /// The column showing the view of `kind` in use (else the nearest of
+    /// its kind, else the focused one).
     fn slot_of(&self, kind: BufferKind) -> usize {
-        if self.focused_kind() == kind {
-            return self.focused_slot;
-        }
-        self.slot_buffers[..self.column_count].iter().position(|k| *k == kind).unwrap_or(self.focused_slot)
+        self.columns.slot_of(self.used_pane(kind)).or_else(|| self.columns.slot_of_kind(kind)).unwrap_or(self.columns.focused())
     }
 
-    /// Shows `kind` in some slot: keeps it where it is, or puts it beside the
-    /// focused slot (or in the only slot) without moving focus. Returns the slot.
+    /// Shows a view of `kind` without moving focus, and uses it: in the
+    /// column a go-to's count names; else the one used last, where it is;
+    /// else the nearest column of that kind; else beside the focused column.
     fn ensure_visible(&mut self, kind: BufferKind) -> usize {
-        if let Some(slot) = self.slot_buffers[..self.column_count].iter().position(|k| *k == kind) {
-            return slot;
-        }
-        let slot = if self.column_count == 1 { 0 } else { (self.focused_slot + 1) % self.column_count };
-        self.slot_buffers[slot] = kind;
+        let slot = match self.landing.take() {
+            Some(slot) => {
+                self.columns.show(slot, kind);
+                slot
+            }
+            None => match self.columns.slot_of(self.used_pane(kind)).or_else(|| self.columns.slot_of_kind(kind)) {
+                Some(slot) => slot,
+                None => self.columns.ensure_visible(self.used_pane(kind)),
+            },
+        };
+        self.use_pane(self.columns.pane(slot));
         slot
     }
 
-    /// Shows `kind` and moves focus to it.
+    /// Shows a view of `kind` (as `ensure_visible`) and moves focus to it.
     fn focus_kind(&mut self, kind: BufferKind) {
-        self.focused_slot = self.ensure_visible(kind);
+        let slot = self.ensure_visible(kind);
+        self.columns.focus(slot);
     }
 
     fn fetch_index_status(&self, ctx: &egui::Context) {
@@ -536,8 +985,8 @@ impl CockpitApp {
     }
 
     fn show_code(&mut self, file: &str, start: u32, end: u32, ctx: &egui::Context) {
-        self.code.show_span(file, start as usize, end as usize, &self.net, ctx.clone());
         self.ensure_visible(BufferKind::Code);
+        self.code.show_span(file, start as usize, end as usize, &self.net, ctx.clone());
     }
 
     // ---- views ----
@@ -620,17 +1069,23 @@ impl CockpitApp {
 
     /// Goes to a recorded place: its view in its slot, focused.
     fn restore_jump(&mut self, jump: Jump, ctx: &egui::Context) {
-        let slot = if jump.slot < self.column_count { jump.slot } else { self.ensure_visible(jump.kind) };
-        self.slot_buffers[slot] = jump.kind;
-        self.focused_slot = slot;
-        match &jump.place {
-            Place::Code { file, line } if *file != self.code.current_file => self.code.load_file(file, Some(*line), &self.net, ctx.clone()),
+        let slot = if jump.slot < self.columns.len() { jump.slot } else { self.ensure_visible(jump.kind) };
+        let pane = self.columns.show(slot, jump.kind);
+        self.columns.focus(slot);
+        self.use_pane(pane);
+        self.restore_place(jump.kind, &jump.place, ctx);
+    }
+
+    /// Puts view `kind` back at `place` (fetching what it needs).
+    fn restore_place(&mut self, kind: BufferKind, place: &Place, ctx: &egui::Context) {
+        match place {
+            Place::Code { file, line } if !self.code.shows(file) => self.code.load_file(file, Some(*line), &self.net, ctx.clone()),
             Place::Spec { component: Some(id), .. } if !self.spec.pinned && self.graph.selection.as_deref() != Some(id.as_str()) => {
                 // The spec shows the graph's selection: move that first.
                 self.graph.reveal(id.clone());
-                self.spec.restore(&jump.place);
+                self.spec.restore(place);
             }
-            place => self.view_mut(jump.kind).restore(place),
+            place => self.view_mut(kind).restore(place),
         }
     }
 
@@ -681,12 +1136,21 @@ impl CockpitApp {
         self.review.tick(&self.net, ctx, plan);
         if self.review.generation != self.review_seen {
             self.review_seen = self.review.generation;
-            self.graph.marks = self.review.marks();
-            self.spec.comments = self.review.comments.clone();
-            self.spec.diff = self.review.diff.clone();
+            let marks = self.review.marks();
+            for graph in self.graphs() {
+                graph.marks.clone_from(&marks);
+            }
+            let (comments, diff) = (self.review.comments.clone(), self.review.diff.clone());
+            for spec in self.specs() {
+                spec.comments.clone_from(&comments);
+                spec.diff.clone_from(&diff);
+            }
         }
-        if self.spec.author != self.config.user.name {
-            self.spec.author = self.config.user.name.clone();
+        let author = self.config.user.name.clone();
+        for spec in self.specs() {
+            if spec.author != author {
+                spec.author.clone_from(&author);
+            }
         }
     }
 
@@ -696,7 +1160,11 @@ impl CockpitApp {
         self.graph.tick(&self.net, ctx);
         let source = self.graph.nav.source.clone();
         let plan = source.plan().cloned();
-        self.spec.follow(self.graph.current().as_ref(), &source);
+        // Specs not pinned show what the graph used last has selected.
+        let selected = self.graph.current();
+        for spec in self.specs() {
+            spec.follow(selected.as_ref(), &source);
+        }
         // One truth for where code is: if the spec fetched a newer anchor for
         // the selection than the view on screen has, the view is stale.
         if let (Some(detail), Some(shown)) = (&self.spec.detail, self.graph.selected())
@@ -744,9 +1212,8 @@ impl CockpitApp {
             self.run_index(IndexOp::Changed, ctx);
         }
         if std::mem::take(&mut self.spec.requests.insert) {
-            let slot = self.ensure_visible(BufferKind::Spec);
-            self.focused_slot = slot;
-            self.input_mode = InputMode::Insert { slot };
+            self.focus_kind(BufferKind::Spec);
+            self.input_mode = InputMode::Insert { slot: self.columns.focused() };
         }
         // A name ctrl-clicked in the code: its definition.
         if let Some(id) = self.code.open.take() {
@@ -755,25 +1222,29 @@ impl CockpitApp {
         }
         for (kind, id) in [(BufferKind::Spec, self.spec.requests.select.take()), (BufferKind::Code, self.code.select.take())] {
             if let Some(id) = id {
+                // In the quick look, a link followed shows its card there too.
+                if kind == BufferKind::Spec && self.quick_look.is_some() {
+                    self.spec.show(id.clone());
+                }
                 self.jumps.record(self.jump_of(kind));
-                self.graph.reveal(id);
                 self.ensure_visible(BufferKind::Graph);
+                self.graph.reveal(id);
             }
         }
         // The outline's Enter: the graph follows (focus stays in the outline).
         if let Some(id) = self.tree.select.take() {
-            self.graph.reveal(id);
             self.ensure_visible(BufferKind::Graph);
+            self.graph.reveal(id);
         }
         if let Some((path, line)) = self.chat.requested_file_jump.take() {
             self.jumps.record(self.jump_of(BufferKind::Chat));
-            self.code.load_file(&path, line, &self.net, ctx.clone());
             self.ensure_visible(BufferKind::Code);
+            self.code.load_file(&path, line, &self.net, ctx.clone());
         }
         let found = std::mem::take(&mut *self.reveal_inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for component in found.into_iter().flatten() {
-            self.graph.reveal(component.id);
             self.ensure_visible(BufferKind::Graph);
+            self.graph.reveal(component.id);
         }
     }
 
@@ -801,7 +1272,8 @@ impl CockpitApp {
         use ShellCommand as S;
         let mut actions = Vec::new();
         let admin = |id: String, label: String, c: ShellCommand| Action::new(id, label, c).group(Group::View).importance(MINOR);
-        for slot in 0..MAX_SLOTS {
+        let max = self.config.columns.max;
+        for slot in 0..max {
             actions.push(admin(format!("slot.focus.{}", slot + 1), format!("Focus slot {}", slot + 1), S::FocusSlot(slot)));
         }
         actions.push(admin("slot.next".into(), "Next slot".into(), S::CycleSlot(1)));
@@ -809,12 +1281,42 @@ impl CockpitApp {
         for kind in BufferKind::ALL {
             actions.push(admin(format!("buffer.{}", kind.name()), format!("Show {} in this slot", kind.title()), S::ShowBuffer(kind)));
         }
-        for cols in 1..=MAX_SLOTS {
+        for cols in 1..=max {
             actions.push(admin(format!("layout.{cols}"), format!("{cols}-column layout"), S::SetLayout(cols)));
+        }
+        actions.push(admin("column.add".into(), "Add a column".into(), S::SetLayout(self.columns.len() + 1)));
+        actions.push(admin("column.close".into(), "Close this column (its view is hidden)".into(), S::CloseColumn));
+        // Every open view, to show here: on screen (and where) or hidden.
+        let views: Vec<Choice> = self
+            .columns
+            .panes()
+            .iter()
+            .enumerate()
+            .map(|(slot, p)| (*p, format!("column {}", slot + 1)))
+            .chain(self.columns.put_away().map(|p| (p, "hidden".to_owned())))
+            .map(|(p, where_)| Choice::new(format!("{}:{}", p.kind.name(), p.id), self.describe(p)).detail(Some(where_)).current(p == self.columns.focused_pane()))
+            .collect();
+        actions.push(Action::new("buffer.list", "Open views: show one here", S::PickView).param(Param::Choice(views)).group(Group::View).importance(SECONDARY));
+        actions.push(admin("buffer.delete".into(), "Delete this column's view (for good)".into(), S::DeleteView));
+        for kind in BufferKind::ALL.into_iter().filter(|k| !k.one_only()) {
+            actions.push(admin(format!("buffer.new.{}", kind.name()), format!("New {} view here", kind.name()), S::NewView(kind)));
         }
         actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), S::ToggleInspector));
         actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), S::ToggleIssues));
-        actions.push(admin("drawer.close".into(), "Close side drawer".into(), S::CloseDrawer));
+        let look = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::View);
+        let open = self.quick_look.is_some();
+        actions.push(look("quicklook.toggle", if open { "Close the quick look" } else { "Quick look: the full card (hold to peek)" }, S::QuickLook).importance(if open { SECONDARY } else { PRIMARY }).when(if open { When::Always } else { When::Component }));
+        if self.quick_look.is_some() {
+            actions.push(look("quicklook.to_column", "Open this card in a column", S::QuickLookToColumn).importance(PRIMARY));
+        }
+        actions.push(Action::new("talk.open", "Talk to the agent from here", S::Talk).group(Group::Act).importance(SECONDARY));
+        actions.push(
+            Action::new("cockpit.agents", "Let agents drive the cockpit", S::Agents)
+                .detail("Agents read the screen and run actions through the server's cockpit tools, as you would")
+                .param(Param::Toggle { on: self.remote.agents })
+                .group(Group::Act)
+                .importance(MINOR),
+        );
         actions.push(admin("palette.open".into(), "Command palette".into(), S::OpenPalette));
         let index = |id: &str, label: &str, op: IndexOp| Action::new(id, label, S::Index(op)).group(Group::Act).importance(MINOR);
         actions.push(index("index.changed", "Re-read the code that changed", IndexOp::Changed));
@@ -988,12 +1490,13 @@ impl CockpitApp {
     }
 
     pub fn invoke(&mut self, invocation: Invocation, ctx: &egui::Context) {
-        self.invoke_counted(invocation, 1, ctx);
+        self.invoke_counted(invocation, None, ctx);
     }
 
-    /// Runs an action `count` times (a count before its key): moves take the
-    /// count, a view's own actions repeat, anything else runs once.
-    fn invoke_counted(&mut self, invocation: Invocation, count: u32, ctx: &egui::Context) {
+    /// Runs an action with the count typed before its key, if one was: moves
+    /// take it, a go-to lands in that column, a view's own actions repeat,
+    /// anything else runs once.
+    fn invoke_counted(&mut self, invocation: Invocation, count: Option<u32>, ctx: &egui::Context) {
         // An action changes what can run as it goes: it sees the actions as
         // they are, and what's drawn after it sees what it left.
         let drawing = self.in_frame.replace(false);
@@ -1002,16 +1505,16 @@ impl CockpitApp {
         self.frame_actions.borrow_mut().take();
     }
 
-    fn run_counted(&mut self, invocation: Invocation, count: u32, ctx: &egui::Context) {
+    fn run_counted(&mut self, invocation: Invocation, count: Option<u32>, ctx: &egui::Context) {
         let Invocation { action, origin, value } = invocation;
         match origin {
             Origin::Shell => {
                 if let Some(command) = action.command::<ShellCommand>() {
-                    self.run_shell(*command, value, count.max(1) as usize, ctx);
+                    self.run_shell(*command, value, count.map(|c| c as usize), ctx);
                 }
             }
             Origin::View(kind) => {
-                let repeats = if kind == self.focused_kind() && action.param == Param::None { count.max(1) } else { 1 };
+                let repeats = if kind == self.focused_kind() && action.param == Param::None { count.unwrap_or(1).max(1) } else { 1 };
                 let before = action.jump.then(|| self.jump_here());
                 for _ in 0..repeats {
                     self.run_on(kind, &action, value.clone(), ctx);
@@ -1045,7 +1548,7 @@ impl CockpitApp {
     }
 
     /// Runs an action, or opens the palette at its parameter if it needs one.
-    fn run_bound(&mut self, bound: &Bound, count: u32, ctx: &egui::Context) {
+    fn run_bound(&mut self, bound: &Bound, count: Option<u32>, ctx: &egui::Context) {
         if bound.action.param == Param::None {
             self.invoke_counted(Invocation { action: bound.action.clone(), origin: bound.origin, value: None }, count, ctx);
         } else {
@@ -1053,42 +1556,33 @@ impl CockpitApp {
         }
     }
 
-    fn run_shell(&mut self, command: ShellCommand, value: Option<String>, count: usize, ctx: &egui::Context) {
+    fn run_shell(&mut self, command: ShellCommand, value: Option<String>, typed: Option<usize>, ctx: &egui::Context) {
         let kind = self.focused_kind();
+        let count = typed.unwrap_or(1).max(1);
         match command {
             ShellCommand::FocusSlot(slot) => {
-                if slot < self.column_count {
-                    self.focused_slot = slot;
-                }
+                self.columns.focus(slot);
             }
-            ShellCommand::CycleSlot(dir) => {
-                let n = self.column_count as i32;
-                self.focused_slot = (self.focused_slot as i32 + dir).rem_euclid(n) as usize;
-            }
+            ShellCommand::CycleSlot(dir) => self.columns.cycle(dir),
             ShellCommand::ShowBuffer(kind) => {
-                self.slot_buffers[self.focused_slot] = kind;
-                // The arrangement changed: nothing to grow back to.
-                self.slots_before_shrink = None;
+                let pane = self.columns.show(self.columns.focused(), kind);
+                self.use_pane(pane);
             }
-            // Fewer columns keep the focused view on screen (in the last one left).
-            ShellCommand::SetLayout(cols) => {
-                let cols = cols.clamp(1, MAX_SLOTS);
-                if cols > self.column_count
-                    && let Some(before) = self.slots_before_shrink.take()
-                {
-                    // Growing back: the slots as they were, focus on the same view.
-                    let focused = self.focused_kind();
-                    self.slot_buffers = before;
-                    self.column_count = cols;
-                    self.focused_slot = self.slot_buffers[..cols].iter().position(|k| *k == focused).unwrap_or(0);
-                    return;
+            ShellCommand::SetLayout(cols) if cols > self.config.columns.max => self.note = Some(format!("{} columns at most (`[columns] max` in your UI config).", self.config.columns.max)),
+            ShellCommand::SetLayout(cols) => self.columns.set_count(cols, self.config.columns.max),
+            ShellCommand::CloseColumn => self.close_column(self.columns.focused()),
+            ShellCommand::DeleteView => self.delete_view(),
+            ShellCommand::NewView(kind) => self.new_view(kind),
+            ShellCommand::PickView => {
+                let picked = value.as_deref().and_then(|v| {
+                    let (kind, id) = v.split_once(':')?;
+                    let kind = BufferKind::ALL.into_iter().find(|k| k.name() == kind)?;
+                    Some(Pane::new(kind, id.parse().ok()?))
+                });
+                match picked.filter(|p| self.columns.has(*p)) {
+                    Some(pane) => self.show_view(pane),
+                    None => self.note = Some("That view isn't open any more.".into()),
                 }
-                if self.focused_slot >= cols {
-                    self.slots_before_shrink.get_or_insert(self.slot_buffers);
-                    self.slot_buffers.swap(self.focused_slot, cols - 1);
-                    self.focused_slot = cols - 1;
-                }
-                self.column_count = cols;
             }
             ShellCommand::ToggleInspector => self.feedback.toggle_inspection(),
             ShellCommand::ToggleIssues => {
@@ -1097,7 +1591,16 @@ impl CockpitApp {
                     self.feedback.load_issues(&self.net, ctx.clone());
                 }
             }
-            ShellCommand::CloseDrawer => self.graph.drawer_open = false,
+            ShellCommand::QuickLook => self.toggle_quick_look(ctx),
+            ShellCommand::QuickLookToColumn => self.quick_look_to_column(),
+            ShellCommand::Talk => {
+                self.talk.get_or_insert_with(Default::default);
+                self.input_mode = InputMode::Insert { slot: self.columns.focused() };
+            }
+            ShellCommand::Agents => {
+                self.remote.agents = value.as_deref() == Some("true");
+                self.note = Some(if self.remote.agents { "Agents can drive the cockpit (the server's cockpit tools)." } else { "Agents can't drive the cockpit." }.into());
+            }
             ShellCommand::OpenPalette => self.open_palette(None),
             ShellCommand::Motion(motion) => {
                 let before = self.jump_here();
@@ -1108,7 +1611,7 @@ impl CockpitApp {
                 }
             }
             ShellCommand::Line => match value.as_deref().map(str::trim).and_then(|v| v.parse::<usize>().ok()) {
-                Some(n) => self.run_shell(ShellCommand::Motion(Motion::Line(n)), None, 1, ctx),
+                Some(n) => self.run_shell(ShellCommand::Motion(Motion::Line(n)), None, None, ctx),
                 None => self.note = Some("Give a line number.".into()),
             },
             ShellCommand::Enter | ShellCommand::Leave => {
@@ -1120,7 +1623,7 @@ impl CockpitApp {
             ShellCommand::Hint { open } => self.start_hint(open),
             ShellCommand::Search => {
                 self.capture = Some(Capture::Search(Searching { kind, query: String::new(), before: self.jump_here() }));
-                self.input_mode = InputMode::Capture { slot: self.focused_slot };
+                self.input_mode = InputMode::Capture { slot: self.columns.focused() };
                 self.view_mut(kind).save_view();
                 // An empty search is a search too (a filter typed into goes blank).
                 self.view_mut(kind).on_search(SearchEvent::Typing(""));
@@ -1144,7 +1647,15 @@ impl CockpitApp {
                 }
             }
             ShellCommand::Keys => self.key_sheet = Some(String::new()),
-            ShellCommand::GoTo(op) => self.goto(op, ctx),
+            ShellCommand::GoTo(op) => {
+                if let Some(column) = typed
+                    && !self.land_in(column)
+                {
+                    return;
+                }
+                self.goto(op, ctx);
+                self.landing = None;
+            }
             ShellCommand::GotoPick => self.goto_pick(value, ctx),
             ShellCommand::Index(op) => self.run_index(op, ctx),
         }
@@ -1152,7 +1663,7 @@ impl CockpitApp {
 
     fn start_capture(&mut self, capture: Capture) {
         self.capture = Some(capture);
-        self.input_mode = InputMode::Capture { slot: self.focused_slot };
+        self.input_mode = InputMode::Capture { slot: self.columns.focused() };
         self.pending_since = 0.0;
     }
 
@@ -1179,7 +1690,7 @@ impl CockpitApp {
             self.note = Some("Nothing on screen to label.".into());
             return;
         }
-        self.start_capture(Capture::Hint(Hinting { slot: self.focused_slot, kind, open, typed: String::new(), labels: labels.into_iter().zip(spots).collect() }));
+        self.start_capture(Capture::Hint(Hinting { slot: self.columns.focused(), kind, open, typed: String::new(), labels: labels.into_iter().zip(spots).collect() }));
     }
 
     /// A hint label was typed (or tapped): move there, or open it.
@@ -1343,6 +1854,27 @@ impl CockpitApp {
         })
     }
 
+    /// A go-to's count names the column it lands in (1 is the leftmost; one
+    /// past the last adds a column). Not the column it starts from: false,
+    /// and the user is told why.
+    fn land_in(&mut self, column: usize) -> bool {
+        let count = self.columns.len();
+        let Some(slot) = column.checked_sub(1) else { return true };
+        if slot == self.columns.focused() {
+            self.note = Some(format!("Column {column} is this one: give another column's number (1 to {count}, or {} for a new one).", count + 1));
+            return false;
+        }
+        if slot > count || slot >= self.config.columns.max {
+            self.note = Some(format!("There are {count} columns: give 1 to {count}, or {} for a new one.", count + 1));
+            return false;
+        }
+        if slot == count {
+            self.columns.set_count(count + 1, self.config.columns.max);
+        }
+        self.landing = Some(slot);
+        true
+    }
+
     /// Takes what the cursor is on where a go-to key says.
     fn goto(&mut self, op: GoTo, ctx: &egui::Context) {
         let origin = self.focused_kind();
@@ -1361,8 +1893,8 @@ impl CockpitApp {
                 return;
             }
             if let (Target::Message { .. }, Some((file, line))) = (&target, target.code()) {
-                self.code.load_file(&file, line, &self.net, ctx.clone());
                 self.focus_kind(BufferKind::Code);
+                self.code.load_file(&file, line, &self.net, ctx.clone());
                 self.after_jump(from);
                 return;
             }
@@ -1377,7 +1909,7 @@ impl CockpitApp {
                         i.push(r);
                     }
                 });
-                self.pending_goto = Some(Pending { wait: Wait::At { op }, from, origin });
+                self.pending_goto = Some(Pending { wait: Wait::At { op }, from, origin, column: self.landing });
             }
             (None, _) => self.note = Some("There's no component here.".into()),
         }
@@ -1403,7 +1935,7 @@ impl CockpitApp {
                     }
                     None => {
                         self.details.want(&id, &source, &self.net, ctx);
-                        self.pending_goto = Some(Pending { wait: Wait::Relations { op, component: id }, from, origin });
+                        self.pending_goto = Some(Pending { wait: Wait::Relations { op, component: id }, from, origin, column: self.landing });
                     }
                 }
             }
@@ -1416,7 +1948,7 @@ impl CockpitApp {
             0 => {}
             1 => self.arrive(op, found[0].clone(), from, origin, ctx),
             _ => {
-                self.choosing = Some(Choosing { op, from, origin, candidates: found });
+                self.choosing = Some(Choosing { op, from, origin, candidates: found, column: self.landing });
                 if let Some(pick) = self.bound_actions().into_iter().find(|b| b.action.id == "goto.pick") {
                     self.open_palette(Some(&pick));
                 }
@@ -1427,7 +1959,9 @@ impl CockpitApp {
     fn goto_pick(&mut self, value: Option<String>, ctx: &egui::Context) {
         let (Some(choosing), Some(value)) = (self.choosing.take(), value) else { return };
         if let Some(c) = choosing.candidates.iter().find(|c| c.id.as_str() == value) {
+            self.landing = choosing.column;
             self.arrive(choosing.op, c.clone(), choosing.from, choosing.origin, ctx);
+            self.landing = None;
         }
     }
 
@@ -1438,6 +1972,11 @@ impl CockpitApp {
         if op == GoTo::Code || origin == BufferKind::Code {
             self.open_component_code(to.id, to.line, from, ctx);
             return;
+        }
+        // In the column a count named: the same kind of view, there.
+        if self.landing.is_some() {
+            let kind = if matches!(origin, BufferKind::Graph | BufferKind::Tree | BufferKind::Spec) { origin } else { BufferKind::Graph };
+            return self.show_in(kind, to.id, from);
         }
         match origin {
             BufferKind::Graph => self.graph.reveal(to.id),
@@ -1457,6 +1996,19 @@ impl CockpitApp {
     /// Shows a component in a view and moves focus there.
     fn show_in(&mut self, kind: BufferKind, id: ComponentId, from: Jump) {
         match kind {
+            BufferKind::Code | BufferKind::Chat => return,
+            BufferKind::Queue if !self.queue.select_component(&id) => {
+                self.note = Some(match &self.queue.plan {
+                    None => "No plan, so no queue: pick a plan in the graph.".to_owned(),
+                    Some(_) => format!("{} has no job in the queue.", self.component_name(&id)),
+                });
+                return;
+            }
+            _ => {}
+        }
+        // The view it lands in first (a column's own), then shown there.
+        self.focus_kind(kind);
+        match kind {
             BufferKind::Graph => self.graph.reveal(id),
             BufferKind::Spec => {
                 if !self.spec.pinned {
@@ -1465,18 +2017,8 @@ impl CockpitApp {
                 self.spec.show(id);
             }
             BufferKind::Tree => self.tree.reveal(&id, Scroll::Center),
-            BufferKind::Queue => {
-                if !self.queue.select_component(&id) {
-                    self.note = Some(match &self.queue.plan {
-                        None => "No plan, so no queue: pick a plan in the graph.".to_owned(),
-                        Some(_) => format!("{} has no job in the queue.", self.component_name(&id)),
-                    });
-                    return;
-                }
-            }
-            BufferKind::Code | BufferKind::Chat => return,
+            BufferKind::Queue | BufferKind::Code | BufferKind::Chat => {}
         }
-        self.focus_kind(kind);
         self.after_jump(from);
     }
 
@@ -1522,7 +2064,7 @@ impl CockpitApp {
             None => {
                 let source = self.graph.nav.source.clone();
                 self.details.want(&id, &source, &self.net, ctx);
-                self.pending_goto = Some(Pending { wait: Wait::Code { component: id, line }, from, origin: self.focused_kind() });
+                self.pending_goto = Some(Pending { wait: Wait::Code { component: id, line }, from, origin: self.focused_kind(), column: self.landing });
             }
         }
     }
@@ -1539,8 +2081,9 @@ impl CockpitApp {
         }
         let at = std::mem::take(&mut *self.at_inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for reply in at {
-            let Some(Pending { wait: Wait::At { op }, from, origin }) = self.pending_goto.clone() else { continue };
+            let Some(Pending { wait: Wait::At { op }, from, origin, column }) = self.pending_goto.clone() else { continue };
             self.pending_goto = None;
+            self.landing = column;
             match reply {
                 Ok(component) => self.goto_component(op, component.id, from, origin, ctx),
                 Err(_) => self.note = Some("No component at this line.".into()),
@@ -1551,13 +2094,15 @@ impl CockpitApp {
             Some(Pending { wait: Wait::Relations { component, .. } | Wait::Code { component, .. }, .. }) => self.details.get(component, &source).is_some(),
             _ => false,
         };
-        if ready && let Some(Pending { wait, from, origin }) = self.pending_goto.take() {
+        if ready && let Some(Pending { wait, from, origin, column }) = self.pending_goto.take() {
+            self.landing = column;
             match wait {
                 Wait::Relations { op, component } => self.goto_component(op, component, from, origin, ctx),
                 Wait::Code { component, line } => self.open_component_code(component, line, from, ctx),
                 Wait::At { .. } => {}
             }
         }
+        self.landing = None;
     }
 
     // ---- keys ----
@@ -1574,7 +2119,7 @@ impl CockpitApp {
             Some(LeaderEntry::Action { index, .. }) => {
                 self.leader_path.clear();
                 self.input_mode = InputMode::Normal;
-                self.run_bound(&bound[index], 1, ctx);
+                self.run_bound(&bound[index], None, ctx);
                 true
             }
             None => false,
@@ -1681,6 +2226,10 @@ impl CockpitApp {
                     self.pending_count = None;
                     return;
                 }
+                if back && self.quick_look.is_some() {
+                    self.close_quick_look();
+                    return;
+                }
                 // Counts: digits before a key, in every view.
                 if self.pending_keys.is_empty() {
                     let digits: Vec<u32> = ctx.input(|i| {
@@ -1704,7 +2253,7 @@ impl CockpitApp {
                     SeqMatch::Run(index) => {
                         self.pending_keys.clear();
                         self.note = None;
-                        let count = self.pending_count.take().unwrap_or(1);
+                        let count = self.pending_count.take();
                         let b = bound[index].clone();
                         self.run_bound(&b, count, ctx);
                     }
@@ -1849,12 +2398,26 @@ impl CockpitApp {
                     ui.add_space(crate::theme::look().space_m);
 
                     // This row runs right to left: add from the right end so
-                    // it reads "Layout: 1 2 3".
+                    // it reads "Columns: - 2 +".
                     let layout_res = ui.horizontal(|ui| {
-                        for cols in (1..=MAX_SLOTS).rev() {
-                            ui.selectable_value(&mut self.column_count, cols, cols.to_string());
+                        let (count, max) = (self.columns.len(), self.config.columns.max);
+                        if ui.add_enabled(count < max, egui::Button::new(egui_phosphor::regular::PLUS)).on_hover_text("Add a column").clicked() {
+                            self.columns.set_count(count + 1, max);
                         }
-                        ui.label(RichText::new("Layout:").size(crate::theme::look().text_body).color(colors().muted));
+                        ui.label(RichText::new(count.to_string()).monospace().size(crate::theme::look().text_body).color(colors().text_strong));
+                        if ui.add_enabled(count > 1, egui::Button::new(egui_phosphor::regular::MINUS)).on_hover_text("One column fewer").clicked() {
+                            self.columns.set_count(count - 1, max);
+                        }
+                        ui.label(RichText::new("Columns:").size(crate::theme::look().text_body).color(colors().muted));
+                        let hidden = self.columns.hidden();
+                        if hidden > 0 {
+                            let list = self.bound_actions().into_iter().find(|b| b.action.id == "buffer.list").map(|b| b.key_hint()).unwrap_or_default();
+                            let chip = ui.add(egui::Label::new(RichText::new(format!("{hidden} hidden")).size(crate::theme::look().text_body).color(colors().info)).sense(egui::Sense::click()));
+                            if chip.on_hover_text(format!("Views open but not on screen ({list} lists them all)")).clicked() {
+                                self.palette.open_with("buffer.list");
+                                self.input_mode = InputMode::Palette;
+                            }
+                        }
                     });
                     self.feedback.register_inspectable(ui, "top_bar:layout_selector", layout_res.response.rect);
                 });
@@ -1910,7 +2473,7 @@ impl CockpitApp {
     }
 
     pub fn render_slot(&mut self, slot_idx: usize, ui: &mut egui::Ui, shell: &[Action], tab_keys: &[String]) {
-        let is_focused = self.focused_slot == slot_idx;
+        let is_focused = self.columns.focused() == slot_idx;
         let border_color = if is_focused { colors().focus } else { colors().border };
 
         let slot_id = format!("slot_{}", slot_idx + 1);
@@ -1921,7 +2484,7 @@ impl CockpitApp {
             ui.set_height(ui.available_height());
 
             ui.vertical(|ui| {
-                let active_kind = self.slot_buffers[slot_idx];
+                let active_kind = self.columns.kind(slot_idx);
                 let is_compact = ui.available_width() < 340.0;
 
                 // Quiet chrome: the slot's number, then a tab per view as an
@@ -1931,7 +2494,7 @@ impl CockpitApp {
                     let number_color = if is_focused { colors().focus } else { colors().faint };
                     let slot_label = ui.add(egui::Label::new(RichText::new((slot_idx + 1).to_string()).strong().monospace().size(crate::theme::look().text_body).color(number_color)).sense(egui::Sense::click()));
                     if slot_label.on_hover_text(format!("Slot {}: {}", slot_idx + 1, active_kind.title().to_lowercase())).clicked() {
-                        self.focused_slot = slot_idx;
+                        self.columns.focus(slot_idx);
                     }
                     for (n, kind) in BufferKind::ALL.into_iter().enumerate() {
                         let title = kind.title();
@@ -1941,11 +2504,21 @@ impl CockpitApp {
                             Some(key) => format!("{name} ({key})"),
                             None => name,
                         };
-                        let tab = ui.selectable_value(&mut self.slot_buffers[slot_idx], kind, label).on_hover_text(tip);
+                        let tab = ui.selectable_label(active_kind == kind, label).on_hover_text(tip);
                         if tab.clicked() {
-                            self.focused_slot = slot_idx;
+                            let pane = self.columns.show(slot_idx, kind);
+                            self.columns.focus(slot_idx);
+                            self.swap_in(pane);
                         }
                         self.feedback.register_inspectable(ui, &format!("slot_{}:tab:{}", slot_idx + 1, kind.name()), tab.rect);
+                    }
+                    if self.columns.len() > 1 {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let close = self.bound_actions().into_iter().find(|b| b.action.id == "column.close").map(|b| b.key_hint()).unwrap_or_default();
+                            if ui.small_button(egui_phosphor::regular::X).on_hover_text(format!("Close this column (its view is hidden, not lost; {close} closes the focused one)")).clicked() {
+                                self.closing = Some(slot_idx);
+                            }
+                        });
                     }
                 });
                 self.feedback.register_inspectable(ui, &format!("slot_{}:header", slot_idx + 1), header_res.response.rect);
@@ -1953,7 +2526,7 @@ impl CockpitApp {
 
                 let ctx = ui.ctx().clone();
                 let mut cx = RunCx { net: &self.net, ctx: &ctx, input_mode: &mut self.input_mode, slot: slot_idx, note: &mut self.note, shell };
-                match self.slot_buffers[slot_idx] {
+                match active_kind {
                     BufferKind::Chat => self.chat.render(ui, &mut self.feedback, is_focused, &mut cx),
                     BufferKind::Code => self.code.render(ui, &self.net, &mut self.feedback, slot_idx),
                     BufferKind::Graph => {
@@ -1967,13 +2540,15 @@ impl CockpitApp {
             });
         });
 
-        self.slot_rects[slot_idx] = ui.min_rect();
+        if let Some(rect) = self.slot_rects.get_mut(slot_idx) {
+            *rect = ui.min_rect();
+        }
         // Frame-level click-to-focus detection
         if ui.input(|i| i.pointer.primary_clicked())
             && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
             && ui.min_rect().contains(pos)
         {
-            self.focused_slot = slot_idx;
+            self.columns.focus(slot_idx);
         }
     }
 
@@ -2056,8 +2631,9 @@ impl CockpitApp {
                             ui.allocate_ui(egui::vec2(200.0, 22.0), |ui| {
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 4.0;
-                                    let fill = if primary { colors().focus } else { colors().overlay_raised };
-                                    let btn = egui::Button::new(RichText::new(key.to_string()).color(colors().key).monospace().strong().size(crate::theme::look().text_body)).fill(fill).corner_radius(crate::theme::look().radius_m);
+                                    // A bright pill takes the text meant for bright fills.
+                                    let (fill, ink) = if primary { (colors().focus, colors().on_bright) } else { (colors().overlay_raised, colors().key) };
+                                    let btn = egui::Button::new(RichText::new(key.to_string()).color(ink).monospace().strong().size(crate::theme::look().text_body)).fill(fill).corner_radius(crate::theme::look().radius_m);
                                     if ui.add(btn).clicked() {
                                         tapped = Some(key);
                                     }
@@ -2119,7 +2695,7 @@ impl CockpitApp {
     pub(crate) fn bar_keys<'a>(&self, bound: &'a [Bound]) -> Vec<&'a Bound> {
         let focused = Origin::View(self.focused_kind());
         let situation = self.situation();
-        let shared = |b: &Bound| b.origin == Origin::Shell && (b.action.id.starts_with("nav.") || b.action.id.starts_with("goto."));
+        let shared = |b: &Bound| b.origin == Origin::Shell && ["nav.", "goto.", "quicklook.", "talk."].iter().any(|p| b.action.id.starts_with(p));
         let mut keys: Vec<(usize, &Bound)> = bound
             .iter()
             .enumerate()
@@ -2186,7 +2762,7 @@ impl CockpitApp {
             });
         });
         if let Some(b) = run {
-            self.run_bound(&b, 1, ctx);
+            self.run_bound(&b, None, ctx);
         }
     }
 
@@ -2289,6 +2865,59 @@ impl CockpitApp {
     }
 
     /// Hint labels over what the focused view draws; tapping one picks it.
+    /// The quick look, over the column it was opened from: what the graph
+    /// says about the card, then the card in full (the spec view).
+    fn render_quick_look(&mut self, ctx: &egui::Context, shell: &[Action]) {
+        let Some(look) = &self.quick_look else { return };
+        let slot = look.slot;
+        let over = self.slot_rects.get(slot).copied().filter(|r| r.is_positive()).unwrap_or_else(|| ctx.content_rect());
+        let screen = ctx.content_rect();
+        let theme = crate::theme::look();
+        let size = egui::vec2(over.width().max(screen.width().min(theme.quick_look_width)).min(screen.width() - 2.0 * theme.space_l), screen.height() * theme.quick_look_height);
+        let pos = egui::pos2((over.center().x - size.x / 2.0).clamp(screen.left() + theme.space_l, (screen.right() - size.x - theme.space_l).max(screen.left())), screen.center().y - size.y / 2.0);
+        let close_hint = self.bound_actions().into_iter().find(|b| b.action.id == "quicklook.toggle").map(|b| b.key_hint()).unwrap_or_default();
+        let column_hint = self.bound_actions().into_iter().find(|b| b.action.id == "quicklook.to_column").map(|b| b.key_hint()).unwrap_or_default();
+        let (mut to_column, mut close) = (false, false);
+        let area = egui::Area::new(egui::Id::new("quick_look")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+            Frame::NONE.fill(colors().panel).stroke(Stroke::new(theme.line_thin, colors().focus)).corner_radius(theme.radius_xl).inner_margin(crate::theme::margin(theme.space_m)).show(ui, |ui| {
+                ui.set_min_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
+                ui.set_max_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{} Quick look", egui_phosphor::regular::EYE)).strong().size(theme.text_label).color(colors().text_strong));
+                    ui.label(RichText::new(format!("{close_hint} or Esc closes · hold {close_hint} to peek")).size(theme.text_small).color(colors().muted));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        close |= ui.small_button(egui_phosphor::regular::X).on_hover_text("Close").clicked();
+                        to_column |= ui.button(format!("{} Open in a column", egui_phosphor::regular::COLUMNS)).on_hover_text(column_hint).clicked();
+                    });
+                });
+                if let Some(id) = self.spec.target.clone() {
+                    self.graph.render_card_context(ui, &id);
+                }
+                ui.separator();
+                let mut cx = RunCx { net: &self.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell };
+                self.spec.render(ui, &mut cx);
+            });
+        });
+        // A click outside closes it (a peek's key closes it when let go).
+        let outside = ctx.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p)));
+        if to_column {
+            self.quick_look_to_column();
+        } else if close || outside {
+            self.close_quick_look();
+        }
+    }
+
+    /// The box for talking to the agent: it has the keyboard while open.
+    fn render_talk(&mut self, ctx: &egui::Context) {
+        let Some(talk) = &mut self.talk else { return };
+        let close = self.config.keymap.back.label();
+        if talk.render(ctx, &mut self.chat, &self.net, &close) == crate::talk::Outcome::Close {
+            self.talk = None;
+            self.input_mode = InputMode::Normal;
+            release_keyboard(ctx);
+        }
+    }
+
     fn render_hints(&mut self, ctx: &egui::Context) {
         let Some(Capture::Hint(hint)) = &self.capture else { return };
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hint_labels")));
@@ -2300,7 +2929,7 @@ impl CockpitApp {
                 continue;
             }
             let galley = painter.layout_no_wrap(label.to_uppercase(), egui::FontId::monospace(crate::theme::look().text_title), colors().on_bright);
-            let chip = hint_chip(spot.rect, galley.size() + egui::vec2(8.0, 4.0), self.slot_rects[hint.slot], &taken);
+            let chip = hint_chip(spot.rect, galley.size() + egui::vec2(8.0, 4.0), self.slot_rects.get(hint.slot).copied().unwrap_or(egui::Rect::EVERYTHING), &taken);
             taken.push(chip);
             painter.rect_filled(chip, 3.0, colors().key);
             painter.galley(chip.min + egui::vec2(4.0, 2.0), galley, colors().on_bright);
@@ -2393,16 +3022,110 @@ impl eframe::App for CockpitApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame(ctx);
     }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.remote.feed(ctx, raw_input);
+    }
 }
 
 impl CockpitApp {
     /// One UI frame.
     pub fn frame(&mut self, ctx: &egui::Context) {
         self.frame_actions.borrow_mut().take();
+        self.serve_calls(ctx);
         self.in_frame.set(true);
         self.draw_frame(ctx);
         self.in_frame.set(false);
         self.frame_actions.borrow_mut().take();
+        let status = self.remote.waiting().then(|| self.remote_status());
+        self.remote.end_frame(ctx, status);
+        self.remote.flush();
+    }
+
+    /// Runs the calls from outside that came since the last frame.
+    fn serve_calls(&mut self, ctx: &egui::Context) {
+        use crate::remote::Call;
+        for (call, respond) in self.remote.take(ctx, &self.net) {
+            match call {
+                Call::Read => self.remote.answer_screen(respond),
+                Call::Actions => respond(Ok(self.actions_listed())),
+                Call::Run { id, value } => match self.run_named(&id, value, ctx) {
+                    Ok(()) => self.remote.answer_ran(respond),
+                    Err(e) => respond(Err(e)),
+                },
+                Call::Click { text, x, y } => self.remote.click(text, x.zip(y).map(|(x, y)| egui::pos2(x, y)), respond),
+                Call::Type { text } => self.remote.type_text(text, respond),
+                Call::Keys { keys } => self.remote.keys(&keys, respond),
+            }
+        }
+    }
+
+    /// Everything that can be run now, as a call from outside lists it.
+    fn actions_listed(&self) -> serde_json::Value {
+        let situation = self.situation();
+        let listed: Vec<serde_json::Value> = self
+            .palette_actions()
+            .iter()
+            .map(|b| {
+                let (needs, choices) = match &b.action.param {
+                    Param::None => ("nothing", Vec::new()),
+                    Param::Choice(_) => ("a choice", b.action.param.choices()),
+                    Param::Toggle { .. } => ("on or off", b.action.param.choices()),
+                    Param::Text { .. } => ("text", Vec::new()),
+                    Param::Search { .. } => ("a search", Vec::new()),
+                };
+                serde_json::json!({
+                    "id": b.action.id,
+                    "label": b.action.label,
+                    "detail": b.action.detail,
+                    "view": match b.origin { Origin::Shell => "shell", Origin::View(kind) => kind.name() },
+                    "keys": b.key_hint(),
+                    "needs": needs,
+                    "choices": choices.iter().map(|c| serde_json::json!({ "value": c.value, "label": c.label, "current": c.current })).collect::<Vec<_>>(),
+                    "available": b.action.when.holds(&situation),
+                })
+            })
+            .collect();
+        serde_json::Value::Array(listed)
+    }
+
+    /// Runs an action by id as its key would, with the value given (a
+    /// choice by value or label); says why not if it can't.
+    fn run_named(&mut self, id: &str, value: Option<String>, ctx: &egui::Context) -> Result<(), String> {
+        let bound = self.palette_actions().into_iter().find(|b| b.action.id == id).ok_or_else(|| format!("no action {id:?} now (actions lists them)"))?;
+        if !bound.action.when.holds(&self.situation()) {
+            return Err(format!("{id:?} doesn't apply here now"));
+        }
+        let value = match (&bound.action.param, value) {
+            (Param::None, _) => None,
+            (Param::Text { .. } | Param::Search { .. }, Some(v)) => Some(v),
+            (param @ (Param::Choice(_) | Param::Toggle { .. }), Some(v)) => {
+                let choices = param.choices();
+                let wanted = match v.as_str() {
+                    "on" => "true",
+                    "off" => "false",
+                    other => other,
+                };
+                let found = choices.iter().find(|c| c.value == wanted).or_else(|| choices.iter().find(|c| c.label.eq_ignore_ascii_case(wanted)));
+                Some(found.map(|c| c.value.clone()).ok_or_else(|| format!("{id:?}: {v:?} isn't one of {:?}", choices.iter().map(|c| &c.value).collect::<Vec<_>>()))?)
+            }
+            (_, None) => return Err(format!("{id:?} needs a value (actions shows what)")),
+        };
+        self.note = None;
+        self.invoke(Invocation { action: bound.action, origin: bound.origin, value }, ctx);
+        Ok(())
+    }
+
+    /// The app's state as a read from outside reports it.
+    fn remote_status(&self) -> crate::remote::Status {
+        let focused = self.columns.focused();
+        crate::remote::Status {
+            mode: format!("{:?}", self.input_mode),
+            columns: self.columns.panes().iter().enumerate().map(|(i, p)| serde_json::json!({ "column": i + 1, "view": self.describe(*p), "focused": i == focused })).collect(),
+            note: self.note.clone(),
+            leader: (self.input_mode == InputMode::Leader).then(|| self.leader_path.iter().collect()),
+            palette: self.palette.is_open(),
+        }
     }
 
     fn draw_frame(&mut self, ctx: &egui::Context) {
@@ -2417,20 +3140,27 @@ impl CockpitApp {
         let shell = self.shell_actions();
         let tab_keys = self.tab_keys(&shell);
         egui::CentralPanel::default().show(ctx, |ui| {
-            let col_count = self.column_count.clamp(1, 3);
-            ui.columns(col_count, |cols| {
+            self.slot_rects.resize(self.columns.len(), egui::Rect::NOTHING);
+            ui.columns(self.columns.len(), |cols| {
                 for (i, col) in cols.iter_mut().enumerate() {
+                    // Each column draws its own view.
+                    self.swap_in(self.columns.pane(i));
                     self.render_slot(i, col, &shell, &tab_keys);
                 }
             });
+            self.back_to_used();
+            // A column's × closes it once every column is drawn.
+            if let Some(slot) = self.closing.take() {
+                self.close_column(slot);
+            }
         });
 
         // Real-time Inspector targeting overlay
         self.feedback.render_inspection_overlay(ctx);
 
         // Developer Feedback modal (automatically pops up when an element is targeted)
-        let active_slots: Vec<String> = self.slot_buffers[..self.column_count].iter().map(|b| b.title().to_lowercase()).collect();
-        self.feedback.render_modal(ctx, &self.net, self.column_count, &active_slots);
+        let active_slots: Vec<String> = self.columns.panes().iter().map(|p| p.kind.title().to_lowercase()).collect();
+        self.feedback.render_modal(ctx, &self.net, self.columns.len(), &active_slots);
 
         // Issues & Feedback Explorer window
         self.feedback.render_issues_window(ctx, &self.net);
@@ -2438,6 +3168,8 @@ impl CockpitApp {
         // Feedback confirmation toast
         self.feedback.render_toast(ctx);
 
+        self.render_quick_look(ctx, &shell);
+        self.render_talk(ctx);
         self.render_hints(ctx);
         self.render_prefix_popup(ctx);
         self.render_which_key_hud(ctx);
@@ -2495,6 +3227,65 @@ mod tests {
         frame(ctx, app, vec![button(false)]);
     }
 
+    /// Calls from outside, answered: each runs frames as eframe does (the
+    /// call's input fed in first) until it's answered.
+    fn from_outside(ctx: &egui::Context, app: &mut CockpitApp, call: &str) -> crate::remote::Answer {
+        let door = app.remote.door(ctx);
+        let answer = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let kept = answer.clone();
+        door.knock(call, Box::new(move |a| *kept.borrow_mut() = Some(a)));
+        for _ in 0..10 {
+            let mut raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)), ..Default::default() };
+            app.remote.feed(ctx, &mut raw);
+            let _ = ctx.run(raw, |ctx| app.frame(ctx));
+            if let Some(answer) = answer.borrow_mut().take() {
+                return answer;
+            }
+        }
+        panic!("{call} wasn't answered");
+    }
+
+    #[test]
+    fn from_outside_the_screen_is_read_and_actions_run_clicked_and_keyed_as_the_user_would() {
+        let (ctx, mut app) = full_app();
+        focus(&ctx, &mut app, BufferKind::Graph);
+        let read = from_outside(&ctx, &mut app, r#"{"op":"read"}"#).unwrap();
+        assert_eq!(read["mode"], "Normal");
+        assert!(read["columns"].as_array().unwrap().iter().any(|c| c["focused"] == true && c["view"].as_str().unwrap().starts_with("graph")), "{}", read["columns"]);
+        assert!(read["texts"].as_array().unwrap().iter().any(|t| t["text"] == "step"), "what's drawn, with where");
+
+        let actions = from_outside(&ctx, &mut app, r#"{"op":"actions"}"#).unwrap();
+        let add = actions.as_array().unwrap().iter().find(|a| a["id"] == "column.add").expect("listed");
+        assert_eq!((add["keys"].as_str(), add["needs"].as_str()), (Some("SPC l a"), Some("nothing")));
+
+        let before = app.columns.len();
+        from_outside(&ctx, &mut app, r#"{"op":"run","id":"column.add"}"#).unwrap();
+        assert_eq!(app.columns.len(), before + 1, "run as its key would");
+        let err = from_outside(&ctx, &mut app, r#"{"op":"run","id":"no.such"}"#).unwrap_err();
+        assert!(err.contains("no action"), "{err}");
+        let err = from_outside(&ctx, &mut app, r#"{"op":"run","id":"cockpit.agents","value":"maybe"}"#).unwrap_err();
+        assert!(err.contains("isn't one of"), "{err}");
+        from_outside(&ctx, &mut app, r#"{"op":"run","id":"cockpit.agents","value":"on"}"#).unwrap();
+        assert!(app.remote.agents && app.saved_ui().agents, "the user's say, kept");
+        from_outside(&ctx, &mut app, r#"{"op":"run","id":"cockpit.agents","value":"off"}"#).unwrap();
+        from_outside(&ctx, &mut app, r#"{"op":"run","id":"slot.focus.1"}"#).unwrap();
+        focus(&ctx, &mut app, BufferKind::Graph);
+
+        from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"space"}"#).unwrap();
+        assert_eq!(app.input_mode, InputMode::Leader, "keys as typed");
+        from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"escape"}"#).unwrap();
+        assert_eq!(app.input_mode, InputMode::Normal);
+
+        let mut tree = crate::graph::tests::sample_tree();
+        tree.cut = Some(arch_graph::tree::Cut { reason: arch_graph::tree::CutReason::Budget, starts_left_out: 0, shown: 2, asked: 3, hidden: 7 });
+        app.graph.set_tree(tree);
+        let clicked = from_outside(&ctx, &mut app, r#"{"op":"click","text":"Show 2 levels"}"#).unwrap();
+        assert_eq!(clicked["clicked"], "Show 2 levels");
+        assert_eq!(app.graph.nav.depth, Some(2), "clicked as the user would");
+        let err = from_outside(&ctx, &mut app, r#"{"op":"click","text":"Nowhere at all"}"#).unwrap_err();
+        assert!(err.contains("isn't on screen"), "{err}");
+    }
+
     #[test]
     fn the_size_note_offers_its_fixes_as_buttons() {
         let (ctx, mut app) = full_app();
@@ -2513,13 +3304,18 @@ mod tests {
         assert_eq!(app.graph.nav.root.as_deref(), Some("rust:a::step"), "started from the card");
     }
 
+    /// Columns showing these kinds, one view each.
+    fn columns_of(kinds: &[BufferKind], focused: usize) -> crate::columns::Columns {
+        crate::columns::Columns::new(kinds.iter().map(|k| Pane::new(*k, 0)).collect(), focused)
+    }
+
     /// An app with the graph in slot 2 (focused) showing the sample view.
     fn app_with_graph() -> (egui::Context, CockpitApp) {
         let ctx = egui::Context::default();
         let mut app = CockpitApp::new("http://127.0.0.1:9");
         app.initialized = true; // skip network bootstrapping
         app.graph = showing(sample_tree());
-        app.focused_slot = 1;
+        app.columns.focus(1);
         (ctx, app)
     }
 
@@ -2592,13 +3388,16 @@ mod tests {
         for n in 4..40 {
             app.chat.process_event(crate::chat::tests::item(n, harness_contracts::ItemBody::UserMessage { text: format!("message {n}") }));
         }
-        app.column_count = 3;
+        app.columns.set_count(3, 12);
         (ctx, app)
     }
 
-    /// Shows `kind` in the focused slot and draws it (so it knows its size).
+    /// Moves the view of `kind` in use to the focused slot and draws it (so
+    /// it knows its size).
     fn focus(ctx: &egui::Context, app: &mut CockpitApp, kind: BufferKind) {
-        app.slot_buffers[app.focused_slot] = kind;
+        let pane = app.used_pane(kind);
+        app.columns.place(app.columns.focused(), pane);
+        app.use_pane(pane);
         for _ in 0..3 {
             frame(ctx, app, vec![]);
         }
@@ -2682,43 +3481,280 @@ mod tests {
         // Only each slot's active tab is named.
         let text = texts(&frame(&ctx, &mut app, vec![]));
         let named = |kind: BufferKind| text.lines().any(|l| l == format!("{} {}{}", kind.icon(), &kind.title()[..1], kind.title()[1..].to_lowercase()));
-        let active: Vec<BufferKind> = app.slot_buffers.iter().take(app.column_count.clamp(1, 3)).copied().collect();
+        let active = app.columns.kinds();
         for kind in BufferKind::ALL {
             assert_eq!(named(kind), active.contains(&kind), "{kind:?}: {text}");
         }
     }
 
-    #[test]
-    fn the_details_card_says_how_each_kind_of_link_is_known() {
-        let (ctx, mut app) = app_with_graph();
-        app.graph = showing(sample_tree());
-        crate::graph::tests::with_detail(&mut app.graph, "rust:a::step", "src/a.rs", 10, 20);
-        // A data flow out of it, matched by name; one call confirmed.
-        let key = ("rust:a::step".to_owned(), Source::Code);
-        let Some(crate::graph::Detail::Ready(detail)) = app.graph.details.get_mut(&key) else { panic!("no detail") };
-        detail.outgoing.push(Relation::new(RelationKind::DataFlow, ComponentId::new("rust:a::step"), ComponentId::new("rust:a::log"), Provenance::OBSERVED));
-        detail.incoming.iter_mut().for_each(|r| r.proven_by = Some("rust-analyzer 1.90.0".into()));
-        app.graph.select(Some("rust:a::step".into()));
-        let text = texts(&frame(&ctx, &mut app, vec![]));
-        assert!(text.contains("save (matched by name)"), "a call: {text}");
-        assert!(text.contains("log (matched by name)"), "a data flow too: {text}");
-        assert!(text.contains("run") && !text.contains("run (matched by name)"), "the confirmed one reads plainly: {text}");
+    /// The quick look's key, down (and typed) or let go, at `time`.
+    fn peek_key(ctx: &egui::Context, app: &mut CockpitApp, pressed: bool, time: f64) {
+        let mut events = vec![egui::Event::Key { key: egui::Key::Q, physical_key: None, pressed, repeat: false, modifiers: Default::default() }];
+        if pressed {
+            events.push(egui::Event::Text("q".into()));
+        }
+        frame_at(ctx, app, events, time);
     }
 
     #[test]
-    fn inspector_summarizes_the_selection_and_links_onward() {
+    fn the_quick_look_shows_the_full_card_over_the_graph_and_says_how_links_are_known() {
         let (ctx, mut app) = app_with_graph();
-        app.graph = showing(sample_tree());
         crate::graph::tests::with_detail(&mut app.graph, "rust:a::step", "src/a.rs", 10, 20);
         app.graph.select(Some("rust:a::step".into()));
+        frame_at(&ctx, &mut app, vec![], 1.0);
+        // Tapped: it stays open, and the keys go to the card.
+        peek_key(&ctx, &mut app, true, 1.0);
+        peek_key(&ctx, &mut app, false, 1.05);
+        assert!(app.quick_look.is_some(), "a tap keeps it open");
+        assert!(app.bound_actions().iter().all(|b| b.action.id != "spec.pin"), "held on its card: nothing to pin");
+        assert_eq!((app.focused_kind(), app.columns.focused_kind(), app.spec.target.as_ref().map(|t| t.as_str())), (BufferKind::Spec, BufferKind::Graph, Some("rust:a::step")));
+        // Its links say how they're known: a data flow and a call only
+        // matched by name, a call confirmed by the language's analyzer.
+        let id = ComponentId::new("rust:a::step");
+        let mut detail = crate::spec::tests::detail(&id, &ComponentId::new("rust:a::save"));
+        detail.outgoing.push(Relation::new(RelationKind::DataFlow, id.clone(), ComponentId::new("rust:a::log"), Provenance::OBSERVED));
+        let mut confirmed = Relation::new(RelationKind::Calls, ComponentId::new("rust:a::run"), id.clone(), Provenance::OBSERVED);
+        confirmed.proven_by = Some("rust-analyzer 1.90.0".into());
+        detail.incoming.push(confirmed);
+        app.spec.detail = Some(detail);
+        let text = texts(&frame_at(&ctx, &mut app, vec![], 1.1));
+        assert!(text.contains("Quick look") && text.contains("Does a step."), "{text}");
+        assert!(text.contains("log (matched by name)"), "a data flow: {text}");
+        assert!(text.contains("run") && !text.contains("run (matched by name)"), "the confirmed one reads plainly: {text}");
+        let before = (app.spec.cursor, app.graph.selection.clone());
+        frame_at(&ctx, &mut app, key("j"), 1.2);
+        assert_eq!((app.spec.cursor, app.graph.selection.clone()), (before.0 + 1, before.1), "j moves in the card, not the graph");
+        // Escape closes it; the spec follows the graph again.
+        frame_at(&ctx, &mut app, press(egui::Key::Escape, false), 1.3);
+        assert!(app.quick_look.is_none() && !app.spec.pinned);
+        assert_eq!(app.focused_kind(), BufferKind::Graph);
+        // Held: a peek, closed when let go.
+        peek_key(&ctx, &mut app, true, 2.0);
+        assert!(app.quick_look.is_some());
+        peek_key(&ctx, &mut app, true, 2.2);
+        assert!(app.quick_look.is_some(), "the key repeating doesn't close it");
+        peek_key(&ctx, &mut app, false, 2.5);
+        assert!(app.quick_look.is_none(), "let go after a hold: closed");
+    }
+
+    #[test]
+    fn the_quick_look_key_is_shown_wherever_keys_are_listed() {
+        let (ctx, mut app) = app_with_graph();
+        app.graph.select(Some("rust:a::step".into()));
+        frame(&ctx, &mut app, vec![]);
+        let bound = app.bound_actions();
+        let bar: Vec<String> = app.bar_keys(&bound).iter().map(|b| format!("{} {}", keys_of(b), b.action.id)).collect();
+        assert!(bar.iter().any(|k| k.starts_with("q ") && k.ends_with(" quicklook.toggle")), "the key bar offers it on a card: {bar:?}");
+        app.key_sheet = Some(String::new());
         let text = texts(&frame(&ctx, &mut app, vec![]));
-        for expected in ["rust:a::step", "function · Existing", "implemented", "src/a.rs:10–20", "Spec view", "Code", "calls", "save", "run"] {
-            assert!(text.contains(expected), "drawer shows {expected}: {text}");
+        assert!(text.contains("Quick look: the full card"), "the ? sheet lists it: {text}");
+        app.key_sheet = None;
+        let menu = leader_entries(&bound, &['q'], Origin::View(BufferKind::Graph));
+        assert!(menu.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'q', index } if bound[*index].action.id == "quicklook.toggle")), "Space q q opens it");
+        // On nothing, it isn't offered.
+        app.graph.select(None);
+        frame(&ctx, &mut app, vec![]);
+        let bound = app.bound_actions();
+        assert!(app.bar_keys(&bound).iter().all(|b| b.action.id != "quicklook.toggle"));
+    }
+
+    #[test]
+    fn the_quick_look_goes_to_a_column_and_says_when_theres_nothing_to_look_at() {
+        let (ctx, mut app) = app_with_graph();
+        app.graph.select(None);
+        frame_at(&ctx, &mut app, vec![], 1.0);
+        peek_key(&ctx, &mut app, true, 1.0);
+        assert!(app.quick_look.is_none() && app.note.as_deref().unwrap_or_default().contains("Nothing here to look at"), "{:?}", app.note);
+        app.graph.select(Some("rust:a::step".into()));
+        peek_key(&ctx, &mut app, false, 1.1);
+        peek_key(&ctx, &mut app, true, 1.2);
+        peek_key(&ctx, &mut app, false, 1.25);
+        let to_column = app.bound_actions().into_iter().find(|b| b.action.id == "quicklook.to_column").expect("offered while open");
+        assert_eq!(to_column.key_hint(), "SPC q c");
+        app.invoke(Invocation { action: to_column.action, origin: to_column.origin, value: None }, &ctx);
+        assert!(app.quick_look.is_none());
+        assert_eq!((app.focused_kind(), app.spec.target.as_ref().map(|t| t.as_str())), (BufferKind::Spec, Some("rust:a::step")), "the same card, in a column, focused");
+        assert!(app.columns.slot_of_kind(BufferKind::Graph).is_some(), "beside the graph");
+    }
+
+    #[test]
+    fn the_layout_comes_back_as_it_was_saved() {
+        let (ctx, mut app) = full_app();
+        focus(&ctx, &mut app, BufferKind::Code);
+        app.code.move_to("6");
+        keys(&ctx, &mut app, "mc");
+        app.columns = columns_of(&[BufferKind::Tree, BufferKind::Graph, BufferKind::Chat, BufferKind::Code], 2);
+        app.graph.select(Some("rust:a::step".into()));
+        app.chat.input_buffer = "half a thought".into();
+        let saved = app.saved_ui();
+        // Through the server (as JSON) into a cockpit that just opened.
+        let json = serde_json::to_value(&saved).unwrap();
+        let (ctx2, mut fresh) = full_app();
+        fresh.restore_saved(serde_json::from_value(json).unwrap(), &ctx2);
+        assert_eq!((fresh.columns.kinds(), fresh.columns.focused()), (saved.columns.kinds(), 2));
+        assert_eq!((fresh.marks.clone(), fresh.jumps.clone(), fresh.chat.input_buffer.as_str()), (saved.marks.clone(), saved.jumps.clone(), "half a thought"));
+        let graph_place = |s: &SavedUi| s.views.iter().find(|(p, _)| p.kind == BufferKind::Graph).map(|(_, p)| p.clone());
+        assert_eq!(fresh.graph.place(), graph_place(&saved).unwrap(), "the graph where it was, the same card selected");
+        assert!(matches!(fresh.saved_ui().views.iter().find(|(p, _)| p.kind == BufferKind::Code), Some((_, Place::Code { line: 6, .. }))));
+        // A cockpit that has loaded nothing loads the saved file, even one
+        // named like the file it starts on.
+        let mut opened = CockpitApp::new("http://127.0.0.1:9");
+        let mut only_code = saved.clone();
+        only_code.views = vec![(Pane::new(BufferKind::Code, 0), Place::Code { file: opened.code.current_file.clone(), line: 3 })];
+        opened.restore_saved(only_code, &ctx2);
+        assert!(opened.code.is_loading, "the saved file is fetched");
+    }
+
+    /// The agent moving the graph, in column `column` if it names one.
+    fn agent_moves(app: &mut CockpitApp, select: &str, column: Option<u32>) {
+        let request = arch_graph::ViewRequest { select: Some(select.into()), column, ..Default::default() };
+        let event = arch_graph::ArchEvent::ViewRequested { request: Box::new(request), by: arch_graph::Requester::Agent };
+        app.net.incoming.lock().unwrap().push(harness_contracts::ClientEvent::Architecture { event });
+    }
+
+    #[test]
+    fn each_column_keeps_its_own_graph_and_the_agent_moves_the_one_named_or_used_last() {
+        let (ctx, mut app) = app_with_graph();
+        app.graph.select(Some("rust:a::run".into()));
+        // A second graph, in a third column, showing its own selection.
+        app.columns.set_count(3, 12);
+        let second = app.columns.show(2, BufferKind::Graph);
+        assert_ne!(second, app.columns.pane(1), "a new graph, not the first one moved");
+        app.columns.focus(2);
+        frame(&ctx, &mut app, vec![]);
+        // It starts where the first one was (its view; its selection once
+        // its tree is in).
+        let first_nav = app.parked.graphs.get(&0).map(|g| g.nav.clone());
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(Some(app.graph.nav.clone()), first_nav);
+        app.graph = showing(sample_tree());
+        app.graph.select(Some("rust:a::step".into()));
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(selected(&app), "rust:a::step");
+        // Focus back on the first: its own selection, untouched.
+        app.columns.focus(1);
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(selected(&app), "rust:a::run");
+        // The agent names the third column: that graph moves, this one doesn't.
+        agent_moves(&mut app, "rust:a::save", Some(3));
+        frame(&ctx, &mut app, vec![]);
+        assert!(app.graph.agent.is_none(), "the focused graph wasn't moved");
+        app.columns.focus(2);
+        frame(&ctx, &mut app, vec![]);
+        assert!(app.graph.agent.is_some(), "the third column's was");
+        // Naming none: the graph used last (this one, focused last).
+        app.columns.focus(0);
+        frame(&ctx, &mut app, vec![]);
+        agent_moves(&mut app, "rust:a::run", None);
+        frame(&ctx, &mut app, vec![]);
+        app.columns.focus(1);
+        frame(&ctx, &mut app, vec![]);
+        assert!(app.graph.agent.is_none(), "the first graph, not used last, stayed");
+        // Saved and put back: both graphs, each where it was.
+        let saved = app.saved_ui();
+        assert_eq!(saved.views.iter().filter(|(p, _)| p.kind == BufferKind::Graph).count(), 2);
+        let (ctx2, mut fresh) = full_app();
+        fresh.restore_saved(saved.clone(), &ctx2);
+        // (Each one's selection comes back when its tree is in.)
+        let nav = |place: Option<Place>| match place {
+            Some(Place::Graph { nav, .. }) => Some(nav),
+            _ => None,
+        };
+        for (pane, place) in saved.views.iter().filter(|(p, _)| p.kind == BufferKind::Graph) {
+            assert_eq!(nav(fresh.place_of(*pane)), nav(Some(place.clone())), "{pane:?} where it was");
         }
-        let close = app.bound_actions().into_iter().find(|b| b.action.id == "drawer.close").unwrap();
-        assert_eq!(close.key_hint(), "SPC x");
-        app.invoke(Invocation { action: close.action, origin: close.origin, value: None }, &ctx);
-        assert!(!app.graph.drawer_open, "SPC x closes it");
+    }
+
+    #[test]
+    fn views_are_hidden_by_closing_and_gone_only_when_deleted() {
+        let (ctx, mut app) = app_with_graph();
+        app.graph.select(Some("rust:a::run".into()));
+        app.columns.set_count(3, 12);
+        let second = app.columns.show(2, BufferKind::Graph);
+        app.columns.focus(2);
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![]);
+        app.graph.select(Some("rust:a::step".into()));
+        // Closing its column hides it; the list shows it, and picking it
+        // brings it back, as it was, in the focused column.
+        app.run_shell(ShellCommand::CloseColumn, None, None, &ctx);
+        assert!(app.columns.slot_of(second).is_none() && app.columns.has(second) && app.columns.hidden() > 0);
+        let list = app.bound_actions().into_iter().find(|b| b.action.id == "buffer.list").expect("the list");
+        assert_eq!(list.key_hint(), "SPC b b");
+        let Param::Choice(views) = &list.action.param else { panic!("a choice") };
+        let line = views.iter().find(|c| c.value == format!("graph:{}", second.id)).expect("the hidden graph is listed");
+        assert_eq!(line.detail.as_deref(), Some("hidden"));
+        app.run_shell(ShellCommand::PickView, Some(line.value.clone()), None, &ctx);
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!((app.columns.focused_pane(), selected(&app)), (second, "rust:a::step"), "the same graph, where it was");
+        // A new view here: the one there is hidden, the new one starts afresh.
+        app.run_shell(ShellCommand::NewView(BufferKind::Graph), None, None, &ctx);
+        frame(&ctx, &mut app, vec![]);
+        assert!(app.columns.focused_pane() != second && app.columns.has(second));
+        assert_eq!(app.graph.nav, crate::graph::Nav::default(), "new, not a copy");
+        // Deleting: gone for good; the view hidden last shows instead.
+        app.run_shell(ShellCommand::DeleteView, None, None, &ctx);
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.columns.focused_pane(), second, "the graph hidden last came back");
+        app.run_shell(ShellCommand::DeleteView, None, None, &ctx);
+        frame(&ctx, &mut app, vec![]);
+        assert!(!app.columns.has(second) && !app.parked.graphs.contains_key(&second.id), "deleted: not anywhere");
+        // The chat isn't deleted (there's one of it).
+        app.columns.focus(0);
+        frame(&ctx, &mut app, vec![]);
+        app.run_shell(ShellCommand::DeleteView, None, None, &ctx);
+        assert!(app.note.as_deref().unwrap_or_default().contains("There's one chat"), "{:?}", app.note);
+        // The first graph is untouched throughout.
+        let first = app.columns.panes().iter().copied().find(|p| p.kind == BufferKind::Graph && p.id == 0).expect("the first graph");
+        app.show_view(first);
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(selected(&app), "rust:a::run");
+    }
+
+    #[test]
+    fn a_count_before_a_go_to_names_the_column_it_opens_in() {
+        let (ctx, mut app) = app_with_graph();
+        app.columns.set_count(3, 12);
+        crate::graph::tests::with_detail(&mut app.graph, "rust:a::step", "src/a.rs", 10, 20);
+        app.graph.select(Some("rust:a::step".into()));
+        frame(&ctx, &mut app, vec![]);
+        // Not this column: it says so, and nothing moves.
+        keys(&ctx, &mut app, "2gd");
+        assert!(app.note.as_deref().unwrap_or_default().contains("Column 2 is this one"), "{:?}", app.note);
+        assert_eq!(app.columns.focused(), 1);
+        keys(&ctx, &mut app, "9gd");
+        assert!(app.note.as_deref().unwrap_or_default().contains("There are 3 columns"), "{:?}", app.note);
+        // The first column: the code opens there (the chat put away).
+        keys(&ctx, &mut app, "1gd");
+        assert_eq!((app.columns.focused(), app.columns.kind(0), app.code.current_file.as_str()), (0, BufferKind::Code, "src/a.rs"));
+        // One past the last: a new column, with a code view of its own.
+        app.columns.focus(1);
+        frame(&ctx, &mut app, vec![]);
+        keys(&ctx, &mut app, "4gd");
+        assert_eq!((app.columns.len(), app.columns.focused(), app.columns.kind(3)), (4, 3, BufferKind::Code));
+        assert_ne!(app.columns.pane(3), app.columns.pane(0), "two code views");
+    }
+
+    #[test]
+    fn the_agent_is_talked_to_from_anywhere_without_moving_anything() {
+        let (ctx, mut app) = app_with_graph();
+        app.graph.select(Some("rust:a::step".into()));
+        frame(&ctx, &mut app, vec![]);
+        let before = (app.columns.clone(), app.graph.place());
+        // As a browser sends it: the key down with its text, then up.
+        let t = |pressed| egui::Event::Key { key: egui::Key::T, physical_key: Some(egui::Key::T), pressed, repeat: false, modifiers: Default::default() };
+        frame(&ctx, &mut app, vec![t(true), egui::Event::Text("t".into())]);
+        frame(&ctx, &mut app, vec![t(false)]);
+        frame(&ctx, &mut app, vec![]);
+        assert!(app.talk.is_some() && matches!(app.input_mode, InputMode::Insert { .. }), "t opens the box, the keyboard in it");
+        frame(&ctx, &mut app, key("what calls step?"));
+        assert_eq!(app.talk.as_ref().unwrap().text, "what calls step?", "typing goes into it, not to the keys");
+        frame(&ctx, &mut app, press(egui::Key::Enter, false));
+        assert!(app.talk.as_ref().unwrap().text.is_empty(), "sent");
+        assert!(matches!(app.chat.session_status(), SessionStatus::Failed(e) if e.contains("No harness instance")), "it went to the chat (no harness here)");
+        frame(&ctx, &mut app, press(egui::Key::Escape, false));
+        assert!(app.talk.is_none() && app.input_mode == InputMode::Normal);
+        assert_eq!((app.columns.clone(), app.graph.place()), before, "nothing on screen moved");
     }
 
     #[test]
@@ -2828,14 +3864,14 @@ mod tests {
         app.graph.select(Some("rust:a::step".into()));
         frame(&ctx, &mut app, vec![]);
         keys(&ctx, &mut app, "gd");
-        assert_eq!((app.focused_kind(), app.focused_slot), (BufferKind::Code, 0), "the code opened beside the graph, with focus");
+        assert_eq!((app.focused_kind(), app.columns.focused()), (BufferKind::Code, 0), "the code opened beside the graph, with focus");
         app.code.set_content((1..=40).map(|i| format!("line {i}\n")).collect());
         keys(&ctx, &mut app, "G");
         assert_eq!(app.code.target_line, Some(40));
         ctrl(&ctx, &mut app, egui::Key::O);
         assert_eq!(app.code.target_line, Some(10), "back within the code");
         ctrl(&ctx, &mut app, egui::Key::O);
-        assert_eq!((app.focused_slot, app.focused_kind(), selected(&app)), (1, BufferKind::Graph, "rust:a::step"), "back to the graph's slot, focused, where it was");
+        assert_eq!((app.columns.focused(), app.focused_kind(), selected(&app)), (1, BufferKind::Graph, "rust:a::step"), "back to the graph's slot, focused, where it was");
         ctrl(&ctx, &mut app, egui::Key::I);
         assert_eq!((app.focused_kind(), app.code.target_line), (BufferKind::Code, Some(10)));
         // Pointer jumps in the graph are in it too.
@@ -3200,16 +4236,16 @@ mod tests {
         focus(&ctx, &mut app, BufferKind::Code);
         app.code.move_to("6");
         keys(&ctx, &mut app, "mc");
-        app.focused_slot = 2;
+        app.columns.focus(2);
         focus(&ctx, &mut app, BufferKind::Tree);
         app.tree.move_to("rust:b");
         keys(&ctx, &mut app, "mt");
-        app.focused_slot = 0;
+        app.columns.focus(0);
         focus(&ctx, &mut app, BufferKind::Graph);
         keys(&ctx, &mut app, "'c");
-        assert_eq!((app.focused_slot, app.focused_kind(), app.code.target_line), (1, BufferKind::Code, Some(6)), "back to the code, in its slot");
+        assert_eq!((app.columns.focused(), app.focused_kind(), app.code.target_line), (1, BufferKind::Code, Some(6)), "back to the code, in its slot");
         keys(&ctx, &mut app, "'t");
-        assert_eq!((app.focused_slot, app.tree.cursor.as_ref().map(|c| c.as_str())), (2, Some("rust:b")));
+        assert_eq!((app.columns.focused(), app.tree.cursor.as_ref().map(|c| c.as_str())), (2, Some("rust:b")));
         ctrl(&ctx, &mut app, egui::Key::O);
         assert_eq!(app.focused_kind(), BufferKind::Code, "a mark jump is in the jump list");
         // The popup after ' lists them.
@@ -3239,12 +4275,12 @@ mod tests {
         app.key_sheet = Some("callee".into());
         let text = texts(&frame(&ctx, &mut app, vec![]));
         assert!(text.contains("Go to a callee") && !text.contains("Half a page down"), "{text}");
-        app.graph.drawer_open = true;
+        let selection = app.graph.selection.clone();
         frame(&ctx, &mut app, press(egui::Key::Escape, false));
         assert!(app.key_sheet.is_none());
         frame(&ctx, &mut app, vec![]);
         assert!(!text_input_focused(&ctx));
-        assert!(app.graph.drawer_open, "Escape closed the sheet and nothing else");
+        assert_eq!(app.graph.selection, selection, "Escape closed the sheet and nothing else");
     }
 
     #[test]
@@ -3397,7 +4433,7 @@ mod tests {
         assert!(shown.contains("showing 2 of 3 levels: 7 more (out of time)"), "{shown}");
         // The status line says it too, with the graph out of sight.
         focus(&ctx, &mut app, BufferKind::Code);
-        app.slot_buffers.iter_mut().for_each(|b| *b = BufferKind::Code);
+        app.columns = columns_of(&[BufferKind::Code], 0);
         let shown = texts(&frame(&ctx, &mut app, vec![]));
         assert!(shown.contains("graph cut (out of time), slow: 340 ms"), "{shown}");
     }
@@ -3419,13 +4455,12 @@ mod tests {
     #[test]
     fn the_code_view_scrolls_with_a_chat_beside_it() {
         let (ctx, mut app) = full_app();
-        app.slot_buffers = [BufferKind::Chat, BufferKind::Code, BufferKind::Tree];
-        app.focused_slot = 1;
+        app.columns = columns_of(&[BufferKind::Chat, BufferKind::Code, BufferKind::Tree], 1);
         app.code.set_content((1..=500).map(|i| format!("fn line_{i}() {{}}\n")).collect());
         for _ in 0..3 {
             frame(&ctx, &mut app, vec![]);
         }
-        app.run_shell(ShellCommand::Motion(Motion::Line(300)), None, 1, &ctx);
+        app.run_shell(ShellCommand::Motion(Motion::Line(300)), None, None, &ctx);
         let mut text = String::new();
         for _ in 0..3 {
             text = texts(&frame(&ctx, &mut app, vec![]));
@@ -3519,10 +4554,10 @@ mod tests {
         frame(&ctx, &mut app, key("j"));
         assert!(app.note.is_none());
         // Fewer columns keep the focused view on screen.
-        app.focused_slot = 2;
-        app.slot_buffers[2] = BufferKind::Spec;
-        app.run_shell(ShellCommand::SetLayout(1), None, 1, &ctx);
-        assert_eq!((app.focused_slot, app.slot_buffers[0]), (0, BufferKind::Spec));
+        app.columns.focus(2);
+        app.columns.show(2, BufferKind::Spec);
+        app.run_shell(ShellCommand::SetLayout(1), None, None, &ctx);
+        assert_eq!((app.columns.focused(), app.columns.kind(0)), (0, BufferKind::Spec));
     }
 
     #[test]
@@ -3585,12 +4620,11 @@ mod tests {
         // A graph search that matches nothing, from no selection, ends with no selection.
         focus(&ctx, &mut app, BufferKind::Graph);
         app.graph.select(None);
-        app.graph.drawer_open = false;
         keys(&ctx, &mut app, "/sa");
         assert_eq!(selected(&app), "rust:a::save", "a preview");
         keys(&ctx, &mut app, "zz");
         frame(&ctx, &mut app, press(egui::Key::Enter, false));
-        assert_eq!((selected(&app), app.graph.drawer_open), ("", false), "nothing selected, the inspector still closed");
+        assert_eq!(selected(&app), "", "nothing selected");
         // An empty search forgets the last one (no stale position in the bar).
         focus(&ctx, &mut app, BufferKind::Tree);
         keys(&ctx, &mut app, "/step");
@@ -3609,27 +4643,25 @@ mod tests {
         assert_eq!(app.spec.entry().unwrap().item, crate::nav::SpecItem::Step(1));
         assert_eq!(app.spec.current, crate::spec::Section::Logic);
         // One column and back: the slots as they were.
-        app.focused_slot = 2;
-        app.slot_buffers = [BufferKind::Code, BufferKind::Graph, BufferKind::Queue];
-        app.run_shell(ShellCommand::SetLayout(1), None, 1, &ctx);
-        assert_eq!(app.slot_buffers[0], BufferKind::Queue);
-        app.run_shell(ShellCommand::SetLayout(3), None, 1, &ctx);
-        assert_eq!((app.slot_buffers, app.focused_slot), ([BufferKind::Code, BufferKind::Graph, BufferKind::Queue], 2));
+        app.columns = columns_of(&[BufferKind::Code, BufferKind::Graph, BufferKind::Queue], 2);
+        app.run_shell(ShellCommand::SetLayout(1), None, None, &ctx);
+        assert_eq!(app.columns.kind(0), BufferKind::Queue);
+        app.run_shell(ShellCommand::SetLayout(3), None, None, &ctx);
+        assert_eq!((app.columns.kinds(), app.columns.focused()), (vec![BufferKind::Code, BufferKind::Graph, BufferKind::Queue], 2));
     }
 
     #[test]
     fn what_the_final_audit_found_stays_fixed() {
         let (ctx, mut app) = full_app();
-        // Escape after a search leaves a closed inspector closed.
+        // Escape after a search puts the selection back.
         focus(&ctx, &mut app, BufferKind::Graph);
         app.graph.select(Some("rust:a::run".into()));
-        app.graph.drawer_open = false;
         keys(&ctx, &mut app, "/sa");
         frame(&ctx, &mut app, press(egui::Key::Escape, false));
-        assert_eq!((selected(&app), app.graph.drawer_open), ("rust:a::run", false));
+        assert_eq!(selected(&app), "rust:a::run");
         keys(&ctx, &mut app, "/sazz");
         frame(&ctx, &mut app, press(egui::Key::Enter, false));
-        assert_eq!((selected(&app), app.graph.drawer_open), ("rust:a::run", false), "no match: nothing changed");
+        assert_eq!(selected(&app), "rust:a::run", "no match: nothing changed");
         assert!(!app.searches.contains_key(&BufferKind::Graph), "and nothing to step through with n");
         frame(&ctx, &mut app, key("n"));
         assert!(app.note.as_deref().unwrap_or_default().contains("No match for sazz"), "n says why: {:?}", app.note);

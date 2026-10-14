@@ -89,7 +89,7 @@ fn methods_verify_without_their_receiver_in_the_plan() {
     // Rust: planned `flush(n: usize) -> usize`, written with `&self`.
     let r = repo(&[("Cargo.toml", "[package]\nname = \"app\"\n"), ("src/lib.rs", "pub struct Store;\n\nimpl Store {\n    fn check(&self) {}\n}\n")]);
     let rs = |s: &str| ComponentId::for_symbol("rust", s);
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "flush", "function", &rs("app::Store"), sig(vec![param("n", "usize")], "usize")).unwrap();
     relate(&r, &rs("app::Store::flush"), &rs("app::Store::check"));
     approve(&r, &rs("app::Store::flush"));
@@ -103,7 +103,7 @@ fn methods_verify_without_their_receiver_in_the_plan() {
     // Python: planned `flush(n: int) -> int`, written with `self`.
     let r = repo(&[("counter.py", "class Counter:\n    def check(self):\n        return 1\n")]);
     let py = |s: &str| ComponentId::for_symbol("python", s);
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "flush", "function", &py("counter.Counter"), sig(vec![param("n", "int")], "int")).unwrap();
     relate(&r, &py("counter.Counter.flush"), &py("counter.Counter.check"));
     approve(&r, &py("counter.Counter.flush"));
@@ -115,7 +115,7 @@ fn methods_verify_without_their_receiver_in_the_plan() {
 fn the_symbol_found_must_be_the_kind_planned() {
     let r = repo(&[("Cargo.toml", "[package]\nname = \"app\"\n"), ("src/lib.rs", "pub fn run() {}\n")]);
     let rs = |s: &str| ComponentId::for_symbol("rust", s);
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     r.s.apply(&pid(), PlanOp::SetGreenfield { greenfield: true }).unwrap();
     add(&r, "Saver", "interface", &rs("app"), None).unwrap();
     approve(&r, &rs("app::Saver"));
@@ -128,7 +128,7 @@ fn the_symbol_found_must_be_the_kind_planned() {
     let mut types = TypeSystem::defaults().unwrap();
     types.extend_from_toml("[types.handler]\nextends = \"function\"").unwrap();
     let r = repo_typed(&[("Cargo.toml", "[package]\nname = \"app\"\n"), ("src/lib.rs", "pub fn run() {}\n")], types);
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     r.s.apply(&pid(), PlanOp::SetGreenfield { greenfield: true }).unwrap();
     add(&r, "on_event", "handler", &rs("app"), sig(vec![], "bool")).unwrap();
     approve(&r, &rs("app::on_event"));
@@ -137,7 +137,7 @@ fn the_symbol_found_must_be_the_kind_planned() {
     // A type the language's pack can't tell apart (a Python interface is a class) isn't judged.
     let r = repo(&[("ports.py", "def run():\n    return 1\n")]);
     let py = |s: &str| ComponentId::for_symbol("python", s);
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     r.s.apply(&pid(), PlanOp::SetGreenfield { greenfield: true }).unwrap();
     add(&r, "Saver", "interface", &py("ports"), None).unwrap();
     approve(&r, &py("ports.Saver"));
@@ -149,7 +149,7 @@ fn the_symbol_found_must_be_the_kind_planned() {
 fn python_run_calls_clean() -> Repo {
     let r = repo(&[("helpers.py", "def clean(text: str) -> str:\n    return text.strip()\n"), ("app.py", "from helpers import clean\n")]);
     let py = |s: &str| ComponentId::for_symbol("python", s);
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     add(&r, "run", "function", &py("app"), sig(vec![param("text", "str")], "str")).unwrap();
     relate(&r, &py("app.run"), &py("helpers.clean"));
     approve(&r, &py("app.run"));
@@ -200,7 +200,7 @@ fn python_and_typescript_stubs_and_dead_calls_dont_pass() {
         ("live", "export function run(text: string): string {\n  return clean(text);\n}\n", true),
     ] {
         let r = repo(&[("helpers.ts", "export function clean(text: string): string {\n  return text.trim();\n}\n"), ("app.ts", "import { clean } from \"./helpers\";\n")]);
-        r.s.create_plan("p", "P", "").unwrap();
+        r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
         add(&r, "run", "function", &ts("app"), sig(vec![param("text", "string")], "string")).unwrap();
         relate(&r, &ts("app.run"), &ts("helpers.clean"));
         approve(&r, &ts("app.run"));
@@ -228,7 +228,7 @@ fn ignored_or_hidden_files_cant_be_planned_into() {
     let r = rust_repo();
     std::fs::create_dir_all(r.root.join(".hidden")).unwrap();
     let rs = |s: &str| ComponentId::for_symbol("rust", s);
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     r.s.apply(&pid(), PlanOp::SetGreenfield { greenfield: true }).unwrap();
     for file in ["gen/x.rs", ".hidden/y.rs"] {
         let err = r.s
@@ -262,7 +262,7 @@ fn ignored_or_hidden_files_cant_be_planned_into() {
 fn component_names_are_single_identifiers_of_the_language() {
     let r = rust_repo();
     let rs = |s: &str| ComponentId::for_symbol("rust", s);
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     for bad in ["Store::extra", "a.b", "1abc", "fn", "two words", ""] {
         let err = add(&r, bad, "function", &rs("app"), Some(Signature::default())).map(|_| ()).unwrap_err().to_string();
         assert!(err.contains("component name") || err.contains("single identifier"), "{bad:?}: {err}");
@@ -270,7 +270,7 @@ fn component_names_are_single_identifiers_of_the_language() {
     add(&r, "fine_name", "function", &rs("app"), Some(Signature::default())).unwrap();
     // Python's keywords are its own.
     let r = repo(&[("m.py", "def f():\n    return 1\n")]);
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     let py = |s: &str| ComponentId::for_symbol("python", s);
     assert!(add(&r, "lambda", "function", &py("m"), Some(Signature::default())).is_err());
     add(&r, "fn", "function", &py("m"), Some(Signature::default())).unwrap();
@@ -280,7 +280,7 @@ fn component_names_are_single_identifiers_of_the_language() {
 fn loops_come_after_what_they_depend_on_and_before_their_dependents() {
     let r = rust_repo();
     let rs = |s: &str| ComponentId::for_symbol("rust", s);
-    r.s.create_plan("p", "P", "").unwrap();
+    r.s.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     // a calls x; x and y call each other; y calls z.
     for name in ["a", "x", "y", "z"] {
         add(&r, name, "function", &rs("app"), Some(Signature::default())).unwrap();

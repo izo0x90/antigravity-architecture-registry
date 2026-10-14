@@ -14,11 +14,13 @@ setup_scripts:
 - rustup target add wasm32-unknown-unknown
 - cd meta-harness && cargo install wasm-bindgen-cli --locked --version "$(grep -A1
   'name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')"
-- bash meta-harness/scripts/bootstrap.sh antigravity-acp
+- bash meta-harness/scripts/bootstrap.sh antigravity-acp claude-code
+- make ui
 env:
 - HOST=0.0.0.0
 - METAHARNESS_PORT=8080
 - STATIC_DIR=static
+- IS_SANDBOX=1
 - AST_GREP=/home/agent/.local/bin/ast-grep
 - PATH=/home/agent/.cargo/bin:/home/agent/.local/bin:$PATH
 use_native_login: false

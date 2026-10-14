@@ -58,7 +58,7 @@ enum OneFile {
 /// measurement runs with a plan loaded.
 fn load_plan(service: &ArchitectureService) -> arch_graph::PlanId {
     let module = service.observed().unwrap().components().find(|c| c.type_name == "module").map(|c| c.id.clone()).unwrap();
-    let plan = service.create_plan("perf", "Perf", "").unwrap();
+    let plan = service.create_plan("perf", "Perf", "", arch_graph::PlanKind::Change).unwrap();
     service
         .apply(
             &plan.id,

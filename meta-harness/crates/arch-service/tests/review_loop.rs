@@ -58,7 +58,7 @@ fn setup() -> (tempfile::TempDir, std::path::PathBuf, ArchitectureService) {
     copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-analyzer/tests/fixtures/rust/sample"), &root);
     let service = open(&root);
     service.ingest(&root).unwrap();
-    service.create_plan("r", "Review", "").unwrap();
+    service.create_plan("r", "Review", "", arch_graph::PlanKind::Change).unwrap();
     service
         .apply(
             &pid(),

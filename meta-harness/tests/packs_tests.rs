@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use harness_contracts::HarnessLaunch;
+use harness_contracts::{HarnessEntry, HarnessLaunch};
 use harness_core::ProviderDriver;
 use meta_harness::packs::{Command, distribution, harness_launches, run};
 use nah_packs::{Catalog, Installed, Lock, Places};
@@ -33,9 +33,14 @@ fn installed(catalog: &Catalog, platform: &str) -> std::path::PathBuf {
     dest
 }
 
-fn unavailable(launch: Option<&HarnessLaunch>) -> (String, Option<String>) {
+/// The launch of instance `instance`.
+fn launch_of(entries: &[HarnessEntry], instance: &str) -> Option<HarnessLaunch> {
+    entries.iter().find(|e| e.profile.instance.as_str() == instance).map(|e| e.launch.clone())
+}
+
+fn unavailable(launch: Option<HarnessLaunch>) -> (String, Option<String>) {
     match launch {
-        Some(HarnessLaunch::Unavailable { reason, fix }) => (reason.clone(), fix.clone()),
+        Some(HarnessLaunch::Unavailable { reason, fix }) => (reason, fix),
         other => panic!("not unavailable: {other:?}"),
     }
 }
@@ -45,11 +50,12 @@ fn the_shipped_harness_pack_gives_its_driver_a_launch_once_it_passes_its_check()
     let dir = tempfile::tempdir().unwrap();
     let catalog = Catalog::load(&distribution(), &places(dir.path())).unwrap();
     let pack = catalog.get("antigravity-acp").expect("shipped");
-    assert_eq!(pack.manifest.provides.as_ref().unwrap().driver, "antigravity");
+    let provides = pack.manifest.provides.as_ref().unwrap();
+    assert_eq!((provides.driver.as_str(), provides.instance.as_deref()), ("acp", Some("antigravity")));
     let listed = run(&Command::List, &catalog).unwrap();
     assert!(listed.contains("antigravity-acp") && listed.contains("not installed"), "{listed}");
     // Not installed: no launch, and the command that fixes it.
-    let (reason, fix) = unavailable(harness_launches(&catalog).get("antigravity"));
+    let (reason, fix) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
     assert!(reason.contains("isn't installed") && fix.as_deref().is_some_and(|f| f.starts_with("meta-harness pack install antigravity-acp")), "{reason} {fix:?}");
     assert!(run(&Command::Which("antigravity-acp".into()), &catalog).unwrap_err().to_string().contains("meta-harness pack install antigravity-acp"));
 
@@ -58,10 +64,10 @@ fn the_shipped_harness_pack_gives_its_driver_a_launch_once_it_passes_its_check()
     let dest = installed(&catalog, "linux-x86_64");
     fake_server(&dest.join("agy_acp_server.par"), "1.1.1");
     // The harness a session starts (the check doesn't reach it) is needed too.
-    let (reason, _) = unavailable(harness_launches(&catalog).get("antigravity"));
+    let (reason, _) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
     assert!(reason.contains("localharness_external is missing"), "{reason}");
     std::fs::write(dest.join("localharness_external"), "").unwrap();
-    let launch = match harness_launches(&catalog).remove("antigravity") {
+    let launch = match launch_of(&harness_launches(&catalog), "antigravity") {
         Some(HarnessLaunch::Ready { launch }) => launch,
         other => panic!("{other:?}"),
     };
@@ -70,16 +76,19 @@ fn the_shipped_harness_pack_gives_its_driver_a_launch_once_it_passes_its_check()
     assert!(run(&Command::Check(Some("antigravity-acp".into())), &catalog).unwrap().contains("ready (1.1.1)"));
     let which = run(&Command::Which("antigravity-acp".into()), &catalog).unwrap();
     assert!(which.contains(&launch.program) && which.contains("the pack, installed for linux-x86_64"), "{which}");
-    let config = provider_antigravity::AntigravityDriver.default_config(&HarnessLaunch::Ready { launch: launch.clone() });
-    assert_eq!(config["launch"]["program"], launch.program);
+    let entry = harness_launches(&catalog).into_iter().find(|e| e.profile.instance.as_str() == "antigravity").unwrap();
+    assert_eq!((entry.profile.driver.as_str(), entry.profile.display_name.as_str()), ("acp", "Antigravity"));
+    harness_acp::AcpSettings::parse(&entry.profile.settings).expect("its settings are the ACP driver's");
+    let config = harness_acp::AcpDriver::new(dir.path().into()).default_config(&entry);
+    assert_eq!(config["launch"]["launch"]["program"], launch.program);
 
     // A version outside the pack's range: no launch; update fixes it.
     fake_server(&dest.join("agy_acp_server.par"), "1.3.0");
-    let (reason, fix) = unavailable(harness_launches(&catalog).get("antigravity"));
+    let (reason, fix) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
     assert!(reason.contains("1.3.0 isn't in") && fix.as_deref().is_some_and(|f| f.starts_with("meta-harness pack update antigravity-acp")), "{reason} {fix:?}");
     // The server gone: the check fails, with why.
     std::fs::remove_file(dest.join("agy_acp_server.par")).unwrap();
-    let (reason, _) = unavailable(harness_launches(&catalog).get("antigravity"));
+    let (reason, _) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
     assert!(reason.contains("is missing"), "{reason}");
 }
 
@@ -92,7 +101,7 @@ fn an_instances_own_launch_from_harnesses_toml_wins_and_which_shows_it() {
     std::fs::create_dir_all(places.config_home.join("nah")).unwrap();
     std::fs::create_dir_all(places.project.join(".nah")).unwrap();
     std::fs::write(places.config_home.join("nah/harnesses.toml"), "[antigravity]\nprogram = \"/users/own\"\n").unwrap();
-    let launch = |all: &std::collections::BTreeMap<String, HarnessLaunch>| match all.get("antigravity") {
+    let launch = |all: &[HarnessEntry]| match launch_of(all, "antigravity") {
         Some(HarnessLaunch::Ready { launch }) => launch.clone(),
         other => panic!("{other:?}"),
     };
@@ -105,7 +114,7 @@ fn an_instances_own_launch_from_harnesses_toml_wins_and_which_shows_it() {
     assert!(which.contains("/project/own --x") && which.contains("A=b") && which.contains(".nah/harnesses.toml for antigravity"), "{which}");
     // A bad file says where.
     std::fs::write(places.project.join(".nah/harnesses.toml"), "[antigravity]\nprogramme = \"x\"\n").unwrap();
-    let (reason, _) = unavailable(harness_launches(&catalog).get("antigravity"));
+    let (reason, _) = unavailable(launch_of(&harness_launches(&catalog), "antigravity"));
     assert!(reason.contains("harnesses.toml"), "a bad file is the reason, naming itself: {reason}");
 }
 
@@ -125,9 +134,10 @@ fn on_the_developer_sandbox_the_launch_is_the_emulated_server() {
 
 #[tokio::test]
 async fn a_harness_without_a_launch_says_why_and_how_to_fix_it() {
-    let driver = provider_antigravity::AntigravityDriver;
+    let driver = harness_acp::AcpDriver::new(std::env::temp_dir());
     let none = HarnessLaunch::Unavailable { reason: "antigravity-acp isn't installed".into(), fix: Some("meta-harness pack install antigravity-acp".into()) };
-    let instance = driver.create(harness_contracts::InstanceId::new("antigravity"), driver.default_config(&none)).await.unwrap();
+    let profile = harness_contracts::HarnessProfile { instance: harness_contracts::InstanceId::new("antigravity"), driver: harness_contracts::DriverKind::new("acp"), display_name: "Antigravity".into(), settings: serde_json::Value::Null };
+    let instance = driver.create(profile.instance.clone(), driver.default_config(&HarnessEntry { profile, launch: none })).await.unwrap();
     instance.refresh().await.unwrap();
     let status = instance.snapshot().borrow().status.clone();
     assert!(matches!(&status, harness_contracts::ProviderStatus::Unavailable { reason } if reason.contains("isn't installed") && reason.contains("meta-harness pack install antigravity-acp")), "{status:?}");
@@ -143,7 +153,7 @@ fn no_install_scripts_or_hard_coded_harness_paths_remain() {
     for gone in ["scripts/install-antigravity-acp.sh", "scripts/install-antigravity-acp-linux-arm-sandbox.sh", "scripts/patch-par-ca.py"] {
         assert!(!root.join(gone).exists(), "{gone}");
     }
-    let driver = std::fs::read_to_string(root.join("crates/provider-antigravity/src/driver.rs")).unwrap();
+    let driver = std::fs::read_to_string(root.join("crates/harness-acp/src/driver.rs")).unwrap();
     assert!(!driver.contains(".local/share") && !driver.contains("AGY_EXECUTABLE"));
 }
 

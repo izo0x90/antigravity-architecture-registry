@@ -9,7 +9,7 @@ use crate::items::TurnItem;
 use crate::plan::PlanArtifact;
 use crate::requests::RuntimeRequest;
 use crate::session::{Subagent, Thread, Turn, Usage};
-use crate::snapshot::{ModelOption, SlashCommand};
+use crate::snapshot::{ModelOption, SignIn, SlashCommand};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
@@ -31,6 +31,9 @@ pub enum AdapterEvent {
 pub struct CatalogUpdate {
     pub commands: Option<Vec<SlashCommand>>,
     pub models: Option<Vec<ModelOption>>,
+    /// The harness reported who it's signed in as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<SignIn>,
 }
 
 /// What the server streams to clients: instance snapshots plus session events.

@@ -114,8 +114,8 @@ fn the_graph_offers_one_small_set_of_actions() {
     let mut g = showing(sample_tree());
     let mut all = ids(&g);
     all.sort();
-    // Depth, flip, switch view, pick source; and finding where to start.
-    assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.find", "graph.flip", "graph.plan", "graph.view"]);
+    // Depth, flip, switch view, pick source; finding where to start; the camera.
+    assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.find", "graph.fit", "graph.flip", "graph.plan", "graph.view", "graph.zoom_in", "graph.zoom_out"]);
     // A selection adds going into it.
     g.select(Some("rust:a::step".into()));
     assert!(ids(&g).contains(&"graph.go_in".to_owned()));
@@ -124,7 +124,7 @@ fn the_graph_offers_one_small_set_of_actions() {
     g.agent = Some(AgentMove { what: "x".into(), select: None, return_to: Nav::default(), return_selection: None });
     assert!(ids(&g).contains(&"graph.full_code".to_owned()) && ids(&g).contains(&"graph.agent_return".to_owned()));
     // The old ways of seeing more or less are gone.
-    for gone in ["graph.focus", "graph.unfocus", "graph.level", "graph.coarser", "graph.finer", "graph.show_all", "graph.story", "graph.reached_by", "graph.follow", "graph.next_call", "graph.up", "graph.next_view", "graph.fit", "graph.zoom_in", "graph.zoom_out", "graph.refresh", "graph.legend", "graph.close_inspector"] {
+    for gone in ["graph.focus", "graph.unfocus", "graph.level", "graph.coarser", "graph.finer", "graph.show_all", "graph.story", "graph.reached_by", "graph.follow", "graph.next_call", "graph.up", "graph.next_view", "graph.refresh", "graph.legend", "graph.close_inspector"] {
         assert!(!ids(&g).contains(&gone.to_owned()), "{gone}");
     }
     // The keys for them are gone from the keymap too.
@@ -255,14 +255,14 @@ fn a_missing_plan_or_root_falls_back_and_says_so() {
     // Not found with no root: the plans are asked; one that's still there stays.
     g.note = None;
     g.failed(missing("something"));
-    g.plans_arrived(vec![kept.clone()]);
+    g.plans_arrived(vec![(kept.clone(), arch_graph::PlanKind::Change)]);
     assert_eq!(g.nav.source.plan(), Some(&kept), "a plan that's there isn't called gone");
     assert!(g.note.is_none());
     // A plan that's gone: the code instead, and it says so.
     g.nav.source = Source::Plan(gone.clone());
     g.failed(missing("plan gone"));
     assert_eq!(g.nav.source.plan(), Some(&gone), "not before the plans say so");
-    g.plans_arrived(vec![kept]);
+    g.plans_arrived(vec![(kept, arch_graph::PlanKind::Change)]);
     assert_eq!(g.nav.source, Source::Code, "the code instead");
     assert!(g.note.as_deref().is_some_and(|n| n.contains("Plan gone isn't there")));
     // Any other failure says so; words in it don't make it "not found".
@@ -367,7 +367,7 @@ fn the_graph_is_split_as_agreed() {
         ("cards.rs", &["pub fn take(", "fn take_change("][..]),
         ("draw.rs", &["fn draw_pills(", "fn visible("][..]),
         ("select.rs", &["pub fn select(", "pub fn reveal(", "fn related(", "pub fn move_selection("][..]),
-        ("details.rs", &["fn render_drawer(", "fn want_details("][..]),
+        ("details.rs", &["fn render_card_context(", "fn want_details("][..]),
         ("source.rs", &["fn source_choices", "fn switch_full_code"][..]),
         ("actions.rs", &["impl ActionProvider for GraphState", "fn command("][..]),
     ] {
@@ -397,10 +397,9 @@ fn a_tree_too_big_to_fit_opens_on_its_root() {
     }
     let mut g = showing(tree_of(&graph, None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(1), ..TreeRequest::default() }));
     g.canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-    g.open_area = g.canvas;
     g.fit_view();
     let root = g.to_screen(&g.card("rust:a::run").unwrap().rect);
-    assert!(g.open_area.contains_rect(root), "the root is on screen: {root:?}");
+    assert!(g.canvas.contains_rect(root), "the root is on screen: {root:?}");
 }
 
 #[test]
@@ -418,4 +417,36 @@ fn a_card_text_is_measured_once_until_the_zoom_changes() {
     assert_eq!(measured.get(), 2, "each text once, however many frames");
     fitted.get("run", 18.0, 120.0, 1.5, fit);
     assert_eq!(measured.get(), 3, "zoomed: measured again");
+}
+
+#[test]
+fn walkthroughs_are_picked_like_plans_and_named_as_walkthroughs() {
+    let mut g = showing(sample_tree());
+    let (plan, walk) = (PlanId::new("add-cache").unwrap(), PlanId::new("how-run-works").unwrap());
+    g.plans_arrived(vec![(walk.clone(), arch_graph::PlanKind::Walkthrough), (plan.clone(), arch_graph::PlanKind::Change)]);
+    let labels: Vec<String> = g.source_choices().iter().map(|c| c.label.clone()).collect();
+    assert_eq!(labels, ["code", "add-cache", "walkthrough how-run-works"], "plans, then walkthroughs");
+    g.nav.source = Source::Plan(walk);
+    assert_eq!(g.source_label(), "walkthrough how-run-works");
+    g.nav.source = Source::Plan(plan);
+    assert_eq!(g.source_label(), "plan add-cache");
+}
+
+#[test]
+fn the_camera_zooms_and_fits_from_keys_and_buttons() {
+    let mut g = showing(sample_tree());
+    let has = |g: &GraphState, id: &str| g.actions().iter().any(|a| a.id == id);
+    assert!(has(&g, "graph.fit") && has(&g, "graph.zoom_in") && has(&g, "graph.zoom_out"));
+    let before = g.camera.zoom;
+    g.command(actions::GraphCommand::Zoom(g.ui.zoom_step), None);
+    assert!(g.camera.zoom > before, "zoomed in");
+    g.command(actions::GraphCommand::Zoom(1.0 / g.ui.zoom_step), None);
+    assert!((g.camera.zoom - before).abs() < 1e-4, "and back out");
+    g.command(actions::GraphCommand::Zoom(g.ui.zoom_step * 4.0), None);
+    g.command(actions::GraphCommand::Fit, None);
+    assert!(g.camera.zoom <= 1.0, "fit brings the drawing back to the screen");
+    let keymap = include_str!("../../config/default.toml");
+    for bound in ["\"graph.zoom_in\" = { leader = \"g =\", keys = [\"z +\"] }", "\"graph.fit\" = { leader = \"g z\", keys = [\"z z\"] }"] {
+        assert!(keymap.contains(bound), "{bound}");
+    }
 }

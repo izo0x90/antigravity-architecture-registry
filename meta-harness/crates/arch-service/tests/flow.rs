@@ -117,7 +117,7 @@ fn append(r: &Repo, file: &str, text: &str) {
 fn service_merges_code_and_plans_and_announces_changes() {
     let r = repo();
     assert!(matches!(r.events.lock().unwrap().last(), Some(ArchEvent::Changed { reason: ChangeReason::Ingested, .. })));
-    r.service.create_plan("v", "Validation", "").unwrap();
+    r.service.create_plan("v", "Validation", "", arch_graph::PlanKind::Change).unwrap();
     add_validate(&r, "v");
     let observed = r.service.observed().unwrap();
     assert!(observed.component(&id("sample::validate")).is_none(), "plans never touch the observed graph");
@@ -154,7 +154,7 @@ fn ingestion_is_incremental_and_follows_deletes_and_gitignore() {
 #[test]
 fn referenced_components_and_subtrees_stay_existing_with_real_anchors() {
     let r = repo();
-    r.service.create_plan("p", "Extend run", "").unwrap();
+    r.service.create_plan("p", "Extend run", "", arch_graph::PlanKind::Change).unwrap();
     r.service.apply(&pid("p"), PlanOp::Reference { id: id("sample::run"), kinds: vec![RelationKind::Calls], depth: 2 }).unwrap();
     let scope = r.service.scope(&pid("p")).unwrap();
     for expected in ["sample::run", "sample::store::Store::new", "sample::Upper::apply", "sample::store::Store::save", "sample::log", "sample::util::shout", "sample::store::Store::check"] {
@@ -173,7 +173,7 @@ fn referenced_components_and_subtrees_stay_existing_with_real_anchors() {
 #[test]
 fn plan_operations_validate_inputs_and_reject_bad_ones() {
     let r = repo();
-    r.service.create_plan("p", "Ops", "").unwrap();
+    r.service.create_plan("p", "Ops", "", arch_graph::PlanKind::Change).unwrap();
     add_validate(&r, "p");
     let plan = r.service.plan(&pid("p")).unwrap();
     let v = plan.component(&id("sample::validate")).unwrap();
@@ -300,7 +300,7 @@ fn findings_have_stable_codes_and_order() {
 #[test]
 fn only_users_approve_and_only_legal_checked_moves() {
     let r = repo();
-    r.service.create_plan("a", "Approvals", "").unwrap();
+    r.service.create_plan("a", "Approvals", "", arch_graph::PlanKind::Change).unwrap();
     add_validate(&r, "a");
     relate(&r, "a", RelationKind::Calls, "sample::run", "sample::validate");
     let agent = Actor::Agent { session: "s1".into() };
@@ -324,7 +324,7 @@ fn only_users_approve_and_only_legal_checked_moves() {
 #[test]
 fn new_work_must_touch_existing_code_unless_greenfield() {
     let r = repo();
-    r.service.create_plan("t", "Touch", "").unwrap();
+    r.service.create_plan("t", "Touch", "", arch_graph::PlanKind::Change).unwrap();
     add_validate(&r, "t");
     let codes = |r: &Repo| r.service.validate(&pid("t")).unwrap().codes();
     assert!(codes(&r).contains(&FindingCode::MissingTouchPoint), "containment alone isn't integration");
@@ -338,7 +338,7 @@ fn new_work_must_touch_existing_code_unless_greenfield() {
 #[test]
 fn contract_slice_carries_real_signatures_and_neighbors() {
     let r = repo();
-    r.service.create_plan("c", "Contract", "").unwrap();
+    r.service.create_plan("c", "Contract", "", arch_graph::PlanKind::Change).unwrap();
     add_validate(&r, "c");
     relate(&r, "c", RelationKind::Calls, "sample::run", "sample::validate");
     relate(&r, "c", RelationKind::Calls, "sample::validate", "sample::store::Store::new");
@@ -356,7 +356,7 @@ fn contract_slice_carries_real_signatures_and_neighbors() {
 }
 
 fn approved_validate(r: &Repo, plan: &str) {
-    r.service.create_plan(plan, "Verify", "").unwrap();
+    r.service.create_plan(plan, "Verify", "", arch_graph::PlanKind::Change).unwrap();
     add_validate(r, plan);
     relate(r, plan, RelationKind::Calls, "sample::run", "sample::validate");
     relate(r, plan, RelationKind::Calls, "sample::validate", "sample::store::Store::new");
@@ -394,7 +394,7 @@ message = "log through the logger"
 "#,
     );
     // Plan checks: a referenced component that breaks a rule is a finding at the match.
-    r.service.create_plan("p", "Touch logging", "").unwrap();
+    r.service.create_plan("p", "Touch logging", "", arch_graph::PlanKind::Change).unwrap();
     r.service.apply(&pid("p"), PlanOp::Reference { id: id("sample::log"), kinds: vec![], depth: 0 }).unwrap();
     let report = r.service.validate(&pid("p")).unwrap();
     let hit = report.findings.iter().find(|f| f.code == FindingCode::ForbiddenPattern).unwrap();
@@ -520,7 +520,7 @@ fn replace_in(r: &Repo, file: &str, from: &str, to: &str) {
 /// run -> validate -> check_all -> Store::new, with validate and check_all
 /// planned and implemented.
 fn implemented_chain(r: &Repo, plan: &str) {
-    r.service.create_plan(plan, "Chain", "").unwrap();
+    r.service.create_plan(plan, "Chain", "", arch_graph::PlanKind::Change).unwrap();
     str_fn(r, plan, "validate", None);
     str_fn(r, plan, "check_all", None);
     relate(r, plan, RelationKind::Calls, "sample::run", "sample::validate");
@@ -662,7 +662,7 @@ applies_to = ["function"]
     let runner = Arc::new(Recording(Mutex::new(Vec::new())));
     let shared = runner.clone();
     let r = repo_with("", move |s| s.with_tools(catalog, shared));
-    r.service.create_plan("t", "Tools", "").unwrap();
+    r.service.create_plan("t", "Tools", "", arch_graph::PlanKind::Change).unwrap();
     let bind = |targets: Vec<&str>, args: Option<Vec<&str>>| arch_graph::ImplementationSpec {
         validation: vec![arch_graph::ToolRef { tool: "has".into(), targets: targets.into_iter().map(String::from).collect(), args: args.map(|a| a.into_iter().map(String::from).collect()) }],
         ..Default::default()
@@ -713,7 +713,7 @@ impl arch_service::ToolRunner for Recording {
 #[test]
 fn changing_a_file_reverifies_only_the_components_it_affects() {
     let r = repo();
-    r.service.create_plan("w", "Watch", "").unwrap();
+    r.service.create_plan("w", "Watch", "", arch_graph::PlanKind::Change).unwrap();
     // validate (src/lib.rs) is planned to call Store::new (src/store.rs);
     // quiet (src/util.rs) calls nothing; pending isn't in the code yet.
     str_fn(&r, "w", "validate", None);
@@ -883,9 +883,9 @@ fn indexing_reports_progress_and_files_changed_since_they_were_read() {
 #[test]
 fn code_shows_no_plan_and_a_plan_shows_only_itself() {
     let r = repo();
-    r.service.create_plan("p", "P", "").unwrap();
+    r.service.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     add_validate(&r, "p");
-    r.service.create_plan("other", "Other", "").unwrap();
+    r.service.create_plan("other", "Other", "", arch_graph::PlanKind::Change).unwrap();
     r.service
         .apply(&pid("other"), PlanOp::AddComponent { name: "audit".into(), type_name: "function".into(), description: "Logs.".into(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None })
         .unwrap();
@@ -918,7 +918,7 @@ fn code_shows_no_plan_and_a_plan_shows_only_itself() {
 #[test]
 fn reads_share_the_graph_and_a_plan_overlay_is_rebuilt_only_when_it_changes() {
     let r = repo();
-    r.service.create_plan("p", "P", "").unwrap();
+    r.service.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     add_validate(&r, "p");
     let code = arch_graph::Source::Code;
     let p = arch_graph::Source::Plan(pid("p"));
@@ -942,4 +942,44 @@ fn reads_share_the_graph_and_a_plan_overlay_is_rebuilt_only_when_it_changes() {
     let after = r.service.graph(&p).unwrap();
     assert!(!Arc::ptr_eq(&edited, &after));
     assert!(after.component(&id("sample::added_later")).is_some() && after.component(&id("sample::validate")).is_some());
+}
+
+#[test]
+fn a_walkthrough_explains_existing_code_and_changes_none_of_it() {
+    use arch_graph::tree::{TreeRequest, ViewKind};
+    use arch_graph::{ImplementationSpec, LogicStep, PlanKind, Source};
+    let r = repo();
+    let plan = r.service.create_plan("how-run-works", "How run works", "", PlanKind::Walkthrough).unwrap();
+    assert_eq!(plan.kind, PlanKind::Walkthrough);
+    let spec = ImplementationSpec { logic_steps: vec![LogicStep { sequence: 1, name: "save".into(), description: "Stores what it was given.".into(), algorithm: None, complexity: None, check: None }], ..Default::default() };
+    for (name, text) in [("sample::run", "Runs one request end to end."), ("sample::store::Store::save", "Writes the value to the store.")] {
+        r.service.apply(&pid("how-run-works"), PlanOp::Modify { id: id(name), description: Some(text.into()), signature: None, schemas: None, spec: Some(spec.clone()) }).unwrap();
+    }
+    // Taken as they are in the code: existing, built, where they are.
+    let source = Source::Plan(pid("how-run-works"));
+    let graph = r.service.graph(&source).unwrap();
+    let run = graph.component(&id("sample::run")).unwrap();
+    assert_eq!((run.status, run.stage, run.description.as_str()), (Status::Existing, Stage::Implemented, "Runs one request end to end."));
+    assert!(run.anchor.is_some());
+    assert_eq!(r.service.component(&id("sample::run"), &source).unwrap().component.spec.unwrap().logic_steps[0].name, "save");
+    // Nothing that would change the code.
+    let reject = |op: PlanOp| {
+        let err = r.service.apply(&pid("how-run-works"), op).unwrap_err().to_string();
+        assert!(err.contains("is a walkthrough"), "{err}");
+    };
+    reject(PlanOp::AddComponent { name: "extra".into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None });
+    reject(PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::log"), order: None, ports: None, note: None, expects: None });
+    reject(PlanOp::Modify { id: id("sample::run"), description: None, signature: Some(Signature::default()), schemas: None, spec: None });
+    reject(PlanOp::SetGreenfield { greenfield: true });
+    let approval = r.service.approve(&pid("how-run-works"), &id("sample::run"), Stage::ArchApproved, &Actor::User { name: "user".into() }).unwrap_err().to_string();
+    assert!(approval.contains("is a walkthrough"), "{approval}");
+    assert!(r.service.verify(&pid("how-run-works"), &id("sample::run"), Stage::Implemented).unwrap_err().to_string().contains("is a walkthrough"));
+    // Its checks find nothing wrong, and the calls view shows only its own
+    // components walked (from run, the only one nothing in it calls).
+    let report = r.service.validate(&pid("how-run-works")).unwrap();
+    assert!(report.findings.iter().all(|f| f.severity != Severity::Error), "{:?}", report.findings);
+    let tree = r.service.tree(&TreeRequest { view: ViewKind::Calls, source, ..Default::default() }).unwrap();
+    assert_eq!(tree.roots, vec![id("sample::run").0]);
+    let walked: Vec<&str> = tree.cards.iter().filter(|c| !c.outside_plan).map(|c| c.key.as_str()).collect();
+    assert_eq!(walked, vec![id("sample::run").0.as_str(), id("sample::store::Store::save").0.as_str()], "only the walkthrough's own components are walked");
 }

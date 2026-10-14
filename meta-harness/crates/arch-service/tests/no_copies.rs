@@ -46,7 +46,7 @@ fn requests_plan_edits_approvals_verification_and_refresh_copy_no_graph() {
     .unwrap();
     service.ingest(&root).unwrap();
     let plan = PlanId::new("p").unwrap();
-    service.create_plan("p", "P", "").unwrap();
+    service.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();
     let user = Actor::User { name: "izo".into() };
     let source = Source::Plan(plan.clone());
 

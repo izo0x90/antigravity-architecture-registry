@@ -18,7 +18,7 @@ async fn what_the_agent_started_stops_with_it() {
     // The agent starts a helper of its own, leaves a file in its temp
     // folder, then waits on its input.
     let temp_file = dir.path().join("temp.path");
-    let launcher = ProcessLauncher { program: "sh".into(), args: vec!["-c".into(), format!("echo left > \"$TMPDIR/log\"; echo \"$TMPDIR\" > {}; sleep 300 & echo $! > {}; cat", temp_file.display(), pid_file.display())], env: Vec::new() };
+    let launcher = ProcessLauncher { program: "sh".into(), args: vec!["-c".into(), format!("echo left > \"$TMPDIR/log\"; echo \"$TMPDIR\" > {}; sleep 300 & echo $! > {}; cat", temp_file.display(), pid_file.display())], env: Vec::new(), env_remove: Vec::new() };
     let config = SessionConfig { thread_id: ThreadId::new("t"), policy: RuntimePolicy::default(), model: None, resume: None, mcp_servers: Vec::new() };
     let transport = launcher.launch(&config).await.unwrap();
     let started = Instant::now();

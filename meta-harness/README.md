@@ -1,6 +1,6 @@
 # NAH (not a harness)
 
-NAH sits between you and coding agents (Antigravity today, over ACP). It reads
+NAH sits between you and coding agents (Antigravity and Claude Code, over ACP). It reads
 your code into an architecture graph, lets an agent plan changes against it,
 checks those plans before any code is written, runs the work one agent session
 per component, and verifies that the code matches the plan. You steer and
@@ -35,8 +35,12 @@ The agent harness and each language's server are packs, installed by the
 binary itself (see [Packs](#packs)). To build and install the ones you need:
 
 ```sh
-scripts/bootstrap.sh antigravity-acp rust-analyzer
+scripts/bootstrap.sh antigravity-acp claude-code rust-analyzer
 ```
+
+`scripts/serve.sh [project]` starts the release build in the background
+over a project (this repository by default), restarting it if it runs, and
+prints the cockpit's link; its output is in `~/.cache/nah/serve.log`.
 
 `make check` runs the lints and every test. The tests need `git` and
 `python3` (stand-in language servers). A test that needs something more
@@ -142,7 +146,7 @@ folder with a `pack.toml`.
 
 | Kind | What it gives | Shipped |
 |---|---|---|
-| `harness` | an agent harness, and how its driver starts it (program, arguments, environment) | `antigravity-acp` |
+| `harness` | an agent harness: how it's started (program, arguments, environment, variables it doesn't get) and its settings (see [Harnesses](#harnesses)) | `antigravity-acp`, `claude-code` |
 | `language` | how to read a language (`syntax.toml`), its colours (`highlights.scm`), and its server | `rust`, `python`, `typescript` |
 | `server` | a language server: how to start it, what to send it, its time limits, where its caches go | `rust-analyzer`, `typescript-server`, `basedpyright` |
 
@@ -168,7 +172,8 @@ supports. A harness that isn't installed, fails its check or is out of
 range gets no launch: its status (the cockpit's AGENT light) says why and
 which command fixes it. An instance's own launch, from `harnesses.toml` in
 your config folder's `nah/` or the project's `.nah/` (the project's wins),
-replaces its pack's (a driver's default instance is named after it).
+replaces its pack's (each harness pack is one instance, named in its
+`[provides]`: `antigravity`, `claude-code`).
 Re-probing the harness (in the cockpit) looks its launch up again, so a
 pack installed or fixed meanwhile is used without a restart:
 
@@ -205,10 +210,93 @@ meta-harness pack update [name]   # reinstall what's outdated or out of range (t
 meta-harness pack which <name>    # how it's started (an instance's own launch, if set)
 ```
 
+## Harnesses
+
+Every harness is an ACP agent, run by the one ACP driver. What an agent
+does its own way is data, in its pack's `[provides]`:
+
+```toml
+[provides]
+launch = { program = "{dest}/node_modules/.bin/claude-agent-acp", env_remove = ["ANTHROPIC_API_KEY"] }
+driver = "acp"
+instance = "claude-code"
+display_name = "Claude Code"
+
+[provides.settings.modes]          # its mode for each of ours (one left out isn't offered)
+approval_required = "default"
+full_access = "bypassPermissions"
+plan = "plan"
+```
+
+The settings (wrong or unknown ones stop the harness, saying why):
+
+| Setting | What it says |
+|---|---|
+| `modes` | its mode for asking first, accepting edits, auto, full access, and planning |
+| `approval_warnings` | words added to an approval option, by decision |
+| `client_fs` | it reads and writes the project's files through us |
+| `advertise` | what we tell it we do: run its login commands (`auth_terminal`), show its questions as forms (`elicitation_form`), more `meta` |
+| `session_meta` | added to every session we open |
+| `queueing`, `steering` | where its `initialize` answer says it queues prompts, and takes messages into the running turn (JSON pointers) |
+| `sign_in` | the notification that says who it's signed in as, and where in it the status, name, email, plan and organization are |
+| `login` | the link its login command prints, and what the page gives back to paste |
+| `questions` | the suffix of a question's own "Other" box in its forms |
+| `dirs` | its folders (`{name}` in paths), each from a variable, else a default |
+| `skills` | where it finds skills, in its order, and how it names and orders them |
+| `tool_config` | its configuration files that list tool servers (file, JSON pointer, scope) |
+
+Paths and pointers can name `{home}`, `{project}` and the `dirs`. Every
+shipped harness pack runs the same contract tests against a mock of its
+agent made from its settings (`tests/harness_contract.rs`).
+
+Sessions, checks, logins and saved sessions run in the project. Signing in
+uses the agent's own login: Antigravity's opens a browser (paste the
+address of a page that fails to load); Claude Code's prints a link (open
+it, sign in, paste the code the page shows). Who it's signed in as shows
+beside its name. An API key in the server's environment isn't passed to
+Claude Code, so it uses the account.
+
+While a turn runs, Enter queues the next message (the agent queues it, or
+the server sends it when the turn ends; it shows as QUEUED);
+`Ctrl+Enter` (or `Space s a`) adds it to what the agent is doing, when it
+takes that. Questions the agent asks show as a form: pick an option or
+type your own, then Answer or Skip. Approvals belong to their turn: ending
+the turn withdraws them.
+
+Tool servers: every session gets ours (`/api/mcp/sse`) and the project's,
+kept in `.nah/mcp.toml` (`GET`/`PUT /api/mcp/servers`; `Space p a` adds
+one, `Space p r` removes one, and the open session restarts with them).
+Each harness also keeps its own (Claude Code's `.mcp.json` and
+`.claude.json`), listed with the rest by `Space p l`; its skills are
+listed by `Space p s`.
+
+```toml
+[[server]]
+name = "docs"
+url = "https://host/mcp"      # transport = "sse" for the older kind
+
+[[server]]
+name = "git"
+command = "git-mcp"
+```
+
 ## The cockpit
 
-The cockpit has six views: chat, code, graph, tree, spec and queue. Each
-slot (column) shows one. Every view has a cursor, and the same keys drive
+The cockpit has six kinds of view: chat, code, graph, tree, spec and queue.
+Each column has its own view: two graphs side by side (calls beside data
+flow), several code files, several cards. There's one chat and one queue
+(showing either in another column swaps the two). Picking a kind of view
+in a column (its tabs) gives it a new one, starting where the last one of
+that kind was. Columns: `+`/`-` in the top bar, `Space l 1`…`l 6` (or
+`alt+1`…`alt+6`), `Space l a` adds one, up to `[columns] max` (12). Columns and views work like
+vim's windows and buffers: closing a column (`Space l x`, or the × on its
+header) or fewer columns only hide its view, with its state, and more
+columns bring hidden views back where they were. `Space b b` lists every
+open view (on screen or hidden; the top bar counts the hidden ones) to show
+one in this column; `Space b n` then a kind starts a new view here; `Space
+b d` deletes this column's view for good, the only way one is lost (the
+chat and the queue, there's one of each, are never deleted). Keys, links and the agent act on the view
+of each kind used last. Every view has a cursor, and the same keys drive
 all of them:
 
 - **Move:**
@@ -230,9 +318,30 @@ all of them:
 - **Go to**, from whatever the cursor is on:
   - `g d` code, `g s` spec, `g m` graph, `g t` outline, `g q` queue job;
   - `g r` callers, `g c` callees, `g p` parent, `g n` members,
-    `g i` implements, `g l` data flow.
+    `g i` implements, `g l` data flow;
+  - a number first picks the column it opens in: `1 g d` in the first
+    column, `3 g s` in the third, one past the last in a new column (not
+    the column you're in). Without one: the nearest column showing that
+    kind of view, else beside this one.
 - **Come back:** `ctrl+o`/`ctrl+i` walk one jump list across all views and
   slots; `m` plus a letter sets a mark and `'` plus the letter returns to it.
+- **Quick look:** `q` shows the full card of what the cursor is on (the
+  spec view, floating over the column), with what the graph says about it
+  on top. Hold `q` to peek (it closes when you let go); tap it to keep it
+  open, and `q` again, `Escape` or a click outside closes it. Inside it,
+  the spec's keys work (`j`/`k`, sections, links; following a link shows
+  that card). `Space q c` (or its button) opens the same card in a column.
+
+- **Talk to the agent:** `t` opens a box over whatever is on screen;
+  Enter sends to the chat's session (opening one if there's none), the
+  agent's reply shows above it, and `Escape` closes it. Nothing moves.
+
+The cockpit's state is kept on the server (`GET`/`PUT /api/ui/state`, in
+`.nah/ui/state.json`, which git ignores): the columns and the view in each,
+where every view is (and which are pinned, and which was used last), the
+marks and the jump list, the chat's session and
+what was typed and not sent. A reload, or another browser, comes back to
+it. It's saved half a second after it last changed (`[net] save_after_ms`).
 
 The key bar at the bottom shows the keys that matter for what the cursor
 is on. Pausing on a prefix (`g`, `z`, `[`, `]`, `m`, `'`) lists what can
@@ -259,19 +368,22 @@ Views also have their own keys:
 
   The same actions in all three:
   - select (click, or `h`/`j`/`k`/`l`): what it's tied to stays bright,
-    the rest dims, and the details card opens; the pills on its lines say
-    what goes in and comes back;
+    the rest dims; the pills on its lines say what goes in and comes back,
+    and `q` shows its full card;
   - open or close a card in place (`z o` / `z c`, or click its `+N`);
   - go in (`Enter`, double-click): the card becomes the root; back
     (`Backspace`) returns along the trail shown above the graph;
   - more or fewer levels (`+` / `-`), flip down and up (`r`), pick the
     view (`v` lists them);
-  - pick the code or one plan (the Source picker). A plan starts from its
-    own items, shows only the code they plug into, and marks cards new,
-    changed, done or doesn't match; "Show in full code" shows it in the
-    whole codebase;
+  - pick the code, one plan or one walkthrough (the Source picker). A plan
+    starts from its own items, shows only the code they plug into, and
+    marks cards new, changed, done or doesn't match; "Show in full code"
+    shows it in the whole codebase. A walkthrough shows only its own
+    components the same way, each with what the agent wrote about it;
   - find anything in the code (`g /`), and go back to where you were
-    before the agent moved the view.
+    before the agent moved the view;
+  - zoom in and out (`z +` / `z -`, the wheel or a pinch) and fit the
+    drawing to the screen (`z z`, or the button in the toolbar).
 
   Nothing changes on its own: zoom only zooms. A tree bigger than one
   answer holds is cut at a whole level and says so ("showing 2 of 3
@@ -324,6 +436,7 @@ overrides them in its own `.nah/` folder:
 | `.nah/reviewers.toml` | reviewers: rule-based, or run as agent sessions |
 | `.nah/queue.toml` | queue settings and session brief templates |
 | `.nah/schema_dsl.toml` | extra shorthand type names for schemas |
+| `.nah/mcp.toml` | the project's tool servers, given to every harness's sessions |
 
 How long things take is visible: every answer is timed stage by stage
 (tracing spans), anything over `slow_request_ms` is logged and marked "slow"
@@ -350,12 +463,44 @@ away and rebuilt when the reader changes.
 
 | Area | Tools |
 |---|---|
-| Explore | `ingest`, `list_types`, `search`, `inspect`, `view`, `navigate` (moves your graph) |
-| Plan | `plan_list`, `plan_create`, `plan_import` (old `system_architecture.json`), `plan_edit`, `plan_validate`, `contract` |
+| Explore | `ingest`, `list_types`, `search`, `inspect`, `view`, `navigate` (moves your graph: the one in the `column` it names, else the one you used last) |
+| Plan | `plan_list`, `plan_create` (a change, or a walkthrough), `plan_import` (old `system_architecture.json`), `plan_edit`, `plan_validate`, `contract` |
 | Build | `verify`, `run_tools`, `review` |
 | Review | `review_comments`, `answer_comment`, `reply_comment` |
+| Cockpit | `cockpit_read`, `cockpit_actions`, `cockpit_run`, `cockpit_click`, `cockpit_type`, `cockpit_keys` (only while you let agents drive it) |
 
 Every result ends with next steps, given in dependency order.
+
+### Driving the cockpit
+
+The cockpit can be driven from outside the way you drive it: list what can
+be run now (the actions the Space menu, keys and palette offer), run one by
+id, read what's on screen (the mode, each column's view, and every piece of
+text drawn, with where), click drawn text, type, and press keys. It's one
+set of calls with two ways in:
+
+- **`window.nah`** in the page: `nah.read()`, `nah.actions()`,
+  `nah.run(id, value)`, `nah.click("Connect")`, `nah.type(text)`,
+  `nah.keys("space s n")`, each a promise. For scripts in the page and
+  browser drivers (DevTools, Playwright).
+- **The `cockpit_*` tools** for agents, over the cockpit's own socket
+  (`/ws/cockpit`, opened with a one-time ticket only the cockpit's session gets). They work only while
+  you let agents drive it: `Space a d` ("Let agents drive the cockpit"),
+  kept with the cockpit's state. Off, an agent can't click its own
+  approvals.
+
+Calls run inside a frame, on the same paths keys and clicks take. A
+cockpit in a background tab draws rarely, so it answers slowly.
+
+A walkthrough (`plan_create` with `kind: "walkthrough"`) is a plan the other
+way round: it explains code that exists. Asked to show how something works,
+the agent brings in each component the behavior goes through (`plan_edit`
+`modify`), writes its description and spec (logic steps, invariants) from
+the code, and moves your graph to the walkthrough (`navigate` with
+`source: plan:<id>`): only those components, from the entry point, each
+with its card in the quick look. A walkthrough changes nothing: adding
+components, relations or signature changes are refused, and nothing in it
+is approved, verified or built. It's saved in `.nah/plans/` like any plan.
 
 ## Code map
 
@@ -368,9 +513,9 @@ Every result ends with next steps, given in dependency order.
 | `arch-store` | where the analysis is kept between runs (SQLite) |
 | `arch-search` | one way of matching what's typed: names with neo_frizbee; files and lines with fff-search |
 | `arch-service` | plans and cache, plan operations and checks, verification, tools, reviewers, review loop, queue state |
-| `src/` (server) | REST (`/api/arch/...`), MCP, events over WebSocket, the queue runner, the cockpit session |
+| `src/` (server) | REST (`/api/arch/...`), MCP, events over WebSocket, the queue runner, the cockpit session, agents driving the cockpit (`remote`) |
 | `cockpit-ui` | the egui/WASM cockpit |
-| `harness-*`, `provider-antigravity` | driving agent harnesses over ACP |
+| `harness-*` | agent harnesses: the contracts, the core (drivers, instances, sessions, the skill and tool-config readers), and the ACP driver every agent runs on, configured by its pack |
 | `workspace-fs` | file access confined to the workspace (no path or symlink escapes) |
 
 ## Left out

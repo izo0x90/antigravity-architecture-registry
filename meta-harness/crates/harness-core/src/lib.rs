@@ -14,6 +14,8 @@ mod error;
 mod hub;
 mod registry;
 mod sessions;
+pub mod skills;
+pub mod tool_config;
 
 pub use error::HarnessError;
 pub use hub::EventHub;
@@ -45,10 +47,10 @@ pub struct DriverMetadata {
 pub trait ProviderDriver: Send + Sync {
     fn metadata(&self) -> DriverMetadata;
 
-    /// Config used when the user has not configured this driver: how its
-    /// harness is started (its pack's launch, or an instance's override),
-    /// or why it can't be.
-    fn default_config(&self, harness: &harness_contracts::HarnessLaunch) -> serde_json::Value;
+    /// An instance's config for a harness this driver runs: its profile
+    /// (from its pack) and how it's started (its pack's launch, or the
+    /// instance's own), or why it can't be.
+    fn default_config(&self, harness: &harness_contracts::HarnessEntry) -> serde_json::Value;
 
     /// Decodes `config` (driver-defined shape) and builds an instance.
     async fn create(&self, id: InstanceId, config: serde_json::Value) -> Result<Arc<dyn ProviderInstance>>;
@@ -100,11 +102,15 @@ pub trait AuthController: Send + Sync {
     async fn logout(&self) -> Result<()>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuthChallenge {
     /// URL for the user to open, if the method is browser-based.
     pub url: Option<String>,
     pub instructions: String,
+    /// What `complete` takes, in words (the page's last URL, a code), when
+    /// it takes anything.
+    pub expects: Option<String>,
 }
 
 /// Opens sessions. Stateless apart from what the instance gave it.
@@ -124,7 +130,16 @@ pub trait SessionRuntime: Send + Sync {
     /// Entity-upsert events for this session. Each call returns a new subscriber.
     fn events(&self) -> BoxStream<'static, harness_contracts::AdapterEvent>;
 
+    /// Starts a turn; while one runs, queues it when the harness queues
+    /// messages (`TurnCapabilities::queued_messages`).
     async fn start_turn(&self, input: TurnInput) -> Result<TurnId>;
+
+    /// Adds a message to the running turn (`TurnCapabilities::active_steering`);
+    /// with none running, starts one.
+    async fn inject(&self, input: TurnInput) -> Result<TurnId> {
+        let _ = input;
+        Err(HarnessError::Unsupported { operation: "adding to a running turn" })
+    }
 
     async fn steer(&self, input: SteerInput) -> Result<()>;
 

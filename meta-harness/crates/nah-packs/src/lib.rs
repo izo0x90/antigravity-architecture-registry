@@ -16,7 +16,7 @@ pub mod template;
 pub use catalog::{Catalog, Distribution, Pack, Places, Timeouts};
 pub use engine::{HarnessLaunch, ServerLaunch, State, harness_launch, install, server_launch, state, tool_version};
 pub use lock::{Installed, Lock};
-pub use manifest::{Kind, Manifest};
+pub use manifest::{Kind, Manifest, Provides};
 pub use platform::{PlatformDef, Platforms};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]

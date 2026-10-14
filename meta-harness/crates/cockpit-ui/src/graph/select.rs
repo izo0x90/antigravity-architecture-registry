@@ -150,8 +150,8 @@ impl GraphState {
         if self.tree.is_none() {
             return;
         }
-        let anchor = self.selection.as_deref().and_then(|s| self.rect_of(s)).map(|r| self.to_screen(&r).center()).filter(|p| self.open_area.contains(*p)).unwrap_or(self.open_area.center());
-        let dy = self.open_area.height() / 2.0 * count as f32;
+        let anchor = self.selection.as_deref().and_then(|s| self.rect_of(s)).map(|r| self.to_screen(&r).center()).filter(|p| self.canvas.contains(*p)).unwrap_or(self.canvas.center());
+        let dy = self.canvas.height() / 2.0 * count as f32;
         self.camera.pan.y += if down { -dy } else { dy };
         let nearest = self.tree.as_ref().and_then(|t| t.cards.iter().map(|c| (self.to_screen(&c.rect).center().distance(anchor), c.key.clone())).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, k)| k));
         if let Some(key) = nearest {
@@ -162,9 +162,6 @@ impl GraphState {
 
 impl GraphState {
     pub fn select(&mut self, key: Option<String>) {
-        if key.is_some() {
-            self.drawer_open = true;
-        }
         self.selection = key;
         self.remembered = None;
     }
@@ -327,9 +324,9 @@ impl Navigable for GraphState {
             .on_screen()
             .into_iter()
             .map(|c| (self.to_screen(&c.rect), c.key.clone()))
-            .filter(|(rect, _)| rect.intersects(self.open_area))
+            .filter(|(rect, _)| rect.intersects(self.canvas))
             // The part on screen: a label never sits over the details card.
-            .map(|(rect, key)| (rect.center().distance(anchor), Spot { key, rect: rect.intersect(self.open_area) }))
+            .map(|(rect, key)| (rect.center().distance(anchor), Spot { key, rect: rect.intersect(self.canvas) }))
             .collect();
         visible.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.key.cmp(&b.1.key)));
         visible.into_iter().map(|(_, spot)| spot).collect()
@@ -340,13 +337,12 @@ impl Navigable for GraphState {
     }
 
     fn save_view(&mut self) {
-        self.saved_view = Some((self.camera(), self.drawer_open));
+        self.saved_view = Some(self.camera());
     }
 
     fn restore_view(&mut self) {
-        if let Some((camera, drawer_open)) = self.saved_view.take() {
+        if let Some(camera) = self.saved_view.take() {
             self.set_camera(camera);
-            self.drawer_open = drawer_open;
         }
     }
 

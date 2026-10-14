@@ -188,6 +188,11 @@ impl Default for CodeViewerState {
 }
 
 impl CodeViewerState {
+    /// Whether `path` is the file shown (or on its way).
+    pub fn shows(&self, path: &str) -> bool {
+        path == self.current_file && (self.is_loading || !self.content.is_empty())
+    }
+
     pub fn load_file(&mut self, path: &str, target_line: Option<usize>, net: &NetClient, ctx: egui::Context) {
         if path != self.current_file {
             self.folds.clear();

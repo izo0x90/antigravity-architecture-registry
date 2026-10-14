@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use egui::{Color32, Frame, Pos2, Rect, RichText, Stroke, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use harness_contracts::{
-    ApprovalDecision, ClientEvent, ConfigKind, McpServer, McpTransport, NativeId, OptionValue, ContentBlock, InstanceId, ItemBody, ItemStatus, ModelSelection, NoticeLevel, PlanBody,
-    PlanStep, ProviderSnapshot, ProviderStatus, RequestResponse, RequestStatus, RuntimeMode, RuntimePolicy, SavedSession,
-    StepStatus, SteerInput, ThreadId, ThreadStatus, ToolKind, TurnInput, TurnItem,
+    ClientEvent, ConfigKind, McpServer, McpTransport, NativeId, OptionValue, ContentBlock, InstanceId, ItemBody, ItemStatus, ModelSelection, NoticeLevel, PlanBody,
+    PlanStep, ProviderSnapshot, ProviderStatus, RequestStatus, RuntimeMode, RuntimePolicy, SavedSession,
+    StepStatus, SteerInput, ThreadId, ThreadStatus, ToolKind, ToolServers, TurnInput, TurnItem, TurnStatus,
 };
 
 use egui_phosphor::regular as icon;
@@ -17,7 +17,8 @@ use egui_phosphor::regular as icon;
 use crate::actions::{Action, ActionProvider, Choice, MINOR, Param, RunCx, ToolbarStyle, ToolbarUse, toolbar_control};
 use crate::feedback::FeedbackInspectorState;
 use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, Spot, Step, Target};
-use crate::net::{NetClient, NetResult, OpenThreadBody};
+use crate::net::{AuthChallenge, NetClient, NetResult, OpenThreadBody};
+use crate::request_card::{Drafts, render_request};
 use crate::store::{Store, ThreadView};
 use crate::theme::colors;
 
@@ -35,7 +36,9 @@ enum Reply {
     Opened(NetResult<ThreadId>),
     Sent(NetResult<()>),
     Saved(NetResult<Vec<SavedSession>>),
-    AuthStarted(NetResult<String>),
+    AuthStarted(NetResult<AuthChallenge>),
+    /// The tool servers every session gets; `saved`: after a change.
+    Tools { result: NetResult<ToolServers>, saved: bool },
     Done(NetResult<()>),
 }
 
@@ -65,10 +68,15 @@ pub struct ChatStreamState {
     /// Asks the app to open the palette at this action (set by toolbar buttons
     /// and by actions that first need to load their choices).
     pending_palette: Option<String>,
-    /// MCP servers the user added; passed to new sessions and reconnects.
-    extra_mcp: Vec<McpServer>,
-    auth_instructions: Option<String>,
+    /// The tool servers every session gets (ours and the project's), once
+    /// asked for.
+    tools: Option<ToolServers>,
+    tools_asked: bool,
+    /// A sign-in under way: the page to open and what to paste back.
+    login: Option<AuthChallenge>,
     auth_paste: String,
+    /// Answers being given to the agent's questions.
+    drafts: Drafts,
     mailbox: Mailbox,
     /// The message the cursor is on (normal mode); None follows the latest.
     pub cursor: Option<usize>,
@@ -100,9 +108,11 @@ impl Default for ChatStreamState {
             saved_sessions: None,
             after_saved: None,
             pending_palette: None,
-            extra_mcp: Vec::new(),
-            auth_instructions: None,
+            tools: None,
+            tools_asked: false,
+            login: None,
             auth_paste: String::new(),
+            drafts: Drafts::default(),
             mailbox: Mailbox::default(),
             cursor: None,
             link_pick: None,
@@ -245,7 +255,7 @@ impl ChatStreamState {
             policy: self.policy(),
             model: self.model_selection(),
             resume,
-            mcp_servers: self.extra_mcp.clone(),
+            mcp_servers: Vec::new(),
         };
         let mailbox = self.mailbox.clone();
         net.open_thread(&body, ctx.clone(), move |r| post(&mailbox, Reply::Opened(r)));
@@ -264,11 +274,62 @@ impl ChatStreamState {
         }
     }
 
+    /// Adds `text` to what the agent is doing, when it takes that and a
+    /// turn runs; else sends it (queued behind the running turn).
+    fn add_to_turn(&mut self, net: &NetClient, ctx: &egui::Context, text: String) {
+        let steerable = self.instance().is_some_and(|s| s.capabilities.turns.active_steering);
+        match (&self.active_thread, self.thread().and_then(|t| t.running_turn()).is_some() && steerable) {
+            (Some(thread), true) => {
+                let mailbox = self.mailbox.clone();
+                net.inject(thread, &TurnInput { text, attachments: Vec::new() }, ctx.clone(), move |r| post(&mailbox, Reply::Sent(r)));
+            }
+            _ => self.send_prompt(net, ctx, text),
+        }
+    }
+
     fn steer(&mut self, net: &NetClient, ctx: &egui::Context, input: SteerInput) {
         if let Some(thread) = &self.active_thread {
             let mailbox = self.mailbox.clone();
             net.steer(thread, &input, ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
         }
+    }
+
+    /// Sends `text` to the agent: into the session open, else a new one
+    /// opened for it.
+    pub fn say(&mut self, net: &NetClient, ctx: &egui::Context, text: String) {
+        self.send_prompt(net, ctx, text);
+    }
+
+    /// Who's answering, in words: the harness, and the session if one is
+    /// open.
+    pub fn who(&self) -> String {
+        let name = self.active_instance.as_ref().and_then(|id| self.store.instances.get(id)).map_or_else(|| "the agent".to_owned(), |i| i.display_name.clone());
+        match self.thread() {
+            Some(t) => {
+                let session: String = t.thread.id.to_string().chars().take(8).collect();
+                format!("{name} · session {session} · {}", format!("{:?}", t.thread.status).to_lowercase())
+            }
+            None => format!("{name} · a new session"),
+        }
+    }
+
+    /// The agent's last message in the open session, as text.
+    pub fn last_reply(&self) -> Option<String> {
+        self.thread()?.items.iter().rev().find_map(|item| match &item.body {
+            ItemBody::AssistantMessage { content, .. } => Some(content.iter().map(block_summary).collect::<Vec<_>>().join(" ")),
+            _ => None,
+        })
+    }
+
+    /// Takes what the server answered (every frame, shown or not: a message
+    /// sent from elsewhere waits on a session opening).
+    pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
+        if !self.tools_asked && !self.store.instances.is_empty() {
+            self.tools_asked = true;
+            let mailbox = self.mailbox.clone();
+            net.tool_servers(ctx.clone(), move |result| post(&mailbox, Reply::Tools { result, saved: false }));
+        }
+        self.drain_replies(net, ctx);
     }
 
     /// The single place async results land.
@@ -294,11 +355,19 @@ impl ChatStreamState {
                         self.pending_palette = Some(action);
                     }
                 }
-                Reply::AuthStarted(Ok(instructions)) => {
+                Reply::AuthStarted(Ok(challenge)) => {
                     self.error = None;
-                    self.auth_instructions = Some(instructions);
+                    // Nothing to open or paste: it's done (the harness checks again).
+                    self.login = (challenge.url.is_some() || challenge.expects.is_some()).then_some(challenge);
                 }
-                Reply::Sent(Err(e)) | Reply::Saved(Err(e)) | Reply::AuthStarted(Err(e)) | Reply::Done(Err(e)) => {
+                Reply::Tools { result: Ok(tools), saved } => {
+                    self.tools = Some(tools);
+                    // The open session takes tool servers only when it starts.
+                    if saved {
+                        self.reconnect(net, ctx);
+                    }
+                }
+                Reply::Sent(Err(e)) | Reply::Saved(Err(e)) | Reply::AuthStarted(Err(e)) | Reply::Done(Err(e)) | Reply::Tools { result: Err(e), .. } => {
                     self.error = Some(e.into());
                 }
                 Reply::Sent(Ok(())) | Reply::Done(Ok(())) => {}
@@ -352,6 +421,18 @@ impl ChatStreamState {
         ui.horizontal(|ui| {
             let name = self.instance().map(|s| s.display_name.clone()).unwrap_or_else(|| "No harness".into());
             ui.label(RichText::new(name).strong().size(crate::theme::look().text_label));
+            // Who it's signed in as, as it says.
+            if let Some(account) = self.instance().and_then(|s| s.auth.account.clone()) {
+                let detail = [account.email.clone(), account.organization.clone(), account.plan.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                let label = ui.label(RichText::new(format!("{} {}", icon::USER_CIRCLE, account.label)).size(crate::theme::look().text_small).color(colors().muted));
+                if !detail.is_empty() {
+                    label.on_hover_text(detail);
+                }
+            }
+            // What of its configuration couldn't be read.
+            if let Some(problems) = self.instance().map(|s| s.problems.clone()).filter(|p| !p.is_empty()) {
+                ui.label(RichText::new(icon::WARNING).color(colors().warn)).on_hover_text(problems.join("\n"));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 for action in on_toolbar(ToolbarStyle::Button) {
                     if let Some(u) = toolbar_control(ui, action) {
@@ -420,13 +501,14 @@ impl ChatStreamState {
                 && (s.auth.status == harness_contracts::AuthStatus::SignedOut
                     || self.error.as_deref().is_some_and(|e| e.to_lowercase().contains("authentication")))
         });
-        if (needs_login || self.auth_instructions.is_some())
+        if (needs_login || self.login.is_some())
             && let Some(snapshot) = self.instance().cloned()
         {
             let instance = snapshot.instance_id.clone();
-            banner(ui, colors().info_bg, colors().focus, |ui| match self.auth_instructions.clone() {
+            let look = crate::theme::look();
+            banner(ui, colors().info_bg, colors().focus, |ui| match self.login.clone() {
                 None => {
-                    ui.label(RichText::new(format!("{} Sign in:", icon::KEY)).strong().size(crate::theme::look().text_label));
+                    ui.label(RichText::new(format!("{} Sign in to {}:", icon::KEY, snapshot.display_name)).strong().size(look.text_label));
                     for method in &snapshot.auth.methods {
                         let button = ui.button(&method.name);
                         let button = match &method.description {
@@ -439,18 +521,31 @@ impl ChatStreamState {
                         }
                     }
                 }
-                Some(instructions) => {
-                    ui.label(RichText::new(instructions).size(crate::theme::look().text_label));
-                    ui.add(egui::TextEdit::singleline(&mut self.auth_paste).hint_text("http://127.0.0.1:…/?code=…").desired_width(220.0));
-                    if ui.button("Complete").clicked() && !self.auth_paste.trim().is_empty() {
-                        let mailbox = self.mailbox.clone();
-                        let pasted = std::mem::take(&mut self.auth_paste);
-                        net.complete_auth(&instance, &pasted, ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
-                        self.auth_instructions = None;
-                    }
-                    if ui.small_button("Done").clicked() {
-                        self.auth_instructions = None;
-                    }
+                Some(login) => {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(&login.instructions).size(look.text_label));
+                        if let Some(url) = &login.url {
+                            ui.hyperlink_to(RichText::new(format!("{} Open the sign-in page", icon::ARROW_SQUARE_OUT)).strong(), url);
+                            // Its address, to copy when the link can't open here.
+                            let mut shown = url.clone();
+                            ui.add(egui::TextEdit::singleline(&mut shown).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+                        }
+                        ui.horizontal(|ui| {
+                            if let Some(expects) = &login.expects {
+                                let hint = format!("Paste {expects}");
+                                ui.add(egui::TextEdit::singleline(&mut self.auth_paste).hint_text(hint).desired_width(260.0));
+                                if ui.button("Sign in").clicked() && !self.auth_paste.trim().is_empty() {
+                                    let mailbox = self.mailbox.clone();
+                                    let pasted = std::mem::take(&mut self.auth_paste);
+                                    net.complete_auth(&instance, &pasted, ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
+                                    self.login = None;
+                                }
+                            }
+                            if ui.small_button("Cancel").clicked() {
+                                self.login = None;
+                            }
+                        });
+                    });
                 }
             });
         }
@@ -484,7 +579,9 @@ impl ChatStreamState {
         for turn in &view.turns {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("Turn {}", turn.ordinal)).monospace().size(crate::theme::look().text_small).color(colors().faint));
-                if !turn.status.is_terminal() {
+                if turn.status == TurnStatus::Queued {
+                    ui.label(RichText::new("QUEUED").size(crate::theme::look().text_tiny).color(colors().muted));
+                } else if !turn.status.is_terminal() {
                     ui.label(RichText::new("RUNNING").size(crate::theme::look().text_tiny).color(colors().warn));
                 } else if let Some(f) = &turn.failure {
                     ui.label(RichText::new(format!("failed: {}", f.message)).size(crate::theme::look().text_tiny).color(colors().error));
@@ -602,7 +699,7 @@ impl ChatStreamState {
             ItemBody::TodoList { steps, .. } => render_steps(ui, steps),
             ItemBody::Request { request_id } => {
                 if let Some(request) = view.request(request_id) {
-                    render_request(ui, net, &view.thread.id, request);
+                    render_request(ui, net, &view.thread.id, request, &mut self.drafts);
                 }
             }
             ItemBody::Subagent { subagent_id } => {
@@ -656,7 +753,10 @@ impl ChatStreamState {
             let send_w = 64.0;
             let text_w = (ui.available_width() - send_w - ui.spacing().item_spacing.x - 4.0).max(60.0);
             let inserting = *input_mode == crate::keymap::InputMode::Insert { slot: slot_idx };
-            let hint = if inserting {
+            let steerable = self.instance().is_some_and(|s| s.capabilities.turns.active_steering) && self.thread().and_then(|t| t.running_turn()).is_some();
+            let hint = if inserting && steerable {
+                "While it works: Enter queues this next, Ctrl+Enter adds it to what it's doing"
+            } else if inserting {
                 "Instructions… (Enter to send, Shift+Enter newline, Esc normal mode, / for commands)"
             } else {
                 "Press 'i' or click to enter insert mode..."
@@ -675,11 +775,18 @@ impl ChatStreamState {
                 *input_mode = crate::keymap::InputMode::Insert { slot: slot_idx };
             }
             let send = ui.add_sized([send_w, 36.0], egui::Button::new(RichText::new("Send").strong().size(crate::theme::look().text_body))).clicked();
-            let enter = inserting && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+            let (enter, add) = ui.input(|i| {
+                let enter = inserting && i.key_pressed(egui::Key::Enter) && !i.modifiers.shift;
+                (enter, enter && i.modifiers.command)
+            });
             if (send || enter) && !self.input_buffer.trim().is_empty() {
                 let text = self.input_buffer.trim().to_string();
                 self.input_buffer.clear();
-                self.send_prompt(net, &ctx, text);
+                if add {
+                    self.add_to_turn(net, &ctx, text);
+                } else {
+                    self.send_prompt(net, &ctx, text);
+                }
             }
         });
     }
@@ -813,7 +920,7 @@ impl Navigable for ChatStreamState {
 
 fn mcp_label(server: &McpServer) -> String {
     match &server.transport {
-        McpTransport::Http { url, .. } => format!("{} — {url}", server.name),
+        McpTransport::Http { url, .. } | McpTransport::Sse { url, .. } => format!("{} — {url}", server.name),
         McpTransport::Stdio { command, .. } => format!("{} — {command}", server.name),
     }
 }
@@ -823,7 +930,7 @@ impl ChatStreamState {
         let Some(instance) = self.active_instance.clone() else { return };
         self.after_saved = Some(then.to_owned());
         let mailbox = self.mailbox.clone();
-        net.list_saved_sessions(&instance, ".", ctx.clone(), move |r| post(&mailbox, Reply::Saved(r.map(|p| p.sessions))));
+        net.list_saved_sessions(&instance, ctx.clone(), move |r| post(&mailbox, Reply::Saved(r.map(|p| p.sessions))));
     }
 
     /// Restarts the active session with the current MCP list (ACP only takes MCP
@@ -835,6 +942,12 @@ impl ChatStreamState {
         net.close_thread(&thread, ctx.clone());
         self.active_thread = None;
         self.open_thread(net, ctx, native);
+    }
+
+    /// Saves the project's tool servers (the session restarts with them).
+    fn save_tools(&mut self, net: &NetClient, ctx: &egui::Context, project: &[McpServer]) {
+        let mailbox = self.mailbox.clone();
+        net.set_tool_servers(project, ctx.clone(), move |result| post(&mailbox, Reply::Tools { result, saved: true }));
     }
 
     fn saved_choices(&self) -> Option<Vec<Choice>> {
@@ -866,6 +979,8 @@ enum ChatCommand {
     ListMcp,
     AddMcp,
     RemoveMcp,
+    ListSkills,
+    AddToTurn,
     HarnessCommand { name: String },
     Login,
     CompleteLogin,
@@ -998,18 +1113,38 @@ impl ActionProvider for ChatStreamState {
             }
         }
 
-        // MCP servers
-        let active_servers: Vec<McpServer> = view.map(|v| v.thread.mcp_servers.clone()).unwrap_or_else(|| self.extra_mcp.clone());
-        if !active_servers.is_empty() {
-            let choices = active_servers.iter().map(|m| Choice::new(&m.name, mcp_label(m))).collect();
-            out.push(Action::new("mcp.list", "MCP servers in this session", C::ListMcp).param(Param::Choice(choices)));
+        // Tool servers and skills
+        let mut servers: Vec<Choice> = match view {
+            Some(v) => v.thread.mcp_servers.iter().map(|m| Choice::new(&m.name, mcp_label(m))).collect(),
+            None => self.tools.iter().flat_map(|t| t.ours.iter().chain(&t.project)).map(|m| Choice::new(&m.name, mcp_label(m))).collect(),
+        };
+        if let Some(s) = snapshot {
+            servers.extend(s.tool_servers.iter().map(|t| Choice::new(&t.name, format!("{} — {} (its own, {:?})", t.name, t.transport, t.scope).to_lowercase()).detail(Some(t.file.clone()))));
         }
-        if caps.tools.mcp_http {
-            out.push(Action::new("mcp.add", "Add an MCP server (HTTP)", C::AddMcp).param(Param::Text { hint: "name https://host/mcp".into() }));
+        if !servers.is_empty() {
+            out.push(Action::new("mcp.list", "Tool servers its sessions get", C::ListMcp).param(Param::Choice(servers)));
         }
-        if !self.extra_mcp.is_empty() {
-            let choices = self.extra_mcp.iter().map(|m| Choice::new(&m.name, mcp_label(m))).collect();
-            out.push(Action::new("mcp.remove", "Remove an added MCP server", C::RemoveMcp).param(Param::Choice(choices)));
+        if let Some(tools) = &self.tools {
+            out.push(Action::new("mcp.add", "Add a tool server to the project", C::AddMcp).param(Param::Text { hint: "name https://host/mcp (then sse for the older kind)".into() }));
+            if !tools.project.is_empty() {
+                let choices = tools.project.iter().map(|m| Choice::new(&m.name, mcp_label(m))).collect();
+                out.push(Action::new("mcp.remove", "Remove a tool server from the project", C::RemoveMcp).param(Param::Choice(choices)));
+            }
+        }
+        if let Some(s) = snapshot.filter(|s| !s.skills.is_empty()) {
+            let choices = s
+                .skills
+                .iter()
+                .map(|k| Choice::new(&k.name, format!("{} ({})", k.name, wire_name(&k.scope))).detail(k.description.clone().or(k.path.clone())))
+                .collect();
+            out.push(Action::new("harness.skills", format!("{}'s skills", s.display_name), C::ListSkills).param(Param::Choice(choices)));
+        }
+        if let Some(view) = view
+            && view.running_turn().is_some()
+            && caps.turns.active_steering
+            && !self.input_buffer.trim().is_empty()
+        {
+            out.push(Action::new("chat.inject", "Add the prompt to what it's doing", C::AddToTurn).focused());
         }
 
         // Harness commands
@@ -1031,7 +1166,8 @@ impl ActionProvider for ChatStreamState {
         if let Some(s) = snapshot.filter(|s| !s.auth.methods.is_empty()) {
             let choices = s.auth.methods.iter().map(|m| Choice::new(&m.id, &m.name).detail(m.description.clone())).collect();
             out.push(Action::new("auth.login", "Sign in", C::Login).param(Param::Choice(choices)));
-            out.push(Action::new("auth.complete", "Complete sign-in with a callback URL", C::CompleteLogin).param(Param::Text { hint: "http://127.0.0.1:…/?code=…".into() }));
+            let hint = self.login.as_ref().and_then(|l| l.expects.clone()).unwrap_or_else(|| "what the sign-in page gave you".into());
+            out.push(Action::new("auth.complete", "Finish signing in", C::CompleteLogin).param(Param::Text { hint }));
             out.push(Action::new("auth.logout", "Sign out", C::Logout));
         }
 
@@ -1123,22 +1259,33 @@ impl ActionProvider for ChatStreamState {
                     self.runtime_mode = mode;
                 }
             }
-            ChatCommand::ListMcp => {}
+            ChatCommand::ListMcp | ChatCommand::ListSkills => {}
+            ChatCommand::AddToTurn => {
+                let text = std::mem::take(&mut self.input_buffer).trim().to_owned();
+                if !text.is_empty() {
+                    self.add_to_turn(net, ctx, text);
+                }
+            }
             ChatCommand::AddMcp => {
                 let text = value.unwrap_or_default();
                 let mut parts = text.split_whitespace();
-                if let (Some(name), Some(url)) = (parts.next(), parts.next()) {
-                    self.extra_mcp.retain(|m| m.name != name);
-                    self.extra_mcp.push(McpServer { name: name.into(), transport: McpTransport::Http { url: url.into(), headers: Vec::new() } });
-                    self.reconnect(net, ctx);
-                } else {
-                    self.error = Some("MCP server needs a name and a URL, e.g. `docs https://host/mcp`".into());
+                match (parts.next(), parts.next(), parts.next(), &self.tools) {
+                    (Some(name), Some(url), kind @ (None | Some("sse")), Some(tools)) => {
+                        let mut project: Vec<McpServer> = tools.project.iter().filter(|m| m.name != name).cloned().collect();
+                        let transport = match kind {
+                            Some(_) => McpTransport::Sse { url: url.into(), headers: Vec::new() },
+                            None => McpTransport::Http { url: url.into(), headers: Vec::new() },
+                        };
+                        project.push(McpServer { name: name.into(), transport });
+                        self.save_tools(net, ctx, &project);
+                    }
+                    _ => self.error = Some("A tool server needs a name and a URL, e.g. `docs https://host/mcp` (`… sse` for the older kind)".into()),
                 }
             }
             ChatCommand::RemoveMcp => {
-                if let Some(name) = value {
-                    self.extra_mcp.retain(|m| m.name != name);
-                    self.reconnect(net, ctx);
+                if let (Some(name), Some(tools)) = (value, &self.tools) {
+                    let project: Vec<McpServer> = tools.project.iter().filter(|m| m.name != name).cloned().collect();
+                    self.save_tools(net, ctx, &project);
                 }
             }
             ChatCommand::HarnessCommand { name } => {
@@ -1158,7 +1305,7 @@ impl ActionProvider for ChatStreamState {
                 if let (Some(url), Some(instance)) = (value, self.active_instance.clone()) {
                     let mailbox = self.mailbox.clone();
                     net.complete_auth(&instance, &url, ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
-                    self.auth_instructions = None;
+                    self.login = None;
                 }
             }
             ChatCommand::Logout => {
@@ -1168,7 +1315,8 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             ChatCommand::Answer { thread, request, option } => {
-                let response = RequestResponse { option_id: Some(option.clone()), ..Default::default() };
+                let Some(pending) = self.store.threads.get(thread).and_then(|t| t.request(request)) else { return };
+                let response = self.drafts.response(pending, option);
                 let mailbox = self.mailbox.clone();
                 net.respond(thread, request, &response, ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
             }
@@ -1189,53 +1337,6 @@ fn render_steps(ui: &mut egui::Ui, steps: &[PlanStep]) {
         };
         ui.label(RichText::new(format!("{mark} {}", step.text)).size(crate::theme::look().text_body).color(color));
     }
-}
-
-fn render_request(ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, request: &harness_contracts::RuntimeRequest) {
-    Frame::NONE
-        .fill(colors().warn_bg)
-        .stroke(Stroke::new(crate::theme::look().line_thin, colors().warn))
-        .corner_radius(crate::theme::look().radius_m)
-        .inner_margin(crate::theme::margin(crate::theme::look().space_m))
-        .show(ui, |ui| {
-            ui.label(RichText::new(format!("{} PERMISSION REQUIRED", icon::WARNING)).strong().size(crate::theme::look().text_body).color(colors().warn));
-            ui.label(RichText::new(&request.title).size(crate::theme::look().text_label));
-            if let Some(detail) = &request.detail {
-                ui.label(RichText::new(detail).size(crate::theme::look().text_body).color(colors().muted));
-            }
-            match request.status {
-                RequestStatus::Pending => {
-                    ui.horizontal_wrapped(|ui| {
-                        for option in &request.options {
-                            let color = match option.decision {
-                                ApprovalDecision::Accept | ApprovalDecision::AcceptForSession | ApprovalDecision::AcceptAlways => colors().ok,
-                                ApprovalDecision::Decline | ApprovalDecision::Cancel => colors().error,
-                            };
-                            let button = ui.button(RichText::new(&option.label).color(color));
-                            let button = match &option.warning { Some(w) => button.on_hover_text(w), None => button };
-                            if button.clicked() {
-                                let response = RequestResponse { option_id: Some(option.id.clone()), ..Default::default() };
-                                net.respond(thread, &request.id, &response, ui.ctx().clone(), |_| {});
-                            }
-                        }
-                    });
-                }
-                status => {
-                    let chosen = request
-                        .response
-                        .as_ref()
-                        .and_then(|r| r.option_id.as_ref())
-                        .and_then(|id| request.options.iter().find(|o| &o.id == id))
-                        .map(|o| o.label.clone());
-                    let text = match (status, chosen) {
-                        (RequestStatus::Resolved, Some(label)) => format!("{} {label}", icon::CHECK),
-                        (RequestStatus::Resolved, None) => format!("{} Resolved", icon::CHECK),
-                        (other, _) => format!("{other:?}"),
-                    };
-                    ui.label(RichText::new(text).size(crate::theme::look().text_body).color(colors().ok));
-                }
-            }
-        });
 }
 
 fn block_summary(block: &ContentBlock) -> String {
@@ -1317,6 +1418,8 @@ pub(crate) mod tests {
             skills: Vec::new(),
             runtime_modes: Vec::new(),
             supports_plan_mode: false,
+            tool_servers: Vec::new(),
+            problems: Vec::new(),
         };
         let reason = "antigravity-acp isn't installed (fix: meta-harness pack install antigravity-acp)";
         chat.process_event(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Unavailable { reason: reason.into() }) });
@@ -1368,6 +1471,38 @@ pub(crate) mod tests {
         let keys: Vec<String> = chat.spots().into_iter().map(|s| s.key).collect();
         for key in ["0", "1", "2", "2:0", "2:1", "3", "3:0"] {
             assert!(keys.contains(&key.to_owned()), "{key} in {keys:?}");
+        }
+    }
+
+    #[test]
+    fn its_skills_tool_servers_and_adding_to_the_running_turn_are_actions() {
+        let mut chat = conversation();
+        let ids = |chat: &ChatStreamState| chat.actions().into_iter().map(|a| a.id).collect::<Vec<_>>();
+        assert!(!ids(&chat).iter().any(|a| a == "mcp.add" || a == "harness.skills" || a == "chat.inject"), "nothing known yet");
+        let mut snapshot = ProviderSnapshot {
+            instance_id: InstanceId::new("i"),
+            driver: harness_contracts::DriverKind::new("acp"),
+            display_name: "Claude Code".into(),
+            status: ProviderStatus::Ready,
+            auth: harness_contracts::AuthState { status: harness_contracts::AuthStatus::SignedIn, account: None, methods: Vec::new() },
+            capabilities: Default::default(),
+            models: Vec::new(),
+            commands: Vec::new(),
+            skills: vec![harness_contracts::Skill { name: "review".into(), description: Some("Review".into()), path: None, scope: harness_contracts::Scope::User }],
+            runtime_modes: Vec::new(),
+            supports_plan_mode: false,
+            tool_servers: Vec::new(),
+            problems: Vec::new(),
+        };
+        snapshot.capabilities.turns.active_steering = true;
+        chat.active_instance = Some(snapshot.instance_id.clone());
+        chat.process_event(ClientEvent::InstanceUpdated { snapshot });
+        chat.tools = Some(ToolServers::default());
+        chat.process_event(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Running, failure: None, usage: None } }));
+        chat.input_buffer = "also".into();
+        let ids = ids(&chat);
+        for id in ["mcp.add", "harness.skills", "chat.inject"] {
+            assert!(ids.iter().any(|a| a == id), "{id} in {ids:?}");
         }
     }
 }

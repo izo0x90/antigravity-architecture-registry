@@ -36,6 +36,8 @@ pub struct GraphUi {
     pub context: Vec<String>,
     /// Fitting never zooms out past this (text stays readable).
     pub readable_zoom: f32,
+    /// How much one zoom in (or out) changes the size.
+    pub zoom_step: f32,
     /// Text smaller than this on screen isn't drawn.
     pub min_text_px: f32,
     /// Details kept for cards selected before.
@@ -71,6 +73,7 @@ impl Default for GraphUi {
             chips: Chips::default(),
             context: Vec::new(),
             readable_zoom: 1.0,
+            zoom_step: 1.2,
             min_text_px: 6.0,
             details_kept: 64,
             find: FindLimits::default(),
@@ -88,8 +91,8 @@ impl GraphUi {
         if self.chips.size <= 0.0 {
             return Err("graph.chips.size must be positive".into());
         }
-        if self.readable_zoom.is_nan() || self.readable_zoom <= 0.0 || self.min_text_px.is_nan() || self.min_text_px < 0.0 || self.details_kept == 0 {
-            return Err("graph: readable_zoom > 0, min_text_px >= 0 and details_kept >= 1".into());
+        if self.readable_zoom.is_nan() || self.readable_zoom <= 0.0 || self.zoom_step.is_nan() || self.zoom_step <= 1.0 || self.min_text_px.is_nan() || self.min_text_px < 0.0 || self.details_kept == 0 {
+            return Err("graph: readable_zoom > 0, zoom_step > 1, min_text_px >= 0 and details_kept >= 1".into());
         }
         Ok(())
     }

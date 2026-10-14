@@ -66,7 +66,8 @@ impl Target {
 }
 
 /// Where a view is, enough to come back to it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Place {
     Chat { message: Option<usize> },
     Code { file: String, line: usize },
@@ -79,7 +80,7 @@ pub enum Place {
 }
 
 /// A place in a slot: what the jump list and marks hold.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Jump {
     pub slot: usize,
     pub kind: BufferKind,
@@ -89,7 +90,7 @@ pub struct Jump {
 /// The jump list: where big moves started, to go back (ctrl+o) and forward
 /// (ctrl+i) across views and slots. Jumping somewhere new drops what was
 /// ahead, like a browser.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct JumpList {
     entries: Vec<Jump>,
     /// Where we are: `entries.len()` means past the newest entry.
@@ -99,6 +100,14 @@ pub struct JumpList {
 const JUMPS: usize = 100;
 
 impl JumpList {
+    /// The same list, its rules holding whatever it was read from.
+    pub fn checked(mut self) -> Self {
+        let over = self.entries.len().saturating_sub(JUMPS);
+        self.entries.drain(..over);
+        self.at = self.at.saturating_sub(over).min(self.entries.len());
+        self
+    }
+
     /// Records the place a jump left from.
     pub fn record(&mut self, from: Jump) {
         self.entries.truncate(self.at);

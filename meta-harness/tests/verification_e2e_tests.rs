@@ -41,7 +41,7 @@ fn id(s: &str) -> ComponentId {
 /// Plan "v": validate (calls Store::new), approved, implemented in src/lib.rs.
 fn implemented_validate(arch: &ArchitectureService, body: &str) {
     let plan = PlanId::new("v").unwrap();
-    arch.create_plan("v", "Validate", "").unwrap();
+    arch.create_plan("v", "Validate", "", arch_graph::PlanKind::Change).unwrap();
     arch.apply(
         &plan,
         PlanOp::AddComponent {

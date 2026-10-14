@@ -118,15 +118,21 @@ impl Chord {
         }
     }
 
-    pub fn released(&self, input: &egui::InputState) -> bool {
+    /// The physical key, when there is one: a named key, or a typed
+    /// letter or digit's own key (so it can be held and let go).
+    fn physical(&self) -> Option<Key> {
         match &self.key {
-            ChordKey::Key(key) => input.key_released(*key),
-            ChordKey::Text(_) => false,
+            ChordKey::Key(key) => Some(*key),
+            ChordKey::Text(text) => named_key(&text.to_uppercase()),
         }
     }
 
+    pub fn released(&self, input: &egui::InputState) -> bool {
+        self.physical().is_some_and(|key| input.key_released(key))
+    }
+
     pub fn key_down(&self, input: &egui::InputState) -> bool {
-        matches!(&self.key, ChordKey::Key(key) if input.key_down(*key))
+        self.physical().is_some_and(|key| input.key_down(key))
     }
 
     pub fn label(&self) -> String {
@@ -203,6 +209,7 @@ impl Default for KeymapConfig {
         Self {
             leader: key(Key::Space),
             back: key(Key::Escape),
+            peek_hold_ms: default_peek_hold(),
             groups: BTreeMap::new(),
             bind: BTreeMap::new(),
             hint_chars: default_hint_chars(),
@@ -233,6 +240,10 @@ impl Default for KeyBar {
 pub struct KeymapConfig {
     pub leader: Chord,
     pub back: Chord,
+    /// Held at least this long, the quick look's key is a peek: the quick
+    /// look closes when it's let go (tapped, it stays open).
+    #[serde(default = "default_peek_hold")]
+    pub peek_hold_ms: u64,
     /// Leader submenu labels by key path ("s" -> "Session").
     #[serde(default)]
     pub groups: BTreeMap<String, String>,
@@ -249,6 +260,10 @@ pub struct KeymapConfig {
     pub view_menu: char,
     #[serde(default)]
     pub bar: KeyBar,
+}
+
+fn default_peek_hold() -> u64 {
+    250
 }
 
 fn default_hint_chars() -> String {

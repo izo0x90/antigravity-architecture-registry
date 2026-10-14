@@ -427,6 +427,7 @@ pub struct HarnessLaunch {
     pub program: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    pub env_remove: Vec<String>,
 }
 
 /// The launch the install `entry` gives (its own, else the pack's).
@@ -446,6 +447,7 @@ fn fill_launch(pack: &Pack, launch: Option<&Launch>, dest: &Path) -> Result<Harn
         program: fill(&launch.program)?,
         args: launch.args.iter().map(|a| fill(a)).collect::<Result<_, _>>()?,
         env: launch.env.iter().map(|(k, v)| Ok((k.clone(), fill(v)?))).collect::<Result<_, PackError>>()?,
+        env_remove: launch.env_remove.clone(),
     })
 }
 

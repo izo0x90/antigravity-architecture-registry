@@ -2,13 +2,16 @@
 name = "harness-acp"
 version = "0.1.0"
 edition = "2024"
-description = "Generic ACP (Agent Client Protocol) adapter; harness specifics plug in as an AcpFlavor"
+description = "The driver for any ACP (Agent Client Protocol) agent, configured by its harness pack's settings"
 
 [dependencies]
 harness-contracts = { path = "../harness-contracts" }
 harness-core = { path = "../harness-core" }
+workspace-fs = { path = "../workspace-fs" }
 agent-client-protocol = "2.2.0"
 async-trait = "0.1.92"
+regex = "1"
+serde = { version = "1.0", features = ["derive"] }
 futures = "0.3.34"
 serde_json = "1.0"
 tokio = { version = "1.53.1", features = ["sync", "process", "rt", "time", "io-util", "macros", "net"] }
@@ -21,7 +24,13 @@ uuid = { version = "1.26.1", features = ["v4"] }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"] }
 
+[features]
+# The mock agent the harness contract tests run against.
+testing = []
+
 [dev-dependencies]
+harness-acp = { path = ".", features = ["testing"] }
+toml = "1"
 tempfile = "3"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-util = { version = "0.7.19", features = ["compat"] }

@@ -2,6 +2,7 @@ pub mod actions;
 pub mod app;
 pub mod chat;
 pub mod code;
+pub mod columns;
 pub mod config;
 pub mod feedback;
 pub mod graph;
@@ -12,10 +13,16 @@ pub mod keymap;
 pub mod nav;
 pub mod net;
 pub mod palette;
+pub mod panes;
 pub mod queue;
+pub mod quick_look;
+pub mod remote;
+pub mod request_card;
 pub mod review;
+pub mod saved;
 pub mod spec;
 pub mod status;
+pub mod talk;
 pub mod store;
 pub mod theme;
 pub mod touch;
@@ -62,7 +69,11 @@ impl WebHandle {
                 web_options,
                 Box::new(move |cc| {
                     cc.egui_ctx.set_fonts(crate::theme::font_definitions());
-                    Ok(Box::new(CockpitApp::new(&origin)))
+                    let mut app = CockpitApp::new(&origin);
+                    if let Err(e) = crate::remote::install_page_door(app.remote.door(&cc.egui_ctx)) {
+                        web_sys::console::warn_1(&e);
+                    }
+                    Ok(Box::new(app))
                 }),
             )
             .await

@@ -6,13 +6,13 @@
 use std::path::Path;
 use std::time::Duration;
 
-use harness_contracts::{HarnessLaunch, InstanceId, ProviderStatus, RuntimePolicy, SessionConfig, ThreadId};
+use harness_contracts::{HarnessLaunch, ProviderStatus, RuntimePolicy, SessionConfig, ThreadId};
 use harness_core::ProviderDriver;
 
-/// The harness pack providing the antigravity driver, when it's installed
-/// on this machine; else why not.
+/// The harness pack providing the antigravity instance, when it's
+/// installed on this machine; else why not.
 fn installed(catalog: &nah_packs::Catalog) -> Result<(), String> {
-    let pack = catalog.of_kind(nah_packs::Kind::Harness).find(|p| p.manifest.provides.as_ref().is_some_and(|p| p.driver == "antigravity")).ok_or("no harness pack provides antigravity")?;
+    let pack = catalog.of_kind(nah_packs::Kind::Harness).find(|p| p.manifest.provides.as_ref().is_some_and(|p| p.instance.as_deref() == Some("antigravity"))).ok_or("no harness pack provides antigravity")?;
     let lock = nah_packs::Lock::read(&catalog.lock_path).map_err(|e| e.to_string())?;
     if lock.packs.contains_key(pack.name()) { Ok(()) } else { Err(format!("{} isn't installed on this machine", pack.name())) }
 }
@@ -25,15 +25,16 @@ async fn the_driver_starts_the_installed_pack_and_opens_a_session_needs_the_pack
         return eprintln!("skipped: {why}");
     }
     // The launch comes from the pack (its check passed), not an old install.
-    let launch = match meta_harness::packs::harness_launches(&catalog).remove("antigravity") {
-        Some(HarnessLaunch::Ready { launch }) => launch,
+    let entry = meta_harness::packs::harness_launches(&catalog).into_iter().find(|e| e.profile.instance.as_str() == "antigravity").expect("the antigravity harness");
+    let launch = match &entry.launch {
+        HarnessLaunch::Ready { launch } => launch.clone(),
         other => panic!("no launch from the pack: {other:?}"),
     };
     assert!(launch.program.starts_with(&catalog.root.display().to_string()), "from the pack's own folder: {launch:?}");
     println!("launch: {} {}", launch.program, launch.args.join(" "));
     // The driver's own code: probe (ACP initialize), then a new session.
-    let driver = provider_antigravity::AntigravityDriver;
-    let instance = driver.create(InstanceId::new("antigravity"), driver.default_config(&HarnessLaunch::Ready { launch })).await.unwrap();
+    let driver = harness_acp::AcpDriver::new(root.to_path_buf());
+    let instance = driver.create(entry.profile.instance.clone(), driver.default_config(&entry)).await.unwrap();
     let started = std::time::Instant::now();
     tokio::time::timeout(Duration::from_secs(600), instance.refresh()).await.expect("initialize answered in time").unwrap();
     let status = instance.snapshot().borrow().status.clone();

@@ -102,7 +102,8 @@ pub struct GraphState {
     /// The views' settings and layout sizes (from the server).
     pub(crate) config: Option<TreeConfig>,
     config_requested: bool,
-    plans: Vec<PlanId>,
+    /// The plans and walkthroughs there are.
+    plans: Vec<(PlanId, arch_graph::PlanKind)>,
     plans_stale: bool,
     /// A tree under this plan wasn't found: the plans are asked for again,
     /// and only if it's not among them does the view say it's gone.
@@ -138,7 +139,6 @@ pub struct GraphState {
     refit: bool,
     /// Bring this card into view once the frame's camera is settled.
     reveal_after_fit: Option<String>,
-    pub drawer_open: bool,
     /// The agent moved the view (shown until the user moves).
     pub agent: Option<AgentMove>,
     /// Where the graph was before a jump made with the pointer or a finger
@@ -146,8 +146,6 @@ pub struct GraphState {
     pub jumped: Option<Place>,
     pub requests: GraphRequests,
     canvas: Rect,
-    /// The part of the canvas the details card doesn't cover.
-    open_area: Rect,
     inbox: Arc<Mutex<Vec<Reply>>>,
     /// Behavior settings (touch, chips), from the UI config.
     pub ui: GraphUi,
@@ -160,7 +158,7 @@ pub struct GraphState {
     /// The "+N" counts drawn this frame (click one to open its card).
     pub(crate) more_rects: Vec<(String, Rect)>,
     /// The camera before a search started previewing matches.
-    saved_view: Option<(Camera, bool)>,
+    saved_view: Option<Camera>,
     pub legend_open: bool,
     /// Something the graph has to say (a branch that didn't fit, a plan gone).
     pub note: Option<String>,
@@ -198,12 +196,10 @@ impl Default for GraphState {
             fit: true,
             refit: false,
             reveal_after_fit: None,
-            drawer_open: true,
             agent: None,
             jumped: None,
             requests: GraphRequests::default(),
             canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
-            open_area: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
             inbox: Arc::default(),
             ui: GraphUi::default(),
             gestures: Gestures::default(),
@@ -355,7 +351,6 @@ impl GraphState {
         if let Some(pending) = self.pending_select.take() {
             if self.at.contains_key(&pending) {
                 self.selection = Some(pending.clone());
-                self.drawer_open = true;
                 self.reveal_after_fit = Some(pending);
             } else {
                 self.remembered = Some(pending);
@@ -401,7 +396,7 @@ impl GraphState {
                     self.config_requested = false;
                     self.load = Load::Failed(e.into());
                 }
-                Reply::Plans(Ok(plans)) => self.plans_arrived(plans.into_iter().map(|p| p.id).collect()),
+                Reply::Plans(Ok(plans)) => self.plans_arrived(plans.into_iter().map(|p| (p.id, p.kind)).collect()),
                 Reply::Plans(Err(_)) => {}
                 Reply::Card(key, source, detail) => {
                     let detail = match *detail {

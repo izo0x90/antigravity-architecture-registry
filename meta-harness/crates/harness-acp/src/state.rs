@@ -3,13 +3,13 @@
 //! Emission happens under the state lock, which lets `events()` subscribe and take a
 //! replay snapshot atomically.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use agent_client_protocol::schema::v1 as acp;
 use harness_contracts::{
     AdapterEvent, ApprovalOption, CatalogUpdate, ContentBlock, Failure, ItemBody, ItemId, ItemStatus,
-    NativeId, PlanArtifact, PlanBody, PlanId, PlanStatus, RequestId, RequestKind, RequestStatus,
-    RuntimeRequest, Thread, ThreadStatus, ToolKind, Turn, TurnId, TurnItem, TurnStatus, Usage,
+    NativeId, PlanArtifact, PlanBody, PlanId, PlanStatus, Question, RequestId, RequestKind, RequestStatus,
+    RuntimeRequest, SignIn, Thread, ThreadStatus, ToolKind, Turn, TurnId, TurnItem, TurnStatus, Usage,
 };
 use tokio::sync::broadcast;
 
@@ -33,7 +33,9 @@ pub struct SessionState {
     plan: Option<PlanArtifact>,
     usage: Option<Usage>,
     catalog: CatalogUpdate,
-    current_turn: Option<TurnId>,
+    /// Turns sent and not ended: the first is running (items go to it),
+    /// the rest wait their turn.
+    running: VecDeque<TurnId>,
     /// Turn that replayed history (no prompt running) attaches to.
     replay_turn: Option<TurnId>,
     events: broadcast::Sender<AdapterEvent>,
@@ -54,7 +56,7 @@ impl SessionState {
             plan: None,
             usage: None,
             catalog: CatalogUpdate::default(),
-            current_turn: None,
+            running: VecDeque::new(),
             replay_turn: None,
             events,
         }
@@ -92,7 +94,7 @@ impl SessionState {
     pub fn set_config(&mut self, controls: Vec<harness_contracts::ConfigControl>) {
         if let Some(models) = convert::models_from_controls(&controls) {
             self.catalog.models = Some(models.clone());
-            self.emit(AdapterEvent::CatalogUpdated { update: CatalogUpdate { commands: None, models: Some(models) } });
+            self.emit(AdapterEvent::CatalogUpdated { update: CatalogUpdate { models: Some(models), ..CatalogUpdate::default() } });
         }
         self.set_thread(|t| t.controls.config = controls);
     }
@@ -122,37 +124,98 @@ impl SessionState {
     // ---- turns ----
 
     pub fn turn_running(&self) -> bool {
-        self.current_turn.is_some()
+        !self.running.is_empty()
     }
 
+    /// The turn items go to now.
+    pub fn active_turn(&self) -> Option<&TurnId> {
+        self.running.front()
+    }
+
+    /// A turn for `prompt`: running if none is, else queued behind those
+    /// that are. Its message is in it either way.
     pub fn begin_turn(&mut self, prompt: &str) -> TurnId {
-        self.close_streams();
-        let turn_id = self.start_turn_record(TurnStatus::Running);
-        self.current_turn = Some(turn_id.clone());
-        self.replay_turn = None;
-        self.push_item(ItemBody::UserMessage { text: prompt.to_owned() }, ItemStatus::Completed, None, None);
-        self.set_thread(|t| t.status = ThreadStatus::Running);
+        let starts = self.running.is_empty();
+        if starts {
+            self.close_streams();
+            self.replay_turn = None;
+        }
+        let turn_id = self.start_turn_record(if starts { TurnStatus::Running } else { TurnStatus::Queued });
+        self.running.push_back(turn_id.clone());
+        self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: prompt.to_owned() }, ItemStatus::Completed, None, None);
+        if starts {
+            self.set_thread(|t| t.status = ThreadStatus::Running);
+        }
         turn_id
     }
 
-    pub fn end_turn(&mut self, status: TurnStatus, failure: Option<Failure>) {
+    /// A message added to the running turn (steering), and its item; none
+    /// running: None.
+    pub fn inject(&mut self, text: &str) -> Option<(TurnId, ItemId)> {
+        let turn_id = self.running.front()?.clone();
         self.close_streams();
-        let pending: Vec<RequestId> =
-            self.requests.iter().filter(|r| r.status == RequestStatus::Pending).map(|r| r.id.clone()).collect();
-        for id in pending {
-            self.set_request_status(&id, RequestStatus::Cancelled);
+        let item = self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: text.to_owned() }, ItemStatus::Completed, None, None);
+        Some((turn_id, item))
+    }
+
+    /// A message the agent didn't take after all.
+    pub fn withdraw(&mut self, item: &ItemId) {
+        self.update_item(item, |i| i.status = ItemStatus::Cancelled);
+    }
+
+    /// Ends `turn_id`. The running one ending closes its streams and
+    /// cancels what it was still asking (returned); the next starts.
+    pub fn end_turn(&mut self, turn_id: &TurnId, status: TurnStatus, failure: Option<Failure>) -> Vec<RequestId> {
+        let Some(at) = self.running.iter().position(|t| t == turn_id) else { return Vec::new() };
+        self.running.remove(at);
+        let mut cancelled = Vec::new();
+        if at == 0 {
+            self.close_streams();
+            cancelled = self.requests.iter().filter(|r| r.status == RequestStatus::Pending && r.turn_id.as_ref() == Some(turn_id)).map(|r| r.id.clone()).collect();
+            for id in &cancelled {
+                self.set_request_status(id, RequestStatus::Cancelled);
+            }
         }
-        if let Some(turn_id) = self.current_turn.take()
-            && let Some(turn) = self.turns.iter_mut().find(|t| t.id == turn_id)
-        {
+        let usage = (at == 0).then(|| self.usage.clone()).flatten();
+        self.set_turn(turn_id, |turn| {
             turn.status = status;
             turn.failure = failure;
-            turn.usage = self.usage.clone();
+            turn.usage = usage;
+        });
+        if at == 0
+            && let Some(next) = self.running.front().cloned()
+        {
+            self.set_turn(&next, |turn| turn.status = TurnStatus::Running);
+        }
+        let next = match (self.running.is_empty(), status) {
+            (false, _) => ThreadStatus::Running,
+            (true, TurnStatus::Failed) => ThreadStatus::Error,
+            (true, _) => ThreadStatus::Idle,
+        };
+        self.set_thread(|t| t.status = next);
+        cancelled
+    }
+
+    /// Ends every turn not ended (the agent went away).
+    pub fn end_all(&mut self, failure: Failure) {
+        let waiting: Vec<TurnId> = self.running.iter().cloned().collect();
+        for id in waiting {
+            self.end_turn(&id, TurnStatus::Failed, Some(failure.clone()));
+        }
+    }
+
+    fn set_turn(&mut self, id: &TurnId, update: impl FnOnce(&mut Turn)) {
+        if let Some(turn) = self.turns.iter_mut().find(|t| &t.id == id) {
+            update(turn);
             let turn = turn.clone();
             self.emit(AdapterEvent::TurnUpdated { turn });
         }
-        let next = if status == TurnStatus::Failed { ThreadStatus::Error } else { ThreadStatus::Idle };
-        self.set_thread(|t| t.status = next);
+    }
+
+    /// Who the agent says it's signed in as.
+    pub fn sign_in(&mut self, sign_in: SignIn) {
+        self.catalog.sign_in = Some(sign_in.clone());
+        self.emit(AdapterEvent::CatalogUpdated { update: CatalogUpdate { sign_in: Some(sign_in), ..CatalogUpdate::default() } });
     }
 
     fn start_turn_record(&mut self, status: TurnStatus) -> TurnId {
@@ -173,7 +236,7 @@ impl SessionState {
     /// Turn for an incoming item: the running prompt, else the current replay turn
     /// (history arriving on load), else a new completed replay turn.
     fn item_turn(&mut self) -> TurnId {
-        if let Some(id) = self.current_turn.clone().or_else(|| self.replay_turn.clone()) {
+        if let Some(id) = self.running.front().cloned().or_else(|| self.replay_turn.clone()) {
             return id;
         }
         let id = self.start_turn_record(TurnStatus::Completed);
@@ -185,6 +248,10 @@ impl SessionState {
 
     fn push_item(&mut self, body: ItemBody, status: ItemStatus, title: Option<String>, native: Option<String>) -> ItemId {
         let turn_id = self.item_turn();
+        self.push_item_in(turn_id, body, status, title, native)
+    }
+
+    fn push_item_in(&mut self, turn_id: TurnId, body: ItemBody, status: ItemStatus, title: Option<String>, native: Option<String>) -> ItemId {
         let item = TurnItem {
             id: ItemId::new(new_id()),
             thread_id: self.thread.id.clone(),
@@ -246,7 +313,7 @@ impl SessionState {
             acp::SessionUpdate::Plan(plan) => self.plan(plan),
             acp::SessionUpdate::AvailableCommandsUpdate(update) => {
                 self.catalog.commands = Some(convert::commands(update));
-                self.emit(AdapterEvent::CatalogUpdated { update: CatalogUpdate { commands: self.catalog.commands.clone(), models: None } });
+                self.emit(AdapterEvent::CatalogUpdated { update: CatalogUpdate { commands: self.catalog.commands.clone(), ..CatalogUpdate::default() } });
             }
             // The app-level runtime mode is mapped by the session (it needs the flavor).
             acp::SessionUpdate::CurrentModeUpdate(update) => {
@@ -262,7 +329,7 @@ impl SessionState {
             acp::SessionUpdate::UsageUpdate(update) => {
                 let usage = convert::usage(update);
                 self.usage = Some(usage.clone());
-                self.emit(AdapterEvent::UsageUpdated { thread_id: self.thread.id.clone(), turn_id: self.current_turn.clone(), usage });
+                self.emit(AdapterEvent::UsageUpdated { thread_id: self.thread.id.clone(), turn_id: self.running.front().cloned(), usage });
             }
             other => {
                 let native_kind = serde_json::to_value(other)
@@ -278,7 +345,7 @@ impl SessionState {
     /// Only seen during history replay: a new user message starts a new replayed turn;
     /// consecutive chunks extend the same message.
     fn user_chunk(&mut self, content: &acp::ContentBlock) {
-        if self.current_turn.is_some() {
+        if self.turn_running() {
             return; // the live prompt is already recorded by begin_turn
         }
         let text = match convert::content_block(content) {
@@ -438,26 +505,22 @@ impl SessionState {
 
     // ---- requests ----
 
-    pub fn open_request(
-        &mut self,
-        native_tool_id: &str,
-        kind: RequestKind,
-        title: String,
-        options: Vec<ApprovalOption>,
-    ) -> RequestId {
+    /// Something the agent waits on the user for: about a tool call
+    /// (`native_tool_id`), with options to choose or questions to answer.
+    pub fn open_request(&mut self, native_tool_id: Option<&str>, kind: RequestKind, title: String, detail: Option<String>, options: Vec<ApprovalOption>, questions: Vec<Question>) -> RequestId {
         self.close_streams();
-        let item_id = self.tool_items.get(native_tool_id).cloned();
+        let item_id = native_tool_id.and_then(|id| self.tool_items.get(id).cloned());
         let request = RuntimeRequest {
             id: RequestId::new(new_id()),
             thread_id: self.thread.id.clone(),
-            turn_id: self.current_turn.clone(),
+            turn_id: self.running.front().cloned(),
             item_id,
             kind,
             status: RequestStatus::Pending,
             title,
-            detail: None,
+            detail,
             options,
-            questions: Vec::new(),
+            questions,
             response: None,
         };
         let id = request.id.clone();
@@ -475,7 +538,7 @@ impl SessionState {
             let request = request.clone();
             self.emit(AdapterEvent::RequestUpdated { request });
         }
-        if self.current_turn.is_some() {
+        if self.turn_running() && !self.requests.iter().any(|r| r.status == RequestStatus::Pending) {
             self.set_thread(|t| t.status = ThreadStatus::Running);
         }
     }
@@ -554,12 +617,41 @@ mod tests {
     #[test]
     fn live_prompt_ignores_user_echo_and_closes_streams_on_end() {
         let mut s = state();
-        s.begin_turn("hello");
+        let turn = s.begin_turn("hello");
         s.apply(&acp::SessionUpdate::UserMessageChunk(chunk("hello")));
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("hi")));
-        s.end_turn(TurnStatus::Completed, None);
+        s.end_turn(&turn, TurnStatus::Completed, None);
         assert_eq!(s.items.len(), 2);
         assert!(matches!(&s.items[1].body, ItemBody::AssistantMessage { streaming: false, .. }));
         assert_eq!(s.turns[0].status, TurnStatus::Completed);
+    }
+
+    #[test]
+    fn turns_sent_while_one_runs_wait_and_start_in_order() {
+        let mut s = state();
+        let first = s.begin_turn("one");
+        let second = s.begin_turn("two");
+        assert_eq!(s.turns[1].status, TurnStatus::Queued);
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("for one")));
+        let ask = s.open_request(None, RequestKind::Permission, "ok?".into(), None, Vec::new(), Vec::new());
+        assert_eq!(s.request(&ask).and_then(|r| r.turn_id.clone()), Some(first.clone()), "asked in the running turn");
+        assert_eq!(s.end_turn(&first, TurnStatus::Completed, None), vec![ask.clone()], "what the turn still asked ends with it");
+        assert_eq!((s.turns[1].status, s.thread.status), (TurnStatus::Running, ThreadStatus::Running));
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("for two")));
+        let of = |turn: &TurnId| s.items.iter().filter(|i| &i.turn_id == turn).map(|i| &i.body).collect::<Vec<_>>();
+        assert!(matches!(of(&second).as_slice(), [ItemBody::UserMessage { text }, ItemBody::AssistantMessage { .. }] if text == "two"));
+        s.end_turn(&second, TurnStatus::Completed, None);
+        assert_eq!(s.thread.status, ThreadStatus::Idle);
+    }
+
+    #[test]
+    fn a_message_added_to_the_running_turn_lands_in_it() {
+        let mut s = state();
+        assert_eq!(s.inject("late"), None, "nothing running");
+        let turn = s.begin_turn("start");
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("working")));
+        assert_eq!(s.inject("also this").map(|(t, _)| t), Some(turn));
+        assert!(matches!(&s.items[1].body, ItemBody::AssistantMessage { streaming: false, .. }), "what streamed before it is done");
+        assert!(matches!(&s.items[2].body, ItemBody::UserMessage { text } if text == "also this"));
     }
 }

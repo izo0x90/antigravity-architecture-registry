@@ -38,9 +38,14 @@ struct UiConfigFile {
     text: Option<String>,
 }
 
-#[derive(serde::Deserialize)]
-struct AuthChallenge {
-    instructions: String,
+/// A sign-in started: what to do, the page to open (if any), and what to
+/// paste back (if anything).
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthChallenge {
+    pub url: Option<String>,
+    pub instructions: String,
+    pub expects: Option<String>,
 }
 
 pub type NetResult<T> = Result<T, NetError>;
@@ -310,6 +315,12 @@ impl NetClient {
         self.call::<serde_json::Value>("POST", &format!("/api/threads/{thread}/turns"), Some(json), ctx, move |r| on_done(r.map(|_| ())));
     }
 
+    /// Adds a message to the running turn (else it starts one).
+    pub fn inject(&self, thread: &ThreadId, input: &TurnInput, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        let json = serde_json::to_value(input).unwrap_or_default();
+        self.call::<serde_json::Value>("POST", &format!("/api/threads/{thread}/inject"), Some(json), ctx, move |r| on_done(r.map(|_| ())));
+    }
+
     pub fn steer(&self, thread: &ThreadId, input: &SteerInput, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
         let json = serde_json::to_value(input).unwrap_or_default();
         self.call::<()>("POST", &format!("/api/threads/{thread}/steer"), Some(json), ctx, on_done);
@@ -340,17 +351,21 @@ impl NetClient {
         self.call::<UiConfigFile>("GET", "/api/ui/config", None, ctx, move |r| on_done(r.map(|f| f.text)));
     }
 
+    /// The cockpit's state as it last saved it (none before it ever has).
+    pub fn ui_state(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<Option<serde_json::Value>>) + Send + 'static) {
+        self.call("GET", "/api/ui/state", None, ctx, on_done);
+    }
+
+    /// Saves the cockpit's state.
+    pub fn save_ui_state(&self, state: serde_json::Value, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call("PUT", "/api/ui/state", Some(state), ctx, on_done);
+    }
+
     // ---- instances ----
 
-    pub fn list_saved_sessions(
-        &self,
-        instance: &InstanceId,
-        cwd: &str,
-        ctx: egui::Context,
-        on_done: impl FnOnce(NetResult<SavedSessionPage>) + Send + 'static,
-    ) {
-        let path = format!("/api/instances/{instance}/sessions?cwd={}", urlencoding::encode(cwd));
-        self.call("GET", &path, None, ctx, on_done);
+    /// The harness's saved sessions in the project.
+    pub fn list_saved_sessions(&self, instance: &InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<SavedSessionPage>) + Send + 'static) {
+        self.call("GET", &format!("/api/instances/{instance}/sessions"), None, ctx, on_done);
     }
 
     pub fn delete_saved_session(&self, instance: &InstanceId, native: &NativeId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
@@ -366,14 +381,36 @@ impl NetClient {
         self.call::<()>("POST", &format!("/api/instances/{instance}/auth/logout"), Some(serde_json::json!({})), ctx, on_done);
     }
 
-    pub fn begin_auth(&self, instance: &InstanceId, method: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<String>) + Send + 'static) {
+    pub fn begin_auth(&self, instance: &InstanceId, method: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<AuthChallenge>) + Send + 'static) {
         let path = format!("/api/instances/{instance}/auth/{}", urlencoding::encode(method));
-        self.call::<AuthChallenge>("POST", &path, Some(serde_json::json!({})), ctx, move |r| on_done(r.map(|c| c.instructions)));
+        self.call("POST", &path, Some(serde_json::json!({})), ctx, on_done);
     }
 
     pub fn complete_auth(&self, instance: &InstanceId, response: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
         let path = format!("/api/instances/{instance}/auth/complete");
         self.call::<()>("POST", &path, Some(serde_json::json!({ "response": response })), ctx, on_done);
+    }
+
+    // ---- tool servers ----
+
+    /// The tool servers every session gets: ours and the project's.
+    /// A one-time ticket for the cockpit's socket (agents driving it).
+    pub fn cockpit_ticket(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<String>) + Send + 'static) {
+        #[derive(serde::Deserialize)]
+        struct Ticket {
+            ticket: String,
+        }
+        self.call::<Ticket>("POST", "/api/cockpit/ticket", Some(serde_json::json!({})), ctx, move |r| on_done(r.map(|t| t.ticket)));
+    }
+
+    pub fn tool_servers(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::ToolServers>) + Send + 'static) {
+        self.call("GET", "/api/mcp/servers", None, ctx, on_done);
+    }
+
+    /// Replaces the project's list.
+    pub fn set_tool_servers(&self, project: &[harness_contracts::McpServer], ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::ToolServers>) + Send + 'static) {
+        let json = serde_json::to_value(project).unwrap_or_default();
+        self.call("PUT", "/api/mcp/servers", Some(json), ctx, on_done);
     }
 
     // ---- architecture ----

@@ -22,10 +22,6 @@ use crate::touch::{Gesture, Swipe};
 /// How far out and in the camera zooms.
 const MIN_ZOOM: f32 = 0.03;
 const MAX_ZOOM: f32 = 4.0;
-/// How much of a wide graph slot the details card takes, beside the canvas.
-const DRAWER_SHARE: f32 = 0.3;
-/// How much of a narrow canvas the details sheet covers, from the bottom.
-const SHEET_SHARE: f32 = 0.34;
 
 impl GraphState {
     pub(crate) fn to_screen(&self, r: &WorldRect) -> Rect {
@@ -45,17 +41,17 @@ impl GraphState {
         self.camera.pan = around - self.canvas.min - world * new;
     }
 
-    /// The whole tree in the open part of the canvas, never smaller than
+    /// The whole tree on the canvas, never smaller than
     /// readable: past that, readable size from the selection (or the top).
     pub(crate) fn fit_view(&mut self) {
         let Some(tree) = &self.tree else { return };
         let (w, h) = (tree.size.0.max(1.0), tree.size.1.max(1.0));
-        let area = self.open_area;
+        let area = self.canvas;
         let pad = crate::theme::look().space_xxxl;
         let zoom = ((area.width() - pad * 2.0) / w).min((area.height() - pad * 2.0) / h).clamp(MIN_ZOOM, 1.0);
         if zoom >= self.ui.readable_zoom {
             self.camera.zoom = zoom;
-            self.camera.pan = (area.min - self.canvas.min) + (area.size() - Vec2::new(w, h) * zoom) / 2.0;
+            self.camera.pan = (area.size() - Vec2::new(w, h) * zoom) / 2.0;
             return;
         }
         // Start from what's selected below the roots; else, in a tidy tree
@@ -70,29 +66,29 @@ impl GraphState {
         self.camera.zoom = zoom;
         // The selection's left edge a little in from the left, centred up and down.
         let at = Vec2::new(focus.x, focus.y + focus.h / 2.0) * zoom;
-        self.camera.pan = (area.min - self.canvas.min) + Vec2::new(pad, area.height() / 2.0) - at;
+        self.camera.pan = Vec2::new(pad, area.height() / 2.0) - at;
     }
 
-    /// Readable size, the drawing's top-left corner at the open area's.
+    /// Readable size, the drawing's top-left corner at the canvas's.
     fn start_at_the_top(&mut self) {
         let pad = crate::theme::look().space_xxxl;
         self.camera.zoom = self.ui.readable_zoom;
-        self.camera.pan = (self.open_area.min - self.canvas.min) + Vec2::splat(pad);
+        self.camera.pan = Vec2::splat(pad);
     }
 
     /// Pans just enough to show `key` (when it isn't already).
     pub(crate) fn bring_into_view(&mut self, key: &str) {
         let Some(card) = self.card(key) else { return };
         let rect = self.to_screen(&card.rect);
-        if self.open_area.contains_rect(rect) {
+        if self.canvas.contains_rect(rect) {
             return;
         }
         // Bigger than the screen (a box): its top-left corner; else centred.
-        if rect.width() > self.open_area.width() || rect.height() > self.open_area.height() {
+        if rect.width() > self.canvas.width() || rect.height() > self.canvas.height() {
             let pad = crate::theme::look().space_xxxl;
-            self.camera.pan += (self.open_area.min + Vec2::splat(pad)) - rect.min;
+            self.camera.pan += (self.canvas.min + Vec2::splat(pad)) - rect.min;
         } else {
-            self.camera.pan += self.open_area.center() - rect.center();
+            self.camera.pan += self.canvas.center() - rect.center();
         }
     }
 
@@ -110,14 +106,8 @@ impl GraphState {
     pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, slot_idx: usize, pan_held: bool, cx: &mut RunCx<'_>) {
         self.tick(cx.net, cx.ctx);
         self.render_toolbar(ui, cx);
-        let area = ui.available_rect_before_wrap();
-        let narrow = area.width() < self.ui.chips.narrow_below;
-        let has_drawer = self.drawer_open && self.selected_card().is_some();
-        let drawer_w = if has_drawer && !narrow { (area.width() * DRAWER_SHARE).clamp(220.0, 360.0) } else { 0.0 };
-        let canvas = Rect::from_min_max(area.min, Pos2::new(area.max.x - drawer_w, area.max.y));
+        let canvas = ui.available_rect_before_wrap();
         self.canvas = canvas;
-        let sheet_h = if has_drawer && narrow { canvas.height() * SHEET_SHARE } else { 0.0 };
-        self.open_area = Rect::from_min_max(canvas.min, Pos2::new(canvas.max.x, canvas.max.y - sheet_h));
         feedback.register_inspectable(ui, &format!("slot_{}:graph:canvas", slot_idx + 1), canvas);
         let response = ui.allocate_rect(canvas, Sense::click_and_drag());
         let painter = ui.painter_at(canvas);
@@ -206,10 +196,6 @@ impl GraphState {
             self.draw_legend(&painter);
         }
         self.render_chips(ui, cx);
-        if has_drawer {
-            let drawer = if narrow { Rect::from_min_max(Pos2::new(canvas.min.x, canvas.max.y - sheet_h), canvas.max) } else { Rect::from_min_max(Pos2::new(canvas.max.x, area.min.y), area.max) };
-            ui.scope_builder(egui::UiBuilder::new().max_rect(drawer.shrink(6.0)), |ui| self.render_drawer(ui));
-        }
     }
 
     /// Feeds this frame's finger events to the gesture recognizer and acts on

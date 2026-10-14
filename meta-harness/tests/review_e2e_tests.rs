@@ -21,7 +21,7 @@ fn id(s: &str) -> ComponentId {
 async fn comments_reach_the_agent_and_answers_come_back_for_the_user() {
     let arch = fixture_architecture();
     let plan = PlanId::new("v").unwrap();
-    arch.create_plan("v", "Validate", "").unwrap();
+    arch.create_plan("v", "Validate", "", arch_graph::PlanKind::Change).unwrap();
     arch.apply(
         &plan,
         PlanOp::AddComponent {

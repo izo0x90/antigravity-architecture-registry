@@ -1,54 +1,50 @@
-//! `AcpAdapter`: opens sessions on any ACP agent. One agent connection per session.
+//! `AcpAdapter`: opens sessions on any ACP agent, the way its profile says.
+//! One agent connection per session.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1 as acp;
-use agent_client_protocol::{Agent, ByteStreams, ConnectionTo};
+use agent_client_protocol::{Agent, ByteStreams, ConnectionTo, UntypedMessage};
 use async_trait::async_trait;
 use harness_contracts::{
-    ApprovalCapabilities, Capabilities, InstanceId, McpServer, McpTransport, NativeId, PlanningCapabilities,
-    SessionCapabilities, SessionConfig, StreamingCapabilities, Thread, ThreadStatus, ToolCapabilities,
-    TurnCapabilities,
+    ApprovalDecision, ApprovalOption, Capabilities, InstanceId, McpServer, McpTransport, NativeId, RequestKind,
+    RequestResponse, SessionConfig, Thread, ThreadStatus,
 };
 use harness_core::{HarnessError, ProviderAdapter, Result, SessionRuntime};
 
 use crate::convert;
-use crate::flavor::{AcpFlavor, ClientFs};
+use crate::control::AcpDeclaredCapabilities;
 use crate::launch::AcpLauncher;
-use crate::session::{AcpSession, Shared, acp_error, lock};
+use crate::profile::Profile;
+use crate::questions::Form;
+use crate::session::{AcpSession, Link, Shared, acp_error, lock};
 use crate::state::{SessionState, request_kind};
+use crate::workspace::WorkspaceFs;
 
 pub struct AcpAdapter {
     instance_id: InstanceId,
-    flavor: Arc<dyn AcpFlavor>,
+    profile: Arc<Profile>,
     launcher: Arc<dyn AcpLauncher>,
 }
 
 impl AcpAdapter {
-    pub fn new(instance_id: InstanceId, flavor: Arc<dyn AcpFlavor>, launcher: Arc<dyn AcpLauncher>) -> Self {
-        Self { instance_id, flavor, launcher }
+    pub fn new(instance_id: InstanceId, profile: Arc<Profile>, launcher: Arc<dyn AcpLauncher>) -> Self {
+        Self { instance_id, profile, launcher }
     }
 }
 
-/// What any ACP agent supports by protocol; flavors adjust from here.
-pub fn acp_base_capabilities() -> Capabilities {
-    Capabilities {
-        sessions: SessionCapabilities { runtime_mode_switch_in_session: true, ..Default::default() },
-        turns: TurnCapabilities { interrupt: true, ..Default::default() },
-        streaming: StreamingCapabilities { assistant_text: true, reasoning: true, tool_output: true },
-        tools: ToolCapabilities { mcp_http: true, ..Default::default() },
-        approvals: ApprovalCapabilities { command_approval: true, file_change_approval: true, live_only: true },
-        planning: PlanningCapabilities { todo_list: true, ..Default::default() },
-        ..Default::default()
-    }
-}
-
-fn mcp_server(server: &McpServer) -> acp::McpServer {
+/// A tool server as the agent takes it: an SSE one as HTTP when the agent
+/// doesn't say it takes SSE.
+fn mcp_server(server: &McpServer, sse: bool) -> acp::McpServer {
     match &server.transport {
-        McpTransport::Http { url, headers } => acp::McpServer::Http(
+        McpTransport::Sse { url, headers } if sse => acp::McpServer::Sse(
+            acp::McpServerSse::new(server.name.clone(), url.clone())
+                .headers(headers.iter().map(|(k, v)| acp::HttpHeader::new(k.clone(), v.clone())).collect()),
+        ),
+        McpTransport::Http { url, headers } | McpTransport::Sse { url, headers } => acp::McpServer::Http(
             acp::McpServerHttp::new(server.name.clone(), url.clone())
                 .headers(headers.iter().map(|(k, v)| acp::HttpHeader::new(k.clone(), v.clone())).collect()),
         ),
@@ -64,29 +60,61 @@ fn selected(option_id: String) -> acp::RequestPermissionResponse {
     acp::RequestPermissionResponse::new(acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(option_id)))
 }
 
-/// Registers the client-side handlers on a connection builder and runs it until the
-/// task is aborted, handing the connection handle out through `handle_tx`.
-async fn run_connection(
-    transport: ByteStreams<Box<dyn futures::AsyncWrite + Send + Unpin>, Box<dyn futures::AsyncRead + Send + Unpin>>,
-    shared: Arc<Shared>,
-    client_fs: Option<Arc<dyn ClientFs>>,
-    handle_tx: tokio::sync::oneshot::Sender<ConnectionTo<Agent>>,
-) {
-    let on_update = shared.clone();
-    let on_permission = shared.clone();
-    let on_read = client_fs.clone();
-    let on_write = client_fs;
+/// The choices on a question form.
+const SUBMIT: &str = "submit";
+const DECLINE: &str = "decline";
+
+fn form_options(submit: &str) -> Vec<ApprovalOption> {
+    vec![
+        ApprovalOption { id: SUBMIT.into(), decision: ApprovalDecision::Accept, label: submit.into(), warning: None },
+        ApprovalOption { id: DECLINE.into(), decision: ApprovalDecision::Decline, label: "Skip".into(), warning: None },
+    ]
+}
+
+/// Opens a request and waits for the user's response (None: cancelled,
+/// e.g. its turn ended).
+async fn ask(shared: &Shared, open: impl FnOnce(&mut SessionState) -> harness_contracts::RequestId) -> Option<RequestResponse> {
+    let rx = {
+        let mut state = lock(&shared.state);
+        let id = open(&mut state);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        lock(&shared.pending).insert(id, tx);
+        rx
+    };
+    rx.await.ok()
+}
+
+/// The answer to a question form: its content, declined, or cancelled.
+fn elicitation_answer(form: Option<&Form>, response: Option<RequestResponse>) -> acp::CreateElicitationResponse {
+    let action = match response {
+        None => acp::ElicitationAction::Cancel,
+        Some(r) if r.option_id.as_deref() == Some(DECLINE) => acp::ElicitationAction::Decline,
+        Some(r) => {
+            let content = form.map(|f| f.content(&r.answers)).filter(|c| !c.is_empty());
+            acp::ElicitationAction::Accept(acp::ElicitationAcceptAction::new().content(content))
+        }
+    };
+    acp::CreateElicitationResponse::new(action)
+}
+
+type Streams = ByteStreams<Box<dyn futures::AsyncWrite + Send + Unpin>, Box<dyn futures::AsyncRead + Send + Unpin>>;
+
+/// Registers the client-side handlers and runs the connection until the
+/// task is aborted, handing the connection out through `handle_tx`.
+async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<WorkspaceFs>, handle_tx: tokio::sync::oneshot::Sender<ConnectionTo<Agent>>) {
+    let (on_update, on_permission, on_question, on_other) = (shared.clone(), shared.clone(), shared.clone(), shared.clone());
+    let (on_read, on_write) = (files.clone(), files);
     let result = agent_client_protocol::Client
         .builder()
         .name("meta-harness")
         .on_receive_notification(
             async move |n: acp::SessionNotification, _cx| {
                 let mut state = lock(&on_update.state);
-                if let acp::SessionUpdate::CurrentModeUpdate(update) = &n.update
-                    && let Some(mode) = on_update.flavor.app_mode(&update.current_mode_id.to_string())
-                {
-                    lock(&on_update.policy).runtime_mode = mode;
-                    state.set_thread(|t| t.policy.runtime_mode = mode);
+                if let acp::SessionUpdate::CurrentModeUpdate(update) = &n.update {
+                    let mut policy = lock(&on_update.policy);
+                    *policy = on_update.profile.policy_for(&update.current_mode_id.to_string(), policy.clone());
+                    let policy = policy.clone();
+                    state.set_thread(|t| t.policy = policy);
                 }
                 state.apply(&n.update);
                 Ok(())
@@ -98,41 +126,65 @@ async fn run_connection(
                 let shared = on_permission.clone();
                 let native_tool = req.tool_call.tool_call_id.to_string();
                 let policy = lock(&shared.policy).clone();
-                let wait = {
+                let auto = {
                     let mut state = lock(&shared.state);
                     state.tool_call_update(&req.tool_call);
-                    let kind = state.tool_kind(&native_tool);
-                    match shared.flavor.auto_approve(&policy, &kind, &req.options) {
-                        Some(option) => Err(option),
-                        None => {
-                            let title = req.tool_call.fields.title.clone().unwrap_or_else(|| "Permission requested".into());
-                            let options = shared.flavor.approval_options(&req.options);
-                            let id = state.open_request(&native_tool, request_kind(&kind), title, options);
-                            let (tx, rx) = tokio::sync::oneshot::channel();
-                            lock(&shared.pending).insert(id, tx);
-                            Ok(rx)
-                        }
-                    }
+                    shared.profile.auto_approve(&policy, &state.tool_kind(&native_tool), &req.options)
                 };
-                match wait {
-                    Err(auto) => responder.respond(selected(auto)),
-                    Ok(rx) => cx.spawn(async move {
-                        match rx.await {
-                            Ok(Some(option)) => responder.respond(selected(option)),
-                            _ => responder.respond(acp::RequestPermissionResponse::new(acp::RequestPermissionOutcome::Cancelled)),
-                        }
-                    }),
+                if let Some(option) = auto {
+                    return responder.respond(selected(option));
                 }
+                cx.spawn(async move {
+                    let response = ask(&shared, |state| {
+                        let kind = state.tool_kind(&native_tool);
+                        let title = req.tool_call.fields.title.clone().unwrap_or_else(|| "Permission requested".into());
+                        state.open_request(Some(&native_tool), request_kind(&kind), title, None, shared.profile.approval_options(&req.options), Vec::new())
+                    })
+                    .await;
+                    match response.and_then(|r| r.option_id) {
+                        Some(option) => responder.respond(selected(option)),
+                        None => responder.respond(acp::RequestPermissionResponse::new(acp::RequestPermissionOutcome::Cancelled)),
+                    }
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .on_receive_request(
+            async move |req: acp::CreateElicitationRequest, responder, cx: ConnectionTo<Agent>| {
+                let shared = on_question.clone();
+                cx.spawn(async move {
+                    let tool = |scope: &acp::ElicitationScope| match scope {
+                        acp::ElicitationScope::Session(s) => s.tool_call_id.as_ref().map(ToString::to_string),
+                        _ => None,
+                    };
+                    match &req.mode {
+                        acp::ElicitationMode::Form(form_mode) => {
+                            let form = Form::new(&form_mode.requested_schema, &req.message, shared.profile.custom_suffix());
+                            let tool = tool(&form_mode.scope);
+                            let questions = form.questions.clone();
+                            let response = ask(&shared, |state| state.open_request(tool.as_deref(), RequestKind::UserInput, req.message.clone(), None, form_options("Answer"), questions)).await;
+                            responder.respond(elicitation_answer(Some(&form), response))
+                        }
+                        acp::ElicitationMode::Url(url_mode) => {
+                            let tool = tool(&url_mode.scope);
+                            let response = ask(&shared, |state| state.open_request(tool.as_deref(), RequestKind::McpElicitation, req.message.clone(), Some(url_mode.url.clone()), form_options("Done"), Vec::new())).await;
+                            responder.respond(elicitation_answer(None, response))
+                        }
+                        _ => responder.respond(acp::CreateElicitationResponse::new(acp::ElicitationAction::Decline)),
+                    }
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        // Files are read and written off the connection's loop.
         .on_receive_request(
             async move |req: acp::ReadTextFileRequest, responder, cx: ConnectionTo<Agent>| {
                 let Some(fs) = on_read.clone() else {
                     return responder.respond_with_error(agent_client_protocol::Error::method_not_found());
                 };
                 cx.spawn(async move {
-                    match fs.read_text_file(&req.path.display().to_string(), req.line, req.limit).await {
+                    let read = tokio::task::spawn_blocking(move || fs.read_text_file(&req.path.display().to_string(), req.line, req.limit)).await;
+                    match read.map_err(|e| HarnessError::Provider { reason: e.to_string() }).and_then(|r| r) {
                         Ok(content) => responder.respond(acp::ReadTextFileResponse::new(content)),
                         Err(e) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(e.to_string())),
                     }
@@ -146,13 +198,24 @@ async fn run_connection(
                     return responder.respond_with_error(agent_client_protocol::Error::method_not_found());
                 };
                 cx.spawn(async move {
-                    match fs.write_text_file(&req.path.display().to_string(), &req.content).await {
+                    let written = tokio::task::spawn_blocking(move || fs.write_text_file(&req.path.display().to_string(), &req.content)).await;
+                    match written.map_err(|e| HarnessError::Provider { reason: e.to_string() }).and_then(|r| r) {
                         Ok(()) => responder.respond(acp::WriteTextFileResponse::new()),
                         Err(e) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(e.to_string())),
                     }
                 })
             },
             agent_client_protocol::on_receive_request!(),
+        )
+        // Last: the agent's own notifications (who it's signed in as).
+        .on_receive_notification(
+            async move |n: UntypedMessage, _cx| {
+                if let Some(signed) = on_other.profile.sign_in(&n.method, &n.params) {
+                    lock(&on_other.state).sign_in(signed);
+                }
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
         )
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
             let _ = handle_tx.send(cx);
@@ -162,20 +225,24 @@ async fn run_connection(
     if let Err(err) = result {
         tracing::warn!(target: "harness_acp", "ACP connection ended: {err}");
     }
+    lock(&shared.waiting).clear();
+    lock(&shared.pending).clear();
     let mut state = lock(&shared.state);
-    if state.turn_running() {
-        state.end_turn(harness_contracts::TurnStatus::Failed, Some(harness_contracts::Failure { message: "agent connection closed".into(), retryable: true }));
-    }
+    state.end_all(harness_contracts::Failure { message: "agent connection closed".into(), retryable: true });
     state.set_thread(|t| t.status = ThreadStatus::Closed);
 }
 
 #[async_trait]
 impl ProviderAdapter for AcpAdapter {
     fn capabilities(&self) -> Capabilities {
-        self.flavor.capabilities(acp_base_capabilities())
+        self.profile.capabilities()
     }
 
     async fn open_session(&self, config: SessionConfig) -> Result<Box<dyn SessionRuntime>> {
+        let cwd = self.profile.cwd(&config.policy);
+        let mut policy = config.policy.clone();
+        policy.cwd = Some(cwd.display().to_string());
+        let config = SessionConfig { policy, ..config };
         let transport = self.launcher.launch(&config).await?;
         let thread = Thread {
             id: config.thread_id.clone(),
@@ -192,35 +259,28 @@ impl ProviderAdapter for AcpAdapter {
             state: Mutex::new(SessionState::new(thread)),
             pending: Mutex::new(HashMap::new()),
             policy: Mutex::new(config.policy.clone()),
-            flavor: self.flavor.clone(),
+            profile: self.profile.clone(),
+            waiting: Mutex::new(VecDeque::new()),
         });
 
-        let client_fs = self.flavor.client_fs(&config);
-        let advertise_fs = client_fs.is_some();
+        let files = self.profile.workspace(&cwd);
+        let client = self.profile.client_capabilities(files.is_some());
         let (handle_tx, handle_rx) = tokio::sync::oneshot::channel();
         let streams = ByteStreams::new(transport.writer, transport.reader);
-        let connection = tokio::spawn(run_connection(streams, shared.clone(), client_fs, handle_tx));
+        let connection = tokio::spawn(run_connection(streams, shared.clone(), files, handle_tx));
         let cx = handle_rx.await.map_err(|_| HarnessError::Provider { reason: "agent connection failed to start".into() })?;
 
-        let mut client = acp::ClientCapabilities::new();
-        if advertise_fs {
-            client = client.fs(acp::FileSystemCapabilities::new().read_text_file(true).write_text_file(true));
-        }
-        let init = cx
-            .send_request(acp::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client))
-            .block_task()
-            .await
-            .map_err(acp_error)?;
+        let init = cx.send_request(acp::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client)).block_task().await.map_err(acp_error)?;
+        let declared = AcpDeclaredCapabilities::of(&init, &self.profile);
         let agent = &init.agent_capabilities;
-
-        let cwd = PathBuf::from(config.policy.cwd.clone().unwrap_or_else(|| ".".into()));
-        let mcp: Vec<acp::McpServer> = config.mcp_servers.iter().map(mcp_server).collect();
+        let mcp: Vec<acp::McpServer> = config.mcp_servers.iter().map(|s| mcp_server(s, agent.mcp_capabilities.sse)).collect();
+        let meta = self.profile.session_meta();
         let (native_id, modes, config_options) = match &config.resume {
             // Prefer load: it replays the history into the stream.
             Some(id) if agent.load_session => {
                 let native = acp::SessionId::new(id.as_str().to_owned());
                 let loaded = cx
-                    .send_request(acp::LoadSessionRequest::new(native.clone(), cwd).mcp_servers(mcp))
+                    .send_request(acp::LoadSessionRequest::new(native.clone(), cwd).mcp_servers(mcp).meta(meta))
                     .block_task()
                     .await
                     .map_err(acp_error)?;
@@ -229,7 +289,7 @@ impl ProviderAdapter for AcpAdapter {
             Some(id) if agent.session_capabilities.resume.is_some() => {
                 let native = acp::SessionId::new(id.as_str().to_owned());
                 let resumed = cx
-                    .send_request(acp::ResumeSessionRequest::new(native.clone(), cwd).mcp_servers(mcp))
+                    .send_request(acp::ResumeSessionRequest::new(native.clone(), cwd).mcp_servers(mcp).meta(meta))
                     .block_task()
                     .await
                     .map_err(acp_error)?;
@@ -237,11 +297,7 @@ impl ProviderAdapter for AcpAdapter {
             }
             Some(_) => return Err(HarnessError::Unsupported { operation: "resuming sessions" }),
             None => {
-                let created = cx
-                    .send_request(acp::NewSessionRequest::new(cwd).mcp_servers(mcp))
-                    .block_task()
-                    .await
-                    .map_err(acp_error)?;
+                let created = cx.send_request(acp::NewSessionRequest::new(cwd).mcp_servers(mcp).meta(meta)).block_task().await.map_err(acp_error)?;
                 (created.session_id, created.modes, created.config_options)
             }
         };
@@ -263,9 +319,8 @@ impl ProviderAdapter for AcpAdapter {
 
         let session = AcpSession {
             thread_id: config.thread_id.clone(),
-            native_id,
-            cx,
-            shared,
+            link: Arc::new(Link { cx, native_id, shared }),
+            declared: declared.declared,
             supports_close: agent.session_capabilities.close.is_some(),
             connection,
             _guard: transport.guard,
