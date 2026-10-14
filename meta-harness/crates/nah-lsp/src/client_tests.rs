@@ -352,3 +352,31 @@ fn highlight_places_that_cant_be_converted_are_counted() {
     assert_eq!(client.accesses(&file, TEXT, &at).unwrap(), vec![None; at.len()], "no kind it can place");
     assert_eq!(client.dropped_positions(), at.len(), "each counted");
 }
+
+#[test]
+fn a_server_that_stops_reading_never_blocks_the_client() {
+    let f = fake();
+    let text = "fn main() {}\n".repeat(4096);
+    std::fs::write(f.root.join("src/main.rs"), &text).unwrap();
+    // Asked all at once, more than a pipe holds: sending them waits on the
+    // server reading, and this one has stopped.
+    let at: Vec<usize> = (0..4096).map(|line| line * 13 + 3).collect();
+    let mut s = spec(&f, &["--deaf"]);
+    s.request_timeout = Duration::from_secs(2);
+    s.in_flight = at.len();
+    let client = std::sync::Arc::new(Client::start(s));
+    assert!(client.wait_ready(Duration::from_secs(10)));
+    let asking = {
+        let (client, file) = (client.clone(), f.root.join("src/main.rs"));
+        std::thread::spawn(move || client.definitions(&file, &text, &at))
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    // While that waits on the server, everything else still answers.
+    let (tx, rx) = std::sync::mpsc::channel();
+    {
+        let client = client.clone();
+        std::thread::spawn(move || tx.send(client.state()).unwrap());
+    }
+    assert!(rx.recv_timeout(Duration::from_secs(2)).is_ok(), "the client's state answers while a send waits on the server");
+    assert!(matches!(asking.join().unwrap(), Err(LspError::Lost(_))), "and the questions give up in time");
+}

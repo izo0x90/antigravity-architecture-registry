@@ -5,7 +5,7 @@
                  [--progress-ms N] [--crash-after K] [--stderr-mb M]
                  [--status-ms N] [--refuse-first N] [--hang-after K]
                  [--no-definition] [--ask-config SECTION] [--never-ready]
-                 [--highlight-kind 1|2|3] [--batch-ms N]
+                 [--highlight-kind 1|2|3] [--batch-ms N] [--deaf]
 
 --status-ms: it says it reports its status, and is quiescent N ms after
 `initialized`. --refuse-first: the first N definitions are answered with
@@ -17,7 +17,8 @@ that kind (2 read, 3 write); without it, it doesn't offer highlights.
 --bad-highlights: those places are past the end of their lines.
 --batch-ms: definitions are held until nothing more arrives for N ms, then
 answered together, and `batch <count>` is logged (how many the client had
-waiting on it at once).
+waiting on it at once). --deaf: after `initialized` it reads nothing more
+(its input fills up, as a busy server's does).
 
 A definition request is answered with the place it was asked about (same
 file, same position), so a test can check positions survive the round
@@ -47,6 +48,7 @@ ap.add_argument("--never-ready", action="store_true")
 ap.add_argument("--highlight-kind", type=int, default=0)
 ap.add_argument("--bad-highlights", action="store_true")
 ap.add_argument("--batch-ms", type=int, default=0)
+ap.add_argument("--deaf", action="store_true")
 a = ap.parse_args()
 log = open(a.log, "a", buffering=1)
 out = sys.stdout.buffer
@@ -81,7 +83,15 @@ if a.stderr_mb:
 
 # Messages as they arrive (a thread reads them, so waiting can time out).
 incoming = queue.Queue()
-threading.Thread(target=lambda: [incoming.put(m) for m in iter(read, None)] + [incoming.put(None)], daemon=True).start()
+def read_all():
+    for m in iter(read, None):
+        incoming.put(m)
+        if a.deaf and m.get("method") == "initialized":
+            threading.Event().wait()
+    incoming.put(None)
+
+
+threading.Thread(target=read_all, daemon=True).start()
 held = []
 
 

@@ -155,7 +155,10 @@ struct State {
     /// The files it asked to hear about (`workspace/didChangeWatchedFiles`
     /// registrations), by registration.
     watched: HashMap<String, Vec<Watch>>,
-    stdin: Option<ChildStdin>,
+    /// What goes to the server, in order: a writer thread of its own
+    /// drains it, so sending never waits on the server (it may be busy
+    /// writing to us while its input is full).
+    outbox: Option<Sender<Vec<u8>>>,
     pid: Option<u32>,
     next_id: i64,
     waiting: HashMap<i64, Sender<Value>>,
@@ -215,9 +218,20 @@ fn frame(msg: &Value) -> Vec<u8> {
     out
 }
 
+/// Queues a message for the server (its writer thread sends it).
 fn send(s: &mut State, msg: &Value) -> Result<(), LspError> {
-    let stdin = s.stdin.as_mut().ok_or_else(|| LspError::Lost("no server running".into()))?;
-    stdin.write_all(&frame(msg)).and_then(|()| stdin.flush()).map_err(|e| LspError::Lost(e.to_string()))
+    let outbox = s.outbox.as_ref().ok_or_else(|| LspError::Lost("no server running".into()))?;
+    outbox.send(frame(msg)).map_err(|_| LspError::Lost("the server's input closed".into()))
+}
+
+/// Writes what's queued to the server's input until the queue closes or
+/// the server stops reading.
+fn write_messages(mut stdin: ChildStdin, queue: Receiver<Vec<u8>>) {
+    for message in queue {
+        if stdin.write_all(&message).and_then(|()| stdin.flush()).is_err() {
+            return;
+        }
+    }
 }
 
 /// A request's id; its answer arrives on the returned channel.
@@ -372,10 +386,12 @@ fn run_once(shared: &Arc<Shared>) -> (String, bool) {
         Ok(c) => c,
         Err(e) => return (format!("{} couldn't start: {e}", spec.program), true),
     };
-    let (stdout, stderr) = (child.stdout.take().expect("piped"), child.stderr.take().expect("piped"));
+    let (stdin, stdout, stderr) = (child.stdin.take().expect("piped"), child.stdout.take().expect("piped"), child.stderr.take().expect("piped"));
+    let (outbox, queue) = channel();
+    let writer = std::thread::spawn(move || write_messages(stdin, queue));
     {
         let mut s = shared.lock();
-        s.stdin = child.stdin.take();
+        s.outbox = Some(outbox);
         s.pid = Some(child.id());
         s.initialized = false;
         s.watched.clear();
@@ -397,7 +413,7 @@ fn run_once(shared: &Arc<Shared>) -> (String, bool) {
         let _ = child.kill();
         let _ = child.wait();
         let mut s = shared.lock();
-        s.stdin = None;
+        s.outbox = None;
         s.pid = None;
         s.initialized = false;
         s.waiting.clear();
@@ -481,9 +497,12 @@ fn run_once(shared: &Arc<Shared>) -> (String, bool) {
     let status = child.wait();
     let _ = reader.join();
     let _ = drain.join();
+    // The queue's last sender goes with the run: the writer ends.
+    shared.lock().outbox = None;
+    let _ = writer.join();
     {
         let mut s = shared.lock();
-        s.stdin = None;
+        s.outbox = None;
         s.pid = None;
         s.initialized = false;
         // Whoever waits for an answer gets none.
@@ -566,7 +585,7 @@ impl Client {
                 encoding: None,
                 highlights: false,
                 watched: HashMap::new(),
-                stdin: None,
+                outbox: None,
                 pid: None,
                 next_id: 0,
                 waiting: HashMap::new(),
