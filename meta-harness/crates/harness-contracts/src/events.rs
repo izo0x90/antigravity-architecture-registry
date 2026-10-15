@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{SlotId, ThreadId, TurnId};
 use crate::snapshot::ProviderSnapshot;
 use crate::items::TurnItem;
+use crate::notifications::Notification;
 use crate::plan::PlanArtifact;
 use crate::requests::RuntimeRequest;
 use crate::session::{Subagent, Thread, Turn, Usage};
@@ -50,6 +51,8 @@ pub enum ClientEvent {
     /// A slot was made or changed (its sessions, its harness, its status).
     SlotUpdated { slot: Slot },
     SlotClosed { slot_id: SlotId },
+    /// A notification appeared or changed state.
+    NotificationUpdated { notification: Notification },
     /// The stream fell behind: drop what you hold; the whole state follows.
     Resync,
 }

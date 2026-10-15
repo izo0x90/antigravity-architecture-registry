@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, SlotId, ThreadId};
+use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, NotificationId, NotificationState, SlotId, ThreadId};
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -22,6 +22,7 @@ enum Key {
     /// The latest state of the work queue over a plan.
     Queue(String),
     Slot(SlotId),
+    Notification(NotificationId),
 }
 
 struct Entry {
@@ -46,6 +47,15 @@ impl Cache {
             ClientEvent::SlotClosed { slot_id } => {
                 self.entries.remove(&Key::Slot(slot_id.clone()));
                 return;
+            }
+            // Open ones only: a late client needs what's still open.
+            ClientEvent::NotificationUpdated { notification } => {
+                let key = Key::Notification(notification.id.clone());
+                if notification.state != NotificationState::Open {
+                    self.entries.remove(&key);
+                    return;
+                }
+                (key, None)
             }
             ClientEvent::ThreadClosed { thread_id } => {
                 self.entries.retain(|_, e| e.thread.as_ref() != Some(thread_id));
@@ -168,5 +178,20 @@ mod tests {
         hub.publish(ClientEvent::ThreadClosed { thread_id: ThreadId::new("a") });
         let (replay, _) = hub.subscribe();
         assert_eq!(replay, vec![thread("b", ThreadStatus::Starting)]);
+    }
+
+    #[test]
+    fn a_late_client_gets_the_open_notifications_only() {
+        let note = |id: &str, state| {
+            let kind = harness_contracts::NotificationKind::Approval;
+            let notification = harness_contracts::Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, title: id.into(), detail: None, at_ms: 0, state };
+            ClientEvent::NotificationUpdated { notification }
+        };
+        let hub = EventHub::default();
+        hub.publish(note("req:1", NotificationState::Open));
+        hub.publish(note("req:2", NotificationState::Open));
+        hub.publish(note("req:1", NotificationState::Done));
+        let (replay, _) = hub.subscribe();
+        assert_eq!(replay, vec![note("req:2", NotificationState::Open)]);
     }
 }

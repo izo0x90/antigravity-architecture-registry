@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use harness_contracts::{
     AdapterEvent, ClientEvent, InstanceId, PlanArtifact, ProviderSnapshot, RequestId, RuntimeRequest, Thread, ThreadId,
-    Turn, TurnId, TurnItem, Usage, Slot, SlotId,
+    Turn, TurnId, TurnItem, Usage, Slot, SlotId, Notification, NotificationId, NotificationState,
 };
 
 #[derive(Debug, Clone)]
@@ -50,6 +50,8 @@ pub struct Store {
     pub instances: BTreeMap<InstanceId, ProviderSnapshot>,
     pub threads: BTreeMap<ThreadId, ThreadView>,
     pub slots: BTreeMap<SlotId, Slot>,
+    /// The open notifications (an ended one leaves).
+    pub notifications: BTreeMap<NotificationId, Notification>,
 }
 
 impl Store {
@@ -69,6 +71,13 @@ impl Store {
             }
             ClientEvent::SlotClosed { slot_id } => {
                 self.slots.remove(&slot_id);
+            }
+            ClientEvent::NotificationUpdated { notification } => {
+                if notification.state == NotificationState::Open {
+                    self.notifications.insert(notification.id.clone(), notification);
+                } else {
+                    self.notifications.remove(&notification.id);
+                }
             }
             // Architecture events go to the graph views, not the session store.
             ClientEvent::Architecture { .. } => {}

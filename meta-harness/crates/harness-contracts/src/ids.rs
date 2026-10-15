@@ -51,4 +51,6 @@ id_type!(
     SlotId,
     /// One of a slot's sessions, the same across restarts (its thread isn't).
     SessionKey,
+    /// A notification, by its subject (`req:<request>`, `turn:<turn>`, ...).
+    NotificationId,
 );
