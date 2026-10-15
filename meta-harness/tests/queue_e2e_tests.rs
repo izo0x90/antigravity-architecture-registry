@@ -11,7 +11,7 @@ use std::time::Duration;
 use arch_graph::{ComponentId, JobKind, JobState, Param, PlanId, QueueStatus, RelationKind, Signature, Stage};
 use arch_service::{Actor, ArchitectureService, PlanOp, QueueConfig};
 use async_trait::async_trait;
-use common::{fixture_architecture, http, http_cockpit, spawn_app_with};
+use common::{fixture_architecture, http, http_anonymous, spawn_app_with};
 use meta_harness::queue::{JobRunner, QueueRunner, Ticket};
 
 fn id(s: &str) -> ComponentId {
@@ -184,10 +184,10 @@ async fn queue_control_is_for_the_user_in_the_cockpit() {
     assert_eq!(status, 200, "{body}");
     assert!(body.contains("\"status\":\"done\"") || body.contains("\"status\":\"idle\""), "{body}");
     for path in ["/api/arch/plans/q/queue/start", "/api/arch/plans/q/queue/stop", "/api/arch/plans/q/queue/retry"] {
-        let (status, _) = http(addr, "POST", path, Some(r#"{"instanceId":"fake","component":"rust:x"}"#)).await;
+        let (status, _) = http_anonymous(addr, "POST", path, Some(r#"{"instanceId":"fake","component":"rust:x"}"#)).await;
         assert_eq!(status, 403, "{path}");
     }
-    let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/q/queue/stop", None).await;
+    let (status, body) = http(addr, "POST", "/api/arch/plans/q/queue/stop", None).await;
     assert_eq!(status, 200, "{body}");
 }
 

@@ -15,6 +15,7 @@ use harness_core::{HarnessError, OpenThread};
 use serde::{Deserialize, Serialize};
 
 use crate::server::{ApiResult, AppState};
+use crate::cockpit::{Needs, can};
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
@@ -36,13 +37,13 @@ pub(crate) fn routes() -> Router<AppState> {
 
 // ---- instances ----
 
-async fn list_instances(State(state): State<AppState>) -> Json<Vec<harness_contracts::ProviderSnapshot>> {
+async fn list_instances(_: Needs<can::ViewRead>, State(state): State<AppState>) -> Json<Vec<harness_contracts::ProviderSnapshot>> {
     Json(state.registry.snapshots())
 }
 
 /// Re-probes an instance, first looking its harness's launch up again: a
 /// pack installed or fixed since makes the instance anew with it.
-async fn refresh_instance(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+async fn refresh_instance(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
     let id = InstanceId::new(id);
     let root = state.arch.root().to_path_buf();
     let launches = tokio::task::spawn_blocking(move || crate::packs::catalog(&root).map(|c| crate::packs::harness_launches(&c))).await;
@@ -66,6 +67,7 @@ pub struct SavedSessionsQuery {
 }
 
 async fn list_saved_sessions(
+    _: Needs<can::ViewRead>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(query): Query<SavedSessionsQuery>,
@@ -75,6 +77,7 @@ async fn list_saved_sessions(
 }
 
 async fn delete_saved_session(
+    _: Needs<can::SessionsControl>,
     State(state): State<AppState>,
     Path((id, native_id)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
@@ -92,11 +95,12 @@ fn auth_controller(state: &AppState, id: String) -> ApiResult<Arc<dyn harness_co
     Ok(state.registry.get(&InstanceId::new(id))?.auth().ok_or(HarnessError::Unsupported { operation: "login" })?)
 }
 
-async fn begin_auth(State(state): State<AppState>, Path((id, method)): Path<(String, String)>) -> ApiResult<Json<harness_core::AuthChallenge>> {
+async fn begin_auth(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path((id, method)): Path<(String, String)>) -> ApiResult<Json<harness_core::AuthChallenge>> {
     Ok(Json(auth_controller(&state, id)?.begin(&method).await?))
 }
 
 async fn complete_auth(
+    _: Needs<can::SessionsControl>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<CompleteAuthRequest>,
@@ -105,7 +109,7 @@ async fn complete_auth(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn logout(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+async fn logout(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
     auth_controller(&state, id)?.logout().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -137,7 +141,7 @@ pub struct TurnStarted {
     pub turn_id: harness_contracts::TurnId,
 }
 
-async fn open_thread(State(state): State<AppState>, Json(body): Json<OpenThreadRequest>) -> ApiResult<Json<ThreadOpened>> {
+async fn open_thread(_: Needs<can::SessionsControl>, State(state): State<AppState>, Json(body): Json<OpenThreadRequest>) -> ApiResult<Json<ThreadOpened>> {
     // No folder asked for: the harness works in the project. It gets the
     // project's tool servers, then any added for this thread.
     let mut extra = state.tool_servers.project().map_err(|reason| HarnessError::InvalidConfig { reason })?;
@@ -156,12 +160,13 @@ async fn open_thread(State(state): State<AppState>, Json(body): Json<OpenThreadR
     Ok(Json(ThreadOpened { thread_id }))
 }
 
-async fn close_thread(State(state): State<AppState>, Path(thread): Path<String>) -> ApiResult<StatusCode> {
+async fn close_thread(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(thread): Path<String>) -> ApiResult<StatusCode> {
     state.sessions.close(&ThreadId::new(thread)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn start_turn(
+    _: Needs<can::SessionsControl>,
     State(state): State<AppState>,
     Path(thread): Path<String>,
     Json(input): Json<TurnInput>,
@@ -172,6 +177,7 @@ async fn start_turn(
 
 /// Adds a message to the running turn (else it starts one).
 async fn inject(
+    _: Needs<can::SessionsControl>,
     State(state): State<AppState>,
     Path(thread): Path<String>,
     Json(input): Json<TurnInput>,
@@ -180,19 +186,19 @@ async fn inject(
     Ok(Json(TurnStarted { turn_id }))
 }
 
-async fn steer(State(state): State<AppState>, Path(thread): Path<String>, Json(input): Json<SteerInput>) -> ApiResult<StatusCode> {
+async fn steer(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(thread): Path<String>, Json(input): Json<SteerInput>) -> ApiResult<StatusCode> {
     state.sessions.get(&ThreadId::new(thread))?.steer(input).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn interrupt(State(state): State<AppState>, Path(thread): Path<String>) -> ApiResult<StatusCode> {
+async fn interrupt(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(thread): Path<String>) -> ApiResult<StatusCode> {
     state.sessions.get(&ThreadId::new(thread))?.interrupt().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Answering an agent's permission request is the user's call.
 async fn respond_request(
-    _: crate::cockpit::CockpitUser,
+    _: Needs<can::RequestsAnswer>,
     State(state): State<AppState>,
     Path((thread, request)): Path<(String, String)>,
     Json(response): Json<RequestResponse>,

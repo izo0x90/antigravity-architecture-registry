@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::cockpit::CockpitUser;
+use crate::cockpit::{Needs, can};
 
 /// How long a call waits for the cockpit.
 const ANSWER_WITHIN: Duration = Duration::from_secs(20);
@@ -143,7 +143,7 @@ impl Remote {
 }
 
 /// `POST /api/cockpit/ticket`: a ticket for the cockpit's socket (the cockpit's session only).
-pub async fn ticket(_: CockpitUser, State(remote): State<Arc<Remote>>) -> Json<Value> {
+pub async fn ticket(_: Needs<can::SessionsControl>, State(remote): State<Arc<Remote>>) -> Json<Value> {
     Json(json!({ "ticket": remote.ticket() }))
 }
 

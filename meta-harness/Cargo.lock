@@ -3317,6 +3317,7 @@ dependencies = [
  "nah-access",
  "nah-packs",
  "notify-debouncer-full",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

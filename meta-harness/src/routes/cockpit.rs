@@ -10,6 +10,7 @@ use axum::{
 };
 
 use crate::server::AppState;
+use crate::cockpit::{Needs, can};
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
@@ -37,13 +38,13 @@ fn ui_config_path() -> Option<std::path::PathBuf> {
 }
 
 /// The cockpit's state as it last saved it (`null` before it ever has).
-async fn get_ui_state(State(state): State<AppState>) -> crate::arch::ArchResult<Option<serde_json::Value>> {
+async fn get_ui_state(_: Needs<can::ViewRead>, State(state): State<AppState>) -> crate::arch::ArchResult<Option<serde_json::Value>> {
     let file = state.ui_state.clone();
     Ok(Json(tokio::task::spawn_blocking(move || file.read()).await.map_err(|e| arch_service::ServiceError::Io(e.to_string()))??))
 }
 
 /// The cockpit saves its state (only the cockpit's user can).
-async fn put_ui_state(_: crate::cockpit::CockpitUser, State(state): State<AppState>, Json(body): Json<serde_json::Value>) -> Result<StatusCode, crate::arch::ArchError> {
+async fn put_ui_state(_: Needs<can::SessionsControl>, State(state): State<AppState>, Json(body): Json<serde_json::Value>) -> Result<StatusCode, crate::arch::ArchError> {
     let file = state.ui_state.clone();
     tokio::task::spawn_blocking(move || file.write(&body)).await.map_err(|e| arch_service::ServiceError::Io(e.to_string()))??;
     Ok(StatusCode::NO_CONTENT)
@@ -51,7 +52,7 @@ async fn put_ui_state(_: crate::cockpit::CockpitUser, State(state): State<AppSta
 
 /// Serves the user's UI config text (merged over the UI's defaults client-side);
 /// `text` is null when there is none.
-async fn ui_config_handler() -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+async fn ui_config_handler(_: Needs<can::ViewRead>) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let Some(path) = ui_config_path() else {
         return Ok(Json(serde_json::json!({ "text": null })));
     };

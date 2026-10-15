@@ -9,6 +9,7 @@
 //! Limits: an agent running shell commands as the same OS user could read
 //! the token file; keeping agents out of it is the harness sandbox's job.
 
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -18,6 +19,7 @@ use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use nah_access::{Access, Capability, Principal};
 use serde::Deserialize;
 
 const COOKIE_NAME: &str = "nah_cockpit";
@@ -106,21 +108,53 @@ pub async fn launch(State(auth): State<CockpitAuth>, Query(q): Query<Launch>) ->
     response
 }
 
-/// Extractor for handlers only the user, in the cockpit, may call.
-pub struct CockpitUser;
+/// Who a request comes from: the cookie the launch link set is the user;
+/// anything else is no one known. (Agents don't use these routes: they use
+/// the MCP endpoint, where their session's key says who they are.)
+pub fn principal_of(parts: &Parts, auth: &CockpitAuth) -> Principal {
+    let user = parts.headers.get_all(COOKIE).iter().filter_map(|v| v.to_str().ok()).any(|c| auth.admits(c));
+    if user { Principal::User } else { Principal::Anonymous }
+}
 
-impl<S> FromRequestParts<S> for CockpitUser
+/// A capability a route needs, as a type: `Needs<can::SessionsControl>`.
+pub trait Cap: Send + Sync + 'static {
+    const NEEDS: Capability;
+}
+
+/// The capabilities as types, one per `Capability`.
+pub mod can {
+    use super::{Cap, Capability};
+
+    macro_rules! markers {
+        ($($name:ident),* $(,)?) => {
+            $(
+                pub struct $name;
+                impl Cap for $name {
+                    const NEEDS: Capability = Capability::$name;
+                }
+            )*
+        };
+    }
+
+    markers!(ViewRead, ViewDrive, PlanEdit, CodeCheck, SlotsObserve, SlotsManage, SlotsMessage, SlotsReport, UserNotify, RequestsAnswer, PlansApprove, SessionsControl);
+}
+
+/// Extractor: the request's caller has the capability `C`, else 403. Put it
+/// first among a handler's arguments, so nothing else is read before it.
+pub struct Needs<C: Cap>(PhantomData<C>);
+
+impl<S, C: Cap> FromRequestParts<S> for Needs<C>
 where
     CockpitAuth: FromRef<S>,
+    Arc<Access>: FromRef<S>,
     S: Send + Sync,
 {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let auth = CockpitAuth::from_ref(state);
-        let admitted = parts.headers.get_all(COOKIE).iter().filter_map(|v| v.to_str().ok()).any(|c| auth.admits(c));
-        if admitted {
-            Ok(CockpitUser)
+        let who = principal_of(parts, &CockpitAuth::from_ref(state));
+        if Arc::<Access>::from_ref(state).allows(&who, C::NEEDS) {
+            Ok(Needs(PhantomData))
         } else {
             Err((StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "only the user, in the cockpit, can do this" }))).into_response())
         }

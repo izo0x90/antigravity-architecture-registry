@@ -25,11 +25,14 @@ The server prints the cockpit's launch link:
 Open the cockpit: http://127.0.0.1:8080/cockpit?nah=<token>
 ```
 
-Open the cockpit through that link once per browser: it sets the session that
-approvals and other user-only actions need. The token is kept in
-`~/.config/nah/cockpit-token`; you can set your own with `NAH_COCKPIT_TOKEN`.
-Agents connect to the MCP endpoint at `/api/mcp/sse`, which every session
-NAH opens is given automatically.
+Open the cockpit through that link once per browser: it sets the session
+every route needs. Only `/health`, the launch link, the static files, the
+agents' MCP endpoint and the sockets (which take a one-time ticket) are open;
+anything else without the cockpit's session gets 403. Each route names the
+capability it needs, as each agent tool does (see `.nah/access.toml`). The
+token is kept in `~/.config/nah/cockpit-token`; you can set your own with
+`NAH_COCKPIT_TOKEN`. Agents connect to the MCP endpoint at `/api/mcp/sse`,
+which every session NAH opens is given automatically.
 
 The agent harness and each language's server are packs, installed by the
 binary itself (see [Packs](#packs)). To build and install the ones you need:

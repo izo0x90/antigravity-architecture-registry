@@ -298,7 +298,7 @@ use harness_contracts::{InstanceId, ModelSelection, RuntimePolicy};
 use serde::Deserialize;
 
 use crate::arch::{ArchResult, plan_id};
-use crate::cockpit::CockpitUser;
+use crate::cockpit::{Needs, can};
 use crate::server::AppState;
 
 pub fn routes() -> axum::Router<AppState> {
@@ -309,7 +309,7 @@ pub fn routes() -> axum::Router<AppState> {
         .route("/api/arch/plans/{plan}/queue/retry", post(retry))
 }
 
-async fn snapshot(State(state): State<AppState>, Path(plan): Path<String>) -> ArchResult<QueueSnapshot> {
+async fn snapshot(_: Needs<can::ViewRead>, State(state): State<AppState>, Path(plan): Path<String>) -> ArchResult<QueueSnapshot> {
     Ok(Json(state.queue.snapshot(&plan_id(&plan)?).await?))
 }
 
@@ -325,7 +325,7 @@ struct StartBody {
 }
 
 /// The user starts the queue from the cockpit.
-async fn start(_: CockpitUser, State(state): State<AppState>, Path(plan): Path<String>, Json(body): Json<StartBody>) -> ArchResult<QueueSnapshot> {
+async fn start(_: Needs<can::PlansApprove>, State(state): State<AppState>, Path(plan): Path<String>, Json(body): Json<StartBody>) -> ArchResult<QueueSnapshot> {
     let plan = plan_id(&plan)?;
     let mut policy = body.policy;
     if policy.cwd.is_none() {
@@ -338,7 +338,7 @@ async fn start(_: CockpitUser, State(state): State<AppState>, Path(plan): Path<S
     Ok(Json(state.queue.start(plan, runner).await?))
 }
 
-async fn stop(_: CockpitUser, State(state): State<AppState>, Path(plan): Path<String>) -> ArchResult<QueueSnapshot> {
+async fn stop(_: Needs<can::PlansApprove>, State(state): State<AppState>, Path(plan): Path<String>) -> ArchResult<QueueSnapshot> {
     Ok(Json(state.queue.stop(&plan_id(&plan)?).await?))
 }
 
@@ -347,6 +347,6 @@ struct RetryBody {
     component: ComponentId,
 }
 
-async fn retry(_: CockpitUser, State(state): State<AppState>, Path(plan): Path<String>, Json(body): Json<RetryBody>) -> ArchResult<QueueSnapshot> {
+async fn retry(_: Needs<can::PlansApprove>, State(state): State<AppState>, Path(plan): Path<String>, Json(body): Json<RetryBody>) -> ArchResult<QueueSnapshot> {
     Ok(Json(state.queue.retry(&plan_id(&plan)?, &body.component).await?))
 }

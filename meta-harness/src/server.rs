@@ -29,6 +29,14 @@ pub struct AppState {
     pub tool_servers: Arc<crate::tool_servers::ToolServerState>,
     /// The cockpit, for agents driving it.
     pub remote: Arc<crate::remote::Remote>,
+    /// What each caller may do.
+    pub access: Arc<nah_access::Access>,
+}
+
+impl axum::extract::FromRef<AppState> for Arc<nah_access::Access> {
+    fn from_ref(state: &AppState) -> Self {
+        state.access.clone()
+    }
 }
 
 impl axum::extract::FromRef<AppState> for Arc<crate::remote::Remote> {

@@ -48,10 +48,13 @@ async fn the_driver_starts_the_installed_pack_and_opens_a_session_needs_the_pack
 }
 
 /// The body of `GET path` from the server at `port`.
+/// The cockpit token the test's server is started with: reads need the cockpit.
+const TOKEN: &str = "sandbox-e2e-token";
+
 fn get(port: u16, path: &str) -> Option<String> {
     use std::io::{Read, Write};
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
-    write!(stream, "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").ok()?;
+    write!(stream, "GET {path} HTTP/1.1\r\nHost: localhost\r\nCookie: nah_cockpit={TOKEN}\r\nConnection: close\r\n\r\n").ok()?;
     let mut text = String::new();
     stream.read_to_string(&mut text).ok()?;
     text.split_once("\r\n\r\n").map(|(_, body)| body.to_owned())
@@ -100,6 +103,7 @@ fn the_server_starts_with_only_the_pack_and_its_harness_comes_up_ready_needs_the
         .env("METAHARNESS_PORT", port.to_string())
         .env("HOST", "127.0.0.1")
         .env("NAH_E2E_RUN", &marker)
+        .env("NAH_COCKPIT_TOKEN", TOKEN)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()

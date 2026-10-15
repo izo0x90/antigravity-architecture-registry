@@ -2,7 +2,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{FAKE, http, spawn_app};
+use common::{FAKE, http, http_anonymous, spawn_app};
 use harness_contracts::{AdapterEvent, ClientEvent, ContentBlock, ItemBody, ProviderSnapshot};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -133,16 +133,16 @@ async fn ui_config_endpoint_answers_with_the_user_file_or_null() {
 async fn the_projects_tool_servers_are_kept_in_its_file_and_only_the_cockpit_changes_them() {
     let (addr, state) = app().await;
     let list = r#"[{"name":"docs","transport":{"type":"http","url":"https://h/mcp","headers":[]}}]"#;
-    let (status, _) = http(addr, "PUT", "/api/mcp/servers", Some(list)).await;
+    let (status, _) = http_anonymous(addr, "PUT", "/api/mcp/servers", Some(list)).await;
     assert!(status == 401 || status == 403, "not the cockpit: {status}");
-    let (status, body) = common::http_cockpit(addr, "PUT", "/api/mcp/servers", Some(list)).await;
+    let (status, body) = common::http(addr, "PUT", "/api/mcp/servers", Some(list)).await;
     assert_eq!(status, 200, "{body}");
     let (_, body) = http(addr, "GET", "/api/mcp/servers", None).await;
     let servers: harness_contracts::ToolServers = serde_json::from_str(&body).unwrap();
     assert_eq!(servers.project.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["docs"]);
     let file = std::fs::read_to_string(state.arch.root().join(".nah/mcp.toml")).unwrap();
     assert!(file.contains("name = \"docs\"") && file.contains("url = \"https://h/mcp\""), "{file}");
-    common::http_cockpit(addr, "PUT", "/api/mcp/servers", Some("[]")).await;
+    common::http(addr, "PUT", "/api/mcp/servers", Some("[]")).await;
 }
 
 #[tokio::test]

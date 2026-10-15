@@ -4,6 +4,7 @@ use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::get}
 use serde::{Deserialize, Serialize};
 
 use crate::server::AppState;
+use crate::cockpit::{Needs, can};
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new().route("/api/dev/feedback", get(get_dev_feedback_handler).post(dev_feedback_handler).put(update_dev_feedback_handler))
@@ -29,6 +30,7 @@ pub struct DevFeedbackItem {
 }
 
 async fn dev_feedback_handler(
+    _: Needs<can::SessionsControl>,
     Json(mut item): Json<DevFeedbackItem>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     if item.id.is_empty() {
@@ -67,7 +69,7 @@ async fn dev_feedback_handler(
     })))
 }
 
-async fn get_dev_feedback_handler() -> Result<impl IntoResponse, (StatusCode, String)> {
+async fn get_dev_feedback_handler(_: Needs<can::ViewRead>) -> Result<impl IntoResponse, (StatusCode, String)> {
     let feedback_file = std::path::Path::new("dev_feedback.json");
     let list: Vec<DevFeedbackItem> = if feedback_file.exists() {
         let content = tokio::fs::read_to_string(feedback_file).await.unwrap_or_default();
@@ -79,6 +81,7 @@ async fn get_dev_feedback_handler() -> Result<impl IntoResponse, (StatusCode, St
 }
 
 async fn update_dev_feedback_handler(
+    _: Needs<can::SessionsControl>,
     Json(item): Json<DevFeedbackItem>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let feedback_file = std::path::Path::new("dev_feedback.json");

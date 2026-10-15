@@ -6,7 +6,7 @@ mod common;
 use std::time::Duration;
 
 use arch_graph::{ArchEvent, ChangeReason, Requester};
-use common::{http, http_cockpit, spawn_app};
+use common::{http, http_anonymous, spawn_app};
 use futures::StreamExt;
 use harness_contracts::ClientEvent;
 use serde_json::{Value, json};
@@ -93,7 +93,7 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
 
     let approve = |to: &str, by: &str| json!({ "to": to, "by": by }).to_string();
     // Without the cockpit's session (an agent with a shell, another site), no approval.
-    let (status, body) = http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", "izo"))).await;
+    let (status, body) = http_anonymous(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", "izo"))).await;
     assert_eq!(status, 403, "{body}");
     assert!(body.contains("only the user, in the cockpit"));
     // The API never hands out the cockpit's cookie: only the user's launch link does.
@@ -110,12 +110,12 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
         ("POST", "/api/arch/plans/val/comments/c1/replies"),
         ("POST", "/api/threads/t1/requests/r1"),
     ] {
-        let (status, _) = http(addr, method, path, Some(r#"{"by":"izo"}"#)).await;
+        let (status, _) = http_anonymous(addr, method, path, Some(r#"{"by":"izo"}"#)).await;
         assert_eq!(status, 403, "{method} {path}");
     }
-    let (status, _) = http_cockpit(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", ""))).await;
+    let (status, _) = http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", ""))).await;
     assert_eq!(status, 400, "a user name is required");
-    let (status, body) = http_cockpit(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", "izo"))).await;
+    let (status, body) = http(addr, "POST", "/api/arch/plans/val/components/rust:sample::validate/approve", Some(&approve("arch_approved", "izo"))).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(parse(&body)["by"], "izo");
 
@@ -139,11 +139,11 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     let (status, body) = http(addr, "GET", "/api/arch/plans", None).await;
     assert_eq!(status, 200);
     assert_eq!(parse(&body)[0]["id"], "val");
-    let (status, body) = http_cockpit(addr, "DELETE", "/api/arch/plans/nope", None).await;
+    let (status, body) = http(addr, "DELETE", "/api/arch/plans/nope", None).await;
     assert_eq!(status, 404, "deleting a plan that doesn't exist: {body}");
-    let (status, _) = http_cockpit(addr, "DELETE", "/api/arch/plans/val", None).await;
+    let (status, _) = http(addr, "DELETE", "/api/arch/plans/val", None).await;
     assert_eq!(status, 204);
-    let (status, _) = http_cockpit(addr, "DELETE", "/api/arch/plans/val", None).await;
+    let (status, _) = http(addr, "DELETE", "/api/arch/plans/val", None).await;
     assert_eq!(status, 404, "already gone");
 }
 

@@ -258,14 +258,15 @@ pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppS
     let hub = Arc::new(EventHub::default());
     bridge_architecture_events(&arch, &hub);
     let remote = Arc::new(meta_harness::remote::Remote::default());
-    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), Arc::new(nah_access::Access::defaults()))));
+    let access = Arc::new(nah_access::Access::defaults());
+    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone())));
     let registry = Arc::new(InstanceRegistry::new(vec![Arc::new(FakeDriver)], hub.clone()));
     registry.configure(registry.default_configs(&[fake_harness()])).await.unwrap();
     let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone(), Vec::new()));
     let queue = meta_harness::server::queue_runner(&arch, arch_service::QueueConfig::defaults().unwrap(), &hub);
     let ui_state = Arc::new(arch_service::UiStateFile::open(arch.root()).unwrap());
     let tool_servers = Arc::new(meta_harness::tool_servers::ToolServerState { ours: Vec::new(), file: meta_harness::tool_servers::ProjectToolServers::of(arch.root()) });
-    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, ui_state, tool_servers, remote };
+    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, ui_state, tool_servers, remote, access };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = create_router(state.clone());
@@ -273,8 +274,14 @@ pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppS
     (addr, state)
 }
 
-/// One HTTP/1.1 request; returns (status code, body).
+/// One HTTP/1.1 request from the cockpit (with its session cookie); returns
+/// (status code, body).
 pub async fn http(addr: SocketAddr, method: &str, path: &str, body: Option<&str>) -> (u16, String) {
+    request(addr, method, path, body, &format!("Cookie: nah_cockpit={COCKPIT_TOKEN}\r\n")).await
+}
+
+/// The same request with no credentials: what anyone else on the machine gets.
+pub async fn http_anonymous(addr: SocketAddr, method: &str, path: &str, body: Option<&str>) -> (u16, String) {
     request(addr, method, path, body, "").await
 }
 
@@ -305,12 +312,6 @@ pub async fn cockpit_cookie(addr: SocketAddr) -> String {
     stream.read_to_string(&mut response).await.unwrap();
     let line = response.lines().find(|l| l.to_ascii_lowercase().starts_with("set-cookie:")).expect("the launch link sets the cookie");
     line.split_once(':').map(|(_, v)| v.trim()).unwrap_or_default().split(';').next().unwrap_or_default().to_owned()
-}
-
-/// Like `http`, from the cockpit (with its session cookie): what only the user may do.
-pub async fn http_cockpit(addr: SocketAddr, method: &str, path: &str, body: Option<&str>) -> (u16, String) {
-    let cookie = cockpit_cookie(addr).await;
-    request(addr, method, path, body, &format!("Cookie: {cookie}\r\n")).await
 }
 
 /// An MCP client over the real endpoint (SSE stream + message posts).
