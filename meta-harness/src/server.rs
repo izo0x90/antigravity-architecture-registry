@@ -109,6 +109,7 @@ pub fn create_router(state: AppState) -> Router {
     let mut router = Router::new()
         .merge(crate::routes::cockpit::routes())
         .merge(crate::routes::harness::routes())
+        .merge(crate::routes::slots::routes())
         .merge(crate::routes::files::routes())
         .merge(crate::routes::feedback::routes())
         .merge(crate::routes::tool_servers::routes())

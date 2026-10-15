@@ -280,9 +280,11 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     let names = |who: &Principal| service.tools_for(who).iter().map(|t| t.name.clone()).collect::<Vec<_>>();
     let reads = ["ingest", "list_types", "search", "inspect", "view", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions"];
     assert_eq!(names(&Principal::agent("external")), reads, "read-only, in the list's order");
-    assert_eq!(names(&Principal::agent("sub")), reads, "a sub-slot reads (its own tools come with slots)");
+    let mut sub = reads.map(String::from).to_vec();
+    sub.push("tell_lead".into());
+    assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, and reports to the lead");
     let lead = names(&Principal::agent("lead"));
-    assert_eq!(lead.len(), 24, "the lead has every tool there is today: {lead:?}");
+    assert!(lead.len() == 29 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself: {lead:?}");
     assert!(names(&Principal::Anonymous).is_empty());
 
     let err = service.call("navigate", json!({ "view": "calls" }), &as_role("sub")).await.unwrap_err().to_string();
@@ -291,4 +293,31 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     assert!(err.contains("(it needs plan.edit)"), "{err}");
     assert!(service.call("list_types", json!({}), &as_role("sub")).await.is_ok(), "what it may use works");
     assert!(service.call("no_such_tool", json!({}), &as_role("lead")).await.unwrap_err().to_string().contains("tool 'no_such_tool'"));
+}
+
+/// The lead runs its sub-slots through its tools; a sub-slot reports back
+/// and can't reach other slots.
+#[tokio::test]
+async fn the_lead_runs_sub_slots_and_a_sub_slot_reports_back() {
+    let (addr, state) = spawn_app().await;
+    let mut lead = Mcp::lead(addr).await;
+    let (err, text) = lead.tool("slot_list", json!({})).await;
+    assert!(!err && text.starts_with("No sub-slots."), "{text}");
+    let (err, text) = lead.tool("slot_start", json!({ "harness": "fake", "name": "helper", "mode": "full-access" })).await;
+    assert!(!err && text.starts_with("Started helper (id sub-"), "{text}");
+    let sub = state.slots.list().into_iter().find(|s| s.name == "helper").unwrap();
+    assert_eq!(sub.policy.runtime_mode, harness_contracts::RuntimeMode::FullAccess);
+    let (err, text) = lead.tool("slot_send", json!({ "slot": "helper", "text": "count the files", "wait_secs": 5 })).await;
+    assert!(!err && text.contains("helper answered:") && text.contains("From the lead (lead):"), "{text}");
+    let (err, text) = lead.tool("slot_send", json!({ "slot": "lead", "text": "hi" })).await;
+    assert!(err && text.contains("that's you"), "{text}");
+
+    let thread = sub.current_thread().cloned().or_else(|| state.slots.get(&sub.id).and_then(|s| s.current_thread().cloned())).expect("its session runs");
+    let mut helper = Mcp::as_session(addr, &thread).await;
+    let (err, text) = helper.tool("tell_lead", json!({ "text": "done: 3 files" })).await;
+    assert!(!err && text.starts_with("Delivered"), "{text}");
+    let (refused, text) = helper.tool("slot_send", json!({ "slot": "helper", "text": "hi" })).await;
+    assert!(refused && text.contains("role (sub) can't use slot_send"), "{text}");
+    let (err, _) = lead.tool("slot_close", json!({ "slot": "helper" })).await;
+    assert!(!err && state.slots.get(&sub.id).is_none());
 }

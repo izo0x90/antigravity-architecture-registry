@@ -295,7 +295,7 @@ pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHu
     let db = Arc::new(nah_state::StateDb::open(&arch_service::state_dir(arch.root()).unwrap(), &arch_service::store_settings(arch.limits())).unwrap());
     let tool_servers = meta_harness::startup::tool_servers(&base_url, arch.root());
     let slots = meta_harness::startup::slots(&sessions, &registry, &hub, &db, &base_url, &tool_servers).unwrap();
-    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone())), meta_harness::startup::mcp_callers(&slots));
+    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone(), slots.clone())), meta_harness::startup::mcp_callers(&slots));
     let state = AppState { registry, sessions, slots, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state: db, tool_servers, remote, access, tickets: Arc::default() };
     let app = create_router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

@@ -257,3 +257,31 @@ async fn a_harness_that_never_opens_doesnt_hold_its_slot_forever() {
     assert!(opening.unwrap_err().to_string().contains("didn't open a session within"));
     assert!(closing.is_ok() && slots.get(&sub).is_none(), "closed once the open gave up");
 }
+
+/// The cockpit's routes for slots: start one, open, prompt (which resumes
+/// first), switch and close sessions, close it.
+#[tokio::test]
+async fn the_cockpit_runs_slots_over_http() {
+    let (addr, state) = spawn_app().await;
+    let (status, body) = common::http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"fake","name":"helper"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let slot = serde_json::from_str::<serde_json::Value>(&body).unwrap()["slotId"].as_str().unwrap().to_owned();
+    let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"hello"}"#)).await;
+    assert_eq!(status, 200, "a prompt to a slot that isn't running opens its session: {body}");
+    let first = state.slots.get(&SlotId::new(&slot)).unwrap().current.unwrap();
+    let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/sessions"), Some("{}")).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, _) = common::http(addr, "POST", &format!("/api/slots/{slot}/current"), Some(&format!(r#"{{"session":"{first}"}}"#))).await;
+    assert_eq!(status, 204);
+    let (status, _) = common::http(addr, "DELETE", &format!("/api/slots/{slot}/sessions/{first}"), None).await;
+    assert_eq!(status, 204);
+    assert_eq!(state.slots.get(&SlotId::new(&slot)).unwrap().sessions.len(), 1);
+    let (status, body) = common::http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"nope"}"#)).await;
+    assert_eq!(status, 404, "{body}");
+    let (status, body) = common::http(addr, "POST", "/api/slots", Some(r#"{"role":"lead","instanceId":"fake"}"#)).await;
+    assert_eq!(status, 400, "the lead isn't made here: {body}");
+    let (status, _) = common::http(addr, "DELETE", &format!("/api/slots/{slot}"), None).await;
+    assert_eq!(status, 204);
+    let (status, _) = common::http(addr, "DELETE", "/api/slots/lead", None).await;
+    assert_eq!(status, 400, "the lead stays");
+}

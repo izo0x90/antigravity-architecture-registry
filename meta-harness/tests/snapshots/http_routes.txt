@@ -16,6 +16,14 @@
 /api/threads/t1/steer POST
 /api/threads/t1/interrupt POST
 /api/threads/t1/requests/r1 POST
+/api/slots GET,HEAD,POST
+/api/slots/s1 DELETE
+/api/slots/s1/harness POST
+/api/slots/s1/settings POST
+/api/slots/s1/sessions POST
+/api/slots/s1/sessions/k1 DELETE
+/api/slots/s1/current POST
+/api/slots/s1/prompt POST
 /api/fs/read GET,HEAD
 /api/dev/feedback GET,HEAD,POST,PUT
 /api/mcp/servers GET,HEAD,PUT

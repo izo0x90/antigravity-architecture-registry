@@ -1083,3 +1083,103 @@ Press keys in the cockpit, in order, space separated: names as in its key sheet,
   ]
 }
 
+## slot_list
+Your sub-slots: each one's name and id, harness, model, what it's doing (running, idle, waiting on the user, failed, not running) and its sessions.
+{
+  "type": "object",
+  "properties": {}
+}
+
+## slot_read
+What a sub-slot is doing and its last messages (prompts and its answers).
+{
+  "type": "object",
+  "properties": {
+    "slot": {
+      "type": "string",
+      "description": "A sub-slot: its id or its name (slot_list shows both)"
+    },
+    "last": {
+      "type": "integer",
+      "description": "How many messages (default 10)"
+    }
+  },
+  "required": [
+    "slot"
+  ]
+}
+
+## slot_start
+Start a sub-slot: an agent of its own on a harness (and model), working under you. It can read the IDE, the graph and the code, and report back to you; it can't drive the user's view or edit plans. Its own harness tools (editing files, running commands) follow its mode and the user's approvals.
+{
+  "type": "object",
+  "properties": {
+    "harness": {
+      "type": "string",
+      "description": "The harness instance, e.g. claude-code or antigravity"
+    },
+    "name": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string",
+      "description": "A model the harness offers"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "approval-required",
+        "auto-accept-edits",
+        "auto",
+        "full-access"
+      ],
+      "description": "How much it may do without asking (default: approval-required)"
+    }
+  },
+  "required": [
+    "harness"
+  ]
+}
+
+## slot_close
+Close a sub-slot and its sessions.
+{
+  "type": "object",
+  "properties": {
+    "slot": {
+      "type": "string",
+      "description": "A sub-slot: its id or its name (slot_list shows both)"
+    }
+  },
+  "required": [
+    "slot"
+  ]
+}
+
+## slot_send
+Send a sub-slot a message: it's queued after what it's doing (or added to its running turn), marked as from you. With wait_secs, waits that long for its answer.
+{
+  "type": "object",
+  "properties": {
+    "slot": {
+      "type": "string",
+      "description": "A sub-slot: its id or its name (slot_list shows both)"
+    },
+    "text": {
+      "type": "string"
+    },
+    "add_to_running": {
+      "type": "boolean",
+      "description": "Into its running turn, when its harness takes that"
+    },
+    "wait_secs": {
+      "type": "integer",
+      "description": "Wait up to this long for its answer (at most 600)"
+    }
+  },
+  "required": [
+    "slot",
+    "text"
+  ]
+}
+

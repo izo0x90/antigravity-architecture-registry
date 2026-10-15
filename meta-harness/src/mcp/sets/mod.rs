@@ -17,6 +17,7 @@ mod explore;
 mod plans;
 mod review;
 mod schema;
+mod slots;
 
 /// A tool as agents see it, and the capability a caller needs to use it.
 pub(crate) struct ToolDef {
@@ -38,16 +39,17 @@ pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
 
 /// Every tool with the capability it needs, in the same order.
 pub(crate) fn tool_defs(trees: &TreeConfig) -> Vec<ToolDef> {
-    [explore::Explore::schemas(trees), plans::Plans::schemas(trees), build::Build::schemas(trees), review::Review::schemas(trees), cockpit::Cockpit::schemas(trees)].into_iter().flatten().collect()
+    [explore::Explore::schemas(trees), plans::Plans::schemas(trees), build::Build::schemas(trees), review::Review::schemas(trees), cockpit::Cockpit::schemas(trees), slots::Slots::schemas(trees)].into_iter().flatten().collect()
 }
 
 /// The sets, in the same order as `list_tools`.
-pub(crate) fn all(arch: &Arc<ArchitectureService>, remote: &Arc<crate::remote::Remote>) -> Vec<Box<dyn ToolSet>> {
+pub(crate) fn all(arch: &Arc<ArchitectureService>, remote: &Arc<crate::remote::Remote>, slots: &Arc<harness_core::SlotManager>) -> Vec<Box<dyn ToolSet>> {
     vec![
         Box::new(explore::Explore { arch: arch.clone() }),
         Box::new(plans::Plans { arch: arch.clone() }),
         Box::new(build::Build { arch: arch.clone() }),
         Box::new(review::Review { arch: arch.clone() }),
         Box::new(cockpit::Cockpit { remote: remote.clone() }),
+        Box::new(slots::Slots { slots: slots.clone() }),
     ]
 }

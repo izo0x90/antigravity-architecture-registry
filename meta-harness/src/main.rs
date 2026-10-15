@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tool_servers = meta_harness::startup::tool_servers(&base_url, arch.root());
     let sessions = Arc::new(SessionManager::new(instances.clone(), hub.clone()));
     let slots = meta_harness::startup::slots(&sessions, &instances, &hub, &state, &base_url, &tool_servers)?;
-    let mcp_state = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone())), meta_harness::startup::mcp_callers(&slots));
+    let mcp_state = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone(), slots.clone())), meta_harness::startup::mcp_callers(&slots));
 
     let queue = meta_harness::server::queue_runner(&arch, meta_harness::startup::queue_config(&arch)?, &hub);
     let cockpit = meta_harness::cockpit::CockpitAuth::for_user()?;

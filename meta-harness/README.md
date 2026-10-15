@@ -477,8 +477,17 @@ away and rebuilt when the reader changes.
 | Build | `verify`, `run_tools`, `review` |
 | Review | `review_comments`, `answer_comment`, `reply_comment` |
 | Cockpit | `cockpit_read`, `cockpit_actions`, `cockpit_run`, `cockpit_click`, `cockpit_type`, `cockpit_keys` (only while you let agents drive it) |
+| Slots | the lead's: `slot_list`, `slot_read`, `slot_start`, `slot_close`, `slot_send` (optionally waiting for the answer); a sub-slot's: `tell_lead` |
 
 Every result ends with next steps, given in dependency order.
+
+Each session NAH opens sits in a slot and is given these tools at its own
+address, with a key that says which slot is calling. What a slot's agent
+may use comes from its role (`.nah/access.toml`): the lead drives the IDE,
+plans, builds and runs its sub-slots; a sub-slot reads and reports to the
+lead; a work-queue job plans and builds its component; an agent NAH didn't
+start (no key) only reads. Tools a role may not use aren't listed to it,
+and a call to one is refused saying which capability it needs.
 
 ### Driving the cockpit
 
