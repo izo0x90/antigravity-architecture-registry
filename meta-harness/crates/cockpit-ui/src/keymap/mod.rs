@@ -1,8 +1,6 @@
 //! Input modes and the keymap. Bindings come from config (see
 //! `config/default.toml`); actions never carry keys themselves.
 
-#[cfg(test)]
-mod lint;
 mod local;
 
 pub use local::{InputKeys, ListKeys, LocalKeys, Modifier, PointerKeys, Sent, local, set_local};

@@ -369,7 +369,8 @@ all of them:
   slots; `m` plus a letter sets a mark and `'` plus the letter returns to it.
 - **Quick look:** `q` shows the full card of what the cursor is on (the
   spec view, floating over the column), with what the graph says about it
-  on top. Hold `q` to peek (it closes when you let go); tap it to keep it
+  on top, on the side away from that column (over it with one column).
+  Hold `q` to peek (it closes when you let go); tap it to keep it
   open, and `q` again, `Escape` or a click outside closes it. Inside it,
   the spec's keys work (`j`/`k`, sections, links; following a link shows
   that card). `Space q c` (or its button) opens the same card in a column.
@@ -419,6 +420,25 @@ leader menu (the focused view's entries first), and `:` opens the command
 palette (`:42` goes to line 42). The palette and its pickers move with
 `Ctrl+J`/`Ctrl+K` (or `Ctrl+N`/`Ctrl+P`, or the arrows) and pick with
 `Enter`.
+
+Every view is drawn the same way by what holds it (a column, the quick
+look): its top line (its name, what it's doing, and its buttons and
+settings), then its content. What you're on shows its own buttons under
+it, and only while you're on it: a review point's Reply, Accept and
+Reopen; a job's Approve or Retry; a card's Go into and go-tos; a request's
+answers (a list to pick from for a question, Allow and Deny for an
+approval); Send under the box you're typing in. Every button is an
+action: it says its key on hover and runs the way its key does.
+
+The mouse and fingers work the same way in every view: a click or tap on
+an item puts the cursor there; a double click or tap opens it (Enter); a
+long press lists what can be done with it (the palette). A swipe runs
+what it's bound to in the view it starts on (`gestures = ["swipe_left"]`
+in `[keymap.bind]`, like keys): in a chat, the next and previous agent
+slot; elsewhere, back and forward. The graph's canvas reads its own (a
+tap selects, a double tap goes in, two fingers pan and zoom), and so does
+the code's text (`[keymap.pointer] go_to` with a click goes to a name).
+Thresholds are in `[touch]`.
 
 Views also have their own keys:
 
@@ -493,11 +513,10 @@ All keys are configurable in `crates/cockpit-ui/config/default.toml`,
 including those outside a view's bindings: `[keymap.list]` (moving in the
 palette and pickers), `[keymap.input]` (`send`, `add` into a running
 turn, and `newline`, in every typing box) and `[keymap.pointer]` (`go_to`,
-held while clicking a name). Every control (a view's toolbar, a column's
-or the quick look's own buttons) is an action, says its key on hover, and
-runs the way its key does. A test fails the build when the cockpit reads
-a key anywhere else, or writes a key's name into text instead of the
-bound key's label.
+held while clicking a name). A test fails the build when the cockpit
+reads a key anywhere else, or writes a key's name into text instead of
+the bound key's label, and when a view draws a button of its own instead
+of placing an action for its host to draw.
 
 ## Configuration
 

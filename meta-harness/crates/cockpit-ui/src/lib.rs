@@ -13,6 +13,8 @@ pub mod graph_config;
 pub mod goto;
 pub mod graph_style;
 pub mod keymap;
+#[cfg(test)]
+mod lint;
 pub mod nav;
 pub mod net;
 pub mod palette;
