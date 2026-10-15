@@ -435,3 +435,14 @@ fn every_key_shown_runs_the_action_it_shows() {
         }
     }
 }
+
+#[test]
+fn shift_h_and_l_go_to_the_column_left_and_right() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Graph);
+    let at = app.desk.columns.focused();
+    frame(&ctx, &mut app, key("L"));
+    assert_eq!(app.desk.columns.focused(), (at + 1) % app.desk.columns.len(), "L: the next column");
+    frame(&ctx, &mut app, key("H"));
+    assert_eq!(app.desk.columns.focused(), at, "H: back");
+}

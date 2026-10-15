@@ -329,7 +329,7 @@ flow), several code files, several cards, several chats (each shows an
 agent slot: the lead, or a sub-slot). There's one queue and one inbox
 (showing either in another column moves it). Picking a kind of view
 in a column (its tabs) gives it a new one, starting where the last one of
-that kind was. Columns: `+`/`-` in the top bar, `Space l 1`…`l 6` (or
+that kind was. Columns: `H`/`L` (or `Tab`/`Shift+Tab`) go to the column left and right; `+`/`-` in the top bar, `Space l 1`…`l 6` (or
 `alt+1`…`alt+6`), `Space l a` adds one, up to `[columns] max` (12). Columns and views work like
 vim's windows and buffers: closing a column (`Space l x`, or the × on its
 header) or fewer columns only hide its view, with its state, and more
