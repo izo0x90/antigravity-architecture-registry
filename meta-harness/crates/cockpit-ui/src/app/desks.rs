@@ -10,13 +10,14 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 
-/// The cockpit's own state, kept on home: the server shown, its settings.
+/// The cockpit's own state, kept on home: the server shown, whether
+/// system notifications are on.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Shell {
     pub current: String,
     #[serde(default)]
-    pub browser_alerts: bool,
+    pub alerts: bool,
 }
 
 /// How long before asking home for the shell's state again.
@@ -160,9 +161,7 @@ impl CockpitApp {
             self.shell.loaded = reply.is_ok();
             match reply.map(|v| v.map(serde_json::from_value::<Shell>)) {
                 Ok(Some(Ok(kept))) => {
-                    if kept.browser_alerts != self.alerts.on() {
-                        self.alerts.set(kept.browser_alerts);
-                    }
+                    self.alerts.restore(kept.alerts);
                     self.shell.want = Some(kept.current.clone());
                     self.shell.saved = Some(kept);
                 }
@@ -186,7 +185,7 @@ impl CockpitApp {
         if !self.shell.loaded || self.shell.want.is_some() {
             return;
         }
-        let shell = Shell { current: self.desk.server.clone(), browser_alerts: self.alerts.on() };
+        let shell = Shell { current: self.desk.server.clone(), alerts: self.alerts.on() };
         if self.shell.saved.as_ref() == Some(&shell) {
             self.shell.changed_at = None;
             return;

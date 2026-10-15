@@ -383,8 +383,11 @@ all of them:
   it's from, the request to answer in place (`y`/`Y`/`A`/`d`, as in the
   chat), what the agent said last; `n`/`N` go to the next and previous,
   `o` opens its chat, `x` puts it away. A chat on screen puts its slot's
-  updates away. *Browser notifications while this tab is hidden* (in the
-  palette) raises the browser's own for what newly waits on you.
+  updates away. The bell beside the counters turns system notifications
+  on or off: what newly waits on you is raised as the browser's (or, in a
+  native build, the OS's) own while the cockpit is out of sight; clicked,
+  it opens the item. The bell says when they're on but not allowed yet (a
+  click asks) or refused (allow them in the site's settings).
 
 The cockpit's state is kept on the server (`GET`/`PUT /api/ui/state`, in
 the project's state database, `.nah/state/state.sqlite`): the columns and

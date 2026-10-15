@@ -115,6 +115,7 @@ impl CockpitApp {
                 self.feedback.register_inspectable(ui, "top_bar:index_status", index_res.rect);
                 ui.add_space(crate::theme::look().space_sm);
                 self.render_server_chip(ui);
+                self.render_alerts_indicator(ui);
                 self.render_attention_counters(ui);
 
                 ui.add_space(crate::theme::look().space_m);

@@ -308,7 +308,7 @@ impl CockpitApp {
             | ShellCommand::AttentionStep(_)
             | ShellCommand::AttentionOpenSlot
             | ShellCommand::AttentionDismiss
-            | ShellCommand::BrowserAlerts => self.run_attention(command, value, ctx),
+            | ShellCommand::Alerts => self.run_attention(command, value, ctx),
             ShellCommand::ServerSwitch
             | ShellCommand::ServerAdd
             | ShellCommand::ServerConnect

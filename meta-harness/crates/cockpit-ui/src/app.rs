@@ -156,8 +156,8 @@ enum ShellCommand {
     AttentionOpenSlot,
     /// The quick look's notification put away.
     AttentionDismiss,
-    /// The browser's notifications while the tab is hidden (on or off).
-    BrowserAlerts,
+    /// System alerts (the browser's, the OS's) on or off.
+    Alerts,
     /// Shows a server's desk (its name, the value).
     ServerSwitch,
     /// Links another server (`name url secret`, the value).
@@ -261,7 +261,7 @@ pub struct CockpitApp {
     /// Which chats were said to be seen, and when.
     seen: crate::attention::Seen,
     /// The browser's notifications.
-    pub alerts: crate::browser_alerts::BrowserAlerts,
+    pub alerts: crate::alerts::Alerts,
     /// What a call that finished later has to say (shown as the note).
     notes_later: Arc<Mutex<Vec<String>>>,
     /// The box for talking to the agent, while it's open.
@@ -308,7 +308,7 @@ impl CockpitApp {
             Ok(config) => (config, None),
             Err(err) => (UiConfig::default(), Some(format!("built-in defaults: {err}"))),
         };
-        let alerts = crate::browser_alerts::BrowserAlerts::default();
+        let alerts = crate::alerts::Alerts::default();
         let mut home = NetClient::new(host_origin);
         home.on_arrival(alerts.arrival());
         Self {

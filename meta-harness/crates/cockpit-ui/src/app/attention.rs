@@ -90,10 +90,17 @@ impl CockpitApp {
         out.extend(picker("attention.waiting", "What's waiting on you", Level::Waiting));
         out.extend(picker("attention.updates", "Updates", Level::Update));
         out.push(Action::new("attention.next_waiting", "Go to what's waiting next", S::AttentionNextWaiting).group(Group::Act).importance(SECONDARY));
+        use crate::alerts::AlertState as A;
+        let (label, detail) = match self.alerts.state() {
+            A::Off => ("Turn system notifications on", Some("What newly waits on you, while the cockpit is out of sight")),
+            A::On => ("Turn system notifications off", None),
+            A::NeedsPermission => ("Allow system notifications", Some("They're on; this asks the platform to allow them")),
+            A::Blocked => ("Turn system notifications off", Some("They're on, but refused: allow them in the browser's site settings")),
+            A::Unavailable(why) => ("System notifications", Some(why)),
+        };
         out.push(
-            Action::new("attention.browser", "Browser notifications while this tab is hidden", S::BrowserAlerts)
-                .detail("For what newly waits on you; the browser asks to allow them")
-                .param(Param::Toggle { on: self.alerts.on() })
+            Action::new("alerts.toggle", label, S::Alerts)
+                .detail(detail.unwrap_or_default())
                 .group(Group::Act)
                 .importance(MINOR),
         );
@@ -174,7 +181,12 @@ impl CockpitApp {
                     None => self.close_quick_look(),
                 }
             }
-            ShellCommand::BrowserAlerts => self.alerts.set(value.as_deref() == Some("true")),
+            ShellCommand::Alerts => {
+                self.alerts.toggle();
+                if let crate::alerts::AlertState::Unavailable(why) = self.alerts.state() {
+                    self.note = Some(format!("No system notifications here: {why}."));
+                }
+            }
             _ => {}
         }
     }
@@ -260,6 +272,26 @@ impl CockpitApp {
         close
     }
 
+    /// The top bar's alerts indicator: whether system notifications are on
+    /// (and allowed); clicked, it turns them on or off (or asks to allow them).
+    pub(super) fn render_alerts_indicator(&mut self, ui: &mut egui::Ui) {
+        use crate::alerts::AlertState as A;
+        use egui_phosphor::regular as icon;
+        let (glyph, color, hint) = match self.alerts.state() {
+            A::Off => (icon::BELL_SLASH, colors().faint, "System notifications are off: click to turn them on".to_owned()),
+            A::On => (icon::BELL_SIMPLE_RINGING, colors().ok, "System notifications are on (while the cockpit is out of sight): click to turn them off".to_owned()),
+            A::NeedsPermission => (icon::BELL_SIMPLE, colors().warn, "System notifications are on but not allowed yet: click to allow them".to_owned()),
+            A::Blocked => (icon::BELL_SIMPLE_SLASH, colors().error, "System notifications are on but refused: allow them in the browser's site settings (click turns them off)".to_owned()),
+            A::Unavailable(why) => (icon::BELL_SLASH, colors().faint, format!("No system notifications: {why}")),
+        };
+        let r = ui.add(egui::Button::new(RichText::new(glyph).size(crate::theme::look().text_label).color(color)).frame(false)).on_hover_text(hint);
+        self.feedback.register_inspectable(ui, "top_bar:alerts", r.rect);
+        if r.clicked() {
+            let ctx = ui.ctx().clone();
+            self.run_attention(ShellCommand::Alerts, None, &ctx);
+        }
+    }
+
     /// The top bar's counters: what waits on the user, and the updates
     /// (each hidden at none); clicked, its picker.
     pub(super) fn render_attention_counters(&mut self, ui: &mut egui::Ui) {
@@ -288,7 +320,7 @@ impl CockpitApp {
     }
 
     /// Chats on screen say their slots were seen (now and then, and only
-    /// with updates open for them); a browser notification clicked opens
+    /// with updates open for them); a system notification clicked opens
     /// its item.
     pub(super) fn say_seen(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);

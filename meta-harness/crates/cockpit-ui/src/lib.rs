@@ -1,7 +1,7 @@
 pub mod actions;
+pub mod alerts;
 pub mod app;
 pub mod attention;
-pub mod browser_alerts;
 pub mod chat;
 pub mod code;
 pub mod columns;
