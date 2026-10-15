@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use arch_graph::tree::{Card, Opened, Tree, TreeRequest, ViewKind};
 use arch_graph::{ComponentId, Source};
-use egui::{RichText, Sense};
+use egui::RichText;
 
 use crate::actions::{Action, ActionProvider, RunCx};
 use crate::feedback::FeedbackInspectorState;
@@ -303,7 +303,6 @@ impl ArchitectureTreeState {
             area = area.vertical_scroll_offset(scroll_offset(how, at, pitch, self.offset_y, view_h));
             self.scroll = None;
         }
-        let (mut toggled, mut picked) = (None, None);
         let mut spots = Vec::new();
         let mut measured: f32 = 0.0;
         let output = area.show_rows(ui, row_h, rows.len(), |ui, range| {
@@ -316,9 +315,7 @@ impl ArchitectureTreeState {
                         if self.has_children(&row.id) {
                             let open = !self.closed.contains(&row.id) && self.children.get(&row.id).is_some_and(|k| !k.is_empty());
                             let icon = if open { egui_phosphor::regular::CARET_DOWN } else { egui_phosphor::regular::CARET_RIGHT };
-                            if ui.add(egui::Label::new(RichText::new(icon).size(crate::theme::look().text_body).color(colors().muted)).sense(Sense::click())).clicked() {
-                                toggled = Some(row.id.clone());
-                            }
+                            ui.label(RichText::new(icon).size(crate::theme::look().text_body).color(colors().muted));
                         } else {
                             ui.add_space(crate::theme::look().space_xl);
                         }
@@ -326,11 +323,8 @@ impl ArchitectureTreeState {
                         let (name, kind) = c.map_or_else(|| (row.id.to_string(), String::new()), |c| (c.label.clone(), c.kind.clone()));
                         let color = if self.matches(&row.id) { colors().text } else { colors().faint };
                         let text = RichText::new(format!("{name} ")).size(crate::theme::look().text_label).color(if on_cursor { colors().text_strong } else { color });
-                        let label = ui.selectable_label(on_cursor, text);
+                        let label = ui.label(if on_cursor { text.background_color(colors().selection) } else { text });
                         ui.label(RichText::new(kind).size(crate::theme::look().text_small).color(colors().muted));
-                        if label.clicked() {
-                            picked = Some(row.id.clone());
-                        }
                         label.rect
                     });
                 measured = measured.max(response.response.rect.height());
@@ -344,15 +338,6 @@ impl ArchitectureTreeState {
         self.offset_y = output.state.offset.y;
         self.view_h = output.inner_rect.height();
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
-        if let Some(id) = toggled
-            && !self.unfold(&id)
-        {
-            self.closed.insert(id);
-        }
-        if let Some(id) = picked {
-            self.cursor = Some(id.clone());
-            self.select = Some(id);
-        }
     }
 }
 

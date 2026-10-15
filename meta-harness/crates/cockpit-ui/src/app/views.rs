@@ -205,10 +205,5 @@ impl CockpitApp {
             self.ensure_visible(BufferKind::Graph);
             self.desk.graph.reveal(id);
         }
-        if let Some((path, line)) = self.desk.chat.ui.requested_file_jump.take() {
-            self.desk.jumps.record(self.jump_of(BufferKind::Chat));
-            self.ensure_visible(BufferKind::Code);
-            self.desk.code.load_file(&path, line, &self.desk.net, ctx.clone());
-        }
     }
 }

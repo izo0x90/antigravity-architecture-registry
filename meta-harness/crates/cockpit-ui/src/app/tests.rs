@@ -35,6 +35,23 @@ fn texts(output: &egui::FullOutput) -> String {
     out
 }
 
+/// Double-clicks the drawn text `label`.
+fn double_click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
+    fn find(shape: &egui::Shape, label: &str) -> Option<egui::Rect> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.text() == label => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
+            egui::Shape::Vec(list) => list.iter().find_map(|s| find(s, label)),
+            _ => None,
+        }
+    }
+    let output = frame_at(ctx, app, vec![], 10.0);
+    let at = output.shapes.iter().find_map(|c| find(&c.shape, label)).unwrap_or_else(|| panic!("{label:?} isn't drawn: {}", texts(&output))).center();
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    for (n, events) in [vec![egui::Event::PointerMoved(at)], vec![button(true)], vec![button(false)], vec![button(true)], vec![button(false)], vec![]].into_iter().enumerate() {
+        frame_at(ctx, app, events, 10.05 + n as f64 * 0.05);
+    }
+}
+
 /// Clicks the drawn text `label` (a button's or a link's).
 fn click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
     fn find(shape: &egui::Shape, label: &str) -> Option<egui::Rect> {

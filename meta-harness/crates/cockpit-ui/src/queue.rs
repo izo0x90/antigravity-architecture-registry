@@ -181,8 +181,6 @@ impl QueueState {
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, _cx: &mut RunCx<'_>) {
-        // A job clicked.
-        let mut clicked: Option<usize> = None;
         let mut spots = Vec::new();
         let scroll = std::mem::take(&mut self.scroll);
         let output = egui::ScrollArea::vertical().id_salt("queue_jobs").auto_shrink([false, false]).show(ui, |ui| {
@@ -199,9 +197,7 @@ impl QueueState {
                 let shown = frame.show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         let name = job.component.as_str().split_once(':').map_or(job.component.as_str(), |(_, s)| s);
-                        if ui.selectable_label(selected, RichText::new(name).strong()).clicked() {
-                            clicked = Some(i);
-                        }
+                        ui.label(RichText::new(name).strong());
                         crate::status::chip(ui, crate::status::job(&job.state), None);
                         if job.attempts > 0 {
                             ui.label(RichText::new(format!("attempt {}", job.attempts + 1)).color(colors().muted));
@@ -235,9 +231,6 @@ impl QueueState {
         });
         self.view_h = output.inner_rect.height();
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
-        if let Some(i) = clicked {
-            self.selected = i;
-        }
     }
 
     fn apply(&mut self, command: QueueCommand, cx: &mut RunCx<'_>) {

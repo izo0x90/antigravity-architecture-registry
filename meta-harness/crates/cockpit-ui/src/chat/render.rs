@@ -228,11 +228,10 @@ impl ChatStreamState {
                     ui.label(RichText::new(format!("{tag} {} {title}", tool_icon(kind))).monospace().size(crate::theme::look().text_body).color(color));
                     for (n, loc) in locations.iter().enumerate() {
                         let label = match loc.line { Some(l) => format!("{} {}:{l}", icon::FOLDER_OPEN, loc.path), None => format!("{} {}", icon::FOLDER_OPEN, loc.path) };
-                        let link = ui.small_button(RichText::new(label).monospace().size(crate::theme::look().text_small));
+                        // A place it went: the cursor goes on it (a click),
+                        // and it opens (Enter, a double click).
+                        let link = ui.label(RichText::new(label).monospace().size(crate::theme::look().text_small).color(colors().info));
                         self.ui.drawing.push(Spot { key: format!("{index}:{n}"), rect: link.rect });
-                        if link.clicked() {
-                            self.ui.requested_file_jump = Some((loc.path.clone(), loc.line.map(|l| l as usize)));
-                        }
                     }
                 });
                 if !output.is_empty() {
@@ -246,11 +245,8 @@ impl ChatStreamState {
                 }
             }
             ItemBody::FileChange { path, .. } => {
-                let link = ui.small_button(RichText::new(format!("{} {path}", icon::PENCIL_SIMPLE)).monospace().size(crate::theme::look().text_body));
+                let link = ui.label(RichText::new(format!("{} {path}", icon::PENCIL_SIMPLE)).monospace().size(crate::theme::look().text_body).color(colors().info));
                 self.ui.drawing.push(Spot { key: format!("{index}:0"), rect: link.rect });
-                if link.clicked() {
-                    self.ui.requested_file_jump = Some((path.clone(), None));
-                }
             }
             ItemBody::CommandExecution { command, output, exit_code } => {
                 ui.label(RichText::new(format!("$ {command}")).monospace().size(crate::theme::look().text_body));
@@ -297,22 +293,6 @@ impl ChatStreamState {
         let (net, slot_idx, hints) = (cx.net, cx.slot, cx.hints);
         let input_mode = &mut *cx.input_mode;
         let ctx = ui.ctx().clone();
-        // Slash-command suggestions from the harness's live command list.
-        if let Some(prefix) = self.ui.input_buffer.strip_prefix('/')
-            && !prefix.contains(' ')
-            && let Some(snapshot) = self.instance()
-        {
-            let matches: Vec<_> = snapshot.commands.iter().filter(|c| c.name.starts_with(prefix)).cloned().collect();
-            ui.horizontal_wrapped(|ui| {
-                for command in matches {
-                    let label = RichText::new(format!("/{}", command.name)).monospace().size(crate::theme::look().text_small);
-                    let hint = match &command.input_hint { Some(h) => format!("{} — {h}", command.description), None => command.description.clone() };
-                    if ui.small_button(label).on_hover_text(hint).clicked() {
-                        self.ui.input_buffer = format!("/{} ", command.name);
-                    }
-                }
-            });
-        }
 
         ui.horizontal(|ui| {
             let text_w = ui.available_width();

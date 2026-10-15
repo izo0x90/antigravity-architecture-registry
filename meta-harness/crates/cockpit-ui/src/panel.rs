@@ -54,6 +54,12 @@ pub trait Panel {
         None
     }
 
+    /// It reads the pointer on its content itself (the graph's canvas:
+    /// cards, dragging, two fingers); the host's clicks leave it alone.
+    fn own_pointer(&self) -> bool {
+        false
+    }
+
     /// Where its typing box is, while it's typed in (its controls go under).
     fn typing_rect(&self) -> Option<egui::Rect> {
         None

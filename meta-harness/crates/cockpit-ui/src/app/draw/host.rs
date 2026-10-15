@@ -5,6 +5,11 @@
 //! card to a column) are actions too, drawn by the same control, with
 //! their keys. A control used asks for its action, and the app runs it
 //! once the frame is drawn, the way its key runs it.
+//!
+//! Pointer and touch, the same in every view: a click or tap on an item
+//! moves the cursor there (the column is focused by it); a double click or
+//! tap opens it (Enter); a long press lists what can be done (the palette,
+//! with the cursor on it). The view only says where its items are.
 
 use super::super::*;
 use crate::actions::At;
@@ -20,6 +25,7 @@ impl CockpitApp {
         let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell, hints: &hints, asked: &mut self.asked };
         crate::panel::header(ui, self.desk.panel(kind), &actions, &mut cx);
         ui.separator();
+        let content = ui.available_rect_before_wrap();
         match kind {
             BufferKind::Chat => self.desk.chat.render(ui, &mut self.feedback, is_focused, &mut cx),
             BufferKind::Code => self.desk.code.render(ui, &mut self.feedback, &mut cx),
@@ -37,6 +43,22 @@ impl CockpitApp {
             }
             BufferKind::Queue => self.desk.queue.render(ui, &mut cx),
             BufferKind::Inbox => self.desk.inbox.render(ui, &mut cx, &mut self.desk.chat),
+        }
+        self.pointer_on_content(kind, ui, content);
+    }
+
+    /// A click or double click on a view's content (not on something over
+    /// it): on one of its items, the cursor goes there; a double opens it.
+    fn pointer_on_content(&mut self, kind: BufferKind, ui: &egui::Ui, content: egui::Rect) {
+        if self.desk.panel(kind).own_pointer() {
+            return;
+        }
+        let (clicked, double, at) = ui.input(|i| (i.pointer.primary_clicked(), i.pointer.button_double_clicked(egui::PointerButton::Primary), i.pointer.interact_pos()));
+        let Some(at) = at.filter(|at| (clicked || double) && content.contains(*at) && ui.ctx().layer_id_at(*at) == Some(ui.layer_id())) else { return };
+        let Some(key) = self.desk.view(kind).spots().into_iter().find(|s| s.rect.contains(at)).map(|s| s.key) else { return };
+        self.desk.view_mut(kind).move_to(&key);
+        if double {
+            self.asked = Some(("nav.enter".to_owned(), None));
         }
     }
 

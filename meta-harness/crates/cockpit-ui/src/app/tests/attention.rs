@@ -193,3 +193,18 @@ fn the_bells_look_says_whether_system_notifications_reach_you_and_its_list_switc
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains(&format!("{} 2", egui_phosphor::regular::BELL_RINGING)), "on: ringing: {text}");
 }
+
+/// Pointer and touch, the same in every view: a click on an item puts the
+/// cursor there; a double click opens it (Enter).
+#[test]
+fn a_click_puts_the_cursor_on_an_item_and_a_double_click_opens_it() {
+    let (ctx, mut app) = waiting_app();
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.next_waiting"}"#).unwrap();
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.desk.inbox.cursor_key().as_deref(), Some("1"), "on its request");
+    click_on(&ctx, &mut app, "req:r1 title");
+    assert_eq!(app.desk.inbox.cursor_key().as_deref(), Some("0"), "clicked: on what it says");
+    assert!(app.quick_look.is_some(), "a click moves, it doesn't open");
+    double_click_on(&ctx, &mut app, "req:r1 title");
+    assert_eq!((app.quick_look.is_none(), app.desk.columns.focused_kind()), (true, BufferKind::Chat), "a double click opens it: its chat");
+}

@@ -749,6 +749,11 @@ impl crate::panel::Panel for GraphState {
         Status::new(format!("{} {}", egui_phosphor::regular::GRAPH, self.source_label()), Tone::Plain)
     }
 
+    /// Its canvas: a tap selects, a double tap goes in, two fingers move it.
+    fn own_pointer(&self) -> bool {
+        true
+    }
+
     /// Loading, the files changed since they were read, the agent having
     /// moved it, and what it has to say.
     fn status(&self) -> Vec<Status> {

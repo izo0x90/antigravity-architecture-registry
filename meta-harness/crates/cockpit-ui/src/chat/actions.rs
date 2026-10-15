@@ -217,18 +217,17 @@ impl ActionProvider for ChatStreamState {
             out.push(Action::new("chat.inject", "Add the prompt to what it's doing", C::AddToTurn).focused().on_typing(Button, "Add to what it's doing", None));
         }
 
-        // Harness commands
+        // Harness commands; typing `/` and its start, those it matches show
+        // under the box.
+        let typed = self.ui.input_buffer.strip_prefix('/').filter(|p| !p.contains(' '));
         if let Some(s) = snapshot {
             for command in &s.commands {
                 let param = match &command.input_hint {
                     Some(hint) => Param::Text { hint: hint.clone() },
                     None => Param::None,
                 };
-                out.push(
-                    Action::new(format!("command.{}", command.name), format!("/{}", command.name), C::HarnessCommand { name: command.name.clone() })
-                        .param(param)
-                        .detail(command.description.clone()),
-                );
+                let action = Action::new(format!("command.{}", command.name), format!("/{}", command.name), C::HarnessCommand { name: command.name.clone() }).param(param).detail(command.description.clone());
+                out.push(if typed.is_some_and(|p| command.name.starts_with(p)) { action.on_typing(Button, format!("/{}", command.name), None) } else { action });
             }
         }
 
@@ -391,6 +390,10 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             ChatCommand::HarnessCommand { name } => {
+                // Picked while typing its start: what was typed goes.
+                if self.ui.input_buffer.strip_prefix('/').is_some_and(|p| name.starts_with(p.trim())) {
+                    self.ui.input_buffer.clear();
+                }
                 let text = match value {
                     Some(args) if !args.is_empty() => format!("/{name} {args}"),
                     _ => format!("/{name}"),

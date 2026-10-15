@@ -103,7 +103,6 @@ pub struct ChatView {
     pub slot: SlotId,
     pub input_buffer: String,
     pub markdown_cache: CommonMarkCache,
-    pub requested_file_jump: Option<(String, Option<usize>)>,
     /// The message the cursor is on (normal mode); None follows the latest.
     pub cursor: Option<usize>,
     /// Which of its links a hint picked.
@@ -125,7 +124,6 @@ impl Default for ChatView {
             slot: SlotId::new(LEAD),
             input_buffer: String::new(),
             markdown_cache: CommonMarkCache::default(),
-            requested_file_jump: None,
             cursor: None,
             link_pick: None,
             scroll: false,

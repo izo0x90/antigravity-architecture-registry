@@ -434,10 +434,9 @@ impl SpecState {
     }
 
     /// The header card: what it is, where, how far along, and what needs looking at.
-    fn render_header(&self, ui: &mut egui::Ui, detail: &ComponentDetail) -> Option<Click> {
+    fn render_header(&self, ui: &mut egui::Ui, detail: &ComponentDetail) {
         let c = &detail.component;
         let look = crate::theme::look();
-        let mut clicked = None;
         egui::Frame::NONE.fill(colors().surface).stroke(egui::Stroke::new(look.line_thin, colors().border_strong)).corner_radius(look.radius_xl).inner_margin(crate::theme::margin(look.space_l)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
@@ -452,9 +451,7 @@ impl SpecState {
             };
             match location {
                 Some(text) => {
-                    if ui.link(RichText::new(format!("{} {text}", egui_phosphor::regular::FILE_CODE)).monospace().size(look.text_small)).on_hover_text("Open in the code view").clicked() {
-                        clicked = Some(Click::OpenCode);
-                    }
+                    ui.label(RichText::new(format!("{} {text}", egui_phosphor::regular::FILE_CODE)).monospace().size(look.text_small));
                 }
                 None => {
                     ui.label(crate::status::text("planned").size(look.text_small));
@@ -494,7 +491,6 @@ impl SpecState {
             crate::status::track(ui, &steps, stages.iter().position(|s| *s == c.stage));
         });
         ui.add_space(look.space_m);
-        clicked
     }
 
     /// Moves to the next (or previous) unaddressed point, cursor and all.
@@ -625,7 +621,6 @@ impl SpecState {
         let c = &detail.component;
         let changed = self.changed_sections();
         let mut spots: Vec<Spot> = Vec::new();
-        let mut clicked: Option<Click> = None;
         let scroll = std::mem::take(&mut self.scroll);
         let relations = self.relations();
         let changed_items = self.changed_items();
@@ -653,9 +648,7 @@ impl SpecState {
                 spots.push(Spot { key: entry.key(), rect: response.rect });
                 response
             };
-            if let Some(click) = self.render_header(ui, &detail) {
-                clicked = Some(click);
-            }
+            self.render_header(ui, &detail);
             for section in Section::ALL {
                 let open = !self.folded.contains(&section);
                 let mut title = section.title().to_owned();
@@ -673,12 +666,9 @@ impl SpecState {
                 }
                 let color = if self.current == section { colors().focus } else if changed.contains(&section) { colors().info } else { colors().text_strong };
                 let caret = if open { egui_phosphor::regular::CARET_DOWN } else { egui_phosphor::regular::CARET_RIGHT };
-                let header = item(ui, Entry { section, item: SpecItem::Header }, &mut |ui| {
-                    ui.add(egui::Label::new(RichText::new(format!("{caret} {title}")).strong().size(crate::theme::look().text_title).color(color)).sense(egui::Sense::click()));
+                item(ui, Entry { section, item: SpecItem::Header }, &mut |ui| {
+                    ui.label(RichText::new(format!("{caret} {title}")).strong().size(crate::theme::look().text_title).color(color));
                 });
-                if header.interact(egui::Sense::click()).clicked() {
-                    clicked = Some(Click::Header(section));
-                }
                 if !open {
                     continue;
                 }
@@ -768,13 +758,9 @@ impl SpecState {
                                 let list = if *outgoing { &detail.outgoing } else { &detail.incoming };
                                 let found = list.iter().find(|r| r.kind == *kind && (if *outgoing { &r.target } else { &r.source }) == other);
                                 let (text, how) = found.map_or_else(|| (name.clone(), String::new()), |r| how_known(r, &name));
-                                let mut followed = false;
                                 item(ui, entry, &mut |ui| {
-                                    followed |= ui.link(RichText::new(&text).monospace().size(crate::theme::look().text_body)).on_hover_text(format!("{}{how}", other.as_str())).clicked();
+                                    ui.label(RichText::new(&text).monospace().size(crate::theme::look().text_body).color(colors().info)).on_hover_text(format!("{}{how}", other.as_str()));
                                 });
-                                if followed {
-                                    clicked = Some(Click::Follow(other.clone()));
-                                }
                             }
                         }
                         Section::Code => match &detail.code {
@@ -841,15 +827,6 @@ impl SpecState {
         });
         self.view = output.inner_rect;
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
-        match clicked {
-            Some(Click::Header(section)) => {
-                self.put_on(&Entry { section, item: SpecItem::Header });
-                self.fold(Fold::Toggle);
-            }
-            Some(Click::Follow(id)) => self.requests.select = Some(id),
-            Some(Click::OpenCode) => self.requests.open_code = self.code_location(),
-            None => {}
-        }
     }
 
     /// The review line under the toolbar: what changed since the review, and
@@ -884,13 +861,6 @@ impl SpecState {
             *cx.input_mode = crate::keymap::InputMode::Normal;
         }
     }
-}
-
-/// What a click in the spec asks for.
-enum Click {
-    Header(Section),
-    Follow(ComponentId),
-    OpenCode,
 }
 
 /// Draws one cursor stop (`Entry`), its contents drawn by the closure given.
