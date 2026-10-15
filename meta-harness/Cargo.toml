@@ -19,6 +19,7 @@ members = [
     "crates/arch-search",
     "crates/nah-packs",
     "crates/nah-lsp",
+    "crates/nah-access",
 ]
 
 # Debug builds (tests, and the server as run in development) optimize the

@@ -437,6 +437,7 @@ overrides them in its own `.nah/` folder:
 | `.nah/queue.toml` | queue settings and session brief templates |
 | `.nah/schema_dsl.toml` | extra shorthand type names for schemas |
 | `.nah/mcp.toml` | the project's tool servers, given to every harness's sessions |
+| `.nah/access.toml` | what each agent role (lead, sub, worker, external) may do with NAH's tools. A role named here replaces the shipped one. It covers NAH's tools only; a slot's own harness tools follow its mode and your approvals |
 
 How long things take is visible: every answer is timed stage by stage
 (tracing spans), anything over `slow_request_ms` is logged and marked "slow"
@@ -510,6 +511,7 @@ is approved, verified or built. It's saved in `.nah/plans/` like any plan.
 | `code-analyzer` | our analyzer: reads each file with ast-grep by its language pack (with syntax colours and code rules) and links names across files |
 | `nah-packs` | packs (harnesses, languages, servers) and the one installer |
 | `nah-lsp` | the one language server client: starts a server in the background, knows when it's ready, asks where names are defined, restarts it when it ends |
+| `nah-access` | what each caller may do: capabilities, the roles that hold them (configured), and the one check every tool and route goes through |
 | `arch-store` | where the analysis is kept between runs (SQLite) |
 | `arch-search` | one way of matching what's typed: names with neo_frizbee; files and lines with fff-search |
 | `arch-service` | plans and cache, plan operations and checks, verification, tools, reviewers, review loop, queue state |

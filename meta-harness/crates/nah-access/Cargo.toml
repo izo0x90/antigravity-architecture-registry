@@ -1,0 +1,9 @@
+[package]
+name = "nah-access"
+version = "0.1.0"
+edition = "2024"
+description = "What each caller may do: capabilities, the roles that hold them, and the one check."
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "1"

@@ -1,0 +1,23 @@
+# What each agent role may do with NAH's tools. A role is a list of
+# capabilities; tools and routes each say which capability they need.
+# A project replaces a role by naming it in .nah/access.toml. The user (and
+# home, relaying the user) can do everything and isn't configured here.
+#
+# These cover NAH's tools only: a slot's own harness tools (its file edits,
+# its shell) are governed by that slot's mode and the approvals you answer.
+
+# The lead slot: drives the IDE, plans and builds, runs the sub-slots.
+[roles.lead]
+can = ["view.read", "view.drive", "plan.edit", "code.check", "slots.observe", "slots.manage", "slots.message", "user.notify"]
+
+# A sub-slot: reads the IDE, reports to the lead and the user.
+[roles.sub]
+can = ["view.read", "slots.report", "user.notify"]
+
+# A work-queue job: plans and builds its component.
+[roles.worker]
+can = ["view.read", "plan.edit", "code.check", "user.notify"]
+
+# An agent NAH didn't start (no key): reads only.
+[roles.external]
+can = ["view.read"]
