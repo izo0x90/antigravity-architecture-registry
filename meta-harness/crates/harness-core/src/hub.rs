@@ -39,6 +39,8 @@ impl Cache {
     fn apply(&mut self, event: &ClientEvent) {
         let (key, thread) = match event {
             ClientEvent::InstanceUpdated { snapshot } => (Key::Instance(snapshot.instance_id.clone()), None),
+            // Said to one client by its stream, never kept.
+            ClientEvent::Resync => return,
             ClientEvent::ThreadClosed { thread_id } => {
                 self.entries.retain(|_, e| e.thread.as_ref() != Some(thread_id));
                 return;
@@ -87,12 +89,18 @@ pub struct EventHub {
 
 impl Default for EventHub {
     fn default() -> Self {
-        let (tx, _) = broadcast::channel(4096);
-        Self { tx, cache: Mutex::default() }
+        Self::with_capacity(4096)
     }
 }
 
 impl EventHub {
+    /// A hub whose subscribers may fall up to `capacity` events behind
+    /// before they must resync.
+    pub fn with_capacity(capacity: usize) -> Self {
+        let (tx, _) = broadcast::channel(capacity);
+        Self { tx, cache: Mutex::default() }
+    }
+
     fn cache(&self) -> std::sync::MutexGuard<'_, Cache> {
         self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }

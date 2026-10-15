@@ -19,7 +19,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/ui/state", get(get_ui_state).put(put_ui_state))
         .route("/cockpit", get(crate::cockpit::launch))
         .route("/ws/cockpit", get(crate::remote::socket))
-        .route("/api/cockpit/ticket", post(crate::remote::ticket))
+        .route("/api/cockpit/ticket", post(ticket))
 }
 
 async fn health_check() -> impl IntoResponse {
@@ -61,4 +61,9 @@ async fn ui_config_handler(_: Needs<can::ViewRead>) -> Result<Json<serde_json::V
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Json(serde_json::json!({ "text": null }))),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("{}: {e}", path.display()) })))),
     }
+}
+
+/// A one-time ticket to open a socket with (`/ws/events`, `/ws/cockpit`).
+async fn ticket(_: Needs<can::ViewRead>, State(tickets): State<std::sync::Arc<crate::cockpit::Tickets>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "ticket": tickets.issue() }))
 }

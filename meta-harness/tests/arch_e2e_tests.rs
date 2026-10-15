@@ -161,7 +161,7 @@ async fn next_architecture_event(ws: &mut (impl StreamExt<Item = Result<tokio_tu
 #[tokio::test]
 async fn changes_checks_and_navigation_arrive_on_the_event_socket() {
     let (addr, _) = spawn_app().await;
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws/events")).await.unwrap();
+    let mut ws = common::events_socket(addr).await;
     http(addr, "POST", "/api/arch/plans", Some(r#"{"id":"ev","title":"Events"}"#)).await;
     assert!(matches!(next_architecture_event(&mut ws).await, ArchEvent::Changed { reason: ChangeReason::PlanEdited, .. }));
     http(addr, "POST", "/api/arch/plans/ev/validate", None).await;
@@ -192,6 +192,6 @@ async fn changes_checks_and_navigation_arrive_on_the_event_socket() {
         other => panic!("{other:?}"),
     }
     // A client that connects later lands on the last requested view.
-    let (mut late, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws/events")).await.unwrap();
+    let mut late = common::events_socket(addr).await;
     assert!(matches!(next_architecture_event(&mut late).await, ArchEvent::ViewRequested { .. }));
 }

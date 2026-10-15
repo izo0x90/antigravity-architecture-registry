@@ -255,7 +255,11 @@ pub async fn spawn_app() -> (SocketAddr, AppState) {
 
 /// Serves the app over a given architecture service.
 pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppState) {
-    let hub = Arc::new(EventHub::default());
+    spawn_app_with_hub(arch, Arc::new(EventHub::default())).await
+}
+
+/// Serves the app over a given architecture service and event hub.
+pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHub>) -> (SocketAddr, AppState) {
     bridge_architecture_events(&arch, &hub);
     let remote = Arc::new(meta_harness::remote::Remote::default());
     let access = Arc::new(nah_access::Access::defaults());
@@ -266,7 +270,7 @@ pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppS
     let queue = meta_harness::server::queue_runner(&arch, arch_service::QueueConfig::defaults().unwrap(), &hub);
     let ui_state = Arc::new(arch_service::UiStateFile::open(arch.root()).unwrap());
     let tool_servers = Arc::new(meta_harness::tool_servers::ToolServerState { ours: Vec::new(), file: meta_harness::tool_servers::ProjectToolServers::of(arch.root()) });
-    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, ui_state, tool_servers, remote, access };
+    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, ui_state, tool_servers, remote, access, tickets: Arc::default() };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = create_router(state.clone());
@@ -298,6 +302,19 @@ async fn request(addr: SocketAddr, method: &str, path: &str, body: Option<&str>,
     let status = response.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
     let body = response.split_once("\r\n\r\n").map(|(_, b)| b.to_owned()).unwrap_or_default();
     (status, body)
+}
+
+/// A one-time ticket for a socket, as the cockpit gets one.
+pub async fn ticket(addr: SocketAddr) -> String {
+    let (status, body) = http(addr, "POST", "/api/cockpit/ticket", Some("{}")).await;
+    assert_eq!(status, 200, "{body}");
+    serde_json::from_str::<Value>(&body).unwrap()["ticket"].as_str().unwrap().to_owned()
+}
+
+/// The event socket, opened as the cockpit opens it (with a ticket).
+pub async fn events_socket(addr: SocketAddr) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    let ticket = ticket(addr).await;
+    tokio_tungstenite::connect_async(format!("ws://{addr}/ws/events?ticket={ticket}")).await.unwrap().0
 }
 
 /// The test server's cockpit token (the user's, in a real launch).

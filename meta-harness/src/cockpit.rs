@@ -160,3 +160,71 @@ where
         }
     }
 }
+
+/// One-time tickets for the sockets: the cockpit asks for one with its
+/// session (`POST /api/cockpit/ticket`), then opens a socket with it.
+/// Proxies may drop cookies from a socket's request, so the session is
+/// checked on the ticket's.
+#[derive(Default)]
+pub struct Tickets {
+    issued: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+}
+
+/// How long a ticket stays good.
+const TICKET_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl Tickets {
+    /// A ticket to connect with (once, within a minute).
+    pub fn issue(&self) -> String {
+        let ticket = uuid::Uuid::new_v4().simple().to_string();
+        let mut issued = self.issued.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        issued.retain(|_, at| at.elapsed() < TICKET_FOR);
+        issued.insert(ticket.clone(), std::time::Instant::now());
+        ticket
+    }
+
+    /// Uses a ticket up: whether it was good.
+    pub fn admit(&self, ticket: &str) -> bool {
+        self.issued.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(ticket).is_some_and(|at| at.elapsed() < TICKET_FOR)
+    }
+}
+
+#[derive(Deserialize)]
+struct TicketQuery {
+    #[serde(default)]
+    ticket: String,
+}
+
+/// Extractor for socket upgrades: a good ticket in `?ticket=`, else 403.
+pub struct Ticketed;
+
+impl<S> FromRequestParts<S> for Ticketed
+where
+    Arc<Tickets>: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let q = Query::<TicketQuery>::try_from_uri(&parts.uri).map(|Query(q)| q.ticket).unwrap_or_default();
+        if Arc::<Tickets>::from_ref(state).admit(&q) {
+            Ok(Ticketed)
+        } else {
+            Err((StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "only the cockpit connects here (with a ticket from /api/cockpit/ticket)" }))).into_response())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_ticket_is_good_once() {
+        let tickets = Tickets::default();
+        let ticket = tickets.issue();
+        assert!(tickets.admit(&ticket));
+        assert!(!tickets.admit(&ticket), "used up");
+        assert!(!tickets.admit("made-up"));
+    }
+}

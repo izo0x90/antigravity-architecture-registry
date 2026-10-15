@@ -28,9 +28,7 @@ async fn the_cockpit_tools_reach_the_cockpit_only_while_it_lets_agents_drive() {
     assert!(refused.is_err(), "no ticket, no socket");
     let (status, _) = common::http_anonymous(addr, "POST", "/api/cockpit/ticket", None).await;
     assert_eq!(status, 403, "tickets are the cockpit's");
-    let (status, body) = common::http(addr, "POST", "/api/cockpit/ticket", None).await;
-    assert_eq!(status, 200, "{body}");
-    let ticket = serde_json::from_str::<Value>(&body).unwrap()["ticket"].as_str().unwrap().to_owned();
+    let ticket = common::ticket(addr).await;
     let (mut cockpit, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws/cockpit?ticket={ticket}")).await.unwrap();
     assert!(tokio_tungstenite::connect_async(format!("ws://{addr}/ws/cockpit?ticket={ticket}")).await.is_err(), "a ticket is good once");
 

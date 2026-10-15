@@ -61,6 +61,8 @@ impl Store {
                 self.threads.remove(&thread_id);
             }
             ClientEvent::Session { event } => self.apply_session(event),
+            // The whole state follows: start from nothing.
+            ClientEvent::Resync => *self = Self::default(),
             // Architecture events go to the graph views, not the session store.
             ClientEvent::Architecture { .. } => {}
         }

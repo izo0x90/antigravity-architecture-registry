@@ -67,7 +67,8 @@ async fn opening_a_thread_on_an_unknown_instance_is_404() {
 #[tokio::test]
 async fn websocket_upgrade_and_replay() {
     let (addr, _) = app().await;
-    let ws_req = "GET /ws/events HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    let ticket = common::ticket(addr).await;
+    let ws_req = format!("GET /ws/events?ticket={ticket} HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
     stream.write_all(ws_req.as_bytes()).await.unwrap();
     let mut buf = vec![0u8; 8192];

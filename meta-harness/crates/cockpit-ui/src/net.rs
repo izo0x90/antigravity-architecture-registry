@@ -102,6 +102,46 @@ pub struct NetClient {
     /// Set when a dropped socket came back: views should refetch (events
     /// were missed meanwhile). Taken by the app.
     pub reconnected: bool,
+    /// The event socket opens with a one-time ticket, asked for first.
+    events_door: TicketDoor,
+}
+
+/// A socket opened with a one-time ticket (the server checks the cockpit's
+/// session on the ticket's request: proxies may drop cookies from a
+/// socket's). Asks for one, then hands it over once.
+#[derive(Default)]
+pub struct TicketDoor {
+    inbox: Arc<Mutex<Option<NetResult<String>>>>,
+    asking: bool,
+}
+
+impl TicketDoor {
+    /// Starts asking (unless it already is): where to hand the answer.
+    pub fn start(&mut self) -> Option<impl FnOnce(NetResult<String>) + Send + 'static> {
+        if self.asking {
+            return None;
+        }
+        self.asking = true;
+        let inbox = self.inbox.clone();
+        Some(move |r| {
+            if let Ok(mut slot) = inbox.lock() {
+                *slot = Some(r);
+            }
+        })
+    }
+
+    /// The ticket (or why there's none), once it has come.
+    pub fn take(&mut self) -> Option<NetResult<String>> {
+        let answer = self.inbox.lock().ok().and_then(|mut slot| slot.take());
+        if answer.is_some() {
+            self.asking = false;
+        }
+        answer
+    }
+
+    pub fn asking(&self) -> bool {
+        self.asking
+    }
 }
 
 /// Error text from a non-2xx response: the server's `{"error": ...}` or the status.
@@ -148,6 +188,7 @@ impl NetClient {
             retry: None,
             dropped: false,
             reconnected: false,
+            events_door: TicketDoor::default(),
         }
     }
 
@@ -211,19 +252,25 @@ impl NetClient {
         });
     }
 
+    /// Starts connecting the event socket: a ticket first, then the socket.
     pub fn connect_ws(&mut self, ctx: egui::Context) {
+        if let Some(done) = self.events_door.start() {
+            self.set_ws_state(WsState::Connecting);
+            // Keep the delay: if this attempt fails too, the next waits longer.
+            self.retry = self.retry.map(|(_, delay)| (f64::INFINITY, delay));
+            self.cockpit_ticket(ctx, done);
+        }
+    }
+
+    fn open_ws(&mut self, ticket: &str, ctx: egui::Context) {
         let options = ewebsock::Options::default();
         let wakeup = move || {
             ctx.request_repaint();
         };
-
-        match ewebsock::connect_with_wakeup(&self.ws_url, options, wakeup) {
+        match ewebsock::connect_with_wakeup(format!("{}?ticket={ticket}", self.ws_url), options, wakeup) {
             Ok((sender, receiver)) => {
                 self.ws_sender = Some(sender);
                 self.ws_receiver = Some(receiver);
-                self.set_ws_state(WsState::Connecting);
-                // Keep the delay: if this attempt fails too, the next waits longer.
-                self.retry = self.retry.map(|(_, delay)| (f64::INFINITY, delay));
             }
             Err(e) => {
                 let now = self.retry.map_or(0.0, |(at, _)| if at.is_finite() { at } else { 0.0 });
@@ -235,6 +282,11 @@ impl NetClient {
     /// Drains socket events; reconnects (with backoff) after the socket drops.
     pub fn poll_ws(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
+        match self.events_door.take() {
+            Some(Ok(ticket)) => self.open_ws(&ticket, ctx.clone()),
+            Some(Err(e)) => self.dropped_at(now, Some(format!("no ticket for the event socket: {}", e.message))),
+            None => {}
+        }
         let mut events = Vec::new();
         if let Some(receiver) = &self.ws_receiver {
             while let Some(event) = receiver.try_recv() {
@@ -245,7 +297,7 @@ impl NetClient {
             self.on_ws_event(event, now);
         }
         if let Some((at, _)) = self.retry.filter(|(at, _)| at.is_finite()) {
-            if now >= at {
+            if now >= at && !self.events_door.asking() {
                 self.connect_ws(ctx.clone());
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_secs_f64(at - now));
@@ -260,6 +312,10 @@ impl NetClient {
                 self.activity.fetch_add(1, Ordering::Relaxed);
                 match serde_json::from_str::<ClientEvent>(&text) {
                     Ok(parsed) => {
+                        // Events were missed: views refetch, as after a reconnect.
+                        if parsed == ClientEvent::Resync {
+                            self.reconnected = true;
+                        }
                         if let Ok(mut events) = self.incoming.lock() {
                             events.push(parsed);
                         }
@@ -656,5 +712,19 @@ mod tests {
         assert_eq!(net.retry.map(|(at, _)| at), None);
         assert!(net.reconnected, "views refetch what they missed");
         assert_eq!(*net.ws_state.lock().unwrap(), WsState::Open);
+    }
+
+    #[test]
+    fn a_resync_drops_what_was_held_and_views_refetch() {
+        let mut net = NetClient::new("http://127.0.0.1:9");
+        net.on_ws_event(WsEvent::Opened, 0.0);
+        net.on_ws_event(WsEvent::Message(WsMessage::Text(r#"{"type":"resync"}"#.into())), 1.0);
+        assert!(net.reconnected, "events were missed: views refetch");
+        let events = std::mem::take(&mut *net.incoming.lock().unwrap());
+        assert_eq!(events, [ClientEvent::Resync], "the store hears it too");
+        let mut chat = crate::chat::tests::conversation();
+        assert!(!chat.store.threads.is_empty());
+        chat.store.apply(ClientEvent::Resync);
+        assert!(chat.store.instances.is_empty() && chat.store.threads.is_empty(), "start from nothing; the whole state follows");
     }
 }

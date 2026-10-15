@@ -59,3 +59,18 @@ async fn a_request_with_no_credentials_is_refused_everywhere_but_the_open_routes
     }
     assert!(refused > 60, "{refused}");
 }
+
+/// The sockets take a one-time ticket, which only the cockpit's session
+/// gets: none, a made-up one, or one used already is refused.
+#[tokio::test]
+async fn the_sockets_take_a_ticket_good_once() {
+    let (addr, _) = spawn_app().await;
+    for path in ["/ws/events", "/ws/cockpit"] {
+        assert!(tokio_tungstenite::connect_async(format!("ws://{addr}{path}")).await.is_err(), "{path}: no ticket");
+        assert!(tokio_tungstenite::connect_async(format!("ws://{addr}{path}?ticket=made-up")).await.is_err(), "{path}: made up");
+        let ticket = common::ticket(addr).await;
+        let opened = tokio_tungstenite::connect_async(format!("ws://{addr}{path}?ticket={ticket}")).await;
+        assert!(opened.is_ok(), "{path}: a good ticket");
+        assert!(tokio_tungstenite::connect_async(format!("ws://{addr}{path}?ticket={ticket}")).await.is_err(), "{path}: used once");
+    }
+}

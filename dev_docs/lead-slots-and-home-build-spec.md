@@ -242,7 +242,7 @@ impl Access {
 - **Why tickets.** The user's sandbox proxy drops cookies on socket upgrades (found with `/ws/cockpit`), so every socket uses a one-time ticket from a cookie-checked request.
 - **Shared tickets.** The tickets in `remote.rs` move to a shared `cockpit::Tickets`, and `POST /api/cockpit/ticket` serves them. `/ws/events`, `/ws/cockpit` and later `/ws/home` require `?ticket=`. Home's links use the Bearer header instead.
 - **Cockpit side.** `NetClient::connect_ws` fetches a ticket before every connect and reconnect, reusing `Remote::keep_socket`'s pattern. That pattern moves into `NetClient`, and `remote.rs` uses it.
-- **`stream_events` on `Lagged`** sends `{ "resync": true }`, then the full replay, instead of skipping. The cockpit's `Store` clears itself on `resync`.
+- **`stream_events` on `Lagged`** sends `ClientEvent::Resync` (a variant of the one wire type, never kept by the hub), then the full replay, instead of skipping. The cockpit's `Store` clears itself on it, and views refetch as after a reconnect.
 - **Tests:**
   - no ticket gives 403; a ticket works once;
   - a forced lag (a tiny broadcast capacity in the test) produces a resync, and the client ends with the right state.

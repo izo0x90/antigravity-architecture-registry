@@ -109,9 +109,8 @@ pub struct Remote {
     pub agents: bool,
     socket_url: String,
     retry_at: f64,
-    /// A ticket for the socket, asked for (the cockpit's session gets one).
-    ticket: std::sync::Arc<std::sync::Mutex<Option<crate::net::NetResult<String>>>>,
-    asking: bool,
+    /// The socket opens with a one-time ticket, asked for first.
+    ticket_door: crate::net::TicketDoor,
 }
 
 /// What an end-of-frame answer reports.
@@ -146,8 +145,7 @@ impl Remote {
             agents: false,
             socket_url,
             retry_at: 0.0,
-            ticket: Default::default(),
-            asking: false,
+            ticket_door: crate::net::TicketDoor::default(),
         }
     }
 
@@ -280,27 +278,21 @@ impl Remote {
             self.socket = None;
             self.retry_at = now + RETRY_S;
         }
-        let ticket = self.ticket.lock().ok().and_then(|mut t| t.take());
-        if let Some(ticket) = ticket {
-            self.asking = false;
+        if let Some(ticket) = self.ticket_door.take() {
             self.retry_at = now + RETRY_S;
             match ticket {
                 Ok(ticket) => self.socket = Socket::open(&format!("{}?ticket={ticket}", self.socket_url), ctx),
                 Err(e) => web_log(&format!("cockpit socket: no ticket: {}", e.message)),
             }
         }
-        if self.socket.is_none() && !self.asking && now >= self.retry_at {
-            self.asking = true;
-            let inbox = self.ticket.clone();
-            net.cockpit_ticket(ctx.clone(), move |r| {
-                if let Ok(mut t) = inbox.lock() {
-                    *t = Some(r);
-                }
-            });
+        if self.socket.is_none() && now >= self.retry_at
+            && let Some(done) = self.ticket_door.start()
+        {
+            net.cockpit_ticket(ctx.clone(), done);
         }
         match &self.socket {
             Some(socket) => socket.take_calls(&self.door),
-            None if !self.asking => ctx.request_repaint_after(std::time::Duration::from_secs_f64((self.retry_at - now).max(0.1))),
+            None if !self.ticket_door.asking() => ctx.request_repaint_after(std::time::Duration::from_secs_f64((self.retry_at - now).max(0.1))),
             None => {}
         }
     }

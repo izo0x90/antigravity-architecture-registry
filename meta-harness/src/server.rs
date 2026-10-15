@@ -31,6 +31,14 @@ pub struct AppState {
     pub remote: Arc<crate::remote::Remote>,
     /// What each caller may do.
     pub access: Arc<nah_access::Access>,
+    /// One-time tickets for the sockets.
+    pub tickets: Arc<crate::cockpit::Tickets>,
+}
+
+impl axum::extract::FromRef<AppState> for Arc<crate::cockpit::Tickets> {
+    fn from_ref(state: &AppState) -> Self {
+        state.tickets.clone()
+    }
 }
 
 impl axum::extract::FromRef<AppState> for Arc<nah_access::Access> {

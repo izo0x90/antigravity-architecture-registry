@@ -46,4 +46,6 @@ pub enum ClientEvent {
     /// The architecture graph changed, was checked, or someone asked the UI to
     /// show part of it.
     Architecture { event: arch_graph::ArchEvent },
+    /// The stream fell behind: drop what you hold; the whole state follows.
+    Resync,
 }

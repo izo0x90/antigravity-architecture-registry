@@ -11,9 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::Json;
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use futures::{SinkExt, StreamExt};
@@ -21,12 +19,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::cockpit::{Needs, can};
+use crate::cockpit::Ticketed;
 
 /// How long a call waits for the cockpit.
 const ANSWER_WITHIN: Duration = Duration::from_secs(20);
-/// How long a ticket stays good.
-const TICKET_FOR: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 pub struct Remote {
@@ -40,8 +36,6 @@ struct Inner {
     next: u64,
     /// Calls waiting for answers, with the connection they went to.
     waiting: HashMap<u64, (u64, oneshot::Sender<Result<Value, String>>)>,
-    /// Tickets given out and not used, with when they were.
-    tickets: HashMap<String, std::time::Instant>,
 }
 
 #[derive(Deserialize)]
@@ -54,21 +48,6 @@ struct Answer {
 }
 
 impl Remote {
-    /// A ticket to connect with (once, within a minute).
-    pub fn ticket(&self) -> String {
-        let ticket = uuid::Uuid::new_v4().simple().to_string();
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.tickets.retain(|_, at| at.elapsed() < TICKET_FOR);
-        inner.tickets.insert(ticket.clone(), std::time::Instant::now());
-        ticket
-    }
-
-    /// Uses a ticket up: whether it was good.
-    fn admits(&self, ticket: &str) -> bool {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.tickets.remove(ticket).is_some_and(|at| at.elapsed() < TICKET_FOR)
-    }
-
     /// Sends a call (`{"op": ..., ...}`) to the cockpit; its answer.
     pub async fn call(&self, call: Value) -> Result<Value, String> {
         let (tx, rx) = oneshot::channel();
@@ -142,23 +121,9 @@ impl Remote {
     }
 }
 
-/// `POST /api/cockpit/ticket`: a ticket for the cockpit's socket (the cockpit's session only).
-pub async fn ticket(_: Needs<can::SessionsControl>, State(remote): State<Arc<Remote>>) -> Json<Value> {
-    Json(json!({ "ticket": remote.ticket() }))
-}
-
-#[derive(Deserialize)]
-pub struct Ticket {
-    #[serde(default)]
-    ticket: String,
-}
-
 /// `GET /ws/cockpit?ticket=`: the cockpit's side.
-pub async fn socket(Query(q): Query<Ticket>, ws: WebSocketUpgrade, State(remote): State<Arc<Remote>>) -> axum::response::Response {
-    if !remote.admits(&q.ticket) {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": "only the cockpit connects here (with a ticket from /api/cockpit/ticket)" }))).into_response();
-    }
-    ws.on_upgrade(move |socket| async move { remote.serve(socket).await }).into_response()
+pub async fn socket(_: Ticketed, ws: WebSocketUpgrade, State(remote): State<Arc<Remote>>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| async move { remote.serve(socket).await })
 }
 
 /// A read as text: the mode, the columns, then what's drawn, row by row
@@ -245,15 +210,6 @@ mod tests {
         let text = screen_text(&read);
         assert!(text.contains("column 1: chat · the agent's session (focused)"), "{text}");
         assert!(text.contains("  104: Harness: @17 Antigravity @71\n 1200: Send @500"), "{text}");
-    }
-
-    #[test]
-    fn a_ticket_is_good_once() {
-        let remote = Remote::default();
-        let ticket = remote.ticket();
-        assert!(remote.admits(&ticket));
-        assert!(!remote.admits(&ticket), "used up");
-        assert!(!remote.admits("made-up"));
     }
 
     #[tokio::test]
