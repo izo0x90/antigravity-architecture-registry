@@ -23,6 +23,9 @@ impl World for Fixed {
     fn queued(&self, _: &ThreadId) -> bool {
         self.lead_queued
     }
+    fn was_running(&self, turn: &TurnId) -> bool {
+        turn.as_str() != "replayed"
+    }
     fn reply(&self, _: &ThreadId, _: &TurnId) -> String {
         "All tests pass.".into()
     }
@@ -126,6 +129,7 @@ fn turns_that_end_are_updates_and_the_lead_going_quiet_says_so() {
         assert!(derive(&turn("u4", "sub-t", quiet), &world(), &none).is_empty(), "{quiet:?}");
     }
     assert!(derive(&turn("u5", "nobodys", TurnStatus::Completed), &world(), &none).is_empty(), "no slot runs it");
+    assert!(derive(&turn("replayed", "sub-t", TurnStatus::Completed), &world(), &none).is_empty(), "history a resumed session replays isn't news");
 }
 
 #[test]

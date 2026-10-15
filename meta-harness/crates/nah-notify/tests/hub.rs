@@ -43,6 +43,11 @@ fn request(id: &str, status: RequestStatus) -> ClientEvent {
     ClientEvent::Session { event: AdapterEvent::RequestUpdated { request } }
 }
 
+/// A turn that runs, then ends as `status` (one first seen ended is history).
+fn ran(id: &str, thread: &str, status: TurnStatus) -> [ClientEvent; 2] {
+    [turn(id, thread, TurnStatus::Running), turn(id, thread, status)]
+}
+
 fn turn(id: &str, thread: &str, status: TurnStatus) -> ClientEvent {
     ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new(id), thread_id: ThreadId::new(thread), ordinal: 1, status, failure: None, usage: None } } }
 }
@@ -102,6 +107,7 @@ async fn falling_behind_rebuilds_from_the_current_state() {
     let r = rig_with(Arc::new(EventHub::with_capacity(4)), Arc::new(MemoryStore::default()));
     r.events.publish(slot("sub-1", "reviewer", Some("sub-t")));
     r.events.publish(request("r1", RequestStatus::Pending));
+    r.events.publish(turn("u1", "sub-t", TurnStatus::Running));
     settle().await;
     assert_eq!(ids(&r.hub.open()), ["req:r1"]);
     // A burst it can't keep up with: r1 answered, r2 asked, a turn done.
@@ -123,7 +129,9 @@ async fn a_restart_expires_what_waited_and_keeps_the_updates() {
         let r = rig_with(Arc::new(EventHub::default()), store.clone());
         r.events.publish(slot("sub-1", "reviewer", Some("sub-t")));
         r.events.publish(request("r1", RequestStatus::Pending));
-        r.events.publish(turn("u1", "sub-t", TurnStatus::Completed));
+        for e in ran("u1", "sub-t", TurnStatus::Completed) {
+            r.events.publish(e);
+        }
         settle().await;
         assert_eq!(r.hub.open().len(), 2);
     }
@@ -150,8 +158,12 @@ async fn seeing_a_slot_dismisses_its_updates_and_nothing_else() {
     r.events.publish(slot("lead", "lead", Some("lead-t")));
     r.events.publish(slot("sub-1", "reviewer", Some("sub-t")));
     r.events.publish(request("r1", RequestStatus::Pending));
-    r.events.publish(turn("u1", "sub-t", TurnStatus::Completed));
-    r.events.publish(turn("u2", "lead-t", TurnStatus::Completed));
+    for e in ran("u1", "sub-t", TurnStatus::Completed) {
+        r.events.publish(e);
+    }
+    for e in ran("u2", "lead-t", TurnStatus::Completed) {
+        r.events.publish(e);
+    }
     settle().await;
     let told = r.hub.message(Some(&SlotId::new("sub-1")), "Found two bugs.").unwrap();
     assert_eq!((told.title.as_str(), told.level), ("From reviewer", Level::Update));
@@ -178,4 +190,14 @@ async fn a_session_ended_unasked_is_a_crash() {
     settle().await;
     let open = r.hub.open();
     assert_eq!((ids(&open), open[0].kind), (vec!["crash:sub-t"], NotificationKind::SessionCrashed));
+}
+
+#[tokio::test]
+async fn history_a_resumed_session_replays_is_not_news() {
+    let r = rig();
+    r.events.publish(slot("sub-1", "reviewer", Some("sub-t")));
+    r.events.publish(turn("old", "sub-t", TurnStatus::Completed));
+    r.events.publish(turn("old-failed", "sub-t", TurnStatus::Failed));
+    settle().await;
+    assert!(r.hub.open().is_empty(), "first seen ended: replayed, not news");
 }

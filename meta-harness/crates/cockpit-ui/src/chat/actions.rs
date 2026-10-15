@@ -3,7 +3,7 @@
 use super::*;
 
 /// Snake/kebab name of a contract enum as serialized, for keymap names.
-pub(super) fn wire_name(value: &impl serde::Serialize) -> String {
+pub(crate) fn wire_name(value: &impl serde::Serialize) -> String {
     serde_json::to_value(value).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()
 }
 
@@ -387,11 +387,7 @@ impl ActionProvider for ChatStreamState {
                     net.logout(instance, ctx.clone(), done);
                 }
             }
-            ChatCommand::Answer { thread, request, option } => {
-                let Some(pending) = self.store.threads.get(thread).and_then(|t| t.request(request)) else { return };
-                let response = self.drafts.response(pending, option);
-                net.respond(thread, request, &response, ctx.clone(), done);
-            }
+            ChatCommand::Answer { thread, request, option } => self.answer(net, ctx, thread, request, option),
         }
     }
 

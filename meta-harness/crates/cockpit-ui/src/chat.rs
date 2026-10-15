@@ -22,7 +22,7 @@ use crate::request_card::{Drafts, render_request};
 use crate::store::{Store, ThreadView};
 use crate::theme::colors;
 
-mod actions;
+pub(crate) mod actions;
 mod nav;
 mod render;
 mod session;
@@ -76,6 +76,8 @@ pub struct ChatStreamState {
     notice: Option<String>,
     /// This view's own state (each chat view has one; the one in use is here).
     pub ui: ChatView,
+    /// The slots a chat view showed this frame (their updates are seen).
+    pub drawn: std::collections::BTreeSet<SlotId>,
     saved_sessions: Option<Vec<SavedSession>>,
     /// Action to open in the palette once saved sessions arrive.
     after_saved: Option<String>,
@@ -200,6 +202,28 @@ impl ChatStreamState {
             self.ui.cursor = None;
         }
         self.store.apply(event);
+    }
+
+    /// Answers `request` with `option`, what was picked and typed for its
+    /// questions going with it; a failure shows in the chat of the slot
+    /// that asked. (The keys, the card's buttons and the quick look all
+    /// answer so.)
+    pub fn answer(&mut self, net: &NetClient, ctx: &egui::Context, thread: &ThreadId, request: &harness_contracts::RequestId, option: &str) {
+        let Some(pending) = self.store.threads.get(thread).and_then(|t| t.request(request)) else { return };
+        let response = self.drafts.response(pending, option);
+        let slot = self.store.slots.values().find(|s| s.current_thread() == Some(thread)).map_or_else(|| self.ui.slot.clone(), |s| s.id.clone());
+        let mailbox = self.mailbox.clone();
+        net.respond(thread, request, &response, ctx.clone(), move |r| post(&mailbox, Reply::Sent(slot, r)));
+    }
+
+    /// Draws `thread`'s request `request` (the quick look's), answering
+    /// what's clicked as the keys do; false when it's no longer there.
+    pub fn render_request_of(&mut self, ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, request: &harness_contracts::RequestId) -> bool {
+        let Some(shown) = self.store.threads.get(thread).and_then(|t| t.request(request)).cloned() else { return false };
+        if let Some(option) = render_request(ui, &shown, &mut self.drafts) {
+            self.answer(net, ui.ctx(), thread, request, &option);
+        }
+        true
     }
 
     /// The slot this view shows.

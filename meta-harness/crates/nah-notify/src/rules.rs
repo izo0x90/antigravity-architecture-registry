@@ -25,6 +25,9 @@ pub trait World {
     fn closed_on_purpose(&self, thread: &ThreadId) -> bool;
     /// Whether a turn waits behind the running one in `thread`.
     fn queued(&self, thread: &ThreadId) -> bool;
+    /// Whether `turn` was seen running (or queued). A turn first seen
+    /// already ended is history a resumed session replays, not news.
+    fn was_running(&self, turn: &TurnId) -> bool;
     /// What the turn said (its assistant messages).
     fn reply(&self, thread: &ThreadId, turn: &TurnId) -> String;
     /// How many times this harness needed signing in before.
@@ -109,6 +112,9 @@ pub fn derive(event: &ClientEvent, world: &dyn World, open: &BTreeMap<Notificati
         ClientEvent::Session { event: AdapterEvent::ThreadUpdated { thread } } if thread.status == ThreadStatus::Error => crashed(&thread.id, "its harness reported an error", world),
         ClientEvent::ThreadClosed { thread_id } if !world.closed_on_purpose(thread_id) => crashed(thread_id, "it ended without being asked to", world),
         ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } } => {
+            if !world.was_running(&turn.id) {
+                return Vec::new();
+            }
             let Some(slot) = world.slot_of(&turn.thread_id) else { return Vec::new() };
             let id = NotificationId::turn(&turn.id);
             match turn.status {

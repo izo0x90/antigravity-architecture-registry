@@ -29,6 +29,8 @@ struct Inner {
     /// The slots, as the stream last said.
     slots: HashMap<SlotId, (SlotRef, Option<InstanceId>)>,
     threads: HashMap<ThreadId, SlotId>,
+    /// Turns seen running or queued (until they end).
+    running: std::collections::HashSet<TurnId>,
 }
 
 impl Inner {
@@ -60,6 +62,7 @@ struct Seen<'a> {
     hub: &'a NotifyHub,
     slots: &'a HashMap<SlotId, (SlotRef, Option<InstanceId>)>,
     threads: &'a HashMap<ThreadId, SlotId>,
+    running: &'a std::collections::HashSet<TurnId>,
 }
 
 impl World for Seen<'_> {
@@ -77,6 +80,10 @@ impl World for Seen<'_> {
 
     fn queued(&self, thread: &ThreadId) -> bool {
         self.hub.events.thread_state(thread).iter().any(|e| matches!(e, ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } } if turn.status == TurnStatus::Queued))
+    }
+
+    fn was_running(&self, turn: &TurnId) -> bool {
+        self.running.contains(turn)
     }
 
     fn reply(&self, thread: &ThreadId, turn: &TurnId) -> String {
@@ -178,10 +185,19 @@ impl NotifyHub {
             match event {
                 ClientEvent::SlotUpdated { slot } => inner.slot_updated(slot),
                 ClientEvent::SlotClosed { slot_id } => inner.slot_closed(slot_id),
+                ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } } if !turn.status.is_terminal() => {
+                    inner.running.insert(turn.id.clone());
+                }
                 _ => {}
             }
-            let Inner { open, slots, threads } = &*inner;
-            rules::derive(event, &Seen { hub: self, slots, threads }, open)
+            let Inner { open, slots, threads, running } = &*inner;
+            let changes = rules::derive(event, &Seen { hub: self, slots, threads, running }, open);
+            if let ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } } = event
+                && turn.status.is_terminal()
+            {
+                inner.running.remove(&turn.id);
+            }
+            changes
         };
         // A thread's end is forgotten once noticed.
         if let ClientEvent::ThreadClosed { thread_id } = event {
@@ -283,7 +299,7 @@ impl NotifyHub {
     pub fn message(&self, from: Option<&SlotId>, text: &str) -> Result<Notification, NotifyError> {
         let n = {
             let inner = self.lock();
-            let world = Seen { hub: self, slots: &inner.slots, threads: &inner.threads };
+            let world = Seen { hub: self, slots: &inner.slots, threads: &inner.threads, running: &inner.running };
             let slot = from.and_then(|id| inner.slots.get(id)).map(|(s, _)| s.clone());
             rules::message(slot.as_ref(), text, &world)
         };

@@ -1,5 +1,6 @@
 //! The shell's tests; helpers here, tests by topic below.
 
+mod attention;
 mod audits;
 mod bindings;
 mod keys_snapshot;

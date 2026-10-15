@@ -233,10 +233,13 @@ impl CockpitApp {
         if self.active.get(&BufferKind::Spec).copied().unwrap_or(0) == pane.id { self.spec.pinned } else { self.parked.specs.get(&pane.id).is_some_and(|s| s.pinned) }
     }
 
-    /// The view the keys go to: the spec, while the quick look shows it;
-    /// else the focused column's.
+    /// The view the keys go to: the spec, while the quick look shows a
+    /// card; else the focused column's.
     pub(super) fn focused_kind(&self) -> BufferKind {
-        if self.quick_look.is_some() { BufferKind::Spec } else { self.columns.focused_kind() }
+        match self.quick_look.as_ref().map(|q| &q.look) {
+            Some(crate::quick_look::Look::Card) => BufferKind::Spec,
+            _ => self.columns.focused_kind(),
+        }
     }
 
     /// The column showing the view of `kind` in use (else the nearest of

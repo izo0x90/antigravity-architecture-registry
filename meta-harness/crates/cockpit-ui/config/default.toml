@@ -175,6 +175,16 @@ I = "Index"
 "session.close" = { leader = "s c" }
 "instance.select" = { leader = "s i" }
 
+"attention.next_waiting" = { leader = "n" }
+"attention.waiting" = { leader = "N" }
+"attention.updates" = { leader = "u" }
+# In the quick look on a notification (they win there): the next and
+# previous, its chat, put away; y/Y/A/d answer its request.
+"attention.next" = { keys = ["n"] }
+"attention.prev" = { keys = ["N"] }
+"attention.open_slot" = { keys = ["o"] }
+"attention.dismiss" = { keys = ["x"] }
+
 "agent.pick" = { leader = "w w" }
 "agent.new" = { leader = "w n" }
 "agent.close" = { leader = "w c" }

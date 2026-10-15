@@ -114,6 +114,8 @@ impl SessionRuntime for FakeSession {
             self.asked.lock().unwrap().push((request, turn.clone()));
             return Ok(turn.id);
         }
+        // As a harness does: the turn runs, then ends.
+        self.emit(AdapterEvent::TurnUpdated { turn: Turn { status: TurnStatus::Running, failure: None, ..turn.clone() } });
         self.reply(&turn, format!("echo: {}", input.text));
         self.emit(AdapterEvent::TurnUpdated { turn: turn.clone() });
         if input.text.contains("[die]") {

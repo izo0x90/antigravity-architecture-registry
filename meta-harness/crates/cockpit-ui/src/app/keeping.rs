@@ -19,6 +19,7 @@ impl CockpitApp {
             marks: self.marks.clone(),
             jumps: self.jumps.clone(),
             drafts: self.drafts(),
+            browser_alerts: self.alerts.on(),
             agents: self.remote.agents,
         }
     }
@@ -56,6 +57,9 @@ impl CockpitApp {
         self.marks = saved.marks.clone();
         self.jumps = saved.jumps.clone().checked();
         self.remote.agents = saved.agents;
+        if saved.browser_alerts != self.alerts.on() {
+            self.alerts.set(saved.browser_alerts);
+        }
         for (pane, place) in &saved.views {
             self.swap_in(*pane);
             if pane.kind == BufferKind::Chat

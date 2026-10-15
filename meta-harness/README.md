@@ -340,6 +340,16 @@ all of them:
   Enter sends to the lead's session (opening one if there's none), the
   agent's reply shows above it, and `Escape` closes it. Nothing moves.
 
+- **What needs you:** the top bar counts what waits on you (approvals,
+  questions, sign-ins) and the updates (crashes, failed and finished
+  turns, messages); click one for its list (`Space N` waiting, `Space u`
+  updates). `Space n` opens the oldest waiting one in the quick look: where
+  it's from, the request to answer in place (`y`/`Y`/`A`/`d`, as in the
+  chat), what the agent said last; `n`/`N` go to the next and previous,
+  `o` opens its chat, `x` puts it away. A chat on screen puts its slot's
+  updates away. *Browser notifications while this tab is hidden* (in the
+  palette) raises the browser's own for what newly waits on you.
+
 The cockpit's state is kept on the server (`GET`/`PUT /api/ui/state`, in
 the project's state database, `.nah/state/state.sqlite`): the columns and
 the view in each, where every view is (each chat's agent slot; which are

@@ -1,10 +1,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ewebsock::{WsEvent, WsMessage, WsReceiver, WsSender};
+use ewebsock::{WsEvent, WsMessage, WsSender};
 use harness_contracts::{
-    ClientEvent, InstanceId, ModelSelection, NativeId, RequestId, RequestResponse, RuntimePolicy, SavedSessionPage, SessionKey, SlotId,
-    SteerInput, ThreadId,
+    ClientEvent, InstanceId, ModelSelection, NativeId, NotificationId, RequestId, RequestResponse, RuntimePolicy, SavedSessionPage, SessionKey,
+    SlotId, SteerInput, ThreadId,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -99,11 +99,20 @@ impl From<NetError> for String {
     }
 }
 
+/// What sees each server event's text as it arrives.
+type Arrival = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct NetClient {
     base_url: String,
     ws_url: String,
     ws_sender: Option<WsSender>,
-    ws_receiver: Option<WsReceiver>,
+    /// What the socket said, by which socket (one dropped may still speak).
+    ws_events: Arc<Mutex<Vec<(u64, WsEvent)>>>,
+    /// The socket opened last.
+    ws_generation: u64,
+    /// Sees each server event's text as it arrives, even while no frame
+    /// runs (a hidden browser tab).
+    on_arrival: Option<Arrival>,
     /// Server events received since the last drain.
     pub incoming: Arc<Mutex<Vec<ClientEvent>>>,
     pub ws_state: Arc<Mutex<WsState>>,
@@ -121,6 +130,9 @@ pub struct NetClient {
     pub reconnected: bool,
     /// The event socket opens with a one-time ticket, asked for first.
     events_door: TicketDoor,
+    /// Every call made (method and path), for tests to check.
+    #[cfg(test)]
+    pub sent: Arc<Mutex<Vec<String>>>,
 }
 
 /// A socket opened with a one-time ticket (the server checks the cockpit's
@@ -196,7 +208,11 @@ impl NetClient {
             base_url,
             ws_url,
             ws_sender: None,
-            ws_receiver: None,
+            ws_events: Arc::default(),
+            ws_generation: 0,
+            on_arrival: None,
+            #[cfg(test)]
+            sent: Arc::default(),
             incoming: Arc::new(Mutex::new(Vec::new())),
             ws_state: Arc::new(Mutex::new(WsState::Closed)),
             activity: Arc::new(AtomicU64::new(0)),
@@ -240,6 +256,8 @@ impl NetClient {
         ctx: egui::Context,
         on_done: impl FnOnce(NetResult<T>) + Send + 'static,
     ) {
+        #[cfg(test)]
+        self.sent.lock().unwrap().push(format!("{method} {path}"));
         let url = format!("{}{}", self.base_url, path);
         let mut request = match body {
             Some(json) => {
@@ -279,16 +297,26 @@ impl NetClient {
         }
     }
 
+    /// `f` sees each server event's text as it arrives.
+    pub fn on_arrival(&mut self, f: impl Fn(&str) + Send + Sync + 'static) {
+        self.on_arrival = Some(Arc::new(f));
+    }
+
     fn open_ws(&mut self, ticket: &str, ctx: egui::Context) {
-        let options = ewebsock::Options::default();
-        let wakeup = move || {
-            ctx.request_repaint();
-        };
-        match ewebsock::connect_with_wakeup(format!("{}?ticket={ticket}", self.ws_url), options, wakeup) {
-            Ok((sender, receiver)) => {
-                self.ws_sender = Some(sender);
-                self.ws_receiver = Some(receiver);
+        self.ws_generation += 1;
+        let (generation, queue, arrival) = (self.ws_generation, self.ws_events.clone(), self.on_arrival.clone());
+        let handler = Box::new(move |event: WsEvent| {
+            if let (WsEvent::Message(WsMessage::Text(text)), Some(arrival)) = (&event, &arrival) {
+                arrival(text);
             }
+            if let Ok(mut queue) = queue.lock() {
+                queue.push((generation, event));
+            }
+            ctx.request_repaint();
+            std::ops::ControlFlow::Continue(())
+        });
+        match ewebsock::ws_connect(format!("{}?ticket={ticket}", self.ws_url), ewebsock::Options::default(), handler) {
+            Ok(sender) => self.ws_sender = Some(sender),
             Err(e) => {
                 let now = self.retry.map_or(0.0, |(at, _)| if at.is_finite() { at } else { 0.0 });
                 self.dropped_at(now, Some(format!("WebSocket connect error: {e}")));
@@ -304,13 +332,10 @@ impl NetClient {
             Some(Err(e)) => self.dropped_at(now, Some(format!("no ticket for the event socket: {}", e.message))),
             None => {}
         }
-        let mut events = Vec::new();
-        if let Some(receiver) = &self.ws_receiver {
-            while let Some(event) = receiver.try_recv() {
-                events.push(event);
-            }
-        }
-        for event in events {
+        let arrived = self.ws_events.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+        // Only the socket open now (a dropped one may still be speaking).
+        let current = self.ws_sender.is_some().then_some(self.ws_generation);
+        for (_, event) in arrived.into_iter().filter(|(g, _)| Some(*g) == current) {
             self.on_ws_event(event, now);
         }
         if let Some((at, _)) = self.retry.filter(|(at, _)| at.is_finite()) {
@@ -367,13 +392,23 @@ impl NetClient {
             *e = Some(error);
         }
         self.ws_sender = None;
-        self.ws_receiver = None;
         self.dropped = true;
         let delay = match self.retry {
             Some((_, last)) => (last * 2.0).min(self.backoff.1),
             None => self.backoff.0,
         };
         self.retry = Some((now + delay, delay));
+    }
+
+    // ---- notifications ----
+
+    /// The user saw `slot`'s chat: its updates are put away.
+    pub fn notifications_seen(&self, slot: &SlotId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<serde_json::Value>("POST", "/api/notifications/seen", Some(serde_json::json!({ "slot": slot })), ctx, move |r| on_done(r.map(|_| ())));
+    }
+
+    pub fn dismiss_notification(&self, id: &NotificationId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<serde_json::Value>("POST", &format!("/api/notifications/{}/dismiss", urlencoding::encode(id.as_str())), None, ctx, move |r| on_done(r.map(|_| ())));
     }
 
     // ---- slots ----

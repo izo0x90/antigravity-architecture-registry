@@ -49,6 +49,7 @@ impl ChatStreamState {
         let (net, slot_idx) = (cx.net, cx.slot);
         let ctx = ui.ctx().clone();
         self.drain_replies(net, &ctx);
+        self.drawn.insert(self.ui.slot.clone());
 
         ui.vertical(|ui| {
             let start = ui.cursor().min;
@@ -385,8 +386,10 @@ impl ChatStreamState {
             }
             ItemBody::TodoList { steps, .. } => render_steps(ui, steps),
             ItemBody::Request { request_id } => {
-                if let Some(request) = view.request(request_id) {
-                    render_request(ui, net, &view.thread.id, request, &mut self.drafts);
+                if let Some(request) = view.request(request_id)
+                    && let Some(option) = render_request(ui, request, &mut self.drafts)
+                {
+                    self.answer(net, ui.ctx(), &view.thread.id, request_id, &option);
                 }
             }
             ItemBody::Subagent { subagent_id } => {

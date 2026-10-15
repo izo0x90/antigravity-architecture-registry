@@ -1,15 +1,15 @@
-//! A request the agent waits on, drawn in the chat: a permission to give
-//! (its options), or questions to answer, each with its choices and, when
-//! it takes one, a typed answer of its own. What's picked and typed is kept
-//! here until it's sent.
+//! A request the agent waits on, drawn in the chat (and the quick look): a
+//! permission to give (its options), or questions to answer, each with its
+//! choices and, when it takes one, a typed answer of its own. What's picked
+//! and typed is kept here until it's sent; the option clicked is handed
+//! back, to be sent the way a key sends it.
 
 use std::collections::{BTreeMap, HashMap};
 
 use egui::{Frame, RichText, Stroke};
 use egui_phosphor::regular as icon;
-use harness_contracts::{ApprovalDecision, Question, RequestId, RequestKind, RequestResponse, RequestStatus, RuntimeRequest, ThreadId};
+use harness_contracts::{ApprovalDecision, Question, RequestId, RequestKind, RequestResponse, RequestStatus, RuntimeRequest};
 
-use crate::net::NetClient;
 use crate::theme::colors;
 
 /// What's picked and typed for each request's questions, by question.
@@ -81,8 +81,10 @@ fn heading(kind: RequestKind) -> String {
     }
 }
 
-pub fn render_request(ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, request: &RuntimeRequest, drafts: &mut Drafts) {
+/// Draws `request`; returns the option clicked, if one was.
+pub fn render_request(ui: &mut egui::Ui, request: &RuntimeRequest, drafts: &mut Drafts) -> Option<String> {
     let look = crate::theme::look();
+    let mut clicked = None;
     Frame::NONE
         .fill(colors().warn_bg)
         .stroke(Stroke::new(look.line_thin, colors().warn))
@@ -116,7 +118,7 @@ pub fn render_request(ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, req
                                 None => button,
                             };
                             if button.clicked() {
-                                net.respond(thread, &request.id, &drafts.response(request, &option.id), ui.ctx().clone(), |_| {});
+                                clicked = Some(option.id.clone());
                             }
                         }
                     });
@@ -124,6 +126,7 @@ pub fn render_request(ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, req
                 status => render_outcome(ui, request, status),
             }
         });
+    clicked
 }
 
 fn render_question(ui: &mut egui::Ui, request: &RuntimeRequest, question: &Question, drafts: &mut Drafts) {
@@ -185,7 +188,7 @@ fn render_outcome(ui: &mut egui::Ui, request: &RuntimeRequest, status: RequestSt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_contracts::{ApprovalOption, QuestionOption};
+    use harness_contracts::{ApprovalOption, QuestionOption, ThreadId};
 
     fn request() -> RuntimeRequest {
         let option = |label: &str| QuestionOption { label: label.into(), description: None, value: None };
@@ -208,17 +211,21 @@ mod tests {
         }
     }
 
-    /// Clicking an option sends the answer (today straight from the card).
+    /// Clicking an option hands it back (to be sent as a key sends it).
     #[test]
-    fn clicking_an_option_sends_the_answer() {
+    fn clicking_an_option_says_which() {
         let ctx = egui::Context::default();
-        let net = NetClient::new("http://answers.invalid");
         let request = request();
         let mut drafts = Drafts::default();
+        let mut picked = None;
         let mut run = |events: Vec<egui::Event>| {
             let input = egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
             ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| render_request(ui, &net, &request.thread_id, &request, &mut drafts));
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    if let Some(option) = render_request(ui, &request, &mut drafts) {
+                        picked = Some(option);
+                    }
+                });
             })
         };
         fn find(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
@@ -231,11 +238,10 @@ mod tests {
         let drawn = run(vec![]);
         let at = drawn.shapes.iter().find_map(|c| find(&c.shape, "Skip")).expect("the Skip button is drawn");
         let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
-        let before = net.activity.load(std::sync::atomic::Ordering::Relaxed);
         run(vec![egui::Event::PointerMoved(at)]);
         run(vec![button(true)]);
         run(vec![button(false)]);
-        assert_eq!(net.activity.load(std::sync::atomic::Ordering::Relaxed), before + 1, "one request went out");
+        assert_eq!(picked.as_deref(), Some("decline"));
     }
 
     #[test]

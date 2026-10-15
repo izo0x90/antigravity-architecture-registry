@@ -25,6 +25,7 @@ use crate::spec::SpecState;
 use crate::theme::colors;
 use crate::tree::ArchitectureTreeState;
 
+pub(crate) mod attention;
 mod capture;
 mod commands;
 mod draw;
@@ -141,6 +142,18 @@ enum ShellCommand {
     /// One of several places a go-to can land (its value).
     GotoPick,
     Index(IndexOp),
+    /// The oldest item waiting on the user, in the quick look.
+    AttentionNextWaiting,
+    /// A notification (its id, the value) in the quick look.
+    AttentionPick,
+    /// The next (or previous) notification, in the quick look.
+    AttentionStep(i32),
+    /// The quick look's notification: its slot's chat shown.
+    AttentionOpenSlot,
+    /// The quick look's notification put away.
+    AttentionDismiss,
+    /// The browser's notifications while the tab is hidden (on or off).
+    BrowserAlerts,
 }
 
 /// Reading the code again, on the user's word.
@@ -237,6 +250,12 @@ pub struct CockpitApp {
     types: Option<arch_graph::TypeSystem>,
     /// The quick look, while it's open.
     pub quick_look: Option<QuickLook>,
+    /// Which chats were said to be seen, and when.
+    seen: crate::attention::Seen,
+    /// The browser's notifications.
+    pub alerts: crate::browser_alerts::BrowserAlerts,
+    /// What a call that finished later has to say (shown as the note).
+    notes_later: Arc<Mutex<Vec<String>>>,
     /// The box for talking to the agent, while it's open.
     pub talk: Option<crate::talk::Talk>,
     /// Loads and saves the cockpit's state on the server.
@@ -305,13 +324,16 @@ impl CockpitApp {
             Ok(config) => (config, None),
             Err(err) => (UiConfig::default(), Some(format!("built-in defaults: {err}"))),
         };
+        let alerts = crate::browser_alerts::BrowserAlerts::default();
+        let mut net = NetClient::new(host_origin);
+        net.on_arrival(alerts.arrival());
         Self {
             bound_cache: Default::default(),
             frame_actions: Default::default(),
             in_frame: Default::default(),
             #[cfg(test)]
             gathered: Default::default(),
-            net: NetClient::new(host_origin),
+            net,
             chat: ChatStreamState::default(),
             code: CodeViewerState::default(),
             graph: GraphState::default(),
@@ -331,6 +353,9 @@ impl CockpitApp {
             closing: None,
             types: None,
             quick_look: None,
+            seen: Default::default(),
+            alerts,
+            notes_later: Arc::default(),
             talk: None,
             keeper: Default::default(),
             remote: crate::remote::Remote::new(host_origin),
@@ -527,6 +552,7 @@ impl CockpitApp {
 
         let shell = self.shell_actions();
         let tab_keys = self.tab_keys(&shell);
+        self.chat.drawn.clear();
         egui::CentralPanel::default().show(ctx, |ui| {
             self.slot_rects.resize(self.columns.len(), egui::Rect::NOTHING);
             ui.columns(self.columns.len(), |cols| {
@@ -542,6 +568,7 @@ impl CockpitApp {
                 self.close_column(slot);
             }
         });
+        self.say_seen(ctx);
 
         // Real-time Inspector targeting overlay
         self.feedback.render_inspection_overlay(ctx);

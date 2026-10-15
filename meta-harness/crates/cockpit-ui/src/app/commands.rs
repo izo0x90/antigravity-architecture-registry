@@ -47,6 +47,7 @@ impl CockpitApp {
             actions.push(look("quicklook.to_column", "Open this card in a column", S::QuickLookToColumn).importance(PRIMARY));
         }
         actions.push(Action::new("talk.open", "Talk to the agent from here", S::Talk).group(Group::Act).importance(SECONDARY));
+        actions.extend(self.attention_actions());
         actions.push(
             Action::new("cockpit.agents", "Let agents drive the cockpit", S::Agents)
                 .detail("Agents read the screen and run actions through the server's cockpit tools, as you would")
@@ -179,7 +180,9 @@ impl CockpitApp {
         self.gathered.set(self.gathered.get() + 1);
         let focused = self.focused_kind();
         let view = |kind: BufferKind, all: bool| self.provider(kind).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(kind), a));
-        let mut actions: Vec<(Origin, Action)> = view(focused, true).collect();
+        // The quick look's notification first: its keys win while it's open.
+        let mut actions: Vec<(Origin, Action)> = self.looked_at_actions().into_iter().map(|a| (Origin::Shell, a)).collect();
+        actions.extend(view(focused, true));
         actions.extend(self.shell_actions().into_iter().map(|a| (Origin::Shell, a)));
         for kind in BufferKind::ALL.into_iter().filter(|k| *k != focused) {
             actions.extend(view(kind, false));
@@ -248,6 +251,8 @@ impl CockpitApp {
             Origin::Shell => {
                 if let Some(command) = action.command::<ShellCommand>() {
                     self.run_shell(*command, value, count.map(|c| c as usize), ctx);
+                } else if let Some(answer) = action.command::<attention::LookAnswer>() {
+                    self.answer_looked_at(&answer.0.clone(), ctx);
                 }
             }
             Origin::View(kind) => {
@@ -297,6 +302,12 @@ impl CockpitApp {
         let kind = self.focused_kind();
         let count = typed.unwrap_or(1).max(1);
         match command {
+            ShellCommand::AttentionNextWaiting
+            | ShellCommand::AttentionPick
+            | ShellCommand::AttentionStep(_)
+            | ShellCommand::AttentionOpenSlot
+            | ShellCommand::AttentionDismiss
+            | ShellCommand::BrowserAlerts => self.run_attention(command, value, ctx),
             ShellCommand::FocusSlot(slot) => {
                 self.columns.focus(slot);
             }

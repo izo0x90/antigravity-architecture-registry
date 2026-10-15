@@ -74,9 +74,11 @@ impl ChatStreamState {
 
     /// Who's answering, in words: the harness, and the session if one is
     /// open.
+    /// The lead, as the talk box names it: its harness and its session.
     pub fn who(&self) -> String {
-        let name = self.instance().map_or_else(|| "the agent".to_owned(), |i| i.display_name.clone());
-        match self.thread() {
+        let lead = SlotId::new(LEAD);
+        let name = self.instance_id_in(&lead).and_then(|i| self.store.instances.get(&i)).map_or_else(|| "the agent".to_owned(), |i| i.display_name.clone());
+        match self.thread_id_in(&lead).and_then(|t| self.store.threads.get(&t)) {
             Some(t) => {
                 let session: String = t.thread.id.to_string().chars().take(8).collect();
                 format!("{name} · session {session} · {}", format!("{:?}", t.thread.status).to_lowercase())
@@ -85,9 +87,14 @@ impl ChatStreamState {
         }
     }
 
-    /// The agent's last message in the open session, as text.
+    /// The lead's last message, as text.
     pub fn last_reply(&self) -> Option<String> {
-        self.thread()?.items.iter().rev().find_map(|item| match &item.body {
+        self.last_said(&self.thread_id_in(&SlotId::new(LEAD))?)
+    }
+
+    /// The agent's last message in `thread`, as text.
+    pub fn last_said(&self, thread: &ThreadId) -> Option<String> {
+        self.store.threads.get(thread)?.items.iter().rev().find_map(|item| match &item.body {
             ItemBody::AssistantMessage { content, .. } => Some(content.iter().map(block_summary).collect::<Vec<_>>().join(" ")),
             _ => None,
         })
