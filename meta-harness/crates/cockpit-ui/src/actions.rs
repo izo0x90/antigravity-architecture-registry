@@ -132,15 +132,22 @@ pub struct Control {
     pub icon: Option<&'static str>,
     /// Its colour, when it says something (allow, deny).
     pub tone: Option<Tone>,
+    /// More on hover, after what it does and its key.
+    pub hover: Option<String>,
 }
 
 impl Control {
     pub fn new(at: At, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
-        Self { at, style, caption: caption.into(), icon, tone: None }
+        Self { at, style, caption: caption.into(), icon, tone: None, hover: None }
     }
 
     pub fn tone(mut self, tone: Tone) -> Self {
         self.tone = Some(tone);
+        self
+    }
+
+    pub fn hover(mut self, hover: impl Into<String>) -> Self {
+        self.hover = Some(hover.into());
         self
     }
 }
@@ -533,10 +540,13 @@ const PICKER_MIN_WIDTH: f32 = 90.0;
 /// (from `hints`, as bound now).
 fn draw_control(ui: &mut egui::Ui, action: &Action, hints: &[(String, String)]) -> Option<ControlUse> {
     let toolbar = action.control.as_ref()?;
-    let tip = match key_of(hints, &action.id) {
+    let mut tip = match key_of(hints, &action.id) {
         Some(key) => format!("{} ({key})", action.label),
         None => action.label.clone(),
     };
+    if let Some(more) = &toolbar.hover {
+        tip = format!("{tip}\n{more}");
+    }
     let text = match toolbar.icon {
         Some(icon) if toolbar.caption.is_empty() => icon.to_owned(),
         Some(icon) => format!("{icon} {}", toolbar.caption),

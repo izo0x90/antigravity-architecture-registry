@@ -3,13 +3,7 @@
 use super::super::*;
 
 impl CockpitApp {
-    /// Each view's tab key ("SPC b g"), in `BufferKind::ALL` order.
-    pub(in crate::app) fn tab_keys(&self, shell: &[Action]) -> Vec<String> {
-        let bound = self.config.keymap.bind(shell.iter().map(|a| (Origin::Shell, a.clone())).collect());
-        BufferKind::ALL.iter().map(|kind| bound.iter().find(|b| b.action.id == format!("buffer.{}", kind.name())).map(Bound::key_hint).unwrap_or_default()).collect()
-    }
-
-    pub fn render_slot(&mut self, slot_idx: usize, ui: &mut egui::Ui, shell: &[Action], tab_keys: &[String]) {
+    pub fn render_slot(&mut self, slot_idx: usize, ui: &mut egui::Ui, shell: &[Action]) {
         let is_focused = self.desk.columns.focused() == slot_idx;
         let border_color = if is_focused { colors().focus } else { colors().border };
 
@@ -29,29 +23,22 @@ impl CockpitApp {
                 // hover. The row wraps rather than widen the slot.
                 let header_res = ui.horizontal_wrapped(|ui| {
                     let number_color = if is_focused { colors().focus } else { colors().faint };
-                    let slot_label = ui.add(egui::Label::new(RichText::new((slot_idx + 1).to_string()).strong().monospace().size(crate::theme::look().text_body).color(number_color)).sense(egui::Sense::click()));
-                    if slot_label.on_hover_text(format!("Slot {}: {}", slot_idx + 1, active_kind.title().to_lowercase())).clicked() {
-                        self.desk.columns.focus(slot_idx);
-                    }
-                    for (n, kind) in BufferKind::ALL.into_iter().enumerate() {
-                        let title = kind.title();
-                        let name = format!("{}{}", &title[..1], title[1..].to_lowercase());
-                        let label = if !is_compact && active_kind == kind { format!("{} {name}", kind.icon()) } else { kind.icon().to_owned() };
-                        let tip = match tab_keys.get(n).filter(|k| !k.is_empty()) {
-                            Some(key) => format!("{name} ({key})"),
-                            None => name,
-                        };
-                        let tab = ui.selectable_label(active_kind == kind, label).on_hover_text(tip);
-                        if tab.clicked() {
-                            let pane = self.desk.columns.show(slot_idx, kind);
-                            self.desk.columns.focus(slot_idx);
-                            self.swap_in(pane);
-                        }
-                        self.feedback.register_inspectable(ui, &format!("slot_{}:tab:{}", slot_idx + 1, kind.name()), tab.rect);
-                    }
-                    // Its own controls (a click focuses it first, so they act on it).
-                    let own = self.column_actions();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.host_controls(ui, &own, slot_idx, shell));
+                    ui.label(RichText::new((slot_idx + 1).to_string()).strong().monospace().size(crate::theme::look().text_body).color(number_color))
+                        .on_hover_text(format!("Slot {}: {}", slot_idx + 1, active_kind.title().to_lowercase()));
+                    // Its controls: a tab per kind of view (the shell's
+                    // buffer.* actions; a click focuses the column first, so
+                    // they act on it), and closing it.
+                    let tabs: Vec<(String, crate::actions::Control)> = BufferKind::ALL
+                        .into_iter()
+                        .map(|kind| {
+                            let title = kind.title();
+                            let caption = if !is_compact && active_kind == kind { format!("{}{}", &title[..1], title[1..].to_lowercase()) } else { String::new() };
+                            let tab = crate::actions::Control::new(crate::actions::At::Header, crate::actions::Style::Button, caption, Some(kind.icon()));
+                            (format!("buffer.{}", kind.name()), if active_kind == kind { tab.tone(crate::actions::Tone::Accent) } else { tab.tone(crate::actions::Tone::Muted) })
+                        })
+                        .collect();
+                    let own = crate::panel::place(tabs, self.column_actions(), shell);
+                    self.host_controls(ui, &own, slot_idx, shell);
                 });
                 self.feedback.register_inspectable(ui, &format!("slot_{}:header", slot_idx + 1), header_res.response.rect);
                 ui.separator();
@@ -72,13 +59,17 @@ impl CockpitApp {
         }
     }
 
-    /// The palette overlay plus a floating button that opens it (touch entry point).
-    pub fn render_palette(&mut self, ctx: &egui::Context) {
+    /// The palette overlay plus a floating control that opens it (touch's
+    /// way in): the shell's palette action.
+    pub fn render_palette(&mut self, ctx: &egui::Context, shell: &[Action]) {
+        let open = crate::panel::place(
+            vec![("palette.open".to_owned(), crate::actions::Control::new(crate::actions::At::Header, crate::actions::Style::Button, "Actions", Some(egui_phosphor::regular::COMMAND)))],
+            Vec::new(),
+            shell,
+        );
         egui::Area::new(egui::Id::new("palette_touch_button")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -48.0)).order(egui::Order::Foreground).show(ctx, |ui| {
-            let button = egui::Button::new(RichText::new(format!("{} Actions", egui_phosphor::regular::COMMAND)).size(crate::theme::look().text_title)).fill(colors().overlay_raised).corner_radius(crate::theme::look().radius_pill);
-            if ui.add(button).on_hover_text("Command palette").clicked() {
-                self.open_palette(None);
-            }
+            let focused = self.desk.columns.focused();
+            self.host_controls(ui, &open, focused, shell);
         });
 
         let bound = self.palette_actions();

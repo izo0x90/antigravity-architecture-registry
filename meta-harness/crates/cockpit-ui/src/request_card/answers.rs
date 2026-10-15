@@ -49,6 +49,18 @@ impl Answer {
     }
 }
 
+/// The page a request asks you to open (a link's), while it's pending.
+pub fn page(request: &RuntimeRequest) -> Option<String> {
+    let url = request.detail.as_ref().filter(|d| d.starts_with("https://") || d.starts_with("http://"))?;
+    (request.status == RequestStatus::Pending).then(|| url.clone())
+}
+
+/// `action` (opening `request`'s page) as it shows: under the request
+/// while the cursor is on it (`here`).
+pub fn place_page(action: Action, here: bool) -> Action {
+    if here { action.on_item(Style::Button, "Open the page", Some(egui_phosphor::regular::ARROW_SQUARE_OUT)) } else { action }
+}
+
 /// The ways to answer `request` (pending), in its order. The chat and the
 /// inbox both offer them so: the same keys wherever it's answered.
 pub fn answers(request: &RuntimeRequest) -> Vec<Answer> {

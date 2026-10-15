@@ -5,7 +5,7 @@
 //! actions: switch, add, connect, disconnect, remove, shut down.
 
 use harness_contracts::home::HERE;
-use harness_contracts::{ClientEvent, HomeEvent, Level, LinkState, ServerView};
+use harness_contracts::{ClientEvent, HomeEvent, LinkState, ServerView};
 use serde::{Deserialize, Serialize};
 
 use super::*;
@@ -287,23 +287,6 @@ impl CockpitApp {
         }
     }
 
-    /// The top bar's server chip: the one shown, a dot when something waits
-    /// on another; clicked, the switcher.
-    pub(super) fn render_server_chip(&mut self, ui: &mut egui::Ui) {
-        if self.servers.len() < 2 {
-            return;
-        }
-        let elsewhere = self.away.values().any(|d| d.chat.store.notifications.values().any(|n| n.level == Level::Waiting));
-        let theme = crate::theme::look();
-        let label = if elsewhere { format!("{} {} ●", egui_phosphor::regular::HARD_DRIVES, self.desk.server) } else { format!("{} {}", egui_phosphor::regular::HARD_DRIVES, self.desk.server) };
-        let color = if elsewhere { colors().warn } else { colors().text };
-        let chip = ui.add(egui::Button::new(RichText::new(label).size(theme.text_label).color(color))).on_hover_text(if elsewhere { "Something waits on you on another server" } else { "The server shown" });
-        self.feedback.register_inspectable(ui, "top_bar:server", chip.rect);
-        if chip.clicked() {
-            let ctx = ui.ctx().clone();
-            self.run_by_id("server.switch", None, &ctx);
-        }
-    }
 }
 
 fn tracing_note(text: &str) {

@@ -39,7 +39,7 @@ fn each_server_gets_a_desk_fed_its_own_events_and_whats_waiting_is_counted_acros
     assert!(app.desk.chat.store.notifications.contains_key(&NotificationId::new("turn:h1")));
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains(&format!("{} 1", egui_phosphor::regular::BELL)) && text.contains(&format!("{} 1", egui_phosphor::regular::TRAY)), "{text}");
-    assert!(text.contains("here ●"), "the chip says something waits elsewhere: {text}");
+    assert!(text.contains("here •"), "the chip says something waits elsewhere: {text}");
     // A Resync for one server drops only its desk's state.
     from_home(&app, vec![event("cloud", ClientEvent::Resync)]);
     frame(&ctx, &mut app, vec![]);

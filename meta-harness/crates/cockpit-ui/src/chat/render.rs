@@ -104,8 +104,7 @@ impl ChatStreamState {
                     ui.vertical(|ui| {
                         ui.label(RichText::new(&login.instructions).size(look.text_label));
                         if let Some(url) = &login.url {
-                            ui.hyperlink_to(RichText::new(format!("{} Open the sign-in page", icon::ARROW_SQUARE_OUT)).strong(), url);
-                            // Its address, to copy when the link can't open here.
+                            // Its address, to copy when the page can't open here.
                             let mut shown = url.clone();
                             ui.add(egui::TextEdit::singleline(&mut shown).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
                         }

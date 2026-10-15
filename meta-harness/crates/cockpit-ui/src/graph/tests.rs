@@ -114,8 +114,9 @@ fn the_graph_offers_one_small_set_of_actions() {
     let mut g = showing(sample_tree());
     let mut all = ids(&g);
     all.sort();
-    // Depth, flip, switch view, pick source; finding where to start; the camera.
-    assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.find", "graph.fit", "graph.flip", "graph.plan", "graph.view", "graph.zoom_in", "graph.zoom_out"]);
+    // Depth, flip, switch view, pick source; finding where to start; the camera;
+    // back along the path; the legend.
+    assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.find", "graph.fit", "graph.flip", "graph.legend", "graph.path", "graph.plan", "graph.view", "graph.zoom_in", "graph.zoom_out"]);
     // A selection adds going into it.
     g.select(Some("rust:a::step".into()));
     assert!(ids(&g).contains(&"graph.go_in".to_owned()));
@@ -124,7 +125,7 @@ fn the_graph_offers_one_small_set_of_actions() {
     g.agent = Some(AgentMove { what: "x".into(), select: None, return_to: Nav::default(), return_selection: None });
     assert!(ids(&g).contains(&"graph.full_code".to_owned()) && ids(&g).contains(&"graph.agent_return".to_owned()));
     // The old ways of seeing more or less are gone.
-    for gone in ["graph.focus", "graph.unfocus", "graph.level", "graph.coarser", "graph.finer", "graph.show_all", "graph.story", "graph.reached_by", "graph.follow", "graph.next_call", "graph.up", "graph.next_view", "graph.refresh", "graph.legend", "graph.close_inspector"] {
+    for gone in ["graph.focus", "graph.unfocus", "graph.level", "graph.coarser", "graph.finer", "graph.show_all", "graph.story", "graph.reached_by", "graph.follow", "graph.next_call", "graph.up", "graph.next_view", "graph.refresh", "graph.close_inspector"] {
         assert!(!ids(&g).contains(&gone.to_owned()), "{gone}");
     }
     // The keys for them are gone from the keymap too.

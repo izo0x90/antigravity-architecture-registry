@@ -67,6 +67,7 @@ enum Command {
     OpenChat,
     Dismiss,
     Answer(String),
+    OpenPage(String),
 }
 
 impl InboxView {
@@ -299,6 +300,9 @@ impl ActionProvider for InboxView {
         let Some(shown) = &self.shown else { return out };
         // Under its request while you're on it.
         let here = self.parts().get(self.cursor) == Some(&Part::Request);
+        if let Some((request, url)) = shown.request.as_ref().and_then(|r| crate::request_card::page(r).map(|u| (r, u))) {
+            out.push(crate::request_card::place_page(act(&format!("request.{}.page", request.id), &format!("Open the page: {}", request.title), Command::OpenPage(url)), here));
+        }
         for answer in shown.request.iter().flat_map(crate::request_card::answers) {
             out.push(answer.place(act(&answer.id, &answer.label, Command::Answer(answer.option.clone())).importance(PRIMARY), here));
         }
@@ -325,6 +329,10 @@ impl ActionProvider for InboxView {
                 None => Step::Nothing("Already handled.".into()),
             },
             Command::Answer(option) => self.answer(option),
+            Command::OpenPage(url) => {
+                cx.ctx.open_url(egui::OpenUrl::new_tab(url));
+                Step::Done
+            }
         };
         if let Step::Nothing(why) = step {
             *cx.note = Some(why);

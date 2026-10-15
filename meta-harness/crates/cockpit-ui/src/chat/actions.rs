@@ -37,6 +37,8 @@ enum ChatCommand {
     CompleteLogin,
     Logout,
     CancelLogin,
+    OpenLoginPage,
+    OpenPage(String),
     Send,
     DismissNotice,
     Retry,
@@ -248,6 +250,9 @@ impl ActionProvider for ChatStreamState {
         {
             // Under the request while you're on it.
             let here = crate::panel::Panel::here(self).or_else(|| self.ui.cursor.map(|c| c.to_string())) == self.pending_item().map(|i| i.to_string());
+            if let Some(url) = crate::request_card::page(request) {
+                out.push(crate::request_card::place_page(Action::new(format!("request.{}.page", request.id), format!("Open the page: {}", request.title), C::OpenPage(url)).focused(), here));
+            }
             for answer in crate::request_card::answers(request) {
                 let command = C::Answer { thread: view.thread.id.clone(), request: request.id.clone(), option: answer.option.clone() };
                 out.push(answer.place(Action::new(answer.id.clone(), answer.label.clone(), command).focused(), here));
@@ -258,6 +263,9 @@ impl ActionProvider for ChatStreamState {
         // What the chat says on its own line, and its ways out.
         if self.login.is_some() {
             out.push(Action::new("auth.cancel", "Stop signing in", C::CancelLogin).focused().importance(MINOR).header(Button, "Cancel sign-in", None));
+            if self.login.as_ref().is_some_and(|l| l.url.is_some()) {
+                out.push(Action::new("auth.page", "Open the sign-in page", C::OpenLoginPage).focused().importance(crate::actions::PRIMARY).header(Button, "Open the sign-in page", Some(icon::ARROW_SQUARE_OUT)));
+            }
         }
         if self.notice.is_some() {
             out.push(Action::new("chat.dismiss", "Put the notice away", C::DismissNotice).focused().importance(MINOR).header(Button, "Dismiss", None));
@@ -418,6 +426,12 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             ChatCommand::CancelLogin => self.login = None,
+            ChatCommand::OpenPage(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            ChatCommand::OpenLoginPage => {
+                if let Some(url) = self.login.as_ref().and_then(|l| l.url.clone()) {
+                    ctx.open_url(egui::OpenUrl::new_tab(url));
+                }
+            }
             ChatCommand::Send => {
                 let text = std::mem::take(&mut self.ui.input_buffer).trim().to_owned();
                 if !text.is_empty() {

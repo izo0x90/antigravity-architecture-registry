@@ -96,8 +96,14 @@ pub fn header(ui: &mut egui::Ui, panel: &dyn Panel, actions: &[Action], cx: &mut
 
 /// A panel's actions as it shows them: its own (`own`), with the controls
 /// it places, and the shell's it places too.
-pub fn placed(panel: &dyn Panel, mut own: Vec<Action>, shell: &[Action]) -> Vec<Action> {
-    for (id, control) in panel.placed() {
+pub fn placed(panel: &dyn Panel, own: Vec<Action>, shell: &[Action]) -> Vec<Action> {
+    place(panel.placed(), own, shell)
+}
+
+/// `own` with `placements` (by id) given their controls; the shell's
+/// placed ones added.
+pub fn place(placements: Vec<(String, Control)>, mut own: Vec<Action>, shell: &[Action]) -> Vec<Action> {
+    for (id, control) in placements {
         match own.iter_mut().find(|a| a.id == id) {
             Some(a) => a.control = Some(control),
             None => {

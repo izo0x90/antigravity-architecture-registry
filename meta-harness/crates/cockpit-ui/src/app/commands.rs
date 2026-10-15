@@ -22,6 +22,7 @@ impl CockpitApp {
             actions.push(admin(format!("layout.{cols}"), format!("{cols}-column layout"), S::SetLayout(cols)));
         }
         actions.push(admin("column.add".into(), "Add a column".into(), S::SetLayout(self.desk.columns.len() + 1)));
+        actions.push(admin("column.fewer".into(), "One column fewer (its view is hidden, not lost)".into(), S::SetLayout(self.desk.columns.len().saturating_sub(1).max(1))));
         actions.extend(self.column_actions());
         // Every open view, to show here: on screen (and where) or hidden.
         let views: Vec<Choice> = self

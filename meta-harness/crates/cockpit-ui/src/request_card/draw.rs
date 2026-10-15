@@ -29,12 +29,10 @@ pub fn render_request(ui: &mut egui::Ui, request: &RuntimeRequest, drafts: &mut 
         ui.label(RichText::new(format!("{glyph} {what}")).strong().size(look.text_small).color(color));
         let title = RichText::new(&request.title).size(look.text_label).color(colors().text_strong);
         ui.label(if request.kind == (RequestKind::Approval { action: ToolAction::Command }) { title.monospace() } else { title.strong() });
+        // A page to open: its address (opening it is its control).
         if let Some(detail) = &request.detail {
-            if detail.starts_with("https://") || detail.starts_with("http://") {
-                ui.hyperlink_to(RichText::new(detail).size(look.text_body), detail);
-            } else {
-                ui.label(RichText::new(detail).size(look.text_body).color(colors().muted));
-            }
+            let link = detail.starts_with("https://") || detail.starts_with("http://");
+            ui.label(if link { RichText::new(detail).monospace().size(look.text_body).color(colors().info) } else { RichText::new(detail).size(look.text_body).color(colors().muted) });
         }
         if request.status != RequestStatus::Pending {
             render_outcome(ui, request);

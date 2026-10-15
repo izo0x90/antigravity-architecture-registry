@@ -517,7 +517,6 @@ impl CockpitApp {
         self.render_key_bar(ctx);
 
         let shell = self.shell_actions();
-        let tab_keys = self.tab_keys(&shell);
         self.desk.chat.drawn.clear();
         egui::CentralPanel::default().show(ctx, |ui| {
             self.slot_rects.resize(self.desk.columns.len(), egui::Rect::NOTHING);
@@ -525,7 +524,7 @@ impl CockpitApp {
                 for (i, col) in cols.iter_mut().enumerate() {
                     // Each column draws its own view.
                     self.swap_in(self.desk.columns.pane(i));
-                    self.render_slot(i, col, &shell, &tab_keys);
+                    self.render_slot(i, col, &shell);
                 }
             });
             self.back_to_used();
@@ -554,7 +553,7 @@ impl CockpitApp {
         self.render_prefix_popup(ctx);
         self.render_which_key_hud(ctx);
         self.render_key_sheet(ctx);
-        self.render_palette(ctx);
+        self.render_palette(ctx, &shell);
     }
 }
 

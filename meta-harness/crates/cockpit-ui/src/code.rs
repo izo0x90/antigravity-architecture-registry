@@ -517,6 +517,7 @@ impl CodeViewerState {
             self.char_w = ui.fonts_mut(|f| f.glyph_width(&egui::FontId::monospace(crate::theme::look().text_body), 'x'));
             let mut clicked: Option<ComponentId> = None;
             let mut put_cursor: Option<usize> = None;
+            let mut opened = false;
             let mut go_to: Option<ComponentId> = None;
             let mut unfold: Option<usize> = None;
             let visible = self.visible_lines();
@@ -568,11 +569,17 @@ impl CodeViewerState {
                             Some(id) => label.on_hover_text(self.describe(id)),
                             None => label,
                         };
+                        // The pointer grammar, read here (a name under it, the
+                        // go-to modifier): a click puts the cursor on the
+                        // line, a double click opens what's there (Enter).
                         if label.clicked() {
                             match (&hovered, ui.input(|i| crate::keymap::local().pointer.go_to.held(i.modifiers))) {
                                 (Some(id), true) => go_to = Some(id.clone()),
                                 _ => put_cursor = Some(line_no),
                             }
+                        }
+                        if label.double_clicked() {
+                            opened = true;
                         }
                         if let Some(hidden) = folded
                             && ui.add(egui::Label::new(RichText::new(format!("  … {hidden} lines")).monospace().size(crate::theme::look().text_small).color(colors().muted)).sense(egui::Sense::click())).on_hover_text("Unfold").clicked()
@@ -604,6 +611,9 @@ impl CodeViewerState {
             }
             if let Some(line) = put_cursor {
                 self.move_cursor(line);
+            }
+            if opened {
+                *cx.asked = Some(("nav.enter".to_owned(), None));
             }
             if go_to.is_some() {
                 self.open = go_to;
@@ -682,6 +692,12 @@ impl crate::panel::Panel for CodeViewerState {
     fn title(&self) -> Status {
         let name = self.current_file.rsplit('/').next().unwrap_or(&self.current_file);
         Status::new(format!("{} {name}", egui_phosphor::regular::FILE_CODE), Tone::Plain).detail(self.current_file.clone())
+    }
+
+    /// Its text: a click puts the cursor on a line, the go-to modifier
+    /// with a click goes to the name under it.
+    fn own_pointer(&self) -> bool {
+        true
     }
 
     /// Out of date with the index: reading it again, on its top line.

@@ -34,6 +34,11 @@ pub(crate) enum GraphCommand {
     /// The camera: zoom by this factor (around the selection), or fit.
     Zoom(f32),
     Fit,
+    /// Show or hide the legend.
+    Legend,
+    /// Back along the path: its start (`top`), a root gone through
+    /// (`back:<i>`), or what holds the root (`into:<key>`).
+    Path,
 }
 
 impl GraphState {
@@ -106,6 +111,18 @@ impl ActionProvider for GraphState {
         if self.agent.is_some() {
             out.push(f("graph.agent_return", "Return to where you were before the agent moved the view", G::AgentReturn).header(Button, "Return", Some(egui_phosphor::regular::ARROW_U_UP_LEFT)).group(Group::Navigate).importance(PRIMARY).jump());
         }
+        // The path to the root: each step back along it.
+        if let Some(root) = &self.nav.root {
+            let name = |key: &str| self.card(key).map_or_else(|| key.rsplit([':', '.']).next().unwrap_or(key).to_owned(), |c| c.label.clone());
+            let mut steps = vec![Choice::new("top", "start").detail(Some("The view's starting points".into()))];
+            steps.extend(self.trail_roots().iter().enumerate().filter_map(|(i, r)| r.as_ref().map(|r| Choice::new(format!("back:{i}"), name(r)))));
+            steps.push(Choice::new(format!("here:{root}"), name(root)).current(true));
+            if let Some(tree) = &self.tree {
+                steps.extend(tree.path.iter().map(|c| Choice::new(format!("into:{}", c.key), format!("inside {}", c.label)).detail(Some("Show this box".into()))));
+            }
+            out.push(f("graph.path", "Go back along the path", G::Path).param(Param::Choice(steps)).header(Setting, "Path", None).group(Group::Navigate).importance(MINOR).jump());
+        }
+        out.push(f("graph.legend", if self.legend_open { "Hide the legend" } else { "Show the legend" }, G::Legend).header(Button, "", Some(egui_phosphor::regular::INFO)).group(Group::View).importance(MINOR));
         out
     }
 
@@ -155,6 +172,17 @@ impl GraphState {
                     self.pick_found(&value);
                 }
             }
+            GraphCommand::Legend => self.legend_open = !self.legend_open,
+            GraphCommand::Path => match value.as_deref().map(|v| v.split_once(':').unwrap_or((v, ""))) {
+                Some(("top", _)) => self.navigate(NavChange::Top),
+                Some(("back", i)) => {
+                    if let Ok(i) = i.parse() {
+                        self.back_to(i);
+                    }
+                }
+                Some(("into", key)) => self.navigate(NavChange::View { view: ViewKind::Contains, root: Some(key.to_owned()) }),
+                _ => {}
+            },
             GraphCommand::AgentReturn => {
                 if let Some(agent) = self.agent.take() {
                     self.navigate(NavChange::Restore(Box::new(agent.return_to)));

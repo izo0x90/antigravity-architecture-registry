@@ -50,10 +50,9 @@ fn vim_sequences_and_leader_drive_the_graph_and_are_rebindable() {
 #[test]
 fn tabs_are_icons_that_name_themselves_and_their_key() {
     let (ctx, mut app) = app_with_graph();
-    let shell = app.shell_actions();
-    let keys = app.tab_keys(&shell);
-    let at = |kind: BufferKind| BufferKind::ALL.iter().position(|k| *k == kind).unwrap();
-    assert_eq!((keys[at(BufferKind::Graph)].as_str(), keys[at(BufferKind::Queue)].as_str()), ("Space b g", "Space b q"));
+    // A tab is the shell's buffer action (its key says so on hover).
+    let hints = app.key_hints();
+    assert_eq!((crate::actions::key_of(&hints, "buffer.graph"), crate::actions::key_of(&hints, "buffer.queue")), (Some("Space b g"), Some("Space b q")));
     // Only each slot's active tab is named.
     let text = texts(&frame(&ctx, &mut app, vec![]));
     let named = |kind: BufferKind| text.lines().any(|l| l == format!("{} {}{}", kind.icon(), &kind.title()[..1], kind.title()[1..].to_lowercase()));

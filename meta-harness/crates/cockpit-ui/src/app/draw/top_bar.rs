@@ -70,7 +70,61 @@ pub(in crate::app) fn server_line(s: &arch_graph::ServerStatus) -> String {
 }
 
 impl CockpitApp {
+    /// The top bar's controls (it's the shell's host): on the left, reading
+    /// the code again, the server shown, the bell and the tray; on the
+    /// right, the columns and the developer tools. The shell's actions,
+    /// placed with what they say now.
+    fn top_bar_controls(&self, shell: &[Action]) -> (Vec<Action>, Vec<Action>) {
+        use crate::actions::{At, Control, Style, Tone};
+        use crate::alerts::AlertState as A;
+        use egui_phosphor::regular as icon;
+        let button = |caption: String, icon: Option<&'static str>| Control::new(At::Header, Style::Button, caption, icon);
+        let mut left = vec![("index.changed".to_owned(), button(String::new(), Some(icon::ARROW_CLOCKWISE)))];
+        if self.servers.len() > 1 {
+            let elsewhere = self.away.values().any(|d| d.chat.store.notifications.values().any(|n| n.level == harness_contracts::Level::Waiting));
+            let shown = button(format!("{}{}", self.desk.server, if elsewhere { " •" } else { "" }), Some(icon::HARD_DRIVES));
+            left.push(("server.switch".to_owned(), if elsewhere { shown.tone(Tone::Warn).hover("Something waits on you on another server") } else { shown }));
+        }
+        let (waiting, updates) = self.desks().map(|d| crate::attention::counts(&d.chat.store)).fold((0, 0), |(w, u), (dw, du)| (w + dw, u + du));
+        let state = self.alerts.state();
+        let glyph = if state == A::On { icon::BELL_RINGING } else { icon::BELL };
+        let count = if waiting > 0 { format!("{waiting}") } else { String::new() };
+        let dot = if matches!(state, A::NeedsPermission | A::Blocked) { " •" } else { "" };
+        let tone = match (&state, waiting) {
+            (A::NeedsPermission | A::Blocked, _) => Tone::Error,
+            (_, 0) => Tone::Muted,
+            _ => Tone::Warn,
+        };
+        let (switch, why) = self.alerts_words();
+        let hint = [Some(format!("{waiting} waiting on you")), Some(switch), why].into_iter().flatten().collect::<Vec<_>>().join("\n");
+        left.push(("attention.waiting".to_owned(), button(format!("{count}{dot}"), Some(glyph)).tone(tone).hover(hint)));
+        if updates > 0 {
+            left.push(("attention.updates".to_owned(), button(updates.to_string(), Some(icon::TRAY)).tone(Tone::Muted).hover(format!("{updates} update(s)"))));
+        }
+        let (count, max) = (self.desk.columns.len(), self.config.columns.max);
+        let mut right = Vec::new();
+        let hidden = self.desk.columns.hidden();
+        if hidden > 0 {
+            right.push(("buffer.list".to_owned(), button(format!("{hidden} hidden"), None).tone(Tone::Info)));
+        }
+        if count > 1 {
+            right.push(("column.fewer".to_owned(), button(String::new(), Some(icon::MINUS))));
+        }
+        if count < max {
+            right.push(("column.add".to_owned(), button(String::new(), Some(icon::PLUS))));
+        }
+        let (inspector, inspecting) = if self.feedback.is_inspecting { (format!("{} ACTIVE", icon::CROSSHAIR), Tone::Warn) } else { (format!("{} Inspector", icon::PENCIL_SIMPLE), Tone::Plain) };
+        right.push(("inspector.toggle".to_owned(), button(inspector, None).tone(inspecting)));
+        let issues = match self.feedback.issues.len() {
+            0 => format!("{} Issues", icon::WARNING_CIRCLE),
+            n => format!("{} Issues ({n})", icon::WARNING_CIRCLE),
+        };
+        right.push(("issues.toggle".to_owned(), button(issues, None).tone(Tone::Info)));
+        (crate::panel::place(left, Vec::new(), shell), crate::panel::place(right, Vec::new(), shell))
+    }
+
     pub fn render_top_bar(&mut self, ui: &mut egui::Ui) {
+        let shell = self.shell_actions();
         let top_rect = ui.available_rect_before_wrap();
         self.feedback.register_inspectable(ui, "top_bar", top_rect);
 
@@ -114,8 +168,8 @@ impl CockpitApp {
                 let index_res = self.render_index_light(ui);
                 self.feedback.register_inspectable(ui, "top_bar:index_status", index_res.rect);
                 ui.add_space(crate::theme::look().space_sm);
-                self.render_server_chip(ui);
-                self.render_attention_counters(ui);
+                let (left, right) = self.top_bar_controls(&shell);
+                self.host_controls(ui, &left, self.desk.columns.focused(), &shell);
 
                 ui.add_space(crate::theme::look().space_m);
 
@@ -161,65 +215,19 @@ impl CockpitApp {
                         .on_hover_text(format!("Your UI config was not applied (using defaults):\n{err}"));
                 }
 
-                // Right-aligned controls group (Inspector, Issues, Layout)
+                // On the right, in the order listed (drawn right to left):
+                // the columns, then the developer tools.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (pencil_label, pencil_color) = if self.feedback.is_inspecting {
-                        (format!("{} ACTIVE", egui_phosphor::regular::CROSSHAIR), colors().warn)
-                    } else {
-                        (format!("{} Inspector", egui_phosphor::regular::PENCIL_SIMPLE), colors().text_strong)
-                    };
-                    let insp_btn = ui.button(RichText::new(&pencil_label).strong().color(pencil_color));
-                    if insp_btn.clicked() {
-                        self.feedback.toggle_inspection();
-                    }
-                    self.feedback.register_inspectable(ui, "top_bar:inspector_button", insp_btn.rect);
-
-                    let issues_label = if self.feedback.issues.is_empty() {
-                        format!("{} Issues", egui_phosphor::regular::WARNING_CIRCLE)
-                    } else {
-                        format!("{} Issues ({})", egui_phosphor::regular::WARNING_CIRCLE, self.feedback.issues.len())
-                    };
-                    let issues_btn = ui.button(RichText::new(&issues_label).color(colors().info));
-                    if issues_btn.clicked() {
-                        self.feedback.is_issues_window_open = !self.feedback.is_issues_window_open;
-                        if self.feedback.is_issues_window_open {
-                            self.feedback.load_issues(&self.desk.net, ui.ctx().clone());
-                        }
-                    }
-                    self.feedback.register_inspectable(ui, "top_bar:issues_button", issues_btn.rect);
-
-                    ui.add_space(crate::theme::look().space_m);
-
-                    // This row runs right to left: add from the right end so
-                    // it reads "Columns: - 2 +".
-                    let layout_res = ui.horizontal(|ui| {
-                        let (count, max) = (self.desk.columns.len(), self.config.columns.max);
-                        if ui.add_enabled(count < max, egui::Button::new(egui_phosphor::regular::PLUS)).on_hover_text("Add a column").clicked() {
-                            self.desk.columns.set_count(count + 1, max);
-                        }
-                        ui.label(RichText::new(count.to_string()).monospace().size(crate::theme::look().text_body).color(colors().text_strong));
-                        if ui.add_enabled(count > 1, egui::Button::new(egui_phosphor::regular::MINUS)).on_hover_text("One column fewer").clicked() {
-                            self.desk.columns.set_count(count - 1, max);
-                        }
-                        ui.label(RichText::new("Columns:").size(crate::theme::look().text_body).color(colors().muted));
-                        let hidden = self.desk.columns.hidden();
-                        if hidden > 0 {
-                            let list = self.bound_actions().into_iter().find(|b| b.action.id == "buffer.list").map(|b| b.key_hint()).unwrap_or_default();
-                            let chip = ui.add(egui::Label::new(RichText::new(format!("{hidden} hidden")).size(crate::theme::look().text_body).color(colors().info)).sense(egui::Sense::click()));
-                            if chip.on_hover_text(format!("Views open but not on screen ({list} lists them all)")).clicked() {
-                                self.palette.open_with("buffer.list");
-                                self.input_mode = InputMode::Palette;
-                            }
-                        }
-                    });
-                    self.feedback.register_inspectable(ui, "top_bar:layout_selector", layout_res.response.rect);
+                    let right: Vec<Action> = right.into_iter().rev().collect();
+                    self.host_controls(ui, &right, self.desk.columns.focused(), &shell);
+                    ui.label(RichText::new(format!("Columns: {}", self.desk.columns.len())).size(crate::theme::look().text_body).color(colors().muted));
                 });
             });
         });
     }
 
     /// The INDEX light: its state's colour and word, progress while it runs,
-    /// the last run on hover; a click offers the re-index actions.
+    /// the last run on hover (reading the code again is a control beside it).
     pub(in crate::app) fn render_index_light(&mut self, ui: &mut egui::Ui) -> egui::Response {
         let state = index_state(&self.desk.index);
         let (_, word, color) = crate::status::look(state);
@@ -242,20 +250,13 @@ impl CockpitApp {
         if !self.desk.index.stale.is_empty() {
             hover.push_str(&format!("\nChanged since read: {}", self.desk.index.stale.join(", ")));
         }
-        hover.push_str("\nClick to read the code again.");
         // Flickers while files go by.
         let activity = if state == "indexing" { self.desk.index.done as u64 } else { 0 };
-        let response = ui
-            .horizontal(|ui| {
-                let led = self.index_led.show(ui, "INDEX", color, activity, &hover);
-                let text = ui.add(egui::Label::new(RichText::new(detail).size(crate::theme::look().text_small).color(color)).sense(egui::Sense::click())).on_hover_text(&hover);
-                led.union(text)
-            })
-            .inner;
-        if response.interact(egui::Sense::click()).clicked() {
-            self.palette.open_with("index.");
-            self.input_mode = InputMode::Palette;
-        }
-        response
+        ui.horizontal(|ui| {
+            let led = self.index_led.show(ui, "INDEX", color, activity, &hover);
+            let text = ui.label(RichText::new(detail).size(crate::theme::look().text_small).color(color)).on_hover_text(&hover);
+            led.union(text)
+        })
+        .inner
     }
 }

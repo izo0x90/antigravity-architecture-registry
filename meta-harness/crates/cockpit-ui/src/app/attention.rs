@@ -112,7 +112,7 @@ impl CockpitApp {
     }
 
     /// The system notifications switch in words, and what's in the way.
-    fn alerts_words(&self) -> (String, Option<String>) {
+    pub(super) fn alerts_words(&self) -> (String, Option<String>) {
         use crate::alerts::AlertState as A;
         match self.alerts.state() {
             A::Off => ("Notify me outside the cockpit: off".into(), Some("Turns them on: what newly waits on you, while the cockpit is out of sight".into())),
@@ -193,45 +193,6 @@ impl CockpitApp {
                 }
                 InboxAsk::Answer { thread, request, option } => self.desk.chat.answer(&self.desk.net, ctx, &thread, &request, &option),
             }
-        }
-    }
-
-    /// The top bar's bell and tray. The bell: what waits on the user (a
-    /// count) and, by its look, whether system notifications reach them
-    /// (ringing: on; plain: off; a dot: on but not allowed); clicked, its
-    /// list (the switch first). The tray: the updates (hidden at none).
-    pub(super) fn render_attention_counters(&mut self, ui: &mut egui::Ui) {
-        use crate::alerts::AlertState as A;
-        use egui_phosphor::regular as icon;
-        let (waiting, updates) = self.desks().map(|d| crate::attention::counts(&d.chat.store)).fold((0, 0), |(w, u), (dw, du)| (w + dw, u + du));
-        let theme = crate::theme::look();
-        let state = self.alerts.state();
-        let glyph = if state == A::On { icon::BELL_RINGING } else { icon::BELL };
-        let count = if waiting > 0 { format!(" {waiting}") } else { String::new() };
-        let dot = if matches!(state, A::NeedsPermission | A::Blocked) { " •" } else { "" };
-        let color = match (&state, waiting) {
-            (A::NeedsPermission | A::Blocked, _) => colors().error,
-            (_, 0) => colors().muted,
-            _ => colors().warn,
-        };
-        let (switch, why) = self.alerts_words();
-        let hint = [Some(format!("{waiting} waiting on you")), Some(switch), why].into_iter().flatten().collect::<Vec<_>>().join("\n");
-        let mut pick = None;
-        let r = ui.add(egui::Button::new(RichText::new(format!("{glyph}{count}{dot}")).strong().size(theme.text_label).color(color)).frame(false)).on_hover_text(hint);
-        self.feedback.register_inspectable(ui, "top_bar:waiting", r.rect);
-        if r.clicked() {
-            pick = Some("attention.waiting");
-        }
-        if updates > 0 {
-            let r = ui.add(egui::Button::new(RichText::new(format!("{} {updates}", icon::TRAY)).size(theme.text_label).color(colors().muted)).frame(false)).on_hover_text(format!("{updates} update(s)"));
-            self.feedback.register_inspectable(ui, "top_bar:updates", r.rect);
-            if r.clicked() {
-                pick = Some("attention.updates");
-            }
-        }
-        if let Some(id) = pick {
-            let ctx = ui.ctx().clone();
-            self.run_by_id(id, None, &ctx);
         }
     }
 

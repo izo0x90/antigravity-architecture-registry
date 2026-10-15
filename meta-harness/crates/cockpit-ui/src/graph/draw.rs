@@ -16,7 +16,6 @@ use crate::panel::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
 use crate::graph_config::ChipMode;
 use crate::graph_style::{LegendEntry, Swatch, style};
-use crate::nav::Navigable;
 use crate::theme::colors;
 use crate::touch::Gesture;
 
@@ -191,14 +190,6 @@ impl GraphState {
                 self.select(hit);
             }
         }
-        // The legend's switch, in the corner: it changes nothing in the view,
-        // so it's a button, not one of the graph's actions.
-        let (size, look) = (self.ui.chips.size, crate::theme::look());
-        let corner = Rect::from_min_size(Pos2::new(self.canvas.min.x + look.space_s, self.canvas.max.y - size - look.space_s), Vec2::splat(size));
-        let legend = ui.put(corner, egui::Button::new(RichText::new(egui_phosphor::regular::INFO).size(look.text_body)).corner_radius(size / 2.0).selected(self.legend_open));
-        if legend.on_hover_text(if self.legend_open { "Hide the legend" } else { "Show the legend" }).clicked() {
-            self.legend_open = !self.legend_open;
-        }
         if self.legend_open {
             self.draw_legend(&painter);
         }
@@ -250,12 +241,6 @@ impl GraphState {
     /// through (each a way back), what holds the root, how deep, what was
     /// cut, and how long it took.
     fn render_where(&mut self, ui: &mut egui::Ui) {
-        enum Go {
-            Back(usize),
-            Into(String),
-            Top,
-        }
-        let mut go: Option<Go> = None;
         ui.horizontal_wrapped(|ui| {
             let look = crate::theme::look();
             let muted = |t: String| RichText::new(t).size(look.text_body).color(colors().muted);
@@ -270,17 +255,11 @@ impl GraphState {
             };
             ui.label(muted(format!("{source} · {way} ·")));
             let name = |key: &str| self.card(key).map_or_else(|| key.rsplit([':', '.']).next().unwrap_or(key).to_owned(), |c| c.label.clone());
-            // The roots gone through, each a way back; then the root.
-            if ui.link(RichText::new("start").size(look.text_body)).on_hover_text("The view's starting points").clicked() {
-                go = Some(Go::Top);
-            }
-            for (i, root) in self.trail_roots().iter().enumerate() {
-                if let Some(root) = root {
-                    ui.label(muted("›".into()));
-                    if ui.link(RichText::new(name(root)).size(look.text_body)).clicked() {
-                        go = Some(Go::Back(i));
-                    }
-                }
+            // The roots gone through, then the root (back along it: the
+            // Path picker on the top line).
+            ui.label(muted("start".into()));
+            for root in self.trail_roots().iter().flatten() {
+                ui.label(muted(format!("› {}", name(root))));
             }
             if let Some(root) = &self.nav.root {
                 ui.label(muted("›".into()));
@@ -290,9 +269,7 @@ impl GraphState {
                 if !tree.path.is_empty() {
                     ui.label(muted("· inside".into()));
                     for crumb in &tree.path {
-                        if ui.link(RichText::new(&crumb.label).size(look.text_body)).on_hover_text("Show this box").clicked() {
-                            go = Some(Go::Into(crumb.key.clone()));
-                        }
+                        ui.label(muted(crumb.label.clone()));
                     }
                 }
                 ui.label(muted(format!("· {} levels · {} cards", self.depth(), tree.cards.len())));
@@ -316,17 +293,6 @@ impl GraphState {
             }
         });
         ui.separator();
-        match go {
-            Some(Go::Back(i)) => {
-                if self.jumped.is_none() {
-                    self.jumped = Some(self.place());
-                }
-                self.back_to(i);
-            }
-            Some(Go::Into(key)) => self.pointer_jump(NavChange::View { view: ViewKind::Contains, root: Some(key) }),
-            Some(Go::Top) => self.pointer_jump(NavChange::Top),
-            None => {}
-        }
     }
 
     /// A faint grid under the graph, moving and scaling with it.
