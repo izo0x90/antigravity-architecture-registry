@@ -19,7 +19,7 @@ impl CockpitApp {
             marks: self.marks.clone(),
             jumps: self.jumps.clone(),
             thread: self.chat.active_thread.clone(),
-            draft: self.chat.input_buffer.clone(),
+            draft: self.chat.ui.input_buffer.clone(),
             agents: self.remote.agents,
         }
     }
@@ -69,8 +69,8 @@ impl CockpitApp {
         if let Some(thread) = saved.thread.clone().filter(|t| self.chat.store.threads.contains_key(t)) {
             self.chat.active_thread = Some(thread);
         }
-        if self.chat.input_buffer.is_empty() {
-            self.chat.input_buffer = saved.draft.clone();
+        if self.chat.ui.input_buffer.is_empty() {
+            self.chat.ui.input_buffer = saved.draft.clone();
         }
         self.keeper.restored(&saved);
     }

@@ -66,13 +66,13 @@ fn messages_take_a_cursor_and_their_links_open() {
     let mut chat = conversation();
     assert_eq!(chat.target(), None, "no cursor: the stream follows the latest");
     chat.motion(Motion::Up, 1);
-    assert_eq!(chat.cursor, Some(3), "the first move starts at the latest message");
+    assert_eq!(chat.ui.cursor, Some(3), "the first move starts at the latest message");
     chat.motion(Motion::Up, 2);
-    assert_eq!(chat.cursor, Some(1));
+    assert_eq!(chat.ui.cursor, Some(1));
     chat.motion(Motion::Last, 1);
-    assert_eq!(chat.cursor, Some(3));
+    assert_eq!(chat.ui.cursor, Some(3));
     chat.motion(Motion::First, 1);
-    assert_eq!(chat.cursor, Some(0));
+    assert_eq!(chat.ui.cursor, Some(0));
     assert!(matches!(chat.enter(), Step::Nothing(_)), "a prompt has no file");
     chat.motion(Motion::Line(3), 1);
     assert_eq!(chat.target(), Some(Target::Message { thread: Some("t".into()), index: 2, link: Some(("src/parse.rs".into(), Some(12))) }));
@@ -86,7 +86,7 @@ fn messages_take_a_cursor_and_their_links_open() {
     assert_eq!(crate::nav::rank_matches(&items, "lex.rs"), vec![2]);
     // Backspace lets go: the stream follows the latest again.
     assert_eq!(chat.leave(), Step::Done);
-    assert_eq!(chat.cursor, None);
+    assert_eq!(chat.ui.cursor, None);
     // What's drawn takes hints: each message, and each link.
     let ctx = egui::Context::default();
     let net = NetClient::new("http://127.0.0.1:9");
@@ -132,7 +132,7 @@ fn its_skills_tool_servers_and_adding_to_the_running_turn_are_actions() {
     chat.process_event(ClientEvent::InstanceUpdated { snapshot });
     chat.tools = Some(ToolServers::default());
     chat.process_event(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Running, failure: None, usage: None } }));
-    chat.input_buffer = "also".into();
+    chat.ui.input_buffer = "also".into();
     let ids = ids(&chat);
     for id in ["mcp.add", "harness.skills", "chat.inject"] {
         assert!(ids.iter().any(|a| a == id), "{id} in {ids:?}");

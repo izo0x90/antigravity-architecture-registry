@@ -33,22 +33,22 @@ pub(super) fn item_text(item: &TurnItem) -> String {
 
 impl Navigable for ChatStreamState {
     fn place(&self) -> Place {
-        Place::Chat { message: self.cursor }
+        Place::Chat { message: self.ui.cursor }
     }
 
     fn restore(&mut self, place: &Place) {
         if let Place::Chat { message } = place {
-            self.cursor = *message;
-            self.link_pick = None;
-            self.scroll = message.is_some();
+            self.ui.cursor = *message;
+            self.ui.link_pick = None;
+            self.ui.scroll = message.is_some();
         }
     }
 
     fn target(&self) -> Option<Target> {
-        let index = self.cursor?;
+        let index = self.ui.cursor?;
         let item = self.stream().into_iter().nth(index)?;
         let links = links_of(&item);
-        let link = self.link_pick.and_then(|n| links.get(n).cloned()).or_else(|| links.first().cloned());
+        let link = self.ui.link_pick.and_then(|n| links.get(n).cloned()).or_else(|| links.first().cloned());
         Some(Target::Message { thread: self.active_thread.as_ref().map(|t| t.to_string()), index, link })
     }
 
@@ -59,8 +59,8 @@ impl Navigable for ChatStreamState {
         if n == 0 {
             return;
         }
-        let at = self.cursor.unwrap_or(n - 1);
-        let fresh = self.cursor.is_none();
+        let at = self.ui.cursor.unwrap_or(n - 1);
+        let fresh = self.ui.cursor.is_none();
         match motion {
             Motion::Down => self.put_cursor(if fresh { at } else { at + count }),
             Motion::Up => self.put_cursor(if fresh { at } else { at.saturating_sub(count) }),
@@ -87,7 +87,7 @@ impl Navigable for ChatStreamState {
     }
 
     fn can_leave(&self) -> bool {
-        self.cursor.is_some()
+        self.ui.cursor.is_some()
     }
 
     fn enter_label(&self) -> Option<String> {
@@ -99,7 +99,7 @@ impl Navigable for ChatStreamState {
 
     /// Lets go of the cursor: the stream follows the latest again.
     fn leave(&mut self) -> Step {
-        if self.cursor.take().is_none() {
+        if self.ui.cursor.take().is_none() {
             return Step::Nothing("Already following the latest.".into());
         }
         Step::Done
@@ -112,11 +112,11 @@ impl Navigable for ChatStreamState {
     }
 
     fn spots(&self) -> Vec<Spot> {
-        self.spots.clone()
+        self.ui.spots.clone()
     }
 
     fn cursor_key(&self) -> Option<String> {
-        self.cursor.map(|c| c.to_string())
+        self.ui.cursor.map(|c| c.to_string())
     }
 
     /// A message ("3") or one of its links ("3:1").
@@ -124,6 +124,6 @@ impl Navigable for ChatStreamState {
         let mut parts = key.split(':');
         let Some(index) = parts.next().and_then(|i| i.parse::<usize>().ok()) else { return };
         self.put_cursor(index);
-        self.link_pick = parts.next().and_then(|n| n.parse().ok());
+        self.ui.link_pick = parts.next().and_then(|n| n.parse().ok());
     }
 }

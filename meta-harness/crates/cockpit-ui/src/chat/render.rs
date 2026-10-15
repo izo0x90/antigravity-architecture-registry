@@ -62,15 +62,15 @@ impl ChatStreamState {
             self.render_plan(ui);
 
             let scroll_height = (ui.available_height() - 105.0).max(50.0);
-            self.drawing.clear();
+            self.ui.drawing.clear();
             let stream = egui::ScrollArea::vertical()
                 .id_salt("chat_stream")
                 .auto_shrink([false, false])
-                .stick_to_bottom(self.cursor.is_none())
+                .stick_to_bottom(self.ui.cursor.is_none())
                 .max_height(scroll_height)
                 .show(ui, |ui| self.render_stream(ui, net));
-            self.view = stream.inner_rect;
-            self.spots = std::mem::take(&mut self.drawing).into_iter().filter(|s| s.rect.intersects(stream.inner_rect)).collect();
+            self.ui.view = stream.inner_rect;
+            self.ui.spots = std::mem::take(&mut self.ui.drawing).into_iter().filter(|s| s.rect.intersects(stream.inner_rect)).collect();
             feedback.register_inspectable(ui, &format!("slot_{}:chat:stream", slot_idx + 1), stream.inner_rect);
             ui.separator();
 
@@ -244,7 +244,7 @@ impl ChatStreamState {
             });
             return;
         };
-        let scroll = std::mem::take(&mut self.scroll);
+        let scroll = std::mem::take(&mut self.ui.scroll);
         let mut index = 0;
         for turn in &view.turns {
             ui.horizontal(|ui| {
@@ -258,7 +258,7 @@ impl ChatStreamState {
                 }
             });
             for item in view.items_of(&turn.id) {
-                let on = self.cursor == Some(index);
+                let on = self.ui.cursor == Some(index);
                 let fill = if on { colors().selection } else { Color32::TRANSPARENT };
                 let shown = Frame::NONE.fill(fill).corner_radius(crate::theme::look().radius_s).inner_margin(crate::theme::margin2(crate::theme::look().space_xs, crate::theme::look().space_hair)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
@@ -267,7 +267,7 @@ impl ChatStreamState {
                 if on && scroll {
                     shown.response.scroll_to_me(Some(egui::Align::Center));
                 }
-                self.drawing.push(Spot { key: index.to_string(), rect: shown.response.rect });
+                self.ui.drawing.push(Spot { key: index.to_string(), rect: shown.response.rect });
                 index += 1;
                 ui.add_space(crate::theme::look().space_xs);
             }
@@ -284,15 +284,15 @@ impl ChatStreamState {
     pub(super) fn put_cursor(&mut self, index: usize) {
         let n = self.stream().len();
         if n > 0 {
-            self.cursor = Some(index.min(n - 1));
-            self.link_pick = None;
-            self.scroll = true;
+            self.ui.cursor = Some(index.min(n - 1));
+            self.ui.link_pick = None;
+            self.ui.scroll = true;
         }
     }
 
     pub(super) fn half_page_items(&self) -> usize {
-        let avg = if self.spots.is_empty() { 40.0 } else { self.spots.iter().map(|s| s.rect.height()).sum::<f32>() / self.spots.len() as f32 };
-        if self.view.height() > 0.0 { ((self.view.height() / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 4 }
+        let avg = if self.ui.spots.is_empty() { 40.0 } else { self.ui.spots.iter().map(|s| s.rect.height()).sum::<f32>() / self.ui.spots.len() as f32 };
+        if self.ui.view.height() > 0.0 { ((self.ui.view.height() / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 4 }
     }
 
     pub(super) fn render_item(&mut self, ui: &mut egui::Ui, net: &NetClient, view: &ThreadView, item: &TurnItem, index: usize) {
@@ -306,7 +306,7 @@ impl ChatStreamState {
             ItemBody::AssistantMessage { content, .. } => {
                 let text: String = content.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect();
                 if !text.is_empty() {
-                    CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &text);
+                    CommonMarkViewer::new().show(ui, &mut self.ui.markdown_cache, &text);
                 }
                 for block in content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })) {
                     ui.label(RichText::new(block_summary(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
@@ -328,9 +328,9 @@ impl ChatStreamState {
                     for (n, loc) in locations.iter().enumerate() {
                         let label = match loc.line { Some(l) => format!("{} {}:{l}", icon::FOLDER_OPEN, loc.path), None => format!("{} {}", icon::FOLDER_OPEN, loc.path) };
                         let link = ui.small_button(RichText::new(label).monospace().size(crate::theme::look().text_small));
-                        self.drawing.push(Spot { key: format!("{index}:{n}"), rect: link.rect });
+                        self.ui.drawing.push(Spot { key: format!("{index}:{n}"), rect: link.rect });
                         if link.clicked() {
-                            self.requested_file_jump = Some((loc.path.clone(), loc.line.map(|l| l as usize)));
+                            self.ui.requested_file_jump = Some((loc.path.clone(), loc.line.map(|l| l as usize)));
                         }
                     }
                 });
@@ -346,9 +346,9 @@ impl ChatStreamState {
             }
             ItemBody::FileChange { path, .. } => {
                 let link = ui.small_button(RichText::new(format!("{} {path}", icon::PENCIL_SIMPLE)).monospace().size(crate::theme::look().text_body));
-                self.drawing.push(Spot { key: format!("{index}:0"), rect: link.rect });
+                self.ui.drawing.push(Spot { key: format!("{index}:0"), rect: link.rect });
                 if link.clicked() {
-                    self.requested_file_jump = Some((path.clone(), None));
+                    self.ui.requested_file_jump = Some((path.clone(), None));
                 }
             }
             ItemBody::CommandExecution { command, output, exit_code } => {
@@ -363,7 +363,7 @@ impl ChatStreamState {
             ItemBody::ProposedPlan { markdown, .. } => {
                 Frame::NONE.fill(colors().surface).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).show(ui, |ui| {
                     ui.label(RichText::new(format!("{} Proposed plan", icon::CLIPBOARD_TEXT)).strong().size(crate::theme::look().text_body));
-                    CommonMarkViewer::new().show(ui, &mut self.markdown_cache, markdown);
+                    CommonMarkViewer::new().show(ui, &mut self.ui.markdown_cache, markdown);
                 });
             }
             ItemBody::TodoList { steps, .. } => render_steps(ui, steps),
@@ -403,7 +403,7 @@ impl ChatStreamState {
     ) {
         let ctx = ui.ctx().clone();
         // Slash-command suggestions from the harness's live command list.
-        if let Some(prefix) = self.input_buffer.strip_prefix('/')
+        if let Some(prefix) = self.ui.input_buffer.strip_prefix('/')
             && !prefix.contains(' ')
             && let Some(snapshot) = self.instance()
         {
@@ -413,7 +413,7 @@ impl ChatStreamState {
                     let label = RichText::new(format!("/{}", command.name)).monospace().size(crate::theme::look().text_small);
                     let hint = match &command.input_hint { Some(h) => format!("{} — {h}", command.description), None => command.description.clone() };
                     if ui.small_button(label).on_hover_text(hint).clicked() {
-                        self.input_buffer = format!("/{} ", command.name);
+                        self.ui.input_buffer = format!("/{} ", command.name);
                     }
                 }
             });
@@ -432,7 +432,7 @@ impl ChatStreamState {
                 "Press 'i' or click to enter insert mode..."
             };
             let output = ui.add(
-                egui::TextEdit::multiline(&mut self.input_buffer)
+                egui::TextEdit::multiline(&mut self.ui.input_buffer)
                     .id(egui::Id::new("chat_persistent_input_text_edit"))
                     .desired_rows(2)
                     .desired_width(text_w)
@@ -449,9 +449,9 @@ impl ChatStreamState {
                 let enter = inserting && i.key_pressed(egui::Key::Enter) && !i.modifiers.shift;
                 (enter, enter && i.modifiers.command)
             });
-            if (send || enter) && !self.input_buffer.trim().is_empty() {
-                let text = self.input_buffer.trim().to_string();
-                self.input_buffer.clear();
+            if (send || enter) && !self.ui.input_buffer.trim().is_empty() {
+                let text = self.ui.input_buffer.trim().to_string();
+                self.ui.input_buffer.clear();
                 if add {
                     self.add_to_turn(net, &ctx, text);
                 } else {

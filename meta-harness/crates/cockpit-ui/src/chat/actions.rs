@@ -49,7 +49,7 @@ impl ActionProvider for ChatStreamState {
 
         // Prompt (this view only)
         out.push(Action::new("chat.insert", "Type a prompt", C::Insert).focused().importance(crate::actions::PRIMARY));
-        if !self.input_buffer.is_empty() {
+        if !self.ui.input_buffer.is_empty() {
             out.push(Action::new("chat.clear", "Clear the prompt", C::ClearPrompt).focused().importance(MINOR));
         }
 
@@ -184,7 +184,7 @@ impl ActionProvider for ChatStreamState {
         if let Some(view) = view
             && view.running_turn().is_some()
             && caps.turns.active_steering
-            && !self.input_buffer.trim().is_empty()
+            && !self.ui.input_buffer.trim().is_empty()
         {
             out.push(Action::new("chat.inject", "Add the prompt to what it's doing", C::AddToTurn).focused());
         }
@@ -236,7 +236,7 @@ impl ActionProvider for ChatStreamState {
         let thread = self.active_thread.clone();
         match command {
             ChatCommand::Insert => *cx.input_mode = crate::keymap::InputMode::Insert { slot: cx.slot },
-            ChatCommand::ClearPrompt => self.input_buffer.clear(),
+            ChatCommand::ClearPrompt => self.ui.input_buffer.clear(),
             ChatCommand::NewSession => {
                 self.active_thread = None;
                 self.open_thread(net, ctx, None);
@@ -303,7 +303,7 @@ impl ActionProvider for ChatStreamState {
             }
             ChatCommand::ListMcp | ChatCommand::ListSkills => {}
             ChatCommand::AddToTurn => {
-                let text = std::mem::take(&mut self.input_buffer).trim().to_owned();
+                let text = std::mem::take(&mut self.ui.input_buffer).trim().to_owned();
                 if !text.is_empty() {
                     self.add_to_turn(net, ctx, text);
                 }

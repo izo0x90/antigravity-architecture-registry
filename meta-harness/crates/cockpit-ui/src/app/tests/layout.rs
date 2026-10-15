@@ -10,14 +10,14 @@ fn the_layout_comes_back_as_it_was_saved() {
     keys(&ctx, &mut app, "mc");
     app.columns = columns_of(&[BufferKind::Tree, BufferKind::Graph, BufferKind::Chat, BufferKind::Code], 2);
     app.graph.select(Some("rust:a::step".into()));
-    app.chat.input_buffer = "half a thought".into();
+    app.chat.ui.input_buffer = "half a thought".into();
     let saved = app.saved_ui();
     // Through the server (as JSON) into a cockpit that just opened.
     let json = serde_json::to_value(&saved).unwrap();
     let (ctx2, mut fresh) = full_app();
     fresh.restore_saved(serde_json::from_value(json).unwrap(), &ctx2);
     assert_eq!((fresh.columns.kinds(), fresh.columns.focused()), (saved.columns.kinds(), 2));
-    assert_eq!((fresh.marks.clone(), fresh.jumps.clone(), fresh.chat.input_buffer.as_str()), (saved.marks.clone(), saved.jumps.clone(), "half a thought"));
+    assert_eq!((fresh.marks.clone(), fresh.jumps.clone(), fresh.chat.ui.input_buffer.as_str()), (saved.marks.clone(), saved.jumps.clone(), "half a thought"));
     let graph_place = |s: &SavedUi| s.views.iter().find(|(p, _)| p.kind == BufferKind::Graph).map(|(_, p)| p.clone());
     assert_eq!(fresh.graph.place(), graph_place(&saved).unwrap(), "the graph where it was, the same card selected");
     assert!(matches!(fresh.saved_ui().views.iter().find(|(p, _)| p.kind == BufferKind::Code), Some((_, Place::Code { line: 6, .. }))));

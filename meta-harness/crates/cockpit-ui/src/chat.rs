@@ -64,9 +64,8 @@ pub struct ChatStreamState {
     opening: bool,
     error: Option<String>,
     queued_prompt: Option<String>,
-    pub input_buffer: String,
-    pub markdown_cache: CommonMarkCache,
-    pub requested_file_jump: Option<(String, Option<usize>)>,
+    /// This view's own state (each chat view has one; the one in use is here).
+    pub ui: ChatView,
     runtime_mode: RuntimeMode,
     model: Option<String>,
     saved_sessions: Option<Vec<SavedSession>>,
@@ -85,17 +84,41 @@ pub struct ChatStreamState {
     /// Answers being given to the agent's questions.
     drafts: Drafts,
     mailbox: Mailbox,
+}
+
+/// A chat view's own state: what's typed, where the cursor is, what was
+/// drawn. The chat's sessions, sign-in and tools are shared by all views.
+pub struct ChatView {
+    pub input_buffer: String,
+    pub markdown_cache: CommonMarkCache,
+    pub requested_file_jump: Option<(String, Option<usize>)>,
     /// The message the cursor is on (normal mode); None follows the latest.
     pub cursor: Option<usize>,
     /// Which of its links a hint picked.
-    link_pick: Option<usize>,
+    pub(crate) link_pick: Option<usize>,
     /// Scroll the cursor's message into view next frame.
-    scroll: bool,
+    pub(crate) scroll: bool,
     /// Messages and links drawn last frame (and this one's, as drawn), and
     /// the stream's viewport.
-    spots: Vec<Spot>,
-    drawing: Vec<Spot>,
-    view: Rect,
+    pub(crate) spots: Vec<Spot>,
+    pub(crate) drawing: Vec<Spot>,
+    pub(crate) view: Rect,
+}
+
+impl Default for ChatView {
+    fn default() -> Self {
+        Self {
+            input_buffer: String::new(),
+            markdown_cache: CommonMarkCache::default(),
+            requested_file_jump: None,
+            cursor: None,
+            link_pick: None,
+            scroll: false,
+            spots: Vec::new(),
+            drawing: Vec::new(),
+            view: Rect::NOTHING,
+        }
+    }
 }
 
 impl Default for ChatStreamState {
@@ -107,9 +130,7 @@ impl Default for ChatStreamState {
             opening: false,
             error: None,
             queued_prompt: None,
-            input_buffer: String::new(),
-            markdown_cache: CommonMarkCache::default(),
-            requested_file_jump: None,
+            ui: ChatView::default(),
             runtime_mode: RuntimeMode::ApprovalRequired,
             model: None,
             saved_sessions: None,
@@ -121,12 +142,6 @@ impl Default for ChatStreamState {
             auth_paste: String::new(),
             drafts: Drafts::default(),
             mailbox: Mailbox::default(),
-            cursor: None,
-            link_pick: None,
-            scroll: false,
-            spots: Vec::new(),
-            drawing: Vec::new(),
-            view: Rect::NOTHING,
         }
     }
 }

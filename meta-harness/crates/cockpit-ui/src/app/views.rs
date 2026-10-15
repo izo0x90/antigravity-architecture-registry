@@ -134,7 +134,7 @@ impl CockpitApp {
         if let Some(thread) = self.queue.requests.open_thread.take() {
             let from = self.jump_of(BufferKind::Queue);
             self.chat.active_thread = Some(harness_contracts::ThreadId::new(thread));
-            self.chat.cursor = None;
+            self.chat.ui.cursor = None;
             self.focus_kind(BufferKind::Chat);
             self.after_jump(from);
         }
@@ -248,7 +248,7 @@ impl CockpitApp {
             self.ensure_visible(BufferKind::Graph);
             self.graph.reveal(id);
         }
-        if let Some((path, line)) = self.chat.requested_file_jump.take() {
+        if let Some((path, line)) = self.chat.ui.requested_file_jump.take() {
             self.jumps.record(self.jump_of(BufferKind::Chat));
             self.ensure_visible(BufferKind::Code);
             self.code.load_file(&path, line, &self.net, ctx.clone());
