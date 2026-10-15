@@ -12,7 +12,9 @@ use serde_json::{Value, json};
 use super::ToolSet;
 use super::schema::{Fragments, tool};
 use crate::arch::blocking;
-use crate::mcp::protocol::McpTool;
+use nah_access::Capability;
+
+use super::ToolDef;
 use crate::mcp::text::*;
 
 pub(crate) struct Explore {
@@ -93,16 +95,18 @@ struct NavigateArgs {
 
 impl Explore {
     /// Its tools, as agents see them (in the list's order).
-    pub(crate) fn schemas(trees: &TreeConfig) -> Vec<McpTool> {
+    pub(crate) fn schemas(trees: &TreeConfig) -> Vec<ToolDef> {
         let Fragments { tree_help, card, source, .. } = Fragments::new(trees);
         vec![
             tool(
+                Capability::ViewRead,
                 "ingest",
                 "Read the code into the architecture graph (incremental: only changed files are parsed). Run it after editing code, or with a path to refresh just that part.",
                 json!({ "type": "object", "properties": { "scope": { "type": "string", "description": "Repo-relative path; the whole repo when absent" } } }),
             ),
-            tool("list_types", "The component types available (generic defaults and any specializations), with their rules.", json!({ "type": "object", "properties": {} })),
+            tool(Capability::ViewRead, "list_types", "The component types available (generic defaults and any specializations), with their rules.", json!({ "type": "object", "properties": {} })),
             tool(
+                Capability::ViewRead,
                 "search",
                 "Find what your work will touch: symbols by name (fuzzy, a typo forgiven; `a::b` matches whole symbols), files by path, or lines by text (as written; `*.rs` or `src/` narrows the files). Each hit gives the card to inspect or view. Query words all must match; 'word matches as written, ^word starts, word$ ends, !word excludes.",
                 json!({ "type": "object", "properties": {
@@ -113,11 +117,13 @@ impl Explore {
                 }, "required": ["query"] }),
             ),
             tool(
+                Capability::ViewRead,
                 "inspect",
                 "One card's component: type, stage, location (file:symbol), signature, relations in and out (each link found in the code says whether the language's analyzer confirmed it or it was matched by name), and its source code. Any card a view shows: a component, a data type (type:<Name>), a flow's start or end (start:<id>, end:<id>).",
                 json!({ "type": "object", "properties": { "id": card, "source": source }, "required": ["id"] }),
             ),
             tool(
+                Capability::ViewRead,
                 "view",
                 &format!("One of the three views as a text tree, the same one the user sees: each card with where it is, what it hides (+N more), what sits on its line, and lines back to cards shown elsewhere. With a plan: its own items first, marked NEW / CHANGED / DONE / DOESN'T MATCH. Give `expand` to get only what opening one card adds, or `context` to see what holds a card and what's beside it.\n{tree_help}"),
                 json!({ "type": "object", "properties": {
@@ -134,6 +140,7 @@ impl Explore {
                 }, "required": ["view"] }),
             ),
             tool(
+                Capability::ViewDrive,
                 "navigate",
                 &format!("Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it. The user may have several graphs, one per column: `column` picks one (counted from 1 on the left; a column that isn't a graph becomes one); without it, the graph they used last moves.\n{tree_help}"),
                 json!({ "type": "object", "properties": {
@@ -157,7 +164,7 @@ impl Explore {
 
 #[async_trait::async_trait]
 impl ToolSet for Explore {
-    fn tools(&self, trees: &TreeConfig) -> Vec<McpTool> {
+    fn tools(&self, trees: &TreeConfig) -> Vec<ToolDef> {
         Self::schemas(trees)
     }
 

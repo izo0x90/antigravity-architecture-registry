@@ -12,7 +12,9 @@ use serde_json::{Value, json};
 use super::ToolSet;
 use super::schema::{Fragments, tool};
 use crate::arch::blocking;
-use crate::mcp::protocol::McpTool;
+use nah_access::Capability;
+
+use super::ToolDef;
 use crate::mcp::text::*;
 
 pub(crate) struct Build {
@@ -35,15 +37,17 @@ struct VerifyArgs {
 
 impl Build {
     /// Its tools, as agents see them (in the list's order).
-    pub(crate) fn schemas(trees: &TreeConfig) -> Vec<McpTool> {
+    pub(crate) fn schemas(trees: &TreeConfig) -> Vec<ToolDef> {
         let Fragments { id, plan, .. } = Fragments::new(trees);
         vec![
             tool(
+                Capability::CodeCheck,
                 "verify",
                 "Check the code against the plan for one component and, when it passes, move it to the goal stage. goal=skeleton accepts placeholder bodies (todo!(), raise NotImplementedError...); goal=implemented requires them gone.",
                 json!({ "type": "object", "properties": { "plan": plan, "id": id, "goal": { "type": "string", "enum": ["skeleton", "implemented"] } }, "required": ["plan", "id", "goal"] }),
             ),
             tool(
+                Capability::CodeCheck,
                 "run_tools",
                 "Run the project's validation tools (linters, type checkers, tests) on one planned component, or on every planned component already in the code. Shows each command, whether it passed, and the end of its output.",
                 json!({ "type": "object", "properties": { "plan": plan, "id": id }, "required": ["plan"] }),
@@ -59,7 +63,7 @@ impl Build {
 
 #[async_trait::async_trait]
 impl ToolSet for Build {
-    fn tools(&self, trees: &TreeConfig) -> Vec<McpTool> {
+    fn tools(&self, trees: &TreeConfig) -> Vec<ToolDef> {
         Self::schemas(trees)
     }
 

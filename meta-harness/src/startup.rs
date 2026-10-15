@@ -133,6 +133,16 @@ pub fn harnesses(project: &std::path::Path, hub: &Arc<EventHub>) -> Result<Arc<I
     Ok(instances)
 }
 
+/// What each agent role may do: the shipped roles, with the project's
+/// `.nah/access.toml` over them.
+pub fn access(project: &std::path::Path) -> Result<nah_access::Access, StartError> {
+    let access = nah_access::Access::defaults();
+    Ok(match std::fs::read_to_string(project.join(".nah/access.toml")) {
+        Ok(text) => access.with_overrides(&text)?,
+        Err(_) => access,
+    })
+}
+
 /// Every session gets the architecture tools, plus the project's.
 pub fn tool_servers(base_url: &str, project: &std::path::Path) -> (Vec<McpServer>, Arc<crate::tool_servers::ToolServerState>) {
     let mcp_servers = vec![McpServer {

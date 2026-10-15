@@ -12,7 +12,9 @@ use serde_json::{Value, json};
 use super::ToolSet;
 use super::schema::{Fragments, tool};
 use crate::arch::blocking;
-use crate::mcp::protocol::McpTool;
+use nah_access::Capability;
+
+use super::ToolDef;
 use crate::mcp::text::*;
 
 pub(crate) struct Plans {
@@ -54,16 +56,18 @@ struct PlanArgs {
 
 impl Plans {
     /// Its tools, as agents see them (in the list's order).
-    pub(crate) fn schemas(trees: &TreeConfig) -> Vec<McpTool> {
+    pub(crate) fn schemas(trees: &TreeConfig) -> Vec<ToolDef> {
         let Fragments { id, plan, op, .. } = Fragments::new(trees);
         vec![
-            tool("plan_list", "All plans, with their components and stages.", json!({ "type": "object", "properties": {} })),
+            tool(Capability::ViewRead, "plan_list", "All plans, with their components and stages.", json!({ "type": "object", "properties": {} })),
             tool(
+                Capability::PlanEdit,
                 "plan_create",
                 "Start a plan. kind \"change\" (the default) plans one change (a feature, a fix): it holds only what's new or changing, and existing code is referenced, never re-described. kind \"walkthrough\" explains existing code to the user: modify brings in each component the behavior goes through as it is, with a description and spec written from the code; nothing is added, related, approved or built, and navigate with source plan:<id> shows the user only those components.",
                 json!({ "type": "object", "properties": { "id": { "type": "string", "description": "letters, digits, - and _" }, "title": { "type": "string" }, "description": { "type": "string" }, "kind": { "type": "string", "enum": ["change", "walkthrough"], "description": "change (the default) or walkthrough" } }, "required": ["id", "title"] }),
             ),
             tool(
+                Capability::PlanEdit,
                 "plan_import",
                 "Create a plan from the old registry document (system_architecture.json): components are matched to the code where possible, everything else is reported. Approvals aren't carried over.",
                 json!({ "type": "object", "properties": {
@@ -74,16 +78,19 @@ impl Plans {
                 }, "required": ["id"] }),
             ),
             tool(
+                Capability::PlanEdit,
                 "plan_edit",
                 "Apply operations to a plan, in order (stops at the first that fails). Add new components under a real parent (they get a proposed location), modify planned or existing ones, reference existing code you build on, and relate components (calls with expectations, data flow, implements). New work must connect to existing code. Changing an approved component's design sends it, and what depends on it, back for approval.",
                 json!({ "type": "object", "properties": { "plan": plan, "ops": { "type": "array", "items": op } }, "required": ["plan", "ops"] }),
             ),
             tool(
+                Capability::CodeCheck,
                 "plan_validate",
                 "Check a plan before any code is written: references, proposed locations, type rules, loops, schema fit (also against existing code's real signatures), spec rules, required details per type, dependency gates and touch points; runs logic-step checks.",
                 json!({ "type": "object", "properties": { "plan": plan }, "required": ["plan"] }),
             ),
             tool(
+                Capability::ViewRead,
                 "contract",
                 "Everything needed to implement one component: where it goes, its signature and spec, what it must call (with the callees' real signatures and locations) and who calls it.",
                 json!({ "type": "object", "properties": { "plan": plan, "id": id }, "required": ["plan", "id"] }),
@@ -99,7 +106,7 @@ impl Plans {
 
 #[async_trait::async_trait]
 impl ToolSet for Plans {
-    fn tools(&self, trees: &TreeConfig) -> Vec<McpTool> {
+    fn tools(&self, trees: &TreeConfig) -> Vec<ToolDef> {
         Self::schemas(trees)
     }
 

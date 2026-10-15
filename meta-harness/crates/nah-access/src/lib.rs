@@ -71,6 +71,11 @@ impl CapabilitySet {
         self.0 |= 1 << c as u16;
     }
 
+    /// Its bits: one per capability, for keying by set.
+    pub fn bits(self) -> u16 {
+        self.0
+    }
+
     pub fn iter(self) -> impl Iterator<Item = Capability> {
         Capability::ALL.iter().copied().filter(move |c| self.contains(*c))
     }

@@ -3314,6 +3314,7 @@ dependencies = [
  "harness-contracts",
  "harness-core",
  "include_dir",
+ "nah-access",
  "nah-packs",
  "notify-debouncer-full",
  "serde",

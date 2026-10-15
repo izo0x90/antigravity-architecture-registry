@@ -112,7 +112,9 @@ pub async fn mcp_messages_handler(
     Query(query): Query<McpMessagesQuery>,
     Json(rpc_req): Json<JsonRpcRequest>,
 ) -> impl IntoResponse {
-    let Some(response) = mcp_state.service.handle_request(rpc_req).await else {
+    // Every caller is the lead until sessions carry their slot's key.
+    let caller = nah_access::Principal::agent("lead");
+    let Some(response) = mcp_state.service.handle_request(rpc_req, &caller).await else {
         // A notification: taken, never answered.
         return StatusCode::ACCEPTED.into_response();
     };

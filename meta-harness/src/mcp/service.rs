@@ -3,40 +3,53 @@
 //! without relying on instructions it may drift from.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use arch_service::{ArchitectureService, ServiceError};
+use nah_access::{Access, Capability, Principal};
 use serde_json::{Value, json};
 
-use crate::mcp::protocol::{JsonRpcRequest, JsonRpcResponse, McpToolResult};
-use crate::mcp::sets::{ToolSet, all, list_tools};
+use crate::mcp::protocol::{JsonRpcRequest, JsonRpcResponse, McpTool, McpToolResult};
+use crate::mcp::sets::{ToolDef, ToolSet, all, tool_defs};
 
 #[derive(Clone)]
 pub struct McpService {
-    arch: Arc<ArchitectureService>,
     sets: Arc<Vec<Box<dyn ToolSet>>>,
-    /// Which set each tool is in.
-    index: Arc<HashMap<String, usize>>,
+    /// Every tool with what it needs, in the list's order.
+    defs: Arc<Vec<ToolDef>>,
+    /// Which set each tool is in, and what it needs.
+    index: Arc<HashMap<String, (usize, Capability)>>,
+    access: Arc<Access>,
+    /// The list each set of capabilities sees, made the first time it's asked for.
+    lists: Arc<Mutex<HashMap<u16, Arc<Vec<McpTool>>>>>,
 }
 
 impl McpService {
-    pub fn new(arch: Arc<ArchitectureService>, remote: Arc<crate::remote::Remote>) -> Self {
+    pub fn new(arch: Arc<ArchitectureService>, remote: Arc<crate::remote::Remote>, access: Arc<Access>) -> Self {
         let sets = all(&arch, &remote);
         let mut index = HashMap::new();
         let mut names = Vec::new();
         for (i, set) in sets.iter().enumerate() {
-            for tool in set.tools(arch.trees()) {
-                assert!(index.insert(tool.name.clone(), i).is_none(), "two tools are named {}", tool.name);
-                names.push(tool.name);
+            for def in set.tools(arch.trees()) {
+                assert!(index.insert(def.tool.name.clone(), (i, def.needs)).is_none(), "two tools are named {}", def.tool.name);
+                names.push(def.tool.name);
             }
         }
-        let listed: Vec<String> = list_tools(arch.trees()).into_iter().map(|t| t.name).collect();
+        let defs = tool_defs(arch.trees());
+        let listed: Vec<&str> = defs.iter().map(|d| d.tool.name.as_str()).collect();
         assert_eq!(names, listed, "the sets and the tool list name the same tools in the same order");
-        Self { arch, sets: Arc::new(sets), index: Arc::new(index) }
+        Self { sets: Arc::new(sets), defs: Arc::new(defs), index: Arc::new(index), access, lists: Arc::default() }
+    }
+
+    /// The tools a caller may use, in the list's order.
+    pub fn tools_for(&self, caller: &Principal) -> Arc<Vec<McpTool>> {
+        let can = self.access.of(caller);
+        let mut lists = self.lists.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        lists.entry(can.bits()).or_insert_with(|| Arc::new(self.defs.iter().filter(|d| can.contains(d.needs)).map(|d| d.tool.clone()).collect())).clone()
     }
 
     /// Answers a request; notifications (no id) get no answer, as JSON-RPC requires.
-    pub async fn handle_request(&self, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
+    pub async fn handle_request(&self, req: JsonRpcRequest, caller: &Principal) -> Option<JsonRpcResponse> {
         let req_id = req.id.clone();
         let response = match req.method.as_str() {
             "initialize" => JsonRpcResponse::success(
@@ -48,12 +61,12 @@ impl McpService {
                 }),
             ),
             "notifications/initialized" | "initialized" | "ping" => JsonRpcResponse::success(req_id, json!({})),
-            "tools/list" => JsonRpcResponse::success(req_id, json!({ "tools": list_tools(self.arch.trees()) })),
+            "tools/list" => JsonRpcResponse::success(req_id, json!({ "tools": *self.tools_for(caller) })),
             "tools/call" => {
                 let params = req.params.unwrap_or(Value::Null);
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
-                let result = match self.call(&name, args).await {
+                let result = match self.call(&name, args, caller).await {
                     Ok(text) => McpToolResult::text(text),
                     Err(err) => McpToolResult::error(err.to_string()),
                 };
@@ -67,11 +80,18 @@ impl McpService {
         req.id.is_some().then_some(response)
     }
 
-    /// Runs a tool; the text is what the agent sees.
-    pub async fn call(&self, name: &str, args: Value) -> Result<String, ServiceError> {
-        match self.index.get(name) {
-            Some(&set) => self.sets[set].call(name, args).await,
-            None => Err(ServiceError::NotFound(format!("tool '{name}'"))),
+    /// Runs a tool for a caller allowed to; the text is what the agent sees.
+    pub async fn call(&self, name: &str, args: Value, caller: &Principal) -> Result<String, ServiceError> {
+        let Some(&(set, needs)) = self.index.get(name) else {
+            return Err(ServiceError::NotFound(format!("tool '{name}'")));
+        };
+        if !self.access.allows(caller, needs) {
+            let role = match caller {
+                Principal::Agent { role } => role.to_string(),
+                other => format!("{other:?}").to_lowercase(),
+            };
+            return Err(ServiceError::Forbidden(format!("this session's role ({role}) can't use {name} (it needs {needs})")));
         }
+        self.sets[set].call(name, args).await
     }
 }

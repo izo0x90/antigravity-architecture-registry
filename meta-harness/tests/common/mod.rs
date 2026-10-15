@@ -258,7 +258,7 @@ pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppS
     let hub = Arc::new(EventHub::default());
     bridge_architecture_events(&arch, &hub);
     let remote = Arc::new(meta_harness::remote::Remote::default());
-    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone())));
+    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), Arc::new(nah_access::Access::defaults()))));
     let registry = Arc::new(InstanceRegistry::new(vec![Arc::new(FakeDriver)], hub.clone()));
     registry.configure(registry.default_configs(&[fake_harness()])).await.unwrap();
     let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone(), Vec::new()));

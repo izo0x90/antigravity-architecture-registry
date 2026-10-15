@@ -7,6 +7,8 @@ use arch_graph::tree::TreeConfig;
 use arch_service::{ArchitectureService, ServiceError};
 use serde_json::Value;
 
+use nah_access::Capability;
+
 use crate::mcp::protocol::McpTool;
 
 mod build;
@@ -16,16 +18,27 @@ mod plans;
 mod review;
 mod schema;
 
+/// A tool as agents see it, and the capability a caller needs to use it.
+pub(crate) struct ToolDef {
+    pub(crate) tool: McpTool,
+    pub(crate) needs: Capability,
+}
+
 /// A set of tools: what they are, and running one of them.
 #[async_trait::async_trait]
 pub(crate) trait ToolSet: Send + Sync {
-    fn tools(&self, trees: &TreeConfig) -> Vec<McpTool>;
+    fn tools(&self, trees: &TreeConfig) -> Vec<ToolDef>;
     async fn call(&self, name: &str, args: Value) -> Result<String, ServiceError>;
 }
 
 /// Every tool, in the order agents see them.
 pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
-    [explore::Explore::schemas(trees), plans::Plans::schemas(trees), build::Build::schemas(trees), review::Review::schemas(trees), cockpit::Cockpit::schemas(trees)].concat()
+    tool_defs(trees).into_iter().map(|d| d.tool).collect()
+}
+
+/// Every tool with the capability it needs, in the same order.
+pub(crate) fn tool_defs(trees: &TreeConfig) -> Vec<ToolDef> {
+    [explore::Explore::schemas(trees), plans::Plans::schemas(trees), build::Build::schemas(trees), review::Review::schemas(trees), cockpit::Cockpit::schemas(trees)].into_iter().flatten().collect()
 }
 
 /// The sets, in the same order as `list_tools`.

@@ -267,3 +267,26 @@ async fn reads_take_a_source_over_rest_and_mcp() {
         assert!(status == 400 && body.contains("plan"), "{old}: {status} {body}");
     }
 }
+
+/// Each tool names the capability it needs: a role sees only the tools it
+/// may use, and a call it may not make is refused with what it lacks.
+#[tokio::test]
+async fn each_role_sees_and_may_use_only_its_tools() {
+    use nah_access::Principal;
+    let (_, state) = spawn_app().await;
+    let service = &state.mcp_state.service;
+    let names = |who: &Principal| service.tools_for(who).iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+    let reads = ["ingest", "list_types", "search", "inspect", "view", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions"];
+    assert_eq!(names(&Principal::agent("external")), reads, "read-only, in the list's order");
+    assert_eq!(names(&Principal::agent("sub")), reads, "a sub-slot reads (its own tools come with slots)");
+    let lead = names(&Principal::agent("lead"));
+    assert_eq!(lead.len(), 24, "the lead has every tool there is today: {lead:?}");
+    assert!(names(&Principal::Anonymous).is_empty());
+
+    let err = service.call("navigate", json!({ "view": "calls" }), &Principal::agent("sub")).await.unwrap_err().to_string();
+    assert_eq!(err, "not allowed: this session's role (sub) can't use navigate (it needs view.drive)");
+    let err = service.call("plan_create", json!({ "id": "x", "title": "X" }), &Principal::agent("external")).await.unwrap_err().to_string();
+    assert!(err.contains("(it needs plan.edit)"), "{err}");
+    assert!(service.call("list_types", json!({}), &Principal::agent("sub")).await.is_ok(), "what it may use works");
+    assert!(service.call("no_such_tool", json!({}), &Principal::agent("lead")).await.unwrap_err().to_string().contains("tool 'no_such_tool'"));
+}

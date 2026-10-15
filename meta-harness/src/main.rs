@@ -93,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui_state = Arc::new(arch_service::UiStateFile::open(arch.root())?);
     meta_harness::server::bridge_architecture_events(&arch, &hub);
     let remote = Arc::new(meta_harness::remote::Remote::default());
-    let mcp_state = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone())));
+    let mcp_state = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), Arc::new(meta_harness::startup::access(arch.root())?))));
     meta_harness::startup::follow_code(&arch);
     let instances = meta_harness::startup::harnesses(arch.root(), &hub)?;
     let (mcp_servers, tool_servers) = meta_harness::startup::tool_servers(&base_url, arch.root());
