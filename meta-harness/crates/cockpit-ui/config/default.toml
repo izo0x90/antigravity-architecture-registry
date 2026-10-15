@@ -44,6 +44,7 @@ l = "Layout"
 q = "Quick look"
 s = "Session"
 w = "Agent slots"
+S = "Servers"
 m = "Model & config"
 o = "Mode"
 p = "Tools & skills"
@@ -184,6 +185,13 @@ I = "Index"
 "attention.prev" = { keys = ["N"] }
 "attention.open_slot" = { keys = ["o"] }
 "attention.dismiss" = { keys = ["x"] }
+
+"server.switch" = { leader = "S S" }
+"server.add" = { leader = "S a" }
+"server.connect" = { leader = "S c" }
+"server.disconnect" = { leader = "S d" }
+"server.remove" = { leader = "S r" }
+"server.shutdown" = { leader = "S x" }
 
 "agent.pick" = { leader = "w w" }
 "agent.new" = { leader = "w n" }

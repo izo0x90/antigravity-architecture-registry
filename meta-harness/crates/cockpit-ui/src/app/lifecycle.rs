@@ -8,28 +8,18 @@ impl CockpitApp {
             self.initialized = true;
             ctx.set_fonts(crate::theme::font_definitions());
 
-            self.desk.net.connect_ws(ctx.clone());
+            self.home.connect_ws(ctx.clone());
 
             let reply = self.config_reply.clone();
-            self.desk.net.ui_config(ctx.clone(), move |r| {
+            self.home.ui_config(ctx.clone(), move |r| {
                 if let Ok(mut slot) = reply.lock() {
                     *slot = Some(r);
                 }
             });
 
-            // The layout as it was saved (the code view opens Cargo.toml
-            // when nothing was).
-            self.desk.keeper.load(&self.desk.net, ctx);
-
             // Auto-load dev feedback issues
-            self.feedback.load_issues(&self.desk.net, ctx.clone());
-            self.fetch_index_status(ctx);
-            let types = self.desk.types_inbox.clone();
-            self.desk.net.arch_types(ctx.clone(), move |r| {
-                if let Ok(mut t) = types.lock() {
-                    *t = Some(r);
-                }
-            });
+            self.feedback.load_issues(&self.home, ctx.clone());
+            self.open_desk(ctx);
         }
 
         self.apply_user_config();
@@ -45,7 +35,7 @@ impl CockpitApp {
             crate::graph_style::set(self.config.graph_style.clone());
             crate::status::set(self.config.status.clone());
             crate::theme::set_look(self.config.look.clone());
-            self.desk.net.set_backoff(self.config.net.reconnect_min_ms, self.config.net.reconnect_max_ms);
+            self.home.set_backoff(self.config.net.reconnect_min_ms, self.config.net.reconnect_max_ms);
             let (graph_ui, code_ui) = (self.config.graph.clone(), self.config.code.clone());
             for graph in self.desk.graphs() {
                 graph.ui = graph_ui.clone();
@@ -57,9 +47,8 @@ impl CockpitApp {
         self.start_fresh(ctx);
         self.use_focused();
 
-        // Poll WebSocket messages
-        self.desk.net.poll_ws(ctx);
-        self.desk.chat.tick(&self.desk.net, ctx);
+        // Every server's events, each to its desk.
+        self.take_from_home(ctx);
         if std::mem::take(&mut self.desk.net.reconnected) {
             self.desk.keeper.reconnected();
             self.desk.keeper.load(&self.desk.net, ctx);
@@ -72,7 +61,56 @@ impl CockpitApp {
             self.desk.details.clear();
             self.fetch_index_status(ctx);
         }
+        self.take_events(ctx);
+        self.tick_away(ctx);
+        self.link_views(ctx);
+        self.mark_out_of_date();
+        self.goto_tick(ctx);
+        // The focused target's relations, so the bar and popup offer only
+        // the go-tos that lead somewhere.
+        if let Some(id) = self.desk.view(self.focused_kind()).target().and_then(|t| t.component().cloned()) {
+            let source = self.desk.graph.nav.source.clone();
+            self.desk.details.want(&id, &source, &self.desk.net, ctx);
+        }
 
+        // Notes fade.
+        let now = ctx.input(|i| i.time);
+        match (&self.note, self.note_since) {
+            (Some(_), None) => self.note_since = Some(now),
+            (Some(_), Some(since)) if now - since > NOTE_SECONDS => {
+                self.note = None;
+                self.note_since = None;
+            }
+            (Some(_), Some(since)) => ctx.request_repaint_after(std::time::Duration::from_secs_f64(NOTE_SECONDS - (now - since) + 0.05)),
+            (None, _) => self.note_since = None,
+        }
+
+        self.handle_keys(ctx);
+        self.quick_look_tick(ctx);
+        self.use_focused();
+        self.keep_state(ctx);
+        self.keep_shell(ctx);
+    }
+
+    /// What the desk shown loads when it's first shown: its saved layout
+    /// (the code view opens Cargo.toml when nothing was), the index's
+    /// state, the component types.
+    pub(super) fn open_desk(&mut self, ctx: &egui::Context) {
+        self.desk.opened = true;
+        self.desk.keeper.load(&self.desk.net, ctx);
+        self.fetch_index_status(ctx);
+        let types = self.desk.types_inbox.clone();
+        self.desk.net.arch_types(ctx.clone(), move |r| {
+            if let Ok(mut t) = types.lock() {
+                *t = Some(r);
+            }
+        });
+    }
+
+    /// The desk's events and replies since last frame (every desk's, every
+    /// frame: the ones not shown take theirs as the one shown, in turn).
+    pub(super) fn take_events(&mut self, ctx: &egui::Context) {
+        self.desk.chat.tick(&self.desk.net, ctx);
         let events = self.desk.net.incoming.lock().map(|mut lock| lock.drain(..).collect::<Vec<_>>()).unwrap_or_default();
         for event in events {
             if let harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::Index { status } } = &event {
@@ -110,32 +148,6 @@ impl CockpitApp {
                 Err(e) => self.note = Some(format!("Couldn't read the index status: {e}")),
             }
         }
-        self.link_views(ctx);
-        self.mark_out_of_date();
-        self.goto_tick(ctx);
-        // The focused target's relations, so the bar and popup offer only
-        // the go-tos that lead somewhere.
-        if let Some(id) = self.desk.view(self.focused_kind()).target().and_then(|t| t.component().cloned()) {
-            let source = self.desk.graph.nav.source.clone();
-            self.desk.details.want(&id, &source, &self.desk.net, ctx);
-        }
-
-        // Notes fade.
-        let now = ctx.input(|i| i.time);
-        match (&self.note, self.note_since) {
-            (Some(_), None) => self.note_since = Some(now),
-            (Some(_), Some(since)) if now - since > NOTE_SECONDS => {
-                self.note = None;
-                self.note_since = None;
-            }
-            (Some(_), Some(since)) => ctx.request_repaint_after(std::time::Duration::from_secs_f64(NOTE_SECONDS - (now - since) + 0.05)),
-            (None, _) => self.note_since = None,
-        }
-
-        self.handle_keys(ctx);
-        self.quick_look_tick(ctx);
-        self.use_focused();
-        self.keep_state(ctx);
     }
 
     pub(super) fn fetch_index_status(&self, ctx: &egui::Context) {

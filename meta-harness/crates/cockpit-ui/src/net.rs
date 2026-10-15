@@ -3,9 +3,10 @@ use std::sync::{Arc, Mutex};
 
 use ewebsock::{WsEvent, WsMessage, WsSender};
 use harness_contracts::{
-    ClientEvent, InstanceId, ModelSelection, NativeId, NotificationId, RequestId, RequestResponse, RuntimePolicy, SavedSessionPage, SessionKey,
+    ClientEvent, HomeEvent, InstanceId, ModelSelection, NativeId, NotificationId, RequestId, RequestResponse, RuntimePolicy, SavedSessionPage, SessionKey,
     SlotId, SteerInput, ThreadId,
 };
+use harness_contracts::home::HERE;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -104,6 +105,9 @@ type Arrival = Arc<dyn Fn(&str) + Send + Sync>;
 
 pub struct NetClient {
     base_url: String,
+    /// Before each path: `""` for home's own server, `/s/<name>` for the
+    /// others (home passes those on).
+    prefix: String,
     ws_url: String,
     ws_sender: Option<WsSender>,
     /// What the socket said, by which socket (one dropped may still speak).
@@ -113,8 +117,11 @@ pub struct NetClient {
     /// Sees each server event's text as it arrives, even while no frame
     /// runs (a hidden browser tab).
     on_arrival: Option<Arrival>,
-    /// Server events received since the last drain.
+    /// This server's events, as home's socket brought them, since the last drain.
     pub incoming: Arc<Mutex<Vec<ClientEvent>>>,
+    /// What home's socket said (every server's events, and the servers),
+    /// since the last drain: only the client that holds the socket.
+    pub from_home: Arc<Mutex<Vec<HomeEvent>>>,
     pub ws_state: Arc<Mutex<WsState>>,
     /// Bumped on every HTTP request/response and WebSocket message (drives the activity LED).
     pub activity: Arc<AtomicU64>,
@@ -196,16 +203,24 @@ fn http_error(response: &ehttp::Response) -> NetError {
 }
 
 impl NetClient {
+    /// Home's own server (the one serving the cockpit).
     pub fn new(host_origin: &str) -> Self {
+        Self::for_server(host_origin, HERE)
+    }
+
+    /// Server `name`, through home at `host_origin`.
+    pub fn for_server(host_origin: &str, name: &str) -> Self {
         let base_url = host_origin.trim_end_matches('/').to_string();
         let ws_url = if base_url.starts_with("https://") {
-            base_url.replacen("https://", "wss://", 1) + "/ws/events"
+            base_url.replacen("https://", "wss://", 1) + "/ws/home"
         } else {
-            base_url.replacen("http://", "ws://", 1) + "/ws/events"
+            base_url.replacen("http://", "ws://", 1) + "/ws/home"
         };
+        let prefix = if name == HERE { String::new() } else { format!("/s/{name}") };
 
         Self {
             base_url,
+            prefix,
             ws_url,
             ws_sender: None,
             ws_events: Arc::default(),
@@ -214,6 +229,7 @@ impl NetClient {
             #[cfg(test)]
             sent: Arc::default(),
             incoming: Arc::new(Mutex::new(Vec::new())),
+            from_home: Arc::default(),
             ws_state: Arc::new(Mutex::new(WsState::Closed)),
             activity: Arc::new(AtomicU64::new(0)),
             last_error: Arc::new(Mutex::new(None)),
@@ -257,8 +273,8 @@ impl NetClient {
         on_done: impl FnOnce(NetResult<T>) + Send + 'static,
     ) {
         #[cfg(test)]
-        self.sent.lock().unwrap().push(format!("{method} {path}"));
-        let url = format!("{}{}", self.base_url, path);
+        self.sent.lock().unwrap().push(format!("{method} {}{path}", self.prefix));
+        let url = format!("{}{}{}", self.base_url, self.prefix, path);
         let mut request = match body {
             Some(json) => {
                 let mut r = ehttp::Request::post(&url, serde_json::to_vec(&json).unwrap_or_default());
@@ -352,13 +368,9 @@ impl NetClient {
         match event {
             WsEvent::Message(WsMessage::Text(text)) => {
                 self.activity.fetch_add(1, Ordering::Relaxed);
-                match serde_json::from_str::<ClientEvent>(&text) {
+                match serde_json::from_str::<HomeEvent>(&text) {
                     Ok(parsed) => {
-                        // Events were missed: views refetch, as after a reconnect.
-                        if parsed == ClientEvent::Resync {
-                            self.reconnected = true;
-                        }
-                        if let Ok(mut events) = self.incoming.lock() {
+                        if let Ok(mut events) = self.from_home.lock() {
                             events.push(parsed);
                         }
                     }
@@ -398,6 +410,37 @@ impl NetClient {
             None => self.backoff.0,
         };
         self.retry = Some((now + delay, delay));
+    }
+
+    // ---- home: the cockpit's own state, the servers it links to ----
+
+    /// The cockpit's own state as home keeps it (none before it ever saved).
+    pub fn ui_shell(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<Option<serde_json::Value>>) + Send + 'static) {
+        self.call("GET", "/api/ui/shell", None, ctx, on_done);
+    }
+
+    pub fn put_ui_shell(&self, state: serde_json::Value, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<()>("PUT", "/api/ui/shell", Some(state), ctx, on_done);
+    }
+
+    pub fn add_server(&self, name: &str, url: &str, secret: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        let body = serde_json::json!({ "name": name, "url": url, "secret": secret });
+        self.call::<serde_json::Value>("POST", "/api/home/servers", Some(body), ctx, move |r| on_done(r.map(|_| ())));
+    }
+
+    pub fn remove_server(&self, name: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<()>("DELETE", &format!("/api/home/servers/{}", urlencoding::encode(name)), None, ctx, on_done);
+    }
+
+    /// Follows a server again (`follow`), or stops following it.
+    pub fn server_link(&self, name: &str, follow: bool, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        let what = if follow { "connect" } else { "disconnect" };
+        self.call::<()>("POST", &format!("/api/home/servers/{}/{what}", urlencoding::encode(name)), None, ctx, on_done);
+    }
+
+    /// Asks this server to stop.
+    pub fn shutdown(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<serde_json::Value>("POST", "/api/server/shutdown", None, ctx, move |r| on_done(r.map(|_| ())));
     }
 
     // ---- notifications ----
@@ -787,13 +830,15 @@ mod tests {
     }
 
     #[test]
-    fn a_resync_drops_what_was_held_and_views_refetch() {
+    fn home_says_whose_events_and_another_servers_calls_go_through_it() {
         let mut net = NetClient::new("http://127.0.0.1:9");
         net.on_ws_event(WsEvent::Opened, 0.0);
-        net.on_ws_event(WsEvent::Message(WsMessage::Text(r#"{"type":"resync"}"#.into())), 1.0);
-        assert!(net.reconnected, "events were missed: views refetch");
-        let events = std::mem::take(&mut *net.incoming.lock().unwrap());
-        assert_eq!(events, [ClientEvent::Resync], "the store hears it too");
+        net.on_ws_event(WsEvent::Message(WsMessage::Text(r#"{"type":"event","server":"cloud","event":{"type":"resync"}}"#.into())), 1.0);
+        let events = std::mem::take(&mut *net.from_home.lock().unwrap());
+        assert_eq!(events, [HomeEvent::Event { server: "cloud".into(), event: Box::new(ClientEvent::Resync) }]);
+        let cloud = NetClient::for_server("http://127.0.0.1:9", "cloud");
+        cloud.notifications_seen(&SlotId::new("lead"), egui::Context::default(), |_| {});
+        assert_eq!(*cloud.sent.lock().unwrap(), ["POST /s/cloud/api/notifications/seen"]);
         let mut chat = crate::chat::tests::conversation();
         assert!(!chat.store.threads.is_empty());
         chat.store.apply(ClientEvent::Resync);

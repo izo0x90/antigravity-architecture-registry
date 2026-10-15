@@ -27,6 +27,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
      CREATE INDEX notifications_by_state ON notifications (state, at_ms);",
     ),
     (4, "CREATE TABLE servers (name TEXT PRIMARY KEY, url TEXT NOT NULL, secret TEXT NOT NULL, added_at INTEGER NOT NULL);"),
+    (5, "CREATE TABLE ui_shell (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL);"),
 ];
 
 /// The newest layout this NAH knows.

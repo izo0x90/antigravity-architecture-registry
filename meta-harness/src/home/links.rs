@@ -114,7 +114,7 @@ impl Links {
 
     /// The servers and their links (no secrets).
     pub fn list(&self) -> Vec<ServerView> {
-        lock(&self.links).values().map(|l| ServerView { name: l.entry.name.clone(), url: l.entry.url.clone(), link: lock(&l.state).clone() }).collect()
+        lock(&self.links).values().map(|l| ServerView { name: l.entry.name.clone(), url: l.entry.url.clone(), link: lock(&l.state).clone(), project: true }).collect()
     }
 
     /// Where a server is, and its secret.

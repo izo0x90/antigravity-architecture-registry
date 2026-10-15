@@ -29,6 +29,7 @@ pub(crate) mod attention;
 mod capture;
 mod commands;
 mod desk;
+mod desks;
 mod draw;
 mod going;
 mod keeping;
@@ -157,6 +158,16 @@ enum ShellCommand {
     AttentionDismiss,
     /// The browser's notifications while the tab is hidden (on or off).
     BrowserAlerts,
+    /// Shows a server's desk (its name, the value).
+    ServerSwitch,
+    /// Links another server (`name url secret`, the value).
+    ServerAdd,
+    ServerConnect,
+    ServerDisconnect,
+    ServerRemove,
+    /// Asks which server to shut down (the value), then to confirm.
+    ServerShutdown,
+    ServerShutdownConfirm,
 }
 
 /// Reading the code again, on the user's word.
@@ -213,6 +224,20 @@ type Keys = (Option<Vec<char>>, Vec<Vec<Chord>>);
 pub struct CockpitApp {
     /// The project shown: its views, layout and server.
     pub desk: Desk,
+    /// The other servers' desks, by name.
+    pub away: BTreeMap<String, Desk>,
+    /// Home (the server serving the cockpit): its socket brings every
+    /// server's events; the shell's own calls go to it.
+    pub home: NetClient,
+    host_origin: String,
+    /// The servers home links to, as it last said.
+    pub servers: Vec<harness_contracts::ServerView>,
+    /// The page's way in (`window.nah`): it drives whatever desk is shown.
+    pub page: crate::remote::Door,
+    /// A server the user asked to stop, until they confirm.
+    confirming_shutdown: Option<String>,
+    /// The shell's own state, kept on home.
+    shell: desks::ShellKeeper,
     /// The keys as last given out, and the actions they were given to (by
     /// view, name and aliases, in order): keys are given out again only when
     /// those change. Labels and commands are always the current ones.
@@ -284,10 +309,17 @@ impl CockpitApp {
             Err(err) => (UiConfig::default(), Some(format!("built-in defaults: {err}"))),
         };
         let alerts = crate::browser_alerts::BrowserAlerts::default();
-        let mut net = NetClient::new(host_origin);
-        net.on_arrival(alerts.arrival());
+        let mut home = NetClient::new(host_origin);
+        home.on_arrival(alerts.arrival());
         Self {
-            desk: Desk::new(net, host_origin),
+            desk: Desk::new(host_origin, harness_contracts::home::HERE),
+            away: BTreeMap::new(),
+            home,
+            host_origin: host_origin.to_owned(),
+            servers: Vec::new(),
+            page: crate::remote::Door::new(),
+            confirming_shutdown: None,
+            shell: Default::default(),
             bound_cache: Default::default(),
             frame_actions: Default::default(),
             in_frame: Default::default(),

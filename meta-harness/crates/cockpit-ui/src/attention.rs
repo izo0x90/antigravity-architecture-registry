@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use harness_contracts::{Level, Notification, NotificationId, NotificationKind, SlotId};
+use harness_contracts::{Level, Notification, NotificationKind, SlotId};
 
 use crate::store::Store;
 
@@ -51,18 +51,6 @@ pub fn detail(n: &Notification, store: &Store, now_ms: u64) -> String {
     [slot, Some(kind_word(n.kind).to_owned()), Some(age(n.at_ms, now_ms))].into_iter().flatten().collect::<Vec<_>>().join(" · ")
 }
 
-/// The one `by` steps from `from` among the open ones (none past either
-/// end). One no longer open steps from where the list starts (or ends).
-pub fn step(store: &Store, from: &NotificationId, by: i32) -> Option<NotificationId> {
-    let all = list(store, None);
-    let at = match all.iter().position(|n| &n.id == from) {
-        Some(at) => at as i64 + i64::from(by),
-        None if by > 0 => 0,
-        None => all.len() as i64 - 1,
-    };
-    usize::try_from(at).ok().and_then(|at| all.get(at)).map(|n| n.id.clone())
-}
-
 pub fn now_ms() -> u64 {
     #[cfg(target_arch = "wasm32")]
     return js_sys::Date::now() as u64;
@@ -93,14 +81,14 @@ impl Seen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_contracts::{ClientEvent, NotificationState};
+    use harness_contracts::{ClientEvent, NotificationId, NotificationState};
 
     pub(crate) fn note(id: &str, kind: NotificationKind, slot: &str, at_ms: u64) -> Notification {
         Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: Some(SlotId::new(slot)), thread: None, request: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
     }
 
     #[test]
-    fn they_are_gone_through_waiting_first_and_stepped_without_wrapping() {
+    fn they_are_gone_through_waiting_first() {
         let mut store = Store::default();
         for n in [note("turn:1", NotificationKind::TurnFinished, "lead", 1), note("req:2", NotificationKind::Approval, "sub-1", 5), note("req:1", NotificationKind::Question, "sub-1", 2)] {
             store.apply(ClientEvent::NotificationUpdated { notification: n });
@@ -108,10 +96,6 @@ mod tests {
         assert_eq!(list(&store, None).iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["req:1", "req:2", "turn:1"]);
         assert_eq!(counts(&store), (2, 1));
         let id = |s: &str| NotificationId::new(s);
-        assert_eq!(step(&store, &id("req:1"), 1), Some(id("req:2")));
-        assert_eq!(step(&store, &id("turn:1"), 1), None, "past the end: nothing");
-        assert_eq!(step(&store, &id("req:1"), -1), None);
-        assert_eq!(step(&store, &id("gone"), 1), Some(id("req:1")), "one handled meanwhile: from the start");
         assert_eq!(detail(&store.notifications[&id("req:2")], &store, 125_000), "sub-1 · approval · 2 min ago");
     }
 

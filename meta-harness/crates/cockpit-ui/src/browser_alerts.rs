@@ -7,13 +7,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use harness_contracts::{ClientEvent, Level, NotificationId, NotificationState};
+use harness_contracts::{ClientEvent, HomeEvent, Level, NotificationId, NotificationState};
 
 #[derive(Default, Clone)]
 pub struct BrowserAlerts {
     on: Arc<AtomicBool>,
-    /// The item a click asked for, until the cockpit opens it.
-    clicked: Arc<Mutex<Option<NotificationId>>>,
+    /// The item a click asked for (its server, and it), until the cockpit opens it.
+    clicked: Arc<Mutex<Option<(String, NotificationId)>>>,
 }
 
 impl BrowserAlerts {
@@ -31,7 +31,7 @@ impl BrowserAlerts {
     }
 
     /// The item a notification's click asked for.
-    pub fn take_clicked(&self) -> Option<NotificationId> {
+    pub fn take_clicked(&self) -> Option<(String, NotificationId)> {
         self.clicked.lock().ok()?.take()
     }
 
@@ -43,9 +43,12 @@ impl BrowserAlerts {
             if !on.load(Ordering::Relaxed) || !text.contains("notification_updated") || !hidden() {
                 return;
             }
-            let Ok(ClientEvent::NotificationUpdated { notification }) = serde_json::from_str::<ClientEvent>(text) else { return };
-            if notification.level == Level::Waiting && notification.state == NotificationState::Open {
-                raise(&notification, &clicked);
+            let Ok(HomeEvent::Event { server, event }) = serde_json::from_str::<HomeEvent>(text) else { return };
+            if let ClientEvent::NotificationUpdated { notification } = *event
+                && notification.level == Level::Waiting
+                && notification.state == NotificationState::Open
+            {
+                raise(&server, &notification, &clicked);
             }
         }
     }
@@ -62,19 +65,19 @@ fn hidden() -> bool {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn raise(notification: &harness_contracts::Notification, clicked: &Arc<Mutex<Option<NotificationId>>>) {
+fn raise(server: &str, notification: &harness_contracts::Notification, clicked: &Arc<Mutex<Option<(String, NotificationId)>>>) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
     if web_sys::Notification::permission() != web_sys::NotificationPermission::Granted {
         return;
     }
     let options = web_sys::NotificationOptions::new();
-    options.set_tag(notification.id.as_str());
+    options.set_tag(&format!("{server}/{}", notification.id));
     if let Some(detail) = &notification.detail {
         options.set_body(detail);
     }
     let Ok(shown) = web_sys::Notification::new_with_options(&notification.title, &options) else { return };
-    let (id, clicked, it) = (notification.id.clone(), clicked.clone(), shown.clone());
+    let (id, clicked, it) = ((server.to_owned(), notification.id.clone()), clicked.clone(), shown.clone());
     let on_click = Closure::<dyn FnMut()>::new(move || {
         if let Some(window) = web_sys::window() {
             let _ = window.focus();
@@ -89,4 +92,4 @@ fn raise(notification: &harness_contracts::Notification, clicked: &Arc<Mutex<Opt
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn raise(_: &harness_contracts::Notification, _: &Arc<Mutex<Option<NotificationId>>>) {}
+fn raise(_: &str, _: &harness_contracts::Notification, _: &Arc<Mutex<Option<(String, NotificationId)>>>) {}

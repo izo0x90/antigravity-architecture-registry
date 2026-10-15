@@ -67,7 +67,7 @@ fn the_counters_say_how_many_and_their_pickers_open_one_in_the_quick_look() {
     let actions = from_outside(&ctx, &mut app, r#"{"op":"actions"}"#).unwrap();
     let waiting = actions.as_array().unwrap().iter().find(|a| a["id"] == "attention.waiting").expect("the waiting picker");
     assert!(waiting.to_string().contains("req:r1") && !waiting.to_string().contains("turn:u1"), "{waiting}");
-    from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.waiting","value":"req:r2"}"#).unwrap();
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.waiting","value":"here/req:r2"}"#).unwrap();
     assert_eq!(looked_at(&app), Some("req:r2"));
     // The next waiting: the oldest.
     keys(&ctx, &mut app, "\u{1b}");
@@ -109,12 +109,12 @@ fn in_the_quick_look_n_and_shift_n_go_through_them_and_y_answers_its_request() {
 #[test]
 fn the_look_opens_its_chat_and_puts_one_away() {
     let (ctx, mut app) = waiting_app();
-    from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.updates","value":"turn:u1"}"#).unwrap();
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.updates","value":"here/turn:u1"}"#).unwrap();
     sent(&app);
     keys(&ctx, &mut app, "x");
     assert_eq!(sent(&app), ["POST /api/notifications/turn%3Au1/dismiss"]);
     assert!(app.quick_look.is_none(), "the last one: closed");
-    from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.updates","value":"turn:u1"}"#).unwrap();
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.updates","value":"here/turn:u1"}"#).unwrap();
     keys(&ctx, &mut app, "o");
     frame(&ctx, &mut app, vec![]);
     assert_eq!((app.quick_look.is_none(), app.focused_kind(), app.desk.chat.ui.slot.as_str()), (true, BufferKind::Chat, "sub-1"), "the reviewer's chat");

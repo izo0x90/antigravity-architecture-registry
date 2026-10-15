@@ -71,6 +71,7 @@ const ROUTES: &[&str] = &[
     "/api/slots/s1/current",
     "/api/slots/s1/prompt",
     "/api/notifications",
+    "/api/ui/shell",
     "/api/server/shutdown",
     "/api/home/servers",
     "/api/home/servers/w1",

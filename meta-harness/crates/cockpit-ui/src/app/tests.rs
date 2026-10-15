@@ -1,6 +1,7 @@
 //! The shell's tests; helpers here, tests by topic below.
 
 mod attention;
+mod desks;
 mod audits;
 mod bindings;
 mod keys_snapshot;
@@ -54,7 +55,7 @@ fn click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
 /// Calls from outside, answered: each runs frames as eframe does (the
 /// call's input fed in first) until it's answered.
 fn from_outside(ctx: &egui::Context, app: &mut CockpitApp, call: &str) -> crate::remote::Answer {
-    let door = app.desk.remote.door(ctx);
+    let door = app.page.wake(ctx);
     let answer = std::rc::Rc::new(std::cell::RefCell::new(None));
     let kept = answer.clone();
     door.knock(call, Box::new(move |a| *kept.borrow_mut() = Some(a)));

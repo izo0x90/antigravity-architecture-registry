@@ -245,7 +245,7 @@ impl AppState {
     /// A project's server; home follows the servers its state database lists.
     pub fn new(p: Parts) -> Result<Self, nah_state::StateError> {
         let gate = Gate { cockpit: p.cockpit, access: p.access, tickets: Arc::default() };
-        let home = crate::home::Home::start(p.state.clone(), p.hub.clone(), p.notify.clone())?;
+        let home = crate::home::Home::start(p.state.clone(), p.hub.clone(), p.notify.clone(), true)?;
         let stopping = Shutdown::default();
         Ok(Self {
             server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },

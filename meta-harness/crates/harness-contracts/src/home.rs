@@ -29,6 +29,13 @@ pub struct ServerView {
     /// Where it is (empty for `here`).
     pub url: String,
     pub link: LinkState,
+    /// It serves a project (a home with none serves only the cockpit).
+    #[serde(default = "yes")]
+    pub project: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

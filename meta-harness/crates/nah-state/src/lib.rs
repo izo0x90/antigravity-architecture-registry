@@ -90,6 +90,26 @@ impl StateDb {
         })
     }
 
+    /// The cockpit's own state as home keeps it (which server it shows,
+    /// its settings): none before it ever saved.
+    pub fn ui_shell(&self) -> Result<Option<Value>, StateError> {
+        self.transaction(|tx| {
+            let text: Option<String> = tx.query_row("SELECT json FROM ui_shell WHERE id = 1", [], |r| r.get(0)).optional().map_err(failed)?;
+            text.map(|t| serde_json::from_str(&t).map_err(failed)).transpose()
+        })
+    }
+
+    pub fn set_ui_shell(&self, state: &Value) -> Result<(), StateError> {
+        if !state.is_object() {
+            return Err(StateError::Invalid("the cockpit's own state is a JSON object".into()));
+        }
+        let text = serde_json::to_string(state).map_err(failed)?;
+        self.transaction(|tx| {
+            tx.execute("INSERT INTO ui_shell (id, json) VALUES (1, ?1) ON CONFLICT (id) DO UPDATE SET json = excluded.json", params![text]).map_err(failed)?;
+            Ok(())
+        })
+    }
+
     /// Replaces it (a JSON object; the shape is the cockpit's).
     pub fn set_ui_state(&self, state: &Value) -> Result<(), StateError> {
         if !state.is_object() {

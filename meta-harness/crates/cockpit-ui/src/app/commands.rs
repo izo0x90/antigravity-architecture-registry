@@ -48,6 +48,7 @@ impl CockpitApp {
         }
         actions.push(Action::new("talk.open", "Talk to the agent from here", S::Talk).group(Group::Act).importance(SECONDARY));
         actions.extend(self.attention_actions());
+        actions.extend(self.server_actions());
         actions.push(
             Action::new("cockpit.agents", "Let agents drive the cockpit", S::Agents)
                 .detail("Agents read the screen and run actions through the server's cockpit tools, as you would")
@@ -308,6 +309,13 @@ impl CockpitApp {
             | ShellCommand::AttentionOpenSlot
             | ShellCommand::AttentionDismiss
             | ShellCommand::BrowserAlerts => self.run_attention(command, value, ctx),
+            ShellCommand::ServerSwitch
+            | ShellCommand::ServerAdd
+            | ShellCommand::ServerConnect
+            | ShellCommand::ServerDisconnect
+            | ShellCommand::ServerRemove
+            | ShellCommand::ServerShutdown
+            | ShellCommand::ServerShutdownConfirm => self.run_server(command, value, ctx),
             ShellCommand::FocusSlot(slot) => {
                 self.desk.columns.focus(slot);
             }

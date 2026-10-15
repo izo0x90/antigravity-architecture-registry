@@ -16,6 +16,7 @@ pub(crate) fn routes() -> Router<CockpitState> {
     Router::new()
         .route("/api/ui/config", get(ui_config_handler))
         .route("/api/ui/state", get(get_ui_state).put(put_ui_state))
+        .route("/api/ui/shell", get(get_ui_shell).put(put_ui_shell))
         .route("/cockpit", get(crate::cockpit::launch))
         .route("/ws/cockpit", get(crate::remote::socket))
         .route("/api/cockpit/ticket", post(ticket))
@@ -37,6 +38,17 @@ async fn get_ui_state(_: Needs<can::ViewRead>, State(state): State<CockpitState>
 /// The cockpit saves its state (only the cockpit's user can).
 async fn put_ui_state(_: Needs<can::SessionsControl>, State(state): State<CockpitState>, Json(body): Json<serde_json::Value>) -> Result<StatusCode, StateFailed> {
     with_state(&state.state, move |db| db.set_ui_state(&body)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The cockpit's own state on home: which server it shows, its settings
+/// (each server keeps its own desk's layout).
+async fn get_ui_shell(_: Needs<can::ViewRead>, State(state): State<CockpitState>) -> Result<Json<Option<serde_json::Value>>, StateFailed> {
+    Ok(Json(with_state(&state.state, |db| db.ui_shell()).await?))
+}
+
+async fn put_ui_shell(_: Needs<can::SessionsControl>, State(state): State<CockpitState>, Json(body): Json<serde_json::Value>) -> Result<StatusCode, StateFailed> {
+    with_state(&state.state, move |db| db.set_ui_shell(&body)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

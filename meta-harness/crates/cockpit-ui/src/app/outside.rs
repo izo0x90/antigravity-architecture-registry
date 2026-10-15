@@ -3,10 +3,13 @@
 use super::*;
 
 impl CockpitApp {
-    /// Runs the calls from outside that came since the last frame.
+    /// Runs the calls from outside that came since the last frame: the
+    /// page's, and the shown server's agents'.
     pub(super) fn serve_calls(&mut self, ctx: &egui::Context) {
         use crate::remote::Call;
-        for (call, respond) in self.desk.remote.take(ctx, &self.desk.net) {
+        let mut calls = self.page.take();
+        calls.extend(self.desk.remote.take(ctx, &self.home));
+        for (call, respond) in calls {
             match call {
                 Call::Read => self.desk.remote.answer_screen(respond),
                 Call::Actions => respond(Ok(self.actions_listed())),
@@ -17,6 +20,26 @@ impl CockpitApp {
                 Call::Click { text, x, y } => self.desk.remote.click(text, x.zip(y).map(|(x, y)| egui::pos2(x, y)), respond),
                 Call::Type { text } => self.desk.remote.type_text(text, respond),
                 Call::Keys { keys } => self.desk.remote.keys(&keys, respond),
+            }
+        }
+    }
+
+    /// Calls from this desk's server while another is shown: it runs what
+    /// it asks on its own desk (a graph moves there, nothing switches); a
+    /// read says what's there and that the screen shows another server;
+    /// clicks, typing and keys need the screen, so they're refused.
+    pub(super) fn serve_calls_away(&mut self, ctx: &egui::Context) {
+        use crate::remote::Call;
+        for (call, respond) in self.desk.remote.take(ctx, &self.home) {
+            let elsewhere = || format!("the screen shows another server: this one ({}) isn't on it; server.switch shows it", self.desk.server);
+            match call {
+                Call::Read => {
+                    let status = self.remote_status();
+                    respond(Ok(serde_json::json!({ "shown": false, "server": self.desk.server, "columns": status.columns, "note": elsewhere() })));
+                }
+                Call::Actions => respond(Ok(self.actions_listed())),
+                Call::Run { id, value } => respond(self.run_named(&id, value, ctx).map(|()| serde_json::json!({ "ran": id, "shown": false }))),
+                Call::Click { .. } | Call::Type { .. } | Call::Keys { .. } => respond(Err(elsewhere())),
             }
         }
     }

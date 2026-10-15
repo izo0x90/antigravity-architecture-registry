@@ -6,6 +6,10 @@
 use super::*;
 
 pub struct Desk {
+    /// Its server's name (`here`: home's own).
+    pub server: String,
+    /// It was shown once (and loaded what it shows then).
+    pub opened: bool,
     pub net: NetClient,
     pub chat: ChatStreamState,
     pub code: CodeViewerState,
@@ -55,9 +59,12 @@ pub struct Desk {
 }
 
 impl Desk {
-    pub fn new(net: NetClient, host_origin: &str) -> Self {
+    /// Server `name`'s desk, its calls going through home at `host_origin`.
+    pub fn new(host_origin: &str, name: &str) -> Self {
         Self {
-            net,
+            server: name.to_owned(),
+            opened: false,
+            net: NetClient::for_server(host_origin, name),
             chat: ChatStreamState::default(),
             code: CodeViewerState::default(),
             graph: GraphState::default(),
@@ -73,7 +80,7 @@ impl Desk {
             fresh: Vec::new(),
             types: None,
             keeper: Default::default(),
-            remote: crate::remote::Remote::new(host_origin),
+            remote: crate::remote::Remote::new(host_origin, name),
             jumps: JumpList::default(),
             marks: BTreeMap::new(),
             searches: BTreeMap::new(),

@@ -56,6 +56,22 @@ pub struct Door {
 }
 
 impl Door {
+    /// A way in of its own (the page's: it drives whatever's shown).
+    pub fn new() -> Self {
+        Self { inbox: Rc::default(), ctx: None }
+    }
+
+    /// Wakes the cockpit for calls through it.
+    pub fn wake(&mut self, ctx: &egui::Context) -> Self {
+        self.ctx = Some(ctx.clone());
+        self.clone()
+    }
+
+    /// The calls come through it since last taken.
+    pub fn take(&self) -> Vec<(Call, Responder)> {
+        self.inbox.borrow_mut().drain(..).collect()
+    }
+
     /// Takes a call as JSON; the answer goes to `respond`.
     pub fn knock(&self, call: &str, respond: Responder) {
         match serde_json::from_str::<Call>(call) {
@@ -132,9 +148,11 @@ pub struct Status {
 }
 
 impl Remote {
-    pub fn new(host_origin: &str) -> Self {
+    /// Server `name`'s way in (through home, at `host_origin`).
+    pub fn new(host_origin: &str, name: &str) -> Self {
         let base = host_origin.trim_end_matches('/');
-        let socket_url = base.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1) + "/ws/cockpit";
+        let through = if name == harness_contracts::home::HERE { String::new() } else { format!("/s/{name}") };
+        let socket_url = base.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1) + &through + "/ws/cockpit";
         Self {
             door: Door { inbox: Rc::default(), ctx: None },
             feed: VecDeque::new(),
@@ -149,18 +167,20 @@ impl Remote {
         }
     }
 
-    /// The way in for scripts in the page.
-    pub fn door(&mut self, ctx: &egui::Context) -> Door {
-        self.door.ctx = Some(ctx.clone());
-        self.door.clone()
-    }
-
     /// The calls come in since last frame (and the socket kept open or
     /// closed as the user says).
     pub fn take(&mut self, ctx: &egui::Context, net: &crate::net::NetClient) -> Vec<(Call, Responder)> {
         self.door.ctx.get_or_insert_with(|| ctx.clone());
         self.keep_socket(ctx, net);
         self.door.inbox.borrow_mut().drain(..).collect()
+    }
+
+    /// What's still to feed in and to answer moves to `to` (the desk shown
+    /// now: the screen those answers are about is its).
+    pub fn hand_over(&mut self, to: &mut Remote) {
+        to.feed.extend(self.feed.drain(..));
+        to.after_feed.append(&mut self.after_feed);
+        to.end_of_frame.append(&mut self.end_of_frame);
     }
 
     /// Feeds the next frame's input in (from `raw_input_hook`).
@@ -266,8 +286,8 @@ impl Remote {
     }
 
     /// Opens the server's way in while agents may drive (with a ticket
-    /// asked for first; a dropped one again now and then), closes it when
-    /// not; takes the calls that came.
+    /// asked for first, from home: `home`; a dropped one again now and
+    /// then), closes it when not; takes the calls that came.
     fn keep_socket(&mut self, ctx: &egui::Context, net: &crate::net::NetClient) {
         if !self.agents {
             self.socket = None;

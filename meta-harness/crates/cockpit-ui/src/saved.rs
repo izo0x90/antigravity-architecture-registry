@@ -36,9 +36,6 @@ pub struct SavedUi {
     pub jumps: JumpList,
     /// What was typed and not sent, by chat view (its pane's number).
     pub drafts: BTreeMap<u32, String>,
-    /// The browser's notifications are on.
-    #[serde(default)]
-    pub browser_alerts: bool,
     /// The user lets agents drive the cockpit.
     #[serde(default)]
     pub agents: bool,
@@ -169,7 +166,7 @@ mod tests {
     use super::*;
 
     fn state(draft: &str) -> SavedUi {
-        SavedUi { version: VERSION, columns: Columns::default(), views: Vec::new(), pinned: Vec::new(), used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), drafts: BTreeMap::from([(0, draft.into())]), browser_alerts: false, agents: false }
+        SavedUi { version: VERSION, columns: Columns::default(), views: Vec::new(), pinned: Vec::new(), used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), drafts: BTreeMap::from([(0, draft.into())]), agents: false }
     }
 
     fn arrive(keeper: &Keeper, value: Option<serde_json::Value>) {

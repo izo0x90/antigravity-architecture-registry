@@ -365,10 +365,21 @@ all of them:
   Enter sends to the lead's session (opening one if there's none), the
   agent's reply shows above it, and `Escape` closes it. Nothing moves.
 
+- **Servers:** the cockpit shows one server's project at a time and keeps
+  every linked one live (each has its own desk: views, layout, marks, its
+  agent-control link). The top bar's chip names the one shown (a dot: something
+  waits on another); `Space S S` switches, `Space S a` links one (`name
+  http://host:port secret`), `Space S c`/`S d` follow one again or stop
+  following it, `Space S r` unlinks it, `Space S x` shuts one down (after
+  you confirm). Each desk's calls and layout go to its own server through
+  home; which one is shown is kept on home. A home with no project shows
+  the first server it links to.
+
 - **What needs you:** the top bar counts what waits on you (approvals,
   questions, sign-ins) and the updates (crashes, failed and finished
   turns, messages); click one for its list (`Space N` waiting, `Space u`
-  updates). `Space n` opens the oldest waiting one in the quick look: where
+  updates; every server's, each said by name). `Space n` opens the oldest
+  waiting one, on whichever server, in the quick look: where
   it's from, the request to answer in place (`y`/`Y`/`A`/`d`, as in the
   chat), what the agent said last; `n`/`N` go to the next and previous,
   `o` opens its chat, `x` puts it away. A chat on screen puts its slot's
