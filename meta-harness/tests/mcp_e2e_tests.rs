@@ -123,7 +123,7 @@ async fn tool_results_end_with_stage_specific_next_steps() {
         });
     }
     let types = arch_graph::TypeSystem::defaults().unwrap();
-    let steps = |plan: &Plan, only: Option<&ComponentId>| meta_harness::mcp::service::next_steps(plan, &arch_graph::Graph::merge(arch_graph::Graph::default(), std::slice::from_ref(plan)), &types, only);
+    let steps = |plan: &Plan, only: Option<&ComponentId>| meta_harness::mcp::text::next_steps(plan, &arch_graph::Graph::merge(arch_graph::Graph::default(), std::slice::from_ref(plan)), &types, only);
     let text = steps(&plan, None);
     assert!(text.contains("rust:x::a (Declared): write its spec") && text.contains("let the user approve the architecture in the cockpit"));
     assert!(text.contains("rust:x::b (ArchApproved): either lay the skeleton in src/x.rs"));

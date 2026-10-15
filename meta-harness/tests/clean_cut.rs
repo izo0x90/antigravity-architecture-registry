@@ -138,7 +138,7 @@ fn the_old_mcp_surface_is_gone_from_code_docs_and_agent_files() {
         let text = std::fs::read_to_string(repo.join(agent)).unwrap();
         assert!(text.contains("`contract`") && text.contains("cockpit"), "{agent} uses the NAH tools and leaves approval to the user");
     }
-    let tools = meta_harness::mcp::tools::list_tools(&arch_graph::tree::TreeConfig::defaults().unwrap());
+    let tools = meta_harness::mcp::list_tools(&arch_graph::tree::TreeConfig::defaults().unwrap());
     let names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
     for old in old_tools {
         assert!(!names.iter().any(|n| n == old), "{old} is not served");
