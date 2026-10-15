@@ -364,3 +364,29 @@ fn lists_move_with_the_configured_keys_ctrl_j_and_k_by_default() {
     ctrl(&ctx, &mut app, egui::Key::E);
     assert_eq!(app.palette.selected(), 2);
 }
+
+/// A finger flicked sideways from `from` by `dx`, quickly.
+fn swipe(ctx: &egui::Context, app: &mut CockpitApp, from: egui::Pos2, dx: f32, at: f64) {
+    let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(7), phase, pos, force: None };
+    let to = from + egui::vec2(dx, 0.0);
+    frame_at(ctx, app, vec![touch(egui::TouchPhase::Start, from)], at);
+    frame_at(ctx, app, vec![touch(egui::TouchPhase::Move, to)], at + 0.05);
+    frame_at(ctx, app, vec![touch(egui::TouchPhase::End, to)], at + 0.1);
+    frame_at(ctx, app, vec![], at + 0.15);
+}
+
+#[test]
+fn a_swipe_runs_what_the_keymap_binds_to_it_in_the_view_it_started_on() {
+    let (ctx, mut app) = full_app();
+    app.desk.chat = crate::chat::tests::conversation();
+    let mut sub = crate::chat::tests::lead(None);
+    (sub.id, sub.role, sub.name) = (harness_contracts::SlotId::new("sub-1"), "sub".into(), "reviewer".into());
+    app.desk.chat.process_event(harness_contracts::ClientEvent::SlotUpdated { slot: sub });
+    focus(&ctx, &mut app, BufferKind::Chat);
+    let middle = app.slot_rects[app.desk.columns.focused()].center();
+    swipe(&ctx, &mut app, middle, -150.0, 1.0);
+    assert_eq!(app.desk.chat.ui.slot.as_str(), "sub-1", "left: the chat's next slot (its own binding before the shell's)");
+    swipe(&ctx, &mut app, middle, 150.0, 2.0);
+    assert_eq!(app.desk.chat.ui.slot.as_str(), harness_contracts::LEAD, "right: back");
+    assert!(UiConfig::with_overrides("[keymap.bind]\n\"chat.next_slot\" = { gestures = [\"wiggle\"] }\n").unwrap_err().contains("no gesture `wiggle`"));
+}

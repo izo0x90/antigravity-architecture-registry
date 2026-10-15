@@ -256,6 +256,8 @@ pub struct CockpitApp {
     /// An action a control asked for this frame (its id and value): run
     /// once everything is drawn, the way its key runs it.
     asked: Option<(String, Option<String>)>,
+    /// Fingers, turned into gestures (for every view).
+    touch: crate::touch::Gestures,
     /// The quick look, while it's open.
     pub quick_look: Option<QuickLook>,
     /// Which chats were said to be seen, and when.
@@ -329,6 +331,7 @@ impl CockpitApp {
 
             landing: None,
             asked: None,
+            touch: Default::default(),
             quick_look: None,
             seen: Default::default(),
             alerts,
@@ -544,6 +547,7 @@ impl CockpitApp {
 
         self.render_quick_look(ctx, &shell);
         self.render_item_controls(ctx, &shell);
+        self.touch_tick(ctx);
         self.run_asked(ctx);
         self.render_talk(ctx);
         self.render_hints(ctx);

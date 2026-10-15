@@ -1,6 +1,9 @@
-//! Touch gestures for the graph: raw finger events in, gestures out. Pure
-//! state (no egui UI), so every gesture is testable on its own; the graph
-//! decides what each gesture does. Thresholds come from `[graph.touch]`.
+//! Touch gestures: raw finger events in, gestures out. Pure state (no egui
+//! UI), so every gesture is testable on its own. The host runs one for the
+//! whole cockpit: a swipe runs what the keymap binds to it in the view it
+//! started on, a long press lists what can be done with the item under it,
+//! and a view that reads its canvas itself (the graph) gets the rest.
+//! Thresholds come from `[touch]`.
 
 use std::collections::BTreeMap;
 
@@ -20,6 +23,15 @@ pub struct TouchConfig {
     pub swipe_min: f32,
     /// Longest a swipe may take.
     pub swipe_max_ms: f64,
+}
+
+impl TouchConfig {
+    pub fn check(&self) -> Result<(), String> {
+        if self.tap_slop <= 0.0 || self.double_tap_ms <= 0.0 || self.long_press_ms <= 0.0 || self.swipe_min <= self.tap_slop || self.swipe_max_ms <= 0.0 {
+            return Err("touch: thresholds must be positive and a swipe longer than the tap slop".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,8 +70,22 @@ pub enum Gesture {
     Pan(Vec2),
     /// Two fingers spread (factor > 1) or pinched around `center`.
     Pinch { factor: f32, center: Pos2 },
-    Swipe(Swipe),
+    /// One finger flicked sideways, starting at `from`.
+    Swipe { way: Swipe, from: Pos2 },
 }
+
+impl Swipe {
+    /// Its name in the keymap (`gestures = ["swipe_left"]`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Left => "swipe_left",
+            Self::Right => "swipe_right",
+        }
+    }
+}
+
+/// Every gesture the keymap can bind.
+pub const BINDABLE: [&str; 2] = ["swipe_left", "swipe_right"];
 
 #[derive(Clone, Copy, Debug)]
 struct Track {
@@ -174,7 +200,7 @@ impl Gestures {
         }
         self.last_tap = None;
         if held_ms <= cfg.swipe_max_ms && travel.x.abs() >= cfg.swipe_min && travel.x.abs() > travel.y.abs() * 2.0 {
-            return vec![Gesture::Swipe(if travel.x > 0.0 { Swipe::Right } else { Swipe::Left })];
+            return vec![Gesture::Swipe { way: if travel.x > 0.0 { Swipe::Right } else { Swipe::Left }, from: track.start }];
         }
         Vec::new()
     }
@@ -185,7 +211,7 @@ mod tests {
     use super::*;
 
     fn cfg() -> TouchConfig {
-        crate::config::UiConfig::with_overrides("").unwrap().graph.touch
+        crate::config::UiConfig::with_overrides("").unwrap().touch
     }
 
     fn p(x: f32, y: f32) -> Pos2 {
@@ -229,9 +255,9 @@ mod tests {
         // A quick horizontal flick swipes; a slow drag doesn't.
         g.feed(3, Phase::Start, p(100.0, 300.0), 1.0, &cfg);
         g.feed(3, Phase::Move, p(100.0 + cfg.swipe_min, 305.0), 1.1, &cfg);
-        assert_eq!(g.feed(3, Phase::End, p(100.0 + cfg.swipe_min + 10.0, 305.0), 1.15, &cfg), vec![Gesture::Swipe(Swipe::Right)]);
+        assert_eq!(g.feed(3, Phase::End, p(100.0 + cfg.swipe_min + 10.0, 305.0), 1.15, &cfg), vec![Gesture::Swipe { way: Swipe::Right, from: p(100.0, 300.0) }]);
         g.feed(4, Phase::Start, p(300.0, 300.0), 2.0, &cfg);
-        assert_eq!(g.feed(4, Phase::End, p(300.0 - cfg.swipe_min - 5.0, 300.0), 2.1, &cfg), vec![Gesture::Swipe(Swipe::Left)]);
+        assert_eq!(g.feed(4, Phase::End, p(300.0 - cfg.swipe_min - 5.0, 300.0), 2.1, &cfg), vec![Gesture::Swipe { way: Swipe::Left, from: p(300.0, 300.0) }]);
         g.feed(5, Phase::Start, p(300.0, 300.0), 3.0, &cfg);
         assert!(g.feed(5, Phase::End, p(300.0 - cfg.swipe_min - 5.0, 300.0), 3.0 + cfg.swipe_max_ms / 1000.0 + 0.5, &cfg).is_empty(), "too slow");
         assert!(!g.active());

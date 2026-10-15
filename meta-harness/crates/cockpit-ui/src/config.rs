@@ -47,6 +47,8 @@ pub struct UiConfig {
     pub look: Look,
     pub graph_style: GraphStyle,
     pub graph: GraphUi,
+    /// Touch gestures' thresholds (every view's).
+    pub touch: crate::touch::TouchConfig,
     pub net: NetUi,
     pub code: CodeUi,
     pub columns: ColumnsUi,
@@ -115,6 +117,8 @@ impl UiConfig {
         config.graph_style.check(&config.theme).map_err(|e| format!("ui config: {e}"))?;
         crate::status::check(&config.status, &config.theme).map_err(|e| format!("ui config: {e}"))?;
         config.graph.check().map_err(|e| format!("ui config: {e}"))?;
+        config.touch.check().map_err(|e| format!("ui config: {e}"))?;
+        config.keymap.check_gestures().map_err(|e| format!("ui config: {e}"))?;
         if let Some((capture, token)) = config.code.highlight.iter().find(|(_, t)| config.theme.token(t).is_none()) {
             return Err(format!("ui config: code.highlight.{capture}: '{token}' is not a theme color"));
         }

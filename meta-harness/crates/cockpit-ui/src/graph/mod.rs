@@ -36,7 +36,6 @@ pub use request::{Nav, NavChange};
 use crate::graph_config::GraphUi;
 use crate::nav::Place;
 use crate::net::{NetClient, NetResult};
-use crate::touch::Gestures;
 
 /// The agent moved the view: what it showed, and where the user was.
 #[derive(Clone, Debug, PartialEq)]
@@ -142,11 +141,10 @@ pub struct GraphState {
     pub requests: GraphRequests,
     canvas: Rect,
     inbox: Arc<Mutex<Vec<Reply>>>,
-    /// Behavior settings (touch, chips), from the UI config.
+    /// Behavior settings (chips, zoom), from the UI config.
     pub ui: GraphUi,
-    gestures: Gestures,
+    /// A finger touched it (its chips show from then on).
     touch_seen: bool,
-    /// Long-pressed card and where: its actions show as chips there.
     /// The "+N" counts drawn this frame (click one to open its card).
     pub(crate) more_rects: Vec<(String, Rect)>,
     /// The camera before a search started previewing matches.
@@ -193,7 +191,6 @@ impl Default for GraphState {
             canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
             inbox: Arc::default(),
             ui: GraphUi::default(),
-            gestures: Gestures::default(),
             touch_seen: false,
             more_rects: Vec::new(),
             saved_view: None,

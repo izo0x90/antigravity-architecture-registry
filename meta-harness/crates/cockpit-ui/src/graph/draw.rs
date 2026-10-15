@@ -18,7 +18,7 @@ use crate::graph_config::ChipMode;
 use crate::graph_style::{LegendEntry, Swatch, style};
 use crate::nav::Navigable;
 use crate::theme::colors;
-use crate::touch::{Gesture, Swipe};
+use crate::touch::Gesture;
 
 /// How far out and in the camera zooms.
 const MIN_ZOOM: f32 = 0.03;
@@ -122,7 +122,10 @@ impl GraphState {
         if let Some(key) = self.reveal_after_fit.take() {
             self.bring_into_view(&key);
         }
-        let touched = self.handle_touch(ui, cx);
+        // Fingers are the host's gestures (on_gesture); the pointer egui
+        // makes of them isn't read twice.
+        let touched = ui.input(|i| i.any_touches() || i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. })));
+        self.touch_seen |= touched;
         if !touched {
             if response.dragged() {
                 self.camera.pan += response.drag_delta();
@@ -201,50 +204,12 @@ impl GraphState {
         }
     }
 
-    /// Feeds this frame's finger events to the gesture recognizer and acts on
-    /// what it sees. Returns whether fingers were involved this frame.
-    fn handle_touch(&mut self, ui: &egui::Ui, cx: &mut RunCx<'_>) -> bool {
-        let (events, time) = ui.input(|i| {
-            let touches: Vec<(u64, crate::touch::Phase, Pos2)> = i
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Touch { id, phase, pos, .. } => Some((id.0, crate::touch::Phase::from(*phase), *pos)),
-                    _ => None,
-                })
-                .collect();
-            (touches, i.time)
-        });
-        let cfg = self.ui.touch.clone();
-        let mut gestures = Vec::new();
-        for (id, phase, pos) in &events {
-            // Fingers that start on something over the graph (a control) belong to it.
-            if *phase == crate::touch::Phase::Start && (ui.ctx().layer_id_at(*pos) != Some(ui.layer_id()) || !self.canvas.contains(*pos)) {
-                continue;
-            }
-            gestures.extend(self.gestures.feed(*id, *phase, *pos, time, &cfg));
-        }
-        gestures.extend(self.gestures.tick(time, &cfg));
-        if let Some(due) = self.gestures.long_press_due(&cfg) {
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((due - time).max(0.0)));
-        }
-        let involved = !events.is_empty() || self.gestures.active();
-        if involved {
-            self.touch_seen = true;
-        }
-        for gesture in gestures {
-            if let Some(id) = self.on_gesture(gesture) {
-                *cx.asked = Some((id.to_owned(), None));
-            }
-        }
-        involved
-    }
-
-    /// What each gesture does: a tap selects (or opens a count), a double
-    /// tap goes in, a long press selects (its controls show under it), two fingers
-    /// pan and zoom, a swipe walks the jump list. The action it asks for
-    /// (run the way its key would), if any.
-    pub fn on_gesture(&mut self, gesture: Gesture) -> Option<&'static str> {
+    /// What a gesture on its canvas does (the host hands them over): a tap
+    /// selects (or opens a count), a double tap goes in, a long press
+    /// selects (its controls show under it), two fingers pan and zoom.
+    /// Swipes are the keymap's (the host runs what they're bound to).
+    pub fn on_gesture(&mut self, gesture: Gesture) {
+        self.touch_seen = true;
         match gesture {
             Gesture::Tap(pos) => {
                 match self.hit_more(pos) {
@@ -269,10 +234,8 @@ impl GraphState {
             }
             Gesture::Pan(delta) => self.camera.pan += delta,
             Gesture::Pinch { factor, center } => self.zoom_by(factor, center),
-            Gesture::Swipe(Swipe::Right) => return Some("nav.back"),
-            Gesture::Swipe(Swipe::Left) => return Some("nav.forward"),
+            Gesture::Swipe { .. } => {}
         }
-        None
     }
 
     fn chips_shown(&self) -> bool {

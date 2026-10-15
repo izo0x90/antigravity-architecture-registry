@@ -4,7 +4,6 @@
 
 use serde::Deserialize;
 
-use crate::touch::TouchConfig;
 
 /// When the on-screen chips show.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -30,7 +29,6 @@ pub struct Chips {
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct GraphUi {
-    pub touch: TouchConfig,
     pub chips: Chips,
     /// Actions under the selected card, in order (those that apply).
     pub context: Vec<String>,
@@ -69,7 +67,6 @@ impl Default for GraphUi {
             graph: GraphUi,
         }
         toml::from_str::<File>(crate::config::DEFAULTS).map(|f| f.graph).unwrap_or(GraphUi {
-            touch: TouchConfig::default(),
             chips: Chips::default(),
             context: Vec::new(),
             readable_zoom: 1.0,
@@ -84,10 +81,6 @@ impl Default for GraphUi {
 
 impl GraphUi {
     pub fn check(&self) -> Result<(), String> {
-        let t = &self.touch;
-        if t.tap_slop <= 0.0 || t.double_tap_ms <= 0.0 || t.long_press_ms <= 0.0 || t.swipe_min <= t.tap_slop || t.swipe_max_ms <= 0.0 {
-            return Err("graph.touch: thresholds must be positive and a swipe longer than the tap slop".into());
-        }
         if self.chips.size <= 0.0 {
             return Err("graph.chips.size must be positive".into());
         }

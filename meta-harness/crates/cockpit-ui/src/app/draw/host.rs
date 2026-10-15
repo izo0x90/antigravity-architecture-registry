@@ -111,6 +111,84 @@ impl CockpitApp {
         });
     }
 
+    /// This frame's fingers, as gestures, on the view each started on: a
+    /// swipe runs what the keymap binds to it there (the view's own first);
+    /// a long press puts the cursor on the item under it and lists what can
+    /// be done (the palette); a view that reads its canvas itself (the
+    /// graph) gets the rest. Taps are the pointer's (a click).
+    pub(in crate::app) fn touch_tick(&mut self, ctx: &egui::Context) {
+        let (events, time) = ctx.input(|i| {
+            let touches: Vec<(u64, crate::touch::Phase, egui::Pos2)> = i.events.iter().filter_map(|e| match e {
+                egui::Event::Touch { id, phase, pos, .. } => Some((id.0, crate::touch::Phase::from(*phase), *pos)),
+                _ => None,
+            }).collect();
+            (touches, i.time)
+        });
+        let cfg = self.config.touch.clone();
+        let mut gestures = Vec::new();
+        for (id, phase, pos) in events {
+            // A finger that starts on a control (over the views) is the control's.
+            if phase == crate::touch::Phase::Start && self.view_at(ctx, pos).is_none() {
+                continue;
+            }
+            gestures.extend(self.touch.feed(id, phase, pos, time, &cfg));
+        }
+        gestures.extend(self.touch.tick(time, &cfg));
+        if let Some(due) = self.touch.long_press_due(&cfg) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64((due - time).max(0.0)));
+        }
+        for gesture in gestures {
+            self.on_gesture(gesture, ctx);
+        }
+    }
+
+    /// The view (and its column) at `pos`: the quick look's, over its
+    /// column; else the column's. None over anything else.
+    fn view_at(&self, ctx: &egui::Context, pos: egui::Pos2) -> Option<(usize, BufferKind)> {
+        if let Some(look) = &self.quick_look
+            && ctx.memory(|m| m.area_rect(egui::Id::new("quick_look"))).is_some_and(|r| r.contains(pos))
+        {
+            return (ctx.layer_id_at(pos).map(|l| l.id) == Some(egui::Id::new("quick_look"))).then_some((look.slot, look.kind));
+        }
+        if ctx.layer_id_at(pos).is_some_and(|l| l.order != egui::Order::Background) {
+            return None;
+        }
+        let slot = self.slot_rects.iter().position(|r| r.contains(pos))?;
+        Some((slot, self.desk.columns.kind(slot)))
+    }
+
+    fn on_gesture(&mut self, gesture: crate::touch::Gesture, ctx: &egui::Context) {
+        use crate::touch::Gesture;
+        let at = match gesture {
+            Gesture::Tap(p) | Gesture::DoubleTap(p) | Gesture::LongPress(p) | Gesture::Pinch { center: p, .. } | Gesture::Swipe { from: p, .. } => Some(p),
+            Gesture::Pan(_) => None,
+        };
+        let Some((slot, kind)) = at.map_or_else(|| Some((self.desk.columns.focused(), self.focused_kind())), |p| self.view_at(ctx, p)) else { return };
+        if self.quick_look.is_none() {
+            self.desk.columns.focus(slot);
+        }
+        let own = self.desk.panel(kind).own_pointer();
+        match gesture {
+            Gesture::Swipe { way, .. } => {
+                let bound = self.bound_actions();
+                let situation = self.situation();
+                let runs = |b: &&Bound| self.config.keymap.runs_on(&b.action, way.name()) && b.action.when.holds(&situation);
+                let found = bound.iter().filter(runs).find(|b| b.origin == Origin::View(kind)).or_else(|| bound.iter().filter(runs).find(|b| b.origin == Origin::Shell));
+                if let Some(b) = found {
+                    self.asked = Some((b.action.id.clone(), None));
+                }
+            }
+            Gesture::LongPress(p) if !own => {
+                if let Some(key) = self.desk.view(kind).spots().into_iter().find(|s| s.rect.contains(p)).map(|s| s.key) {
+                    self.desk.view_mut(kind).move_to(&key);
+                    self.asked = Some(("palette.open".to_owned(), None));
+                }
+            }
+            other if own => self.desk.view_mut(kind).gesture(other),
+            _ => {}
+        }
+    }
+
     /// Runs the action a control asked for this frame.
     pub(in crate::app) fn run_asked(&mut self, ctx: &egui::Context) {
         if let Some((id, value)) = self.asked.take() {

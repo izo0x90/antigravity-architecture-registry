@@ -440,6 +440,10 @@ pub trait Navigable {
         self.enter()
     }
 
+    /// A finger gesture on its content, for a view that reads its canvas
+    /// itself (`Panel::own_pointer`): taps, long presses, two fingers.
+    fn gesture(&mut self, _gesture: crate::touch::Gesture) {}
+
     /// A search in this view changed (views that narrow what they show).
     fn on_search(&mut self, _event: SearchEvent<'_>) {}
 

@@ -333,7 +333,7 @@ fn plan_marks_show_on_cards() {
 
 #[test]
 fn fingers_select_go_in_offer_actions_pan_zoom_and_walk_back() {
-    use crate::touch::{Gesture, Swipe};
+    use crate::touch::Gesture;
     let mut g = showing(sample_tree());
     let at = |g: &GraphState, key: &str| g.to_screen(&g.card(key).unwrap().rect).center();
     let step = at(&g, "rust:a::step");
@@ -347,7 +347,7 @@ fn fingers_select_go_in_offer_actions_pan_zoom_and_walk_back() {
     g.on_gesture(Gesture::Pan(egui::vec2(30.0, 0.0)));
     g.on_gesture(Gesture::Pinch { factor: 1.5, center: egui::Pos2::new(100.0, 100.0) });
     assert!(g.camera() != before, "two fingers move the camera");
-    assert_eq!(g.on_gesture(Gesture::Swipe(Swipe::Right)), Some("nav.back"), "a swipe walks the jump list");
+
 }
 
 #[test]

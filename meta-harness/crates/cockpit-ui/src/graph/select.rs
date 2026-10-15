@@ -184,6 +184,10 @@ impl GraphState {
 }
 
 impl Navigable for GraphState {
+    fn gesture(&mut self, gesture: crate::touch::Gesture) {
+        self.on_gesture(gesture);
+    }
+
     fn place(&self) -> Place {
         Place::Graph { nav: self.nav.clone(), selection: self.selection.clone() }
     }

@@ -28,6 +28,18 @@ which_key_delay_ms = 300
 # leader path of their own get the next free keys in it).
 view_menu = ","
 
+# Touch gestures (every view): how far a finger may wander and still tap or
+# long-press, the double tap and long press times, and what's a swipe (a
+# quick sideways flick at least this long). What a swipe does is bound in
+# [keymap.bind] like a key (`gestures = ["swipe_left"]`).
+[touch]
+# Points a finger may wander and still tap or long-press.
+tap_slop = 12.0
+double_tap_ms = 320.0
+long_press_ms = 550.0
+swipe_min = 90.0
+swipe_max_ms = 450.0
+
 # Moving and picking in every list (the palette, its pickers).
 [keymap.list]
 next = ["ctrl+j", "ctrl+n", "ArrowDown"]
@@ -160,8 +172,8 @@ I = "Index"
 "nav.mark_set" = { keys = ["m"] }
 "nav.mark_jump" = { keys = ["'"] }
 # The jump list: back to where a jump left from, and forward again.
-"nav.back" = { keys = ["ctrl+o"] }
-"nav.forward" = { keys = ["ctrl+i"] }
+"nav.back" = { keys = ["ctrl+o"], gestures = ["swipe_right"] }
+"nav.forward" = { keys = ["ctrl+i"], gestures = ["swipe_left"] }
 # This view's keys.
 "nav.keys" = { leader = "?", keys = ["?"] }
 
@@ -183,8 +195,8 @@ I = "Index"
 
 "chat.insert" = { keys = ["i"] }
 "chat.clear" = { keys = ["x"] }
-"chat.next_slot" = { keys = ["J"] }
-"chat.prev_slot" = { keys = ["K"] }
+"chat.next_slot" = { keys = ["J"], gestures = ["swipe_left"] }
+"chat.prev_slot" = { keys = ["K"], gestures = ["swipe_right"] }
 
 "session.new" = { leader = "s n" }
 "session.resume" = { leader = "s r" }
@@ -201,8 +213,8 @@ I = "Index"
 # The inbox's own (in a column or the quick look): the next and previous
 # item (on whichever server), its chat, put away; y/Y/A/d (or r 1, r 2…
 # when several answers are of one kind) answer its request.
-"inbox.next" = { keys = ["J"] }
-"inbox.prev" = { keys = ["K"] }
+"inbox.next" = { keys = ["J"], gestures = ["swipe_left"] }
+"inbox.prev" = { keys = ["K"], gestures = ["swipe_right"] }
 "inbox.open_chat" = { keys = ["o"] }
 "inbox.dismiss" = { keys = ["x"] }
 
@@ -603,15 +615,6 @@ text = 8
 [graph.legend]
 min_w = 160.0
 max_w = 400.0
-
-[graph.touch]
-# Points a finger may wander and still tap or long-press.
-tap_slop = 12.0
-double_tap_ms = 320.0
-long_press_ms = 550.0
-# A swipe (back/forward in the jump list) is a quick horizontal flick at least this long.
-swipe_min = 90.0
-swipe_max_ms = 450.0
 
 # On-screen chips: "auto" (narrow screens, or after a touch), "always" or "never".
 [graph.chips]

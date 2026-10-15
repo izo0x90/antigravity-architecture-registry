@@ -222,6 +222,9 @@ pub struct Binding {
     pub leader: Option<LeaderPath>,
     #[serde(default)]
     pub keys: Vec<KeySeq>,
+    /// Touch gestures that run it, like keys (`["swipe_left"]`).
+    #[serde(default)]
+    pub gestures: Vec<String>,
 }
 
 /// Without a config: Space leader, Escape back, nothing bound.
@@ -327,6 +330,19 @@ impl KeymapConfig {
     }
 
     /// The binding for an action: by id, then aliases, then the closest wildcard.
+    /// Whether `gesture` (`"swipe_left"`) runs `action`.
+    pub fn runs_on(&self, action: &Action, gesture: &str) -> bool {
+        self.binding_for(action).is_some_and(|b| b.gestures.iter().any(|g| g == gesture))
+    }
+
+    /// Every bound gesture is one the cockpit knows.
+    pub fn check_gestures(&self) -> Result<(), String> {
+        match self.bind.iter().find_map(|(id, b)| b.gestures.iter().find(|g| !crate::touch::BINDABLE.contains(&g.as_str())).map(|g| (id, g))) {
+            Some((id, g)) => Err(format!("keymap.bind.\"{id}\": no gesture `{g}` (there are {})", crate::touch::BINDABLE.join(", "))),
+            None => Ok(()),
+        }
+    }
+
     fn binding_for(&self, action: &Action) -> Option<&Binding> {
         let names: Vec<&str> = std::iter::once(action.id.as_str()).chain(action.aliases.iter().map(String::as_str)).collect();
         if let Some(found) = names.iter().find_map(|n| self.bind.get(*n)) {
