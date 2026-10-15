@@ -25,6 +25,7 @@
 /api/home/servers/w1 DELETE
 /api/home/servers/w1/connect POST
 /api/home/servers/w1/disconnect POST
+/s/w1/ws/events GET,HEAD
 /api/notifications/seen POST
 /api/notifications/n1/dismiss POST
 /api/fs/read GET,HEAD
@@ -77,3 +78,4 @@
 /api/arch/plans/p1/queue/start POST
 /api/arch/plans/p1/queue/stop POST
 /api/arch/plans/p1/queue/retry POST
+/s/w1/api/slots ANY

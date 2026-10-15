@@ -75,6 +75,7 @@ const ROUTES: &[&str] = &[
     "/api/home/servers/w1",
     "/api/home/servers/w1/connect",
     "/api/home/servers/w1/disconnect",
+    "/s/w1/ws/events",
     "/api/notifications/seen",
     "/api/notifications/n1/dismiss",
     "/api/fs/read",
@@ -157,6 +158,11 @@ async fn the_http_routes_are_as_pinned() {
         assert!(status == 405 && !methods.is_empty(), "{path} is a route (PATCH is no route's method): {status} [{methods}]");
         out.push_str(&format!("{path} {methods}\n"));
     }
+    // Home's pass-through takes every method (PATCH included): refused
+    // here only for want of the cockpit's session.
+    let (status, _) = allowed(addr, "/s/w1/api/slots").await;
+    assert_eq!(status, 403, "the pass-through is a route for every method");
+    out.push_str("/s/w1/api/slots ANY\n");
     let (_, methods) = allowed(addr, "/api/no/such/route").await;
     assert!(methods.is_empty(), "an unknown path isn't mistaken for a route: [{methods}]");
     golden("http_routes.txt", &out);

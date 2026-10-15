@@ -60,6 +60,8 @@ nah-notify = { path = "crates/nah-notify" }
 include_dir = "0.7"
 clap = { version = "4", features = ["derive"] }
 tokio-tungstenite = "0.29"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 dirs = "7"
 async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["ws"] }

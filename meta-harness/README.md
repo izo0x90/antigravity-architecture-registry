@@ -52,7 +52,10 @@ a project's server). It follows each one's events and sends them, by
 name, on `/ws/home`, with the list whenever it changes. A server that
 stops answering is tried again (waiting longer each time) and is a
 notification until it's back; disconnecting one stops following it and
-leaves it running.
+leaves it running. `/s/{server}/...` is that server's `/...` through home
+(sockets too, at `/s/{server}/ws/...`), streamed both ways: home adds the
+server's secret and drops the cookie, and the server checks what the call
+needs.
 
 The agent harness and each language's server are packs, installed by the
 binary itself (see [Packs](#packs)). To build and install the ones you need:

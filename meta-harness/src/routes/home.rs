@@ -22,6 +22,27 @@ pub(crate) fn routes() -> Router<HomeState> {
         .route("/api/home/servers/{name}/connect", post(connect))
         .route("/api/home/servers/{name}/disconnect", post(disconnect))
         .route("/ws/home", get(home_socket))
+        .route("/s/{server}/ws/{*rest}", get(pass_socket))
+        .route("/s/{server}/{*rest}", axum::routing::any(pass))
+}
+
+/// `/s/{server}/...`: that server's `/...` (it checks what the call needs).
+async fn pass(_: Needs<can::ViewRead>, State(state): State<HomeState>, Path((server, rest)): Path<(String, String)>, request: axum::extract::Request) -> axum::response::Response {
+    match crate::home::pass::entry(&state.home, &server) {
+        Some(entry) => crate::home::pass::request(&state.home.client, &entry, &rest, request).await,
+        None => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({ "error": format!("home links to no server named {server:?}") }))).into_response(),
+    }
+}
+
+/// `/s/{server}/ws/...`: that server's socket, bridged both ways.
+async fn pass_socket(_: Ticketed, ws: WebSocketUpgrade, State(state): State<HomeState>, Path((server, rest)): Path<(String, String)>, uri: axum::http::Uri) -> axum::response::Response {
+    match crate::home::pass::entry(&state.home, &server) {
+        Some(entry) => {
+            let query = uri.query().map(str::to_owned);
+            ws.on_upgrade(move |socket| crate::home::pass::socket(socket, entry, format!("ws/{rest}"), query)).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({ "error": format!("home links to no server named {server:?}") }))).into_response(),
+    }
 }
 
 async fn list(_: Needs<can::ViewRead>, State(state): State<HomeState>) -> Json<Vec<ServerView>> {

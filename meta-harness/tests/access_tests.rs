@@ -8,8 +8,8 @@ use common::{http_anonymous, spawn_app};
 
 /// Open on purpose: health, the launch link, the agents' endpoint (their
 /// session's key says who they are), and the sockets (a ticket each).
-const OPEN_HANDLERS: &[&str] = &["crate::cockpit::launch", "mcp_sse_proxy", "mcp_messages_proxy", "ws_events_handler", "crate::remote::socket", "home_socket"];
-const OPEN_PATHS: &[&str] = &["/health", "/cockpit", "/api/mcp/sse", "/api/mcp/messages", "/ws/events", "/ws/cockpit", "/ws/home"];
+const OPEN_HANDLERS: &[&str] = &["crate::cockpit::launch", "mcp_sse_proxy", "mcp_messages_proxy", "ws_events_handler", "crate::remote::socket", "home_socket", "pass_socket"];
+const OPEN_PATHS: &[&str] = &["/health", "/cockpit", "/api/mcp/sse", "/api/mcp/messages", "/ws/events", "/ws/cockpit", "/ws/home", "/s/w1/ws/events"];
 
 #[test]
 fn every_routed_handler_takes_needs_first() {
@@ -51,6 +51,7 @@ async fn a_request_with_no_credentials_is_refused_everywhere_but_the_open_routes
         if OPEN_PATHS.contains(&path) {
             continue;
         }
+        let methods = if methods == "ANY" { "GET,POST,PUT,DELETE,PATCH" } else { methods };
         for method in methods.split(',').filter(|m| *m != "HEAD") {
             let (status, body) = http_anonymous(addr, method, path, Some("{}")).await;
             assert_eq!(status, 403, "{method} {path}: {body}");

@@ -4,6 +4,7 @@
 //! requests on to the server they're for.
 
 pub mod links;
+pub mod pass;
 pub mod socket;
 
 use std::sync::Arc;
@@ -15,6 +16,8 @@ use harness_core::EventHub;
 pub struct Home {
     pub db: Arc<nah_state::StateDb>,
     pub links: Arc<links::Links>,
+    /// Passes the cockpit's requests on to the servers.
+    pub client: pass::HttpClient,
     /// Home's own events: its project's, else only its notifications.
     pub here: Arc<EventHub>,
 }
@@ -27,7 +30,7 @@ impl Home {
     /// Home over its state database, following every server listed there.
     pub fn start(db: Arc<nah_state::StateDb>, here: Arc<EventHub>, notify: Arc<nah_notify::NotifyHub>) -> Result<Arc<Self>, nah_state::StateError> {
         let links = links::Links::start(db.servers()?, notify);
-        Ok(Arc::new(Self { db, links, here }))
+        Ok(Arc::new(Self { db, links, here, client: pass::client() }))
     }
 
     /// Every server: home's own first, then the others as added.
