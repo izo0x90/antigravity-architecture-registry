@@ -133,8 +133,8 @@ The baseline is committed (`626df30`, `77182a9`, `76e5907`).
 `mod.rs` (types, struct, `process_event`, getters), `session.rs` (open, send, steer, tick, drain, saved sessions, tools), `render.rs`, `nav.rs` (`Navigable`), `actions.rs` (`ChatCommand`, `ActionProvider`), `tests.rs`.
 
 ### B3. `src/server.rs` → `src/routes/`
-- New route files: `harness.rs`, `ui.rs`, `files.rs`, `feedback.rs`, `tool_servers.rs`, `events.rs`.
-- `arch.rs`, `graph.rs` and `queue.rs` move there unchanged.
+- New route files: `cockpit.rs` (health, launch, UI config and state, the cockpit-control socket and ticket), `harness.rs` (instances and threads), `mcp.rs` (the agents' endpoint), `tool_servers.rs`, `files.rs`, `feedback.rs`, `events.rs`.
+- `arch.rs`, `graph.rs` and `queue.rs` stay where they are. They're already one module per concern, and two of them hold more than routes: `queue.rs` has the runner, and `arch.rs` has helpers the MCP tools use.
 - `server.rs` keeps `AppState`, the error types, `create_router`, `bridge_architecture_events`, `queue_runner`, `static_dir`.
 
 ### B4. MCP service → tool sets

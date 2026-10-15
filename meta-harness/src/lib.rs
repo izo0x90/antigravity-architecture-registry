@@ -6,6 +6,7 @@ pub mod packs;
 pub mod project;
 pub mod queue;
 pub mod remote;
+mod routes;
 pub mod server;
 pub mod tool_servers;
 pub mod watch;
