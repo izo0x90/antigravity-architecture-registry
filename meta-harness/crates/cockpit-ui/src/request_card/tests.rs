@@ -25,39 +25,6 @@ fn request() -> RuntimeRequest {
     }
 }
 
-/// Clicking an option hands it back (to be sent as a key sends it).
-#[test]
-fn clicking_an_option_says_which() {
-    let ctx = egui::Context::default();
-    let request = request();
-    let mut drafts = Drafts::default();
-    let mut picked = None;
-    let mut run = |events: Vec<egui::Event>| {
-        let input = egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
-        ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                if let Some(option) = render_request(ui, &request, &mut drafts, &Shown::default()).clicked {
-                    picked = Some(option);
-                }
-            });
-        })
-    };
-    fn find(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
-        match shape {
-            egui::Shape::Text(t) if t.galley.text() == label => Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center()),
-            egui::Shape::Vec(list) => list.iter().find_map(|s| find(s, label)),
-            _ => None,
-        }
-    }
-    let drawn = run(vec![]);
-    let at = drawn.shapes.iter().find_map(|c| find(&c.shape, "Skip")).expect("the Skip button is drawn");
-    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
-    run(vec![egui::Event::PointerMoved(at)]);
-    run(vec![button(true)]);
-    run(vec![button(false)]);
-    assert_eq!(picked.as_deref(), Some("decline"));
-}
-
 #[test]
 fn an_answers_key_is_its_kinds_only_when_its_the_only_one_of_its_kind() {
     let mut asked = request();
@@ -88,13 +55,12 @@ fn picks_and_typed_answers_make_the_response_and_skipping_sends_none() {
 }
 
 /// Everything drawn, as text.
-fn texts(request: &RuntimeRequest, hints: &[(String, String)], cursor: Option<&str>) -> (String, Vec<String>) {
+fn texts(request: &RuntimeRequest) -> String {
     let ctx = egui::Context::default();
     let mut drafts = Drafts::default();
-    let mut rows = Vec::new();
     let out = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() }, |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            rows = render_request(ui, request, &mut drafts, &Shown { cursor, hints }).rows.into_iter().map(|(o, _)| o).collect();
+            render_request(ui, request, &mut drafts);
         });
     });
     fn all(shape: &egui::Shape, out: &mut Vec<String>) {
@@ -106,7 +72,7 @@ fn texts(request: &RuntimeRequest, hints: &[(String, String)], cursor: Option<&s
     }
     let mut text = Vec::new();
     out.shapes.iter().for_each(|c| all(&c.shape, &mut text));
-    (text.join("\n"), rows)
+    text.join("\n")
 }
 
 fn asked(kind: RequestKind, options: &[(&str, ApprovalDecision, &str)]) -> RuntimeRequest {
@@ -126,14 +92,19 @@ fn asked(kind: RequestKind, options: &[(&str, ApprovalDecision, &str)]) -> Runti
 }
 
 #[test]
-fn a_question_reads_as_one_with_its_answers_and_their_keys_and_an_approval_as_what_it_would_do() {
+fn a_question_reads_as_one_its_answers_a_list_under_it_and_an_approval_as_what_it_would_do() {
+    use crate::actions::{Action, At, Style, Tone};
     let question = asked(RequestKind::Question, &[("1", ApprovalDecision::Answer, "Redis"), ("2", ApprovalDecision::Answer, "Postgres")]);
-    let hints = [("request.q.1".to_owned(), "SPC r 1".to_owned()), ("request.q.2".to_owned(), "SPC r 2".to_owned())];
-    let (text, rows) = texts(&question, &hints, Some("2"));
+    let text = texts(&question);
     assert!(text.contains("Asks you") && !text.to_lowercase().contains("permission"), "{text}");
-    assert!(text.contains("Redis   SPC r 1") && text.contains("Postgres   SPC r 2"), "each answer with its key: {text}");
-    assert_eq!(rows, ["1", "2"], "where each answer is, for a cursor");
+    assert!(!text.contains("Redis"), "its answers aren't the card's: they're its actions: {text}");
+    let shown: Vec<(String, Style, Tone)> = answers(&question).into_iter().map(|a| (a.caption, a.style, a.tone)).collect();
+    assert_eq!(shown, [("Redis".to_owned(), Style::Choice, Tone::Plain), ("Postgres".to_owned(), Style::Choice, Tone::Plain)], "a list to pick from");
+    let answer = answers(&question).remove(0);
+    assert_eq!(answer.place(Action::new(answer.id.clone(), answer.label.clone(), ()), false).at(), None, "away from it: keys and the palette only");
+    assert_eq!(answer.place(Action::new(answer.id.clone(), answer.label.clone(), ()), true).at(), Some(At::Item), "on it: under it");
     let command = asked(RequestKind::Approval { action: harness_contracts::ToolAction::Command }, &[("allow", ApprovalDecision::Accept, "Allow"), ("deny", ApprovalDecision::Decline, "Deny")]);
-    let (text, _) = texts(&command, &[], None);
-    assert!(text.contains("Wants to run a command") && text.contains("Allow") && text.contains("Deny"), "{text}");
+    assert!(texts(&command).contains("Wants to run a command"));
+    let shown: Vec<(String, Style, Tone)> = answers(&command).into_iter().map(|a| (a.caption, a.style, a.tone)).collect();
+    assert_eq!(shown, [("Allow".to_owned(), Style::Button, Tone::Ok), ("Deny".to_owned(), Style::Button, Tone::Error)]);
 }

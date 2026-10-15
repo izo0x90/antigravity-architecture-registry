@@ -340,7 +340,7 @@ fn fingers_select_go_in_offer_actions_pan_zoom_and_walk_back() {
     g.on_gesture(Gesture::Tap(step));
     assert_eq!(g.selection.as_deref(), Some("rust:a::step"), "a tap selects");
     g.on_gesture(Gesture::LongPress(step));
-    assert!(g.context.as_ref().is_some_and(|(k, _)| k == "rust:a::step"), "a long press offers its actions");
+    assert_eq!(g.selection.as_deref(), Some("rust:a::step"), "a long press selects (its controls show under it)");
     g.on_gesture(Gesture::DoubleTap(step));
     assert_eq!(g.nav.root.as_deref(), Some("rust:a::step"), "a double tap goes in");
     let before = g.camera();

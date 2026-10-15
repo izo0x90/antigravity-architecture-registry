@@ -1,8 +1,8 @@
 //! The inbox: what needs the user and what happened (the open
 //! notifications), one at a time. A view like the others: the cursor moves
-//! over its parts (what it says, each answer to its request, what the
-//! agent said last), the shared keys scroll it and label its answers, and
-//! Enter answers or opens. It shows in a column, or in the quick look over
+//! over its parts (what it says, its request, what the agent said last);
+//! on its request, the request's answers show under it (its actions, with
+//! their keys); Enter opens its chat. It shows in a column, or in the quick look over
 //! one. What it asks for beyond itself (the next item on another server,
 //! its chat, putting it away, an answer) it hands the shell as an ask.
 
@@ -42,8 +42,8 @@ pub struct Shown {
 #[derive(Clone, Debug, PartialEq)]
 enum Part {
     Says,
-    /// An answer to its request (its option).
-    Answer { option: String, label: String },
+    /// Its request (its answers show under it).
+    Request,
     Said,
 }
 
@@ -70,10 +70,10 @@ enum Command {
 }
 
 impl InboxView {
-    /// Shows item `id` from the top.
+    /// Shows item `id`, on what waits on you (its request) if it asks.
     pub fn show(&mut self, id: NotificationId) {
         if self.item.as_ref() != Some(&id) {
-            self.cursor = 0;
+            self.cursor = usize::MAX;
             self.scroll = true;
         }
         self.item = Some(id);
@@ -85,6 +85,7 @@ impl InboxView {
         let store = &chat.store;
         if self.item.is_none() {
             self.item = crate::attention::list(store, None).first().map(|n| n.id.clone());
+            self.cursor = usize::MAX;
         }
         self.shown = self.item.as_ref().and_then(|id| store.notifications.get(id)).map(|n| {
             let harness = n.slot.as_ref().and_then(|s| store.slots.get(s)).and_then(|s| s.instance_id.as_ref()).and_then(|i| store.instances.get(i)).map(|i| i.display_name.clone());
@@ -94,7 +95,11 @@ impl InboxView {
             Shown { notification: n.clone(), from, request, said }
         });
         self.at = self.item.as_ref().and_then(at);
-        self.cursor = self.cursor.min(self.parts().len().saturating_sub(1));
+        let parts = self.parts();
+        if self.cursor == usize::MAX {
+            self.cursor = parts.iter().position(|p| *p == Part::Request).unwrap_or(0);
+        }
+        self.cursor = self.cursor.min(parts.len().saturating_sub(1));
     }
 
     /// What it asked for since last taken.
@@ -104,8 +109,8 @@ impl InboxView {
 
     fn parts(&self) -> Vec<Part> {
         let Some(shown) = &self.shown else { return Vec::new() };
-        let answers = shown.request.iter().flat_map(crate::request_card::answers).map(|a| Part::Answer { option: a.option, label: a.label });
-        std::iter::once(Part::Says).chain(answers).chain(shown.said.as_ref().map(|_| Part::Said)).collect()
+        let request = shown.request.as_ref().map(|_| Part::Request);
+        std::iter::once(Part::Says).chain(request).chain(shown.said.as_ref().map(|_| Part::Said)).collect()
     }
 
     fn put_cursor(&mut self, at: usize) {
@@ -141,7 +146,6 @@ impl InboxView {
         let parts = self.parts();
         let mut drawn = Vec::new();
         let (cursor, scroll) = (self.cursor, std::mem::take(&mut self.scroll));
-        let cursor_at = cursor;
         let mark = |ui: &mut egui::Ui, rect: egui::Rect, index: usize, drawn: &mut Vec<Spot>| {
             drawn.push(Spot { key: index.to_string(), rect });
             if index == cursor {
@@ -165,22 +169,10 @@ impl InboxView {
             mark(ui, says, 0, &mut drawn);
             if let (Some(thread), Some(request)) = (&shown.notification.thread, &shown.notification.request) {
                 ui.add_space(theme.space_sm);
-                // The card's own answers are the cursor's parts (and the hints').
-                let cursor = match parts.get(cursor) {
-                    Some(Part::Answer { option, .. }) => Some(option.as_str()),
-                    _ => None,
-                };
-                match chat.render_request_of(ui, cx.net, thread, request, &crate::request_card::Shown { cursor, hints: cx.hints }) {
+                match chat.render_request_of(ui, thread, request) {
                     Some(card) => {
-                        for (index, part) in parts.iter().enumerate() {
-                            if let Part::Answer { option, .. } = part
-                                && let Some((_, rect)) = card.rows.iter().find(|(o, _)| o == option)
-                            {
-                                drawn.push(Spot { key: index.to_string(), rect: *rect });
-                                if index == cursor_at && scroll {
-                                    ui.scroll_to_rect(*rect, Some(egui::Align::Center));
-                                }
-                            }
+                        if let Some(index) = parts.iter().position(|p| *p == Part::Request) {
+                            mark(ui, card, index, &mut drawn);
                         }
                     }
                     None => {
@@ -238,10 +230,9 @@ impl Navigable for InboxView {
         }
     }
 
-    /// An answer under the cursor answers; anything else opens its chat.
+    /// Opens its chat.
     fn enter(&mut self) -> Step {
-        match self.parts().get(self.cursor).cloned() {
-            Some(Part::Answer { option, .. }) => self.answer(option),
+        match self.parts().get(self.cursor) {
             Some(_) => self.open_chat(),
             None => Step::Nothing("Nothing needs you.".into()),
         }
@@ -252,10 +243,8 @@ impl Navigable for InboxView {
     }
 
     fn enter_label(&self) -> Option<String> {
-        match self.parts().get(self.cursor)? {
-            Part::Answer { label, .. } => Some(label.clone()),
-            _ => self.shown.as_ref()?.notification.slot.as_ref().map(|_| "Open its chat".to_owned()),
-        }
+        self.parts().get(self.cursor)?;
+        self.shown.as_ref()?.notification.slot.as_ref().map(|_| "Open its chat".to_owned())
     }
 
     fn can_leave(&self) -> bool {
@@ -276,7 +265,7 @@ impl Navigable for InboxView {
             .map(|(i, part)| {
                 let text = match part {
                     Part::Says => format!("{} {}", shown.notification.title, shown.notification.detail.clone().unwrap_or_default()),
-                    Part::Answer { label, .. } => label.clone(),
+                    Part::Request => shown.request.as_ref().map(|r| r.title.clone()).unwrap_or_default(),
                     Part::Said => shown.said.clone().unwrap_or_default(),
                 };
                 Item::new(i.to_string(), "", text)
@@ -308,15 +297,10 @@ impl ActionProvider for InboxView {
             out.push(act("inbox.next", "Next", Command::Step(1)).importance(PRIMARY).header(Style::Button, "", Some(icon::CARET_RIGHT)));
         }
         let Some(shown) = &self.shown else { return out };
+        // Under its request while you're on it.
+        let here = self.parts().get(self.cursor) == Some(&Part::Request);
         for answer in shown.request.iter().flat_map(crate::request_card::answers) {
-            let mut action = act(&answer.id, &answer.label, Command::Answer(answer.option)).importance(PRIMARY);
-            if let Some(alias) = answer.alias {
-                action = action.alias(alias);
-            }
-            if let Some(w) = answer.warning {
-                action = action.detail(w);
-            }
-            out.push(action);
+            out.push(answer.place(act(&answer.id, &answer.label, Command::Answer(answer.option.clone())).importance(PRIMARY), here));
         }
         if shown.notification.slot.is_some() {
             out.push(act("inbox.open_chat", "Open its chat", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its chat", Some(icon::CHAT_TEARDROP_TEXT)));

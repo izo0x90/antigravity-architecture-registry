@@ -98,6 +98,11 @@ impl ActionProvider for GraphState {
         let (found, waiting) = self.find_choices();
         let find = Param::Search { hint: "a name, a file, or words in a line".into(), found, waiting };
         out.push(f("graph.find", "Find in the code (symbols, files, lines)", G::Find).param(find).header(Button, "", Some(egui_phosphor::regular::MAGNIFYING_GLASS)).group(Group::Navigate).importance(SECONDARY).jump());
+        // Too big to show whole: only the levels that fit.
+        if let Some(cut) = self.tree.as_ref().and_then(|t| t.cut.as_ref()).filter(|c| c.shown < c.asked && c.shown > 0) {
+            let delta = cut.shown as i32 - self.depth() as i32;
+            out.push(f("graph.fit_levels", &format!("Show only the {} levels that fit", cut.shown), G::Depth(delta)).header(Button, format!("Show {} levels", cut.shown), None).group(Group::View).importance(SECONDARY).jump());
+        }
         if self.agent.is_some() {
             out.push(f("graph.agent_return", "Return to where you were before the agent moved the view", G::AgentReturn).header(Button, "Return", Some(egui_phosphor::regular::ARROW_U_UP_LEFT)).group(Group::Navigate).importance(PRIMARY).jump());
         }

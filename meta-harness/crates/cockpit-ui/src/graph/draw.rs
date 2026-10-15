@@ -11,7 +11,7 @@ use egui::{Align2, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKin
 use arch_graph::tree::{Card, Line as TreeLine, LineKind, Rect as WorldRect, ViewKind, Way, card_lines, count_text};
 
 use super::{Camera, GraphState, Load, NavChange};
-use crate::actions::{Action, At, Control, RunCx, Style};
+use crate::actions::{At, Control, RunCx, Style};
 use crate::panel::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
 use crate::graph_config::ChipMode;
@@ -199,7 +199,6 @@ impl GraphState {
         if self.legend_open {
             self.draw_legend(&painter);
         }
-        self.render_chips(ui, cx);
     }
 
     /// Feeds this frame's finger events to the gesture recognizer and acts on
@@ -219,8 +218,8 @@ impl GraphState {
         let cfg = self.ui.touch.clone();
         let mut gestures = Vec::new();
         for (id, phase, pos) in &events {
-            // Fingers that start on a chip belong to the chip.
-            if *phase == crate::touch::Phase::Start && (self.chip_rects.iter().any(|(_, r)| r.contains(*pos)) || !self.canvas.contains(*pos)) {
+            // Fingers that start on something over the graph (a control) belong to it.
+            if *phase == crate::touch::Phase::Start && (ui.ctx().layer_id_at(*pos) != Some(ui.layer_id()) || !self.canvas.contains(*pos)) {
                 continue;
             }
             gestures.extend(self.gestures.feed(*id, *phase, *pos, time, &cfg));
@@ -242,13 +241,12 @@ impl GraphState {
     }
 
     /// What each gesture does: a tap selects (or opens a count), a double
-    /// tap goes in, a long press offers the card's actions, two fingers
+    /// tap goes in, a long press selects (its controls show under it), two fingers
     /// pan and zoom, a swipe walks the jump list. The action it asks for
     /// (run the way its key would), if any.
     pub fn on_gesture(&mut self, gesture: Gesture) -> Option<&'static str> {
         match gesture {
             Gesture::Tap(pos) => {
-                self.close_context();
                 match self.hit_more(pos) {
                     Some(key) => self.navigate(NavChange::Open(key)),
                     None => {
@@ -266,8 +264,7 @@ impl GraphState {
             },
             Gesture::LongPress(pos) => {
                 if let Some(key) = self.hit(pos) {
-                    self.select(Some(key.clone()));
-                    self.context = Some((key, pos));
+                    self.select(Some(key));
                 }
             }
             Gesture::Pan(delta) => self.camera.pan += delta,
@@ -286,62 +283,6 @@ impl GraphState {
         }
     }
 
-    /// On-screen chips along the canvas top, and a long-pressed card's
-    /// actions next to it: the same actions the keys run.
-    fn render_chips(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        use crate::actions::ActionProvider;
-        self.chip_rects.clear();
-        let mut actions = self.actions();
-        actions.extend(cx.shell.iter().cloned());
-        let size = self.ui.chips.size;
-        let mut run: Option<Action> = None;
-        if self.chips_shown() {
-            let bar = Rect::from_min_max(self.canvas.min + Vec2::splat(6.0), Pos2::new(self.canvas.max.x - 6.0, self.canvas.min.y + size * 2.0 + 12.0));
-            let wanted: Vec<&Action> = self.ui.chips.actions.iter().filter_map(|id| actions.iter().find(|a| &a.id == id)).collect();
-            ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for action in wanted {
-                        let text = action.glyph().map_or_else(|| action.label.clone(), str::to_owned);
-                        let response = ui.add(egui::Button::new(RichText::new(text).size(size * 0.42)).min_size(Vec2::splat(size)).corner_radius(size / 2.0)).on_hover_text(&action.label);
-                        self.chip_rects.push((action.id.clone(), response.rect));
-                        if response.clicked() {
-                            run = Some(action.clone());
-                        }
-                    }
-                });
-            });
-        }
-        self.context_chips = self.chip_rects.len();
-        if let Some((_, at)) = self.context.clone() {
-            let wanted: Vec<&Action> = self.ui.context.iter().filter_map(|id| actions.iter().find(|a| &a.id == id)).collect();
-            let width = (size + 8.0) * 3.0;
-            let origin = Pos2::new(at.x.min(self.canvas.max.x - width).max(self.canvas.min.x), (at.y + 12.0).min(self.canvas.max.y - size * 2.0));
-            let panel = Rect::from_min_size(origin, Vec2::new(width, (size + 8.0) * wanted.len().div_ceil(3) as f32));
-            ui.scope_builder(egui::UiBuilder::new().max_rect(panel), |ui| {
-                egui::Frame::NONE.fill(colors().overlay).corner_radius(crate::theme::look().radius_xl).show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for action in wanted {
-                            let response = ui.add(egui::Button::new(RichText::new(&action.label).size(crate::theme::look().text_label)).min_size(Vec2::new(size, size)));
-                            self.chip_rects.push((action.id.clone(), response.rect));
-                            if response.clicked() {
-                                run = Some(action.clone());
-                            }
-                        }
-                    });
-                });
-            });
-        }
-        if let Some(action) = run {
-            self.close_context();
-            *cx.asked = Some((action.id.clone(), None));
-        }
-    }
-
-    fn close_context(&mut self) {
-        self.context = None;
-        self.chip_rects.truncate(self.context_chips);
-    }
-
     /// Where the graph is: the source, the view and way, the roots gone
     /// through (each a way back), what holds the root, how deep, what was
     /// cut, and how long it took.
@@ -350,10 +291,6 @@ impl GraphState {
             Back(usize),
             Into(String),
             Top,
-            /// The size note's fixes: show only the levels that fit, or go
-            /// into the selected card.
-            Levels(u32),
-            Enter(String),
         }
         let mut go: Option<Go> = None;
         ui.horizontal_wrapped(|ui| {
@@ -405,16 +342,9 @@ impl GraphState {
                         text.push_str(" (out of time)");
                     }
                     let (glyph, _, color) = crate::status::look("stale");
+                    // Its fixes are actions: showing the levels that fit (on
+                    // the top line), going into the selected card (under it).
                     ui.label(RichText::new(format!("{glyph} {text}")).size(look.text_body).color(color));
-                    // Its fixes, as buttons.
-                    if cut.shown < cut.asked && cut.shown > 0 && ui.small_button(format!("Show {} levels", cut.shown)).on_hover_text("Only the levels that fit").clicked() {
-                        go = Some(Go::Levels(cut.shown));
-                    }
-                    if let Some(card) = self.selected_card().filter(|c| self.nav.root.as_deref() != Some(c.key.as_str()))
-                        && ui.small_button(format!("Go into {}", card.label)).on_hover_text("Start from it: what's under it fits").clicked()
-                    {
-                        go = Some(Go::Enter(card.key.clone()));
-                    }
                 }
                 if let Some(ms) = tree.slow_ms {
                     ui.label(RichText::new(format!("· slow: {ms} ms")).size(look.text_body).color(colors().warn))
@@ -432,11 +362,6 @@ impl GraphState {
             }
             Some(Go::Into(key)) => self.pointer_jump(NavChange::View { view: ViewKind::Contains, root: Some(key) }),
             Some(Go::Top) => self.pointer_jump(NavChange::Top),
-            Some(Go::Levels(levels)) => {
-                let base = self.depth();
-                self.pointer_jump(NavChange::Depth { delta: levels as i32 - base as i32, base });
-            }
-            Some(Go::Enter(key)) => self.pointer_jump(NavChange::GoIn(key)),
             None => {}
         }
     }
@@ -720,15 +645,9 @@ impl GraphState {
         let width = rows.iter().map(|(head, _, g)| if head.is_some() { g.size().x + pad * 2.0 } else { g.size().x + pad * 2.0 + swatch_w + gap }).fold(0.0f32, f32::max).min(max_w);
         let row_min = look.space_l + look.space_xs;
         let height: f32 = rows.iter().map(|(_, _, g)| g.size().y.max(row_min) + look.space_s).sum::<f32>() + pad * 2.0;
-        let mut top = self.canvas.min.y + look.space_m;
+        let top = self.canvas.min.y + look.space_m;
         let left = self.canvas.max.x - width - look.space_m;
-        let footprint = Rect::from_min_size(Pos2::new(left, top), Vec2::new(width, height));
-        for (_, chip) in &self.chip_rects {
-            if chip.intersects(footprint) {
-                top = top.max(chip.max.y + look.space_m);
-            }
-        }
-        let rect = Rect::from_min_size(Pos2::new(left, top), Vec2::new(width, height)).intersect(self.canvas);
+                let rect = Rect::from_min_size(Pos2::new(left, top), Vec2::new(width, height)).intersect(self.canvas);
         painter.rect_filled(rect, look.radius_l, theme.overlay);
         let mut y = rect.min.y + pad;
         for (head, entry, galley) in rows {
@@ -850,13 +769,22 @@ impl crate::panel::Panel for GraphState {
         out
     }
 
-    /// The jump list's back and forward, and reading changed code again.
-    fn shell_controls(&self) -> Vec<(&'static str, Control)> {
-        let button = |caption: &str, icon: Option<&'static str>| Control::new(At::Header, Style::Button, caption, icon);
-        let mut out = vec![("nav.forward", button("", Some(egui_phosphor::regular::ARROW_RIGHT))), ("nav.back", button("", Some(egui_phosphor::regular::ARROW_LEFT)))];
+    /// On its top line: the jump list's back and forward, reading changed
+    /// code again, and (on touch or narrow screens) the chips; under the
+    /// selected card, the actions for it (`[graph] context`).
+    fn placed(&self) -> Vec<(String, Control)> {
+        let header = |icon: Option<&'static str>, caption: &str| Control::new(At::Header, Style::Button, caption, icon);
+        let mut out = vec![("nav.back".to_owned(), header(Some(egui_phosphor::regular::ARROW_LEFT), "")), ("nav.forward".to_owned(), header(Some(egui_phosphor::regular::ARROW_RIGHT), ""))];
         if !self.stale_files.is_empty() {
-            out.insert(0, ("index.changed", button("Re-read", None)));
+            out.push(("index.changed".to_owned(), header(None, "Re-read")));
+        }
+        if self.chips_shown() {
+            out.extend(self.ui.chips.actions.iter().filter(|id| !out.iter().any(|(o, _)| o == *id)).map(|id| (id.clone(), header(None, ""))).collect::<Vec<_>>());
+        }
+        if self.selection.is_some() {
+            out.extend(self.ui.context.iter().map(|id| (id.clone(), Control::new(At::Item, Style::Button, "", None))));
         }
         out
     }
+
 }

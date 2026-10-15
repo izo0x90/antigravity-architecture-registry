@@ -490,9 +490,6 @@ impl CodeViewerState {
                     ui.horizontal_wrapped(|ui| {
                         crate::status::chip(ui, "stale", None);
                         ui.label(RichText::new("This file changed since it was indexed: marks and spans may be off.").size(crate::theme::look().text_body).color(colors().text));
-                        if let Some(reread) = cx.shell.iter().find(|a| a.id == "index.file").map(|a| a.clone().header(crate::actions::Style::Button, "Re-read it", None)) {
-                            crate::actions::control(ui, &reread, cx);
-                        }
                     });
                 });
             }
@@ -507,11 +504,7 @@ impl CodeViewerState {
             if self.lines.is_empty() && !self.is_loading {
                 ui.vertical_centered(|ui| {
                     ui.add_space(crate::theme::look().space_xxxl);
-                    ui.label(RichText::new("No file content loaded.").size(crate::theme::look().text_label).color(colors().muted));
-                    if ui.button("Load Cargo.toml").clicked() {
-                        let ctx = ui.ctx().clone();
-                        self.load_file("Cargo.toml", None, net, ctx);
-                    }
+                    ui.label(RichText::new("No file open: type a path above, or go to one from the graph.").size(crate::theme::look().text_label).color(colors().muted));
                 });
                 return;
             }
@@ -689,6 +682,15 @@ impl crate::panel::Panel for CodeViewerState {
     fn title(&self) -> Status {
         let name = self.current_file.rsplit('/').next().unwrap_or(&self.current_file);
         Status::new(format!("{} {name}", egui_phosphor::regular::FILE_CODE), Tone::Plain).detail(self.current_file.clone())
+    }
+
+    /// Out of date with the index: reading it again, on its top line.
+    fn placed(&self) -> Vec<(String, crate::actions::Control)> {
+        if self.out_of_date && !self.lines.is_empty() {
+            vec![("index.file".to_owned(), crate::actions::Control::new(crate::actions::At::Header, Style::Button, "Re-read it", None))]
+        } else {
+            Vec::new()
+        }
     }
 
     /// Loading, and out of date with the index.

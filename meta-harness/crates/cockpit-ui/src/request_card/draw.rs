@@ -2,25 +2,10 @@
 
 use egui::{Frame, RichText, Stroke};
 use egui_phosphor::regular as icon;
-use harness_contracts::{ApprovalDecision, ApprovalOption, Question, RequestKind, RequestStatus, RuntimeRequest, ToolAction};
+use harness_contracts::{Question, RequestKind, RequestStatus, RuntimeRequest, ToolAction};
 
 use super::drafts::{Drafts, value};
 use crate::theme::colors;
-
-/// How it's shown: the answer the cursor is on (its option), and each
-/// action's key as bound now (an answer's action: `request.<id>.<option>`).
-#[derive(Default)]
-pub struct Shown<'a> {
-    pub cursor: Option<&'a str>,
-    pub hints: &'a [(String, String)],
-}
-
-/// What drawing it gave: the answer clicked, and where each answer is.
-#[derive(Default)]
-pub struct Drawn {
-    pub clicked: Option<String>,
-    pub rows: Vec<(String, egui::Rect)>,
-}
 
 /// What it says it is, in words, with its mark and colours.
 fn heading(kind: RequestKind) -> (&'static str, &'static str, egui::Color32, egui::Color32) {
@@ -35,14 +20,11 @@ fn heading(kind: RequestKind) -> (&'static str, &'static str, egui::Color32, egu
     }
 }
 
-fn says_yes(option: &ApprovalOption) -> bool {
-    matches!(option.decision, ApprovalDecision::Accept | ApprovalDecision::AcceptForSession | ApprovalDecision::AcceptAlways)
-}
-
-pub fn render_request(ui: &mut egui::Ui, request: &RuntimeRequest, drafts: &mut Drafts, shown: &Shown) -> Drawn {
+/// Draws what's asked (and a form's fields); its answers are its actions,
+/// shown under it while the cursor is on it. Where it's drawn.
+pub fn render_request(ui: &mut egui::Ui, request: &RuntimeRequest, drafts: &mut Drafts) -> egui::Rect {
     let look = crate::theme::look();
     let (glyph, what, color, fill) = heading(request.kind);
-    let mut drawn = Drawn::default();
     Frame::NONE.fill(fill).stroke(Stroke::new(look.line_thin, color)).corner_radius(look.radius_m).inner_margin(crate::theme::margin(look.space_m)).show(ui, |ui| {
         ui.label(RichText::new(format!("{glyph} {what}")).strong().size(look.text_small).color(color));
         let title = RichText::new(&request.title).size(look.text_label).color(colors().text_strong);
@@ -61,52 +43,9 @@ pub fn render_request(ui: &mut egui::Ui, request: &RuntimeRequest, drafts: &mut 
         for question in &request.questions {
             render_question(ui, request, question, drafts);
         }
-        // A question's answers are a list to pick from; anything else
-        // (allow or deny, a form's submit or skip, done) a row of buttons.
-        let list = request.kind == RequestKind::Question && request.questions.is_empty();
-        let complete = drafts.complete(request);
-        let key = |option: &ApprovalOption| {
-            let id = format!("request.{}.{}", request.id, option.id);
-            crate::actions::key_of(shown.hints, &id).map(str::to_owned)
-        };
-        let mut row = |ui: &mut egui::Ui, option: &ApprovalOption| {
-            let enabled = !says_yes(option) || complete;
-            let tint = match option.decision {
-                ApprovalDecision::Decline | ApprovalDecision::Cancel => colors().error,
-                ApprovalDecision::Answer => colors().text,
-                _ => colors().ok,
-            };
-            let text = match key(option) {
-                Some(k) => format!("{}   {k}", option.label),
-                None => option.label.clone(),
-            };
-            let on = shown.cursor == Some(option.id.as_str());
-            let response = if list {
-                ui.add_enabled(enabled, egui::Button::selectable(on, RichText::new(format!("{} {text}", icon::CARET_RIGHT)).size(look.text_body).color(tint)).min_size(egui::vec2(ui.available_width(), 0.0)))
-            } else {
-                let button = egui::Button::new(RichText::new(text).size(look.text_body).color(tint)).selected(on);
-                ui.add_enabled(enabled, button)
-            };
-            let response = match &option.warning {
-                Some(w) => response.on_hover_text(w),
-                None if !enabled => response.on_disabled_hover_text("Answer the questions it needs first."),
-                None => response,
-            };
-            if on {
-                ui.painter().rect_stroke(response.rect.expand(2.0), look.radius_m, Stroke::new(look.line_thin, colors().focus), egui::StrokeKind::Outside);
-            }
-            if response.clicked() {
-                drawn.clicked = Some(option.id.clone());
-            }
-            drawn.rows.push((option.id.clone(), response.rect));
-        };
-        if list {
-            ui.vertical(|ui| request.options.iter().for_each(|o| row(ui, o)));
-        } else {
-            ui.horizontal_wrapped(|ui| request.options.iter().for_each(|o| row(ui, o)));
-        }
-    });
-    drawn
+    })
+    .response
+    .rect
 }
 
 fn render_question(ui: &mut egui::Ui, request: &RuntimeRequest, question: &Question, drafts: &mut Drafts) {

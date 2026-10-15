@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use arch_graph::{Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, ComponentDetail, ComponentId, Finding, PlanDiff, RelationKind, Report, Severity, Source};
 use egui::{Rect, RichText};
 
-use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style, When, key_tip};
+use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style, When};
 use crate::panel::{Status, Tone};
 use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, SpecItem, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
@@ -189,6 +189,8 @@ pub struct SpecState {
     /// Items drawn last frame, and where; and the viewport.
     spots: Vec<Spot>,
     view: Rect,
+    /// Where the comment box is, while it's typed in.
+    typing: Option<Rect>,
     inbox: Arc<Mutex<Vec<Reply>>>,
 }
 
@@ -219,6 +221,7 @@ impl Default for SpecState {
             restore_item: None,
             spots: Vec::new(),
             view: Rect::NOTHING,
+            typing: None,
             inbox: Arc::default(),
         }
     }
@@ -602,7 +605,6 @@ impl SpecState {
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        let hints = cx.hints;
         self.tick(cx.net, cx.ctx);
         self.render_composer(ui, cx);
         let Some(detail) = self.detail.clone() else {
@@ -781,21 +783,13 @@ impl SpecState {
                                     ui.horizontal_wrapped(|ui| {
                                         crate::status::chip(ui, "stale", None);
                                         ui.label(RichText::new("This code changed since it was indexed; the excerpt may be old.").size(crate::theme::look().text_body).color(colors().muted));
-                                        if ui.small_button("Re-read it").clicked() {
-                                            clicked = Some(Click::Reread);
-                                        }
                                     });
                                 }
-                                let mut open_code = false;
                                 item(ui, Entry { section, item: SpecItem::Source }, &mut |ui| {
                                     egui::Frame::NONE.fill(colors().bg).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).corner_radius(crate::theme::look().radius_m).show(ui, |ui| {
                                         ui.label(RichText::new(code).monospace().size(crate::theme::look().text_body));
                                     });
-                                    open_code |= ui.button("Open in the code view").on_hover_text(key_tip(hints, "goto.code")).clicked();
                                 });
-                                if open_code {
-                                    clicked = Some(Click::OpenCode);
-                                }
                             }
                             None => {
                                 ui.label(RichText::new("Not in the code yet.").color(colors().muted));
@@ -840,9 +834,7 @@ impl SpecState {
                         }
                     }
                     for comment in self.comments_in(Some(section)) {
-                        if let Some(click) = render_thread(ui, comment, self.point.as_ref(), section, &mut item, hints) {
-                            clicked = Some(click);
-                        }
+                        render_thread(ui, comment, self.point.as_ref(), section, &mut item);
                     }
                 });
             }
@@ -855,13 +847,7 @@ impl SpecState {
                 self.fold(Fold::Toggle);
             }
             Some(Click::Follow(id)) => self.requests.select = Some(id),
-            Some(Click::Reread) => self.requests.reread = self.code_location().map(|(file, _, _)| file),
             Some(Click::OpenCode) => self.requests.open_code = self.code_location(),
-            Some(Click::Accept(id)) => self.accept(&id, cx.net, cx.ctx),
-            Some(Click::Compose(id, purpose)) => {
-                self.point = Some(id);
-                self.start_composing(purpose);
-            }
             None => {}
         }
     }
@@ -869,6 +855,7 @@ impl SpecState {
     /// The review line under the toolbar: what changed since the review, and
     /// the composer when writing a comment, reply or reason to reopen.
     fn render_composer(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
+        self.typing = None;
         let Some(composer) = self.composer.as_mut() else { return };
         let what = match (&composer.purpose, &composer.anchor) {
             (Compose::New(kind), Some(CommentAnchor::Relation { kind: rel, source, target })) => {
@@ -891,18 +878,9 @@ impl SpecState {
         if output.clicked() || output.gained_focus() {
             *cx.input_mode = crate::keymap::InputMode::Insert { slot: cx.slot };
         }
-        let enter = inserting && output.has_focus() && ui.input(|i| crate::keymap::local().input.sent(i).is_some());
-        let (mut send, mut cancel) = (enter, false);
-        ui.horizontal(|ui| {
-            send |= ui.button("Send").on_hover_text(crate::keymap::local().input.send_label()).clicked();
-            cancel = ui.button("Cancel").clicked();
-        });
-        if cancel {
-            self.composer = None;
-        } else if send {
+        self.typing = inserting.then_some(output.rect);
+        if inserting && output.has_focus() && ui.input(|i| crate::keymap::local().input.sent(i).is_some()) {
             self.send_composer(cx.net, cx.ctx);
-        }
-        if (cancel || send) && inserting {
             *cx.input_mode = crate::keymap::InputMode::Normal;
         }
     }
@@ -910,12 +888,9 @@ impl SpecState {
 
 /// What a click in the spec asks for.
 enum Click {
-    Reread,
     Header(Section),
     Follow(ComponentId),
     OpenCode,
-    Accept(CommentId),
-    Compose(CommentId, Compose),
 }
 
 /// Draws one cursor stop (`Entry`), its contents drawn by the closure given.
@@ -923,8 +898,7 @@ type ItemDrawer<'a> = dyn FnMut(&mut egui::Ui, Entry, &mut dyn FnMut(&mut egui::
 
 /// One comment thread: the comment and its replies are cursor stops; its
 /// buttons name their keys.
-fn render_thread(ui: &mut egui::Ui, c: &Comment, point: Option<&CommentId>, section: Section, item: &mut ItemDrawer, hints: &[(String, String)]) -> Option<Click> {
-    let mut clicked = None;
+fn render_thread(ui: &mut egui::Ui, c: &Comment, point: Option<&CommentId>, section: Section, item: &mut ItemDrawer) {
     let (label, color) = match c.status {
         CommentStatus::Open => ("OPEN", colors().warn),
         CommentStatus::Answered => ("ANSWERED", colors().info),
@@ -954,23 +928,7 @@ fn render_thread(ui: &mut egui::Ui, c: &Comment, point: Option<&CommentId>, sect
                 ui.label(RichText::new(format!("   {}", ch.describe())).size(crate::theme::look().text_small).monospace().color(colors().muted));
             }
         }
-        if !c.is_addressed() {
-            ui.horizontal(|ui| {
-                if c.status == CommentStatus::Answered {
-                    if ui.small_button("Accept").on_hover_text(key_tip(hints, "spec.accept")).clicked() {
-                        clicked = Some(Click::Accept(c.id.clone()));
-                    }
-                    if ui.small_button("Reopen").on_hover_text(key_tip(hints, "spec.reopen")).clicked() {
-                        clicked = Some(Click::Compose(c.id.clone(), Compose::Reopen(c.id.clone())));
-                    }
-                }
-                if ui.small_button("Reply").on_hover_text(key_tip(hints, "spec.reply")).clicked() {
-                    clicked = Some(Click::Compose(c.id.clone(), Compose::Reply(c.id.clone())));
-                }
-            });
-        }
     });
-    clicked
 }
 
 /// A relation's name as listed, and how it's known (for its hover): a
@@ -1002,7 +960,10 @@ fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum SpecCommand {
+    Send,
     CancelCompose,
+    /// Read the component's code again (it changed since it was read).
+    Reread,
     NextSection,
     PrevSection,
     /// Go to the section (its index in `Section::ALL`).
@@ -1023,7 +984,8 @@ impl ActionProvider for SpecState {
         let f = |id: &str, label: &str, c: SpecCommand| Action::new(id, label, c).focused();
         let mut out = vec![];
         if self.composer.is_some() {
-            out.push(f("spec.cancel", "Throw away what's being written", S::CancelCompose).importance(PRIMARY));
+            out.push(f("spec.send", "Send what's written", S::Send).importance(PRIMARY).on_typing(Style::Button, "Send", Some(egui_phosphor::regular::PAPER_PLANE_RIGHT)));
+            out.push(f("spec.cancel", "Throw away what's being written", S::CancelCompose).importance(PRIMARY).on_typing(Style::Button, "Cancel", None));
         }
         out.extend([
             f("spec.next_section", "Next section", S::NextSection).group(Group::Navigate),
@@ -1054,12 +1016,15 @@ impl ActionProvider for SpecState {
             let points = if self.open_points().is_empty() { When::Unavailable } else { When::Always };
             out.push(f("spec.next_point", "Next open review point", S::Point { forward: true }).group(Group::Navigate).importance(if on_comment { SECONDARY } else { PRIMARY }).when(points).jump());
             out.push(f("spec.prev_point", "Previous open review point", S::Point { forward: false }).group(Group::Navigate).importance(MINOR).when(points).jump());
+            // On an open point, its controls are under it.
+            let on_open = self.comment_here().is_some_and(|c| !c.is_addressed());
+            let under = |a: Action, caption: &str| if on_open { a.on_item(Style::Button, caption, None) } else { a };
             if self.reply_point().is_some() {
-                out.push(f("spec.reply", "Reply to this point", S::Reply).importance(if on_comment { PRIMARY } else { SECONDARY }));
+                out.push(under(f("spec.reply", "Reply to this point", S::Reply).importance(if on_comment { PRIMARY } else { SECONDARY }), "Reply"));
             }
             if self.answered_point().is_some() {
-                out.push(f("spec.accept", "Accept the answer to this point", S::Accept).importance(PRIMARY));
-                out.push(f("spec.reopen", "Reopen this point (say why)", S::Reopen).importance(SECONDARY));
+                out.push(under(f("spec.accept", "Accept the answer to this point", S::Accept).importance(PRIMARY), "Accept"));
+                out.push(under(f("spec.reopen", "Reopen this point (say why)", S::Reopen).importance(SECONDARY), "Reopen"));
             }
         }
         out.push(
@@ -1069,6 +1034,9 @@ impl ActionProvider for SpecState {
                 .group(Group::Navigate)
                 .importance(MINOR),
         );
+        if self.out_of_date && self.detail.as_ref().is_some_and(|d| d.code.is_some()) {
+            out.push(f("spec.reread", "Read this code again (it changed since)", S::Reread).header(Style::Button, "Re-read", None).importance(MINOR));
+        }
         out
     }
 
@@ -1103,7 +1071,15 @@ impl ActionProvider for SpecState {
                 }
                 None => *cx.note = Some("Only an answered point can be reopened.".into()),
             },
-            Some(SpecCommand::CancelCompose) => self.composer = None,
+            Some(SpecCommand::CancelCompose) => {
+                self.composer = None;
+                *cx.input_mode = crate::keymap::InputMode::Normal;
+            }
+            Some(SpecCommand::Send) => {
+                self.send_composer(cx.net, cx.ctx);
+                *cx.input_mode = crate::keymap::InputMode::Normal;
+            }
+            Some(SpecCommand::Reread) => self.requests.reread = self.code_location().map(|(file, _, _)| file),
             Some(SpecCommand::NextSection) => self.step_section(1),
             Some(SpecCommand::PrevSection) => self.step_section(-1),
             Some(SpecCommand::Section) => {
@@ -1300,6 +1276,18 @@ impl crate::panel::Panel for SpecState {
             Some(d) => Status::new(d.component.name.clone(), Tone::Plain).detail(d.component.id.as_str()),
             None => Status::new("Spec", Tone::Muted),
         }
+    }
+
+    /// On its code: going to it in the code view.
+    fn placed(&self) -> Vec<(String, crate::actions::Control)> {
+        match self.entries().get(self.cursor).map(|e| &e.item) {
+            Some(SpecItem::Source) => vec![("goto.code".to_owned(), crate::actions::Control::new(crate::actions::At::Item, Style::Button, "Open in the code view", None))],
+            _ => Vec::new(),
+        }
+    }
+
+    fn typing_rect(&self) -> Option<Rect> {
+        self.typing
     }
 
     /// What changed since the plan was reviewed (items that changed carry

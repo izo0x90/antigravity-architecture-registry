@@ -207,3 +207,5 @@ fn indexing_shows_its_state_everywhere_and_can_be_run_from_the_cockpit() {
     // Every state names a real icon and colour (config is checked).
     assert!(UiConfig::with_overrides("[status.stale]\nword = \"old\"\nicon = \"nope\"\ncolor = \"warn\"\n").unwrap_err().contains("unknown icon"));
 }
+
+

@@ -1,39 +1,14 @@
 //! What a view tells its host about itself, and the header the host draws
 //! from it. A view draws its content; its top line (a title, what it's
 //! doing, and the controls for the whole view) is the host's, the same for
-//! every view: the title, then each status, then the view's header controls
-//! (buttons on the right, settings on a row under them).
+//! every view: the title, then each status, then the view's header buttons
+//! (one line that wraps), and its settings on a row under them.
 
 use egui::RichText;
 
 use crate::actions::{Action, At, Control, RunCx, Style};
-use crate::theme::colors;
 
-/// How a status reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tone {
-    Plain,
-    Muted,
-    Accent,
-    Info,
-    Ok,
-    Warn,
-    Error,
-}
-
-impl Tone {
-    fn color(self) -> egui::Color32 {
-        match self {
-            Self::Plain => colors().text,
-            Self::Muted => colors().muted,
-            Self::Accent => colors().accent,
-            Self::Info => colors().info,
-            Self::Ok => colors().ok,
-            Self::Warn => colors().warn,
-            Self::Error => colors().error,
-        }
-    }
-}
+pub use crate::actions::Tone;
 
 /// One thing the view says about what it's doing (signed in as, loading,
 /// files changed, tokens used…).
@@ -66,10 +41,22 @@ pub trait Panel {
         Vec::new()
     }
 
-    /// The shell's actions it shows on its top line too (by id), with their
-    /// controls: the graph's back and forward, its re-read.
-    fn shell_controls(&self) -> Vec<(&'static str, Control)> {
+    /// Actions it shows (its own or the shell's, by id), with the control
+    /// it gives them here: the graph's back and forward on its top line, a
+    /// card's go-tos under it.
+    fn placed(&self) -> Vec<(String, Control)> {
         Vec::new()
+    }
+
+    /// Where you are, when it isn't the cursor's item (a chat following
+    /// the latest: what's waiting on you there).
+    fn here(&self) -> Option<String> {
+        None
+    }
+
+    /// Where its typing box is, while it's typed in (its controls go under).
+    fn typing_rect(&self) -> Option<egui::Rect> {
+        None
     }
 }
 
@@ -88,31 +75,33 @@ pub fn header(ui: &mut egui::Ui, panel: &dyn Panel, actions: &[Action], cx: &mut
             label.on_hover_text(detail);
         }
     };
-    ui.horizontal(|ui| {
+    // One line that wraps (a narrow column, a phone): nothing overlaps.
+    ui.horizontal_wrapped(|ui| {
         said(ui, &panel.title(), true);
         for status in panel.status() {
             said(ui, &status, false);
         }
-        // On the right, in the order listed (drawn right to left).
-        let buttons: Vec<&Action> = at_header(Style::Button).collect();
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| crate::actions::controls(ui, buttons.into_iter().rev(), cx));
+        crate::actions::controls(ui, at_header(Style::Button), cx);
     });
     if at_header(Style::Setting).next().is_some() {
         ui.horizontal_wrapped(|ui| crate::actions::controls(ui, at_header(Style::Setting), cx));
     }
 }
 
-/// The shell actions a panel shows, with the controls it gives them.
-pub fn borrowed(panel: &dyn Panel, shell: &[Action]) -> Vec<Action> {
-    panel
-        .shell_controls()
-        .into_iter()
-        .filter_map(|(id, control)| {
-            shell.iter().find(|a| a.id == id).map(|a| {
-                let mut a = a.clone();
-                a.control = Some(control);
-                a
-            })
-        })
-        .collect()
+/// A panel's actions as it shows them: its own (`own`), with the controls
+/// it places, and the shell's it places too.
+pub fn placed(panel: &dyn Panel, mut own: Vec<Action>, shell: &[Action]) -> Vec<Action> {
+    for (id, control) in panel.placed() {
+        match own.iter_mut().find(|a| a.id == id) {
+            Some(a) => a.control = Some(control),
+            None => {
+                if let Some(a) = shell.iter().find(|a| a.id == id) {
+                    let mut a = a.clone();
+                    a.control = Some(control);
+                    own.push(a);
+                }
+            }
+        }
+    }
+    own
 }

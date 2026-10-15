@@ -18,7 +18,7 @@ use crate::actions::{Action, ActionProvider, Choice, MINOR, Param, RunCx, Style}
 use crate::feedback::FeedbackInspectorState;
 use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, Spot, Step, Target};
 use crate::net::{AuthChallenge, NetClient, NetResult, OpenSlotSession, SlotOpened};
-use crate::request_card::{Drafts, Drawn, Shown, render_request};
+use crate::request_card::{Drafts, render_request};
 use crate::store::{Store, ThreadView};
 use crate::theme::colors;
 
@@ -91,7 +91,6 @@ pub struct ChatStreamState {
     tools_asked: bool,
     /// A sign-in under way: the page to open and what to paste back.
     login: Option<AuthChallenge>,
-    auth_paste: String,
     /// Answers being given to the agent's questions.
     drafts: Drafts,
     mailbox: Mailbox,
@@ -116,6 +115,8 @@ pub struct ChatView {
     pub(crate) spots: Vec<Spot>,
     pub(crate) drawing: Vec<Spot>,
     pub(crate) view: Rect,
+    /// Where its typing box is, while it's typed in.
+    pub(crate) typing: Option<Rect>,
 }
 
 impl Default for ChatView {
@@ -131,6 +132,7 @@ impl Default for ChatView {
             spots: Vec::new(),
             drawing: Vec::new(),
             view: Rect::NOTHING,
+            typing: None,
         }
     }
 }
@@ -211,6 +213,11 @@ impl ChatStreamState {
     /// answer so.)
     pub fn answer(&mut self, net: &NetClient, ctx: &egui::Context, thread: &ThreadId, request: &harness_contracts::RequestId, option: &str) {
         let Some(pending) = self.store.threads.get(thread).and_then(|t| t.request(request)) else { return };
+        let says_yes = pending.options.iter().find(|o| o.id == option).is_some_and(|o| matches!(o.decision, harness_contracts::ApprovalDecision::Accept | harness_contracts::ApprovalDecision::AcceptForSession | harness_contracts::ApprovalDecision::AcceptAlways));
+        if says_yes && !self.drafts.complete(pending) {
+            self.notice = Some("Answer the questions it needs first.".into());
+            return;
+        }
         let response = self.drafts.response(pending, option);
         let slot = self.store.slots.values().find(|s| s.current_thread() == Some(thread)).map_or_else(|| self.ui.slot.clone(), |s| s.id.clone());
         let mailbox = self.mailbox.clone();
@@ -219,13 +226,15 @@ impl ChatStreamState {
 
     /// Draws `thread`'s request `request` (the inbox's) as `shown`,
     /// answering what's clicked as the keys do; none when it's no longer there.
-    pub fn render_request_of(&mut self, ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, request: &harness_contracts::RequestId, shown: &Shown) -> Option<Drawn> {
+    pub fn render_request_of(&mut self, ui: &mut egui::Ui, thread: &ThreadId, request: &harness_contracts::RequestId) -> Option<Rect> {
         let asked = self.store.threads.get(thread).and_then(|t| t.request(request)).cloned()?;
-        let drawn = render_request(ui, &asked, &mut self.drafts, shown);
-        if let Some(option) = &drawn.clicked {
-            self.answer(net, ui.ctx(), thread, request, option);
-        }
-        Some(drawn)
+        Some(render_request(ui, &asked, &mut self.drafts))
+    }
+
+    /// The stream item (its index) of the request waiting on you here.
+    pub(crate) fn pending_item(&self) -> Option<usize> {
+        let pending = self.thread()?.requests.iter().find(|r| r.status == RequestStatus::Pending)?.id.clone();
+        self.stream().iter().position(|i| matches!(&i.body, ItemBody::Request { request_id } if *request_id == pending))
     }
 
     /// The slot this view shows.

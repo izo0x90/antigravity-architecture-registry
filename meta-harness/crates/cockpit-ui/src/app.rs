@@ -543,6 +543,7 @@ impl CockpitApp {
         self.feedback.render_toast(ctx);
 
         self.render_quick_look(ctx, &shell);
+        self.render_item_controls(ctx, &shell);
         self.run_asked(ctx);
         self.render_talk(ctx);
         self.render_hints(ctx);

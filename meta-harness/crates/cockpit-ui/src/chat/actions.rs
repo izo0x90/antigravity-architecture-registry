@@ -36,6 +36,11 @@ enum ChatCommand {
     Login,
     CompleteLogin,
     Logout,
+    CancelLogin,
+    Send,
+    DismissNotice,
+    Retry,
+    DismissError,
     Answer { thread: ThreadId, request: harness_contracts::RequestId, option: String },
 }
 
@@ -209,7 +214,7 @@ impl ActionProvider for ChatStreamState {
             && caps.turns.active_steering
             && !self.ui.input_buffer.trim().is_empty()
         {
-            out.push(Action::new("chat.inject", "Add the prompt to what it's doing", C::AddToTurn).focused());
+            out.push(Action::new("chat.inject", "Add the prompt to what it's doing", C::AddToTurn).focused().on_typing(Button, "Add to what it's doing", None));
         }
 
         // Harness commands
@@ -230,9 +235,11 @@ impl ActionProvider for ChatStreamState {
         // Account
         if let Some(s) = snapshot.filter(|s| !s.auth.methods.is_empty()) {
             let choices = s.auth.methods.iter().map(|m| Choice::new(&m.id, &m.name).detail(m.description.clone())).collect();
-            out.push(Action::new("auth.login", "Sign in", C::Login).param(Param::Choice(choices)));
+            let login = Action::new("auth.login", "Sign in", C::Login).param(Param::Choice(choices));
+            out.push(if self.needs_login() && self.login.is_none() { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
             let hint = self.login.as_ref().and_then(|l| l.expects.clone()).unwrap_or_else(|| "what the sign-in page gave you".into());
-            out.push(Action::new("auth.complete", "Finish signing in", C::CompleteLogin).param(Param::Text { hint }));
+            let complete = Action::new("auth.complete", "Finish signing in", C::CompleteLogin).param(Param::Text { hint });
+            out.push(if self.login.as_ref().is_some_and(|l| l.expects.is_some()) { complete.header(Button, "Finish signing in", Some(icon::KEY)) } else { complete });
             out.push(Action::new("auth.logout", "Sign out", C::Logout));
         }
 
@@ -240,17 +247,27 @@ impl ActionProvider for ChatStreamState {
         if let Some(view) = view
             && let Some(request) = view.requests.iter().find(|r| r.status == RequestStatus::Pending)
         {
+            // Under the request while you're on it.
+            let here = crate::panel::Panel::here(self).or_else(|| self.ui.cursor.map(|c| c.to_string())) == self.pending_item().map(|i| i.to_string());
             for answer in crate::request_card::answers(request) {
                 let command = C::Answer { thread: view.thread.id.clone(), request: request.id.clone(), option: answer.option.clone() };
-                let mut action = Action::new(answer.id, answer.label, command).focused();
-                if let Some(alias) = answer.alias {
-                    action = action.alias(alias);
-                }
-                if let Some(w) = answer.warning {
-                    action = action.detail(w);
-                }
-                out.push(action);
+                out.push(answer.place(Action::new(answer.id.clone(), answer.label.clone(), command).focused(), here));
             }
+        }
+        // Typed in: sending it.
+        out.push(Action::new("chat.send", "Send the prompt", C::Send).focused().importance(crate::actions::PRIMARY).on_typing(Button, "Send", Some(icon::PAPER_PLANE_RIGHT)));
+        // What the chat says on its own line, and its ways out.
+        if self.login.is_some() {
+            out.push(Action::new("auth.cancel", "Stop signing in", C::CancelLogin).focused().importance(MINOR).header(Button, "Cancel sign-in", None));
+        }
+        if self.notice.is_some() {
+            out.push(Action::new("chat.dismiss", "Put the notice away", C::DismissNotice).focused().importance(MINOR).header(Button, "Dismiss", None));
+        }
+        if self.error().is_some() {
+            if self.active_thread().is_none() {
+                out.push(Action::new("chat.retry", "Try connecting again", C::Retry).focused().header(Button, "Retry", Some(icon::ARROW_COUNTER_CLOCKWISE)));
+            }
+            out.push(Action::new("chat.dismiss_error", "Put the error away", C::DismissError).focused().importance(MINOR).header(Button, "Dismiss", None));
         }
         out
     }
@@ -396,6 +413,18 @@ impl ActionProvider for ChatStreamState {
                 if let Some(instance) = &self.active_instance() {
                     net.logout(instance, ctx.clone(), done);
                 }
+            }
+            ChatCommand::CancelLogin => self.login = None,
+            ChatCommand::Send => {
+                let text = std::mem::take(&mut self.ui.input_buffer).trim().to_owned();
+                if !text.is_empty() {
+                    self.send_prompt(net, ctx, text);
+                }
+            }
+            ChatCommand::DismissNotice => self.notice = None,
+            ChatCommand::Retry => self.open_thread(net, ctx, None),
+            ChatCommand::DismissError => {
+                self.errors.remove(&slot);
             }
             ChatCommand::Answer { thread, request, option } => self.answer(net, ctx, thread, request, option),
         }

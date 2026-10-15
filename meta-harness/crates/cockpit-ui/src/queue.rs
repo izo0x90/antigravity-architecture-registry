@@ -180,11 +180,10 @@ impl QueueState {
         if self.view_h > 0.0 { ((self.view_h / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 5 }
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        // A job clicked, and the action asked for on it.
-        let mut clicked: Option<(usize, Option<&str>)> = None;
+    pub fn render(&mut self, ui: &mut egui::Ui, _cx: &mut RunCx<'_>) {
+        // A job clicked.
+        let mut clicked: Option<usize> = None;
         let mut spots = Vec::new();
-        let tip = |id: &str| crate::actions::key_tip(cx.hints, id);
         let scroll = std::mem::take(&mut self.scroll);
         let output = egui::ScrollArea::vertical().id_salt("queue_jobs").auto_shrink([false, false]).show(ui, |ui| {
             let Some(snapshot) = &self.snapshot else {
@@ -201,20 +200,14 @@ impl QueueState {
                     ui.horizontal_wrapped(|ui| {
                         let name = job.component.as_str().split_once(':').map_or(job.component.as_str(), |(_, s)| s);
                         if ui.selectable_label(selected, RichText::new(name).strong()).clicked() {
-                            clicked = Some((i, None));
+                            clicked = Some(i);
                         }
                         crate::status::chip(ui, crate::status::job(&job.state), None);
                         if job.attempts > 0 {
                             ui.label(RichText::new(format!("attempt {}", job.attempts + 1)).color(colors().muted));
                         }
-                        match &job.state {
-                            JobState::AwaitingApproval if ui.button(format!("Approve {:?}", job.kind.goal())).on_hover_text(tip("queue.approve")).clicked() => clicked = Some((i, Some("queue.approve"))),
-                            JobState::Failed if ui.button("Retry").on_hover_text(tip("queue.retry")).clicked() => clicked = Some((i, Some("queue.retry"))),
-                            JobState::Running { thread: Some(_) } if ui.button("Session").on_hover_text(tip("queue.open_session")).clicked() => clicked = Some((i, Some("queue.open_session"))),
-                            _ => {}
-                        }
-                        if !job.findings.is_empty() && ui.small_button(format!("{} findings", job.findings.len())).on_hover_text(tip("nav.enter")).clicked() {
-                            clicked = Some((i, Some("queue.expand")));
+                        if !job.findings.is_empty() {
+                            ui.label(RichText::new(format!("{} findings", job.findings.len())).color(colors().muted));
                         }
                     });
                     // Where it is in design, plan, skeleton, implement; and what it waits for.
@@ -242,11 +235,8 @@ impl QueueState {
         });
         self.view_h = output.inner_rect.height();
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
-        if let Some((i, asked)) = clicked {
+        if let Some(i) = clicked {
             self.selected = i;
-            if let Some(id) = asked {
-                *cx.asked = Some((id.to_owned(), None));
-            }
         }
     }
 
@@ -297,13 +287,13 @@ impl ActionProvider for QueueState {
         }
         if let Some(job) = self.job() {
             if !job.findings.is_empty() {
-                out.push(f("queue.expand", "Show or hide why the last attempt failed", Q::Expand).group(Group::View));
+                out.push(f("queue.expand", "Show or hide why the last attempt failed", Q::Expand).group(Group::View).on_item(Style::Button, "Findings", None));
             }
             // Always listed (the key sheet shows them); they apply to some jobs.
             let applies = |yes: bool| if yes { When::Always } else { When::Unavailable };
-            out.push(f("queue.approve", "Approve this component's design", Q::Approve).importance(PRIMARY).when(applies(job.state == JobState::AwaitingApproval)));
-            out.push(f("queue.retry", "Give this job another round", Q::Retry).importance(PRIMARY).when(applies(job.state == JobState::Failed)));
-            out.push(f("queue.open_session", "Open the session working on it", Q::OpenSession).group(Group::GoTo).importance(PRIMARY).when(applies(matches!(job.state, JobState::Running { thread: Some(_) }))));
+            out.push(f("queue.approve", "Approve this component's design", Q::Approve).importance(PRIMARY).when(applies(job.state == JobState::AwaitingApproval)).on_item(Style::Button, format!("Approve {:?}", job.kind.goal()), Some(egui_phosphor::regular::CHECK)));
+            out.push(f("queue.retry", "Give this job another round", Q::Retry).importance(PRIMARY).when(applies(job.state == JobState::Failed)).on_item(Style::Button, "Retry", Some(egui_phosphor::regular::ARROW_CLOCKWISE)));
+            out.push(f("queue.open_session", "Open the session working on it", Q::OpenSession).group(Group::GoTo).importance(PRIMARY).when(applies(matches!(job.state, JobState::Running { thread: Some(_) }))).on_item(Style::Button, "Session", None));
         }
         out
     }

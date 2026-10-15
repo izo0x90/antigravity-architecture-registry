@@ -82,6 +82,8 @@ pub enum At {
     Header,
     /// Under the item the cursor is on, while it's on it.
     Item,
+    /// Under the box being typed in, while it's typed in (Send…).
+    Typing,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +92,35 @@ pub enum Style {
     Button,
     /// A setting: a picker (choices) or a switch (on/off).
     Setting,
+    /// One of a list to pick from (a question's answers): a full-width row.
+    Choice,
+}
+
+/// How a control or a status reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    Plain,
+    Muted,
+    Accent,
+    Info,
+    Ok,
+    Warn,
+    Error,
+}
+
+impl Tone {
+    pub fn color(self) -> egui::Color32 {
+        let c = crate::theme::colors();
+        match self {
+            Self::Plain => c.text,
+            Self::Muted => c.muted,
+            Self::Accent => c.accent,
+            Self::Info => c.info,
+            Self::Ok => c.ok,
+            Self::Warn => c.warn,
+            Self::Error => c.error,
+        }
+    }
 }
 
 /// An action's control: where it shows and how it looks.
@@ -99,11 +130,18 @@ pub struct Control {
     pub style: Style,
     pub caption: String,
     pub icon: Option<&'static str>,
+    /// Its colour, when it says something (allow, deny).
+    pub tone: Option<Tone>,
 }
 
 impl Control {
     pub fn new(at: At, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
-        Self { at, style, caption: caption.into(), icon }
+        Self { at, style, caption: caption.into(), icon, tone: None }
+    }
+
+    pub fn tone(mut self, tone: Tone) -> Self {
+        self.tone = Some(tone);
+        self
     }
 }
 
@@ -312,6 +350,12 @@ impl Action {
         self
     }
 
+    /// Shown under the box being typed in, while it's typed in.
+    pub fn on_typing(mut self, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
+        self.control = Some(Control::new(At::Typing, style, caption, icon));
+        self
+    }
+
     /// Where its control shows, if it has one.
     pub fn at(&self) -> Option<At> {
         self.control.as_ref().map(|c| c.at)
@@ -496,7 +540,15 @@ fn draw_control(ui: &mut egui::Ui, action: &Action, hints: &[(String, String)]) 
     let text = match toolbar.icon {
         Some(icon) if toolbar.caption.is_empty() => icon.to_owned(),
         Some(icon) => format!("{icon} {}", toolbar.caption),
+        None if toolbar.caption.is_empty() => action.label.clone(),
         None => toolbar.caption.clone(),
+    };
+    let tinted = |text: String| {
+        let rich = RichText::new(text).size(crate::theme::look().text_body);
+        match toolbar.tone {
+            Some(tone) => rich.color(tone.color()),
+            None => rich,
+        }
     };
     match (&action.param, toolbar.style) {
         (Param::Toggle { on }, Style::Setting) => {
@@ -537,8 +589,12 @@ fn draw_control(ui: &mut egui::Ui, action: &Action, hints: &[(String, String)]) 
                 });
             picked.map(|v| ControlUse::Run(Some(v)))
         }
-        (Param::None, _) => ui.button(text).on_hover_text(tip).clicked().then_some(ControlUse::Run(None)),
-        _ => ui.button(text).on_hover_text(tip).clicked().then_some(ControlUse::OpenPalette),
+        (Param::None, Style::Choice) => {
+            let row = egui::Button::selectable(false, tinted(format!("{} {text}", egui_phosphor::regular::CARET_RIGHT))).min_size(egui::vec2(ui.available_width(), 0.0));
+            ui.add(row).on_hover_text(tip).clicked().then_some(ControlUse::Run(None))
+        }
+        (Param::None, _) => ui.button(tinted(text)).on_hover_text(tip).clicked().then_some(ControlUse::Run(None)),
+        _ => ui.button(tinted(text)).on_hover_text(tip).clicked().then_some(ControlUse::OpenPalette),
     }
 }
 

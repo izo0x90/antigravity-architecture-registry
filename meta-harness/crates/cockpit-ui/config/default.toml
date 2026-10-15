@@ -581,8 +581,8 @@ step = "accent"
 
 # How the graph behaves.
 [graph]
-# Long-press a card: these actions (the ones that apply) as chips.
-context = ["graph.go_in", "goto.spec", "goto.code", "goto.callees", "goto.uses", "goto.callers", "goto.parent", "goto.members", "goto.implements", "goto.flows"]
+# Under the selected card: these actions (the ones that apply).
+context = ["graph.go_in", "goto.spec", "goto.code"]
 # Fitting the drawing to the screen never zooms out past this (text stays
 # readable; what doesn't fit is panned to).
 readable_zoom = 0.85

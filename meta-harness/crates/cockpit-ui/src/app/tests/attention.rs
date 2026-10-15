@@ -146,12 +146,15 @@ fn the_look_has_the_keyboard_its_keys_move_and_label_its_parts_and_nothing_reach
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.next_waiting"}"#).unwrap();
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.focused_kind(), BufferKind::Inbox, "the inbox it holds has the keys");
-    keys(&ctx, &mut app, "jj");
-    assert_eq!((selected(&app), app.desk.inbox.cursor_key().as_deref()), (before.as_str(), Some("2")), "j moves over its parts (what it says, Allow, Deny), not the graph under it");
-    // Enter on an answer answers with it.
+    assert_eq!(app.desk.inbox.cursor_key().as_deref(), Some("1"), "it opens on what waits on you: its request");
+    // Its answers show under it; clicked, one answers.
     sent(&app);
-    frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert_eq!(sent(&app), ["POST /api/threads/t/requests/r1"], "Deny, under the cursor");
+    click_on(&ctx, &mut app, "Deny");
+    assert_eq!(sent(&app), ["POST /api/threads/t/requests/r1"], "Deny, under its request");
+    keys(&ctx, &mut app, "k");
+    assert_eq!((selected(&app), app.desk.inbox.cursor_key().as_deref()), (before.as_str(), Some("0")), "k moves over its parts, not the graph under it");
+    let under: Vec<String> = crate::actions::ActionProvider::actions(&app.desk.inbox).into_iter().filter(|a| a.at().is_some_and(|at| at == crate::actions::At::Item)).map(|a| a.id).collect();
+    assert!(under.is_empty(), "off its request, its answers aren't under anything: {under:?}");
     // f labels what's in it; the bar offers its keys.
     keys(&ctx, &mut app, "gg");
     frame(&ctx, &mut app, key("f"));

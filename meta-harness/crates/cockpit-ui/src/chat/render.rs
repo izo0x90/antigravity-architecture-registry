@@ -53,7 +53,7 @@ impl ChatStreamState {
         self.drawn.insert(self.ui.slot.clone());
 
         ui.vertical(|ui| {
-            self.render_banners(ui, net);
+            self.render_banners(ui);
             self.render_plan(ui);
 
             let scroll_height = (ui.available_height() - 105.0).max(50.0);
@@ -63,7 +63,7 @@ impl ChatStreamState {
                 .auto_shrink([false, false])
                 .stick_to_bottom(self.ui.cursor.is_none())
                 .max_height(scroll_height)
-                .show(ui, |ui| self.render_stream(ui, net, cx.hints));
+                .show(ui, |ui| self.render_stream(ui));
             self.ui.view = stream.inner_rect;
             self.ui.spots = std::mem::take(&mut self.ui.drawing).into_iter().filter(|s| s.rect.intersects(stream.inner_rect)).collect();
             feedback.register_inspectable(ui, &format!("slot_{}:chat:stream", slot_idx + 1), stream.inner_rect);
@@ -77,62 +77,28 @@ impl ChatStreamState {
         });
     }
 
-    pub(super) fn render_banners(&mut self, ui: &mut egui::Ui, net: &NetClient) {
-        let ctx = ui.ctx().clone();
+    pub(super) fn render_banners(&mut self, ui: &mut egui::Ui) {
+        // What it says; its ways out (Dismiss, Retry, signing in) are its
+        // actions, on its top line.
         if let Some(notice) = self.notice.clone() {
-            let mut dismiss = false;
             banner(ui, colors().info_bg, colors().focus, |ui| {
                 ui.label(RichText::new(icon::INFO).size(crate::theme::look().text_label).color(colors().info));
                 ui.label(RichText::new(&notice).size(crate::theme::look().text_label).color(colors().text));
-                dismiss = ui.small_button("Dismiss").clicked();
             });
-            if dismiss {
-                self.notice = None;
-            }
         }
         if let Some(err) = self.error().cloned() {
-            let mut retry = false;
-            let mut dismiss = false;
             banner(ui, colors().error_bg, colors().error, |ui| {
                 ui.label(RichText::new(icon::X_CIRCLE).size(crate::theme::look().text_label).color(colors().error));
                 ui.label(RichText::new(&err).size(crate::theme::look().text_label).color(colors().text));
-                if self.active_thread().is_none() {
-                    retry = ui.button(format!("{} Retry", icon::ARROW_COUNTER_CLOCKWISE)).clicked();
-                }
-                dismiss = ui.small_button("Dismiss").clicked();
             });
-            if retry {
-                self.open_thread(net, &ctx, None);
-            } else if dismiss {
-                self.errors.remove(&self.ui.slot.clone());
-            }
         }
-
-        // Sign in, when the harness offers login methods and isn't signed in.
-        let needs_login = self.instance().is_some_and(|s| {
-            !s.auth.methods.is_empty()
-                && (s.auth.status == harness_contracts::AuthStatus::SignedOut
-                    || self.error().is_some_and(|e| e.to_lowercase().contains("authentication")))
-        });
-        if (needs_login || self.login.is_some())
+        if (self.needs_login() || self.login.is_some())
             && let Some(snapshot) = self.instance().cloned()
         {
-            let instance = snapshot.instance_id.clone();
             let look = crate::theme::look();
             banner(ui, colors().info_bg, colors().focus, |ui| match self.login.clone() {
                 None => {
-                    ui.label(RichText::new(format!("{} Sign in to {}:", icon::KEY, snapshot.display_name)).strong().size(look.text_label));
-                    for method in &snapshot.auth.methods {
-                        let button = ui.button(&method.name);
-                        let button = match &method.description {
-                            Some(d) => button.on_hover_text(d),
-                            None => button,
-                        };
-                        if button.clicked() {
-                            let mailbox = self.mailbox.clone();
-                            net.begin_auth(&instance, &method.id, ctx.clone(), move |r| post(&mailbox, Reply::AuthStarted(r)));
-                        }
-                    }
+                    ui.label(RichText::new(format!("{} Sign in to {}", icon::KEY, snapshot.display_name)).strong().size(look.text_label));
                 }
                 Some(login) => {
                     ui.vertical(|ui| {
@@ -143,25 +109,17 @@ impl ChatStreamState {
                             let mut shown = url.clone();
                             ui.add(egui::TextEdit::singleline(&mut shown).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
                         }
-                        ui.horizontal(|ui| {
-                            if let Some(expects) = &login.expects {
-                                let hint = format!("Paste {expects}");
-                                ui.add(egui::TextEdit::singleline(&mut self.auth_paste).hint_text(hint).desired_width(260.0));
-                                if ui.button("Sign in").clicked() && !self.auth_paste.trim().is_empty() {
-                                    let mailbox = self.mailbox.clone();
-                                    let pasted = std::mem::take(&mut self.auth_paste);
-                                    net.complete_auth(&instance, &pasted, ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
-                                    self.login = None;
-                                }
-                            }
-                            if ui.small_button("Cancel").clicked() {
-                                self.login = None;
-                            }
-                        });
                     });
                 }
             });
         }
+    }
+
+    /// The harness offers sign-in and isn't signed in (or said so).
+    pub(super) fn needs_login(&self) -> bool {
+        self.instance().is_some_and(|s| {
+            !s.auth.methods.is_empty() && (s.auth.status == harness_contracts::AuthStatus::SignedOut || self.error().is_some_and(|e| e.to_lowercase().contains("authentication")))
+        })
     }
 
     pub(super) fn render_plan(&mut self, ui: &mut egui::Ui) {
@@ -174,7 +132,7 @@ impl ChatStreamState {
             .show(ui, |ui| render_steps(ui, &steps));
     }
 
-    pub(super) fn render_stream(&mut self, ui: &mut egui::Ui, net: &NetClient, hints: &[(String, String)]) {
+    pub(super) fn render_stream(&mut self, ui: &mut egui::Ui) {
         let Some(view) = self.thread().cloned() else {
             ui.add_space(crate::theme::look().space_xxl);
             ui.vertical_centered(|ui| {
@@ -205,7 +163,7 @@ impl ChatStreamState {
                 let fill = if on { colors().selection } else { Color32::TRANSPARENT };
                 let shown = Frame::NONE.fill(fill).corner_radius(crate::theme::look().radius_s).inner_margin(crate::theme::margin2(crate::theme::look().space_xs, crate::theme::look().space_hair)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    self.render_item(ui, net, &view, item, index, hints);
+                    self.render_item(ui, &view, item, index);
                 });
                 if on && scroll {
                     shown.response.scroll_to_me(Some(egui::Align::Center));
@@ -238,7 +196,7 @@ impl ChatStreamState {
         if self.ui.view.height() > 0.0 { ((self.ui.view.height() / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 4 }
     }
 
-    pub(super) fn render_item(&mut self, ui: &mut egui::Ui, net: &NetClient, view: &ThreadView, item: &TurnItem, index: usize, hints: &[(String, String)]) {
+    pub(super) fn render_item(&mut self, ui: &mut egui::Ui, view: &ThreadView, item: &TurnItem, index: usize) {
         match &item.body {
             ItemBody::UserMessage { text } => {
                 ui.horizontal_wrapped(|ui| {
@@ -311,10 +269,8 @@ impl ChatStreamState {
             }
             ItemBody::TodoList { steps, .. } => render_steps(ui, steps),
             ItemBody::Request { request_id } => {
-                if let Some(request) = view.request(request_id)
-                    && let Some(option) = render_request(ui, request, &mut self.drafts, &Shown { cursor: None, hints }).clicked
-                {
-                    self.answer(net, ui.ctx(), &view.thread.id, request_id, &option);
+                if let Some(request) = view.request(request_id) {
+                    render_request(ui, request, &mut self.drafts);
                 }
             }
             ItemBody::Subagent { subagent_id } => {
@@ -359,8 +315,7 @@ impl ChatStreamState {
         }
 
         ui.horizontal(|ui| {
-            let send_w = 64.0;
-            let text_w = (ui.available_width() - send_w - ui.spacing().item_spacing.x - 4.0).max(60.0);
+            let text_w = ui.available_width();
             let inserting = *input_mode == crate::keymap::InputMode::Insert { slot: slot_idx };
             let steerable = self.instance().is_some_and(|s| s.capabilities.turns.active_steering) && self.thread().and_then(|t| t.running_turn()).is_some();
             let keys = crate::keymap::local();
@@ -387,10 +342,11 @@ impl ChatStreamState {
             if output.clicked() || output.gained_focus() {
                 *input_mode = crate::keymap::InputMode::Insert { slot: slot_idx };
             }
-            let send = ui.add_sized([send_w, 36.0], egui::Button::new(RichText::new("Send").strong().size(crate::theme::look().text_body))).clicked();
+            // Its Send (and Add) are actions, under it while it's typed in.
+            self.ui.typing = inserting.then_some(output.rect);
             let sent = if inserting { ui.input(|i| keys.input.sent(i)) } else { None };
             let (enter, add) = (sent.is_some(), sent == Some(crate::keymap::Sent::Add));
-            if (send || enter) && !self.ui.input_buffer.trim().is_empty() {
+            if enter && !self.ui.input_buffer.trim().is_empty() {
                 let text = self.ui.input_buffer.trim().to_string();
                 self.ui.input_buffer.clear();
                 if add {
@@ -410,6 +366,15 @@ impl crate::panel::Panel for ChatStreamState {
             Some(slot) => Status::new(format!("{} {}", icon::USER_FOCUS, slot.name), if slot.is_lead() { Tone::Accent } else { Tone::Info }).detail(format!("agent slot ({})", slot.role)),
             None => Status::new("No agent slot", Tone::Muted),
         }
+    }
+
+    fn typing_rect(&self) -> Option<Rect> {
+        self.ui.typing
+    }
+
+    /// Following the latest, you're at what waits on you: its request.
+    fn here(&self) -> Option<String> {
+        self.ui.cursor.is_none().then(|| self.pending_item()).flatten().map(|i| i.to_string())
     }
 
     /// Its harness, who it's signed in as, what of its configuration

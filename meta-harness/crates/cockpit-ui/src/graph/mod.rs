@@ -147,9 +147,6 @@ pub struct GraphState {
     gestures: Gestures,
     touch_seen: bool,
     /// Long-pressed card and where: its actions show as chips there.
-    pub context: Option<(String, Pos2)>,
-    pub(crate) chip_rects: Vec<(String, Rect)>,
-    context_chips: usize,
     /// The "+N" counts drawn this frame (click one to open its card).
     pub(crate) more_rects: Vec<(String, Rect)>,
     /// The camera before a search started previewing matches.
@@ -198,9 +195,6 @@ impl Default for GraphState {
             ui: GraphUi::default(),
             gestures: Gestures::default(),
             touch_seen: false,
-            context: None,
-            chip_rects: Vec::new(),
-            context_chips: 0,
             more_rects: Vec::new(),
             saved_view: None,
             legend_open: false,

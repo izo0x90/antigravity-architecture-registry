@@ -32,7 +32,7 @@ pub struct Chips {
 pub struct GraphUi {
     pub touch: TouchConfig,
     pub chips: Chips,
-    /// Actions offered on a long press, in order (those that apply).
+    /// Actions under the selected card, in order (those that apply).
     pub context: Vec<String>,
     /// Fitting never zooms out past this (text stays readable).
     pub readable_zoom: f32,

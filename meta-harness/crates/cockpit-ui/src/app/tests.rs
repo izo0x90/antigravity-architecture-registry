@@ -44,6 +44,9 @@ fn click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
             _ => None,
         }
     }
+    // A panel shown for the first time (the item's controls) is measured
+    // unseen for a frame, then drawn.
+    frame(ctx, app, vec![]);
     let output = frame(ctx, app, vec![]);
     let at = output.shapes.iter().find_map(|c| find(&c.shape, label)).unwrap_or_else(|| panic!("{label:?} isn't drawn: {}", texts(&output))).center();
     let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
