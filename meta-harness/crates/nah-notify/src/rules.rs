@@ -140,6 +140,23 @@ fn crashed(thread: &ThreadId, why: &str, world: &dyn World) -> Vec<Change> {
     vec![Change::Open(new(NotificationId::crash(thread), NotificationKind::SessionCrashed, Some(&slot), Some(thread), title, Some(format!("{why}; its next prompt resumes it")), world))]
 }
 
+/// A server home links to stopped answering (the `time`th time).
+pub fn server_lost(server: &str, reason: &str, time: u32, now_ms: u64) -> Notification {
+    Notification {
+        id: NotificationId::lost(server, time),
+        server: None,
+        level: NotificationKind::ServerLost.level(),
+        kind: NotificationKind::ServerLost,
+        slot: None,
+        thread: None,
+        request: None,
+        title: format!("{server} stopped answering"),
+        detail: Some(format!("{reason}; home keeps trying")),
+        at_ms: now_ms,
+        state: NotificationState::Open,
+    }
+}
+
 /// Something an agent says to the user (or a sub-slot's report, which the
 /// user sees too).
 pub fn message(from: Option<&SlotRef>, text: &str, world: &dyn World) -> Notification {

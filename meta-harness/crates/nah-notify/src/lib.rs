@@ -10,7 +10,7 @@ pub mod rules;
 #[cfg(feature = "testing")]
 pub mod testing;
 
-pub use hub::{Live, NotifyHub};
+pub use hub::{Live, NoSessions, NotifyHub};
 
 use harness_contracts::{Notification, NotificationId, TransitionError};
 

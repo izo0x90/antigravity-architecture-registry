@@ -349,7 +349,7 @@ pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHu
     meta_harness::startup::reconcile_on_start(&db).unwrap();
     let notify = meta_harness::startup::notifications(&hub, &db, &slots).unwrap();
     let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone(), slots.clone(), notify.clone())), meta_harness::startup::mcp_callers(&slots));
-    let state = AppState::new(meta_harness::modules::Parts { registry, sessions, slots, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state: db, tool_servers, remote, access, notify });
+    let state = AppState::new(meta_harness::modules::Parts { registry, sessions, slots, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state: db, tool_servers, remote, access, notify }).unwrap();
     let app = create_router(&state.modules());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (addr, state)

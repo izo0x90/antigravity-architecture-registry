@@ -164,3 +164,32 @@ mod notifications {
         assert_eq!(db.get(&NotificationId::new("nope")).unwrap(), None);
     }
 }
+
+mod servers {
+    use super::*;
+    use crate::ServerEntry;
+
+    fn entry(name: &str) -> ServerEntry {
+        ServerEntry { name: name.into(), url: "http://100.64.0.2:8080".into(), secret: "s3cret".into(), added_at_ms: 1 }
+    }
+
+    #[test]
+    fn servers_are_kept_by_name_with_their_secret_and_the_file_is_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = StateDb::open(dir.path(), &settings()).unwrap();
+        db.add_server(&entry("cloud")).unwrap();
+        db.add_server(&ServerEntry { url: "http://127.0.0.1:9090/".into(), ..entry("box") }).unwrap();
+        assert_eq!(db.servers().unwrap().iter().map(|s| (s.name.as_str(), s.url.as_str())).collect::<Vec<_>>(), [("box", "http://127.0.0.1:9090"), ("cloud", "http://100.64.0.2:8080")]);
+        assert_eq!(db.server("cloud").unwrap().map(|s| s.secret), Some("s3cret".into()));
+        for (bad, says) in [(entry("cloud"), "already"), (entry("here"), "this server's own"), (entry("a b"), "letters, digits"), (ServerEntry { url: "https://x".into(), ..entry("x") }, "http://host:port"), (ServerEntry { url: "http://h:1/x/".into(), ..entry("p") }, "no path"), (ServerEntry { secret: " ".into(), ..entry("y") }, "meta-harness token")] {
+            let err = db.add_server(&bad).unwrap_err().to_string();
+            assert!(err.contains(says), "{err}");
+        }
+        assert!(db.remove_server("cloud").unwrap() && !db.remove_server("cloud").unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(db.path()).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+    }
+}

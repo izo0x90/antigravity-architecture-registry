@@ -21,6 +21,10 @@
 /api/slots/s1/current POST
 /api/slots/s1/prompt POST
 /api/notifications GET,HEAD
+/api/home/servers GET,HEAD,POST
+/api/home/servers/w1 DELETE
+/api/home/servers/w1/connect POST
+/api/home/servers/w1/disconnect POST
 /api/notifications/seen POST
 /api/notifications/n1/dismiss POST
 /api/fs/read GET,HEAD

@@ -127,6 +127,14 @@ impl EventHub {
         let _ = self.tx.send(event);
     }
 
+    /// Forgets everything (another server's state, about to be replayed
+    /// again) and tells subscribers to drop what they hold.
+    pub fn reset(&self) {
+        let mut cache = self.cache();
+        cache.entries.clear();
+        let _ = self.tx.send(ClientEvent::Resync);
+    }
+
     /// The latest state of one thread's entities (its turns, items,
     /// requests…), in first-seen order. Scans the cache: for occasional reads.
     pub fn thread_state(&self, thread: &ThreadId) -> Vec<ClientEvent> {

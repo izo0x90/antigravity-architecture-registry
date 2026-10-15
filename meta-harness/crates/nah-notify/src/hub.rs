@@ -17,6 +17,15 @@ pub trait Live: Send + Sync {
     fn closed_on_purpose(&self, thread: &ThreadId) -> bool;
 }
 
+/// A server with no sessions (a home with no project).
+pub struct NoSessions;
+
+impl Live for NoSessions {
+    fn closed_on_purpose(&self, _: &ThreadId) -> bool {
+        false
+    }
+}
+
 impl Live for harness_core::SlotManager {
     fn closed_on_purpose(&self, thread: &ThreadId) -> bool {
         harness_core::SlotManager::closed_on_purpose(self, thread)
@@ -293,6 +302,34 @@ impl NotifyHub {
             .map(|n| n.moved(NotificationState::Dismissed))
             .collect::<Result<_, _>>()?;
         Ok(self.keep(seen)?.len())
+    }
+
+    /// A server home links to stopped answering: said once until it's back
+    /// (each time is a new one, numbered).
+    pub fn server_lost(&self, server: &str, reason: &str) -> Result<(), NotifyError> {
+        let prefix = format!("lost:{server}:");
+        if self.lock().open.keys().any(|id| id.as_str().starts_with(&prefix)) {
+            return Ok(());
+        }
+        let time = self.store.count(&prefix).map_err(NotifyError::Store)? + 1;
+        self.keep(vec![rules::server_lost(server, reason, time, now_ms())])?;
+        Ok(())
+    }
+
+    /// It answers again (or the user disconnected it): its lost one is done.
+    pub fn server_back(&self, server: &str) -> Result<(), NotifyError> {
+        let prefix = format!("lost:{server}:");
+        let back: Vec<Notification> = self.lock().open.values().filter(|n| n.id.as_str().starts_with(&prefix)).map(|n| n.moved(NotificationState::Done)).collect::<Result<_, _>>()?;
+        self.keep(back)?;
+        Ok(())
+    }
+
+    /// Another server's notification (its own rules made it): handed to
+    /// this one's adapters, never through the rules again.
+    pub fn relay(&self, notification: &Notification) {
+        for adapter in &self.adapters {
+            adapter.deliver(notification);
+        }
     }
 
     /// An agent tells the user something (a sub-slot's report, too).

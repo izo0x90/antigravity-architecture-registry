@@ -19,7 +19,10 @@ use serde_json::Value;
 
 mod migrations;
 mod notifications;
+mod servers;
 mod slots;
+
+pub use servers::{ServerEntry, check_name};
 
 pub use migrations::LATEST;
 
@@ -58,6 +61,7 @@ impl StateDb {
         let shown = path.display().to_string();
         let damaged = |e: rusqlite::Error| StateError::Damaged { path: shown.clone(), reason: e.to_string() };
         let mut conn = Connection::open(&path).map_err(damaged)?;
+        owner_only(&path)?;
         arch_store::configure(&conn, settings).map_err(damaged)?;
         migrations::run(&mut conn, &shown)?;
         Ok(Self { path, conn: Mutex::new(conn), _lock: lock })
@@ -160,6 +164,16 @@ pub fn log_in(tx: &Transaction<'_>, entry: &Activity) -> Result<(), StateError> 
 
 /// Takes the lock file's OS lock and writes this process's id into it; if
 /// another holds it, says which.
+/// Only its owner reads it (home's holds other servers' secrets).
+fn owner_only(path: &Path) -> Result<(), StateError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+    }
+    Ok(())
+}
+
 fn take_lock(path: &Path) -> Result<File, StateError> {
     let mut file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
     match file.try_lock() {

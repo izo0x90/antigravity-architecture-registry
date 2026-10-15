@@ -6,6 +6,7 @@ pub(crate) mod events;
 pub(crate) mod feedback;
 pub(crate) mod files;
 pub(crate) mod harness;
+pub(crate) mod home;
 pub(crate) mod mcp;
 pub(crate) mod notifications;
 pub(crate) mod slots;

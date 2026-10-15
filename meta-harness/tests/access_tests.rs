@@ -8,8 +8,8 @@ use common::{http_anonymous, spawn_app};
 
 /// Open on purpose: health, the launch link, the agents' endpoint (their
 /// session's key says who they are), and the sockets (a ticket each).
-const OPEN_HANDLERS: &[&str] = &["crate::cockpit::launch", "mcp_sse_proxy", "mcp_messages_proxy", "ws_events_handler", "crate::remote::socket"];
-const OPEN_PATHS: &[&str] = &["/health", "/cockpit", "/api/mcp/sse", "/api/mcp/messages", "/ws/events", "/ws/cockpit"];
+const OPEN_HANDLERS: &[&str] = &["crate::cockpit::launch", "mcp_sse_proxy", "mcp_messages_proxy", "ws_events_handler", "crate::remote::socket", "home_socket"];
+const OPEN_PATHS: &[&str] = &["/health", "/cockpit", "/api/mcp/sse", "/api/mcp/messages", "/ws/events", "/ws/cockpit", "/ws/home"];
 
 #[test]
 fn every_routed_handler_takes_needs_first() {
@@ -65,7 +65,7 @@ async fn a_request_with_no_credentials_is_refused_everywhere_but_the_open_routes
 #[tokio::test]
 async fn the_sockets_take_a_ticket_good_once() {
     let (addr, _) = spawn_app().await;
-    for path in ["/ws/events", "/ws/cockpit"] {
+    for path in ["/ws/events", "/ws/cockpit", "/ws/home"] {
         assert!(tokio_tungstenite::connect_async(format!("ws://{addr}{path}")).await.is_err(), "{path}: no ticket");
         assert!(tokio_tungstenite::connect_async(format!("ws://{addr}{path}?ticket=made-up")).await.is_err(), "{path}: made up");
         let ticket = common::ticket(addr).await;

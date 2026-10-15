@@ -59,6 +59,7 @@ nah-state = { path = "crates/nah-state" }
 nah-notify = { path = "crates/nah-notify" }
 include_dir = "0.7"
 clap = { version = "4", features = ["derive"] }
+tokio-tungstenite = "0.29"
 dirs = "7"
 async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["ws"] }
@@ -84,5 +85,4 @@ cockpit-ui = { path = "crates/cockpit-ui" }
 ast-grep-config = "0.45.3"
 ast-grep-core = "0.45.3"
 tempfile = "3.27.0"
-tokio-tungstenite = "0.29"
 regex = "1"

@@ -58,6 +58,25 @@ enum Cmd {
     /// Prints this server's secret: what another server (a home) needs to
     /// reach it.
     Token,
+    /// The servers a home links to (in its state database: the user's
+    /// home, or a project's with --project). The server holding it must be
+    /// stopped; while it runs, use its cockpit.
+    Servers {
+        #[command(subcommand)]
+        action: ServersCmd,
+        /// The project whose server is the home (default: the user's home).
+        #[arg(long, global = true)]
+        project: Option<PathBuf>,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum ServersCmd {
+    List,
+    /// Adds one: its name, where it is (http://host:port) and its secret
+    /// (`meta-harness token` there).
+    Add { name: String, url: String, secret: String },
+    Remove { name: String },
 }
 
 #[derive(clap::Subcommand)]
@@ -112,6 +131,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if let Some(Cmd::Servers { action, project }) = &cli.command {
+        let db = match project {
+            Some(project) => {
+                let arch = arch_service::Limits::defaults()?;
+                nah_state::StateDb::open(&arch_service::state_dir(&project.canonicalize()?)?, &arch_service::store_settings(&arch))?
+            }
+            None => meta_harness::startup::home_state()?,
+        };
+        match action {
+            ServersCmd::List => {
+                for s in db.servers()? {
+                    println!("{}\t{}", s.name, s.url);
+                }
+            }
+            ServersCmd::Add { name, url, secret } => {
+                let added_at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+                db.add_server(&nah_state::ServerEntry { name: name.clone(), url: url.clone(), secret: secret.clone(), added_at_ms })?;
+                println!("Added {name}: home links to it from its next start.");
+            }
+            ServersCmd::Remove { name } => {
+                if !db.remove_server(name)? {
+                    return Err(format!("there's no server named {name:?}").into());
+                }
+                println!("Removed {name}.");
+            }
+        }
+        return Ok(());
+    }
     if let Some(Cmd::Token) = cli.command {
         println!("{}", meta_harness::cockpit::CockpitAuth::for_user()?.secret());
         return Ok(());
@@ -132,9 +179,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if serve.no_project {
         let cockpit_path = cockpit.launch_path();
         let gate = meta_harness::modules::Gate { cockpit, access: Arc::new(nah_access::Access::defaults()), tickets: Arc::default() };
-        let page = meta_harness::modules::CockpitState { gate, state: Arc::new(meta_harness::startup::home_state()?), remote: Arc::default() };
-        info!("No project here: the cockpit only. Open it: {base_url}{cockpit_path}");
-        meta_harness::startup::serve(listener, create_router(&[&page]), None).await?;
+        let state = Arc::new(meta_harness::startup::home_state()?);
+        meta_harness::startup::reconcile_on_start(&state)?;
+        let here = Arc::new(EventHub::default());
+        let notify = nah_notify::NotifyHub::start(here.clone(), state.clone(), Arc::new(nah_notify::NoSessions), Vec::new())?;
+        let home = meta_harness::modules::HomeState { gate: gate.clone(), home: meta_harness::home::Home::start(state.clone(), here, notify)? };
+        let page = meta_harness::modules::CockpitState { gate, state, remote: Arc::default() };
+        info!("No project here: the cockpit and home. Open it: {base_url}{cockpit_path}");
+        meta_harness::startup::serve(listener, create_router(&[&page, &home]), None).await?;
         info!("Meta-harness stopped.");
         return Ok(());
     }
@@ -157,7 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let queue = meta_harness::server::queue_runner(&arch, meta_harness::startup::queue_config(&arch)?, &hub);
     let cockpit_path = cockpit.launch_path();
     let streams = mcp_state.sessions.clone();
-    let app = AppState::new(Parts { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, notify });
+    let app = AppState::new(Parts { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, notify })?;
     let parts: Vec<&dyn meta_harness::modules::Module> = app.modules().into_iter().filter(|m| !(serve.no_cockpit && m.is_cockpit())).collect();
     let router = create_router(&parts);
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");

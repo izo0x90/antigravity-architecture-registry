@@ -118,3 +118,18 @@ fn the_server_says_its_secret_and_refuses_an_address_the_internet_reaches() {
     let said = String::from_utf8_lossy(&public.stderr);
     assert!(!public.status.success() && said.contains("0.0.0.0") && said.contains("--listen-public"), "{said}");
 }
+
+#[test]
+fn the_servers_a_home_links_to_are_kept_from_the_command_line() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| std::process::Command::new(env!("CARGO_BIN_EXE_meta-harness")).arg("servers").args(args).env("HOME", home.path()).env("XDG_DATA_HOME", home.path().join("data")).output().unwrap();
+    let added = run(&["add", "cloud", "http://100.64.0.7:8080", "its-secret"]);
+    assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stderr));
+    let listed = String::from_utf8(run(&["list"]).stdout).unwrap();
+    assert_eq!(listed, "cloud\thttp://100.64.0.7:8080\n", "listed without its secret");
+    let taken = run(&["add", "here", "http://127.0.0.1:1", "x"]);
+    assert!(!taken.status.success() && String::from_utf8_lossy(&taken.stderr).contains("this server's own"));
+    assert!(run(&["remove", "cloud"]).status.success());
+    let again = run(&["remove", "cloud"]);
+    assert!(!again.status.success() && String::from_utf8_lossy(&again.stderr).contains("no server named"));
+}

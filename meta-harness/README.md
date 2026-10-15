@@ -44,6 +44,16 @@ included, is refused unless you pass `--listen-public`. `--no-cockpit`
 serves the project without the cockpit's page; `--no-project` serves the
 cockpit alone (its state in `~/.local/share/nah/home/`), reading no code.
 
+The server that serves the cockpit is a home: it links to other servers
+(one per project), listed in its state database with each one's address
+and secret (`POST /api/home/servers` with `name`, `url`, `secret`; or
+`meta-harness servers add|list|remove` while it's stopped, `--project` for
+a project's server). It follows each one's events and sends them, by
+name, on `/ws/home`, with the list whenever it changes. A server that
+stops answering is tried again (waiting longer each time) and is a
+notification until it's back; disconnecting one stops following it and
+leaves it running.
+
 The agent harness and each language's server are packs, installed by the
 binary itself (see [Packs](#packs)). To build and install the ones you need:
 

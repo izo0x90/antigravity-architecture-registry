@@ -6,6 +6,7 @@
 
 pub mod capabilities;
 pub mod events;
+pub mod home;
 pub mod ids;
 pub mod items;
 pub mod launch;
@@ -19,6 +20,7 @@ pub mod snapshot;
 
 pub use capabilities::*;
 pub use events::*;
+pub use home::{HomeEvent, LinkState, ServerView};
 pub use ids::*;
 pub use items::*;
 pub use launch::*;

@@ -19,7 +19,7 @@ use crate::routes;
 /// A part of the server: its routes, given its state.
 pub trait Module {
     fn routes(&self) -> Router;
-    /// The cockpit's part (left out by `--no-cockpit`).
+    /// The cockpit's, or home's (left out by `--no-cockpit`).
     fn is_cockpit(&self) -> bool {
         false
     }
@@ -55,7 +55,7 @@ macro_rules! gated {
     )*};
 }
 
-gated!(CockpitState, HarnessState, NotifyState, ProjectState);
+gated!(CockpitState, HarnessState, NotifyState, ProjectState, HomeState);
 
 /// The cockpit: its page and launch link, its saved state, feedback, and
 /// agents driving it.
@@ -80,6 +80,24 @@ impl Module for CockpitState {
         let router = routes::cockpit::routes().merge(routes::feedback::routes()).with_state(self.clone());
         let page = crate::server::static_dir();
         if page.exists() { router.fallback_service(tower_http::services::ServeDir::new(page)) } else { router }
+    }
+
+    fn is_cockpit(&self) -> bool {
+        true
+    }
+}
+
+/// Home: the servers it links to, their events, and (G5) the cockpit's
+/// requests passed on to them. It runs with the cockpit.
+#[derive(Clone)]
+pub struct HomeState {
+    pub gate: Gate,
+    pub home: Arc<crate::home::Home>,
+}
+
+impl Module for HomeState {
+    fn routes(&self) -> Router {
+        routes::home::routes().with_state(self.clone())
     }
 
     fn is_cockpit(&self) -> bool {
@@ -144,6 +162,7 @@ impl Module for ProjectState {
 #[derive(Clone)]
 pub struct AppState {
     pub cockpit: CockpitState,
+    pub home: HomeState,
     pub harness: HarnessState,
     pub notify: NotifyState,
     pub project: ProjectState,
@@ -167,17 +186,20 @@ pub struct Parts {
 }
 
 impl AppState {
-    pub fn new(p: Parts) -> Self {
+    /// A project's server; home follows the servers its state database lists.
+    pub fn new(p: Parts) -> Result<Self, nah_state::StateError> {
         let gate = Gate { cockpit: p.cockpit, access: p.access, tickets: Arc::default() };
-        Self {
+        let home = crate::home::Home::start(p.state.clone(), p.hub.clone(), p.notify.clone())?;
+        Ok(Self {
+            home: HomeState { gate: gate.clone(), home },
             cockpit: CockpitState { gate: gate.clone(), state: p.state, remote: p.remote },
             harness: HarnessState { gate: gate.clone(), registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
             project: ProjectState { gate, arch: p.arch, queue: p.queue, sessions: p.sessions, slots: p.slots, mcp_state: p.mcp_state },
-        }
+        })
     }
 
-    pub fn modules(&self) -> [&dyn Module; 4] {
-        [&self.cockpit, &self.harness, &self.notify, &self.project]
+    pub fn modules(&self) -> [&dyn Module; 5] {
+        [&self.cockpit, &self.home, &self.harness, &self.notify, &self.project]
     }
 }
