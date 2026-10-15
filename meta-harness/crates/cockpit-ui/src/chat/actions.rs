@@ -17,6 +17,7 @@ enum ChatCommand {
     SwitchSession,
     SelectInstance,
     PickSlot,
+    StepSlot(i32),
     NewSlot,
     CloseSlot,
     CloseSession,
@@ -109,13 +110,13 @@ impl ActionProvider for ChatStreamState {
 
         // Agent slots: which one this view shows; starting and closing sub-slots
         if self.store.slots.len() > 1 {
-            let choices = self
-                .store
-                .slots
-                .values()
+            let choices = super::slots::ordered(&self.store)
+                .into_iter()
                 .map(|s| Choice::new(s.id.to_string(), slot_label(s, &self.store)).detail(slot_detail(s)).current(s.id == self.ui.slot))
                 .collect();
             out.push(Action::new("agent.pick", "Show an agent slot", C::PickSlot).param(Param::Choice(choices)));
+            out.push(Action::new("chat.next_slot", "Show the next agent slot", C::StepSlot(1)).focused());
+            out.push(Action::new("chat.prev_slot", "Show the previous agent slot", C::StepSlot(-1)).focused());
         }
         if !self.store.instances.is_empty() {
             let choices = self.store.instances.values().map(|i| Choice::new(i.instance_id.to_string(), &i.display_name)).collect();
@@ -293,6 +294,13 @@ impl ActionProvider for ChatStreamState {
                     self.ui.cursor = None;
                 }
             }
+            ChatCommand::StepSlot(by) => match super::slots::beside(&self.store, &self.ui.slot, *by) {
+                Some(next) => {
+                    self.ui.slot = next;
+                    self.ui.cursor = None;
+                }
+                None => *cx.note = Some(if *by > 0 { "This is the last agent slot." } else { "This is the first agent slot." }.into()),
+            },
             ChatCommand::NewSlot => {
                 if let Some(i) = value {
                     let mailbox = self.mailbox.clone();

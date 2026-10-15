@@ -287,9 +287,21 @@ Claude Code, so it uses the account.
 While a turn runs, Enter queues the next message (the agent queues it, or
 the server sends it when the turn ends; it shows as QUEUED);
 `Ctrl+Enter` (or `Space s a`) adds it to what the agent is doing, when it
-takes that. Questions the agent asks show as a form: pick an option or
-type your own, then Answer or Skip. Approvals belong to their turn: ending
-the turn withdraws them.
+takes that. What an agent asks shows as one card, by what it asks: an
+approval ("Wants to run a command", "change a file", "read a file", "use
+a tool") with Allow and Deny (`y`/`Y`/`A`/`d`); a question ("Asks you")
+with its answers numbered (`Space r 1`, `r 2`…), or its form (type your
+own, then Answer or Skip); a page to open, then Done. Each answer shows
+its key. Full access and Auto answer approvals only; a question always
+waits for you. A harness that asks questions as permission requests says
+how its pack marks them (`[provides.settings.questions]
+permission_tool_prefix`, Antigravity's `interaction_`); a permission
+request with no deny among its options is a question too. Requests belong
+to their turn: ending the turn withdraws them.
+
+In a chat, `J`/`K` show the next and previous agent slot: the lead, then
+sub-slots, then queue workers, each by name (the slot picker, `Space w w`,
+lists them so).
 
 Tool servers: every session gets ours (`/api/mcp/sse`) and the project's,
 kept in `.nah/mcp.toml` (`GET`/`PUT /api/mcp/servers`; `Space p a` adds
@@ -404,7 +416,9 @@ The key bar at the bottom shows the keys that matter for what the cursor
 is on. Pausing on a prefix (`g`, `z`, `[`, `]`, `m`, `'`) lists what can
 follow, and `?` lists every key of the focused view. `Space` opens the
 leader menu (the focused view's entries first), and `:` opens the command
-palette (`:42` goes to line 42).
+palette (`:42` goes to line 42). The palette and its pickers move with
+`Ctrl+J`/`Ctrl+K` (or `Ctrl+N`/`Ctrl+P`, or the arrows) and pick with
+`Enter`.
 
 Views also have their own keys:
 
@@ -475,7 +489,12 @@ Views also have their own keys:
   - `r`/`a`/`x` reply to, accept or reopen a review point.
 - **Queue:** `a` approve, `r` retry, `o` open the job's session.
 
-All keys are configurable in `crates/cockpit-ui/config/default.toml`.
+All keys are configurable in `crates/cockpit-ui/config/default.toml`,
+including those outside a view's bindings: `[keymap.list]` (moving in the
+palette and pickers), `[keymap.input]` (`send`, and `add` into a running
+turn, in every typing box; Shift+Enter is a new line) and
+`[keymap.pointer]` (`go_to`, held while clicking a name). A test fails the
+build when the cockpit reads a key anywhere else.
 
 ## Configuration
 

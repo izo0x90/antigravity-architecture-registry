@@ -26,6 +26,7 @@ pub(crate) mod actions;
 mod nav;
 mod render;
 mod session;
+pub(crate) mod slots;
 
 use render::{block_summary, mcp_label};
 

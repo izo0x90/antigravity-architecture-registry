@@ -176,6 +176,33 @@ fn a_view_shows_the_slot_picked_and_the_lead_when_its_slot_closes() {
 }
 
 #[test]
+fn next_and_previous_go_through_the_slots_in_order_and_say_the_ends() {
+    let mut chat = conversation();
+    for (id, role, name) in [("w-1", "worker", "a"), ("sub-2", "sub", "z"), ("sub-1", "sub", "b")] {
+        let mut slot = lead(None);
+        (slot.id, slot.role, slot.name) = (SlotId::new(id), role.into(), name.into());
+        chat.process_event(ClientEvent::SlotUpdated { slot });
+    }
+    let action = |id: &str| chat.actions().into_iter().find(|a| a.id == id).expect(id);
+    let (next, prev) = (action("chat.next_slot"), action("chat.prev_slot"));
+    let ctx = egui::Context::default();
+    let net = NetClient::new("http://127.0.0.1:9");
+    let (mut mode, mut note) = (crate::keymap::InputMode::Normal, None);
+    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[] };
+    let mut seen = vec![chat.ui.slot.to_string()];
+    for _ in 0..3 {
+        chat.run(&next, None, &mut cx);
+        seen.push(chat.ui.slot.to_string());
+    }
+    assert_eq!(seen, [LEAD, "sub-1", "sub-2", "w-1"], "the lead, sub-slots by name, then workers");
+    chat.run(&next, None, &mut cx);
+    assert_eq!(chat.ui.slot.as_str(), "w-1");
+    assert_eq!(cx.note.take().as_deref(), Some("This is the last agent slot."));
+    chat.run(&prev, None, &mut cx);
+    assert_eq!(chat.ui.slot.as_str(), "sub-2");
+}
+
+#[test]
 fn a_prompt_with_no_harness_anywhere_says_so() {
     let mut chat = ChatStreamState::default();
     let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
