@@ -49,18 +49,13 @@ pub type Answer = Result<Value, String>;
 pub type Responder = Box<dyn FnOnce(Answer)>;
 
 /// Calls waiting for the next frame (both ways in put them here).
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Door {
     inbox: Rc<RefCell<VecDeque<(Call, Responder)>>>,
     ctx: Option<egui::Context>,
 }
 
 impl Door {
-    /// A way in of its own (the page's: it drives whatever's shown).
-    pub fn new() -> Self {
-        Self { inbox: Rc::default(), ctx: None }
-    }
-
     /// Wakes the cockpit for calls through it.
     pub fn wake(&mut self, ctx: &egui::Context) -> Self {
         self.ctx = Some(ctx.clone());
@@ -154,7 +149,7 @@ impl Remote {
         let through = if name == harness_contracts::home::HERE { String::new() } else { format!("/s/{name}") };
         let socket_url = base.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1) + &through + "/ws/cockpit";
         Self {
-            door: Door { inbox: Rc::default(), ctx: None },
+            door: Door::default(),
             feed: VecDeque::new(),
             after_feed: Vec::new(),
             fed_out: false,

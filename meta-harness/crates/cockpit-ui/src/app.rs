@@ -317,7 +317,7 @@ impl CockpitApp {
             home,
             host_origin: host_origin.to_owned(),
             servers: Vec::new(),
-            page: crate::remote::Door::new(),
+            page: crate::remote::Door::default(),
             confirming_shutdown: None,
             shell: Default::default(),
             bound_cache: Default::default(),
