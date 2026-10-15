@@ -136,6 +136,25 @@ async fn full_turn_maps_every_update_and_waits_for_approval() {
     assert!(seen.iter().any(|e| matches!(e, AdapterEvent::RequestUpdated { request } if request.status == RequestStatus::Resolved)));
 }
 
+/// A permission request is answered once, and the agent goes on with the answer.
+#[tokio::test]
+async fn a_permission_answered_once_lets_the_agent_go_on() {
+    let (session, agent) = open(RuntimeMode::ApprovalRequired).await;
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    let turn = session.start_turn(say("[permission]")).await.unwrap();
+    collect_until(&mut events, &mut seen, pending_request).await;
+    let request = last_request(&seen);
+    assert_eq!((request.kind, request.turn_id.as_ref()), (RequestKind::FileChange, Some(&turn)));
+    let once = request.options.iter().find(|o| o.decision == ApprovalDecision::Accept).expect("a yes-once option");
+    session.respond(&request.id, RequestResponse { option_id: Some(once.id.clone()), ..Default::default() }).await.unwrap();
+    collect_until(&mut events, &mut seen, turn_ended(1)).await;
+    assert_eq!(agent.seen().permission.as_deref(), Some("allow-once"));
+    assert!(said(&seen, &turn).iter().any(|t| t.contains("permission: allow-once")), "{:?}", said(&seen, &turn));
+    let again = session.respond(&request.id, RequestResponse { option_id: Some(once.id.clone()), ..Default::default() }).await;
+    assert!(again.is_err(), "an answered request can't be answered again");
+}
+
 #[tokio::test]
 async fn full_access_auto_approves_without_asking() {
     let (session, agent) = open(RuntimeMode::FullAccess).await;

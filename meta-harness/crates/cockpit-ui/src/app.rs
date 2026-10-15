@@ -3179,6 +3179,9 @@ impl CockpitApp {
 }
 
 #[cfg(test)]
+mod keys_snapshot;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -3366,7 +3369,7 @@ mod tests {
     /// Every view with something in it: the graph (slot 2, focused) on plan
     /// `p`, the outline, a code file with definitions and calls, a spec
     /// (pinned on step), the queue and a conversation.
-    fn full_app() -> (egui::Context, CockpitApp) {
+    pub(super) fn full_app() -> (egui::Context, CockpitApp) {
         let (ctx, mut app) = app_with_graph();
         let plan = PlanId::new("p").unwrap();
         app.graph.nav.source = Source::Plan(plan.clone());
@@ -3394,7 +3397,7 @@ mod tests {
 
     /// Moves the view of `kind` in use to the focused slot and draws it (so
     /// it knows its size).
-    fn focus(ctx: &egui::Context, app: &mut CockpitApp, kind: BufferKind) {
+    pub(super) fn focus(ctx: &egui::Context, app: &mut CockpitApp, kind: BufferKind) {
         let pane = app.used_pane(kind);
         app.columns.place(app.columns.focused(), pane);
         app.use_pane(pane);

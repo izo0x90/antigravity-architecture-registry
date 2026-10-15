@@ -1,0 +1,1085 @@
+## ingest
+Read the code into the architecture graph (incremental: only changed files are parsed). Run it after editing code, or with a path to refresh just that part.
+{
+  "type": "object",
+  "properties": {
+    "scope": {
+      "type": "string",
+      "description": "Repo-relative path; the whole repo when absent"
+    }
+  }
+}
+
+## list_types
+The component types available (generic defaults and any specializations), with their rules.
+{
+  "type": "object",
+  "properties": {}
+}
+
+## search
+Find what your work will touch: symbols by name (fuzzy, a typo forgiven; `a::b` matches whole symbols), files by path, or lines by text (as written; `*.rs` or `src/` narrows the files). Each hit gives the card to inspect or view. Query words all must match; 'word matches as written, ^word starts, word$ ends, !word excludes.
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "symbols",
+        "files",
+        "text"
+      ],
+      "description": "symbols (the default), files or text"
+    },
+    "source": {
+      "type": "string",
+      "description": "What to read: \"code\" (the code alone, the default) or \"plan:<id>\" (the code with that plan)"
+    },
+    "limit": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "query"
+  ]
+}
+
+## inspect
+One card's component: type, stage, location (file:symbol), signature, relations in and out (each link found in the code says whether the language's analyzer confirmed it or it was matched by name), and its source code. Any card a view shows: a component, a data type (type:<Name>), a flow's start or end (start:<id>, end:<id>).
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "A card: a component id (rust:my_crate::server::run), in data_flow a data type as type:<Name> or a flow's start or end as start:<id> / end:<id>"
+    },
+    "source": {
+      "type": "string",
+      "description": "What to read: \"code\" (the code alone, the default) or \"plan:<id>\" (the code with that plan)"
+    }
+  },
+  "required": [
+    "id"
+  ]
+}
+
+## view
+One of the three views as a text tree, the same one the user sees: each card with where it is, what it hides (+N more), what sits on its line, and lines back to cards shown elsewhere. With a plan: its own items first, marked NEW / CHANGED / DONE / DOESN'T MATCH. Give `expand` to get only what opening one card adds, or `context` to see what holds a card and what's beside it.
+Views (each a tree from one root, cut to a size limit that it reports):
+- contains: What's inside what: boxes inside boxes, no lines. Go into a box to make it the whole screen.
+- calls: Who calls whom, in the order the calls happen. Down: what it calls. Up: what calls it. The data going in and coming back sits on the selected card's lines.
+- data_flow: Where data goes: cards are data types, the functions that turn one into another sit on the lines. Down: where it goes. Up: where it came from.
+{
+  "type": "object",
+  "properties": {
+    "view": {
+      "type": "string",
+      "enum": [
+        "contains",
+        "calls",
+        "data_flow"
+      ]
+    },
+    "root": {
+      "type": "string",
+      "description": "A card: a component id (rust:my_crate::server::run), in data_flow a data type as type:<Name> or a flow's start or end as start:<id> / end:<id>"
+    },
+    "way": {
+      "type": "string",
+      "enum": [
+        "down",
+        "up"
+      ],
+      "description": "down: what it calls, holds, turns into; up: what calls it, holds it, it came from"
+    },
+    "depth": {
+      "type": "integer"
+    },
+    "source": {
+      "type": "string",
+      "description": "What to read: \"code\" (the code alone, the default) or \"plan:<id>\" (the code with that plan)"
+    },
+    "full_code": {
+      "type": "boolean",
+      "description": "With a plan: show it in the whole codebase, not only its items and what they plug into"
+    },
+    "open": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "A card: a component id (rust:my_crate::server::run), in data_flow a data type as type:<Name> or a flow's start or end as start:<id> / end:<id>"
+      },
+      "description": "Cards to open one level further"
+    },
+    "expand": {
+      "type": "string",
+      "description": "A card: a component id (rust:my_crate::server::run), in data_flow a data type as type:<Name> or a flow's start or end as start:<id> / end:<id>"
+    },
+    "levels": {
+      "type": "integer",
+      "description": "With expand: how many levels (default 1)"
+    },
+    "context": {
+      "type": "string",
+      "description": "A card: a component id (rust:my_crate::server::run), in data_flow a data type as type:<Name> or a flow's start or end as start:<id> / end:<id>"
+    }
+  },
+  "required": [
+    "view"
+  ]
+}
+
+## navigate
+Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it. The user may have several graphs, one per column: `column` picks one (counted from 1 on the left; a column that isn't a graph becomes one); without it, the graph they used last moves.
+Views (each a tree from one root, cut to a size limit that it reports):
+- contains: What's inside what: boxes inside boxes, no lines. Go into a box to make it the whole screen.
+- calls: Who calls whom, in the order the calls happen. Down: what it calls. Up: what calls it. The data going in and coming back sits on the selected card's lines.
+- data_flow: Where data goes: cards are data types, the functions that turn one into another sit on the lines. Down: where it goes. Up: where it came from.
+{
+  "type": "object",
+  "properties": {
+    "view": {
+      "type": "string",
+      "enum": [
+        "contains",
+        "calls",
+        "data_flow"
+      ]
+    },
+    "source": {
+      "type": "string",
+      "description": "What to read: \"code\" (the code alone, the default) or \"plan:<id>\" (the code with that plan)"
+    },
+    "root": {
+      "type": "string",
+      "description": "A card: a component id (rust:my_crate::server::run), in data_flow a data type as type:<Name> or a flow's start or end as start:<id> / end:<id>"
+    },
+    "way": {
+      "type": "string",
+      "enum": [
+        "down",
+        "up"
+      ]
+    },
+    "depth": {
+      "type": "integer"
+    },
+    "select": {
+      "type": "string",
+      "description": "A card: a component id (rust:my_crate::server::run), in data_flow a data type as type:<Name> or a flow's start or end as start:<id> / end:<id>"
+    },
+    "column": {
+      "type": "integer",
+      "description": "The user's column to show it in, from 1 on the left (default: the graph they used last)"
+    }
+  }
+}
+
+## plan_list
+All plans, with their components and stages.
+{
+  "type": "object",
+  "properties": {}
+}
+
+## plan_create
+Start a plan. kind "change" (the default) plans one change (a feature, a fix): it holds only what's new or changing, and existing code is referenced, never re-described. kind "walkthrough" explains existing code to the user: modify brings in each component the behavior goes through as it is, with a description and spec written from the code; nothing is added, related, approved or built, and navigate with source plan:<id> shows the user only those components.
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "letters, digits, - and _"
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "change",
+        "walkthrough"
+      ],
+      "description": "change (the default) or walkthrough"
+    }
+  },
+  "required": [
+    "id",
+    "title"
+  ]
+}
+
+## plan_import
+Create a plan from the old registry document (system_architecture.json): components are matched to the code where possible, everything else is reported. Approvals aren't carried over.
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "new plan id"
+    },
+    "title": {
+      "type": "string"
+    },
+    "file": {
+      "type": "string",
+      "description": "repo-relative path (default system_architecture.json)"
+    },
+    "language": {
+      "type": "string",
+      "description": "language for components with no location and no code to match"
+    }
+  },
+  "required": [
+    "id"
+  ]
+}
+
+## plan_edit
+Apply operations to a plan, in order (stops at the first that fails). Add new components under a real parent (they get a proposed location), modify planned or existing ones, reference existing code you build on, and relate components (calls with expectations, data flow, implements). New work must connect to existing code. Changing an approved component's design sends it, and what depends on it, back for approval.
+{
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Plan id"
+    },
+    "ops": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "description": "One plan operation, selected by `op`.",
+        "oneOf": [
+          {
+            "properties": {
+              "op": {
+                "const": "add_component"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "description": "A component type (see list_types)"
+              },
+              "description": {
+                "type": "string"
+              },
+              "parent": {
+                "type": "string",
+                "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+              },
+              "file": {
+                "type": "string",
+                "description": "Repo-relative file; defaults to the parent's file"
+              },
+              "signature": {
+                "type": "object",
+                "properties": {
+                  "params": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "ty": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  },
+                  "returns": {
+                    "type": "string"
+                  }
+                }
+              },
+              "schemas": {
+                "type": "object",
+                "description": "Data shapes: properties (data types), inputs (one field per parameter), outputs, and side effects.",
+                "properties": {
+                  "properties": {
+                    "description": "JSON Schema, or shorthand: a type string (\"int\", \"str[]\", \"User?\" where User is a data type) or a map of field -> type (fields ending in ? are optional)."
+                  },
+                  "inputs": {
+                    "description": "JSON Schema, or shorthand: a type string (\"int\", \"str[]\", \"User?\" where User is a data type) or a map of field -> type (fields ending in ? are optional)."
+                  },
+                  "outputs": {
+                    "description": "JSON Schema, or shorthand: a type string (\"int\", \"str[]\", \"User?\" where User is a data type) or a map of field -> type (fields ending in ? are optional)."
+                  },
+                  "side_effects": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "target": {
+                          "type": "string",
+                          "description": "What it changes: db, fs, network..."
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "target"
+                      ]
+                    }
+                  }
+                }
+              },
+              "spec": {
+                "type": "object",
+                "description": "How it works: the primary planning artifact.",
+                "properties": {
+                  "pattern": {
+                    "type": "string"
+                  },
+                  "logic_steps": {
+                    "type": "array",
+                    "description": "Numbered 1..n.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "sequence": {
+                          "type": "integer"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "algorithm": {
+                          "type": "string"
+                        },
+                        "complexity": {
+                          "type": "string"
+                        },
+                        "check": {
+                          "type": "string",
+                          "description": "Shell snippet run from the repo root during validation; exit 0 = the step holds"
+                        }
+                      },
+                      "required": [
+                        "sequence",
+                        "name"
+                      ]
+                    }
+                  },
+                  "invariants": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "pre_condition",
+                            "post_condition",
+                            "state_invariant",
+                            "complexity"
+                          ]
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  },
+                  "tasks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "text": {
+                          "type": "string"
+                        },
+                        "done": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ]
+                    }
+                  },
+                  "validation": {
+                    "type": "array",
+                    "description": "Project tools to run on it (see .nah/tools.toml)",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "tool": {
+                          "type": "string"
+                        },
+                        "targets": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "args": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "tool"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "op",
+              "name",
+              "type"
+            ]
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "modify"
+              },
+              "id": {
+                "type": "string",
+                "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+              },
+              "description": {
+                "type": "string"
+              },
+              "signature": {
+                "type": "object",
+                "properties": {
+                  "params": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "ty": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  },
+                  "returns": {
+                    "type": "string"
+                  }
+                }
+              },
+              "schemas": {
+                "type": "object",
+                "description": "Data shapes: properties (data types), inputs (one field per parameter), outputs, and side effects.",
+                "properties": {
+                  "properties": {
+                    "description": "JSON Schema, or shorthand: a type string (\"int\", \"str[]\", \"User?\" where User is a data type) or a map of field -> type (fields ending in ? are optional)."
+                  },
+                  "inputs": {
+                    "description": "JSON Schema, or shorthand: a type string (\"int\", \"str[]\", \"User?\" where User is a data type) or a map of field -> type (fields ending in ? are optional)."
+                  },
+                  "outputs": {
+                    "description": "JSON Schema, or shorthand: a type string (\"int\", \"str[]\", \"User?\" where User is a data type) or a map of field -> type (fields ending in ? are optional)."
+                  },
+                  "side_effects": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "target": {
+                          "type": "string",
+                          "description": "What it changes: db, fs, network..."
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "target"
+                      ]
+                    }
+                  }
+                }
+              },
+              "spec": {
+                "type": "object",
+                "description": "How it works: the primary planning artifact.",
+                "properties": {
+                  "pattern": {
+                    "type": "string"
+                  },
+                  "logic_steps": {
+                    "type": "array",
+                    "description": "Numbered 1..n.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "sequence": {
+                          "type": "integer"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "algorithm": {
+                          "type": "string"
+                        },
+                        "complexity": {
+                          "type": "string"
+                        },
+                        "check": {
+                          "type": "string",
+                          "description": "Shell snippet run from the repo root during validation; exit 0 = the step holds"
+                        }
+                      },
+                      "required": [
+                        "sequence",
+                        "name"
+                      ]
+                    }
+                  },
+                  "invariants": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "pre_condition",
+                            "post_condition",
+                            "state_invariant",
+                            "complexity"
+                          ]
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  },
+                  "tasks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "text": {
+                          "type": "string"
+                        },
+                        "done": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ]
+                    }
+                  },
+                  "validation": {
+                    "type": "array",
+                    "description": "Project tools to run on it (see .nah/tools.toml)",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "tool": {
+                          "type": "string"
+                        },
+                        "targets": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "args": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "tool"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "op",
+              "id"
+            ]
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "reference"
+              },
+              "id": {
+                "type": "string",
+                "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+              },
+              "kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "contains",
+                    "implements",
+                    "calls",
+                    "data_flow"
+                  ]
+                }
+              },
+              "depth": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "op",
+              "id"
+            ]
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "relate"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "contains",
+                  "implements",
+                  "calls",
+                  "data_flow"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+              },
+              "target": {
+                "type": "string",
+                "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+              },
+              "order": {
+                "type": "integer"
+              },
+              "ports": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "note": {
+                "type": "string"
+              },
+              "expects": {
+                "description": "Calls only: what the caller passes (inputs), gets back (outputs) and expects changed (side_effects); checked against the callee's real signature.",
+                "type": "object",
+                "properties": {
+                  "inputs": {
+                    "description": "JSON Schema, or shorthand: a type string (\"int\", \"str[]\", \"User?\" where User is a data type) or a map of field -> type (fields ending in ? are optional)."
+                  },
+                  "outputs": {
+                    "description": "JSON Schema, or shorthand: a type string (\"int\", \"str[]\", \"User?\" where User is a data type) or a map of field -> type (fields ending in ? are optional)."
+                  },
+                  "side_effects": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "target": {
+                          "type": "string",
+                          "description": "What it changes: db, fs, network..."
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "target"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "op",
+              "kind",
+              "source",
+              "target"
+            ]
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "unrelate"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "contains",
+                  "implements",
+                  "calls",
+                  "data_flow"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+              },
+              "target": {
+                "type": "string",
+                "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+              }
+            },
+            "required": [
+              "op",
+              "kind",
+              "source",
+              "target"
+            ]
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "remove"
+              },
+              "id": {
+                "type": "string",
+                "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+              }
+            },
+            "required": [
+              "op",
+              "id"
+            ]
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "set_greenfield"
+              },
+              "greenfield": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "op",
+              "greenfield"
+            ]
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "describe"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "required": [
+    "plan",
+    "ops"
+  ]
+}
+
+## plan_validate
+Check a plan before any code is written: references, proposed locations, type rules, loops, schema fit (also against existing code's real signatures), spec rules, required details per type, dependency gates and touch points; runs logic-step checks.
+{
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Plan id"
+    }
+  },
+  "required": [
+    "plan"
+  ]
+}
+
+## contract
+Everything needed to implement one component: where it goes, its signature and spec, what it must call (with the callees' real signatures and locations) and who calls it.
+{
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Plan id"
+    },
+    "id": {
+      "type": "string",
+      "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+    }
+  },
+  "required": [
+    "plan",
+    "id"
+  ]
+}
+
+## verify
+Check the code against the plan for one component and, when it passes, move it to the goal stage. goal=skeleton accepts placeholder bodies (todo!(), raise NotImplementedError...); goal=implemented requires them gone.
+{
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Plan id"
+    },
+    "id": {
+      "type": "string",
+      "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+    },
+    "goal": {
+      "type": "string",
+      "enum": [
+        "skeleton",
+        "implemented"
+      ]
+    }
+  },
+  "required": [
+    "plan",
+    "id",
+    "goal"
+  ]
+}
+
+## run_tools
+Run the project's validation tools (linters, type checkers, tests) on one planned component, or on every planned component already in the code. Shows each command, whether it passed, and the end of its output.
+{
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Plan id"
+    },
+    "id": {
+      "type": "string",
+      "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+    }
+  },
+  "required": [
+    "plan"
+  ]
+}
+
+## review_comments
+The user's review points on a plan: comments and change requests on components, spec sections, relations or the whole plan, with their threads, plus what changed since the user last reviewed it. Answer every open point (answer_comment); approval waits until the user accepts each answer.
+{
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Plan id"
+    },
+    "all": {
+      "type": "boolean",
+      "description": "Include resolved points too"
+    }
+  },
+  "required": [
+    "plan"
+  ]
+}
+
+## answer_comment
+Answer one review point. For a change request, first change the plan (plan_edit), then link the components you changed; the answer carries those changes so the user can check them. Questions can be answered without changes.
+{
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Plan id"
+    },
+    "comment": {
+      "type": "string",
+      "description": "Comment id, e.g. c3"
+    },
+    "answer": {
+      "type": "string"
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+      },
+      "description": "Components you changed for it (since the last review)"
+    }
+  },
+  "required": [
+    "plan",
+    "comment",
+    "answer"
+  ]
+}
+
+## reply_comment
+Reply in a review point's thread without answering it (e.g. to ask the user a clarifying question).
+{
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Plan id"
+    },
+    "comment": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "plan",
+    "comment",
+    "text"
+  ]
+}
+
+## review
+Run the reviewers that apply to one planned component (faithfulness to the plan, anti-patterns, logic...). Blocking points must be fixed before it can be verified as implemented.
+{
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Plan id"
+    },
+    "id": {
+      "type": "string",
+      "description": "Component id: <language>:<symbol>, e.g. rust:my_crate::server::run"
+    }
+  },
+  "required": [
+    "plan",
+    "id"
+  ]
+}
+
+## cockpit_read
+What the user's cockpit shows now: the input mode, each column's view (which has focus), the note line, and every piece of text drawn, row by row with its x. Works while the user lets agents drive the cockpit. Read again after acting: the screen updates as results arrive.
+{
+  "type": "object",
+  "properties": {}
+}
+
+## cockpit_actions
+Everything the cockpit can run now (what the Space menu, keys and palette offer): id, label, keys, what it needs (a choice, text, on/off) with its choices, and whether it applies now.
+{
+  "type": "object",
+  "properties": {}
+}
+
+## cockpit_run
+Run a cockpit action by id, as its key would (see cockpit_actions). A choice is given by its value or label; on/off as on or off.
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "value": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ]
+}
+
+## cockpit_click
+Click in the cockpit: on drawn text (the topmost match, exact before containing), or at x, y (screen points, as cockpit_read gives them).
+{
+  "type": "object",
+  "properties": {
+    "text": {
+      "type": "string"
+    },
+    "x": {
+      "type": "number"
+    },
+    "y": {
+      "type": "number"
+    }
+  }
+}
+
+## cockpit_type
+Type text into whatever has the keyboard in the cockpit (a text box in insert mode, the palette, a search).
+{
+  "type": "object",
+  "properties": {
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ]
+}
+
+## cockpit_keys
+Press keys in the cockpit, in order, space separated: names as in its key sheet, with modifiers joined by + ("space s n", "i", "ctrl+enter", "escape", "G").
+{
+  "type": "object",
+  "properties": {
+    "keys": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "keys"
+  ]
+}
+

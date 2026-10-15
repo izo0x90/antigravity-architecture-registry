@@ -208,6 +208,36 @@ mod tests {
         }
     }
 
+    /// Clicking an option sends the answer (today straight from the card).
+    #[test]
+    fn clicking_an_option_sends_the_answer() {
+        let ctx = egui::Context::default();
+        let net = NetClient::new("http://answers.invalid");
+        let request = request();
+        let mut drafts = Drafts::default();
+        let mut run = |events: Vec<egui::Event>| {
+            let input = egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+            ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| render_request(ui, &net, &request.thread_id, &request, &mut drafts));
+            })
+        };
+        fn find(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.text() == label => Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center()),
+                egui::Shape::Vec(list) => list.iter().find_map(|s| find(s, label)),
+                _ => None,
+            }
+        }
+        let drawn = run(vec![]);
+        let at = drawn.shapes.iter().find_map(|c| find(&c.shape, "Skip")).expect("the Skip button is drawn");
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let before = net.activity.load(std::sync::atomic::Ordering::Relaxed);
+        run(vec![egui::Event::PointerMoved(at)]);
+        run(vec![button(true)]);
+        run(vec![button(false)]);
+        assert_eq!(net.activity.load(std::sync::atomic::Ordering::Relaxed), before + 1, "one request went out");
+    }
+
     #[test]
     fn picks_and_typed_answers_make_the_response_and_skipping_sends_none() {
         let request = request();
