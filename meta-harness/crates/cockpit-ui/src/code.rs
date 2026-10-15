@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 use arch_graph::{Alignment, Component, ComponentId, FileView, RelationKind};
 use egui::{Frame, Pos2, Rect, RichText, Stroke, Vec2};
 
-use crate::actions::{Action, ActionProvider, Group, RunCx};
+use crate::actions::{Action, ActionProvider, Group, MINOR, RunCx, Style};
+use crate::panel::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
 use crate::nav::{Fold, Item, Motion, Navigable, Place, Scroll, Spot, Step, Target, scroll_offset};
 use crate::net::{NetClient, NetResult};
@@ -461,11 +462,9 @@ impl CodeViewerState {
             let start_y = ui.cursor().min.y;
             let start_x = ui.cursor().min.x;
             let w = ui.available_width();
-            let is_narrow = ui.available_width() < 240.0;
-            let copy_label = if is_narrow { "📋" } else { "📋 Copy" };
-            // Room for the buttons and the `:line` label next to the path.
+            // Room for the `:line` label next to the path.
             let label_w = if self.target_line.is_some() { 48.0 } else { 0.0 };
-            let edit_w = if is_narrow { (ui.available_width() - 80.0 - label_w).max(50.0) } else { (ui.available_width() - 120.0 - label_w).max(80.0) };
+            let edit_w = (ui.available_width() - 40.0 - label_w).max(50.0);
 
             ui.horizontal(|ui| {
                 ui.label(RichText::new("📂").size(crate::theme::look().text_title));
@@ -478,20 +477,6 @@ impl CodeViewerState {
                 if let Some(target) = self.target_line {
                     ui.label(RichText::new(format!(":{}", target)).monospace().strong().size(crate::theme::look().text_body).color(colors().warn));
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button(copy_label).clicked() {
-                        ui.ctx().copy_text(self.content.clone());
-                    }
-                    if ui.small_button("🔄").clicked() {
-                        let path = self.current_file.clone();
-                        let target = self.target_line;
-                        let ctx = ui.ctx().clone();
-                        self.load_file(&path, target, net, ctx);
-                    }
-                    if self.is_loading {
-                        ui.label(RichText::new(egui_phosphor::regular::DOT).size(crate::theme::look().text_small).color(colors().warn));
-                    }
-                });
             });
             let end_y = ui.cursor().min.y;
             let toolbar_rect = Rect::from_min_size(Pos2::new(start_x, start_y), Vec2::new(w, (end_y - start_y).max(22.0)));
@@ -505,7 +490,7 @@ impl CodeViewerState {
                     ui.horizontal_wrapped(|ui| {
                         crate::status::chip(ui, "stale", None);
                         ui.label(RichText::new("This file changed since it was indexed: marks and spans may be off.").size(crate::theme::look().text_body).color(colors().text));
-                        if let Some(reread) = cx.shell.iter().find(|a| a.id == "index.file").map(|a| a.clone().toolbar(crate::actions::ToolbarStyle::Button, "Re-read it", None)) {
+                        if let Some(reread) = cx.shell.iter().find(|a| a.id == "index.file").map(|a| a.clone().header(crate::actions::Style::Button, "Re-read it", None)) {
                             crate::actions::control(ui, &reread, cx);
                         }
                     });
@@ -666,25 +651,53 @@ fn find_word(text: &str, word: &str) -> Option<usize> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CodeCommand {
     Def { forward: bool },
+    Copy,
+    Reload,
 }
 
 impl ActionProvider for CodeViewerState {
     fn actions(&self) -> Vec<Action> {
-        if self.defs.is_empty() {
-            return Vec::new();
+        let mut out = Vec::new();
+        if !self.defs.is_empty() {
+            out.push(Action::new("code.next_def", "Next definition", CodeCommand::Def { forward: true }).focused().group(Group::Navigate));
+            out.push(Action::new("code.prev_def", "Previous definition", CodeCommand::Def { forward: false }).focused().group(Group::Navigate));
         }
-        vec![
-            Action::new("code.next_def", "Next definition", CodeCommand::Def { forward: true }).focused().group(Group::Navigate),
-            Action::new("code.prev_def", "Previous definition", CodeCommand::Def { forward: false }).focused().group(Group::Navigate),
-        ]
+        out.push(Action::new("code.reload", "Load the file again", CodeCommand::Reload).focused().group(Group::View).importance(MINOR).header(Style::Button, "", Some(egui_phosphor::regular::ARROW_CLOCKWISE)));
+        out.push(Action::new("code.copy", "Copy the file", CodeCommand::Copy).focused().importance(MINOR).header(Style::Button, "", Some(egui_phosphor::regular::COPY)));
+        out
     }
 
     fn run(&mut self, action: &Action, _value: Option<String>, cx: &mut RunCx<'_>) {
-        if let Some(CodeCommand::Def { forward }) = action.command::<CodeCommand>()
-            && let Err(why) = self.step_def(*forward, 1, false)
-        {
-            *cx.note = Some(why);
+        match action.command::<CodeCommand>() {
+            Some(CodeCommand::Def { forward }) => {
+                if let Err(why) = self.step_def(*forward, 1, false) {
+                    *cx.note = Some(why);
+                }
+            }
+            Some(CodeCommand::Copy) => cx.ctx.copy_text(self.content.clone()),
+            Some(CodeCommand::Reload) => {
+                let path = self.current_file.clone();
+                self.load_file(&path, self.target_line, cx.net, cx.ctx.clone());
+            }
+            None => {}
         }
+    }
+}
+
+impl crate::panel::Panel for CodeViewerState {
+    /// The file it shows (its path on hover).
+    fn title(&self) -> Status {
+        let name = self.current_file.rsplit('/').next().unwrap_or(&self.current_file);
+        Status::new(format!("{} {name}", egui_phosphor::regular::FILE_CODE), Tone::Plain).detail(self.current_file.clone())
+    }
+
+    /// Loading, and out of date with the index.
+    fn status(&self) -> Vec<Status> {
+        let mut out = Vec::new();
+        if self.is_loading {
+            out.push(Status::new(egui_phosphor::regular::HOURGLASS, Tone::Warn).detail("Loading"));
+        }
+        out
     }
 }
 

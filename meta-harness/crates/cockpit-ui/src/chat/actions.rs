@@ -44,7 +44,7 @@ impl ActionProvider for ChatStreamState {
     /// active session's controls and what is pending.
     fn actions(&self) -> Vec<Action> {
         use ChatCommand as C;
-        use ToolbarStyle::{Button, Control};
+        use Style::{Button, Setting};
         let mut out = Vec::new();
         let snapshot = self.instance();
         let caps = snapshot.map(|s| s.capabilities.clone()).unwrap_or_default();
@@ -60,14 +60,14 @@ impl ActionProvider for ChatStreamState {
         // Session
         let mut new = Action::new("session.new", "New session", C::NewSession);
         if idle {
-            new = new.toolbar(Button, "Connect", Some(icon::LIGHTNING));
+            new = new.header(Button, "Connect", Some(icon::LIGHTNING));
         }
         out.push(new);
         if caps.sessions.list_saved {
             let param = self.saved_choices().map(Param::Choice).unwrap_or(Param::None);
             let mut resume = Action::new("session.resume", "Resume a saved session", C::ResumeSession).param(param.clone());
             if idle {
-                resume = resume.toolbar(Button, "Resume…", Some(icon::ARROW_COUNTER_CLOCKWISE));
+                resume = resume.header(Button, "Resume…", Some(icon::ARROW_COUNTER_CLOCKWISE));
             }
             out.push(resume);
             if caps.sessions.delete_saved {
@@ -98,12 +98,12 @@ impl ActionProvider for ChatStreamState {
                     Choice::new(i.instance_id.to_string(), label).current(Some(&i.instance_id) == self.active_instance().as_ref())
                 })
                 .collect();
-            out.push(Action::new("instance.select", "Choose harness", C::SelectInstance).param(Param::Choice(choices)).toolbar(Control, "Harness", None));
+            out.push(Action::new("instance.select", "Choose harness", C::SelectInstance).param(Param::Choice(choices)).header(Setting, "Harness", None));
         }
         if let Some(view) = view {
-            out.push(Action::new("session.close", "Close session", C::CloseSession).toolbar(Button, "", Some(icon::X)));
+            out.push(Action::new("session.close", "Close session", C::CloseSession).header(Button, "", Some(icon::X)));
             if view.running_turn().is_some() && caps.turns.interrupt {
-                out.push(Action::new("session.stop", "Stop the running turn", C::StopTurn).toolbar(Button, "Stop", Some(icon::STOP)));
+                out.push(Action::new("session.stop", "Stop the running turn", C::StopTurn).header(Button, "Stop", Some(icon::STOP)));
             }
         }
         out.push(Action::new("instance.refresh", "Re-probe the harness", C::RefreshInstance));
@@ -138,7 +138,7 @@ impl ActionProvider for ChatStreamState {
                         .iter()
                         .map(|m| Choice::new(&m.id, &m.name).detail(m.description.clone()).current(current.as_ref() == Some(&m.id)))
                         .collect();
-                    out.push(Action::new("mode.native", "Set session mode", C::NativeMode).param(Param::Choice(choices)).toolbar(Control, "Mode", None));
+                    out.push(Action::new("mode.native", "Set session mode", C::NativeMode).param(Param::Choice(choices)).header(Setting, "Mode", None));
                 }
                 for control in &controls.config {
                     let (param, boolean) = match &control.kind {
@@ -156,7 +156,7 @@ impl ActionProvider for ChatStreamState {
                     let mut action = Action::new(format!("config.{}", control.id), format!("Set {}", control.name), C::SetConfig { option: control.id.clone(), boolean })
                         .alias(format!("config.category.{}", wire_name(&control.category)))
                         .param(param)
-                        .toolbar(Control, &control.name, None);
+                        .header(Setting, &control.name, None);
                     if let Some(d) = &control.description {
                         action = action.detail(d.clone());
                     }
@@ -168,12 +168,12 @@ impl ActionProvider for ChatStreamState {
                     let model = self.model();
                     let default = Choice::new("", "default").current(model.is_none());
                     let choices = std::iter::once(default).chain(s.models.iter().map(|m| Choice::new(&m.id, &m.name).current(model.as_ref() == Some(&m.id)))).collect();
-                    out.push(Action::new("model.next", "Model for the next session", C::NextModel).param(Param::Choice(choices)).toolbar(Control, "Model", None));
+                    out.push(Action::new("model.next", "Model for the next session", C::NextModel).param(Param::Choice(choices)).header(Setting, "Model", None));
                 }
                 if let Some(s) = snapshot.filter(|s| !s.runtime_modes.is_empty()) {
                     let current = self.policy().runtime_mode;
                     let choices = s.runtime_modes.iter().map(|m| Choice::new(wire_name(m), mode_label(*m)).current(*m == current)).collect();
-                    out.push(Action::new("mode.runtime", "Runtime mode", C::RuntimeMode).param(Param::Choice(choices)).toolbar(Control, "Mode", None));
+                    out.push(Action::new("mode.runtime", "Runtime mode", C::RuntimeMode).param(Param::Choice(choices)).header(Setting, "Mode", None));
                 }
             }
         }

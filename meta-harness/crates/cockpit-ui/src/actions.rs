@@ -75,20 +75,36 @@ pub enum Scope {
     Focused,
 }
 
+/// Where an action's control shows. Hosts draw both; views draw none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ToolbarStyle {
-    /// A button in the view's action row.
-    Button,
-    /// A picker or toggle in the view's controls row.
-    Control,
+pub enum At {
+    /// The panel's top line: what applies to the whole view.
+    Header,
+    /// Under the item the cursor is on, while it's on it.
+    Item,
 }
 
-/// How an action shows up in its view's toolbar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Style {
+    /// A button.
+    Button,
+    /// A setting: a picker (choices) or a switch (on/off).
+    Setting,
+}
+
+/// An action's control: where it shows and how it looks.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Toolbar {
+pub struct Control {
+    pub at: At,
+    pub style: Style,
     pub caption: String,
     pub icon: Option<&'static str>,
-    pub style: ToolbarStyle,
+}
+
+impl Control {
+    pub fn new(at: At, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
+        Self { at, style, caption: caption.into(), icon }
+    }
 }
 
 /// What kind of thing an action does (how the key sheet groups them).
@@ -197,7 +213,7 @@ pub struct Action {
     pub scope: Scope,
     /// Other keymap names for this action, most specific first.
     pub aliases: Vec<String>,
-    pub toolbar: Option<Toolbar>,
+    pub control: Option<Control>,
     /// A glyph for compact controls (on-screen chips).
     pub icon: Option<&'static str>,
     pub group: Group,
@@ -224,7 +240,7 @@ impl Action {
             param: Param::None,
             scope: Scope::Global,
             aliases: Vec::new(),
-            toolbar: None,
+            control: None,
             icon: None,
             group: Group::Act,
             importance: SECONDARY,
@@ -279,14 +295,26 @@ impl Action {
         self
     }
 
-    /// The glyph for compact controls: its own, else its toolbar's.
+    /// The glyph for compact controls: its own, else its control's.
     pub fn glyph(&self) -> Option<&'static str> {
-        self.icon.or(self.toolbar.as_ref().and_then(|t| t.icon))
+        self.icon.or(self.control.as_ref().and_then(|c| c.icon))
     }
 
-    pub fn toolbar(mut self, style: ToolbarStyle, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
-        self.toolbar = Some(Toolbar { caption: caption.into(), icon, style });
+    /// Shown on the panel's top line.
+    pub fn header(mut self, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
+        self.control = Some(Control::new(At::Header, style, caption, icon));
         self
+    }
+
+    /// Shown under the cursor's item, while the cursor is on it.
+    pub fn on_item(mut self, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
+        self.control = Some(Control::new(At::Item, style, caption, icon));
+        self
+    }
+
+    /// Where its control shows, if it has one.
+    pub fn at(&self) -> Option<At> {
+        self.control.as_ref().map(|c| c.at)
     }
 
     /// The provider's own command, if this action is one of its kind.
@@ -426,21 +454,22 @@ pub fn is_primary(entry: &LeaderEntry, bound: &[Bound], path: &[char], focused: 
     }
 }
 
-/// What the user did with a toolbar control.
-enum ToolbarUse {
+/// What the user did with a control.
+enum ControlUse {
     Run(Option<String>),
     /// Needs a parameter the toolbar can't take; open the palette at it.
     OpenPalette,
 }
 
-/// Draws an action as its control (its `toolbar`), saying its key on
-/// hover; used, it's asked for (`RunCx::asked`). Whether it was used.
+/// Draws an action as its control, saying its key on hover; used, it's
+/// asked for (`RunCx::asked`). Whether it was used. Only hosts call this
+/// (and `controls`): views draw no controls.
 pub fn control(ui: &mut egui::Ui, action: &Action, cx: &mut RunCx<'_>) -> bool {
-    let Some(used) = toolbar_control(ui, action, cx.hints) else { return false };
+    let Some(used) = draw_control(ui, action, cx.hints) else { return false };
     let value = match used {
-        ToolbarUse::Run(value) => value,
+        ControlUse::Run(value) => value,
         // Asked without its value: the palette opens at it.
-        ToolbarUse::OpenPalette => None,
+        ControlUse::OpenPalette => None,
     };
     *cx.asked = Some((action.id.clone(), value));
     true
@@ -448,18 +477,18 @@ pub fn control(ui: &mut egui::Ui, action: &Action, cx: &mut RunCx<'_>) -> bool {
 
 /// Draws every action of `actions` that has a control, in order.
 pub fn controls<'x>(ui: &mut egui::Ui, actions: impl IntoIterator<Item = &'x Action>, cx: &mut RunCx<'_>) {
-    for action in actions.into_iter().filter(|a| a.toolbar.is_some()) {
+    for action in actions.into_iter().filter(|a| a.control.is_some()) {
         control(ui, action, cx);
     }
 }
 
-/// Narrowest a toolbar picker gets before its text is truncated.
+/// Narrowest a picker gets before its text is truncated.
 const PICKER_MIN_WIDTH: f32 = 90.0;
 
-/// Draws an action as a toolbar control; hovering it says what it does
-/// and its key (from `hints`, as bound now).
-fn toolbar_control(ui: &mut egui::Ui, action: &Action, hints: &[(String, String)]) -> Option<ToolbarUse> {
-    let toolbar = action.toolbar.as_ref()?;
+/// Draws an action's control; hovering it says what it does and its key
+/// (from `hints`, as bound now).
+fn draw_control(ui: &mut egui::Ui, action: &Action, hints: &[(String, String)]) -> Option<ControlUse> {
+    let toolbar = action.control.as_ref()?;
     let tip = match key_of(hints, &action.id) {
         Some(key) => format!("{} ({key})", action.label),
         None => action.label.clone(),
@@ -470,11 +499,11 @@ fn toolbar_control(ui: &mut egui::Ui, action: &Action, hints: &[(String, String)
         None => toolbar.caption.clone(),
     };
     match (&action.param, toolbar.style) {
-        (Param::Toggle { on }, ToolbarStyle::Control) => {
+        (Param::Toggle { on }, Style::Setting) => {
             let mut value = *on;
-            ui.checkbox(&mut value, RichText::new(text).size(crate::theme::look().text_body)).changed().then(|| ToolbarUse::Run(Some(value.to_string())))
+            ui.checkbox(&mut value, RichText::new(text).size(crate::theme::look().text_body)).changed().then(|| ControlUse::Run(Some(value.to_string())))
         }
-        (Param::Choice(choices), ToolbarStyle::Control) => {
+        (Param::Choice(choices), Style::Setting) => {
             let caption = RichText::new(format!("{text}:")).strong().size(crate::theme::look().text_body);
             let shown = choices.iter().find(|c| c.current).map(|c| c.label.clone()).unwrap_or_else(|| "—".into());
             // Caption and picker stay on one row: wrap first if they won't fit, and
@@ -490,7 +519,7 @@ fn toolbar_control(ui: &mut egui::Ui, action: &Action, hints: &[(String, String)
             }
             ui.label(caption);
             let mut picked = None;
-            egui::ComboBox::from_id_salt(("toolbar", action.id.as_str()))
+            egui::ComboBox::from_id_salt(("control", action.id.as_str()))
                 .width(PICKER_MIN_WIDTH.min(ui.available_width()))
                 .truncate()
                 .selected_text(shown)
@@ -506,10 +535,10 @@ fn toolbar_control(ui: &mut egui::Ui, action: &Action, hints: &[(String, String)
                         }
                     }
                 });
-            picked.map(|v| ToolbarUse::Run(Some(v)))
+            picked.map(|v| ControlUse::Run(Some(v)))
         }
-        (Param::None, _) => ui.button(text).on_hover_text(tip).clicked().then_some(ToolbarUse::Run(None)),
-        _ => ui.button(text).on_hover_text(tip).clicked().then_some(ToolbarUse::OpenPalette),
+        (Param::None, _) => ui.button(text).on_hover_text(tip).clicked().then_some(ControlUse::Run(None)),
+        _ => ui.button(text).on_hover_text(tip).clicked().then_some(ControlUse::OpenPalette),
     }
 }
 

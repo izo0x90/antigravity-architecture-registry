@@ -11,7 +11,8 @@ use egui::{Align2, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKin
 use arch_graph::tree::{Card, Line as TreeLine, LineKind, Rect as WorldRect, ViewKind, Way, card_lines, count_text};
 
 use super::{Camera, GraphState, Load, NavChange};
-use crate::actions::{Action, RunCx, ToolbarStyle};
+use crate::actions::{Action, At, Control, RunCx, Style};
+use crate::panel::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
 use crate::graph_config::ChipMode;
 use crate::graph_style::{LegendEntry, Swatch, style};
@@ -105,7 +106,7 @@ impl GraphState {
 
     pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, slot_idx: usize, pan_held: bool, cx: &mut RunCx<'_>) {
         self.tick(cx.net, cx.ctx);
-        self.render_toolbar(ui, cx);
+        self.render_where(ui);
         let canvas = ui.available_rect_before_wrap();
         self.canvas = canvas;
         feedback.register_inspectable(ui, &format!("slot_{}:graph:canvas", slot_idx + 1), canvas);
@@ -341,31 +342,10 @@ impl GraphState {
         self.chip_rects.truncate(self.context_chips);
     }
 
-    /// The toolbar (the graph's controls) and, under it, where the graph is:
-    /// the source, the view and way, the roots gone through (each a way
-    /// back), what holds the root, how deep, what was cut, and anything the
-    /// graph has to say.
-    fn render_toolbar(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        use crate::actions::ActionProvider;
-        let mut actions: Vec<Action> = cx
-            .shell
-            .iter()
-            .filter_map(|a| match a.id.as_str() {
-                "nav.back" => Some(a.clone().toolbar(ToolbarStyle::Button, "", Some(egui_phosphor::regular::ARROW_LEFT))),
-                "nav.forward" => Some(a.clone().toolbar(ToolbarStyle::Button, "", Some(egui_phosphor::regular::ARROW_RIGHT))),
-                _ => None,
-            })
-            .collect();
-        actions.extend(self.actions());
-        // The code that changed, read again; the view back where the agent found it.
-        let reread = cx.shell.iter().find(|a| a.id == "index.changed").map(|a| a.clone().toolbar(ToolbarStyle::Button, "Re-read", None));
-        let agent_return = actions.iter().find(|a| a.id == "graph.agent_return").map(|a| a.clone().toolbar(ToolbarStyle::Button, "Return", Some(egui_phosphor::regular::ARROW_U_UP_LEFT)));
-        ui.horizontal_wrapped(|ui| {
-            crate::actions::controls(ui, &actions, cx);
-            if self.load == Load::Loading {
-                ui.label(RichText::new(egui_phosphor::regular::HOURGLASS).color(colors().warn));
-            }
-        });
+    /// Where the graph is: the source, the view and way, the roots gone
+    /// through (each a way back), what holds the root, how deep, what was
+    /// cut, and how long it took.
+    fn render_where(&mut self, ui: &mut egui::Ui) {
         enum Go {
             Back(usize),
             Into(String),
@@ -440,22 +420,6 @@ impl GraphState {
                     ui.label(RichText::new(format!("· slow: {ms} ms")).size(look.text_body).color(colors().warn))
                         .on_hover_text("The server took longer than its limit to build this. Each stage's time is at /api/perf.");
                 }
-            }
-            if !self.stale_files.is_empty() {
-                let count = self.stale_files.len().to_string();
-                crate::status::chip(ui, "stale", Some(&count)).on_hover_text(self.stale_files.join("\n"));
-                if let Some(reread) = &reread {
-                    crate::actions::control(ui, reread, cx);
-                }
-            }
-            if let Some(agent) = &self.agent {
-                ui.label(RichText::new(format!("{} the agent moved the view: {}", egui_phosphor::regular::ROBOT, agent.what)).size(look.text_body).color(colors().special));
-                if let Some(back) = &agent_return {
-                    crate::actions::control(ui, back, cx);
-                }
-            }
-            if let Some(note) = &self.note {
-                ui.label(RichText::new(note).size(look.text_body).color(colors().warn));
             }
         });
         ui.separator();
@@ -858,4 +822,41 @@ fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, width: f32) -> O
         }
     }
     (lo > 0).then(|| format!("{}…", chars[..lo].iter().collect::<String>()))
+}
+
+impl crate::panel::Panel for GraphState {
+    /// What it shows: the code, or a plan.
+    fn title(&self) -> Status {
+        Status::new(format!("{} {}", egui_phosphor::regular::GRAPH, self.source_label()), Tone::Plain)
+    }
+
+    /// Loading, the files changed since they were read, the agent having
+    /// moved it, and what it has to say.
+    fn status(&self) -> Vec<Status> {
+        let mut out = Vec::new();
+        if self.load == Load::Loading {
+            out.push(Status::new(egui_phosphor::regular::HOURGLASS, Tone::Warn).detail("Loading"));
+        }
+        if !self.stale_files.is_empty() {
+            let (glyph, word, _) = crate::status::look("stale");
+            out.push(Status::new(format!("{glyph} {} {word}", self.stale_files.len()), Tone::Warn).detail(self.stale_files.join("\n")));
+        }
+        if let Some(agent) = &self.agent {
+            out.push(Status::new(format!("{} the agent moved the view: {}", egui_phosphor::regular::ROBOT, agent.what), Tone::Accent));
+        }
+        if let Some(note) = &self.note {
+            out.push(Status::new(note.clone(), Tone::Warn));
+        }
+        out
+    }
+
+    /// The jump list's back and forward, and reading changed code again.
+    fn shell_controls(&self) -> Vec<(&'static str, Control)> {
+        let button = |caption: &str, icon: Option<&'static str>| Control::new(At::Header, Style::Button, caption, icon);
+        let mut out = vec![("nav.forward", button("", Some(egui_phosphor::regular::ARROW_RIGHT))), ("nav.back", button("", Some(egui_phosphor::regular::ARROW_LEFT)))];
+        if !self.stale_files.is_empty() {
+            out.insert(0, ("index.changed", button("Re-read", None)));
+        }
+        out
+    }
 }

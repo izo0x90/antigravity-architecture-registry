@@ -1,6 +1,7 @@
 //! Drawing the chat: controls, banners, the stream, items, the input.
 
 use super::*;
+use crate::panel::{Status, Tone};
 
 pub(super) fn mcp_label(server: &McpServer) -> String {
     match &server.transport {
@@ -52,13 +53,6 @@ impl ChatStreamState {
         self.drawn.insert(self.ui.slot.clone());
 
         ui.vertical(|ui| {
-            let start = ui.cursor().min;
-            let w = ui.available_width();
-            self.render_controls(ui, cx);
-            let controls = Rect::from_min_size(start, Vec2::new(w, (ui.cursor().min.y - start.y).max(24.0)));
-            feedback.register_inspectable(ui, &format!("slot_{}:chat:controls", slot_idx + 1), controls);
-            ui.separator();
-
             self.render_banners(ui, net);
             self.render_plan(ui);
 
@@ -81,61 +75,6 @@ impl ChatStreamState {
             let input = Rect::from_min_size(Pos2::new(start.x, start.y), Vec2::new(w, (ui.cursor().min.y - start.y).max(40.0)));
             feedback.register_inspectable(ui, &format!("slot_{}:chat:input_bar", slot_idx + 1), input);
         });
-    }
-
-    /// The toolbar: the view's own actions marked for it, plus status chrome.
-    pub(super) fn render_controls(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        let actions = self.actions();
-        let on_toolbar = |style: ToolbarStyle| actions.iter().filter(move |a| a.toolbar.as_ref().is_some_and(|t| t.style == style));
-
-        ui.horizontal(|ui| {
-            // The agent slot it shows (its role on hover).
-            if let Some(slot) = self.slot() {
-                let color = if slot.is_lead() { colors().accent } else { colors().info };
-                ui.label(RichText::new(format!("{} {}", icon::USER_FOCUS, slot.name)).strong().size(crate::theme::look().text_label).color(color))
-                    .on_hover_text(format!("agent slot ({})", slot.role));
-            }
-            let name = self.instance().map(|s| s.display_name.clone()).unwrap_or_else(|| "No harness".into());
-            ui.label(RichText::new(name).strong().size(crate::theme::look().text_label));
-            // Who it's signed in as, as it says.
-            if let Some(account) = self.instance().and_then(|s| s.auth.account.clone()) {
-                let detail = [account.email.clone(), account.organization.clone(), account.plan.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
-                let label = ui.label(RichText::new(format!("{} {}", icon::USER_CIRCLE, account.label)).size(crate::theme::look().text_small).color(colors().muted));
-                if !detail.is_empty() {
-                    label.on_hover_text(detail);
-                }
-            }
-            // What of its configuration couldn't be read.
-            if let Some(problems) = self.instance().map(|s| s.problems.clone()).filter(|p| !p.is_empty()) {
-                ui.label(RichText::new(icon::WARNING).color(colors().warn)).on_hover_text(problems.join("\n"));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                crate::actions::controls(ui, on_toolbar(ToolbarStyle::Button), cx);
-                if let Some(thread) = &self.active_thread() {
-                    let short: String = thread.as_str().chars().take(8).collect();
-                    ui.label(RichText::new(format!("[{short}]")).monospace().size(crate::theme::look().text_small).color(colors().info));
-                } else if self.opening() {
-                    ui.label(RichText::new(format!("{} Connecting…", icon::HOURGLASS)).size(crate::theme::look().text_small).color(colors().warn));
-                }
-            });
-        });
-
-        ui.horizontal_wrapped(|ui| {
-            crate::actions::controls(ui, on_toolbar(ToolbarStyle::Control), cx);
-            if let Some(thread) = self.thread().map(|v| &v.thread)
-                && !thread.mcp_servers.is_empty()
-            {
-                let names: Vec<String> = thread.mcp_servers.iter().map(mcp_label).collect();
-                ui.add(egui::Label::new(RichText::new(format!("{} MCP {}", icon::PLUGS_CONNECTED, thread.mcp_servers.len())).size(crate::theme::look().text_small).color(colors().muted)).extend())
-                    .on_hover_text(names.join("\n"));
-            }
-            if let Some(usage) = self.thread().and_then(|t| t.usage.clone())
-                && let (Some(used), Some(window)) = (usage.context_used_tokens, usage.context_window_tokens)
-            {
-                ui.add(egui::Label::new(RichText::new(format!("ctx {:.1}k/{:.0}k", used as f64 / 1000.0, window as f64 / 1000.0)).monospace().size(crate::theme::look().text_small).color(colors().muted)).extend());
-            }
-        });
-
     }
 
     pub(super) fn render_banners(&mut self, ui: &mut egui::Ui, net: &NetClient) {
@@ -461,5 +400,47 @@ impl ChatStreamState {
                 }
             }
         });
+    }
+}
+
+impl crate::panel::Panel for ChatStreamState {
+    /// The agent slot it shows (its role on hover).
+    fn title(&self) -> Status {
+        match self.slot() {
+            Some(slot) => Status::new(format!("{} {}", icon::USER_FOCUS, slot.name), if slot.is_lead() { Tone::Accent } else { Tone::Info }).detail(format!("agent slot ({})", slot.role)),
+            None => Status::new("No agent slot", Tone::Muted),
+        }
+    }
+
+    /// Its harness, who it's signed in as, what of its configuration
+    /// couldn't be read, its session (or that it's connecting), its tool
+    /// servers and how much of its context is used.
+    fn status(&self) -> Vec<Status> {
+        let mut out = vec![Status::new(self.instance().map(|s| s.display_name.clone()).unwrap_or_else(|| "No harness".into()), Tone::Plain)];
+        if let Some(account) = self.instance().and_then(|s| s.auth.account.clone()) {
+            let detail = [account.email.clone(), account.organization.clone(), account.plan.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            let status = Status::new(format!("{} {}", icon::USER_CIRCLE, account.label), Tone::Muted);
+            out.push(if detail.is_empty() { status } else { status.detail(detail) });
+        }
+        if let Some(problems) = self.instance().map(|s| s.problems.clone()).filter(|p| !p.is_empty()) {
+            out.push(Status::new(icon::WARNING, Tone::Warn).detail(problems.join("\n")));
+        }
+        if let Some(thread) = &self.active_thread() {
+            out.push(Status::new(format!("[{}]", thread.as_str().chars().take(8).collect::<String>()), Tone::Info));
+        } else if self.opening() {
+            out.push(Status::new(format!("{} Connecting…", icon::HOURGLASS), Tone::Warn));
+        }
+        if let Some(thread) = self.thread().map(|v| &v.thread)
+            && !thread.mcp_servers.is_empty()
+        {
+            let names: Vec<String> = thread.mcp_servers.iter().map(mcp_label).collect();
+            out.push(Status::new(format!("{} MCP {}", icon::PLUGS_CONNECTED, thread.mcp_servers.len()), Tone::Muted).detail(names.join("\n")));
+        }
+        if let Some(usage) = self.thread().and_then(|t| t.usage.clone())
+            && let (Some(used), Some(window)) = (usage.context_used_tokens, usage.context_window_tokens)
+        {
+            out.push(Status::new(format!("ctx {:.1}k/{:.0}k", used as f64 / 1000.0, window as f64 / 1000.0), Tone::Muted));
+        }
+        out
     }
 }

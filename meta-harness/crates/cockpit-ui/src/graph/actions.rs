@@ -19,7 +19,7 @@ use arch_search::{Found, Hit, SearchKind};
 
 use super::{GraphState, NavChange};
 use crate::net::NetResult;
-use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, ToolbarStyle};
+use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum GraphCommand {
@@ -69,7 +69,7 @@ impl GraphState {
 impl ActionProvider for GraphState {
     fn actions(&self) -> Vec<Action> {
         use GraphCommand as G;
-        use ToolbarStyle::{Button, Control};
+        use Style::{Button, Setting};
         let mut out = Vec::new();
         let f = |id: &str, label: &str, c: GraphCommand| Action::new(id, label, c).focused();
         let views = ViewKind::ALL
@@ -79,27 +79,27 @@ impl ActionProvider for GraphState {
                 Choice::new(v.name(), v.name().replace('_', " ")).detail(detail).current(*v == self.nav.view)
             })
             .collect();
-        out.push(f("graph.view", "Switch view (contains, calls, data flow)", G::SetView).param(Param::Choice(views)).toolbar(Control, "View", Some(egui_phosphor::regular::GRAPH)).group(Group::View).jump());
-        out.push(f("graph.plan", "Show the code, or one plan", G::SetPlan).param(Param::Choice(self.source_choices())).toolbar(Control, "Source", None).group(Group::View).jump());
+        out.push(f("graph.view", "Switch view (contains, calls, data flow)", G::SetView).param(Param::Choice(views)).header(Setting, "View", Some(egui_phosphor::regular::GRAPH)).group(Group::View).jump());
+        out.push(f("graph.plan", "Show the code, or one plan", G::SetPlan).param(Param::Choice(self.source_choices())).header(Setting, "Source", None).group(Group::View).jump());
         if self.nav.source != Source::Code {
-            out.push(f("graph.full_code", "Show the plan in the full code", G::FullCode).param(Param::Toggle { on: self.nav.full_code }).toolbar(Control, "Full code", None).group(Group::View).jump());
+            out.push(f("graph.full_code", "Show the plan in the full code", G::FullCode).param(Param::Toggle { on: self.nav.full_code }).header(Setting, "Full code", None).group(Group::View).jump());
         }
-        out.push(f("graph.flip", self.flip_label(), G::Flip).toolbar(Button, "", Some(egui_phosphor::regular::ARROWS_DOWN_UP)).group(Group::View).importance(SECONDARY).jump());
-        out.push(f("graph.depth_less", "Show fewer levels", G::Depth(-1)).toolbar(Button, "", Some(egui_phosphor::regular::MINUS)).group(Group::View).importance(MINOR).jump());
-        out.push(f("graph.depth_more", "Show more levels", G::Depth(1)).toolbar(Button, "", Some(egui_phosphor::regular::PLUS)).group(Group::View).importance(MINOR).jump());
+        out.push(f("graph.flip", self.flip_label(), G::Flip).header(Button, "", Some(egui_phosphor::regular::ARROWS_DOWN_UP)).group(Group::View).importance(SECONDARY).jump());
+        out.push(f("graph.depth_less", "Show fewer levels", G::Depth(-1)).header(Button, "", Some(egui_phosphor::regular::MINUS)).group(Group::View).importance(MINOR).jump());
+        out.push(f("graph.depth_more", "Show more levels", G::Depth(1)).header(Button, "", Some(egui_phosphor::regular::PLUS)).group(Group::View).importance(MINOR).jump());
         if let Some(card) = self.selected_card()
             && self.nav.root.as_deref() != Some(card.key.as_str())
         {
             out.push(f("graph.go_in", &format!("Go into {}", card.label), G::GoIn).icon(egui_phosphor::regular::ARROW_SQUARE_IN).group(Group::Navigate).importance(SECONDARY).jump());
         }
-        out.push(f("graph.fit", "Fit the drawing to the screen", G::Fit).toolbar(Button, "", Some(egui_phosphor::regular::CORNERS_OUT)).group(Group::View).importance(MINOR));
+        out.push(f("graph.fit", "Fit the drawing to the screen", G::Fit).header(Button, "", Some(egui_phosphor::regular::CORNERS_OUT)).group(Group::View).importance(MINOR));
         out.push(f("graph.zoom_in", "Zoom in", G::Zoom(self.ui.zoom_step)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS).group(Group::View).importance(MINOR));
         out.push(f("graph.zoom_out", "Zoom out", G::Zoom(1.0 / self.ui.zoom_step)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS).group(Group::View).importance(MINOR));
         let (found, waiting) = self.find_choices();
         let find = Param::Search { hint: "a name, a file, or words in a line".into(), found, waiting };
-        out.push(f("graph.find", "Find in the code (symbols, files, lines)", G::Find).param(find).toolbar(Button, "", Some(egui_phosphor::regular::MAGNIFYING_GLASS)).group(Group::Navigate).importance(SECONDARY).jump());
+        out.push(f("graph.find", "Find in the code (symbols, files, lines)", G::Find).param(find).header(Button, "", Some(egui_phosphor::regular::MAGNIFYING_GLASS)).group(Group::Navigate).importance(SECONDARY).jump());
         if self.agent.is_some() {
-            out.push(f("graph.agent_return", "Return to where you were before the agent moved the view", G::AgentReturn).group(Group::Navigate).importance(PRIMARY).jump());
+            out.push(f("graph.agent_return", "Return to where you were before the agent moved the view", G::AgentReturn).header(Button, "Return", Some(egui_phosphor::regular::ARROW_U_UP_LEFT)).group(Group::Navigate).importance(PRIMARY).jump());
         }
         out
     }

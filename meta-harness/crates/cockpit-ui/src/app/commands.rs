@@ -64,7 +64,7 @@ impl CockpitApp {
     /// another column).
     pub(super) fn column_actions(&self) -> Vec<Action> {
         let close = Action::new("column.close", "Close this column (its view is hidden, not lost)", ShellCommand::CloseColumn).group(Group::View).importance(MINOR);
-        let close = if self.desk.columns.len() > 1 { close.toolbar(ToolbarStyle::Button, "", Some(egui_phosphor::regular::X)) } else { close };
+        let close = if self.desk.columns.len() > 1 { close.header(Style::Button, "", Some(egui_phosphor::regular::X)) } else { close };
         vec![close]
     }
 
@@ -76,9 +76,9 @@ impl CockpitApp {
         let Some(open) = &self.quick_look else {
             return vec![look("quicklook.toggle", "Quick look: the full card (hold to peek)", S::QuickLook).importance(PRIMARY).when(When::Component)];
         };
-        let mut out = vec![look("quicklook.toggle", "Close the quick look", S::QuickLook).importance(SECONDARY).toolbar(ToolbarStyle::Button, "", Some(egui_phosphor::regular::X))];
+        let mut out = vec![look("quicklook.toggle", "Close the quick look", S::QuickLook).importance(SECONDARY).header(Style::Button, "", Some(egui_phosphor::regular::X))];
         if open.kind == BufferKind::Spec {
-            out.push(look("quicklook.to_column", "Open this card in a column", S::QuickLookToColumn).importance(PRIMARY).toolbar(ToolbarStyle::Button, "Open in a column", Some(egui_phosphor::regular::COLUMNS)));
+            out.push(look("quicklook.to_column", "Open this card in a column", S::QuickLookToColumn).importance(PRIMARY).header(Style::Button, "Open in a column", Some(egui_phosphor::regular::COLUMNS)));
         }
         out
     }

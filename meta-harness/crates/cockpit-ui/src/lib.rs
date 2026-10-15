@@ -16,6 +16,7 @@ pub mod keymap;
 pub mod nav;
 pub mod net;
 pub mod palette;
+pub mod panel;
 pub mod panes;
 pub mod queue;
 pub mod quick_look;

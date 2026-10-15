@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use arch_graph::ComponentId;
 
-use crate::actions::{Action, ActionProvider, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, ToolbarStyle, When, is_primary, leader_entries};
+use crate::actions::{Action, ActionProvider, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, Style, When, is_primary, leader_entries};
 use crate::chat::{ChatStreamState, SessionStatus};
 use crate::code::CodeViewerState;
 use crate::columns::{Columns, Pane};

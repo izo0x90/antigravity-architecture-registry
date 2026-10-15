@@ -277,15 +277,14 @@ impl ArchitectureTreeState {
         if self.view_h > 0.0 { ((self.view_h / pitch) / 2.0).floor().max(1.0) as usize } else { 10 }
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, net: &NetClient, feedback: &mut FeedbackInspectorState, slot_idx: usize) {
+    pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
+        let (net, slot_idx) = (cx.net, cx.slot);
         self.tick(net, ui.ctx());
-        let header = ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{} Outline", egui_phosphor::regular::TREE_STRUCTURE)).strong().color(colors().info));
-            ui.add(egui::TextEdit::singleline(&mut self.search_filter).hint_text("filter… (/)").desired_width(160.0));
-            if !self.search_filter.is_empty() && ui.small_button(egui_phosphor::regular::X).on_hover_text("Clear the filter").clicked() {
-                self.search_filter.clear();
-            }
-        });
+        let hint = match crate::actions::key_of(cx.hints, "nav.search") {
+            Some(key) => format!("filter… ({key})"),
+            None => "filter…".to_owned(),
+        };
+        let header = ui.horizontal(|ui| ui.add(egui::TextEdit::singleline(&mut self.search_filter).hint_text(hint).desired_width(f32::INFINITY)));
         feedback.register_inspectable(ui, &format!("slot_{}:tree:header", slot_idx + 1), header.response.rect);
         ui.separator();
         if self.result.is_none() {
@@ -357,12 +356,31 @@ impl ArchitectureTreeState {
     }
 }
 
+/// What the outline's own actions do.
+enum TreeCommand {
+    ClearFilter,
+}
+
 impl ActionProvider for ArchitectureTreeState {
     fn actions(&self) -> Vec<Action> {
-        Vec::new()
+        let mut out = Vec::new();
+        if !self.search_filter.is_empty() {
+            out.push(Action::new("tree.clear_filter", "Clear the filter", TreeCommand::ClearFilter).focused().importance(crate::actions::MINOR).header(crate::actions::Style::Button, "", Some(egui_phosphor::regular::X)));
+        }
+        out
     }
 
-    fn run(&mut self, _action: &Action, _value: Option<String>, _cx: &mut RunCx<'_>) {}
+    fn run(&mut self, action: &Action, _value: Option<String>, _cx: &mut RunCx<'_>) {
+        if let Some(TreeCommand::ClearFilter) = action.command::<TreeCommand>() {
+            self.search_filter.clear();
+        }
+    }
+}
+
+impl crate::panel::Panel for ArchitectureTreeState {
+    fn title(&self) -> crate::panel::Status {
+        crate::panel::Status::new(format!("{} Outline", egui_phosphor::regular::TREE_STRUCTURE), crate::panel::Tone::Info)
+    }
 }
 
 impl Navigable for ArchitectureTreeState {
@@ -677,7 +695,10 @@ pub(crate) mod tests {
         t.set_result(outline());
         for _ in 0..2 {
             let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 160.0))), ..Default::default() }, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| t.render(ui, &net, &mut feedback, 0));
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
+                    t.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut asked });
+                });
             });
         }
         let spots = t.spots();

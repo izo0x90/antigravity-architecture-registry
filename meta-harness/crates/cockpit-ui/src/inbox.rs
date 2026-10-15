@@ -10,9 +10,10 @@ use egui::{RichText, Vec2};
 use egui_phosphor::regular as icon;
 use harness_contracts::{Level, Notification, NotificationId, RequestId, RuntimeRequest, SlotId, ThreadId};
 
-use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, ToolbarStyle};
+use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, Style};
 use crate::chat::ChatStreamState;
 use crate::nav::{Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
+use crate::panel::{Status, Tone};
 use crate::theme::colors;
 
 /// What the inbox asks the shell to do.
@@ -130,21 +131,6 @@ impl InboxView {
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, chat: &mut ChatStreamState) {
         let theme = crate::theme::look();
-        ui.horizontal(|ui| {
-            let (what, color) = match self.shown.as_ref().map(|s| s.notification.level) {
-                Some(Level::Waiting) => (format!("{} Waiting on you", icon::BELL_RINGING), colors().warn),
-                Some(Level::Update) => (format!("{} Update", icon::TRAY), colors().info),
-                None if self.item.is_some() => (format!("{} Handled", icon::CHECK), colors().ok),
-                None => (format!("{} Nothing needs you", icon::CHECK), colors().ok),
-            };
-            ui.label(RichText::new(what).strong().size(theme.text_label).color(color));
-            if let Some((at, of)) = self.at {
-                ui.label(RichText::new(format!("{at} of {of}")).size(theme.text_small).color(colors().muted));
-            }
-            let actions = self.actions();
-            crate::actions::controls(ui, &actions, cx);
-        });
-        ui.separator();
         let Some(shown) = self.shown.clone() else {
             if self.item.is_some() {
                 ui.label(RichText::new("Already handled: the next one is a key away.").size(theme.text_body).color(colors().muted));
@@ -318,8 +304,8 @@ impl ActionProvider for InboxView {
         let act = |id: &str, label: &str, c: Command| Action::new(id, label, c).focused().group(Group::Act);
         let mut out = Vec::new();
         if self.at.is_some_and(|(_, of)| of > 1) || self.shown.is_none() && self.item.is_some() {
-            out.push(act("inbox.prev", "Previous", Command::Step(-1)).importance(SECONDARY).toolbar(ToolbarStyle::Button, "", Some(icon::CARET_LEFT)));
-            out.push(act("inbox.next", "Next", Command::Step(1)).importance(PRIMARY).toolbar(ToolbarStyle::Button, "", Some(icon::CARET_RIGHT)));
+            out.push(act("inbox.prev", "Previous", Command::Step(-1)).importance(SECONDARY).header(Style::Button, "", Some(icon::CARET_LEFT)));
+            out.push(act("inbox.next", "Next", Command::Step(1)).importance(PRIMARY).header(Style::Button, "", Some(icon::CARET_RIGHT)));
         }
         let Some(shown) = &self.shown else { return out };
         for answer in shown.request.iter().flat_map(crate::request_card::answers) {
@@ -333,9 +319,9 @@ impl ActionProvider for InboxView {
             out.push(action);
         }
         if shown.notification.slot.is_some() {
-            out.push(act("inbox.open_chat", "Open its chat", Command::OpenChat).importance(SECONDARY).toolbar(ToolbarStyle::Button, "Open its chat", Some(icon::CHAT_TEARDROP_TEXT)));
+            out.push(act("inbox.open_chat", "Open its chat", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its chat", Some(icon::CHAT_TEARDROP_TEXT)));
         }
-        out.push(act("inbox.dismiss", "Put it away", Command::Dismiss).importance(MINOR).toolbar(ToolbarStyle::Button, "Put away", Some(icon::ARCHIVE)));
+        out.push(act("inbox.dismiss", "Put it away", Command::Dismiss).importance(MINOR).header(Style::Button, "Put away", Some(icon::ARCHIVE)));
         out
     }
 
@@ -359,5 +345,22 @@ impl ActionProvider for InboxView {
         if let Step::Nothing(why) = step {
             *cx.note = Some(why);
         }
+    }
+}
+
+impl crate::panel::Panel for InboxView {
+    /// What the item shown is: waiting on you, an update, handled, or none.
+    fn title(&self) -> Status {
+        match self.shown.as_ref().map(|s| s.notification.level) {
+            Some(Level::Waiting) => Status::new(format!("{} Waiting on you", icon::BELL_RINGING), Tone::Warn),
+            Some(Level::Update) => Status::new(format!("{} Update", icon::TRAY), Tone::Info),
+            None if self.item.is_some() => Status::new(format!("{} Handled", icon::CHECK), Tone::Ok),
+            None => Status::new(format!("{} Nothing needs you", icon::CHECK), Tone::Ok),
+        }
+    }
+
+    /// Which one of how many.
+    fn status(&self) -> Vec<Status> {
+        self.at.map(|(at, of)| Status::new(format!("{at} of {of}"), Tone::Muted)).into_iter().collect()
     }
 }

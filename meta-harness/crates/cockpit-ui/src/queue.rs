@@ -10,9 +10,10 @@ use arch_graph::{ArchEvent, ComponentId, Job, JobState, PlanId, QueueSnapshot, Q
 use egui::RichText;
 use harness_contracts::InstanceId;
 
-use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, ToolbarStyle, When};
+use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, Style, When};
 use crate::nav::{Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
+use crate::panel::{Status, Tone};
 use crate::theme::colors;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,20 +181,6 @@ impl QueueState {
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        let actions = self.actions();
-        ui.horizontal_wrapped(|ui| {
-            let title = match (&self.plan, self.status()) {
-                (Some(p), Some(s)) => format!("Queue for {p}: {s:?}"),
-                (Some(p), None) => format!("Queue for {p}"),
-                (None, _) => "No plan selected (pick one in the graph)".to_owned(),
-            };
-            ui.label(RichText::new(title).strong());
-            crate::actions::controls(ui, &actions, cx);
-        });
-        if let Some(e) = &self.error {
-            ui.colored_label(colors().error, e);
-        }
-        ui.separator();
         // A job clicked, and the action asked for on it.
         let mut clicked: Option<(usize, Option<&str>)> = None;
         let mut spots = Vec::new();
@@ -304,9 +291,9 @@ impl ActionProvider for QueueState {
         }
         let running = matches!(self.status(), Some(QueueStatus::Running | QueueStatus::WaitingForUser | QueueStatus::Stopping));
         if running {
-            out.push(f("queue.stop", "Stop the queue (after the running job)", Q::Stop).toolbar(ToolbarStyle::Button, "Stop", Some(egui_phosphor::regular::STOP)).importance(MINOR));
+            out.push(f("queue.stop", "Stop the queue (after the running job)", Q::Stop).header(Style::Button, "Stop", Some(egui_phosphor::regular::STOP)).importance(MINOR));
         } else if self.status() != Some(QueueStatus::Done) {
-            out.push(f("queue.start", "Start working through the plan", Q::Start).toolbar(ToolbarStyle::Button, "Start", Some(egui_phosphor::regular::PLAY)));
+            out.push(f("queue.start", "Start working through the plan", Q::Start).header(Style::Button, "Start", Some(egui_phosphor::regular::PLAY)));
         }
         if let Some(job) = self.job() {
             if !job.findings.is_empty() {
@@ -435,6 +422,25 @@ impl Navigable for QueueState {
         if let Ok(i) = key.parse() {
             self.put_cursor(i);
         }
+    }
+}
+
+impl crate::panel::Panel for QueueState {
+    /// The plan it works through.
+    fn title(&self) -> Status {
+        match &self.plan {
+            Some(p) => Status::new(format!("Queue for {p}"), Tone::Plain),
+            None => Status::new("No plan selected (pick one in the graph)", Tone::Muted),
+        }
+    }
+
+    /// Where the queue is, and what went wrong.
+    fn status(&self) -> Vec<Status> {
+        let mut out: Vec<Status> = QueueState::status(self).map(|s| Status::new(format!("{s:?}"), Tone::Info)).into_iter().collect();
+        if let Some(e) = &self.error {
+            out.push(Status::new(e.clone(), Tone::Error));
+        }
+        out
     }
 }
 

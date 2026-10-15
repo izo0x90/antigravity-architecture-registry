@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use arch_graph::{Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, ComponentDetail, ComponentId, Finding, PlanDiff, RelationKind, Report, Severity, Source};
 use egui::{Rect, RichText};
 
-use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, ToolbarStyle, When, key_tip};
+use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style, When, key_tip};
+use crate::panel::{Status, Tone};
 use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, SpecItem, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
@@ -603,18 +604,7 @@ impl SpecState {
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         let hints = cx.hints;
         self.tick(cx.net, cx.ctx);
-        let actions = self.actions();
-        ui.horizontal_wrapped(|ui| {
-            crate::actions::controls(ui, &actions, cx);
-            for section in Section::ALL {
-                let label = RichText::new(section.title()).size(crate::theme::look().text_body);
-                if ui.selectable_label(self.current == section, label).on_hover_text(format!("{} / {}", key_tip(cx.hints, "spec.next_section"), key_tip(cx.hints, "spec.prev_section"))).clicked() {
-                    self.put_on(&Entry { section, item: SpecItem::Header });
-                }
-            }
-        });
-        self.render_review_bar(ui, cx);
-        ui.separator();
+        self.render_composer(ui, cx);
         let Some(detail) = self.detail.clone() else {
             let msg = match (&self.target, &self.error) {
                 (_, Some(e)) => format!("Couldn't load it: {e}"),
@@ -878,18 +868,7 @@ impl SpecState {
 
     /// The review line under the toolbar: what changed since the review, and
     /// the composer when writing a comment, reply or reason to reopen.
-    fn render_review_bar(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        if let Some(id) = &self.target {
-            // Items that changed carry their own mark; the line names the fields.
-            let fields: Vec<String> = self.diff.fields(id).into_iter().filter(|f| f.rsplit('.').next().is_none_or(|last| last.parse::<usize>().is_err())).collect();
-            if !fields.is_empty() {
-                let since = self.diff.since.as_deref().map_or_else(|| "new in this plan (never reviewed)".to_owned(), |at| format!("changed since the review at {at}"));
-                ui.label(RichText::new(format!("{} {since}: {}", egui_phosphor::regular::DOT, fields.into_iter().collect::<Vec<_>>().join(", "))).size(crate::theme::look().text_body).color(colors().info));
-            }
-        }
-        if let Some(note) = &self.note {
-            ui.label(RichText::new(note).size(crate::theme::look().text_body).color(colors().error));
-        }
+    fn render_composer(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         let Some(composer) = self.composer.as_mut() else { return };
         let what = match (&composer.purpose, &composer.anchor) {
             (Compose::New(kind), Some(CommentAnchor::Relation { kind: rel, source, target })) => {
@@ -1026,6 +1005,8 @@ enum SpecCommand {
     CancelCompose,
     NextSection,
     PrevSection,
+    /// Go to the section (its index in `Section::ALL`).
+    Section,
     Pin,
     Comment,
     RequestChange,
@@ -1051,7 +1032,7 @@ impl ActionProvider for SpecState {
         if !self.floating {
             out.push(
                 f("spec.pin", if self.pinned { "Unpin (follow the graph)" } else { "Pin this component" }, S::Pin)
-                    .toolbar(ToolbarStyle::Button, if self.pinned { "Pinned" } else { "Pin" }, Some(egui_phosphor::regular::PUSH_PIN))
+                    .header(Style::Button, if self.pinned { "Pinned" } else { "Pin" }, Some(egui_phosphor::regular::PUSH_PIN))
                     .group(Group::View)
                     .importance(MINOR),
             );
@@ -1066,7 +1047,7 @@ impl ActionProvider for SpecState {
         if self.source.plan().is_some() {
             out.push(
                 f("spec.mark_reviewed", "Mark the plan reviewed (later changes are highlighted)", S::MarkReviewed)
-                    .toolbar(ToolbarStyle::Button, "Reviewed", Some(egui_phosphor::regular::CHECK_SQUARE))
+                    .header(Style::Button, "Reviewed", Some(egui_phosphor::regular::CHECK_SQUARE))
                     .importance(MINOR),
             );
             // Always there: with no open points it says so.
@@ -1081,10 +1062,17 @@ impl ActionProvider for SpecState {
                 out.push(f("spec.reopen", "Reopen this point (say why)", S::Reopen).importance(SECONDARY));
             }
         }
+        out.push(
+            f("spec.section", "Go to a section", S::Section)
+                .param(Param::Choice(Section::ALL.iter().enumerate().map(|(i, s)| Choice::new(i.to_string(), s.title()).current(*s == self.current)).collect()))
+                .header(Style::Setting, "Section", None)
+                .group(Group::Navigate)
+                .importance(MINOR),
+        );
         out
     }
 
-    fn run(&mut self, action: &Action, _value: Option<String>, cx: &mut RunCx<'_>) {
+    fn run(&mut self, action: &Action, value: Option<String>, cx: &mut RunCx<'_>) {
         match action.command::<SpecCommand>() {
             // Comments live in a plan.
             Some(SpecCommand::Comment | SpecCommand::RequestChange) if self.source.plan().is_none() => *cx.note = Some("Comments go in a plan: pick one in the graph first.".into()),
@@ -1118,6 +1106,11 @@ impl ActionProvider for SpecState {
             Some(SpecCommand::CancelCompose) => self.composer = None,
             Some(SpecCommand::NextSection) => self.step_section(1),
             Some(SpecCommand::PrevSection) => self.step_section(-1),
+            Some(SpecCommand::Section) => {
+                if let Some(section) = value.and_then(|v| v.parse::<usize>().ok()).and_then(|i| Section::ALL.get(i)) {
+                    self.put_on(&Entry { section: *section, item: SpecItem::Header });
+                }
+            }
             Some(SpecCommand::Pin) => self.pinned = !self.pinned,
             None => {}
         }
@@ -1297,6 +1290,33 @@ impl SpecState {
         if let Some(i) = self.entries().iter().position(|e| e.section == section && e.item == SpecItem::Header) {
             self.put_cursor(i);
         }
+    }
+}
+
+impl crate::panel::Panel for SpecState {
+    /// The component it shows.
+    fn title(&self) -> Status {
+        match &self.detail {
+            Some(d) => Status::new(d.component.name.clone(), Tone::Plain).detail(d.component.id.as_str()),
+            None => Status::new("Spec", Tone::Muted),
+        }
+    }
+
+    /// What changed since the plan was reviewed (items that changed carry
+    /// their own mark; this names the fields), and what went wrong.
+    fn status(&self) -> Vec<Status> {
+        let mut out = Vec::new();
+        if let Some(id) = &self.target {
+            let fields: Vec<String> = self.diff.fields(id).into_iter().filter(|f| f.rsplit('.').next().is_none_or(|last| last.parse::<usize>().is_err())).collect();
+            if !fields.is_empty() {
+                let since = self.diff.since.as_deref().map_or_else(|| "new in this plan (never reviewed)".to_owned(), |at| format!("changed since the review at {at}"));
+                out.push(Status::new(format!("{} {since}: {}", egui_phosphor::regular::DOT, fields.join(", ")), Tone::Info));
+            }
+        }
+        if let Some(note) = &self.note {
+            out.push(Status::new(note.clone(), Tone::Error));
+        }
+        out
     }
 }
 
@@ -1626,7 +1646,8 @@ pub(crate) mod tests {
         let title = |name: &str| text.lines().find(|l| l.trim_start().contains(name) && l.contains("  ")).unwrap_or_default().to_owned();
         assert!(title("Overview").contains(&format!("{} 1 {}", crate::status::look("required_missing").0, word("required_missing"))), "{text}");
         assert!(title("Signature").contains(&format!("1 {}", word("required_missing"))), "{text}");
-        assert!(text.contains("spec.logic_steps") && !text.contains("spec.logic_steps.1"), "the review line names fields, not items");
+        let review: String = crate::panel::Panel::status(&s).into_iter().map(|st| st.text).collect();
+        assert!(review.contains("spec.logic_steps") && !review.contains("spec.logic_steps.1"), "the review line names fields, not items: {review}");
         assert!(text.contains("description: none yet, required for a function.") && text.contains("signature: none yet, required for a function."));
         assert!(!text.contains("logic steps: none yet"), "it has logic steps");
         assert!(text.find("a problem") < text.find("a note") && text.contains(&word("severity_error")), "worst first, with its severity");

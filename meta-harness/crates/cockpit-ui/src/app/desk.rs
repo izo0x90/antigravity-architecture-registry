@@ -111,6 +111,19 @@ impl Desk {
         }
     }
 
+    /// The view of `kind` as its host shows it (its top line).
+    pub fn panel(&self, kind: BufferKind) -> &dyn crate::panel::Panel {
+        match kind {
+            BufferKind::Chat => &self.chat,
+            BufferKind::Code => &self.code,
+            BufferKind::Graph => &self.graph,
+            BufferKind::Tree => &self.tree,
+            BufferKind::Spec => &self.spec,
+            BufferKind::Queue => &self.queue,
+            BufferKind::Inbox => &self.inbox,
+        }
+    }
+
     pub fn provider_mut(&mut self, kind: BufferKind) -> &mut dyn ActionProvider {
         match kind {
             BufferKind::Chat => &mut self.chat,
