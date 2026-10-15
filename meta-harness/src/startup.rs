@@ -256,10 +256,13 @@ pub fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueCon
 
 /// Serves until asked to stop. Stopping ends the agents' event streams,
 /// which would otherwise keep the graceful shutdown waiting.
-pub async fn serve(listener: tokio::net::TcpListener, app: axum::Router, streams: Option<Arc<crate::mcp::SseSessionManager>>) -> Result<(), StartError> {
+pub async fn serve(listener: tokio::net::TcpListener, app: axum::Router, streams: Option<Arc<crate::mcp::SseSessionManager>>, asked: crate::modules::Shutdown) -> Result<(), StartError> {
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            shutdown_signal().await;
+            tokio::select! {
+                _ = shutdown_signal() => asked.ask(),
+                _ = asked.asked() => {}
+            }
             if let Some(streams) = streams {
                 streams.close_all().await;
             }

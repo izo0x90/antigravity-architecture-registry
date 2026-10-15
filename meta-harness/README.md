@@ -55,7 +55,9 @@ notification until it's back; disconnecting one stops following it and
 leaves it running. `/s/{server}/...` is that server's `/...` through home
 (sockets too, at `/s/{server}/ws/...`), streamed both ways: home adds the
 server's secret and drops the cookie, and the server checks what the call
-needs.
+needs. `POST /api/server/shutdown` stops a server the way Ctrl-C does
+(its sockets close too); through home, `/s/{server}/api/server/shutdown`
+stops that one, and home keeps it listed, as lost, until it's removed.
 
 The agent harness and each language's server are packs, installed by the
 binary itself (see [Packs](#packs)). To build and install the ones you need:

@@ -22,7 +22,7 @@ pub(crate) fn routes() -> Router<HarnessState> {
 }
 
 async fn ws_events_handler(_: crate::cockpit::Ticketed, ws: WebSocketUpgrade, State(state): State<HarnessState>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| stream_events(socket, state.hub))
+    ws.on_upgrade(move |socket| async move { state.stopping.or_stop(stream_events(socket, state.hub.clone())).await })
 }
 
 /// Replays current state, then streams `ClientEvent`s as JSON text frames.

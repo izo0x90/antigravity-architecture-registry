@@ -55,13 +55,65 @@ macro_rules! gated {
     )*};
 }
 
-gated!(CockpitState, HarnessState, NotifyState, ProjectState, HomeState);
+gated!(CockpitState, HarnessState, NotifyState, ProjectState, HomeState, ServerState);
+
+/// Asks the server to stop (as Ctrl-C does); its serving waits on it.
+#[derive(Clone, Default)]
+pub struct Shutdown(Arc<tokio::sync::watch::Sender<bool>>);
+
+impl Shutdown {
+    pub fn ask(&self) {
+        self.0.send_replace(true);
+    }
+
+    /// Returns once it's asked.
+    pub async fn asked(&self) {
+        let mut asked = self.0.subscribe();
+        let _ = asked.wait_for(|a| *a).await;
+    }
+
+    /// Runs `socket` until it ends, or until the server stops (the socket
+    /// is closed then, and its client sees it go).
+    pub async fn or_stop(&self, socket: impl std::future::Future<Output = ()>) {
+        tokio::select! {
+            _ = socket => {}
+            _ = self.asked() => {}
+        }
+    }
+}
+
+macro_rules! stoppable {
+    ($($state:ty),*) => {$(
+        impl FromRef<$state> for Shutdown {
+            fn from_ref(state: &$state) -> Self {
+                state.stopping.clone()
+            }
+        }
+    )*};
+}
+
+stoppable!(CockpitState, HarnessState, HomeState);
+
+/// Every server's own part: being asked to stop.
+#[derive(Clone)]
+pub struct ServerState {
+    pub gate: Gate,
+    pub shutdown: Shutdown,
+}
+
+impl Module for ServerState {
+    fn routes(&self) -> Router {
+        routes::server::routes().with_state(self.clone())
+    }
+}
 
 /// The cockpit: its page and launch link, its saved state, feedback, and
 /// agents driving it.
 #[derive(Clone)]
 pub struct CockpitState {
     pub gate: Gate,
+    /// Its socket ends when the server stops.
+    pub stopping: Shutdown,
     /// The state database (the cockpit's saved views, feedback).
     pub state: Arc<nah_state::StateDb>,
     /// The cockpit, for agents driving it.
@@ -92,6 +144,7 @@ impl Module for CockpitState {
 #[derive(Clone)]
 pub struct HomeState {
     pub gate: Gate,
+    pub stopping: Shutdown,
     pub home: Arc<crate::home::Home>,
 }
 
@@ -110,6 +163,8 @@ impl Module for HomeState {
 #[derive(Clone)]
 pub struct HarnessState {
     pub gate: Gate,
+    /// The event sockets end when the server stops.
+    pub stopping: Shutdown,
     pub registry: Arc<InstanceRegistry>,
     pub sessions: Arc<SessionManager>,
     /// The slots: the lead, sub-slots, the queue's workers.
@@ -161,6 +216,7 @@ impl Module for ProjectState {
 /// A project's server: every part.
 #[derive(Clone)]
 pub struct AppState {
+    pub server: ServerState,
     pub cockpit: CockpitState,
     pub home: HomeState,
     pub harness: HarnessState,
@@ -190,16 +246,18 @@ impl AppState {
     pub fn new(p: Parts) -> Result<Self, nah_state::StateError> {
         let gate = Gate { cockpit: p.cockpit, access: p.access, tickets: Arc::default() };
         let home = crate::home::Home::start(p.state.clone(), p.hub.clone(), p.notify.clone())?;
+        let stopping = Shutdown::default();
         Ok(Self {
-            home: HomeState { gate: gate.clone(), home },
-            cockpit: CockpitState { gate: gate.clone(), state: p.state, remote: p.remote },
-            harness: HarnessState { gate: gate.clone(), registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
+            server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },
+            home: HomeState { gate: gate.clone(), stopping: stopping.clone(), home },
+            cockpit: CockpitState { gate: gate.clone(), stopping: stopping.clone(), state: p.state, remote: p.remote },
+            harness: HarnessState { gate: gate.clone(), stopping, registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
             project: ProjectState { gate, arch: p.arch, queue: p.queue, sessions: p.sessions, slots: p.slots, mcp_state: p.mcp_state },
         })
     }
 
-    pub fn modules(&self) -> [&dyn Module; 5] {
-        [&self.cockpit, &self.home, &self.harness, &self.notify, &self.project]
+    pub fn modules(&self) -> [&dyn Module; 6] {
+        [&self.server, &self.cockpit, &self.home, &self.harness, &self.notify, &self.project]
     }
 }

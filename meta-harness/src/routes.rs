@@ -9,5 +9,6 @@ pub(crate) mod harness;
 pub(crate) mod home;
 pub(crate) mod mcp;
 pub(crate) mod notifications;
+pub(crate) mod server;
 pub(crate) mod slots;
 pub(crate) mod tool_servers;

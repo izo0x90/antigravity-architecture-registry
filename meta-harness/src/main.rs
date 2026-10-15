@@ -183,10 +183,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         meta_harness::startup::reconcile_on_start(&state)?;
         let here = Arc::new(EventHub::default());
         let notify = nah_notify::NotifyHub::start(here.clone(), state.clone(), Arc::new(nah_notify::NoSessions), Vec::new())?;
-        let home = meta_harness::modules::HomeState { gate: gate.clone(), home: meta_harness::home::Home::start(state.clone(), here, notify)? };
-        let page = meta_harness::modules::CockpitState { gate, state, remote: Arc::default() };
+        let stopping = meta_harness::modules::Shutdown::default();
+        let home = meta_harness::modules::HomeState { gate: gate.clone(), stopping: stopping.clone(), home: meta_harness::home::Home::start(state.clone(), here, notify)? };
+        let server = meta_harness::modules::ServerState { gate: gate.clone(), shutdown: stopping.clone() };
+        let page = meta_harness::modules::CockpitState { gate, stopping, state, remote: Arc::default() };
         info!("No project here: the cockpit and home. Open it: {base_url}{cockpit_path}");
-        meta_harness::startup::serve(listener, create_router(&[&page, &home]), None).await?;
+        meta_harness::startup::serve(listener, create_router(&[&server, &page, &home]), None, server.shutdown.clone()).await?;
         info!("Meta-harness stopped.");
         return Ok(());
     }
@@ -216,7 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !serve.no_cockpit {
         info!("Open the cockpit: {base_url}{cockpit_path}");
     }
-    meta_harness::startup::serve(listener, router, Some(streams)).await?;
+    meta_harness::startup::serve(listener, router, Some(streams), app.server.shutdown.clone()).await?;
     info!("Meta-harness stopped.");
     Ok(())
 }

@@ -39,7 +39,7 @@ async fn pass_socket(_: Ticketed, ws: WebSocketUpgrade, State(state): State<Home
     match crate::home::pass::entry(&state.home, &server) {
         Some(entry) => {
             let query = uri.query().map(str::to_owned);
-            ws.on_upgrade(move |socket| crate::home::pass::socket(socket, entry, format!("ws/{rest}"), query)).into_response()
+            ws.on_upgrade(move |socket| async move { state.stopping.or_stop(crate::home::pass::socket(socket, entry, format!("ws/{rest}"), query)).await }).into_response()
         }
         None => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({ "error": format!("home links to no server named {server:?}") }))).into_response(),
     }
@@ -90,5 +90,5 @@ async fn disconnect(_: Needs<can::SessionsControl>, State(state): State<HomeStat
 
 async fn home_socket(_: Ticketed, ws: WebSocketUpgrade, State(state): State<HomeState>) -> impl IntoResponse {
     let home = state.home.clone();
-    ws.on_upgrade(move |socket| crate::home::socket::serve(socket, home))
+    ws.on_upgrade(move |socket| async move { state.stopping.or_stop(crate::home::socket::serve(socket, home)).await })
 }

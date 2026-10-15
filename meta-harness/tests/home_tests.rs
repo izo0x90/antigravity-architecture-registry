@@ -114,3 +114,39 @@ async fn a_server_that_doesnt_answer_is_said_lost_once_until_removed() {
     assert_eq!(http(home, "DELETE", "/api/home/servers/gone", None).await.0, 404);
     assert_eq!(servers(home).await.len(), 1);
 }
+
+#[tokio::test]
+async fn a_server_asked_to_stop_stops_and_home_keeps_it_listed_as_lost() {
+    let (worker, _) = spawn_app().await;
+    let (home, _) = spawn_app().await;
+    let (status, body) = add(home, "w1", &format!("http://{worker}")).await;
+    assert_eq!(status, 201, "{body}");
+    for _ in 0..100 {
+        if servers(home).await.iter().any(|s| s.name == "w1" && s.link == LinkState::Connected) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(common::http_anonymous(worker, "POST", "/api/server/shutdown", None).await.0, 403, "only the user (or home) stops it");
+    // Through home, as the cockpit asks it.
+    assert_eq!(http(home, "POST", "/s/w1/api/server/shutdown", None).await.0, 202);
+    let mut stopped = false;
+    for _ in 0..100 {
+        if tokio::net::TcpStream::connect(worker).await.is_err() {
+            stopped = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(stopped, "it stopped, home's link to its events notwithstanding");
+    let mut lost = false;
+    for _ in 0..100 {
+        if matches!(servers(home).await.iter().find(|s| s.name == "w1").map(|s| &s.link), Some(LinkState::Lost { .. })) {
+            lost = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(lost, "home says it's lost, and keeps it listed until it's removed");
+    assert_eq!(http(home, "GET", "/health", None).await.0, 200);
+}
