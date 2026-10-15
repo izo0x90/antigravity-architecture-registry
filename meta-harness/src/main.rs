@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let hub = Arc::new(EventHub::default());
     let arch = Arc::new(meta_harness::startup::open_architecture()?);
-    let ui_state = Arc::new(arch_service::UiStateFile::open(arch.root())?);
+    let state = Arc::new(meta_harness::startup::state(&arch)?);
     meta_harness::server::bridge_architecture_events(&arch, &hub);
     let remote = Arc::new(meta_harness::remote::Remote::default());
     let access = Arc::new(meta_harness::startup::access(arch.root())?);
@@ -104,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cockpit = meta_harness::cockpit::CockpitAuth::for_user()?;
     let cockpit_path = cockpit.launch_path();
     let streams = mcp_state.sessions.clone();
-    let app = create_router(AppState { registry: instances, sessions, hub, mcp_state, arch, cockpit, queue, ui_state, tool_servers, remote, access, tickets: Arc::default() });
+    let app = create_router(AppState { registry: instances, sessions, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, tickets: Arc::default() });
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");
     info!("Open the cockpit: {base_url}{cockpit_path}");
     meta_harness::startup::serve(listener, app, streams).await?;

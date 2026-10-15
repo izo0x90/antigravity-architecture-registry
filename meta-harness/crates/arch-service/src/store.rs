@@ -100,11 +100,11 @@ fn sync_dir(_dir: &Path) -> Result<(), ServiceError> {
 }
 
 /// What `.nah/.gitignore` keeps out of version control: the cache (rebuilt
-/// from the code) and the cockpit's state (one person's screen). Plans stay
-/// committed.
-const NAH_IGNORED: [&str; 2] = [CACHE_DIR, UI_DIR];
+/// from the code) and the server's state (slots, notifications, one
+/// person's screen). Plans stay committed.
+const NAH_IGNORED: [&str; 2] = [CACHE_DIR, STATE_DIR];
 const CACHE_DIR: &str = "cache";
-const UI_DIR: &str = "ui";
+const STATE_DIR: &str = "state";
 
 /// Ensures `.nah/.gitignore` lists what's kept out of version control (adding
 /// what an older one lacks), without touching the repository's own .gitignore.
@@ -112,7 +112,7 @@ fn ensure_nah_gitignore(nah: &Path) -> Result<(), ServiceError> {
     let ignore = nah.join(".gitignore");
     let text = match std::fs::read_to_string(&ignore) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "# Caches are rebuilt from the code and the cockpit's state is one person's; plans are kept.\n".to_owned(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "# Caches are rebuilt from the code and the server's state is one person's; plans are kept.\n".to_owned(),
         Err(e) => return Err(io(&ignore, e)),
     };
     let missing: Vec<String> = NAH_IGNORED.into_iter().map(|dir| format!("{dir}/")).filter(|entry| !text.lines().any(|l| l.trim() == entry)).collect();
@@ -128,40 +128,6 @@ fn ensure_nah_gitignore(nah: &Path) -> Result<(), ServiceError> {
         write_atomic(&ignore, &text)?;
     }
     Ok(())
-}
-
-/// The cockpit's state (`<repo>/.nah/ui/state.json`): what it shows and
-/// where, kept by the server so a reload, or another browser, comes back
-/// to it. The server keeps it as the cockpit wrote it; its shape is the
-/// cockpit's.
-pub struct UiStateFile {
-    path: PathBuf,
-}
-
-impl UiStateFile {
-    pub fn open(root: &Path) -> Result<Self, ServiceError> {
-        let nah = root.join(".nah");
-        ensure_nah_gitignore(&nah)?;
-        Ok(Self { path: nah.join(UI_DIR).join("state.json") })
-    }
-
-    /// The state as last written, if there is one.
-    pub fn read(&self) -> Result<Option<serde_json::Value>, ServiceError> {
-        match std::fs::read_to_string(&self.path) {
-            Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| ServiceError::Io(format!("{}: {e}", self.path.display()))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(io(&self.path, e)),
-        }
-    }
-
-    /// Replaces the state (a JSON object).
-    pub fn write(&self, state: &serde_json::Value) -> Result<(), ServiceError> {
-        if !state.is_object() {
-            return Err(ServiceError::InvalidOp("the cockpit's state is a JSON object".into()));
-        }
-        let text = serde_json::to_string_pretty(state).map_err(|e| ServiceError::Io(e.to_string()))?;
-        write_atomic(&self.path, &text)
-    }
 }
 
 /// Plans as `<repo>/.nah/plans/<id>.json`, all kept in memory: read once
@@ -290,20 +256,28 @@ impl PlanRepository for FsPlans {
     }
 }
 
+/// Where the server keeps its state: `<repo>/.nah/state/`.
+pub fn state_dir(repo_root: &Path) -> Result<PathBuf, ServiceError> {
+    let nah = repo_root.join(".nah");
+    ensure_nah_gitignore(&nah)?;
+    Ok(nah.join(STATE_DIR))
+}
+
 /// The analysis, kept in `<repo>/.nah/cache/index.sqlite`.
 pub fn open_facts(repo_root: &Path, limits: &crate::Limits) -> Result<arch_store::SqliteStore, ServiceError> {
     let nah = repo_root.join(".nah");
     ensure_nah_gitignore(&nah)?;
-    Ok(arch_store::SqliteStore::open(&nah.join(CACHE_DIR).join("index.sqlite"), &settings(limits)))
+    Ok(arch_store::SqliteStore::open(&nah.join(CACHE_DIR).join("index.sqlite"), &store_settings(limits)))
 }
 
 /// A store for one run, in a temporary file removed when it's dropped
 /// (`meta-harness analyze`, tests).
 pub fn temporary_facts(limits: &crate::Limits) -> Result<arch_store::SqliteStore, ServiceError> {
-    Ok(arch_store::SqliteStore::temporary(&settings(limits))?)
+    Ok(arch_store::SqliteStore::temporary(&store_settings(limits))?)
 }
 
-fn settings(limits: &crate::Limits) -> arch_store::Settings {
+/// SQLite settings from the limits (`[store]`): every NAH database uses them.
+pub fn store_settings(limits: &crate::Limits) -> arch_store::Settings {
     let store = &limits.store;
     arch_store::Settings { synchronous: store.synchronous.clone(), cache_kib: store.cache_kib, busy_retry_us: store.busy_retry_us, busy_give_up_ms: store.busy_give_up_ms }
 }
@@ -436,19 +410,14 @@ mod tests {
     }
 
     #[test]
-    fn the_cockpits_state_is_kept_as_written_and_out_of_version_control() {
+    fn the_servers_state_is_kept_out_of_version_control() {
         let dir = tempfile::tempdir().unwrap();
         // An older .nah/.gitignore gets what it lacks, and keeps the rest.
         std::fs::create_dir_all(dir.path().join(".nah")).unwrap();
         std::fs::write(dir.path().join(".nah/.gitignore"), "# mine\ncache/").unwrap();
-        let state = UiStateFile::open(dir.path()).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nui/\n");
-        assert_eq!(state.read().unwrap(), None);
-        let written = serde_json::json!({ "version": 1, "columns": { "shown": ["chat", "graph"] } });
-        state.write(&written).unwrap();
-        assert_eq!(state.read().unwrap(), Some(written));
-        assert!(state.write(&serde_json::json!([1, 2])).is_err(), "only an object");
-        UiStateFile::open(dir.path()).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nui/\n", "nothing added twice");
+        assert_eq!(state_dir(dir.path()).unwrap(), dir.path().join(".nah/state"));
+        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nstate/\n");
+        state_dir(dir.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join(".nah/.gitignore")).unwrap(), "# mine\ncache/\nstate/\n", "nothing added twice");
     }
 }

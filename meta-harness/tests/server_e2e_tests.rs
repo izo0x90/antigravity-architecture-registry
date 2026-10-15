@@ -108,8 +108,14 @@ async fn dev_feedback_endpoint() {
     let (status, body) = http(addr, "POST", "/api/dev/feedback", Some(feedback)).await;
     assert_eq!(status, 200);
     assert!(body.contains("\"status\":\"saved\""));
-    assert!(body.contains("\"total_feedback_count\":"));
-    let _ = tokio::fs::remove_file("dev_feedback.json").await;
+    assert!(body.contains("\"total_feedback_count\":1"), "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"].as_str().unwrap().to_owned();
+    let updated = format!(r#"{{"id":"{id}","category":"Bug","comment":"Fixed","target":{{}},"status":"done"}}"#);
+    assert_eq!(http(addr, "PUT", "/api/dev/feedback", Some(&updated)).await.0, 200);
+    let (_, list) = http(addr, "GET", "/api/dev/feedback", None).await;
+    let list: Vec<serde_json::Value> = serde_json::from_str(&list).unwrap();
+    assert_eq!((list.len(), list[0]["status"].as_str()), (1, Some("done")), "kept in the project's state, updated in place");
+    assert!(!std::path::Path::new("dev_feedback.json").exists(), "no file wherever the server was started");
 }
 
 #[tokio::test]

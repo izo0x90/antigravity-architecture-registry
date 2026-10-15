@@ -22,9 +22,8 @@ pub struct AppState {
     pub arch: Arc<arch_service::ArchitectureService>,
     pub cockpit: crate::cockpit::CockpitAuth,
     pub queue: Arc<crate::queue::QueueRunner>,
-    /// What the cockpit shows and where (it saves it here, and reads it back
-    /// when it opens).
-    pub ui_state: Arc<arch_service::UiStateFile>,
+    /// The project's state database: kept across restarts.
+    pub state: Arc<nah_state::StateDb>,
     /// The tool servers every session gets (ours and the project's).
     pub tool_servers: Arc<crate::tool_servers::ToolServerState>,
     /// The cockpit, for agents driving it.
@@ -143,4 +142,26 @@ async fn json_errors(response: Response) -> Response {
     let text = String::from_utf8_lossy(&bytes).trim().to_owned();
     let message = if text.is_empty() { status.canonical_reason().unwrap_or("error").to_owned() } else { text };
     (status, Json(serde_json::json!({ "error": message }))).into_response()
+}
+
+/// Runs `f` on the state database off the async threads.
+pub(crate) async fn with_state<T: Send + 'static>(
+    db: &Arc<nah_state::StateDb>,
+    f: impl FnOnce(&nah_state::StateDb) -> Result<T, nah_state::StateError> + Send + 'static,
+) -> Result<T, StateFailed> {
+    let db = db.clone();
+    tokio::task::spawn_blocking(move || f(&db)).await.map_err(|e| StateFailed(nah_state::StateError::Failed(e.to_string())))?.map_err(StateFailed)
+}
+
+/// A state database error as an HTTP response: `{ "error": "..." }`.
+pub struct StateFailed(pub nah_state::StateError);
+
+impl IntoResponse for StateFailed {
+    fn into_response(self) -> Response {
+        let status = match self.0 {
+            nah_state::StateError::Invalid(_) => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
+    }
 }

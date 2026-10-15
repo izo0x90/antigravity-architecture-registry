@@ -452,7 +452,12 @@ about 0.55 s (slower than before the rebuild's 0.36 s and 0.44 s), and a view 0
 to 11 ms on the server; the real rust-analyzer
 confirms a changed file's links in 0.1 to 0.35 s once warm (71 to 327 ms measured).
 
-Plans live in `.nah/plans/`. The analysis is kept in
+Plans live in `.nah/plans/`. What the server keeps across restarts (the
+cockpit's saved views, dev feedback, an activity log, and as they arrive
+slots and notifications) is in `.nah/state/state.sqlite`, which isn't
+committed and is never thrown away: a second server on the same project, a
+database from a newer NAH or one that can't be read is refused with what to
+do. The analysis is kept in
 `.nah/cache/index.sqlite`, which isn't committed: a table per kind of row
 (files, components, refs, relations, flows, placeholders, rule hits,
 highlights, the servers' states), each row under its file. One thread
@@ -515,6 +520,7 @@ is approved, verified or built. It's saved in `.nah/plans/` like any plan.
 | `nah-packs` | packs (harnesses, languages, servers) and the one installer |
 | `nah-lsp` | the one language server client: starts a server in the background, knows when it's ready, asks where names are defined, restarts it when it ends |
 | `nah-access` | what each caller may do: capabilities, the roles that hold them (configured), and the one check every tool and route goes through |
+| `nah-state` | the project's state database (`.nah/state/state.sqlite`): what the server keeps across restarts that isn't the analysis. One server per project (a lock), explicit layouts, never thrown away |
 | `arch-store` | where the analysis is kept between runs (SQLite) |
 | `arch-search` | one way of matching what's typed: names with neo_frizbee; files and lines with fff-search |
 | `arch-service` | plans and cache, plan operations and checks, verification, tools, reviewers, review loop, queue state |

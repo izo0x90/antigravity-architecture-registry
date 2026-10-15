@@ -133,6 +133,12 @@ pub fn harnesses(project: &std::path::Path, hub: &Arc<EventHub>) -> Result<Arc<I
     Ok(instances)
 }
 
+/// The project's state database (`.nah/state/`), locked for this server.
+pub fn state(arch: &ArchitectureService) -> Result<nah_state::StateDb, StartError> {
+    let dir = arch_service::state_dir(arch.root())?;
+    Ok(nah_state::StateDb::open(&dir, &arch_service::store_settings(arch.limits()))?)
+}
+
 /// What each agent role may do: the shipped roles, with the project's
 /// `.nah/access.toml` over them.
 pub fn access(project: &std::path::Path) -> Result<nah_access::Access, StartError> {

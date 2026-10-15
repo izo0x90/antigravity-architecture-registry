@@ -20,6 +20,7 @@ members = [
     "crates/nah-packs",
     "crates/nah-lsp",
     "crates/nah-access",
+    "crates/nah-state",
 ]
 
 # Debug builds (tests, and the server as run in development) optimize the
@@ -53,6 +54,7 @@ code-analyzer = { path = "crates/code-analyzer" }
 arch-service = { path = "crates/arch-service" }
 nah-packs = { path = "crates/nah-packs" }
 nah-access = { path = "crates/nah-access" }
+nah-state = { path = "crates/nah-state" }
 include_dir = "0.7"
 clap = { version = "4", features = ["derive"] }
 async-trait = "0.1.92"

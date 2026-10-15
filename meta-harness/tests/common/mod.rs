@@ -268,9 +268,9 @@ pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHu
     registry.configure(registry.default_configs(&[fake_harness()])).await.unwrap();
     let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone(), Vec::new()));
     let queue = meta_harness::server::queue_runner(&arch, arch_service::QueueConfig::defaults().unwrap(), &hub);
-    let ui_state = Arc::new(arch_service::UiStateFile::open(arch.root()).unwrap());
+    let state = Arc::new(nah_state::StateDb::open(&arch_service::state_dir(arch.root()).unwrap(), &arch_service::store_settings(arch.limits())).unwrap());
     let tool_servers = Arc::new(meta_harness::tool_servers::ToolServerState { ours: Vec::new(), file: meta_harness::tool_servers::ProjectToolServers::of(arch.root()) });
-    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, ui_state, tool_servers, remote, access, tickets: Arc::default() };
+    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state, tool_servers, remote, access, tickets: Arc::default() };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = create_router(state.clone());
