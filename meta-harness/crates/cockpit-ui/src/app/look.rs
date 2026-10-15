@@ -79,7 +79,15 @@ impl CockpitApp {
         let screen = ctx.content_rect();
         let theme = crate::theme::look();
         let size = egui::vec2(over.width().max(screen.width().min(theme.quick_look_width)).min(screen.width() - 2.0 * theme.space_l), screen.height() * theme.quick_look_height);
-        let pos = egui::pos2((over.center().x - size.x / 2.0).clamp(screen.left() + theme.space_l, (screen.right() - size.x - theme.space_l).max(screen.left())), screen.center().y - size.y / 2.0);
+        // On the side away from the column it's about, so that column stays
+        // in sight; with one column there's no other side: over it.
+        let (left, right) = (screen.left() + theme.space_l, (screen.right() - size.x - theme.space_l).max(screen.left()));
+        let x = match self.desk.columns.len() {
+            1 => (over.center().x - size.x / 2.0).clamp(left, right),
+            _ if over.center().x > screen.center().x => left,
+            _ => right,
+        };
+        let pos = egui::pos2(x, screen.center().y - size.y / 2.0);
         let own = self.look_actions();
         let area = egui::Area::new(egui::Id::new("quick_look")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
             Frame::NONE.fill(colors().panel).stroke(Stroke::new(theme.line_thin, colors().focus)).corner_radius(theme.radius_xl).inner_margin(crate::theme::margin(theme.space_m)).show(ui, |ui| {

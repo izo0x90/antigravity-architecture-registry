@@ -25,6 +25,9 @@ fn the_quick_look_shows_the_full_card_over_the_graph_and_says_how_links_are_know
     app.desk.spec.detail = Some(detail);
     let text = texts(&frame_at(&ctx, &mut app, vec![], 1.1));
     assert!(text.contains("Quick look") && text.contains("Does a step."), "{text}");
+    // Over the side away from its column (the graph, on the right), so the graph stays in sight.
+    let shown = ctx.memory(|m| m.area_rect(egui::Id::new("quick_look"))).expect("drawn");
+    assert!(app.desk.columns.len() > 1 && app.slot_rects[1].center().x > SCREEN.x / 2.0 && shown.center().x < SCREEN.x / 2.0, "{shown:?}");
     assert!(text.contains("log (matched by name)"), "a data flow: {text}");
     assert!(text.contains("run") && !text.contains("run (matched by name)"), "the confirmed one reads plainly: {text}");
     let before = (app.desk.spec.cursor, app.desk.graph.selection.clone());
