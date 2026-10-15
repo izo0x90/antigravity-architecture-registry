@@ -656,4 +656,5 @@ Tests: disconnect leaves the worker running; shutdown stops it, home shows Lost,
 
 ## Noticed, not changed
 - `arch-service/tests/perf.rs` (`this_repo`) sits at its limit (343–366 ms against 360) on this sandbox. It measures the biggest Rust file, `cockpit-ui/src/app.rs`, which B1 splits.
+- `theme.rs` `glyph_tests::SOURCES` doesn't list several UI files that draw text (`columns.rs`, `quick_look.rs`, `request_card.rs`, `talk.rs`, `remote.rs`, `status.rs`, `goto.rs`, `nav.rs`). B1 added the files it split, and only those.
 - The sandbox disk is 20 GB, and builds on the host mount fail to mmap. Builds use `~/.cache/meta-harness-sandbox-target` with symbols stripped.

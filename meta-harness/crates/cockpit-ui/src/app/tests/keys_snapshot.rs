@@ -1,6 +1,5 @@
 //! The cockpit's actions and keys, pinned (see the test).
 
-use super::tests::{focus, full_app};
 use super::*;
 
 /// Every action and its keys, with each view focused, pinned in
