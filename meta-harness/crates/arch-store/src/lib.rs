@@ -10,7 +10,7 @@
 
 mod sqlite;
 
-pub use sqlite::{RefTo, Settings, SqliteStore};
+pub use sqlite::{RefTo, Settings, SqliteStore, configure};
 
 /// Bumped whenever the tables change.
 pub const STORE_VERSION: i64 = 4;

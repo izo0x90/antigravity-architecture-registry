@@ -32,6 +32,27 @@ pub struct Settings {
     pub busy_give_up_ms: u64,
 }
 
+/// Sets a connection up the way every NAH database is: write-ahead log,
+/// `synchronous` and cache size from the settings, and a busy wait in
+/// microseconds.
+pub fn configure(c: &Connection, settings: &Settings) -> rusqlite::Result<()> {
+    c.pragma_update(None, "journal_mode", "wal")?;
+    c.pragma_update(None, "synchronous", &settings.synchronous)?;
+    c.pragma_update(None, "cache_size", -settings.cache_kib)?;
+    // Busy (the writer checkpointing as a read starts): try again in a
+    // moment. SQLite's own wait sleeps whole milliseconds, growing, so a
+    // read would wait milliseconds for what takes microseconds.
+    // SQLite takes the handler as a plain function, so its timings are
+    // the process's: the last settings a connection was made with.
+    BUSY_RETRY_US.store(settings.busy_retry_us, Ordering::Relaxed);
+    BUSY_GIVE_UP_US.store(settings.busy_give_up_ms.saturating_mul(1000), Ordering::Relaxed);
+    c.busy_handler(Some(|tries: i32| {
+        let retry = BUSY_RETRY_US.load(Ordering::Relaxed);
+        std::thread::sleep(std::time::Duration::from_micros(retry));
+        (tries as u64).saturating_mul(retry) < BUSY_GIVE_UP_US.load(Ordering::Relaxed)
+    }))
+}
+
 pub struct SqliteStore {
     path: PathBuf,
     settings: Settings,
@@ -140,22 +161,7 @@ impl SqliteStore {
 
     fn connect(path: &Path, settings: &Settings) -> Result<Connection, StoreError> {
         let c = Connection::open(path).map_err(failed)?;
-        c.pragma_update(None, "journal_mode", "wal").map_err(failed)?;
-        c.pragma_update(None, "synchronous", &settings.synchronous).map_err(failed)?;
-        c.pragma_update(None, "cache_size", -settings.cache_kib).map_err(failed)?;
-        // Busy (the writer checkpointing as a read starts): try again in a
-        // moment. SQLite's own wait sleeps whole milliseconds, growing, so a
-        // read would wait milliseconds for what takes microseconds.
-        // SQLite takes the handler as a plain function, so its timings are
-        // the process's: the last settings a connection was made with.
-        BUSY_RETRY_US.store(settings.busy_retry_us, Ordering::Relaxed);
-        BUSY_GIVE_UP_US.store(settings.busy_give_up_ms.saturating_mul(1000), Ordering::Relaxed);
-        c.busy_handler(Some(|tries: i32| {
-            let retry = BUSY_RETRY_US.load(Ordering::Relaxed);
-            std::thread::sleep(std::time::Duration::from_micros(retry));
-            (tries as u64).saturating_mul(retry) < BUSY_GIVE_UP_US.load(Ordering::Relaxed)
-        }))
-        .map_err(failed)?;
+        configure(&c, settings).map_err(failed)?;
         Ok(c)
     }
 
