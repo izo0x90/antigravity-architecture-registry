@@ -281,10 +281,10 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     let reads = ["ingest", "list_types", "search", "inspect", "view", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions"];
     assert_eq!(names(&Principal::agent("external")), reads, "read-only, in the list's order");
     let mut sub = reads.map(String::from).to_vec();
-    sub.push("tell_lead".into());
-    assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, and reports to the lead");
+    sub.extend(["tell_lead".into(), "tell_user".into()]);
+    assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, and reports to the lead and the user");
     let lead = names(&Principal::agent("lead"));
-    assert!(lead.len() == 29 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself: {lead:?}");
+    assert!(lead.len() == 30 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself: {lead:?}");
     assert!(names(&Principal::Anonymous).is_empty());
 
     let err = service.call("navigate", json!({ "view": "calls" }), &as_role("sub")).await.unwrap_err().to_string();

@@ -3315,6 +3315,7 @@ dependencies = [
  "harness-core",
  "include_dir",
  "nah-access",
+ "nah-notify",
  "nah-packs",
  "nah-state",
  "notify-debouncer-full",
@@ -3458,6 +3459,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nah-notify"
+version = "0.1.0"
+dependencies = [
+ "harness-contracts",
+ "harness-core",
+ "nah-notify",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "nah-packs"
 version = "0.1.0"
 dependencies = [
@@ -3494,6 +3508,7 @@ dependencies = [
  "arch-store",
  "harness-contracts",
  "harness-core",
+ "nah-notify",
  "rusqlite",
  "serde",
  "serde_json",

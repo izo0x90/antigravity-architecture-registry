@@ -478,7 +478,7 @@ away and rebuilt when the reader changes.
 | Build | `verify`, `run_tools`, `review` |
 | Review | `review_comments`, `answer_comment`, `reply_comment` |
 | Cockpit | `cockpit_read`, `cockpit_actions`, `cockpit_run`, `cockpit_click`, `cockpit_type`, `cockpit_keys` (only while you let agents drive it) |
-| Slots | the lead's: `slot_list`, `slot_read`, `slot_start`, `slot_close`, `slot_send` (optionally waiting for the answer); a sub-slot's: `tell_lead` |
+| Slots | the lead's: `slot_list`, `slot_read`, `slot_start`, `slot_close`, `slot_send` (optionally waiting for the answer); a sub-slot's: `tell_lead` (the user sees it too); any slot's: `tell_user` |
 
 Every result ends with next steps, given in dependency order.
 
@@ -489,6 +489,16 @@ plans, builds and runs its sub-slots; a sub-slot reads and reports to the
 lead; a work-queue job plans and builds its component; an agent NAH didn't
 start (no key) only reads. Tools a role may not use aren't listed to it,
 and a call to one is refused saying which capability it needs.
+
+Whatever an agent waits on the user for (an approval, a question, a
+sign-in) is a notification until it's answered, and so is what happened
+that the user would want to know: a session that stopped unasked, a failed
+or finished turn, a sub-slot's report, an agent's `tell_user`. They're kept
+in the state database (`GET /api/notifications`, `?state=recent` for the
+latest in any state; `POST /api/notifications/seen` with a slot puts its
+updates away; `POST /api/notifications/{id}/dismiss` one). Answering a
+request stays the request's own route. What waited when the server
+stopped expires at the next start: that agent session is gone.
 
 ### Driving the cockpit
 
@@ -530,6 +540,7 @@ is approved, verified or built. It's saved in `.nah/plans/` like any plan.
 | `nah-packs` | packs (harnesses, languages, servers) and the one installer |
 | `nah-lsp` | the one language server client: starts a server in the background, knows when it's ready, asks where names are defined, restarts it when it ends |
 | `nah-access` | what each caller may do: capabilities, the roles that hold them (configured), and the one check every tool and route goes through |
+| `nah-notify` | notifications: what waits on the user (approvals, questions, sign-ins) and what happened (crashes, failed and finished turns, messages), from the event stream; kept in the state database, published, handed to adapters (Slack, email, a phone: none yet) |
 | `nah-state` | the project's state database (`.nah/state/state.sqlite`): what the server keeps across restarts that isn't the analysis. One server per project (a lock), explicit layouts, never thrown away |
 | `arch-store` | where the analysis is kept between runs (SQLite) |
 | `arch-search` | one way of matching what's typed: names with neo_frizbee; files and lines with fff-search |

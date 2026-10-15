@@ -137,3 +137,30 @@ mod slots {
         assert_eq!(db.activity(1).unwrap()[0].action, "sent");
     }
 }
+
+mod notifications {
+    use super::*;
+    use harness_contracts::{Notification, NotificationId, NotificationKind, NotificationState, SlotId};
+    use nah_notify::NotificationStore;
+
+    fn note(id: &str, kind: NotificationKind, at_ms: u64) -> Notification {
+        Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: Some(SlotId::new("sub-1")), thread: None, request: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
+    }
+
+    #[test]
+    fn they_are_kept_by_id_and_a_restart_expires_only_what_waited() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = StateDb::open(dir.path(), &settings()).unwrap();
+        let (ask, done) = (note("req:r1", NotificationKind::Approval, 1), note("turn:u1", NotificationKind::TurnFinished, 2));
+        db.put(&[ask.clone(), done.clone()]).unwrap();
+        db.put(std::slice::from_ref(&ask)).unwrap();
+        assert_eq!(db.open().unwrap(), [ask.clone(), done.clone()], "kept once, by id");
+        assert_eq!(db.count("req:").unwrap(), 1);
+        assert_eq!(db.count("req_").unwrap(), 0, "a prefix is literal");
+        assert_eq!(db.expire_waiting().unwrap(), 1);
+        assert_eq!(db.get(&ask.id).unwrap().map(|n| n.state), Some(NotificationState::Expired));
+        assert_eq!(db.open().unwrap(), std::slice::from_ref(&done));
+        assert_eq!(db.recent(10).unwrap().iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["turn:u1", "req:r1"], "newest first");
+        assert_eq!(db.get(&NotificationId::new("nope")).unwrap(), None);
+    }
+}

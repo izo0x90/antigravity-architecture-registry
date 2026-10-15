@@ -21,6 +21,11 @@ const MIGRATIONS: &[(i64, &str)] = &[
      CREATE INDEX slot_sessions_by_slot ON slot_sessions (slot);
      CREATE TABLE held_reports (seq INTEGER PRIMARY KEY AUTOINCREMENT, from_slot TEXT NOT NULL, text TEXT NOT NULL, at_ms INTEGER NOT NULL);",
     ),
+    (
+        3,
+        "CREATE TABLE notifications (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, level TEXT NOT NULL, state TEXT NOT NULL, at_ms INTEGER NOT NULL, json TEXT NOT NULL);
+     CREATE INDEX notifications_by_state ON notifications (state, at_ms);",
+    ),
 ];
 
 /// The newest layout this NAH knows.

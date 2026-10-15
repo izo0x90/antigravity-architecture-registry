@@ -20,6 +20,10 @@ pub enum HarnessError {
     #[error("couldn't keep it: {reason}")]
     Store { reason: String },
 
+    /// What was asked can't happen from where it is now.
+    #[error("{reason}")]
+    Conflict { reason: String },
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

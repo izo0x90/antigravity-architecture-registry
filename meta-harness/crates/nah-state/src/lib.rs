@@ -18,6 +18,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 
 mod migrations;
+mod notifications;
 mod slots;
 
 pub use migrations::LATEST;

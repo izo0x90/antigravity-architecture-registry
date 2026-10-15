@@ -1183,3 +1183,17 @@ Send a sub-slot a message: it's queued after what it's doing (or added to its ru
   ]
 }
 
+## tell_user
+Tell the user something they should know (a result, a blocker, a decision you need them to look at). It shows in their notifications, named as from you. For a question you're waiting on, ask in your reply instead.
+{
+  "type": "object",
+  "properties": {
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ]
+}
+

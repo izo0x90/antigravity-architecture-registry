@@ -1,5 +1,6 @@
 //! The lead's sub-slots: list and read them, start and close them, send
-//! them work; and a sub-slot's report back to the lead.
+//! them work; a sub-slot's report back to the lead; any agent telling the
+//! user something.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use crate::mcp::text::parse;
 
 pub(crate) struct Slots {
     pub(crate) slots: Arc<SlotManager>,
+    pub(crate) notify: Arc<nah_notify::NotifyHub>,
 }
 
 #[derive(Deserialize)]
@@ -103,6 +105,12 @@ impl Slots {
                 Capability::SlotsReport,
                 "tell_lead",
                 "Report to the lead: your message is queued for it (never cutting into what it's doing). If no lead session is running, it's kept and delivered when one starts. The user sees it too.",
+                json!({ "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }),
+            ),
+            tool(
+                Capability::UserNotify,
+                "tell_user",
+                "Tell the user something they should know (a result, a blocker, a decision you need them to look at). It shows in their notifications, named as from you. For a question you're waiting on, ask in your reply instead.",
                 json!({ "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }),
             ),
         ]
@@ -207,10 +215,23 @@ impl ToolSet for Slots {
             "tell_lead" => {
                 let a: TextArgs = parse(args)?;
                 let from: SlotId = caller.slot.clone().ok_or_else(|| ServiceError::InvalidOp("only a slot's agent reports to the lead".into()))?;
-                Ok(match self.slots.report(&from, a.text).await.map_err(failed)? {
-                    Reported::Delivered => "Delivered: the lead gets it after what it's doing.".into(),
-                    Reported::Held => "Kept: no lead session is running; it's delivered when one starts.".into(),
+                let reported = self.slots.report(&from, a.text.clone()).await.map_err(failed)?;
+                let to_user = match self.notify.message(Some(&from), &a.text) {
+                    Ok(_) => "",
+                    Err(e) => {
+                        tracing::warn!("a report couldn't be shown to the user: {e}");
+                        " (It couldn't be shown to the user: their notifications failed.)"
+                    }
+                };
+                Ok(match reported {
+                    Reported::Delivered => format!("Delivered: the lead gets it after what it's doing.{to_user}"),
+                    Reported::Held => format!("Kept: no lead session is running; it's delivered when one starts.{to_user}"),
                 })
+            }
+            "tell_user" => {
+                let a: TextArgs = parse(args)?;
+                self.notify.message(caller.slot.as_ref(), &a.text).map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
+                Ok("The user has it, in their notifications.".into())
             }
             other => Err(ServiceError::NotFound(format!("tool '{other}'"))),
         }

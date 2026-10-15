@@ -21,6 +21,7 @@ members = [
     "crates/nah-lsp",
     "crates/nah-access",
     "crates/nah-state",
+    "crates/nah-notify",
 ]
 
 # Debug builds (tests, and the server as run in development) optimize the
@@ -55,6 +56,7 @@ arch-service = { path = "crates/arch-service" }
 nah-packs = { path = "crates/nah-packs" }
 nah-access = { path = "crates/nah-access" }
 nah-state = { path = "crates/nah-state" }
+nah-notify = { path = "crates/nah-notify" }
 include_dir = "0.7"
 clap = { version = "4", features = ["derive"] }
 async-trait = "0.1.92"

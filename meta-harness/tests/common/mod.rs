@@ -19,19 +19,42 @@ use tokio::sync::{broadcast, watch};
 
 pub const FAKE: &str = "fake";
 
-/// A session that answers every prompt with one assistant message.
+/// A session that answers every prompt with one assistant message. In the
+/// prompt, "[ask]" asks the user's approval first (and "[question]" a
+/// question): the turn finishes once it's answered; "[fail]" fails the
+/// turn; "[die]" ends the session as a crash would.
 pub struct FakeSession {
     thread: Thread,
     events: broadcast::Sender<AdapterEvent>,
     log: Arc<Mutex<Vec<AdapterEvent>>>,
     /// Turns so far: each turn and its item get ids of their own.
     turns: std::sync::atomic::AtomicU32,
+    /// The requests waiting on the user, with the turn each holds up.
+    asked: Mutex<Vec<(RuntimeRequest, Turn)>>,
+    /// Set when the session dies.
+    dead: watch::Sender<bool>,
 }
 
 impl FakeSession {
     fn emit(&self, event: AdapterEvent) {
         self.log.lock().unwrap().push(event.clone());
         let _ = self.events.send(event);
+    }
+
+    fn reply(&self, turn: &Turn, text: String) {
+        self.emit(AdapterEvent::ItemUpdated {
+            item: TurnItem {
+                id: ItemId::new(format!("item-{}", turn.id)),
+                thread_id: self.thread.id.clone(),
+                turn_id: turn.id.clone(),
+                native_id: None,
+                parent_id: None,
+                ordinal: turn.ordinal,
+                status: ItemStatus::Completed,
+                title: None,
+                body: ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text }], streaming: false },
+            },
+        });
     }
 }
 
@@ -47,39 +70,55 @@ impl SessionRuntime for FakeSession {
 
     fn events(&self) -> BoxStream<'static, AdapterEvent> {
         let replay = self.log.lock().unwrap().clone();
+        let mut dead = self.dead.subscribe();
         let live = tokio_stream::wrappers::BroadcastStream::new(self.events.subscribe()).filter_map(|e| async move { e.ok() });
-        futures::stream::iter(replay).chain(live).boxed()
+        let died = async move {
+            let _ = dead.wait_for(|d| *d).await;
+        };
+        futures::stream::iter(replay).chain(live.take_until(Box::pin(died))).boxed()
     }
 
     async fn start_turn(&self, input: TurnInput) -> Result<TurnId> {
         // "[hang]" in the input: a turn that never finishes (for timeouts).
-        let status = if input.text.contains("[hang]") { TurnStatus::Running } else { TurnStatus::Completed };
+        let asks = ["[ask]", "[question]"].iter().find(|a| input.text.contains(*a));
+        let status = match () {
+            _ if input.text.contains("[hang]") || asks.is_some() => TurnStatus::Running,
+            _ if input.text.contains("[fail]") => TurnStatus::Failed,
+            _ => TurnStatus::Completed,
+        };
         let n = self.turns.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let turn = Turn {
             id: TurnId::new(format!("turn-{n}")),
             thread_id: self.thread.id.clone(),
             ordinal: n,
             status,
-            failure: None,
+            failure: (status == TurnStatus::Failed).then(|| Failure { message: "the model refused".into(), retryable: false }),
             usage: None,
         };
-        self.emit(AdapterEvent::ItemUpdated {
-            item: TurnItem {
-                id: ItemId::new(format!("item-{n}")),
+        if let Some(ask) = asks {
+            let request = RuntimeRequest {
+                id: RequestId::new(format!("req-{}-{n}", self.thread.id)),
                 thread_id: self.thread.id.clone(),
-                turn_id: turn.id.clone(),
-                native_id: None,
-                parent_id: None,
-                ordinal: n,
-                status: ItemStatus::Completed,
-                title: None,
-                body: ItemBody::AssistantMessage {
-                    content: vec![ContentBlock::Text { text: format!("echo: {}", input.text) }],
-                    streaming: false,
-                },
-            },
-        });
+                turn_id: Some(turn.id.clone()),
+                item_id: None,
+                kind: if *ask == "[ask]" { RequestKind::Command } else { RequestKind::UserInput },
+                status: RequestStatus::Pending,
+                title: "Run cargo test".into(),
+                detail: None,
+                options: vec![ApprovalOption { id: "allow".into(), decision: ApprovalDecision::Accept, label: "Allow".into(), warning: None }],
+                questions: Vec::new(),
+                response: None,
+            };
+            self.emit(AdapterEvent::TurnUpdated { turn: turn.clone() });
+            self.emit(AdapterEvent::RequestUpdated { request: request.clone() });
+            self.asked.lock().unwrap().push((request, turn.clone()));
+            return Ok(turn.id);
+        }
+        self.reply(&turn, format!("echo: {}", input.text));
         self.emit(AdapterEvent::TurnUpdated { turn: turn.clone() });
+        if input.text.contains("[die]") {
+            let _ = self.dead.send(true);
+        }
         Ok(turn.id)
     }
 
@@ -91,8 +130,17 @@ impl SessionRuntime for FakeSession {
         Ok(())
     }
 
-    async fn respond(&self, request: &RequestId, _response: RequestResponse) -> Result<()> {
-        Err(HarnessError::NotFound { what: format!("request {request}") })
+    async fn respond(&self, request: &RequestId, response: RequestResponse) -> Result<()> {
+        let at = self.asked.lock().unwrap().iter().position(|(r, _)| &r.id == request);
+        let Some(at) = at else { return Err(HarnessError::NotFound { what: format!("request {request}") }) };
+        let (mut asked, mut turn) = self.asked.lock().unwrap().remove(at);
+        asked.status = RequestStatus::Resolved;
+        asked.response = Some(response);
+        self.emit(AdapterEvent::RequestUpdated { request: asked });
+        turn.status = TurnStatus::Completed;
+        self.reply(&turn, "done, as allowed".into());
+        self.emit(AdapterEvent::TurnUpdated { turn });
+        Ok(())
     }
 
     async fn close(&self) -> Result<()> {
@@ -139,7 +187,7 @@ impl ProviderAdapter for FakeAdapter {
             mcp_servers: Vec::new(),
         };
         let (events, _) = broadcast::channel(64);
-        let session = FakeSession { thread: thread.clone(), events, log: Arc::default(), turns: Default::default() };
+        let session = FakeSession { thread: thread.clone(), events, log: Arc::default(), turns: Default::default(), asked: Mutex::default(), dead: watch::channel(false).0 };
         session.emit(AdapterEvent::ThreadUpdated { thread });
         session.emit(AdapterEvent::CatalogUpdated {
             update: CatalogUpdate {
@@ -295,8 +343,10 @@ pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHu
     let db = Arc::new(nah_state::StateDb::open(&arch_service::state_dir(arch.root()).unwrap(), &arch_service::store_settings(arch.limits())).unwrap());
     let tool_servers = meta_harness::startup::tool_servers(&base_url, arch.root());
     let slots = meta_harness::startup::slots(&sessions, &registry, &hub, &db, &base_url, &tool_servers).unwrap();
-    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone(), slots.clone())), meta_harness::startup::mcp_callers(&slots));
-    let state = AppState { registry, sessions, slots, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state: db, tool_servers, remote, access, tickets: Arc::default() };
+    meta_harness::startup::reconcile_on_start(&db).unwrap();
+    let notify = meta_harness::startup::notifications(&hub, &db, &slots).unwrap();
+    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone(), slots.clone(), notify.clone())), meta_harness::startup::mcp_callers(&slots));
+    let state = AppState { registry, sessions, slots, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state: db, tool_servers, remote, access, tickets: Arc::default(), notify };
     let app = create_router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (addr, state)

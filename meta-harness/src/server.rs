@@ -34,6 +34,8 @@ pub struct AppState {
     pub access: Arc<nah_access::Access>,
     /// One-time tickets for the sockets.
     pub tickets: Arc<crate::cockpit::Tickets>,
+    /// What needs the user, and what happened.
+    pub notify: Arc<nah_notify::NotifyHub>,
 }
 
 impl axum::extract::FromRef<AppState> for Arc<crate::cockpit::Tickets> {
@@ -78,8 +80,20 @@ impl IntoResponse for ApiError {
             HarnessError::AuthRequired { .. } => StatusCode::UNAUTHORIZED,
             HarnessError::Provider { .. } | HarnessError::Io(_) => StatusCode::BAD_GATEWAY,
             HarnessError::Store { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            HarnessError::Conflict { .. } => StatusCode::CONFLICT,
         };
         (status, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
+    }
+}
+
+impl From<nah_notify::NotifyError> for ApiError {
+    fn from(err: nah_notify::NotifyError) -> Self {
+        use nah_notify::NotifyError as N;
+        Self(match err {
+            N::NotFound(id) => HarnessError::NotFound { what: format!("notification {id}") },
+            N::Transition(e) => HarnessError::Conflict { reason: e.to_string() },
+            N::Store(reason) => HarnessError::Store { reason },
+        })
     }
 }
 
@@ -110,6 +124,7 @@ pub fn create_router(state: AppState) -> Router {
         .merge(crate::routes::cockpit::routes())
         .merge(crate::routes::harness::routes())
         .merge(crate::routes::slots::routes())
+        .merge(crate::routes::notifications::routes())
         .merge(crate::routes::files::routes())
         .merge(crate::routes::feedback::routes())
         .merge(crate::routes::tool_servers::routes())

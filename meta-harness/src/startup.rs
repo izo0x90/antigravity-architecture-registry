@@ -139,6 +139,21 @@ pub fn state(arch: &ArchitectureService) -> Result<nah_state::StateDb, StartErro
     Ok(nah_state::StateDb::open(&dir, &arch_service::store_settings(arch.limits()))?)
 }
 
+/// Before the server takes requests: what an earlier run left that can't
+/// hold now is put right, and said in one line. (What waited on the user
+/// then can't be answered now: those notifications expire. Worker slots
+/// went when the slots loaded.)
+pub fn reconcile_on_start(state: &nah_state::StateDb) -> Result<(), StartError> {
+    let expired = nah_notify::NotificationStore::expire_waiting(state).map_err(nah_notify::NotifyError::Store)?;
+    info!("start: {expired} notification(s) that waited on the last run expired");
+    Ok(())
+}
+
+/// Notifications: from the event stream, kept in the state database.
+pub fn notifications(hub: &Arc<EventHub>, state: &Arc<nah_state::StateDb>, slots: &Arc<harness_core::SlotManager>) -> Result<Arc<nah_notify::NotifyHub>, StartError> {
+    Ok(nah_notify::NotifyHub::start(hub.clone(), state.clone(), slots.clone(), Vec::new())?)
+}
+
 /// What each agent role may do: the shipped roles, with the project's
 /// `.nah/access.toml` over them.
 pub fn access(project: &std::path::Path) -> Result<nah_access::Access, StartError> {

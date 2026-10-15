@@ -1,0 +1,21 @@
+[package]
+name = "nah-notify"
+version = "0.1.0"
+edition = "2024"
+description = "Notifications: what needs the user and what happened, from the event stream, kept and handed to adapters."
+
+[features]
+# An in-memory store and an adapter that records what it's given, for tests.
+testing = []
+
+[dependencies]
+harness-contracts = { path = "../harness-contracts" }
+harness-core = { path = "../harness-core" }
+thiserror = "2.0"
+tokio = { version = "1.53.1", features = ["sync", "rt"] }
+tracing = "0.1.44"
+uuid = { version = "1.26.1", features = ["v4"] }
+
+[dev-dependencies]
+nah-notify = { path = ".", features = ["testing"] }
+tokio = { version = "1.53.1", features = ["sync", "rt", "macros", "time"] }

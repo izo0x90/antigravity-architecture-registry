@@ -20,6 +20,9 @@
 /api/slots/s1/sessions/k1 DELETE
 /api/slots/s1/current POST
 /api/slots/s1/prompt POST
+/api/notifications GET,HEAD
+/api/notifications/seen POST
+/api/notifications/n1/dismiss POST
 /api/fs/read GET,HEAD
 /api/dev/feedback GET,HEAD,POST,PUT
 /api/mcp/servers GET,HEAD,PUT
