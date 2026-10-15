@@ -69,7 +69,7 @@ impl ChatStreamState {
                 .auto_shrink([false, false])
                 .stick_to_bottom(self.ui.cursor.is_none())
                 .max_height(scroll_height)
-                .show(ui, |ui| self.render_stream(ui, net));
+                .show(ui, |ui| self.render_stream(ui, net, cx.hints));
             self.ui.view = stream.inner_rect;
             self.ui.spots = std::mem::take(&mut self.ui.drawing).into_iter().filter(|s| s.rect.intersects(stream.inner_rect)).collect();
             feedback.register_inspectable(ui, &format!("slot_{}:chat:stream", slot_idx + 1), stream.inner_rect);
@@ -249,7 +249,7 @@ impl ChatStreamState {
             .show(ui, |ui| render_steps(ui, &steps));
     }
 
-    pub(super) fn render_stream(&mut self, ui: &mut egui::Ui, net: &NetClient) {
+    pub(super) fn render_stream(&mut self, ui: &mut egui::Ui, net: &NetClient, hints: &[(String, String)]) {
         let Some(view) = self.thread().cloned() else {
             ui.add_space(crate::theme::look().space_xxl);
             ui.vertical_centered(|ui| {
@@ -280,7 +280,7 @@ impl ChatStreamState {
                 let fill = if on { colors().selection } else { Color32::TRANSPARENT };
                 let shown = Frame::NONE.fill(fill).corner_radius(crate::theme::look().radius_s).inner_margin(crate::theme::margin2(crate::theme::look().space_xs, crate::theme::look().space_hair)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    self.render_item(ui, net, &view, item, index);
+                    self.render_item(ui, net, &view, item, index, hints);
                 });
                 if on && scroll {
                     shown.response.scroll_to_me(Some(egui::Align::Center));
@@ -313,7 +313,7 @@ impl ChatStreamState {
         if self.ui.view.height() > 0.0 { ((self.ui.view.height() / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 4 }
     }
 
-    pub(super) fn render_item(&mut self, ui: &mut egui::Ui, net: &NetClient, view: &ThreadView, item: &TurnItem, index: usize) {
+    pub(super) fn render_item(&mut self, ui: &mut egui::Ui, net: &NetClient, view: &ThreadView, item: &TurnItem, index: usize, hints: &[(String, String)]) {
         match &item.body {
             ItemBody::UserMessage { text } => {
                 ui.horizontal_wrapped(|ui| {
@@ -387,7 +387,7 @@ impl ChatStreamState {
             ItemBody::TodoList { steps, .. } => render_steps(ui, steps),
             ItemBody::Request { request_id } => {
                 if let Some(request) = view.request(request_id)
-                    && let Some(option) = render_request(ui, request, &mut self.drafts)
+                    && let Some(option) = render_request(ui, request, &mut self.drafts, &Shown { cursor: None, hints }).clicked
                 {
                     self.answer(net, ui.ctx(), &view.thread.id, request_id, &option);
                 }

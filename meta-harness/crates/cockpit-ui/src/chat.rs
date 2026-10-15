@@ -18,7 +18,7 @@ use crate::actions::{Action, ActionProvider, Choice, MINOR, Param, RunCx, Toolba
 use crate::feedback::FeedbackInspectorState;
 use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, Spot, Step, Target};
 use crate::net::{AuthChallenge, NetClient, NetResult, OpenSlotSession, SlotOpened};
-use crate::request_card::{Drafts, render_request};
+use crate::request_card::{Drafts, Drawn, Shown, render_request};
 use crate::store::{Store, ThreadView};
 use crate::theme::colors;
 
@@ -216,14 +216,15 @@ impl ChatStreamState {
         net.respond(thread, request, &response, ctx.clone(), move |r| post(&mailbox, Reply::Sent(slot, r)));
     }
 
-    /// Draws `thread`'s request `request` (the quick look's), answering
-    /// what's clicked as the keys do; false when it's no longer there.
-    pub fn render_request_of(&mut self, ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, request: &harness_contracts::RequestId) -> bool {
-        let Some(shown) = self.store.threads.get(thread).and_then(|t| t.request(request)).cloned() else { return false };
-        if let Some(option) = render_request(ui, &shown, &mut self.drafts) {
-            self.answer(net, ui.ctx(), thread, request, &option);
+    /// Draws `thread`'s request `request` (the inbox's) as `shown`,
+    /// answering what's clicked as the keys do; none when it's no longer there.
+    pub fn render_request_of(&mut self, ui: &mut egui::Ui, net: &NetClient, thread: &ThreadId, request: &harness_contracts::RequestId, shown: &Shown) -> Option<Drawn> {
+        let asked = self.store.threads.get(thread).and_then(|t| t.request(request)).cloned()?;
+        let drawn = render_request(ui, &asked, &mut self.drafts, shown);
+        if let Some(option) = &drawn.clicked {
+            self.answer(net, ui.ctx(), thread, request, option);
         }
-        true
+        Some(drawn)
     }
 
     /// The slot this view shows.

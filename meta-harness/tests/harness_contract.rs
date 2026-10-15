@@ -117,6 +117,21 @@ async fn permission_requests_are_asked_answered_and_skipped_as_the_mode_says() {
     }
 }
 
+/// A question asked through a permission request (as Antigravity asks
+/// them) is a question in every harness, and no mode answers it for the user.
+#[tokio::test]
+async fn a_question_asked_through_a_permission_request_is_never_answered_for_the_user() {
+    for h in Harness::all() {
+        let mode = h.profile.runtime_modes().into_iter().find(|m| *m == RuntimeMode::FullAccess).unwrap_or(RuntimeMode::ApprovalRequired);
+        let session = h.open(mode).await;
+        let mut events = session.events();
+        session.start_turn(say("[ask-by-permission]")).await.unwrap();
+        let AdapterEvent::RequestUpdated { request } = until(&mut events, "the question", |e| matches!(e, AdapterEvent::RequestUpdated { request } if request.status == RequestStatus::Pending)).await else { unreachable!() };
+        assert_eq!((request.kind, h.agent.seen().permission), (RequestKind::Question, None), "{}: asked, not answered", h.name);
+        assert!(request.options.iter().all(|o| o.decision == ApprovalDecision::Answer), "{}: its options are answers", h.name);
+    }
+}
+
 #[tokio::test]
 async fn messages_sent_while_a_turn_runs_are_all_answered_in_order() {
     for h in Harness::all() {
@@ -152,7 +167,7 @@ async fn what_it_declares_works() {
             let session = h.open(RuntimeMode::ApprovalRequired).await;
             let mut events = session.events();
             session.start_turn(say("[question]")).await.unwrap();
-            let AdapterEvent::RequestUpdated { request } = until(&mut events, "questions", |e| matches!(e, AdapterEvent::RequestUpdated { request } if request.kind == RequestKind::UserInput)).await else { unreachable!() };
+            let AdapterEvent::RequestUpdated { request } = until(&mut events, "questions", |e| matches!(e, AdapterEvent::RequestUpdated { request } if request.kind == RequestKind::Question)).await else { unreachable!() };
             assert_eq!(request.questions.len(), 2, "{}: each answer box folds into its question", h.name);
             let answers = [("question_0".to_owned(), vec!["Redis".to_owned()])].into();
             session.respond(&request.id, RequestResponse { option_id: Some("submit".into()), answers }).await.unwrap();

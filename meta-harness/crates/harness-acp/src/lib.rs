@@ -7,6 +7,7 @@
 mod adapter;
 mod auth;
 mod catalog;
+mod classify;
 mod control;
 mod convert;
 mod driver;

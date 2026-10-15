@@ -100,16 +100,16 @@ fn with(notification: &Change) -> BTreeMap<NotificationId, Notification> {
 #[test]
 fn a_pending_request_waits_on_the_user_until_it_is_answered() {
     let none = BTreeMap::new();
-    for (kind, as_) in [(RequestKind::Permission, NotificationKind::Approval), (RequestKind::FileChange, NotificationKind::Approval), (RequestKind::UserInput, NotificationKind::Question), (RequestKind::McpElicitation, NotificationKind::Link)] {
+    for (kind, as_) in [(RequestKind::Approval { action: harness_contracts::ToolAction::Tool }, NotificationKind::Approval), (RequestKind::Approval { action: harness_contracts::ToolAction::FileChange }, NotificationKind::Approval), (RequestKind::Question, NotificationKind::Question), (RequestKind::Link, NotificationKind::Link)] {
         let changes = derive(&request("r1", "sub-t", kind, RequestStatus::Pending), &world(), &none);
         assert_eq!(opened(&changes), [("req:r1".to_owned(), as_, Some("sub-1".to_owned()), "Run cargo test".to_owned())]);
         let Change::Open(n) = &changes[0] else { unreachable!() };
         assert_eq!((n.level, n.request.as_ref().map(|r| r.as_str())), (harness_contracts::Level::Waiting, Some("r1")));
     }
-    let open = with(&derive(&request("r1", "sub-t", RequestKind::Command, RequestStatus::Pending), &world(), &none)[0]);
-    let answered = derive(&request("r1", "sub-t", RequestKind::Command, RequestStatus::Resolved), &world(), &open);
+    let open = with(&derive(&request("r1", "sub-t", RequestKind::Approval { action: harness_contracts::ToolAction::Command }, RequestStatus::Pending), &world(), &none)[0]);
+    let answered = derive(&request("r1", "sub-t", RequestKind::Approval { action: harness_contracts::ToolAction::Command }, RequestStatus::Resolved), &world(), &open);
     assert_eq!(answered, [Change::End { id: NotificationId::new("req:r1"), to: NotificationState::Done }]);
-    assert!(derive(&request("r2", "sub-t", RequestKind::Command, RequestStatus::Cancelled), &world(), &open).is_empty(), "nothing open for it: nothing to end");
+    assert!(derive(&request("r2", "sub-t", RequestKind::Approval { action: harness_contracts::ToolAction::Command }, RequestStatus::Cancelled), &world(), &open).is_empty(), "nothing open for it: nothing to end");
 }
 
 #[test]

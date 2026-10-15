@@ -1349,7 +1349,7 @@ pub(crate) mod tests {
         let mut note = None;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: mode, slot, note: &mut note, shell: &[] });
+                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: mode, slot, note: &mut note, shell: &[], hints: &[] });
             });
         });
     }
@@ -1438,7 +1438,7 @@ pub(crate) mod tests {
         assert_eq!(s.enter(), Step::GoTo(GoTo::Spec));
         let comment_action = s.actions().into_iter().find(|a| a.id == "spec.comment").unwrap();
         let (ctx, net, mut mode, mut note) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
-        s.run(&comment_action, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] });
+        s.run(&comment_action, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[] });
         assert_eq!(s.composer.as_ref().unwrap().anchor, Some(CommentAnchor::Relation { kind: RelationKind::Calls, source: id.clone(), target: other.clone() }));
         s.composer = None;
         // Search finds items; hints label what's drawn.
@@ -1539,7 +1539,7 @@ pub(crate) mod tests {
         assert_eq!(s.current, Section::Logic);
         let request = actions.iter().find(|a| a.id == "spec.request_change").unwrap().clone();
         let mut note = None;
-        s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 1, note: &mut note, shell: &[] });
+        s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 1, note: &mut note, shell: &[], hints: &[] });
         assert!(s.requests.insert);
         assert_eq!(
             s.composer,
@@ -1562,7 +1562,7 @@ pub(crate) mod tests {
         let (net, mut mode, mut note) = (NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
         let out = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] });
+                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[] });
             });
         });
         fn collect(shape: &egui::Shape, out: &mut String) {

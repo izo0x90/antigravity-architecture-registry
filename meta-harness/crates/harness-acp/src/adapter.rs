@@ -21,7 +21,7 @@ use crate::launch::AcpLauncher;
 use crate::profile::Profile;
 use crate::questions::Form;
 use crate::session::{AcpSession, Link, Shared, acp_error, lock};
-use crate::state::{SessionState, request_kind};
+use crate::state::SessionState;
 use crate::workspace::WorkspaceFs;
 
 pub struct AcpAdapter {
@@ -126,19 +126,22 @@ async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<W
                 let shared = on_permission.clone();
                 let native_tool = req.tool_call.tool_call_id.to_string();
                 let policy = lock(&shared.policy).clone();
-                let auto = {
+                // What's asked first: only an approval may be answered for the user.
+                let (asked, auto) = {
                     let mut state = lock(&shared.state);
                     state.tool_call_update(&req.tool_call);
-                    shared.profile.auto_approve(&policy, &state.tool_kind(&native_tool), &req.options)
+                    let kind = state.tool_kind(&native_tool);
+                    let asked = crate::classify::permission(&shared.profile.settings.questions, &native_tool, &kind, &req.options);
+                    let auto = if matches!(asked, RequestKind::Approval { .. }) { shared.profile.auto_approve(&policy, &kind, &req.options) } else { None };
+                    (asked, auto)
                 };
                 if let Some(option) = auto {
                     return responder.respond(selected(option));
                 }
                 cx.spawn(async move {
                     let response = ask(&shared, |state| {
-                        let kind = state.tool_kind(&native_tool);
                         let title = req.tool_call.fields.title.clone().unwrap_or_else(|| "Permission requested".into());
-                        state.open_request(Some(&native_tool), request_kind(&kind), title, None, shared.profile.approval_options(&req.options), Vec::new())
+                        state.open_request(Some(&native_tool), asked, title, None, shared.profile.approval_options(asked, &req.options), Vec::new())
                     })
                     .await;
                     match response.and_then(|r| r.option_id) {
@@ -162,12 +165,12 @@ async fn run_connection(transport: Streams, shared: Arc<Shared>, files: Option<W
                             let form = Form::new(&form_mode.requested_schema, &req.message, shared.profile.custom_suffix());
                             let tool = tool(&form_mode.scope);
                             let questions = form.questions.clone();
-                            let response = ask(&shared, |state| state.open_request(tool.as_deref(), RequestKind::UserInput, req.message.clone(), None, form_options("Answer"), questions)).await;
+                            let response = ask(&shared, |state| state.open_request(tool.as_deref(), RequestKind::Question, req.message.clone(), None, form_options("Answer"), questions)).await;
                             responder.respond(elicitation_answer(Some(&form), response))
                         }
                         acp::ElicitationMode::Url(url_mode) => {
                             let tool = tool(&url_mode.scope);
-                            let response = ask(&shared, |state| state.open_request(tool.as_deref(), RequestKind::McpElicitation, req.message.clone(), Some(url_mode.url.clone()), form_options("Done"), Vec::new())).await;
+                            let response = ask(&shared, |state| state.open_request(tool.as_deref(), RequestKind::Link, req.message.clone(), Some(url_mode.url.clone()), form_options("Done"), Vec::new())).await;
                             responder.respond(elicitation_answer(None, response))
                         }
                         _ => responder.respond(acp::CreateElicitationResponse::new(acp::ElicitationAction::Decline)),

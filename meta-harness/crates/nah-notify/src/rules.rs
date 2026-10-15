@@ -87,9 +87,9 @@ pub fn derive(event: &ClientEvent, world: &dyn World, open: &BTreeMap<Notificati
                 return open.contains_key(&id).then_some(Change::End { id, to: NotificationState::Done }).into_iter().collect();
             }
             let kind = match request.kind {
-                RequestKind::Permission | RequestKind::Command | RequestKind::FileRead | RequestKind::FileChange => NotificationKind::Approval,
-                RequestKind::UserInput => NotificationKind::Question,
-                RequestKind::McpElicitation => NotificationKind::Link,
+                RequestKind::Approval { .. } => NotificationKind::Approval,
+                RequestKind::Question => NotificationKind::Question,
+                RequestKind::Link => NotificationKind::Link,
             };
             let slot = world.slot_of(&request.thread_id);
             let mut n = new(id, kind, slot.as_ref(), Some(&request.thread_id), request.title.clone(), request.detail.clone(), world);

@@ -102,7 +102,7 @@ impl SessionRuntime for FakeSession {
                 thread_id: self.thread.id.clone(),
                 turn_id: Some(turn.id.clone()),
                 item_id: None,
-                kind: if *ask == "[ask]" { RequestKind::Command } else { RequestKind::UserInput },
+                kind: if *ask == "[ask]" { RequestKind::Approval { action: harness_contracts::ToolAction::Command } } else { RequestKind::Question },
                 status: RequestStatus::Pending,
                 title: "Run cargo test".into(),
                 detail: None,

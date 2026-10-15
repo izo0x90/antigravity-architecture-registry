@@ -2,7 +2,7 @@
 
 use agent_client_protocol::schema::v1 as acp;
 use harness_contracts::{
-    ApprovalDecision, ApprovalOption, ConfigCategory, ConfigChoice, ConfigControl, ConfigKind, ContentBlock, Diff,
+    ConfigCategory, ConfigChoice, ConfigControl, ConfigKind, ContentBlock, Diff,
     FileLocation, ItemStatus, ModeOption, ModelOption, PlanStep, SlashCommand, StepStatus, ToolKind, TurnStatus, Usage,
 };
 
@@ -109,16 +109,6 @@ pub fn stop_reason(reason: &acp::StopReason) -> TurnStatus {
 }
 
 /// Default mapping of native permission options; flavors may override labels/warnings.
-pub fn approval_option(option: &acp::PermissionOption) -> ApprovalOption {
-    let decision = match option.kind {
-        acp::PermissionOptionKind::AllowOnce => ApprovalDecision::Accept,
-        acp::PermissionOptionKind::AllowAlways => ApprovalDecision::AcceptForSession,
-        acp::PermissionOptionKind::RejectOnce | acp::PermissionOptionKind::RejectAlways => ApprovalDecision::Decline,
-        _ => ApprovalDecision::Decline,
-    };
-    ApprovalOption { id: option.option_id.to_string(), decision, label: option.name.clone(), warning: None }
-}
-
 pub fn modes(state: &acp::SessionModeState) -> (Vec<ModeOption>, Option<String>) {
     let modes = state
         .available_modes
@@ -198,14 +188,6 @@ pub fn models_from_controls(controls: &[ConfigControl]) -> Option<Vec<ModelOptio
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn permission_kinds_map_to_decisions() {
-        let opt = |kind| acp::PermissionOption::new("id", "label", kind);
-        assert_eq!(approval_option(&opt(acp::PermissionOptionKind::AllowOnce)).decision, ApprovalDecision::Accept);
-        assert_eq!(approval_option(&opt(acp::PermissionOptionKind::AllowAlways)).decision, ApprovalDecision::AcceptForSession);
-        assert_eq!(approval_option(&opt(acp::PermissionOptionKind::RejectOnce)).decision, ApprovalDecision::Decline);
-    }
 
     #[test]
     fn stop_reasons_map_to_turn_status() {

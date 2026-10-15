@@ -6,12 +6,11 @@ use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::v1 as acp;
 use harness_contracts::{
-    Account, ApprovalCapabilities, ApprovalOption, AuthStatus, Capabilities, InteractionMode, Launch,
+    Account, ApprovalCapabilities, ApprovalOption, AuthStatus, RequestKind, Capabilities, InteractionMode, Launch,
     PlanningCapabilities, RuntimeMode, RuntimePolicy, SessionCapabilities, SignIn, StreamingCapabilities,
     ToolCapabilities, ToolKind, TurnCapabilities,
 };
 
-use crate::convert;
 use crate::settings::{AcpSettings, Places};
 use crate::workspace::WorkspaceFs;
 
@@ -83,11 +82,12 @@ impl Profile {
     }
 
     /// The agent's options for a permission request, with their warnings.
-    pub fn approval_options(&self, native: &[acp::PermissionOption]) -> Vec<ApprovalOption> {
-        native
-            .iter()
-            .map(|option| {
-                let mut option = convert::approval_option(option);
+    /// A permission request's options as `asked` (an approval's allow and
+    /// deny, with this harness's warnings; a question's answers).
+    pub fn approval_options(&self, asked: RequestKind, native: &[acp::PermissionOption]) -> Vec<ApprovalOption> {
+        crate::classify::options(asked, native)
+            .into_iter()
+            .map(|mut option| {
                 option.warning = self.settings.approval_warnings.get(&option.decision).cloned();
                 option
             })

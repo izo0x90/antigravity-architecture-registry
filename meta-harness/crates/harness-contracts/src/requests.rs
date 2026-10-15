@@ -25,15 +25,28 @@ pub struct RuntimeRequest {
     pub response: Option<RequestResponse>,
 }
 
+/// What's asked (not how it came: a harness may ask a question through a
+/// permission prompt; its adapter says which it is).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
+pub enum RequestKind {
+    /// Allow a tool call, or not: what it would do.
+    Approval { action: ToolAction },
+    /// A question: one of its answers (`options`), or a form (`questions`).
+    Question,
+    /// A page to open, then done.
+    Link,
+}
+
+/// What a tool call asking for approval would do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RequestKind {
-    Permission,
+pub enum ToolAction {
     Command,
     FileRead,
     FileChange,
-    UserInput,
-    McpElicitation,
+    /// Any other tool.
+    Tool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +61,8 @@ pub enum RequestStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalDecision {
+    /// One of a question's answers (not allow or deny).
+    Answer,
     Accept,
     AcceptForSession,
     AcceptAlways,

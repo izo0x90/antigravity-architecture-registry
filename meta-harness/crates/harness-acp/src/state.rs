@@ -564,16 +564,6 @@ fn append_block(content: &mut Vec<ContentBlock>, block: ContentBlock) {
     content.push(block);
 }
 
-/// Request kind for a permission prompt about a tool of `kind`.
-pub fn request_kind(kind: &ToolKind) -> RequestKind {
-    match kind {
-        ToolKind::Execute => RequestKind::Command,
-        ToolKind::Edit | ToolKind::Delete | ToolKind::Move => RequestKind::FileChange,
-        ToolKind::Read => RequestKind::FileRead,
-        _ => RequestKind::Permission,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,7 +623,7 @@ mod tests {
         let second = s.begin_turn("two");
         assert_eq!(s.turns[1].status, TurnStatus::Queued);
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("for one")));
-        let ask = s.open_request(None, RequestKind::Permission, "ok?".into(), None, Vec::new(), Vec::new());
+        let ask = s.open_request(None, RequestKind::Approval { action: harness_contracts::ToolAction::Tool }, "ok?".into(), None, Vec::new(), Vec::new());
         assert_eq!(s.request(&ask).and_then(|r| r.turn_id.clone()), Some(first.clone()), "asked in the running turn");
         assert_eq!(s.end_turn(&first, TurnStatus::Completed, None), vec![ask.clone()], "what the turn still asked ends with it");
         assert_eq!((s.turns[1].status, s.thread.status), (TurnStatus::Running, ThreadStatus::Running));

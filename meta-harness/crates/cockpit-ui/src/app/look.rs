@@ -95,7 +95,8 @@ impl CockpitApp {
                             close |= ui.small_button(egui_phosphor::regular::X).on_hover_text("Close").clicked();
                         });
                     });
-                    let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell };
+                    let hints = self.key_hints();
+                    let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell, hints: &hints };
                     self.desk.inbox.render(ui, &mut cx, &mut self.desk.chat);
                     return;
                 }
@@ -111,7 +112,8 @@ impl CockpitApp {
                     self.desk.graph.render_card_context(ui, &id);
                 }
                 ui.separator();
-                let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell };
+                let hints = self.key_hints();
+                let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell, hints: &hints };
                 self.desk.spec.render(ui, &mut cx);
             });
         });

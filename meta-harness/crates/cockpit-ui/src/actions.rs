@@ -346,6 +346,9 @@ pub struct RunCx<'a> {
     /// The shell's own actions (moves, go-tos, the jump list), for views
     /// that put them on chips or toolbars.
     pub shell: &'a [Action],
+    /// Each action's key as bound now (`id`, its key), for views that show
+    /// the keys beside what they do (a request's answers).
+    pub hints: &'a [(String, String)],
 }
 
 /// A part of the UI that offers actions: what it can do right now, and running

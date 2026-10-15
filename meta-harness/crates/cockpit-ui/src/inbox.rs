@@ -153,6 +153,7 @@ impl InboxView {
         let parts = self.parts();
         let mut drawn = Vec::new();
         let (cursor, scroll) = (self.cursor, std::mem::take(&mut self.scroll));
+        let cursor_at = cursor;
         let mark = |ui: &mut egui::Ui, rect: egui::Rect, index: usize, drawn: &mut Vec<Spot>| {
             drawn.push(Spot { key: index.to_string(), rect });
             if index == cursor {
@@ -176,14 +177,26 @@ impl InboxView {
             mark(ui, says, 0, &mut drawn);
             if let (Some(thread), Some(request)) = (&shown.notification.thread, &shown.notification.request) {
                 ui.add_space(theme.space_sm);
-                if !chat.render_request_of(ui, cx.net, thread, request) {
-                    ui.label(RichText::new("Its request is gone (its session ended).").size(theme.text_body).color(colors().muted));
-                }
-                // The answers, each a part the cursor (and hints) can reach.
-                for (index, part) in parts.iter().enumerate() {
-                    if let Part::Answer { label, .. } = part {
-                        let row = ui.label(RichText::new(format!("{} {label}", icon::ARROW_BEND_DOWN_RIGHT)).size(theme.text_small).color(colors().muted)).rect;
-                        mark(ui, row, index, &mut drawn);
+                // The card's own answers are the cursor's parts (and the hints').
+                let cursor = match parts.get(cursor) {
+                    Some(Part::Answer { option, .. }) => Some(option.as_str()),
+                    _ => None,
+                };
+                match chat.render_request_of(ui, cx.net, thread, request, &crate::request_card::Shown { cursor, hints: cx.hints }) {
+                    Some(card) => {
+                        for (index, part) in parts.iter().enumerate() {
+                            if let Part::Answer { option, .. } = part
+                                && let Some((_, rect)) = card.rows.iter().find(|(o, _)| o == option)
+                            {
+                                drawn.push(Spot { key: index.to_string(), rect: *rect });
+                                if index == cursor_at && scroll {
+                                    ui.scroll_to_rect(*rect, Some(egui::Align::Center));
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        ui.label(RichText::new("Its request is gone (its session ended).").size(theme.text_body).color(colors().muted));
                     }
                 }
             }

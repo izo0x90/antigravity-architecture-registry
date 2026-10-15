@@ -62,7 +62,8 @@ impl CockpitApp {
                 ui.separator();
 
                 let ctx = ui.ctx().clone();
-                let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, slot: slot_idx, note: &mut self.note, shell };
+                let hints = self.key_hints();
+                let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, slot: slot_idx, note: &mut self.note, shell, hints: &hints };
                 match active_kind {
                     BufferKind::Chat => self.desk.chat.render(ui, &mut self.feedback, is_focused, &mut cx),
                     BufferKind::Code => self.desk.code.render(ui, &self.desk.net, &mut self.feedback, slot_idx),

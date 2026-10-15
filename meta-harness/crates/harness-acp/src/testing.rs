@@ -225,6 +225,23 @@ impl MockAgent {
             lock(&self.seen).permission = Some(outcome.clone());
             return say(cx, &format!("permission: {outcome}"));
         }
+        // As Google's Antigravity server asks a question (1.1.1, 1.3.0):
+        // a made-up tool call, then a permission request whose options are
+        // the answers, every one "allow once".
+        if text.contains("[ask-by-permission]") {
+            notify(cx, acp::SessionUpdate::ToolCall(acp::ToolCall::new("interaction_1a2b3c4d", "Which store?").status(acp::ToolCallStatus::Pending)))?;
+            let options = vec![
+                acp::PermissionOption::new("1", "Redis", acp::PermissionOptionKind::AllowOnce),
+                acp::PermissionOption::new("2", "Postgres", acp::PermissionOptionKind::AllowOnce),
+            ];
+            let request = acp::RequestPermissionRequest::new(SESSION, acp::ToolCallUpdate::new("interaction_1a2b3c4d", acp::ToolCallUpdateFields::new().title("Which store?")), options);
+            let outcome = match cx.send_request(request).block_task().await?.outcome {
+                acp::RequestPermissionOutcome::Selected(s) => s.option_id.to_string(),
+                _ => "cancelled".into(),
+            };
+            lock(&self.seen).permission = Some(outcome.clone());
+            return say(cx, &format!("answer: {outcome}"));
+        }
         if text.contains("[question]") {
             let schema: acp::ElicitationSchema = serde_json::from_value(serde_json::json!({
                 "type": "object",

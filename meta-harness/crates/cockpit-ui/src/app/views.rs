@@ -7,6 +7,7 @@ impl CockpitApp {
     pub(super) fn run_on(&mut self, kind: BufferKind, action: &Action, value: Option<String>, ctx: &egui::Context) {
         let slot = self.slot_of(kind);
         let shell = self.shell_actions();
+        let hints = self.key_hints();
         let provider: &mut dyn ActionProvider = match kind {
             BufferKind::Chat => &mut self.desk.chat,
             BufferKind::Code => &mut self.desk.code,
@@ -16,7 +17,13 @@ impl CockpitApp {
             BufferKind::Queue => &mut self.desk.queue,
             BufferKind::Inbox => &mut self.desk.inbox,
         };
-        provider.run(action, value, &mut RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell: &shell });
+        provider.run(action, value, &mut RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell: &shell, hints: &hints });
+    }
+
+    /// Each action's key as bound now, for views that show keys beside what
+    /// they do.
+    pub(super) fn key_hints(&self) -> Vec<(String, String)> {
+        self.bound_actions().iter().map(|b| (b.action.id.clone(), b.key_hint())).collect()
     }
 
     /// The place `kind` is at, in the slot showing it.

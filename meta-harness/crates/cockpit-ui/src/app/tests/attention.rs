@@ -35,7 +35,7 @@ fn waiting_app() -> (egui::Context, CockpitApp) {
         thread_id: ThreadId::new("t"),
         turn_id: None,
         item_id: None,
-        kind: RequestKind::Command,
+        kind: RequestKind::Approval { action: harness_contracts::ToolAction::Command },
         status: RequestStatus::Pending,
         title: "Run cargo test".into(),
         detail: None,

@@ -116,7 +116,7 @@ async fn full_turn_maps_every_update_and_waits_for_approval() {
 
     collect_until(&mut events, &mut seen, pending_request).await;
     let request = last_request(&seen);
-    assert_eq!(request.kind, RequestKind::FileChange);
+    assert_eq!(request.kind, RequestKind::Approval { action: harness_contracts::ToolAction::FileChange });
     assert_eq!(request.options.iter().map(|o| o.decision).collect::<Vec<_>>(), vec![ApprovalDecision::Accept, ApprovalDecision::AcceptForSession, ApprovalDecision::Decline]);
 
     session.respond(&request.id, RequestResponse { option_id: Some("always".into()), ..Default::default() }).await.unwrap();
@@ -145,7 +145,7 @@ async fn a_permission_answered_once_lets_the_agent_go_on() {
     let turn = session.start_turn(say("[permission]")).await.unwrap();
     collect_until(&mut events, &mut seen, pending_request).await;
     let request = last_request(&seen);
-    assert_eq!((request.kind, request.turn_id.as_ref()), (RequestKind::FileChange, Some(&turn)));
+    assert_eq!((request.kind, request.turn_id.as_ref()), (RequestKind::Approval { action: harness_contracts::ToolAction::FileChange }, Some(&turn)));
     let once = request.options.iter().find(|o| o.decision == ApprovalDecision::Accept).expect("a yes-once option");
     session.respond(&request.id, RequestResponse { option_id: Some(once.id.clone()), ..Default::default() }).await.unwrap();
     collect_until(&mut events, &mut seen, turn_ended(1)).await;
@@ -301,7 +301,7 @@ async fn questions_are_asked_and_their_answers_go_back_in_the_form() {
     session.start_turn(say("[question]")).await.unwrap();
     collect_until(&mut events, &mut seen, pending_request).await;
     let request = last_request(&seen);
-    assert_eq!(request.kind, RequestKind::UserInput);
+    assert_eq!(request.kind, RequestKind::Question);
     assert_eq!(request.questions.iter().map(|q| (q.header.as_str(), q.multi_select)).collect::<Vec<_>>(), [("Store", false), ("Checks", true)]);
     let answers = [("question_0", vec!["Postgres"]), ("question_1", vec!["test", "fmt"])].map(|(k, v)| (k.to_owned(), v.into_iter().map(String::from).collect())).into();
     session.respond(&request.id, RequestResponse { option_id: Some("submit".into()), answers }).await.unwrap();
@@ -394,4 +394,31 @@ async fn a_sessions_key_goes_to_its_agent_and_not_to_clients() {
     let text = serde_json::to_string(&shown).unwrap();
     assert!(!text.contains("secret") && !text.contains("hidden"), "{text}");
     assert!(text.contains("http://127.0.0.1:8080/api/mcp/sse"), "still says where: {text}");
+}
+
+/// Antigravity asks questions through permission requests (its pack says
+/// how to tell them); one is a question, and Full access never answers it.
+#[tokio::test]
+async fn a_question_asked_through_a_permission_request_waits_for_the_user_even_in_full_access() {
+    let agent = agent(MockSetup::default());
+    let antigravity = profile(&format!("{MODES}\n[questions]\npermission_tool_prefix = \"interaction_\"\n"));
+    let session = open_with(&agent, antigravity, config(RuntimeMode::FullAccess)).await;
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    session.start_turn(say("[ask-by-permission]")).await.unwrap();
+    collect_until(&mut events, &mut seen, pending_request).await;
+    let request = last_request(&seen);
+    assert_eq!(request.kind, RequestKind::Question, "a question, not an approval");
+    assert_eq!(request.options.iter().map(|o| (o.label.as_str(), o.decision)).collect::<Vec<_>>(), [("Redis", ApprovalDecision::Answer), ("Postgres", ApprovalDecision::Answer)]);
+    assert_eq!(agent.seen().permission, None, "not answered for the user");
+    session.respond(&request.id, RequestResponse { option_id: Some("2".into()), ..Default::default() }).await.unwrap();
+    collect_until(&mut events, &mut seen, turn_ended(1)).await;
+    assert_eq!(agent.seen().permission.as_deref(), Some("2"), "the user's answer goes back as its option");
+    // The same in Full access without the pack's rule: still a question (no deny among them).
+    let session = open_with(&agent, profile(MODES), config(RuntimeMode::FullAccess)).await;
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    session.start_turn(say("[ask-by-permission]")).await.unwrap();
+    collect_until(&mut events, &mut seen, pending_request).await;
+    assert_eq!(last_request(&seen).kind, RequestKind::Question);
 }

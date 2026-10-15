@@ -32,7 +32,7 @@ fn request(id: &str, status: RequestStatus) -> ClientEvent {
         thread_id: ThreadId::new("sub-t"),
         turn_id: None,
         item_id: None,
-        kind: RequestKind::Permission,
+        kind: RequestKind::Approval { action: harness_contracts::ToolAction::Tool },
         status,
         title: "Edit src/main.rs".into(),
         detail: None,

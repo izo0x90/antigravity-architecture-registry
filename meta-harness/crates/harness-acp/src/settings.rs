@@ -145,6 +145,10 @@ pub struct QuestionSettings {
     /// A field named a question's name plus this is that question's own
     /// answer box ("Other"), not a question of its own.
     pub custom_suffix: Option<String>,
+    /// A permission request on a tool call whose id starts with this is a
+    /// question (the harness asks its questions so): its options are the
+    /// answers, and it's never answered for the user.
+    pub permission_tool_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
