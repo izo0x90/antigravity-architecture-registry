@@ -31,8 +31,8 @@ impl CockpitApp {
             self.close_quick_look();
         }
         let now = ctx.input(|i| i.time);
-        let (slot, over) = (self.columns.focused(), self.columns.focused_kind());
-        self.quick_look = Some(QuickLook::open(Look::Attention(id), slot, over, self.used_pane(BufferKind::Spec).id, None, now));
+        let (slot, over) = (self.desk.columns.focused(), self.desk.columns.focused_kind());
+        self.quick_look = Some(QuickLook::open(Look::Attention(id), slot, over, self.desk.used_pane(BufferKind::Spec).id, None, now));
     }
 
     /// The shell's notification actions: the pickers, the next waiting, the
@@ -41,7 +41,7 @@ impl CockpitApp {
         use ShellCommand as S;
         let mut out = Vec::new();
         let now = crate::attention::now_ms();
-        let store = &self.chat.store;
+        let store = &self.desk.chat.store;
         let picker = |id: &str, label: &str, level: Level| {
             let list = crate::attention::list(store, Some(level));
             (!list.is_empty()).then(|| {
@@ -70,7 +70,7 @@ impl CockpitApp {
         let Some(id) = self.looked_at() else { return Vec::new() };
         let act = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::Act).importance(PRIMARY);
         let mut out = vec![act("attention.next", "Next notification", S::AttentionStep(1)), act("attention.prev", "Previous notification", S::AttentionStep(-1))];
-        let Some(n) = self.chat.store.notifications.get(id) else { return out };
+        let Some(n) = self.desk.chat.store.notifications.get(id) else { return out };
         if let Some(request) = self.pending_request(id) {
             for option in &request.options {
                 let action = Action::new(format!("attention.answer.{}", option.id), format!("{}: {}", option.label, request.title), LookAnswer(option.id.clone()))
@@ -92,14 +92,14 @@ impl CockpitApp {
 
     /// The request a notification waits on, while it's pending.
     fn pending_request(&self, id: &NotificationId) -> Option<&harness_contracts::RuntimeRequest> {
-        let n = self.chat.store.notifications.get(id)?;
-        let request = self.chat.store.threads.get(n.thread.as_ref()?)?.request(n.request.as_ref()?)?;
+        let n = self.desk.chat.store.notifications.get(id)?;
+        let request = self.desk.chat.store.threads.get(n.thread.as_ref()?)?.request(n.request.as_ref()?)?;
         (request.status == RequestStatus::Pending).then_some(request)
     }
 
     pub(super) fn run_attention(&mut self, command: ShellCommand, value: Option<String>, ctx: &egui::Context) {
         match command {
-            ShellCommand::AttentionNextWaiting => match crate::attention::list(&self.chat.store, Some(Level::Waiting)).first() {
+            ShellCommand::AttentionNextWaiting => match crate::attention::list(&self.desk.chat.store, Some(Level::Waiting)).first() {
                 Some(n) => self.open_attention(n.id.clone(), ctx),
                 None => self.note = Some("Nothing is waiting on you.".into()),
             },
@@ -110,26 +110,26 @@ impl CockpitApp {
             }
             ShellCommand::AttentionStep(by) => {
                 let Some(from) = self.looked_at().cloned() else { return };
-                match crate::attention::step(&self.chat.store, &from, by) {
+                match crate::attention::step(&self.desk.chat.store, &from, by) {
                     Some(next) => self.open_attention(next, ctx),
                     None => self.note = Some(if by > 0 { "That was the last one." } else { "That was the first one." }.into()),
                 }
             }
             ShellCommand::AttentionOpenSlot => {
-                let Some(slot) = self.looked_at().and_then(|id| self.chat.store.notifications.get(id)).and_then(|n| n.slot.clone()) else { return };
+                let Some(slot) = self.looked_at().and_then(|id| self.desk.chat.store.notifications.get(id)).and_then(|n| n.slot.clone()) else { return };
                 self.close_quick_look();
                 let from = self.jump_here();
                 self.focus_kind(BufferKind::Chat);
                 self.use_focused();
-                self.chat.ui.slot = slot;
-                self.chat.ui.cursor = None;
+                self.desk.chat.ui.slot = slot;
+                self.desk.chat.ui.cursor = None;
                 self.after_jump(from);
             }
             ShellCommand::AttentionDismiss => {
                 let Some(id) = self.looked_at().cloned() else { return };
-                let next = crate::attention::step(&self.chat.store, &id, 1);
+                let next = crate::attention::step(&self.desk.chat.store, &id, 1);
                 let later = self.notes_later.clone();
-                self.net.dismiss_notification(&id, ctx.clone(), move |r| {
+                self.desk.net.dismiss_notification(&id, ctx.clone(), move |r| {
                     if let (Err(e), Ok(mut notes)) = (r, later.lock()) {
                         notes.push(format!("It couldn't be put away: {}", e.message));
                     }
@@ -152,7 +152,7 @@ impl CockpitApp {
             self.note = Some("Already answered.".into());
             return;
         };
-        self.chat.answer(&self.net, ctx, &thread, &request, option);
+        self.desk.chat.answer(&self.desk.net, ctx, &thread, &request, option);
     }
 
     /// The quick look on a notification: where it's from, what it says, the
@@ -164,9 +164,9 @@ impl CockpitApp {
         let key = |action: &str| self.bound_actions().into_iter().find(|b| b.action.id == action).map(|b| b.key_hint()).unwrap_or_default();
         let (next, prev, back) = (key("attention.next"), key("attention.prev"), self.config.keymap.back.label());
         let (open_key, dismiss_key) = (key("attention.open_slot"), key("attention.dismiss"));
-        let all = crate::attention::list(&self.chat.store, None);
+        let all = crate::attention::list(&self.desk.chat.store, None);
         let at = all.iter().position(|n| &n.id == id);
-        let shown = self.chat.store.notifications.get(id).cloned();
+        let shown = self.desk.chat.store.notifications.get(id).cloned();
         let (mut close, mut open_slot, mut dismiss) = (false, false, false);
         ui.horizontal(|ui| {
             let (what, color) = match shown.as_ref().map(|n| n.level) {
@@ -189,8 +189,8 @@ impl CockpitApp {
             return close;
         };
         let now = crate::attention::now_ms();
-        let harness = n.slot.as_ref().and_then(|s| self.chat.store.slots.get(s)).and_then(|s| s.instance_id.as_ref()).and_then(|i| self.chat.store.instances.get(i)).map(|i| i.display_name.clone());
-        let from = [Some(crate::attention::detail(&n, &self.chat.store, now)), harness].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+        let harness = n.slot.as_ref().and_then(|s| self.desk.chat.store.slots.get(s)).and_then(|s| s.instance_id.as_ref()).and_then(|i| self.desk.chat.store.instances.get(i)).map(|i| i.display_name.clone());
+        let from = [Some(crate::attention::detail(&n, &self.desk.chat.store, now)), harness].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         ui.label(RichText::new(from).size(theme.text_small).color(colors().muted));
         ui.label(RichText::new(&n.title).strong().size(theme.text_title).color(colors().text_strong));
         egui::ScrollArea::vertical().id_salt("attention_body").auto_shrink([false, true]).max_height(ui.available_height() - 40.0).show(ui, |ui| {
@@ -199,11 +199,11 @@ impl CockpitApp {
             }
             if let (Some(thread), Some(request)) = (&n.thread, &n.request) {
                 ui.add_space(theme.space_sm);
-                if !self.chat.render_request_of(ui, &self.net, thread, request) {
+                if !self.desk.chat.render_request_of(ui, &self.desk.net, thread, request) {
                     ui.label(RichText::new("Its request is gone (its session ended).").size(theme.text_body).color(colors().muted));
                 }
             }
-            if let Some(said) = n.thread.as_ref().and_then(|t| self.chat.last_said(t)).filter(|s| n.detail.as_deref() != Some(s.as_str())) {
+            if let Some(said) = n.thread.as_ref().and_then(|t| self.desk.chat.last_said(t)).filter(|s| n.detail.as_deref() != Some(s.as_str())) {
                 ui.add_space(theme.space_sm);
                 ui.label(RichText::new("It said last").size(theme.text_small).color(colors().muted));
                 let said: String = said.chars().take(1200).collect();
@@ -229,7 +229,7 @@ impl CockpitApp {
     /// (each hidden at none); clicked, its picker.
     pub(super) fn render_attention_counters(&mut self, ui: &mut egui::Ui) {
         use egui_phosphor::regular as icon;
-        let (waiting, updates) = crate::attention::counts(&self.chat.store);
+        let (waiting, updates) = crate::attention::counts(&self.desk.chat.store);
         let theme = crate::theme::look();
         let mut pick = None;
         if waiting > 0 {
@@ -257,11 +257,11 @@ impl CockpitApp {
     /// its item.
     pub(super) fn say_seen(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
-        let drawn: Vec<SlotId> = self.chat.drawn.iter().cloned().collect();
+        let drawn: Vec<SlotId> = self.desk.chat.drawn.iter().cloned().collect();
         for slot in drawn {
-            let has_updates = self.chat.store.notifications.values().any(|n| n.level == Level::Update && n.slot.as_ref() == Some(&slot));
+            let has_updates = self.desk.chat.store.notifications.values().any(|n| n.level == Level::Update && n.slot.as_ref() == Some(&slot));
             if has_updates && self.seen.due(&slot, now, SEEN_EVERY) {
-                self.net.notifications_seen(&slot, ctx.clone(), |_| {});
+                self.desk.net.notifications_seen(&slot, ctx.clone(), |_| {});
             }
         }
         if let Some(id) = self.alerts.take_clicked() {

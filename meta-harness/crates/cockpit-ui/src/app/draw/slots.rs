@@ -10,7 +10,7 @@ impl CockpitApp {
     }
 
     pub fn render_slot(&mut self, slot_idx: usize, ui: &mut egui::Ui, shell: &[Action], tab_keys: &[String]) {
-        let is_focused = self.columns.focused() == slot_idx;
+        let is_focused = self.desk.columns.focused() == slot_idx;
         let border_color = if is_focused { colors().focus } else { colors().border };
 
         let slot_id = format!("slot_{}", slot_idx + 1);
@@ -21,7 +21,7 @@ impl CockpitApp {
             ui.set_height(ui.available_height());
 
             ui.vertical(|ui| {
-                let active_kind = self.columns.kind(slot_idx);
+                let active_kind = self.desk.columns.kind(slot_idx);
                 let is_compact = ui.available_width() < 340.0;
 
                 // Quiet chrome: the slot's number, then a tab per view as an
@@ -31,7 +31,7 @@ impl CockpitApp {
                     let number_color = if is_focused { colors().focus } else { colors().faint };
                     let slot_label = ui.add(egui::Label::new(RichText::new((slot_idx + 1).to_string()).strong().monospace().size(crate::theme::look().text_body).color(number_color)).sense(egui::Sense::click()));
                     if slot_label.on_hover_text(format!("Slot {}: {}", slot_idx + 1, active_kind.title().to_lowercase())).clicked() {
-                        self.columns.focus(slot_idx);
+                        self.desk.columns.focus(slot_idx);
                     }
                     for (n, kind) in BufferKind::ALL.into_iter().enumerate() {
                         let title = kind.title();
@@ -43,13 +43,13 @@ impl CockpitApp {
                         };
                         let tab = ui.selectable_label(active_kind == kind, label).on_hover_text(tip);
                         if tab.clicked() {
-                            let pane = self.columns.show(slot_idx, kind);
-                            self.columns.focus(slot_idx);
+                            let pane = self.desk.columns.show(slot_idx, kind);
+                            self.desk.columns.focus(slot_idx);
                             self.swap_in(pane);
                         }
                         self.feedback.register_inspectable(ui, &format!("slot_{}:tab:{}", slot_idx + 1, kind.name()), tab.rect);
                     }
-                    if self.columns.len() > 1 {
+                    if self.desk.columns.len() > 1 {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let close = self.bound_actions().into_iter().find(|b| b.action.id == "column.close").map(|b| b.key_hint()).unwrap_or_default();
                             if ui.small_button(egui_phosphor::regular::X).on_hover_text(format!("Close this column (its view is hidden, not lost; {close} closes the focused one)")).clicked() {
@@ -62,17 +62,17 @@ impl CockpitApp {
                 ui.separator();
 
                 let ctx = ui.ctx().clone();
-                let mut cx = RunCx { net: &self.net, ctx: &ctx, input_mode: &mut self.input_mode, slot: slot_idx, note: &mut self.note, shell };
+                let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, slot: slot_idx, note: &mut self.note, shell };
                 match active_kind {
-                    BufferKind::Chat => self.chat.render(ui, &mut self.feedback, is_focused, &mut cx),
-                    BufferKind::Code => self.code.render(ui, &self.net, &mut self.feedback, slot_idx),
+                    BufferKind::Chat => self.desk.chat.render(ui, &mut self.feedback, is_focused, &mut cx),
+                    BufferKind::Code => self.desk.code.render(ui, &self.desk.net, &mut self.feedback, slot_idx),
                     BufferKind::Graph => {
                         let pan_held = ui.input(|i| self.config.keymap.leader.key_down(i));
-                        self.graph.render(ui, &mut self.feedback, slot_idx, pan_held, &mut cx);
+                        self.desk.graph.render(ui, &mut self.feedback, slot_idx, pan_held, &mut cx);
                     }
-                    BufferKind::Tree => self.tree.render(ui, &self.net, &mut self.feedback, slot_idx),
-                    BufferKind::Spec => self.spec.render(ui, &mut cx),
-                    BufferKind::Queue => self.queue.render(ui, &mut cx),
+                    BufferKind::Tree => self.desk.tree.render(ui, &self.desk.net, &mut self.feedback, slot_idx),
+                    BufferKind::Spec => self.desk.spec.render(ui, &mut cx),
+                    BufferKind::Queue => self.desk.queue.render(ui, &mut cx),
                 }
             });
         });
@@ -85,7 +85,7 @@ impl CockpitApp {
             && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
             && ui.min_rect().contains(pos)
         {
-            self.columns.focus(slot_idx);
+            self.desk.columns.focus(slot_idx);
         }
     }
 
@@ -101,7 +101,7 @@ impl CockpitApp {
         let bound = self.palette_actions();
         // A view asked for an action's picker (e.g. Resume once sessions loaded).
         for kind in BufferKind::ALL {
-            if let Some(id) = self.provider_mut(kind).take_palette_request()
+            if let Some(id) = self.desk.provider_mut(kind).take_palette_request()
                 && let Some(action) = bound.iter().find(|b| b.action.id == id)
             {
                 self.open_palette(Some(action));
@@ -111,7 +111,7 @@ impl CockpitApp {
         if let Some(ask) = self.palette.take_search()
             && let Origin::View(kind) = ask.origin
         {
-            self.provider_mut(kind).search(&ask.action, &ask.query);
+            self.desk.provider_mut(kind).search(&ask.action, &ask.query);
         }
         if let Some(invocation) = picked {
             self.input_mode = InputMode::Normal;

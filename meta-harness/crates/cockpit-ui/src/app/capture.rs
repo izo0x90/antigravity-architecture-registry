@@ -21,24 +21,24 @@ pub(super) fn hint_chip(item: egui::Rect, size: egui::Vec2, slot: egui::Rect, ta
 impl CockpitApp {
     pub(super) fn start_hint(&mut self, open: bool) {
         let kind = self.focused_kind();
-        let spots = self.view(kind).spots();
+        let spots = self.desk.view(kind).spots();
         let chars: Vec<char> = self.config.keymap.hint_chars.chars().collect();
         let labels = hint_labels(spots.len(), &chars);
         if labels.is_empty() {
             self.note = Some("Nothing on screen to label.".into());
             return;
         }
-        self.start_capture(Capture::Hint(Hinting { slot: self.columns.focused(), kind, open, typed: String::new(), labels: labels.into_iter().zip(spots).collect() }));
+        self.start_capture(Capture::Hint(Hinting { slot: self.desk.columns.focused(), kind, open, typed: String::new(), labels: labels.into_iter().zip(spots).collect() }));
     }
 
     /// A hint label was typed (or tapped): move there, or open it.
     pub(super) fn hint_hit(&mut self, kind: BufferKind, key: &str, open: bool, ctx: &egui::Context) {
         let before = self.jump_here();
         if open {
-            let step = self.view_mut(kind).open_item(key);
+            let step = self.desk.view_mut(kind).open_item(key);
             self.take_step(step, before, ctx);
         } else {
-            self.view_mut(kind).move_to(key);
+            self.desk.view_mut(kind).move_to(key);
             self.after_jump(before);
         }
     }
@@ -68,26 +68,26 @@ impl CockpitApp {
             Capture::Search(mut search) => {
                 let kind = search.kind;
                 if back {
-                    self.view_mut(kind).on_search(SearchEvent::Cancelled);
-                    self.view_mut(kind).restore(&search.before.place);
-                    self.view_mut(kind).restore_view();
+                    self.desk.view_mut(kind).on_search(SearchEvent::Cancelled);
+                    self.desk.view_mut(kind).restore(&search.before.place);
+                    self.desk.view_mut(kind).restore_view();
                     return false;
                 }
                 for c in typed {
                     match c {
                         '\n' | '\r' => {
-                            self.view_mut(kind).on_search(SearchEvent::Confirmed);
+                            self.desk.view_mut(kind).on_search(SearchEvent::Confirmed);
                             // Only a search that finds something stays for n/N.
-                            let found = !rank_matches(&self.view(kind).items(), &search.query).is_empty();
+                            let found = !rank_matches(&self.desk.view(kind).items(), &search.query).is_empty();
                             if found {
-                                self.searches.insert(kind, search.query.clone());
-                                self.missed.remove(&kind);
+                                self.desk.searches.insert(kind, search.query.clone());
+                                self.desk.missed.remove(&kind);
                             } else {
-                                self.searches.remove(&kind);
+                                self.desk.searches.remove(&kind);
                                 if search.query.is_empty() {
-                                    self.missed.remove(&kind);
+                                    self.desk.missed.remove(&kind);
                                 } else {
-                                    self.missed.insert(kind, search.query.clone());
+                                    self.desk.missed.insert(kind, search.query.clone());
                                 }
                             }
                             self.after_jump(search.before);
@@ -101,15 +101,15 @@ impl CockpitApp {
                     }
                 }
                 // Incremental: the first match shows while typing.
-                self.view_mut(kind).on_search(SearchEvent::Typing(&search.query));
-                let items = self.view(kind).items();
+                self.desk.view_mut(kind).on_search(SearchEvent::Typing(&search.query));
+                let items = self.desk.view(kind).items();
                 match rank_matches(&items, &search.query).first() {
-                    Some(&first) => self.view_mut(kind).move_to(&items[first].key),
+                    Some(&first) => self.desk.view_mut(kind).move_to(&items[first].key),
                     None => {
                         // No match (yet): back where it was, looking as it did.
-                        self.view_mut(kind).restore(&search.before.place);
-                        self.view_mut(kind).restore_view();
-                        self.view_mut(kind).save_view();
+                        self.desk.view_mut(kind).restore(&search.before.place);
+                        self.desk.view_mut(kind).restore_view();
+                        self.desk.view_mut(kind).save_view();
                     }
                 }
                 self.capture = Some(Capture::Search(search));
@@ -123,10 +123,10 @@ impl CockpitApp {
                 }
                 let Some(letter) = typed.iter().copied().find(|c| c.is_alphanumeric()).filter(|_| !back) else { return false };
                 if capture == Capture::MarkSet {
-                    self.marks.insert(letter, self.jump_here());
+                    self.desk.marks.insert(letter, self.jump_here());
                     self.note = Some(format!("Mark {letter} set."));
                 } else {
-                    match self.marks.get(&letter).cloned() {
+                    match self.desk.marks.get(&letter).cloned() {
                         Some(mark) => {
                             let before = self.jump_here();
                             self.restore_jump(mark, ctx);
@@ -143,26 +143,26 @@ impl CockpitApp {
     /// The next (or previous) match of the view's last search.
     pub(super) fn search_step(&mut self, forward: bool, count: usize) {
         let kind = self.focused_kind();
-        let Some(query) = self.searches.get(&kind).cloned() else {
-            self.note = Some(match self.missed.get(&kind) {
+        let Some(query) = self.desk.searches.get(&kind).cloned() else {
+            self.note = Some(match self.desk.missed.get(&kind) {
                 Some(missed) => format!("No match for {missed} here."),
                 None => "Nothing searched here yet (/).".into(),
             });
             return;
         };
-        let items = self.view(kind).items();
+        let items = self.desk.view(kind).items();
         let found = rank_matches(&items, &query);
         if found.is_empty() {
             self.note = Some(format!("No match for {query}."));
             return;
         }
-        let mut at = self.view(kind).cursor_key().and_then(|k| items.iter().position(|i| i.key == k));
+        let mut at = self.desk.view(kind).cursor_key().and_then(|k| items.iter().position(|i| i.key == k));
         for _ in 0..count {
             at = step_match(&found, at, forward);
         }
         if let Some(i) = at {
             let before = self.jump_here();
-            self.view_mut(kind).move_to(&items[i].key);
+            self.desk.view_mut(kind).move_to(&items[i].key);
             self.after_jump(before);
         }
     }
@@ -171,14 +171,14 @@ impl CockpitApp {
     /// the cursor is among the view's last search's matches.
     pub(super) fn search_status(&self) -> Option<(String, bool)> {
         if let Some(Capture::Search(search)) = &self.capture {
-            let found = rank_matches(&self.view(search.kind).items(), &search.query).len();
+            let found = rank_matches(&self.desk.view(search.kind).items(), &search.query).len();
             return Some((format!("/{}| {found} {}", search.query, if found == 1 { "match" } else { "matches" }), true));
         }
         let kind = self.focused_kind();
-        let query = self.searches.get(&kind)?;
-        let items = self.view(kind).items();
+        let query = self.desk.searches.get(&kind)?;
+        let items = self.desk.view(kind).items();
         let found = rank_matches(&items, query);
-        let cursor = self.view(kind).cursor_key()?;
+        let cursor = self.desk.view(kind).cursor_key()?;
         let at = found.iter().position(|i| items[*i].key == cursor)?;
         Some((format!("/{query} {}/{}", at + 1, found.len()), false))
     }

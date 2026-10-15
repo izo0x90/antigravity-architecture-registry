@@ -6,17 +6,17 @@ impl CockpitApp {
     /// Runs the calls from outside that came since the last frame.
     pub(super) fn serve_calls(&mut self, ctx: &egui::Context) {
         use crate::remote::Call;
-        for (call, respond) in self.remote.take(ctx, &self.net) {
+        for (call, respond) in self.desk.remote.take(ctx, &self.desk.net) {
             match call {
-                Call::Read => self.remote.answer_screen(respond),
+                Call::Read => self.desk.remote.answer_screen(respond),
                 Call::Actions => respond(Ok(self.actions_listed())),
                 Call::Run { id, value } => match self.run_named(&id, value, ctx) {
-                    Ok(()) => self.remote.answer_ran(respond),
+                    Ok(()) => self.desk.remote.answer_ran(respond),
                     Err(e) => respond(Err(e)),
                 },
-                Call::Click { text, x, y } => self.remote.click(text, x.zip(y).map(|(x, y)| egui::pos2(x, y)), respond),
-                Call::Type { text } => self.remote.type_text(text, respond),
-                Call::Keys { keys } => self.remote.keys(&keys, respond),
+                Call::Click { text, x, y } => self.desk.remote.click(text, x.zip(y).map(|(x, y)| egui::pos2(x, y)), respond),
+                Call::Type { text } => self.desk.remote.type_text(text, respond),
+                Call::Keys { keys } => self.desk.remote.keys(&keys, respond),
             }
         }
     }
@@ -79,10 +79,10 @@ impl CockpitApp {
 
     /// The app's state as a read from outside reports it.
     pub(super) fn remote_status(&self) -> crate::remote::Status {
-        let focused = self.columns.focused();
+        let focused = self.desk.columns.focused();
         crate::remote::Status {
             mode: format!("{:?}", self.input_mode),
-            columns: self.columns.panes().iter().enumerate().map(|(i, p)| serde_json::json!({ "column": i + 1, "view": self.describe(*p), "focused": i == focused })).collect(),
+            columns: self.desk.columns.panes().iter().enumerate().map(|(i, p)| serde_json::json!({ "column": i + 1, "view": self.describe(*p), "focused": i == focused })).collect(),
             note: self.note.clone(),
             leader: (self.input_mode == InputMode::Leader).then(|| self.leader_path.iter().collect()),
             palette: self.palette.is_open(),

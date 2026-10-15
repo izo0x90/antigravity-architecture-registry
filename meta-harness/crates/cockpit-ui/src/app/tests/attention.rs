@@ -25,10 +25,10 @@ fn note(id: &str, kind: NotificationKind, slot: &str, request: Option<&str>, at_
 /// approval and a question, and the reviewer's finished turn.
 fn waiting_app() -> (egui::Context, CockpitApp) {
     let (ctx, mut app) = full_app();
-    app.chat = crate::chat::tests::conversation();
+    app.desk.chat = crate::chat::tests::conversation();
     let mut sub = crate::chat::tests::lead(None);
     (sub.id, sub.role, sub.name) = (SlotId::new("sub-1"), "sub".into(), "reviewer".into());
-    app.chat.process_event(ClientEvent::SlotUpdated { slot: sub });
+    app.desk.chat.process_event(ClientEvent::SlotUpdated { slot: sub });
     let option = |id: &str, decision, label: &str| ApprovalOption { id: id.into(), decision, label: label.into(), warning: None };
     let request = RuntimeRequest {
         id: RequestId::new("r1"),
@@ -43,16 +43,16 @@ fn waiting_app() -> (egui::Context, CockpitApp) {
         questions: Vec::new(),
         response: None,
     };
-    app.chat.process_event(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request } });
+    app.desk.chat.process_event(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request } });
     for event in [note("req:r1", NotificationKind::Approval, "lead", Some("r1"), 1), note("req:r2", NotificationKind::Question, "lead", Some("r2"), 2), note("turn:u1", NotificationKind::TurnFinished, "sub-1", None, 3)] {
-        app.chat.process_event(event);
+        app.desk.chat.process_event(event);
     }
     focus(&ctx, &mut app, BufferKind::Graph);
     (ctx, app)
 }
 
 fn sent(app: &CockpitApp) -> Vec<String> {
-    std::mem::take(&mut *app.net.sent.lock().unwrap())
+    std::mem::take(&mut *app.desk.net.sent.lock().unwrap())
 }
 
 fn looked_at(app: &CockpitApp) -> Option<&str> {
@@ -96,10 +96,10 @@ fn in_the_quick_look_n_and_shift_n_go_through_them_and_y_answers_its_request() {
     keys(&ctx, &mut app, "y");
     assert_eq!(sent(&app), ["POST /api/threads/t/requests/r1"], "y answers its request, as in the chat");
     // Answered (the server says so): the look says it's handled.
-    let mut answered = app.chat.store.threads[&ThreadId::new("t")].request(&RequestId::new("r1")).unwrap().clone();
+    let mut answered = app.desk.chat.store.threads[&ThreadId::new("t")].request(&RequestId::new("r1")).unwrap().clone();
     answered.status = RequestStatus::Resolved;
-    app.chat.process_event(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request: answered } });
-    app.chat.process_event(ClientEvent::NotificationUpdated { notification: Notification { state: NotificationState::Done, ..app.chat.store.notifications[&NotificationId::new("req:r1")].clone() } });
+    app.desk.chat.process_event(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request: answered } });
+    app.desk.chat.process_event(ClientEvent::NotificationUpdated { notification: Notification { state: NotificationState::Done, ..app.desk.chat.store.notifications[&NotificationId::new("req:r1")].clone() } });
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("Already handled"), "{text}");
     keys(&ctx, &mut app, "y");
@@ -117,7 +117,7 @@ fn the_look_opens_its_chat_and_puts_one_away() {
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.updates","value":"turn:u1"}"#).unwrap();
     keys(&ctx, &mut app, "o");
     frame(&ctx, &mut app, vec![]);
-    assert_eq!((app.quick_look.is_none(), app.focused_kind(), app.chat.ui.slot.as_str()), (true, BufferKind::Chat, "sub-1"), "the reviewer's chat");
+    assert_eq!((app.quick_look.is_none(), app.focused_kind(), app.desk.chat.ui.slot.as_str()), (true, BufferKind::Chat, "sub-1"), "the reviewer's chat");
 }
 
 #[test]
@@ -127,14 +127,14 @@ fn a_chat_on_screen_says_its_updates_were_seen_now_and_then() {
     frame_at(&ctx, &mut app, vec![], 10.0);
     assert!(!sent(&app).iter().any(|s| s.contains("seen")), "the chat isn't on screen");
     focus(&ctx, &mut app, BufferKind::Chat);
-    app.chat.ui.slot = SlotId::new("sub-1");
+    app.desk.chat.ui.slot = SlotId::new("sub-1");
     frame_at(&ctx, &mut app, vec![], 20.0);
     frame_at(&ctx, &mut app, vec![], 20.5);
     let seen: Vec<String> = sent(&app).into_iter().filter(|s| s.contains("seen")).collect();
     assert_eq!(seen, ["POST /api/notifications/seen"], "once, not every frame");
     frame_at(&ctx, &mut app, vec![], 23.0);
     assert_eq!(sent(&app).iter().filter(|s| s.contains("seen")).count(), 1, "again after a while, while it has updates");
-    app.chat.process_event(ClientEvent::NotificationUpdated { notification: Notification { state: NotificationState::Dismissed, ..app.chat.store.notifications[&NotificationId::new("turn:u1")].clone() } });
+    app.desk.chat.process_event(ClientEvent::NotificationUpdated { notification: Notification { state: NotificationState::Dismissed, ..app.desk.chat.store.notifications[&NotificationId::new("turn:u1")].clone() } });
     frame_at(&ctx, &mut app, vec![], 30.0);
     assert!(!sent(&app).iter().any(|s| s.contains("seen")), "none left: nothing said");
 }

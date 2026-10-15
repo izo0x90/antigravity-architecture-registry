@@ -21,17 +21,17 @@ impl CockpitApp {
         for cols in 1..=max {
             actions.push(admin(format!("layout.{cols}"), format!("{cols}-column layout"), S::SetLayout(cols)));
         }
-        actions.push(admin("column.add".into(), "Add a column".into(), S::SetLayout(self.columns.len() + 1)));
+        actions.push(admin("column.add".into(), "Add a column".into(), S::SetLayout(self.desk.columns.len() + 1)));
         actions.push(admin("column.close".into(), "Close this column (its view is hidden)".into(), S::CloseColumn));
         // Every open view, to show here: on screen (and where) or hidden.
         let views: Vec<Choice> = self
-            .columns
+            .desk.columns
             .panes()
             .iter()
             .enumerate()
             .map(|(slot, p)| (*p, format!("column {}", slot + 1)))
-            .chain(self.columns.put_away().map(|p| (p, "hidden".to_owned())))
-            .map(|(p, where_)| Choice::new(format!("{}:{}", p.kind.name(), p.id), self.describe(p)).detail(Some(where_)).current(p == self.columns.focused_pane()))
+            .chain(self.desk.columns.put_away().map(|p| (p, "hidden".to_owned())))
+            .map(|(p, where_)| Choice::new(format!("{}:{}", p.kind.name(), p.id), self.describe(p)).detail(Some(where_)).current(p == self.desk.columns.focused_pane()))
             .collect();
         actions.push(Action::new("buffer.list", "Open views: show one here", S::PickView).param(Param::Choice(views)).group(Group::View).importance(SECONDARY));
         actions.push(admin("buffer.delete".into(), "Delete this column's view (for good)".into(), S::DeleteView));
@@ -51,7 +51,7 @@ impl CockpitApp {
         actions.push(
             Action::new("cockpit.agents", "Let agents drive the cockpit", S::Agents)
                 .detail("Agents read the screen and run actions through the server's cockpit tools, as you would")
-                .param(Param::Toggle { on: self.remote.agents })
+                .param(Param::Toggle { on: self.desk.remote.agents })
                 .group(Group::Act)
                 .importance(MINOR),
         );
@@ -59,7 +59,7 @@ impl CockpitApp {
         let index = |id: &str, label: &str, op: IndexOp| Action::new(id, label, S::Index(op)).group(Group::Act).importance(MINOR);
         actions.push(index("index.changed", "Re-read the code that changed", IndexOp::Changed));
         actions.push(index("index.rebuild", "Rebuild the index from scratch", IndexOp::Rebuild));
-        actions.push(index("index.file", &format!("Re-read {}", self.code.current_file), IndexOp::File));
+        actions.push(index("index.file", &format!("Re-read {}", self.desk.code.current_file), IndexOp::File));
         actions.extend(self.nav_actions());
         actions
     }
@@ -106,9 +106,9 @@ impl CockpitApp {
             K::Queue => ("Show why it failed", "Hide that again"),
             K::Chat => ("Open the file it points to", "Follow the latest again"),
         };
-        let enter = self.view(kind).enter_label().unwrap_or_else(|| enter.to_owned());
+        let enter = self.desk.view(kind).enter_label().unwrap_or_else(|| enter.to_owned());
         out.push(nav("nav.enter", &enter, S::Enter).importance(PRIMARY).when(When::Enter));
-        let leave = self.view(kind).leave_label().unwrap_or_else(|| leave.to_owned());
+        let leave = self.desk.view(kind).leave_label().unwrap_or_else(|| leave.to_owned());
         out.push(nav("nav.leave", &leave, S::Leave).importance(SECONDARY).when(When::Leave));
         out.push(nav("nav.hint", "Jump to something on screen", S::Hint { open: false }).importance(PRIMARY));
         out.push(nav("nav.hint_open", "Open something on screen", S::Hint { open: true }).importance(SECONDARY).icon(egui_phosphor::regular::CURSOR_CLICK));
@@ -138,8 +138,8 @@ impl CockpitApp {
         if kind != K::Tree {
             out.push(go("goto.tree", "Show it in the outline", GoTo::Tree, When::Component, MINOR));
         }
-        if kind != K::Queue && self.queue.plan.is_some() {
-            let has_job = self.view(kind).target().and_then(|t| t.component().cloned()).is_none_or(|id| self.queue.has_job(&id));
+        if kind != K::Queue && self.desk.queue.plan.is_some() {
+            let has_job = self.desk.view(kind).target().and_then(|t| t.component().cloned()).is_none_or(|id| self.desk.queue.has_job(&id));
             out.push(go("goto.queue", "Go to its queue job", GoTo::Queue, if has_job { When::Component } else { When::Unavailable }, MINOR));
         }
         out.push(go("goto.uses", "Go to a use", GoTo::Uses, When::Reaches(GoTo::Uses), SECONDARY));
@@ -149,7 +149,7 @@ impl CockpitApp {
         out.push(go("goto.members", "Go to a member", GoTo::Members, When::Reaches(GoTo::Members), MINOR));
         out.push(go("goto.implements", "Go to what it implements", GoTo::Implements, When::Reaches(GoTo::Implements), MINOR));
         out.push(go("goto.flows", "Follow its data flow", GoTo::Flows, When::Reaches(GoTo::Flows), MINOR));
-        if let Some(choosing) = &self.choosing {
+        if let Some(choosing) = &self.desk.choosing {
             let name = |id: &ComponentId| self.component_name(id);
             let choices = choosing.candidates.iter().map(|c| Choice::new(c.id.as_str(), name(&c.id)).detail(Some(c.id.to_string()))).collect();
             out.push(Action::new("goto.pick", format!("Go to which {}?", choosing.op.one()), S::GotoPick).param(Param::Choice(choices)).group(Group::GoTo));
@@ -179,7 +179,7 @@ impl CockpitApp {
         #[cfg(test)]
         self.gathered.set(self.gathered.get() + 1);
         let focused = self.focused_kind();
-        let view = |kind: BufferKind, all: bool| self.provider(kind).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(kind), a));
+        let view = |kind: BufferKind, all: bool| self.desk.provider(kind).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(kind), a));
         // The quick look's notification first: its keys win while it's open.
         let mut actions: Vec<(Origin, Action)> = self.looked_at_actions().into_iter().map(|a| (Origin::Shell, a)).collect();
         actions.extend(view(focused, true));
@@ -221,7 +221,7 @@ impl CockpitApp {
         let mut out = self.bound_actions();
         let focused = self.focused_kind();
         for kind in BufferKind::ALL.into_iter().filter(|k| *k != focused) {
-            for mut action in self.provider(kind).actions().into_iter().filter(|a| a.scope == Scope::Focused) {
+            for mut action in self.desk.provider(kind).actions().into_iter().filter(|a| a.scope == Scope::Focused) {
                 action.label = format!("{}{} · {}", &kind.title()[..1], kind.title()[1..].to_lowercase(), action.label);
                 out.push(Bound { action, origin: Origin::View(kind), leader: None, keys: Vec::new() });
             }
@@ -309,16 +309,16 @@ impl CockpitApp {
             | ShellCommand::AttentionDismiss
             | ShellCommand::BrowserAlerts => self.run_attention(command, value, ctx),
             ShellCommand::FocusSlot(slot) => {
-                self.columns.focus(slot);
+                self.desk.columns.focus(slot);
             }
-            ShellCommand::CycleSlot(dir) => self.columns.cycle(dir),
+            ShellCommand::CycleSlot(dir) => self.desk.columns.cycle(dir),
             ShellCommand::ShowBuffer(kind) => {
-                let pane = self.columns.show(self.columns.focused(), kind);
+                let pane = self.desk.columns.show(self.desk.columns.focused(), kind);
                 self.use_pane(pane);
             }
             ShellCommand::SetLayout(cols) if cols > self.config.columns.max => self.note = Some(format!("{} columns at most (`[columns] max` in your UI config).", self.config.columns.max)),
-            ShellCommand::SetLayout(cols) => self.columns.set_count(cols, self.config.columns.max),
-            ShellCommand::CloseColumn => self.close_column(self.columns.focused()),
+            ShellCommand::SetLayout(cols) => self.desk.columns.set_count(cols, self.config.columns.max),
+            ShellCommand::CloseColumn => self.close_column(self.desk.columns.focused()),
             ShellCommand::DeleteView => self.delete_view(),
             ShellCommand::NewView(kind) => self.new_view(kind),
             ShellCommand::PickView => {
@@ -327,7 +327,7 @@ impl CockpitApp {
                     let kind = BufferKind::ALL.into_iter().find(|k| k.name() == kind)?;
                     Some(Pane::new(kind, id.parse().ok()?))
                 });
-                match picked.filter(|p| self.columns.has(*p)) {
+                match picked.filter(|p| self.desk.columns.has(*p)) {
                     Some(pane) => self.show_view(pane),
                     None => self.note = Some("That view isn't open any more.".into()),
                 }
@@ -336,23 +336,23 @@ impl CockpitApp {
             ShellCommand::ToggleIssues => {
                 self.feedback.is_issues_window_open = !self.feedback.is_issues_window_open;
                 if self.feedback.is_issues_window_open {
-                    self.feedback.load_issues(&self.net, ctx.clone());
+                    self.feedback.load_issues(&self.desk.net, ctx.clone());
                 }
             }
             ShellCommand::QuickLook => self.toggle_quick_look(ctx),
             ShellCommand::QuickLookToColumn => self.quick_look_to_column(),
             ShellCommand::Talk => {
                 self.talk.get_or_insert_with(Default::default);
-                self.input_mode = InputMode::Insert { slot: self.columns.focused() };
+                self.input_mode = InputMode::Insert { slot: self.desk.columns.focused() };
             }
             ShellCommand::Agents => {
-                self.remote.agents = value.as_deref() == Some("true");
-                self.note = Some(if self.remote.agents { "Agents can drive the cockpit (the server's cockpit tools)." } else { "Agents can't drive the cockpit." }.into());
+                self.desk.remote.agents = value.as_deref() == Some("true");
+                self.note = Some(if self.desk.remote.agents { "Agents can drive the cockpit (the server's cockpit tools)." } else { "Agents can't drive the cockpit." }.into());
             }
             ShellCommand::OpenPalette => self.open_palette(None),
             ShellCommand::Motion(motion) => {
                 let before = self.jump_here();
-                self.view_mut(kind).motion(motion, count);
+                self.desk.view_mut(kind).motion(motion, count);
                 // Big moves are jumps; small ones aren't.
                 if matches!(motion, Motion::First | Motion::Last | Motion::Line(_)) {
                     self.after_jump(before);
@@ -364,17 +364,17 @@ impl CockpitApp {
             },
             ShellCommand::Enter | ShellCommand::Leave => {
                 let before = self.jump_here();
-                let step = if command == ShellCommand::Enter { self.view_mut(kind).enter() } else { self.view_mut(kind).leave() };
+                let step = if command == ShellCommand::Enter { self.desk.view_mut(kind).enter() } else { self.desk.view_mut(kind).leave() };
                 self.take_step(step, before, ctx);
             }
-            ShellCommand::Fold(fold) => self.view_mut(kind).fold(fold),
+            ShellCommand::Fold(fold) => self.desk.view_mut(kind).fold(fold),
             ShellCommand::Hint { open } => self.start_hint(open),
             ShellCommand::Search => {
                 self.capture = Some(Capture::Search(Searching { kind, query: String::new(), before: self.jump_here() }));
-                self.input_mode = InputMode::Capture { slot: self.columns.focused() };
-                self.view_mut(kind).save_view();
+                self.input_mode = InputMode::Capture { slot: self.desk.columns.focused() };
+                self.desk.view_mut(kind).save_view();
                 // An empty search is a search too (a filter typed into goes blank).
-                self.view_mut(kind).on_search(SearchEvent::Typing(""));
+                self.desk.view_mut(kind).on_search(SearchEvent::Typing(""));
             }
             ShellCommand::SearchStep { forward } => self.search_step(forward, count),
             ShellCommand::MarkSet => self.start_capture(Capture::MarkSet),
@@ -383,7 +383,7 @@ impl CockpitApp {
                 let here = self.jump_here();
                 let mut to = None;
                 for _ in 0..count {
-                    let step = if command == ShellCommand::Back { self.jumps.back(to.clone().unwrap_or_else(|| here.clone())) } else { self.jumps.forward(to.clone().unwrap_or_else(|| here.clone())) };
+                    let step = if command == ShellCommand::Back { self.desk.jumps.back(to.clone().unwrap_or_else(|| here.clone())) } else { self.desk.jumps.forward(to.clone().unwrap_or_else(|| here.clone())) };
                     match step {
                         Some(j) => to = Some(j),
                         None => break,
@@ -411,7 +411,7 @@ impl CockpitApp {
 
     pub(super) fn start_capture(&mut self, capture: Capture) {
         self.capture = Some(capture);
-        self.input_mode = InputMode::Capture { slot: self.columns.focused() };
+        self.input_mode = InputMode::Capture { slot: self.desk.columns.focused() };
         self.pending_since = 0.0;
     }
 

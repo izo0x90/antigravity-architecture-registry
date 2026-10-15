@@ -12,12 +12,12 @@ impl CockpitApp {
             }
             return;
         }
-        let kind = self.columns.focused_kind();
+        let kind = self.desk.columns.focused_kind();
         if kind == BufferKind::Spec {
             self.note = Some("The spec view shows the full card already.".into());
             return;
         }
-        let Some(id) = self.view(kind).target().and_then(|t| t.component().cloned()) else {
+        let Some(id) = self.desk.view(kind).target().and_then(|t| t.component().cloned()) else {
             self.note = Some("Nothing here to look at: put the cursor on a component.".into());
             return;
         };
@@ -26,12 +26,12 @@ impl CockpitApp {
             self.bound_actions().into_iter().find(|b| b.action.id == "quicklook.toggle").and_then(|b| b.keys.into_iter().filter(|seq| seq.len() == 1).map(|mut seq| seq.remove(0)).find(|chord| chord.key_down(i)))
         });
         let now = ctx.input(|i| i.time);
-        self.quick_look = Some(QuickLook::open(crate::quick_look::Look::Card, self.columns.focused(), kind, self.used_pane(BufferKind::Spec).id, key, now));
+        self.quick_look = Some(QuickLook::open(crate::quick_look::Look::Card, self.desk.columns.focused(), kind, self.desk.used_pane(BufferKind::Spec).id, key, now));
         // Its own spec view, held on the card.
         self.use_pane(Pane::new(BufferKind::Spec, crate::quick_look::PANE));
-        self.spec.pinned = true;
-        self.spec.floating = true;
-        self.spec.show(id);
+        self.desk.spec.pinned = true;
+        self.desk.spec.floating = true;
+        self.desk.spec.show(id);
     }
 
     /// Closes the quick look: the spec view used before is used again.
@@ -48,12 +48,12 @@ impl CockpitApp {
             return;
         }
         let from = self.jump_here();
-        let pane = self.columns.new_pane(BufferKind::Spec);
-        self.spec.floating = false;
-        self.active.insert(BufferKind::Spec, pane.id);
-        self.last_used.insert(BufferKind::Spec, pane.id);
-        let slot = self.columns.ensure_visible(pane);
-        self.columns.focus(slot);
+        let pane = self.desk.columns.new_pane(BufferKind::Spec);
+        self.desk.spec.floating = false;
+        self.desk.active.insert(BufferKind::Spec, pane.id);
+        self.desk.last_used.insert(BufferKind::Spec, pane.id);
+        let slot = self.desk.columns.ensure_visible(pane);
+        self.desk.columns.focus(slot);
         self.after_jump(from);
     }
 
@@ -61,7 +61,7 @@ impl CockpitApp {
     /// focus moved to a column (a go-to landed there).
     pub(super) fn quick_look_tick(&mut self, ctx: &egui::Context) {
         let Some(look) = &mut self.quick_look else { return };
-        let moved = self.columns.focused() != look.slot || self.columns.kind(look.slot) != look.over;
+        let moved = self.desk.columns.focused() != look.slot || self.desk.columns.kind(look.slot) != look.over;
         let hold = self.config.keymap.peek_hold_ms as f64 / 1000.0;
         let (released, now) = ctx.input(|i| (look.key().is_some_and(|k| k.released(i)), i.time));
         if moved || (released && look.let_go(now, hold)) {
@@ -95,12 +95,12 @@ impl CockpitApp {
                             to_column |= ui.button(format!("{} Open in a column", egui_phosphor::regular::COLUMNS)).on_hover_text(column_hint).clicked();
                         });
                     });
-                    if let Some(id) = self.spec.target.clone() {
-                        self.graph.render_card_context(ui, &id);
+                    if let Some(id) = self.desk.spec.target.clone() {
+                        self.desk.graph.render_card_context(ui, &id);
                     }
                     ui.separator();
-                    let mut cx = RunCx { net: &self.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell };
-                    self.spec.render(ui, &mut cx);
+                    let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell };
+                    self.desk.spec.render(ui, &mut cx);
                     return;
                 };
                 close |= self.render_attention(ui, &id);
@@ -119,7 +119,7 @@ impl CockpitApp {
     pub(super) fn render_talk(&mut self, ctx: &egui::Context) {
         let Some(talk) = &mut self.talk else { return };
         let close = self.config.keymap.back.label();
-        if talk.render(ctx, &mut self.chat, &self.net, &close) == crate::talk::Outcome::Close {
+        if talk.render(ctx, &mut self.desk.chat, &self.desk.net, &close) == crate::talk::Outcome::Close {
             self.talk = None;
             self.input_mode = InputMode::Normal;
             release_keyboard(ctx);

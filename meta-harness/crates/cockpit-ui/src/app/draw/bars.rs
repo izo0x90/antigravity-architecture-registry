@@ -129,7 +129,7 @@ impl CockpitApp {
                 .map(|(b, rest)| (rest.iter().map(Chord::label).collect::<Vec<_>>().join(" "), b.action.label.clone()))
                 .collect()
         } else {
-            let mut rows: Vec<(String, String)> = self.marks.iter().map(|(letter, jump)| (letter.to_string(), describe_jump(jump))).collect();
+            let mut rows: Vec<(String, String)> = self.desk.marks.iter().map(|(letter, jump)| (letter.to_string(), describe_jump(jump))).collect();
             if matches!(self.capture, Some(Capture::MarkSet)) {
                 rows.insert(0, ("a–z".into(), "set a mark here (replaces one with that letter)".into()));
             }

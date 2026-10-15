@@ -28,6 +28,7 @@ use crate::tree::ArchitectureTreeState;
 pub(crate) mod attention;
 mod capture;
 mod commands;
+mod desk;
 mod draw;
 mod going;
 mod keeping;
@@ -37,6 +38,8 @@ mod lifecycle;
 mod look;
 mod outside;
 mod views;
+
+pub use desk::Desk;
 
 pub use draw::top_bar::{ActivityLed, index_state};
 use keys::release_keyboard;
@@ -208,6 +211,8 @@ type KeyedActions = (BufferKind, Vec<(Origin, String, Vec<String>)>);
 type Keys = (Option<Vec<char>>, Vec<Vec<Chord>>);
 
 pub struct CockpitApp {
+    /// The project shown: its views, layout and server.
+    pub desk: Desk,
     /// The keys as last given out, and the actions they were given to (by
     /// view, name and aliases, in order): keys are given out again only when
     /// those change. Labels and commands are always the current ones.
@@ -220,34 +225,12 @@ pub struct CockpitApp {
     /// How many times the actions were gathered (counted for the tests).
     #[cfg(test)]
     gathered: std::cell::Cell<usize>,
-    pub net: NetClient,
-    pub chat: ChatStreamState,
-    pub code: CodeViewerState,
-    pub graph: GraphState,
-    pub spec: SpecState,
-    pub tree: ArchitectureTreeState,
     pub feedback: FeedbackInspectorState,
-    /// The current plan's comments and changes since review.
-    pub review: ReviewState,
-    pub queue: crate::queue::QueueState,
-    review_seen: u64,
 
-    /// The columns: the view each shows, and which has focus.
-    pub columns: Columns,
-    /// The views not in use now (each column's own; see `panes`).
-    parked: Parked,
-    /// For each kind with a view per column: the view in use now, and the
-    /// one used last (what keys, links and the agent act on).
-    active: BTreeMap<BufferKind, u32>,
-    last_used: BTreeMap<BufferKind, u32>,
-    /// New views, to start where the view of their kind used before was.
-    fresh: Vec<(Pane, Place)>,
     /// The column a go-to lands in (a count before its keys).
     landing: Option<usize>,
     /// A column whose × was clicked (closed after drawing).
     closing: Option<usize>,
-    /// The component types, for each spec view.
-    types: Option<arch_graph::TypeSystem>,
     /// The quick look, while it's open.
     pub quick_look: Option<QuickLook>,
     /// Which chats were said to be seen, and when.
@@ -258,10 +241,6 @@ pub struct CockpitApp {
     notes_later: Arc<Mutex<Vec<String>>>,
     /// The box for talking to the agent, while it's open.
     pub talk: Option<crate::talk::Talk>,
-    /// Loads and saves the cockpit's state on the server.
-    keeper: crate::saved::Keeper,
-    /// Calls from outside: scripts in the page, and agents while allowed.
-    pub remote: crate::remote::Remote,
     pub initialized: bool,
 
     pub config: UiConfig,
@@ -282,23 +261,6 @@ pub struct CockpitApp {
     pub pending_count: Option<u32>,
     /// What typed keys go to while the shell has them (search, hints, marks).
     pub capture: Option<Capture>,
-    /// Where jumps left from, across views and slots.
-    pub jumps: JumpList,
-    /// Marks by letter.
-    pub marks: BTreeMap<char, Jump>,
-    /// The last search in each view (one that found something), and the
-    /// last that found nothing (so `n` can say so).
-    pub searches: BTreeMap<BufferKind, String>,
-    missed: BTreeMap<BufferKind, String>,
-    /// Go-tos: component details, and one under way or being picked.
-    pub details: Details,
-    pending_goto: Option<Pending>,
-    choosing: Option<Choosing>,
-    at_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
-    /// Code indexing: running or not, progress, last run, stale files.
-    pub index: arch_graph::IndexStatus,
-    index_inbox: Arc<Mutex<Vec<NetResult<arch_graph::IndexStatus>>>>,
-    types_inbox: Arc<Mutex<Option<NetResult<arch_graph::TypeSystem>>>>,
     /// A short note in the key bar (why something didn't happen), and since when.
     pub note: Option<String>,
     note_since: Option<f64>,
@@ -306,9 +268,6 @@ pub struct CockpitApp {
     pub key_sheet: Option<String>,
     /// Where each slot was drawn last frame (hint labels stay inside theirs).
     slot_rects: Vec<egui::Rect>,
-    /// The spec's anchor we last refetched the view for (so a mismatch the
-    /// server itself holds doesn't refetch every frame).
-    anchor_checked: Option<Option<arch_graph::CodeAnchor>>,
     palette: crate::palette::Palette,
 
     // Top-bar status LEDs
@@ -328,37 +287,21 @@ impl CockpitApp {
         let mut net = NetClient::new(host_origin);
         net.on_arrival(alerts.arrival());
         Self {
+            desk: Desk::new(net, host_origin),
             bound_cache: Default::default(),
             frame_actions: Default::default(),
             in_frame: Default::default(),
             #[cfg(test)]
             gathered: Default::default(),
-            net,
-            chat: ChatStreamState::default(),
-            code: CodeViewerState::default(),
-            graph: GraphState::default(),
-            spec: SpecState::default(),
-            tree: ArchitectureTreeState::default(),
             feedback: FeedbackInspectorState::default(),
-            review: ReviewState::default(),
-            queue: crate::queue::QueueState::default(),
-            review_seen: 0,
 
-            columns: Columns::default(),
-            parked: Parked::default(),
-            active: BTreeMap::new(),
-            last_used: BTreeMap::new(),
-            fresh: Vec::new(),
             landing: None,
             closing: None,
-            types: None,
             quick_look: None,
             seen: Default::default(),
             alerts,
             notes_later: Arc::default(),
             talk: None,
-            keeper: Default::default(),
-            remote: crate::remote::Remote::new(host_origin),
             initialized: false,
 
             config,
@@ -372,22 +315,10 @@ impl CockpitApp {
             pending_since: 0.0,
             pending_count: None,
             capture: None,
-            jumps: JumpList::default(),
-            marks: BTreeMap::new(),
-            searches: BTreeMap::new(),
-            missed: BTreeMap::new(),
-            details: Details::default(),
-            pending_goto: None,
-            choosing: None,
-            at_inbox: Arc::default(),
-            index: arch_graph::IndexStatus::default(),
-            index_inbox: Arc::default(),
-            types_inbox: Arc::default(),
             note: None,
             note_since: None,
             key_sheet: None,
             slot_rects: Vec::new(),
-            anchor_checked: None,
             palette: crate::palette::Palette::default(),
 
             srv_led: ActivityLed::default(),
@@ -519,7 +450,7 @@ impl eframe::App for CockpitApp {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        self.remote.feed(ctx, raw_input);
+        self.desk.remote.feed(ctx, raw_input);
     }
 }
 
@@ -532,9 +463,9 @@ impl CockpitApp {
         self.draw_frame(ctx);
         self.in_frame.set(false);
         self.frame_actions.borrow_mut().take();
-        let status = self.remote.waiting().then(|| self.remote_status());
-        self.remote.end_frame(ctx, status);
-        self.remote.flush();
+        let status = self.desk.remote.waiting().then(|| self.remote_status());
+        self.desk.remote.end_frame(ctx, status);
+        self.desk.remote.flush();
     }
 
 
@@ -552,13 +483,13 @@ impl CockpitApp {
 
         let shell = self.shell_actions();
         let tab_keys = self.tab_keys(&shell);
-        self.chat.drawn.clear();
+        self.desk.chat.drawn.clear();
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.slot_rects.resize(self.columns.len(), egui::Rect::NOTHING);
-            ui.columns(self.columns.len(), |cols| {
+            self.slot_rects.resize(self.desk.columns.len(), egui::Rect::NOTHING);
+            ui.columns(self.desk.columns.len(), |cols| {
                 for (i, col) in cols.iter_mut().enumerate() {
                     // Each column draws its own view.
-                    self.swap_in(self.columns.pane(i));
+                    self.swap_in(self.desk.columns.pane(i));
                     self.render_slot(i, col, &shell, &tab_keys);
                 }
             });
@@ -574,11 +505,11 @@ impl CockpitApp {
         self.feedback.render_inspection_overlay(ctx);
 
         // Developer Feedback modal (automatically pops up when an element is targeted)
-        let active_slots: Vec<String> = self.columns.panes().iter().map(|p| p.kind.title().to_lowercase()).collect();
-        self.feedback.render_modal(ctx, &self.net, self.columns.len(), &active_slots);
+        let active_slots: Vec<String> = self.desk.columns.panes().iter().map(|p| p.kind.title().to_lowercase()).collect();
+        self.feedback.render_modal(ctx, &self.desk.net, self.desk.columns.len(), &active_slots);
 
         // Issues & Feedback Explorer window
-        self.feedback.render_issues_window(ctx, &self.net);
+        self.feedback.render_issues_window(ctx, &self.desk.net);
 
         // Feedback confirmation toast
         self.feedback.render_toast(ctx);

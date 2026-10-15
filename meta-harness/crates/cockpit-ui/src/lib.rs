@@ -72,7 +72,7 @@ impl WebHandle {
                 Box::new(move |cc| {
                     cc.egui_ctx.set_fonts(crate::theme::font_definitions());
                     let mut app = CockpitApp::new(&origin);
-                    if let Err(e) = crate::remote::install_page_door(app.remote.door(&cc.egui_ctx)) {
+                    if let Err(e) = crate::remote::install_page_door(app.desk.remote.door(&cc.egui_ctx)) {
                         web_sys::console::warn_1(&e);
                     }
                     Ok(Box::new(app))

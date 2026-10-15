@@ -87,19 +87,19 @@ impl CockpitApp {
 
                 // Status LEDs: SRV = event WebSocket to the meta-harness server,
                 // AGENT = the agent session behind it. Both flicker on traffic.
-                let ws = self.net.ws_state.lock().map(|s| *s).unwrap_or(WsState::Closed);
+                let ws = self.desk.net.ws_state.lock().map(|s| *s).unwrap_or(WsState::Closed);
                 let (srv_color, srv_hint) = match ws {
                     WsState::Open => (colors().ok, "Meta-harness server: connected"),
                     WsState::Connecting => (colors().warn, "Meta-harness server: connecting…"),
                     WsState::Closed => (colors().error, "Meta-harness server: disconnected"),
                 };
-                let srv_count = self.net.activity.load(Ordering::Relaxed);
+                let srv_count = self.desk.net.activity.load(Ordering::Relaxed);
                 let srv_res = self.srv_led.show(ui, "SRV", srv_color, srv_count, srv_hint);
                 self.feedback.register_inspectable(ui, "top_bar:connection_status", srv_res.rect);
 
                 ui.add_space(crate::theme::look().space_sm);
-                let (agent_color, agent_hint) = match &self.chat.session_status() {
-                    SessionStatus::Idle => match self.chat.harness_problem() {
+                let (agent_color, agent_hint) = match &self.desk.chat.session_status() {
+                    SessionStatus::Idle => match self.desk.chat.harness_problem() {
                         Some(problem) => (colors().error, format!("Agent: unavailable — {problem}")),
                         None => (colors().faint, "Agent: not connected".to_string()),
                     },
@@ -107,7 +107,7 @@ impl CockpitApp {
                     SessionStatus::Connected(tid) => (colors().ok, format!("Agent: connected [{}]", tid)),
                     SessionStatus::Failed(err) => (colors().error, format!("Agent: failed — {}", err)),
                 };
-                let agent_res = self.agent_led.show(ui, "AGENT", agent_color, self.chat.agent_activity(), &agent_hint);
+                let agent_res = self.agent_led.show(ui, "AGENT", agent_color, self.desk.chat.agent_activity(), &agent_hint);
                 self.feedback.register_inspectable(ui, "top_bar:agent_status", agent_res.rect);
 
                 ui.add_space(crate::theme::look().space_sm);
@@ -151,7 +151,7 @@ impl CockpitApp {
                 });
 
                 // An answer cut short or slow, whichever view is showing it.
-                if let Some((words, more)) = self.graph.answer_status() {
+                if let Some((words, more)) = self.desk.graph.answer_status() {
                     ui.label(RichText::new(format!("{} {words}", egui_phosphor::regular::WARNING)).size(crate::theme::look().text_body).color(colors().warn)).on_hover_text(more);
                 }
 
@@ -182,7 +182,7 @@ impl CockpitApp {
                     if issues_btn.clicked() {
                         self.feedback.is_issues_window_open = !self.feedback.is_issues_window_open;
                         if self.feedback.is_issues_window_open {
-                            self.feedback.load_issues(&self.net, ui.ctx().clone());
+                            self.feedback.load_issues(&self.desk.net, ui.ctx().clone());
                         }
                     }
                     self.feedback.register_inspectable(ui, "top_bar:issues_button", issues_btn.rect);
@@ -192,16 +192,16 @@ impl CockpitApp {
                     // This row runs right to left: add from the right end so
                     // it reads "Columns: - 2 +".
                     let layout_res = ui.horizontal(|ui| {
-                        let (count, max) = (self.columns.len(), self.config.columns.max);
+                        let (count, max) = (self.desk.columns.len(), self.config.columns.max);
                         if ui.add_enabled(count < max, egui::Button::new(egui_phosphor::regular::PLUS)).on_hover_text("Add a column").clicked() {
-                            self.columns.set_count(count + 1, max);
+                            self.desk.columns.set_count(count + 1, max);
                         }
                         ui.label(RichText::new(count.to_string()).monospace().size(crate::theme::look().text_body).color(colors().text_strong));
                         if ui.add_enabled(count > 1, egui::Button::new(egui_phosphor::regular::MINUS)).on_hover_text("One column fewer").clicked() {
-                            self.columns.set_count(count - 1, max);
+                            self.desk.columns.set_count(count - 1, max);
                         }
                         ui.label(RichText::new("Columns:").size(crate::theme::look().text_body).color(colors().muted));
-                        let hidden = self.columns.hidden();
+                        let hidden = self.desk.columns.hidden();
                         if hidden > 0 {
                             let list = self.bound_actions().into_iter().find(|b| b.action.id == "buffer.list").map(|b| b.key_hint()).unwrap_or_default();
                             let chip = ui.add(egui::Label::new(RichText::new(format!("{hidden} hidden")).size(crate::theme::look().text_body).color(colors().info)).sense(egui::Sense::click()));
@@ -220,30 +220,30 @@ impl CockpitApp {
     /// The INDEX light: its state's colour and word, progress while it runs,
     /// the last run on hover; a click offers the re-index actions.
     pub(in crate::app) fn render_index_light(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        let state = index_state(&self.index);
+        let state = index_state(&self.desk.index);
         let (_, word, color) = crate::status::look(state);
         let detail = match state {
-            "indexing" => format!("{word} {} of {}", self.index.done, self.index.total),
-            "stale" => format!("{} {word}", self.index.stale.len()),
+            "indexing" => format!("{word} {} of {}", self.desk.index.done, self.desk.index.total),
+            "stale" => format!("{} {word}", self.desk.index.stale.len()),
             _ => word,
         };
-        let mut hover = match &self.index.last {
+        let mut hover = match &self.desk.index.last {
             Some(l) => format!("Last read {}: {} files ({} re-read) in {} ms; {} components, {} connections, {} calls not linked for certain.", l.at, l.files, l.parsed, l.millis, l.components, l.relations, l.unresolved),
             None => "Not read yet.".to_owned(),
         };
-        if let Some(e) = &self.index.error {
+        if let Some(e) = &self.desk.index.error {
             hover.push_str(&format!("\nThe last run failed: {e}"));
         }
-        for s in &self.index.servers {
+        for s in &self.desk.index.servers {
             hover.push('\n');
             hover.push_str(&server_line(s));
         }
-        if !self.index.stale.is_empty() {
-            hover.push_str(&format!("\nChanged since read: {}", self.index.stale.join(", ")));
+        if !self.desk.index.stale.is_empty() {
+            hover.push_str(&format!("\nChanged since read: {}", self.desk.index.stale.join(", ")));
         }
         hover.push_str("\nClick to read the code again.");
         // Flickers while files go by.
-        let activity = if state == "indexing" { self.index.done as u64 } else { 0 };
+        let activity = if state == "indexing" { self.desk.index.done as u64 } else { 0 };
         let response = ui
             .horizontal(|ui| {
                 let led = self.index_led.show(ui, "INDEX", color, activity, &hover);

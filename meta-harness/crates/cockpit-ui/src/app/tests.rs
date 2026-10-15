@@ -54,13 +54,13 @@ fn click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
 /// Calls from outside, answered: each runs frames as eframe does (the
 /// call's input fed in first) until it's answered.
 fn from_outside(ctx: &egui::Context, app: &mut CockpitApp, call: &str) -> crate::remote::Answer {
-    let door = app.remote.door(ctx);
+    let door = app.desk.remote.door(ctx);
     let answer = std::rc::Rc::new(std::cell::RefCell::new(None));
     let kept = answer.clone();
     door.knock(call, Box::new(move |a| *kept.borrow_mut() = Some(a)));
     for _ in 0..10 {
         let mut raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)), ..Default::default() };
-        app.remote.feed(ctx, &mut raw);
+        app.desk.remote.feed(ctx, &mut raw);
         let _ = ctx.run(raw, |ctx| app.frame(ctx));
         if let Some(answer) = answer.borrow_mut().take() {
             return answer;
@@ -79,8 +79,8 @@ fn app_with_graph() -> (egui::Context, CockpitApp) {
     let ctx = egui::Context::default();
     let mut app = CockpitApp::new("http://127.0.0.1:9");
     app.initialized = true; // skip network bootstrapping
-    app.graph = showing(sample_tree());
-    app.columns.focus(1);
+    app.desk.graph = showing(sample_tree());
+    app.desk.columns.focus(1);
     (ctx, app)
 }
 
@@ -118,7 +118,7 @@ fn ctrl(ctx: &egui::Context, app: &mut CockpitApp, key: egui::Key) {
 }
 
 fn selected(app: &CockpitApp) -> &str {
-    app.graph.selection.as_ref().map_or("", |s| s.as_str())
+    app.desk.graph.selection.as_ref().map_or("", |s| s.as_str())
 }
 
 fn call(a: &str, b: &str, order: u32, line: u32) -> Relation {
@@ -134,34 +134,34 @@ fn call(a: &str, b: &str, order: u32, line: u32) -> Relation {
 fn full_app() -> (egui::Context, CockpitApp) {
     let (ctx, mut app) = app_with_graph();
     let plan = PlanId::new("p").unwrap();
-    app.graph.nav.source = Source::Plan(plan.clone());
-    app.tree.set_result(crate::tree::tests::outline());
-    app.code = crate::code::tests::sample();
+    app.desk.graph.nav.source = Source::Plan(plan.clone());
+    app.desk.tree.set_result(crate::tree::tests::outline());
+    app.desk.code = crate::code::tests::sample();
     let step = ComponentId::new("rust:a::step");
-    app.spec.pinned = true;
-    app.spec.show(step.clone());
-    app.spec.source = Source::Plan(plan.clone());
-    app.spec.detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
-    app.queue.tick(&app.net, &ctx, Some(&plan));
+    app.desk.spec.pinned = true;
+    app.desk.spec.show(step.clone());
+    app.desk.spec.source = Source::Plan(plan.clone());
+    app.desk.spec.detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
+    app.desk.queue.tick(&app.desk.net, &ctx, Some(&plan));
     // Enough jobs and messages that half a page means something.
     let mut snapshot = crate::queue::tests::snapshot(arch_graph::QueueStatus::Idle);
     for i in 0..30 {
         snapshot.jobs.push(arch_graph::Job { component: ComponentId::new(format!("rust:q{i}")), kind: arch_graph::JobKind::Implement, state: arch_graph::JobState::Queued, attempts: 0, findings: vec![] });
     }
-    app.queue.on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(snapshot) });
-    app.chat = crate::chat::tests::conversation();
+    app.desk.queue.on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(snapshot) });
+    app.desk.chat = crate::chat::tests::conversation();
     for n in 4..40 {
-        app.chat.process_event(crate::chat::tests::item(n, harness_contracts::ItemBody::UserMessage { text: format!("message {n}") }));
+        app.desk.chat.process_event(crate::chat::tests::item(n, harness_contracts::ItemBody::UserMessage { text: format!("message {n}") }));
     }
-    app.columns.set_count(3, 12);
+    app.desk.columns.set_count(3, 12);
     (ctx, app)
 }
 
 /// Moves the view of `kind` in use to the focused slot and draws it (so
 /// it knows its size).
 fn focus(ctx: &egui::Context, app: &mut CockpitApp, kind: BufferKind) {
-    let pane = app.used_pane(kind);
-    app.columns.place(app.columns.focused(), pane);
+    let pane = app.desk.used_pane(kind);
+    app.desk.columns.place(app.desk.columns.focused(), pane);
     app.use_pane(pane);
     for _ in 0..3 {
         frame(ctx, app, vec![]);
@@ -169,7 +169,7 @@ fn focus(ctx: &egui::Context, app: &mut CockpitApp, kind: BufferKind) {
 }
 
 fn cursor(app: &CockpitApp) -> Option<String> {
-    app.view(app.focused_kind()).cursor_key()
+    app.desk.view(app.focused_kind()).cursor_key()
 }
 
 /// The quick look's key, down (and typed) or let go, at `time`.
@@ -185,7 +185,7 @@ fn peek_key(ctx: &egui::Context, app: &mut CockpitApp, pressed: bool, time: f64)
 fn agent_moves(app: &mut CockpitApp, select: &str, column: Option<u32>) {
     let request = arch_graph::ViewRequest { select: Some(select.into()), column, ..Default::default() };
     let event = arch_graph::ArchEvent::ViewRequested { request: Box::new(request), by: arch_graph::Requester::Agent };
-    app.net.incoming.lock().unwrap().push(harness_contracts::ClientEvent::Architecture { event });
+    app.desk.net.incoming.lock().unwrap().push(harness_contracts::ClientEvent::Architecture { event });
 }
 
 /// Where the kept keys live (moves when they're given out again).
