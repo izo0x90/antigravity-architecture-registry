@@ -280,11 +280,7 @@ impl ArchitectureTreeState {
     pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
         let (net, slot_idx) = (cx.net, cx.slot);
         self.tick(net, ui.ctx());
-        let hint = match crate::actions::key_of(cx.hints, "nav.search") {
-            Some(key) => format!("filter… ({key})"),
-            None => "filter…".to_owned(),
-        };
-        let header = ui.horizontal(|ui| ui.add(egui::TextEdit::singleline(&mut self.search_filter).hint_text(hint).desired_width(f32::INFINITY)));
+        let header = ui.horizontal(|ui| ui.add(egui::TextEdit::singleline(&mut self.search_filter).hint_text("filter…").desired_width(f32::INFINITY)));
         feedback.register_inspectable(ui, &format!("slot_{}:tree:header", slot_idx + 1), header.response.rect);
         ui.separator();
         if self.result.is_none() {
@@ -682,7 +678,7 @@ pub(crate) mod tests {
             let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 160.0))), ..Default::default() }, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-                    t.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut asked });
+                    t.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut asked });
                 });
             });
         }

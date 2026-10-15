@@ -289,7 +289,7 @@ impl ChatStreamState {
     }
 
     pub(super) fn render_input(&mut self, ui: &mut egui::Ui, feedback: &FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
-        let (net, slot_idx, hints) = (cx.net, cx.slot, cx.hints);
+        let (net, slot_idx) = (cx.net, cx.slot);
         let input_mode = &mut *cx.input_mode;
         let ctx = ui.ctx().clone();
 
@@ -299,14 +299,11 @@ impl ChatStreamState {
             let steerable = self.instance().is_some_and(|s| s.capabilities.turns.active_steering) && self.thread().and_then(|t| t.running_turn()).is_some();
             let keys = crate::keymap::local();
             let hint = if inserting && steerable {
-                format!("While it works: {} queues this next, {} adds it to what it's doing", keys.input.send_label(), keys.input.add_label())
+                "While it works: sending queues it next; adding puts it into what it's doing".to_owned()
             } else if inserting {
-                format!("Instructions… ({}; / for commands)", keys.typing_hint("leaves the field"))
+                "Instructions… (/ for commands)".to_owned()
             } else {
-                match crate::actions::key_of(hints, "chat.insert") {
-                    Some(key) => format!("{key} or a click to type…"),
-                    None => "Click to type…".to_owned(),
-                }
+                "Type a prompt…".to_owned()
             };
             let output = ui.add(
                 keys.text_box(&mut self.ui.input_buffer)

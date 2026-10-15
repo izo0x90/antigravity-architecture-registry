@@ -33,8 +33,7 @@ impl CockpitApp {
             return;
         }
         let bound = self.bound_actions();
-        let focused = Origin::View(self.focused_kind());
-        let entries = leader_entries(&bound, &self.leader_path, focused);
+        let entries = leader_entries(&bound, &self.leader_path);
         let screen_rect = ctx.content_rect();
         let hud_w = (screen_rect.width() - 32.0).min(760.0);
         let mut tapped: Option<char> = None;
@@ -52,7 +51,7 @@ impl CockpitApp {
                 });
                 ui.separator();
                 // The focused view's entries first, under its name; then the rest.
-                let (own, rest): (Vec<&LeaderEntry>, Vec<&LeaderEntry>) = entries.iter().partition(|e| is_primary(e, &bound, &self.leader_path, focused));
+                let (own, rest): (Vec<&LeaderEntry>, Vec<&LeaderEntry>) = entries.iter().partition(|e| is_primary(e, &bound, &self.leader_path));
                 // Explicit rows sized to the screen (wrapping layouts ignore Area widths).
                 let per_row = ((hud_w - 28.0) / 210.0).floor().max(1.0) as usize;
                 let view_name = self.focused_kind().title();

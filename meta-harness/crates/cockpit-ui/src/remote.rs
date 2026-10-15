@@ -228,12 +228,10 @@ impl Remote {
         let parsed: Result<Vec<_>, _> = keys.split_whitespace().map(key_press).collect();
         match parsed {
             Ok(presses) if !presses.is_empty() => {
-                for (key, modifiers, text) in presses {
-                    let event = |pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
-                    let mut down = vec![event(true)];
-                    down.extend(text.map(egui::Event::Text));
+                for chord in presses {
+                    let (modifiers, down, up) = chord.press();
                     self.queue(down, modifiers);
-                    self.queue(vec![event(false)], egui::Modifiers::NONE);
+                    self.queue(up, egui::Modifiers::NONE);
                 }
                 self.after_feed.push((respond, json!({ "pressed": keys })));
             }
@@ -326,56 +324,30 @@ fn find<'a>(drawn: &'a [Drawn], text: &str) -> Option<&'a Drawn> {
     drawn.iter().rev().find(|d| d.text.trim() == text).or_else(|| drawn.iter().rev().find(|d| d.text.contains(text)))
 }
 
-/// One key as named (`ctrl+enter`, `space`, `j`, `G`): the key, its
-/// modifiers, and the text it types (as a browser gives it).
-fn key_press(name: &str) -> Result<(egui::Key, egui::Modifiers, Option<String>), String> {
-    let mut modifiers = egui::Modifiers::NONE;
-    let mut parts: Vec<&str> = name.split('+').collect();
-    let last = parts.pop().filter(|k| !k.is_empty()).ok_or_else(|| format!("{name:?}: no key"))?;
-    for m in parts {
-        match m.to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => {
-                modifiers.ctrl = true;
-                modifiers.command = true;
-            }
-            "cmd" | "command" | "meta" => {
-                modifiers.mac_cmd = true;
-                modifiers.command = true;
-            }
-            "shift" => modifiers.shift = true,
-            "alt" | "option" => modifiers.alt = true,
-            other => return Err(format!("{name:?}: {other:?} isn't a modifier (ctrl, cmd, shift, alt)")),
-        }
-    }
-    let mut chars = last.chars();
-    let (key, text) = match (chars.next(), chars.next()) {
-        (Some(c), None) => {
-            let key = egui::Key::from_name(&c.to_ascii_uppercase().to_string()).ok_or_else(|| format!("{name:?}: unknown key"))?;
-            if c.is_ascii_uppercase() {
-                modifiers.shift = true;
-            }
-            (key, Some(c.to_string()))
-        }
-        _ => {
-            let named = match last.to_ascii_lowercase().as_str() {
-                "esc" => "Escape".to_owned(),
-                "return" => "Enter".to_owned(),
-                "bs" => "Backspace".to_owned(),
-                "pgup" => "PageUp".to_owned(),
-                "pgdn" => "PageDown".to_owned(),
-                lower => lower.split('_').map(capitalized).collect(),
-            };
-            let key = egui::Key::from_name(&named).ok_or_else(|| format!("{name:?}: unknown key"))?;
-            (key, (key == egui::Key::Space).then(|| " ".to_owned()))
-        }
+/// A key as an agent names it, in the keymap's own grammar (`J`, `+`,
+/// `ctrl+o`, `Space`, `Enter`); a few short names agents use are taken
+/// too (`esc`, `return`, `bs`, `pgup`, `pgdn`, any case).
+fn key_press(name: &str) -> Result<crate::keymap::Chord, String> {
+    let (mods, key) = match name.strip_suffix("++") {
+        Some(mods) => (format!("{mods}+"), "+"),
+        None => match name.rsplit_once('+') {
+            Some((mods, key)) if !key.is_empty() => (format!("{mods}+"), key),
+            _ => (String::new(), name),
+        },
     };
-    let typed = text.filter(|_| !(modifiers.ctrl || modifiers.mac_cmd || modifiers.alt));
-    Ok((key, modifiers, typed))
-}
-
-fn capitalized(word: &str) -> String {
-    let mut chars = word.chars();
-    chars.next().map(|c| c.to_ascii_uppercase().to_string() + chars.as_str()).unwrap_or_default()
+    let key = match key.to_ascii_lowercase().as_str() {
+        "esc" => "Escape".to_owned(),
+        "return" => "Enter".to_owned(),
+        "bs" => "Backspace".to_owned(),
+        "pgup" => "PageUp".to_owned(),
+        "pgdn" => "PageDown".to_owned(),
+        lower if key.chars().count() > 1 => lower.split('_').map(|w| {
+            let mut chars = w.chars();
+            chars.next().map(|c| c.to_ascii_uppercase().to_string() + chars.as_str()).unwrap_or_default()
+        }).collect(),
+        _ => key.to_owned(),
+    };
+    crate::keymap::Chord::try_from(format!("{mods}{key}")).map_err(|e| format!("{name:?}: {e}"))
 }
 
 /// Every piece of text drawn this frame and visible, back to front.
@@ -541,13 +513,21 @@ mod tests {
 
     #[test]
     fn keys_are_named_as_in_the_key_sheet() {
-        let (key, mods, text) = key_press("ctrl+enter").unwrap();
-        assert_eq!((key, mods.command, text), (egui::Key::Enter, true, None));
-        assert_eq!(key_press("space").unwrap().2.as_deref(), Some(" "), "space types a space, as a browser gives it");
-        let (key, mods, text) = key_press("G").unwrap();
-        assert_eq!((key, mods.shift, text.as_deref()), (egui::Key::G, true, Some("G")));
-        assert_eq!(key_press("esc").unwrap().0, egui::Key::Escape);
-        assert_eq!(key_press("page_down").unwrap().0, egui::Key::PageDown);
+        // The press a key name makes: its key with its modifiers, the text it types.
+        let press = |name: &str| {
+            let (mods, down, _) = key_press(name).unwrap().press();
+            let key = down.iter().find_map(|e| if let egui::Event::Key { key, .. } = e { Some(*key) } else { None });
+            let text = down.iter().find_map(|e| if let egui::Event::Text(t) = e { Some(t.clone()) } else { None });
+            (key, mods, text)
+        };
+        let (key, mods, text) = press("ctrl+enter");
+        assert_eq!((key, mods.command, text), (Some(egui::Key::Enter), true, None));
+        assert_eq!(press("space").2.as_deref(), Some(" "), "space types a space, as a browser gives it");
+        let (key, mods, text) = press("G");
+        assert_eq!((key, mods.shift, text.as_deref()), (Some(egui::Key::G), true, Some("G")));
+        assert_eq!(press("+").2.as_deref(), Some("+"), "the keymap's own names: + types a plus");
+        assert_eq!(press("esc").0, Some(egui::Key::Escape));
+        assert_eq!(press("page_down").0, Some(egui::Key::PageDown));
         assert!(key_press("hyper+x").is_err());
         assert!(key_press("nonsense").is_err());
     }

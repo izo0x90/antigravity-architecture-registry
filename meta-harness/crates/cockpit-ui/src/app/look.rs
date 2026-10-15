@@ -72,7 +72,7 @@ impl CockpitApp {
     /// The quick look, over the column it was opened from: a host like a
     /// column, holding its view (the card's spec view, or the inbox), its
     /// own controls on its header.
-    pub(super) fn render_quick_look(&mut self, ctx: &egui::Context, shell: &[Action]) {
+    pub(super) fn render_quick_look(&mut self, ctx: &egui::Context) {
         let Some(look) = &self.quick_look else { return };
         let (slot, kind) = (look.slot, look.kind);
         let over = self.slot_rects.get(slot).copied().filter(|r| r.is_positive()).unwrap_or_else(|| ctx.content_rect());
@@ -88,16 +88,17 @@ impl CockpitApp {
             _ => right,
         };
         let pos = egui::pos2(x, screen.center().y - size.y / 2.0);
-        let own = self.look_actions();
+        // Its own controls from the one list (where you are: it).
+        let own: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::Host).collect();
         let area = egui::Area::new(egui::Id::new("quick_look")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
             Frame::NONE.fill(colors().panel).stroke(Stroke::new(theme.line_thin, colors().focus)).corner_radius(theme.radius_xl).inner_margin(crate::theme::margin(theme.space_m)).show(ui, |ui| {
                 ui.set_min_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
                 ui.set_max_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{} Quick look", egui_phosphor::regular::EYE)).strong().size(theme.text_label).color(colors().text_strong));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.host_controls(ui, &own, slot, shell));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.host_controls(ui, &own, slot));
                 });
-                self.render_view(kind, ui, slot, true, shell);
+                self.render_view(Here { slot, kind, look: true }, ui, true);
             });
         });
         // A click outside closes it (a peek's key closes it when let go).

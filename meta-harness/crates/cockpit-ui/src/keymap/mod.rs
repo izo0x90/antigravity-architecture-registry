@@ -131,6 +131,23 @@ impl Chord {
         }
     }
 
+    /// The input a hand makes pressing it: the modifiers held, the events
+    /// down (its key, the text it types), and up. How the cockpit is
+    /// pressed from outside: the same grammar the keymap is written in.
+    pub fn press(&self) -> (egui::Modifiers, Vec<egui::Event>, Vec<egui::Event>) {
+        let physical = self.physical();
+        let shifted = matches!(&self.key, ChordKey::Text(t) if t.chars().all(|c| c.is_uppercase()));
+        let modifiers = egui::Modifiers { alt: self.alt, shift: self.shift || shifted, ctrl: self.ctrl, command: self.ctrl, mac_cmd: false };
+        let key = |pressed| physical.map(|key| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: if pressed { modifiers } else { egui::Modifiers::NONE } });
+        let typed = match &self.key {
+            ChordKey::Text(t) => Some(t.clone()),
+            ChordKey::Key(Key::Space) if !self.ctrl && !self.alt => Some(" ".to_owned()),
+            ChordKey::Key(_) => None,
+        };
+        let down = key(true).into_iter().chain(typed.map(egui::Event::Text)).collect();
+        (modifiers, down, key(false).into_iter().collect())
+    }
+
     /// Takes the key if it was pressed (so a text box under it doesn't act
     /// on it too): whether it was.
     pub fn consume(&self, input: &mut egui::InputState) -> bool {
@@ -328,11 +345,6 @@ impl KeymapConfig {
     }
 
     /// The binding for an action: by id, then aliases, then the closest wildcard.
-    /// Whether `gesture` (`"swipe_left"`) runs `action`.
-    pub fn runs_on(&self, action: &Action, gesture: &str) -> bool {
-        self.binding_for(action).is_some_and(|b| b.gestures.iter().any(|g| g == gesture))
-    }
-
     /// Every bound gesture is one the cockpit knows.
     pub fn check_gestures(&self) -> Result<(), String> {
         match self.bind.iter().find_map(|(id, b)| b.gestures.iter().find(|g| !crate::touch::BINDABLE.contains(&g.as_str())).map(|g| (id, g))) {
@@ -400,7 +412,9 @@ impl KeymapConfig {
             .zip(specs)
             .zip(leaders)
             .map(|(((origin, action), spec), leader)| Bound {
+                layer: crate::actions::Layer::Everywhere,
                 keys: spec.map(|b| b.keys.iter().map(|k| k.0.clone()).collect()).unwrap_or_default(),
+                gestures: spec.map(|b| b.gestures.clone()).unwrap_or_default(),
                 action,
                 origin,
                 leader,

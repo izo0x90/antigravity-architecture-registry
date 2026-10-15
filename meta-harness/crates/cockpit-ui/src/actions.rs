@@ -75,6 +75,22 @@ pub enum Scope {
     Focused,
 }
 
+/// Where an action sits relative to where you are, closest first. Every
+/// bound action has one (worked out once a frame, with its keys); every
+/// surface reads it: the key bar and the leader menu put the closest first,
+/// the `?` sheet has a section for each, and each host draws its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Layer {
+    /// What you're on: the cursor's item, or the box being typed in.
+    On,
+    /// The focused panel's own, and the moves and go-tos on its cursor.
+    Panel,
+    /// What holds the panel: the quick look, the column.
+    Host,
+    /// The rest: columns, servers, the palette, the bell.
+    Everywhere,
+}
+
 /// Where an action's control shows. Hosts draw both; views draw none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum At {
@@ -134,11 +150,13 @@ pub struct Control {
     pub tone: Option<Tone>,
     /// More on hover, after what it does and its key.
     pub hover: Option<String>,
+    /// At the far end of its row (the top bar's columns and tools).
+    pub end: bool,
 }
 
 impl Control {
     pub fn new(at: At, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
-        Self { at, style, caption: caption.into(), icon, tone: None, hover: None }
+        Self { at, style, caption: caption.into(), icon, tone: None, hover: None, end: false }
     }
 
     pub fn tone(mut self, tone: Tone) -> Self {
@@ -148,6 +166,11 @@ impl Control {
 
     pub fn hover(mut self, hover: impl Into<String>) -> Self {
         self.hover = Some(hover.into());
+        self
+    }
+
+    pub fn at_end(mut self) -> Self {
+        self.end = true;
         self
     }
 }
@@ -267,6 +290,10 @@ pub struct Action {
     pub when: When,
     /// Running it is a jump: where the cursor was goes in the jump list.
     pub jump: bool,
+    /// Where it sits, when its maker says (a shell action on what you're on
+    /// is the panel's; a quick look's or a column's own, its host's). A
+    /// view's own are its panel's; the shell's otherwise everywhere's.
+    pub layer: Option<Layer>,
     command: Rc<dyn Any>,
 }
 
@@ -291,6 +318,7 @@ impl Action {
             importance: SECONDARY,
             when: When::Always,
             jump: false,
+            layer: None,
             command: Rc::new(command),
         }
     }
@@ -312,6 +340,11 @@ impl Action {
 
     pub fn jump(mut self) -> Self {
         self.jump = true;
+        self
+    }
+
+    pub fn layer(mut self, layer: Layer) -> Self {
+        self.layer = Some(layer);
         self
     }
 
@@ -391,14 +424,35 @@ pub struct Bound {
     pub leader: Option<Vec<char>>,
     /// Direct key sequences in normal mode (most are one chord; `g c` is two).
     pub keys: Vec<Vec<Chord>>,
+    /// Touch gestures that run it (`"swipe_left"`).
+    pub gestures: Vec<String>,
+    /// Where it sits relative to where you are.
+    pub layer: Layer,
 }
 
 impl Bound {
+    /// The quickest way to run it, as keys are written: its direct key,
+    /// else its leader path (empty with neither). What every control and
+    /// the key bar show.
     pub fn key_hint(&self) -> String {
-        match &self.leader {
-            Some(path) => crate::keymap::local().leader_hint(path),
-            None => self.keys.first().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" ")).unwrap_or_default(),
+        match self.keys.first() {
+            Some(seq) => seq.iter().map(Chord::label).collect::<Vec<_>>().join(" "),
+            None => self.leader.as_ref().map(|path| crate::keymap::local().leader_hint(path)).unwrap_or_default(),
         }
+    }
+
+    /// Every way to run it: its keys, its leader path, its gestures (what
+    /// the `?` sheet lists).
+    pub fn ways(&self) -> Vec<String> {
+        let keys = self.keys.iter().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" "));
+        let leader = self.leader.iter().map(|path| crate::keymap::local().leader_hint(path));
+        let gestures = self.gestures.iter().map(|g| g.replace('_', " "));
+        keys.chain(leader).chain(gestures).collect()
+    }
+
+    /// Whether `gesture` (`"swipe_left"`) runs it.
+    pub fn runs_on(&self, gesture: &str) -> bool {
+        self.gestures.iter().any(|g| g == gesture)
     }
 }
 
@@ -419,25 +473,9 @@ pub struct RunCx<'a> {
     pub slot: usize,
     /// A short note for the status line (why something didn't happen).
     pub note: &'a mut Option<String>,
-    /// The shell's own actions (moves, go-tos, the jump list), for views
-    /// that put them on chips or toolbars.
-    pub shell: &'a [Action],
-    /// Each action's key as bound now (`id`, its key), for views that show
-    /// the keys beside what they do (a request's answers).
-    pub hints: &'a [(String, String)],
     /// An action a control asked to run (its id, and its value if it has
     /// one): the app runs it once the frame is drawn, the way its key would.
     pub asked: &'a mut Option<(String, Option<String>)>,
-}
-
-/// The key bound to action `id` now, in words (none when it has none).
-pub fn key_of<'a>(hints: &'a [(String, String)], id: &str) -> Option<&'a str> {
-    hints.iter().find(|(a, _)| a == id).map(|(_, k)| k.as_str()).filter(|k| !k.is_empty())
-}
-
-/// Action `id`'s key, for a control's hover (empty when it has none).
-pub fn key_tip(hints: &[(String, String)], id: &str) -> String {
-    key_of(hints, id).unwrap_or_default().to_owned()
 }
 
 /// A part of the UI that offers actions: what it can do right now, and running
@@ -471,9 +509,9 @@ impl LeaderEntry {
 }
 
 /// What is reachable one key below `path`: submenus that contain at least one
-/// action, and actions bound directly at this level. What belongs to the
-/// focused view comes first.
-pub fn leader_entries(bound: &[Bound], path: &[char], focused: Origin) -> Vec<LeaderEntry> {
+/// action, and actions bound directly at this level. What's closest to where
+/// you are comes first.
+pub fn leader_entries(bound: &[Bound], path: &[char]) -> Vec<LeaderEntry> {
     let mut entries: Vec<LeaderEntry> = Vec::new();
     for (index, b) in bound.iter().enumerate() {
         let Some(leader) = &b.leader else { continue };
@@ -488,21 +526,26 @@ pub fn leader_entries(bound: &[Bound], path: &[char], focused: Origin) -> Vec<Le
             entries.push(LeaderEntry::Group { key });
         }
     }
-    entries.sort_by_key(|e| (!is_primary(e, bound, path, focused), matches!(e, LeaderEntry::Action { .. }), e.key()));
+    entries.sort_by_key(|e| (closest(e, bound, path), matches!(e, LeaderEntry::Action { .. }), e.key()));
     entries
 }
 
-/// Whether a leader entry belongs to the focused view (an action of its, or
-/// a submenu holding one).
-pub fn is_primary(entry: &LeaderEntry, bound: &[Bound], path: &[char], focused: Origin) -> bool {
+/// The closest layer a leader entry reaches (its action's, or the closest
+/// of a submenu's).
+pub fn closest(entry: &LeaderEntry, bound: &[Bound], path: &[char]) -> Layer {
     match entry {
-        LeaderEntry::Action { index, .. } => bound[*index].origin == focused,
+        LeaderEntry::Action { index, .. } => bound[*index].layer,
         LeaderEntry::Group { key } => {
             let mut prefix = path.to_vec();
             prefix.push(*key);
-            bound.iter().any(|b| b.origin == focused && b.leader.as_ref().is_some_and(|l| l.starts_with(&prefix)))
+            bound.iter().filter(|b| b.leader.as_ref().is_some_and(|l| l.starts_with(&prefix))).map(|b| b.layer).min().unwrap_or(Layer::Everywhere)
         }
     }
+}
+
+/// Whether a leader entry is about where you are (not only everywhere's).
+pub fn is_primary(entry: &LeaderEntry, bound: &[Bound], path: &[char]) -> bool {
+    closest(entry, bound, path) < Layer::Everywhere
 }
 
 /// What the user did with a control.
@@ -512,11 +555,13 @@ enum ControlUse {
     OpenPalette,
 }
 
-/// Draws an action as its control, saying its key on hover; used, it's
-/// asked for (`RunCx::asked`). Whether it was used. Only hosts call this
-/// (and `controls`): views draw no controls.
-pub fn control(ui: &mut egui::Ui, action: &Action, cx: &mut RunCx<'_>) -> bool {
-    let Some(used) = draw_control(ui, action, cx.hints) else { return false };
+/// Draws a bound action as its control: its caption and the key that runs
+/// it (the binding's own, the one key handling uses; on hover when there's
+/// no room); used, it's asked for (`RunCx::asked`). Whether it was used.
+/// Only hosts call this (and `controls`): views draw no controls.
+pub fn control(ui: &mut egui::Ui, bound: &Bound, cx: &mut RunCx<'_>) -> bool {
+    let action = &bound.action;
+    let Some(used) = draw_control(ui, bound) else { return false };
     let value = match used {
         ControlUse::Run(value) => value,
         // Asked without its value: the palette opens at it.
@@ -526,24 +571,26 @@ pub fn control(ui: &mut egui::Ui, action: &Action, cx: &mut RunCx<'_>) -> bool {
     true
 }
 
-/// Draws every action of `actions` that has a control, in order.
-pub fn controls<'x>(ui: &mut egui::Ui, actions: impl IntoIterator<Item = &'x Action>, cx: &mut RunCx<'_>) {
-    for action in actions.into_iter().filter(|a| a.control.is_some()) {
-        control(ui, action, cx);
+/// Draws every bound action of `bound` that has a control, in order.
+pub fn controls<'x>(ui: &mut egui::Ui, bound: impl IntoIterator<Item = &'x Bound>, cx: &mut RunCx<'_>) {
+    for b in bound.into_iter().filter(|b| b.action.control.is_some()) {
+        control(ui, b, cx);
     }
 }
+
+/// Narrowest room left in a row for a control to also show its key.
+const KEY_SHOWN_ABOVE: f32 = 140.0;
 
 /// Narrowest a picker gets before its text is truncated.
 const PICKER_MIN_WIDTH: f32 = 90.0;
 
-/// Draws an action's control; hovering it says what it does and its key
-/// (from `hints`, as bound now).
-fn draw_control(ui: &mut egui::Ui, action: &Action, hints: &[(String, String)]) -> Option<ControlUse> {
+/// Draws a bound action's control; hovering it says what it does and its
+/// key, and the key shows beside its caption when there's room.
+fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
+    let action = &bound.action;
     let toolbar = action.control.as_ref()?;
-    let mut tip = match key_of(hints, &action.id) {
-        Some(key) => format!("{} ({key})", action.label),
-        None => action.label.clone(),
-    };
+    let key = bound.key_hint();
+    let mut tip = if key.is_empty() { action.label.clone() } else { format!("{} ({key})", action.label) };
     if let Some(more) = &toolbar.hover {
         tip = format!("{tip}\n{more}");
     }
@@ -553,33 +600,39 @@ fn draw_control(ui: &mut egui::Ui, action: &Action, hints: &[(String, String)]) 
         None if toolbar.caption.is_empty() => action.label.clone(),
         None => toolbar.caption.clone(),
     };
-    let tinted = |text: String| {
-        let rich = RichText::new(text).size(crate::theme::look().text_body);
-        match toolbar.tone {
-            Some(tone) => rich.color(tone.color()),
-            None => rich,
+    let shows_key = !key.is_empty() && ui.available_width() > KEY_SHOWN_ABOVE;
+    let tinted = |text: String| -> egui::WidgetText {
+        let look = crate::theme::look();
+        let style = ui.style();
+        let mut job = egui::text::LayoutJob::default();
+        let mut caption = RichText::new(text).size(look.text_body);
+        if let Some(tone) = toolbar.tone {
+            caption = caption.color(tone.color());
         }
+        caption.append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
+        if shows_key {
+            RichText::new(format!("  {key}")).monospace().size(look.text_small).color(crate::theme::colors().key).append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
+        }
+        job.into()
     };
     match (&action.param, toolbar.style) {
         (Param::Toggle { on }, Style::Setting) => {
             let mut value = *on;
-            ui.checkbox(&mut value, RichText::new(text).size(crate::theme::look().text_body)).changed().then(|| ControlUse::Run(Some(value.to_string())))
+            ui.checkbox(&mut value, tinted(text)).on_hover_text(tip).changed().then(|| ControlUse::Run(Some(value.to_string())))
         }
         (Param::Choice(choices), Style::Setting) => {
-            let caption = RichText::new(format!("{text}:")).strong().size(crate::theme::look().text_body);
+            let caption = tinted(format!("{text}:"));
             let shown = choices.iter().find(|c| c.current).map(|c| c.label.clone()).unwrap_or_else(|| "—".into());
             // Caption and picker stay on one row: wrap first if they won't fit, and
             // truncate the picker rather than let it push the slot wider.
-            let measure = |ui: &egui::Ui, text: RichText| {
-                egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button).size().x
-            };
+            let measure = |ui: &egui::Ui, text: egui::WidgetText| text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button).size().x;
             let spacing = ui.spacing();
             let gap = spacing.item_spacing.x;
-            let picker = (measure(ui, RichText::new(&shown)) + spacing.icon_width + spacing.icon_spacing + spacing.button_padding.x * 2.0).max(PICKER_MIN_WIDTH);
+            let picker = (measure(ui, RichText::new(&shown).into()) + spacing.icon_width + spacing.icon_spacing + spacing.button_padding.x * 2.0).max(PICKER_MIN_WIDTH);
             if ui.available_width() < measure(ui, caption.clone()) + gap + picker {
                 ui.end_row();
             }
-            ui.label(caption);
+            ui.label(caption).on_hover_text(&tip);
             let mut picked = None;
             egui::ComboBox::from_id_salt(("control", action.id.as_str()))
                 .width(PICKER_MIN_WIDTH.min(ui.available_width()))
@@ -618,31 +671,30 @@ mod tests {
             origin: Origin::Shell,
             leader: (!leader.is_empty()).then(|| leader.chars().collect()),
             keys: Vec::new(),
+            gestures: Vec::new(),
+            layer: Layer::Everywhere,
         }
     }
 
     #[test]
     fn leader_tree_is_built_from_resolved_paths() {
         let all = vec![bound("slot", "1"), bound("new", "sn"), bound("resume", "sr"), bound("palette-only", "")];
-        let root = leader_entries(&all, &[], Origin::Shell);
+        let root = leader_entries(&all, &[]);
         assert!(root.contains(&LeaderEntry::Group { key: 's' }));
         assert!(root.contains(&LeaderEntry::Action { key: '1', index: 0 }));
         assert!(!root.iter().any(|e| matches!(e, LeaderEntry::Action { index: 3, .. })));
-        let session = leader_entries(&all, &['s'], Origin::Shell);
+        let session = leader_entries(&all, &['s']);
         assert_eq!(session, vec![LeaderEntry::Action { key: 'n', index: 1 }, LeaderEntry::Action { key: 'r', index: 2 }]);
     }
 
     #[test]
-    fn the_focused_views_leader_entries_come_first() {
+    fn leader_entries_closest_to_where_you_are_come_first() {
         let mut all = vec![bound("slot", "1"), bound("new", "sn"), bound("graph.view", "gv"), bound("graph.flip", "z")];
-        all[2].origin = Origin::View(BufferKind::Graph);
-        all[3].origin = Origin::View(BufferKind::Graph);
-        let root = leader_entries(&all, &[], Origin::View(BufferKind::Graph));
-        assert_eq!(root[..2], [LeaderEntry::Group { key: 'g' }, LeaderEntry::Action { key: 'z', index: 3 }], "the graph's own first: {root:?}");
-        assert!(is_primary(&root[0], &all, &[], Origin::View(BufferKind::Graph)));
-        assert!(!is_primary(&root[2], &all, &[], Origin::View(BufferKind::Graph)), "then the rest");
-        let from_spec = leader_entries(&all, &[], Origin::View(BufferKind::Spec));
-        assert_eq!(from_spec[0], LeaderEntry::Group { key: 'g' }, "nothing of the spec's here: the usual order");
+        (all[2].layer, all[3].layer) = (Layer::Panel, Layer::Panel);
+        let root = leader_entries(&all, &[]);
+        assert_eq!(root[..2], [LeaderEntry::Group { key: 'g' }, LeaderEntry::Action { key: 'z', index: 3 }], "the panel's own first: {root:?}");
+        assert!(is_primary(&root[0], &all, &[]));
+        assert!(!is_primary(&root[2], &all, &[]), "then everywhere's");
     }
 
     #[test]

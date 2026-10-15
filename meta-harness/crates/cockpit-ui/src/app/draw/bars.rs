@@ -2,15 +2,6 @@
 
 use super::super::*;
 
-/// An action's keys as the key sheet lists them ("g d", "Space g v").
-pub(in crate::app) fn keys_of(b: &Bound) -> String {
-    let mut all: Vec<String> = b.keys.iter().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" ")).collect();
-    if let Some(path) = &b.leader {
-        all.push(crate::keymap::local().leader_hint(path));
-    }
-    all.join(" / ")
-}
-
 /// A mark in words: its view and where.
 pub(in crate::app) fn describe_jump(jump: &Jump) -> String {
     let short = |id: &ComponentId| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned();
@@ -27,20 +18,35 @@ pub(in crate::app) fn describe_jump(jump: &Jump) -> String {
 }
 
 impl CockpitApp {
-    /// The keys the key bar shows: the focused view's and the shared ones
-    /// that apply to what the cursor is on, most important first.
+    /// The keys the key bar shows: what applies where you are (what you're
+    /// on, this panel, what holds it), most important first; among equals,
+    /// the closest, and in a layer the panel's own before the moves it
+    /// shares.
     pub(crate) fn bar_keys<'a>(&self, bound: &'a [Bound]) -> Vec<&'a Bound> {
-        let focused = Origin::View(self.focused_kind());
         let situation = self.situation();
-        let shared = |b: &Bound| b.origin == Origin::Shell && ["nav.", "goto.", "quicklook.", "talk."].iter().any(|p| b.action.id.starts_with(p));
+        let own = Origin::View(self.here().kind);
         let mut keys: Vec<(usize, &Bound)> = bound
             .iter()
             .enumerate()
-            .filter(|(_, b)| (b.origin == focused || shared(b)) && !b.keys.is_empty() && b.action.when.holds(&situation))
+            .filter(|(_, b)| b.layer < Layer::Everywhere && !b.key_hint().is_empty() && b.action.when.holds(&situation))
             .collect();
-        // Most important first; the view's own before the shared ones; then as listed.
-        keys.sort_by_key(|(i, b)| (b.action.importance, b.origin != focused, b.action.group, *i));
+        keys.sort_by_key(|(i, b)| (b.action.importance, b.layer, b.origin != own, b.action.group, *i));
         keys.into_iter().take(self.config.keymap.bar.max).map(|(_, b)| b).collect()
+    }
+
+    /// While a mode has the keys (typing, the palette, a search, labels, a
+    /// mark): its name and its keys, as configured, each with what it does.
+    pub(in crate::app) fn mode_keys(&self) -> Option<(&'static str, Vec<(String, &'static str)>)> {
+        let local = crate::keymap::local();
+        let back = local.back.label();
+        match (&self.capture, self.input_mode) {
+            (Some(Capture::Search(_)), _) => Some(("Searching", vec![(local.input.send_label(), "jumps to it"), (back, "gives up")])),
+            (Some(Capture::Hint(_)), _) => Some(("Labels", vec![("a label".into(), "goes there"), (back, "gives up")])),
+            (Some(Capture::MarkSet | Capture::MarkJump), _) => Some(("Marks", vec![("a letter".into(), "the mark"), (back, "gives up")])),
+            (None, InputMode::Insert { .. }) => Some(("Typing", local.input.keys(&local.back, "leaves the field"))),
+            (None, InputMode::Palette) => Some(("The palette", local.list.keys(&local.back, "closes"))),
+            (None, _) => None,
+        }
     }
 
     /// The bar at the bottom: what's being typed (a search, a hint, a mark),
@@ -70,26 +76,15 @@ impl CockpitApp {
                 if !show_keys {
                     return;
                 }
-                // While typing a search, a label or a mark, those keys are
-                // what matter, as configured.
-                let local = crate::keymap::local();
-                let back = local.back.label();
-                let typing: Option<Vec<(String, &str)>> = match (&self.capture, self.input_mode) {
-                    (Some(Capture::Search(_)), _) => Some(vec![(local.input.send_label(), "jumps to it"), (back, "gives up")]),
-                    (Some(Capture::Hint(_)), _) => Some(vec![("a label".into(), "goes there"), (back, "gives up")]),
-                    (Some(Capture::MarkSet | Capture::MarkJump), _) => Some(vec![("a letter".into(), "the mark"), (back, "gives up")]),
-                    (None, InputMode::Insert { .. }) => Some(local.input.keys(&local.back, "leaves the field")),
-                    (None, InputMode::Palette) => Some(local.list.keys(&local.back, "closes")),
-                    (None, _) => None,
-                };
-                if let Some(typing) = typing {
+                // While a mode has the keys, its keys are what matter.
+                if let Some((_, typing)) = self.mode_keys() {
                     for (keys, what) in typing {
                         ui.label(RichText::new(format!("{keys} {what}")).size(crate::theme::look().text_body).color(colors().muted));
                     }
                     return;
                 }
                 for b in self.bar_keys(&bound) {
-                    let keys = b.keys.first().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+                    let keys = b.key_hint();
                     let text = RichText::new(format!("{keys} {}", b.action.label)).size(if narrow { crate::theme::look().text_title } else { crate::theme::look().text_body });
                     let mut button = egui::Button::new(text).corner_radius(crate::theme::look().radius_m);
                     if narrow {
@@ -126,12 +121,11 @@ impl CockpitApp {
         let rows: Vec<(String, String)> = if waiting {
             let bound = self.bound_actions();
             let situation = self.situation();
-            let focused = Origin::View(self.focused_kind());
-            continuations(&bound, &self.pending_keys)
-                .into_iter()
-                .filter(|(b, _)| b.action.when.holds(&situation) && (b.origin == focused || b.origin == Origin::Shell || b.action.scope == Scope::Global))
-                .map(|(b, rest)| (rest.iter().map(Chord::label).collect::<Vec<_>>().join(" "), b.action.label.clone()))
-                .collect()
+            let mut next = continuations(&bound, &self.pending_keys);
+            next.retain(|(b, _)| b.action.when.holds(&situation));
+            // The closest to where you are first.
+            next.sort_by_key(|(b, _)| b.layer);
+            next.into_iter().map(|(b, rest)| (rest.iter().map(Chord::label).collect::<Vec<_>>().join(" "), b.action.label.clone())).collect()
         } else {
             let mut rows: Vec<(String, String)> = self.desk.marks.iter().map(|(letter, jump)| (letter.to_string(), describe_jump(jump))).collect();
             if matches!(self.capture, Some(Capture::MarkSet)) {
@@ -157,7 +151,10 @@ impl CockpitApp {
         });
     }
 
-    /// The focused view's keys (`?`), grouped and searchable.
+    /// Every key where you are (`?`): a mode's keys first while one has
+    /// them; then a section per layer (what you're on, this panel, what
+    /// holds it, everywhere), grouped inside; every way to run each (keys,
+    /// leader, gesture); what doesn't apply now, greyed. Searchable.
     pub(in crate::app) fn render_key_sheet(&mut self, ctx: &egui::Context) {
         let Some(mut filter) = self.key_sheet.take() else { return };
         if ctx.input(|i| self.config.keymap.back.pressed(i)) {
@@ -165,35 +162,75 @@ impl CockpitApp {
             return;
         }
         let bound = self.bound_actions();
-        let focused = Origin::View(self.focused_kind());
         let situation = self.situation();
-        let rows: Vec<&Bound> = bound.iter().filter(|b| (b.origin == focused || b.origin == Origin::Shell) && (!b.keys.is_empty() || b.leader.is_some())).collect();
+        let here = self.here();
+        let rows: Vec<&Bound> = bound.iter().filter(|b| !b.ways().is_empty()).collect();
+        let layer_title = |layer: Layer| -> String {
+            match layer {
+                Layer::On => "On what you're on".to_owned(),
+                Layer::Panel => self.desk.panel(here.kind).title().text,
+                Layer::Host if here.look => "Quick look".to_owned(),
+                Layer::Host => format!("Column {}", here.slot + 1),
+                Layer::Everywhere => "Everywhere".to_owned(),
+            }
+        };
+        let mode = self.mode_keys();
         let mut open = true;
-        let title = format!("{} keys", self.focused_kind().title());
-        egui::Window::new(title).id(egui::Id::new("key_sheet")).collapsible(false).resizable(true).default_width(520.0).anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO).open(&mut open).show(ctx, |ui| {
+        egui::Window::new("Keys").id(egui::Id::new("key_sheet")).collapsible(false).resizable(true).default_width(560.0).anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO).open(&mut open).show(ctx, |ui| {
             let field = ui.add(egui::TextEdit::singleline(&mut filter).hint_text("filter…").desired_width(f32::INFINITY));
             field.request_focus();
+            let wanted = filter.trim().to_lowercase();
+            let matches = |text: &str| wanted.is_empty() || text.to_lowercase().contains(&wanted);
+            let look = crate::theme::look();
+            let row = |ui: &mut egui::Ui, keys: &str, what: &str, applies: bool| {
+                ui.label(RichText::new(keys).monospace().size(look.text_body).color(colors().key));
+                ui.label(RichText::new(what).size(look.text_body).color(if applies { colors().text } else { colors().faint }));
+                ui.end_row();
+            };
             egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
-                let matches = |b: &&&Bound| filter.trim().is_empty() || format!("{} {} {}", b.action.label, b.action.id, keys_of(b)).to_lowercase().contains(&filter.trim().to_lowercase());
-                if !rows.iter().any(|b| matches(&b)) {
-                    ui.label(RichText::new("No keys match.").size(crate::theme::look().text_body).color(colors().muted));
+                let mut any = false;
+                if let Some((name, keys)) = &mode {
+                    let keys: Vec<&(String, &str)> = keys.iter().filter(|(k, w)| matches(&format!("{k} {w}"))).collect();
+                    if !keys.is_empty() {
+                        any = true;
+                        ui.label(RichText::new(*name).strong().size(look.text_title).color(colors().accent));
+                        egui::Grid::new("key_sheet_mode").num_columns(2).spacing(egui::vec2(16.0, 2.0)).show(ui, |ui| keys.iter().for_each(|(k, w)| row(ui, k, w, true)));
+                        ui.add_space(look.space_m);
+                    }
                 }
-                for group in Group::ALL {
-                    let mut in_group: Vec<&&Bound> = rows.iter().filter(|b| b.action.group == group).filter(matches).collect();
-                    if in_group.is_empty() {
+                for layer in [Layer::On, Layer::Panel, Layer::Host, Layer::Everywhere] {
+                    let here: Vec<&&Bound> = rows.iter().filter(|b| b.layer == layer && matches(&format!("{} {} {}", b.action.label, b.action.id, b.ways().join(" ")))).collect();
+                    if here.is_empty() {
                         continue;
                     }
-                    in_group.sort_by_key(|b| (b.origin != focused, b.action.importance));
-                    ui.label(RichText::new(group.title()).strong().size(crate::theme::look().text_label).color(colors().info));
-                    egui::Grid::new(("key_sheet", group as u8)).num_columns(2).spacing(egui::vec2(16.0, 2.0)).show(ui, |ui| {
-                        for b in in_group {
-                            let applies = b.action.when.holds(&situation);
-                            ui.label(RichText::new(keys_of(b)).monospace().size(crate::theme::look().text_body).color(colors().key));
-                            ui.label(RichText::new(&b.action.label).size(crate::theme::look().text_body).color(if applies { colors().text } else { colors().faint }));
-                            ui.end_row();
+                    any = true;
+                    ui.label(RichText::new(layer_title(layer)).strong().size(look.text_title).color(colors().accent));
+                    for group in Group::ALL {
+                        let mut in_group: Vec<&&&Bound> = here.iter().filter(|b| b.action.group == group).collect();
+                        if in_group.is_empty() {
+                            continue;
                         }
-                    });
-                    ui.add_space(crate::theme::look().space_s);
+                        in_group.sort_by_key(|b| b.action.importance);
+                        ui.label(RichText::new(group.title()).strong().size(look.text_label).color(colors().info));
+                        egui::Grid::new(("key_sheet", layer, group as u8)).num_columns(2).spacing(egui::vec2(16.0, 2.0)).show(ui, |ui| {
+                            for b in in_group {
+                                row(ui, &b.ways().join(" · "), &b.action.label, b.action.when.holds(&situation));
+                            }
+                        });
+                    }
+                    ui.add_space(look.space_m);
+                }
+                // The pointer and fingers, the same in every view.
+                let go_to = format!("{}+click", crate::keymap::local().pointer.go_to.label());
+                let pointer = [("click / tap", "put the cursor on an item"), ("double click / tap", "open it"), ("long press", "what can be done with it (the palette)"), (go_to.as_str(), "go to the name under it (code)")];
+                let pointer: Vec<&(&str, &str)> = pointer.iter().filter(|(k, w)| matches(&format!("{k} {w}"))).collect();
+                if !pointer.is_empty() {
+                    any = true;
+                    ui.label(RichText::new("Pointer and touch").strong().size(look.text_title).color(colors().accent));
+                    egui::Grid::new("key_sheet_pointer").num_columns(2).spacing(egui::vec2(16.0, 2.0)).show(ui, |ui| pointer.iter().for_each(|(k, w)| row(ui, k, w, true)));
+                }
+                if !any {
+                    ui.label(RichText::new("No keys match.").size(look.text_body).color(colors().muted));
                 }
             });
         });

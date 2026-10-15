@@ -289,7 +289,7 @@ impl CodeViewerState {
             Some(t) => {
                 let at = t.at.as_ref().map(|(f, l)| format!("\n{f}:{l}")).unwrap_or_default();
                 let sig = t.signature.as_ref().map(|s| format!("\n{s}")).unwrap_or_default();
-                format!("{} ({}){sig}{at}\n{}+click: go to it", t.name, t.type_name, crate::keymap::local().pointer.go_to.label())
+                format!("{} ({}){sig}{at}", t.name, t.type_name)
             }
             None => id.as_str().to_owned(),
         }
@@ -903,7 +903,7 @@ pub(crate) mod tests {
         let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, h))), ..Default::default() }, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-                code.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut asked });
+                code.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut asked });
             });
         });
         placed(&output)

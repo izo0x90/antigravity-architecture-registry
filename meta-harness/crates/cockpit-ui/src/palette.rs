@@ -179,7 +179,8 @@ impl Palette {
                                 // `:42` goes to line (or row) 42 of the focused view.
                                 let line = self.filter.trim().parse::<usize>().ok().filter(|n| *n > 0).and_then(|n| actions.iter().find(|b| b.action.id == "nav.line").map(|b| (n, b)));
                                 let mut listed: Vec<&Bound> = actions.iter().collect();
-                                listed.sort_by(|a, b| a.action.label.cmp(&b.action.label));
+                                // The closest to where you are first, then by name.
+                                listed.sort_by(|a, b| (a.layer, &a.action.label).cmp(&(b.layer, &b.action.label)));
                                 let haystacks: Vec<String> = listed
                                     .iter()
                                     .map(|b| {

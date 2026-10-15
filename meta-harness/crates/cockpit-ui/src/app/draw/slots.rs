@@ -3,7 +3,7 @@
 use super::super::*;
 
 impl CockpitApp {
-    pub fn render_slot(&mut self, slot_idx: usize, ui: &mut egui::Ui, shell: &[Action]) {
+    pub fn render_slot(&mut self, slot_idx: usize, ui: &mut egui::Ui) {
         let is_focused = self.desk.columns.focused() == slot_idx;
         let border_color = if is_focused { colors().focus } else { colors().border };
 
@@ -16,34 +16,23 @@ impl CockpitApp {
 
             ui.vertical(|ui| {
                 let active_kind = self.desk.columns.kind(slot_idx);
-                let is_compact = ui.available_width() < 340.0;
 
-                // Quiet chrome: the slot's number, then a tab per view as an
-                // icon (the active one named), each saying its name and key on
-                // hover. The row wraps rather than widen the slot.
+                // Quiet chrome: the slot's number, then its controls. The row
+                // wraps rather than widen the slot.
                 let header_res = ui.horizontal_wrapped(|ui| {
                     let number_color = if is_focused { colors().focus } else { colors().faint };
                     ui.label(RichText::new((slot_idx + 1).to_string()).strong().monospace().size(crate::theme::look().text_body).color(number_color))
                         .on_hover_text(format!("Slot {}: {}", slot_idx + 1, active_kind.title().to_lowercase()));
-                    // Its controls: a tab per kind of view (the shell's
-                    // buffer.* actions; a click focuses the column first, so
-                    // they act on it), and closing it.
-                    let tabs: Vec<(String, crate::actions::Control)> = BufferKind::ALL
-                        .into_iter()
-                        .map(|kind| {
-                            let title = kind.title();
-                            let caption = if !is_compact && active_kind == kind { format!("{}{}", &title[..1], title[1..].to_lowercase()) } else { String::new() };
-                            let tab = crate::actions::Control::new(crate::actions::At::Header, crate::actions::Style::Button, caption, Some(kind.icon()));
-                            (format!("buffer.{}", kind.name()), if active_kind == kind { tab.tone(crate::actions::Tone::Accent) } else { tab.tone(crate::actions::Tone::Muted) })
-                        })
-                        .collect();
-                    let own = crate::panel::place(tabs, self.column_actions(), shell);
-                    self.host_controls(ui, &own, slot_idx, shell);
+                    // Its own controls from the one list (its host's layer
+                    // where it is): a tab per kind of view, closing it.
+                    let here = Here { slot: slot_idx, kind: active_kind, look: false };
+                    let own: Vec<Bound> = self.shown_at(here).into_iter().filter(|b| b.layer == Layer::Host).collect();
+                    self.host_controls(ui, &own, slot_idx);
                 });
                 self.feedback.register_inspectable(ui, &format!("slot_{}:header", slot_idx + 1), header_res.response.rect);
                 ui.separator();
 
-                self.render_view(active_kind, ui, slot_idx, is_focused, shell);
+                self.render_view(Here { slot: slot_idx, kind: active_kind, look: false }, ui, is_focused);
             });
         });
 
@@ -59,19 +48,9 @@ impl CockpitApp {
         }
     }
 
-    /// The palette overlay plus a floating control that opens it (touch's
-    /// way in): the shell's palette action.
-    pub fn render_palette(&mut self, ctx: &egui::Context, shell: &[Action]) {
-        let open = crate::panel::place(
-            vec![("palette.open".to_owned(), crate::actions::Control::new(crate::actions::At::Header, crate::actions::Style::Button, "Actions", Some(egui_phosphor::regular::COMMAND)))],
-            Vec::new(),
-            shell,
-        );
-        egui::Area::new(egui::Id::new("palette_touch_button")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -48.0)).order(egui::Order::Foreground).show(ctx, |ui| {
-            let focused = self.desk.columns.focused();
-            self.host_controls(ui, &open, focused, shell);
-        });
-
+    /// The palette overlay (opened by its key, or its control on the top
+    /// bar).
+    pub fn render_palette(&mut self, ctx: &egui::Context) {
         let bound = self.palette_actions();
         // A view asked for an action's picker (e.g. Resume once sessions loaded).
         for kind in BufferKind::ALL {

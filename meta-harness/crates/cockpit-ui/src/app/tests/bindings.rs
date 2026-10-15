@@ -37,7 +37,7 @@ fn vim_sequences_and_leader_drive_the_graph_and_are_rebindable() {
     assert!(app.pending_keys.is_empty(), "a key that continues nothing drops the sequence");
     // The leader menu lists the graph's own under g.
     let bound = app.bound_actions();
-    let entries = leader_entries(&bound, &['g'], Origin::View(BufferKind::Graph));
+    let entries = leader_entries(&bound, &['g']);
     assert!(entries.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'f', index } if bound[*index].action.id == "graph.go_in")));
     assert!(entries.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'v', index } if bound[*index].action.id == "graph.view")));
     // Rebinding from config takes effect.
@@ -50,12 +50,13 @@ fn vim_sequences_and_leader_drive_the_graph_and_are_rebindable() {
 #[test]
 fn tabs_are_icons_that_name_themselves_and_their_key() {
     let (ctx, mut app) = app_with_graph();
-    // A tab is the shell's buffer action (its key says so on hover).
-    let hints = app.key_hints();
-    assert_eq!((crate::actions::key_of(&hints, "buffer.graph"), crate::actions::key_of(&hints, "buffer.queue")), (Some("Space b g"), Some("Space b q")));
+    // A tab is the shell's buffer action, its key from its own binding.
+    let bound = app.bound_actions();
+    let key = |id: &str| bound.iter().find(|b| b.action.id == id).map(|b| b.key_hint());
+    assert_eq!((key("buffer.graph").as_deref(), key("buffer.queue").as_deref()), (Some("Space b g"), Some("Space b q")));
     // Only each slot's active tab is named.
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    let named = |kind: BufferKind| text.lines().any(|l| l == format!("{} {}{}", kind.icon(), &kind.title()[..1], kind.title()[1..].to_lowercase()));
+    let named = |kind: BufferKind| text.lines().any(|l| l.starts_with(&format!("{} {}{}", kind.icon(), &kind.title()[..1], kind.title()[1..].to_lowercase())));
     let active = app.desk.columns.kinds();
     for kind in BufferKind::ALL {
         assert_eq!(named(kind), active.contains(&kind), "{kind:?}: {text}");
@@ -189,9 +190,15 @@ fn question_mark_lists_this_views_keys_grouped_and_searchable() {
     frame(&ctx, &mut app, key("?"));
     assert!(app.key_sheet.is_some());
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    for expected in ["SPEC keys", "Navigate", "Go to", "Act", "g d", "Go to its code", "Comment on this item", "J", "Next section"] {
+    // A section per layer of where you are: this panel first.
+    for expected in ["Keys", "Spec", "Navigate", "Go to", "Act", "g d", "Go to its code", "Comment on this item", "J", "Next section"] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
+    // Its column's own and everywhere's follow (found by filtering).
+    app.key_sheet = Some("column".into());
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains("Column") && text.contains("Close this column") && text.contains("Everywhere") && text.contains("Add a column"), "{text}");
+    assert!(text.find("Close this column") < text.find("Add a column"), "what holds it before everywhere's");
     assert!(!text.contains("Next view"), "only this view's keys (and the shared ones)");
     app.key_sheet = Some("fold".into());
     let text = texts(&frame(&ctx, &mut app, vec![]));
@@ -269,14 +276,15 @@ fn the_leader_menu_opens_with_the_focused_views_own_menu() {
     for kind in [BufferKind::Code, BufferKind::Spec, BufferKind::Queue] {
         focus(&ctx, &mut app, kind);
         let bound = app.bound_actions();
-        let entries = leader_entries(&bound, &[], Origin::View(kind));
+        let entries = leader_entries(&bound, &[]);
         let menu = app.config.keymap.view_menu;
         assert_eq!(entries.first(), Some(&LeaderEntry::Group { key: menu }), "{kind:?}: its own menu first");
-        assert!(is_primary(&entries[0], &bound, &[], Origin::View(kind)));
-        assert!(!entries[1..].iter().any(|e| is_primary(e, &bound, &[], Origin::View(kind))) || kind == BufferKind::Graph);
-        assert!(!entries.contains(&LeaderEntry::Group { key: 'g' }), "{kind:?}: the graph's menu isn't here");
-        // Inside it: that view's actions.
-        let own = leader_entries(&bound, &[menu], Origin::View(kind));
+        // What's about where you are (the panel's, its moves and go-tos, the
+        // quick look) before what's everywhere's.
+        let primary: Vec<bool> = entries.iter().map(|e| is_primary(e, &bound, &[])).collect();
+        assert!(primary[0] && primary.windows(2).all(|w| w[0] || !w[1]), "{kind:?}: closest first: {primary:?}");
+        // Inside its menu: that view's actions.
+        let own = leader_entries(&bound, &[menu]);
         assert!(own.iter().all(|e| matches!(e, LeaderEntry::Action { index, .. } if bound[*index].origin == Origin::View(kind))));
     }
     // Drawn: the view's name heads its block.
@@ -388,4 +396,42 @@ fn a_swipe_runs_what_the_keymap_binds_to_it_in_the_view_it_started_on() {
     swipe(&ctx, &mut app, middle, 150.0, 2.0);
     assert_eq!(app.desk.chat.ui.slot.as_str(), harness_contracts::LEAD, "right: back");
     assert!(UiConfig::with_overrides("[keymap.bind]\n\"chat.next_slot\" = { gestures = [\"wiggle\"] }\n").unwrap_err().contains("no gesture `wiggle`"));
+}
+
+/// What's shown is what runs: every key the key bar, the `?` sheet and the
+/// controls show for an action (its binding's own) runs that very action,
+/// pressed as a user would, wherever you are.
+#[test]
+fn every_key_shown_runs_the_action_it_shows() {
+    fn on_a_card() -> (egui::Context, CockpitApp) {
+        let (ctx, mut app) = app_with_graph();
+        app.desk.graph.select(Some("rust:a::step".into()));
+        frame(&ctx, &mut app, vec![]);
+        (ctx, app)
+    }
+    fn in_the_quick_look() -> (egui::Context, CockpitApp) {
+        let (ctx, mut app) = on_a_card();
+        crate::graph::tests::with_detail(&mut app.desk.graph, "rust:a::step", "src/a.rs", 10, 20);
+        from_outside(&ctx, &mut app, r#"{"op":"run","id":"quicklook.toggle"}"#).unwrap();
+        assert!(app.quick_look.is_some());
+        (ctx, app)
+    }
+    for (place, setup) in [("on a card", on_a_card as fn() -> (egui::Context, CockpitApp)), ("in the quick look", in_the_quick_look)] {
+        let (_, app) = setup();
+        let situation = app.situation();
+        let shown: Vec<(String, String)> = app
+            .bound_actions()
+            .iter()
+            .filter(|b| b.action.param == Param::None && b.action.when.holds(&situation) && !b.key_hint().is_empty())
+            .map(|b| (b.action.id.clone(), b.key_hint()))
+            .collect();
+        assert!(shown.iter().any(|(id, _)| id == "quicklook.toggle"), "{place}: {shown:?}");
+        for (id, keys) in shown {
+            let (ctx, mut app) = setup();
+            app.ran.borrow_mut().clear();
+            from_outside(&ctx, &mut app, &serde_json::json!({ "op": "keys", "keys": keys }).to_string()).unwrap_or_else(|e| panic!("{place}: {id}'s keys `{keys}`: {e}"));
+            let ran = app.ran.borrow().clone();
+            assert_eq!(ran.first(), Some(&id), "{place}: `{keys}` is shown for {id}; it ran {ran:?}");
+        }
+    }
 }

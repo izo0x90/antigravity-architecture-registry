@@ -415,7 +415,11 @@ it. It's saved half a second after it last changed (`[net] save_after_ms`).
 
 The key bar at the bottom shows the keys that matter for what the cursor
 is on. Pausing on a prefix (`g`, `z`, `[`, `]`, `m`, `'`) lists what can
-follow, and `?` lists every key of the focused view. `Space` opens the
+follow, and `?` lists every key where you are: a section for what you're
+on, this panel, what holds it (the quick look, the column) and
+everywhere, each action with every way to run it (keys, leader path,
+gesture), the mode's keys first while typing or in the palette, and the
+pointer and touch grammar. `Space` opens the
 leader menu (the focused view's entries first), and `:` opens the command
 palette (`:42` goes to line 42). The palette and its pickers move with
 `Ctrl+J`/`Ctrl+K` (or `Ctrl+N`/`Ctrl+P`, or the arrows) and pick with
@@ -428,7 +432,11 @@ it, and only while you're on it: a review point's Reply, Accept and
 Reopen; a job's Approve or Retry; a card's Go into and go-tos; a request's
 answers (a list to pick from for a question, Allow and Deny for an
 approval); Send under the box you're typing in. Every button is an
-action: it says its key on hover and runs the way its key does.
+action: it shows its key beside it (on hover when there's no room) and
+runs the way its key does. The key bar, the `?` sheet, the leader menu,
+the palette and every button read one list of what can run where you are,
+so a key is shown wherever it runs and runs what it shows. A panel that
+isn't focused shows its buttons without keys (they run it once it is).
 
 The mouse and fingers work the same way in every view: a click or tap on
 an item puts the cursor there; a double click or tap opens it (Enter); a

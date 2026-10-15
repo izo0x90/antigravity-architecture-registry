@@ -39,7 +39,8 @@ fn texts(output: &egui::FullOutput) -> String {
 fn double_click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
     fn find(shape: &egui::Shape, label: &str) -> Option<egui::Rect> {
         match shape {
-            egui::Shape::Text(t) if t.galley.text() == label => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
+            // A control's text is its caption, then its key.
+            egui::Shape::Text(t) if t.galley.text() == label || t.galley.text().starts_with(&format!("{label}  ")) => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
             egui::Shape::Vec(list) => list.iter().find_map(|s| find(s, label)),
             _ => None,
         }
@@ -56,7 +57,8 @@ fn double_click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
 fn click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
     fn find(shape: &egui::Shape, label: &str) -> Option<egui::Rect> {
         match shape {
-            egui::Shape::Text(t) if t.galley.text() == label => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
+            // A control's text is its caption, then its key.
+            egui::Shape::Text(t) if t.galley.text() == label || t.galley.text().starts_with(&format!("{label}  ")) => Some(egui::Rect::from_min_size(t.pos, t.galley.size())),
             egui::Shape::Vec(list) => list.iter().find_map(|s| find(s, label)),
             _ => None,
         }

@@ -37,7 +37,6 @@ impl Talk {
                 ui.set_width(width);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{} {}", egui_phosphor::regular::CHAT_CIRCLE_TEXT, chat.who())).strong().size(look.text_label).color(colors().text_strong));
-                    ui.label(RichText::new(crate::keymap::local().typing_hint("closes")).size(look.text_small).color(colors().muted));
                 });
                 if self.sent && let Some(reply) = chat.last_reply() {
                     egui::ScrollArea::vertical().id_salt("talk_reply").max_height(screen.height() * look.quick_look_height / 3.0).stick_to_bottom(true).show(ui, |ui| {

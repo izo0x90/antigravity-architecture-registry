@@ -153,10 +153,7 @@ impl GraphState {
             (Some(tree), _) if tree.cards.is_empty() => {
                 let why = match (tree.request.view, &tree.request.source) {
                     (_, arch_graph::Source::Plan(p)) if !tree.request.full_code => format!("Plan {p} has nothing for this view yet. Show it in the full code, or pick another view."),
-                    _ => match crate::actions::key_of(cx.hints, "index.rebuild") {
-                        Some(key) => format!("Nothing to show in this view yet. Read the code in ({key}) or pick another view."),
-                        None => "Nothing to show in this view yet. Read the code in, or pick another view.".to_owned(),
-                    },
+                    _ => "Nothing to show in this view yet. Read the code in, or pick another view.".to_owned(),
                 };
                 painter.text(canvas.center(), Align2::CENTER_CENTER, why, FontId::proportional(look.text_title), colors().muted);
             }
@@ -703,15 +700,13 @@ impl crate::panel::Panel for GraphState {
         out
     }
 
-    /// On its top line: the jump list's back and forward, reading changed
-    /// code again, and (on touch or narrow screens) the chips; under the
+    /// On its top line: the jump list's back and forward, and (on touch or
+    /// narrow screens) the chips (reading changed code again is the top
+    /// bar's); under the
     /// selected card, the actions for it (`[graph] context`).
     fn placed(&self) -> Vec<(String, Control)> {
         let header = |icon: Option<&'static str>, caption: &str| Control::new(At::Header, Style::Button, caption, icon);
         let mut out = vec![("nav.back".to_owned(), header(Some(egui_phosphor::regular::ARROW_LEFT), "")), ("nav.forward".to_owned(), header(Some(egui_phosphor::regular::ARROW_RIGHT), ""))];
-        if !self.stale_files.is_empty() {
-            out.push(("index.changed".to_owned(), header(None, "Re-read")));
-        }
         if self.chips_shown() {
             out.extend(self.ui.chips.actions.iter().filter(|id| !out.iter().any(|(o, _)| o == *id)).map(|id| (id.clone(), header(None, ""))).collect::<Vec<_>>());
         }

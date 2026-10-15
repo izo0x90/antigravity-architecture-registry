@@ -70,15 +70,16 @@ pub(in crate::app) fn server_line(s: &arch_graph::ServerStatus) -> String {
 }
 
 impl CockpitApp {
-    /// The top bar's controls (it's the shell's host): on the left, reading
-    /// the code again, the server shown, the bell and the tray; on the
-    /// right, the columns and the developer tools. The shell's actions,
-    /// placed with what they say now.
-    fn top_bar_controls(&self, shell: &[Action]) -> (Vec<Action>, Vec<Action>) {
+    /// The top bar's placements (it's the shell's host): on the left,
+    /// reading the code again, the server shown, the bell and the tray; at
+    /// the end, the palette, the columns and the developer tools. The
+    /// shell's actions, placed with what they say now.
+    pub(in crate::app) fn top_bar_placements(&self) -> Vec<(String, crate::actions::Control)> {
         use crate::actions::{At, Control, Style, Tone};
         use crate::alerts::AlertState as A;
         use egui_phosphor::regular as icon;
         let button = |caption: String, icon: Option<&'static str>| Control::new(At::Header, Style::Button, caption, icon);
+        let end = |caption: String, icon: Option<&'static str>| Control::new(At::Header, Style::Button, caption, icon).at_end();
         let mut left = vec![("index.changed".to_owned(), button(String::new(), Some(icon::ARROW_CLOCKWISE)))];
         if self.servers.len() > 1 {
             let elsewhere = self.away.values().any(|d| d.chat.store.notifications.values().any(|n| n.level == harness_contracts::Level::Waiting));
@@ -102,29 +103,28 @@ impl CockpitApp {
             left.push(("attention.updates".to_owned(), button(updates.to_string(), Some(icon::TRAY)).tone(Tone::Muted).hover(format!("{updates} update(s)"))));
         }
         let (count, max) = (self.desk.columns.len(), self.config.columns.max);
-        let mut right = Vec::new();
+        left.push(("palette.open".to_owned(), end("Actions".to_owned(), Some(icon::COMMAND))));
         let hidden = self.desk.columns.hidden();
         if hidden > 0 {
-            right.push(("buffer.list".to_owned(), button(format!("{hidden} hidden"), None).tone(Tone::Info)));
+            left.push(("buffer.list".to_owned(), end(format!("{hidden} hidden"), None).tone(Tone::Info)));
         }
         if count > 1 {
-            right.push(("column.fewer".to_owned(), button(String::new(), Some(icon::MINUS))));
+            left.push(("column.fewer".to_owned(), end(String::new(), Some(icon::MINUS))));
         }
         if count < max {
-            right.push(("column.add".to_owned(), button(String::new(), Some(icon::PLUS))));
+            left.push(("column.add".to_owned(), end(String::new(), Some(icon::PLUS))));
         }
         let (inspector, inspecting) = if self.feedback.is_inspecting { (format!("{} ACTIVE", icon::CROSSHAIR), Tone::Warn) } else { (format!("{} Inspector", icon::PENCIL_SIMPLE), Tone::Plain) };
-        right.push(("inspector.toggle".to_owned(), button(inspector, None).tone(inspecting)));
+        left.push(("inspector.toggle".to_owned(), end(inspector, None).tone(inspecting)));
         let issues = match self.feedback.issues.len() {
             0 => format!("{} Issues", icon::WARNING_CIRCLE),
             n => format!("{} Issues ({n})", icon::WARNING_CIRCLE),
         };
-        right.push(("issues.toggle".to_owned(), button(issues, None).tone(Tone::Info)));
-        (crate::panel::place(left, Vec::new(), shell), crate::panel::place(right, Vec::new(), shell))
+        left.push(("issues.toggle".to_owned(), end(issues, None).tone(Tone::Info)));
+        left
     }
 
     pub fn render_top_bar(&mut self, ui: &mut egui::Ui) {
-        let shell = self.shell_actions();
         let top_rect = ui.available_rect_before_wrap();
         self.feedback.register_inspectable(ui, "top_bar", top_rect);
 
@@ -168,8 +168,10 @@ impl CockpitApp {
                 let index_res = self.render_index_light(ui);
                 self.feedback.register_inspectable(ui, "top_bar:index_status", index_res.rect);
                 ui.add_space(crate::theme::look().space_sm);
-                let (left, right) = self.top_bar_controls(&shell);
-                self.host_controls(ui, &left, self.desk.columns.focused(), &shell);
+                // Its controls: everywhere's placed actions, from the one list.
+                let mine: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::Everywhere && b.action.control.as_ref().is_some_and(|c| c.at == crate::actions::At::Header)).collect();
+                let (end, start): (Vec<Bound>, Vec<Bound>) = mine.into_iter().partition(|b| b.action.control.as_ref().is_some_and(|c| c.end));
+                self.host_controls(ui, &start, self.desk.columns.focused());
 
                 ui.add_space(crate::theme::look().space_m);
 
@@ -218,8 +220,8 @@ impl CockpitApp {
                 // On the right, in the order listed (drawn right to left):
                 // the columns, then the developer tools.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let right: Vec<Action> = right.into_iter().rev().collect();
-                    self.host_controls(ui, &right, self.desk.columns.focused(), &shell);
+                    let end: Vec<Bound> = end.into_iter().rev().collect();
+                    self.host_controls(ui, &end, self.desk.columns.focused());
                     ui.label(RichText::new(format!("Columns: {}", self.desk.columns.len())).size(crate::theme::look().text_body).color(colors().muted));
                 });
             });

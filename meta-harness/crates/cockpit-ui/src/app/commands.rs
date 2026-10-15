@@ -42,7 +42,7 @@ impl CockpitApp {
         actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), S::ToggleInspector));
         actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), S::ToggleIssues));
         actions.extend(self.look_actions());
-        actions.push(Action::new("talk.open", "Talk to the agent from here", S::Talk).group(Group::Act).importance(SECONDARY));
+        actions.push(Action::new("talk.open", "Talk to the agent from here", S::Talk).group(Group::Act).importance(SECONDARY).layer(Layer::Panel));
         actions.extend(self.attention_actions());
         actions.extend(self.server_actions());
         actions.push(
@@ -61,12 +61,9 @@ impl CockpitApp {
         actions
     }
 
-    /// A column's own: closing it (its control, on its header, when there's
-    /// another column).
+    /// A column's own: closing it (its host places it on its header).
     pub(super) fn column_actions(&self) -> Vec<Action> {
-        let close = Action::new("column.close", "Close this column (its view is hidden, not lost)", ShellCommand::CloseColumn).group(Group::View).importance(MINOR);
-        let close = if self.desk.columns.len() > 1 { close.header(Style::Button, "", Some(egui_phosphor::regular::X)) } else { close };
-        vec![close]
+        vec![Action::new("column.close", "Close this column (its view is hidden, not lost)", ShellCommand::CloseColumn).group(Group::View).importance(MINOR)]
     }
 
     /// The quick look's own: opening and closing it (hold its key to peek),
@@ -75,11 +72,12 @@ impl CockpitApp {
         use ShellCommand as S;
         let look = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::View);
         let Some(open) = &self.quick_look else {
-            return vec![look("quicklook.toggle", "Quick look: the full card (hold to peek)", S::QuickLook).importance(PRIMARY).when(When::Component)];
+            // On what you're on: its full card.
+            return vec![look("quicklook.toggle", "Quick look: the full card (hold to peek)", S::QuickLook).importance(PRIMARY).when(When::Component).layer(Layer::Panel)];
         };
-        let mut out = vec![look("quicklook.toggle", "Close the quick look", S::QuickLook).importance(SECONDARY).header(Style::Button, "", Some(egui_phosphor::regular::X))];
+        let mut out = vec![look("quicklook.toggle", "Close the quick look", S::QuickLook).importance(PRIMARY)];
         if open.kind == BufferKind::Spec {
-            out.push(look("quicklook.to_column", "Open this card in a column", S::QuickLookToColumn).importance(PRIMARY).header(Style::Button, "Open in a column", Some(egui_phosphor::regular::COLUMNS)));
+            out.push(look("quicklook.to_column", "Open this card in a column", S::QuickLookToColumn).importance(PRIMARY));
         }
         out
     }
@@ -90,7 +88,7 @@ impl CockpitApp {
         use BufferKind as K;
         use ShellCommand as S;
         let kind = self.focused_kind();
-        let nav = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::Navigate);
+        let nav = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::Navigate).layer(Layer::Panel);
         let mut out = vec![nav("nav.down", "Down", S::Motion(Motion::Down)).importance(SECONDARY), nav("nav.up", "Up", S::Motion(Motion::Up)).importance(SECONDARY)];
         match kind {
             K::Graph => {
@@ -150,7 +148,7 @@ impl CockpitApp {
         out.push(nav("nav.forward", "Forward (jump list)", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT));
         out.push(Action::new("nav.keys", "Keys for this view", S::Keys).group(Group::View).importance(MINOR));
         out.push(nav("nav.line", "Go to line or row", S::Line).param(Param::Text { hint: "line or row number".into() }).importance(MINOR));
-        let go = |id: &str, label: &str, op: GoTo, when: When, importance: u8| Action::new(id, label, S::GoTo(op)).group(Group::GoTo).when(when).importance(importance);
+        let go = |id: &str, label: &str, op: GoTo, when: When, importance: u8| Action::new(id, label, S::GoTo(op)).group(Group::GoTo).when(when).importance(importance).layer(Layer::Panel);
         out.push(go("goto.code", "Go to its code", GoTo::Code, When::Code, PRIMARY));
         out.push(go("goto.spec", "Go to its spec", GoTo::Spec, When::Component, SECONDARY));
         if kind != K::Graph {
@@ -178,48 +176,137 @@ impl CockpitApp {
         out
     }
 
-    /// Everything invokable right now, bound to its keys: the focused view's
-    /// actions first (they win key conflicts), then the shell, then the global
-    /// actions of every other view.
+    /// Where you are: the view with the keyboard, and what holds it (the
+    /// quick look, or its column).
+    pub(crate) fn here(&self) -> Here {
+        match &self.quick_look {
+            Some(look) => Here { slot: look.slot, kind: look.kind, look: true },
+            None => Here { slot: self.desk.columns.focused(), kind: self.desk.columns.focused_kind(), look: false },
+        }
+    }
+
+    /// Everything invokable where you are, bound to its keys and in its
+    /// layer: the one list key handling, the key bar, the `?` sheet, the
+    /// leader menu, the palette and every control read. Gathered once a
+    /// frame.
     pub(crate) fn bound_actions(&self) -> Vec<Bound> {
-        // Gathered once a frame: the key bar, the hints, the palette and the
-        // keys all read the same list.
         if self.in_frame.get()
             && let Some(kept) = self.frame_actions.borrow().as_ref()
         {
             return kept.clone();
         }
-        let bound = self.gather_actions();
+        let bound = self.gather(self.here(), true);
         if self.in_frame.get() {
             *self.frame_actions.borrow_mut() = Some(bound.clone());
         }
         bound
     }
 
-    pub(super) fn gather_actions(&self) -> Vec<Bound> {
+    /// What a view shows where it is (`here`), the same way: gathered,
+    /// placed and in layers; bound to keys only when it's where you are
+    /// (`keyed`): a column not focused shows its controls without keys
+    /// (they don't run it until it is).
+    pub(crate) fn shown_at(&self, here: Here) -> Vec<Bound> {
+        if here == self.here() { self.bound_actions() } else { self.gather(here, false) }
+    }
+
+    /// The list for `here`: its view's actions (and every other view's
+    /// global ones), the shell's (with its host's own: the quick look's or
+    /// the column's); each placed (the panel's, its host's and the top
+    /// bar's placements); bound to keys; in its layer.
+    pub(super) fn gather(&self, here: Here, keyed: bool) -> Vec<Bound> {
         #[cfg(test)]
-        self.gathered.set(self.gathered.get() + 1);
-        let focused = self.focused_kind();
-        let view = |kind: BufferKind, all: bool| self.desk.provider(kind).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(kind), a));
-        let mut actions: Vec<(Origin, Action)> = view(focused, true).collect();
+        if keyed {
+            self.gathered.set(self.gathered.get() + 1);
+        }
+        let kind = here.kind;
+        let view = |k: BufferKind, all: bool| self.desk.provider(k).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(k), a));
+        let mut actions: Vec<(Origin, Action)> = view(kind, true).collect();
         actions.extend(self.shell_actions().into_iter().map(|a| (Origin::Shell, a)));
-        for kind in BufferKind::ALL.into_iter().filter(|k| *k != focused) {
-            actions.extend(view(kind, false));
+        // Another view's global actions are here for their keys and the
+        // palette; their controls are their own panel's, not drawn here.
+        for k in BufferKind::ALL.into_iter().filter(|k| *k != kind) {
+            actions.extend(view(k, false).map(|(o, mut a)| {
+                a.control = None;
+                (o, a)
+            }));
         }
-        let keyed: KeyedActions = (focused, actions.iter().map(|(origin, a)| (*origin, a.id.clone(), a.aliases.clone())).collect());
-        let mut cache = self.bound_cache.borrow_mut();
-        if cache.as_ref().is_none_or(|(kept, _)| *kept != keyed) {
-            let keys = self.bind_actions(actions.clone()).into_iter().map(|b| (b.leader, b.keys)).collect();
-            *cache = Some((keyed, keys));
+        // Placed: by its panel, its host, the top bar; each placement says
+        // its layer.
+        let mut layers: Vec<Option<Layer>> = vec![None; actions.len()];
+        for (id, control, layer) in self.placements(here) {
+            let found = actions.iter().position(|(o, a)| *o == Origin::View(kind) && a.id == id).or_else(|| actions.iter().position(|(o, a)| *o == Origin::Shell && a.id == id));
+            if let Some(i) = found {
+                actions[i].1.control = Some(control);
+                layers[i] = Some(layer);
+            }
         }
-        let keys = cache.as_ref().map(|(_, keys)| keys.clone()).unwrap_or_default();
-        actions.into_iter().zip(keys).map(|((origin, action), (leader, keys))| Bound { action, origin, leader, keys }).collect()
+        let layer_of = |(origin, action): &(Origin, Action), placed: Option<Layer>| -> Layer {
+            let on = action.control.as_ref().is_some_and(|c| matches!(c.at, crate::actions::At::Item | crate::actions::At::Typing));
+            match placed {
+                Some(_) if on => Layer::On,
+                Some(layer) => layer,
+                None if on => Layer::On,
+                None if *origin == Origin::View(kind) => Layer::Panel,
+                None => action.layer.unwrap_or(Layer::Everywhere),
+            }
+        };
+        let tagged: Vec<Layer> = actions.iter().zip(&layers).map(|(a, placed)| layer_of(a, *placed)).collect();
+        let keys: Vec<Keys> = if keyed {
+            let keyed: KeyedActions = (kind, actions.iter().map(|(origin, a)| (*origin, a.id.clone(), a.aliases.clone())).collect());
+            let mut cache = self.bound_cache.borrow_mut();
+            if cache.as_ref().is_none_or(|(kept, _)| *kept != keyed) {
+                let keys = self.bind_actions(actions.clone(), kind).into_iter().map(|b| (b.leader, b.keys, b.gestures)).collect();
+                *cache = Some((keyed, keys));
+            }
+            cache.as_ref().map(|(_, keys)| keys.clone()).unwrap_or_default()
+        } else {
+            vec![(None, Vec::new(), Vec::new()); actions.len()]
+        };
+        actions.into_iter().zip(keys).zip(tagged).map(|(((origin, action), (leader, keys, gestures)), layer)| Bound { action, origin, leader, keys, gestures, layer }).collect()
+    }
+
+    /// Every placement for `here`, with its layer: the panel's (on its top
+    /// line, or under what you're on), its host's (a column's tabs), the
+    /// top bar's (everywhere's).
+    fn placements(&self, here: Here) -> Vec<(String, crate::actions::Control, Layer)> {
+        use crate::actions::{At, Control, Style};
+        use egui_phosphor::regular as icon;
+        let panel = self.desk.panel(here.kind).placed().into_iter().map(|(id, c)| (id, c, Layer::Panel));
+        let button = |caption: &str, glyph: &'static str| Control::new(At::Header, Style::Button, caption, Some(glyph));
+        let host = if here.look {
+            vec![("quicklook.to_column".to_owned(), button("Open in a column", icon::COLUMNS)), ("quicklook.toggle".to_owned(), button("", icon::X))]
+        } else {
+            let mut own = self.tabs(here.slot);
+            if self.desk.columns.len() > 1 {
+                own.push(("column.close".to_owned(), button("", icon::X)));
+            }
+            own
+        };
+        panel.chain(host.into_iter().map(|(id, c)| (id, c, Layer::Host))).chain(self.top_bar_placements().into_iter().map(|(id, c)| (id, c, Layer::Everywhere))).collect()
+    }
+
+    /// A column's tabs: the shell's `buffer.*` actions, the shown one named
+    /// (when there's room) and lit.
+    fn tabs(&self, slot: usize) -> Vec<(String, crate::actions::Control)> {
+        use crate::actions::{At, Control, Style, Tone};
+        let active = self.desk.columns.kind(slot);
+        // Narrow (once its width is known): icons only.
+        let compact = self.slot_rects.get(slot).is_some_and(|r| r.is_positive() && r.width() < 340.0);
+        BufferKind::ALL
+            .into_iter()
+            .map(|kind| {
+                let title = kind.title();
+                let caption = if !compact && active == kind { format!("{}{}", &title[..1], title[1..].to_lowercase()) } else { String::new() };
+                let tab = Control::new(At::Header, Style::Button, caption, Some(kind.icon()));
+                (format!("buffer.{}", kind.name()), tab.tone(if active == kind { Tone::Accent } else { Tone::Muted }))
+            })
+            .collect()
     }
 
     /// The actions bound to their keys, the focused view's own getting the
     /// view menu's free letters.
-    pub(super) fn bind_actions(&self, actions: Vec<(Origin, Action)>) -> Vec<Bound> {
-        let focused = self.focused_kind();
+    pub(super) fn bind_actions(&self, actions: Vec<(Origin, Action)>, focused: BufferKind) -> Vec<Bound> {
         let mut bound = self.config.keymap.bind(actions);
         // The focused view's own menu: its actions without a leader path get
         // the next free keys under the view-menu key.
@@ -242,7 +329,7 @@ impl CockpitApp {
         for kind in BufferKind::ALL.into_iter().filter(|k| *k != focused) {
             for mut action in self.desk.provider(kind).actions().into_iter().filter(|a| a.scope == Scope::Focused) {
                 action.label = format!("{}{} · {}", &kind.title()[..1], kind.title()[1..].to_lowercase(), action.label);
-                out.push(Bound { action, origin: Origin::View(kind), leader: None, keys: Vec::new() });
+                out.push(Bound { action, origin: Origin::View(kind), leader: None, keys: Vec::new(), gestures: Vec::new(), layer: Layer::Everywhere });
             }
         }
         out
@@ -259,6 +346,8 @@ impl CockpitApp {
         // An action changes what can run as it goes: it sees the actions as
         // they are, and what's drawn after it sees what it left.
         let drawing = self.in_frame.replace(false);
+        #[cfg(test)]
+        self.ran.borrow_mut().push(invocation.action.id.clone());
         self.run_counted(invocation, count, ctx);
         // What the inbox asked for, done now (its next item, its chat…).
         self.inbox_asks(ctx);

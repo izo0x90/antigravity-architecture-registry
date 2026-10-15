@@ -19,7 +19,7 @@ impl CockpitApp {
     /// Applies one leader key; returns true when the leader menu is done.
     pub(super) fn leader_key(&mut self, key: char, ctx: &egui::Context) -> bool {
         let bound = self.bound_actions();
-        let entry = leader_entries(&bound, &self.leader_path, Origin::View(self.focused_kind())).into_iter().find(|e| e.key() == key);
+        let entry = leader_entries(&bound, &self.leader_path).into_iter().find(|e| e.key() == key);
         match entry {
             Some(LeaderEntry::Group { key }) => {
                 self.leader_path.push(key);

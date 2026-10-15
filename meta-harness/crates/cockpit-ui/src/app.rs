@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use arch_graph::ComponentId;
 
-use crate::actions::{Action, ActionProvider, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, Style, When, is_primary, leader_entries};
+use crate::actions::{Action, ActionProvider, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, When, is_primary, leader_entries};
+use crate::actions::Layer;
 use crate::chat::{ChatStreamState, SessionStatus};
 use crate::code::CodeViewerState;
 use crate::columns::{Columns, Pane};
@@ -45,7 +46,7 @@ pub use desk::Desk;
 pub use draw::top_bar::{ActivityLed, index_state};
 use keys::release_keyboard;
 #[cfg(test)]
-use {capture::hint_chip, draw::bars::keys_of, draw::top_bar::server_line, keys::text_input_focused};
+use {capture::hint_chip, draw::top_bar::server_line, keys::text_input_focused};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -217,8 +218,17 @@ const MAX_COUNT: u32 = 999;
 /// Which actions keys were given to: each one's view, name and aliases, in
 /// order, and the focused view (its actions get the view menu's letters).
 type KeyedActions = (BufferKind, Vec<(Origin, String, Vec<String>)>);
+
+/// Where a list of actions is gathered for: a view, and what holds it (the
+/// quick look, or column `slot`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Here {
+    pub slot: usize,
+    pub kind: BufferKind,
+    pub look: bool,
+}
 /// One action's keys: its leader path and direct sequences.
-type Keys = (Option<Vec<char>>, Vec<Vec<Chord>>);
+type Keys = (Option<Vec<char>>, Vec<Vec<Chord>>, Vec<String>);
 
 pub struct CockpitApp {
     /// The project shown: its views, layout and server.
@@ -249,6 +259,9 @@ pub struct CockpitApp {
     /// How many times the actions were gathered (counted for the tests).
     #[cfg(test)]
     gathered: std::cell::Cell<usize>,
+    /// Every action run, by id (what keys and controls ran).
+    #[cfg(test)]
+    ran: std::cell::RefCell<Vec<String>>,
     pub feedback: FeedbackInspectorState,
 
     /// The column a go-to lands in (a count before its keys).
@@ -327,6 +340,8 @@ impl CockpitApp {
             in_frame: Default::default(),
             #[cfg(test)]
             gathered: Default::default(),
+            #[cfg(test)]
+            ran: Default::default(),
             feedback: FeedbackInspectorState::default(),
 
             landing: None,
@@ -516,7 +531,6 @@ impl CockpitApp {
         });
         self.render_key_bar(ctx);
 
-        let shell = self.shell_actions();
         self.desk.chat.drawn.clear();
         egui::CentralPanel::default().show(ctx, |ui| {
             self.slot_rects.resize(self.desk.columns.len(), egui::Rect::NOTHING);
@@ -524,7 +538,7 @@ impl CockpitApp {
                 for (i, col) in cols.iter_mut().enumerate() {
                     // Each column draws its own view.
                     self.swap_in(self.desk.columns.pane(i));
-                    self.render_slot(i, col, &shell);
+                    self.render_slot(i, col);
                 }
             });
             self.back_to_used();
@@ -544,8 +558,8 @@ impl CockpitApp {
         // Feedback confirmation toast
         self.feedback.render_toast(ctx);
 
-        self.render_quick_look(ctx, &shell);
-        self.render_item_controls(ctx, &shell);
+        self.render_quick_look(ctx);
+        self.render_item_controls(ctx);
         self.touch_tick(ctx);
         self.run_asked(ctx);
         self.render_talk(ctx);
@@ -553,7 +567,7 @@ impl CockpitApp {
         self.render_prefix_popup(ctx);
         self.render_which_key_hud(ctx);
         self.render_key_sheet(ctx);
-        self.render_palette(ctx, &shell);
+        self.render_palette(ctx);
     }
 }
 

@@ -52,13 +52,13 @@ fn the_quick_look_key_is_shown_wherever_keys_are_listed() {
     app.desk.graph.select(Some("rust:a::step".into()));
     frame(&ctx, &mut app, vec![]);
     let bound = app.bound_actions();
-    let bar: Vec<String> = app.bar_keys(&bound).iter().map(|b| format!("{} {}", keys_of(b), b.action.id)).collect();
+    let bar: Vec<String> = app.bar_keys(&bound).iter().map(|b| format!("{} {}", b.key_hint(), b.action.id)).collect();
     assert!(bar.iter().any(|k| k.starts_with("q ") && k.ends_with(" quicklook.toggle")), "the key bar offers it on a card: {bar:?}");
     app.key_sheet = Some(String::new());
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("Quick look: the full card"), "the ? sheet lists it: {text}");
     app.key_sheet = None;
-    let menu = leader_entries(&bound, &['q'], Origin::View(BufferKind::Graph));
+    let menu = leader_entries(&bound, &['q']);
     assert!(menu.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'q', index } if bound[*index].action.id == "quicklook.toggle")), "Space q q opens it");
     // On nothing, it isn't offered.
     app.desk.graph.select(None);
@@ -84,4 +84,26 @@ fn the_quick_look_goes_to_a_column_and_says_when_theres_nothing_to_look_at() {
     assert!(app.quick_look.is_none());
     assert_eq!((app.focused_kind(), app.desk.spec.target.as_ref().map(|t| t.as_str())), (BufferKind::Spec, Some("rust:a::step")), "the same card, in a column, focused");
     assert!(app.desk.columns.slot_of_kind(BufferKind::Graph).is_some(), "beside the graph");
+}
+
+/// In the quick look, its own actions are where you are: the key bar offers
+/// them with their keys, its controls show those keys, the `?` sheet has a
+/// section for it.
+#[test]
+fn the_quick_looks_own_actions_are_offered_with_their_keys() {
+    let (ctx, mut app) = app_with_graph();
+    crate::graph::tests::with_detail(&mut app.desk.graph, "rust:a::step", "src/a.rs", 10, 20);
+    app.desk.graph.select(Some("rust:a::step".into()));
+    frame(&ctx, &mut app, vec![]);
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"quicklook.toggle"}"#).unwrap();
+    let bound = app.bound_actions();
+    let column = bound.iter().find(|b| b.action.id == "quicklook.to_column").expect("offered");
+    assert_eq!((column.layer, column.key_hint().as_str()), (crate::actions::Layer::Host, "Space q c"));
+    let bar: Vec<String> = app.bar_keys(&bound).iter().map(|b| b.action.id.clone()).collect();
+    assert!(bar.contains(&"quicklook.to_column".to_owned()) && bar.contains(&"quicklook.toggle".to_owned()), "{bar:?}");
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains("Open in a column  Space q c"), "its control says its key: {text}");
+    app.key_sheet = Some("quick".into());
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains("Quick look") && text.contains("Close the quick look"), "{text}");
 }

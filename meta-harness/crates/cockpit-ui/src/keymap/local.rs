@@ -183,12 +183,6 @@ impl LocalKeys {
         egui::TextEdit::multiline(text).return_key(self.input.newline.shortcut())
     }
 
-    /// A typing box's keys in words ("Enter sends · shift+Enter new line
-    /// · Escape leaves"), `leave` saying what the way back out does.
-    pub fn typing_hint(&self, leave: &'static str) -> String {
-        self.input.keys(&self.back, leave).into_iter().map(|(key, what)| format!("{key} {what}")).collect::<Vec<_>>().join(" · ")
-    }
-
     /// A leader path in words ("Space s n").
     pub fn leader_hint(&self, path: &[char]) -> String {
         std::iter::once(self.leader.label()).chain(path.iter().map(char::to_string)).collect::<Vec<_>>().join(" ")

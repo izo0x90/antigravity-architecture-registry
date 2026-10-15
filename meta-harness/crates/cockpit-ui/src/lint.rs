@@ -6,6 +6,9 @@
 //!   down, or writes one into text the user reads. Every key is a binding
 //!   (or a list, typing or pointer key) the config sets, and is said by its
 //!   label.
+//! - **Key text**: keys are said only from a bound action (its binding's
+//!   own: `Bound::key_hint`, `Bound::ways`), and only by the hosts, the
+//!   control, the palette and the keymap. A view never says a key.
 //! - **Controls**: views draw content; hosts draw every control. Outside
 //!   the hosts (the top bar, columns, the quick look, the key bar and
 //!   menus: `app/draw/`), the one control (`actions.rs`, `panel.rs`) and
@@ -117,6 +120,22 @@ fn no_code_reads_or_names_a_key_the_keymap_doesnt_give_it() {
         }
     }
     assert!(found.is_empty(), "keys read or named outside the keymap (bind them in [keymap], and say them by their labels):\n{}", found.join("\n"));
+}
+
+/// Where key text is made from bound actions.
+const KEY_TEXT_MAKERS: &[&str] = &["app/", "actions.rs", "palette.rs", "keymap/"];
+
+#[test]
+fn only_the_hosts_say_keys_and_only_from_a_bound_action() {
+    let mut found = Vec::new();
+    for (name, code) in code().iter().filter(|(name, _)| !KEY_TEXT_MAKERS.iter().any(|h| name.starts_with(h))) {
+        for (n, line) in lines(code) {
+            for token in ["key_hint(", ".ways(", "leader_hint(", "send_label(", "add_label(", "pick_label(", ".label()", ".keys(&"].iter().filter(|t| line.contains(*t)) {
+                found.push(format!("{name}:{n}: {token}"));
+            }
+        }
+    }
+    assert!(found.is_empty(), "key text made outside the hosts (a view says no keys; a control or the key bar shows them):\n{}", found.join("\n"));
 }
 
 /// Where controls are drawn: the hosts, the one control, the palette; and
