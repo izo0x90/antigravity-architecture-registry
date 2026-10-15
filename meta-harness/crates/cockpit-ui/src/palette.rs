@@ -39,6 +39,14 @@ pub struct Palette {
     ask: Option<SearchAsk>,
 }
 
+impl Palette {
+    /// The row the keys are on.
+    #[cfg(test)]
+    pub fn selected(&self) -> usize {
+        self.selected
+    }
+}
+
 impl Default for Palette {
     fn default() -> Self {
         Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None }
@@ -115,15 +123,9 @@ impl Palette {
         };
         let list_height = (screen.max.y - pos.y - 110.0).clamp(120.0, 360.0);
 
-        let (up, down, enter, escape) = ctx.input(|i| {
-            let ctrl = i.modifiers.ctrl;
-            (
-                i.key_pressed(egui::Key::ArrowUp) || (ctrl && i.key_pressed(egui::Key::P)),
-                i.key_pressed(egui::Key::ArrowDown) || (ctrl && i.key_pressed(egui::Key::N)),
-                i.key_pressed(egui::Key::Enter),
-                keymap.back.pressed(i),
-            )
-        });
+        let step = ctx.input_mut(|i| keymap.list.step(i));
+        let (enter, escape) = ctx.input(|i| (keymap.list.picked(i), keymap.back.pressed(i)));
+        let (up, down) = (step < 0, step > 0);
         if escape {
             self.back();
             return None;
@@ -258,7 +260,7 @@ impl Palette {
                                 if enter && !self.filter.trim().is_empty() {
                                     picked = Some(invocation(action, Some(self.filter.trim().to_owned())));
                                 }
-                                ui.label(RichText::new("Enter to submit • Esc to go back").size(crate::theme::look().text_small).color(colors().muted));
+                                ui.label(RichText::new(format!("{} to submit • {} to go back", keymap.list.pick.first().map(crate::keymap::Chord::label).unwrap_or_default(), keymap.back.label())).size(crate::theme::look().text_small).color(colors().muted));
                             }
                         }
                     });

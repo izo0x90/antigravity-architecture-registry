@@ -1,6 +1,12 @@
 //! Input modes and the keymap. Bindings come from config (see
 //! `config/default.toml`); actions never carry keys themselves.
 
+#[cfg(test)]
+mod lint;
+mod local;
+
+pub use local::{InputKeys, ListKeys, LocalKeys, Modifier, PointerKeys, Sent, local, set_local};
+
 use std::collections::BTreeMap;
 
 use egui::Key;
@@ -127,6 +133,16 @@ impl Chord {
         }
     }
 
+    /// Takes the key if it was pressed (so a text box under it doesn't act
+    /// on it too): whether it was.
+    pub fn consume(&self, input: &mut egui::InputState) -> bool {
+        let pressed = self.pressed(input);
+        if pressed && let ChordKey::Key(key) = &self.key {
+            input.events.retain(|e| !matches!(e, egui::Event::Key { key: k, pressed: true, .. } if k == key));
+        }
+        pressed
+    }
+
     pub fn released(&self, input: &egui::InputState) -> bool {
         self.physical().is_some_and(|key| input.key_released(key))
     }
@@ -216,6 +232,9 @@ impl Default for KeymapConfig {
             which_key_delay_ms: default_which_key_delay(),
             view_menu: default_view_menu(),
             bar: KeyBar::default(),
+            list: ListKeys::default(),
+            input: InputKeys::default(),
+            pointer: PointerKeys::default(),
         }
     }
 }
@@ -260,6 +279,15 @@ pub struct KeymapConfig {
     pub view_menu: char,
     #[serde(default)]
     pub bar: KeyBar,
+    /// Moving and picking in a list (the palette).
+    #[serde(default)]
+    pub list: ListKeys,
+    /// Sending from a typing box.
+    #[serde(default)]
+    pub input: InputKeys,
+    /// Held with the pointer.
+    #[serde(default)]
+    pub pointer: PointerKeys,
 }
 
 fn default_peek_hold() -> u64 {
@@ -282,6 +310,11 @@ fn default_view_menu() -> char {
 pub const AUTO_KEYS: &str = "123456789abcdefghijklmnopqrstuvwxyz";
 
 impl KeymapConfig {
+    /// The keys outside the views' bindings, as views read them.
+    pub fn local(&self) -> LocalKeys {
+        LocalKeys { list: self.list.clone(), input: self.input.clone(), pointer: self.pointer.clone(), back: Some(self.back.clone()) }
+    }
+
     pub fn group_label(&self, path: &[char]) -> Option<&str> {
         let key: Vec<String> = path.iter().map(char::to_string).collect();
         self.groups.get(&key.join(" ")).or_else(|| self.groups.get(&key.concat())).map(String::as_str)

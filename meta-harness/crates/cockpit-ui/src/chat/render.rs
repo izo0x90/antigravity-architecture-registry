@@ -444,12 +444,14 @@ impl ChatStreamState {
             let text_w = (ui.available_width() - send_w - ui.spacing().item_spacing.x - 4.0).max(60.0);
             let inserting = *input_mode == crate::keymap::InputMode::Insert { slot: slot_idx };
             let steerable = self.instance().is_some_and(|s| s.capabilities.turns.active_steering) && self.thread().and_then(|t| t.running_turn()).is_some();
+            let keys = crate::keymap::local();
+            let back = keys.back.as_ref().map(crate::keymap::Chord::label).unwrap_or_default();
             let hint = if inserting && steerable {
-                "While it works: Enter queues this next, Ctrl+Enter adds it to what it's doing"
+                format!("While it works: {} queues this next, {} adds it to what it's doing", keys.input.send_label(), keys.input.add_label())
             } else if inserting {
-                "Instructions… (Enter to send, Shift+Enter newline, Esc normal mode, / for commands)"
+                format!("Instructions… ({} to send, Shift+Enter newline, {back} normal mode, / for commands)", keys.input.send_label())
             } else {
-                "Press 'i' or click to enter insert mode..."
+                "Press 'i' or click to enter insert mode...".to_owned()
             };
             let output = ui.add(
                 egui::TextEdit::multiline(&mut self.ui.input_buffer)
@@ -465,10 +467,8 @@ impl ChatStreamState {
                 *input_mode = crate::keymap::InputMode::Insert { slot: slot_idx };
             }
             let send = ui.add_sized([send_w, 36.0], egui::Button::new(RichText::new("Send").strong().size(crate::theme::look().text_body))).clicked();
-            let (enter, add) = ui.input(|i| {
-                let enter = inserting && i.key_pressed(egui::Key::Enter) && !i.modifiers.shift;
-                (enter, enter && i.modifiers.command)
-            });
+            let sent = if inserting { ui.input(|i| keys.input.sent(i)) } else { None };
+            let (enter, add) = (sent.is_some(), sent == Some(crate::keymap::Sent::Add));
             if (send || enter) && !self.ui.input_buffer.trim().is_empty() {
                 let text = self.ui.input_buffer.trim().to_string();
                 self.ui.input_buffer.clear();

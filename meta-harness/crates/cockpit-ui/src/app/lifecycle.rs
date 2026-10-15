@@ -35,6 +35,7 @@ impl CockpitApp {
             crate::graph_style::set(self.config.graph_style.clone());
             crate::status::set(self.config.status.clone());
             crate::theme::set_look(self.config.look.clone());
+            crate::keymap::set_local(self.config.keymap.local());
             self.home.set_backoff(self.config.net.reconnect_min_ms, self.config.net.reconnect_max_ms);
             let (graph_ui, code_ui) = (self.config.graph.clone(), self.config.code.clone());
             for graph in self.desk.graphs() {

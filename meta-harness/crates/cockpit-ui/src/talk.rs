@@ -37,7 +37,7 @@ impl Talk {
                 ui.set_width(width);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{} {}", egui_phosphor::regular::CHAT_CIRCLE_TEXT, chat.who())).strong().size(look.text_label).color(colors().text_strong));
-                    ui.label(RichText::new(format!("Enter sends · Shift+Enter new line · {close_keys} closes")).size(look.text_small).color(colors().muted));
+                    ui.label(RichText::new(format!("{} sends · Shift+Enter new line · {close_keys} closes", crate::keymap::local().input.send_label())).size(look.text_small).color(colors().muted));
                 });
                 if self.sent && let Some(reply) = chat.last_reply() {
                     egui::ScrollArea::vertical().id_salt("talk_reply").max_height(screen.height() * look.quick_look_height / 3.0).stick_to_bottom(true).show(ui, |ui| {
@@ -46,7 +46,7 @@ impl Talk {
                 }
                 let field = ui.add(egui::TextEdit::multiline(&mut self.text).id(egui::Id::new("talk_input")).desired_rows(2).desired_width(f32::INFINITY).hint_text("Ask the agent…"));
                 field.request_focus();
-                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+                let enter = ui.input(|i| crate::keymap::local().input.sent(i).is_some());
                 if enter && !self.text.trim().is_empty() {
                     let text = self.text.trim().to_owned();
                     self.text.clear();
@@ -57,7 +57,7 @@ impl Talk {
                 }
             });
         });
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ctx.input(|i| crate::keymap::local().back(i)) {
             outcome = Outcome::Close;
         }
         outcome

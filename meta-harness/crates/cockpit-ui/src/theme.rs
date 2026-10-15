@@ -311,7 +311,7 @@ mod glyph_tests {
         ("graph/source.rs", include_str!("graph/source.rs")),
         ("graph/select.rs", include_str!("graph/select.rs")),
         ("graph_style.rs", include_str!("graph_style.rs")),
-        ("keymap.rs", include_str!("keymap.rs")),
+        ("keymap/mod.rs", include_str!("keymap/mod.rs")),
         ("palette.rs", include_str!("palette.rs")),
         ("queue.rs", include_str!("queue.rs")),
         ("review.rs", include_str!("review.rs")),

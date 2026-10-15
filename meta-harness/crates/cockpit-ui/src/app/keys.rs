@@ -63,18 +63,23 @@ impl CockpitApp {
 
             // The shell reads typed keys (search, hint labels, marks).
             InputMode::Capture { .. } => {
-                // Text as typed, plus Enter ('\n') and Backspace ('\u{8}') for prompts.
+                // Text as typed, its own erasing ('\u{8}'), then the send key
+                // ('\n': the prompt's done) as configured.
                 let typed: Vec<char> = ctx.input(|i| {
-                    i.events
+                    let mut typed: Vec<char> = i
+                        .events
                         .iter()
                         .filter_map(|e| match e {
                             egui::Event::Text(t) => Some(t.chars().collect::<Vec<_>>()),
-                            egui::Event::Key { key: egui::Key::Enter, pressed: true, .. } => Some(vec!['\n']),
                             egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } => Some(vec!['\u{8}']),
                             _ => None,
                         })
                         .flatten()
-                        .collect()
+                        .collect();
+                    if keymap.input.sent(i).is_some() {
+                        typed.push('\n');
+                    }
+                    typed
                 });
                 if typed.is_empty() && !back {
                     if self.capture.is_none() {

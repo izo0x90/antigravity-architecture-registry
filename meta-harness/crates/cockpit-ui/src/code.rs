@@ -473,7 +473,7 @@ impl CodeViewerState {
                 ui.label(RichText::new("📂").size(crate::theme::look().text_title));
                 let mut path_edit = self.current_file.clone();
                 let resp = ui.add(egui::TextEdit::singleline(&mut path_edit).desired_width(edit_w).font(egui::TextStyle::Monospace));
-                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if resp.lost_focus() && ui.input(|i| crate::keymap::local().input.sent(i).is_some()) {
                     let ctx = ui.ctx().clone();
                     self.load_file(&path_edit, None, net, ctx);
                 }
@@ -593,7 +593,7 @@ impl CodeViewerState {
                             None => label,
                         };
                         if label.clicked() {
-                            match (&hovered, ui.input(|i| i.modifiers.command)) {
+                            match (&hovered, ui.input(|i| crate::keymap::local().pointer.go_to.held(i.modifiers))) {
                                 (Some(id), true) => go_to = Some(id.clone()),
                                 _ => put_cursor = Some(line_no),
                             }

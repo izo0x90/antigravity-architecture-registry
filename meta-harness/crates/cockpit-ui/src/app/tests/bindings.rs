@@ -347,3 +347,20 @@ fn enter_and_backspace_are_only_offered_where_they_act() {
     assert_eq!(bar.first().map(String::as_str), Some("spec.reply"), "{bar:?}");
     assert!(!bar.contains(&"spec.comment".to_owned()) || bar.iter().position(|b| b == "spec.reply") < bar.iter().position(|b| b == "spec.comment"));
 }
+
+#[test]
+fn lists_move_with_the_configured_keys_ctrl_j_and_k_by_default() {
+    let (ctx, mut app) = full_app();
+    app.open_palette(None);
+    frame(&ctx, &mut app, vec![]);
+    ctrl(&ctx, &mut app, egui::Key::J);
+    ctrl(&ctx, &mut app, egui::Key::J);
+    ctrl(&ctx, &mut app, egui::Key::K);
+    assert_eq!(app.palette.selected(), 1, "down, down, up");
+    // Rebound: the config's keys, not ours.
+    app.config = UiConfig::with_overrides("[keymap.list]\nnext = [\"ctrl+e\"]\nprev = [\"ctrl+y\"]\npick = [\"Enter\"]\n").unwrap();
+    ctrl(&ctx, &mut app, egui::Key::J);
+    assert_eq!(app.palette.selected(), 1, "ctrl+j isn't a key any more");
+    ctrl(&ctx, &mut app, egui::Key::E);
+    assert_eq!(app.palette.selected(), 2);
+}

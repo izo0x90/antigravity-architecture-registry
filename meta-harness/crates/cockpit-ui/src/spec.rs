@@ -911,17 +911,17 @@ impl SpecState {
         };
         ui.label(RichText::new(what).size(crate::theme::look().text_body).color(colors().muted));
         let inserting = *cx.input_mode == crate::keymap::InputMode::Insert { slot: cx.slot };
-        let output = ui.add(egui::TextEdit::multiline(&mut composer.text).id(egui::Id::new(("spec_composer", cx.slot))).desired_rows(2).desired_width(f32::INFINITY).hint_text("Enter sends, Shift+Enter for a new line, Esc leaves"));
+        let output = ui.add(egui::TextEdit::multiline(&mut composer.text).id(egui::Id::new(("spec_composer", cx.slot))).desired_rows(2).desired_width(f32::INFINITY).hint_text(format!("{} sends, Shift+Enter for a new line, {} leaves", crate::keymap::local().input.send_label(), crate::keymap::local().back.as_ref().map(crate::keymap::Chord::label).unwrap_or_default())));
         if inserting {
             output.request_focus();
         }
         if output.clicked() || output.gained_focus() {
             *cx.input_mode = crate::keymap::InputMode::Insert { slot: cx.slot };
         }
-        let enter = inserting && output.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+        let enter = inserting && output.has_focus() && ui.input(|i| crate::keymap::local().input.sent(i).is_some());
         let (mut send, mut cancel) = (enter, false);
         ui.horizontal(|ui| {
-            send |= ui.button("Send").on_hover_text("Enter").clicked();
+            send |= ui.button("Send").on_hover_text(crate::keymap::local().input.send_label()).clicked();
             cancel = ui.button("Cancel").clicked();
         });
         if cancel {

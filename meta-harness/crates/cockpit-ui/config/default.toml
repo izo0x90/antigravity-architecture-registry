@@ -29,6 +29,22 @@ which_key_delay_ms = 300
 view_menu = ","
 
 # The key bar at the bottom: the keys that matter for what the cursor is on.
+# Moving and picking in every list (the palette, its pickers).
+[keymap.list]
+next = ["ctrl+j", "ctrl+n", "ArrowDown"]
+prev = ["ctrl+k", "ctrl+p", "ArrowUp"]
+pick = ["Enter"]
+
+# Every typing box: send, and (in the chat) add to what it's doing.
+# Shift+Enter, the box's own, is a new line.
+[keymap.input]
+send = ["Enter"]
+add = ["ctrl+Enter"]
+
+# Held while clicking a name in the code: go to what it names.
+[keymap.pointer]
+go_to = "ctrl"
+
 [keymap.bar]
 show = true
 # How many keys it shows.
