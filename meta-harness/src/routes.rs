@@ -1,6 +1,7 @@
 //! The HTTP and WebSocket routes, by concern. The architecture, graph and
 //! queue routes live with their modules (`arch`, `graph`, `queue`).
 
+pub(crate) mod changes;
 pub(crate) mod cockpit;
 pub(crate) mod events;
 pub(crate) mod feedback;

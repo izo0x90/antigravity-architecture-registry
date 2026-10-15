@@ -172,6 +172,18 @@ pub fn harnesses(project: &std::path::Path, hub: &Arc<EventHub>) -> Result<Arc<I
 }
 
 /// The project's state database (`.nah/state/`), locked for this server.
+/// The project's changes, from git; none (and said why) when it isn't a
+/// git repository.
+pub fn changes(arch: &ArchitectureService) -> Option<Arc<nah_changes::Changes>> {
+    match nah_changes::Changes::open(arch.root()) {
+        Ok(c) => Some(Arc::new(c)),
+        Err(e) => {
+            tracing::warn!("No changes view: {e}");
+            None
+        }
+    }
+}
+
 pub fn state(arch: &ArchitectureService) -> Result<nah_state::StateDb, StartError> {
     let dir = arch_service::state_dir(arch.root())?;
     Ok(nah_state::StateDb::open(&dir, &arch_service::store_settings(arch.limits()))?)

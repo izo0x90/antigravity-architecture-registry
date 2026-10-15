@@ -3324,6 +3324,7 @@ dependencies = [
  "hyper-util",
  "include_dir",
  "nah-access",
+ "nah-changes",
  "nah-notify",
  "nah-packs",
  "nah-state",
@@ -3451,6 +3452,16 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "toml",
+]
+
+[[package]]
+name = "nah-changes"
+version = "0.1.0"
+dependencies = [
+ "git2",
+ "harness-contracts",
+ "tempfile",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

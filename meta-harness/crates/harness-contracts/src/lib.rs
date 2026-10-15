@@ -5,6 +5,7 @@
 //! Provider-specific behavior lives in adapters; nothing here names a harness.
 
 pub mod capabilities;
+pub mod changes;
 pub mod events;
 pub mod home;
 pub mod ids;

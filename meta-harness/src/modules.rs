@@ -205,11 +205,13 @@ pub struct ProjectState {
     pub sessions: Arc<SessionManager>,
     pub slots: Arc<SlotManager>,
     pub mcp_state: crate::mcp::McpServerState,
+    /// Its changes, from git (none when it isn't a git repository).
+    pub changes: Option<Arc<nah_changes::Changes>>,
 }
 
 impl Module for ProjectState {
     fn routes(&self) -> Router {
-        routes::files::routes().merge(routes::mcp::routes()).merge(crate::arch::routes()).merge(crate::graph::routes()).merge(crate::queue::routes()).with_state(self.clone())
+        routes::files::routes().merge(routes::changes::routes()).merge(routes::mcp::routes()).merge(crate::arch::routes()).merge(crate::graph::routes()).merge(crate::queue::routes()).with_state(self.clone())
     }
 }
 
@@ -239,6 +241,7 @@ pub struct Parts {
     pub remote: Arc<crate::remote::Remote>,
     pub access: Arc<Access>,
     pub notify: Arc<nah_notify::NotifyHub>,
+    pub changes: Option<Arc<nah_changes::Changes>>,
 }
 
 impl AppState {
@@ -253,7 +256,7 @@ impl AppState {
             cockpit: CockpitState { gate: gate.clone(), stopping: stopping.clone(), state: p.state, remote: p.remote },
             harness: HarnessState { gate: gate.clone(), stopping, registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
-            project: ProjectState { gate, arch: p.arch, queue: p.queue, sessions: p.sessions, slots: p.slots, mcp_state: p.mcp_state },
+            project: ProjectState { gate, arch: p.arch, queue: p.queue, sessions: p.sessions, slots: p.slots, mcp_state: p.mcp_state, changes: p.changes },
         })
     }
 

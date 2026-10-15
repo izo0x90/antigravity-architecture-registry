@@ -22,6 +22,7 @@ members = [
     "crates/nah-access",
     "crates/nah-state",
     "crates/nah-notify",
+    "crates/nah-changes",
 ]
 
 # Debug builds (tests, and the server as run in development) optimize the
@@ -57,6 +58,7 @@ nah-packs = { path = "crates/nah-packs" }
 nah-access = { path = "crates/nah-access" }
 nah-state = { path = "crates/nah-state" }
 nah-notify = { path = "crates/nah-notify" }
+nah-changes = { path = "crates/nah-changes" }
 include_dir = "0.7"
 clap = { version = "4", features = ["derive"] }
 tokio-tungstenite = "0.29"

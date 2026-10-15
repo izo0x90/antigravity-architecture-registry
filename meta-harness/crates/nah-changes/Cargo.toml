@@ -1,0 +1,13 @@
+[package]
+name = "nah-changes"
+version = "0.1.0"
+edition = "2024"
+description = "The project's changes, from git: comparisons, changed files, one file's changes, and the timeline's snapshots. Reads the user's repository; writes only its own snapshot refs."
+
+[dependencies]
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
+harness-contracts = { path = "../harness-contracts" }
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3"
