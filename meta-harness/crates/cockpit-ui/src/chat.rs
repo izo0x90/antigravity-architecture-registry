@@ -8,8 +8,8 @@ use egui::{Color32, Frame, Pos2, Rect, RichText, Stroke, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use harness_contracts::{
     ClientEvent, ConfigKind, McpServer, McpTransport, NativeId, OptionValue, ContentBlock, InstanceId, ItemBody, ItemStatus, ModelSelection, NoticeLevel, PlanBody,
-    PlanStep, ProviderSnapshot, ProviderStatus, RequestStatus, RuntimeMode, RuntimePolicy, SavedSession,
-    StepStatus, SteerInput, ThreadId, ThreadStatus, ToolKind, ToolServers, TurnInput, TurnItem, TurnStatus,
+    PlanStep, ProviderSnapshot, ProviderStatus, RequestStatus, RuntimeMode, RuntimePolicy, SavedSession, SessionKey, Slot, SlotId, SlotStatus,
+    StepStatus, SteerInput, ThreadId, ThreadStatus, ToolKind, ToolServers, TurnItem, TurnStatus, LEAD,
 };
 
 use egui_phosphor::regular as icon;
@@ -17,7 +17,7 @@ use egui_phosphor::regular as icon;
 use crate::actions::{Action, ActionProvider, Choice, MINOR, Param, RunCx, ToolbarStyle, ToolbarUse, toolbar_control};
 use crate::feedback::FeedbackInspectorState;
 use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, Spot, Step, Target};
-use crate::net::{AuthChallenge, NetClient, NetResult, OpenThreadBody};
+use crate::net::{AuthChallenge, NetClient, NetResult, OpenSlotSession, SlotOpened};
 use crate::request_card::{Drafts, render_request};
 use crate::store::{Store, ThreadView};
 use crate::theme::colors;
@@ -38,10 +38,15 @@ pub enum SessionStatus {
     Failed(String),
 }
 
-/// Results of async calls, drained once per frame.
+/// Results of async calls, drained once per frame (each says which slot
+/// it was for: the view may show another by then).
 enum Reply {
-    Opened(NetResult<ThreadId>),
-    Sent(NetResult<()>),
+    Opened(SlotId, NetResult<SlotOpened>),
+    Sent(SlotId, NetResult<()>),
+    /// A sub-slot was started (shown in the view that asked).
+    SlotMade(NetResult<SlotId>),
+    /// A session was ended to start again with new tool servers.
+    Restart { slot: SlotId, resume: Option<NativeId>, result: NetResult<()> },
     Saved(NetResult<Vec<SavedSession>>),
     AuthStarted(NetResult<AuthChallenge>),
     /// The tool servers every session gets; `saved`: after a change.
@@ -57,17 +62,20 @@ fn post(mailbox: &Mailbox, reply: Reply) {
     }
 }
 
+#[derive(Default)]
 pub struct ChatStreamState {
     pub store: Store,
-    pub active_instance: Option<InstanceId>,
-    pub active_thread: Option<ThreadId>,
-    opening: bool,
-    error: Option<String>,
-    queued_prompt: Option<String>,
+    /// Slots whose session is being opened.
+    opening: std::collections::BTreeSet<SlotId>,
+    /// What went wrong, by slot.
+    errors: std::collections::BTreeMap<SlotId, String>,
+    /// A prompt for a slot with no harness yet, sent once its first session opens.
+    queued: std::collections::BTreeMap<SlotId, String>,
+    /// Something to tell the user once (a resume that opened fresh,
+    /// reports delivered to the lead).
+    notice: Option<String>,
     /// This view's own state (each chat view has one; the one in use is here).
     pub ui: ChatView,
-    runtime_mode: RuntimeMode,
-    model: Option<String>,
     saved_sessions: Option<Vec<SavedSession>>,
     /// Action to open in the palette once saved sessions arrive.
     after_saved: Option<String>,
@@ -89,6 +97,8 @@ pub struct ChatStreamState {
 /// A chat view's own state: what's typed, where the cursor is, what was
 /// drawn. The chat's sessions, sign-in and tools are shared by all views.
 pub struct ChatView {
+    /// The slot it shows: the lead, unless another was picked.
+    pub slot: SlotId,
     pub input_buffer: String,
     pub markdown_cache: CommonMarkCache,
     pub requested_file_jump: Option<(String, Option<usize>)>,
@@ -108,6 +118,7 @@ pub struct ChatView {
 impl Default for ChatView {
     fn default() -> Self {
         Self {
+            slot: SlotId::new(LEAD),
             input_buffer: String::new(),
             markdown_cache: CommonMarkCache::default(),
             requested_file_jump: None,
@@ -117,31 +128,6 @@ impl Default for ChatView {
             spots: Vec::new(),
             drawing: Vec::new(),
             view: Rect::NOTHING,
-        }
-    }
-}
-
-impl Default for ChatStreamState {
-    fn default() -> Self {
-        Self {
-            store: Store::default(),
-            active_instance: None,
-            active_thread: None,
-            opening: false,
-            error: None,
-            queued_prompt: None,
-            ui: ChatView::default(),
-            runtime_mode: RuntimeMode::ApprovalRequired,
-            model: None,
-            saved_sessions: None,
-            after_saved: None,
-            pending_palette: None,
-            tools: None,
-            tools_asked: false,
-            login: None,
-            auth_paste: String::new(),
-            drafts: Drafts::default(),
-            mailbox: Mailbox::default(),
         }
     }
 }
@@ -189,60 +175,98 @@ fn banner(ui: &mut egui::Ui, fill: Color32, stroke: Color32, add: impl FnOnce(&m
     ui.add_space(crate::theme::look().space_s);
 }
 
+impl ChatView {
+    /// Where it is: its slot, and its message.
+    pub fn place(&self) -> Place {
+        Place::Chat { message: self.cursor, slot: Some(self.slot.clone()) }
+    }
+}
+
 impl ChatStreamState {
+    /// Shows the slot running `thread` (one of the queue's workers, say);
+    /// false when no slot runs it.
+    pub fn show_thread(&mut self, thread: &ThreadId) -> bool {
+        let Some(slot) = self.store.slots.values().find(|s| s.current_thread() == Some(thread)) else { return false };
+        self.ui.slot = slot.id.clone();
+        self.ui.cursor = None;
+        true
+    }
+
     pub fn process_event(&mut self, event: ClientEvent) {
-        if let ClientEvent::InstanceUpdated { snapshot } = &event
-            && self.active_instance.is_none()
+        if let ClientEvent::SlotClosed { slot_id } = &event
+            && slot_id == &self.ui.slot
         {
-            self.active_instance = Some(snapshot.instance_id.clone());
-        }
-        if let ClientEvent::ThreadClosed { thread_id } = &event
-            && self.active_thread.as_ref() == Some(thread_id)
-        {
-            self.active_thread = None;
-        }
-        // After a reload the server replays live sessions; adopt one if none is active.
-        if let ClientEvent::Session { event: harness_contracts::AdapterEvent::ThreadUpdated { thread } } = &event
-            && self.active_thread.is_none()
-            && !self.opening
-            && thread.status != ThreadStatus::Closed
-        {
-            self.active_thread = Some(thread.id.clone());
-            self.active_instance = Some(thread.instance_id.clone());
+            self.ui.slot = SlotId::new(LEAD);
+            self.ui.cursor = None;
         }
         self.store.apply(event);
     }
 
+    /// The slot this view shows.
+    pub fn slot(&self) -> Option<&Slot> {
+        self.store.slots.get(&self.ui.slot)
+    }
+
+    /// Its current session's thread, while it runs.
+    pub fn active_thread(&self) -> Option<ThreadId> {
+        self.thread_id_in(&self.ui.slot)
+    }
+
+    /// Its harness: the slot's, else (a lead with none chosen yet) the
+    /// first there is.
+    pub fn active_instance(&self) -> Option<InstanceId> {
+        self.instance_id_in(&self.ui.slot)
+    }
+
+    fn thread_id_in(&self, slot: &SlotId) -> Option<ThreadId> {
+        self.store.slots.get(slot)?.current_thread().cloned()
+    }
+
+    fn instance_id_in(&self, slot: &SlotId) -> Option<InstanceId> {
+        self.store.slots.get(slot).and_then(|s| s.instance_id.clone()).or_else(|| self.store.instances.keys().next().cloned())
+    }
+
     fn instance(&self) -> Option<&ProviderSnapshot> {
-        self.active_instance.as_ref().and_then(|id| self.store.instances.get(id))
+        self.store.instances.get(&self.active_instance()?)
     }
 
     fn thread(&self) -> Option<&ThreadView> {
-        self.active_thread.as_ref().and_then(|id| self.store.threads.get(id))
+        self.store.threads.get(&self.active_thread()?)
     }
 
+    fn error(&self) -> Option<&String> {
+        self.errors.get(&self.ui.slot)
+    }
+
+    fn set_error(&mut self, slot: SlotId, message: String) {
+        self.errors.insert(slot, message);
+    }
+
+    fn opening(&self) -> bool {
+        self.opening.contains(&self.ui.slot)
+    }
+
+    /// The lead's session (the AGENT light): whichever slot a view shows.
     pub fn session_status(&self) -> SessionStatus {
-        if let Some(err) = &self.error {
+        let lead = SlotId::new(LEAD);
+        if let Some(err) = self.errors.get(&lead) {
             return SessionStatus::Failed(err.clone());
         }
-        match self.thread().map(|t| t.thread.status) {
+        let thread = self.thread_id_in(&lead);
+        match thread.as_ref().and_then(|t| self.store.threads.get(t)).map(|t| t.thread.status) {
             Some(ThreadStatus::Starting) => SessionStatus::Connecting,
             Some(ThreadStatus::Error) => SessionStatus::Failed("the agent reported an error".into()),
             Some(ThreadStatus::Closed) => SessionStatus::Failed("the agent session closed".into()),
-            Some(_) => SessionStatus::Connected(self.active_thread.as_ref().map(ToString::to_string).unwrap_or_default()),
-            None if self.opening => SessionStatus::Connecting,
+            Some(_) => SessionStatus::Connected(thread.map(|t| t.to_string()).unwrap_or_default()),
+            None if self.opening.contains(&lead) => SessionStatus::Connecting,
             None => SessionStatus::Idle,
         }
     }
 
-    /// Why the chosen harness (else the only one) can't start, and how to
-    /// fix it, as its instance says.
+    /// Why the lead's harness (else the first) can't start, and how to fix
+    /// it, as its instance says.
     pub fn harness_problem(&self) -> Option<String> {
-        let instance = match &self.active_instance {
-            Some(id) => self.store.instances.get(id),
-            None if self.store.instances.len() == 1 => self.store.instances.values().next(),
-            None => None,
-        }?;
+        let instance = self.store.instances.get(&self.instance_id_in(&SlotId::new(LEAD))?)?;
         match &instance.status {
             ProviderStatus::Unavailable { reason } => Some(format!("{}: {reason}", instance.display_name)),
             ProviderStatus::Error { message } => Some(format!("{}: {message}", instance.display_name)),
@@ -250,18 +274,23 @@ impl ChatStreamState {
         }
     }
 
+    /// How much the lead's session has done (the AGENT light blinks with it).
     pub fn agent_activity(&self) -> u64 {
-        self.thread().map(|t| t.activity).unwrap_or(0)
+        self.thread_id_in(&SlotId::new(LEAD)).and_then(|t| self.store.threads.get(&t)).map(|t| t.activity).unwrap_or(0)
     }
 
+    /// How the slot's sessions run (its settings).
     fn policy(&self) -> RuntimePolicy {
-        RuntimePolicy { runtime_mode: self.runtime_mode, ..RuntimePolicy::default() }
+        self.slot().map(|s| s.policy.clone()).unwrap_or_default()
+    }
+
+    fn model(&self) -> Option<String> {
+        self.slot().and_then(|s| s.model.as_ref()).map(|m| m.model.clone())
     }
 
     fn model_selection(&self) -> Option<ModelSelection> {
-        Some(ModelSelection { instance_id: self.active_instance.clone()?, model: self.model.clone()?, options: Vec::new() })
+        Some(ModelSelection { instance_id: self.active_instance()?, model: self.model()?, options: Vec::new() })
     }
-
 }
 
 #[cfg(test)]

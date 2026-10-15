@@ -1,5 +1,5 @@
 //! The harnesses: their instances (refresh, saved sessions, sign-in) and
-//! threads (open, turns, steering, answering requests). Routes address
+//! threads (steering, stopping, answering requests). Routes address
 //! instances and threads by id and never know which harness is behind them.
 
 use std::sync::Arc;
@@ -10,9 +10,9 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post},
 };
-use harness_contracts::{InstanceId, ModelSelection, NativeId, RequestId, RequestResponse, RuntimePolicy, SteerInput, ThreadId, TurnInput};
-use harness_core::{HarnessError, Open};
-use serde::{Deserialize, Serialize};
+use harness_contracts::{InstanceId, NativeId, RequestId, RequestResponse, SteerInput, ThreadId};
+use harness_core::HarnessError;
+use serde::Deserialize;
 
 use crate::server::{ApiResult, AppState};
 use crate::cockpit::{Needs, can};
@@ -26,10 +26,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/instances/{id}/auth/{method}", post(begin_auth))
         .route("/api/instances/{id}/auth/complete", post(complete_auth))
         .route("/api/instances/{id}/auth/logout", post(logout))
-        .route("/api/threads", post(open_thread))
-        .route("/api/threads/{thread}", delete(close_thread))
-        .route("/api/threads/{thread}/turns", post(start_turn))
-        .route("/api/threads/{thread}/inject", post(inject))
         .route("/api/threads/{thread}/steer", post(steer))
         .route("/api/threads/{thread}/interrupt", post(interrupt))
         .route("/api/threads/{thread}/requests/{request}", post(respond_request))
@@ -114,69 +110,7 @@ async fn logout(_: Needs<can::SessionsControl>, State(state): State<AppState>, P
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ---- threads ----
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OpenThreadRequest {
-    pub instance_id: InstanceId,
-    #[serde(default)]
-    pub policy: RuntimePolicy,
-    pub model: Option<ModelSelection>,
-    pub resume: Option<NativeId>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadOpened {
-    pub thread_id: ThreadId,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TurnStarted {
-    pub turn_id: harness_contracts::TurnId,
-}
-
-/// Opens a session in the lead slot, on the harness asked for. (The
-/// cockpit's way until it opens sessions by slot.)
-async fn open_thread(_: Needs<can::SessionsControl>, State(state): State<AppState>, Json(body): Json<OpenThreadRequest>) -> ApiResult<Json<ThreadOpened>> {
-    state.registry.get(&body.instance_id)?;
-    let lead = state.slots.lead();
-    state.slots.set_harness(&lead, body.instance_id).await?;
-    state.slots.set_settings(&lead, body.policy, body.model).await?;
-    let opened = state.slots.open_session(&lead, Open::New { resume: body.resume }).await?;
-    Ok(Json(ThreadOpened { thread_id: opened.thread }))
-}
-
-/// Ends a session: its slot forgets it.
-async fn close_thread(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(thread): Path<String>) -> ApiResult<StatusCode> {
-    let thread = ThreadId::new(thread);
-    let (slot, session) = state.slots.of_thread(&thread).ok_or_else(|| HarnessError::NotFound { what: format!("thread {thread}") })?;
-    state.slots.close_session(&slot, &session).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn start_turn(
-    _: Needs<can::SessionsControl>,
-    State(state): State<AppState>,
-    Path(thread): Path<String>,
-    Json(input): Json<TurnInput>,
-) -> ApiResult<Json<TurnStarted>> {
-    let turn_id = state.sessions.get(&ThreadId::new(thread))?.start_turn(input).await?;
-    Ok(Json(TurnStarted { turn_id }))
-}
-
-/// Adds a message to the running turn (else it starts one).
-async fn inject(
-    _: Needs<can::SessionsControl>,
-    State(state): State<AppState>,
-    Path(thread): Path<String>,
-    Json(input): Json<TurnInput>,
-) -> ApiResult<Json<TurnStarted>> {
-    let turn_id = state.sessions.get(&ThreadId::new(thread))?.inject(input).await?;
-    Ok(Json(TurnStarted { turn_id }))
-}
+// ---- threads (sessions open, close and take prompts by slot: see `slots`) ----
 
 async fn steer(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(thread): Path<String>, Json(input): Json<SteerInput>) -> ApiResult<StatusCode> {
     state.sessions.get(&ThreadId::new(thread))?.steer(input).await?;

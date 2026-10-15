@@ -67,10 +67,10 @@ impl BufferKind {
         }
     }
 
-    /// There is one of these (a chat, a queue); of the others, each column
-    /// can have its own.
+    /// There is one of these (the queue); of the others, each column can
+    /// have its own.
     pub fn one_only(&self) -> bool {
-        matches!(self, Self::Chat | Self::Queue)
+        matches!(self, Self::Queue)
     }
 
     /// Lowercase name used in action ids ("buffer.chat").

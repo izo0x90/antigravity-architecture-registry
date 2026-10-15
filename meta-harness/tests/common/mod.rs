@@ -372,7 +372,7 @@ impl Mcp {
     /// As the lead: opens a lead session on the fake harness and connects
     /// the way its agent would, with the address (and key) it was given.
     pub async fn lead(addr: SocketAddr) -> Self {
-        let (status, body) = http(addr, "POST", "/api/threads", Some(&format!(r#"{{"instanceId":"{FAKE}"}}"#))).await;
+        let (status, body) = http(addr, "POST", "/api/slots/lead/sessions", Some(&format!(r#"{{"instanceId":"{FAKE}"}}"#))).await;
         assert_eq!(status, 200, "{body}");
         let thread = ThreadId::new(serde_json::from_str::<Value>(&body).unwrap()["threadId"].as_str().unwrap());
         Self::as_session(addr, &thread).await

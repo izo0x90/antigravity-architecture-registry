@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use ewebsock::{WsEvent, WsMessage, WsReceiver, WsSender};
 use harness_contracts::{
-    ClientEvent, InstanceId, ModelSelection, NativeId, RequestId, RequestResponse, RuntimePolicy, SavedSessionPage,
-    SteerInput, ThreadId, TurnInput,
+    ClientEvent, InstanceId, ModelSelection, NativeId, RequestId, RequestResponse, RuntimePolicy, SavedSessionPage, SessionKey, SlotId,
+    SteerInput, ThreadId,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -17,20 +17,37 @@ pub enum WsState {
     Closed,
 }
 
-#[derive(Debug, Serialize)]
+/// How to open a session in a slot: its harness and settings (set first),
+/// and which session: a new one, a saved one, or one of the slot's own.
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct OpenThreadBody {
-    pub instance_id: InstanceId,
-    pub policy: RuntimePolicy,
+pub struct OpenSlotSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<InstanceId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy: Option<RuntimePolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resume: Option<NativeId>,
-    pub mcp_servers: Vec<harness_contracts::McpServer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<SessionKey>,
+}
+
+/// A session opened in a slot: its thread, and what to tell the user.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotOpened {
+    pub thread_id: ThreadId,
+    pub session: SessionKey,
+    pub note: Option<String>,
+    pub delivered_reports: usize,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ThreadOpened {
-    thread_id: ThreadId,
+struct SlotCreated {
+    slot_id: SlotId,
 }
 
 #[derive(serde::Deserialize)]
@@ -359,23 +376,47 @@ impl NetClient {
         self.retry = Some((now + delay, delay));
     }
 
-    // ---- threads ----
+    // ---- slots ----
 
-    pub fn open_thread(&self, body: &OpenThreadBody, ctx: egui::Context, on_done: impl FnOnce(NetResult<ThreadId>) + Send + 'static) {
+    /// Opens a session in a slot (setting its harness and settings first, if given).
+    pub fn open_slot_session(&self, slot: &SlotId, body: &OpenSlotSession, ctx: egui::Context, on_done: impl FnOnce(NetResult<SlotOpened>) + Send + 'static) {
         let json = serde_json::to_value(body).unwrap_or_default();
-        self.call::<ThreadOpened>("POST", "/api/threads", Some(json), ctx, move |r| on_done(r.map(|o| o.thread_id)));
+        self.call::<SlotOpened>("POST", &format!("/api/slots/{slot}/sessions"), Some(json), ctx, on_done);
     }
 
-    pub fn start_turn(&self, thread: &ThreadId, input: &TurnInput, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
-        let json = serde_json::to_value(input).unwrap_or_default();
-        self.call::<serde_json::Value>("POST", &format!("/api/threads/{thread}/turns"), Some(json), ctx, move |r| on_done(r.map(|_| ())));
+    /// A prompt to a slot (its session resumed or opened first if it isn't
+    /// running); `add_to_running`: into the turn it's running.
+    pub fn prompt_slot(&self, slot: &SlotId, text: &str, add_to_running: bool, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        let json = serde_json::json!({ "text": text, "addToRunning": add_to_running });
+        self.call::<serde_json::Value>("POST", &format!("/api/slots/{slot}/prompt"), Some(json), ctx, move |r| on_done(r.map(|_| ())));
     }
 
-    /// Adds a message to the running turn (else it starts one).
-    pub fn inject(&self, thread: &ThreadId, input: &TurnInput, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
-        let json = serde_json::to_value(input).unwrap_or_default();
-        self.call::<serde_json::Value>("POST", &format!("/api/threads/{thread}/inject"), Some(json), ctx, move |r| on_done(r.map(|_| ())));
+    pub fn close_slot_session(&self, slot: &SlotId, session: &SessionKey, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<()>("DELETE", &format!("/api/slots/{slot}/sessions/{session}"), None, ctx, on_done);
     }
+
+    pub fn switch_slot_session(&self, slot: &SlotId, session: &SessionKey, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<()>("POST", &format!("/api/slots/{slot}/current"), Some(serde_json::json!({ "session": session })), ctx, on_done);
+    }
+
+    pub fn set_slot_harness(&self, slot: &SlotId, instance: &InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<()>("POST", &format!("/api/slots/{slot}/harness"), Some(serde_json::json!({ "instanceId": instance })), ctx, on_done);
+    }
+
+    pub fn set_slot_settings(&self, slot: &SlotId, policy: &RuntimePolicy, model: Option<&ModelSelection>, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<()>("POST", &format!("/api/slots/{slot}/settings"), Some(serde_json::json!({ "policy": policy, "model": model })), ctx, on_done);
+    }
+
+    /// Starts a sub-slot on a harness.
+    pub fn new_slot(&self, instance: &InstanceId, ctx: egui::Context, on_done: impl FnOnce(NetResult<SlotId>) + Send + 'static) {
+        self.call::<SlotCreated>("POST", "/api/slots", Some(serde_json::json!({ "instanceId": instance })), ctx, move |r| on_done(r.map(|c| c.slot_id)));
+    }
+
+    pub fn close_slot(&self, slot: &SlotId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<()>("DELETE", &format!("/api/slots/{slot}"), None, ctx, on_done);
+    }
+
+    // ---- threads ----
 
     pub fn steer(&self, thread: &ThreadId, input: &SteerInput, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
         let json = serde_json::to_value(input).unwrap_or_default();
@@ -384,10 +425,6 @@ impl NetClient {
 
     pub fn interrupt(&self, thread: &ThreadId, ctx: egui::Context) {
         self.call::<()>("POST", &format!("/api/threads/{thread}/interrupt"), Some(serde_json::json!({})), ctx, |_| {});
-    }
-
-    pub fn close_thread(&self, thread: &ThreadId, ctx: egui::Context) {
-        self.call::<()>("DELETE", &format!("/api/threads/{thread}"), None, ctx, |_| {});
     }
 
     pub fn respond(

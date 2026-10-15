@@ -18,10 +18,19 @@ impl CockpitApp {
             used: used.collect(),
             marks: self.marks.clone(),
             jumps: self.jumps.clone(),
-            thread: self.chat.active_thread.clone(),
-            draft: self.chat.ui.input_buffer.clone(),
+            drafts: self.drafts(),
             agents: self.remote.agents,
         }
+    }
+
+    /// Each chat view's unsent text.
+    fn drafts(&self) -> BTreeMap<u32, String> {
+        let used = self.active.get(&BufferKind::Chat).copied().unwrap_or(0);
+        std::iter::once((used, &self.chat.ui))
+            .chain(self.parked.chats.iter().map(|(id, v)| (*id, v)))
+            .filter(|(_, v)| !v.input_buffer.is_empty())
+            .map(|(id, v)| (id, v.input_buffer.clone()))
+            .collect()
     }
 
     /// Saves the state a moment after it changed, and puts back what was
@@ -40,8 +49,7 @@ impl CockpitApp {
     }
 
     /// Puts the saved state back: the columns, each view where it was, the
-    /// marks and jumps, the chat's session (if it's still there) and its
-    /// unsent text.
+    /// marks and jumps, and each chat view's unsent text.
     pub(super) fn restore_saved(&mut self, saved: SavedUi, ctx: &egui::Context) {
         self.close_quick_look();
         self.columns = saved.columns.clone().checked();
@@ -50,6 +58,12 @@ impl CockpitApp {
         self.remote.agents = saved.agents;
         for (pane, place) in &saved.views {
             self.swap_in(*pane);
+            if pane.kind == BufferKind::Chat
+                && self.chat.ui.input_buffer.is_empty()
+                && let Some(draft) = saved.drafts.get(&pane.id)
+            {
+                self.chat.ui.input_buffer.clone_from(draft);
+            }
             if pane.kind == BufferKind::Spec {
                 self.spec.pinned = saved.pinned.contains(&pane.id);
                 // One not pinned follows the graph's selection (put back with the graph).
@@ -66,12 +80,6 @@ impl CockpitApp {
         }
         self.back_to_used();
         self.use_focused();
-        if let Some(thread) = saved.thread.clone().filter(|t| self.chat.store.threads.contains_key(t)) {
-            self.chat.active_thread = Some(thread);
-        }
-        if self.chat.ui.input_buffer.is_empty() {
-            self.chat.ui.input_buffer = saved.draft.clone();
-        }
         self.keeper.restored(&saved);
     }
 }

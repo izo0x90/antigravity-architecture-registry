@@ -64,7 +64,7 @@ impl ChatStreamState {
             let scroll_height = (ui.available_height() - 105.0).max(50.0);
             self.ui.drawing.clear();
             let stream = egui::ScrollArea::vertical()
-                .id_salt("chat_stream")
+                .id_salt(("chat_stream", slot_idx))
                 .auto_shrink([false, false])
                 .stick_to_bottom(self.ui.cursor.is_none())
                 .max_height(scroll_height)
@@ -89,6 +89,12 @@ impl ChatStreamState {
         let mut used: Option<(Action, ToolbarUse)> = None;
 
         ui.horizontal(|ui| {
+            // The agent slot it shows (its role on hover).
+            if let Some(slot) = self.slot() {
+                let color = if slot.is_lead() { colors().accent } else { colors().info };
+                ui.label(RichText::new(format!("{} {}", icon::USER_FOCUS, slot.name)).strong().size(crate::theme::look().text_label).color(color))
+                    .on_hover_text(format!("agent slot ({})", slot.role));
+            }
             let name = self.instance().map(|s| s.display_name.clone()).unwrap_or_else(|| "No harness".into());
             ui.label(RichText::new(name).strong().size(crate::theme::look().text_label));
             // Who it's signed in as, as it says.
@@ -109,10 +115,10 @@ impl ChatStreamState {
                         used = Some((action.clone(), u));
                     }
                 }
-                if let Some(thread) = &self.active_thread {
+                if let Some(thread) = &self.active_thread() {
                     let short: String = thread.as_str().chars().take(8).collect();
                     ui.label(RichText::new(format!("[{short}]")).monospace().size(crate::theme::look().text_small).color(colors().info));
-                } else if self.opening {
+                } else if self.opening() {
                     ui.label(RichText::new(format!("{} Connecting…", icon::HOURGLASS)).size(crate::theme::look().text_small).color(colors().warn));
                 }
             });
@@ -147,13 +153,24 @@ impl ChatStreamState {
 
     pub(super) fn render_banners(&mut self, ui: &mut egui::Ui, net: &NetClient) {
         let ctx = ui.ctx().clone();
-        if let Some(err) = self.error.clone() {
+        if let Some(notice) = self.notice.clone() {
+            let mut dismiss = false;
+            banner(ui, colors().info_bg, colors().focus, |ui| {
+                ui.label(RichText::new(icon::INFO).size(crate::theme::look().text_label).color(colors().info));
+                ui.label(RichText::new(&notice).size(crate::theme::look().text_label).color(colors().text));
+                dismiss = ui.small_button("Dismiss").clicked();
+            });
+            if dismiss {
+                self.notice = None;
+            }
+        }
+        if let Some(err) = self.error().cloned() {
             let mut retry = false;
             let mut dismiss = false;
             banner(ui, colors().error_bg, colors().error, |ui| {
                 ui.label(RichText::new(icon::X_CIRCLE).size(crate::theme::look().text_label).color(colors().error));
                 ui.label(RichText::new(&err).size(crate::theme::look().text_label).color(colors().text));
-                if self.active_thread.is_none() {
+                if self.active_thread().is_none() {
                     retry = ui.button(format!("{} Retry", icon::ARROW_COUNTER_CLOCKWISE)).clicked();
                 }
                 dismiss = ui.small_button("Dismiss").clicked();
@@ -161,7 +178,7 @@ impl ChatStreamState {
             if retry {
                 self.open_thread(net, &ctx, None);
             } else if dismiss {
-                self.error = None;
+                self.errors.remove(&self.ui.slot.clone());
             }
         }
 
@@ -169,7 +186,7 @@ impl ChatStreamState {
         let needs_login = self.instance().is_some_and(|s| {
             !s.auth.methods.is_empty()
                 && (s.auth.status == harness_contracts::AuthStatus::SignedOut
-                    || self.error.as_deref().is_some_and(|e| e.to_lowercase().contains("authentication")))
+                    || self.error().is_some_and(|e| e.to_lowercase().contains("authentication")))
         });
         if (needs_login || self.login.is_some())
             && let Some(snapshot) = self.instance().cloned()
@@ -433,7 +450,7 @@ impl ChatStreamState {
             };
             let output = ui.add(
                 egui::TextEdit::multiline(&mut self.ui.input_buffer)
-                    .id(egui::Id::new("chat_persistent_input_text_edit"))
+                    .id(egui::Id::new(("chat_persistent_input_text_edit", slot_idx)))
                     .desired_rows(2)
                     .desired_width(text_w)
                     .hint_text(hint),

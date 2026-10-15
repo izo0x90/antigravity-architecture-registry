@@ -117,11 +117,12 @@ fn views_are_hidden_by_closing_and_gone_only_when_deleted() {
     app.run_shell(ShellCommand::DeleteView, None, None, &ctx);
     frame(&ctx, &mut app, vec![]);
     assert!(!app.columns.has(second) && !app.parked.graphs.contains_key(&second.id), "deleted: not anywhere");
-    // The chat isn't deleted (there's one of it).
+    // The queue isn't deleted (there's one of it).
+    app.columns.show(0, BufferKind::Queue);
     app.columns.focus(0);
     frame(&ctx, &mut app, vec![]);
     app.run_shell(ShellCommand::DeleteView, None, None, &ctx);
-    assert!(app.note.as_deref().unwrap_or_default().contains("There's one chat"), "{:?}", app.note);
+    assert!(app.note.as_deref().unwrap_or_default().contains("There's one queue"), "{:?}", app.note);
     // The first graph is untouched throughout.
     let first = app.columns.panes().iter().copied().find(|p| p.kind == BufferKind::Graph && p.id == 0).expect("the first graph");
     app.show_view(first);
@@ -151,6 +152,43 @@ fn a_count_before_a_go_to_names_the_column_it_opens_in() {
     keys(&ctx, &mut app, "4gd");
     assert_eq!((app.columns.len(), app.columns.focused(), app.columns.kind(3)), (4, 3, BufferKind::Code));
     assert_ne!(app.columns.pane(3), app.columns.pane(0), "two code views");
+}
+
+#[test]
+fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
+    let (ctx, mut app) = full_app();
+    app.chat = crate::chat::tests::conversation();
+    let mut sub = crate::chat::tests::lead(None);
+    (sub.id, sub.role, sub.name) = (harness_contracts::SlotId::new("sub-1"), "sub".into(), "reviewer".into());
+    app.chat.process_event(harness_contracts::ClientEvent::SlotUpdated { slot: sub });
+    let (first, second) = (Pane::new(BufferKind::Chat, 0), Pane::new(BufferKind::Chat, 1));
+    app.columns = crate::columns::Columns::new(vec![first, second], 0);
+    app.use_pane(first);
+    app.chat.ui.input_buffer = "to the lead".into();
+    app.columns.focus(1);
+    app.use_pane(second);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.chat.ui.slot.as_str(), "lead", "a new chat view starts where the one before it was");
+    assert!(app.chat.ui.input_buffer.is_empty(), "with its own prompt");
+    app.chat.ui.slot = harness_contracts::SlotId::new("sub-1");
+    app.chat.ui.input_buffer = "to the reviewer".into();
+    assert_eq!(app.chat.active_thread(), None, "the sub-slot runs no session");
+    let ids: Vec<String> = app.chat.actions().into_iter().map(|a| a.id).collect();
+    assert!(ids.contains(&"agent.close".to_owned()) && ids.contains(&"agent.pick".to_owned()), "{ids:?}");
+    app.columns.focus(0);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!((app.chat.ui.slot.as_str(), app.chat.ui.input_buffer.as_str(), app.chat.active_thread().map(|t| t.to_string())), ("lead", "to the lead", Some("t".into())));
+    assert!(!app.chat.actions().iter().any(|a| a.id == "agent.close"), "the lead isn't closed");
+    // Saved and opened again: each view on its slot, with its draft.
+    let saved = serde_json::to_value(app.saved_ui()).unwrap();
+    let (ctx2, mut fresh) = full_app();
+    fresh.restore_saved(serde_json::from_value(saved).unwrap(), &ctx2);
+    let view = |app: &mut CockpitApp, pane| {
+        app.use_pane(pane);
+        (app.chat.ui.slot.to_string(), app.chat.ui.input_buffer.clone())
+    };
+    assert_eq!(view(&mut fresh, second), ("sub-1".into(), "to the reviewer".into()));
+    assert_eq!(view(&mut fresh, first), ("lead".into(), "to the lead".into()));
 }
 
 #[test]

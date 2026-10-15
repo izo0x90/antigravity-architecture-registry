@@ -126,17 +126,19 @@ impl CockpitApp {
     }
 
     /// The queue view runs on the graph's plan with the chat's harness, and
-    /// sends the user to sessions.
+    /// sends the user to its workers' sessions.
     pub(super) fn link_queue(&mut self, plan: Option<&arch_graph::PlanId>, ctx: &egui::Context) {
         self.queue.author = self.config.user.name.clone();
-        self.queue.instance = self.chat.active_instance.clone();
+        self.queue.instance = self.chat.active_instance();
         self.queue.tick(&self.net, ctx, plan);
         if let Some(thread) = self.queue.requests.open_thread.take() {
             let from = self.jump_of(BufferKind::Queue);
-            self.chat.active_thread = Some(harness_contracts::ThreadId::new(thread));
-            self.chat.ui.cursor = None;
             self.focus_kind(BufferKind::Chat);
-            self.after_jump(from);
+            if self.chat.show_thread(&harness_contracts::ThreadId::new(&thread)) {
+                self.after_jump(from);
+            } else {
+                self.note = Some(format!("No slot runs session {thread} now."));
+            }
         }
     }
 

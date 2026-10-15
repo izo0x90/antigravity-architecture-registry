@@ -33,11 +33,14 @@ pub(super) fn item_text(item: &TurnItem) -> String {
 
 impl Navigable for ChatStreamState {
     fn place(&self) -> Place {
-        Place::Chat { message: self.ui.cursor }
+        self.ui.place()
     }
 
     fn restore(&mut self, place: &Place) {
-        if let Place::Chat { message } = place {
+        if let Place::Chat { message, slot } = place {
+            if let Some(slot) = slot {
+                self.ui.slot = slot.clone();
+            }
             self.ui.cursor = *message;
             self.ui.link_pick = None;
             self.ui.scroll = message.is_some();
@@ -49,7 +52,7 @@ impl Navigable for ChatStreamState {
         let item = self.stream().into_iter().nth(index)?;
         let links = links_of(&item);
         let link = self.ui.link_pick.and_then(|n| links.get(n).cloned()).or_else(|| links.first().cloned());
-        Some(Target::Message { thread: self.active_thread.as_ref().map(|t| t.to_string()), index, link })
+        Some(Target::Message { thread: self.active_thread().map(|t| t.to_string()), index, link })
     }
 
     /// From the latest message (none under the cursor yet), moves start at

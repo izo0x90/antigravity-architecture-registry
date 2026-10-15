@@ -21,7 +21,8 @@ impl CockpitApp {
             BufferKind::Code => swap_view(&mut self.code, &mut self.parked.codes, current, pane.id),
             BufferKind::Spec => swap_view(&mut self.spec, &mut self.parked.specs, current, pane.id),
             BufferKind::Tree => swap_view(&mut self.tree, &mut self.parked.trees, current, pane.id),
-            BufferKind::Chat | BufferKind::Queue => false,
+            BufferKind::Chat => swap_view(&mut self.chat.ui, &mut self.parked.chats, current, pane.id),
+            BufferKind::Queue => false,
         };
         self.active.insert(pane.kind, pane.id);
         if new {
@@ -100,8 +101,8 @@ impl CockpitApp {
     }
 
     /// Deletes the focused column's view for good: the column shows the
-    /// view hidden last, else a new one of its kind. The chat and the queue
-    /// (there's one of each) aren't deleted.
+    /// view hidden last, else a new one of its kind. The queue (there's
+    /// one) isn't deleted.
     pub(super) fn delete_view(&mut self) {
         let slot = self.columns.focused();
         let pane = self.columns.pane(slot);
@@ -173,7 +174,10 @@ impl CockpitApp {
                 if self.pinned(pane) { format!("{card} (pinned)") } else { card }
             }
             Some(Place::Tree { cursor }) => cursor.as_ref().map_or_else(|| "the outline".to_owned(), |id| format!("at {}", name(id))),
-            Some(Place::Chat { .. }) => "the agent's session".to_owned(),
+            Some(Place::Chat { slot, .. }) => {
+                let slot = slot.as_ref().and_then(|s| self.chat.store.slots.get(s));
+                slot.map_or_else(|| "the agent's session".to_owned(), |s| format!("agent slot {}", s.name))
+            }
             Some(Place::Queue { .. }) => "the plan's jobs".to_owned(),
             None => "new".to_owned(),
         };
@@ -219,7 +223,8 @@ impl CockpitApp {
             BufferKind::Code => self.parked.codes.get(&pane.id).map(|v| v.place()),
             BufferKind::Spec => self.parked.specs.get(&pane.id).map(|v| v.place()),
             BufferKind::Tree => self.parked.trees.get(&pane.id).map(|v| v.place()),
-            BufferKind::Chat | BufferKind::Queue => None,
+            BufferKind::Chat => self.parked.chats.get(&pane.id).map(|v| v.place()),
+            BufferKind::Queue => None,
         }
     }
 

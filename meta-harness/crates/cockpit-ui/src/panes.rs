@@ -1,10 +1,12 @@
 //! Every column's own view. The cockpit works on one view of each kind at a
-//! time (`CockpitApp::graph`, `code`, `spec`, `tree`): the one used last.
+//! time (`CockpitApp::graph`, `code`, `spec`, `tree`, the chat's `ui`): the
+//! one used last.
 //! The others wait here, by their pane's number, until their column is
 //! used or drawn; then they change places with the one in use.
 
 use std::collections::BTreeMap;
 
+use crate::chat::ChatView;
 use crate::code::CodeViewerState;
 use crate::graph::GraphState;
 use crate::spec::SpecState;
@@ -16,6 +18,7 @@ pub struct Parked {
     pub codes: BTreeMap<u32, CodeViewerState>,
     pub specs: BTreeMap<u32, SpecState>,
     pub trees: BTreeMap<u32, ArchitectureTreeState>,
+    pub chats: BTreeMap<u32, ChatView>,
 }
 
 impl Parked {
@@ -27,6 +30,7 @@ impl Parked {
         self.codes.retain(|id, _| kept(K::Code, *id));
         self.specs.retain(|id, _| kept(K::Spec, *id));
         self.trees.retain(|id, _| kept(K::Tree, *id));
+        self.chats.retain(|id, _| kept(K::Chat, *id));
     }
 }
 

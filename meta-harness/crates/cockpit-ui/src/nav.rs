@@ -69,7 +69,12 @@ impl Target {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Place {
-    Chat { message: Option<usize> },
+    /// The chat: which slot it shows, and the message.
+    Chat {
+        message: Option<usize>,
+        #[serde(default)]
+        slot: Option<harness_contracts::SlotId>,
+    },
     Code { file: String, line: usize },
     /// The graph: where it looks, and the selected card's key.
     Graph { nav: Nav, selection: Option<String> },

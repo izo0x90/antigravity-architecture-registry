@@ -15,7 +15,7 @@ pub(in crate::app) fn keys_of(b: &Bound) -> String {
 pub(in crate::app) fn describe_jump(jump: &Jump) -> String {
     let short = |id: &ComponentId| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned();
     let place = match &jump.place {
-        Place::Chat { message } => message.map_or("latest".to_owned(), |m| format!("message {}", m + 1)),
+        Place::Chat { message, .. } => message.map_or("latest".to_owned(), |m| format!("message {}", m + 1)),
         Place::Code { file, line } => format!("{file}:{line}"),
         Place::Graph { selection: Some(key), .. } => short(&ComponentId::new(key.clone())),
         Place::Graph { selection: None, nav } => format!("{} view", nav.view.name().replace('_', " ")),

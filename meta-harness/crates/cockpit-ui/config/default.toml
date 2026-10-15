@@ -43,6 +43,7 @@ b = "Buffer"
 l = "Layout"
 q = "Quick look"
 s = "Session"
+w = "Agent slots"
 m = "Model & config"
 o = "Mode"
 p = "Tools & skills"
@@ -90,6 +91,7 @@ I = "Index"
 "buffer.new.graph" = { leader = "b n g" }
 "buffer.new.tree" = { leader = "b n t" }
 "buffer.new.spec" = { leader = "b n s" }
+"buffer.new.chat" = { leader = "b n c" }
 "layout.1" = { leader = "l 1", keys = ["alt+1"] }
 "layout.2" = { leader = "l 2", keys = ["alt+2"] }
 "layout.3" = { leader = "l 3", keys = ["alt+3"] }
@@ -172,6 +174,10 @@ I = "Index"
 "chat.inject" = { leader = "s a" }
 "session.close" = { leader = "s c" }
 "instance.select" = { leader = "s i" }
+
+"agent.pick" = { leader = "w w" }
+"agent.new" = { leader = "w n" }
+"agent.close" = { leader = "w c" }
 
 "config.category.model" = { leader = "m m" }
 "config.category.mode" = { leader = "o o" }

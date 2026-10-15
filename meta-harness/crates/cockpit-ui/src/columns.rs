@@ -77,7 +77,7 @@ impl Columns {
     }
 
     /// Whether `pane` can't be added: it's here already, or it's a second
-    /// chat or queue.
+    /// queue.
     fn taken(&self, pane: Pane) -> bool {
         self.all().any(|p| *p == pane || (pane.kind.one_only() && p.kind == pane.kind))
     }
@@ -188,7 +188,7 @@ impl Columns {
     }
 
     /// Shows a view of `kind` in column `slot`: the one there if it's of
-    /// that kind; the chat or the queue from where it is; else the last one
+    /// that kind; the queue from where it is; else the last one
     /// of that kind put away, or a new one. Returns the view.
     pub fn show(&mut self, slot: usize, kind: BufferKind) -> Pane {
         let slot = slot.min(self.shown.len() - 1);
@@ -307,17 +307,18 @@ mod tests {
     use BufferKind as K;
 
     #[test]
-    fn every_column_can_hold_its_own_view_but_there_is_one_chat() {
-        let mut c = Columns::new(vec![Pane::new(K::Chat, 0), Pane::new(K::Graph, 0), Pane::new(K::Code, 0)], 0);
+    fn every_column_can_hold_its_own_view_but_there_is_one_queue() {
+        let mut c = Columns::new(vec![Pane::new(K::Queue, 0), Pane::new(K::Graph, 0), Pane::new(K::Code, 0)], 0);
         // Another graph in the third column: a new one, the code put away.
         let second = c.show(2, K::Graph);
-        assert_eq!((c.kinds(), second == c.pane(1)), (vec![K::Chat, K::Graph, K::Graph], false));
+        assert_eq!((c.kinds(), second == c.pane(1)), (vec![K::Queue, K::Graph, K::Graph], false));
         // The code comes back where it's asked for, the same one.
         assert_eq!(c.show(1, K::Code), Pane::new(K::Code, 0));
-        // The chat moves rather than being doubled.
-        c.show(2, K::Chat);
-        assert_eq!(c.kinds(), vec![K::Graph, K::Code, K::Chat]);
-        assert_eq!(Columns::new(vec![Pane::new(K::Chat, 0), Pane::new(K::Chat, 1), Pane::new(K::Tree, 0)], 5).panes(), [Pane::new(K::Chat, 0), Pane::new(K::Tree, 0)]);
+        // The queue moves rather than being doubled; a chat is another one.
+        c.show(2, K::Queue);
+        assert_eq!(c.kinds(), vec![K::Graph, K::Code, K::Queue]);
+        assert_eq!(Columns::new(vec![Pane::new(K::Queue, 0), Pane::new(K::Queue, 1), Pane::new(K::Tree, 0)], 5).panes(), [Pane::new(K::Queue, 0), Pane::new(K::Tree, 0)]);
+        assert_eq!(Columns::new(vec![Pane::new(K::Chat, 0), Pane::new(K::Chat, 1)], 0).panes().len(), 2, "two chats");
     }
 
     #[test]

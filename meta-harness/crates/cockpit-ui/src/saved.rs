@@ -20,7 +20,7 @@ use crate::net::{NetClient, NetResult};
 
 /// Bumped when a change to this structure can't read an older one (an older
 /// one is then left unread, and the cockpit opens as new).
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedUi {
@@ -34,9 +34,8 @@ pub struct SavedUi {
     pub used: Vec<Pane>,
     pub marks: BTreeMap<char, Jump>,
     pub jumps: JumpList,
-    /// The chat's session, and what was typed and not sent.
-    pub thread: Option<harness_contracts::ThreadId>,
-    pub draft: String,
+    /// What was typed and not sent, by chat view (its pane's number).
+    pub drafts: BTreeMap<u32, String>,
     /// The user lets agents drive the cockpit.
     #[serde(default)]
     pub agents: bool,
@@ -167,7 +166,7 @@ mod tests {
     use super::*;
 
     fn state(draft: &str) -> SavedUi {
-        SavedUi { version: VERSION, columns: Columns::default(), views: Vec::new(), pinned: Vec::new(), used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), thread: None, draft: draft.into(), agents: false }
+        SavedUi { version: VERSION, columns: Columns::default(), views: Vec::new(), pinned: Vec::new(), used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), drafts: BTreeMap::from([(0, draft.into())]), agents: false }
     }
 
     fn arrive(keeper: &Keeper, value: Option<serde_json::Value>) {

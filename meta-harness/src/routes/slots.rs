@@ -107,6 +107,15 @@ struct OpenBody {
     /// One of the slot's own sessions, again.
     #[serde(default)]
     session: Option<SessionKey>,
+    /// The harness to open it on (the slot's is set first; only while
+    /// none of its sessions runs).
+    #[serde(default)]
+    instance_id: Option<InstanceId>,
+    /// How it runs (the slot's settings are set first).
+    #[serde(default)]
+    policy: Option<RuntimePolicy>,
+    #[serde(default)]
+    model: Option<ModelSelection>,
 }
 
 #[derive(Serialize)]
@@ -119,12 +128,20 @@ struct OpenedBody {
 }
 
 async fn open(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(slot): Path<String>, Json(body): Json<OpenBody>) -> ApiResult<Json<OpenedBody>> {
+    let slot_id = SlotId::new(slot);
+    if let Some(instance) = body.instance_id {
+        state.registry.get(&instance)?;
+        state.slots.set_harness(&slot_id, instance).await?;
+    }
+    if let Some(policy) = body.policy {
+        state.slots.set_settings(&slot_id, policy, body.model).await?;
+    }
     let open = match (body.session, body.resume) {
         (Some(_), Some(_)) => return Err(harness_core::HarnessError::InvalidConfig { reason: "open one of the slot's sessions, or resume a saved one: not both".into() }.into()),
         (Some(session), None) => Open::Again(session),
         (None, resume) => Open::New { resume },
     };
-    let opened = state.slots.open_session(&SlotId::new(slot), open).await?;
+    let opened = state.slots.open_session(&slot_id, open).await?;
     Ok(Json(OpenedBody { thread_id: opened.thread, session: opened.session, note: opened.note, delivered_reports: opened.delivered_reports }))
 }
 

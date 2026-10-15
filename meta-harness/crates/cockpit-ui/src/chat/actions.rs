@@ -16,6 +16,9 @@ enum ChatCommand {
     DeleteSaved,
     SwitchSession,
     SelectInstance,
+    PickSlot,
+    NewSlot,
+    CloseSlot,
     CloseSession,
     StopTurn,
     RefreshInstance,
@@ -45,7 +48,7 @@ impl ActionProvider for ChatStreamState {
         let snapshot = self.instance();
         let caps = snapshot.map(|s| s.capabilities.clone()).unwrap_or_default();
         let view = self.thread();
-        let idle = self.active_thread.is_none() && !self.opening;
+        let idle = self.active_thread().is_none() && !self.opening();
 
         // Prompt (this view only)
         out.push(Action::new("chat.insert", "Type a prompt", C::Insert).focused().importance(crate::actions::PRIMARY));
@@ -70,19 +73,18 @@ impl ActionProvider for ChatStreamState {
                 out.push(Action::new("session.delete", "Delete a saved session", C::DeleteSaved).param(param));
             }
         }
-        if self.store.threads.len() > 1 {
-            let choices = self
-                .store
-                .threads
-                .values()
-                .map(|t| {
-                    Choice::new(t.thread.id.to_string(), t.thread.title.clone().unwrap_or_else(|| t.thread.id.to_string()))
-                        .current(Some(&t.thread.id) == self.active_thread.as_ref())
+        if let Some(slot) = self.slot().filter(|s| s.sessions.len() > 1) {
+            let choices = slot
+                .sessions
+                .iter()
+                .map(|s| {
+                    let label = s.title.clone().or_else(|| s.native_id.as_ref().map(|n| n.to_string())).unwrap_or_else(|| s.key.to_string());
+                    Choice::new(s.key.to_string(), label).detail(s.thread.is_none().then(|| "not running".to_owned())).current(slot.current.as_ref() == Some(&s.key))
                 })
                 .collect();
             out.push(Action::new("session.switch", "Switch session", C::SwitchSession).param(Param::Choice(choices)));
         }
-        if self.store.instances.len() > 1 && self.active_thread.is_none() {
+        if self.store.instances.len() > 1 && self.active_thread().is_none() {
             let choices = self
                 .store
                 .instances
@@ -92,7 +94,7 @@ impl ActionProvider for ChatStreamState {
                         ProviderStatus::Ready => i.display_name.clone(),
                         other => format!("{} ({other:?})", i.display_name),
                     };
-                    Choice::new(i.instance_id.to_string(), label).current(Some(&i.instance_id) == self.active_instance.as_ref())
+                    Choice::new(i.instance_id.to_string(), label).current(Some(&i.instance_id) == self.active_instance().as_ref())
                 })
                 .collect();
             out.push(Action::new("instance.select", "Choose harness", C::SelectInstance).param(Param::Choice(choices)).toolbar(Control, "Harness", None));
@@ -104,6 +106,24 @@ impl ActionProvider for ChatStreamState {
             }
         }
         out.push(Action::new("instance.refresh", "Re-probe the harness", C::RefreshInstance));
+
+        // Agent slots: which one this view shows; starting and closing sub-slots
+        if self.store.slots.len() > 1 {
+            let choices = self
+                .store
+                .slots
+                .values()
+                .map(|s| Choice::new(s.id.to_string(), slot_label(s, &self.store)).detail(slot_detail(s)).current(s.id == self.ui.slot))
+                .collect();
+            out.push(Action::new("agent.pick", "Show an agent slot", C::PickSlot).param(Param::Choice(choices)));
+        }
+        if !self.store.instances.is_empty() {
+            let choices = self.store.instances.values().map(|i| Choice::new(i.instance_id.to_string(), &i.display_name)).collect();
+            out.push(Action::new("agent.new", "Start an agent sub-slot", C::NewSlot).param(Param::Choice(choices)));
+        }
+        if self.slot().is_some_and(|s| !s.is_lead()) {
+            out.push(Action::new("agent.close", "Close this agent sub-slot", C::CloseSlot));
+        }
 
         // Model, config and mode: exactly what the harness reports for the session;
         // before one, what the next session starts with.
@@ -144,12 +164,14 @@ impl ActionProvider for ChatStreamState {
             }
             None => {
                 if let Some(s) = snapshot.filter(|s| !s.models.is_empty()) {
-                    let default = Choice::new("", "default").current(self.model.is_none());
-                    let choices = std::iter::once(default).chain(s.models.iter().map(|m| Choice::new(&m.id, &m.name).current(self.model.as_ref() == Some(&m.id)))).collect();
+                    let model = self.model();
+                    let default = Choice::new("", "default").current(model.is_none());
+                    let choices = std::iter::once(default).chain(s.models.iter().map(|m| Choice::new(&m.id, &m.name).current(model.as_ref() == Some(&m.id)))).collect();
                     out.push(Action::new("model.next", "Model for the next session", C::NextModel).param(Param::Choice(choices)).toolbar(Control, "Model", None));
                 }
                 if let Some(s) = snapshot.filter(|s| !s.runtime_modes.is_empty()) {
-                    let choices = s.runtime_modes.iter().map(|m| Choice::new(wire_name(m), mode_label(*m)).current(*m == self.runtime_mode)).collect();
+                    let current = self.policy().runtime_mode;
+                    let choices = s.runtime_modes.iter().map(|m| Choice::new(wire_name(m), mode_label(*m)).current(*m == current)).collect();
                     out.push(Action::new("mode.runtime", "Runtime mode", C::RuntimeMode).param(Param::Choice(choices)).toolbar(Control, "Mode", None));
                 }
             }
@@ -233,44 +255,52 @@ impl ActionProvider for ChatStreamState {
     fn run(&mut self, action: &Action, value: Option<String>, cx: &mut RunCx<'_>) {
         let Some(command) = action.command::<ChatCommand>() else { return };
         let (net, ctx) = (cx.net, cx.ctx);
-        let thread = self.active_thread.clone();
+        let thread = self.active_thread();
+        let slot = self.ui.slot.clone();
+        let mailbox = self.mailbox.clone();
+        let done = move |r: NetResult<()>| post(&mailbox, Reply::Done(r));
         match command {
             ChatCommand::Insert => *cx.input_mode = crate::keymap::InputMode::Insert { slot: cx.slot },
             ChatCommand::ClearPrompt => self.ui.input_buffer.clear(),
-            ChatCommand::NewSession => {
-                self.active_thread = None;
-                self.open_thread(net, ctx, None);
-            }
+            ChatCommand::NewSession => self.open_thread(net, ctx, None),
             ChatCommand::ResumeSession => match value {
-                Some(native) => {
-                    self.active_thread = None;
-                    self.open_thread(net, ctx, Some(NativeId::new(native)));
-                }
+                Some(native) => self.open_thread(net, ctx, Some(NativeId::new(native))),
                 None => self.load_saved(net, ctx, &action.id),
             },
-            ChatCommand::DeleteSaved => match (value, self.active_instance.clone()) {
+            ChatCommand::DeleteSaved => match (value, self.active_instance()) {
                 (Some(native), Some(instance)) => {
-                    let mailbox = self.mailbox.clone();
-                    net.delete_saved_session(&instance, &NativeId::new(native), ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
+                    net.delete_saved_session(&instance, &NativeId::new(native), ctx.clone(), done);
                     self.saved_sessions = None;
                 }
                 (None, _) => self.load_saved(net, ctx, &action.id),
                 _ => {}
             },
             ChatCommand::SwitchSession => {
-                if let Some(t) = value {
-                    self.active_thread = Some(ThreadId::new(t));
+                if let Some(key) = value {
+                    net.switch_slot_session(&slot, &SessionKey::new(key), ctx.clone(), done);
                 }
             }
             ChatCommand::SelectInstance => {
                 if let Some(i) = value {
-                    self.active_instance = Some(InstanceId::new(i));
+                    net.set_slot_harness(&slot, &InstanceId::new(i), ctx.clone(), done);
                 }
             }
+            ChatCommand::PickSlot => {
+                if let Some(picked) = value.map(SlotId::new).filter(|s| self.store.slots.contains_key(s)) {
+                    self.ui.slot = picked;
+                    self.ui.cursor = None;
+                }
+            }
+            ChatCommand::NewSlot => {
+                if let Some(i) = value {
+                    let mailbox = self.mailbox.clone();
+                    net.new_slot(&InstanceId::new(i), ctx.clone(), move |r| post(&mailbox, Reply::SlotMade(r)));
+                }
+            }
+            ChatCommand::CloseSlot => net.close_slot(&slot, ctx.clone(), done),
             ChatCommand::CloseSession => {
-                if let Some(t) = &thread {
-                    net.close_thread(t, ctx.clone());
-                    self.active_thread = None;
+                if let Some(key) = self.slot().and_then(|s| s.current.clone()) {
+                    net.close_slot_session(&slot, &key, ctx.clone(), done);
                 }
             }
             ChatCommand::StopTurn => {
@@ -279,9 +309,8 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             ChatCommand::RefreshInstance => {
-                if let Some(instance) = &self.active_instance {
-                    let mailbox = self.mailbox.clone();
-                    net.refresh_instance(instance, ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
+                if let Some(instance) = &self.active_instance() {
+                    net.refresh_instance(instance, ctx.clone(), done);
                 }
             }
             ChatCommand::SetConfig { option, boolean } => {
@@ -290,7 +319,10 @@ impl ActionProvider for ChatStreamState {
                     self.steer(net, ctx, SteerInput { config: vec![OptionValue { id: option.clone(), value: json }], ..Default::default() });
                 }
             }
-            ChatCommand::NextModel => self.model = value.filter(|v| !v.is_empty()),
+            ChatCommand::NextModel => {
+                let model = value.filter(|v| !v.is_empty()).zip(self.active_instance()).map(|(model, instance_id)| ModelSelection { instance_id, model, options: Vec::new() });
+                net.set_slot_settings(&slot, &self.policy(), model.as_ref(), ctx.clone(), done);
+            }
             ChatCommand::NativeMode => {
                 if let Some(mode) = value {
                     self.steer(net, ctx, SteerInput { mode: Some(mode), ..Default::default() });
@@ -298,7 +330,8 @@ impl ActionProvider for ChatStreamState {
             }
             ChatCommand::RuntimeMode => {
                 if let Some(mode) = value.and_then(|v| serde_json::from_value::<RuntimeMode>(serde_json::Value::String(v)).ok()) {
-                    self.runtime_mode = mode;
+                    let policy = RuntimePolicy { runtime_mode: mode, ..self.policy() };
+                    net.set_slot_settings(&slot, &policy, self.model_selection().as_ref(), ctx.clone(), done);
                 }
             }
             ChatCommand::ListMcp | ChatCommand::ListSkills => {}
@@ -321,7 +354,7 @@ impl ActionProvider for ChatStreamState {
                         project.push(McpServer { name: name.into(), transport });
                         self.save_tools(net, ctx, &project);
                     }
-                    _ => self.error = Some("A tool server needs a name and a URL, e.g. `docs https://host/mcp` (`… sse` for the older kind)".into()),
+                    _ => self.set_error(slot, "A tool server needs a name and a URL, e.g. `docs https://host/mcp` (`… sse` for the older kind)".into()),
                 }
             }
             ChatCommand::RemoveMcp => {
@@ -338,29 +371,26 @@ impl ActionProvider for ChatStreamState {
                 self.send_prompt(net, ctx, text);
             }
             ChatCommand::Login => {
-                if let (Some(method), Some(instance)) = (value, self.active_instance.clone()) {
+                if let (Some(method), Some(instance)) = (value, self.active_instance()) {
                     let mailbox = self.mailbox.clone();
                     net.begin_auth(&instance, &method, ctx.clone(), move |r| post(&mailbox, Reply::AuthStarted(r)));
                 }
             }
             ChatCommand::CompleteLogin => {
-                if let (Some(url), Some(instance)) = (value, self.active_instance.clone()) {
-                    let mailbox = self.mailbox.clone();
-                    net.complete_auth(&instance, &url, ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
+                if let (Some(url), Some(instance)) = (value, self.active_instance()) {
+                    net.complete_auth(&instance, &url, ctx.clone(), done);
                     self.login = None;
                 }
             }
             ChatCommand::Logout => {
-                if let Some(instance) = &self.active_instance {
-                    let mailbox = self.mailbox.clone();
-                    net.logout(instance, ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
+                if let Some(instance) = &self.active_instance() {
+                    net.logout(instance, ctx.clone(), done);
                 }
             }
             ChatCommand::Answer { thread, request, option } => {
                 let Some(pending) = self.store.threads.get(thread).and_then(|t| t.request(request)) else { return };
                 let response = self.drafts.response(pending, option);
-                let mailbox = self.mailbox.clone();
-                net.respond(thread, request, &response, ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
+                net.respond(thread, request, &response, ctx.clone(), done);
             }
         }
     }
@@ -368,4 +398,22 @@ impl ActionProvider for ChatStreamState {
     fn take_palette_request(&mut self) -> Option<String> {
         self.pending_palette.take()
     }
+}
+
+/// A slot as the picker lists it: its name, and its harness.
+fn slot_label(slot: &Slot, store: &Store) -> String {
+    match slot.instance_id.as_ref().and_then(|i| store.instances.get(i)) {
+        Some(instance) => format!("{} ({})", slot.name, instance.display_name),
+        None => slot.name.clone(),
+    }
+}
+
+/// Its role, and whether its session runs (or why it can't).
+fn slot_detail(slot: &Slot) -> Option<String> {
+    let state = match &slot.status {
+        SlotStatus::Unavailable { reason, .. } => reason.clone(),
+        SlotStatus::Ready if slot.current_thread().is_some() => "running".into(),
+        SlotStatus::Ready => "not running".into(),
+    };
+    Some(format!("{}: {state}", slot.role))
 }

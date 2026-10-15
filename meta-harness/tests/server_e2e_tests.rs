@@ -25,21 +25,24 @@ async fn health_and_instance_listing() {
 }
 
 #[tokio::test]
-async fn thread_lifecycle_routes_through_the_instance_adapter() {
+async fn a_slots_session_routes_through_the_instance_adapter() {
     let (addr, state) = app().await;
 
-    let (status, body) = http(addr, "POST", "/api/threads", Some(r#"{"instanceId":"fake"}"#)).await;
+    let (status, body) = http(addr, "POST", "/api/slots/lead/sessions", Some(r#"{"instanceId":"fake"}"#)).await;
     assert_eq!(status, 200, "{body}");
-    let thread_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["threadId"].as_str().unwrap().to_owned();
+    let opened: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let (thread_id, session) = (opened["threadId"].as_str().unwrap().to_owned(), opened["session"].as_str().unwrap().to_owned());
 
-    let (status, body) = http(addr, "POST", &format!("/api/threads/{thread_id}/turns"), Some(r#"{"text":"hi"}"#)).await;
+    let (status, body) = http(addr, "POST", "/api/slots/lead/prompt", Some(r#"{"text":"hi"}"#)).await;
     assert_eq!(status, 200, "{body}");
-    assert!(body.contains("\"turnId\":\"turn-1\""));
+    assert!(body.contains("\"turnId\":"), "{body}");
 
-    // Unsupported operations surface as 501, unknown threads as 404.
+    // Unsupported operations surface as 501, unknown threads and slots as 404.
     let (status, _) = http(addr, "POST", &format!("/api/threads/{thread_id}/steer"), Some("{}")).await;
     assert_eq!(status, 501);
-    let (status, _) = http(addr, "POST", "/api/threads/nope/turns", Some(r#"{"text":"x"}"#)).await;
+    let (status, _) = http(addr, "POST", "/api/threads/nope/interrupt", None).await;
+    assert_eq!(status, 404);
+    let (status, _) = http(addr, "POST", "/api/slots/nope/prompt", Some(r#"{"text":"x"}"#)).await;
     assert_eq!(status, 404);
 
     // The hub replays the session's events and the catalog folded into the snapshot.
@@ -51,16 +54,16 @@ async fn thread_lifecycle_routes_through_the_instance_adapter() {
     assert!(replay.iter().any(|e| matches!(e, ClientEvent::InstanceUpdated { snapshot }
         if snapshot.commands.iter().any(|c| c.name == "plan"))));
 
-    let (status, _) = http(addr, "DELETE", &format!("/api/threads/{thread_id}"), None).await;
+    let (status, _) = http(addr, "DELETE", &format!("/api/slots/lead/sessions/{session}"), None).await;
     assert_eq!(status, 204);
-    let (status, _) = http(addr, "POST", &format!("/api/threads/{thread_id}/turns"), Some(r#"{"text":"x"}"#)).await;
-    assert_eq!(status, 404);
+    let (status, _) = http(addr, "POST", &format!("/api/threads/{thread_id}/interrupt"), None).await;
+    assert_eq!(status, 404, "the session ended");
 }
 
 #[tokio::test]
-async fn opening_a_thread_on_an_unknown_instance_is_404() {
+async fn opening_a_session_on_an_unknown_instance_is_404() {
     let (addr, _) = app().await;
-    let (status, _) = http(addr, "POST", "/api/threads", Some(r#"{"instanceId":"missing"}"#)).await;
+    let (status, _) = http(addr, "POST", "/api/slots/lead/sessions", Some(r#"{"instanceId":"missing"}"#)).await;
     assert_eq!(status, 404);
 }
 
@@ -155,8 +158,8 @@ async fn the_projects_tool_servers_are_kept_in_its_file_and_only_the_cockpit_cha
 #[tokio::test]
 async fn adding_to_a_running_turn_is_refused_by_a_harness_that_cant() {
     let (addr, _) = app().await;
-    let (_, body) = http(addr, "POST", "/api/threads", Some(r#"{"instanceId":"fake"}"#)).await;
-    let thread_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["threadId"].as_str().unwrap().to_owned();
-    let (status, _) = http(addr, "POST", &format!("/api/threads/{thread_id}/inject"), Some(r#"{"text":"also"}"#)).await;
+    let (status, body) = http(addr, "POST", "/api/slots/lead/sessions", Some(r#"{"instanceId":"fake"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, _) = http(addr, "POST", "/api/slots/lead/prompt", Some(r#"{"text":"also","addToRunning":true}"#)).await;
     assert_eq!(status, 501);
 }

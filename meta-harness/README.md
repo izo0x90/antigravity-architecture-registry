@@ -287,8 +287,9 @@ command = "git-mcp"
 
 The cockpit has six kinds of view: chat, code, graph, tree, spec and queue.
 Each column has its own view: two graphs side by side (calls beside data
-flow), several code files, several cards. There's one chat and one queue
-(showing either in another column swaps the two). Picking a kind of view
+flow), several code files, several cards, several chats (each shows an
+agent slot: the lead, or a sub-slot). There's one queue (showing it in
+another column moves it). Picking a kind of view
 in a column (its tabs) gives it a new one, starting where the last one of
 that kind was. Columns: `+`/`-` in the top bar, `Space l 1`…`l 6` (or
 `alt+1`…`alt+6`), `Space l a` adds one, up to `[columns] max` (12). Columns and views work like
@@ -298,7 +299,7 @@ columns bring hidden views back where they were. `Space b b` lists every
 open view (on screen or hidden; the top bar counts the hidden ones) to show
 one in this column; `Space b n` then a kind starts a new view here; `Space
 b d` deletes this column's view for good, the only way one is lost (the
-chat and the queue, there's one of each, are never deleted). Keys, links and the agent act on the view
+queue, there's one, is never deleted). Keys, links and the agent act on the view
 of each kind used last. Every view has a cursor, and the same keys drive
 all of them:
 
@@ -336,14 +337,14 @@ all of them:
   that card). `Space q c` (or its button) opens the same card in a column.
 
 - **Talk to the agent:** `t` opens a box over whatever is on screen;
-  Enter sends to the chat's session (opening one if there's none), the
+  Enter sends to the lead's session (opening one if there's none), the
   agent's reply shows above it, and `Escape` closes it. Nothing moves.
 
 The cockpit's state is kept on the server (`GET`/`PUT /api/ui/state`, in
-`.nah/ui/state.json`, which git ignores): the columns and the view in each,
-where every view is (and which are pinned, and which was used last), the
-marks and the jump list, the chat's session and
-what was typed and not sent. A reload, or another browser, comes back to
+the project's state database, `.nah/state/state.sqlite`): the columns and
+the view in each, where every view is (each chat's agent slot; which are
+pinned, and which was used last), the marks and the jump list, and what
+each chat had typed and not sent. A reload, or another browser, comes back to
 it. It's saved half a second after it last changed (`[net] save_after_ms`).
 
 The key bar at the bottom shows the keys that matter for what the cursor

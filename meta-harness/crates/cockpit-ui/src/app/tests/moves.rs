@@ -361,13 +361,17 @@ fn go_to_keys_work_from_every_view() {
     app.queue.move_to("1");
     keys(&ctx, &mut app, "gs");
     assert_eq!((app.focused_kind(), app.spec.target.as_ref().map(|c| c.as_str())), (BufferKind::Spec, Some("rust:a")));
-    // The queue's own keys: o opens the running job's session.
+    // The queue's own keys: o shows the slot running the job's session.
+    let mut worker = crate::chat::tests::lead(Some("t1"));
+    (worker.id, worker.role) = (harness_contracts::SlotId::new("worker-1"), "worker".into());
+    app.chat.process_event(harness_contracts::ClientEvent::SlotUpdated { slot: worker });
     focus(&ctx, &mut app, BufferKind::Queue);
     app.queue.on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(crate::queue::tests::snapshot(arch_graph::QueueStatus::Running)) });
     keys(&ctx, &mut app, "gg");
     frame(&ctx, &mut app, key("o"));
     frame(&ctx, &mut app, vec![]);
-    assert_eq!((app.focused_kind(), app.chat.active_thread.as_ref().map(|t| t.as_str())), (BufferKind::Chat, Some("t1")));
+    assert_eq!((app.focused_kind(), app.chat.active_thread().as_ref().map(|t| t.as_str())), (BufferKind::Chat, Some("t1")));
+    assert_eq!(app.chat.ui.slot.as_str(), "worker-1");
     // Graph -> queue: g q finds the component's job, or says there isn't one.
     focus(&ctx, &mut app, BufferKind::Graph);
     app.graph.select(Some("rust:a::run".into()));

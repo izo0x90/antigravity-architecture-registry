@@ -21,11 +21,29 @@ pub(crate) fn item(n: u32, body: ItemBody) -> ClientEvent {
     })
 }
 
+/// The lead slot, its one session running `thread` (when given).
+pub(crate) fn lead(thread: Option<&str>) -> harness_contracts::Slot {
+    let key = harness_contracts::SessionKey::new("s1");
+    harness_contracts::Slot {
+        id: SlotId::new(LEAD),
+        role: LEAD.into(),
+        name: LEAD.into(),
+        instance_id: Some(InstanceId::new("i")),
+        policy: RuntimePolicy::default(),
+        model: None,
+        sessions: vec![harness_contracts::SlotSession { key: key.clone(), native_id: None, title: None, thread: thread.map(ThreadId::new) }],
+        current: Some(key),
+        started_by: harness_contracts::Starter::User,
+        status: harness_contracts::SlotStatus::Ready,
+    }
+}
+
 /// A thread with a prompt, an answer, a tool call reading two files and a file change.
 pub(crate) fn conversation() -> ChatStreamState {
     let mut chat = ChatStreamState::default();
     let thread = Thread { id: ThreadId::new("t"), instance_id: InstanceId::new("i"), native_id: None, title: None, status: ThreadStatus::Idle, policy: RuntimePolicy::default(), model: None, controls: Default::default(), mcp_servers: Vec::new() };
     chat.process_event(session(AdapterEvent::ThreadUpdated { thread }));
+    chat.process_event(ClientEvent::SlotUpdated { slot: lead(Some("t")) });
     chat.process_event(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Completed, failure: None, usage: None } }));
     chat.process_event(item(0, ItemBody::UserMessage { text: "fix the parser".into() }));
     chat.process_event(item(1, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Looking at it.".into() }], streaming: false }));
@@ -128,7 +146,6 @@ fn its_skills_tool_servers_and_adding_to_the_running_turn_are_actions() {
         problems: Vec::new(),
     };
     snapshot.capabilities.turns.active_steering = true;
-    chat.active_instance = Some(snapshot.instance_id.clone());
     chat.process_event(ClientEvent::InstanceUpdated { snapshot });
     chat.tools = Some(ToolServers::default());
     chat.process_event(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Running, failure: None, usage: None } }));
@@ -137,4 +154,31 @@ fn its_skills_tool_servers_and_adding_to_the_running_turn_are_actions() {
     for id in ["mcp.add", "harness.skills", "chat.inject"] {
         assert!(ids.iter().any(|a| a == id), "{id} in {ids:?}");
     }
+}
+
+#[test]
+fn a_view_shows_the_slot_picked_and_the_lead_when_its_slot_closes() {
+    let mut chat = conversation();
+    let mut sub = lead(None);
+    (sub.id, sub.role) = (SlotId::new("sub-1"), "sub".into());
+    chat.process_event(ClientEvent::SlotUpdated { slot: sub });
+    let pick = chat.actions().into_iter().find(|a| a.id == "agent.pick").expect("two slots: a pick");
+    let ctx = egui::Context::default();
+    let net = NetClient::new("http://127.0.0.1:9");
+    let (mut mode, mut note) = (crate::keymap::InputMode::Normal, None);
+    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[] };
+    chat.run(&pick, Some("sub-1".into()), &mut cx);
+    assert_eq!((chat.ui.slot.as_str(), chat.active_thread()), ("sub-1", None));
+    chat.run(&pick, Some("gone".into()), &mut cx);
+    assert_eq!(chat.ui.slot.as_str(), "sub-1", "a slot that isn't there isn't shown");
+    chat.process_event(ClientEvent::SlotClosed { slot_id: SlotId::new("sub-1") });
+    assert_eq!((chat.ui.slot.as_str(), chat.active_thread().map(|t| t.to_string())), (LEAD, Some("t".into())));
+}
+
+#[test]
+fn a_prompt_with_no_harness_anywhere_says_so() {
+    let mut chat = ChatStreamState::default();
+    let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
+    chat.say(&net, &ctx, "hello".into());
+    assert!(matches!(chat.session_status(), SessionStatus::Failed(e) if e.contains("No harness instance")));
 }
