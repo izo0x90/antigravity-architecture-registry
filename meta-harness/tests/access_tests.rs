@@ -8,7 +8,7 @@ use common::{http_anonymous, spawn_app};
 
 /// Open on purpose: health, the launch link, the agents' endpoint (their
 /// session's key says who they are), and the sockets (a ticket each).
-const OPEN_HANDLERS: &[&str] = &["health_check", "crate::cockpit::launch", "mcp_sse_proxy", "mcp_messages_proxy", "ws_events_handler", "crate::remote::socket"];
+const OPEN_HANDLERS: &[&str] = &["crate::cockpit::launch", "mcp_sse_proxy", "mcp_messages_proxy", "ws_events_handler", "crate::remote::socket"];
 const OPEN_PATHS: &[&str] = &["/health", "/cockpit", "/api/mcp/sse", "/api/mcp/messages", "/ws/events", "/ws/cockpit"];
 
 #[test]
@@ -73,6 +73,22 @@ async fn the_sockets_take_a_ticket_good_once() {
         assert!(opened.is_ok(), "{path}: a good ticket");
         assert!(tokio_tungstenite::connect_async(format!("ws://{addr}{path}?ticket={ticket}")).await.is_err(), "{path}: used once");
     }
+}
+
+/// A home server, relaying the user, sends this server's secret in its
+/// `Authorization`; never in the URL (but for the launch link).
+#[tokio::test]
+async fn a_home_comes_in_with_the_servers_secret_in_its_header_only() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let (addr, _) = spawn_app().await;
+    assert_eq!(common::http_as_home(addr, "GET", "/api/slots", common::COCKPIT_TOKEN).await.0, 200);
+    assert_eq!(common::http_as_home(addr, "GET", "/api/slots", "a-guess").await.0, 403);
+    for in_the_url in [format!("/api/slots?nah={}", common::COCKPIT_TOKEN), format!("/api/slots?secret={}", common::COCKPIT_TOKEN)] {
+        assert_eq!(http_anonymous(addr, "GET", &in_the_url, None).await.0, 403, "{in_the_url}");
+    }
+    let mut socket = format!("ws://{addr}/ws/events").into_client_request().unwrap();
+    socket.headers_mut().insert("Authorization", format!("Bearer {}", common::COCKPIT_TOKEN).parse().unwrap());
+    assert!(tokio_tungstenite::connect_async(socket).await.is_ok(), "its link to the events, with no ticket");
 }
 
 /// A request's log line has its path, never its query: sessions' keys and

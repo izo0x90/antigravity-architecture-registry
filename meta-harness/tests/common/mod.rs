@@ -361,6 +361,11 @@ pub async fn http(addr: SocketAddr, method: &str, path: &str, body: Option<&str>
     request(addr, method, path, body, &format!("Cookie: nah_cockpit={COCKPIT_TOKEN}\r\n")).await
 }
 
+/// The request as a home server makes it: with this server's secret.
+pub async fn http_as_home(addr: SocketAddr, method: &str, path: &str, secret: &str) -> (u16, String) {
+    request(addr, method, path, None, &format!("Authorization: Bearer {secret}\r\n")).await
+}
+
 /// The same request with no credentials: what anyone else on the machine gets.
 pub async fn http_anonymous(addr: SocketAddr, method: &str, path: &str, body: Option<&str>) -> (u16, String) {
     request(addr, method, path, body, "").await

@@ -19,6 +19,10 @@ use crate::routes;
 /// A part of the server: its routes, given its state.
 pub trait Module {
     fn routes(&self) -> Router;
+    /// The cockpit's part (left out by `--no-cockpit`).
+    fn is_cockpit(&self) -> bool {
+        false
+    }
 }
 
 /// Who's calling: the cockpit's cookie, the roles, the sockets' tickets.
@@ -71,8 +75,15 @@ impl FromRef<CockpitState> for Arc<crate::remote::Remote> {
 }
 
 impl Module for CockpitState {
+    /// Its routes, and its page and build (from `STATIC_DIR`) for anything else.
     fn routes(&self) -> Router {
-        routes::cockpit::routes().merge(routes::feedback::routes()).with_state(self.clone())
+        let router = routes::cockpit::routes().merge(routes::feedback::routes()).with_state(self.clone());
+        let page = crate::server::static_dir();
+        if page.exists() { router.fallback_service(tower_http::services::ServeDir::new(page)) } else { router }
+    }
+
+    fn is_cockpit(&self) -> bool {
+        true
     }
 }
 

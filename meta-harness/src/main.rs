@@ -13,6 +13,28 @@ use tracing::info;
 struct Cli {
     #[command(subcommand)]
     command: Option<Cmd>,
+    #[command(flatten)]
+    serve: ServeArgs,
+}
+
+/// How the server runs (with no command, or `serve`).
+#[derive(clap::Args, Clone, Default)]
+struct ServeArgs {
+    /// Don't serve the cockpit (its page, its saved state): agents and other
+    /// servers only.
+    #[arg(long)]
+    no_cockpit: bool,
+    /// Serve no project: the cockpit only (a lighter process).
+    #[arg(long)]
+    no_project: bool,
+    /// Where to listen, as address:port (default: HOST and PORT, else
+    /// 127.0.0.1:8080).
+    #[arg(long)]
+    listen: Option<String>,
+    /// Allow an address that isn't private (by default only loopback, a LAN
+    /// and Tailscale's 100.64/10).
+    #[arg(long)]
+    listen_public: bool,
 }
 
 #[derive(clap::Subcommand)]
@@ -31,6 +53,11 @@ enum Cmd {
         #[command(subcommand)]
         action: PackCmd,
     },
+    /// The server (as with no command).
+    Serve(ServeArgs),
+    /// Prints this server's secret: what another server (a home) needs to
+    /// reach it.
+    Token,
 }
 
 #[derive(clap::Subcommand)]
@@ -85,9 +112,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    meta_harness::startup::check_cockpit_build()?;
-    let (listener, base_url) = meta_harness::startup::listen().await?;
+    if let Some(Cmd::Token) = cli.command {
+        println!("{}", meta_harness::cockpit::CockpitAuth::for_user()?.secret());
+        return Ok(());
+    }
+    let serve = match cli.command {
+        Some(Cmd::Serve(args)) => args,
+        _ => cli.serve,
+    };
+    if serve.no_project && serve.no_cockpit {
+        return Err("--no-project and --no-cockpit leave nothing to serve".into());
+    }
+    if !serve.no_cockpit {
+        meta_harness::startup::check_cockpit_build()?;
+    }
+    let (listener, base_url) = meta_harness::startup::listen(serve.listen.as_deref(), serve.listen_public).await?;
     let bound = listener.local_addr()?;
+    let cockpit = meta_harness::cockpit::CockpitAuth::for_user()?;
+    if serve.no_project {
+        let cockpit_path = cockpit.launch_path();
+        let gate = meta_harness::modules::Gate { cockpit, access: Arc::new(nah_access::Access::defaults()), tickets: Arc::default() };
+        let page = meta_harness::modules::CockpitState { gate, state: Arc::new(meta_harness::startup::home_state()?), remote: Arc::default() };
+        info!("No project here: the cockpit only. Open it: {base_url}{cockpit_path}");
+        meta_harness::startup::serve(listener, create_router(&[&page]), None).await?;
+        info!("Meta-harness stopped.");
+        return Ok(());
+    }
 
     let hub = Arc::new(EventHub::default());
     let arch = Arc::new(meta_harness::startup::open_architecture()?);
@@ -105,14 +155,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mcp_state = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone(), slots.clone(), notify.clone())), meta_harness::startup::mcp_callers(&slots));
 
     let queue = meta_harness::server::queue_runner(&arch, meta_harness::startup::queue_config(&arch)?, &hub);
-    let cockpit = meta_harness::cockpit::CockpitAuth::for_user()?;
     let cockpit_path = cockpit.launch_path();
     let streams = mcp_state.sessions.clone();
     let app = AppState::new(Parts { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, notify });
-    let app = create_router(&app.modules());
+    let parts: Vec<&dyn meta_harness::modules::Module> = app.modules().into_iter().filter(|m| !(serve.no_cockpit && m.is_cockpit())).collect();
+    let router = create_router(&parts);
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");
-    info!("Open the cockpit: {base_url}{cockpit_path}");
-    meta_harness::startup::serve(listener, app, streams).await?;
+    if !serve.no_cockpit {
+        info!("Open the cockpit: {base_url}{cockpit_path}");
+    }
+    meta_harness::startup::serve(listener, router, Some(streams)).await?;
     info!("Meta-harness stopped.");
     Ok(())
 }

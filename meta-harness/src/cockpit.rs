@@ -54,12 +54,23 @@ impl CockpitAuth {
     }
 
     /// Where the user opens the cockpit.
+    /// The secret itself (what `meta-harness token` prints).
+    pub fn secret(&self) -> &str {
+        &self.token
+    }
+
     pub fn launch_path(&self) -> String {
         format!("/cockpit?nah={}", self.token)
     }
 
     fn set_cookie(&self) -> String {
         format!("{COOKIE_NAME}={}; HttpOnly; SameSite=Strict; Path=/", self.token)
+    }
+
+    /// A home server, relaying the user: `Authorization: Bearer <secret>`
+    /// (the secret is never taken from a URL, but for the launch link).
+    fn bearer(&self, parts: &Parts) -> bool {
+        parts.headers.get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).is_some_and(|secret| secret.trim() == &*self.token)
     }
 
     fn admits(&self, cookies: &str) -> bool {
@@ -112,6 +123,9 @@ pub async fn launch(State(auth): State<CockpitAuth>, Query(q): Query<Launch>) ->
 /// anything else is no one known. (Agents don't use these routes: they use
 /// the MCP endpoint, where their session's key says who they are.)
 pub fn principal_of(parts: &Parts, auth: &CockpitAuth) -> Principal {
+    if auth.bearer(parts) {
+        return Principal::Home;
+    }
     let user = parts.headers.get_all(COOKIE).iter().filter_map(|v| v.to_str().ok()).any(|c| auth.admits(c));
     if user { Principal::User } else { Principal::Anonymous }
 }
@@ -195,19 +209,21 @@ struct TicketQuery {
     ticket: String,
 }
 
-/// Extractor for socket upgrades: a good ticket in `?ticket=`, else 403.
+/// Extractor for socket upgrades: a good ticket in `?ticket=` (the
+/// cockpit), or a home server's secret in its `Authorization`, else 403.
 pub struct Ticketed;
 
 impl<S> FromRequestParts<S> for Ticketed
 where
     Arc<Tickets>: FromRef<S>,
+    CockpitAuth: FromRef<S>,
     S: Send + Sync,
 {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let q = Query::<TicketQuery>::try_from_uri(&parts.uri).map(|Query(q)| q.ticket).unwrap_or_default();
-        if Arc::<Tickets>::from_ref(state).admit(&q) {
+        if CockpitAuth::from_ref(state).bearer(parts) || Arc::<Tickets>::from_ref(state).admit(&q) {
             Ok(Ticketed)
         } else {
             Err((StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "only the cockpit connects here (with a ticket from /api/cockpit/ticket)" }))).into_response())

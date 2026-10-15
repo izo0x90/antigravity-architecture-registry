@@ -1,11 +1,10 @@
-//! What the cockpit itself uses: the launch link, health, its config and
-//! saved state, and the agents' way to drive it.
+//! What the cockpit itself uses: the launch link, its config and saved
+//! state, and the agents' way to drive it.
 
 use axum::{
     Json, Router,
     extract::State,
     http::StatusCode,
-    response::IntoResponse,
     routing::{get, post},
 };
 
@@ -15,19 +14,11 @@ use crate::cockpit::{Needs, can};
 
 pub(crate) fn routes() -> Router<CockpitState> {
     Router::new()
-        .route("/health", get(health_check))
         .route("/api/ui/config", get(ui_config_handler))
         .route("/api/ui/state", get(get_ui_state).put(put_ui_state))
         .route("/cockpit", get(crate::cockpit::launch))
         .route("/ws/cockpit", get(crate::remote::socket))
         .route("/api/cockpit/ticket", post(ticket))
-}
-
-async fn health_check() -> impl IntoResponse {
-    Json(serde_json::json!({
-        "status": "ok",
-        "version": env!("CARGO_PKG_VERSION")
-    }))
 }
 
 /// The user's UI config file: `$NAH_UI_CONFIG`, else `~/.config/nah/ui.toml`.

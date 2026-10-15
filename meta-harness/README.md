@@ -31,8 +31,18 @@ agents' MCP endpoint and the sockets (which take a one-time ticket) are open;
 anything else without the cockpit's session gets 403. Each route names the
 capability it needs, as each agent tool does (see `.nah/access.toml`). The
 token is kept in `~/.config/nah/cockpit-token`; you can set your own with
-`NAH_COCKPIT_TOKEN`. Agents connect to the MCP endpoint at `/api/mcp/sse`,
-which every session NAH opens is given automatically.
+`NAH_COCKPIT_TOKEN`. It's also this server's secret: `meta-harness token`
+prints it, and another server (a home) sends it as `Authorization: Bearer
+<secret>`, never in a URL. Agents connect to the MCP endpoint at
+`/api/mcp/sse`, which every session NAH opens is given automatically.
+
+The server listens on `127.0.0.1:8080` unless told otherwise (`--listen
+addr:port`, or `HOST` and `PORT`). It listens only where the internet
+doesn't reach: loopback, a LAN (10/8, 172.16/12, 192.168/16), Tailscale's
+100.64/10, IPv6 unique-local and link-local; anything else, `0.0.0.0`
+included, is refused unless you pass `--listen-public`. `--no-cockpit`
+serves the project without the cockpit's page; `--no-project` serves the
+cockpit alone (its state in `~/.local/share/nah/home/`), reading no code.
 
 The agent harness and each language's server are packs, installed by the
 binary itself (see [Packs](#packs)). To build and install the ones you need:

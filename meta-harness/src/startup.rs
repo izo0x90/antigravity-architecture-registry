@@ -33,20 +33,58 @@ pub fn check_cockpit_build() -> Result<(), StartError> {
     Ok(())
 }
 
-/// Binds where `HOST` and `PORT` (or `METAHARNESS_PORT`) say, first, so the
-/// base URL handed to harnesses is the real one.
-pub async fn listen() -> Result<(tokio::net::TcpListener, String), StartError> {
-    let port: u16 = std::env::var("PORT")
-        .or_else(|_| std::env::var("METAHARNESS_PORT"))
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(8080);
-    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
+/// Binds where `--listen` says, else `HOST` and `PORT` (or
+/// `METAHARNESS_PORT`), else 127.0.0.1:8080, first, so the base URL handed
+/// to harnesses is the real one. Unless `public`, only addresses that
+/// aren't the internet's (see `check_bind`).
+pub async fn listen(asked: Option<&str>, public: bool) -> Result<(tokio::net::TcpListener, String), StartError> {
+    let addr: std::net::SocketAddr = match asked {
+        Some(asked) => asked.parse().map_err(|e| format!("--listen {asked}: not an address and port ({e}); e.g. 127.0.0.1:8080 or 100.101.102.103:8080"))?,
+        None => {
+            let port: u16 = std::env::var("PORT").or_else(|_| std::env::var("METAHARNESS_PORT")).ok().and_then(|p| p.parse().ok()).unwrap_or(8080);
+            let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+            let ip: std::net::IpAddr = host.parse().map_err(|e| format!("HOST={host}: not an address ({e})"))?;
+            std::net::SocketAddr::new(ip, port)
+        }
+    };
+    if !public {
+        check_bind(addr.ip())?;
+    }
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
-    let base_url = format!("http://127.0.0.1:{}", bound.port());
+    let base_url = match bound.ip() {
+        ip if ip.is_unspecified() => format!("http://127.0.0.1:{}", bound.port()),
+        _ => format!("http://{bound}"),
+    };
     info!("Meta-harness listening on {bound} ({base_url})");
     Ok((listener, base_url))
+}
+
+/// Whether a server may listen on `ip` without `--listen-public`: loopback,
+/// private networks (10/8, 172.16/12, 192.168/16), Tailscale's (100.64/10),
+/// IPv6 unique-local (fc00::/7) and link-local (fe80::/10). Not the
+/// unspecified address: it takes every interface, the internet's too.
+pub fn check_bind(ip: std::net::IpAddr) -> Result<(), String> {
+    use std::net::IpAddr;
+    let private = match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            v4.is_loopback() || v4.is_private() || (a == 100 && (64..128).contains(&b))
+        }
+        IpAddr::V6(v6) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00 || (v6.segments()[0] & 0xffc0) == 0xfe80,
+    };
+    match () {
+        _ if private => Ok(()),
+        _ if ip.is_unspecified() => Err(format!("listening on {ip} takes every interface, the internet's too: listen on a private address (127.0.0.1, your LAN's, Tailscale's 100.x) with --listen, or pass --listen-public to mean it")),
+        _ => Err(format!("{ip} isn't a private address (loopback, a LAN, Tailscale's 100.64/10): pass --listen-public to listen on it anyway")),
+    }
+}
+
+/// The state database of a server with no project (`<data dir>/nah/home/`).
+pub fn home_state() -> Result<nah_state::StateDb, StartError> {
+    let data = dirs::data_dir().ok_or("no data directory for this user (set XDG_DATA_HOME)")?;
+    let defaults = arch_service::Limits::defaults()?;
+    Ok(nah_state::StateDb::open(&data.join("nah/home"), &arch_service::store_settings(&defaults))?)
 }
 
 /// The architecture service over the repo at `NAH_REPO_ROOT` (default: the
@@ -218,11 +256,13 @@ pub fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueCon
 
 /// Serves until asked to stop. Stopping ends the agents' event streams,
 /// which would otherwise keep the graceful shutdown waiting.
-pub async fn serve(listener: tokio::net::TcpListener, app: axum::Router, streams: Arc<crate::mcp::SseSessionManager>) -> Result<(), StartError> {
+pub async fn serve(listener: tokio::net::TcpListener, app: axum::Router, streams: Option<Arc<crate::mcp::SseSessionManager>>) -> Result<(), StartError> {
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
-            streams.close_all().await;
+            if let Some(streams) = streams {
+                streams.close_all().await;
+            }
         })
         .await?;
     Ok(())
@@ -252,4 +292,20 @@ async fn shutdown_signal() {
         _ = terminated => {}
     }
     info!("Shutdown signal received");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_server_listens_where_the_internet_isnt_unless_told() {
+        let allowed = ["127.0.0.1", "127.8.9.10", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.20", "100.64.0.1", "100.101.102.103", "100.127.255.255", "::1", "fd7a:115c:a1e0::1", "fe80::1"];
+        for ip in allowed {
+            assert_eq!(super::check_bind(ip.parse().unwrap()), Ok(()), "{ip}");
+        }
+        let refused = ["0.0.0.0", "::", "8.8.8.8", "100.63.255.255", "100.128.0.1", "172.32.0.1", "192.169.0.1", "2001:db8::1"];
+        for ip in refused {
+            let err = super::check_bind(ip.parse().unwrap()).unwrap_err();
+            assert!(err.contains(ip) && err.contains("--listen-public"), "{ip}: {err}");
+        }
+    }
 }

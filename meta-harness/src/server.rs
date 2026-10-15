@@ -10,7 +10,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use harness_core::{EventHub, HarnessError};
-use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 /// `HarnessError` as an HTTP response: `{ "error": "..." }` with a matching status.
@@ -69,20 +68,20 @@ pub fn static_dir() -> std::path::PathBuf {
 
 /// The cockpit's build, as `make ui` leaves it in the static folder.
 pub const COCKPIT_BUILD: &str = "wasm/cockpit_ui_bg.wasm";
-/// The server's routes: each part's, then the cockpit's page and build.
+/// The server's routes: whether it's up, then each part's.
 pub fn create_router(modules: &[&dyn crate::modules::Module]) -> Router {
-    let static_dir = static_dir();
-    let mut router = modules.iter().fold(Router::new(), |router, m| router.merge(m.routes()));
-
-    if static_dir.exists() {
-        router = router.fallback_service(ServeDir::new(static_dir));
-    }
+    let health = Router::new().route("/health", axum::routing::get(health));
+    let router = modules.iter().fold(health, |router, m| router.merge(m.routes()));
 
     // Same-origin only: no CORS layer, so other sites can't call the API.
     router
         .layer(axum::middleware::map_response(json_errors))
         .layer(tower_http::compression::CompressionLayer::new())
         .layer(TraceLayer::new_for_http().make_span_with(request_span))
+}
+
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
 }
 
 /// A request's span: its method and path, never its query (sessions' keys

@@ -3309,6 +3309,7 @@ dependencies = [
  "clap",
  "cockpit-ui",
  "code-analyzer",
+ "dirs 7.0.0",
  "futures",
  "harness-acp",
  "harness-contracts",
