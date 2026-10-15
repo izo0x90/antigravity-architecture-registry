@@ -8,5 +8,6 @@ pub mod queue;
 pub mod remote;
 mod routes;
 pub mod server;
+pub mod startup;
 pub mod tool_servers;
 pub mod watch;
