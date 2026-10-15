@@ -220,7 +220,7 @@ pre {
       <li><a href="#cockpit">Cockpit changes</a></li>
       <li><a href="#phases">Build order</a></li>
       <li><a href="#practice">How we keep it safe</a></li>
-      <li><a href="#open">Still open</a></li>
+      <li><a href="#open">Decided</a></li>
     </ol>
   </nav>
 
@@ -428,9 +428,9 @@ can = ["view.read"]</code></pre>
         <li><strong>Starting is explicit.</strong> "New session in the lead slot" and "new sub-slot (pick harness, model, mode)" are separate actions, in the cockpit and as tools.</li>
         <li><strong>Swapping the lead's session</strong> closes or detaches only that thread. Sub-slots and their sessions keep running.</li>
         <li><strong>Lead to sub-slot messages</strong> arrive in the sub-slot's chat marked as from the lead, so you can tell them apart from yours. <code>slot_send</code> can wait for the turn to end and return its answer. That uses an event subscription, not polling.</li>
-        <li><strong>Sub-slots answer through their turns.</strong> They can't message the lead or each other. If we ever want them to report up, it's one capability in config.</li>
+        <li><strong>Sub-slots report to the lead and to you</strong> with <code>tell_lead</code>. The report is queued for the lead, never added to its running turn, so it never cuts off the lead's work. Sub-slots never message each other.</li>
         <li><strong>Queue jobs become worker slots.</strong> Same manager, same events, same visibility in the cockpit. This deletes the queue's separate way of opening sessions.</li>
-        <li><strong>Slots are saved</strong> in <code>.nah/slots.json</code> (role, name, harness, last session's id). After a restart they come back and resume their sessions when opened.</li>
+        <li><strong>Slots are saved</strong> in the project's state database (<code>.nah/state/state.sqlite</code>): role, name, harness, settings and saved-session ids. After a restart they come back and resume their sessions on first use.</li>
         <li><strong>One new event,</strong> <code>SlotUpdated</code>, goes through the hub, so late clients get the slot list in the replay like everything else.</li>
       </ul>
     </section>
@@ -442,7 +442,7 @@ can = ["view.read"]</code></pre>
     server: ServerId,              // filled in by home
     level: Level,                  // Waiting | Update
     kind: Kind,                    // Approval, Question, SignIn, TurnFinished, TurnFailed,
-                                   // SessionCrashed, Message, LeadIdle, ServerLost
+                                   // SessionCrashed, Message, ServerLost
     slot: Option&lt;SlotId&gt;,
     title: String, detail: Option&lt;String&gt;,
     at: Timestamp,
@@ -467,7 +467,6 @@ impl NotifyHub {
             <tr><td>A failed turn</td><td><span class="pill upd">update</span> TurnFailed, sorted first</td><td>seen or dismissed</td></tr>
             <tr><td>A finished turn</td><td><span class="pill upd">update</span> TurnFinished</td><td>seen (you open that slot)</td></tr>
             <tr><td><code>tell_user</code></td><td><span class="pill upd">update</span> Message</td><td>seen or dismissed</td></tr>
-            <tr><td>The lead going idle</td><td><span class="pill upd">update</span> LeadIdle</td><td>it starts again</td></tr>
             <tr><td>Home losing a server</td><td><span class="pill upd">update</span> ServerLost</td><td>reconnected</td></tr>
           </tbody>
         </table>
@@ -497,7 +496,7 @@ impl NotifyHub {
 
       <h3>Links to other servers</h3>
       <ul>
-        <li><strong>Your server list</strong> lives on home in <code>~/.config/nah/servers.toml</code>: name, address, secret. You add servers from the cockpit or the file.</li>
+        <li><strong>Your server list</strong> lives in home's own state database: name, address, secret. You add servers from the cockpit or with <code>meta-harness servers add</code>.</li>
         <li><strong>One link per server:</strong> a persistent connection to its event stream with automatic reconnect and backoff. A link that drops raises a ServerLost update; reconnecting replays that server's state, so nothing is missed.</li>
         <li><strong>The cockpit gets one connection to home.</strong> Frames are tagged with their server: <code>{server, event}</code>. Its own project is just another server, named <code>here</code>.</li>
         <li><strong>Pass-through:</strong> <code>/s/&lt;server&gt;/api/…</code> and <code>/s/&lt;server&gt;/ws/…</code> stream to that server unchanged, with home adding the secret. There's no per-route code. The cookie never leaves home.</li>
@@ -559,7 +558,7 @@ impl NotifyHub {
           <div class="cols">
             <div><span class="label">Build</span><ul>
               <li>Slot manager, slot keys, <code>SlotUpdated</code>, saved slots.</li>
-              <li><code>slot_*</code> tools and <code>tell_user</code>.</li>
+              <li><code>slot_*</code> tools and <code>tell_lead</code>.</li>
               <li>Queue jobs moved onto worker slots.</li>
               <li>Cockpit: slot picker, chat per slot, the two start actions.</li>
             </ul></div>
@@ -660,13 +659,15 @@ impl NotifyHub {
     </section>
 
     <section id="open">
-      <h2>Still open</h2>
+      <h2>Decided</h2>
       <ol>
-        <li><strong>Finished-turn noise.</strong> When the lead drives a sub-slot, every finished turn would be an update. Should those only count toward the slot's badge, with updates only for turns you started yourself?</li>
-        <li><strong>Sub-slots reporting up.</strong> Off by default as decided. Confirm it should stay possible as a capability, so you can switch it on later.</li>
-        <li><strong>Slots after a restart.</strong> Bring them back automatically and resume their sessions when opened, or start empty?</li>
-        <li><strong>Keys.</strong> I'd put slots under <code>Space w</code> (workers) and attention on <code>Space n</code> (next waiting) and <code>Space N</code> (picker). Change these if they clash with what you're used to.</li>
+        <li><strong>Notifications for everything,</strong> including turns the lead started in sub-slots.</li>
+        <li><strong>Sub-slots report to the lead and to you.</strong> Reports are queued for the lead, so they never cut off its work.</li>
+        <li><strong>Slots come back after a restart</strong> and resume their sessions on first use.</li>
+        <li><strong>Durable state lives in a state database</strong> per project, plus home's own; plans and config stay as files.</li>
+        <li><strong>Keys:</strong> <code>Space w</code> slots, <code>Space n</code> next waiting (<code>n</code>/<code>N</code> inside the look), <code>Space S</code> servers. All configurable.</li>
       </ol>
+      <p class="note">The step-by-step build spec is <code>dev_docs/lead-slots-and-home-build-spec.md</code>.</p>
     </section>
   </main>
 </div>
