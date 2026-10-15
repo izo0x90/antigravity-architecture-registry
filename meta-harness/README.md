@@ -310,11 +310,12 @@ command = "git-mcp"
 
 ## The cockpit
 
-The cockpit has six kinds of view: chat, code, graph, tree, spec and queue.
+The cockpit has seven kinds of view: chat, code, graph, tree, spec, queue
+and inbox.
 Each column has its own view: two graphs side by side (calls beside data
 flow), several code files, several cards, several chats (each shows an
-agent slot: the lead, or a sub-slot). There's one queue (showing it in
-another column moves it). Picking a kind of view
+agent slot: the lead, or a sub-slot). There's one queue and one inbox
+(showing either in another column moves it). Picking a kind of view
 in a column (its tabs) gives it a new one, starting where the last one of
 that kind was. Columns: `+`/`-` in the top bar, `Space l 1`…`l 6` (or
 `alt+1`…`alt+6`), `Space l a` adds one, up to `[columns] max` (12). Columns and views work like
@@ -375,19 +376,22 @@ all of them:
   home; which one is shown is kept on home. A home with no project shows
   the first server it links to.
 
-- **What needs you:** the top bar counts what waits on you (approvals,
-  questions, sign-ins) and the updates (crashes, failed and finished
-  turns, messages); click one for its list (`Space N` waiting, `Space u`
-  updates; every server's, each said by name). `Space n` opens the oldest
-  waiting one, on whichever server, in the quick look: where
-  it's from, the request to answer in place (`y`/`Y`/`A`/`d`, as in the
-  chat), what the agent said last; `n`/`N` go to the next and previous,
-  `o` opens its chat, `x` puts it away. A chat on screen puts its slot's
-  updates away. The bell beside the counters turns system notifications
-  on or off: what newly waits on you is raised as the browser's (or, in a
-  native build, the OS's) own while the cockpit is out of sight; clicked,
-  it opens the item. The bell says when they're on but not allowed yet (a
-  click asks) or refused (allow them in the site's settings).
+- **What needs you:** the bell counts what waits on you (approvals,
+  questions, sign-ins), and the tray counts the updates (crashes, failed
+  and finished turns, messages), every server's. The bell's look says
+  whether system notifications (the browser's, or the OS's in a native
+  build) reach you while the cockpit is out of sight: ringing, on; plain,
+  off; a dot, on but not allowed yet or refused. Its list (click it, or
+  `Space N`) starts with that switch, then what's waiting; the tray's is
+  `Space u`. The inbox is a view like the others: one item at a time,
+  where it's from, its request, what the agent said last. `Space n` opens
+  the oldest waiting one in the quick look, which holds the inbox and
+  gives it the keyboard: `j`/`k` move over its parts, `Ctrl+d`/`Ctrl+u`
+  scroll, `f` labels its answers, `Enter` answers with the one under the
+  cursor; `y`/`Y`/`A`/`d` answer as in the chat (several answers of one
+  kind are `Space r 1`, `r 2`…); `J`/`K` go to the next and previous item
+  (on whichever server), `o` opens its chat, `x` puts it away. A chat on
+  screen puts its slot's updates away.
 
 The cockpit's state is kept on the server (`GET`/`PUT /api/ui/state`, in
 the project's state database, `.nah/state/state.sqlite`): the columns and

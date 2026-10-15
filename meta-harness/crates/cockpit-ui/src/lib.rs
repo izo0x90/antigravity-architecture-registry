@@ -8,6 +8,7 @@ pub mod columns;
 pub mod config;
 pub mod feedback;
 pub mod graph;
+pub mod inbox;
 pub mod graph_config;
 pub mod goto;
 pub mod graph_style;

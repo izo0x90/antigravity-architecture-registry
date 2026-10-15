@@ -144,7 +144,7 @@ impl CockpitApp {
                 self.desk.spec.show(to.id);
             }
             BufferKind::Queue if self.desk.queue.select_component(&to.id) => {}
-            BufferKind::Queue | BufferKind::Chat | BufferKind::Code => return self.show_in(BufferKind::Graph, to.id, from),
+            BufferKind::Queue | BufferKind::Chat | BufferKind::Code | BufferKind::Inbox => return self.show_in(BufferKind::Graph, to.id, from),
         }
         self.after_jump(from);
     }
@@ -152,7 +152,7 @@ impl CockpitApp {
     /// Shows a component in a view and moves focus there.
     pub(super) fn show_in(&mut self, kind: BufferKind, id: ComponentId, from: Jump) {
         match kind {
-            BufferKind::Code | BufferKind::Chat => return,
+            BufferKind::Code | BufferKind::Chat | BufferKind::Inbox => return,
             BufferKind::Queue if !self.desk.queue.select_component(&id) => {
                 self.note = Some(match &self.desk.queue.plan {
                     None => "No plan, so no queue: pick a plan in the graph.".to_owned(),
@@ -173,7 +173,7 @@ impl CockpitApp {
                 self.desk.spec.show(id);
             }
             BufferKind::Tree => self.desk.tree.reveal(&id, Scroll::Center),
-            BufferKind::Queue | BufferKind::Code | BufferKind::Chat => {}
+            BufferKind::Queue | BufferKind::Code | BufferKind::Chat | BufferKind::Inbox => {}
         }
         self.after_jump(from);
     }

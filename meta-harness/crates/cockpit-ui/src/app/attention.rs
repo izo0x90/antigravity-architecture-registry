@@ -1,41 +1,41 @@
-//! What needs the user, in the cockpit: the counters' pickers, the quick
-//! look on one notification (answered in place, the next a key away), the
-//! chats seen, and the browser's notifications.
+//! What needs the user, in the shell: the bell (what's waiting, and
+//! whether system notifications are on) and the tray (updates), their
+//! lists, the quick look on the inbox, the inbox's asks (the next item on
+//! whichever server, its chat, putting it away, an answer), chats seen.
 
-use harness_contracts::{ApprovalDecision, Level, NotificationId, RequestStatus, SlotId};
+use harness_contracts::{Level, Notification, NotificationId, SlotId};
 
 use super::*;
+use crate::inbox::InboxAsk;
 use crate::quick_look::Look;
-
-/// The quick look's request answered with this option.
-#[derive(Clone, Debug)]
-pub(super) struct LookAnswer(pub String);
-
-/// The quick look's own keys on a notification: offered only while it's
-/// open, and winning over the keys of the view under it.
-#[cfg(test)]
-pub(crate) const LOOK_ONLY: &[&str] = &["attention.next", "attention.prev", "attention.open_slot", "attention.dismiss"];
 
 /// How often a chat on screen says its slot was seen (seconds).
 const SEEN_EVERY: f64 = 2.0;
 
+/// The bell's list's first row: the system notifications switch.
+const SWITCH: &str = "alerts";
+
 impl CockpitApp {
-    /// The notification the quick look shows.
+    /// The item the quick look shows, while it shows the inbox.
+    #[cfg(test)]
     pub(super) fn looked_at(&self) -> Option<&NotificationId> {
-        self.quick_look.as_ref().and_then(|q| q.attention())
+        self.quick_look.as_ref().filter(|q| q.look == Look::Inbox).and(self.desk.inbox.item.as_ref())
     }
 
-    /// The quick look on notification `id` (a card shown there is closed first).
+    /// The quick look on the inbox, showing `id` (a card shown there is closed first).
     pub(super) fn open_attention(&mut self, id: NotificationId, ctx: &egui::Context) {
         if self.quick_look.as_ref().is_some_and(|q| q.look == Look::Card) {
             self.close_quick_look();
         }
-        let now = ctx.input(|i| i.time);
-        let (slot, over) = (self.desk.columns.focused(), self.desk.columns.focused_kind());
-        self.quick_look = Some(QuickLook::open(Look::Attention(id), slot, over, self.desk.used_pane(BufferKind::Spec).id, None, now));
+        self.desk.inbox.show(id);
+        if self.quick_look.is_none() {
+            let now = ctx.input(|i| i.time);
+            let (slot, over) = (self.desk.columns.focused(), self.desk.columns.focused_kind());
+            self.quick_look = Some(QuickLook::open(Look::Inbox, slot, over, self.desk.used_pane(BufferKind::Spec).id, None, now));
+        }
     }
 
-    /// The quick look on server `server`'s notification `id` (its desk shown first).
+    /// The quick look on server `server`'s item `id` (its desk shown first).
     pub(super) fn open_attention_at(&mut self, server: &str, id: NotificationId, ctx: &egui::Context) {
         self.switch_to(server, ctx);
         if self.desk.server == server {
@@ -45,19 +45,18 @@ impl CockpitApp {
 
     /// Every server's open ones of `level` (both, given none), in the order
     /// they're gone through, each with its server.
-    pub(super) fn all_open(&self, level: Option<Level>) -> Vec<(String, harness_contracts::Notification)> {
-        let mut all: Vec<(String, harness_contracts::Notification)> =
-            self.desks().flat_map(|d| crate::attention::list(&d.chat.store, level).into_iter().map(|n| (d.server.clone(), n.clone()))).collect();
+    pub(super) fn all_open(&self, level: Option<Level>) -> Vec<(String, Notification)> {
+        let mut all: Vec<(String, Notification)> = self.desks().flat_map(|d| crate::attention::list(&d.chat.store, level).into_iter().map(|n| (d.server.clone(), n.clone()))).collect();
         all.sort_by(|a, b| harness_contracts::order(&a.1, &b.1));
         all
     }
 
-    /// The one `by` steps from the quick look's, across every server (none
-    /// past either end; from one handled meanwhile, the list's start or end).
+    /// The one `by` steps from the inbox's, across every server (none past
+    /// either end; from one handled meanwhile, the list's start or end).
     fn step(&self, by: i32) -> Option<(String, NotificationId)> {
         let all = self.all_open(None);
-        let from = self.looked_at()?;
-        let at = match all.iter().position(|(s, n)| *s == self.desk.server && &n.id == from) {
+        let from = self.desk.inbox.item.as_ref();
+        let at = match all.iter().position(|(s, n)| *s == self.desk.server && Some(&n.id) == from) {
             Some(at) => at as i64 + i64::from(by),
             None if by > 0 => 0,
             None => all.len() as i64 - 1,
@@ -65,81 +64,64 @@ impl CockpitApp {
         usize::try_from(at).ok().and_then(|at| all.get(at)).map(|(s, n)| (s.clone(), n.id.clone()))
     }
 
-    /// The shell's notification actions: the pickers (every server's), the
-    /// next waiting, the browser's notifications.
+    /// Shows item `id` of `server` in the inbox: in the quick look when
+    /// it's open, else in the inbox's column (the desk switched first).
+    fn inbox_to(&mut self, server: &str, id: NotificationId, ctx: &egui::Context) {
+        if self.quick_look.as_ref().is_some_and(|q| q.look == Look::Inbox) {
+            let look = self.quick_look.take();
+            self.switch_to(server, ctx);
+            // Over the desk shown now (else it'd close, its column gone).
+            self.quick_look = look.map(|mut look| {
+                (look.slot, look.over) = (self.desk.columns.focused(), self.desk.columns.focused_kind());
+                look
+            });
+            self.desk.inbox.show(id);
+        } else {
+            self.switch_to(server, ctx);
+            self.desk.inbox.show(id);
+        }
+    }
+
+    /// The shell's notification actions: the bell's and the tray's lists,
+    /// the next waiting, the system notifications switch.
     pub(super) fn attention_actions(&self) -> Vec<Action> {
         use ShellCommand as S;
-        let mut out = Vec::new();
         let now = crate::attention::now_ms();
         let many = self.servers.len() > 1;
-        let picker = |id: &str, label: &str, level: Level| {
-            let list = self.all_open(Some(level));
-            (!list.is_empty()).then(|| {
-                let choices = list
-                    .iter()
-                    .map(|(server, n)| {
-                        let store = &self.desks().find(|d| &d.server == server).expect("a desk per server listed").chat.store;
-                        let detail = crate::attention::detail(n, store, now);
-                        let detail = if many { format!("{server} · {detail}") } else { detail };
-                        Choice::new(format!("{server}/{}", n.id), &n.title).detail(Some(detail))
-                    })
-                    .collect();
-                Action::new(id, label, S::AttentionPick).param(Param::Choice(choices)).group(Group::Act).importance(SECONDARY)
-            })
+        let rows = |level: Level| -> Vec<Choice> {
+            self.all_open(Some(level))
+                .iter()
+                .map(|(server, n)| {
+                    let store = &self.desks().find(|d| &d.server == server).expect("a desk per server listed").chat.store;
+                    let detail = crate::attention::detail(n, store, now);
+                    Choice::new(format!("{server}/{}", n.id), &n.title).detail(Some(if many { format!("{server} · {detail}") } else { detail }))
+                })
+                .collect()
         };
-        out.extend(picker("attention.waiting", "What's waiting on you", Level::Waiting));
-        out.extend(picker("attention.updates", "Updates", Level::Update));
+        let (switch, why) = self.alerts_words();
+        let mut waiting = vec![Choice::new(SWITCH, &switch).detail(why.clone())];
+        waiting.extend(rows(Level::Waiting));
+        let pick = |id: &str, label: &str, choices: Vec<Choice>| Action::new(id, label, S::AttentionPick).param(Param::Choice(choices)).group(Group::Act).importance(SECONDARY);
+        let mut out = vec![pick("attention.waiting", "What's waiting on you", waiting)];
+        let updates = rows(Level::Update);
+        if !updates.is_empty() {
+            out.push(pick("attention.updates", "Updates", updates));
+        }
         out.push(Action::new("attention.next_waiting", "Go to what's waiting next", S::AttentionNextWaiting).group(Group::Act).importance(SECONDARY));
+        out.push(Action::new("alerts.toggle", switch, S::Alerts).detail(why.unwrap_or_default()).group(Group::Act).importance(MINOR));
+        out
+    }
+
+    /// The system notifications switch in words, and what's in the way.
+    fn alerts_words(&self) -> (String, Option<String>) {
         use crate::alerts::AlertState as A;
-        let (label, detail) = match self.alerts.state() {
-            A::Off => ("Turn system notifications on", Some("What newly waits on you, while the cockpit is out of sight")),
-            A::On => ("Turn system notifications off", None),
-            A::NeedsPermission => ("Allow system notifications", Some("They're on; this asks the platform to allow them")),
-            A::Blocked => ("Turn system notifications off", Some("They're on, but refused: allow them in the browser's site settings")),
-            A::Unavailable(why) => ("System notifications", Some(why)),
-        };
-        out.push(
-            Action::new("alerts.toggle", label, S::Alerts)
-                .detail(detail.unwrap_or_default())
-                .group(Group::Act)
-                .importance(MINOR),
-        );
-        out
-    }
-
-    /// The quick look's own actions on its notification (they win key
-    /// conflicts while it's open): next and previous, its request's options,
-    /// its slot's chat, put away.
-    pub(super) fn looked_at_actions(&self) -> Vec<Action> {
-        use ShellCommand as S;
-        let Some(id) = self.looked_at() else { return Vec::new() };
-        let act = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::Act).importance(PRIMARY);
-        let mut out = vec![act("attention.next", "Next notification", S::AttentionStep(1)), act("attention.prev", "Previous notification", S::AttentionStep(-1))];
-        let Some(n) = self.desk.chat.store.notifications.get(id) else { return out };
-        if let Some(request) = self.pending_request(id) {
-            for option in &request.options {
-                let action = Action::new(format!("attention.answer.{}", option.id), format!("{}: {}", option.label, request.title), LookAnswer(option.id.clone()))
-                    .alias(format!("request.{}", crate::chat::actions::wire_name(&option.decision)))
-                    .group(Group::Act)
-                    .importance(if option.decision == ApprovalDecision::Accept { PRIMARY } else { SECONDARY });
-                out.push(match &option.warning {
-                    Some(w) => action.detail(w.clone()),
-                    None => action,
-                });
-            }
+        match self.alerts.state() {
+            A::Off => ("Notify me outside the cockpit: off".into(), Some("Turns them on: what newly waits on you, while the cockpit is out of sight".into())),
+            A::On => ("Notify me outside the cockpit: on".into(), None),
+            A::NeedsPermission => ("Notify me outside the cockpit: on, not allowed yet".into(), Some("Choosing it asks the browser to allow them".into())),
+            A::Blocked => ("Notify me outside the cockpit: on, refused".into(), Some("Allow them in the browser's site settings (choosing it turns them off)".into())),
+            A::Unavailable(why) => ("Notify me outside the cockpit: unavailable".into(), Some(why.into())),
         }
-        if n.slot.is_some() {
-            out.push(act("attention.open_slot", "Open its chat", S::AttentionOpenSlot));
-        }
-        out.push(act("attention.dismiss", "Put it away", S::AttentionDismiss).importance(SECONDARY));
-        out
-    }
-
-    /// The request a notification waits on, while it's pending.
-    fn pending_request(&self, id: &NotificationId) -> Option<&harness_contracts::RuntimeRequest> {
-        let n = self.desk.chat.store.notifications.get(id)?;
-        let request = self.desk.chat.store.threads.get(n.thread.as_ref()?)?.request(n.request.as_ref()?)?;
-        (request.status == RequestStatus::Pending).then_some(request)
     }
 
     pub(super) fn run_attention(&mut self, command: ShellCommand, value: Option<String>, ctx: &egui::Context) {
@@ -148,39 +130,15 @@ impl CockpitApp {
                 Some((server, n)) => self.open_attention_at(&server, n.id, ctx),
                 None => self.note = Some("Nothing is waiting on you.".into()),
             },
-            ShellCommand::AttentionPick => {
-                if let Some((server, id)) = value.as_deref().and_then(|v| v.split_once('/')) {
-                    self.open_attention_at(server, NotificationId::new(id), ctx);
-                }
-            }
-            ShellCommand::AttentionStep(by) => match self.step(by) {
-                Some((server, next)) => self.open_attention_at(&server, next, ctx),
-                None => self.note = Some(if by > 0 { "That was the last one." } else { "That was the first one." }.into()),
-            },
-            ShellCommand::AttentionOpenSlot => {
-                let Some(slot) = self.looked_at().and_then(|id| self.desk.chat.store.notifications.get(id)).and_then(|n| n.slot.clone()) else { return };
-                self.close_quick_look();
-                let from = self.jump_here();
-                self.focus_kind(BufferKind::Chat);
-                self.use_focused();
-                self.desk.chat.ui.slot = slot;
-                self.desk.chat.ui.cursor = None;
-                self.after_jump(from);
-            }
-            ShellCommand::AttentionDismiss => {
-                let Some(id) = self.looked_at().cloned() else { return };
-                let next = self.step(1);
-                let later = self.notes_later.clone();
-                self.desk.net.dismiss_notification(&id, ctx.clone(), move |r| {
-                    if let (Err(e), Ok(mut notes)) = (r, later.lock()) {
-                        notes.push(format!("It couldn't be put away: {}", e.message));
+            ShellCommand::AttentionPick => match value.as_deref() {
+                Some(SWITCH) => self.run_attention(ShellCommand::Alerts, None, ctx),
+                Some(v) => {
+                    if let Some((server, id)) = v.split_once('/') {
+                        self.open_attention_at(server, NotificationId::new(id), ctx);
                     }
-                });
-                match next {
-                    Some((server, next)) => self.open_attention_at(&server, next, ctx),
-                    None => self.close_quick_look(),
                 }
-            }
+                None => {}
+            },
             ShellCommand::Alerts => {
                 self.alerts.toggle();
                 if let crate::alerts::AlertState::Unavailable(why) = self.alerts.state() {
@@ -191,123 +149,82 @@ impl CockpitApp {
         }
     }
 
-    /// The quick look's request answered with `option` (as its keys and
-    /// buttons do).
-    pub(super) fn answer_looked_at(&mut self, option: &str, ctx: &egui::Context) {
-        let Some(id) = self.looked_at().cloned() else { return };
-        let Some((thread, request)) = self.pending_request(&id).map(|r| (r.thread_id.clone(), r.id.clone())) else {
-            self.note = Some("Already answered.".into());
-            return;
-        };
-        self.desk.chat.answer(&self.desk.net, ctx, &thread, &request, option);
+    /// The inbox reads what it shows (each frame) and its asks are done.
+    pub(super) fn inbox_tick(&mut self, ctx: &egui::Context) {
+        self.sync_inbox();
+        self.inbox_asks(ctx);
     }
 
-    /// The quick look on a notification: where it's from, what it says, the
-    /// request to answer (if it waits on one), what the agent said last.
-    /// True when its close button was clicked.
-    pub(super) fn render_attention(&mut self, ui: &mut egui::Ui, id: &NotificationId) -> bool {
-        use egui_phosphor::regular as icon;
-        let theme = crate::theme::look();
-        let key = |action: &str| self.bound_actions().into_iter().find(|b| b.action.id == action).map(|b| b.key_hint()).unwrap_or_default();
-        let (next, prev, back) = (key("attention.next"), key("attention.prev"), self.config.keymap.back.label());
-        let (open_key, dismiss_key) = (key("attention.open_slot"), key("attention.dismiss"));
-        let all = self.all_open(None);
-        let at = all.iter().position(|(s, n)| *s == self.desk.server && &n.id == id);
-        let shown = self.desk.chat.store.notifications.get(id).cloned();
-        let (mut close, mut open_slot, mut dismiss) = (false, false, false);
-        ui.horizontal(|ui| {
-            let (what, color) = match shown.as_ref().map(|n| n.level) {
-                Some(Level::Waiting) => (format!("{} Waiting on you", icon::BELL_RINGING), colors().warn),
-                Some(Level::Update) => (format!("{} Update", icon::BELL), colors().info),
-                None => (format!("{} Handled", icon::CHECK), colors().ok),
-            };
-            ui.label(RichText::new(what).strong().size(theme.text_label).color(color));
-            if let Some(at) = at {
-                ui.label(RichText::new(format!("{} of {}", at + 1, all.len())).size(theme.text_small).color(colors().muted));
-            }
-            ui.label(RichText::new(format!("{next} next · {prev} previous · {back} closes")).size(theme.text_small).color(colors().muted));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                close |= ui.small_button(icon::X).on_hover_text("Close").clicked();
-            });
-        });
-        ui.separator();
-        let Some(n) = shown else {
-            ui.label(RichText::new(format!("Already handled. {next} for the next.")).size(theme.text_body).color(colors().muted));
-            return close;
-        };
-        let now = crate::attention::now_ms();
-        let harness = n.slot.as_ref().and_then(|s| self.desk.chat.store.slots.get(s)).and_then(|s| s.instance_id.as_ref()).and_then(|i| self.desk.chat.store.instances.get(i)).map(|i| i.display_name.clone());
-        let from = [Some(crate::attention::detail(&n, &self.desk.chat.store, now)), harness].into_iter().flatten().collect::<Vec<_>>().join(" · ");
-        ui.label(RichText::new(from).size(theme.text_small).color(colors().muted));
-        ui.label(RichText::new(&n.title).strong().size(theme.text_title).color(colors().text_strong));
-        egui::ScrollArea::vertical().id_salt("attention_body").auto_shrink([false, true]).max_height(ui.available_height() - 40.0).show(ui, |ui| {
-            if let Some(detail) = &n.detail {
-                ui.add(egui::Label::new(RichText::new(detail).size(theme.text_body)).wrap());
-            }
-            if let (Some(thread), Some(request)) = (&n.thread, &n.request) {
-                ui.add_space(theme.space_sm);
-                if !self.desk.chat.render_request_of(ui, &self.desk.net, thread, request) {
-                    ui.label(RichText::new("Its request is gone (its session ended).").size(theme.text_body).color(colors().muted));
+    pub(super) fn sync_inbox(&mut self) {
+        let all: Vec<(String, NotificationId)> = self.all_open(None).into_iter().map(|(s, n)| (s, n.id)).collect();
+        let server = self.desk.server.clone();
+        let at = |id: &NotificationId| all.iter().position(|(s, n)| *s == server && n == id).map(|i| (i + 1, all.len()));
+        self.desk.inbox.sync(&self.desk.chat, at, crate::attention::now_ms());
+    }
+
+    /// Does what the inbox asked (after its keys, and each frame for its buttons).
+    pub(super) fn inbox_asks(&mut self, ctx: &egui::Context) {
+        for ask in self.desk.inbox.take_asks() {
+            match ask {
+                InboxAsk::Step(by) => match self.step(by) {
+                    Some((server, next)) => self.inbox_to(&server, next, ctx),
+                    None => self.note = Some(if by > 0 { "That was the last one." } else { "That was the first one." }.into()),
+                },
+                InboxAsk::OpenChat(slot) => {
+                    self.close_quick_look();
+                    let from = self.jump_here();
+                    self.focus_kind(BufferKind::Chat);
+                    self.use_focused();
+                    self.desk.chat.ui.slot = slot;
+                    self.desk.chat.ui.cursor = None;
+                    self.after_jump(from);
                 }
+                InboxAsk::Dismiss(id) => {
+                    let next = self.step(1);
+                    let later = self.notes_later.clone();
+                    self.desk.net.dismiss_notification(&id, ctx.clone(), move |r| {
+                        if let (Err(e), Ok(mut notes)) = (r, later.lock()) {
+                            notes.push(format!("It couldn't be put away: {}", e.message));
+                        }
+                    });
+                    match next {
+                        Some((server, next)) => self.inbox_to(&server, next, ctx),
+                        None => self.close_quick_look(),
+                    }
+                }
+                InboxAsk::Answer { thread, request, option } => self.desk.chat.answer(&self.desk.net, ctx, &thread, &request, &option),
             }
-            if let Some(said) = n.thread.as_ref().and_then(|t| self.desk.chat.last_said(t)).filter(|s| n.detail.as_deref() != Some(s.as_str())) {
-                ui.add_space(theme.space_sm);
-                ui.label(RichText::new("It said last").size(theme.text_small).color(colors().muted));
-                let said: String = said.chars().take(1200).collect();
-                ui.add(egui::Label::new(RichText::new(said).size(theme.text_body)).wrap());
-            }
-        });
-        ui.horizontal(|ui| {
-            if n.slot.is_some() {
-                open_slot = ui.button(format!("{} Open its chat", icon::CHAT_TEARDROP_TEXT)).on_hover_text(open_key).clicked();
-            }
-            dismiss = ui.button(format!("{} Put away", icon::ARCHIVE)).on_hover_text(dismiss_key).clicked();
-        });
-        let ctx = ui.ctx().clone();
-        if open_slot {
-            self.run_attention(ShellCommand::AttentionOpenSlot, None, &ctx);
-        } else if dismiss {
-            self.run_attention(ShellCommand::AttentionDismiss, None, &ctx);
-        }
-        close
-    }
-
-    /// The top bar's alerts indicator: whether system notifications are on
-    /// (and allowed); clicked, it turns them on or off (or asks to allow them).
-    pub(super) fn render_alerts_indicator(&mut self, ui: &mut egui::Ui) {
-        use crate::alerts::AlertState as A;
-        use egui_phosphor::regular as icon;
-        let (glyph, color, hint) = match self.alerts.state() {
-            A::Off => (icon::BELL_SLASH, colors().faint, "System notifications are off: click to turn them on".to_owned()),
-            A::On => (icon::BELL_SIMPLE_RINGING, colors().ok, "System notifications are on (while the cockpit is out of sight): click to turn them off".to_owned()),
-            A::NeedsPermission => (icon::BELL_SIMPLE, colors().warn, "System notifications are on but not allowed yet: click to allow them".to_owned()),
-            A::Blocked => (icon::BELL_SIMPLE_SLASH, colors().error, "System notifications are on but refused: allow them in the browser's site settings (click turns them off)".to_owned()),
-            A::Unavailable(why) => (icon::BELL_SLASH, colors().faint, format!("No system notifications: {why}")),
-        };
-        let r = ui.add(egui::Button::new(RichText::new(glyph).size(crate::theme::look().text_label).color(color)).frame(false)).on_hover_text(hint);
-        self.feedback.register_inspectable(ui, "top_bar:alerts", r.rect);
-        if r.clicked() {
-            let ctx = ui.ctx().clone();
-            self.run_attention(ShellCommand::Alerts, None, &ctx);
         }
     }
 
-    /// The top bar's counters: what waits on the user, and the updates
-    /// (each hidden at none); clicked, its picker.
+    /// The top bar's bell and tray. The bell: what waits on the user (a
+    /// count) and, by its look, whether system notifications reach them
+    /// (ringing: on; plain: off; a dot: on but not allowed); clicked, its
+    /// list (the switch first). The tray: the updates (hidden at none).
     pub(super) fn render_attention_counters(&mut self, ui: &mut egui::Ui) {
+        use crate::alerts::AlertState as A;
         use egui_phosphor::regular as icon;
         let (waiting, updates) = self.desks().map(|d| crate::attention::counts(&d.chat.store)).fold((0, 0), |(w, u), (dw, du)| (w + dw, u + du));
         let theme = crate::theme::look();
+        let state = self.alerts.state();
+        let glyph = if state == A::On { icon::BELL_RINGING } else { icon::BELL };
+        let count = if waiting > 0 { format!(" {waiting}") } else { String::new() };
+        let dot = if matches!(state, A::NeedsPermission | A::Blocked) { " •" } else { "" };
+        let color = match (&state, waiting) {
+            (A::NeedsPermission | A::Blocked, _) => colors().error,
+            (_, 0) => colors().muted,
+            _ => colors().warn,
+        };
+        let (switch, why) = self.alerts_words();
+        let hint = [Some(format!("{waiting} waiting on you")), Some(switch), why].into_iter().flatten().collect::<Vec<_>>().join("\n");
         let mut pick = None;
-        if waiting > 0 {
-            let r = ui.add(egui::Button::new(RichText::new(format!("{} {waiting}", icon::BELL_RINGING)).strong().size(theme.text_label).color(colors().warn)).frame(false)).on_hover_text(format!("{waiting} waiting on you"));
-            self.feedback.register_inspectable(ui, "top_bar:waiting", r.rect);
-            if r.clicked() {
-                pick = Some("attention.waiting");
-            }
+        let r = ui.add(egui::Button::new(RichText::new(format!("{glyph}{count}{dot}")).strong().size(theme.text_label).color(color)).frame(false)).on_hover_text(hint);
+        self.feedback.register_inspectable(ui, "top_bar:waiting", r.rect);
+        if r.clicked() {
+            pick = Some("attention.waiting");
         }
         if updates > 0 {
-            let r = ui.add(egui::Button::new(RichText::new(format!("{} {updates}", icon::BELL)).size(theme.text_label).color(colors().muted)).frame(false)).on_hover_text(format!("{updates} update(s)"));
+            let r = ui.add(egui::Button::new(RichText::new(format!("{} {updates}", icon::TRAY)).size(theme.text_label).color(colors().muted)).frame(false)).on_hover_text(format!("{updates} update(s)"));
             self.feedback.register_inspectable(ui, "top_bar:updates", r.rect);
             if r.clicked() {
                 pick = Some("attention.updates");

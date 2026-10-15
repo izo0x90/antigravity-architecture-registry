@@ -82,6 +82,8 @@ pub enum Place {
     /// The item by its key (indexes shift as the spec loads).
     Spec { component: Option<ComponentId>, item: Option<String> },
     Queue { component: Option<ComponentId> },
+    /// The item shown, by its id.
+    Inbox { item: Option<String> },
 }
 
 /// A place in a slot: what the jump list and marks hold.

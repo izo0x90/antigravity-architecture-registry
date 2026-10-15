@@ -235,16 +235,18 @@ impl ActionProvider for ChatStreamState {
             out.push(Action::new("auth.logout", "Sign out", C::Logout));
         }
 
-        // The pending request's options (contextual)
+        // The pending request's answers (here: the inbox offers them too, with the same keys)
         if let Some(view) = view
             && let Some(request) = view.requests.iter().find(|r| r.status == RequestStatus::Pending)
         {
-            for option in &request.options {
-                let answer = C::Answer { thread: view.thread.id.clone(), request: request.id.clone(), option: option.id.clone() };
-                let mut action = Action::new(format!("request.{}.{}", request.id, option.id), format!("{}: {}", option.label, request.title), answer)
-                    .alias(format!("request.{}", wire_name(&option.decision)));
-                if let Some(w) = &option.warning {
-                    action = action.detail(w.clone());
+            for answer in crate::request_card::answers(request) {
+                let command = C::Answer { thread: view.thread.id.clone(), request: request.id.clone(), option: answer.option.clone() };
+                let mut action = Action::new(answer.id, answer.label, command).focused();
+                if let Some(alias) = answer.alias {
+                    action = action.alias(alias);
+                }
+                if let Some(w) = answer.warning {
+                    action = action.detail(w);
                 }
                 out.push(action);
             }

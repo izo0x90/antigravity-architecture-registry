@@ -84,6 +84,7 @@ I = "Index"
 "buffer.tree" = { leader = "b t" }
 "buffer.spec" = { leader = "b s" }
 "buffer.queue" = { leader = "b q" }
+"buffer.inbox" = { leader = "b i" }
 # Every open view (on screen or hidden), to show in this column; a new one
 # here; this column's view deleted for good (closing a column only hides it).
 "buffer.list" = { leader = "b b" }
@@ -179,12 +180,13 @@ I = "Index"
 "attention.next_waiting" = { leader = "n" }
 "attention.waiting" = { leader = "N" }
 "attention.updates" = { leader = "u" }
-# In the quick look on a notification (they win there): the next and
-# previous, its chat, put away; y/Y/A/d answer its request.
-"attention.next" = { keys = ["n"] }
-"attention.prev" = { keys = ["N"] }
-"attention.open_slot" = { keys = ["o"] }
-"attention.dismiss" = { keys = ["x"] }
+# The inbox's own (in a column or the quick look): the next and previous
+# item (on whichever server), its chat, put away; y/Y/A/d (or r 1, r 2…
+# when several answers are of one kind) answer its request.
+"inbox.next" = { keys = ["J"] }
+"inbox.prev" = { keys = ["K"] }
+"inbox.open_chat" = { keys = ["o"] }
+"inbox.dismiss" = { keys = ["x"] }
 
 "server.switch" = { leader = "S S" }
 "server.add" = { leader = "S a" }
@@ -221,6 +223,8 @@ I = "Index"
 "request.accept_always" = { leader = "r A", keys = ["A"] }
 "request.decline" = { leader = "r n", keys = ["d"] }
 "request.cancel" = { leader = "r c" }
+# Several answers of one kind (a question's): numbered under r.
+"request.*" = { leader = "r #" }
 
 # Graph (when focused). Select with the moves (h j k l), open or close a
 # card with the folds (z o, z c), go in with Enter, back with Backspace.

@@ -178,6 +178,10 @@ fn the_graph_keys_flip_change_depth_switch_view_go_in_and_back() {
 fn f_labels_what_is_on_screen_in_every_view() {
     let (ctx, mut app) = full_app();
     app.desk.graph.set_tree(sample_tree());
+    // Something in the inbox, to label.
+    let kind = harness_contracts::NotificationKind::TurnFinished;
+    let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new("turn:1"), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, title: "done".into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
+    app.desk.chat.process_event(harness_contracts::ClientEvent::NotificationUpdated { notification });
     for kind in BufferKind::ALL {
         focus(&ctx, &mut app, kind);
         let spots = app.desk.view(kind).spots();

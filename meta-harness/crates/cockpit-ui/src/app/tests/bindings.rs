@@ -71,8 +71,7 @@ fn every_key_comes_from_config_and_no_two_actions_in_a_view_share_one() {
     for view in BufferKind::ALL {
         let mut seqs: Vec<(String, &str)> = Vec::new();
         for (id, binding) in &config.keymap.bind {
-            // The quick look's own (only while it's open, and they win there).
-            if only_in(id).is_some_and(|k| k != view) || crate::app::attention::LOOK_ONLY.contains(&id.as_str()) {
+            if only_in(id).is_some_and(|k| k != view) {
                 continue;
             }
             for seq in &binding.keys {

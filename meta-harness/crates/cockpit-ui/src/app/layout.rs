@@ -17,7 +17,7 @@ impl CockpitApp {
             BufferKind::Spec => swap_view(&mut self.desk.spec, &mut self.desk.parked.specs, current, pane.id),
             BufferKind::Tree => swap_view(&mut self.desk.tree, &mut self.desk.parked.trees, current, pane.id),
             BufferKind::Chat => swap_view(&mut self.desk.chat.ui, &mut self.desk.parked.chats, current, pane.id),
-            BufferKind::Queue => false,
+            BufferKind::Queue | BufferKind::Inbox => false,
         };
         self.desk.active.insert(pane.kind, pane.id);
         if new {
@@ -62,7 +62,7 @@ impl CockpitApp {
                 self.desk.spec.comments.clone_from(&self.desk.review.comments);
                 self.desk.spec.diff.clone_from(&self.desk.review.diff);
             }
-            BufferKind::Tree | BufferKind::Chat | BufferKind::Queue => {}
+            BufferKind::Tree | BufferKind::Chat | BufferKind::Queue | BufferKind::Inbox => {}
         }
     }
 
@@ -174,6 +174,7 @@ impl CockpitApp {
                 slot.map_or_else(|| "the agent's session".to_owned(), |s| format!("agent slot {}", s.name))
             }
             Some(Place::Queue { .. }) => "the plan's jobs".to_owned(),
+            Some(Place::Inbox { .. }) => "what needs you".to_owned(),
             None => "new".to_owned(),
         };
         format!("{} · {what}", pane.kind.name())
@@ -186,7 +187,7 @@ impl CockpitApp {
             BufferKind::Code => self.desk.code = CodeViewerState::default(),
             BufferKind::Spec => self.desk.spec = SpecState::default(),
             BufferKind::Tree => self.desk.tree = ArchitectureTreeState::default(),
-            BufferKind::Chat | BufferKind::Queue => return,
+            BufferKind::Chat | BufferKind::Queue | BufferKind::Inbox => return,
         }
         self.set_up(kind);
     }
@@ -202,16 +203,17 @@ impl CockpitApp {
             BufferKind::Spec => self.desk.parked.specs.get(&pane.id).map(|v| v.place()),
             BufferKind::Tree => self.desk.parked.trees.get(&pane.id).map(|v| v.place()),
             BufferKind::Chat => self.desk.parked.chats.get(&pane.id).map(|v| v.place()),
-            BufferKind::Queue => None,
+            BufferKind::Queue | BufferKind::Inbox => None,
         }
     }
 
-    /// The view the keys go to: the spec, while the quick look shows a
-    /// card; else the focused column's.
+    /// The view the keys go to: the quick look's, while it's open (its
+    /// card's spec view, or the inbox); else the focused column's.
     pub(super) fn focused_kind(&self) -> BufferKind {
         match self.quick_look.as_ref().map(|q| &q.look) {
             Some(crate::quick_look::Look::Card) => BufferKind::Spec,
-            _ => self.desk.columns.focused_kind(),
+            Some(crate::quick_look::Look::Inbox) => BufferKind::Inbox,
+            None => self.desk.columns.focused_kind(),
         }
     }
 

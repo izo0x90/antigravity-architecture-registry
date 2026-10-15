@@ -1,26 +1,24 @@
 //! The quick look: the full card of what the cursor is on, over the column
 //! it was opened from, without taking that column. It's a spec view of its
 //! own, floating (its keys, sections and links work in it); sending it to a
-//! column makes it that column's spec view. It also shows one notification
-//! (what waits on the user, or what happened): answered in place, the next
-//! and previous a key away.
+//! column makes it that column's spec view. Or it shows the inbox (what
+//! needs the user, one at a time), the same way: the view it holds has the
+//! keyboard.
 //!
 //! Its key held is a peek (it closes when let go); tapped, it stays open
 //! until Escape, the key again, a click outside it, or focus moving to a
 //! column.
 
-use harness_contracts::NotificationId;
-
 use crate::app::BufferKind;
 use crate::keymap::Chord;
 
-/// What the quick look shows.
+/// The view the quick look holds (and gives the keyboard to).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Look {
     /// The full card of a component (its own spec view).
     Card,
-    /// One notification.
-    Attention(NotificationId),
+    /// The inbox.
+    Inbox,
 }
 
 /// The quick look's own spec view (its pane's number; never a column's).
@@ -44,13 +42,6 @@ impl QuickLook {
         Self { look, slot, over, previous_spec, held: key.map(|k| (k, now)) }
     }
 
-    /// The notification it shows, if that's what it shows.
-    pub fn attention(&self) -> Option<&NotificationId> {
-        match &self.look {
-            Look::Attention(id) => Some(id),
-            Look::Card => None,
-        }
-    }
 
     /// Its key is still down (a press now is the key repeating, not a
     /// second press).

@@ -73,6 +73,41 @@ impl Drafts {
     }
 }
 
+/// One way to answer a request, as an action offers it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Answer {
+    /// The action's id: `request.<request>.<option>`.
+    pub id: String,
+    pub option: String,
+    /// `"Allow: run cargo test"`.
+    pub label: String,
+    /// `request.accept` and the like, which the keys bind (`y`, `d`…): only
+    /// when its kind is the only one of it. Several of a kind (a question's
+    /// answers) are numbered under the leader instead.
+    pub alias: Option<String>,
+    pub warning: Option<String>,
+}
+
+/// The ways to answer `request` (pending), in its order. The chat and the
+/// inbox both offer them so: the same keys wherever it's answered.
+pub fn answers(request: &RuntimeRequest) -> Vec<Answer> {
+    if request.status != RequestStatus::Pending {
+        return Vec::new();
+    }
+    let alone = |d: ApprovalDecision| request.options.iter().filter(|o| o.decision == d).count() == 1;
+    request
+        .options
+        .iter()
+        .map(|o| Answer {
+            id: format!("request.{}.{}", request.id, o.id),
+            option: o.id.clone(),
+            label: format!("{}: {}", o.label, request.title),
+            alias: alone(o.decision).then(|| format!("request.{}", crate::chat::actions::wire_name(&o.decision))),
+            warning: o.warning.clone(),
+        })
+        .collect()
+}
+
 fn heading(kind: RequestKind) -> String {
     match kind {
         RequestKind::UserInput => format!("{} THE AGENT ASKS", icon::CHAT_CIRCLE_DOTS),
@@ -242,6 +277,17 @@ mod tests {
         run(vec![button(true)]);
         run(vec![button(false)]);
         assert_eq!(picked.as_deref(), Some("decline"));
+    }
+
+    #[test]
+    fn an_answers_key_is_its_kinds_only_when_its_the_only_one_of_its_kind() {
+        let mut asked = request();
+        let names = |r: &RuntimeRequest| answers(r).into_iter().map(|a| (a.option, a.alias)).collect::<Vec<_>>();
+        assert_eq!(names(&asked), [("submit".to_owned(), Some("request.accept".to_owned())), ("decline".to_owned(), Some("request.decline".to_owned()))]);
+        asked.options.push(ApprovalOption { id: "other".into(), decision: ApprovalDecision::Accept, label: "Other answer".into(), warning: None });
+        assert_eq!(names(&asked), [("submit".to_owned(), None), ("decline".to_owned(), Some("request.decline".to_owned())), ("other".to_owned(), None)], "two answers that accept: numbered, not both y");
+        asked.status = RequestStatus::Resolved;
+        assert!(answers(&asked).is_empty(), "answered: nothing to offer");
     }
 
     #[test]

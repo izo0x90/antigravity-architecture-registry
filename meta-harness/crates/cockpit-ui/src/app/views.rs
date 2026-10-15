@@ -14,6 +14,7 @@ impl CockpitApp {
             BufferKind::Tree => &mut self.desk.tree,
             BufferKind::Spec => &mut self.desk.spec,
             BufferKind::Queue => &mut self.desk.queue,
+            BufferKind::Inbox => &mut self.desk.inbox,
         };
         provider.run(action, value, &mut RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell: &shell });
     }

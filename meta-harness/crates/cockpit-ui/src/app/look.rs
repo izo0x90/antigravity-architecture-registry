@@ -86,24 +86,33 @@ impl CockpitApp {
             Frame::NONE.fill(colors().panel).stroke(Stroke::new(theme.line_thin, colors().focus)).corner_radius(theme.radius_xl).inner_margin(crate::theme::margin(theme.space_m)).show(ui, |ui| {
                 ui.set_min_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
                 ui.set_max_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
-                let crate::quick_look::Look::Attention(id) = shows else {
+                // The view it holds: the inbox, or the card's spec view.
+                if shows == crate::quick_look::Look::Inbox {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!("{} Quick look", egui_phosphor::regular::EYE)).strong().size(theme.text_label).color(colors().text_strong));
-                        ui.label(RichText::new(format!("{close_hint} or Esc closes · hold {close_hint} to peek")).size(theme.text_small).color(colors().muted));
+                        ui.label(RichText::new(format!("{} closes", self.config.keymap.back.label())).size(theme.text_small).color(colors().muted));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             close |= ui.small_button(egui_phosphor::regular::X).on_hover_text("Close").clicked();
-                            to_column |= ui.button(format!("{} Open in a column", egui_phosphor::regular::COLUMNS)).on_hover_text(column_hint).clicked();
                         });
                     });
-                    if let Some(id) = self.desk.spec.target.clone() {
-                        self.desk.graph.render_card_context(ui, &id);
-                    }
-                    ui.separator();
                     let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell };
-                    self.desk.spec.render(ui, &mut cx);
+                    self.desk.inbox.render(ui, &mut cx, &mut self.desk.chat);
                     return;
-                };
-                close |= self.render_attention(ui, &id);
+                }
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{} Quick look", egui_phosphor::regular::EYE)).strong().size(theme.text_label).color(colors().text_strong));
+                    ui.label(RichText::new(format!("{close_hint} or Esc closes · hold {close_hint} to peek")).size(theme.text_small).color(colors().muted));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        close |= ui.small_button(egui_phosphor::regular::X).on_hover_text("Close").clicked();
+                        to_column |= ui.button(format!("{} Open in a column", egui_phosphor::regular::COLUMNS)).on_hover_text(column_hint).clicked();
+                    });
+                });
+                if let Some(id) = self.desk.spec.target.clone() {
+                    self.desk.graph.render_card_context(ui, &id);
+                }
+                ui.separator();
+                let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell };
+                self.desk.spec.render(ui, &mut cx);
             });
         });
         // A click outside closes it (a peek's key closes it when let go).

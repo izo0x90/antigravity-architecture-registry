@@ -60,10 +60,10 @@ fn looked_at(app: &CockpitApp) -> Option<&str> {
 }
 
 #[test]
-fn the_counters_say_how_many_and_their_pickers_open_one_in_the_quick_look() {
+fn the_bell_and_the_tray_say_how_many_and_their_lists_open_one_in_the_quick_look() {
     let (ctx, mut app) = waiting_app();
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains(&format!("{} 2", egui_phosphor::regular::BELL_RINGING)) && text.contains(&format!("{} 1", egui_phosphor::regular::BELL)), "{text}");
+    assert!(text.contains(&format!("{} 2", egui_phosphor::regular::BELL)) && text.contains(&format!("{} 1", egui_phosphor::regular::TRAY)), "one bell (system notifications off: plain), one tray: {text}");
     let actions = from_outside(&ctx, &mut app, r#"{"op":"actions"}"#).unwrap();
     let waiting = actions.as_array().unwrap().iter().find(|a| a["id"] == "attention.waiting").expect("the waiting picker");
     assert!(waiting.to_string().contains("req:r1") && !waiting.to_string().contains("turn:u1"), "{waiting}");
@@ -78,20 +78,20 @@ fn the_counters_say_how_many_and_their_pickers_open_one_in_the_quick_look() {
 }
 
 #[test]
-fn in_the_quick_look_n_and_shift_n_go_through_them_and_y_answers_its_request() {
+fn in_the_quick_look_shift_j_and_k_go_through_them_and_y_answers_its_request() {
     let (ctx, mut app) = waiting_app();
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.next_waiting"}"#).unwrap();
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("Run cargo test") && text.contains("1 of 3") && text.contains("Allow"), "the request to answer, in place: {text}");
-    keys(&ctx, &mut app, "n");
-    assert_eq!(looked_at(&app), Some("req:r2"), "n: the next");
+    keys(&ctx, &mut app, "J");
+    assert_eq!(looked_at(&app), Some("req:r2"), "J: the next");
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("Its request is gone"), "{text}");
-    keys(&ctx, &mut app, "n");
-    keys(&ctx, &mut app, "n");
+    keys(&ctx, &mut app, "J");
+    keys(&ctx, &mut app, "J");
     assert_eq!((looked_at(&app), app.note.as_deref()), (Some("turn:u1"), Some("That was the last one.")));
-    keys(&ctx, &mut app, "NN");
-    assert_eq!(looked_at(&app), Some("req:r1"), "N: back");
+    keys(&ctx, &mut app, "KK");
+    assert_eq!(looked_at(&app), Some("req:r1"), "K: back");
     sent(&app);
     keys(&ctx, &mut app, "y");
     assert_eq!(sent(&app), ["POST /api/threads/t/requests/r1"], "y answers its request, as in the chat");
@@ -137,4 +137,56 @@ fn a_chat_on_screen_says_its_updates_were_seen_now_and_then() {
     app.desk.chat.process_event(ClientEvent::NotificationUpdated { notification: Notification { state: NotificationState::Dismissed, ..app.desk.chat.store.notifications[&NotificationId::new("turn:u1")].clone() } });
     frame_at(&ctx, &mut app, vec![], 30.0);
     assert!(!sent(&app).iter().any(|s| s.contains("seen")), "none left: nothing said");
+}
+
+#[test]
+fn the_look_has_the_keyboard_its_keys_move_and_label_its_parts_and_nothing_reaches_the_column_under_it() {
+    let (ctx, mut app) = waiting_app();
+    let before = selected(&app).to_owned();
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.next_waiting"}"#).unwrap();
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.focused_kind(), BufferKind::Inbox, "the inbox it holds has the keys");
+    keys(&ctx, &mut app, "jj");
+    assert_eq!((selected(&app), app.desk.inbox.cursor_key().as_deref()), (before.as_str(), Some("2")), "j moves over its parts (what it says, Allow, Deny), not the graph under it");
+    // Enter on an answer answers with it.
+    sent(&app);
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(sent(&app), ["POST /api/threads/t/requests/r1"], "Deny, under the cursor");
+    // f labels what's in it; the bar offers its keys.
+    keys(&ctx, &mut app, "gg");
+    frame(&ctx, &mut app, key("f"));
+    let Some(Capture::Hint(hint)) = &app.capture else { panic!("hint mode") };
+    assert_eq!(hint.labels.len(), app.desk.inbox.spots().len(), "its parts, labelled");
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
+    let bound = app.bound_actions();
+    let bar: Vec<String> = app.bar_keys(&bound).iter().map(|b| b.action.id.clone()).collect();
+    assert!(bar.iter().any(|id| id == "inbox.next") && bar.iter().any(|id| id.starts_with("request.")), "{bar:?}");
+}
+
+#[test]
+fn several_answers_of_one_kind_are_numbered_not_all_y() {
+    let (ctx, mut app) = waiting_app();
+    let option = |id: &str, label: &str| ApprovalOption { id: id.into(), decision: ApprovalDecision::Accept, label: label.into(), warning: None };
+    let mut asked = app.desk.chat.store.threads[&ThreadId::new("t")].request(&RequestId::new("r1")).unwrap().clone();
+    asked.options = vec![option("yes", "Yes, it worked"), option("no", "Still nothing")];
+    app.desk.chat.process_event(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request: asked } });
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.next_waiting"}"#).unwrap();
+    frame(&ctx, &mut app, vec![]);
+    let bound = app.bound_actions();
+    let answers: Vec<String> = bound.iter().filter(|b| b.action.id.starts_with("request.r1.")).map(|b| b.key_hint()).collect();
+    assert_eq!(answers, ["SPC r 1", "SPC r 2"], "numbered under r, neither on y");
+}
+
+#[test]
+fn the_bells_look_says_whether_system_notifications_reach_you_and_its_list_switches_them() {
+    let (ctx, mut app) = waiting_app();
+    let backend = std::sync::Arc::new(crate::alerts::tests::Recorded::default());
+    app.alerts = crate::alerts::Alerts::with(backend.clone());
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.waiting","value":"alerts"}"#).unwrap();
+    assert!(backend.asked.load(std::sync::atomic::Ordering::Relaxed), "turned on from the list: the platform is asked");
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains(&format!("{} 2 •", egui_phosphor::regular::BELL)), "on, not allowed yet: a dot: {text}");
+    *backend.permission.lock().unwrap() = Some(crate::alerts::Permission::Granted);
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains(&format!("{} 2", egui_phosphor::regular::BELL_RINGING)), "on: ringing: {text}");
 }

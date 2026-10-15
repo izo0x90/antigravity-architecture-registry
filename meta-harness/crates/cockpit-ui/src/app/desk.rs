@@ -19,6 +19,8 @@ pub struct Desk {
     /// The current plan's comments and changes since review.
     pub review: ReviewState,
     pub queue: crate::queue::QueueState,
+    /// What needs the user, one at a time.
+    pub inbox: crate::inbox::InboxView,
     pub review_seen: u64,
     /// The columns: the view each shows, and which has focus.
     pub columns: Columns,
@@ -72,6 +74,7 @@ impl Desk {
             tree: ArchitectureTreeState::default(),
             review: ReviewState::default(),
             queue: crate::queue::QueueState::default(),
+            inbox: Default::default(),
             review_seen: 0,
             columns: Columns::default(),
             parked: Parked::default(),
@@ -104,6 +107,7 @@ impl Desk {
             BufferKind::Tree => &self.tree,
             BufferKind::Spec => &self.spec,
             BufferKind::Queue => &self.queue,
+            BufferKind::Inbox => &self.inbox,
         }
     }
 
@@ -115,6 +119,7 @@ impl Desk {
             BufferKind::Tree => &mut self.tree,
             BufferKind::Spec => &mut self.spec,
             BufferKind::Queue => &mut self.queue,
+            BufferKind::Inbox => &mut self.inbox,
         }
     }
 
@@ -126,6 +131,7 @@ impl Desk {
             BufferKind::Tree => &self.tree,
             BufferKind::Spec => &self.spec,
             BufferKind::Queue => &self.queue,
+            BufferKind::Inbox => &self.inbox,
         }
     }
 
@@ -137,6 +143,7 @@ impl Desk {
             BufferKind::Tree => &mut self.tree,
             BufferKind::Spec => &mut self.spec,
             BufferKind::Queue => &mut self.queue,
+            BufferKind::Inbox => &mut self.inbox,
         }
     }
 

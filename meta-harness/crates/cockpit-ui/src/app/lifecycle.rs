@@ -63,6 +63,7 @@ impl CockpitApp {
         }
         self.take_events(ctx);
         self.tick_away(ctx);
+        self.inbox_tick(ctx);
         self.link_views(ctx);
         self.mark_out_of_date();
         self.goto_tick(ctx);

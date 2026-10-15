@@ -73,6 +73,7 @@ impl CockpitApp {
                     BufferKind::Tree => self.desk.tree.render(ui, &self.desk.net, &mut self.feedback, slot_idx),
                     BufferKind::Spec => self.desk.spec.render(ui, &mut cx),
                     BufferKind::Queue => self.desk.queue.render(ui, &mut cx),
+                    BufferKind::Inbox => self.desk.inbox.render(ui, &mut cx, &mut self.desk.chat),
                 }
             });
         });

@@ -93,7 +93,7 @@ impl CockpitApp {
             K::Tree => Some(("Next sibling row", "Previous sibling row")),
             K::Spec => Some(("Next section", "Previous section")),
             K::Code => Some(("Next definition at this level", "Previous definition at this level")),
-            K::Queue | K::Chat => None,
+            K::Queue | K::Chat | K::Inbox => None,
         };
         if let Some((next, prev)) = siblings {
             out.push(nav("nav.next_sibling", next, S::Motion(Motion::NextSibling)).importance(MINOR));
@@ -106,6 +106,7 @@ impl CockpitApp {
             K::Spec => ("Open: fold a section, follow a relation, reply", "Up to the section title"),
             K::Queue => ("Show why it failed", "Hide that again"),
             K::Chat => ("Open the file it points to", "Follow the latest again"),
+            K::Inbox => ("Answer with it, or open its chat", ""),
         };
         let enter = self.desk.view(kind).enter_label().unwrap_or_else(|| enter.to_owned());
         out.push(nav("nav.enter", &enter, S::Enter).importance(PRIMARY).when(When::Enter));
@@ -181,9 +182,7 @@ impl CockpitApp {
         self.gathered.set(self.gathered.get() + 1);
         let focused = self.focused_kind();
         let view = |kind: BufferKind, all: bool| self.desk.provider(kind).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(kind), a));
-        // The quick look's notification first: its keys win while it's open.
-        let mut actions: Vec<(Origin, Action)> = self.looked_at_actions().into_iter().map(|a| (Origin::Shell, a)).collect();
-        actions.extend(view(focused, true));
+        let mut actions: Vec<(Origin, Action)> = view(focused, true).collect();
         actions.extend(self.shell_actions().into_iter().map(|a| (Origin::Shell, a)));
         for kind in BufferKind::ALL.into_iter().filter(|k| *k != focused) {
             actions.extend(view(kind, false));
@@ -242,6 +241,9 @@ impl CockpitApp {
         // they are, and what's drawn after it sees what it left.
         let drawing = self.in_frame.replace(false);
         self.run_counted(invocation, count, ctx);
+        // What the inbox asked for, done now (its next item, its chat…).
+        self.inbox_asks(ctx);
+        self.sync_inbox();
         self.in_frame.set(drawing);
         self.frame_actions.borrow_mut().take();
     }
@@ -252,8 +254,6 @@ impl CockpitApp {
             Origin::Shell => {
                 if let Some(command) = action.command::<ShellCommand>() {
                     self.run_shell(*command, value, count.map(|c| c as usize), ctx);
-                } else if let Some(answer) = action.command::<attention::LookAnswer>() {
-                    self.answer_looked_at(&answer.0.clone(), ctx);
                 }
             }
             Origin::View(kind) => {
@@ -303,12 +303,7 @@ impl CockpitApp {
         let kind = self.focused_kind();
         let count = typed.unwrap_or(1).max(1);
         match command {
-            ShellCommand::AttentionNextWaiting
-            | ShellCommand::AttentionPick
-            | ShellCommand::AttentionStep(_)
-            | ShellCommand::AttentionOpenSlot
-            | ShellCommand::AttentionDismiss
-            | ShellCommand::Alerts => self.run_attention(command, value, ctx),
+            ShellCommand::AttentionNextWaiting | ShellCommand::AttentionPick | ShellCommand::Alerts => self.run_attention(command, value, ctx),
             ShellCommand::ServerSwitch
             | ShellCommand::ServerAdd
             | ShellCommand::ServerConnect

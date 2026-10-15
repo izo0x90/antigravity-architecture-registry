@@ -56,10 +56,11 @@ pub enum BufferKind {
     Tree,
     Spec,
     Queue,
+    Inbox,
 }
 
 impl BufferKind {
-    pub const ALL: [Self; 6] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec, Self::Queue];
+    pub const ALL: [Self; 7] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec, Self::Queue, Self::Inbox];
 
     pub fn title(&self) -> &'static str {
         match self {
@@ -69,13 +70,14 @@ impl BufferKind {
             Self::Tree => "TREE",
             Self::Spec => "SPEC",
             Self::Queue => "QUEUE",
+            Self::Inbox => "INBOX",
         }
     }
 
-    /// There is one of these (the queue); of the others, each column can
-    /// have its own.
+    /// There is one of these (the queue, the inbox); of the others, each
+    /// column can have its own.
     pub fn one_only(&self) -> bool {
-        matches!(self, Self::Queue)
+        matches!(self, Self::Queue | Self::Inbox)
     }
 
     /// Lowercase name used in action ids ("buffer.chat").
@@ -87,6 +89,7 @@ impl BufferKind {
             Self::Tree => "tree",
             Self::Spec => "spec",
             Self::Queue => "queue",
+            Self::Inbox => "inbox",
         }
     }
 
@@ -98,6 +101,7 @@ impl BufferKind {
             Self::Tree => egui_phosphor::regular::TREE_STRUCTURE,
             Self::Spec => egui_phosphor::regular::ARTICLE,
             Self::Queue => egui_phosphor::regular::LIST_CHECKS,
+            Self::Inbox => egui_phosphor::regular::TRAY,
         }
     }
 }
@@ -148,14 +152,9 @@ enum ShellCommand {
     Index(IndexOp),
     /// The oldest item waiting on the user, in the quick look.
     AttentionNextWaiting,
-    /// A notification (its id, the value) in the quick look.
+    /// An item (`server/id`, the value) in the quick look, or the system
+    /// notifications switch (its row in the bell's list).
     AttentionPick,
-    /// The next (or previous) notification, in the quick look.
-    AttentionStep(i32),
-    /// The quick look's notification: its slot's chat shown.
-    AttentionOpenSlot,
-    /// The quick look's notification put away.
-    AttentionDismiss,
     /// System alerts (the browser's, the OS's) on or off.
     Alerts,
     /// Shows a server's desk (its name, the value).
