@@ -94,17 +94,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     meta_harness::server::bridge_architecture_events(&arch, &hub);
     let remote = Arc::new(meta_harness::remote::Remote::default());
     let access = Arc::new(meta_harness::startup::access(arch.root())?);
-    let mcp_state = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone())));
     meta_harness::startup::follow_code(&arch);
     let instances = meta_harness::startup::harnesses(arch.root(), &hub)?;
-    let (mcp_servers, tool_servers) = meta_harness::startup::tool_servers(&base_url, arch.root());
-    let sessions = Arc::new(SessionManager::new(instances.clone(), hub.clone(), mcp_servers));
+    let tool_servers = meta_harness::startup::tool_servers(&base_url, arch.root());
+    let sessions = Arc::new(SessionManager::new(instances.clone(), hub.clone()));
+    let slots = meta_harness::startup::slots(&sessions, &instances, &hub, &state, &base_url, &tool_servers)?;
+    let mcp_state = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone())), meta_harness::startup::mcp_callers(&slots));
 
     let queue = meta_harness::server::queue_runner(&arch, meta_harness::startup::queue_config(&arch)?, &hub);
     let cockpit = meta_harness::cockpit::CockpitAuth::for_user()?;
     let cockpit_path = cockpit.launch_path();
     let streams = mcp_state.sessions.clone();
-    let app = create_router(AppState { registry: instances, sessions, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, tickets: Arc::default() });
+    let app = create_router(AppState { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, tickets: Arc::default() });
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");
     info!("Open the cockpit: {base_url}{cockpit_path}");
     meta_harness::startup::serve(listener, app, streams).await?;

@@ -11,7 +11,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use harness_contracts::{InstanceId, ModelSelection, NativeId, RequestId, RequestResponse, RuntimePolicy, SteerInput, ThreadId, TurnInput};
-use harness_core::{HarnessError, OpenThread};
+use harness_core::{HarnessError, Open};
 use serde::{Deserialize, Serialize};
 
 use crate::server::{ApiResult, AppState};
@@ -124,9 +124,6 @@ pub struct OpenThreadRequest {
     pub policy: RuntimePolicy,
     pub model: Option<ModelSelection>,
     pub resume: Option<NativeId>,
-    /// Tool servers to add for this thread, on top of the built-in ones.
-    #[serde(default)]
-    pub mcp_servers: Vec<harness_contracts::McpServer>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -141,27 +138,22 @@ pub struct TurnStarted {
     pub turn_id: harness_contracts::TurnId,
 }
 
+/// Opens a session in the lead slot, on the harness asked for. (The
+/// cockpit's way until it opens sessions by slot.)
 async fn open_thread(_: Needs<can::SessionsControl>, State(state): State<AppState>, Json(body): Json<OpenThreadRequest>) -> ApiResult<Json<ThreadOpened>> {
-    // No folder asked for: the harness works in the project. It gets the
-    // project's tool servers, then any added for this thread.
-    let mut extra = state.tool_servers.project().map_err(|reason| HarnessError::InvalidConfig { reason })?;
-    extra.retain(|p| !body.mcp_servers.iter().any(|b| b.name == p.name));
-    extra.extend(body.mcp_servers);
-    let thread_id = state
-        .sessions
-        .open(OpenThread {
-            instance_id: body.instance_id,
-            policy: body.policy,
-            model: body.model,
-            resume: body.resume,
-            extra_mcp_servers: extra,
-        })
-        .await?;
-    Ok(Json(ThreadOpened { thread_id }))
+    state.registry.get(&body.instance_id)?;
+    let lead = state.slots.lead();
+    state.slots.set_harness(&lead, body.instance_id).await?;
+    state.slots.set_settings(&lead, body.policy, body.model).await?;
+    let opened = state.slots.open_session(&lead, Open::New { resume: body.resume }).await?;
+    Ok(Json(ThreadOpened { thread_id: opened.thread }))
 }
 
+/// Ends a session: its slot forgets it.
 async fn close_thread(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(thread): Path<String>) -> ApiResult<StatusCode> {
-    state.sessions.close(&ThreadId::new(thread)).await?;
+    let thread = ThreadId::new(thread);
+    let (slot, session) = state.slots.of_thread(&thread).ok_or_else(|| HarnessError::NotFound { what: format!("thread {thread}") })?;
+    state.slots.close_session(&slot, &session).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

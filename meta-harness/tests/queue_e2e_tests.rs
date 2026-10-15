@@ -243,14 +243,9 @@ async fn ingest_plan_validate_skeleton_implement_verify_break_and_detect_on_a_fi
 async fn a_session_past_its_time_is_stopped_before_the_job_is_retried() {
     let (_, state) = common::spawn_app().await;
     let runner = meta_harness::queue::SessionRunner {
+        slots: state.slots.clone(),
         sessions: state.sessions.clone(),
-        open: harness_core::OpenThread {
-            instance_id: harness_contracts::InstanceId::new("fake"),
-            policy: Default::default(),
-            model: None,
-            resume: None,
-            extra_mcp_servers: Vec::new(),
-        },
+        settings: harness_core::SlotSettings { instance: Some(harness_contracts::InstanceId::new("fake")), ..Default::default() },
     };
     let ticket = Ticket { plan: PlanId::new("p").unwrap(), component: id("x::f"), kind: JobKind::Implement, brief: "[hang] take forever".into() };
     let thread = Arc::new(Mutex::new(None));
@@ -259,23 +254,24 @@ async fn a_session_past_its_time_is_stopped_before_the_job_is_retried() {
     assert!(result.unwrap_err().contains("didn't finish"), "times out");
     let thread = thread.lock().unwrap().clone().expect("a session was opened");
     assert!(state.sessions.get(&harness_contracts::ThreadId::new(thread)).is_err(), "and its session is closed, so a retry can't race it");
+    assert!(state.slots.list().iter().all(|s| s.role != "worker"), "and its worker slot is gone");
     // A turn that completes is fine.
     let ok = Ticket { brief: "do it".into(), ..ticket.clone() };
     assert!(runner.run(&ok, Duration::from_secs(5), &|_| {}).await.is_ok());
     // A harness that never finishes opening the session is cut off too.
     let stuck = meta_harness::queue::SessionRunner {
+        slots: state.slots.clone(),
         sessions: state.sessions.clone(),
-        open: harness_core::OpenThread {
-            instance_id: harness_contracts::InstanceId::new("fake"),
+        settings: harness_core::SlotSettings {
+            instance: Some(harness_contracts::InstanceId::new("fake")),
             policy: harness_contracts::RuntimePolicy { cwd: Some("[hang-open]".into()), ..Default::default() },
             model: None,
-            resume: None,
-            extra_mcp_servers: Vec::new(),
         },
     };
     let started = std::time::Instant::now();
     let result = stuck.run(&ticket, Duration::from_millis(200), &|_| {}).await;
     assert!(result.unwrap_err().contains("didn't finish") && started.elapsed() < Duration::from_secs(3));
+    assert!(state.slots.list().iter().all(|s| s.role != "worker"), "a worker that never got its session goes too");
 }
 
 /// A session that never gets the work done.

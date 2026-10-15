@@ -25,7 +25,7 @@ async fn the_old_registry_imports_through_rest_and_mcp() {
     let (status, _) = http(addr, "POST", "/api/arch/import", Some(&json!({ "plan": "esc", "file": "../x.json" }).to_string())).await;
     assert_eq!(status, 400, "paths stay inside the repo");
 
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     let (err, text) = mcp.tool("plan_import", json!({ "id": "calc2", "language": "rust" })).await;
     assert!(!err, "{text}");
     assert!(text.starts_with("Imported plan calc2: 11 components (0 matched to code)"), "{text}");

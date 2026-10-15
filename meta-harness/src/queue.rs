@@ -13,7 +13,8 @@ use arch_service::{ArchitectureService, BriefContext, Outcome, Queue, QueueConfi
 use async_trait::async_trait;
 use futures::StreamExt;
 use harness_contracts::{AdapterEvent, TurnInput, TurnStatus};
-use harness_core::{OpenThread, SessionManager};
+use harness_contracts::Starter;
+use harness_core::{Open, SessionManager, SlotManager, SlotSettings};
 use tokio::sync::Notify;
 
 use crate::arch::blocking;
@@ -35,20 +36,27 @@ pub trait JobRunner: Send + Sync {
     async fn run(&self, ticket: &Ticket, timeout: Duration, attach: &(dyn Fn(String) + Send + Sync)) -> Result<(), String>;
 }
 
-/// Opens a session per job on a configured harness instance and runs the
-/// brief as one turn.
+/// Runs each job in a worker slot of its own on a configured harness: the
+/// brief as one turn, then the slot is closed. A worker gets the same tools
+/// as any session, and its role says what it may do.
 pub struct SessionRunner {
+    pub slots: Arc<SlotManager>,
     pub sessions: Arc<SessionManager>,
-    pub open: OpenThread,
+    pub settings: SlotSettings,
 }
 
 #[async_trait]
 impl JobRunner for SessionRunner {
     async fn run(&self, ticket: &Ticket, timeout: Duration, attach: &(dyn Fn(String) + Send + Sync)) -> Result<(), String> {
+        let slot = self
+            .slots
+            .create("worker", Some(format!("queue: {}", ticket.component)), self.settings.clone(), Starter::Queue)
+            .await
+            .map_err(|e| format!("couldn't make a worker slot: {e}"))?;
         // The whole job (opening the session included) runs against the clock.
         let opened: std::sync::Mutex<Option<harness_contracts::ThreadId>> = std::sync::Mutex::new(None);
         let job = async {
-            let thread = self.sessions.open(self.open.clone()).await.map_err(|e| format!("couldn't open a session: {e}"))?;
+            let thread = self.slots.open_session(&slot, Open::New { resume: None }).await.map_err(|e| format!("couldn't open a session: {e}"))?.thread;
             *opened.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(thread.clone());
             attach(thread.to_string());
             let session = self.sessions.get(&thread).map_err(|e| e.to_string())?;
@@ -74,20 +82,22 @@ impl JobRunner for SessionRunner {
             }
             Err("the session closed before the turn ended".into())
         };
-        match tokio::time::timeout(timeout, job).await {
+        let result = match tokio::time::timeout(timeout, job).await {
             Ok(result) => result,
             Err(_) => {
                 // Stop it for real: a retry must not race a session still editing the code.
                 let thread = opened.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-                if let Some(thread) = thread {
-                    if let Ok(session) = self.sessions.get(&thread) {
-                        let _ = session.interrupt().await;
-                    }
-                    let _ = self.sessions.close(&thread).await;
+                if let Some(session) = thread.and_then(|t| self.sessions.get(&t).ok()) {
+                    let _ = session.interrupt().await;
                 }
                 Err(format!("the session didn't finish within {}s and was stopped", timeout.as_secs()))
             }
+        };
+        // Done either way: the worker and its session go.
+        if let Err(e) = self.slots.close(&slot).await {
+            tracing::warn!("worker slot {slot} wasn't closed: {e}");
         }
+        result
     }
 }
 
@@ -332,8 +342,9 @@ async fn start(_: Needs<can::PlansApprove>, State(state): State<AppState>, Path(
         policy.cwd = Some(state.arch.root().display().to_string());
     }
     let runner = Arc::new(SessionRunner {
+        slots: state.slots.clone(),
         sessions: state.sessions.clone(),
-        open: OpenThread { instance_id: body.instance_id, policy, model: body.model, resume: None, extra_mcp_servers: Vec::new() },
+        settings: SlotSettings { instance: Some(body.instance_id), policy, model: body.model },
     });
     Ok(Json(state.queue.start(plan, runner).await?))
 }

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use harness_contracts::{
     AdapterEvent, ClientEvent, InstanceId, PlanArtifact, ProviderSnapshot, RequestId, RuntimeRequest, Thread, ThreadId,
-    Turn, TurnId, TurnItem, Usage,
+    Turn, TurnId, TurnItem, Usage, Slot, SlotId,
 };
 
 #[derive(Debug, Clone)]
@@ -49,6 +49,7 @@ fn upsert<T>(list: &mut Vec<T>, value: T, same: impl Fn(&T, &T) -> bool) {
 pub struct Store {
     pub instances: BTreeMap<InstanceId, ProviderSnapshot>,
     pub threads: BTreeMap<ThreadId, ThreadView>,
+    pub slots: BTreeMap<SlotId, Slot>,
 }
 
 impl Store {
@@ -63,6 +64,12 @@ impl Store {
             ClientEvent::Session { event } => self.apply_session(event),
             // The whole state follows: start from nothing.
             ClientEvent::Resync => *self = Self::default(),
+            ClientEvent::SlotUpdated { slot } => {
+                self.slots.insert(slot.id.clone(), slot);
+            }
+            ClientEvent::SlotClosed { slot_id } => {
+                self.slots.remove(&slot_id);
+            }
             // Architecture events go to the graph views, not the session store.
             ClientEvent::Architecture { .. } => {}
         }

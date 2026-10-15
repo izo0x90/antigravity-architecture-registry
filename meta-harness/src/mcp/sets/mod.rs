@@ -28,7 +28,7 @@ pub(crate) struct ToolDef {
 #[async_trait::async_trait]
 pub(crate) trait ToolSet: Send + Sync {
     fn tools(&self, trees: &TreeConfig) -> Vec<ToolDef>;
-    async fn call(&self, name: &str, args: Value) -> Result<String, ServiceError>;
+    async fn call(&self, name: &str, args: Value, caller: &crate::mcp::McpCaller) -> Result<String, ServiceError>;
 }
 
 /// Every tool, in the order agents see them.

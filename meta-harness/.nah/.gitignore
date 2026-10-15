@@ -1,3 +1,4 @@
 # Caches are rebuilt from the code; plans are kept.
 cache/
 ui/
+state/

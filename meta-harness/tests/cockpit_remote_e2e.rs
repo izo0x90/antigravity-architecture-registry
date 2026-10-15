@@ -19,7 +19,7 @@ async fn tool(mcp: &mut Mcp, name: &str, arguments: Value) -> (bool, String) {
 #[tokio::test]
 async fn the_cockpit_tools_reach_the_cockpit_only_while_it_lets_agents_drive() {
     let (addr, _) = spawn_app().await;
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     let (failed, text) = tool(&mut mcp, "cockpit_read", json!({})).await;
     assert!(failed && text.contains("Let agents drive the cockpit"), "no cockpit yet: {text}");
 

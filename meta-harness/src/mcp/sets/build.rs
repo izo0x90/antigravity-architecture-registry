@@ -67,7 +67,7 @@ impl ToolSet for Build {
         Self::schemas(trees)
     }
 
-    async fn call(&self, name: &str, args: Value) -> Result<String, ServiceError> {
+    async fn call(&self, name: &str, args: Value, _caller: &crate::mcp::McpCaller) -> Result<String, ServiceError> {
         match name {
         "verify" => {
             let a: VerifyArgs = parse(args)?;

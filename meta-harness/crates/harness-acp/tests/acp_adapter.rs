@@ -378,3 +378,20 @@ async fn session_meta_and_tool_servers_go_to_the_agent_as_it_takes_them() {
     assert!(matches!(http_only.seen().mcp_servers.as_slice(), [acp::McpServer::Http(_)]));
     assert_eq!(http_only.seen().session_meta, None);
 }
+
+/// A session's key reaches its agent, and no one else: the session as
+/// shown to clients has its tool servers without it.
+#[tokio::test]
+async fn a_sessions_key_goes_to_its_agent_and_not_to_clients() {
+    let servers = vec![McpServer { name: "nah".into(), transport: McpTransport::Sse { url: "http://127.0.0.1:8080/api/mcp/sse?key=secret".into(), headers: vec![("Authorization".into(), "Bearer hidden".into())] } }];
+    let agent = agent(MockSetup { sse: true, ..MockSetup::default() });
+    let session = open_with(&agent, profile(MODES), SessionConfig { mcp_servers: servers, ..config(RuntimeMode::ApprovalRequired) }).await;
+    assert!(matches!(agent.seen().mcp_servers.as_slice(), [acp::McpServer::Sse(s)] if s.url.ends_with("?key=secret")), "the agent connects with its key");
+    let mut events = session.events();
+    let mut seen = Vec::new();
+    collect_until(&mut events, &mut seen, |e| matches!(e, AdapterEvent::ThreadUpdated { .. })).await;
+    let shown = seen.iter().rev().find_map(|e| if let AdapterEvent::ThreadUpdated { thread } = e { Some(thread.mcp_servers.clone()) } else { None }).unwrap();
+    let text = serde_json::to_string(&shown).unwrap();
+    assert!(!text.contains("secret") && !text.contains("hidden"), "{text}");
+    assert!(text.contains("http://127.0.0.1:8080/api/mcp/sse"), "still says where: {text}");
+}

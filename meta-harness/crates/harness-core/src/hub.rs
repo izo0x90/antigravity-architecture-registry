@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, ThreadId};
+use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, SlotId, ThreadId};
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -21,6 +21,7 @@ enum Key {
     ArchitectureView,
     /// The latest state of the work queue over a plan.
     Queue(String),
+    Slot(SlotId),
 }
 
 struct Entry {
@@ -41,6 +42,11 @@ impl Cache {
             ClientEvent::InstanceUpdated { snapshot } => (Key::Instance(snapshot.instance_id.clone()), None),
             // Said to one client by its stream, never kept.
             ClientEvent::Resync => return,
+            ClientEvent::SlotUpdated { slot } => (Key::Slot(slot.id.clone()), None),
+            ClientEvent::SlotClosed { slot_id } => {
+                self.entries.remove(&Key::Slot(slot_id.clone()));
+                return;
+            }
             ClientEvent::ThreadClosed { thread_id } => {
                 self.entries.retain(|_, e| e.thread.as_ref() != Some(thread_id));
                 return;
@@ -109,6 +115,15 @@ impl EventHub {
         let mut cache = self.cache();
         cache.apply(&event);
         let _ = self.tx.send(event);
+    }
+
+    /// The latest state of one thread's entities (its turns, items,
+    /// requests…), in first-seen order. Scans the cache: for occasional reads.
+    pub fn thread_state(&self, thread: &ThreadId) -> Vec<ClientEvent> {
+        let cache = self.cache();
+        let mut entries: Vec<&Entry> = cache.entries.values().filter(|e| e.thread.as_ref() == Some(thread)).collect();
+        entries.sort_by_key(|e| e.seq);
+        entries.into_iter().map(|e| e.event.clone()).collect()
     }
 
     /// Current state of everything, plus a receiver for what happens next.

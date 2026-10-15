@@ -74,3 +74,66 @@ fn a_transaction_that_fails_keeps_nothing() {
     assert!(err.is_err());
     assert!(db.activity(10).unwrap().is_empty(), "the half that ran isn't kept");
 }
+
+mod slots {
+    use super::*;
+    use harness_contracts::{InstanceId, NativeId, RuntimeMode, RuntimePolicy, SessionKey, Slot, SlotId, SlotSession, SlotStatus, Starter, ThreadId};
+    use harness_core::slots::{HeldReport, SlotStore};
+
+    fn slot(id: &str) -> Slot {
+        Slot {
+            id: SlotId::new(id),
+            role: "sub".into(),
+            name: format!("{id} name"),
+            instance_id: Some(InstanceId::new("claude-code")),
+            policy: RuntimePolicy { runtime_mode: RuntimeMode::FullAccess, ..RuntimePolicy::default() },
+            model: None,
+            sessions: vec![
+                SlotSession { key: SessionKey::new(format!("{id}-k1")), native_id: Some(NativeId::new("n1")), title: Some("first".into()), thread: Some(ThreadId::new("live")) },
+                SlotSession { key: SessionKey::new(format!("{id}-k2")), native_id: None, title: None, thread: None },
+            ],
+            current: Some(SessionKey::new(format!("{id}-k2"))),
+            started_by: Starter::Lead,
+            status: SlotStatus::Ready,
+        }
+    }
+
+    #[test]
+    fn a_slot_comes_back_as_kept_with_nothing_running() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let db = StateDb::open(dir.path(), &settings()).unwrap();
+            db.save(&slot("b")).unwrap();
+            db.save(&slot("a")).unwrap();
+            let mut renamed = slot("b");
+            renamed.name = "renamed".into();
+            renamed.sessions.remove(0);
+            db.save(&renamed).unwrap();
+        }
+        let db = StateDb::open(dir.path(), &settings()).unwrap();
+        let loaded = db.load().unwrap();
+        assert_eq!(loaded.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["b", "a"], "in the order they were made");
+        assert_eq!(loaded[0].name, "renamed");
+        assert_eq!(loaded[0].sessions.len(), 1, "a session forgotten is gone");
+        let a = &loaded[1];
+        assert_eq!((a.current.as_ref().map(|k| k.as_str()), a.policy.runtime_mode, a.started_by), (Some("a-k2"), RuntimeMode::FullAccess, Starter::Lead));
+        assert_eq!(a.sessions[0].native_id.as_ref().map(|n| n.as_str()), Some("n1"));
+        assert!(a.sessions.iter().all(|s| s.thread.is_none()), "running isn't kept");
+        db.remove(&SlotId::new("a")).unwrap();
+        assert_eq!(db.load().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn held_reports_come_out_once_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = StateDb::open(dir.path(), &settings()).unwrap();
+        for (n, text) in ["one", "two"].iter().enumerate() {
+            db.hold_report(&HeldReport { from: "sub 1".into(), text: (*text).into(), at_ms: n as u64 }).unwrap();
+        }
+        let taken = db.take_reports().unwrap();
+        assert_eq!(taken.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["one", "two"]);
+        assert!(db.take_reports().unwrap().is_empty(), "taken: gone");
+        db.note("lead", "sent", "sub 1", None);
+        assert_eq!(db.activity(1).unwrap()[0].action, "sent");
+    }
+}

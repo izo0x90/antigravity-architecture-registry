@@ -63,7 +63,7 @@ async fn comments_reach_the_agent_and_answers_come_back_for_the_user() {
     assert!(body.contains("unaddressed review comments") && body.contains("c1"), "{body}");
 
     // The agent sees the point as structured feedback, and next steps point at it.
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     let (err, text) = mcp.tool("plan_validate", json!({ "plan": "v" })).await;
     assert!(!err && text.contains("1 open point(s) from the user (c1)"), "{text}");
     let (err, text) = mcp.tool("review_comments", json!({ "plan": "v" })).await;

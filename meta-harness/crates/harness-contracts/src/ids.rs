@@ -47,4 +47,8 @@ id_type!(
     SubagentId,
     /// The harness's own identifier for something (session id, tool call id, ...).
     NativeId,
+    /// A seat for an agent: the lead, a sub-slot, a queue job's worker.
+    SlotId,
+    /// One of a slot's sessions, the same across restarts (its thread isn't).
+    SessionKey,
 );

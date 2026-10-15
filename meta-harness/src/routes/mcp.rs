@@ -16,8 +16,9 @@ pub(crate) fn routes() -> Router<AppState> {
 
 async fn mcp_sse_proxy(
     State(state): State<AppState>,
+    query: axum::extract::Query<crate::mcp::sse::McpStreamQuery>,
 ) -> axum::response::sse::Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
-    crate::mcp::mcp_sse_handler(axum::extract::State(state.mcp_state)).await
+    crate::mcp::mcp_sse_handler(axum::extract::State(state.mcp_state), query).await
 }
 
 async fn mcp_messages_proxy(

@@ -13,6 +13,7 @@ pub mod plan;
 pub mod policy;
 pub mod requests;
 pub mod session;
+pub mod slots;
 pub mod snapshot;
 
 pub use capabilities::*;
@@ -24,4 +25,5 @@ pub use plan::*;
 pub use policy::*;
 pub use requests::*;
 pub use session::*;
+pub use slots::*;
 pub use snapshot::*;

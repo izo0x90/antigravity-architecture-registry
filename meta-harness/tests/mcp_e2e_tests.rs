@@ -9,7 +9,7 @@ use serde_json::json;
 #[tokio::test]
 async fn every_tool_works_through_the_mcp_endpoint() {
     let (addr, state) = spawn_app().await;
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     let init = mcp.rpc("initialize", json!({})).await;
     assert_eq!(init["result"]["serverInfo"]["name"], "nah-architecture");
     let tools = mcp.rpc("tools/list", json!({})).await;
@@ -142,7 +142,7 @@ async fn tool_results_end_with_stage_specific_next_steps() {
 #[tokio::test]
 async fn tools_report_failures_as_errors_the_agent_can_act_on() {
     let (addr, _) = spawn_app().await;
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     for (tool, args, expected) in [
         ("run_tools", json!({ "plan": "nope" }), "not found"),
         ("review", json!({ "plan": "nope", "id": "rust:sample::run" }), "not found"),
@@ -172,7 +172,7 @@ async fn tools_report_failures_as_errors_the_agent_can_act_on() {
 #[tokio::test]
 async fn notifications_are_taken_but_never_answered() {
     let (addr, _) = spawn_app().await;
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     assert_eq!(mcp.notify("notifications/initialized").await, 202);
     assert_eq!(mcp.notify("notifications/unknown").await, 202, "unknown notifications aren't errors either");
     // Nothing was put on the stream for them: the next message answers the next request.
@@ -183,7 +183,7 @@ async fn notifications_are_taken_but_never_answered() {
 #[tokio::test]
 async fn inspect_opens_any_card_a_view_shows_and_says_how_links_are_known() {
     let (addr, _state) = spawn_app().await;
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     mcp.rpc("initialize", json!({})).await;
     let (err, text) = mcp.tool("ingest", json!({})).await;
     assert!(!err, "{text}");
@@ -213,7 +213,7 @@ async fn next_view(events: &mut tokio::sync::broadcast::Receiver<harness_contrac
 #[tokio::test]
 async fn the_agent_moves_the_users_view_to_a_plan_and_back_to_code() {
     let (addr, state) = spawn_app().await;
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     mcp.rpc("initialize", json!({})).await;
     assert!(!mcp.tool("ingest", json!({})).await.0);
     assert!(!mcp.tool("plan_create", json!({ "id": "val", "title": "Validate input" })).await.0);
@@ -234,7 +234,7 @@ async fn the_agent_moves_the_users_view_to_a_plan_and_back_to_code() {
 #[tokio::test]
 async fn reads_take_a_source_over_rest_and_mcp() {
     let (addr, _state) = spawn_app().await;
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     mcp.rpc("initialize", json!({})).await;
     assert!(!mcp.tool("ingest", json!({})).await.0);
     assert!(!mcp.tool("plan_create", json!({ "id": "val", "title": "Validate input" })).await.0);
@@ -272,9 +272,11 @@ async fn reads_take_a_source_over_rest_and_mcp() {
 /// may use, and a call it may not make is refused with what it lacks.
 #[tokio::test]
 async fn each_role_sees_and_may_use_only_its_tools() {
+    use meta_harness::mcp::McpCaller;
     use nah_access::Principal;
     let (_, state) = spawn_app().await;
     let service = &state.mcp_state.service;
+    let as_role = |role: &str| McpCaller { principal: Principal::agent(role), slot: None, label: role.into() };
     let names = |who: &Principal| service.tools_for(who).iter().map(|t| t.name.clone()).collect::<Vec<_>>();
     let reads = ["ingest", "list_types", "search", "inspect", "view", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions"];
     assert_eq!(names(&Principal::agent("external")), reads, "read-only, in the list's order");
@@ -283,10 +285,10 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     assert_eq!(lead.len(), 24, "the lead has every tool there is today: {lead:?}");
     assert!(names(&Principal::Anonymous).is_empty());
 
-    let err = service.call("navigate", json!({ "view": "calls" }), &Principal::agent("sub")).await.unwrap_err().to_string();
+    let err = service.call("navigate", json!({ "view": "calls" }), &as_role("sub")).await.unwrap_err().to_string();
     assert_eq!(err, "not allowed: this session's role (sub) can't use navigate (it needs view.drive)");
-    let err = service.call("plan_create", json!({ "id": "x", "title": "X" }), &Principal::agent("external")).await.unwrap_err().to_string();
+    let err = service.call("plan_create", json!({ "id": "x", "title": "X" }), &as_role("external")).await.unwrap_err().to_string();
     assert!(err.contains("(it needs plan.edit)"), "{err}");
-    assert!(service.call("list_types", json!({}), &Principal::agent("sub")).await.is_ok(), "what it may use works");
-    assert!(service.call("no_such_tool", json!({}), &Principal::agent("lead")).await.unwrap_err().to_string().contains("tool 'no_such_tool'"));
+    assert!(service.call("list_types", json!({}), &as_role("sub")).await.is_ok(), "what it may use works");
+    assert!(service.call("no_such_tool", json!({}), &as_role("lead")).await.unwrap_err().to_string().contains("tool 'no_such_tool'"));
 }

@@ -3492,6 +3492,8 @@ name = "nah-state"
 version = "0.1.0"
 dependencies = [
  "arch-store",
+ "harness-contracts",
+ "harness-core",
  "rusqlite",
  "serde",
  "serde_json",

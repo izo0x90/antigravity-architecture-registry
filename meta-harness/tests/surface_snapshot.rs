@@ -36,7 +36,7 @@ fn golden(name: &str, actual: &str) {
 #[tokio::test]
 async fn the_mcp_tools_are_as_pinned() {
     let (addr, _) = spawn_app().await;
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     let tools = mcp.rpc("tools/list", json!({})).await;
     let mut out = String::new();
     for tool in tools["result"]["tools"].as_array().unwrap() {

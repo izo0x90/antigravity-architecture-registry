@@ -74,3 +74,31 @@ async fn the_sockets_take_a_ticket_good_once() {
         assert!(tokio_tungstenite::connect_async(format!("ws://{addr}{path}?ticket={ticket}")).await.is_err(), "{path}: used once");
     }
 }
+
+/// A request's log line has its path, never its query: sessions' keys and
+/// sockets' tickets travel there.
+#[test]
+fn request_logs_never_carry_a_key() {
+    #[derive(Clone, Default)]
+    struct Buffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buffer = Buffer::default();
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::fmt().with_writer(move || writer.clone()).with_ansi(false).finish();
+    tracing::subscriber::with_default(subscriber, || {
+        let request = axum::http::Request::get("/api/mcp/sse?key=secret-key&ticket=secret-ticket").body(()).unwrap();
+        let span = meta_harness::server::request_span(&request);
+        let _inside = span.enter();
+        tracing::info!("answered");
+    });
+    let logged = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+    assert!(logged.contains("/api/mcp/sse") && !logged.contains("secret"), "{logged}");
+}

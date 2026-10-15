@@ -3,12 +3,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ThreadId, TurnId};
+use crate::ids::{SlotId, ThreadId, TurnId};
 use crate::snapshot::ProviderSnapshot;
 use crate::items::TurnItem;
 use crate::plan::PlanArtifact;
 use crate::requests::RuntimeRequest;
 use crate::session::{Subagent, Thread, Turn, Usage};
+use crate::slots::Slot;
 use crate::snapshot::{ModelOption, SignIn, SlashCommand};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,6 +47,9 @@ pub enum ClientEvent {
     /// The architecture graph changed, was checked, or someone asked the UI to
     /// show part of it.
     Architecture { event: arch_graph::ArchEvent },
+    /// A slot was made or changed (its sessions, its harness, its status).
+    SlotUpdated { slot: Slot },
+    SlotClosed { slot_id: SlotId },
     /// The stream fell behind: drop what you hold; the whole state follows.
     Resync,
 }

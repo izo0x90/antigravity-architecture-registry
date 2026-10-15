@@ -313,7 +313,8 @@ impl ProviderAdapter for AcpAdapter {
                 t.status = ThreadStatus::Idle;
                 t.controls.modes = modes;
                 t.controls.current_mode = current_mode;
-                t.mcp_servers = config.mcp_servers.clone();
+                // Shown to every client: no session's key in it.
+                t.mcp_servers = config.mcp_servers.iter().map(harness_contracts::McpServer::redacted).collect();
             });
         }
 

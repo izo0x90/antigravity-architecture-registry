@@ -18,21 +18,19 @@ pub struct OpenThread {
     pub policy: RuntimePolicy,
     pub model: Option<ModelSelection>,
     pub resume: Option<NativeId>,
-    /// Added to the manager's shared MCP servers for this thread.
-    pub extra_mcp_servers: Vec<McpServer>,
+    /// The tool servers this thread's session gets.
+    pub mcp_servers: Vec<McpServer>,
 }
 
 pub struct SessionManager {
     registry: Arc<InstanceRegistry>,
     hub: Arc<EventHub>,
-    /// Tool servers every session is connected to (e.g. our own MCP endpoint).
-    mcp_servers: Vec<McpServer>,
     sessions: RwLock<HashMap<ThreadId, Arc<dyn SessionRuntime>>>,
 }
 
 impl SessionManager {
-    pub fn new(registry: Arc<InstanceRegistry>, hub: Arc<EventHub>, mcp_servers: Vec<McpServer>) -> Self {
-        Self { registry, hub, mcp_servers, sessions: RwLock::default() }
+    pub fn new(registry: Arc<InstanceRegistry>, hub: Arc<EventHub>) -> Self {
+        Self { registry, hub, sessions: RwLock::default() }
     }
 
     pub async fn open(&self, request: OpenThread) -> Result<ThreadId> {
@@ -43,7 +41,7 @@ impl SessionManager {
             policy: request.policy,
             model: request.model,
             resume: request.resume,
-            mcp_servers: self.mcp_servers.iter().cloned().chain(request.extra_mcp_servers).collect(),
+            mcp_servers: request.mcp_servers,
         };
         let session: Arc<dyn SessionRuntime> = instance.adapter().open_session(config).await?.into();
 

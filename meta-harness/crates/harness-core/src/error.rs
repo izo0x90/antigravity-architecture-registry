@@ -17,6 +17,9 @@ pub enum HarnessError {
     #[error("harness failed: {reason}")]
     Provider { reason: String },
 
+    #[error("couldn't keep it: {reason}")]
+    Store { reason: String },
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

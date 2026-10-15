@@ -88,7 +88,7 @@ impl ToolSet for Review {
         Self::schemas(trees)
     }
 
-    async fn call(&self, name: &str, args: Value) -> Result<String, ServiceError> {
+    async fn call(&self, name: &str, args: Value, caller: &crate::mcp::McpCaller) -> Result<String, ServiceError> {
         match name {
         "review_comments" => {
             let a: CommentsArgs = parse(args)?;
@@ -104,7 +104,8 @@ impl ToolSet for Review {
             let plan = plan_id(&a.plan)?;
             let changes: Vec<ComponentId> = a.changes.into_iter().map(ComponentId::new).collect();
             let p = plan.clone();
-            let comment = blocking(&self.arch, move |s| s.answer_comment(&p, &CommentId(a.comment), &a.answer, &changes, &agent())).await?;
+            let actor = agent(caller);
+            let comment = blocking(&self.arch, move |s| s.answer_comment(&p, &CommentId(a.comment), &a.answer, &changes, &actor)).await?;
             let mut out = format!("Answered {}; the user will accept it or reopen it.\n", comment.id);
             for ch in comment.answer.iter().flat_map(|a| &a.changes) {
                 let _ = writeln!(out, "- linked: {}", ch.describe());
@@ -115,7 +116,8 @@ impl ToolSet for Review {
         "reply_comment" => {
             let a: ReplyArgs = parse(args)?;
             let plan = plan_id(&a.plan)?;
-            let comment = blocking(&self.arch, move |s| s.reply(&plan, &CommentId(a.comment), &a.text, &agent())).await?;
+            let actor = agent(caller);
+            let comment = blocking(&self.arch, move |s| s.reply(&plan, &CommentId(a.comment), &a.text, &actor)).await?;
             Ok(format!("Replied in {}'s thread ({} replies). It stays {}; wait for the user, then answer it.", comment.id, comment.replies.len(), if comment.status == CommentStatus::Open { "open" } else { "as it was" }))
         }
         "review" => {

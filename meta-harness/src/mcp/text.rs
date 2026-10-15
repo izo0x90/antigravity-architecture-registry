@@ -157,9 +157,9 @@ pub(crate) fn findings_text(report: &arch_graph::Report) -> String {
     out
 }
 
-/// The agent behind the MCP endpoint (one per server; sessions aren't told apart here).
-pub(crate) fn agent() -> Actor {
-    Actor::Agent { session: String::new() }
+/// The agent behind a call, as its writing is signed: its slot's name.
+pub(crate) fn agent(caller: &crate::mcp::McpCaller) -> Actor {
+    Actor::Agent { session: caller.label.clone() }
 }
 
 #[derive(Deserialize)]

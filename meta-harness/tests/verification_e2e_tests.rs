@@ -97,7 +97,7 @@ async fn tools_reviews_and_refresh_over_rest_and_mcp() {
     assert_eq!(reviews["report"]["findings"][0]["severity"], "error");
 
     // Through the agent's tools.
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     let (err, text) = mcp.tool("run_tools", json!({ "plan": "v" })).await;
     assert!(!err && text.contains("PASS mentions on rust:sample::validate") && text.contains("Next:") && text.contains("rust:sample::validate ("), "{text}");
     let (err, text) = mcp.tool("review", json!({ "plan": "v", "id": "rust:sample::validate" })).await;

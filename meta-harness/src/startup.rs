@@ -149,20 +149,50 @@ pub fn access(project: &std::path::Path) -> Result<nah_access::Access, StartErro
     })
 }
 
-/// Every session gets the architecture tools, plus the project's.
-pub fn tool_servers(base_url: &str, project: &std::path::Path) -> (Vec<McpServer>, Arc<crate::tool_servers::ToolServerState>) {
-    let mcp_servers = vec![McpServer {
-        name: "nah-architecture".into(),
-        transport: McpTransport::Sse { url: format!("{base_url}/api/mcp/sse"), headers: Vec::new() },
-    }];
-    let tool_servers = Arc::new(crate::tool_servers::ToolServerState { ours: mcp_servers.clone(), file: crate::tool_servers::ProjectToolServers::of(project) });
+/// The server's own tool server, as every session gets it: at its own
+/// address, with its key (which says which slot is calling).
+pub fn our_tools(base_url: &str) -> harness_core::slots::OurServer {
+    let url = format!("{base_url}/api/mcp/sse");
+    Arc::new(move |key: &str| McpServer { name: OUR_TOOLS.into(), transport: McpTransport::Sse { url: format!("{url}?key={key}"), headers: Vec::new() } })
+}
+
+/// The name agents see our tools under.
+pub const OUR_TOOLS: &str = "nah-architecture";
+
+/// The tool servers listed for the cockpit: ours (no key) and the project's.
+pub fn tool_servers(base_url: &str, project: &std::path::Path) -> Arc<crate::tool_servers::ToolServerState> {
+    let ours = vec![McpServer { name: OUR_TOOLS.into(), transport: McpTransport::Sse { url: format!("{base_url}/api/mcp/sse"), headers: Vec::new() } }];
+    let tool_servers = Arc::new(crate::tool_servers::ToolServerState { ours, file: crate::tool_servers::ProjectToolServers::of(project) });
     if let Err(e) = tool_servers.project() {
         tracing::warn!("The project's tool servers can't be read: {e}");
     }
-    (mcp_servers, tool_servers)
+    tool_servers
 }
 
-/// How the work queue runs: defaults plus the project's `.nah/queue.toml`.
+/// Who holds an MCP key: the slot whose running session it was made for.
+pub fn mcp_callers(slots: &Arc<harness_core::SlotManager>) -> crate::mcp::sse::Callers {
+    let slots = slots.clone();
+    Arc::new(move |key: &str| {
+        slots.holder(key).map(|h| crate::mcp::McpCaller { principal: nah_access::Principal::agent(&h.role), slot: Some(h.slot), label: h.name })
+    })
+}
+
+/// How long a harness may take to open a session.
+pub const OPEN_WITHIN: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The slots, as kept in the state database.
+pub fn slots(
+    sessions: &Arc<harness_core::SessionManager>,
+    registry: &Arc<InstanceRegistry>,
+    hub: &Arc<EventHub>,
+    state: &Arc<nah_state::StateDb>,
+    base_url: &str,
+    tool_servers: &Arc<crate::tool_servers::ToolServerState>,
+) -> Result<Arc<harness_core::SlotManager>, StartError> {
+    let project = tool_servers.clone();
+    Ok(harness_core::SlotManager::load(sessions.clone(), registry.clone(), hub.clone(), state.clone(), our_tools(base_url), Arc::new(move || project.project()), OPEN_WITHIN)?)
+}
+
 pub fn queue_config(arch: &ArchitectureService) -> Result<arch_service::QueueConfig, StartError> {
     let mut config = arch_service::QueueConfig::defaults()?;
     if let Ok(text) = std::fs::read_to_string(arch.root().join(".nah/queue.toml")) {

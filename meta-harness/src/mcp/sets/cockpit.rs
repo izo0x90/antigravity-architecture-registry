@@ -86,7 +86,7 @@ impl ToolSet for Cockpit {
         Self::schemas(trees)
     }
 
-    async fn call(&self, name: &str, args: Value) -> Result<String, ServiceError> {
+    async fn call(&self, name: &str, args: Value, _caller: &crate::mcp::McpCaller) -> Result<String, ServiceError> {
         let op = name.strip_prefix("cockpit_").ok_or_else(|| ServiceError::NotFound(format!("tool '{name}'")))?;
         self.drive(op, args).await
     }

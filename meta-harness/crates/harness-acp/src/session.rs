@@ -167,6 +167,10 @@ impl SessionRuntime for AcpSession {
         &self.thread_id
     }
 
+    fn native_id(&self) -> Option<harness_contracts::NativeId> {
+        Some(harness_contracts::NativeId::new(self.link.native_id.to_string()))
+    }
+
     fn events(&self) -> BoxStream<'static, AdapterEvent> {
         let (replay, rx) = {
             let state = lock(&self.shared().state);

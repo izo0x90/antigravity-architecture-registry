@@ -24,6 +24,8 @@ pub struct FakeSession {
     thread: Thread,
     events: broadcast::Sender<AdapterEvent>,
     log: Arc<Mutex<Vec<AdapterEvent>>>,
+    /// Turns so far: each turn and its item get ids of their own.
+    turns: std::sync::atomic::AtomicU32,
 }
 
 impl FakeSession {
@@ -39,6 +41,10 @@ impl SessionRuntime for FakeSession {
         &self.thread.id
     }
 
+    fn native_id(&self) -> Option<NativeId> {
+        Some(NativeId::new(format!("native-{}", self.thread_id())))
+    }
+
     fn events(&self) -> BoxStream<'static, AdapterEvent> {
         let replay = self.log.lock().unwrap().clone();
         let live = tokio_stream::wrappers::BroadcastStream::new(self.events.subscribe()).filter_map(|e| async move { e.ok() });
@@ -48,22 +54,23 @@ impl SessionRuntime for FakeSession {
     async fn start_turn(&self, input: TurnInput) -> Result<TurnId> {
         // "[hang]" in the input: a turn that never finishes (for timeouts).
         let status = if input.text.contains("[hang]") { TurnStatus::Running } else { TurnStatus::Completed };
+        let n = self.turns.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let turn = Turn {
-            id: TurnId::new("turn-1"),
+            id: TurnId::new(format!("turn-{n}")),
             thread_id: self.thread.id.clone(),
-            ordinal: 1,
+            ordinal: n,
             status,
             failure: None,
             usage: None,
         };
         self.emit(AdapterEvent::ItemUpdated {
             item: TurnItem {
-                id: ItemId::new("item-1"),
+                id: ItemId::new(format!("item-{n}")),
                 thread_id: self.thread.id.clone(),
                 turn_id: turn.id.clone(),
                 native_id: None,
                 parent_id: None,
-                ordinal: 0,
+                ordinal: n,
                 status: ItemStatus::Completed,
                 title: None,
                 body: ItemBody::AssistantMessage {
@@ -95,6 +102,15 @@ impl SessionRuntime for FakeSession {
 
 pub struct FakeAdapter;
 
+/// The tool servers each fake session was given, by thread: what an agent
+/// would connect to (its key included).
+static GIVEN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<ThreadId, Vec<McpServer>>>> = std::sync::LazyLock::new(Default::default);
+
+/// The tool servers a fake session was given.
+pub fn given_tools(thread: &ThreadId) -> Vec<McpServer> {
+    GIVEN.lock().unwrap().get(thread).cloned().unwrap_or_default()
+}
+
 #[async_trait]
 impl ProviderAdapter for FakeAdapter {
     fn capabilities(&self) -> Capabilities {
@@ -106,6 +122,11 @@ impl ProviderAdapter for FakeAdapter {
         if config.policy.cwd.as_deref() == Some("[hang-open]") {
             futures::future::pending::<()>().await;
         }
+        // A session saved as "gone" can't be resumed.
+        if config.resume.as_ref().is_some_and(|n| n.as_str() == "gone") {
+            return Err(HarnessError::Provider { reason: "no such session".into() });
+        }
+        GIVEN.lock().unwrap().insert(config.thread_id.clone(), config.mcp_servers.clone());
         let thread = Thread {
             id: config.thread_id,
             instance_id: InstanceId::new(FAKE),
@@ -118,7 +139,7 @@ impl ProviderAdapter for FakeAdapter {
             mcp_servers: Vec::new(),
         };
         let (events, _) = broadcast::channel(64);
-        let session = FakeSession { thread: thread.clone(), events, log: Arc::default() };
+        let session = FakeSession { thread: thread.clone(), events, log: Arc::default(), turns: Default::default() };
         session.emit(AdapterEvent::ThreadUpdated { thread });
         session.emit(AdapterEvent::CatalogUpdated {
             update: CatalogUpdate {
@@ -260,19 +281,22 @@ pub async fn spawn_app_with(arch: Arc<ArchitectureService>) -> (SocketAddr, AppS
 
 /// Serves the app over a given architecture service and event hub.
 pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHub>) -> (SocketAddr, AppState) {
+    // Bound first, as the server does: sessions are given its real address.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://{addr}");
     bridge_architecture_events(&arch, &hub);
     let remote = Arc::new(meta_harness::remote::Remote::default());
     let access = Arc::new(nah_access::Access::defaults());
-    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone())));
     let registry = Arc::new(InstanceRegistry::new(vec![Arc::new(FakeDriver)], hub.clone()));
     registry.configure(registry.default_configs(&[fake_harness()])).await.unwrap();
-    let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone(), Vec::new()));
+    let sessions = Arc::new(SessionManager::new(registry.clone(), hub.clone()));
     let queue = meta_harness::server::queue_runner(&arch, arch_service::QueueConfig::defaults().unwrap(), &hub);
-    let state = Arc::new(nah_state::StateDb::open(&arch_service::state_dir(arch.root()).unwrap(), &arch_service::store_settings(arch.limits())).unwrap());
-    let tool_servers = Arc::new(meta_harness::tool_servers::ToolServerState { ours: Vec::new(), file: meta_harness::tool_servers::ProjectToolServers::of(arch.root()) });
-    let state = AppState { registry, sessions, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state, tool_servers, remote, access, tickets: Arc::default() };
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let db = Arc::new(nah_state::StateDb::open(&arch_service::state_dir(arch.root()).unwrap(), &arch_service::store_settings(arch.limits())).unwrap());
+    let tool_servers = meta_harness::startup::tool_servers(&base_url, arch.root());
+    let slots = meta_harness::startup::slots(&sessions, &registry, &hub, &db, &base_url, &tool_servers).unwrap();
+    let mcp = McpServerState::new(Arc::new(McpService::new(arch.clone(), remote.clone(), access.clone())), meta_harness::startup::mcp_callers(&slots));
+    let state = AppState { registry, sessions, slots, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state: db, tool_servers, remote, access, tickets: Arc::default() };
     let app = create_router(state.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (addr, state)
@@ -340,9 +364,31 @@ pub struct Mcp {
 }
 
 impl Mcp {
+    /// As an agent NAH didn't start (no key): read-only.
     pub async fn connect(addr: SocketAddr) -> Self {
+        Self::connect_to(addr, "/api/mcp/sse").await
+    }
+
+    /// As the lead: opens a lead session on the fake harness and connects
+    /// the way its agent would, with the address (and key) it was given.
+    pub async fn lead(addr: SocketAddr) -> Self {
+        let (status, body) = http(addr, "POST", "/api/threads", Some(&format!(r#"{{"instanceId":"{FAKE}"}}"#))).await;
+        assert_eq!(status, 200, "{body}");
+        let thread = ThreadId::new(serde_json::from_str::<Value>(&body).unwrap()["threadId"].as_str().unwrap());
+        Self::as_session(addr, &thread).await
+    }
+
+    /// As a fake session's agent, with the address it was given.
+    pub async fn as_session(addr: SocketAddr, thread: &ThreadId) -> Self {
+        let ours = given_tools(thread).into_iter().find(|s| s.name == "nah-architecture").expect("the session was given our tools");
+        let McpTransport::Sse { url, .. } = ours.transport else { panic!("ours is SSE: {ours:?}") };
+        let path = url.split_once("//").and_then(|(_, rest)| rest.split_once('/')).map(|(_, p)| format!("/{p}")).unwrap();
+        Self::connect_to(addr, &path).await
+    }
+
+    async fn connect_to(addr: SocketAddr, path: &str) -> Self {
         let mut stream = TcpStream::connect(addr).await.unwrap();
-        stream.write_all(b"GET /api/mcp/sse HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n").await.unwrap();
+        stream.write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n").as_bytes()).await.unwrap();
         let mut events = BufReader::new(stream);
         let endpoint = loop {
             let mut line = String::new();

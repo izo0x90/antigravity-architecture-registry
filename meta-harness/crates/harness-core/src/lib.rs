@@ -15,12 +15,14 @@ mod hub;
 mod registry;
 mod sessions;
 pub mod skills;
+pub mod slots;
 pub mod tool_config;
 
 pub use error::HarnessError;
 pub use hub::EventHub;
 pub use registry::{InstanceConfig, InstanceRegistry};
 pub use sessions::{OpenThread, SessionManager};
+pub use slots::{Delivery, KeyHolder, Open, Opened, Origin, Reported, Sent, SlotManager, SlotReport, SlotSettings, SlotState, SlotStore};
 
 use std::sync::Arc;
 
@@ -126,6 +128,8 @@ pub trait ProviderAdapter: Send + Sync {
 #[async_trait]
 pub trait SessionRuntime: Send + Sync {
     fn thread_id(&self) -> &ThreadId;
+    /// The harness's own id for this session (to resume it later), if it has one.
+    fn native_id(&self) -> Option<NativeId>;
 
     /// Entity-upsert events for this session. Each call returns a new subscriber.
     fn events(&self) -> BoxStream<'static, harness_contracts::AdapterEvent>;

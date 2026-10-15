@@ -17,6 +17,8 @@ use tower_http::trace::TraceLayer;
 pub struct AppState {
     pub registry: Arc<InstanceRegistry>,
     pub sessions: Arc<SessionManager>,
+    /// The slots: the lead, sub-slots, the queue's workers.
+    pub slots: Arc<harness_core::SlotManager>,
     pub hub: Arc<EventHub>,
     pub mcp_state: crate::mcp::McpServerState,
     pub arch: Arc<arch_service::ArchitectureService>,
@@ -75,6 +77,7 @@ impl IntoResponse for ApiError {
             HarnessError::Unsupported { .. } => StatusCode::NOT_IMPLEMENTED,
             HarnessError::AuthRequired { .. } => StatusCode::UNAUTHORIZED,
             HarnessError::Provider { .. } | HarnessError::Io(_) => StatusCode::BAD_GATEWAY,
+            HarnessError::Store { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
     }
@@ -123,8 +126,14 @@ pub fn create_router(state: AppState) -> Router {
     router
         .layer(axum::middleware::map_response(json_errors))
         .layer(tower_http::compression::CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(request_span))
         .with_state(state)
+}
+
+/// A request's span: its method and path, never its query (sessions' keys
+/// and sockets' tickets travel there).
+pub fn request_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
+    tracing::info_span!("request", method = %request.method(), path = %request.uri().path())
 }
 
 /// Errors from extractors (bad JSON, bad paths) come back as plain text;

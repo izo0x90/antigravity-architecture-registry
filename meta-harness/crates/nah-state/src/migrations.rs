@@ -7,12 +7,21 @@ use rusqlite::Connection;
 use crate::{StateError, failed};
 
 /// (version, what it adds). Features add theirs as they're built.
-const MIGRATIONS: &[(i64, &str)] = &[(
-    1,
-    "CREATE TABLE ui_state (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL);
+const MIGRATIONS: &[(i64, &str)] = &[
+    (
+        1,
+        "CREATE TABLE ui_state (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL);
      CREATE TABLE feedback (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, json TEXT NOT NULL);
      CREATE TABLE activity (seq INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, subject TEXT NOT NULL, detail TEXT);",
-)];
+    ),
+    (
+        2,
+        "CREATE TABLE slots (id TEXT PRIMARY KEY, role TEXT NOT NULL, name TEXT NOT NULL, instance TEXT, policy_json TEXT NOT NULL, model_json TEXT, started_by TEXT NOT NULL, seq INTEGER NOT NULL);
+     CREATE TABLE slot_sessions (key TEXT PRIMARY KEY, slot TEXT NOT NULL, native_id TEXT, title TEXT, current INTEGER NOT NULL, seq INTEGER NOT NULL);
+     CREATE INDEX slot_sessions_by_slot ON slot_sessions (slot);
+     CREATE TABLE held_reports (seq INTEGER PRIMARY KEY AUTOINCREMENT, from_slot TEXT NOT NULL, text TEXT NOT NULL, at_ms INTEGER NOT NULL);",
+    ),
+];
 
 /// The newest layout this NAH knows.
 pub const LATEST: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;

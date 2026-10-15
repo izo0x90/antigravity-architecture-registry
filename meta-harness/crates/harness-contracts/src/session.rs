@@ -202,6 +202,21 @@ pub struct McpServer {
     pub transport: McpTransport,
 }
 
+impl McpServer {
+    /// As shown to clients: no secrets. A URL's query (a session's key) is
+    /// dropped and header values are hidden.
+    pub fn redacted(&self) -> Self {
+        let hide = |headers: &[(String, String)]| headers.iter().map(|(name, _)| (name.clone(), "…".to_owned())).collect();
+        let url_only = |url: &str| url.split_once('?').map_or(url, |(base, _)| base).to_owned();
+        let transport = match &self.transport {
+            McpTransport::Http { url, headers } => McpTransport::Http { url: url_only(url), headers: hide(headers) },
+            McpTransport::Sse { url, headers } => McpTransport::Sse { url: url_only(url), headers: hide(headers) },
+            McpTransport::Stdio { command, args, env } => McpTransport::Stdio { command: command.clone(), args: args.clone(), env: hide(env) },
+        };
+        Self { name: self.name.clone(), transport }
+    }
+}
+
 /// The tool servers every session gets, besides any added for it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

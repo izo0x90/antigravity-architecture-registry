@@ -12,6 +12,22 @@ use serde_json::{Value, json};
 use crate::mcp::protocol::{JsonRpcRequest, JsonRpcResponse, McpTool, McpToolResult};
 use crate::mcp::sets::{ToolDef, ToolSet, all, tool_defs};
 
+/// Who a tool call comes from: a slot's agent (by its session's key), or
+/// an agent NAH didn't start.
+#[derive(Clone, Debug, PartialEq)]
+pub struct McpCaller {
+    pub principal: Principal,
+    pub slot: Option<harness_contracts::SlotId>,
+    /// How its writing is signed: the slot's name, or "external".
+    pub label: String,
+}
+
+impl McpCaller {
+    pub fn external() -> Self {
+        Self { principal: Principal::agent("external"), slot: None, label: "external".into() }
+    }
+}
+
 #[derive(Clone)]
 pub struct McpService {
     sets: Arc<Vec<Box<dyn ToolSet>>>,
@@ -49,7 +65,7 @@ impl McpService {
     }
 
     /// Answers a request; notifications (no id) get no answer, as JSON-RPC requires.
-    pub async fn handle_request(&self, req: JsonRpcRequest, caller: &Principal) -> Option<JsonRpcResponse> {
+    pub async fn handle_request(&self, req: JsonRpcRequest, caller: &McpCaller) -> Option<JsonRpcResponse> {
         let req_id = req.id.clone();
         let response = match req.method.as_str() {
             "initialize" => JsonRpcResponse::success(
@@ -61,7 +77,7 @@ impl McpService {
                 }),
             ),
             "notifications/initialized" | "initialized" | "ping" => JsonRpcResponse::success(req_id, json!({})),
-            "tools/list" => JsonRpcResponse::success(req_id, json!({ "tools": *self.tools_for(caller) })),
+            "tools/list" => JsonRpcResponse::success(req_id, json!({ "tools": *self.tools_for(&caller.principal) })),
             "tools/call" => {
                 let params = req.params.unwrap_or(Value::Null);
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
@@ -81,17 +97,17 @@ impl McpService {
     }
 
     /// Runs a tool for a caller allowed to; the text is what the agent sees.
-    pub async fn call(&self, name: &str, args: Value, caller: &Principal) -> Result<String, ServiceError> {
+    pub async fn call(&self, name: &str, args: Value, caller: &McpCaller) -> Result<String, ServiceError> {
         let Some(&(set, needs)) = self.index.get(name) else {
             return Err(ServiceError::NotFound(format!("tool '{name}'")));
         };
-        if !self.access.allows(caller, needs) {
-            let role = match caller {
+        if !self.access.allows(&caller.principal, needs) {
+            let role = match &caller.principal {
                 Principal::Agent { role } => role.to_string(),
                 other => format!("{other:?}").to_lowercase(),
             };
             return Err(ServiceError::Forbidden(format!("this session's role ({role}) can't use {name} (it needs {needs})")));
         }
-        self.sets[set].call(name, args).await
+        self.sets[set].call(name, args, caller).await
     }
 }
