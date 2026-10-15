@@ -28,23 +28,23 @@ which_key_delay_ms = 300
 # leader path of their own get the next free keys in it).
 view_menu = ","
 
-# The key bar at the bottom: the keys that matter for what the cursor is on.
 # Moving and picking in every list (the palette, its pickers).
 [keymap.list]
 next = ["ctrl+j", "ctrl+n", "ArrowDown"]
 prev = ["ctrl+k", "ctrl+p", "ArrowUp"]
 pick = ["Enter"]
 
-# Every typing box: send, and (in the chat) add to what it's doing.
-# Shift+Enter, the box's own, is a new line.
+# Every typing box: send, (in the chat) add to what it's doing, and a new line.
 [keymap.input]
 send = ["Enter"]
 add = ["ctrl+Enter"]
+newline = "shift+Enter"     # a new line in the box
 
 # Held while clicking a name in the code: go to what it names.
 [keymap.pointer]
 go_to = "ctrl"
 
+# The key bar at the bottom: the keys that matter for what the cursor is on.
 [keymap.bar]
 show = true
 # How many keys it shows.

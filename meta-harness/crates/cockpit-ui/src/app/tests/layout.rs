@@ -98,7 +98,7 @@ fn views_are_hidden_by_closing_and_gone_only_when_deleted() {
     app.run_shell(ShellCommand::CloseColumn, None, None, &ctx);
     assert!(app.desk.columns.slot_of(second).is_none() && app.desk.columns.has(second) && app.desk.columns.hidden() > 0);
     let list = app.bound_actions().into_iter().find(|b| b.action.id == "buffer.list").expect("the list");
-    assert_eq!(list.key_hint(), "SPC b b");
+    assert_eq!(list.key_hint(), "Space b b");
     let Param::Choice(views) = &list.action.param else { panic!("a choice") };
     let line = views.iter().find(|c| c.value == format!("graph:{}", second.id)).expect("the hidden graph is listed");
     assert_eq!(line.detail.as_deref(), Some("hidden"));

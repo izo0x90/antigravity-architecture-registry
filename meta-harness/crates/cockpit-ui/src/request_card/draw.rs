@@ -67,7 +67,7 @@ pub fn render_request(ui: &mut egui::Ui, request: &RuntimeRequest, drafts: &mut 
         let complete = drafts.complete(request);
         let key = |option: &ApprovalOption| {
             let id = format!("request.{}.{}", request.id, option.id);
-            shown.hints.iter().find(|(a, _)| *a == id).map(|(_, k)| k.clone()).filter(|k| !k.is_empty())
+            crate::actions::key_of(shown.hints, &id).map(str::to_owned)
         };
         let mut row = |ui: &mut egui::Ui, option: &ApprovalOption| {
             let enabled = !says_yes(option) || complete;

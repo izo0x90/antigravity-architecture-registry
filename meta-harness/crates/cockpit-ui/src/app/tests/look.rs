@@ -76,7 +76,7 @@ fn the_quick_look_goes_to_a_column_and_says_when_theres_nothing_to_look_at() {
     peek_key(&ctx, &mut app, true, 1.2);
     peek_key(&ctx, &mut app, false, 1.25);
     let to_column = app.bound_actions().into_iter().find(|b| b.action.id == "quicklook.to_column").expect("offered while open");
-    assert_eq!(to_column.key_hint(), "SPC q c");
+    assert_eq!(to_column.key_hint(), "Space q c");
     app.invoke(Invocation { action: to_column.action, origin: to_column.origin, value: None }, &ctx);
     assert!(app.quick_look.is_none());
     assert_eq!((app.focused_kind(), app.desk.spec.target.as_ref().map(|t| t.as_str())), (BufferKind::Spec, Some("rust:a::step")), "the same card, in a column, focused");

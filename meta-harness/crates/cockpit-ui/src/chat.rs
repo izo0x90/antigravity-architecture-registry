@@ -14,7 +14,7 @@ use harness_contracts::{
 
 use egui_phosphor::regular as icon;
 
-use crate::actions::{Action, ActionProvider, Choice, MINOR, Param, RunCx, ToolbarStyle, ToolbarUse, toolbar_control};
+use crate::actions::{Action, ActionProvider, Choice, MINOR, Param, RunCx, ToolbarStyle};
 use crate::feedback::FeedbackInspectorState;
 use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, Spot, Step, Target};
 use crate::net::{AuthChallenge, NetClient, NetResult, OpenSlotSession, SlotOpened};

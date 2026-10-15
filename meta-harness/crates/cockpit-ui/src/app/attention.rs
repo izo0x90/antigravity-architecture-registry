@@ -7,7 +7,6 @@ use harness_contracts::{Level, Notification, NotificationId, SlotId};
 
 use super::*;
 use crate::inbox::InboxAsk;
-use crate::quick_look::Look;
 
 /// How often a chat on screen says its slot was seen (seconds).
 const SEEN_EVERY: f64 = 2.0;
@@ -19,19 +18,19 @@ impl CockpitApp {
     /// The item the quick look shows, while it shows the inbox.
     #[cfg(test)]
     pub(super) fn looked_at(&self) -> Option<&NotificationId> {
-        self.quick_look.as_ref().filter(|q| q.look == Look::Inbox).and(self.desk.inbox.item.as_ref())
+        self.quick_look.as_ref().filter(|q| q.kind == BufferKind::Inbox).and(self.desk.inbox.item.as_ref())
     }
 
     /// The quick look on the inbox, showing `id` (a card shown there is closed first).
     pub(super) fn open_attention(&mut self, id: NotificationId, ctx: &egui::Context) {
-        if self.quick_look.as_ref().is_some_and(|q| q.look == Look::Card) {
+        if self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Spec) {
             self.close_quick_look();
         }
         self.desk.inbox.show(id);
         if self.quick_look.is_none() {
             let now = ctx.input(|i| i.time);
             let (slot, over) = (self.desk.columns.focused(), self.desk.columns.focused_kind());
-            self.quick_look = Some(QuickLook::open(Look::Inbox, slot, over, self.desk.used_pane(BufferKind::Spec).id, None, now));
+            self.quick_look = Some(QuickLook::open(BufferKind::Inbox, slot, over, self.desk.used_pane(BufferKind::Spec).id, None, now));
         }
     }
 
@@ -67,7 +66,7 @@ impl CockpitApp {
     /// Shows item `id` of `server` in the inbox: in the quick look when
     /// it's open, else in the inbox's column (the desk switched first).
     fn inbox_to(&mut self, server: &str, id: NotificationId, ctx: &egui::Context) {
-        if self.quick_look.as_ref().is_some_and(|q| q.look == Look::Inbox) {
+        if self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Inbox) {
             let look = self.quick_look.take();
             self.switch_to(server, ctx);
             // Over the desk shown now (else it'd close, its column gone).

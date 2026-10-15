@@ -210,11 +210,7 @@ impl CockpitApp {
     /// The view the keys go to: the quick look's, while it's open (its
     /// card's spec view, or the inbox); else the focused column's.
     pub(super) fn focused_kind(&self) -> BufferKind {
-        match self.quick_look.as_ref().map(|q| &q.look) {
-            Some(crate::quick_look::Look::Card) => BufferKind::Spec,
-            Some(crate::quick_look::Look::Inbox) => BufferKind::Inbox,
-            None => self.desk.columns.focused_kind(),
-        }
+        self.quick_look.as_ref().map_or_else(|| self.desk.columns.focused_kind(), |q| q.kind)
     }
 
     /// The column showing the view of `kind` in use (else the nearest of

@@ -77,7 +77,7 @@ impl ChatStreamState {
 
             let start = ui.cursor().min;
             let w = ui.available_width();
-            self.render_input(ui, net, feedback, slot_idx, is_focused, cx.input_mode);
+            self.render_input(ui, feedback, is_focused, cx);
             let input = Rect::from_min_size(Pos2::new(start.x, start.y), Vec2::new(w, (ui.cursor().min.y - start.y).max(40.0)));
             feedback.register_inspectable(ui, &format!("slot_{}:chat:input_bar", slot_idx + 1), input);
         });
@@ -87,7 +87,6 @@ impl ChatStreamState {
     pub(super) fn render_controls(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         let actions = self.actions();
         let on_toolbar = |style: ToolbarStyle| actions.iter().filter(move |a| a.toolbar.as_ref().is_some_and(|t| t.style == style));
-        let mut used: Option<(Action, ToolbarUse)> = None;
 
         ui.horizontal(|ui| {
             // The agent slot it shows (its role on hover).
@@ -111,11 +110,7 @@ impl ChatStreamState {
                 ui.label(RichText::new(icon::WARNING).color(colors().warn)).on_hover_text(problems.join("\n"));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                for action in on_toolbar(ToolbarStyle::Button) {
-                    if let Some(u) = toolbar_control(ui, action) {
-                        used = Some((action.clone(), u));
-                    }
-                }
+                crate::actions::controls(ui, on_toolbar(ToolbarStyle::Button), cx);
                 if let Some(thread) = &self.active_thread() {
                     let short: String = thread.as_str().chars().take(8).collect();
                     ui.label(RichText::new(format!("[{short}]")).monospace().size(crate::theme::look().text_small).color(colors().info));
@@ -126,11 +121,7 @@ impl ChatStreamState {
         });
 
         ui.horizontal_wrapped(|ui| {
-            for action in on_toolbar(ToolbarStyle::Control) {
-                if let Some(u) = toolbar_control(ui, action) {
-                    used = Some((action.clone(), u));
-                }
-            }
+            crate::actions::controls(ui, on_toolbar(ToolbarStyle::Control), cx);
             if let Some(thread) = self.thread().map(|v| &v.thread)
                 && !thread.mcp_servers.is_empty()
             {
@@ -145,11 +136,6 @@ impl ChatStreamState {
             }
         });
 
-        match used {
-            Some((action, ToolbarUse::Run(value))) => self.run(&action, value, cx),
-            Some((action, ToolbarUse::OpenPalette)) => self.pending_palette = Some(action.id),
-            None => {}
-        }
     }
 
     pub(super) fn render_banners(&mut self, ui: &mut egui::Ui, net: &NetClient) {
@@ -412,15 +398,9 @@ impl ChatStreamState {
         }
     }
 
-    pub(super) fn render_input(
-        &mut self,
-        ui: &mut egui::Ui,
-        net: &NetClient,
-        feedback: &FeedbackInspectorState,
-        slot_idx: usize,
-        is_focused: bool,
-        input_mode: &mut crate::keymap::InputMode,
-    ) {
+    pub(super) fn render_input(&mut self, ui: &mut egui::Ui, feedback: &FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
+        let (net, slot_idx, hints) = (cx.net, cx.slot, cx.hints);
+        let input_mode = &mut *cx.input_mode;
         let ctx = ui.ctx().clone();
         // Slash-command suggestions from the harness's live command list.
         if let Some(prefix) = self.ui.input_buffer.strip_prefix('/')
@@ -445,16 +425,18 @@ impl ChatStreamState {
             let inserting = *input_mode == crate::keymap::InputMode::Insert { slot: slot_idx };
             let steerable = self.instance().is_some_and(|s| s.capabilities.turns.active_steering) && self.thread().and_then(|t| t.running_turn()).is_some();
             let keys = crate::keymap::local();
-            let back = keys.back.as_ref().map(crate::keymap::Chord::label).unwrap_or_default();
             let hint = if inserting && steerable {
                 format!("While it works: {} queues this next, {} adds it to what it's doing", keys.input.send_label(), keys.input.add_label())
             } else if inserting {
-                format!("Instructions… ({} to send, Shift+Enter newline, {back} normal mode, / for commands)", keys.input.send_label())
+                format!("Instructions… ({}; / for commands)", keys.typing_hint("leaves the field"))
             } else {
-                "Press 'i' or click to enter insert mode...".to_owned()
+                match crate::actions::key_of(hints, "chat.insert") {
+                    Some(key) => format!("{key} or a click to type…"),
+                    None => "Click to type…".to_owned(),
+                }
             };
             let output = ui.add(
-                egui::TextEdit::multiline(&mut self.ui.input_buffer)
+                keys.text_box(&mut self.ui.input_buffer)
                     .id(egui::Id::new(("chat_persistent_input_text_edit", slot_idx)))
                     .desired_rows(2)
                     .desired_width(text_w)

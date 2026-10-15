@@ -149,8 +149,6 @@ pub struct CodeViewerState {
     pub file_stale: bool,
     /// Out of date, by the server's word or the index status (set by the app).
     pub out_of_date: bool,
-    /// Asks the app to read this file again.
-    pub reread: bool,
 }
 
 impl Default for CodeViewerState {
@@ -182,7 +180,6 @@ impl Default for CodeViewerState {
             select: None,
             file_stale: false,
             out_of_date: false,
-            reread: false,
         }
     }
 }
@@ -291,7 +288,7 @@ impl CodeViewerState {
             Some(t) => {
                 let at = t.at.as_ref().map(|(f, l)| format!("\n{f}:{l}")).unwrap_or_default();
                 let sig = t.signature.as_ref().map(|s| format!("\n{s}")).unwrap_or_default();
-                format!("{} ({}){sig}{at}\nCtrl+click: go to it", t.name, t.type_name)
+                format!("{} ({}){sig}{at}\n{}+click: go to it", t.name, t.type_name, crate::keymap::local().pointer.go_to.label())
             }
             None => id.as_str().to_owned(),
         }
@@ -440,7 +437,8 @@ impl CodeViewerState {
         Ok(())
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, net: &NetClient, feedback: &mut FeedbackInspectorState, slot_idx: usize) {
+    pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
+        let (net, slot_idx) = (cx.net, cx.slot);
         // Replies for a file that's no longer the one shown (an earlier load
         // answering late) are dropped, so they can't use up its scroll.
         let incoming = self.analysis_inbox.lock().ok().and_then(|mut a| a.take());
@@ -507,8 +505,8 @@ impl CodeViewerState {
                     ui.horizontal_wrapped(|ui| {
                         crate::status::chip(ui, "stale", None);
                         ui.label(RichText::new("This file changed since it was indexed: marks and spans may be off.").size(crate::theme::look().text_body).color(colors().text));
-                        if ui.small_button("Re-read it").on_hover_text("SPC I f").clicked() {
-                            self.reread = true;
+                        if let Some(reread) = cx.shell.iter().find(|a| a.id == "index.file").map(|a| a.clone().toolbar(crate::actions::ToolbarStyle::Button, "Re-read it", None)) {
+                            crate::actions::control(ui, &reread, cx);
                         }
                     });
                 });
@@ -872,7 +870,10 @@ pub(crate) mod tests {
         let net = NetClient::new("http://localhost:0");
         let mut feedback = FeedbackInspectorState::default();
         let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, h))), ..Default::default() }, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| code.render(ui, &net, &mut feedback, 0));
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
+                code.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut asked });
+            });
         });
         placed(&output)
     }

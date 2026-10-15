@@ -22,7 +22,7 @@ impl CockpitApp {
             actions.push(admin(format!("layout.{cols}"), format!("{cols}-column layout"), S::SetLayout(cols)));
         }
         actions.push(admin("column.add".into(), "Add a column".into(), S::SetLayout(self.desk.columns.len() + 1)));
-        actions.push(admin("column.close".into(), "Close this column (its view is hidden)".into(), S::CloseColumn));
+        actions.extend(self.column_actions());
         // Every open view, to show here: on screen (and where) or hidden.
         let views: Vec<Choice> = self
             .desk.columns
@@ -40,12 +40,7 @@ impl CockpitApp {
         }
         actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), S::ToggleInspector));
         actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), S::ToggleIssues));
-        let look = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::View);
-        let open = self.quick_look.is_some();
-        actions.push(look("quicklook.toggle", if open { "Close the quick look" } else { "Quick look: the full card (hold to peek)" }, S::QuickLook).importance(if open { SECONDARY } else { PRIMARY }).when(if open { When::Always } else { When::Component }));
-        if self.quick_look.is_some() {
-            actions.push(look("quicklook.to_column", "Open this card in a column", S::QuickLookToColumn).importance(PRIMARY));
-        }
+        actions.extend(self.look_actions());
         actions.push(Action::new("talk.open", "Talk to the agent from here", S::Talk).group(Group::Act).importance(SECONDARY));
         actions.extend(self.attention_actions());
         actions.extend(self.server_actions());
@@ -63,6 +58,29 @@ impl CockpitApp {
         actions.push(index("index.file", &format!("Re-read {}", self.desk.code.current_file), IndexOp::File));
         actions.extend(self.nav_actions());
         actions
+    }
+
+    /// A column's own: closing it (its control, on its header, when there's
+    /// another column).
+    pub(super) fn column_actions(&self) -> Vec<Action> {
+        let close = Action::new("column.close", "Close this column (its view is hidden, not lost)", ShellCommand::CloseColumn).group(Group::View).importance(MINOR);
+        let close = if self.desk.columns.len() > 1 { close.toolbar(ToolbarStyle::Button, "", Some(egui_phosphor::regular::X)) } else { close };
+        vec![close]
+    }
+
+    /// The quick look's own: opening and closing it (hold its key to peek),
+    /// and sending its card to a column; open, their controls on its header.
+    pub(super) fn look_actions(&self) -> Vec<Action> {
+        use ShellCommand as S;
+        let look = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::View);
+        let Some(open) = &self.quick_look else {
+            return vec![look("quicklook.toggle", "Quick look: the full card (hold to peek)", S::QuickLook).importance(PRIMARY).when(When::Component)];
+        };
+        let mut out = vec![look("quicklook.toggle", "Close the quick look", S::QuickLook).importance(SECONDARY).toolbar(ToolbarStyle::Button, "", Some(egui_phosphor::regular::X))];
+        if open.kind == BufferKind::Spec {
+            out.push(look("quicklook.to_column", "Open this card in a column", S::QuickLookToColumn).importance(PRIMARY).toolbar(ToolbarStyle::Button, "Open in a column", Some(egui_phosphor::regular::COLUMNS)));
+        }
+        out
     }
 
     /// The keys every view shares, labelled for the focused view and marked

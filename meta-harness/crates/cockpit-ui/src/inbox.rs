@@ -10,7 +10,7 @@ use egui::{RichText, Vec2};
 use egui_phosphor::regular as icon;
 use harness_contracts::{Level, Notification, NotificationId, RequestId, RuntimeRequest, SlotId, ThreadId};
 
-use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY};
+use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, ToolbarStyle};
 use crate::chat::ChatStreamState;
 use crate::nav::{Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
 use crate::theme::colors;
@@ -141,6 +141,8 @@ impl InboxView {
             if let Some((at, of)) = self.at {
                 ui.label(RichText::new(format!("{at} of {of}")).size(theme.text_small).color(colors().muted));
             }
+            let actions = self.actions();
+            crate::actions::controls(ui, &actions, cx);
         });
         ui.separator();
         let Some(shown) = self.shown.clone() else {
@@ -212,15 +214,6 @@ impl InboxView {
                     .rect;
                 mark(ui, rect, parts.len() - 1, &mut drawn);
             }
-            ui.add_space(theme.space_sm);
-            ui.horizontal(|ui| {
-                if shown.notification.slot.is_some() && ui.button(format!("{} Open its chat", icon::CHAT_TEARDROP_TEXT)).clicked() {
-                    let _ = self.open_chat();
-                }
-                if ui.button(format!("{} Put away", icon::ARCHIVE)).clicked() {
-                    self.asks.push(InboxAsk::Dismiss(shown.notification.id.clone()));
-                }
-            });
             ui.allocate_space(Vec2::ZERO);
         });
         self.spots = drawn;
@@ -325,8 +318,8 @@ impl ActionProvider for InboxView {
         let act = |id: &str, label: &str, c: Command| Action::new(id, label, c).focused().group(Group::Act);
         let mut out = Vec::new();
         if self.at.is_some_and(|(_, of)| of > 1) || self.shown.is_none() && self.item.is_some() {
-            out.push(act("inbox.next", "Next", Command::Step(1)).importance(PRIMARY));
-            out.push(act("inbox.prev", "Previous", Command::Step(-1)).importance(SECONDARY));
+            out.push(act("inbox.prev", "Previous", Command::Step(-1)).importance(SECONDARY).toolbar(ToolbarStyle::Button, "", Some(icon::CARET_LEFT)));
+            out.push(act("inbox.next", "Next", Command::Step(1)).importance(PRIMARY).toolbar(ToolbarStyle::Button, "", Some(icon::CARET_RIGHT)));
         }
         let Some(shown) = &self.shown else { return out };
         for answer in shown.request.iter().flat_map(crate::request_card::answers) {
@@ -340,9 +333,9 @@ impl ActionProvider for InboxView {
             out.push(action);
         }
         if shown.notification.slot.is_some() {
-            out.push(act("inbox.open_chat", "Open its chat", Command::OpenChat).importance(SECONDARY));
+            out.push(act("inbox.open_chat", "Open its chat", Command::OpenChat).importance(SECONDARY).toolbar(ToolbarStyle::Button, "Open its chat", Some(icon::CHAT_TEARDROP_TEXT)));
         }
-        out.push(act("inbox.dismiss", "Put it away", Command::Dismiss).importance(MINOR));
+        out.push(act("inbox.dismiss", "Put it away", Command::Dismiss).importance(MINOR).toolbar(ToolbarStyle::Button, "Put away", Some(icon::ARCHIVE)));
         out
     }
 

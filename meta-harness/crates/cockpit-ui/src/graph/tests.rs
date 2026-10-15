@@ -347,8 +347,7 @@ fn fingers_select_go_in_offer_actions_pan_zoom_and_walk_back() {
     g.on_gesture(Gesture::Pan(egui::vec2(30.0, 0.0)));
     g.on_gesture(Gesture::Pinch { factor: 1.5, center: egui::Pos2::new(100.0, 100.0) });
     assert!(g.camera() != before, "two fingers move the camera");
-    g.on_gesture(Gesture::Swipe(Swipe::Right));
-    assert_eq!(g.requests.run.as_ref().map(|(id, _)| id.as_str()), Some("nav.back"), "a swipe walks the jump list");
+    assert_eq!(g.on_gesture(Gesture::Swipe(Swipe::Right)), Some("nav.back"), "a swipe walks the jump list");
 }
 
 #[test]

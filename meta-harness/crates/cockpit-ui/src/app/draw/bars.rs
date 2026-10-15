@@ -2,11 +2,11 @@
 
 use super::super::*;
 
-/// An action's keys as the key sheet lists them ("g d", "SPC g v").
+/// An action's keys as the key sheet lists them ("g d", "Space g v").
 pub(in crate::app) fn keys_of(b: &Bound) -> String {
     let mut all: Vec<String> = b.keys.iter().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" ")).collect();
     if let Some(path) = &b.leader {
-        all.push(format!("SPC {}", path.iter().map(char::to_string).collect::<Vec<_>>().join(" ")));
+        all.push(crate::keymap::local().leader_hint(path));
     }
     all.join(" / ")
 }
@@ -70,13 +70,16 @@ impl CockpitApp {
                 if !show_keys {
                     return;
                 }
-                // While typing a search, a label or a mark, those keys are what matter.
-                let typing: Option<&[(&str, &str)]> = match (&self.capture, self.input_mode) {
-                    (Some(Capture::Search(_)), _) => Some(&[("Enter", "jump to it"), ("Backspace", "delete"), ("Escape", "give up")]),
-                    (Some(Capture::Hint(_)), _) => Some(&[("a label", "go there"), ("Escape", "give up")]),
-                    (Some(Capture::MarkSet | Capture::MarkJump), _) => Some(&[("a letter", "the mark"), ("Escape", "give up")]),
-                    (None, InputMode::Insert { .. }) => Some(&[("Enter", "send"), ("Shift+Enter", "new line"), ("Escape", "leave the field")]),
-                    (None, InputMode::Palette) => Some(&[("Enter", "run"), ("Up/Down", "choose"), ("Escape", "close")]),
+                // While typing a search, a label or a mark, those keys are
+                // what matter, as configured.
+                let local = crate::keymap::local();
+                let back = local.back.label();
+                let typing: Option<Vec<(String, &str)>> = match (&self.capture, self.input_mode) {
+                    (Some(Capture::Search(_)), _) => Some(vec![(local.input.send_label(), "jumps to it"), (back, "gives up")]),
+                    (Some(Capture::Hint(_)), _) => Some(vec![("a label".into(), "goes there"), (back, "gives up")]),
+                    (Some(Capture::MarkSet | Capture::MarkJump), _) => Some(vec![("a letter".into(), "the mark"), (back, "gives up")]),
+                    (None, InputMode::Insert { .. }) => Some(local.input.keys(&local.back, "leaves the field")),
+                    (None, InputMode::Palette) => Some(local.list.keys(&local.back, "closes")),
                     (None, _) => None,
                 };
                 if let Some(typing) = typing {

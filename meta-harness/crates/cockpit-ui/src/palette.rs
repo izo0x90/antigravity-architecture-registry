@@ -260,7 +260,7 @@ impl Palette {
                                 if enter && !self.filter.trim().is_empty() {
                                     picked = Some(invocation(action, Some(self.filter.trim().to_owned())));
                                 }
-                                ui.label(RichText::new(format!("{} to submit • {} to go back", keymap.list.pick.first().map(crate::keymap::Chord::label).unwrap_or_default(), keymap.back.label())).size(crate::theme::look().text_small).color(colors().muted));
+                                ui.label(RichText::new(format!("{} submits · {} goes back", keymap.list.pick_label(), keymap.back.label())).size(crate::theme::look().text_small).color(colors().muted));
                             }
                         }
                     });

@@ -1,6 +1,7 @@
-//! Nothing reads keys behind the keymap's back: outside it, no code names a
-//! key or a modifier, or asks whether one is down. Every key is a binding
-//! (or a list, typing or pointer key) the config sets.
+//! Nothing reads or names keys behind the keymap's back: outside it, no
+//! code names a key or a modifier, asks whether one is down, or writes one
+//! into text the user reads. Every key is a binding (or a list, typing or
+//! pointer key) the config sets, and is said by its label.
 
 /// Allowed by name, and why.
 const EXCEPTIONS: &[(&str, &str, &str)] = &[
@@ -11,6 +12,46 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
 ];
 
 const FORBIDDEN: &[&str] = &["egui::Key::", "Key::from_name", "key_pressed(egui", "key_released(egui", "key_down(egui", "modifiers.ctrl", "modifiers.command", "modifiers.shift", "modifiers.alt", "modifiers.mac_cmd"];
+
+/// Key names, as words in text (not those that are also plain words:
+/// Return, Delete, Home, End).
+const KEY_WORDS: &[&str] = &["Enter", "Esc", "Escape", "Backspace", "Tab", "Space", "SPC", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Up/Down"];
+
+/// The string literals on a line (their text, escapes left as written).
+fn literals(line: &str) -> Vec<String> {
+    let (mut out, mut current, mut inside, mut escaped) = (Vec::new(), String::new(), false, false);
+    let line = line.replace("'\"'", "");
+    for c in line.chars() {
+        match (inside, escaped, c) {
+            (true, true, _) => escaped = false,
+            (true, false, '\\') => escaped = true,
+            (true, false, '"') => {
+                out.push(std::mem::take(&mut current));
+                inside = false;
+            }
+            (true, false, c) => current.push(c),
+            (false, _, '"') => inside = true,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// What in `text` names a key: a key's name as a word, a modifier with a
+/// key ("ctrl+"), or the whole text a key sequence ("g d", "J / K", "a").
+fn names_a_key(text: &str) -> Option<String> {
+    let words = text.split(|c: char| !(c.is_alphanumeric() || c == '/' || c == '+'));
+    if let Some(word) = words.into_iter().find(|w| KEY_WORDS.contains(w)) {
+        return Some(word.to_owned());
+    }
+    let lower = text.to_ascii_lowercase();
+    if let Some(m) = ["ctrl+", "shift+", "alt+", "cmd+"].into_iter().find(|m| lower.contains(m)) {
+        return Some(m.to_owned());
+    }
+    let parts: Vec<&str> = text.split_whitespace().filter(|p| *p != "/").collect();
+    let sequence = !parts.is_empty() && parts.iter().all(|p| p.chars().count() == 1 && p.chars().all(|c| c.is_ascii_alphabetic()));
+    sequence.then(|| text.to_owned())
+}
 
 fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -26,7 +67,7 @@ fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 }
 
 #[test]
-fn no_code_reads_a_key_the_keymap_doesnt_give_it() {
+fn no_code_reads_or_names_a_key_the_keymap_doesnt_give_it() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
     sources(&root, &mut files);
@@ -37,19 +78,36 @@ fn no_code_reads_a_key_the_keymap_doesnt_give_it() {
             continue;
         }
         let text = std::fs::read_to_string(&file).unwrap();
-        // Its own tests make input as a user would.
-        let code = text.split("#[cfg(test)]\nmod tests").next().unwrap_or(&text);
+        // Its own tests make input as a user would: the code is what comes
+        // before its test module.
+        let code = text.match_indices("#[cfg(test)]\n").find(|(at, cut)| text[at + cut.len()..].trim_start_matches("pub(crate) ").starts_with("mod ")).map_or(text.as_str(), |(at, _)| &text[..at]);
         for (n, line) in code.lines().enumerate() {
             if line.trim_start().starts_with("//") {
                 continue;
             }
+            let excused = |what: &str| EXCEPTIONS.iter().any(|(f, allowed, _)| *f == name && (allowed.is_empty() || what.contains(allowed)));
             for token in FORBIDDEN.iter().filter(|t| line.contains(*t)) {
-                let excused = EXCEPTIONS.iter().any(|(f, what, _)| *f == name && (what.is_empty() || line.contains(what)));
-                if !excused {
+                if !excused(line) {
                     found.push(format!("{name}:{}: {token}", n + 1));
+                }
+            }
+            for text in literals(line) {
+                if let Some(key) = names_a_key(&text).filter(|_| !excused(&text)) {
+                    found.push(format!("{name}:{}: \"{text}\" names {key} (say a bound key by its label)", n + 1));
                 }
             }
         }
     }
-    assert!(found.is_empty(), "keys read outside the keymap (bind them in [keymap] instead):\n{}", found.join("\n"));
+    assert!(found.is_empty(), "keys read or named outside the keymap (bind them in [keymap], and say them by their labels):\n{}", found.join("\n"));
+}
+
+#[test]
+fn text_naming_a_key_is_caught_and_words_are_not() {
+    assert_eq!(literals(r#"ui.label("a" ); f(x, "Esc closes", '"')"#), ["a", "Esc closes"]);
+    for named in ["Esc closes", "Enter sends", "ctrl+Enter", "Shift+Enter new line", "g d", "J / K", "a", "SPC I f", "(Space S a)"] {
+        assert!(names_a_key(named).is_some(), "{named}");
+    }
+    for words in ["Open in a column", "entered", "Put away", "Re-read it", "", "—", "On", "It said last"] {
+        assert_eq!(names_a_key(words), None, "{words}");
+    }
 }

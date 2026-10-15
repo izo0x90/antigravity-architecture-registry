@@ -25,9 +25,9 @@ pub enum Outcome {
 }
 
 impl Talk {
-    /// Draws the box above the key bar; sends on Enter. `close_keys` names
+    /// Draws the box above the key bar; sends on the send key.
     /// what closes it, for its hint.
-    pub fn render(&mut self, ctx: &egui::Context, chat: &mut ChatStreamState, net: &NetClient, close_keys: &str) -> Outcome {
+    pub fn render(&mut self, ctx: &egui::Context, chat: &mut ChatStreamState, net: &NetClient) -> Outcome {
         let look = crate::theme::look();
         let screen = ctx.content_rect();
         let width = (screen.width() - 2.0 * look.space_l).min(look.quick_look_width);
@@ -37,14 +37,14 @@ impl Talk {
                 ui.set_width(width);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{} {}", egui_phosphor::regular::CHAT_CIRCLE_TEXT, chat.who())).strong().size(look.text_label).color(colors().text_strong));
-                    ui.label(RichText::new(format!("{} sends · Shift+Enter new line · {close_keys} closes", crate::keymap::local().input.send_label())).size(look.text_small).color(colors().muted));
+                    ui.label(RichText::new(crate::keymap::local().typing_hint("closes")).size(look.text_small).color(colors().muted));
                 });
                 if self.sent && let Some(reply) = chat.last_reply() {
                     egui::ScrollArea::vertical().id_salt("talk_reply").max_height(screen.height() * look.quick_look_height / 3.0).stick_to_bottom(true).show(ui, |ui| {
                         ui.label(RichText::new(reply).size(look.text_body).color(colors().text));
                     });
                 }
-                let field = ui.add(egui::TextEdit::multiline(&mut self.text).id(egui::Id::new("talk_input")).desired_rows(2).desired_width(f32::INFINITY).hint_text("Ask the agent…"));
+                let field = ui.add(crate::keymap::local().text_box(&mut self.text).id(egui::Id::new("talk_input")).desired_rows(2).desired_width(f32::INFINITY).hint_text("Ask the agent…"));
                 field.request_focus();
                 let enter = ui.input(|i| crate::keymap::local().input.sent(i).is_some());
                 if enter && !self.text.trim().is_empty() {

@@ -1,8 +1,9 @@
 //! The keys outside the views' bindings, from the same config: moving and
-//! picking in a list (the palette, its pickers), sending from a typing box,
-//! and the modifier held while clicking a name to go to it. Views read
-//! them through `local()` (set with the rest of the config), never as keys
-//! of their own.
+//! picking in a list (the palette, its pickers), sending from a typing box
+//! and its new line, the modifier held while clicking a name to go to it,
+//! the leader and the way back out. Views read them through `local()` (set
+//! with the rest of the config), never as keys of their own, and say them
+//! by their labels.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -46,20 +47,34 @@ impl ListKeys {
     pub fn picked(&self, input: &egui::InputState) -> bool {
         any(&self.pick, input)
     }
+
+    pub fn pick_label(&self) -> String {
+        self.pick.first().map(Chord::label).unwrap_or_default()
+    }
+
+    /// What a list's keys do (`leave`: what the way back out does), each
+    /// key with its words.
+    pub fn keys(&self, back: &Chord, leave: &'static str) -> Vec<(String, &'static str)> {
+        let first = |chords: &[Chord]| chords.first().map(Chord::label).unwrap_or_default();
+        vec![(self.pick_label(), "runs"), (format!("{}/{}", first(&self.next), first(&self.prev)), "choose"), (back.label(), leave)]
+    }
 }
 
-/// Every typing box (Shift+Enter, the box's own, is a new line).
+/// Every typing box.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InputKeys {
     pub send: Vec<Chord>,
     /// In the chat: into the turn it's running.
     pub add: Vec<Chord>,
+    /// A new line in the box (the box's own return key).
+    pub newline: Chord,
 }
 
 impl Default for InputKeys {
     fn default() -> Self {
-        Self { send: chords(&["Enter"]), add: chords(&["ctrl+Enter"]) }
+        let [newline] = <[Chord; 1]>::try_from(chords(&["shift+Enter"])).expect("one key");
+        Self { send: chords(&["Enter"]), add: chords(&["ctrl+Enter"]), newline }
     }
 }
 
@@ -90,6 +105,12 @@ impl InputKeys {
     pub fn add_label(&self) -> String {
         self.add.first().map(Chord::label).unwrap_or_default()
     }
+
+    /// What a typing box's keys do (`leave`: what the way back out does),
+    /// each key with its words.
+    pub fn keys(&self, back: &Chord, leave: &'static str) -> Vec<(String, &'static str)> {
+        vec![(self.send_label(), "sends"), (self.newline.label(), "new line"), (back.label(), leave)]
+    }
 }
 
 /// A modifier held with the pointer.
@@ -103,6 +124,15 @@ pub enum Modifier {
 }
 
 impl Modifier {
+    /// Its name, as keys are written ("ctrl").
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ctrl => "ctrl",
+            Self::Alt => "alt",
+            Self::Shift => "shift",
+        }
+    }
+
     pub fn held(self, modifiers: egui::Modifiers) -> bool {
         match self {
             Self::Ctrl => modifiers.ctrl || modifiers.command,
@@ -125,19 +155,43 @@ impl Default for PointerKeys {
     }
 }
 
-/// The keys outside the views' bindings, and the way back out (Escape).
-#[derive(Clone, Debug, Default)]
+/// The keys outside the views' bindings, the leader and the way back out.
+#[derive(Clone, Debug)]
 pub struct LocalKeys {
     pub list: ListKeys,
     pub input: InputKeys,
     pub pointer: PointerKeys,
-    pub back: Option<Chord>,
+    pub leader: Chord,
+    pub back: Chord,
+}
+
+impl Default for LocalKeys {
+    fn default() -> Self {
+        let [leader, back] = <[Chord; 2]>::try_from(chords(&["Space", "Escape"])).expect("two keys");
+        Self { list: ListKeys::default(), input: InputKeys::default(), pointer: PointerKeys::default(), leader, back }
+    }
 }
 
 impl LocalKeys {
     /// The way back out was pressed.
     pub fn back(&self, input: &egui::InputState) -> bool {
-        self.back.as_ref().is_some_and(|c| c.pressed(input))
+        self.back.pressed(input)
+    }
+
+    /// A typing box: several lines, a new line on the configured key.
+    pub fn text_box<'t>(&self, text: &'t mut dyn egui::TextBuffer) -> egui::TextEdit<'t> {
+        egui::TextEdit::multiline(text).return_key(self.input.newline.shortcut())
+    }
+
+    /// A typing box's keys in words ("Enter sends · shift+Enter new line
+    /// · Escape leaves"), `leave` saying what the way back out does.
+    pub fn typing_hint(&self, leave: &'static str) -> String {
+        self.input.keys(&self.back, leave).into_iter().map(|(key, what)| format!("{key} {what}")).collect::<Vec<_>>().join(" · ")
+    }
+
+    /// A leader path in words ("Space s n").
+    pub fn leader_hint(&self, path: &[char]) -> String {
+        std::iter::once(self.leader.label()).chain(path.iter().map(char::to_string)).collect::<Vec<_>>().join(" ")
     }
 }
 

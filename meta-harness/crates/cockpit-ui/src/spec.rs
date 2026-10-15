@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use arch_graph::{Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, ComponentDetail, ComponentId, Finding, PlanDiff, RelationKind, Report, Severity, Source};
 use egui::{Rect, RichText};
 
-use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, ToolbarStyle, ToolbarUse, When, toolbar_control};
+use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, ToolbarStyle, When, key_tip};
 use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, SpecItem, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
@@ -601,25 +601,18 @@ impl SpecState {
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
+        let hints = cx.hints;
         self.tick(cx.net, cx.ctx);
         let actions = self.actions();
-        let mut used = None;
         ui.horizontal_wrapped(|ui| {
-            for action in actions.iter().filter(|a| a.toolbar.is_some()) {
-                if let Some(u) = toolbar_control(ui, action) {
-                    used = Some((action.clone(), u));
-                }
-            }
+            crate::actions::controls(ui, &actions, cx);
             for section in Section::ALL {
                 let label = RichText::new(section.title()).size(crate::theme::look().text_body);
-                if ui.selectable_label(self.current == section, label).on_hover_text("J / K").clicked() {
+                if ui.selectable_label(self.current == section, label).on_hover_text(format!("{} / {}", key_tip(cx.hints, "spec.next_section"), key_tip(cx.hints, "spec.prev_section"))).clicked() {
                     self.put_on(&Entry { section, item: SpecItem::Header });
                 }
             }
         });
-        if let Some((action, ToolbarUse::Run(value))) = used {
-            self.run(&action, value, cx);
-        }
         self.render_review_bar(ui, cx);
         ui.separator();
         let Some(detail) = self.detail.clone() else {
@@ -808,7 +801,7 @@ impl SpecState {
                                     egui::Frame::NONE.fill(colors().bg).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).corner_radius(crate::theme::look().radius_m).show(ui, |ui| {
                                         ui.label(RichText::new(code).monospace().size(crate::theme::look().text_body));
                                     });
-                                    open_code |= ui.button("Open in the code view").on_hover_text("g d").clicked();
+                                    open_code |= ui.button("Open in the code view").on_hover_text(key_tip(hints, "goto.code")).clicked();
                                 });
                                 if open_code {
                                     clicked = Some(Click::OpenCode);
@@ -857,7 +850,7 @@ impl SpecState {
                         }
                     }
                     for comment in self.comments_in(Some(section)) {
-                        if let Some(click) = render_thread(ui, comment, self.point.as_ref(), section, &mut item) {
+                        if let Some(click) = render_thread(ui, comment, self.point.as_ref(), section, &mut item, hints) {
                             clicked = Some(click);
                         }
                     }
@@ -911,7 +904,8 @@ impl SpecState {
         };
         ui.label(RichText::new(what).size(crate::theme::look().text_body).color(colors().muted));
         let inserting = *cx.input_mode == crate::keymap::InputMode::Insert { slot: cx.slot };
-        let output = ui.add(egui::TextEdit::multiline(&mut composer.text).id(egui::Id::new(("spec_composer", cx.slot))).desired_rows(2).desired_width(f32::INFINITY).hint_text(format!("{} sends, Shift+Enter for a new line, {} leaves", crate::keymap::local().input.send_label(), crate::keymap::local().back.as_ref().map(crate::keymap::Chord::label).unwrap_or_default())));
+        let keys = crate::keymap::local();
+        let output = ui.add(keys.text_box(&mut composer.text).id(egui::Id::new(("spec_composer", cx.slot))).desired_rows(2).desired_width(f32::INFINITY).hint_text(keys.typing_hint("leaves")));
         if inserting {
             output.request_focus();
         }
@@ -950,7 +944,7 @@ type ItemDrawer<'a> = dyn FnMut(&mut egui::Ui, Entry, &mut dyn FnMut(&mut egui::
 
 /// One comment thread: the comment and its replies are cursor stops; its
 /// buttons name their keys.
-fn render_thread(ui: &mut egui::Ui, c: &Comment, point: Option<&CommentId>, section: Section, item: &mut ItemDrawer) -> Option<Click> {
+fn render_thread(ui: &mut egui::Ui, c: &Comment, point: Option<&CommentId>, section: Section, item: &mut ItemDrawer, hints: &[(String, String)]) -> Option<Click> {
     let mut clicked = None;
     let (label, color) = match c.status {
         CommentStatus::Open => ("OPEN", colors().warn),
@@ -984,14 +978,14 @@ fn render_thread(ui: &mut egui::Ui, c: &Comment, point: Option<&CommentId>, sect
         if !c.is_addressed() {
             ui.horizontal(|ui| {
                 if c.status == CommentStatus::Answered {
-                    if ui.small_button("Accept").on_hover_text("a").clicked() {
+                    if ui.small_button("Accept").on_hover_text(key_tip(hints, "spec.accept")).clicked() {
                         clicked = Some(Click::Accept(c.id.clone()));
                     }
-                    if ui.small_button("Reopen").on_hover_text("x").clicked() {
+                    if ui.small_button("Reopen").on_hover_text(key_tip(hints, "spec.reopen")).clicked() {
                         clicked = Some(Click::Compose(c.id.clone(), Compose::Reopen(c.id.clone())));
                     }
                 }
-                if ui.small_button("Reply").on_hover_text("r").clicked() {
+                if ui.small_button("Reply").on_hover_text(key_tip(hints, "spec.reply")).clicked() {
                     clicked = Some(Click::Compose(c.id.clone(), Compose::Reply(c.id.clone())));
                 }
             });
@@ -1349,7 +1343,7 @@ pub(crate) mod tests {
         let mut note = None;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: mode, slot, note: &mut note, shell: &[], hints: &[] });
+                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: mode, slot, note: &mut note, shell: &[], hints: &[], asked: &mut None });
             });
         });
     }
@@ -1438,7 +1432,7 @@ pub(crate) mod tests {
         assert_eq!(s.enter(), Step::GoTo(GoTo::Spec));
         let comment_action = s.actions().into_iter().find(|a| a.id == "spec.comment").unwrap();
         let (ctx, net, mut mode, mut note) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
-        s.run(&comment_action, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[] });
+        s.run(&comment_action, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut None });
         assert_eq!(s.composer.as_ref().unwrap().anchor, Some(CommentAnchor::Relation { kind: RelationKind::Calls, source: id.clone(), target: other.clone() }));
         s.composer = None;
         // Search finds items; hints label what's drawn.
@@ -1539,7 +1533,7 @@ pub(crate) mod tests {
         assert_eq!(s.current, Section::Logic);
         let request = actions.iter().find(|a| a.id == "spec.request_change").unwrap().clone();
         let mut note = None;
-        s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 1, note: &mut note, shell: &[], hints: &[] });
+        s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 1, note: &mut note, shell: &[], hints: &[], asked: &mut None });
         assert!(s.requests.insert);
         assert_eq!(
             s.composer,
@@ -1562,7 +1556,7 @@ pub(crate) mod tests {
         let (net, mut mode, mut note) = (NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
         let out = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[] });
+                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut None });
             });
         });
         fn collect(shape: &egui::Shape, out: &mut String) {

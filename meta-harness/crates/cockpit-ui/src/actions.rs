@@ -317,10 +317,7 @@ pub struct Bound {
 impl Bound {
     pub fn key_hint(&self) -> String {
         match &self.leader {
-            Some(path) => {
-                let keys: Vec<String> = path.iter().map(char::to_string).collect();
-                format!("SPC {}", keys.join(" "))
-            }
+            Some(path) => crate::keymap::local().leader_hint(path),
             None => self.keys.first().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" ")).unwrap_or_default(),
         }
     }
@@ -349,6 +346,19 @@ pub struct RunCx<'a> {
     /// Each action's key as bound now (`id`, its key), for views that show
     /// the keys beside what they do (a request's answers).
     pub hints: &'a [(String, String)],
+    /// An action a control asked to run (its id, and its value if it has
+    /// one): the app runs it once the frame is drawn, the way its key would.
+    pub asked: &'a mut Option<(String, Option<String>)>,
+}
+
+/// The key bound to action `id` now, in words (none when it has none).
+pub fn key_of<'a>(hints: &'a [(String, String)], id: &str) -> Option<&'a str> {
+    hints.iter().find(|(a, _)| a == id).map(|(_, k)| k.as_str()).filter(|k| !k.is_empty())
+}
+
+/// Action `id`'s key, for a control's hover (empty when it has none).
+pub fn key_tip(hints: &[(String, String)], id: &str) -> String {
+    key_of(hints, id).unwrap_or_default().to_owned()
 }
 
 /// A part of the UI that offers actions: what it can do right now, and running
@@ -417,18 +427,43 @@ pub fn is_primary(entry: &LeaderEntry, bound: &[Bound], path: &[char], focused: 
 }
 
 /// What the user did with a toolbar control.
-pub enum ToolbarUse {
+enum ToolbarUse {
     Run(Option<String>),
     /// Needs a parameter the toolbar can't take; open the palette at it.
     OpenPalette,
 }
 
+/// Draws an action as its control (its `toolbar`), saying its key on
+/// hover; used, it's asked for (`RunCx::asked`). Whether it was used.
+pub fn control(ui: &mut egui::Ui, action: &Action, cx: &mut RunCx<'_>) -> bool {
+    let Some(used) = toolbar_control(ui, action, cx.hints) else { return false };
+    let value = match used {
+        ToolbarUse::Run(value) => value,
+        // Asked without its value: the palette opens at it.
+        ToolbarUse::OpenPalette => None,
+    };
+    *cx.asked = Some((action.id.clone(), value));
+    true
+}
+
+/// Draws every action of `actions` that has a control, in order.
+pub fn controls<'x>(ui: &mut egui::Ui, actions: impl IntoIterator<Item = &'x Action>, cx: &mut RunCx<'_>) {
+    for action in actions.into_iter().filter(|a| a.toolbar.is_some()) {
+        control(ui, action, cx);
+    }
+}
+
 /// Narrowest a toolbar picker gets before its text is truncated.
 const PICKER_MIN_WIDTH: f32 = 90.0;
 
-/// Draws an action as a toolbar control.
-pub fn toolbar_control(ui: &mut egui::Ui, action: &Action) -> Option<ToolbarUse> {
+/// Draws an action as a toolbar control; hovering it says what it does
+/// and its key (from `hints`, as bound now).
+fn toolbar_control(ui: &mut egui::Ui, action: &Action, hints: &[(String, String)]) -> Option<ToolbarUse> {
     let toolbar = action.toolbar.as_ref()?;
+    let tip = match key_of(hints, &action.id) {
+        Some(key) => format!("{} ({key})", action.label),
+        None => action.label.clone(),
+    };
     let text = match toolbar.icon {
         Some(icon) if toolbar.caption.is_empty() => icon.to_owned(),
         Some(icon) => format!("{icon} {}", toolbar.caption),
@@ -473,8 +508,8 @@ pub fn toolbar_control(ui: &mut egui::Ui, action: &Action) -> Option<ToolbarUse>
                 });
             picked.map(|v| ToolbarUse::Run(Some(v)))
         }
-        (Param::None, _) => ui.button(text).on_hover_text(&action.label).clicked().then_some(ToolbarUse::Run(None)),
-        _ => ui.button(text).on_hover_text(&action.label).clicked().then_some(ToolbarUse::OpenPalette),
+        (Param::None, _) => ui.button(text).on_hover_text(tip).clicked().then_some(ToolbarUse::Run(None)),
+        _ => ui.button(text).on_hover_text(tip).clicked().then_some(ToolbarUse::OpenPalette),
     }
 }
 

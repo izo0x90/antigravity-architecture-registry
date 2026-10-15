@@ -491,10 +491,13 @@ Views also have their own keys:
 
 All keys are configurable in `crates/cockpit-ui/config/default.toml`,
 including those outside a view's bindings: `[keymap.list]` (moving in the
-palette and pickers), `[keymap.input]` (`send`, and `add` into a running
-turn, in every typing box; Shift+Enter is a new line) and
-`[keymap.pointer]` (`go_to`, held while clicking a name). A test fails the
-build when the cockpit reads a key anywhere else.
+palette and pickers), `[keymap.input]` (`send`, `add` into a running
+turn, and `newline`, in every typing box) and `[keymap.pointer]` (`go_to`,
+held while clicking a name). Every control (a view's toolbar, a column's
+or the quick look's own buttons) is an action, says its key on hover, and
+runs the way its key does. A test fails the build when the cockpit reads
+a key anywhere else, or writes a key's name into text instead of the
+bound key's label.
 
 ## Configuration
 

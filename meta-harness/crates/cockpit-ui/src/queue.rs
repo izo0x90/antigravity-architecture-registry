@@ -10,7 +10,7 @@ use arch_graph::{ArchEvent, ComponentId, Job, JobState, PlanId, QueueSnapshot, Q
 use egui::RichText;
 use harness_contracts::InstanceId;
 
-use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, ToolbarStyle, ToolbarUse, When, toolbar_control};
+use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, ToolbarStyle, When};
 use crate::nav::{Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
@@ -181,7 +181,6 @@ impl QueueState {
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         let actions = self.actions();
-        let mut used = None;
         ui.horizontal_wrapped(|ui| {
             let title = match (&self.plan, self.status()) {
                 (Some(p), Some(s)) => format!("Queue for {p}: {s:?}"),
@@ -189,18 +188,16 @@ impl QueueState {
                 (None, _) => "No plan selected (pick one in the graph)".to_owned(),
             };
             ui.label(RichText::new(title).strong());
-            for action in actions.iter().filter(|a| a.toolbar.is_some()) {
-                if let Some(u) = toolbar_control(ui, action) {
-                    used = Some((action.clone(), u));
-                }
-            }
+            crate::actions::controls(ui, &actions, cx);
         });
         if let Some(e) = &self.error {
             ui.colored_label(colors().error, e);
         }
         ui.separator();
-        let mut clicked: Option<(usize, Option<QueueCommand>)> = None;
+        // A job clicked, and the action asked for on it.
+        let mut clicked: Option<(usize, Option<&str>)> = None;
         let mut spots = Vec::new();
+        let tip = |id: &str| crate::actions::key_tip(cx.hints, id);
         let scroll = std::mem::take(&mut self.scroll);
         let output = egui::ScrollArea::vertical().id_salt("queue_jobs").auto_shrink([false, false]).show(ui, |ui| {
             let Some(snapshot) = &self.snapshot else {
@@ -224,13 +221,13 @@ impl QueueState {
                             ui.label(RichText::new(format!("attempt {}", job.attempts + 1)).color(colors().muted));
                         }
                         match &job.state {
-                            JobState::AwaitingApproval if ui.button(format!("Approve {:?}", job.kind.goal())).on_hover_text("a").clicked() => clicked = Some((i, Some(QueueCommand::Approve))),
-                            JobState::Failed if ui.button("Retry").on_hover_text("r").clicked() => clicked = Some((i, Some(QueueCommand::Retry))),
-                            JobState::Running { thread: Some(_) } if ui.button("Session").on_hover_text("o").clicked() => clicked = Some((i, Some(QueueCommand::OpenSession))),
+                            JobState::AwaitingApproval if ui.button(format!("Approve {:?}", job.kind.goal())).on_hover_text(tip("queue.approve")).clicked() => clicked = Some((i, Some("queue.approve"))),
+                            JobState::Failed if ui.button("Retry").on_hover_text(tip("queue.retry")).clicked() => clicked = Some((i, Some("queue.retry"))),
+                            JobState::Running { thread: Some(_) } if ui.button("Session").on_hover_text(tip("queue.open_session")).clicked() => clicked = Some((i, Some("queue.open_session"))),
                             _ => {}
                         }
-                        if !job.findings.is_empty() && ui.small_button(format!("{} findings", job.findings.len())).on_hover_text("Enter").clicked() {
-                            clicked = Some((i, Some(QueueCommand::Expand)));
+                        if !job.findings.is_empty() && ui.small_button(format!("{} findings", job.findings.len())).on_hover_text(tip("nav.enter")).clicked() {
+                            clicked = Some((i, Some("queue.expand")));
                         }
                     });
                     // Where it is in design, plan, skeleton, implement; and what it waits for.
@@ -258,14 +255,11 @@ impl QueueState {
         });
         self.view_h = output.inner_rect.height();
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
-        if let Some((i, command)) = clicked {
+        if let Some((i, asked)) = clicked {
             self.selected = i;
-            if let Some(c) = command {
-                self.apply(c, cx);
+            if let Some(id) = asked {
+                *cx.asked = Some((id.to_owned(), None));
             }
-        }
-        if let Some((action, ToolbarUse::Run(value))) = used {
-            self.run(&action, value, cx);
         }
     }
 
@@ -481,7 +475,7 @@ pub(crate) mod tests {
         assert_eq!(q.snapshot.as_ref().unwrap().jobs.len(), 3, "the pushed snapshot is shown");
         let mut mode = crate::keymap::InputMode::Normal;
         let mut note = None;
-        let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[] };
+        let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut None };
         // The running job links to its session.
         assert!(ids(&q).contains(&"queue.open_session".to_owned()) && ids(&q).contains(&"queue.stop".to_owned()));
         q.apply(QueueCommand::OpenSession, &mut cx);
@@ -523,7 +517,7 @@ pub(crate) mod tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let mut mode = crate::keymap::InputMode::Normal;
                 let mut note = None;
-                let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[] };
+                let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut None };
                 q.render(ui, &mut cx);
             });
         });
@@ -548,7 +542,7 @@ pub(crate) mod tests {
         let out = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let (mut mode, mut note) = (crate::keymap::InputMode::Normal, None);
-                q.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[] });
+                q.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut None });
             });
         });
         fn collect(shape: &egui::Shape, out: &mut Vec<String>) {

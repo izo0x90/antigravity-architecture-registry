@@ -174,7 +174,7 @@ fn several_answers_of_one_kind_are_numbered_not_all_y() {
     frame(&ctx, &mut app, vec![]);
     let bound = app.bound_actions();
     let answers: Vec<String> = bound.iter().filter(|b| b.action.id.starts_with("request.r1.")).map(|b| b.key_hint()).collect();
-    assert_eq!(answers, ["SPC r 1", "SPC r 2"], "numbered under r, neither on y");
+    assert_eq!(answers, ["Space r 1", "Space r 2"], "numbered under r, neither on y");
 }
 
 #[test]

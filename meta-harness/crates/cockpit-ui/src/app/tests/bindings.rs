@@ -53,7 +53,7 @@ fn tabs_are_icons_that_name_themselves_and_their_key() {
     let shell = app.shell_actions();
     let keys = app.tab_keys(&shell);
     let at = |kind: BufferKind| BufferKind::ALL.iter().position(|k| *k == kind).unwrap();
-    assert_eq!((keys[at(BufferKind::Graph)].as_str(), keys[at(BufferKind::Queue)].as_str()), ("SPC b g", "SPC b q"));
+    assert_eq!((keys[at(BufferKind::Graph)].as_str(), keys[at(BufferKind::Queue)].as_str()), ("Space b g", "Space b q"));
     // Only each slot's active tab is named.
     let text = texts(&frame(&ctx, &mut app, vec![]));
     let named = |kind: BufferKind| text.lines().any(|l| l == format!("{} {}{}", kind.icon(), &kind.title()[..1], kind.title()[1..].to_lowercase()));

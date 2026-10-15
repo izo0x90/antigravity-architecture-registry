@@ -114,7 +114,7 @@ fn messages_take_a_cursor_and_their_links_open() {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let mut mode = crate::keymap::InputMode::Normal;
                 let mut note = None;
-                let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[] };
+                let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut None };
                 chat.render(ui, &mut feedback, true, &mut cx);
             });
         });
@@ -166,7 +166,7 @@ fn a_view_shows_the_slot_picked_and_the_lead_when_its_slot_closes() {
     let ctx = egui::Context::default();
     let net = NetClient::new("http://127.0.0.1:9");
     let (mut mode, mut note) = (crate::keymap::InputMode::Normal, None);
-    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[] };
+    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut None };
     chat.run(&pick, Some("sub-1".into()), &mut cx);
     assert_eq!((chat.ui.slot.as_str(), chat.active_thread()), ("sub-1", None));
     chat.run(&pick, Some("gone".into()), &mut cx);
@@ -188,7 +188,7 @@ fn next_and_previous_go_through_the_slots_in_order_and_say_the_ends() {
     let ctx = egui::Context::default();
     let net = NetClient::new("http://127.0.0.1:9");
     let (mut mode, mut note) = (crate::keymap::InputMode::Normal, None);
-    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[] };
+    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, shell: &[], hints: &[], asked: &mut None };
     let mut seen = vec![chat.ui.slot.to_string()];
     for _ in 0..3 {
         chat.run(&next, None, &mut cx);

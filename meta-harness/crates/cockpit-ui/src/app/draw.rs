@@ -2,6 +2,7 @@
 //! the which-key menu, the key bar and sheet.
 
 pub(super) mod bars;
+pub(super) mod host;
 pub(super) mod slots;
 pub(super) mod top_bar;
 pub(super) mod which_key;

@@ -93,7 +93,10 @@ impl CockpitApp {
         if projectless && self.desk.server == HERE {
             match self.servers.iter().find(|s| s.name != HERE).map(|s| s.name.clone()) {
                 Some(other) => self.switch_to(&other, ctx),
-                None if had.is_empty() => self.note = Some("This home serves no project: link a server (Space S a) to see one.".into()),
+                None if had.is_empty() => {
+                    let key = self.bound_actions().into_iter().find(|b| b.action.id == "server.add").map(|b| format!(" ({})", b.key_hint())).unwrap_or_default();
+                    self.note = Some(format!("This home serves no project: link a server{key} to see one."));
+                }
                 None => {}
             }
         }

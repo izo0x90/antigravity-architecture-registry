@@ -17,7 +17,7 @@ impl CockpitApp {
             BufferKind::Queue => &mut self.desk.queue,
             BufferKind::Inbox => &mut self.desk.inbox,
         };
-        provider.run(action, value, &mut RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell: &shell, hints: &hints });
+        provider.run(action, value, &mut RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, shell: &shell, hints: &hints, asked: &mut self.asked });
     }
 
     /// Each action's key as bound now, for views that show keys beside what
@@ -159,9 +159,6 @@ impl CockpitApp {
         if let Some(place) = self.desk.graph.jumped.take() {
             self.desk.jumps.record(Jump { slot: self.slot_of(BufferKind::Graph), kind: BufferKind::Graph, place });
         }
-        if let Some((id, value)) = self.desk.graph.requests.run.take() {
-            self.run_by_id(&id, value, ctx);
-        }
         if let Some((file, start, end)) = self.desk.graph.requests.open_code.take() {
             self.desk.jumps.record(self.jump_of(BufferKind::Graph));
             self.show_code(&file, start, end, ctx);
@@ -173,9 +170,6 @@ impl CockpitApp {
             self.desk.jumps.record(self.jump_of(BufferKind::Spec));
             self.show_code(&file, start, end, ctx);
         }
-        if std::mem::take(&mut self.desk.code.reread) {
-            self.run_index(IndexOp::File, ctx);
-        }
         if let Some(file) = self.desk.spec.requests.reread.take() {
             let notes = self.desk.index_inbox.clone();
             self.desk.net.arch_refresh(&[file], ctx.clone(), move |r| {
@@ -185,9 +179,6 @@ impl CockpitApp {
                     i.push(Err(e));
                 }
             });
-        }
-        if std::mem::take(&mut self.desk.graph.requests.reindex) {
-            self.run_index(IndexOp::Changed, ctx);
         }
         if std::mem::take(&mut self.desk.spec.requests.insert) {
             self.focus_kind(BufferKind::Spec);

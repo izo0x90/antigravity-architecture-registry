@@ -11,7 +11,7 @@ use egui::{Align2, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKin
 use arch_graph::tree::{Card, Line as TreeLine, LineKind, Rect as WorldRect, ViewKind, Way, card_lines, count_text};
 
 use super::{Camera, GraphState, Load, NavChange};
-use crate::actions::{Action, RunCx, ToolbarStyle, ToolbarUse, toolbar_control};
+use crate::actions::{Action, RunCx, ToolbarStyle};
 use crate::feedback::FeedbackInspectorState;
 use crate::graph_config::ChipMode;
 use crate::graph_style::{LegendEntry, Swatch, style};
@@ -121,7 +121,7 @@ impl GraphState {
         if let Some(key) = self.reveal_after_fit.take() {
             self.bring_into_view(&key);
         }
-        let touched = self.handle_touch(ui);
+        let touched = self.handle_touch(ui, cx);
         if !touched {
             if response.dragged() {
                 self.camera.pan += response.drag_delta();
@@ -150,7 +150,10 @@ impl GraphState {
             (Some(tree), _) if tree.cards.is_empty() => {
                 let why = match (tree.request.view, &tree.request.source) {
                     (_, arch_graph::Source::Plan(p)) if !tree.request.full_code => format!("Plan {p} has nothing for this view yet. Show it in the full code, or pick another view."),
-                    _ => "Nothing to show in this view yet. Read the code in (Space I) or pick another view.".to_owned(),
+                    _ => match crate::actions::key_of(cx.hints, "index.rebuild") {
+                        Some(key) => format!("Nothing to show in this view yet. Read the code in ({key}) or pick another view."),
+                        None => "Nothing to show in this view yet. Read the code in, or pick another view.".to_owned(),
+                    },
                 };
                 painter.text(canvas.center(), Align2::CENTER_CENTER, why, FontId::proportional(look.text_title), colors().muted);
             }
@@ -200,7 +203,7 @@ impl GraphState {
 
     /// Feeds this frame's finger events to the gesture recognizer and acts on
     /// what it sees. Returns whether fingers were involved this frame.
-    fn handle_touch(&mut self, ui: &egui::Ui) -> bool {
+    fn handle_touch(&mut self, ui: &egui::Ui, cx: &mut RunCx<'_>) -> bool {
         let (events, time) = ui.input(|i| {
             let touches: Vec<(u64, crate::touch::Phase, Pos2)> = i
                 .events
@@ -230,15 +233,18 @@ impl GraphState {
             self.touch_seen = true;
         }
         for gesture in gestures {
-            self.on_gesture(gesture);
+            if let Some(id) = self.on_gesture(gesture) {
+                *cx.asked = Some((id.to_owned(), None));
+            }
         }
         involved
     }
 
     /// What each gesture does: a tap selects (or opens a count), a double
     /// tap goes in, a long press offers the card's actions, two fingers
-    /// pan and zoom, a swipe walks the jump list.
-    pub fn on_gesture(&mut self, gesture: Gesture) {
+    /// pan and zoom, a swipe walks the jump list. The action it asks for
+    /// (run the way its key would), if any.
+    pub fn on_gesture(&mut self, gesture: Gesture) -> Option<&'static str> {
         match gesture {
             Gesture::Tap(pos) => {
                 self.close_context();
@@ -265,9 +271,10 @@ impl GraphState {
             }
             Gesture::Pan(delta) => self.camera.pan += delta,
             Gesture::Pinch { factor, center } => self.zoom_by(factor, center),
-            Gesture::Swipe(Swipe::Right) => self.requests.run = Some(("nav.back".into(), None)),
-            Gesture::Swipe(Swipe::Left) => self.requests.run = Some(("nav.forward".into(), None)),
+            Gesture::Swipe(Swipe::Right) => return Some("nav.back"),
+            Gesture::Swipe(Swipe::Left) => return Some("nav.forward"),
         }
+        None
     }
 
     fn chips_shown(&self) -> bool {
@@ -325,7 +332,7 @@ impl GraphState {
         }
         if let Some(action) = run {
             self.close_context();
-            self.use_action(&action, None, cx);
+            *cx.asked = Some((action.id.clone(), None));
         }
     }
 
@@ -350,13 +357,11 @@ impl GraphState {
             })
             .collect();
         actions.extend(self.actions());
-        let mut used: Option<(Action, ToolbarUse)> = None;
+        // The code that changed, read again; the view back where the agent found it.
+        let reread = cx.shell.iter().find(|a| a.id == "index.changed").map(|a| a.clone().toolbar(ToolbarStyle::Button, "Re-read", None));
+        let agent_return = actions.iter().find(|a| a.id == "graph.agent_return").map(|a| a.clone().toolbar(ToolbarStyle::Button, "Return", Some(egui_phosphor::regular::ARROW_U_UP_LEFT)));
         ui.horizontal_wrapped(|ui| {
-            for action in actions.iter().filter(|a| a.toolbar.is_some()) {
-                if let Some(u) = toolbar_control(ui, action) {
-                    used = Some((action.clone(), u));
-                }
-            }
+            crate::actions::controls(ui, &actions, cx);
             if self.load == Load::Loading {
                 ui.label(RichText::new(egui_phosphor::regular::HOURGLASS).color(colors().warn));
             }
@@ -439,16 +444,14 @@ impl GraphState {
             if !self.stale_files.is_empty() {
                 let count = self.stale_files.len().to_string();
                 crate::status::chip(ui, "stale", Some(&count)).on_hover_text(self.stale_files.join("\n"));
-                if ui.small_button("Re-read").on_hover_text("Read the code that changed again").clicked() {
-                    self.requests.reindex = true;
+                if let Some(reread) = &reread {
+                    crate::actions::control(ui, reread, cx);
                 }
             }
             if let Some(agent) = &self.agent {
                 ui.label(RichText::new(format!("{} the agent moved the view: {}", egui_phosphor::regular::ROBOT, agent.what)).size(look.text_body).color(colors().special));
-                if let Some(back) = actions.iter().find(|a| a.id == "graph.agent_return")
-                    && ui.small_button(format!("{} Return", egui_phosphor::regular::ARROW_U_UP_LEFT)).on_hover_text(&back.label).clicked()
-                {
-                    used = Some((back.clone(), ToolbarUse::Run(None)));
+                if let Some(back) = &agent_return {
+                    crate::actions::control(ui, back, cx);
                 }
             }
             if let Some(note) = &self.note {
@@ -470,11 +473,6 @@ impl GraphState {
                 self.pointer_jump(NavChange::Depth { delta: levels as i32 - base as i32, base });
             }
             Some(Go::Enter(key)) => self.pointer_jump(NavChange::GoIn(key)),
-            None => {}
-        }
-        match used {
-            Some((action, ToolbarUse::Run(value))) => self.use_action(&action, value, cx),
-            Some((action, ToolbarUse::OpenPalette)) => self.palette_request = Some(action.id.clone()),
             None => {}
         }
     }

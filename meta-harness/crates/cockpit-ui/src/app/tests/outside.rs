@@ -13,7 +13,7 @@ fn from_outside_the_screen_is_read_and_actions_run_clicked_and_keyed_as_the_user
 
     let actions = from_outside(&ctx, &mut app, r#"{"op":"actions"}"#).unwrap();
     let add = actions.as_array().unwrap().iter().find(|a| a["id"] == "column.add").expect("listed");
-    assert_eq!((add["keys"].as_str(), add["needs"].as_str()), (Some("SPC l a"), Some("nothing")));
+    assert_eq!((add["keys"].as_str(), add["needs"].as_str()), (Some("Space l a"), Some("nothing")));
 
     let before = app.desk.columns.len();
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"column.add"}"#).unwrap();

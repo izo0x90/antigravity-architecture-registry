@@ -49,33 +49,14 @@ impl CockpitApp {
                         }
                         self.feedback.register_inspectable(ui, &format!("slot_{}:tab:{}", slot_idx + 1, kind.name()), tab.rect);
                     }
-                    if self.desk.columns.len() > 1 {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let close = self.bound_actions().into_iter().find(|b| b.action.id == "column.close").map(|b| b.key_hint()).unwrap_or_default();
-                            if ui.small_button(egui_phosphor::regular::X).on_hover_text(format!("Close this column (its view is hidden, not lost; {close} closes the focused one)")).clicked() {
-                                self.closing = Some(slot_idx);
-                            }
-                        });
-                    }
+                    // Its own controls (a click focuses it first, so they act on it).
+                    let own = self.column_actions();
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.host_controls(ui, &own, slot_idx, shell));
                 });
                 self.feedback.register_inspectable(ui, &format!("slot_{}:header", slot_idx + 1), header_res.response.rect);
                 ui.separator();
 
-                let ctx = ui.ctx().clone();
-                let hints = self.key_hints();
-                let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, slot: slot_idx, note: &mut self.note, shell, hints: &hints };
-                match active_kind {
-                    BufferKind::Chat => self.desk.chat.render(ui, &mut self.feedback, is_focused, &mut cx),
-                    BufferKind::Code => self.desk.code.render(ui, &self.desk.net, &mut self.feedback, slot_idx),
-                    BufferKind::Graph => {
-                        let pan_held = ui.input(|i| self.config.keymap.leader.key_down(i));
-                        self.desk.graph.render(ui, &mut self.feedback, slot_idx, pan_held, &mut cx);
-                    }
-                    BufferKind::Tree => self.desk.tree.render(ui, &self.desk.net, &mut self.feedback, slot_idx),
-                    BufferKind::Spec => self.desk.spec.render(ui, &mut cx),
-                    BufferKind::Queue => self.desk.queue.render(ui, &mut cx),
-                    BufferKind::Inbox => self.desk.inbox.render(ui, &mut cx, &mut self.desk.chat),
-                }
+                self.render_view(active_kind, ui, slot_idx, is_focused, shell);
             });
         });
 

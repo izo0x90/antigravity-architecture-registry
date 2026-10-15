@@ -64,16 +64,6 @@ impl GraphState {
         }
     }
 
-    /// Runs an action from a chip or the toolbar: the graph's own right here,
-    /// unless it's a jump; jumps and the shell's actions go through the shell
-    /// (so the jump list records them).
-    pub(crate) fn use_action(&mut self, action: &Action, value: Option<String>, cx: &mut RunCx<'_>) {
-        if action.command::<GraphCommand>().is_some() && !action.jump {
-            self.run(action, value, cx);
-        } else {
-            self.requests.run = Some((action.id.clone(), value));
-        }
-    }
 }
 
 impl ActionProvider for GraphState {
@@ -120,9 +110,6 @@ impl ActionProvider for GraphState {
         }
     }
 
-    fn take_palette_request(&mut self) -> Option<String> {
-        self.palette_request.take()
-    }
 
     fn search(&mut self, action: &str, query: &str) {
         if action == "graph.find" {

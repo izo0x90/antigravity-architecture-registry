@@ -143,6 +143,12 @@ impl Chord {
         pressed
     }
 
+    /// As egui's shortcut (a text box's return key), when it's a named key.
+    pub fn shortcut(&self) -> Option<egui::KeyboardShortcut> {
+        let ChordKey::Key(key) = &self.key else { return None };
+        Some(egui::KeyboardShortcut::new(egui::Modifiers { alt: self.alt, shift: self.shift, ctrl: self.ctrl, command: self.ctrl, mac_cmd: false }, *key))
+    }
+
     pub fn released(&self, input: &egui::InputState) -> bool {
         self.physical().is_some_and(|key| input.key_released(key))
     }
@@ -312,7 +318,7 @@ pub const AUTO_KEYS: &str = "123456789abcdefghijklmnopqrstuvwxyz";
 impl KeymapConfig {
     /// The keys outside the views' bindings, as views read them.
     pub fn local(&self) -> LocalKeys {
-        LocalKeys { list: self.list.clone(), input: self.input.clone(), pointer: self.pointer.clone(), back: Some(self.back.clone()) }
+        LocalKeys { list: self.list.clone(), input: self.input.clone(), pointer: self.pointer.clone(), leader: self.leader.clone(), back: self.back.clone() }
     }
 
     pub fn group_label(&self, path: &[char]) -> Option<&str> {

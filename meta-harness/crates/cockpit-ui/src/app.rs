@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use arch_graph::ComponentId;
 
-use crate::actions::{Action, ActionProvider, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, When, is_primary, leader_entries};
+use crate::actions::{Action, ActionProvider, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, ToolbarStyle, When, is_primary, leader_entries};
 use crate::chat::{ChatStreamState, SessionStatus};
 use crate::code::CodeViewerState;
 use crate::columns::{Columns, Pane};
@@ -253,8 +253,9 @@ pub struct CockpitApp {
 
     /// The column a go-to lands in (a count before its keys).
     landing: Option<usize>,
-    /// A column whose × was clicked (closed after drawing).
-    closing: Option<usize>,
+    /// An action a control asked for this frame (its id and value): run
+    /// once everything is drawn, the way its key runs it.
+    asked: Option<(String, Option<String>)>,
     /// The quick look, while it's open.
     pub quick_look: Option<QuickLook>,
     /// Which chats were said to be seen, and when.
@@ -327,7 +328,7 @@ impl CockpitApp {
             feedback: FeedbackInspectorState::default(),
 
             landing: None,
-            closing: None,
+            asked: None,
             quick_look: None,
             seen: Default::default(),
             alerts,
@@ -525,10 +526,6 @@ impl CockpitApp {
                 }
             });
             self.back_to_used();
-            // A column's × closes it once every column is drawn.
-            if let Some(slot) = self.closing.take() {
-                self.close_column(slot);
-            }
         });
         self.say_seen(ctx);
 
@@ -546,6 +543,7 @@ impl CockpitApp {
         self.feedback.render_toast(ctx);
 
         self.render_quick_look(ctx, &shell);
+        self.run_asked(ctx);
         self.render_talk(ctx);
         self.render_hints(ctx);
         self.render_prefix_popup(ctx);

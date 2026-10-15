@@ -54,11 +54,6 @@ pub struct GraphRequests {
     /// Open this file at these lines in the code view.
     pub open_code: Option<(String, u32, u32)>,
     pub open_spec: bool,
-    /// Run this action (by id, with its value) the way keys do: from a chip
-    /// or the toolbar, for the shell's actions.
-    pub run: Option<(String, Option<String>)>,
-    /// Read the code that changed again.
-    pub reindex: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -165,7 +160,6 @@ pub struct GraphState {
     /// Finding anything in the code (typed in the palette).
     pub(crate) find: actions::Find,
     /// A toolbar button whose action needs input: open the palette at it.
-    palette_request: Option<String>,
     /// Card texts as they fit their cards, at the camera's zoom.
     fitted: std::cell::RefCell<draw::Fitted>,
 }
@@ -212,7 +206,6 @@ impl Default for GraphState {
             legend_open: false,
             note: None,
             find: actions::Find::default(),
-            palette_request: None,
             fitted: Default::default(),
         }
     }
