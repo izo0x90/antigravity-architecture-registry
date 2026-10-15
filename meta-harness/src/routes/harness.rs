@@ -14,10 +14,11 @@ use harness_contracts::{InstanceId, NativeId, RequestId, RequestResponse, SteerI
 use harness_core::HarnessError;
 use serde::Deserialize;
 
-use crate::server::{ApiResult, AppState};
+use crate::server::ApiResult;
+use crate::modules::HarnessState;
 use crate::cockpit::{Needs, can};
 
-pub(crate) fn routes() -> Router<AppState> {
+pub(crate) fn routes() -> Router<HarnessState> {
     Router::new()
         .route("/api/instances", get(list_instances))
         .route("/api/instances/{id}/refresh", post(refresh_instance))
@@ -33,15 +34,15 @@ pub(crate) fn routes() -> Router<AppState> {
 
 // ---- instances ----
 
-async fn list_instances(_: Needs<can::ViewRead>, State(state): State<AppState>) -> Json<Vec<harness_contracts::ProviderSnapshot>> {
+async fn list_instances(_: Needs<can::ViewRead>, State(state): State<HarnessState>) -> Json<Vec<harness_contracts::ProviderSnapshot>> {
     Json(state.registry.snapshots())
 }
 
 /// Re-probes an instance, first looking its harness's launch up again: a
 /// pack installed or fixed since makes the instance anew with it.
-async fn refresh_instance(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+async fn refresh_instance(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
     let id = InstanceId::new(id);
-    let root = state.arch.root().to_path_buf();
+    let root = state.root.clone();
     let launches = tokio::task::spawn_blocking(move || crate::packs::catalog(&root).map(|c| crate::packs::harness_launches(&c))).await;
     if let Ok(Ok(launches)) = launches
         && let Some(config) = state.registry.default_configs(&launches).into_iter().find(|c| c.id == id)
@@ -64,7 +65,7 @@ pub struct SavedSessionsQuery {
 
 async fn list_saved_sessions(
     _: Needs<can::ViewRead>,
-    State(state): State<AppState>,
+    State(state): State<HarnessState>,
     Path(id): Path<String>,
     Query(query): Query<SavedSessionsQuery>,
 ) -> ApiResult<Json<harness_contracts::SavedSessionPage>> {
@@ -74,7 +75,7 @@ async fn list_saved_sessions(
 
 async fn delete_saved_session(
     _: Needs<can::SessionsControl>,
-    State(state): State<AppState>,
+    State(state): State<HarnessState>,
     Path((id, native_id)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     let catalog = state.registry.get(&InstanceId::new(id))?.sessions().ok_or(HarnessError::Unsupported { operation: "saved sessions" })?;
@@ -87,17 +88,17 @@ pub struct CompleteAuthRequest {
     pub response: String,
 }
 
-fn auth_controller(state: &AppState, id: String) -> ApiResult<Arc<dyn harness_core::AuthController>> {
+fn auth_controller(state: &HarnessState, id: String) -> ApiResult<Arc<dyn harness_core::AuthController>> {
     Ok(state.registry.get(&InstanceId::new(id))?.auth().ok_or(HarnessError::Unsupported { operation: "login" })?)
 }
 
-async fn begin_auth(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path((id, method)): Path<(String, String)>) -> ApiResult<Json<harness_core::AuthChallenge>> {
+async fn begin_auth(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path((id, method)): Path<(String, String)>) -> ApiResult<Json<harness_core::AuthChallenge>> {
     Ok(Json(auth_controller(&state, id)?.begin(&method).await?))
 }
 
 async fn complete_auth(
     _: Needs<can::SessionsControl>,
-    State(state): State<AppState>,
+    State(state): State<HarnessState>,
     Path(id): Path<String>,
     Json(body): Json<CompleteAuthRequest>,
 ) -> ApiResult<StatusCode> {
@@ -105,19 +106,19 @@ async fn complete_auth(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn logout(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+async fn logout(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
     auth_controller(&state, id)?.logout().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 // ---- threads (sessions open, close and take prompts by slot: see `slots`) ----
 
-async fn steer(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(thread): Path<String>, Json(input): Json<SteerInput>) -> ApiResult<StatusCode> {
+async fn steer(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(thread): Path<String>, Json(input): Json<SteerInput>) -> ApiResult<StatusCode> {
     state.sessions.get(&ThreadId::new(thread))?.steer(input).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn interrupt(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(thread): Path<String>) -> ApiResult<StatusCode> {
+async fn interrupt(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(thread): Path<String>) -> ApiResult<StatusCode> {
     state.sessions.get(&ThreadId::new(thread))?.interrupt().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -125,7 +126,7 @@ async fn interrupt(_: Needs<can::SessionsControl>, State(state): State<AppState>
 /// Answering an agent's permission request is the user's call.
 async fn respond_request(
     _: Needs<can::RequestsAnswer>,
-    State(state): State<AppState>,
+    State(state): State<HarnessState>,
     Path((thread, request)): Path<(String, String)>,
     Json(response): Json<RequestResponse>,
 ) -> ApiResult<StatusCode> {

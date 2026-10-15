@@ -11,10 +11,10 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::arch::{ArchResult, blocking};
-use crate::server::AppState;
+use crate::modules::ProjectState;
 use crate::cockpit::{Needs, can};
 
-pub fn routes() -> Router<AppState> {
+pub fn routes() -> Router<ProjectState> {
     Router::new()
         .route("/api/graph/tree", get(tree))
         .route("/api/graph/expand", get(expand))
@@ -53,7 +53,7 @@ impl Asked {
     }
 }
 
-async fn tree(_: Needs<can::ViewRead>, State(state): State<AppState>, Query(pairs): Query<Vec<(String, String)>>) -> Encoded {
+async fn tree(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(pairs): Query<Vec<(String, String)>>) -> Encoded {
     let asked = Asked::from(pairs, &[])?;
     Ok(json(blocking(&state.arch, move |a| a.tree_json(&asked.request)).await?))
 }
@@ -61,14 +61,14 @@ async fn tree(_: Needs<can::ViewRead>, State(state): State<AppState>, Query(pair
 /// What opening a card some levels further changes in the tree the asker
 /// holds (the one its request was answered with): the new cards, every
 /// card's place, the lines.
-async fn expand(_: Needs<can::ViewRead>, State(state): State<AppState>, Query(pairs): Query<Vec<(String, String)>>) -> Encoded {
+async fn expand(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(pairs): Query<Vec<(String, String)>>) -> Encoded {
     let asked = Asked::from(pairs, &QUERY_EXTRA)?;
     let card = asked.card()?;
     let levels = asked.one("levels").map_or(Ok(1), str::parse::<u32>).map_err(|e| ServiceError::InvalidOp(format!("levels: {e}")))?;
     Ok(json(blocking(&state.arch, move |a| a.expand_json(&asked.request, &card, levels)).await?))
 }
 
-async fn context(_: Needs<can::ViewRead>, State(state): State<AppState>, Query(pairs): Query<Vec<(String, String)>>) -> Encoded {
+async fn context(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(pairs): Query<Vec<(String, String)>>) -> Encoded {
     let asked = Asked::from(pairs, &["card"])?;
     let card = asked.card()?;
     Ok(json(blocking(&state.arch, move |a| a.context_json(&asked.request, &card)).await?))
@@ -84,16 +84,16 @@ struct SourceQuery {
 }
 
 /// Everything about one card (its component's details).
-async fn details(_: Needs<can::ViewRead>, State(state): State<AppState>, Path(card): Path<String>, Query(q): Query<SourceQuery>) -> ArchResult<ComponentDetail> {
+async fn details(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Path(card): Path<String>, Query(q): Query<SourceQuery>) -> ArchResult<ComponentDetail> {
     Ok(Json(blocking(&state.arch, move |a| a.card(&card, &q.source)).await?))
 }
 
 /// The last answers' timings stage by stage, the graph's and the store's
 /// size, memory, and the last index run.
-async fn perf(_: Needs<can::ViewRead>, State(state): State<AppState>) -> ArchResult<arch_service::PerfReport> {
+async fn perf(_: Needs<can::ViewRead>, State(state): State<ProjectState>) -> ArchResult<arch_service::PerfReport> {
     Ok(Json(blocking(&state.arch, |a| a.perf()).await?))
 }
 
-async fn config(_: Needs<can::ViewRead>, State(state): State<AppState>) -> Json<TreeConfig> {
+async fn config(_: Needs<can::ViewRead>, State(state): State<ProjectState>) -> Json<TreeConfig> {
     Json(state.arch.trees().clone())
 }

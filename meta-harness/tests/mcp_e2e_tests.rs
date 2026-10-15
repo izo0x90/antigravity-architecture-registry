@@ -46,7 +46,7 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     let (err, _) = mcp.tool("view", json!({ "view": "teleport" })).await;
     assert!(err);
 
-    let (mut events, _) = (state.hub.subscribe().1, ());
+    let (mut events, _) = (state.harness.hub.subscribe().1, ());
     let (err, _) = mcp.tool("navigate", json!({ "view": "calls", "select": "rust:sample::run" })).await;
     assert!(!err);
     let event = events.recv().await.unwrap();
@@ -80,10 +80,10 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     assert!(err, "not a plan component");
 
     // The user approves in the cockpit; then the agent lays a skeleton and verifies.
-    state.arch.approve(&arch_graph::PlanId::new("val").unwrap(), &arch_graph::ComponentId::new("rust:sample::validate"), arch_graph::Stage::ArchApproved, &arch_service::Actor::User { name: "izo".into() }).unwrap();
+    state.project.arch.approve(&arch_graph::PlanId::new("val").unwrap(), &arch_graph::ComponentId::new("rust:sample::validate"), arch_graph::Stage::ArchApproved, &arch_service::Actor::User { name: "izo".into() }).unwrap();
     let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "skeleton" })).await;
     assert!(!err && text.contains("Not yet") && text.contains("isn't in the code"), "{text}");
-    let lib = state.arch.root().join("src/lib.rs");
+    let lib = state.project.arch.root().join("src/lib.rs");
     let mut code = std::fs::read_to_string(&lib).unwrap();
     code.push_str("\npub fn validate(input: &str) -> bool {\n    todo!()\n}\n");
     std::fs::write(&lib, &code).unwrap();
@@ -93,7 +93,7 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     // Implementing needs the user's plan approval (after the skeleton is fine).
     let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "implemented" })).await;
     assert!(!err && text.contains("approves its plan"), "{text}");
-    state.arch.approve(&arch_graph::PlanId::new("val").unwrap(), &arch_graph::ComponentId::new("rust:sample::validate"), arch_graph::Stage::PlanApproved, &arch_service::Actor::User { name: "izo".into() }).unwrap();
+    state.project.arch.approve(&arch_graph::PlanId::new("val").unwrap(), &arch_graph::ComponentId::new("rust:sample::validate"), arch_graph::Stage::PlanApproved, &arch_service::Actor::User { name: "izo".into() }).unwrap();
     let (err, text) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "implemented" })).await;
     assert!(!err && text.contains("is now Implemented") && text.contains("nothing pending"), "{text}");
     let (err, _) = mcp.tool("verify", json!({ "plan": "val", "id": "rust:sample::validate", "goal": "declared" })).await;
@@ -219,7 +219,7 @@ async fn the_agent_moves_the_users_view_to_a_plan_and_back_to_code() {
     assert!(!mcp.tool("plan_create", json!({ "id": "val", "title": "Validate input" })).await.0);
     // The user's graph, as the cockpit holds it.
     let mut graph = cockpit_ui::graph::GraphState::default();
-    let mut events = state.hub.subscribe().1;
+    let mut events = state.harness.hub.subscribe().1;
     let (err, text) = mcp.tool("navigate", json!({ "view": "calls", "source": "plan:val" })).await;
     assert!(!err, "{text}");
     graph.on_event(&next_view(&mut events).await);
@@ -275,7 +275,7 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     use meta_harness::mcp::McpCaller;
     use nah_access::Principal;
     let (_, state) = spawn_app().await;
-    let service = &state.mcp_state.service;
+    let service = &state.project.mcp_state.service;
     let as_role = |role: &str| McpCaller { principal: Principal::agent(role), slot: None, label: role.into() };
     let names = |who: &Principal| service.tools_for(who).iter().map(|t| t.name.clone()).collect::<Vec<_>>();
     let reads = ["ingest", "list_types", "search", "inspect", "view", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions"];
@@ -305,19 +305,19 @@ async fn the_lead_runs_sub_slots_and_a_sub_slot_reports_back() {
     assert!(!err && text.starts_with("No sub-slots."), "{text}");
     let (err, text) = lead.tool("slot_start", json!({ "harness": "fake", "name": "helper", "mode": "full-access" })).await;
     assert!(!err && text.starts_with("Started helper (id sub-"), "{text}");
-    let sub = state.slots.list().into_iter().find(|s| s.name == "helper").unwrap();
+    let sub = state.harness.slots.list().into_iter().find(|s| s.name == "helper").unwrap();
     assert_eq!(sub.policy.runtime_mode, harness_contracts::RuntimeMode::FullAccess);
     let (err, text) = lead.tool("slot_send", json!({ "slot": "helper", "text": "count the files", "wait_secs": 5 })).await;
     assert!(!err && text.contains("helper answered:") && text.contains("From the lead (lead):"), "{text}");
     let (err, text) = lead.tool("slot_send", json!({ "slot": "lead", "text": "hi" })).await;
     assert!(err && text.contains("that's you"), "{text}");
 
-    let thread = sub.current_thread().cloned().or_else(|| state.slots.get(&sub.id).and_then(|s| s.current_thread().cloned())).expect("its session runs");
+    let thread = sub.current_thread().cloned().or_else(|| state.harness.slots.get(&sub.id).and_then(|s| s.current_thread().cloned())).expect("its session runs");
     let mut helper = Mcp::as_session(addr, &thread).await;
     let (err, text) = helper.tool("tell_lead", json!({ "text": "done: 3 files" })).await;
     assert!(!err && text.starts_with("Delivered"), "{text}");
     let (refused, text) = helper.tool("slot_send", json!({ "slot": "helper", "text": "hi" })).await;
     assert!(refused && text.contains("role (sub) can't use slot_send"), "{text}");
     let (err, _) = lead.tool("slot_close", json!({ "slot": "helper" })).await;
-    assert!(!err && state.slots.get(&sub.id).is_none());
+    assert!(!err && state.harness.slots.get(&sub.id).is_none());
 }

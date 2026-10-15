@@ -9,58 +9,9 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use harness_core::{EventHub, HarnessError, InstanceRegistry, SessionManager};
+use harness_core::{EventHub, HarnessError};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub registry: Arc<InstanceRegistry>,
-    pub sessions: Arc<SessionManager>,
-    /// The slots: the lead, sub-slots, the queue's workers.
-    pub slots: Arc<harness_core::SlotManager>,
-    pub hub: Arc<EventHub>,
-    pub mcp_state: crate::mcp::McpServerState,
-    pub arch: Arc<arch_service::ArchitectureService>,
-    pub cockpit: crate::cockpit::CockpitAuth,
-    pub queue: Arc<crate::queue::QueueRunner>,
-    /// The project's state database: kept across restarts.
-    pub state: Arc<nah_state::StateDb>,
-    /// The tool servers every session gets (ours and the project's).
-    pub tool_servers: Arc<crate::tool_servers::ToolServerState>,
-    /// The cockpit, for agents driving it.
-    pub remote: Arc<crate::remote::Remote>,
-    /// What each caller may do.
-    pub access: Arc<nah_access::Access>,
-    /// One-time tickets for the sockets.
-    pub tickets: Arc<crate::cockpit::Tickets>,
-    /// What needs the user, and what happened.
-    pub notify: Arc<nah_notify::NotifyHub>,
-}
-
-impl axum::extract::FromRef<AppState> for Arc<crate::cockpit::Tickets> {
-    fn from_ref(state: &AppState) -> Self {
-        state.tickets.clone()
-    }
-}
-
-impl axum::extract::FromRef<AppState> for Arc<nah_access::Access> {
-    fn from_ref(state: &AppState) -> Self {
-        state.access.clone()
-    }
-}
-
-impl axum::extract::FromRef<AppState> for Arc<crate::remote::Remote> {
-    fn from_ref(state: &AppState) -> Self {
-        state.remote.clone()
-    }
-}
-
-impl axum::extract::FromRef<AppState> for crate::cockpit::CockpitAuth {
-    fn from_ref(state: &AppState) -> Self {
-        state.cockpit.clone()
-    }
-}
 
 /// `HarnessError` as an HTTP response: `{ "error": "..." }` with a matching status.
 pub struct ApiError(HarnessError);
@@ -118,21 +69,10 @@ pub fn static_dir() -> std::path::PathBuf {
 
 /// The cockpit's build, as `make ui` leaves it in the static folder.
 pub const COCKPIT_BUILD: &str = "wasm/cockpit_ui_bg.wasm";
-pub fn create_router(state: AppState) -> Router {
+/// The server's routes: each part's, then the cockpit's page and build.
+pub fn create_router(modules: &[&dyn crate::modules::Module]) -> Router {
     let static_dir = static_dir();
-    let mut router = Router::new()
-        .merge(crate::routes::cockpit::routes())
-        .merge(crate::routes::harness::routes())
-        .merge(crate::routes::slots::routes())
-        .merge(crate::routes::notifications::routes())
-        .merge(crate::routes::files::routes())
-        .merge(crate::routes::feedback::routes())
-        .merge(crate::routes::tool_servers::routes())
-        .merge(crate::routes::mcp::routes())
-        .merge(crate::routes::events::routes())
-        .merge(crate::arch::routes())
-        .merge(crate::graph::routes())
-        .merge(crate::queue::routes());
+    let mut router = modules.iter().fold(Router::new(), |router, m| router.merge(m.routes()));
 
     if static_dir.exists() {
         router = router.fallback_service(ServeDir::new(static_dir));
@@ -143,7 +83,6 @@ pub fn create_router(state: AppState) -> Router {
         .layer(axum::middleware::map_response(json_errors))
         .layer(tower_http::compression::CompressionLayer::new())
         .layer(TraceLayer::new_for_http().make_span_with(request_span))
-        .with_state(state)
 }
 
 /// A request's span: its method and path, never its query (sessions' keys

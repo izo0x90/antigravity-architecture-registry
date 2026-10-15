@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use harness_core::{EventHub, SessionManager};
 use meta_harness::mcp::{McpServerState, McpService};
-use meta_harness::server::{AppState, create_router};
+use meta_harness::modules::{AppState, Parts};
+use meta_harness::server::create_router;
 use tracing::info;
 
 /// The meta-harness: with no command, the server.
@@ -107,7 +108,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cockpit = meta_harness::cockpit::CockpitAuth::for_user()?;
     let cockpit_path = cockpit.launch_path();
     let streams = mcp_state.sessions.clone();
-    let app = create_router(AppState { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, tickets: Arc::default(), notify });
+    let app = AppState::new(Parts { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, notify });
+    let app = create_router(&app.modules());
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");
     info!("Open the cockpit: {base_url}{cockpit_path}");
     meta_harness::startup::serve(listener, app, streams).await?;

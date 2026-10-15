@@ -29,7 +29,7 @@ async fn a_client_that_falls_behind_gets_resync_and_the_whole_state_never_a_gap(
     while next(&mut ws, Duration::from_millis(300)).await.is_some() {}
 
     // Far more changes than the stream holds, before it gets to send any.
-    let mut snapshot = state.registry.snapshots().into_iter().next().expect("the fake harness");
+    let mut snapshot = state.harness.registry.snapshots().into_iter().next().expect("the fake harness");
     for n in 0..200 {
         snapshot.display_name = format!("change {n}");
         hub.publish(ClientEvent::InstanceUpdated { snapshot: snapshot.clone() });

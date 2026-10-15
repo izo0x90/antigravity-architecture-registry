@@ -3,14 +3,15 @@
 use axum::{Json, Router, extract::State, routing::get};
 use harness_core::HarnessError;
 
-use crate::server::{ApiResult, AppState};
+use crate::server::ApiResult;
+use crate::modules::HarnessState;
 use crate::cockpit::{Needs, can};
 
-pub(crate) fn routes() -> Router<AppState> {
+pub(crate) fn routes() -> Router<HarnessState> {
     Router::new().route("/api/mcp/servers", get(get_tool_servers).put(put_tool_servers))
 }
 
-async fn get_tool_servers(_: Needs<can::ViewRead>, State(state): State<AppState>) -> ApiResult<Json<harness_contracts::ToolServers>> {
+async fn get_tool_servers(_: Needs<can::ViewRead>, State(state): State<HarnessState>) -> ApiResult<Json<harness_contracts::ToolServers>> {
     let tools = state.tool_servers.clone();
     let current = tokio::task::spawn_blocking(move || tools.current()).await.map_err(|e| HarnessError::Provider { reason: e.to_string() })?;
     Ok(Json(current.map_err(|reason| HarnessError::InvalidConfig { reason })?))
@@ -20,7 +21,7 @@ async fn get_tool_servers(_: Needs<can::ViewRead>, State(state): State<AppState>
 /// get it.
 async fn put_tool_servers(
     _: Needs<can::SessionsControl>,
-    State(state): State<AppState>,
+    State(state): State<HarnessState>,
     Json(project): Json<Vec<harness_contracts::McpServer>>,
 ) -> ApiResult<Json<harness_contracts::ToolServers>> {
     let tools = state.tool_servers.clone();

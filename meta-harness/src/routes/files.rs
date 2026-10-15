@@ -9,10 +9,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::server::AppState;
+use crate::modules::ProjectState;
 use crate::cockpit::{Needs, can};
 
-pub(crate) fn routes() -> Router<AppState> {
+pub(crate) fn routes() -> Router<ProjectState> {
     Router::new().route("/api/fs/read", get(fs_read_handler))
 }
 
@@ -31,7 +31,7 @@ pub struct FsReadResponse {
 
 async fn fs_read_handler(
     _: Needs<can::ViewRead>,
-    State(state): State<AppState>,
+    State(state): State<ProjectState>,
     Query(query): Query<FsReadQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     // Only files inside the repository NAH works on, however they're named.

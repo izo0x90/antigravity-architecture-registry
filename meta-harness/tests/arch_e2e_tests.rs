@@ -63,7 +63,7 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     assert!(named.iter().any(|o| o["target"] == "rust:sample::store::Store::save" && o.get("definition").is_none()), "{body}");
     assert!(code["targets"].as_array().unwrap().iter().any(|t| t["id"] == "rust:sample::store::Store::save" && t["signature"].as_str().is_some_and(|s| s.contains("save("))), "{body}");
     // Edited since it was read: nothing it says applies.
-    let root = state.arch.root().to_path_buf();
+    let root = state.project.arch.root().to_path_buf();
     std::fs::write(root.join("src/util.rs"), std::fs::read_to_string(root.join("src/util.rs")).unwrap() + "\n// edited\n").unwrap();
     let (_, body) = http(addr, "GET", "/api/code/analysis?path=src/util.rs", None).await;
     let code = parse(&body);
@@ -120,7 +120,7 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     assert_eq!(parse(&body)["by"], "izo");
 
     // Write a skeleton into the repo and verify it over REST.
-    let lib = state.arch.root().join("src/lib.rs");
+    let lib = state.project.arch.root().join("src/lib.rs");
     let mut text = std::fs::read_to_string(&lib).unwrap();
     text.push_str("\npub fn validate(input: &str) -> bool {\n    todo!()\n}\n");
     std::fs::write(&lib, text).unwrap();

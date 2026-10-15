@@ -8,7 +8,7 @@ use std::time::Duration;
 use common::{FAKE, Mcp, http, spawn_app};
 use harness_contracts::{InstanceId, Notification, NotificationKind, NotificationState, SlotId, Starter, ThreadId};
 use harness_core::{Open, SlotSettings};
-use meta_harness::server::AppState;
+use meta_harness::modules::AppState;
 use serde_json::json;
 
 fn fake() -> SlotSettings {
@@ -18,18 +18,18 @@ fn fake() -> SlotSettings {
 /// Waits (a little) for the open notifications to settle as `done` says.
 async fn open_when(state: &AppState, done: impl Fn(&[Notification]) -> bool) -> Vec<Notification> {
     for _ in 0..100 {
-        let open = state.notify.open();
+        let open = state.notify.notify.open();
         if done(&open) {
             return open;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    state.notify.open()
+    state.notify.notify.open()
 }
 
 async fn sub_with_session(state: &AppState) -> (SlotId, ThreadId) {
-    let sub = state.slots.create("sub", Some("reviewer".into()), fake(), Starter::User).await.unwrap();
-    let thread = state.slots.open_session(&sub, Open::New { resume: None }).await.unwrap().thread;
+    let sub = state.harness.slots.create("sub", Some("reviewer".into()), fake(), Starter::User).await.unwrap();
+    let thread = state.harness.slots.open_session(&sub, Open::New { resume: None }).await.unwrap().thread;
     (sub, thread)
 }
 
@@ -78,7 +78,7 @@ async fn a_question_waits_too_and_a_failed_turn_is_an_update() {
     // Seeing the slot's chat puts its updates away.
     let (status, body) = http(addr, "POST", "/api/notifications/seen", Some(&json!({ "slot": sub }).to_string())).await;
     assert_eq!((status, body.contains("\"dismissed\":")), (200, true), "{body}");
-    assert!(state.notify.open().iter().all(|n| n.slot.as_ref() != Some(&sub)));
+    assert!(state.notify.notify.open().iter().all(|n| n.slot.as_ref() != Some(&sub)));
     let (_, recent) = http(addr, "GET", "/api/notifications?state=recent", None).await;
     let recent: Vec<Notification> = serde_json::from_str(&recent).unwrap();
     assert!(recent.iter().any(|n| n.id == failed.id && n.state == NotificationState::Dismissed), "kept, as dismissed");
@@ -116,8 +116,8 @@ async fn a_session_that_dies_is_a_crash_and_one_closed_on_purpose_isnt() {
     assert_eq!(crash.title, "reviewer's session stopped");
     // Closed by the user: not a crash.
     let (other, _) = sub_with_session(&state).await;
-    state.slots.close(&other).await.unwrap();
+    state.harness.slots.close(&other).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(!state.notify.open().iter().any(|n| n.kind == NotificationKind::SessionCrashed && n.slot.as_ref() == Some(&other)));
+    assert!(!state.notify.notify.open().iter().any(|n| n.kind == NotificationKind::SessionCrashed && n.slot.as_ref() == Some(&other)));
     assert_eq!(http(addr, "POST", "/api/notifications/nope/dismiss", None).await.0, 404);
 }

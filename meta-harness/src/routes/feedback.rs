@@ -3,10 +3,11 @@
 use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
 use serde::{Deserialize, Serialize};
 
-use crate::server::{AppState, StateFailed, with_state};
+use crate::modules::CockpitState;
+use crate::server::{StateFailed, with_state};
 use crate::cockpit::{Needs, can};
 
-pub(crate) fn routes() -> Router<AppState> {
+pub(crate) fn routes() -> Router<CockpitState> {
     Router::new().route("/api/dev/feedback", get(get_dev_feedback_handler).post(dev_feedback_handler).put(update_dev_feedback_handler))
 }
 
@@ -30,7 +31,7 @@ pub struct DevFeedbackItem {
 }
 
 /// Keeps a new item: it gets an id and a time if it came without.
-async fn dev_feedback_handler(_: Needs<can::SessionsControl>, State(state): State<AppState>, Json(mut item): Json<DevFeedbackItem>) -> Result<impl IntoResponse, StateFailed> {
+async fn dev_feedback_handler(_: Needs<can::SessionsControl>, State(state): State<CockpitState>, Json(mut item): Json<DevFeedbackItem>) -> Result<impl IntoResponse, StateFailed> {
     if item.id.is_empty() {
         item.id = format!("fb_{}", uuid::Uuid::new_v4().simple());
     }
@@ -44,12 +45,12 @@ async fn dev_feedback_handler(_: Needs<can::SessionsControl>, State(state): Stat
 }
 
 /// Every item, oldest first.
-async fn get_dev_feedback_handler(_: Needs<can::ViewRead>, State(state): State<AppState>) -> Result<impl IntoResponse, StateFailed> {
+async fn get_dev_feedback_handler(_: Needs<can::ViewRead>, State(state): State<CockpitState>) -> Result<impl IntoResponse, StateFailed> {
     Ok(Json(with_state(&state.state, |db| db.feedback()).await?))
 }
 
 /// Replaces the item with its id (or adds it).
-async fn update_dev_feedback_handler(_: Needs<can::SessionsControl>, State(state): State<AppState>, Json(item): Json<DevFeedbackItem>) -> Result<impl IntoResponse, StateFailed> {
+async fn update_dev_feedback_handler(_: Needs<can::SessionsControl>, State(state): State<CockpitState>, Json(item): Json<DevFeedbackItem>) -> Result<impl IntoResponse, StateFailed> {
     let (id, value) = (item.id.clone(), as_value(&item));
     with_state(&state.state, move |db| db.put_feedback(&id, &value)).await?;
     Ok(Json(item))

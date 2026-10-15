@@ -15,13 +15,13 @@ use futures::{SinkExt, StreamExt};
 use harness_contracts::ClientEvent;
 use harness_core::EventHub;
 
-use crate::server::AppState;
+use crate::modules::HarnessState;
 
-pub(crate) fn routes() -> Router<AppState> {
+pub(crate) fn routes() -> Router<HarnessState> {
     Router::new().route("/ws/events", get(ws_events_handler))
 }
 
-async fn ws_events_handler(_: crate::cockpit::Ticketed, ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+async fn ws_events_handler(_: crate::cockpit::Ticketed, ws: WebSocketUpgrade, State(state): State<HarnessState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| stream_events(socket, state.hub))
 }
 

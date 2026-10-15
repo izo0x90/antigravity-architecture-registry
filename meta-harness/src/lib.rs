@@ -2,6 +2,7 @@ pub mod arch;
 pub mod cockpit;
 pub mod graph;
 pub mod mcp;
+pub mod modules;
 pub mod packs;
 pub mod project;
 pub mod queue;

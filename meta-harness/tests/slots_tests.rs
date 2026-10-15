@@ -27,7 +27,7 @@ fn key_of(thread: &ThreadId) -> String {
 #[tokio::test]
 async fn the_lead_is_always_there_and_sub_slots_come_and_go_without_touching_it() {
     let (_, state) = spawn_app().await;
-    let slots = &state.slots;
+    let slots = &state.harness.slots;
     let lead = slots.lead();
     assert_eq!(slots.list().len(), 1, "the lead, from the start");
     assert!(slots.get(&lead).unwrap().instance_id.is_none(), "its harness is chosen before its first session");
@@ -43,11 +43,11 @@ async fn the_lead_is_always_there_and_sub_slots_come_and_go_without_touching_it(
     slots.switch(&sub, &first.session).await.unwrap();
     assert_eq!(slots.get(&sub).unwrap().current, Some(first.session.clone()));
     slots.close_session(&sub, &first.session).await.unwrap();
-    assert!(state.sessions.get(&first.thread).is_err(), "its session ended");
+    assert!(state.harness.sessions.get(&first.thread).is_err(), "its session ended");
     assert_eq!(slots.get(&sub).unwrap().current, Some(second.session.clone()), "another becomes current");
     slots.close(&sub).await.unwrap();
-    assert!(slots.get(&sub).is_none() && state.sessions.get(&second.thread).is_err(), "the slot and its sessions are gone");
-    assert!(state.sessions.get(&lead_thread).is_ok(), "the lead's session never moved");
+    assert!(slots.get(&sub).is_none() && state.harness.sessions.get(&second.thread).is_err(), "the slot and its sessions are gone");
+    assert!(state.harness.sessions.get(&lead_thread).is_ok(), "the lead's session never moved");
     assert!(slots.close(&lead).await.unwrap_err().to_string().contains("the lead slot stays"));
     assert!(slots.set_harness(&lead, InstanceId::new("other")).await.unwrap_err().to_string().contains("close its sessions first"));
 }
@@ -55,7 +55,7 @@ async fn the_lead_is_always_there_and_sub_slots_come_and_go_without_touching_it(
 #[tokio::test]
 async fn each_session_has_its_own_key_which_says_whose_calls_they_are() {
     let (addr, state) = spawn_app().await;
-    let slots = &state.slots;
+    let slots = &state.harness.slots;
     let sub = slots.create("sub", Some("helper".into()), fake(), Starter::User).await.unwrap();
     let one = slots.open_session(&sub, Open::New { resume: None }).await.unwrap();
     let two = slots.open_session(&sub, Open::New { resume: None }).await.unwrap();
@@ -81,7 +81,7 @@ async fn each_session_has_its_own_key_which_says_whose_calls_they_are() {
 #[tokio::test]
 async fn the_lead_sends_to_a_sub_slot_and_gets_its_answer() {
     let (_, state) = spawn_app().await;
-    let slots = &state.slots;
+    let slots = &state.harness.slots;
     let sub = slots.create("sub", Some("helper".into()), fake(), Starter::Lead).await.unwrap();
     // Not running yet: sending opens its session first.
     let sent = slots.send(&sub, "count the files".into(), Delivery::Queue, Origin::Lead, Some(Duration::from_secs(5))).await.unwrap();
@@ -103,7 +103,7 @@ async fn the_lead_sends_to_a_sub_slot_and_gets_its_answer() {
 #[tokio::test]
 async fn a_report_reaches_a_running_lead_or_waits_for_one() {
     let (_, state) = spawn_app().await;
-    let slots = &state.slots;
+    let slots = &state.harness.slots;
     let lead = slots.lead();
     slots.set_harness(&lead, InstanceId::new(FAKE)).await.unwrap();
     let sub = slots.create("sub", Some("helper".into()), fake(), Starter::Lead).await.unwrap();
@@ -158,9 +158,9 @@ impl SlotStore for Store {
     fn note(&self, _: &str, _: &str, _: &str, _: Option<&str>) {}
 }
 
-fn manager(state: &meta_harness::server::AppState, store: Arc<Store>, open_within: Duration) -> Arc<SlotManager> {
+fn manager(state: &meta_harness::modules::AppState, store: Arc<Store>, open_within: Duration) -> Arc<SlotManager> {
     let ours = meta_harness::startup::our_tools("http://127.0.0.1:9");
-    SlotManager::load(state.sessions.clone(), state.registry.clone(), state.hub.clone(), store, ours, Arc::new(|| Ok(Vec::new())), open_within).unwrap()
+    SlotManager::load(state.harness.sessions.clone(), state.harness.registry.clone(), state.harness.hub.clone(), store, ours, Arc::new(|| Ok(Vec::new())), open_within).unwrap()
 }
 
 #[tokio::test]
@@ -211,7 +211,7 @@ async fn a_session_that_cant_be_resumed_opens_fresh_and_says_so() {
 #[tokio::test]
 async fn a_slot_whose_harness_is_missing_says_so_until_it_comes() {
     let (_, state) = spawn_app().await;
-    let slots = &state.slots;
+    let slots = &state.harness.slots;
     let sub = slots.create("sub", None, SlotSettings { instance: Some(InstanceId::new("later")), ..SlotSettings::default() }, Starter::User).await.unwrap();
     let SlotStatus::Unavailable { reason, fix } = slots.get(&sub).unwrap().status else { panic!("unavailable") };
     assert!(reason.contains("isn't set up") && fix.unwrap().contains("pack install later"));
@@ -219,7 +219,7 @@ async fn a_slot_whose_harness_is_missing_says_so_until_it_comes() {
     // The harness appears: the slot follows.
     let mut entry = common::fake_harness();
     entry.profile.instance = InstanceId::new("later");
-    state.registry.configure(state.registry.default_configs(&[common::fake_harness(), entry])).await.unwrap();
+    state.harness.registry.configure(state.harness.registry.default_configs(&[common::fake_harness(), entry])).await.unwrap();
     for _ in 0..50 {
         if slots.get(&sub).unwrap().status == SlotStatus::Ready {
             break;
@@ -239,7 +239,7 @@ async fn a_session_that_cant_be_kept_doesnt_stay_running() {
     let err = slots.open_session(&sub, Open::New { resume: None }).await.unwrap_err().to_string();
     assert!(err.contains("the disk is full"), "{err}");
     assert!(slots.get(&sub).unwrap().sessions.is_empty(), "nothing half-kept");
-    assert!(state.slots.list().len() == 1 && state.sessions.get(&ThreadId::new("x")).is_err());
+    assert!(state.harness.slots.list().len() == 1 && state.harness.sessions.get(&ThreadId::new("x")).is_err());
     let running = slots.list().iter().flat_map(|s| s.sessions.iter()).filter(|s| s.thread.is_some()).count();
     assert_eq!(running, 0, "the session it opened was closed again");
 }
@@ -268,14 +268,14 @@ async fn the_cockpit_runs_slots_over_http() {
     let slot = serde_json::from_str::<serde_json::Value>(&body).unwrap()["slotId"].as_str().unwrap().to_owned();
     let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"hello"}"#)).await;
     assert_eq!(status, 200, "a prompt to a slot that isn't running opens its session: {body}");
-    let first = state.slots.get(&SlotId::new(&slot)).unwrap().current.unwrap();
+    let first = state.harness.slots.get(&SlotId::new(&slot)).unwrap().current.unwrap();
     let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/sessions"), Some("{}")).await;
     assert_eq!(status, 200, "{body}");
     let (status, _) = common::http(addr, "POST", &format!("/api/slots/{slot}/current"), Some(&format!(r#"{{"session":"{first}"}}"#))).await;
     assert_eq!(status, 204);
     let (status, _) = common::http(addr, "DELETE", &format!("/api/slots/{slot}/sessions/{first}"), None).await;
     assert_eq!(status, 204);
-    assert_eq!(state.slots.get(&SlotId::new(&slot)).unwrap().sessions.len(), 1);
+    assert_eq!(state.harness.slots.get(&SlotId::new(&slot)).unwrap().sessions.len(), 1);
     let (status, body) = common::http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"nope"}"#)).await;
     assert_eq!(status, 404, "{body}");
     let (status, body) = common::http(addr, "POST", "/api/slots", Some(r#"{"role":"lead","instanceId":"fake"}"#)).await;

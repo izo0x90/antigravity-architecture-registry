@@ -11,9 +11,10 @@ use harness_contracts::{Notification, NotificationId, SlotId};
 use serde::{Deserialize, Serialize};
 
 use crate::cockpit::{Needs, can};
-use crate::server::{ApiResult, AppState};
+use crate::server::ApiResult;
+use crate::modules::NotifyState;
 
-pub(crate) fn routes() -> Router<AppState> {
+pub(crate) fn routes() -> Router<NotifyState> {
     Router::new()
         .route("/api/notifications", get(list))
         .route("/api/notifications/seen", post(seen))
@@ -40,7 +41,7 @@ struct ListQuery {
 
 /// The open ones in the order they're gone through, or the latest in any
 /// state, newest first.
-async fn list(_: Needs<can::SessionsControl>, State(state): State<AppState>, Query(query): Query<ListQuery>) -> ApiResult<Json<Vec<Notification>>> {
+async fn list(_: Needs<can::SessionsControl>, State(state): State<NotifyState>, Query(query): Query<ListQuery>) -> ApiResult<Json<Vec<Notification>>> {
     Ok(Json(match query.state {
         Which::Open => state.notify.open(),
         Which::Recent => blocking(move || state.notify.recent(RECENT)).await?,
@@ -59,12 +60,12 @@ struct Dismissed {
 }
 
 /// The user saw the slot's chat: its updates are put away.
-async fn seen(_: Needs<can::SessionsControl>, State(state): State<AppState>, Json(body): Json<Seen>) -> ApiResult<Json<Dismissed>> {
+async fn seen(_: Needs<can::SessionsControl>, State(state): State<NotifyState>, Json(body): Json<Seen>) -> ApiResult<Json<Dismissed>> {
     let dismissed = blocking(move || state.notify.seen(&body.slot)).await?;
     Ok(Json(Dismissed { dismissed }))
 }
 
-async fn dismiss(_: Needs<can::SessionsControl>, State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Notification>> {
+async fn dismiss(_: Needs<can::SessionsControl>, State(state): State<NotifyState>, Path(id): Path<String>) -> ApiResult<Json<Notification>> {
     Ok(Json(blocking(move || state.notify.dismiss(&NotificationId::new(id))).await?))
 }
 

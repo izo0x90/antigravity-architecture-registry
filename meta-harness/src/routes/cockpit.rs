@@ -9,10 +9,11 @@ use axum::{
     routing::{get, post},
 };
 
-use crate::server::{AppState, StateFailed, with_state};
+use crate::modules::CockpitState;
+use crate::server::{StateFailed, with_state};
 use crate::cockpit::{Needs, can};
 
-pub(crate) fn routes() -> Router<AppState> {
+pub(crate) fn routes() -> Router<CockpitState> {
     Router::new()
         .route("/health", get(health_check))
         .route("/api/ui/config", get(ui_config_handler))
@@ -38,12 +39,12 @@ fn ui_config_path() -> Option<std::path::PathBuf> {
 }
 
 /// The cockpit's state as it last saved it (`null` before it ever has).
-async fn get_ui_state(_: Needs<can::ViewRead>, State(state): State<AppState>) -> Result<Json<Option<serde_json::Value>>, StateFailed> {
+async fn get_ui_state(_: Needs<can::ViewRead>, State(state): State<CockpitState>) -> Result<Json<Option<serde_json::Value>>, StateFailed> {
     Ok(Json(with_state(&state.state, |db| db.ui_state()).await?))
 }
 
 /// The cockpit saves its state (only the cockpit's user can).
-async fn put_ui_state(_: Needs<can::SessionsControl>, State(state): State<AppState>, Json(body): Json<serde_json::Value>) -> Result<StatusCode, StateFailed> {
+async fn put_ui_state(_: Needs<can::SessionsControl>, State(state): State<CockpitState>, Json(body): Json<serde_json::Value>) -> Result<StatusCode, StateFailed> {
     with_state(&state.state, move |db| db.set_ui_state(&body)).await?;
     Ok(StatusCode::NO_CONTENT)
 }

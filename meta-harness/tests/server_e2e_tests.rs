@@ -6,7 +6,7 @@ use common::{FAKE, http, http_anonymous, spawn_app};
 use harness_contracts::{AdapterEvent, ClientEvent, ContentBlock, ItemBody, ProviderSnapshot};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-async fn app() -> (std::net::SocketAddr, meta_harness::server::AppState) {
+async fn app() -> (std::net::SocketAddr, meta_harness::modules::AppState) {
     spawn_app().await
 }
 
@@ -47,7 +47,7 @@ async fn a_slots_session_routes_through_the_instance_adapter() {
 
     // The hub replays the session's events and the catalog folded into the snapshot.
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let (replay, _) = state.hub.subscribe();
+    let (replay, _) = state.harness.hub.subscribe();
     assert!(replay.iter().any(|e| matches!(e, ClientEvent::Session { event: AdapterEvent::ItemUpdated { item } }
         if matches!(&item.body, ItemBody::AssistantMessage { content, .. }
             if content == &vec![ContentBlock::Text { text: "echo: hi".into() }]))));
@@ -93,7 +93,7 @@ async fn fs_read_endpoint_reads_only_inside_the_repository() {
     assert_eq!(status, 200);
     assert!(body.contains("sample"), "the repository's own manifest: {body}");
     assert!(body.contains("\"lines\":"));
-    let absolute = state.arch.root().join("src/lib.rs");
+    let absolute = state.project.arch.root().join("src/lib.rs");
     let (status, _) = http(addr, "GET", &format!("/api/fs/read?path={}", absolute.display()), None).await;
     assert_eq!(status, 200, "absolute paths inside the repo are fine");
     for outside in ["/etc/passwd", "../../../../etc/passwd", "../sample/../../outside.txt"] {
@@ -150,7 +150,7 @@ async fn the_projects_tool_servers_are_kept_in_its_file_and_only_the_cockpit_cha
     let (_, body) = http(addr, "GET", "/api/mcp/servers", None).await;
     let servers: harness_contracts::ToolServers = serde_json::from_str(&body).unwrap();
     assert_eq!(servers.project.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["docs"]);
-    let file = std::fs::read_to_string(state.arch.root().join(".nah/mcp.toml")).unwrap();
+    let file = std::fs::read_to_string(state.project.arch.root().join(".nah/mcp.toml")).unwrap();
     assert!(file.contains("name = \"docs\"") && file.contains("url = \"https://h/mcp\""), "{file}");
     common::http(addr, "PUT", "/api/mcp/servers", Some("[]")).await;
 }
