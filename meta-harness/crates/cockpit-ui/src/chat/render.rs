@@ -1,0 +1,463 @@
+//! Drawing the chat: controls, banners, the stream, items, the input.
+
+use super::*;
+
+pub(super) fn mcp_label(server: &McpServer) -> String {
+    match &server.transport {
+        McpTransport::Http { url, .. } | McpTransport::Sse { url, .. } => format!("{} — {url}", server.name),
+        McpTransport::Stdio { command, .. } => format!("{} — {command}", server.name),
+    }
+}
+
+pub(super) fn render_steps(ui: &mut egui::Ui, steps: &[PlanStep]) {
+    for step in steps {
+        let (mark, color) = match step.status {
+            StepStatus::Completed => (icon::CHECK_SQUARE, colors().ok),
+            StepStatus::InProgress => (icon::CIRCLE_HALF, colors().warn),
+            StepStatus::Pending => (icon::SQUARE, colors().muted),
+        };
+        ui.label(RichText::new(format!("{mark} {}", step.text)).size(crate::theme::look().text_body).color(color));
+    }
+}
+
+pub(super) fn block_summary(block: &ContentBlock) -> String {
+    match block {
+        ContentBlock::Text { text } => text.clone(),
+        ContentBlock::Image { mime_type, .. } => format!("[image {mime_type}]"),
+        ContentBlock::ResourceLink { uri, name } => format!("[link {}]", name.clone().unwrap_or_else(|| uri.clone())),
+        ContentBlock::Resource { uri, .. } => format!("[resource {uri}]"),
+        ContentBlock::Diff(d) => format!("[diff {}]", d.path),
+        ContentBlock::Unsupported => "[unsupported content]".into(),
+    }
+}
+
+pub(super) fn block_detail(block: &ContentBlock) -> String {
+    match block {
+        ContentBlock::Diff(d) => {
+            let old = d.old_text.as_deref().map(|t| t.lines().count()).unwrap_or(0);
+            let new = d.new_text.lines().count();
+            let preview: String = d.new_text.lines().take(12).collect::<Vec<_>>().join("\n");
+            format!("{}  (−{old} +{new} lines)\n{preview}", d.path)
+        }
+        ContentBlock::Resource { uri, text: Some(text) } => format!("{uri}\n{}", text.chars().take(600).collect::<String>()),
+        other => block_summary(other),
+    }
+}
+
+impl ChatStreamState {
+    pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
+        let (net, slot_idx) = (cx.net, cx.slot);
+        let ctx = ui.ctx().clone();
+        self.drain_replies(net, &ctx);
+
+        ui.vertical(|ui| {
+            let start = ui.cursor().min;
+            let w = ui.available_width();
+            self.render_controls(ui, cx);
+            let controls = Rect::from_min_size(start, Vec2::new(w, (ui.cursor().min.y - start.y).max(24.0)));
+            feedback.register_inspectable(ui, &format!("slot_{}:chat:controls", slot_idx + 1), controls);
+            ui.separator();
+
+            self.render_banners(ui, net);
+            self.render_plan(ui);
+
+            let scroll_height = (ui.available_height() - 105.0).max(50.0);
+            self.drawing.clear();
+            let stream = egui::ScrollArea::vertical()
+                .id_salt("chat_stream")
+                .auto_shrink([false, false])
+                .stick_to_bottom(self.cursor.is_none())
+                .max_height(scroll_height)
+                .show(ui, |ui| self.render_stream(ui, net));
+            self.view = stream.inner_rect;
+            self.spots = std::mem::take(&mut self.drawing).into_iter().filter(|s| s.rect.intersects(stream.inner_rect)).collect();
+            feedback.register_inspectable(ui, &format!("slot_{}:chat:stream", slot_idx + 1), stream.inner_rect);
+            ui.separator();
+
+            let start = ui.cursor().min;
+            let w = ui.available_width();
+            self.render_input(ui, net, feedback, slot_idx, is_focused, cx.input_mode);
+            let input = Rect::from_min_size(Pos2::new(start.x, start.y), Vec2::new(w, (ui.cursor().min.y - start.y).max(40.0)));
+            feedback.register_inspectable(ui, &format!("slot_{}:chat:input_bar", slot_idx + 1), input);
+        });
+    }
+
+    /// The toolbar: the view's own actions marked for it, plus status chrome.
+    pub(super) fn render_controls(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
+        let actions = self.actions();
+        let on_toolbar = |style: ToolbarStyle| actions.iter().filter(move |a| a.toolbar.as_ref().is_some_and(|t| t.style == style));
+        let mut used: Option<(Action, ToolbarUse)> = None;
+
+        ui.horizontal(|ui| {
+            let name = self.instance().map(|s| s.display_name.clone()).unwrap_or_else(|| "No harness".into());
+            ui.label(RichText::new(name).strong().size(crate::theme::look().text_label));
+            // Who it's signed in as, as it says.
+            if let Some(account) = self.instance().and_then(|s| s.auth.account.clone()) {
+                let detail = [account.email.clone(), account.organization.clone(), account.plan.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                let label = ui.label(RichText::new(format!("{} {}", icon::USER_CIRCLE, account.label)).size(crate::theme::look().text_small).color(colors().muted));
+                if !detail.is_empty() {
+                    label.on_hover_text(detail);
+                }
+            }
+            // What of its configuration couldn't be read.
+            if let Some(problems) = self.instance().map(|s| s.problems.clone()).filter(|p| !p.is_empty()) {
+                ui.label(RichText::new(icon::WARNING).color(colors().warn)).on_hover_text(problems.join("\n"));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                for action in on_toolbar(ToolbarStyle::Button) {
+                    if let Some(u) = toolbar_control(ui, action) {
+                        used = Some((action.clone(), u));
+                    }
+                }
+                if let Some(thread) = &self.active_thread {
+                    let short: String = thread.as_str().chars().take(8).collect();
+                    ui.label(RichText::new(format!("[{short}]")).monospace().size(crate::theme::look().text_small).color(colors().info));
+                } else if self.opening {
+                    ui.label(RichText::new(format!("{} Connecting…", icon::HOURGLASS)).size(crate::theme::look().text_small).color(colors().warn));
+                }
+            });
+        });
+
+        ui.horizontal_wrapped(|ui| {
+            for action in on_toolbar(ToolbarStyle::Control) {
+                if let Some(u) = toolbar_control(ui, action) {
+                    used = Some((action.clone(), u));
+                }
+            }
+            if let Some(thread) = self.thread().map(|v| &v.thread)
+                && !thread.mcp_servers.is_empty()
+            {
+                let names: Vec<String> = thread.mcp_servers.iter().map(mcp_label).collect();
+                ui.add(egui::Label::new(RichText::new(format!("{} MCP {}", icon::PLUGS_CONNECTED, thread.mcp_servers.len())).size(crate::theme::look().text_small).color(colors().muted)).extend())
+                    .on_hover_text(names.join("\n"));
+            }
+            if let Some(usage) = self.thread().and_then(|t| t.usage.clone())
+                && let (Some(used), Some(window)) = (usage.context_used_tokens, usage.context_window_tokens)
+            {
+                ui.add(egui::Label::new(RichText::new(format!("ctx {:.1}k/{:.0}k", used as f64 / 1000.0, window as f64 / 1000.0)).monospace().size(crate::theme::look().text_small).color(colors().muted)).extend());
+            }
+        });
+
+        match used {
+            Some((action, ToolbarUse::Run(value))) => self.run(&action, value, cx),
+            Some((action, ToolbarUse::OpenPalette)) => self.pending_palette = Some(action.id),
+            None => {}
+        }
+    }
+
+    pub(super) fn render_banners(&mut self, ui: &mut egui::Ui, net: &NetClient) {
+        let ctx = ui.ctx().clone();
+        if let Some(err) = self.error.clone() {
+            let mut retry = false;
+            let mut dismiss = false;
+            banner(ui, colors().error_bg, colors().error, |ui| {
+                ui.label(RichText::new(icon::X_CIRCLE).size(crate::theme::look().text_label).color(colors().error));
+                ui.label(RichText::new(&err).size(crate::theme::look().text_label).color(colors().text));
+                if self.active_thread.is_none() {
+                    retry = ui.button(format!("{} Retry", icon::ARROW_COUNTER_CLOCKWISE)).clicked();
+                }
+                dismiss = ui.small_button("Dismiss").clicked();
+            });
+            if retry {
+                self.open_thread(net, &ctx, None);
+            } else if dismiss {
+                self.error = None;
+            }
+        }
+
+        // Sign in, when the harness offers login methods and isn't signed in.
+        let needs_login = self.instance().is_some_and(|s| {
+            !s.auth.methods.is_empty()
+                && (s.auth.status == harness_contracts::AuthStatus::SignedOut
+                    || self.error.as_deref().is_some_and(|e| e.to_lowercase().contains("authentication")))
+        });
+        if (needs_login || self.login.is_some())
+            && let Some(snapshot) = self.instance().cloned()
+        {
+            let instance = snapshot.instance_id.clone();
+            let look = crate::theme::look();
+            banner(ui, colors().info_bg, colors().focus, |ui| match self.login.clone() {
+                None => {
+                    ui.label(RichText::new(format!("{} Sign in to {}:", icon::KEY, snapshot.display_name)).strong().size(look.text_label));
+                    for method in &snapshot.auth.methods {
+                        let button = ui.button(&method.name);
+                        let button = match &method.description {
+                            Some(d) => button.on_hover_text(d),
+                            None => button,
+                        };
+                        if button.clicked() {
+                            let mailbox = self.mailbox.clone();
+                            net.begin_auth(&instance, &method.id, ctx.clone(), move |r| post(&mailbox, Reply::AuthStarted(r)));
+                        }
+                    }
+                }
+                Some(login) => {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(&login.instructions).size(look.text_label));
+                        if let Some(url) = &login.url {
+                            ui.hyperlink_to(RichText::new(format!("{} Open the sign-in page", icon::ARROW_SQUARE_OUT)).strong(), url);
+                            // Its address, to copy when the link can't open here.
+                            let mut shown = url.clone();
+                            ui.add(egui::TextEdit::singleline(&mut shown).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+                        }
+                        ui.horizontal(|ui| {
+                            if let Some(expects) = &login.expects {
+                                let hint = format!("Paste {expects}");
+                                ui.add(egui::TextEdit::singleline(&mut self.auth_paste).hint_text(hint).desired_width(260.0));
+                                if ui.button("Sign in").clicked() && !self.auth_paste.trim().is_empty() {
+                                    let mailbox = self.mailbox.clone();
+                                    let pasted = std::mem::take(&mut self.auth_paste);
+                                    net.complete_auth(&instance, &pasted, ctx.clone(), move |r| post(&mailbox, Reply::Done(r)));
+                                    self.login = None;
+                                }
+                            }
+                            if ui.small_button("Cancel").clicked() {
+                                self.login = None;
+                            }
+                        });
+                    });
+                }
+            });
+        }
+    }
+
+    pub(super) fn render_plan(&mut self, ui: &mut egui::Ui) {
+        let Some(PlanBody::TodoList { steps }) = self.thread().and_then(|t| t.plan.clone()).map(|p| p.body) else {
+            return;
+        };
+        let done = steps.iter().filter(|s| s.status == StepStatus::Completed).count();
+        egui::CollapsingHeader::new(RichText::new(format!("{} Plan ({done}/{})", icon::CLIPBOARD_TEXT, steps.len())).size(crate::theme::look().text_body))
+            .default_open(true)
+            .show(ui, |ui| render_steps(ui, &steps));
+    }
+
+    pub(super) fn render_stream(&mut self, ui: &mut egui::Ui, net: &NetClient) {
+        let Some(view) = self.thread().cloned() else {
+            ui.add_space(crate::theme::look().space_xxl);
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new("No session yet").strong().size(crate::theme::look().text_heading).color(colors().accent));
+                let hint = match self.instance() {
+                    Some(s) => format!("{} • type below or Connect to start a session", s.display_name),
+                    None => "Waiting for the server…".into(),
+                };
+                ui.label(RichText::new(hint).size(crate::theme::look().text_label).color(colors().muted));
+            });
+            return;
+        };
+        let scroll = std::mem::take(&mut self.scroll);
+        let mut index = 0;
+        for turn in &view.turns {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Turn {}", turn.ordinal)).monospace().size(crate::theme::look().text_small).color(colors().faint));
+                if turn.status == TurnStatus::Queued {
+                    ui.label(RichText::new("QUEUED").size(crate::theme::look().text_tiny).color(colors().muted));
+                } else if !turn.status.is_terminal() {
+                    ui.label(RichText::new("RUNNING").size(crate::theme::look().text_tiny).color(colors().warn));
+                } else if let Some(f) = &turn.failure {
+                    ui.label(RichText::new(format!("failed: {}", f.message)).size(crate::theme::look().text_tiny).color(colors().error));
+                }
+            });
+            for item in view.items_of(&turn.id) {
+                let on = self.cursor == Some(index);
+                let fill = if on { colors().selection } else { Color32::TRANSPARENT };
+                let shown = Frame::NONE.fill(fill).corner_radius(crate::theme::look().radius_s).inner_margin(crate::theme::margin2(crate::theme::look().space_xs, crate::theme::look().space_hair)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    self.render_item(ui, net, &view, item, index);
+                });
+                if on && scroll {
+                    shown.response.scroll_to_me(Some(egui::Align::Center));
+                }
+                self.drawing.push(Spot { key: index.to_string(), rect: shown.response.rect });
+                index += 1;
+                ui.add_space(crate::theme::look().space_xs);
+            }
+            ui.add(egui::Separator::default().spacing(8.0));
+        }
+    }
+
+    /// Every item in the active thread, in the order shown.
+    pub(super) fn stream(&self) -> Vec<TurnItem> {
+        let Some(view) = self.thread() else { return Vec::new() };
+        view.turns.iter().flat_map(|t| view.items_of(&t.id).cloned()).collect()
+    }
+
+    pub(super) fn put_cursor(&mut self, index: usize) {
+        let n = self.stream().len();
+        if n > 0 {
+            self.cursor = Some(index.min(n - 1));
+            self.link_pick = None;
+            self.scroll = true;
+        }
+    }
+
+    pub(super) fn half_page_items(&self) -> usize {
+        let avg = if self.spots.is_empty() { 40.0 } else { self.spots.iter().map(|s| s.rect.height()).sum::<f32>() / self.spots.len() as f32 };
+        if self.view.height() > 0.0 { ((self.view.height() / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 4 }
+    }
+
+    pub(super) fn render_item(&mut self, ui: &mut egui::Ui, net: &NetClient, view: &ThreadView, item: &TurnItem, index: usize) {
+        match &item.body {
+            ItemBody::UserMessage { text } => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(">").monospace().size(crate::theme::look().text_heading).strong().color(colors().accent));
+                    ui.label(RichText::new(text).size(crate::theme::look().text_title).strong().color(colors().text_strong));
+                });
+            }
+            ItemBody::AssistantMessage { content, .. } => {
+                let text: String = content.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect();
+                if !text.is_empty() {
+                    CommonMarkViewer::new().show(ui, &mut self.markdown_cache, &text);
+                }
+                for block in content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })) {
+                    ui.label(RichText::new(block_summary(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                }
+            }
+            ItemBody::Reasoning { text, streaming } => {
+                let label = if *streaming { format!("{} Thinking… ({} chars)", icon::BRAIN, text.len()) } else { format!("{} Reasoning ({} chars)", icon::BRAIN, text.len()) };
+                egui::CollapsingHeader::new(RichText::new(label).size(crate::theme::look().text_body).color(colors().special))
+                    .id_salt(item.id.as_str())
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(text).monospace().size(crate::theme::look().text_body).color(colors().muted));
+                    });
+            }
+            ItemBody::ToolCall { kind, name, output, locations, .. } => {
+                let (tag, color) = status_tag(item.status);
+                let title = item.title.clone().unwrap_or_else(|| name.clone());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(format!("{tag} {} {title}", tool_icon(kind))).monospace().size(crate::theme::look().text_body).color(color));
+                    for (n, loc) in locations.iter().enumerate() {
+                        let label = match loc.line { Some(l) => format!("{} {}:{l}", icon::FOLDER_OPEN, loc.path), None => format!("{} {}", icon::FOLDER_OPEN, loc.path) };
+                        let link = ui.small_button(RichText::new(label).monospace().size(crate::theme::look().text_small));
+                        self.drawing.push(Spot { key: format!("{index}:{n}"), rect: link.rect });
+                        if link.clicked() {
+                            self.requested_file_jump = Some((loc.path.clone(), loc.line.map(|l| l as usize)));
+                        }
+                    }
+                });
+                if !output.is_empty() {
+                    egui::CollapsingHeader::new(RichText::new("output").size(crate::theme::look().text_small).color(colors().muted))
+                        .id_salt((item.id.as_str(), "out"))
+                        .show(ui, |ui| {
+                            for block in output {
+                                ui.label(RichText::new(block_detail(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                            }
+                        });
+                }
+            }
+            ItemBody::FileChange { path, .. } => {
+                let link = ui.small_button(RichText::new(format!("{} {path}", icon::PENCIL_SIMPLE)).monospace().size(crate::theme::look().text_body));
+                self.drawing.push(Spot { key: format!("{index}:0"), rect: link.rect });
+                if link.clicked() {
+                    self.requested_file_jump = Some((path.clone(), None));
+                }
+            }
+            ItemBody::CommandExecution { command, output, exit_code } => {
+                ui.label(RichText::new(format!("$ {command}")).monospace().size(crate::theme::look().text_body));
+                if let Some(out) = output {
+                    ui.label(RichText::new(out).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                }
+                if let Some(code) = exit_code {
+                    ui.label(RichText::new(format!("exit {code}")).monospace().size(crate::theme::look().text_small).color(colors().muted));
+                }
+            }
+            ItemBody::ProposedPlan { markdown, .. } => {
+                Frame::NONE.fill(colors().surface).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).show(ui, |ui| {
+                    ui.label(RichText::new(format!("{} Proposed plan", icon::CLIPBOARD_TEXT)).strong().size(crate::theme::look().text_body));
+                    CommonMarkViewer::new().show(ui, &mut self.markdown_cache, markdown);
+                });
+            }
+            ItemBody::TodoList { steps, .. } => render_steps(ui, steps),
+            ItemBody::Request { request_id } => {
+                if let Some(request) = view.request(request_id) {
+                    render_request(ui, net, &view.thread.id, request, &mut self.drafts);
+                }
+            }
+            ItemBody::Subagent { subagent_id } => {
+                ui.label(RichText::new(format!("{} subagent {subagent_id}", icon::ROBOT)).size(crate::theme::look().text_body));
+            }
+            ItemBody::Notice { level, text } => {
+                let color = match level { NoticeLevel::Info => colors().muted, NoticeLevel::Warning => colors().warn };
+                ui.label(RichText::new(text).size(crate::theme::look().text_body).color(color));
+            }
+            ItemBody::Error { message } => {
+                ui.label(RichText::new(format!("{} {message}", icon::WARNING)).size(crate::theme::look().text_body).color(colors().error));
+            }
+            ItemBody::Unknown { native_kind, display } => {
+                let shown: String = display.chars().take(300).collect();
+                ui.label(RichText::new(format!("[{native_kind}] {shown}")).monospace().size(crate::theme::look().text_small).color(colors().muted));
+            }
+            ItemBody::Unsupported => {
+                ui.label(RichText::new("(item type not supported by this client)").size(crate::theme::look().text_small).color(colors().muted));
+            }
+        }
+    }
+
+    pub(super) fn render_input(
+        &mut self,
+        ui: &mut egui::Ui,
+        net: &NetClient,
+        feedback: &FeedbackInspectorState,
+        slot_idx: usize,
+        is_focused: bool,
+        input_mode: &mut crate::keymap::InputMode,
+    ) {
+        let ctx = ui.ctx().clone();
+        // Slash-command suggestions from the harness's live command list.
+        if let Some(prefix) = self.input_buffer.strip_prefix('/')
+            && !prefix.contains(' ')
+            && let Some(snapshot) = self.instance()
+        {
+            let matches: Vec<_> = snapshot.commands.iter().filter(|c| c.name.starts_with(prefix)).cloned().collect();
+            ui.horizontal_wrapped(|ui| {
+                for command in matches {
+                    let label = RichText::new(format!("/{}", command.name)).monospace().size(crate::theme::look().text_small);
+                    let hint = match &command.input_hint { Some(h) => format!("{} — {h}", command.description), None => command.description.clone() };
+                    if ui.small_button(label).on_hover_text(hint).clicked() {
+                        self.input_buffer = format!("/{} ", command.name);
+                    }
+                }
+            });
+        }
+
+        ui.horizontal(|ui| {
+            let send_w = 64.0;
+            let text_w = (ui.available_width() - send_w - ui.spacing().item_spacing.x - 4.0).max(60.0);
+            let inserting = *input_mode == crate::keymap::InputMode::Insert { slot: slot_idx };
+            let steerable = self.instance().is_some_and(|s| s.capabilities.turns.active_steering) && self.thread().and_then(|t| t.running_turn()).is_some();
+            let hint = if inserting && steerable {
+                "While it works: Enter queues this next, Ctrl+Enter adds it to what it's doing"
+            } else if inserting {
+                "Instructions… (Enter to send, Shift+Enter newline, Esc normal mode, / for commands)"
+            } else {
+                "Press 'i' or click to enter insert mode..."
+            };
+            let output = ui.add(
+                egui::TextEdit::multiline(&mut self.input_buffer)
+                    .id(egui::Id::new("chat_persistent_input_text_edit"))
+                    .desired_rows(2)
+                    .desired_width(text_w)
+                    .hint_text(hint),
+            );
+            if inserting && is_focused && !feedback.is_modal_open && !feedback.is_issues_window_open && !feedback.is_inspecting {
+                output.request_focus();
+            }
+            if output.clicked() || output.gained_focus() {
+                *input_mode = crate::keymap::InputMode::Insert { slot: slot_idx };
+            }
+            let send = ui.add_sized([send_w, 36.0], egui::Button::new(RichText::new("Send").strong().size(crate::theme::look().text_body))).clicked();
+            let (enter, add) = ui.input(|i| {
+                let enter = inserting && i.key_pressed(egui::Key::Enter) && !i.modifiers.shift;
+                (enter, enter && i.modifiers.command)
+            });
+            if (send || enter) && !self.input_buffer.trim().is_empty() {
+                let text = self.input_buffer.trim().to_string();
+                self.input_buffer.clear();
+                if add {
+                    self.add_to_turn(net, &ctx, text);
+                } else {
+                    self.send_prompt(net, &ctx, text);
+                }
+            }
+        });
+    }
+}
