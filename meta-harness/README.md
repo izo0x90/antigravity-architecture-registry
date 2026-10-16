@@ -381,11 +381,18 @@ all of them:
   apart as git status does; or the last commit, the staged files, the
   files, any commit or branch (`rev:main`) against each other. Only the
   project's folder is read, by its own paths. `Space b f` shows the
-  Changes view: files then their hunks, run together (a few small files
-  open by themselves; `z o`/`z c` open and close one), one column or side
-  by side (a setting; auto: side by side when the column is wide enough).
-  `Enter` opens the spot in the code; an action shows more lines around a
-  hunk. The code view marks the lines changed against where the
+  Changes view: files then their changes, run together, one column or
+  side by side (a setting; auto: side by side when the column is wide
+  enough). `j` / `k` move a line at a time, `]]` / `[[` from change to
+  change. A file folds and unfolds (a few small files open by
+  themselves), and so does each change: `z a` folds or unfolds what the
+  cursor is in (on a file's row, the file), `z o` / `z c` open and close
+  it, `z M` folds every file and `z R` unfolds everything; a folded
+  change is one line, where it is and how many lines it adds and
+  removes, and Fold / Unfold is also a button on the cursor's item.
+  `Enter` (or a double click) opens a folded file or change, and
+  otherwise the spot in the code; an action shows more lines around a
+  change. The code view marks the lines changed against where the
   comparison starts (a bar: green added, blue changed) and shows deleted
   lines in place, struck through; `z d` hides and shows them. Changes
   land on the components whose lines they touch (and what holds them):

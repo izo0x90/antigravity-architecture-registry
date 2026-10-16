@@ -175,6 +175,8 @@ pub struct ChangesView {
     opened: BTreeMap<FileKey, Opened>,
     /// Files the user closed (not opened by themselves again).
     closed: std::collections::BTreeSet<FileKey>,
+    /// Changes folded to their one line, by file and place in it.
+    folded: std::collections::BTreeSet<(FileKey, usize)>,
     cursor: usize,
     /// A place to put the cursor back on once the list is in.
     restore: Option<String>,
@@ -221,6 +223,7 @@ impl Default for ChangesView {
             stale: true,
             opened: BTreeMap::new(),
             closed: Default::default(),
+            folded: Default::default(),
             cursor: 0,
             restore: None,
             folding: None,
@@ -279,6 +282,7 @@ impl ChangesView {
             self.list = None;
             self.opened.clear();
             self.closed.clear();
+            self.folded.clear();
             self.cursor = 0;
             self.stale = true;
             // A list still on its way is for the old comparison: its answer
@@ -318,6 +322,9 @@ impl ChangesView {
             if let Some(changes) = self.opened.get(&file_key(f)).and_then(|o| o.changes.as_ref()) {
                 for (h, hunk) in changes.hunks.iter().enumerate() {
                     rows.push(Row::Hunk(i, h));
+                    if self.folded.contains(&(file_key(f), h)) {
+                        continue;
+                    }
                     let lines = if self.side { paired(&hunk.lines).len() } else { hunk.lines.len() };
                     rows.extend((0..lines).map(|n| Row::Line(i, h, n)));
                 }
@@ -482,6 +489,10 @@ impl ChangesView {
                         opened.loading = false;
                         match result {
                             Ok(changes) => {
+                                // Its changes cut differently: what was folded is no longer where it was.
+                                if opened.changes.as_ref().is_some_and(|c| c.hunks.len() != changes.hunks.len()) {
+                                    v.folded.retain(|(k, _)| *k != key);
+                                }
                                 opened.changes = Some(changes);
                                 opened.error = None;
                             }
@@ -510,28 +521,49 @@ impl ChangesView {
         }
     }
 
-    /// Opens or closes the cursor's file, or every file.
+    /// Folds or unfolds what the cursor is in: its change (on a change or
+    /// one of its lines), or its file (on the file); or everything: every
+    /// file folded, or every file and change unfolded.
     fn apply_fold(&mut self, fold: Fold, net: &NetClient, ctx: &egui::Context) {
         let all: Vec<FileKey> = self.list().map(|l| l.files.iter().map(file_key).collect()).unwrap_or_default();
-        let here = self.cursor_row().and_then(|r| self.file_of(&r).map(file_key));
-        match (fold, here.clone()) {
-            (Fold::OpenAll, _) => {
+        let row = self.cursor_row();
+        let file = row.as_ref().and_then(|r| self.file_of(r).map(file_key));
+        let change = row.as_ref().and_then(Self::hunk_of).zip(file.clone()).map(|((_, h), k)| (k, h));
+        match (fold, change, file) {
+            (Fold::OpenAll, ..) => {
+                self.folded.clear();
                 for k in all.into_iter().filter(|k| !self.opened.contains_key(k)).collect::<Vec<_>>() {
                     self.open(k, net, ctx);
                 }
             }
-            (Fold::CloseAll, _) => all.iter().for_each(|k| self.close(k)),
-            (Fold::Toggle, Some(k)) => self.toggle(k, net, ctx),
-            (Fold::Open, Some(k)) if !self.opened.contains_key(&k) => self.open(k, net, ctx),
-            (Fold::Close, Some(k)) => self.close(&k),
+            (Fold::CloseAll, ..) => all.iter().for_each(|k| self.close(k)),
+            (Fold::Toggle, Some(c), _) => {
+                if !self.folded.remove(&c) {
+                    self.folded.insert(c);
+                }
+            }
+            (Fold::Open, Some(c), _) => {
+                self.folded.remove(&c);
+            }
+            (Fold::Close, Some(c), _) => {
+                self.folded.insert(c);
+            }
+            (Fold::Toggle, None, Some(k)) => self.toggle(k, net, ctx),
+            (Fold::Open, None, Some(k)) if !self.opened.contains_key(&k) => self.open(k, net, ctx),
+            (Fold::Close, None, Some(k)) => self.close(&k),
             _ => {}
         }
-        // Its file folded: the cursor goes to the file's row.
+        // The cursor stays on what it was on, or on what folded it away:
+        // its change, else its file.
+        let Some(row) = row else { return };
         let rows = self.rows();
-        let file_row = here.as_ref().and_then(|k| rows.iter().position(|r| matches!(r, Row::File(_)) && self.file_of(r).map(file_key).as_ref() == Some(k)));
-        match (here, file_row) {
-            (Some(k), Some(at)) if !self.opened.contains_key(&k) => self.put_cursor(at, Show::InView),
-            _ => self.put_cursor(self.cursor, Show::InView),
+        let up = match &row {
+            Row::Line(i, h, _) => vec![row.clone(), Row::Hunk(*i, *h), Row::File(*i)],
+            Row::Hunk(i, _) => vec![row.clone(), Row::File(*i)],
+            _ => vec![row.clone()],
+        };
+        if let Some(at) = up.iter().find_map(|r| rows.iter().position(|x| x == r)) {
+            self.put_cursor(at, Show::InView);
         }
     }
 
@@ -775,10 +807,23 @@ impl ChangesView {
                 ui.label(RichText::new(format!("{} · {count}", g.title())).strong().size(look.text_small).color(colors().muted));
             }
             Row::File(i) => self.draw_file(ui, &list.files[*i]),
-            Row::Hunk(..) => {
-                if let Some(hunk) = Self::hunk_of(row).and_then(|(i, h)| self.file_changes(list.files[i].group, &list.files[i].path)?.hunks.get(h)) {
-                    ui.label(RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines)).monospace().size(look.text_small).color(colors().faint));
-                }
+            Row::Hunk(i, h) => {
+                let file = &list.files[*i];
+                let Some(hunk) = self.file_changes(file.group, &file.path).and_then(|c| c.hunks.get(*h)) else { return };
+                let folded = self.folded.contains(&(file_key(file), *h));
+                ui.horizontal(|ui| {
+                    let caret = if folded { egui_phosphor::regular::CARET_RIGHT } else { egui_phosphor::regular::CARET_DOWN };
+                    ui.label(RichText::new(caret).size(look.text_small).color(colors().muted));
+                    if !folded {
+                        ui.label(RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines)).monospace().size(look.text_small).color(colors().faint));
+                        return;
+                    }
+                    // Folded: where it is and how much changed.
+                    let count = |kind: LineKind| hunk.lines.iter().filter(|l| l.kind == kind).count();
+                    ui.label(RichText::new(format!("line {}", hunk.new_start.max(1))).monospace().size(look.text_small).color(colors().text));
+                    ui.label(RichText::new(format!("+{}", count(LineKind::Added))).monospace().size(look.text_small).color(colors().ok));
+                    ui.label(RichText::new(format!("−{}", count(LineKind::Removed))).monospace().size(look.text_small).color(colors().error));
+                });
             }
             Row::Line(i, h, n) => {
                 let Some(hunk) = self.file_changes(list.files[*i].group, &list.files[*i].path).and_then(|c| c.hunks.get(*h)) else { return };
@@ -974,16 +1019,39 @@ impl ChangesView {
         out.push(Move::Motion(Motion::NextSibling).offer("Next change"));
         out.push(Move::Motion(Motion::PrevSibling).offer("Previous change"));
         let file = row.as_ref().and_then(|r| self.file_of(r));
-        out.push(Move::Enter.offer_if(file.is_some_and(|f| f.status != FileStatus::Deleted), "Open it in the code"));
+        // A folded file or change opens (as a double click does); else the code.
+        out.push(match self.folded_here() {
+            Some(what) => Move::Enter.offer(format!("Unfold {what}")),
+            None => Move::Enter.offer_if(file.is_some_and(|f| f.status != FileStatus::Deleted), "Open it in the code"),
+        });
         out.push(match row {
             Some(Row::Line(..)) => Move::Leave.offer("Up to its change"),
             Some(Row::Hunk(..)) => Move::Leave.offer("Up to its file"),
             _ => Move::Leave.offer_if(false, "Up to its change or file"),
         });
-        out.extend(crate::nav::fold_here(file.map(|f| (f.path.as_str(), !self.opened.contains_key(&file_key(f))))));
+        let change = row.as_ref().and_then(Self::hunk_of).zip(file).map(|((_, h), f)| self.folded.contains(&(file_key(f), h)));
+        out.extend(crate::nav::fold_here(match (change, file) {
+            (Some(folded), _) => Some(("this change", folded)),
+            (None, Some(f)) => Some((f.path.as_str(), !self.opened.contains_key(&file_key(f)))),
+            _ => None,
+        }));
         let closed = self.list().is_some_and(|l| l.files.iter().any(|f| !self.opened.contains_key(&file_key(f))));
-        out.extend(crate::nav::fold_all((closed, "Unfold every file"), (!self.opened.is_empty(), "Fold every file")));
+        out.extend(crate::nav::fold_all((closed || !self.folded.is_empty(), "Unfold everything"), (!self.opened.is_empty(), "Fold everything")));
         out
+    }
+}
+
+impl ChangesView {
+    /// What's folded where the cursor is, in words: its file (on a folded
+    /// file's row) or its change (on a folded change).
+    fn folded_here(&self) -> Option<String> {
+        let row = self.cursor_row()?;
+        let file = self.file_of(&row)?;
+        match row {
+            Row::File(_) if !self.opened.contains_key(&file_key(file)) => Some(file.path.clone()),
+            Row::Hunk(_, h) if self.folded.contains(&(file_key(file), h)) => Some("this change".into()),
+            _ => None,
+        }
     }
 }
 
@@ -1157,13 +1225,18 @@ impl Navigable for ChangesView {
         }
     }
 
-    /// Opens the spot in the code view; on the timeline, compares the
-    /// window.
+    /// Opens a folded file or change; else the spot in the code view; on
+    /// the timeline, compares the window.
     fn enter(&mut self) -> Step {
         if let Some(Row::Window(w)) = self.cursor_row() {
             let Some(comparison) = self.windows().get(w).map(|w| w.comparison()) else { return Step::Nothing("No window here.".into()) };
             self.compare(comparison);
             self.show_timeline(false);
+            return Step::Done;
+        }
+        // A folded file or change: it opens.
+        if self.folded_here().is_some() {
+            self.folding = Some(Fold::Open);
             return Step::Done;
         }
         match self.cursor_row().and_then(|r| self.file_of(&r).cloned()) {

@@ -23,13 +23,18 @@ pub(crate) fn view_with_changes() -> (ChangesView, NetClient, egui::Context) {
     view.stale = false;
     view.loading = true;
     view.tick(&net, &ctx, false);
+    arrive(&mut view, &net, &ctx);
+    (view, net, ctx)
+}
+
+/// a.rs's and b.rs's changes come in.
+fn arrive(view: &mut ChangesView, net: &NetClient, ctx: &egui::Context) {
     let hunk = Hunk { old_start: 2, old_lines: 3, new_start: 2, new_lines: 3, lines: vec![line(LineKind::Context, Some(2), Some(2), "two"), line(LineKind::Removed, Some(3), None, "old three"), line(LineKind::Added, None, Some(3), "new three"), line(LineKind::Context, Some(4), Some(4), "four")] };
     let a = FileChanges { comparison: Comparison::default(), path: "a.rs".into(), group: Group::Unstaged, context: 3, binary: false, hunks: vec![hunk] };
     push(&view.inbox, Reply::File(Comparison::default(), (Group::Unstaged, "a.rs".into()), Ok(a)));
     let b = FileChanges { comparison: Comparison::default(), path: "b.rs".into(), group: Group::Unstaged, context: 3, binary: false, hunks: vec![Hunk { old_start: 1, old_lines: 2, new_start: 0, new_lines: 0, lines: vec![line(LineKind::Removed, Some(1), None, "gone"), line(LineKind::Removed, Some(2), None, "too")] }] };
     push(&view.inbox, Reply::File(Comparison::default(), (Group::Unstaged, "b.rs".into()), Ok(b)));
-    view.tick(&net, &ctx, false);
-    (view, net, ctx)
+    view.tick(net, ctx, false);
 }
 
 #[test]
@@ -74,8 +79,13 @@ fn the_cursor_walks_files_and_changes_and_enter_opens_the_spot() {
     assert_eq!(view.cursor_key().as_deref(), Some("h:Unstaged:a.rs:0"), "[[: the one before");
     view.move_to("f:Unstaged:b.rs");
     assert!(matches!(view.enter(), Step::Nothing(why) if why.contains("deleted")), "a deleted file has nothing to open");
-    // Folds: its changes fold away, the cursor on the file.
-    view.motion(Motion::Down, 1);
+    // Folds: on a line, its change folds to one line, the cursor on it;
+    // on the file, the file folds.
+    view.motion(Motion::Down, 2);
+    view.fold(Fold::Close);
+    view.tick(&net, &ctx, false);
+    assert_eq!((view.rows().len(), view.cursor_key().as_deref()), (9, Some("h:Unstaged:b.rs:0")));
+    view.leave();
     view.fold(Fold::Close);
     view.tick(&net, &ctx, false);
     assert_eq!((view.rows().len(), view.cursor_key().as_deref()), (8, Some("f:Unstaged:b.rs")));
@@ -284,4 +294,35 @@ fn a_big_change_is_drawn_only_where_it_shows_and_moved_through_a_line_at_a_time(
     }
     assert!(texts.iter().any(|t| t == "let line_5000 = 5000;"), "the last line shows");
     assert!(texts.iter().filter(|t| t.starts_with("let line_")).count() < 80, "still only what shows");
+}
+
+#[test]
+fn a_change_folds_to_one_line_and_opens_again_and_everything_folds_and_unfolds() {
+    let (mut view, net, ctx) = view_with_changes();
+    let fold = |view: &mut ChangesView, fold: Fold| {
+        view.fold(fold);
+        view.tick(&net, &ctx, false);
+    };
+    let offered = |view: &ChangesView, id: &str| view.actions().into_iter().find(|a| a.id == id && a.when.holds(&crate::actions::Situation::default())).map(|a| a.label);
+    view.move_to("h:Unstaged:a.rs:0");
+    assert_eq!(offered(&view, "nav.fold_toggle").as_deref(), Some("Fold this change"), "said on the change, and on it as a control");
+    assert!(view.actions().iter().any(|a| a.id == "nav.fold_toggle" && a.at() == Some(crate::actions::At::Item)));
+    fold(&mut view, Fold::Toggle);
+    let (l, h) = (Row::Line, Row::Hunk);
+    assert_eq!(view.rows(), [Row::Group(Group::Unstaged), Row::File(0), h(0, 0), Row::File(1), h(1, 0), l(1, 0, 0), l(1, 0, 1)], "one line for it");
+    assert_eq!(offered(&view, "nav.enter").as_deref(), Some("Unfold this change"), "Enter (a double click) opens it");
+    assert_eq!(view.enter(), Step::Done);
+    view.tick(&net, &ctx, false);
+    assert_eq!(view.rows().len(), 11, "open again");
+    assert_eq!(offered(&view, "nav.enter").as_deref(), Some("Open it in the code"), "open: Enter goes to the code");
+    // z M folds every file; z R unfolds every file and change.
+    fold(&mut view, Fold::Close);
+    fold(&mut view, Fold::CloseAll);
+    assert_eq!(view.rows(), [Row::Group(Group::Unstaged), Row::File(0), Row::File(1)]);
+    assert_eq!(offered(&view, "nav.enter").as_deref(), Some("Unfold a.rs"), "a folded file opens with Enter too");
+    assert_eq!(offered(&view, "nav.fold_open_all").as_deref(), Some("Unfold everything"));
+    fold(&mut view, Fold::OpenAll);
+    assert!(view.folded.is_empty(), "its changes unfolded too");
+    arrive(&mut view, &net, &ctx);
+    assert_eq!(view.rows().len(), 11, "every file and change open");
 }
