@@ -70,15 +70,17 @@ fn merge(base: &mut toml::Table, over: toml::Table) {
     }
 }
 
-/// The panels: how many there may be.
+/// The panels: how many there may be, and where they show the buttons of
+/// what you're on (until changed in the cockpit, which is kept).
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct PanelsUi {
     pub max: usize,
+    pub item_buttons: crate::hosted::ItemButtons,
 }
 
 impl Default for PanelsUi {
     fn default() -> Self {
-        Self { max: 12 }
+        Self { max: 12, item_buttons: crate::hosted::ItemButtons::default() }
     }
 }
 

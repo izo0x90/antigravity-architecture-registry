@@ -7,6 +7,20 @@
 //! wrapping after them (one line that wraps); its settings on a row under.
 
 use egui::RichText;
+use serde::{Deserialize, Serialize};
+
+/// Where a host shows the buttons of what you're on (the cursor's item,
+/// the box being typed in).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ItemButtons {
+    /// In a box under the item (over what's below it), following it.
+    #[default]
+    Floating,
+    /// In a row of their own along the host's bottom, kept whether there
+    /// are any or not: nothing is covered and nothing moves.
+    Bar,
+}
 
 use crate::actions::{At, Bound, Control, RunCx, Style};
 

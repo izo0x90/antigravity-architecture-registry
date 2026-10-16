@@ -44,6 +44,10 @@ pub struct SavedUi {
     pub comparison: harness_contracts::changes::Comparison,
     #[serde(default)]
     pub diff_layout: crate::changes::DiffLayout,
+    /// Where the buttons of what you're on show, once changed here (else
+    /// the UI config says).
+    #[serde(default)]
+    pub item_buttons: Option<crate::hosted::ItemButtons>,
 }
 
 /// What came back from the server.
@@ -171,7 +175,7 @@ mod tests {
     use super::*;
 
     fn state(draft: &str) -> SavedUi {
-        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), pinned: Vec::new(), used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), drafts: BTreeMap::from([(0, draft.into())]), agents: false, comparison: Default::default(), diff_layout: Default::default() }
+        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), pinned: Vec::new(), used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), drafts: BTreeMap::from([(0, draft.into())]), agents: false, comparison: Default::default(), diff_layout: Default::default(), item_buttons: None }
     }
 
     fn arrive(keeper: &Keeper, value: Option<serde_json::Value>) {

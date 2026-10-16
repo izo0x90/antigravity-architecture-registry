@@ -128,6 +128,8 @@ enum ShellCommand {
     PickView,
     ToggleInspector,
     ToggleIssues,
+    /// The buttons of what you're on in a bar (true) or floating.
+    ItemButtons,
     /// The quick look on what the cursor is on (or closed, when open).
     QuickLook,
     /// The quick look's card in a panel instead.
@@ -306,6 +308,11 @@ pub struct CockpitApp {
     pub key_sheet: Option<String>,
     /// Where each panel was drawn last frame (hint labels stay inside theirs).
     panel_rects: Vec<egui::Rect>,
+    /// Where the buttons of what you're on show, once changed here (else
+    /// the UI config says), and this frame's row kept for them by each host
+    /// (the quick look, or a panel by its number) while they're in a bar.
+    pub(crate) item_buttons: Option<crate::hosted::ItemButtons>,
+    item_bars: Vec<((bool, usize), egui::Rect)>,
     palette: crate::palette::Palette,
 
     // Top-bar status LEDs
@@ -367,6 +374,8 @@ impl CockpitApp {
             note_since: None,
             key_sheet: None,
             panel_rects: Vec::new(),
+            item_buttons: None,
+            item_bars: Vec::new(),
             palette: crate::palette::Palette::default(),
 
             srv_led: ActivityLed::default(),
@@ -523,6 +532,7 @@ impl CockpitApp {
     fn draw_frame(&mut self, ctx: &egui::Context) {
         self.update_lifecycle(ctx);
         self.feedback.begin_frame();
+        self.item_bars.clear();
 
         egui::TopBottomPanel::top("cockpit_top_panel").show(ctx, |ui| {
             self.render_top_bar(ui);

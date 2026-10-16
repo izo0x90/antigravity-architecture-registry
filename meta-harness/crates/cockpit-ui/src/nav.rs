@@ -54,6 +54,16 @@ pub enum SpecItem {
 }
 
 impl Target {
+    /// What it is, in a few words ("run", "a.rs:12", "message 3").
+    pub fn in_words(&self) -> String {
+        let file = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
+        match self {
+            Self::Component(id) | Self::Job { component: id } | Self::Spec { component: id, .. } => short_name(id),
+            Self::Line { file: path, line, .. } | Self::Change { file: path, line } => format!("{}:{line}", file(path)),
+            Self::Message { index, .. } => format!("message {}", index + 1),
+        }
+    }
+
     /// The component the target is about: for a relation in the spec, the
     /// other end (what the cursor points at).
     pub fn component(&self) -> Option<&ComponentId> {

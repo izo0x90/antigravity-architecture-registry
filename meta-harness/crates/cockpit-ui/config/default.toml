@@ -135,6 +135,7 @@ D = "Developer"
 "layout.6" = { leader = "l 6", keys = ["alt+6"] }
 "panel.add" = { leader = "l a" }
 "panel.close" = { leader = "l x" }
+"panel.item_buttons" = { leader = "l b" }
 "inspector.toggle" = { leader = "D i", keys = ["ctrl+shift+c"] }
 "issues.toggle" = { leader = "D d", keys = ["F2"] }
 # The quick look: the full card of what the cursor is on, over the view
@@ -661,9 +662,13 @@ property = "text"
 # The event socket: when it drops, try again after `reconnect_min_ms`, doubling
 # up to `reconnect_max_ms`; views refetch once it's back.
 # Each panel shows its own buffer (graphs, code, specs, outlines; one chat
-# and one queue). How many panels there may be:
+# and one queue). How many panels there may be, and where they show the
+# buttons of what you're on: "floating" (a box under it) or "bar" (a row of
+# their own along each panel's bottom). Changed in the cockpit (Space l b),
+# it's kept with its state.
 [panels]
 max = 12
+item_buttons = "floating"
 
 # The changes view (git): context lines around each change and how many
 # more "more context" adds; how many files (and changed lines in all) open

@@ -494,7 +494,12 @@ a note. What you're on shows its own buttons under
 it, and only while you're on it: a review point's Reply, Accept and
 Reopen; a job's Approve or Retry; a card's Go into and go-tos; a request's
 answers (a list to pick from for a question, Allow and Deny for an
-approval); Send under the box you're typing in. Every button is an
+approval); Send under the box you're typing in. They float in a box under
+what you're on (over what's below it), or, switched with `Space l b` (or
+its button in the top bar; `[panels] item_buttons` sets where they start),
+sit in a row of their own along the bottom of each panel and the quick
+look, the buttons first and what they act on after them: kept whether
+there are any or not, so nothing is covered and nothing moves. Every button is an
 action: it shows its key beside it (on hover when there's no room) and
 runs the way its key does. The key bar, the `?` sheet, the leader menu,
 the palette and every button read one list of what can run where you are,

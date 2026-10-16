@@ -114,6 +114,12 @@ impl CockpitApp {
         if count < max {
             left.push(("panel.add".to_owned(), end(String::new(), Some(icon::PLUS))));
         }
+        // Where the buttons of what you're on show: its mark says which.
+        let (mark, words) = match self.item_buttons_now() {
+            crate::hosted::ItemButtons::Bar => (icon::SQUARE_HALF_BOTTOM, "The buttons of what you're on: in a bar (click: floating)"),
+            crate::hosted::ItemButtons::Floating => (icon::PICTURE_IN_PICTURE, "The buttons of what you're on: floating (click: in a bar)"),
+        };
+        left.push(("panel.item_buttons".to_owned(), end(String::new(), Some(mark)).hover(words)));
         let (inspector, inspecting) = if self.feedback.is_inspecting { (format!("{} ACTIVE", icon::CROSSHAIR), Tone::Warn) } else { (format!("{} Inspector", icon::PENCIL_SIMPLE), Tone::Plain) };
         left.push(("inspector.toggle".to_owned(), end(inspector, None).tone(inspecting)));
         let issues = match self.feedback.issues.len() {

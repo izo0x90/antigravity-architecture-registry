@@ -22,6 +22,7 @@ impl CockpitApp {
             agents: self.desk.remote.agents,
             comparison: self.desk.changes.comparison.clone(),
             diff_layout: self.desk.changes.layout,
+            item_buttons: self.item_buttons,
         }
     }
 
@@ -60,6 +61,7 @@ impl CockpitApp {
         self.desk.remote.agents = saved.agents;
         self.desk.changes.compare(saved.comparison.clone());
         self.desk.changes.layout = saved.diff_layout;
+        self.item_buttons = saved.item_buttons;
         for (buffer, place) in &saved.views {
             self.swap_in(*buffer);
             if buffer.kind == BufferKind::Chat

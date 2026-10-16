@@ -214,3 +214,44 @@ fn what_comes_and_goes_on_the_top_and_bottom_lines_never_moves_a_button() {
     assert_eq!(drawn_at(&after, "f Jump to"), Some(key), "the bottom line's keys stay put");
     assert_eq!(drawn_at(&after, "Space I r"), Some(reread), "the top bar's buttons stay put when the bell counts");
 }
+
+/// Where the drawn text `label` starts inside `within`.
+fn drawn_in(output: &egui::FullOutput, label: &str, within: egui::Rect) -> Option<egui::Pos2> {
+    fn find(shape: &egui::Shape, label: &str, within: egui::Rect, out: &mut Vec<egui::Pos2>) {
+        match shape {
+            egui::Shape::Text(t) if t.galley.text().contains(label) && within.contains(t.pos) => out.push(t.pos),
+            egui::Shape::Vec(list) => list.iter().for_each(|s| find(s, label, within, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    output.shapes.iter().for_each(|c| find(&c.shape, label, within, &mut out));
+    out.first().copied()
+}
+
+#[test]
+fn item_buttons_float_under_the_item_or_sit_in_a_row_of_their_own_that_never_moves() {
+    let (ctx, mut app) = app_with_graph();
+    app.desk.graph.select(Some("rust:a::step".into()));
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    let floating = drawn_in(&output, "Make step the root", app.panel_rects[1]).expect("floating under the card");
+    let card = app.desk.graph.to_screen(&app.desk.graph.card("rust:a::step").unwrap().rect);
+    assert!((floating.y - card.bottom()).abs() < 40.0, "floating: just under the card ({floating:?}, card {card:?})");
+    // In a bar: the panel's own row along its bottom, whatever is selected.
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"panel.item_buttons","value":"true"}"#).unwrap();
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    let panel = app.panel_rects[1];
+    let bar = drawn_in(&output, "Make step the root", panel).expect("in the bar");
+    assert!(bar.y > panel.bottom() - 60.0 && bar.y < panel.bottom(), "along the panel's bottom: {bar:?} in {panel:?}");
+    assert!(texts(&output).contains("step\n"), "what they act on, named after them");
+    keys(&ctx, &mut app, "j");
+    frame(&ctx, &mut app, vec![]);
+    let moved = frame(&ctx, &mut app, vec![]);
+    assert_eq!(drawn_in(&moved, "Make log the root", panel).map(|p| p.y), Some(bar.y), "the cursor moved, the bar didn't");
+    // Kept with the cockpit's state, and back to floating.
+    assert_eq!(app.saved_ui().item_buttons, Some(crate::hosted::ItemButtons::Bar));
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"panel.item_buttons","value":"false"}"#).unwrap();
+    assert_eq!(app.item_buttons_now(), crate::hosted::ItemButtons::Floating);
+}

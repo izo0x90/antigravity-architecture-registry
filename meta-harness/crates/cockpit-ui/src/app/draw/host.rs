@@ -14,6 +14,7 @@
 
 use super::super::*;
 use crate::actions::At;
+use crate::hosted::ItemButtons;
 
 impl CockpitApp {
     /// Draws the view where `here` is (the one in use): its top line, then
@@ -23,11 +24,23 @@ impl CockpitApp {
         let ctx = ui.ctx().clone();
         let pan_held = ui.input(|i| self.config.keymap.leader.key_down(i));
         let mine: Vec<Bound> = self.shown_at(here).into_iter().filter(|b| b.layer == Layer::Panel).collect();
+        let buttons = self.item_buttons_now();
         let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked };
         crate::hosted::header(ui, self.desk.hosted(kind), &mine, &mut cx);
         ui.separator();
-        let content = ui.available_rect_before_wrap();
-        match kind {
+        // The buttons of what you're on in a bar: their row kept along the
+        // bottom (drawn there once everything is laid out), the buffer above.
+        let whole = ui.available_rect_before_wrap();
+        let content = match buttons {
+            ItemButtons::Floating => whole,
+            ItemButtons::Bar => {
+                let height = ui.spacing().interact_size.y + crate::theme::look().space_s * 2.0;
+                let bar = egui::Rect::from_min_max(egui::pos2(whole.left(), whole.bottom() - height), whole.right_bottom());
+                self.item_bars.push(((here.look, panel), bar));
+                egui::Rect::from_min_max(whole.min, egui::pos2(whole.right(), bar.top()))
+            }
+        };
+        ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| match kind {
             BufferKind::Chat => self.desk.chat.render(ui, &mut self.feedback, is_focused, &mut cx),
             BufferKind::Code => self.desk.code.render(ui, &mut self.feedback, &mut cx),
             BufferKind::Graph => self.desk.graph.render(ui, &mut self.feedback, panel, pan_held, &mut cx),
@@ -45,8 +58,18 @@ impl CockpitApp {
             BufferKind::Queue => self.desk.queue.render(ui, &mut cx),
             BufferKind::Inbox => self.desk.inbox.render(ui, &mut cx, &mut self.desk.chat),
             BufferKind::Changes => self.desk.changes.render(ui, &mut cx),
+        });
+        if content != whole {
+            ui.painter().hline(whole.x_range(), content.bottom(), egui::Stroke::new(crate::theme::look().line_thin, colors().border));
+            ui.allocate_rect(whole, egui::Sense::hover());
         }
         self.pointer_on_content(kind, ui, content);
+    }
+
+    /// Where the buttons of what you're on show now: as changed here, else
+    /// as the UI config says.
+    pub(in crate::app) fn item_buttons_now(&self) -> ItemButtons {
+        self.item_buttons.unwrap_or(self.config.panels.item_buttons)
     }
 
     /// A click or double click on a view's content (not on something over
@@ -71,9 +94,10 @@ impl CockpitApp {
         crate::actions::controls(ui, bound, &mut cx);
     }
 
-    /// Under where you are in the focused view (the cursor's item, or the
-    /// box being typed in): what you're on's controls, from the one list.
-    /// Below it, or above when there's no room.
+    /// Where you are in the focused buffer (the cursor's item, or the box
+    /// being typed in): what you're on's controls, from the one list. In
+    /// their bar when they're in one; else floating below it, or above when
+    /// there's no room.
     pub(in crate::app) fn render_item_controls(&mut self, ctx: &egui::Context) {
         let kind = self.focused_kind();
         let (panel, bounds) = match &self.quick_look {
@@ -90,7 +114,7 @@ impl CockpitApp {
                 (At::Item, view.spots().into_iter().find(|s| Some(&s.key) == here.as_ref()).map(|s| s.rect))
             }
         };
-        let Some(anchor) = anchor.map(|r| r.intersect(bounds)).filter(|r| r.is_positive()) else { return };
+        let anchor = anchor.map(|r| r.intersect(bounds)).filter(|r| r.is_positive());
         let situation = self.situation();
         let here: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::On && b.action.at() == Some(at) && b.action.when.holds(&situation)).collect();
         if here.is_empty() {
@@ -98,16 +122,43 @@ impl CockpitApp {
         }
         let id = egui::Id::new("item_controls");
         let look = crate::theme::look();
-        let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(anchor.width(), look.text_title * 2.0), |r| r.size());
-        let below = anchor.bottom() + look.space_s;
-        let y = if below + size.y <= bounds.bottom() { below } else { (anchor.top() - look.space_s - size.y).max(bounds.top()) };
         let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked };
-        egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(egui::pos2(anchor.left(), y)).show(ctx, |ui| {
-            Frame::NONE.fill(colors().overlay_raised).stroke(Stroke::new(look.line_thin, colors().border)).corner_radius(look.radius_m).inner_margin(crate::theme::margin(look.space_s)).show(ui, |ui| {
-                ui.set_max_width(anchor.width().max(look.quick_look_width / 3.0).min(bounds.width()));
-                ui.horizontal_wrapped(|ui| crate::actions::controls(ui, &here, &mut cx));
-            });
-        });
+        // In a bar: its host's row, the buttons then what they act on
+        // (whether or not the item is on screen). Floating: under the item (above it
+        // when there's no room).
+        let host = (self.quick_look.is_some(), panel);
+        match self.item_bars.iter().find(|(h, _)| *h == host).map(|(_, rect)| *rect) {
+            Some(bar) => {
+                let what = self.desk.view(kind).target().map(|t| t.in_words());
+                egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(bar.min).show(ctx, |ui| {
+                    ui.set_clip_rect(bar);
+                    Frame::NONE.inner_margin(crate::theme::margin2(look.space_s, look.space_s)).show(ui, |ui| {
+                        ui.set_width(bar.width() - look.space_s * 2.0);
+                        // The buttons first, as on every line: what they act
+                        // on after them, never pushing them.
+                        ui.horizontal(|ui| {
+                            crate::actions::controls(ui, &here, &mut cx);
+                            if let Some(what) = what {
+                                ui.label(RichText::new(what).size(look.text_small).color(colors().muted));
+                            }
+                        });
+                    });
+                });
+            }
+            // Floating needs the item on screen.
+            None => {
+                let Some(anchor) = anchor else { return };
+                let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(anchor.width(), look.text_title * 2.0), |r| r.size());
+                let below = anchor.bottom() + look.space_s;
+                let y = if below + size.y <= bounds.bottom() { below } else { (anchor.top() - look.space_s - size.y).max(bounds.top()) };
+                egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(egui::pos2(anchor.left(), y)).show(ctx, |ui| {
+                    Frame::NONE.fill(colors().overlay_raised).stroke(Stroke::new(look.line_thin, colors().border)).corner_radius(look.radius_m).inner_margin(crate::theme::margin(look.space_s)).show(ui, |ui| {
+                        ui.set_max_width(anchor.width().max(look.quick_look_width / 3.0).min(bounds.width()));
+                        ui.horizontal_wrapped(|ui| crate::actions::controls(ui, &here, &mut cx));
+                    });
+                });
+            }
+        }
     }
 
     /// This frame's fingers, as gestures, on the view each started on: a

@@ -1,6 +1,7 @@
 //! The actions: gathering, binding, invoking, and the shell's own commands.
 
 use super::*;
+use crate::hosted::ItemButtons;
 
 impl CockpitApp {
     /// The outermost level, everywhere: the shell's own (panels and
@@ -21,6 +22,8 @@ impl CockpitApp {
         }
         actions.push(admin("panel.add".into(), "Add a panel".into(), S::SetLayout(self.desk.panels.len() + 1)));
         actions.push(admin("panel.fewer".into(), "One panel fewer (its buffer is hidden, not lost)".into(), S::SetLayout(self.desk.panels.len().saturating_sub(1).max(1))));
+        let bar = self.item_buttons_now() == ItemButtons::Bar;
+        actions.push(Action::new("panel.item_buttons", "Show the buttons of what you're on in a bar along each panel's bottom (else floating under it)", S::ItemButtons).param(Param::Toggle { on: bar }).group(Group::View).importance(MINOR));
         actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), S::ToggleInspector));
         actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), S::ToggleIssues));
         actions.extend(self.attention_actions());
@@ -401,6 +404,11 @@ impl CockpitApp {
             ShellCommand::Talk => {
                 self.talk.get_or_insert_with(Default::default);
                 self.input_mode = InputMode::Insert { panel: self.desk.panels.focused() };
+            }
+            ShellCommand::ItemButtons => {
+                let bar = value.as_deref() == Some("true");
+                self.item_buttons = Some(if bar { ItemButtons::Bar } else { ItemButtons::Floating });
+                self.note = Some(if bar { "The buttons of what you're on are in a bar along each panel's bottom." } else { "The buttons of what you're on float under it." }.into());
             }
             ShellCommand::Agents => {
                 self.desk.remote.agents = value.as_deref() == Some("true");
