@@ -59,9 +59,10 @@ impl ChatStreamState {
             let scroll_height = (ui.available_height() - 105.0).max(50.0);
             self.ui.drawing.clear();
             let area = egui::ScrollArea::vertical().id_salt(("chat_stream", panel)).auto_shrink([false, false]).stick_to_bottom(self.ui.cursor.is_none()).max_height(scroll_height);
-            // Following the latest: the newest stays in view. Else where the
-            // shared rules say.
-            let area = if self.ui.cursor.is_some() { self.ui.scrolling.area(area, ui.input(|i| i.time)) } else { area };
+            // Where the shared rules say (following the latest, nothing's
+            // asked: the newest stays in view); each frame's messages are
+            // measured either way, for the first move from it.
+            let area = self.ui.scrolling.area(area, ui.input(|i| i.time));
             let stream = area.show(ui, |ui| self.render_stream(ui));
             // Each message's stop (its links aren't stops).
             let messages: Vec<Rect> = self.ui.drawing.iter().filter(|s| !s.key.contains(':')).map(|s| s.rect).collect();

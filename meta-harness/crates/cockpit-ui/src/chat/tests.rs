@@ -236,6 +236,12 @@ fn a_long_chat_moves_by_the_shared_rules() {
     };
     let bottom = draw(&mut chat, 3);
     assert!(bottom > 0.0, "following the latest: at the bottom");
+    assert_eq!(chat.ui.scrolling.len(), 40, "each message measured once, following or not");
+    // gg straight from following the latest: the top; Backspace, back.
+    chat.motion(Motion::First, 1);
+    assert_eq!((chat.ui.cursor, draw(&mut chat, 5)), (Some(0), 0.0));
+    chat.leave();
+    assert_eq!((chat.ui.cursor, draw(&mut chat, 5)), (None, bottom));
     chat.motion(Motion::Up, 1);
     assert_eq!((chat.ui.cursor, draw(&mut chat, 5)), (Some(39), bottom), "the first move lands on the newest, where it shows");
     chat.motion(Motion::First, 1);
@@ -245,4 +251,9 @@ fn a_long_chat_moves_by_the_shared_rules() {
     let cursor = chat.ui.cursor.unwrap();
     assert_eq!(draw(&mut chat, 8), half, "half a page down: the view moves half a window");
     assert!(cursor > 0, "and the cursor with it");
+    // Backspace: to the latest, and following it again.
+    chat.leave();
+    assert_eq!(draw(&mut chat, 5), bottom, "Backspace: at the latest");
+    chat.process_event(item(40, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "a new answer".into() }], streaming: false }));
+    assert!(draw(&mut chat, 3) > bottom, "and following it: a new message shows");
 }

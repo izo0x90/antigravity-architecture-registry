@@ -104,11 +104,14 @@ impl Navigable for ChatStreamState {
         }
     }
 
-    /// Lets go of the cursor: the stream follows the latest again.
+    /// Lets go of the cursor: the stream goes to the latest and follows it
+    /// again.
     fn leave(&mut self) -> Step {
-        if self.ui.cursor.take().is_none() {
+        let Some(at) = self.ui.cursor.take() else {
             return Step::Nothing("Already following the latest.".into());
-        }
+        };
+        let n = self.stream().len();
+        self.ui.scrolling.go(n, Some(at), crate::viewport::Go::Last);
         Step::Done
     }
 
