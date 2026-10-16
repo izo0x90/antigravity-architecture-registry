@@ -33,6 +33,20 @@ impl super::GraphState {
             self.note = Some(format!("Closed {} again to keep the graph to its size.", closed.join(", ")));
         }
         self.at = tree.cards.iter().enumerate().map(|(i, c)| (c.key.clone(), i)).collect();
+        self.land_on_first();
+    }
+
+    /// Opened to go to its first card: there, once the cards are in (a
+    /// whole tree or just the opened branch); none came: it says so.
+    pub(super) fn land_on_first(&mut self) {
+        let (Some(tree), Some(parent)) = (&self.tree, self.first_child_of.take()) else { return };
+        match super::select::children(tree, &parent).into_iter().next() {
+            Some(first) => {
+                self.selection = Some(first.clone());
+                self.reveal_after_fit = Some((first, crate::viewport::Show::InView));
+            }
+            None => self.note = Some(format!("Opened {}: nothing more came to show.", tree.card(&parent).map_or(parent.as_str(), |c| c.label.as_str()))),
+        }
     }
 }
 

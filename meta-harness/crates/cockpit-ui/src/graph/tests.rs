@@ -496,9 +496,11 @@ fn keys_follow_the_layout_a_tree_by_its_columns_boxes_at_their_depth() {
     let mut g = showing(tree_of(&sample_graph(), None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(1), ..TreeRequest::default() }));
     g.select(Some("rust:a::step".into()));
     assert_eq!(g.goes(Dir::Right), Ok(Goes::OpenFirst("rust:a::step".into())));
+    let held = g.tree.clone().unwrap();
     g.motion(crate::nav::Motion::Right, 1);
-    g.set_tree(tree_of(&sample_graph(), None, g.nav.request()));
-    assert_eq!(g.selection.as_deref(), Some("rust:a::save"), "opened, on its first");
+    assert!(g.expanding.is_some(), "only its branch is asked for");
+    g.take_change(change_of(&sample_graph(), &held, "rust:a::step", 1000));
+    assert_eq!(g.selection.as_deref(), Some("rust:a::save"), "opened, on its first, once its branch is in");
     // Contains: a holds run, step, save, log; b holds util.
     let mut g = showing(boxes_tree());
     g.select(Some("rust:a".into()));

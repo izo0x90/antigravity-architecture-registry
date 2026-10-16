@@ -391,16 +391,6 @@ impl GraphState {
                 self.remembered = Some(pending);
             }
         }
-        // Opened to go to its first card (none came: it says so).
-        if let Some(parent) = self.first_child_of.take() {
-            match select::children(&tree, &parent).first() {
-                Some(first) => {
-                    self.selection = Some(first.clone());
-                    self.reveal_after_fit = Some((first.clone(), crate::viewport::Show::InView));
-                }
-                None => self.note = Some(format!("Opened {}: nothing more came to show.", tree.card(&parent).map_or(parent.as_str(), |c| c.label.as_str()))),
-            }
-        }
         // Gone into something that holds nothing (Contains): show it where
         // it lives, inside its box, selected.
         let lone_leaf = tree.request.view == ViewKind::Contains && tree.cards.len() == 1 && tree.cards[0].more == 0;
@@ -408,6 +398,7 @@ impl GraphState {
         let leaf = tree.roots.first().cloned();
         self.tree = Some(tree);
         self.load = Load::Idle;
+        self.land_on_first();
         if std::mem::take(&mut self.refit) {
             self.fit = true;
         }
