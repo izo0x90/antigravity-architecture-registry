@@ -254,12 +254,19 @@ impl NetClient {
 
     /// All HTTP goes through here so the activity LED sees requests and responses.
     fn fetch(&self, request: ehttp::Request, on_done: impl 'static + Send + FnOnce(ehttp::Result<ehttp::Response>)) {
-        self.activity.fetch_add(1, Ordering::Relaxed);
-        let activity = self.activity.clone();
-        ehttp::fetch(request, move |result| {
-            activity.fetch_add(1, Ordering::Relaxed);
-            on_done(result);
-        });
+        // Tests answer for the server themselves (what was asked is in
+        // `sent`): nothing goes out, so no real answer races theirs.
+        #[cfg(test)]
+        let _ = (request, on_done);
+        #[cfg(not(test))]
+        {
+            self.activity.fetch_add(1, Ordering::Relaxed);
+            let activity = self.activity.clone();
+            ehttp::fetch(request, move |result| {
+                activity.fetch_add(1, Ordering::Relaxed);
+                on_done(result);
+            });
+        }
     }
 
     /// Sends JSON (or no body for GET) and decodes a JSON reply into `T`
