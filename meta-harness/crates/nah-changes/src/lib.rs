@@ -1,6 +1,7 @@
 //! The project's changes, from git. Reads the user's repository (its
-//! commits, its index, its files) and never changes them; the only things
-//! it writes are its own snapshots (`refs/nah/snapshots/…`).
+//! commits, its index, its files) and never changes them on its own: it
+//! writes its own snapshots (`refs/nah/snapshots/…`), and the index only
+//! when the user stages or unstages (`staging`).
 //!
 //! - [`Changes::list`]: the files a [`Comparison`] changes, with their
 //!   counts (no content), a page at a time. The uncommitted changes come
@@ -11,6 +12,7 @@
 //!   commit of their own (`timeline`).
 
 mod compare;
+mod staging;
 mod timeline;
 
 use std::collections::HashMap;
@@ -19,6 +21,7 @@ use std::sync::Mutex;
 
 use harness_contracts::changes::{ChangeList, Comparison, FileChanges, Group, Point};
 
+pub use staging::HunkAt;
 pub use timeline::{SNAPSHOT_REFS, Snapshot};
 
 #[derive(Debug, thiserror::Error)]

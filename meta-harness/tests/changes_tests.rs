@@ -137,3 +137,37 @@ async fn the_timeline_has_a_window_per_turn_boundary_and_each_turns_changes() {
     let (status, body) = http(addr, "GET", &format!("/api/changes?from={}&to={}", u1.comparison.from, u1.comparison.to), None).await;
     assert!(status == 200 && body.contains("src/util.rs"), "its comparison reads: {body}");
 }
+
+#[tokio::test]
+async fn the_user_stages_and_unstages_and_agents_read_changes_but_cannot_stage() {
+    let arch = committed();
+    let util = arch.root().join("src/util.rs");
+    std::fs::write(&util, "pub fn shout(s: &str) -> String {\n    s.trim().to_uppercase()\n}\n\npub fn helper() {}\n").unwrap();
+    arch.refresh(std::slice::from_ref(&util)).unwrap();
+    let (addr, _) = spawn_app_with(arch).await;
+    let groups = |body: String| serde_json::from_str::<ChangeList>(&body).unwrap().files.into_iter().map(|f| (f.group, f.path)).collect::<Vec<_>>();
+    let (status, body) = http(addr, "POST", "/api/changes/stage", Some(r#"{"path":"src/util.rs"}"#)).await;
+    assert_eq!(status, 204, "{body}");
+    assert_eq!(groups(http(addr, "GET", "/api/changes", None).await.1), [(Group::Staged, "src/util.rs".into())]);
+    let (status, _) = http(addr, "POST", "/api/changes/unstage", Some(r#"{"path":"src/util.rs"}"#)).await;
+    assert_eq!(status, 204);
+    assert_eq!(groups(http(addr, "GET", "/api/changes", None).await.1), [(Group::Unstaged, "src/util.rs".into())]);
+    let (status, body) = http(addr, "POST", "/api/changes/stage", Some(r#"{"path":"src/util.rs","hunk":{"old_start":90,"new_start":90,"context":3}}"#)).await;
+    assert_eq!(status, 400, "a change that isn't there: {body}");
+    // No agent role may stage; every one may read.
+    let access = nah_access::Access::defaults();
+    for role in ["lead", "sub", "worker", "external"] {
+        assert!(!access.allows(&nah_access::Principal::agent(role), nah_access::Capability::ChangesStage), "{role}");
+    }
+    let mut mcp = Mcp::lead(addr).await;
+    let (err, text) = mcp.tool("changes", serde_json::json!({})).await;
+    assert!(!err && text.contains("[unstaged] modified src/util.rs +1 -1"), "{text}");
+    let (err, text) = mcp.tool("changes", serde_json::json!({ "path": "src/util.rs" })).await;
+    assert!(!err && text.contains("+    s.trim().to_uppercase()") && text.contains("-    s.to_uppercase()"), "{text}");
+    let (err, text) = mcp.tool("changes", serde_json::json!({ "components": true })).await;
+    assert!(!err && text.contains("util::shout (src/util.rs) +1 -1"), "{text}");
+    let (err, text) = mcp.tool("changes", serde_json::json!({ "changed": "HEAD..nowhere" })).await;
+    assert!(err, "{text}");
+    let (err, text) = mcp.tool("changes", serde_json::json!({ "timeline": true })).await;
+    assert!(!err && text.contains("Windows"), "{text}");
+}

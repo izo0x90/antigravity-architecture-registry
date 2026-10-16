@@ -152,3 +152,22 @@ fn the_timeline_lists_windows_newest_first_and_picking_one_compares_it() {
     view.run(&since, None, &mut cx);
     assert_eq!(view.comparison, Comparison { from: Point::Snapshot("2-b".into()), to: Point::Files });
 }
+
+#[test]
+fn the_user_stages_a_file_or_a_change_and_the_cursor_follows_the_file() {
+    let (mut view, net, ctx) = view_with_changes();
+    let mut parts = (None, None, crate::keymap::InputMode::Normal);
+    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut parts.2, slot: 0, note: &mut parts.0, asked: &mut parts.1 };
+    let ids = |view: &ChangesView| view.actions().into_iter().map(|a| a.id).collect::<Vec<_>>();
+    assert!(ids(&view).contains(&"changes.stage".to_owned()) && !ids(&view).contains(&"changes.unstage".to_owned()), "unstaged: stage it");
+    let stage = view.actions().into_iter().find(|a| a.id == "changes.stage").unwrap();
+    view.run(&stage, None, &mut cx);
+    assert!(net.sent.lock().unwrap().iter().any(|s| s.ends_with("POST /api/changes/stage")));
+    assert_eq!(view.restore.as_deref(), Some("f:Staged:a.rs"), "the cursor follows it");
+    push(&view.inbox, Reply::Staged(Ok(serde_json::Value::Null)));
+    view.tick(&net, &ctx, false);
+    assert!(view.loading, "read again");
+    // Another comparison's changes can't be staged.
+    view.compare(Comparison { from: Point::Head, to: Point::Rev("main".into()) });
+    assert!(!ids(&view).contains(&"changes.stage".to_owned()));
+}

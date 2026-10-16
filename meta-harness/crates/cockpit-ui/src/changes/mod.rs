@@ -55,6 +55,8 @@ enum Reply {
     File(Comparison, FileKey, NetResult<FileChanges>),
     Components(Comparison, NetResult<ComponentChangeList>),
     Timeline(NetResult<Timeline>),
+    /// Staged or unstaged: read it all again (or say why not).
+    Staged(NetResult<serde_json::Value>),
 }
 
 /// An opened file: how much context it asks for, and its changes once in.
@@ -85,6 +87,8 @@ enum Command {
     MoreContext,
     Timeline,
     Since,
+    /// Stage (true) or unstage the cursor's file or change.
+    Stage(bool),
 }
 
 /// The comparisons the picker offers (any other, a timeline window, shows
@@ -333,6 +337,11 @@ impl ChangesView {
                         Ok(list) => self.took_list(list, net, ctx),
                         Err(e) => self.error = Some(e.into()),
                     }
+                }
+                Reply::Staged(result) => {
+                    self.stale = true;
+                    self.opened.values_mut().for_each(|o| o.asked_for = None);
+                    self.error = result.err().map(String::from);
                 }
                 Reply::Timeline(Ok(timeline)) => {
                     self.timeline = Some(timeline);
@@ -779,6 +788,13 @@ impl ActionProvider for ChangesView {
             f("changes.refresh", "Read the changes again", Command::Refresh).header(Style::Button, "", Some(egui_phosphor::regular::ARROW_CLOCKWISE)).group(ActionGroup::View).importance(MINOR),
         ];
         out.push(f("changes.timeline", "Show when the files changed and who was working", Command::Timeline).param(Param::Toggle { on: self.on_timeline }).header(Style::Setting, "Timeline", None).group(ActionGroup::View).importance(SECONDARY));
+        // Staging: the user's own act, on the uncommitted changes.
+        if let Some(row) = self.cursor_row().filter(|_| self.comparison.is_uncommitted())
+            && let Some(stage) = self.file_of(&row).and_then(|f| f.group.staging())
+        {
+            let (id, label, caption) = if stage { ("changes.stage", "Stage it", "Stage") } else { ("changes.unstage", "Unstage it", "Unstage") };
+            out.push(f(id, label, Command::Stage(stage)).on_item(Style::Button, caption, None).group(ActionGroup::Act).importance(SECONDARY));
+        }
         if let Some(Row::Window(_)) = self.cursor_row() {
             out.push(f("changes.since", "Compare from here to the files now", Command::Since).on_item(Style::Button, "Since here", None).group(ActionGroup::View).importance(MINOR));
         } else if self.cursor_row().is_some() {
@@ -805,6 +821,21 @@ impl ActionProvider for ChangesView {
                     _ => !self.on_timeline,
                 };
                 self.show_timeline(on);
+            }
+            Some(Command::Stage(stage)) => {
+                let Some(row) = self.cursor_row() else { return };
+                let Some(file) = self.file_of(&row).cloned() else { return };
+                let hunk = match row {
+                    Row::Hunk(_, h) => self.opened.get(&file_key(&file)).and_then(|o| Some((o.changes.as_ref()?.hunks.get(h)?.clone(), o.context))).map(|(h, context)| (h.old_start, h.new_start, context)),
+                    _ => None,
+                };
+                // A whole file: the cursor follows it to its new group.
+                if hunk.is_none() {
+                    let to = if *stage { Group::Staged } else if file.status == FileStatus::Added && file.old_path.is_none() { Group::Untracked } else { Group::Unstaged };
+                    self.restore = Some(format!("f:{to:?}:{}", file.path));
+                }
+                let inbox = self.inbox.clone();
+                cx.net.change_stage(*stage, &file.path, hunk, cx.ctx.clone(), move |r| push(&inbox, Reply::Staged(r)));
             }
             Some(Command::Since) => {
                 if let Some(Row::Window(w)) = self.cursor_row()

@@ -194,3 +194,69 @@ fn runs_are_where_the_files_now_changed_and_files_changed_since_the_newer_side_a
     assert_eq!((staged.files.len(), staged.moved), (0, vec!["a.txt".to_owned()]));
 }
 
+
+#[test]
+fn the_user_stages_and_unstages_a_file_or_one_change_in_it() {
+    let (dir, _repo) = repo();
+    write(dir.path(), "a.txt", "ONE\ntwo\nthree\nfour\nFIVE\n");
+    write(dir.path(), "c.txt", "new\n");
+    std::fs::remove_file(dir.path().join("b.txt")).unwrap();
+    let changes = Changes::open(dir.path()).unwrap();
+    let groups = |changes: &Changes| listed(changes, &Comparison::default()).into_iter().map(|(g, p, ..)| (g, p)).collect::<Vec<_>>();
+    // One of a.txt's two changes (shown with no context: two hunks).
+    let unstaged = changes.file(&Comparison::default(), "a.txt", Group::Unstaged, 0).unwrap();
+    assert_eq!(unstaged.hunks.len(), 2);
+    let first = HunkAt { old_start: unstaged.hunks[0].old_start, new_start: unstaged.hunks[0].new_start, context: 0 };
+    changes.stage("a.txt", Some(first)).unwrap();
+    let staged = changes.file(&Comparison::default(), "a.txt", Group::Staged, 0).unwrap();
+    assert_eq!(staged.hunks.iter().flat_map(|h| &h.lines).filter(|l| l.kind == LineKind::Added).map(|l| l.text.as_str()).collect::<Vec<_>>(), ["ONE"], "only that change");
+    assert_eq!(changes.file(&Comparison::default(), "a.txt", Group::Unstaged, 0).unwrap().hunks.len(), 1, "the other still unstaged");
+    assert!(changes.stage("a.txt", Some(first)).is_err(), "not there any more: says so");
+    // And back.
+    let at = HunkAt { old_start: staged.hunks[0].old_start, new_start: staged.hunks[0].new_start, context: 0 };
+    changes.unstage("a.txt", Some(at)).unwrap();
+    assert!(changes.file(&Comparison::default(), "a.txt", Group::Staged, 0).unwrap().hunks.is_empty());
+    // Whole files: changed, new, deleted.
+    for path in ["a.txt", "c.txt", "b.txt"] {
+        changes.stage(path, None).unwrap();
+    }
+    assert_eq!(groups(&changes), [(Group::Staged, "a.txt".into()), (Group::Staged, "b.txt".into()), (Group::Staged, "c.txt".into())]);
+    for path in ["a.txt", "c.txt", "b.txt"] {
+        changes.unstage(path, None).unwrap();
+    }
+    assert_eq!(groups(&changes), [(Group::Unstaged, "a.txt".into()), (Group::Unstaged, "b.txt".into()), (Group::Untracked, "c.txt".into())]);
+    assert_eq!(std::fs::read_to_string(dir.path().join("a.txt")).unwrap(), "ONE\ntwo\nthree\nfour\nFIVE\n", "the files as they were");
+}
+
+#[test]
+fn a_big_repository_and_a_30000_line_file_stay_fast() {
+    let (dir, repo) = repo();
+    let big: String = (0..30_000).map(|i| format!("line {i}\n")).collect();
+    write(dir.path(), "big.txt", &big);
+    let small: Vec<String> = (0..2000).map(|i| format!("src/m{}/f{i}.rs", i % 40)).collect();
+    for p in &small {
+        write(dir.path(), p, "fn a() {}\n");
+    }
+    let mut index = repo.index().unwrap();
+    index.add_all(["*"], git2::IndexAddOption::DEFAULT, None).unwrap();
+    index.write().unwrap();
+    commit(&repo, "big");
+    let edited: String = (0..30_000).map(|i| if i % 100 == 0 { format!("changed {i}\n") } else { format!("line {i}\n") }).collect();
+    write(dir.path(), "big.txt", &edited);
+    for p in small.iter().step_by(40) {
+        write(dir.path(), p, "fn a() {}\nfn b() {}\n");
+    }
+    let changes = Changes::open(dir.path()).unwrap();
+    let started = std::time::Instant::now();
+    let list = changes.list(&Comparison::default(), 0, PAGE).unwrap();
+    let listed_in = started.elapsed();
+    assert_eq!(list.total, 51);
+    let started = std::time::Instant::now();
+    let file = changes.file(&Comparison::default(), "big.txt", Group::Unstaged, CONTEXT).unwrap();
+    let read_in = started.elapsed();
+    assert_eq!(file.hunks.len(), 300);
+    let started = std::time::Instant::now();
+    changes.file(&Comparison::default(), "big.txt", Group::Unstaged, CONTEXT).unwrap();
+    let kept_in = started.elapsed();
+    assert!(listed_in.as_millis() < 1500 && read_in.as_millis() < 1000 && kept_in < read_in, "list {listed_in:?}, the big file {read_in:?}, again {kept_in:?}");
+}

@@ -635,6 +635,14 @@ impl NetClient {
         self.call("GET", &path, None, ctx, on_done);
     }
 
+    /// Stages (or, `stage` false, unstages) `path`, or one change in it
+    /// (where it starts on each side, and the context it was shown with).
+    pub fn change_stage(&self, stage: bool, path: &str, hunk: Option<(u32, u32, u32)>, ctx: egui::Context, on_done: impl FnOnce(NetResult<serde_json::Value>) + Send + 'static) {
+        let hunk = hunk.map(|(old_start, new_start, context)| serde_json::json!({ "old_start": old_start, "new_start": new_start, "context": context }));
+        let route = if stage { "/api/changes/stage" } else { "/api/changes/unstage" };
+        self.call("POST", route, Some(serde_json::json!({ "path": path, "hunk": hunk })), ctx, on_done);
+    }
+
     /// When the files changed and who was working, and each turn's changes.
     pub fn change_timeline(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::changes::Timeline>) + Send + 'static) {
         self.call("GET", "/api/changes/timeline", None, ctx, on_done);

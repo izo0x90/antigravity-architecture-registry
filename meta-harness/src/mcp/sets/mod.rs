@@ -12,6 +12,7 @@ use nah_access::Capability;
 use crate::mcp::protocol::McpTool;
 
 mod build;
+mod changes;
 mod cockpit;
 mod explore;
 mod plans;
@@ -39,13 +40,14 @@ pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
 
 /// Every tool with the capability it needs, in the same order.
 pub(crate) fn tool_defs(trees: &TreeConfig) -> Vec<ToolDef> {
-    [explore::Explore::schemas(trees), plans::Plans::schemas(trees), build::Build::schemas(trees), review::Review::schemas(trees), cockpit::Cockpit::schemas(trees), slots::Slots::schemas(trees)].into_iter().flatten().collect()
+    [explore::Explore::schemas(trees), changes::Changes::schemas(trees), plans::Plans::schemas(trees), build::Build::schemas(trees), review::Review::schemas(trees), cockpit::Cockpit::schemas(trees), slots::Slots::schemas(trees)].into_iter().flatten().collect()
 }
 
 /// The sets, in the same order as `list_tools`.
-pub(crate) fn all(arch: &Arc<ArchitectureService>, changes: &Option<Arc<nah_changes::Changes>>, remote: &Arc<crate::remote::Remote>, slots: &Arc<harness_core::SlotManager>, notify: &Arc<nah_notify::NotifyHub>) -> Vec<Box<dyn ToolSet>> {
+pub(crate) fn all(arch: &Arc<ArchitectureService>, changes: &Option<Arc<nah_changes::Changes>>, timeline: &Option<Arc<nah_timeline::Timeline>>, remote: &Arc<crate::remote::Remote>, slots: &Arc<harness_core::SlotManager>, notify: &Arc<nah_notify::NotifyHub>) -> Vec<Box<dyn ToolSet>> {
     vec![
         Box::new(explore::Explore { arch: arch.clone(), changes: changes.clone() }),
+        Box::new(changes::Changes { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone() }),
         Box::new(plans::Plans { arch: arch.clone() }),
         Box::new(build::Build { arch: arch.clone() }),
         Box::new(review::Review { arch: arch.clone() }),

@@ -10,7 +10,7 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use harness_contracts::changes::{ChangeList, Comparison, ComponentChangeList, ComponentChanges, FileChanges, Group, Point};
 use nah_changes::{Changes, ChangesError};
@@ -21,6 +21,8 @@ use crate::modules::ProjectState;
 
 pub(crate) fn routes() -> Router<ProjectState> {
     Router::new().route("/api/changes", get(list)).route("/api/changes/file", get(file)).route("/api/changes/components", get(components)).route("/api/changes/timeline", get(timeline))
+        .route("/api/changes/stage", post(stage))
+        .route("/api/changes/unstage", post(unstage))
 }
 
 /// A changes error as an HTTP response: `{ "error": "..." }`.
@@ -151,6 +153,42 @@ async fn timeline(_: Needs<can::ViewRead>, State(state): State<ProjectState>) ->
         nah_timeline::TimelineError::Changes(e) => ChangesFailed(e).into_response(),
         e => failed(e.to_string()),
     })?))
+}
+
+/// One change in a file, as the Changes view showed it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HunkBody {
+    old_start: u32,
+    new_start: u32,
+    context: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StageBody {
+    path: String,
+    /// One change in it; the whole file when left out.
+    #[serde(default)]
+    hunk: Option<HunkBody>,
+}
+
+impl StageBody {
+    fn hunk(&self) -> Option<nah_changes::HunkAt> {
+        self.hunk.as_ref().map(|h| nah_changes::HunkAt { old_start: h.old_start, new_start: h.new_start, context: h.context })
+    }
+}
+
+/// Stages a file, or one change in it: the user's act, from the cockpit.
+async fn stage(_: Needs<can::ChangesStage>, State(state): State<ProjectState>, Json(body): Json<StageBody>) -> ChangesResult<StatusCode> {
+    blocking(changes_of(&state)?, move |c| c.stage(&body.path, body.hunk())).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Unstages a file, or one change in it.
+async fn unstage(_: Needs<can::ChangesStage>, State(state): State<ProjectState>, Json(body): Json<StageBody>) -> ChangesResult<StatusCode> {
+    blocking(changes_of(&state)?, move |c| c.unstage(&body.path, body.hunk())).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The files a comparison (`from..to`) changed, for filters ("only changed

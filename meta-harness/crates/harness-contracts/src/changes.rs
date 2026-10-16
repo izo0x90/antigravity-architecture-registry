@@ -141,6 +141,16 @@ pub enum Group {
 }
 
 impl Group {
+    /// What the user can do with its changes: stage them (`true`), unstage
+    /// them (`false`); another comparison's, neither.
+    pub fn staging(self) -> Option<bool> {
+        match self {
+            Self::Unstaged | Self::Untracked => Some(true),
+            Self::Staged => Some(false),
+            Self::Changes => None,
+        }
+    }
+
     pub fn title(self) -> &'static str {
         match self {
             Self::Staged => "Staged",

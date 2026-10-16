@@ -405,7 +405,10 @@ all of them:
   how many files each turn changed, and `g x` on a message compares its
   turn (its start to its end; others working meanwhile are named, not
   guessed apart). Kept in the state database, let go after
-  `.nah/changes.toml`'s days. The server reads git (`GET
+  `.nah/changes.toml`'s days. Staging is yours alone (no agent role has
+  `changes.stage`): on the uncommitted changes, a file's or a change's
+  Stage / Unstage button (or the palette) writes the index, and only the
+  index (`POST /api/changes/stage`, `/unstage`). The server reads git (`GET
   /api/changes?from=&to=`, `GET /api/changes/file`, `GET
   /api/changes/components`, `GET /api/changes/timeline`; `GET
   /api/search?changed=from..to`) and never changes the repository, its
@@ -612,6 +615,7 @@ away and rebuilt when the reader changes.
 
 | Area | Tools |
 |---|---|
+| Changes | `changes`: what changed in the files (git): the files a comparison changes, one file's diff, the components touched, the timeline (when, who was working, each turn's changes). Reading only: staging is the user's |
 | Explore | `ingest`, `list_types`, `search`, `inspect`, `view`, `navigate` (moves your graph: the one in the `column` it names, else the one you used last); `search` and `view` take `changed` (`HEAD..files`, `rev:main..files`) to keep to what changed |
 | Plan | `plan_list`, `plan_create` (a change, or a walkthrough), `plan_import` (old `system_architecture.json`), `plan_edit`, `plan_validate`, `contract` |
 | Build | `verify`, `run_tools`, `review` |

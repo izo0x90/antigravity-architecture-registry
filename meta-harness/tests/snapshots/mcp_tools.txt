@@ -186,6 +186,34 @@ Views (each a tree from one root, cut to a size limit that it reports):
   }
 }
 
+## changes
+What changed in the project's files (git; read only). By default the uncommitted changes against the last commit, staged, unstaged and untracked kept apart; or `changed` from..to between any two of HEAD, index (the staged files), files (as they are now), rev:<commit or branch>, snapshot:<id> (from the timeline), e.g. HEAD~3..HEAD or rev:main..files. Lists the files with lines added and removed; `path` gives one file's changes as a diff; `components` the components they touch (where the index is current); `timeline` when the files changed and which sessions were working, with each turn's changes as a comparison.
+{
+  "type": "object",
+  "properties": {
+    "changed": {
+      "type": "string",
+      "description": "from..to; the uncommitted changes when left out"
+    },
+    "path": {
+      "type": "string",
+      "description": "One file (project-relative): its changes as a diff"
+    },
+    "context": {
+      "type": "integer",
+      "description": "With path: unchanged lines around each change (3)"
+    },
+    "components": {
+      "type": "boolean",
+      "description": "The components the changes touch, with lines added and removed"
+    },
+    "timeline": {
+      "type": "boolean",
+      "description": "When the files changed and who was working; each turn's changes"
+    }
+  }
+}
+
 ## plan_list
 All plans, with their components and stages.
 {

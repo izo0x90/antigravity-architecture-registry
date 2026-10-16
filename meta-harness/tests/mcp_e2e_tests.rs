@@ -14,7 +14,7 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     assert_eq!(init["result"]["serverInfo"]["name"], "nah-architecture");
     let tools = mcp.rpc("tools/list", json!({})).await;
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for expected in ["ingest", "list_types", "search", "inspect", "view", "navigate", "plan_list", "plan_create", "plan_import", "plan_edit", "plan_validate", "contract", "verify", "run_tools", "review", "review_comments", "answer_comment", "reply_comment"] {
+    for expected in ["ingest", "list_types", "search", "inspect", "view", "changes", "navigate", "plan_list", "plan_create", "plan_import", "plan_edit", "plan_validate", "contract", "verify", "run_tools", "review", "review_comments", "answer_comment", "reply_comment"] {
         assert!(names.contains(&expected), "{expected} in {names:?}");
     }
     assert!(!names.iter().any(|n| n.contains("approve")), "agents can't approve");
@@ -278,13 +278,13 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     let service = &state.project.mcp_state.service;
     let as_role = |role: &str| McpCaller { principal: Principal::agent(role), slot: None, label: role.into() };
     let names = |who: &Principal| service.tools_for(who).iter().map(|t| t.name.clone()).collect::<Vec<_>>();
-    let reads = ["ingest", "list_types", "search", "inspect", "view", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions"];
+    let reads = ["ingest", "list_types", "search", "inspect", "view", "changes", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions"];
     assert_eq!(names(&Principal::agent("external")), reads, "read-only, in the list's order");
     let mut sub = reads.map(String::from).to_vec();
     sub.extend(["tell_lead".into(), "tell_user".into()]);
     assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, and reports to the lead and the user");
     let lead = names(&Principal::agent("lead"));
-    assert!(lead.len() == 30 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself: {lead:?}");
+    assert!(lead.len() == 31 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself: {lead:?}");
     assert!(names(&Principal::Anonymous).is_empty());
 
     let err = service.call("navigate", json!({ "view": "calls" }), &as_role("sub")).await.unwrap_err().to_string();
