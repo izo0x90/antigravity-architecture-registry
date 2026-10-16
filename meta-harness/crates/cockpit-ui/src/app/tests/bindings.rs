@@ -314,7 +314,7 @@ fn a_code_line_offers_every_go_to() {
     // No plan: no queue to go to (the queue says so).
     frame_at(&ctx, &mut app, press(egui::Key::Escape, false), 72.0);
     app.desk.queue.plan = None;
-    assert!(app.shell_actions().iter().any(|a| a.id == "goto.queue" && a.when == When::Unavailable));
+    assert!(app.bound_actions().iter().any(|b| b.action.id == "goto.queue" && b.action.when == When::Unavailable));
 }
 
 #[test]

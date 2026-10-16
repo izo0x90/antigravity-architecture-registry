@@ -187,7 +187,8 @@ impl CockpitApp {
             self.desk.jumps.record(self.jump_of(BufferKind::Spec));
             self.show_code(&file, start, end, ctx);
         }
-        if let Some(file) = self.desk.spec.requests.reread.take() {
+        // Files a view asked to read into the index again.
+        for file in [self.desk.spec.requests.reread.take(), self.desk.code.reread.take()].into_iter().flatten() {
             let notes = self.desk.index_inbox.clone();
             self.desk.net.arch_refresh(&[file], ctx.clone(), move |r| {
                 if let Err(e) = r

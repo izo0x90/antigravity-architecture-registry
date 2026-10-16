@@ -177,8 +177,6 @@ pub enum IndexOp {
     Changed,
     /// Everything, from scratch (the cache dropped).
     Rebuild,
-    /// The file open in the code view.
-    File,
 }
 
 /// Hint labels on what the focused view draws.

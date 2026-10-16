@@ -283,10 +283,6 @@ pub struct Action {
     pub when: When,
     /// Running it is a jump: where the cursor was goes in the jump list.
     pub jump: bool,
-    /// Where it sits, when its maker says (a shell action on what you're on
-    /// is the panel's; a quick look's or a column's own, its host's). A
-    /// view's own are its panel's; the shell's otherwise everywhere's.
-    pub layer: Option<Layer>,
     command: Rc<dyn Any>,
 }
 
@@ -311,7 +307,6 @@ impl Action {
             importance: SECONDARY,
             when: When::Always,
             jump: false,
-            layer: None,
             command: Rc::new(command),
         }
     }
@@ -333,11 +328,6 @@ impl Action {
 
     pub fn jump(mut self) -> Self {
         self.jump = true;
-        self
-    }
-
-    pub fn layer(mut self, layer: Layer) -> Self {
-        self.layer = Some(layer);
         self
     }
 

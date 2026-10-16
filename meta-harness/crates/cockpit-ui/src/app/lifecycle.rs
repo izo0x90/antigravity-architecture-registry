@@ -191,10 +191,6 @@ impl CockpitApp {
         match op {
             IndexOp::Changed => self.desk.net.arch_ingest(false, ctx.clone(), failed),
             IndexOp::Rebuild => self.desk.net.arch_ingest(true, ctx.clone(), failed),
-            IndexOp::File => {
-                let file = self.desk.code.current_file.clone();
-                self.desk.net.arch_refresh(&[file], ctx.clone(), failed);
-            }
         }
     }
 

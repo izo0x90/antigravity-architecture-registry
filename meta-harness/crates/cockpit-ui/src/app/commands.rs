@@ -3,8 +3,9 @@
 use super::*;
 
 impl CockpitApp {
-    /// The shell's own actions: slots, layout and overlays, and the keys
-    /// every view shares, labelled for the focused view.
+    /// The outermost level, everywhere: the shell's own (columns and
+    /// layouts, the inspector, what needs you, servers, the palette, the
+    /// index).
     pub(crate) fn shell_actions(&self) -> Vec<Action> {
         use ShellCommand as S;
         let mut actions = Vec::new();
@@ -15,15 +16,47 @@ impl CockpitApp {
         }
         actions.push(admin("slot.next".into(), "Next slot".into(), S::CycleSlot(1)));
         actions.push(admin("slot.prev".into(), "Previous slot".into(), S::CycleSlot(-1)));
-        for kind in BufferKind::ALL {
-            actions.push(admin(format!("buffer.{}", kind.name()), format!("Show {} in this slot", kind.title()), S::ShowBuffer(kind)));
-        }
         for cols in 1..=max {
             actions.push(admin(format!("layout.{cols}"), format!("{cols}-column layout"), S::SetLayout(cols)));
         }
         actions.push(admin("column.add".into(), "Add a column".into(), S::SetLayout(self.desk.columns.len() + 1)));
         actions.push(admin("column.fewer".into(), "One column fewer (its view is hidden, not lost)".into(), S::SetLayout(self.desk.columns.len().saturating_sub(1).max(1))));
-        actions.extend(self.column_actions());
+        actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), S::ToggleInspector));
+        actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), S::ToggleIssues));
+        actions.extend(self.attention_actions());
+        actions.extend(self.server_actions());
+        actions.push(
+            Action::new("cockpit.agents", "Let agents drive the cockpit", S::Agents)
+                .detail("Agents read the screen and run actions through the server's cockpit tools, as you would")
+                .param(Param::Toggle { on: self.desk.remote.agents })
+                .group(Group::Act)
+                .importance(MINOR),
+        );
+        actions.push(admin("palette.open".into(), "Command palette".into(), S::OpenPalette));
+        let index = |id: &str, label: &str, op: IndexOp| Action::new(id, label, S::Index(op)).group(Group::Act).importance(MINOR);
+        actions.push(index("index.changed", "Re-read the code that changed", IndexOp::Changed));
+        actions.push(index("index.rebuild", "Rebuild the index from scratch", IndexOp::Rebuild));
+        actions
+    }
+
+    /// The level around the panel, its host: a column's own (what it
+    /// shows, closing it), or the quick look's.
+    pub(crate) fn host_actions(&self, here: Here) -> Vec<Action> {
+        use ShellCommand as S;
+        if let Some(open) = self.quick_look.as_ref().filter(|_| here.look) {
+            let look = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::View);
+            let mut out = vec![look("quicklook.toggle", "Close the quick look", S::QuickLook).importance(PRIMARY)];
+            // It holds a card (or the inbox): a card can go to a column.
+            if open.kind == BufferKind::Spec {
+                out.push(look("quicklook.to_column", "Open this card in a column", S::QuickLookToColumn).importance(PRIMARY));
+            }
+            return out;
+        }
+        let admin = |id: String, label: String, c: ShellCommand| Action::new(id, label, c).group(Group::View).importance(MINOR);
+        let mut actions = vec![Action::new("column.close", "Close this column (its view is hidden, not lost)", S::CloseColumn).group(Group::View).importance(MINOR)];
+        for kind in BufferKind::ALL {
+            actions.push(admin(format!("buffer.{}", kind.name()), format!("Show {} in this slot", kind.title()), S::ShowBuffer(kind)));
+        }
         // Every open view, to show here: on screen (and where) or hidden.
         let views: Vec<Choice> = self
             .desk.columns
@@ -39,55 +72,16 @@ impl CockpitApp {
         for kind in BufferKind::ALL.into_iter().filter(|k| !k.one_only()) {
             actions.push(admin(format!("buffer.new.{}", kind.name()), format!("New {} view here", kind.name()), S::NewView(kind)));
         }
-        actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), S::ToggleInspector));
-        actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), S::ToggleIssues));
-        actions.extend(self.look_actions());
-        actions.push(Action::new("talk.open", "Talk to the agent from here", S::Talk).group(Group::Act).importance(SECONDARY).layer(Layer::Panel));
-        actions.extend(self.attention_actions());
-        actions.extend(self.server_actions());
-        actions.push(
-            Action::new("cockpit.agents", "Let agents drive the cockpit", S::Agents)
-                .detail("Agents read the screen and run actions through the server's cockpit tools, as you would")
-                .param(Param::Toggle { on: self.desk.remote.agents })
-                .group(Group::Act)
-                .importance(MINOR),
-        );
-        actions.push(admin("palette.open".into(), "Command palette".into(), S::OpenPalette));
-        let index = |id: &str, label: &str, op: IndexOp| Action::new(id, label, S::Index(op)).group(Group::Act).importance(MINOR);
-        actions.push(index("index.changed", "Re-read the code that changed", IndexOp::Changed));
-        actions.push(index("index.rebuild", "Rebuild the index from scratch", IndexOp::Rebuild));
-        actions.push(index("index.file", &format!("Re-read {}", self.desk.code.current_file), IndexOp::File));
-        actions.extend(self.nav_actions());
         actions
     }
 
-    /// A column's own: closing it (its host places it on its header).
-    pub(super) fn column_actions(&self) -> Vec<Action> {
-        vec![Action::new("column.close", "Close this column (its view is hidden, not lost)", ShellCommand::CloseColumn).group(Group::View).importance(MINOR)]
-    }
-
-    /// The quick look's own: opening and closing it (hold its key to peek),
-    /// and sending its card to a column; open, their controls on its header.
-    pub(super) fn look_actions(&self) -> Vec<Action> {
+    /// What every panel has besides its view's own, the same for every
+    /// view: hints, search, marks and the jump list, its keys, a line or
+    /// row by number, the go-tos from its cursor, the quick look on it,
+    /// talking to the agent from here.
+    pub(crate) fn panel_actions(&self, here: Here) -> Vec<Action> {
         use ShellCommand as S;
-        let look = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::View);
-        let Some(open) = &self.quick_look else {
-            // On what you're on: its full card.
-            return vec![look("quicklook.toggle", "Quick look: the full card (hold to peek)", S::QuickLook).importance(PRIMARY).when(When::Component).layer(Layer::Panel)];
-        };
-        let mut out = vec![look("quicklook.toggle", "Close the quick look", S::QuickLook).importance(PRIMARY)];
-        if open.kind == BufferKind::Spec {
-            out.push(look("quicklook.to_column", "Open this card in a column", S::QuickLookToColumn).importance(PRIMARY));
-        }
-        out
-    }
-
-    /// The keys every view shares, labelled for the focused view and marked
-    /// with when they apply.
-    pub(super) fn nav_actions(&self) -> Vec<Action> {
-        use ShellCommand as S;
-        let kind = self.focused_kind();
-        let nav = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::Navigate).layer(Layer::Panel);
+        let nav = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::Navigate);
         let mut out = vec![
             nav("nav.hint", "Jump to something on screen", S::Hint { open: false }).importance(PRIMARY),
             nav("nav.hint_open", "Open something on screen", S::Hint { open: true }).importance(SECONDARY).icon(egui_phosphor::regular::CURSOR_CLICK),
@@ -99,19 +93,24 @@ impl CockpitApp {
             nav("nav.back", "Back (jump list)", S::Back).importance(SECONDARY).when(When::Back).icon(egui_phosphor::regular::ARROW_LEFT),
             nav("nav.forward", "Forward (jump list)", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT),
             Action::new("nav.keys", "Keys for this view", S::Keys).group(Group::View).importance(MINOR),
+            Action::new("talk.open", "Talk to the agent from here", S::Talk).group(Group::Act).importance(SECONDARY),
             nav("nav.line", "Go to line or row", S::Line).param(Param::Text { hint: "line or row number".into() }).importance(MINOR),
         ];
         // Each go-to's destination says whether it can show what the
         // cursor is on; the relational ones, whether its relations lead
         // anywhere.
-        let target = self.desk.view(kind).target();
+        let target = self.desk.view(here.kind).target();
         for op in GoTo::ALL {
             let when = match op.view() {
                 Some(view) if target.as_ref().is_some_and(|t| self.desk.view(view).can_show(t)) => When::Always,
                 Some(_) => When::Unavailable,
                 None => When::Reaches(op),
             };
-            out.push(Action::new(op.id(), op.label(), S::GoTo(op)).group(Group::GoTo).when(when).importance(op.importance()).layer(Layer::Panel));
+            out.push(Action::new(op.id(), op.label(), S::GoTo(op)).group(Group::GoTo).when(when).importance(op.importance()));
+        }
+        // On what you're on: its full card (open, it's the quick look's).
+        if self.quick_look.is_none() {
+            out.push(Action::new("quicklook.toggle", "Quick look: the full card (hold to peek)", S::QuickLook).group(Group::View).importance(PRIMARY).when(When::Component));
         }
         if let Some(choosing) = &self.desk.choosing {
             let name = |id: &ComponentId| self.component_name(id);
@@ -155,10 +154,14 @@ impl CockpitApp {
         if here == self.here() { self.bound_actions() } else { self.gather(here, false) }
     }
 
-    /// The list for `here`: its view's actions (and every other view's
-    /// global ones), the shell's (with its host's own: the quick look's or
-    /// the column's); each placed (the panel's, its host's and the top
-    /// bar's placements); bound to keys; in its layer.
+    /// The list for `here`: every level of where you are, innermost first,
+    /// each offering its actions the same way: the panel (its view's own,
+    /// its moves among them, and what every panel has), its host (the
+    /// column's or the quick look's), and everywhere (the shell's, and the
+    /// other views' global actions). An action's layer is the level that
+    /// offered it, or what you're on when its control is on the item. Each
+    /// is placed (the panel's, its host's and the top bar's placements:
+    /// how it shows, never its level) and bound to keys.
     pub(super) fn gather(&self, here: Here, keyed: bool) -> Vec<Bound> {
         #[cfg(test)]
         if keyed {
@@ -166,37 +169,27 @@ impl CockpitApp {
         }
         let kind = here.kind;
         let view = |k: BufferKind, all: bool| self.desk.provider(k).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(k), a));
-        let mut actions: Vec<(Origin, Action)> = view(kind, true).collect();
-        actions.extend(self.shell_actions().into_iter().map(|a| (Origin::Shell, a)));
+        let mut levels: Vec<(Layer, Origin, Action)> = Vec::new();
+        levels.extend(view(kind, true).map(|(o, a)| (Layer::Panel, o, a)));
+        levels.extend(self.panel_actions(here).into_iter().map(|a| (Layer::Panel, Origin::Shell, a)));
+        levels.extend(self.host_actions(here).into_iter().map(|a| (Layer::Host, Origin::Shell, a)));
+        levels.extend(self.shell_actions().into_iter().map(|a| (Layer::Everywhere, Origin::Shell, a)));
         // Another view's global actions are here for their keys and the
         // palette; their controls are their own panel's, not drawn here.
         for k in BufferKind::ALL.into_iter().filter(|k| *k != kind) {
-            actions.extend(view(k, false).map(|(o, mut a)| {
+            levels.extend(view(k, false).map(|(o, mut a)| {
                 a.control = None;
-                (o, a)
+                (Layer::Everywhere, o, a)
             }));
         }
-        // Placed: by its panel, its host, the top bar; each placement says
-        // its layer.
-        let mut layers: Vec<Option<Layer>> = vec![None; actions.len()];
-        for (id, control, layer) in self.placements(here) {
-            let found = actions.iter().position(|(o, a)| *o == Origin::View(kind) && a.id == id).or_else(|| actions.iter().position(|(o, a)| *o == Origin::Shell && a.id == id));
+        for (id, control) in self.placements(here) {
+            let found = levels.iter().position(|(_, o, a)| *o == Origin::View(kind) && a.id == id).or_else(|| levels.iter().position(|(_, o, a)| *o == Origin::Shell && a.id == id));
             if let Some(i) = found {
-                actions[i].1.control = Some(control);
-                layers[i] = Some(layer);
+                levels[i].2.control = Some(control);
             }
         }
-        let layer_of = |(origin, action): &(Origin, Action), placed: Option<Layer>| -> Layer {
-            let on = action.control.as_ref().is_some_and(|c| matches!(c.at, crate::actions::At::Item | crate::actions::At::Typing));
-            match placed {
-                Some(_) if on => Layer::On,
-                Some(layer) => layer,
-                None if on => Layer::On,
-                None if *origin == Origin::View(kind) => Layer::Panel,
-                None => action.layer.unwrap_or(Layer::Everywhere),
-            }
-        };
-        let tagged: Vec<Layer> = actions.iter().zip(&layers).map(|(a, placed)| layer_of(a, *placed)).collect();
+        let tagged: Vec<Layer> = levels.iter().map(|(level, _, action)| if action.control.as_ref().is_some_and(|c| matches!(c.at, crate::actions::At::Item | crate::actions::At::Typing)) { Layer::On } else { *level }).collect();
+        let actions: Vec<(Origin, Action)> = levels.into_iter().map(|(_, o, a)| (o, a)).collect();
         let keys: Vec<Keys> = if keyed {
             let keyed: KeyedActions = (kind, actions.iter().map(|(origin, a)| (*origin, a.id.clone(), a.aliases.clone())).collect());
             let mut cache = self.bound_cache.borrow_mut();
@@ -211,13 +204,12 @@ impl CockpitApp {
         actions.into_iter().zip(keys).zip(tagged).map(|(((origin, action), (leader, keys, gestures)), layer)| Bound { action, origin, leader, keys, gestures, layer }).collect()
     }
 
-    /// Every placement for `here`, with its layer: the panel's (on its top
-    /// line, or under what you're on), its host's (a column's tabs), the
-    /// top bar's (everywhere's).
-    fn placements(&self, here: Here) -> Vec<(String, crate::actions::Control, Layer)> {
+    /// Every placement for `here`: the panel's (on its top line, or under
+    /// what you're on), its host's (a column's tabs), the top bar's.
+    fn placements(&self, here: Here) -> Vec<(String, crate::actions::Control)> {
         use crate::actions::{At, Control, Style};
         use egui_phosphor::regular as icon;
-        let panel = self.desk.panel(here.kind).placed().into_iter().map(|(id, c)| (id, c, Layer::Panel));
+        let panel = self.desk.panel(here.kind).placed().into_iter();
         let button = |caption: &str, glyph: &'static str| Control::new(At::Header, Style::Button, caption, Some(glyph));
         let host = if here.look {
             vec![("quicklook.to_column".to_owned(), button("Open in a column", icon::COLUMNS)), ("quicklook.toggle".to_owned(), button("", icon::X))]
@@ -228,7 +220,7 @@ impl CockpitApp {
             }
             own
         };
-        panel.chain(host.into_iter().map(|(id, c)| (id, c, Layer::Host))).chain(self.top_bar_placements().into_iter().map(|(id, c)| (id, c, Layer::Everywhere))).collect()
+        panel.chain(host).chain(self.top_bar_placements()).collect()
     }
 
     /// A column's tabs: the shell's `buffer.*` actions, the shown one named

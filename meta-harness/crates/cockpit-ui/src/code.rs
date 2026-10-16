@@ -194,6 +194,8 @@ pub struct CodeViewerState {
     char_w: f32,
     /// Asks the app to select this component in the graph.
     pub select: Option<ComponentId>,
+    /// Asks the app to read this file into the index again.
+    pub reread: Option<String>,
     /// The server says this file changed since it was indexed.
     pub file_stale: bool,
     /// Out of date, by the server's word or the index status (set by the app).
@@ -235,6 +237,7 @@ impl Default for CodeViewerState {
             drawn: Vec::new(),
             char_w: 7.0,
             select: None,
+            reread: None,
             file_stale: false,
             out_of_date: false,
             on_lines: OnLines::default(),
@@ -815,6 +818,7 @@ enum CodeCommand {
     Copy,
     Reload,
     Deleted,
+    Reread,
 }
 
 impl CodeViewerState {
@@ -855,6 +859,8 @@ impl ActionProvider for CodeViewerState {
         out.push(Action::new("code.deleted", "Show deleted lines in place", CodeCommand::Deleted).focused().param(Param::Toggle { on: self.show_deleted }).header(Style::Setting, "Deleted lines", None).group(Group::View).importance(MINOR));
         out.push(Action::new("code.reload", "Load the file again", CodeCommand::Reload).focused().group(Group::View).importance(MINOR).header(Style::Button, "", Some(egui_phosphor::regular::ARROW_CLOCKWISE)));
         out.push(Action::new("code.copy", "Copy the file", CodeCommand::Copy).focused().importance(MINOR).header(Style::Button, "", Some(egui_phosphor::regular::COPY)));
+        // Its file, read into the index again (from anywhere).
+        out.push(Action::new("index.file", format!("Re-read {}", self.current_file), CodeCommand::Reread).group(Group::Act).importance(MINOR));
         out
     }
 
@@ -866,6 +872,7 @@ impl ActionProvider for CodeViewerState {
                 }
             }
             Some(CodeCommand::Copy) => cx.ctx.copy_text(self.content.clone()),
+            Some(CodeCommand::Reread) => self.reread = Some(self.current_file.clone()),
             Some(CodeCommand::Deleted) => {
                 self.show_deleted = match value.as_deref() {
                     Some("true") => true,
