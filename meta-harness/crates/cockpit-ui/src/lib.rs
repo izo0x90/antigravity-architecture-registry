@@ -67,6 +67,7 @@ impl WebHandle {
             .dyn_into::<web_sys::HtmlCanvasElement>()
             .map_err(|_| JsValue::from_str("Element is not a canvas"))?;
 
+        crate::keymap::keep_browser_keys(&window)?;
         let location = window.location();
         let origin = location.origin().unwrap_or_else(|_| "http://localhost:8080".to_string());
 

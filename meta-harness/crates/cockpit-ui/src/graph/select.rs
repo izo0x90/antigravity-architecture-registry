@@ -284,6 +284,8 @@ impl Navigable for GraphState {
             Motion::NextSibling => self.step_sibling(true, count),
             Motion::PrevSibling => self.step_sibling(false, count),
             Motion::Left | Motion::Down | Motion::Up | Motion::Right => {}
+            // Sideways: the camera, with the graph's own keys (to come).
+            Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
         }
     }
 

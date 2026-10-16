@@ -163,12 +163,15 @@ pub struct LocalKeys {
     pub pointer: PointerKeys,
     pub leader: Chord,
     pub back: Chord,
+    /// The keys with ctrl the cockpit binds, as a browser names them: the
+    /// page keeps them from the browser.
+    pub browser_keys: std::collections::BTreeSet<String>,
 }
 
 impl Default for LocalKeys {
     fn default() -> Self {
         let [leader, back] = <[Chord; 2]>::try_from(chords(&["Space", "Escape"])).expect("two keys");
-        Self { list: ListKeys::default(), input: InputKeys::default(), pointer: PointerKeys::default(), leader, back }
+        Self { list: ListKeys::default(), input: InputKeys::default(), pointer: PointerKeys::default(), leader, back, browser_keys: Default::default() }
     }
 }
 

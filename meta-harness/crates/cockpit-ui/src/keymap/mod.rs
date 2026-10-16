@@ -172,6 +172,16 @@ impl Chord {
         self.physical().is_some_and(|key| input.key_down(key))
     }
 
+    /// With ctrl alone (no shift or alt), the key a browser names in a
+    /// keydown (`"d"`, `"enter"`), lowercased.
+    fn ctrl_key(&self) -> Option<String> {
+        let key = match &self.key {
+            ChordKey::Text(t) => t.clone(),
+            ChordKey::Key(k) => k.name().to_owned(),
+        };
+        (self.ctrl && !self.shift && !self.alt).then(|| key.to_lowercase())
+    }
+
     pub fn label(&self) -> String {
         let key = match &self.key {
             ChordKey::Text(t) => t.clone(),
@@ -336,7 +346,17 @@ pub const AUTO_KEYS: &str = "123456789abcdefghijklmnopqrstuvwxyz";
 impl KeymapConfig {
     /// The keys outside the views' bindings, as views read them.
     pub fn local(&self) -> LocalKeys {
-        LocalKeys { list: self.list.clone(), input: self.input.clone(), pointer: self.pointer.clone(), leader: self.leader.clone(), back: self.back.clone() }
+        LocalKeys { list: self.list.clone(), input: self.input.clone(), pointer: self.pointer.clone(), leader: self.leader.clone(), back: self.back.clone(), browser_keys: self.ctrl_keys() }
+    }
+
+    /// The keys with ctrl the cockpit binds (alone, not with shift or alt:
+    /// those stay the browser's, its developer tools among them), as a
+    /// browser names them: they're the cockpit's, not the browser's history,
+    /// address bar or bookmarks.
+    pub fn ctrl_keys(&self) -> std::collections::BTreeSet<String> {
+        let bound = self.bind.values().flat_map(|b| b.keys.iter()).filter_map(|seq| seq.0.first());
+        let lists = self.list.next.iter().chain(&self.list.prev).chain(&self.list.pick);
+        bound.chain(lists).filter_map(Chord::ctrl_key).collect()
     }
 
     pub fn group_label(&self, path: &[char]) -> Option<&str> {
@@ -475,6 +495,25 @@ pub fn match_sequence(bound: &[Bound], pending: &[Chord], input: &egui::InputSta
     }
 }
 
+/// Keys with ctrl the cockpit binds stay the cockpit's in a browser: the
+/// browser's own use of them (history, the address bar, bookmarks) is kept
+/// from them (eframe keeps only a few). Read from the keys in use, so a
+/// user's keymap counts.
+#[cfg(target_arch = "wasm32")]
+pub fn keep_browser_keys(window: &web_sys::Window) -> Result<(), wasm_bindgen::JsValue> {
+    use wasm_bindgen::JsCast;
+    let listener = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(|e: web_sys::KeyboardEvent| {
+        if e.ctrl_key() && !e.shift_key() && !e.alt_key() && !e.meta_key() && local().browser_keys.contains(&e.key().to_lowercase()) {
+            e.prevent_default();
+        }
+    });
+    let options = web_sys::AddEventListenerOptions::new();
+    options.set_capture(true);
+    window.add_event_listener_with_callback_and_add_event_listener_options("keydown", listener.as_ref().unchecked_ref(), &options)?;
+    listener.forget();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +525,17 @@ mod tests {
 
     fn act(id: &str) -> (Origin, Action) {
         (Origin::Shell, Action::new(id, id, ()))
+    }
+
+    #[test]
+    fn the_ctrl_keys_bound_are_kept_from_the_browser_and_shifted_ones_are_not() {
+        let config = crate::config::UiConfig::with_overrides("").unwrap();
+        let keys = config.keymap.ctrl_keys();
+        for kept in ["d", "u", "h", "l", "o", "i"] {
+            assert!(keys.contains(kept), "ctrl+{kept}: {keys:?}");
+        }
+        assert!(!keys.contains("c"), "ctrl+shift+c (the inspector) stays the browser's too: {keys:?}");
+        assert_eq!(config.keymap.local().browser_keys, keys);
     }
 
     #[test]

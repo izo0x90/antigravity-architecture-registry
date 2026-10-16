@@ -14,7 +14,11 @@ use egui::{Frame, Pos2, Rect, RichText, Stroke, Vec2};
 use crate::actions::{Action, ActionProvider, Group, MINOR, Param, RunCx, Style};
 use crate::panel::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
-use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Scroll, Spot, Step, Target, scroll_offset};
+use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
+use crate::viewport::{Go, Show, Stop, Viewport};
+
+/// How many columns `z h` / `z l` move sideways.
+const FEW_COLUMNS: i32 = 4;
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
 
@@ -181,11 +185,15 @@ pub struct CodeViewerState {
     pub open: Option<ComponentId>,
     /// Folded definitions, by start line.
     folds: BTreeSet<usize>,
-    /// Where to scroll once the right file's lines are in.
-    scroll: Option<Scroll>,
-    /// The scroll position and viewport height last frame.
-    offset_y: f32,
-    view_h: f32,
+    /// How to show the cursor once the right file's lines are laid out
+    /// (asked before they were).
+    show: Option<Show>,
+    /// Where it's looking (the shared rules move it).
+    viewport: Viewport,
+    /// The time last drawn (a key's move glides from then).
+    clock: f64,
+    /// A row's height with the space under it (rows are laid out by it).
+    pitch: f32,
     /// The height a drawn row really takes (labels can be taller than the
     /// font's line height); rows are laid out and scrolled by it.
     row_h: f32,
@@ -230,9 +238,10 @@ impl Default for CodeViewerState {
             ui: crate::config::CodeUi::default(),
             open: None,
             folds: BTreeSet::new(),
-            scroll: None,
-            offset_y: 0.0,
-            view_h: 0.0,
+            show: None,
+            viewport: Viewport::default(),
+            clock: 0.0,
+            pitch: 16.0,
             row_h: 0.0,
             drawn: Vec::new(),
             char_w: 7.0,
@@ -269,7 +278,7 @@ impl CodeViewerState {
         self.target_line = target_line;
         self.cursor_col = None;
         self.highlight = target_line.map(|l| (l, l));
-        self.scroll = target_line.map(|_| Scroll::Center);
+        self.show = target_line.map(|_| Show::Middle);
         self.is_loading = true;
         self.error_message = None;
         // The text, its components and its analysis, in one answer (the
@@ -557,14 +566,27 @@ impl CodeViewerState {
         out
     }
 
-    fn put_cursor(&mut self, line: usize, how: Scroll) {
+    /// The cursor on `line`, shown as asked once laid out.
+    fn put_cursor(&mut self, line: usize, show: Show) {
         self.move_cursor(line);
-        self.scroll = Some(how);
+        self.show = Some(show);
     }
 
-    fn half_page_lines(&self) -> usize {
-        let pitch = if self.row_h > 0.0 { self.row_h } else { 16.0 };
-        if self.view_h > 0.0 { ((self.view_h / pitch) / 2.0).floor().max(1.0) as usize } else { 15 }
+    /// Where the cursor can stop: each line drawn, a row each (deleted
+    /// lines shown in place take a row, not a stop); and which line each is.
+    fn stops(&self) -> (Vec<Stop>, Vec<usize>) {
+        let pitch = self.pitch;
+        self.rows().iter().enumerate().filter_map(|(r, row)| if let Row::Line(l) = row { Some((Stop::new(r as f32 * pitch, pitch), *l)) } else { None }).unzip()
+    }
+
+    /// Moves by the shared rules from where the cursor is.
+    fn go(&mut self, go: Go) {
+        let (stops, lines) = self.stops();
+        let cursor = self.target_line.and_then(|l| lines.iter().position(|v| *v >= l));
+        if let Some(moved) = self.viewport.go(&stops, cursor, go) {
+            self.move_cursor(lines[moved.cursor]);
+            self.viewport.take(&moved, self.clock, true);
+        }
     }
 
     /// The next (or previous) definition start from the cursor; `same_level`
@@ -585,7 +607,7 @@ impl CodeViewerState {
                 None => break,
             }
         }
-        self.put_cursor(at, Scroll::KeepVisible);
+        self.put_cursor(at, Show::InView);
         Ok(())
     }
 
@@ -672,19 +694,31 @@ impl CodeViewerState {
             let mut go_to: Option<ComponentId> = None;
             let mut unfold: Option<usize> = None;
             let rows = self.rows();
-            // Rows are laid out only when visible, so scrolling to a line is
-            // done by offset, once the requested file's lines are in.
+            // Rows are laid out only when visible: where to look is worked
+            // out by the shared rules from the rows' pitch, and kept between
+            // the edges; two lines of room around the cursor.
             let pitch = row_height + ui.spacing().item_spacing.y;
-            let mut area = egui::ScrollArea::both().id_salt("code_lines").auto_shrink([false, false]);
-            let mut scrolled: Option<(Scroll, f32)> = None;
+            self.pitch = pitch;
+            self.viewport.margin = 2.0 * pitch;
+            self.viewport.column = self.char_w;
+            self.clock = ui.input(|i| i.time);
+            // Asked before the lines were laid out: shown now (once the
+            // window's size is known).
             if !self.is_loading
-                && let (Some(how), Some(line)) = (self.scroll, self.target_line)
+                && self.viewport.window.y > 0.0
+                && let (Some(show), Some(line)) = (self.show, self.target_line)
             {
-                let row = rows.iter().position(|r| matches!(r, Row::Line(l) if *l >= line)).unwrap_or(rows.len().saturating_sub(1));
-                let view_h = if self.view_h > 0.0 { self.view_h } else { ui.available_height() };
-                area = area.vertical_scroll_offset(scroll_offset(how, row, pitch, self.offset_y, view_h));
-                self.scroll = None;
-                scrolled = Some((how, view_h));
+                self.show = None;
+                let (stops, lines) = self.stops();
+                if let Some(at) = lines.iter().position(|l| *l >= line).or(lines.len().checked_sub(1))
+                    && let Some(moved) = self.viewport.go(&stops, Some(at), Go::To(at, show))
+                {
+                    self.viewport.take(&moved, self.clock, false);
+                }
+            }
+            let mut area = egui::ScrollArea::both().id_salt("code_lines").auto_shrink([false, false]);
+            if let Some(offset) = self.viewport.wanted(self.clock) {
+                area = area.scroll_offset(offset);
             }
             let mut drawn = Vec::new();
             let last = self.lines.len();
@@ -755,14 +789,8 @@ impl CodeViewerState {
                 self.row_h = measured;
                 ui.ctx().request_repaint();
             }
-            self.offset_y = viewer_res.state.offset.y;
-            self.view_h = viewer_res.inner_rect.height();
-            // Scrolled for a viewport of another size (the slot just opened
-            // or changed): once more for the real one.
-            if let Some((how, used)) = scrolled
-                && (used - self.view_h).abs() > 1.0
-            {
-                self.scroll = Some(how);
+            self.viewport.drawn(viewer_res.state.offset, viewer_res.inner_rect.size(), viewer_res.content_size);
+            if self.viewport.gliding() || self.show.is_some() {
                 ui.ctx().request_repaint();
             }
             let clip = viewer_res.inner_rect;
@@ -827,6 +855,12 @@ impl CodeViewerState {
     /// definition, folding definitions.
     fn moves(&self) -> Vec<Action> {
         let mut out = crate::nav::list_moves();
+        // Sideways, when lines are wider than the window.
+        let wide = self.viewport.content.x > self.viewport.window.x + 0.5;
+        out.push(Move::Motion(Motion::HalfLeft).offer_if(wide && self.viewport.offset.x > 0.0, "Half a window left"));
+        out.push(Move::Motion(Motion::HalfRight).offer_if(wide, "Half a window right"));
+        out.push(Move::Motion(Motion::FewLeft).offer_if(wide && self.viewport.offset.x > 0.0, "A few columns left"));
+        out.push(Move::Motion(Motion::FewRight).offer_if(wide, "A few columns right"));
         let line = self.target_line.unwrap_or(1);
         let defs = !self.defs.is_empty();
         out.push(Move::Motion(Motion::NextSibling).offer_if(defs, "Next definition at this level"));
@@ -938,7 +972,7 @@ impl Navigable for CodeViewerState {
         if let Place::Code { line, .. } = place {
             self.target_line = Some(*line);
             self.cursor_col = None;
-            self.scroll = Some(Scroll::Center);
+            self.show = Some(Show::Middle);
         }
     }
 
@@ -947,21 +981,25 @@ impl Navigable for CodeViewerState {
         Some(Target::Line { file: self.current_file.clone(), line, within: self.def_at(line).map(|d| d.id.clone()), refs: self.refs_at(line) })
     }
 
+    /// By the shared rules (a line a jump goes to is put in the middle).
     fn motion(&mut self, motion: Motion, count: usize) {
-        let visible = self.visible_lines();
-        if visible.is_empty() {
+        if self.lines.is_empty() {
             return;
         }
-        let row = self.target_line.and_then(|l| visible.iter().position(|v| *v >= l)).unwrap_or(0);
-        let to_row = |r: usize| visible[r.min(visible.len() - 1)];
+        let sideways = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
         match motion {
-            Motion::Down => self.put_cursor(if self.target_line.is_none() { visible[0] } else { to_row(row + count) }, Scroll::KeepVisible),
-            Motion::Up => self.put_cursor(to_row(row.saturating_sub(count)), Scroll::KeepVisible),
-            Motion::HalfDown => self.put_cursor(to_row(row + self.half_page_lines() * count), Scroll::KeepVisible),
-            Motion::HalfUp => self.put_cursor(to_row(row.saturating_sub(self.half_page_lines() * count)), Scroll::KeepVisible),
-            Motion::First => self.put_cursor(1, Scroll::KeepVisible),
-            Motion::Last => self.put_cursor(self.lines.len(), Scroll::KeepVisible),
-            Motion::Line(n) => self.put_cursor(n, Scroll::Center),
+            Motion::Down if self.target_line.is_none() => self.go(Go::First),
+            Motion::Down => self.go(Go::Down(count)),
+            Motion::Up => self.go(Go::Up(count)),
+            Motion::HalfDown => self.go(Go::HalfDown(count)),
+            Motion::HalfUp => self.go(Go::HalfUp(count)),
+            Motion::First => self.go(Go::First),
+            Motion::Last => self.go(Go::Last),
+            Motion::HalfLeft => self.go(Go::Sideways(-sideways(count))),
+            Motion::HalfRight => self.go(Go::Sideways(sideways(count))),
+            Motion::FewLeft => self.go(Go::Columns(-sideways(count) * FEW_COLUMNS)),
+            Motion::FewRight => self.go(Go::Columns(sideways(count) * FEW_COLUMNS)),
+            Motion::Line(n) => self.put_cursor(n, Show::Middle),
             Motion::NextSibling | Motion::PrevSibling => {
                 let _ = self.step_def(motion == Motion::NextSibling, count, true);
             }
@@ -988,7 +1026,7 @@ impl Navigable for CodeViewerState {
         let around = self.defs.iter().filter(|d| d.start < line && line <= d.end).min_by_key(|d| d.end - d.start).map(|d| d.start);
         match around {
             Some(start) => {
-                self.put_cursor(start, Scroll::KeepVisible);
+                self.put_cursor(start, Show::InView);
                 Step::Done
             }
             None => Step::Nothing("Not inside a definition.".into()),
@@ -1014,7 +1052,7 @@ impl Navigable for CodeViewerState {
                     self.folds.remove(&def.start);
                 } else {
                     self.folds.insert(def.start);
-                    self.scroll = Some(Scroll::KeepVisible);
+                    self.show = Some(Show::InView);
                 }
             }
         }
@@ -1052,7 +1090,7 @@ impl Navigable for CodeViewerState {
         let col = parts.next().and_then(|c| c.parse::<usize>().ok());
         let defs = &self.defs;
         self.folds.retain(|start| !defs.iter().any(|d| d.start == *start && d.start < line && line <= d.end));
-        self.put_cursor(line, Scroll::Center);
+        self.put_cursor(line, Show::Middle);
         self.cursor_col = col;
     }
 }
@@ -1135,7 +1173,7 @@ pub(crate) mod tests {
         *code.analysis_inbox.lock().unwrap() = Some(("Cargo.toml".into(), Ok(arch_graph::code::CodeAnalysis { file: "Cargo.toml".into(), text: "[package]\nname = \"x\"\n".into(), stale: true, ..Default::default() })));
         code.target_line = Some(700);
         code.highlight = Some((700, 700));
-        code.scroll = Some(Scroll::Center);
+        code.show = Some(Show::Middle);
         code.is_loading = true;
         frame(&mut code);
         code.set_content(text.clone());
@@ -1147,27 +1185,38 @@ pub(crate) mod tests {
         assert!(!drawn.iter().any(|t| t == "fn line_10() {}"), "the top of the file isn't");
         // Moving the cursor past the bottom scrolls just enough to keep it
         // visible (5j: a count).
+        // A key's move glides a sixth of a second (a frame is a sixtieth here).
         for _ in 0..12 {
             code.motion(Motion::Down, 5);
-            for _ in 0..2 {
+            for _ in 0..12 {
                 drawn = frame(&mut code);
             }
         }
         assert_eq!(code.target_line, Some(760));
         assert!(drawn.iter().any(|t| t == "fn line_760() {}"), "the cursor line stays on screen");
-        // Half a page moves by half the rows that fit, and stays in view.
-        let half = code.half_page_lines();
+        // Half a window moves the view and the cursor together, and the
+        // cursor stays on screen.
+        let half = (code.viewport.window.y / 2.0 / code.pitch).floor() as usize;
         assert!(half > 5 && half < 30, "{half}");
+        let top = code.viewport.offset.y;
         code.motion(Motion::HalfDown, 1);
-        for _ in 0..2 {
+        assert_eq!(code.viewport.offset.y - top, code.viewport.window.y / 2.0, "the view moves half a window");
+        let moved = code.target_line.unwrap() - 760;
+        assert!(moved.abs_diff(half) <= 1, "the cursor moves as far: {moved} vs {half}");
+        for _ in 0..12 {
             drawn = frame(&mut code);
         }
-        assert_eq!(code.target_line, Some(760 + half));
-        assert!(drawn.iter().any(|t| *t == format!("fn line_{}() {{}}", 760 + half)));
-        code.motion(Motion::HalfUp, 2);
-        assert_eq!(code.target_line, Some(760 - half));
+        assert!(drawn.iter().any(|t| *t == format!("fn line_{}() {{}}", code.target_line.unwrap())));
         code.motion(Motion::Last, 1);
         assert_eq!(code.target_line, Some(900));
+        for _ in 0..12 {
+            frame(&mut code);
+        }
+        // At the end, half a window more asks for nothing: no scroll past
+        // the end (the flicker).
+        let end = code.viewport.offset;
+        code.motion(Motion::HalfDown, 1);
+        assert!(!code.viewport.gliding() && code.viewport.offset == end && code.viewport.offset.y <= code.viewport.max_offset().y);
         code.motion(Motion::First, 1);
         assert_eq!(code.target_line, Some(1));
         code.motion(Motion::Line(42), 1);

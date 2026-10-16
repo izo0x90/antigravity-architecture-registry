@@ -128,7 +128,8 @@ fn the_code_view_scrolls_with_a_chat_beside_it() {
     }
     assert!(text.contains("fn line_300() {}"), "the code scrolled to its cursor");
     frame(&ctx, &mut app, key("G"));
-    for _ in 0..2 {
+    // A key's move glides a sixth of a second (a frame is a sixtieth here).
+    for _ in 0..12 {
         text = texts(&frame(&ctx, &mut app, vec![]));
     }
     assert!(text.contains("fn line_500() {}"));

@@ -14,7 +14,8 @@ use egui::RichText;
 
 use crate::actions::{Action, ActionProvider, RunCx};
 use crate::feedback::FeedbackInspectorState;
-use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Scroll, SearchEvent, Spot, Step, Target, scroll_offset};
+use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, SearchEvent, Spot, Step, Target};
+use crate::viewport::{Go, Show, Stop, Viewport};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
 
@@ -51,9 +52,13 @@ pub struct ArchitectureTreeState {
     /// Rows folded shut (everything else is open).
     closed: BTreeSet<ComponentId>,
     pub cursor: Option<ComponentId>,
-    scroll: Option<Scroll>,
-    offset_y: f32,
-    view_h: f32,
+    /// How to show the cursor once the rows are laid out.
+    show: Option<Show>,
+    /// Where it's looking (the shared rules move it), the time last drawn,
+    /// and a row's height with the space under it.
+    viewport: Viewport,
+    clock: f64,
+    pitch: f32,
     row_h: f32,
     /// Rows drawn last frame, and where.
     spots: Vec<Spot>,
@@ -246,8 +251,8 @@ impl ArchitectureTreeState {
         }
     }
 
-    /// Puts the cursor on `id` (opening what contains it) and scrolls to it.
-    pub fn reveal(&mut self, id: &ComponentId, how: Scroll) {
+    /// Puts the cursor on `id` (opening what contains it) and shows it.
+    pub fn reveal(&mut self, id: &ComponentId, how: Show) {
         if self.cards.contains_key(id) || self.parent.contains_key(id) || self.roots.contains(id) {
             self.open_to(id);
             if !self.rows().iter().any(|r| &r.id == id) {
@@ -255,15 +260,26 @@ impl ArchitectureTreeState {
                 self.search_filter.clear();
             }
             self.cursor = Some(id.clone());
-            self.scroll = Some(how);
+            self.show = Some(how);
         }
     }
 
-    fn put_cursor(&mut self, index: usize, how: Scroll) {
+    fn put_cursor(&mut self, index: usize, how: Show) {
         let rows = self.rows();
         if let Some(row) = rows.get(index.min(rows.len().saturating_sub(1))) {
             self.cursor = Some(row.id.clone());
-            self.scroll = Some(how);
+            self.show = Some(how);
+        }
+    }
+
+    /// Moves by the shared rules from where the cursor is: a row each.
+    fn go(&mut self, go: Go) {
+        let rows = self.rows();
+        let pitch = if self.pitch > 0.0 { self.pitch } else { ROW_H };
+        let stops: Vec<Stop> = (0..rows.len()).map(|i| Stop::new(i as f32 * pitch, pitch)).collect();
+        if let Some(moved) = self.viewport.go(&stops, self.cursor_index(&rows), go) {
+            self.cursor = Some(rows[moved.cursor].id.clone());
+            self.viewport.take(&moved, self.clock, true);
         }
     }
 
@@ -271,11 +287,6 @@ impl ArchitectureTreeState {
         self.cursor.as_ref().and_then(|c| rows.iter().position(|r| &r.id == c))
     }
 
-    /// Rows that fit in half the viewport.
-    fn half_page_rows(&self) -> usize {
-        let pitch = if self.row_h > 0.0 { self.row_h } else { ROW_H };
-        if self.view_h > 0.0 { ((self.view_h / pitch) / 2.0).floor().max(1.0) as usize } else { 10 }
-    }
 
     pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
         let (net, slot_idx) = (cx.net, cx.slot);
@@ -293,11 +304,21 @@ impl ArchitectureTreeState {
         }
         let row_h = ui.text_style_height(&egui::TextStyle::Body).max(ROW_H).max(self.row_h);
         let pitch = row_h + ui.spacing().item_spacing.y;
+        (self.pitch, self.viewport.margin, self.clock) = (pitch, 2.0 * pitch, ui.input(|i| i.time));
+        // Asked before the rows were laid out: shown now (once the window's
+        // size is known).
+        if self.viewport.window.y > 0.0
+            && let (Some(show), Some(at)) = (self.show, self.cursor_index(&rows))
+        {
+            self.show = None;
+            let stops: Vec<Stop> = (0..rows.len()).map(|i| Stop::new(i as f32 * pitch, pitch)).collect();
+            if let Some(moved) = self.viewport.go(&stops, Some(at), Go::To(at, show)) {
+                self.viewport.take(&moved, self.clock, false);
+            }
+        }
         let mut area = egui::ScrollArea::vertical().id_salt("tree_rows").auto_shrink([false, false]);
-        if let (Some(how), Some(at)) = (self.scroll, self.cursor_index(&rows)) {
-            let view_h = if self.view_h > 0.0 { self.view_h } else { ui.available_height() };
-            area = area.vertical_scroll_offset(scroll_offset(how, at, pitch, self.offset_y, view_h));
-            self.scroll = None;
+        if let Some(offset) = self.viewport.wanted(self.clock) {
+            area = area.vertical_scroll_offset(offset.y);
         }
         let mut spots = Vec::new();
         let mut measured: f32 = 0.0;
@@ -331,8 +352,10 @@ impl ArchitectureTreeState {
             self.row_h = measured;
             ui.ctx().request_repaint();
         }
-        self.offset_y = output.state.offset.y;
-        self.view_h = output.inner_rect.height();
+        self.viewport.drawn(output.state.offset, output.inner_rect.size(), output.content_size);
+        if self.viewport.gliding() || self.show.is_some() {
+            ui.ctx().request_repaint();
+        }
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
     }
 }
@@ -402,7 +425,7 @@ impl Navigable for ArchitectureTreeState {
 
     fn restore(&mut self, place: &Place) {
         if let Place::Tree { cursor: Some(id) } = place {
-            self.reveal(&id.clone(), Scroll::Center);
+            self.reveal(&id.clone(), Show::Middle);
         }
     }
 
@@ -417,7 +440,7 @@ impl Navigable for ArchitectureTreeState {
 
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
         let id = target.component().ok_or("Not a component.")?;
-        self.reveal(id, Scroll::Center);
+        self.reveal(id, Show::Middle);
         Ok(())
     }
 
@@ -427,15 +450,15 @@ impl Navigable for ArchitectureTreeState {
             return;
         }
         let at = self.cursor_index(&rows);
-        let here = at.unwrap_or(0);
         match motion {
-            Motion::Down => self.put_cursor(at.map_or(0, |i| i + count), Scroll::KeepVisible),
-            Motion::Up => self.put_cursor(here.saturating_sub(count), Scroll::KeepVisible),
-            Motion::HalfDown => self.put_cursor(here + self.half_page_rows() * count, Scroll::KeepVisible),
-            Motion::HalfUp => self.put_cursor(here.saturating_sub(self.half_page_rows() * count), Scroll::KeepVisible),
-            Motion::First => self.put_cursor(0, Scroll::KeepVisible),
-            Motion::Last => self.put_cursor(rows.len() - 1, Scroll::KeepVisible),
-            Motion::Line(n) => self.put_cursor(n.saturating_sub(1), Scroll::Center),
+            Motion::Down if at.is_none() => self.go(Go::First),
+            Motion::Down => self.go(Go::Down(count)),
+            Motion::Up => self.go(Go::Up(count)),
+            Motion::HalfDown => self.go(Go::HalfDown(count)),
+            Motion::HalfUp => self.go(Go::HalfUp(count)),
+            Motion::First => self.go(Go::First),
+            Motion::Last => self.go(Go::Last),
+            Motion::Line(n) => self.put_cursor(n.saturating_sub(1), Show::Middle),
             // h: fold the row, or step out to what contains it.
             Motion::Left => {
                 for _ in 0..count {
@@ -443,7 +466,7 @@ impl Navigable for ArchitectureTreeState {
                     if self.has_children(&id) && !self.closed.contains(&id) {
                         self.closed.insert(id);
                     } else if let Some(p) = self.parent.get(&id).cloned() {
-                        self.reveal(&p, Scroll::KeepVisible);
+                        self.reveal(&p, Show::InView);
                     }
                 }
             }
@@ -455,7 +478,7 @@ impl Navigable for ArchitectureTreeState {
                         continue;
                     }
                     if let Some(first) = self.children.get(&id).and_then(|k| k.first()).cloned() {
-                        self.reveal(&first, Scroll::KeepVisible);
+                        self.reveal(&first, Show::InView);
                     }
                 }
             }
@@ -469,9 +492,10 @@ impl Navigable for ArchitectureTreeState {
                 if let Some(i) = shown.iter().position(|s| **s == id) {
                     let next = if motion == Motion::NextSibling { (i + count).min(shown.len() - 1) } else { i.saturating_sub(count) };
                     let target = shown[next].clone();
-                    self.reveal(&target, Scroll::KeepVisible);
+                    self.reveal(&target, Show::InView);
                 }
             }
+            Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
         }
     }
 
@@ -494,7 +518,7 @@ impl Navigable for ArchitectureTreeState {
         }
         match self.parent.get(&id).cloned() {
             Some(p) => {
-                self.reveal(&p, Scroll::KeepVisible);
+                self.reveal(&p, Show::InView);
                 Step::Done
             }
             None => Step::Nothing("Already at the top.".into()),
@@ -513,7 +537,7 @@ impl Navigable for ArchitectureTreeState {
                         at = p.clone();
                     }
                     self.cursor = Some(at);
-                    self.scroll = Some(Scroll::KeepVisible);
+                    self.show = Some(Show::InView);
                 }
             }
             Fold::Open | Fold::Close | Fold::Toggle => {
@@ -531,7 +555,7 @@ impl Navigable for ArchitectureTreeState {
                     self.closed.insert(row.clone());
                     if self.cursor.as_ref() != Some(&row) {
                         self.cursor = Some(row);
-                        self.scroll = Some(Scroll::KeepVisible);
+                        self.show = Some(Show::InView);
                     }
                 }
             }
@@ -551,7 +575,7 @@ impl Navigable for ArchitectureTreeState {
     }
 
     fn move_to(&mut self, key: &str) {
-        self.reveal(&ComponentId::new(key), Scroll::Center);
+        self.reveal(&ComponentId::new(key), Show::Middle);
     }
 
     /// `/` types into the filter; Escape puts back the one there was.
@@ -714,11 +738,13 @@ pub(crate) mod tests {
         let spots = t.spots();
         assert!(!spots.is_empty() && spots.len() < 6, "only what fits is labelled: {}", spots.len());
         assert_eq!(spots[0].key, "rust:a");
-        let half = t.half_page_rows();
-        assert!((1..=4).contains(&half), "{half}");
+        // Half a window moves the view and the cursor together.
         t.motion(Motion::First, 1);
         t.motion(Motion::HalfDown, 1);
-        assert_eq!(t.cursor_index(&t.rows()), Some(half));
+        let at = t.cursor_index(&t.rows()).unwrap();
+        let top = at as f32 * t.pitch;
+        assert!(at > 0 && t.viewport.offset.y > 0.0, "both moved: row {at}, offset {}", t.viewport.offset.y);
+        assert!(top >= t.viewport.offset.y && top < t.viewport.offset.y + t.viewport.window.y, "the cursor stays on screen");
     }
 
     #[test]

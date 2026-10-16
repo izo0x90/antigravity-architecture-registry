@@ -1219,7 +1219,7 @@ impl Navigable for SpecState {
             Motion::Line(i) => self.put_cursor(i.saturating_sub(1)),
             Motion::NextSibling => self.step_section(count as i32),
             Motion::PrevSibling => self.step_section(-(count as i32)),
-            Motion::Left | Motion::Right => {}
+            Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
         }
     }
 

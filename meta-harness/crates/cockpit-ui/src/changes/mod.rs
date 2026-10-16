@@ -962,7 +962,7 @@ impl Navigable for ChangesView {
                     self.put_cursor(at);
                 }
             }
-            Motion::Left | Motion::Right => {}
+            Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
         }
     }
 

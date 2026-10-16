@@ -44,6 +44,8 @@ pub enum Go {
     To(usize, Show),
     /// Half the window sideways, `n` times (negative: left).
     Sideways(i32),
+    /// `n` columns sideways (negative: left).
+    Columns(i32),
 }
 
 /// How a stop gone to is shown.
@@ -75,16 +77,21 @@ pub struct Viewport {
     pub content: Vec2,
     /// Room kept around the cursor when it's brought into view.
     pub margin: f32,
+    /// A column's width, for moving sideways by columns.
+    pub column: f32,
     /// Scrolled by hand (a wheel, a finger) since the last move with keys:
     /// the next key brings the cursor onto the screen first.
     pub by_hand: bool,
-    /// A key's move under way: from where, to where, since when.
-    glide: Option<(Vec2, Vec2, f64)>,
+    /// Where it was last drawn (a glide starts there).
+    at: Vec2,
+    /// A move under way: from where, to where, since when (none: there
+    /// at once, next frame).
+    glide: Option<(Vec2, Vec2, Option<f64>)>,
 }
 
 impl Default for Viewport {
     fn default() -> Self {
-        Self { offset: Vec2::ZERO, window: Vec2::ZERO, content: Vec2::ZERO, margin: 0.0, by_hand: false, glide: None }
+        Self { offset: Vec2::ZERO, window: Vec2::ZERO, content: Vec2::ZERO, margin: 0.0, column: 0.0, by_hand: false, at: Vec2::ZERO, glide: None }
     }
 }
 
@@ -136,7 +143,8 @@ impl Viewport {
     pub fn go(&self, stops: &[Stop], cursor: Option<usize>, go: Go) -> Option<Moved> {
         if stops.is_empty() {
             return match go {
-                Go::Sideways(n) => self.sideways(cursor.unwrap_or(0), n),
+                Go::Sideways(n) => self.sideways(cursor.unwrap_or(0), self.window.x / 2.0 * n as f32),
+                Go::Columns(n) => self.sideways(cursor.unwrap_or(0), self.column * n as f32),
                 _ => None,
             };
         }
@@ -163,25 +171,29 @@ impl Viewport {
                     // At the end: the cursor goes the rest of the way.
                     to(if down { last } else { 0 }, Show::InView)
                 } else {
-                    // The view and the cursor move together: the cursor
-                    // stays where it was on the screen.
-                    let on_screen = (stops[at].top - offset.y).clamp(0.0, self.window.y);
-                    Moved { cursor: Self::stop_at(stops, y + on_screen), offset: Vec2::new(offset.x, y) }
+                    // The view and the cursor move together, as far as the
+                    // edges let the view; the cursor stays in view.
+                    let cursor = Self::stop_at(stops, (stops[at].top + if down { step } else { -step }).max(0.0));
+                    Moved { cursor, offset: Vec2::new(offset.x, self.showing(&stops[cursor], Show::InView, y)) }
                 }
             }
-            Go::Sideways(n) => return self.sideways(at, n),
+            Go::Sideways(n) => return self.sideways(at, self.window.x / 2.0 * n as f32),
+            Go::Columns(n) => return self.sideways(at, self.column * n as f32),
         };
         (moved.cursor != cursor.unwrap_or(usize::MAX) || moved.offset != self.offset).then_some(moved)
     }
 
-    fn sideways(&self, cursor: usize, n: i32) -> Option<Moved> {
-        let offset = self.clamp(self.offset + Vec2::new(self.window.x / 2.0 * n as f32, 0.0));
+    fn sideways(&self, cursor: usize, by: f32) -> Option<Moved> {
+        let offset = self.clamp(self.offset + Vec2::new(by, 0.0));
         (offset != self.offset).then_some(Moved { cursor, offset })
     }
 
-    /// Takes a key's move: where to look now glides there from here.
-    pub fn take(&mut self, moved: &Moved, now: f64) {
-        self.glide = (moved.offset != self.offset).then_some((self.offset, moved.offset, now));
+    /// Takes a move: a key's (`glide`: from `now`, from where it was last
+    /// drawn) or a jump's (there at once).
+    pub fn take(&mut self, moved: &Moved, now: f64, glide: bool) {
+        if moved.offset != self.offset || moved.offset != self.at {
+            self.glide = Some((self.at, moved.offset, glide.then_some(now)));
+        }
         self.offset = moved.offset;
         self.by_hand = false;
     }
@@ -191,6 +203,10 @@ impl Viewport {
     /// what it has (nothing asked, nothing gliding).
     pub fn wanted(&mut self, now: f64) -> Option<Vec2> {
         let (from, to, since) = self.glide?;
+        let Some(since) = since else {
+            self.glide = None;
+            return Some(to);
+        };
         let t = ((now - since) / GLIDE_S).clamp(0.0, 1.0) as f32;
         if t >= 1.0 {
             self.glide = None;
@@ -209,14 +225,14 @@ impl Viewport {
     /// content. Scrolled where nothing asked (a wheel, a finger) is by
     /// hand.
     pub fn drawn(&mut self, offset: Vec2, window: Vec2, content: Vec2) {
-        let asked = self.glide.map_or(self.offset, |(_, to, _)| to);
-        if self.glide.is_none() && (offset - asked).length() > 0.5 {
-            self.by_hand = true;
-        }
+        (self.window, self.content, self.at) = (window, content, offset);
         if self.glide.is_none() {
+            // Where it was asked to look, as the content now allows.
+            if (offset - self.clamp(self.offset)).length() > 0.5 {
+                self.by_hand = true;
+            }
             self.offset = offset;
         }
-        (self.window, self.content) = (window, content);
     }
 }
 
@@ -254,7 +270,7 @@ mod tests {
         let (stops, mut view) = lines();
         assert_eq!(y(view.go(&stops, Some(3), Go::HalfDown(1))), Some((8, 100.0)), "both move 100: the cursor stays where it was on the screen");
         view.offset.y = 1750.0;
-        assert_eq!(y(view.go(&stops, Some(95), Go::HalfDown(1))), Some((97, 1800.0)), "only 50 more to scroll");
+        assert_eq!(y(view.go(&stops, Some(90), Go::HalfDown(1))), Some((95, 1800.0)), "only 50 more to scroll: the cursor still moves half a window");
         view.offset.y = 1800.0;
         assert_eq!(y(view.go(&stops, Some(95), Go::HalfDown(1))), Some((99, 1800.0)), "at the end: the cursor goes to the last");
         assert_eq!(y(view.go(&stops, Some(99), Go::HalfDown(1))), None, "and then nothing: no flicker past the end");
@@ -299,7 +315,7 @@ mod tests {
         assert_eq!(y(view.go(&stops, Some(2), Go::Down(1))), Some((53, 1000.0)), "the cursor (above) comes to the top that shows (with room), then moves; the view stays");
         assert_eq!(y(view.go(&stops, Some(90), Go::Up(1))), Some((56, 1000.0)), "from below: the bottom that shows");
         let moved = view.go(&stops, Some(52), Go::Down(1)).unwrap();
-        view.take(&moved, 0.0);
+        view.take(&moved, 0.0, true);
         assert!(!view.by_hand, "a key's move: back to following the cursor");
     }
 
@@ -307,7 +323,7 @@ mod tests {
     fn a_keys_move_glides_and_a_hand_doesnt() {
         let (stops, mut view) = lines();
         let moved = view.go(&stops, Some(0), Go::Last).unwrap();
-        view.take(&moved, 10.0);
+        view.take(&moved, 10.0, true);
         assert_eq!(view.wanted(10.0), Some(Vec2::ZERO), "starts where it was");
         let half = view.wanted(10.0 + GLIDE_S / 2.0).unwrap().y;
         assert!(half > 900.0 && half < 1800.0, "on its way, eased: {half}");
@@ -315,6 +331,10 @@ mod tests {
         assert_eq!(view.wanted(11.0), None, "and done");
         view.drawn(Vec2::new(0.0, 1800.0), view.window, view.content);
         assert!(!view.by_hand, "where it was asked to be");
+        // A jump: there at once.
+        let moved = view.go(&stops, Some(99), Go::To(0, Show::Middle)).unwrap();
+        view.take(&moved, 20.0, false);
+        assert_eq!((view.wanted(20.0), view.wanted(20.0)), (Some(Vec2::ZERO), None));
     }
 
     #[test]
@@ -325,6 +345,9 @@ mod tests {
         view.offset.x = 400.0;
         assert_eq!(view.go(&stops, Some(3), Go::Sideways(1)), None, "at the right edge");
         assert_eq!(view.go(&stops, Some(3), Go::Sideways(-3)).map(|m| m.offset.x), Some(0.0));
+        view.offset.x = 0.0;
+        view.column = 8.0;
+        assert_eq!(view.go(&stops, Some(3), Go::Columns(4)).map(|m| m.offset.x), Some(32.0), "a few columns");
         view.content.x = 200.0;
         view.offset.x = 0.0;
         assert_eq!(view.go(&stops, Some(3), Go::Sideways(1)), None, "narrower than the window: nothing");

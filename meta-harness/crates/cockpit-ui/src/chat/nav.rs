@@ -87,7 +87,7 @@ impl Navigable for ChatStreamState {
             Motion::First => self.put_cursor(0),
             Motion::Last => self.put_cursor(n - 1),
             Motion::Line(i) => self.put_cursor(i.saturating_sub(1)),
-            Motion::NextSibling | Motion::PrevSibling | Motion::Left | Motion::Right => {}
+            Motion::NextSibling | Motion::PrevSibling | Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
         }
     }
 

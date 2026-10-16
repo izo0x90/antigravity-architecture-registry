@@ -205,6 +205,12 @@ pub enum Motion {
     Right,
     HalfDown,
     HalfUp,
+    /// Half the window sideways (views wider than their window).
+    HalfLeft,
+    HalfRight,
+    /// A few columns sideways.
+    FewLeft,
+    FewRight,
     First,
     Last,
     NextSibling,
@@ -245,6 +251,10 @@ impl Move {
             Self::Motion(Motion::Right) => "nav.right",
             Self::Motion(Motion::HalfDown) => "nav.half_down",
             Self::Motion(Motion::HalfUp) => "nav.half_up",
+            Self::Motion(Motion::HalfLeft) => "nav.half_left",
+            Self::Motion(Motion::HalfRight) => "nav.half_right",
+            Self::Motion(Motion::FewLeft) => "nav.few_left",
+            Self::Motion(Motion::FewRight) => "nav.few_right",
             Self::Motion(Motion::First) => "nav.first",
             Self::Motion(Motion::Last) => "nav.last",
             Self::Motion(Motion::NextSibling) => "nav.next_sibling",
@@ -542,29 +552,6 @@ pub fn hint_labels(n: usize, alphabet: &[char]) -> Vec<String> {
         .collect()
 }
 
-/// How a list view scrolls to its cursor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Scroll {
-    /// Bring the row to the middle (a jump, opening a target).
-    Center,
-    /// Scroll only as far as needed to keep the row on screen (moves).
-    KeepVisible,
-}
-
-/// The scroll offset that shows row `row` (0-based) the way `how` asks,
-/// given the row pitch, the current offset and the viewport height.
-pub fn scroll_offset(how: Scroll, row: usize, pitch: f32, current: f32, view_h: f32) -> f32 {
-    let top = row as f32 * pitch;
-    // A couple of rows of context around a cursor kept in view.
-    let margin = (2.0 * pitch).min((view_h - pitch).max(0.0) / 2.0);
-    match how {
-        Scroll::Center => (top - (view_h - pitch) / 2.0).max(0.0),
-        Scroll::KeepVisible if top < current + margin => (top - margin).max(0.0),
-        Scroll::KeepVisible if top + pitch > current + view_h - margin => (top + pitch + margin - view_h).max(0.0),
-        Scroll::KeepVisible => current,
-    }
-}
-
 /// What a search is doing, for views that narrow what they show while it's
 /// typed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -699,15 +686,6 @@ mod tests {
         let unique: std::collections::BTreeSet<&String> = many.iter().collect();
         assert_eq!(unique.len(), 10);
         assert!(hint_labels(0, &alphabet).is_empty());
-    }
-
-    #[test]
-    fn scroll_offsets_center_targets_and_keep_the_cursor_visible() {
-        assert_eq!(scroll_offset(Scroll::Center, 0, 20.0, 0.0, 400.0), 0.0);
-        assert_eq!(scroll_offset(Scroll::Center, 100, 20.0, 0.0, 420.0), 2000.0 - 200.0);
-        assert_eq!(scroll_offset(Scroll::KeepVisible, 9, 20.0, 0.0, 400.0), 0.0, "already visible");
-        assert_eq!(scroll_offset(Scroll::KeepVisible, 29, 20.0, 0.0, 400.0), 600.0 + 40.0 - 400.0, "just below: scroll by what's needed, with context");
-        assert_eq!(scroll_offset(Scroll::KeepVisible, 4, 20.0, 500.0, 400.0), 40.0, "above: bring near the top, with context");
     }
 
     #[test]

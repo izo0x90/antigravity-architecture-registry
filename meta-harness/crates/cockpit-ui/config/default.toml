@@ -149,6 +149,12 @@ I = "Index"
 "nav.right" = { keys = ["l"] }
 "nav.half_down" = { keys = ["ctrl+d"] }
 "nav.half_up" = { keys = ["ctrl+u"] }
+# Sideways, in views wider than their window: half a window, or a few
+# columns (vim's z H / z L and z h / z l work too).
+"nav.half_left" = { keys = ["ctrl+h", "z H"] }
+"nav.half_right" = { keys = ["ctrl+l", "z L"] }
+"nav.few_left" = { keys = ["z h"] }
+"nav.few_right" = { keys = ["z l"] }
 "nav.first" = { keys = ["g g"] }
 "nav.last" = { keys = ["G"] }
 "nav.next_sibling" = { keys = ["] ]"] }
