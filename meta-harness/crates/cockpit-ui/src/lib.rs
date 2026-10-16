@@ -17,6 +17,7 @@ pub mod keymap;
 #[cfg(test)]
 mod lint;
 pub mod nav;
+pub mod viewport;
 pub mod net;
 pub mod palette;
 pub mod panel;
