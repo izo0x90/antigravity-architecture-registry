@@ -113,7 +113,7 @@ fn going_to_a_components_changes_opens_its_file_at_its_change() {
     let list = ComponentChangeList { comparison: Comparison::default(), components: vec![harness_contracts::changes::ComponentChanges { component: id.as_str().into(), file: "a.rs".into(), added: 1, removed: 1, runs: vec![(3, 1)], direct: true }], out_of_date: vec![] };
     push(&view.inbox, Reply::Components(Comparison::default(), Ok(list)));
     view.tick(&net, &ctx, false);
-    assert!(view.touches(&id) && view.components().1 == 1);
+    assert!(view.touches(&id) && view.components().0.is_some());
     assert_eq!(view.by_component().get(&id).map(|c| (c.added, c.removed)), Some((1, 1)));
     view.close(&(Group::Unstaged, "a.rs".into()));
     assert!(view.reveal(&id));
@@ -122,4 +122,33 @@ fn going_to_a_components_changes_opens_its_file_at_its_change() {
     push(&view.inbox, Reply::File(Comparison::default(), (Group::Unstaged, "a.rs".into()), Ok(a)));
     view.tick(&net, &ctx, false);
     assert_eq!(view.cursor_key().as_deref(), Some("h:Unstaged:a.rs:0"), "its file opened again, the cursor on the change");
+}
+
+fn window(from: &str, to: Option<&str>, started_ms: u64, slots: &[&str], files: u32) -> Window {
+    let working = slots.iter().map(|s| harness_contracts::changes::Working { slot: (*s).into(), thread: "t".into(), turn: "u".into() }).collect();
+    Window { from: from.into(), to: to.map(Into::into), started_ms, ended_ms: to.map(|_| started_ms + 1), working, files }
+}
+
+#[test]
+fn the_timeline_lists_windows_newest_first_and_picking_one_compares_it() {
+    let (mut view, net, ctx) = view_with_changes();
+    let timeline = Timeline { windows: vec![window("1-a", Some("2-b"), 1, &["lead"], 2), window("2-b", None, 2, &[], 1)], turns: vec![] };
+    push(&view.inbox, Reply::Timeline(Ok(timeline)));
+    view.tick(&net, &ctx, false);
+    assert_eq!(view.timeline().1, 1);
+    let mut cx_net = (NetClient::new("http://127.0.0.1:9"), None, None, crate::keymap::InputMode::Normal);
+    let mut cx = RunCx { net: &cx_net.0, ctx: &ctx, input_mode: &mut cx_net.3, slot: 0, note: &mut cx_net.1, asked: &mut cx_net.2 };
+    let timeline = view.actions().into_iter().find(|a| a.id == "changes.timeline").unwrap();
+    view.run(&timeline, None, &mut cx);
+    assert_eq!(view.rows(), [Row::Window(0), Row::Window(1)]);
+    assert_eq!(view.cursor_key().as_deref(), Some("w:2-b"), "newest first: the open one");
+    assert!(view.items().iter().any(|i| i.text.contains("lead")), "who was working is searchable");
+    view.motion(Motion::Down, 1);
+    assert_eq!(view.enter(), Step::Done);
+    assert_eq!((view.comparison.clone(), view.on_timeline), (Comparison { from: Point::Snapshot("1-a".into()), to: Point::Snapshot("2-b".into()) }, false), "that window, compared");
+    // "Since here": from a window's start to the files now.
+    view.show_timeline(true);
+    let since = view.actions().into_iter().find(|a| a.id == "changes.since").expect("on a window");
+    view.run(&since, None, &mut cx);
+    assert_eq!(view.comparison, Comparison { from: Point::Snapshot("2-b".into()), to: Point::Files });
 }

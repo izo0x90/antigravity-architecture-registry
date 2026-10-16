@@ -93,7 +93,7 @@ fn messages_take_a_cursor_and_their_links_open() {
     assert_eq!(chat.ui.cursor, Some(0));
     assert!(matches!(chat.enter(), Step::Nothing(_)), "a prompt has no file");
     chat.motion(Motion::Line(3), 1);
-    assert_eq!(chat.target(), Some(Target::Message { thread: Some("t".into()), index: 2, link: Some(("src/parse.rs".into(), Some(12))) }));
+    assert_eq!(chat.target(), Some(Target::Message { thread: Some("t".into()), turn: Some("turn".into()), index: 2, link: Some(("src/parse.rs".into(), Some(12))) }));
     assert_eq!(chat.enter(), Step::GoTo(GoTo::Code), "Enter opens the file it points to");
     // A hint on the second link picks it.
     chat.move_to("2:1");

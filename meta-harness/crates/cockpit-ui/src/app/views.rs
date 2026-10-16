@@ -143,6 +143,11 @@ impl CockpitApp {
             spec.follow_changes(&comparison, read, context, &self.desk.net, ctx);
         }
         // Which components it changed: badges, and the only-changed filter.
+        let (timeline, turns_read) = self.desk.changes.timeline();
+        if turns_read != self.desk.chat.turn_files_read {
+            self.desk.chat.turn_files = timeline.map(|t| t.turns.iter().map(|x| (x.turn.clone(), x.files)).collect()).unwrap_or_default();
+            self.desk.chat.turn_files_read = turns_read;
+        }
         let (_, read) = self.desk.changes.components();
         let mut changed = None;
         for graph in std::iter::once(&mut self.desk.graph).chain(self.desk.parked.graphs.values_mut()) {

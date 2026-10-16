@@ -156,6 +156,10 @@ impl ChatStreamState {
                 } else if let Some(f) = &turn.failure {
                     ui.label(RichText::new(format!("failed: {}", f.message)).size(crate::theme::look().text_tiny).color(colors().error));
                 }
+                if let Some(files) = self.turn_files.get(turn.id.as_str()).filter(|n| **n > 0) {
+                    let words = if *files == 1 { "1 file changed".to_owned() } else { format!("{files} files changed") };
+                    ui.label(RichText::new(format!("{} {words}", egui_phosphor::regular::GIT_DIFF)).size(crate::theme::look().text_tiny).color(colors().ok));
+                }
             });
             for item in view.items_of(&turn.id) {
                 let on = self.ui.cursor == Some(index);

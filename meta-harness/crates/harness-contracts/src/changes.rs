@@ -309,6 +309,22 @@ pub struct TurnChanges {
     pub alongside: Vec<Working>,
 }
 
+/// When the project's files changed and who was working: the windows
+/// between snapshots (oldest first; the last one open, up to the files
+/// now), and each turn's changes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Timeline {
+    pub windows: Vec<Window>,
+    pub turns: Vec<TurnChanges>,
+}
+
+impl Timeline {
+    /// A turn's changes, if it was seen.
+    pub fn turn(&self, turn: &str) -> Option<&TurnChanges> {
+        self.turns.iter().find(|t| t.turn == turn)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

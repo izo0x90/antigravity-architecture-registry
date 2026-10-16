@@ -22,8 +22,8 @@ pub enum Target {
     Spec { component: ComponentId, section: Section, item: SpecItem },
     /// A job in the work queue.
     Job { component: ComponentId },
-    /// A message in the chat, and the file it points to (if any).
-    Message { thread: Option<String>, index: usize, link: Option<(String, Option<usize>)> },
+    /// A message in the chat: its turn, and the file it points to (if any).
+    Message { thread: Option<String>, turn: Option<String>, index: usize, link: Option<(String, Option<usize>)> },
     /// A change (git): the file, at its first changed line.
     Change { file: String, line: usize },
 }
@@ -544,7 +544,7 @@ mod tests {
         let step = Target::Spec { component: a.clone(), section: Section::Logic, item: SpecItem::Step(0) };
         assert_eq!(step.component(), Some(&a));
         assert_eq!(Target::Job { component: b.clone() }.component(), Some(&b));
-        let message = Target::Message { thread: None, index: 2, link: Some(("src/b.rs".into(), Some(7))) };
+        let message = Target::Message { thread: None, turn: None, index: 2, link: Some(("src/b.rs".into(), Some(7))) };
         assert_eq!((message.component(), message.code()), (None, Some(("src/b.rs".into(), Some(7)))));
     }
 }

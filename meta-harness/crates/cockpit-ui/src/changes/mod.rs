@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use egui::RichText;
-use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, ComponentChangeList, ComponentChanges, DiffLine, FileChanges, FileStatus, Group, Hunk, LineKind, Point};
+use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, ComponentChangeList, ComponentChanges, Timeline, TurnChanges, Window, DiffLine, FileChanges, FileStatus, Group, Hunk, LineKind, Point};
 use serde::{Deserialize, Serialize};
 
 use crate::actions::{Action, ActionProvider, Choice, Group as ActionGroup, MINOR, Param, RunCx, SECONDARY, Style};
@@ -54,6 +54,7 @@ enum Reply {
     List(Comparison, NetResult<ChangeList>),
     File(Comparison, FileKey, NetResult<FileChanges>),
     Components(Comparison, NetResult<ComponentChangeList>),
+    Timeline(NetResult<Timeline>),
 }
 
 /// An opened file: how much context it asks for, and its changes once in.
@@ -67,11 +68,13 @@ struct Opened {
     asked_for: Option<(u32, u32)>,
 }
 
-/// A cursor stop: a file, or one of its changes.
+/// A cursor stop: a file, or one of its changes; on the timeline, a
+/// window (newest first).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Row {
     File(usize),
     Hunk(usize, usize),
+    Window(usize),
 }
 
 #[derive(Clone, Debug)]
@@ -80,6 +83,8 @@ enum Command {
     Layout,
     Refresh,
     MoreContext,
+    Timeline,
+    Since,
 }
 
 /// The comparisons the picker offers (any other, a timeline window, shows
@@ -132,6 +137,11 @@ pub struct ChangesView {
     components_read: u64,
     /// A spot to put the cursor on once its file's changes are in (`g x`).
     revealing: Option<(FileKey, usize)>,
+    /// When the files changed and who was working (asked for with each
+    /// list), and whether the view shows it instead of the changes.
+    timeline: Option<Timeline>,
+    timeline_read: u64,
+    pub on_timeline: bool,
     inbox: Arc<Mutex<Vec<Reply>>>,
 }
 
@@ -159,6 +169,9 @@ impl Default for ChangesView {
             components: None,
             components_read: 0,
             revealing: None,
+            timeline: None,
+            timeline_read: 0,
+            on_timeline: false,
             inbox: Arc::default(),
         }
     }
@@ -215,7 +228,15 @@ impl ChangesView {
         self.opened.get(&(group, path.to_owned())).and_then(|o| o.changes.as_ref())
     }
 
+    /// The timeline's windows, newest first (as its rows are).
+    fn windows(&self) -> Vec<&Window> {
+        self.timeline.iter().flat_map(|t| t.windows.iter().rev()).collect()
+    }
+
     fn rows(&self) -> Vec<Row> {
+        if self.on_timeline {
+            return (0..self.windows().len()).map(Row::Window).collect();
+        }
         let Some(list) = self.list() else { return Vec::new() };
         let mut rows = Vec::new();
         for (i, f) in list.files.iter().enumerate() {
@@ -228,8 +249,12 @@ impl ChangesView {
     }
 
     fn row_key(&self, row: &Row) -> String {
+        if let Row::Window(w) = row {
+            return self.windows().get(*w).map(|w| format!("w:{}", w.from)).unwrap_or_default();
+        }
         let Some(list) = self.list() else { return String::new() };
         match row {
+            Row::Window(_) => String::new(),
             Row::File(i) => format!("f:{:?}:{}", list.files[*i].group, list.files[*i].path),
             Row::Hunk(i, h) => format!("h:{:?}:{}:{h}", list.files[*i].group, list.files[*i].path),
         }
@@ -246,8 +271,27 @@ impl ChangesView {
 
     /// The file a row is in.
     fn file_of(&self, row: &Row) -> Option<&ChangedFile> {
-        let (Row::File(i) | Row::Hunk(i, _)) = row;
+        let (Row::File(i) | Row::Hunk(i, _)) = row else { return None };
         self.list()?.files.get(*i)
+    }
+
+    /// The timeline as last read, and how many times that was.
+    pub fn timeline(&self) -> (Option<&Timeline>, u64) {
+        (self.timeline.as_ref(), self.timeline_read)
+    }
+
+    /// A turn's changes, if the timeline saw it.
+    pub fn turn(&self, turn: &str) -> Option<&TurnChanges> {
+        self.timeline.as_ref()?.turn(turn)
+    }
+
+    /// Shows the timeline, or the changes.
+    pub fn show_timeline(&mut self, on: bool) {
+        if on != self.on_timeline {
+            self.on_timeline = on;
+            self.cursor = 0;
+            self.scroll = true;
+        }
     }
 
     fn open(&mut self, key: FileKey, net: &NetClient, ctx: &egui::Context) {
@@ -289,6 +333,10 @@ impl ChangesView {
                         Ok(list) => self.took_list(list, net, ctx),
                         Err(e) => self.error = Some(e.into()),
                     }
+                }
+                Reply::Timeline(Ok(timeline)) => {
+                    self.timeline = Some(timeline);
+                    self.timeline_read += 1;
                 }
                 Reply::Components(asked, result) if asked == self.comparison => {
                     // Not there (not a repository, an older server): none.
@@ -413,6 +461,8 @@ impl ChangesView {
         self.read += 1;
         let (inbox, asked) = (self.inbox.clone(), list.comparison.clone());
         net.change_components(&list.comparison, ctx.clone(), move |r| push(&inbox, Reply::Components(asked, r)));
+        let inbox = self.inbox.clone();
+        net.change_timeline(ctx.clone(), move |r| push(&inbox, Reply::Timeline(r)));
         let keys: Vec<(FileKey, (u32, u32))> = list.files.iter().map(|f| (file_key(f), (f.added, f.removed))).collect();
         self.list = Some(list);
         // Gone files go; opened ones whose counts moved are asked again.
@@ -453,6 +503,13 @@ impl ChangesView {
         self.took_list(list, &net, &ctx);
     }
 
+    /// The timeline, as if it came from the server.
+    #[cfg(test)]
+    pub(crate) fn take_timeline_for_test(&mut self, timeline: Timeline) {
+        self.timeline = Some(timeline);
+        self.timeline_read += 1;
+    }
+
     /// Whether files show side by side in a column `width` wide.
     fn side_by_side(&self, width: f32) -> bool {
         match self.layout {
@@ -463,6 +520,10 @@ impl ChangesView {
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
+        if self.on_timeline {
+            self.render_timeline(ui, cx);
+            return;
+        }
         let look = crate::theme::look();
         let Some(list) = self.list().cloned() else {
             let words = match &self.error {
@@ -487,6 +548,7 @@ impl ChangesView {
                 let on = at == cursor;
                 let file = &list.files[match row {
                     Row::File(i) | Row::Hunk(i, _) => *i,
+                    Row::Window(_) => continue,
                 }];
                 if let Row::File(_) = row
                     && group != Some(file.group)
@@ -502,6 +564,7 @@ impl ChangesView {
                 let shown = egui::Frame::NONE.fill(fill).corner_radius(look.radius_s).inner_margin(crate::theme::margin2(look.space_xs, look.space_hair)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     match row {
+                        Row::Window(_) => {}
                         Row::File(_) => self.draw_file(ui, file),
                         Row::Hunk(_, h) => {
                             if let Some(hunk) = self.file_changes(file.group, &file.path).and_then(|c| c.hunks.get(*h)) {
@@ -514,6 +577,52 @@ impl ChangesView {
                     shown.response.scroll_to_me(Some(egui::Align::Center));
                 }
                 self.drawing.push(Spot { key: self.row_key(row), rect: shown.response.rect });
+            }
+        });
+        self.view_h = output.inner_rect.height();
+        self.spots = std::mem::take(&mut self.drawing).into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
+    }
+
+    /// The windows, newest first: when, who was working, how many files.
+    fn render_timeline(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
+        let look = crate::theme::look();
+        let windows: Vec<Window> = self.windows().into_iter().cloned().collect();
+        if windows.is_empty() {
+            let words = if self.timeline.is_some() { "Nothing yet: a snapshot is taken whenever a turn starts or ends." } else { "Reading the timeline…" };
+            ui.label(RichText::new(words).size(look.text_body).color(colors().muted));
+            self.spots.clear();
+            return;
+        }
+        let now = crate::attention::now_ms();
+        let (cursor, scroll) = (self.cursor, std::mem::take(&mut self.scroll));
+        self.drawing.clear();
+        let output = egui::ScrollArea::vertical().id_salt(("timeline", cx.slot)).auto_shrink([false, false]).show(ui, |ui| {
+            for (at, w) in windows.iter().enumerate() {
+                let on = at == cursor;
+                let compared = w.comparison() == self.comparison;
+                let fill = if on { colors().selection } else { egui::Color32::TRANSPARENT };
+                let shown = egui::Frame::NONE.fill(fill).corner_radius(look.radius_s).inner_margin(crate::theme::margin2(look.space_xs, look.space_hair)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
+                        let when = match w.ended_ms {
+                            Some(end) => format!("{} → {}", crate::attention::age(w.started_ms, now), crate::attention::age(end, now)),
+                            None => format!("since {}", crate::attention::age(w.started_ms, now)),
+                        };
+                        ui.label(RichText::new(when).size(look.text_body).color(if compared { colors().accent } else { colors().text_strong }));
+                        let files = if w.files == 1 { "1 file".to_owned() } else { format!("{} files", w.files) };
+                        ui.label(RichText::new(files).monospace().size(look.text_small).color(if w.files > 0 { colors().ok } else { colors().muted }));
+                        let who = if w.working.is_empty() {
+                            "no session working".to_owned()
+                        } else {
+                            w.working.iter().map(|x| if x.slot.is_empty() { x.thread.clone() } else { x.slot.clone() }).collect::<Vec<_>>().join(", ")
+                        };
+                        ui.label(RichText::new(who).size(look.text_small).color(colors().muted));
+                    });
+                });
+                if on && scroll {
+                    shown.response.scroll_to_me(Some(egui::Align::Center));
+                }
+                self.drawing.push(Spot { key: format!("w:{}", w.from), rect: shown.response.rect });
             }
         });
         self.view_h = output.inner_rect.height();
@@ -669,7 +778,10 @@ impl ActionProvider for ChangesView {
             f("changes.layout", "Lay changes out", Command::Layout).param(Param::Choice(layouts)).header(Style::Setting, "Layout", None).group(ActionGroup::View).importance(MINOR),
             f("changes.refresh", "Read the changes again", Command::Refresh).header(Style::Button, "", Some(egui_phosphor::regular::ARROW_CLOCKWISE)).group(ActionGroup::View).importance(MINOR),
         ];
-        if self.cursor_row().is_some() {
+        out.push(f("changes.timeline", "Show when the files changed and who was working", Command::Timeline).param(Param::Toggle { on: self.on_timeline }).header(Style::Setting, "Timeline", None).group(ActionGroup::View).importance(SECONDARY));
+        if let Some(Row::Window(_)) = self.cursor_row() {
+            out.push(f("changes.since", "Compare from here to the files now", Command::Since).on_item(Style::Button, "Since here", None).group(ActionGroup::View).importance(MINOR));
+        } else if self.cursor_row().is_some() {
             out.push(f("changes.more_context", "Show more lines around its changes", Command::MoreContext).on_item(Style::Button, "More context", None).group(ActionGroup::View).importance(MINOR));
         }
         out
@@ -684,6 +796,22 @@ impl ActionProvider for ChangesView {
             Some(Command::Layout) => {
                 if let Some(layout) = DiffLayout::ALL.iter().find(|(l, _)| Some(l.name()) == value.as_deref()) {
                     self.layout = layout.0;
+                }
+            }
+            Some(Command::Timeline) => {
+                let on = match value.as_deref() {
+                    Some("true") => true,
+                    Some("false") => false,
+                    _ => !self.on_timeline,
+                };
+                self.show_timeline(on);
+            }
+            Some(Command::Since) => {
+                if let Some(Row::Window(w)) = self.cursor_row()
+                    && let Some(from) = self.windows().get(w).map(|w| w.from.clone())
+                {
+                    self.compare(Comparison { from: Point::Snapshot(from), to: Point::Files });
+                    self.show_timeline(false);
                 }
             }
             Some(Command::Refresh) => {
@@ -723,7 +851,7 @@ impl Navigable for ChangesView {
         let hunks = self.file_changes(file.group, &file.path).map(|c| c.hunks.as_slice()).unwrap_or_default();
         let hunk = match row {
             Row::Hunk(_, h) => hunks.get(h),
-            Row::File(_) => hunks.first(),
+            Row::File(_) | Row::Window(_) => hunks.first(),
         };
         let line = hunk.map_or(1, |h| h.lines.iter().find(|l| l.kind != LineKind::Context).and_then(|l| l.new.or(l.old)).unwrap_or(h.new_start.max(1)));
         Some(Target::Change { file: file.path.clone(), line: line as usize })
@@ -756,8 +884,15 @@ impl Navigable for ChangesView {
         }
     }
 
-    /// Opens the spot in the code view.
+    /// Opens the spot in the code view; on the timeline, compares the
+    /// window.
     fn enter(&mut self) -> Step {
+        if let Some(Row::Window(w)) = self.cursor_row() {
+            let Some(comparison) = self.windows().get(w).map(|w| w.comparison()) else { return Step::Nothing("No window here.".into()) };
+            self.compare(comparison);
+            self.show_timeline(false);
+            return Step::Done;
+        }
         match self.cursor_row().and_then(|r| self.file_of(&r).cloned()) {
             Some(f) if f.status == FileStatus::Deleted => Step::Nothing(format!("{} was deleted: there's nothing to open.", f.path)),
             Some(_) => Step::GoTo(GoTo::Code),
@@ -770,7 +905,7 @@ impl Navigable for ChangesView {
     }
 
     fn enter_label(&self) -> Option<String> {
-        Some("Open it in the code".to_owned())
+        Some(if self.on_timeline { "Compare what changed then" } else { "Open it in the code" }.to_owned())
     }
 
     fn can_leave(&self) -> bool {
@@ -799,19 +934,21 @@ impl Navigable for ChangesView {
     }
 
     fn items(&self) -> Vec<Item> {
-        let Some(list) = self.list() else { return Vec::new() };
+        let windows = self.windows();
+        let list = self.list();
         self.rows()
             .iter()
-            .map(|row| {
+            .filter_map(|row| {
                 let (name, text) = match row {
-                    Row::File(i) => (list.files[*i].path.clone(), list.files[*i].path.clone()),
+                    Row::Window(w) => (String::new(), windows.get(*w).map(|w| w.working.iter().map(|x| format!("{} {}", x.slot, x.thread)).collect::<Vec<_>>().join(" ")).unwrap_or_default()),
+                    Row::File(i) => (list?.files[*i].path.clone(), list?.files[*i].path.clone()),
                     Row::Hunk(i, h) => {
-                        let f = &list.files[*i];
+                        let f = &list?.files[*i];
                         let text = self.file_changes(f.group, &f.path).and_then(|c| c.hunks.get(*h)).map(|h| h.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default();
                         (String::new(), text)
                     }
                 };
-                Item::new(self.row_key(row), name, text)
+                Some(Item::new(self.row_key(row), name, text))
             })
             .collect()
     }

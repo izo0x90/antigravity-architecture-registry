@@ -184,6 +184,18 @@ pub fn changes(arch: &ArchitectureService) -> Option<Arc<nah_changes::Changes>> 
     }
 }
 
+/// The timeline over the project's changes, kept in its state database and
+/// following every session's turns (none without git). How long it keeps
+/// things: `.nah/changes.toml`'s `[timeline]`.
+pub fn timeline(arch: &ArchitectureService, changes: &Option<Arc<nah_changes::Changes>>, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>) -> Result<Option<Arc<nah_timeline::Timeline>>, StartError> {
+    let Some(changes) = changes else { return Ok(None) };
+    let policy = match std::fs::read_to_string(arch.root().join(".nah/changes.toml")) {
+        Ok(text) => nah_timeline::Policy::from_toml(&text)?,
+        Err(_) => nah_timeline::Policy::default(),
+    };
+    Ok(Some(nah_timeline::Timeline::new(changes.clone(), state.clone(), policy)?.start(hub.clone())))
+}
+
 pub fn state(arch: &ArchitectureService) -> Result<nah_state::StateDb, StartError> {
     let dir = arch_service::state_dir(arch.root())?;
     Ok(nah_state::StateDb::open(&dir, &arch_service::store_settings(arch.limits()))?)

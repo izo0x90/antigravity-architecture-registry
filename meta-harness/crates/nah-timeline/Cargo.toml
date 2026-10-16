@@ -1,0 +1,19 @@
+[package]
+name = "nah-timeline"
+version = "0.1.0"
+edition = "2024"
+description = "The timeline: snapshots of the project's files whenever a session's turn starts or ends, the windows between them and who was working, kept and pruned."
+
+[dependencies]
+harness-contracts = { path = "../harness-contracts" }
+harness-core = { path = "../harness-core" }
+nah-changes = { path = "../nah-changes" }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+tokio = { version = "1.53.1", features = ["sync", "rt"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
+tempfile = "3"

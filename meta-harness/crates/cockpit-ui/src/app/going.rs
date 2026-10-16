@@ -39,6 +39,19 @@ impl CockpitApp {
             self.note = Some("Nothing under the cursor.".into());
             return;
         };
+        // A message's changes: its turn's, compared.
+        if let (GoTo::Changes, Target::Message { turn: Some(turn), .. }) = (op, &target) {
+            match self.desk.changes.turn(turn).map(|t| t.comparison.clone()) {
+                Some(comparison) => {
+                    self.desk.changes.compare(comparison);
+                    self.desk.changes.show_timeline(false);
+                    self.focus_kind(BufferKind::Changes);
+                    self.after_jump(from);
+                }
+                None => self.note = Some("The timeline didn't see this turn's start.".into()),
+            }
+            return;
+        }
         if op == GoTo::Code {
             // A call goes to what it calls; a file link opens as it is.
             if let Target::Line { refs, .. } = &target

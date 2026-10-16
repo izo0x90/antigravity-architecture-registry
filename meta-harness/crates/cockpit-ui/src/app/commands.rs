@@ -164,8 +164,12 @@ impl CockpitApp {
             out.push(go("goto.queue", "Go to its queue job", GoTo::Queue, if has_job { When::Component } else { When::Unavailable }, MINOR));
         }
         if kind != K::Changes {
-            let touched = self.desk.view(kind).target().and_then(|t| t.component().cloned()).is_none_or(|id| self.desk.changes.touches(&id));
-            out.push(go("goto.changes", "Go to its changes", GoTo::Changes, if touched { When::Component } else { When::Unavailable }, MINOR));
+            // A component's changes, or a message's turn's.
+            let has = match self.desk.view(kind).target() {
+                Some(Target::Message { turn, .. }) => turn.is_some_and(|t| self.desk.changes.turn(&t).is_some()),
+                target => target.and_then(|t| t.component().cloned()).is_none_or(|id| self.desk.changes.touches(&id)),
+            };
+            out.push(go("goto.changes", "Go to its changes", GoTo::Changes, if has { When::Target } else { When::Unavailable }, MINOR));
         }
         out.push(go("goto.uses", "Go to a use", GoTo::Uses, When::Reaches(GoTo::Uses), SECONDARY));
         out.push(go("goto.callers", "Go to a caller", GoTo::Callers, When::Reaches(GoTo::Callers), SECONDARY));

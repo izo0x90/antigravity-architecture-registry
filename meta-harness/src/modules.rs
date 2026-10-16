@@ -205,8 +205,10 @@ pub struct ProjectState {
     pub sessions: Arc<SessionManager>,
     pub slots: Arc<SlotManager>,
     pub mcp_state: crate::mcp::McpServerState,
-    /// Its changes, from git (none when it isn't a git repository).
+    /// Its changes, from git (none when it isn't a git repository), and
+    /// when they changed (snapshots at every turn's start and end).
     pub changes: Option<Arc<nah_changes::Changes>>,
+    pub timeline: Option<Arc<nah_timeline::Timeline>>,
 }
 
 impl Module for ProjectState {
@@ -242,6 +244,7 @@ pub struct Parts {
     pub access: Arc<Access>,
     pub notify: Arc<nah_notify::NotifyHub>,
     pub changes: Option<Arc<nah_changes::Changes>>,
+    pub timeline: Option<Arc<nah_timeline::Timeline>>,
 }
 
 impl AppState {
@@ -256,7 +259,7 @@ impl AppState {
             cockpit: CockpitState { gate: gate.clone(), stopping: stopping.clone(), state: p.state, remote: p.remote },
             harness: HarnessState { gate: gate.clone(), stopping, registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
-            project: ProjectState { gate, arch: p.arch, queue: p.queue, sessions: p.sessions, slots: p.slots, mcp_state: p.mcp_state, changes: p.changes },
+            project: ProjectState { gate, arch: p.arch, queue: p.queue, sessions: p.sessions, slots: p.slots, mcp_state: p.mcp_state, changes: p.changes, timeline: p.timeline },
         })
     }
 

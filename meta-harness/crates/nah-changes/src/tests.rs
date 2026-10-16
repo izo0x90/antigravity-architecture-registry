@@ -134,13 +134,15 @@ fn a_snapshot_keeps_the_files_as_they_are_and_leaves_the_repository_as_it_was() 
     write(dir.path(), "c.txt", "untracked\n");
     let changes = Changes::open(dir.path()).unwrap();
     let before = (repo.head().unwrap().target(), listed(&changes, &Comparison::default()));
-    let start = changes.snapshot("turn started").unwrap();
+    let (start, new) = changes.snapshot("turn started", None).unwrap();
+    assert!(new);
     assert_eq!((repo.head().unwrap().target(), listed(&changes, &Comparison::default())), before, "the user's index, branch and files are untouched");
     // What changed since: only what happened after it.
     write(dir.path(), "c.txt", "untracked\nedited after\n");
     let since = Comparison { from: Point::Snapshot(start.id.clone()), to: Point::Files };
     assert_eq!(listed(&changes, &since), [(Group::Changes, "c.txt".into(), FileStatus::Modified, 1, 0)]);
-    let end = changes.snapshot("turn ended").unwrap();
+    let (end, _) = changes.snapshot("turn ended", Some(&start)).unwrap();
+    assert_eq!(changes.snapshot("again", Some(&end)).unwrap(), (end.clone(), false), "nothing changed since: the same one");
     let between = Comparison { from: Point::Snapshot(start.id.clone()), to: Point::Snapshot(end.id.clone()) };
     assert_eq!(listed(&changes, &between), [(Group::Changes, "c.txt".into(), FileStatus::Modified, 1, 0)]);
     assert_eq!(changes.snapshots().unwrap().iter().map(|s| s.id.clone()).collect::<Vec<_>>(), [start.id.clone(), end.id.clone()]);
@@ -191,3 +193,4 @@ fn runs_are_where_the_files_now_changed_and_files_changed_since_the_newer_side_a
     let staged = changes.on_files(&Comparison { from: Point::Head, to: Point::Index }).unwrap();
     assert_eq!((staged.files.len(), staged.moved), (0, vec!["a.txt".to_owned()]));
 }
+

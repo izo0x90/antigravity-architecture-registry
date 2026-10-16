@@ -20,7 +20,7 @@ use crate::cockpit::{Needs, can};
 use crate::modules::ProjectState;
 
 pub(crate) fn routes() -> Router<ProjectState> {
-    Router::new().route("/api/changes", get(list)).route("/api/changes/file", get(file)).route("/api/changes/components", get(components))
+    Router::new().route("/api/changes", get(list)).route("/api/changes/file", get(file)).route("/api/changes/components", get(components)).route("/api/changes/timeline", get(timeline))
 }
 
 /// A changes error as an HTTP response: `{ "error": "..." }`.
@@ -138,6 +138,19 @@ pub(crate) fn component_changes(arch: &arch_service::ArchitectureService, change
     out.out_of_date.sort();
     out.out_of_date.dedup();
     Ok(out)
+}
+
+/// When the files changed and who was working: the windows between
+/// snapshots (taken at every turn's start and end), each turn's changes.
+async fn timeline(_: Needs<can::ViewRead>, State(state): State<ProjectState>) -> Result<Json<harness_contracts::changes::Timeline>, Response> {
+    let timeline = state.timeline.clone().ok_or_else(|| ChangesFailed(ChangesError::NotARepo(state.arch.root().display().to_string())).into_response())?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+    let failed = |e: String| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e }))).into_response();
+    let read = tokio::task::spawn_blocking(move || timeline.read(now)).await.map_err(|e| failed(e.to_string()))?;
+    Ok(Json(read.map_err(|e| match e {
+        nah_timeline::TimelineError::Changes(e) => ChangesFailed(e).into_response(),
+        e => failed(e.to_string()),
+    })?))
 }
 
 /// The files a comparison (`from..to`) changed, for filters ("only changed

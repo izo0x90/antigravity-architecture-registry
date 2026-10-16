@@ -21,6 +21,7 @@ mod migrations;
 mod notifications;
 mod servers;
 mod slots;
+mod timeline;
 
 pub use servers::{ServerEntry, check_name};
 

@@ -94,6 +94,10 @@ pub struct ChatStreamState {
     /// Answers being given to the agent's questions.
     drafts: Drafts,
     mailbox: Mailbox,
+    /// How many files each turn changed (from the desk's timeline), and
+    /// which read of it that is.
+    pub turn_files: std::collections::BTreeMap<String, u32>,
+    pub turn_files_read: u64,
 }
 
 /// A chat view's own state: what's typed, where the cursor is, what was

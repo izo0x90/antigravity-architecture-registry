@@ -3328,6 +3328,7 @@ dependencies = [
  "nah-notify",
  "nah-packs",
  "nah-state",
+ "nah-timeline",
  "notify-debouncer-full",
  "regex",
  "serde",
@@ -3529,11 +3530,28 @@ dependencies = [
  "harness-contracts",
  "harness-core",
  "nah-notify",
+ "nah-timeline",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "nah-timeline"
+version = "0.1.0"
+dependencies = [
+ "git2",
+ "harness-contracts",
+ "harness-core",
+ "nah-changes",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

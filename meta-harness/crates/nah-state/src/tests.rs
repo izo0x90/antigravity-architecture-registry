@@ -193,3 +193,28 @@ mod servers {
         }
     }
 }
+
+mod timeline {
+    use super::*;
+    use nah_timeline::{Kept, TimelineStore, TurnSpan};
+
+    #[test]
+    fn snapshots_and_turns_are_kept_and_let_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = StateDb::open(dir.path(), &settings()).unwrap();
+        let (a, b) = (Kept { id: "1-a".into(), at_ms: 1, previous: None, files: 0 }, Kept { id: "2-b".into(), at_ms: 2, previous: Some("1-a".into()), files: 3 });
+        db.add_snapshot(&b).unwrap();
+        db.add_snapshot(&a).unwrap();
+        assert_eq!(db.snapshots().unwrap(), [a.clone(), b.clone()], "oldest first");
+        let mut turn = TurnSpan { turn: "u1".into(), thread: "t1".into(), slot: "lead".into(), started_ms: 1, start: "1-a".into(), ended_ms: None, end: None, files: None, closed_ms: None };
+        db.put_turn(&turn).unwrap();
+        (turn.ended_ms, turn.end, turn.files) = (Some(2), Some("2-b".into()), Some(3));
+        db.put_turn(&turn).unwrap();
+        db.thread_closed("t1", 5).unwrap();
+        db.thread_closed("t1", 9).unwrap();
+        turn.closed_ms = Some(5);
+        assert_eq!(db.turns().unwrap(), [turn], "written again with its end; closed once");
+        db.forget(&["1-a".into()], &["u1".into()]).unwrap();
+        assert_eq!((db.snapshots().unwrap(), db.turns().unwrap().len()), (vec![b], 0));
+    }
+}

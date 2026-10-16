@@ -97,3 +97,43 @@ async fn search_and_the_agents_views_can_keep_to_what_changed() {
     let (err, text) = mcp.tool("view", serde_json::json!({ "view": "contains", "changed": "HEAD..files" })).await;
     assert!(!err && text.contains("shout") && !text.contains("save"), "only what changed and what holds it: {text}");
 }
+
+#[tokio::test]
+async fn the_timeline_has_a_window_per_turn_boundary_and_each_turns_changes() {
+    use harness_contracts::{AdapterEvent, ClientEvent, ThreadId, Turn, TurnId, TurnStatus};
+    let arch = committed();
+    let root = arch.root().to_path_buf();
+    let (addr, state) = spawn_app_with(arch).await;
+    let turn = |status| ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("u1"), thread_id: ThreadId::new("t1"), ordinal: 1, status, failure: None, usage: None } } };
+    let timeline = |addr| async move {
+        let (status, body) = http(addr, "GET", "/api/changes/timeline", None).await;
+        assert_eq!(status, 200, "{body}");
+        serde_json::from_str::<harness_contracts::changes::Timeline>(&body).unwrap()
+    };
+    state.harness.hub.publish(turn(TurnStatus::Running));
+    let mut started = timeline(addr).await;
+    for _ in 0..50 {
+        if !started.turns.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        started = timeline(addr).await;
+    }
+    assert_eq!(started.turns.len(), 1, "the turn's start was seen: {started:?}");
+    std::fs::write(root.join("src/util.rs"), "pub fn helper() {}\n").unwrap();
+    state.harness.hub.publish(turn(TurnStatus::Completed));
+    let mut ended = timeline(addr).await;
+    for _ in 0..50 {
+        if ended.turn("u1").is_some_and(|t| t.comparison.to != harness_contracts::changes::Point::Files) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        ended = timeline(addr).await;
+    }
+    let u1 = ended.turn("u1").unwrap();
+    assert_eq!(u1.files, 1, "{ended:?}");
+    assert_eq!(ended.windows.len(), 2, "its window, and the open one since");
+    assert_eq!(ended.windows[0].working.iter().map(|w| w.turn.as_str()).collect::<Vec<_>>(), ["u1"]);
+    let (status, body) = http(addr, "GET", &format!("/api/changes?from={}&to={}", u1.comparison.from, u1.comparison.to), None).await;
+    assert!(status == 200 && body.contains("src/util.rs"), "its comparison reads: {body}");
+}

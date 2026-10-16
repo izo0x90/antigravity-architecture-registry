@@ -28,6 +28,12 @@ const MIGRATIONS: &[(i64, &str)] = &[
     ),
     (4, "CREATE TABLE servers (name TEXT PRIMARY KEY, url TEXT NOT NULL, secret TEXT NOT NULL, added_at INTEGER NOT NULL);"),
     (5, "CREATE TABLE ui_shell (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL);"),
+    (
+        6,
+        "CREATE TABLE timeline_snapshots (id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, previous TEXT, files INTEGER NOT NULL);
+     CREATE TABLE timeline_turns (turn TEXT PRIMARY KEY, thread TEXT NOT NULL, slot TEXT NOT NULL, started_ms INTEGER NOT NULL, start TEXT NOT NULL, ended_ms INTEGER, end_snapshot TEXT, files INTEGER, closed_ms INTEGER);
+     CREATE INDEX timeline_turns_by_thread ON timeline_turns (thread);",
+    ),
 ];
 
 /// The newest layout this NAH knows.

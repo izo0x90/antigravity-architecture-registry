@@ -34,21 +34,29 @@ fn now_ms() -> u64 {
 
 impl Changes {
     /// The project's files as they are now, kept as a snapshot (`why` says
-    /// what it was taken for).
-    pub fn snapshot(&self, why: &str) -> Result<Snapshot> {
+    /// what it was taken for); when they're as snapshot `last` has them,
+    /// that one (and `false`: nothing new was kept).
+    pub fn snapshot(&self, why: &str, last: Option<&Snapshot>) -> Result<(Snapshot, bool)> {
         let repo = self.repo()?;
         let mut index = repo.index()?;
-        index.add_all(["*"], IndexAddOption::DEFAULT, None)?;
-        index.update_all(["*"], None)?;
+        // The project's folder (the rest as the index has it).
+        let within = if self.prefix.is_empty() { "*".to_owned() } else { format!("{}*", self.prefix) };
+        index.add_all([within.as_str()], IndexAddOption::DEFAULT, None)?;
+        index.update_all([within.as_str()], None)?;
         // Its tree only; the copy itself is never written back.
         let tree = repo.find_tree(index.write_tree()?)?;
+        if let Some(last) = last
+            && tree_of(&repo, &last.id).is_ok_and(|t| t.id() == tree.id())
+        {
+            return Ok((last.clone(), false));
+        }
         let head = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
         let who = git2::Signature::now("NAH", "nah@localhost")?;
         let commit = repo.commit(None, &who, &who, &format!("NAH snapshot: {why}"), &tree, &head.iter().collect::<Vec<_>>())?;
         let at_ms = now_ms();
         let id = format!("{at_ms}-{}", &commit.to_string()[..10]);
         repo.reference(&format!("{SNAPSHOT_REFS}{id}"), commit, true, "NAH snapshot")?;
-        Ok(Snapshot { id, at_ms })
+        Ok((Snapshot { id, at_ms }, true))
     }
 
     /// Every snapshot kept, oldest first.

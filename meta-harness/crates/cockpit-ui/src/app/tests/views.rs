@@ -236,3 +236,20 @@ fn z_d_flips_the_deleted_lines_in_the_code_by_the_key_alone() {
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"z d"}"#).unwrap();
     assert_eq!(app.desk.code.show_deleted, shown);
 }
+
+#[test]
+fn g_x_on_a_message_compares_its_turns_changes() {
+    use harness_contracts::changes::{Comparison, Point, Timeline, TurnChanges};
+    let (ctx, mut app) = full_app();
+    app.desk.chat = crate::chat::tests::conversation();
+    from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"space b c"}"#).unwrap();
+    from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g g"}"#).unwrap();
+    from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g x"}"#).unwrap();
+    assert_eq!(app.desk.columns.focused_kind(), BufferKind::Chat, "the timeline hasn't seen it: nothing to go to");
+    let turn = Comparison { from: Point::Snapshot("1-a".into()), to: Point::Snapshot("2-b".into()) };
+    app.desk.changes.take_timeline_for_test(Timeline { windows: vec![], turns: vec![TurnChanges { thread: "t".into(), turn: "turn".into(), comparison: turn.clone(), files: 3, alongside: vec![] }] });
+    frame(&ctx, &mut app, Vec::new());
+    assert_eq!(app.desk.chat.turn_files.get("turn"), Some(&3), "the chat knows how much each turn changed");
+    from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g x"}"#).unwrap();
+    assert_eq!((app.desk.columns.focused_kind(), app.desk.changes.comparison.clone()), (BufferKind::Changes, turn));
+}

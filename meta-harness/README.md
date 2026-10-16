@@ -393,10 +393,23 @@ all of them:
   changed" switch shows just those (and `g /` then finds only in changed
   files), a card's Changes section (the spec, the quick look) shows its
   hunks, and `g x` goes to them in the Changes view. Files the index has
-  out of date are left out of that until they're read again. The server
-  reads git (`GET /api/changes?from=&to=`, `GET /api/changes/file`, `GET
-  /api/changes/components`; `GET /api/search?changed=from..to`) and never
-  changes the repository, its index or its files.
+  out of date are left out of that until they're read again.
+  The timeline: whenever any session's turn starts or ends, the project's
+  files are snapshotted as a commit of NAH's own (`refs/nah/snapshots/`,
+  made from a copy of the index: your index, branch and files are
+  untouched; ignored files left out; nothing new kept when nothing
+  changed). The Changes view's Timeline switch lists the windows between
+  snapshots, newest first, with how many files changed and which sessions
+  were working (none: you, or a tool NAH doesn't run); `Enter` compares a
+  window, "Since here" compares from it to the files now. The chat says
+  how many files each turn changed, and `g x` on a message compares its
+  turn (its start to its end; others working meanwhile are named, not
+  guessed apart). Kept in the state database, let go after
+  `.nah/changes.toml`'s days. The server reads git (`GET
+  /api/changes?from=&to=`, `GET /api/changes/file`, `GET
+  /api/changes/components`, `GET /api/changes/timeline`; `GET
+  /api/search?changed=from..to`) and never changes the repository, its
+  index or its files.
 
 - **Talk to the agent:** `t` opens a box over whatever is on screen;
   Enter sends to the lead's session (opening one if there's none), the
@@ -566,6 +579,7 @@ overrides them in its own `.nah/` folder:
 | `.nah/queue.toml` | queue settings and session brief templates |
 | `.nah/schema_dsl.toml` | extra shorthand type names for schemas |
 | `.nah/mcp.toml` | the project's tool servers, given to every harness's sessions |
+| `.nah/changes.toml` | `[timeline]`: how long snapshots and turns are kept (`keep_days`, 14) and a closed session's turns after it closed (`closed_session_days`, 1) |
 | `.nah/access.toml` | what each agent role (lead, sub, worker, external) may do with NAH's tools. A role named here replaces the shipped one. It covers NAH's tools only; a slot's own harness tools follow its mode and your approvals |
 
 How long things take is visible: every answer is timed stage by stage
@@ -667,6 +681,7 @@ is approved, verified or built. It's saved in `.nah/plans/` like any plan.
 | `nah-access` | what each caller may do: capabilities, the roles that hold them (configured), and the one check every tool and route goes through |
 | `nah-notify` | notifications: what waits on the user (approvals, questions, sign-ins) and what happened (crashes, failed and finished turns, messages), from the event stream; kept in the state database, published, handed to adapters (Slack, email, a phone: none yet) |
 | `nah-changes` | the project's changes, from git: what a comparison (two of the last commit, the staged files, the files, any commit, a snapshot) changes, one file's changes, where they are on the files now; snapshots of the files kept as commits of their own (`refs/nah/snapshots/`). Reads the repository and never changes it |
+| `nah-timeline` | the timeline: a snapshot whenever a session's turn starts or ends (from the event stream), the windows between them and who was working, each turn's changes; kept in the state database, let go by policy |
 | `nah-state` | the project's state database (`.nah/state/state.sqlite`): what the server keeps across restarts that isn't the analysis. One server per project (a lock), explicit layouts, never thrown away |
 | `arch-store` | where the analysis is kept between runs (SQLite) |
 | `arch-search` | one way of matching what's typed: names with neo_frizbee; files and lines with fff-search |

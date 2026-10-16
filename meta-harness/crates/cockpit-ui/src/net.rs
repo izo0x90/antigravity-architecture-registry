@@ -635,6 +635,11 @@ impl NetClient {
         self.call("GET", &path, None, ctx, on_done);
     }
 
+    /// When the files changed and who was working, and each turn's changes.
+    pub fn change_timeline(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::changes::Timeline>) + Send + 'static) {
+        self.call("GET", "/api/changes/timeline", None, ctx, on_done);
+    }
+
     /// Which components `comparison` changed (where the index knows them).
     pub fn change_components(&self, comparison: &harness_contracts::changes::Comparison, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::changes::ComponentChangeList>) + Send + 'static) {
         let path = format!("/api/changes/components?from={}&to={}", urlencoding::encode(&comparison.from.to_string()), urlencoding::encode(&comparison.to.to_string()));
