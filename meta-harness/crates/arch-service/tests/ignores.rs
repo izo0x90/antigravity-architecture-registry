@@ -52,7 +52,7 @@ fn the_service_skips_what_the_parent_repos_ignore_files_and_nah_ignore_skip() {
     service.mark_stale(&[root.join("target/debug/build.rs"), root.join("generated/out.rs"), root.join("target")]).unwrap();
     assert!(service.index_status().stale.is_empty(), "ignored paths are never out of date: {:?}", service.index_status().stale);
     // Search.
-    let found = service.search("out", SearchKind::Files, &arch_graph::Source::Code, Some(50)).unwrap();
+    let found = service.search("out", SearchKind::Files, &arch_graph::Source::Code, Some(50), None).unwrap();
     assert!(found.hits.iter().all(|h| !format!("{h:?}").contains("generated/") && !format!("{h:?}").contains("target/")), "{:?}", found.hits);
     // Where a plan may put code.
     let plan = PlanId::new("p").unwrap();
@@ -76,7 +76,7 @@ fn open(root: &Path) -> ArchitectureService {
 }
 
 fn found(service: &ArchitectureService, query: &str) -> Vec<String> {
-    service.search(query, SearchKind::Files, &arch_graph::Source::Code, Some(5)).unwrap().hits.into_iter().filter_map(|h| h.file).collect()
+    service.search(query, SearchKind::Files, &arch_graph::Source::Code, Some(5), None).unwrap().hits.into_iter().filter_map(|h| h.file).collect()
 }
 
 #[test]

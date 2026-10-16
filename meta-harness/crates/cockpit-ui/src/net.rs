@@ -611,14 +611,33 @@ impl NetClient {
     }
 
     /// Symbols, files or lines matching `query` (in the code, or with a plan).
-    pub fn search(&self, query: &str, kind: arch_search::SearchKind, source: &arch_graph::Source, limit: usize, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_search::Found>) + Send + 'static) {
-        self.call("GET", &format!("/api/search?q={}&kind={}&limit={limit}&source={}", urlencoding::encode(query), kind.name(), source_param(source)), None, ctx, on_done);
+    /// Symbols, files or lines matching `query`; only in the files
+    /// `changed` changed, when given.
+    #[allow(clippy::too_many_arguments)]
+    pub fn search(
+        &self,
+        query: &str,
+        kind: arch_search::SearchKind,
+        source: &arch_graph::Source,
+        limit: usize,
+        changed: Option<&harness_contracts::changes::Comparison>,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<arch_search::Found>) + Send + 'static,
+    ) {
+        let changed = changed.map(|c| format!("&changed={}", urlencoding::encode(&c.range()))).unwrap_or_default();
+        self.call("GET", &format!("/api/search?q={}&kind={}&limit={limit}&source={}{changed}", urlencoding::encode(query), kind.name(), source_param(source)), None, ctx, on_done);
     }
 
     /// A file's text and its analysis, in one answer.
     /// The files `comparison` changes (a page), with their counts.
     pub fn changes(&self, comparison: &harness_contracts::changes::Comparison, offset: usize, limit: usize, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::changes::ChangeList>) + Send + 'static) {
         let path = format!("/api/changes?from={}&to={}&offset={offset}&limit={limit}", urlencoding::encode(&comparison.from.to_string()), urlencoding::encode(&comparison.to.to_string()));
+        self.call("GET", &path, None, ctx, on_done);
+    }
+
+    /// Which components `comparison` changed (where the index knows them).
+    pub fn change_components(&self, comparison: &harness_contracts::changes::Comparison, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::changes::ComponentChangeList>) + Send + 'static) {
+        let path = format!("/api/changes/components?from={}&to={}", urlencoding::encode(&comparison.from.to_string()), urlencoding::encode(&comparison.to.to_string()));
         self.call("GET", &path, None, ctx, on_done);
     }
 

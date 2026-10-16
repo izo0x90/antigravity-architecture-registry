@@ -40,6 +40,10 @@ Find what your work will touch: symbols by name (fuzzy, a typo forgiven; `a::b` 
     },
     "limit": {
       "type": "integer"
+    },
+    "changed": {
+      "type": "string",
+      "description": "Only in files changed: from..to, e.g. HEAD..files (the uncommitted changes), rev:main..files, HEAD~3..HEAD"
     }
   },
   "required": [
@@ -105,6 +109,10 @@ Views (each a tree from one root, cut to a size limit that it reports):
     "full_code": {
       "type": "boolean",
       "description": "With a plan: show it in the whole codebase, not only its items and what they plug into"
+    },
+    "changed": {
+      "type": "string",
+      "description": "Only what changed (and what holds it): from..to, e.g. HEAD..files (the uncommitted changes), rev:main..files"
     },
     "open": {
       "type": "array",

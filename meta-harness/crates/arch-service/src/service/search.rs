@@ -4,6 +4,7 @@
 //! definition of ignored leaves out. Every hit says which card it stands
 //! for, so picking it can make that card the root.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::PoisonError;
 
@@ -16,11 +17,14 @@ use crate::{ServiceError, checks};
 impl ArchitectureService {
     /// Symbols (in the code, or the code with a plan), files or lines that
     /// match `query`, best first, at most `limit` (the configured default
-    /// when none is given, never more than the configured most).
-    pub fn search(&self, query: &str, kind: SearchKind, source: &Source, limit: Option<usize>) -> Result<Found, ServiceError> {
+    /// when none is given, never more than the configured most); only in
+    /// the files `within` names, when given (the changed ones, say: the
+    /// configured most are searched, then those kept).
+    pub fn search(&self, query: &str, kind: SearchKind, source: &Source, limit: Option<usize>, within: Option<&BTreeSet<String>>) -> Result<Found, ServiceError> {
         self.timed("search", format!("{} {query:?} ({source})", kind.name()), |t| {
             let limits = &self.core.limits.search;
-            let limit = limit.unwrap_or(limits.results).clamp(1, limits.most);
+            let asked = limit.unwrap_or(limits.results).clamp(1, limits.most);
+            let limit = if within.is_some() { limits.most } else { asked };
             let graph = t.stage("source", || self.graph(source))?;
             let mut found = t.stage(kind.name(), || -> Result<Found, ServiceError> {
                 Ok(match kind {
@@ -29,6 +33,12 @@ impl ArchitectureService {
                     SearchKind::Text => self.find_lines(query, &graph, limit)?,
                 })
             })?;
+            if let Some(within) = within {
+                found.partial |= found.total > found.hits.len();
+                found.hits.retain(|h| h.file.as_ref().is_some_and(|f| within.contains(f)));
+                found.total = found.hits.len();
+                found.hits.truncate(asked);
+            }
             t.size(found.hits.len(), "hits");
             found.query = query.to_owned();
             found.kind = kind;

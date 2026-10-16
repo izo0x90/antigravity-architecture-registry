@@ -185,7 +185,7 @@ fn measure(name: &str, root: &Path, gate: OneFile) {
     }
     for (kind, query) in [(SearchKind::Symbols, "view"), (SearchKind::Symbols, "servce::serch"), (SearchKind::Files, "service"), (SearchKind::Text, "fn new")] {
         let t = Instant::now();
-        let found = service.search(query, kind, &arch_graph::Source::Code, None).unwrap();
+        let found = service.search(query, kind, &arch_graph::Source::Code, None, None).unwrap();
         let took = ms(t);
         println!("perf {name} search kind={} query={query:?} ms={took} hits={} total={}", kind.name(), found.hits.len(), found.total);
         assert!(took <= limits.perf.search_ms, "{name}: searching {} for {query:?} took {took} ms", kind.name());

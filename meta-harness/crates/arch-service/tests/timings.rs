@@ -37,7 +37,7 @@ fn every_answer_is_timed_by_stage_and_kept_for_the_perf_page() {
     let json = service.tree_json(&request).unwrap();
     let tree: arch_graph::tree::Tree = serde_json::from_slice(&json).unwrap();
     assert!(tree.slow_ms.is_none(), "quick: nothing to say");
-    service.search("save", SearchKind::Symbols, &arch_graph::Source::Code, None).unwrap();
+    service.search("save", SearchKind::Symbols, &arch_graph::Source::Code, None, None).unwrap();
     service.card("rust:sample::run", &arch_graph::Source::Code).unwrap();
 
     let perf = service.perf().unwrap();
@@ -65,7 +65,7 @@ fn an_answer_over_the_limit_says_so_and_only_the_last_few_are_kept() {
     let tree = service.tree(&TreeRequest { view: ViewKind::Contains, depth: Some(3), ..TreeRequest::default() }).unwrap();
     assert!(tree.slow_ms.is_some(), "over a 0 ms limit: the tree says it was slow");
     for _ in 0..5 {
-        service.search("run", SearchKind::Symbols, &arch_graph::Source::Code, None).unwrap();
+        service.search("run", SearchKind::Symbols, &arch_graph::Source::Code, None, None).unwrap();
     }
     let perf = service.perf().unwrap();
     assert_eq!(perf.recent.len(), 3, "only the last few");

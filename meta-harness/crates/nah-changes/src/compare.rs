@@ -5,7 +5,7 @@
 use git2::{Delta, Diff, DiffFindOptions, DiffOptions, Patch, Repository, Tree};
 use harness_contracts::changes::{ChangedFile, Comparison, DiffLine, FileChanges, FileStatus, Group, Hunk, LineKind, Point};
 
-use crate::{ChangesError, Result};
+use crate::{ChangesError, FileRuns, Result, Run};
 
 /// A side of a comparison, resolved.
 enum Side<'r> {
@@ -136,6 +136,28 @@ pub(crate) fn files(repo: &Repository, comparison: &Comparison, prefix: &str) ->
     Ok(out)
 }
 
+/// Each changed file's runs on its newer side, with no context around
+/// them (deleted files have none).
+pub(crate) fn runs(repo: &Repository, comparison: &Comparison, prefix: &str) -> Result<Vec<FileRuns>> {
+    let mut out = Vec::new();
+    for (group, diff) in diffs(repo, comparison, 0, &within(prefix))? {
+        for (i, delta) in diff.deltas().enumerate() {
+            let Some((_, status, path, _)) = described(&delta, group, prefix) else { continue };
+            if status == FileStatus::Deleted {
+                continue;
+            }
+            let Some(patch) = Patch::from_diff(&diff, i)? else { continue };
+            let runs = (0..patch.num_hunks())
+                .map(|h| patch.hunk(h).map(|(hunk, _)| Run { start: hunk.new_start(), lines: hunk.new_lines(), removed: hunk.old_lines() }))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            if !runs.is_empty() {
+                out.push(FileRuns { path, runs });
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// `path`'s changes (from the project's folder) in `group` of `comparison`.
 pub(crate) fn file(repo: &Repository, comparison: &Comparison, path: &str, group: Group, context: u32, prefix: &str) -> Result<FileChanges> {
     let mut out = FileChanges { comparison: comparison.clone(), path: path.to_owned(), group, context, binary: false, hunks: Vec::new() };
@@ -184,7 +206,11 @@ pub(crate) fn fingerprint(repo: &Repository, comparison: &Comparison, path: &str
     for point in [&comparison.from, &comparison.to] {
         parts.push(match point {
             Point::Head => repo.head().ok().and_then(|h| h.target()).map_or_else(|| "unborn".to_owned(), |o| o.to_string()),
-            Point::Rev(rev) => repo.revparse_single(rev).map_or_else(|_| format!("?{rev}"), |o| o.id().to_string()),
+            Point::Rev(rev) => match repo.revparse_single(rev) {
+                Ok(o) => o.id().to_string(),
+                // One that isn't there: the diff says so; this only keys the cache.
+                Err(_missing) => format!("missing {rev}"),
+            },
             Point::Snapshot(id) => id.clone(),
             Point::Index => stat(&repo.path().join("index")),
             Point::Files => stat(&repo.workdir().unwrap_or(repo.path()).join(prefix).join(path)),

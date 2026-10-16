@@ -8,12 +8,16 @@ use std::sync::{Arc, Mutex};
 
 use arch_graph::{Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, ComponentDetail, ComponentId, Finding, PlanDiff, RelationKind, Report, Severity, Source};
 use egui::{Rect, RichText};
+use harness_contracts::changes::{Comparison, FileChanges, Hunk};
 
 use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style, When};
 use crate::panel::{Status, Tone};
 use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, SpecItem, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
+
+/// A file's changes, by the comparison and file they were asked for.
+type ChangesReply = (Comparison, String, NetResult<FileChanges>);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Section {
@@ -23,13 +27,14 @@ pub enum Section {
     Invariants,
     Relations,
     Code,
+    Changes,
     Placeholders,
     Findings,
 }
 
 impl Section {
-    pub const ALL: [Section; 8] =
-        [Section::Overview, Section::Signature, Section::Logic, Section::Invariants, Section::Relations, Section::Code, Section::Placeholders, Section::Findings];
+    pub const ALL: [Section; 9] =
+        [Section::Overview, Section::Signature, Section::Logic, Section::Invariants, Section::Relations, Section::Code, Section::Changes, Section::Placeholders, Section::Findings];
 
     /// The stable name comments use for it.
     pub fn key(self) -> &'static str {
@@ -40,6 +45,7 @@ impl Section {
             Self::Invariants => "invariants",
             Self::Relations => "relations",
             Self::Code => "code",
+            Self::Changes => "changes",
             Self::Placeholders => "placeholders",
             Self::Findings => "findings",
         }
@@ -81,6 +87,7 @@ impl Section {
             Self::Invariants => "Invariants",
             Self::Relations => "Relations",
             Self::Code => "Code",
+            Self::Changes => "Changes",
             Self::Placeholders => "Placeholders",
             Self::Findings => "Findings",
         }
@@ -184,6 +191,12 @@ pub struct SpecState {
     pub out_of_date: bool,
     /// The component types (what each requires), from the server.
     pub types: Option<arch_graph::TypeSystem>,
+    /// What the desk's comparison changed in its code: its file's changes
+    /// that touch its lines; what they were asked for (the comparison, the
+    /// file, the list as read); and the answer's way back.
+    changes: Vec<Hunk>,
+    changes_asked: Option<(Comparison, String, u64)>,
+    changes_inbox: Arc<Mutex<Option<ChangesReply>>>,
     /// The item a restored place is on, until the component's detail is in.
     restore_item: Option<String>,
     /// Items drawn last frame, and where; and the viewport.
@@ -218,6 +231,9 @@ impl Default for SpecState {
             note: None,
             out_of_date: false,
             types: None,
+            changes: Vec::new(),
+            changes_asked: None,
+            changes_inbox: Arc::default(),
             restore_item: None,
             spots: Vec::new(),
             view: Rect::NOTHING,
@@ -242,10 +258,50 @@ impl SpecState {
     /// Moving to another component: the cursor, the review point and an
     /// unsent composer belonged to the old one.
     fn leave_component(&mut self) {
+        self.changes.clear();
+        self.changes_asked = None;
         self.cursor = 0;
         self.current = Section::Overview;
         self.point = None;
         self.composer = None;
+    }
+
+    /// Its code's lines, from the index: the file and first and last line.
+    fn code_lines(&self) -> Option<(String, u32, u32)> {
+        let anchor = self.detail.as_ref()?.component.anchor.as_ref()?;
+        Some((anchor.file.as_str().to_owned(), anchor.span.start_line, anchor.span.end_line.max(anchor.span.start_line)))
+    }
+
+    /// Shows what `comparison` changed in its code (`context` lines around
+    /// each change): asked for when the component, the comparison or its
+    /// list (`read`: the times it was read) changes.
+    pub fn follow_changes(&mut self, comparison: &Comparison, read: u64, context: u32, net: &NetClient, ctx: &egui::Context) {
+        let on_files = comparison.on_files();
+        let lines = self.code_lines();
+        if let Some((asked, path, result)) = self.changes_inbox.lock().ok().and_then(|mut r| r.take())
+            && asked == on_files
+            && let Some((file, first, last)) = &lines
+            && path == *file
+        {
+            let touches = |h: &Hunk| h.new_start <= *last && h.new_start + h.new_lines.max(1) > *first;
+            self.changes = result.map(|c| c.hunks.into_iter().filter(touches).collect()).unwrap_or_default();
+        }
+        let Some((file, ..)) = lines else {
+            self.changes.clear();
+            return;
+        };
+        let want = (on_files, file, read);
+        if self.changes_asked.as_ref() == Some(&want) {
+            return;
+        }
+        let inbox = self.changes_inbox.clone();
+        let (asked, path) = (want.0.clone(), want.1.clone());
+        net.change_file(&want.0, &want.1, harness_contracts::changes::Group::Changes, context, ctx.clone(), move |r| {
+            if let Ok(mut i) = inbox.lock() {
+                *i = Some((asked, path, r));
+            }
+        });
+        self.changes_asked = Some(want);
     }
 
     /// Shows `id` even while pinned (a go-to asked for it).
@@ -334,6 +390,7 @@ impl SpecState {
             Section::Invariants => out.extend((0..spec.map_or(0, |s| s.invariants.len())).map(SpecItem::Invariant)),
             Section::Relations => out.extend(self.relations().into_iter().map(|(kind, other, outgoing)| SpecItem::Relation { kind, other, outgoing })),
             Section::Code if self.detail.as_ref().is_some_and(|d| d.code.is_some()) => out.push(SpecItem::Source),
+            Section::Changes => out.extend((0..self.changes.len()).map(SpecItem::Hunk)),
             Section::Placeholders => out.extend((0..self.detail.as_ref().map_or(0, |d| d.component.placeholders.len())).map(SpecItem::Placeholder)),
             Section::Findings => out.extend((0..self.findings.len()).map(SpecItem::Finding)),
             _ => {}
@@ -781,6 +838,16 @@ impl SpecState {
                                 ui.label(RichText::new("Not in the code yet.").color(colors().muted));
                             }
                         },
+                        Section::Changes => {
+                            if self.changes.is_empty() {
+                                ui.label(RichText::new("None in the changes compared.").color(colors().muted));
+                            }
+                            for (i, hunk) in self.changes.iter().enumerate() {
+                                item(ui, Entry { section, item: SpecItem::Hunk(i) }, &mut |ui| {
+                                    crate::changes::draw_hunk(ui, hunk, false);
+                                });
+                            }
+                        }
                         Section::Placeholders => {
                             if c.placeholders.is_empty() {
                                 ui.label(RichText::new("None.").color(colors().muted));
@@ -1091,6 +1158,12 @@ impl Navigable for SpecState {
     fn target(&self) -> Option<Target> {
         let component = self.target.clone()?;
         let entry = self.entry().unwrap_or(Entry { section: self.current, item: SpecItem::Header });
+        // A change: its place in the file.
+        if let (SpecItem::Hunk(i), Some((file, ..))) = (&entry.item, self.code_lines())
+            && let Some(hunk) = self.changes.get(*i)
+        {
+            return Some(Target::Change { file, line: hunk.new_start.max(1) as usize });
+        }
         Some(Target::Spec { component, section: entry.section, item: entry.item })
     }
 
@@ -1123,7 +1196,7 @@ impl Navigable for SpecState {
                 Step::Done
             }
             SpecItem::Relation { .. } => Step::GoTo(GoTo::Spec),
-            SpecItem::Source => Step::GoTo(GoTo::Code),
+            SpecItem::Source | SpecItem::Hunk(_) => Step::GoTo(GoTo::Code),
             SpecItem::Comment(id) | SpecItem::Reply(id, _) => {
                 self.point = Some(id.clone());
                 self.start_composing(Compose::Reply(id));
@@ -1148,7 +1221,7 @@ impl Navigable for SpecState {
             SpecItem::Header if self.folded.contains(&self.current) => "Unfold this section".to_owned(),
             SpecItem::Header => "Fold this section".to_owned(),
             SpecItem::Relation { other, .. } => format!("Follow to {}", name(&other)),
-            SpecItem::Source | SpecItem::Placeholder(_) => "Open in the code".to_owned(),
+            SpecItem::Source | SpecItem::Placeholder(_) | SpecItem::Hunk(_) => "Open in the code".to_owned(),
             SpecItem::Comment(_) | SpecItem::Reply(..) => "Reply".to_owned(),
             SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_) => return None,
         })
@@ -1206,6 +1279,8 @@ impl Navigable for SpecState {
                     SpecItem::Relation { other, .. } => (other.as_str().rsplit([':', '.']).next().unwrap_or_default().to_owned(), other.to_string()),
                     SpecItem::Source => (String::new(), detail.and_then(|d| d.code.clone()).unwrap_or_default()),
                     SpecItem::Placeholder(_) => (String::new(), "placeholder".to_owned()),
+                    // Deleted lines too: what was there.
+                    SpecItem::Hunk(i) => (String::new(), self.changes.get(*i).map(|h| h.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default()),
                     SpecItem::Finding(i) => (String::new(), self.findings.get(*i).map(|f| f.message.clone()).unwrap_or_default()),
                     SpecItem::Comment(id) => (String::new(), self.comments.iter().find(|c| &c.id == id).map(|c| c.text.clone()).unwrap_or_default()),
                     SpecItem::Reply(id, i) => (String::new(), self.comments.iter().find(|c| &c.id == id).and_then(|c| c.replies.get(*i)).map(|r| r.text.clone()).unwrap_or_default()),
@@ -1431,7 +1506,7 @@ pub(crate) mod tests {
         s.motion(Motion::NextSibling, 1);
         assert_eq!(s.current, Section::Findings, "no section after the last");
         s.motion(Motion::PrevSibling, 2);
-        assert_eq!(s.current, Section::Code);
+        assert_eq!(s.current, Section::Changes);
     }
 
     #[test]
@@ -1619,4 +1694,31 @@ pub(crate) mod tests {
         assert!(!changed.contains(&Entry { section: Section::Logic, item: SpecItem::Step(0) }.key()));
         assert_eq!(changed.len(), 2);
     }
+
+    #[test]
+    fn its_changes_section_shows_the_changes_on_its_lines_and_enter_opens_them() {
+        use harness_contracts::changes::{DiffLine, LineKind};
+        let (a, b) = (ComponentId::new("rust:a::step"), ComponentId::new("rust:a::run"));
+        let mut s = SpecState::default();
+        s.follow(Some(&a), &Source::Code);
+        let mut d = detail(&a, &b);
+        d.component.anchor = Some(arch_graph::CodeAnchor { language: "rust".into(), syntax_kind: "function_item".into(), file: arch_graph::RepoPath::new("src/a.rs").unwrap(), symbol: "a::step".into(), span: arch_graph::Span { start_line: 10, end_line: 20, start_byte: 0, end_byte: 0 }, content_hash: String::new() });
+        s.detail = Some(d);
+        s.loaded = Some((a.clone(), Source::Code));
+        let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
+        s.follow_changes(&Comparison::default(), 1, 3, &net, &ctx);
+        assert!(net.sent.lock().unwrap().iter().any(|u| u.contains("/api/changes/file?from=rev%3AHEAD&to=files&path=src%2Fa.rs")), "its file, against the files");
+        let hunk = |start: u32, text: &str| Hunk { old_start: start, old_lines: 1, new_start: start, new_lines: 1, lines: vec![DiffLine { kind: LineKind::Added, old: None, new: Some(start), text: text.into() }] };
+        let file = FileChanges { comparison: Comparison::default().on_files(), path: "src/a.rs".into(), group: harness_contracts::changes::Group::Changes, context: 3, binary: false, hunks: vec![hunk(2, "above it"), hunk(12, "in it"), hunk(30, "below it")] };
+        *s.changes_inbox.lock().unwrap() = Some((Comparison::default().on_files(), "src/a.rs".into(), Ok(file)));
+        s.follow_changes(&Comparison::default(), 1, 3, &net, &ctx);
+        assert_eq!(s.changes.iter().map(|h| h.new_start).collect::<Vec<_>>(), [12], "only what touches its lines");
+        let at = s.entries().iter().position(|e| e.item == SpecItem::Hunk(0)).expect("a cursor stop");
+        s.put_cursor(at);
+        assert_eq!((s.target(), s.enter()), (Some(Target::Change { file: "src/a.rs".into(), line: 12 }), Step::GoTo(GoTo::Code)));
+        assert!(s.items().iter().any(|i| i.text.contains("in it")), "searchable");
+        let mut mode = crate::keymap::InputMode::Normal;
+        frame(&mut s, &ctx, &mut mode, 0);
+    }
+
 }

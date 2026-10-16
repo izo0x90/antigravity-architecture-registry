@@ -61,14 +61,19 @@ struct Flows {
     planned_only: BTreeSet<String>,
 }
 
-/// With a plan in focus: what's part of it.
+/// What's in focus: a plan's own components, or only those asked for
+/// (`TreeRequest::only`), or both.
 struct Focus {
-    /// The plan's own components.
+    /// The components in focus.
     items: BTreeSet<ComponentId>,
     /// Contains: the items and every box that holds one.
     held: BTreeSet<ComponentId>,
-    /// Data flow: the types the plan's own flows carry.
+    /// Data flow: the types the items' flows carry (a plan's), and the
+    /// data items themselves.
     types: BTreeSet<String>,
+    /// A box in focus shows all it holds (a plan's: what it adds goes in
+    /// whole); otherwise only what's in focus (only those asked for).
+    whole: bool,
 }
 
 pub(super) struct Lens<'a, G: GraphRead> {
@@ -127,15 +132,23 @@ impl<'a, G: GraphRead> Lens<'a, G> {
                 None => std::sync::Arc::new(lens.flow_index()),
             };
         }
-        if let Some(plan) = input.plan.filter(|_| !request.full_code) {
-            let items: BTreeSet<ComponentId> = plan.components.iter().map(|c| c.id.clone()).collect();
+        // In focus: the plan's items (unless shown in the whole code), and
+        // of them (or of everything) only those asked for.
+        let plan = input.plan.filter(|_| !request.full_code);
+        let only: Option<BTreeSet<ComponentId>> = request.only.as_ref().map(|ids| ids.iter().map(ComponentId::new).collect());
+        let items: Option<BTreeSet<ComponentId>> = match (plan, only) {
+            (Some(plan), only) => Some(plan.components.iter().map(|c| c.id.clone()).filter(|id| only.as_ref().is_none_or(|o| o.contains(id))).collect()),
+            (None, only) => only,
+        };
+        if let Some(items) = items {
             let mut held = items.clone();
             for id in &items {
                 held.extend(lens.ancestors(id));
             }
-            let mut types: BTreeSet<String> = plan.relations.iter().filter(|r| r.kind == RelationKind::DataFlow).filter_map(|r| lens.flow_type(r)).collect();
-            types.extend(plan.components.iter().filter(|c| lens.is_data(c)).map(|c| format!("{TYPE}{}", c.name)));
-            lens.focus = Some(Focus { items, held, types });
+            let mut types: BTreeSet<String> = plan.into_iter().flat_map(|p| &p.relations).filter(|r| r.kind == RelationKind::DataFlow && (items.contains(&r.source) || items.contains(&r.target))).filter_map(|r| lens.flow_type(r)).collect();
+            let data = |id: &ComponentId| plan.and_then(|p| p.component(id)).or_else(|| lens.graph().component(id)).filter(|c| lens.is_data(c)).map(|c| format!("{TYPE}{}", c.name));
+            types.extend(items.iter().filter_map(data));
+            lens.focus = Some(Focus { items, held, types, whole: request.only.is_none() });
         }
         lens
     }
@@ -407,7 +420,7 @@ impl<'a, G: GraphRead> Lens<'a, G> {
         };
         // With a plan in focus, a box shows what holds or is part of the plan.
         if let (Some(focus), ViewKind::Contains, Way::Down) = (&self.focus, self.view, self.way)
-            && !focus.items.contains(&ComponentId::new(key))
+            && (!focus.whole || !focus.items.contains(&ComponentId::new(key)))
         {
             kids.retain(|k| focus.held.contains(&ComponentId::new(&k.key)));
         }

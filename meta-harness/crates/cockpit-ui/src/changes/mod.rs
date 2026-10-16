@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use egui::RichText;
-use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, DiffLine, FileChanges, FileStatus, Group, Hunk, LineKind, Point};
+use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, ComponentChangeList, ComponentChanges, DiffLine, FileChanges, FileStatus, Group, Hunk, LineKind, Point};
 use serde::{Deserialize, Serialize};
 
 use crate::actions::{Action, ActionProvider, Choice, Group as ActionGroup, MINOR, Param, RunCx, SECONDARY, Style};
@@ -53,6 +53,7 @@ type FileKey = (Group, String);
 enum Reply {
     List(Comparison, NetResult<ChangeList>),
     File(Comparison, FileKey, NetResult<FileChanges>),
+    Components(Comparison, NetResult<ComponentChangeList>),
 }
 
 /// An opened file: how much context it asks for, and its changes once in.
@@ -94,8 +95,7 @@ fn offered() -> Vec<(Comparison, &'static str)> {
 }
 
 fn compared(value: &str) -> Option<Comparison> {
-    let (from, to) = value.split_once("..")?;
-    Some(Comparison { from: from.parse().ok()?, to: to.parse().ok()? })
+    value.parse().ok()
 }
 
 pub struct ChangesView {
@@ -126,6 +126,12 @@ pub struct ChangesView {
     /// How many times the list was read (views that show the changes too
     /// ask for theirs again when it is).
     read: u64,
+    /// Which components it changed (asked for each time the list is read),
+    /// and how many times that was read.
+    components: Option<ComponentChangeList>,
+    components_read: u64,
+    /// A spot to put the cursor on once its file's changes are in (`g x`).
+    revealing: Option<(FileKey, usize)>,
     inbox: Arc<Mutex<Vec<Reply>>>,
 }
 
@@ -150,6 +156,9 @@ impl Default for ChangesView {
             view_h: 0.0,
             asked_at: f64::NEG_INFINITY,
             read: 0,
+            components: None,
+            components_read: 0,
+            revealing: None,
             inbox: Arc::default(),
         }
     }
@@ -281,6 +290,11 @@ impl ChangesView {
                         Err(e) => self.error = Some(e.into()),
                     }
                 }
+                Reply::Components(asked, result) if asked == self.comparison => {
+                    // Not there (not a repository, an older server): none.
+                    self.components = result.ok();
+                    self.components_read += 1;
+                }
                 Reply::File(asked, key, result) if asked == self.comparison => {
                     if let Some(opened) = self.opened.get_mut(&key) {
                         opened.loading = false;
@@ -296,6 +310,7 @@ impl ChangesView {
                 _ => {}
             }
         }
+        self.go_to_revealed(net, ctx);
         if let Some(fold) = self.folding.take() {
             self.apply_fold(fold, net, ctx);
         }
@@ -343,9 +358,61 @@ impl ChangesView {
         self.read
     }
 
+    /// Which components it changed, as last read, and how many times that
+    /// was read.
+    pub fn components(&self) -> (Option<&ComponentChangeList>, u64) {
+        (self.components.as_ref(), self.components_read)
+    }
+
+    /// Whether it changed component `id`.
+    pub fn touches(&self, id: &arch_graph::ComponentId) -> bool {
+        self.components.as_ref().is_some_and(|l| l.components.iter().any(|c| c.component == id.as_str()))
+    }
+
+    /// Puts the cursor on component `id`'s first change (its file opened),
+    /// once it's in. False when it changed nothing there.
+    pub fn reveal(&mut self, id: &arch_graph::ComponentId) -> bool {
+        let Some(changed) = self.components.as_ref().and_then(|l| l.components.iter().find(|c| c.component == id.as_str())) else { return false };
+        let line = changed.runs.first().map_or(1, |(start, _)| (*start).max(1) as usize);
+        // The file as it is now: its unstaged changes before its staged ones.
+        let keys: Vec<FileKey> = self.list().map(|l| l.files.iter().filter(|f| f.path == changed.file).map(file_key).collect()).unwrap_or_default();
+        let Some(key) = keys.iter().find(|(g, _)| *g != Group::Staged).or(keys.first()).cloned() else { return false };
+        self.revealing = Some((key, line));
+        true
+    }
+
+    /// The spot asked for by `reveal`: its file opened, then the cursor on
+    /// the change at its line.
+    fn go_to_revealed(&mut self, net: &NetClient, ctx: &egui::Context) {
+        let Some((key, line)) = self.revealing.clone() else { return };
+        let Some(opened) = self.opened.get(&key) else {
+            self.open(key, net, ctx);
+            return;
+        };
+        let Some(changes) = &opened.changes else {
+            if !opened.loading {
+                self.revealing = None;
+            }
+            return;
+        };
+        let at = changes.hunks.iter().position(|h| h.new_range().contains(&(line as u32))).unwrap_or(0);
+        let rows = self.rows();
+        if let Some(row) = rows.iter().position(|r| matches!(r, Row::Hunk(_, h) if *h == at) && self.file_of(r).map(file_key).as_ref() == Some(&key)) {
+            self.put_cursor(row);
+        }
+        self.revealing = None;
+    }
+
+    /// What it changed in each component.
+    pub fn by_component(&self) -> BTreeMap<arch_graph::ComponentId, ComponentChanges> {
+        self.components.iter().flat_map(|l| &l.components).map(|c| (arch_graph::ComponentId::new(&c.component), c.clone())).collect()
+    }
+
     fn took_list(&mut self, list: ChangeList, net: &NetClient, ctx: &egui::Context) {
         self.error = None;
         self.read += 1;
+        let (inbox, asked) = (self.inbox.clone(), list.comparison.clone());
+        net.change_components(&list.comparison, ctx.clone(), move |r| push(&inbox, Reply::Components(asked, r)));
         let keys: Vec<(FileKey, (u32, u32))> = list.files.iter().map(|f| (file_key(f), (f.added, f.removed))).collect();
         self.list = Some(list);
         // Gone files go; opened ones whose counts moved are asked again.
@@ -520,7 +587,7 @@ fn draw_gap(ui: &mut egui::Ui) {
 
 /// A change: its header, then its lines (interleaved, or removed lines on
 /// the left and added on the right, paired in runs).
-fn draw_hunk(ui: &mut egui::Ui, hunk: &Hunk, side_by_side: bool) {
+pub(crate) fn draw_hunk(ui: &mut egui::Ui, hunk: &Hunk, side_by_side: bool) {
     let look = crate::theme::look();
     ui.label(RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines)).monospace().size(look.text_small).color(colors().faint));
     if !side_by_side {
@@ -592,9 +659,9 @@ impl Panel for ChangesView {
 impl ActionProvider for ChangesView {
     fn actions(&self) -> Vec<Action> {
         let f = |id: &str, label: &str, c: Command| Action::new(id, label, c).focused();
-        let mut choices: Vec<Choice> = offered().into_iter().map(|(c, label)| Choice::new(format!("{}..{}", c.from, c.to), label).current(c == self.comparison)).collect();
+        let mut choices: Vec<Choice> = offered().into_iter().map(|(c, label)| Choice::new(c.range(), label).current(c == self.comparison)).collect();
         if !offered().iter().any(|(c, _)| *c == self.comparison) {
-            choices.push(Choice::new(format!("{}..{}", self.comparison.from, self.comparison.to), self.comparison.to_string()).current(true));
+            choices.push(Choice::new(self.comparison.range(), self.comparison.to_string()).current(true));
         }
         let layouts = DiffLayout::ALL.iter().map(|(l, label)| Choice::new(l.name(), *label).current(*l == self.layout)).collect();
         let mut out = vec![

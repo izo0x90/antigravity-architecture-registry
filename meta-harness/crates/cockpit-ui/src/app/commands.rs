@@ -163,6 +163,10 @@ impl CockpitApp {
             let has_job = self.desk.view(kind).target().and_then(|t| t.component().cloned()).is_none_or(|id| self.desk.queue.has_job(&id));
             out.push(go("goto.queue", "Go to its queue job", GoTo::Queue, if has_job { When::Component } else { When::Unavailable }, MINOR));
         }
+        if kind != K::Changes {
+            let touched = self.desk.view(kind).target().and_then(|t| t.component().cloned()).is_none_or(|id| self.desk.changes.touches(&id));
+            out.push(go("goto.changes", "Go to its changes", GoTo::Changes, if touched { When::Component } else { When::Unavailable }, MINOR));
+        }
         out.push(go("goto.uses", "Go to a use", GoTo::Uses, When::Reaches(GoTo::Uses), SECONDARY));
         out.push(go("goto.callers", "Go to a caller", GoTo::Callers, When::Reaches(GoTo::Callers), SECONDARY));
         out.push(go("goto.callees", "Go to a callee", GoTo::Callees, When::Reaches(GoTo::Callees), SECONDARY));

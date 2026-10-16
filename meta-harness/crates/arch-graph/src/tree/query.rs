@@ -28,6 +28,9 @@ impl TreeRequest {
         if self.full_code {
             out.push(("full_code", "true".to_owned()));
         }
+        if let Some(only) = &self.only {
+            out.push(("only", serde_json::to_string(only).unwrap_or_default()));
+        }
         out
     }
 
@@ -50,6 +53,7 @@ impl TreeRequest {
                 "opened" => request.opened = serde_json::from_str::<Vec<Opened>>(value).map_err(|e| bad(&e.to_string()))?,
                 "closed" => request.closed = serde_json::from_str::<Vec<String>>(value).map_err(|e| bad(&e.to_string()))?,
                 "full_code" => request.full_code = value.parse().map_err(|_| bad("true or false"))?,
+                "only" => request.only = Some(serde_json::from_str::<Vec<String>>(value).map_err(|e| bad(&e.to_string()))?),
                 other if extra.contains(&other) => {}
                 _ => return Err(format!("{name}: not something a view is asked with")),
             }
@@ -85,6 +89,7 @@ mod tests {
             opened: vec![Opened { card: "type:Vec<A, B>".into(), levels: 2 }],
             closed: vec!["rust:a::log".into()],
             full_code: true,
+            only: Some(vec!["rust:a::run".into()]),
         };
         assert_eq!(TreeRequest::from_query_pairs(&decoded(request.query_pairs()), &[]).unwrap(), request);
         assert_eq!(TreeRequest::from_query_pairs(&[], &[]).unwrap(), TreeRequest::default());

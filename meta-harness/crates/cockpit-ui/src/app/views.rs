@@ -138,6 +138,18 @@ impl CockpitApp {
         for code in std::iter::once(&mut self.desk.code).chain(self.desk.parked.codes.values_mut()) {
             code.follow_changes(&comparison, read, &self.desk.net, ctx);
         }
+        let context = self.desk.changes.ui.context;
+        for spec in std::iter::once(&mut self.desk.spec).chain(self.desk.parked.specs.values_mut()) {
+            spec.follow_changes(&comparison, read, context, &self.desk.net, ctx);
+        }
+        // Which components it changed: badges, and the only-changed filter.
+        let (_, read) = self.desk.changes.components();
+        let mut changed = None;
+        for graph in std::iter::once(&mut self.desk.graph).chain(self.desk.parked.graphs.values_mut()) {
+            if graph.changed_read() != read {
+                graph.set_changed(changed.get_or_insert_with(|| self.desk.changes.by_component()).clone(), &self.desk.changes.comparison, read);
+            }
+        }
         let source = self.desk.graph.nav.source.clone();
         let plan = source.plan().cloned();
         // Specs not pinned show what the graph used last has selected.

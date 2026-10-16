@@ -121,6 +121,14 @@ pub struct GraphState {
     pub stale_files: Vec<String>,
     /// Review badges: changed since the last review, unaddressed comments.
     pub marks: BTreeMap<ComponentId, crate::review::NodeMark>,
+    /// What the desk's comparison changed, by component: a badge on each;
+    /// the only-changed filter shows those changed themselves (and what
+    /// holds them).
+    changed: BTreeMap<ComponentId, harness_contracts::changes::ComponentChanges>,
+    /// Which read of the changes' components that is, and what was
+    /// compared (find looks only in its files while only changed show).
+    changed_read: u64,
+    comparison: Option<harness_contracts::changes::Comparison>,
     load: Load,
     stale: bool,
     /// A card opened whose branch is to be fetched and merged in, and the
@@ -177,6 +185,9 @@ impl Default for GraphState {
             details: BTreeMap::new(),
             stale_files: Vec::new(),
             marks: BTreeMap::new(),
+            changed: BTreeMap::new(),
+            changed_read: 0,
+            comparison: None,
             load: Load::Idle,
             stale: true,
             expanding: None,
@@ -301,6 +312,32 @@ impl GraphState {
         parts.join(" · ")
     }
 
+    /// What the desk's comparison changed, by component; showing only
+    /// those, the tree is asked for again when they change.
+    pub fn set_changed(&mut self, changed: BTreeMap<ComponentId, harness_contracts::changes::ComponentChanges>, comparison: &harness_contracts::changes::Comparison, read: u64) {
+        self.changed_read = read;
+        self.comparison = Some(comparison.clone());
+        if changed != self.changed {
+            self.changed = changed;
+            self.stale |= self.nav.only_changed;
+        }
+    }
+
+    /// Which read of the changes' components it has.
+    pub fn changed_read(&self) -> u64 {
+        self.changed_read
+    }
+
+    /// Lines added and removed in a component, by the desk's comparison.
+    pub fn changed(&self, id: &ComponentId) -> Option<(u32, u32)> {
+        self.changed.get(id).map(|c| (c.added, c.removed))
+    }
+
+    /// The components changed themselves.
+    fn changed_directly(&self) -> impl Iterator<Item = &ComponentId> {
+        self.changed.iter().filter(|(_, c)| c.direct).map(|(id, _)| id)
+    }
+
     /// Fetch everything again (events may have been missed).
     pub fn invalidate(&mut self) {
         self.stale = true;
@@ -366,7 +403,8 @@ impl GraphState {
         use arch_search::SearchKind;
         for (kind, limit) in [(SearchKind::Symbols, limits.symbols), (SearchKind::Files, limits.files), (SearchKind::Text, limits.text)] {
             let (inbox, asked) = (self.inbox.clone(), self.find.asked);
-            net.search(&self.find.query, kind, &self.nav.source, limit, ctx.clone(), move |r| push(&inbox, Reply::Found(asked, kind, Box::new(r))));
+            let changed = self.comparison.as_ref().filter(|_| self.nav.only_changed);
+            net.search(&self.find.query, kind, &self.nav.source, limit, changed, ctx.clone(), move |r| push(&inbox, Reply::Found(asked, kind, Box::new(r))));
         }
     }
 
@@ -426,7 +464,7 @@ impl GraphState {
             self.generation += 1;
             self.load = Load::Loading;
             let (inbox, generation) = (self.inbox.clone(), self.generation);
-            net.graph_tree(&self.nav.request(), ctx.clone(), move |r| push(&inbox, Reply::Tree(generation, Box::new(r))));
+            net.graph_tree(&self.nav.asking(self.changed_directly()), ctx.clone(), move |r| push(&inbox, Reply::Tree(generation, Box::new(r))));
         }
         if let Some((card, held)) = self.expanding.take()
             && self.tree.is_some()

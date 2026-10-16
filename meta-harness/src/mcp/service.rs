@@ -41,8 +41,8 @@ pub struct McpService {
 }
 
 impl McpService {
-    pub fn new(arch: Arc<ArchitectureService>, remote: Arc<crate::remote::Remote>, access: Arc<Access>, slots: Arc<harness_core::SlotManager>, notify: Arc<nah_notify::NotifyHub>) -> Self {
-        let sets = all(&arch, &remote, &slots, &notify);
+    pub fn new(arch: Arc<ArchitectureService>, changes: Option<Arc<nah_changes::Changes>>, remote: Arc<crate::remote::Remote>, access: Arc<Access>, slots: Arc<harness_core::SlotManager>, notify: Arc<nah_notify::NotifyHub>) -> Self {
+        let sets = all(&arch, &changes, &remote, &slots, &notify);
         let mut index = HashMap::new();
         let mut names = Vec::new();
         for (i, set) in sets.iter().enumerate() {

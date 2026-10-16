@@ -492,3 +492,26 @@ fn the_layout_has_its_own_time_limit_and_a_cut_answer_says_so() {
     lay_out(&mut tree, &f.config.layout, &|| false);
     assert!(tree.cut.is_none());
 }
+
+#[test]
+fn only_the_components_asked_for_show_with_what_holds_them() {
+    let f = Fixture::new(sample());
+    let only = |view: ViewKind| TreeRequest { view, only: Some(vec![id("app::step").0, id("lib::util").0]), ..TreeRequest::default() };
+    let mut boxes = keys(&f.tree(only(ViewKind::Contains)));
+    boxes.sort();
+    assert_eq!(boxes, vec!["app", "lib", "step", "util"], "the changed ones and their boxes, nothing else");
+    // A box asked for itself shows only what's asked for in it.
+    let with_box = TreeRequest { only: Some(vec![id("app").0, id("app::step").0]), ..only(ViewKind::Contains) };
+    let mut boxes = keys(&f.tree(with_box));
+    boxes.sort();
+    assert_eq!(boxes, vec!["app", "step"]);
+    let calls = f.tree(only(ViewKind::Calls));
+    assert!(keys(&calls).contains(&"step".to_owned()) && !keys(&calls).contains(&"run".to_owned()), "{:?}", keys(&calls));
+    // With a plan: of its items, only those asked for.
+    let mut on = with_plan();
+    on.budget = 400;
+    let mut boxes = keys(&on.tree(TreeRequest { only: Some(vec![id("app::run").0]), ..on_plan(ViewKind::Contains, None) }));
+    boxes.sort();
+    assert_eq!(boxes, vec!["app", "run"]);
+    assert!(f.tree(TreeRequest { only: Some(Vec::new()), ..ask(ViewKind::Contains, None, Way::Down, 2) }).cards.is_empty(), "none asked for: nothing");
+}

@@ -387,9 +387,16 @@ all of them:
   `Enter` opens the spot in the code; an action shows more lines around a
   hunk. The code view marks the lines changed against where the
   comparison starts (a bar: green added, blue changed) and shows deleted
-  lines in place, struck through; `z d` hides and shows them. The server
-  reads git (`GET /api/changes?from=&to=`, `GET /api/changes/file`) and
-  never changes the repository, its index or its files.
+  lines in place, struck through; `z d` hides and shows them. Changes
+  land on the components whose lines they touch (and what holds them):
+  the graph badges each with its lines added and removed, its "Only
+  changed" switch shows just those (and `g /` then finds only in changed
+  files), a card's Changes section (the spec, the quick look) shows its
+  hunks, and `g x` goes to them in the Changes view. Files the index has
+  out of date are left out of that until they're read again. The server
+  reads git (`GET /api/changes?from=&to=`, `GET /api/changes/file`, `GET
+  /api/changes/components`; `GET /api/search?changed=from..to`) and never
+  changes the repository, its index or its files.
 
 - **Talk to the agent:** `t` opens a box over whatever is on screen;
   Enter sends to the lead's session (opening one if there's none), the
@@ -591,7 +598,7 @@ away and rebuilt when the reader changes.
 
 | Area | Tools |
 |---|---|
-| Explore | `ingest`, `list_types`, `search`, `inspect`, `view`, `navigate` (moves your graph: the one in the `column` it names, else the one you used last) |
+| Explore | `ingest`, `list_types`, `search`, `inspect`, `view`, `navigate` (moves your graph: the one in the `column` it names, else the one you used last); `search` and `view` take `changed` (`HEAD..files`, `rev:main..files`) to keep to what changed |
 | Plan | `plan_list`, `plan_create` (a change, or a walkthrough), `plan_import` (old `system_architecture.json`), `plan_edit`, `plan_validate`, `contract` |
 | Build | `verify`, `run_tools`, `review` |
 | Review | `review_comments`, `answer_comment`, `reply_comment` |
@@ -659,6 +666,7 @@ is approved, verified or built. It's saved in `.nah/plans/` like any plan.
 | `nah-lsp` | the one language server client: starts a server in the background, knows when it's ready, asks where names are defined, restarts it when it ends |
 | `nah-access` | what each caller may do: capabilities, the roles that hold them (configured), and the one check every tool and route goes through |
 | `nah-notify` | notifications: what waits on the user (approvals, questions, sign-ins) and what happened (crashes, failed and finished turns, messages), from the event stream; kept in the state database, published, handed to adapters (Slack, email, a phone: none yet) |
+| `nah-changes` | the project's changes, from git: what a comparison (two of the last commit, the staged files, the files, any commit, a snapshot) changes, one file's changes, where they are on the files now; snapshots of the files kept as commits of their own (`refs/nah/snapshots/`). Reads the repository and never changes it |
 | `nah-state` | the project's state database (`.nah/state/state.sqlite`): what the server keeps across restarts that isn't the analysis. One server per project (a lock), explicit layouts, never thrown away |
 | `arch-store` | where the analysis is kept between runs (SQLite) |
 | `arch-search` | one way of matching what's typed: names with neo_frizbee; files and lines with fff-search |

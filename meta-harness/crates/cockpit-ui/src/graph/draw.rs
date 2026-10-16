@@ -152,6 +152,7 @@ impl GraphState {
             }
             (Some(tree), _) if tree.cards.is_empty() => {
                 let why = match (tree.request.view, &tree.request.source) {
+                    _ if tree.request.only.is_some() => "Nothing the changes touch is in this view. Show everything, or compare something else.".to_owned(),
                     (_, arch_graph::Source::Plan(p)) if !tree.request.full_code => format!("Plan {p} has nothing for this view yet. Show it in the full code, or pick another view."),
                     _ => "Nothing to show in this view yet. Read the code in, or pick another view.".to_owned(),
                 };
@@ -445,6 +446,14 @@ impl GraphState {
         }
         if let Some(id) = &card.component {
             self.draw_marks(painter, rect, id);
+            if let Some((added, removed)) = self.changed(id) {
+                // What the desk's comparison changed in it, at its bottom left.
+                let galley = painter.layout_no_wrap(format!("{} +{added} −{removed}", egui_phosphor::regular::GIT_DIFF), FontId::proportional(look.text_tiny), theme.text);
+                let chip = Rect::from_min_size(rect.left_bottom() + Vec2::new(look.space_s, -galley.size().y / 2.0 - look.space_hair), galley.size() + Vec2::new(look.space_s * 2.0, look.space_hair * 2.0));
+                painter.rect_filled(chip, look.radius_pill, theme.ok_bg);
+                painter.rect_stroke(chip, look.radius_pill, Stroke::new(look.line_thin, theme.ok), StrokeKind::Inside);
+                painter.galley(chip.min + Vec2::new(look.space_s, look.space_hair), galley, theme.text);
+            }
         }
         if self.card_stale(card) {
             let (glyph, _, color) = crate::status::look("stale");

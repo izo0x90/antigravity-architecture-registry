@@ -25,6 +25,9 @@ pub struct Nav {
     pub closed: Vec<String>,
     /// With a plan: shown in the whole codebase.
     pub full_code: bool,
+    /// Only what the desk's comparison changed (and what holds it).
+    #[serde(default)]
+    pub only_changed: bool,
 }
 
 impl Nav {
@@ -38,7 +41,14 @@ impl Nav {
             opened: self.opened.clone(),
             closed: self.closed.clone(),
             full_code: self.full_code,
+            only: None,
         }
+    }
+
+    /// The request, with only the `changed` components when that's on.
+    pub fn asking<'c>(&self, changed: impl IntoIterator<Item = &'c arch_graph::ComponentId>) -> TreeRequest {
+        let only = self.only_changed.then(|| changed.into_iter().map(|id| id.as_str().to_owned()).collect());
+        TreeRequest { only, ..self.request() }
     }
 
     /// Hand-opened and hand-closed cards start over (they belonged to the
@@ -59,6 +69,8 @@ pub enum NavChange {
     /// With a plan: in the whole codebase, or only the plan and what it
     /// plugs into.
     FullCode(bool),
+    /// Only what the desk's comparison changed, or everything.
+    OnlyChanged(bool),
     /// Make a card the root.
     GoIn(String),
     /// More (+) or fewer (-) levels from `base` (the depth shown now).
@@ -92,6 +104,10 @@ pub fn apply(nav: &mut Nav, change: NavChange) {
         }
         NavChange::FullCode(full) => {
             nav.full_code = full;
+            nav.reset_folds();
+        }
+        NavChange::OnlyChanged(on) => {
+            nav.only_changed = on;
             nav.reset_folds();
         }
         NavChange::GoIn(card) => {
@@ -176,7 +192,7 @@ impl super::GraphState {
         apply(&mut self.nav, change);
         if self.nav != before {
             match expand {
-                Some(card) if !self.stale => self.expanding = Some((card, before.request())),
+                Some(card) if !self.stale => self.expanding = Some((card, before.asking(self.changed_directly()))),
                 _ => {
                     self.stale = true;
                     self.refit = true;

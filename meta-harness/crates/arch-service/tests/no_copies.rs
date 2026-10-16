@@ -81,8 +81,8 @@ fn requests_plan_edits_approvals_verification_and_refresh_copy_no_graph() {
         service.component(&id("sample::validate"), &source).unwrap();
     });
     step("search", &mut || {
-        service.search("run", arch_service::SearchKind::Symbols, &source, Some(5)).unwrap();
-        service.search("run", arch_service::SearchKind::Symbols, &Source::Code, Some(5)).unwrap();
+        service.search("run", arch_service::SearchKind::Symbols, &source, Some(5), None).unwrap();
+        service.search("run", arch_service::SearchKind::Symbols, &Source::Code, Some(5), None).unwrap();
     });
     step("expand and context", &mut || {
         let request = TreeRequest { view: ViewKind::Calls, source: source.clone(), ..TreeRequest::default() };

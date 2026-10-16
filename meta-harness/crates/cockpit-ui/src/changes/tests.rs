@@ -104,3 +104,22 @@ fn a_comparison_is_picked_by_its_two_points() {
     view.compare(Comparison { from: Point::Head, to: Point::Index });
     assert!(view.list().is_none() && view.rows().is_empty() && view.stale, "another comparison: asked afresh");
 }
+
+#[test]
+fn going_to_a_components_changes_opens_its_file_at_its_change() {
+    let (mut view, net, ctx) = view_with_changes();
+    let id = arch_graph::ComponentId::new("rust:a::three");
+    assert!(!view.reveal(&id), "nothing known about it changed");
+    let list = ComponentChangeList { comparison: Comparison::default(), components: vec![harness_contracts::changes::ComponentChanges { component: id.as_str().into(), file: "a.rs".into(), added: 1, removed: 1, runs: vec![(3, 1)], direct: true }], out_of_date: vec![] };
+    push(&view.inbox, Reply::Components(Comparison::default(), Ok(list)));
+    view.tick(&net, &ctx, false);
+    assert!(view.touches(&id) && view.components().1 == 1);
+    assert_eq!(view.by_component().get(&id).map(|c| (c.added, c.removed)), Some((1, 1)));
+    view.close(&(Group::Unstaged, "a.rs".into()));
+    assert!(view.reveal(&id));
+    view.tick(&net, &ctx, false);
+    let a = FileChanges { comparison: Comparison::default(), path: "a.rs".into(), group: Group::Unstaged, context: 3, binary: false, hunks: vec![Hunk { old_start: 2, old_lines: 1, new_start: 2, new_lines: 2, lines: vec![line(LineKind::Added, None, Some(3), "new three")] }] };
+    push(&view.inbox, Reply::File(Comparison::default(), (Group::Unstaged, "a.rs".into()), Ok(a)));
+    view.tick(&net, &ctx, false);
+    assert_eq!(view.cursor_key().as_deref(), Some("h:Unstaged:a.rs:0"), "its file opened again, the cursor on the change");
+}

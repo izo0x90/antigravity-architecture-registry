@@ -99,7 +99,7 @@ pub(crate) fn loading() -> GraphState {
 /// A graph showing `tree`, settled where it asked (nothing to fetch).
 pub(crate) fn showing(tree: Tree) -> GraphState {
     let r = &tree.request;
-    let nav = Nav { view: r.view, source: r.source.clone(), root: r.root.clone(), way: r.way, depth: r.depth, opened: r.opened.clone(), closed: r.closed.clone(), full_code: r.full_code };
+    let nav = Nav { view: r.view, source: r.source.clone(), root: r.root.clone(), way: r.way, depth: r.depth, opened: r.opened.clone(), closed: r.closed.clone(), full_code: r.full_code, only_changed: r.only.is_some() };
     let mut g = GraphState { config: Some(TreeConfig::defaults().unwrap()), config_requested: true, plans_stale: false, stale: false, nav, ..Default::default() };
     g.set_tree(tree);
     g
@@ -449,4 +449,27 @@ fn the_camera_zooms_and_fits_from_keys_and_buttons() {
     for bound in ["\"graph.zoom_in\" = { leader = \"g =\", keys = [\"z +\"] }", "\"graph.fit\" = { leader = \"g z\", keys = [\"z z\"] }"] {
         assert!(keymap.contains(bound), "{bound}");
     }
+}
+
+#[test]
+fn changed_components_get_a_badge_and_only_they_show_when_asked() {
+    let mut g = showing(sample_tree());
+    assert!(!ids(&g).contains(&"graph.only_changed".to_owned()), "nothing changed: no switch");
+    let comparison = harness_contracts::changes::Comparison::default();
+    let step = ComponentId::new("rust:a::step");
+    let changed = |id: &ComponentId, direct: bool| harness_contracts::changes::ComponentChanges { component: id.as_str().into(), file: "src/a.rs".into(), added: 2, removed: 1, runs: vec![(2, 2)], direct };
+    let module = ComponentId::new("rust:a");
+    g.set_changed(BTreeMap::from([(step.clone(), changed(&step, true)), (module.clone(), changed(&module, false))]), &comparison, 1);
+    assert_eq!((g.changed(&step), g.changed_read(), g.stale), (Some((2, 1)), 1, false), "a badge; the tree as it was");
+    assert!(ids(&g).contains(&"graph.only_changed".to_owned()));
+    g.command(super::actions::GraphCommand::OnlyChanged, None);
+    assert!(g.nav.only_changed && g.stale, "only changed: asked again");
+    assert_eq!(g.changed(&module), Some((2, 1)), "what holds it: a badge too");
+    assert_eq!(g.nav.asking(g.changed_directly()).only, Some(vec!["rust:a::step".to_owned()]), "only what changed itself (what holds it comes along)");
+    g.stale = false;
+    g.set_changed(BTreeMap::new(), &comparison, 2);
+    assert!(g.stale, "what changed moved: asked again");
+    assert_eq!(g.nav.asking(g.changed_directly()).only, Some(Vec::new()), "nothing changed: nothing shown");
+    g.command(super::actions::GraphCommand::OnlyChanged, Some("false".into()));
+    assert_eq!(g.nav.asking(g.changed_directly()).only, None);
 }

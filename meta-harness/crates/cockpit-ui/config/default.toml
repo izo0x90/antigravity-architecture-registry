@@ -186,6 +186,7 @@ I = "Index"
 "goto.graph" = { keys = ["g m"] }
 "goto.tree" = { keys = ["g t"] }
 "goto.queue" = { keys = ["g q"] }
+"goto.changes" = { keys = ["g x"] }
 "goto.uses" = { keys = ["g r"] }
 "goto.callers" = { keys = ["g R"] }
 "goto.callees" = { keys = ["g c"] }

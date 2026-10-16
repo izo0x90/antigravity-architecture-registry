@@ -167,3 +167,27 @@ fn a_project_in_a_folder_of_the_repository_sees_its_own_files_by_its_own_paths()
     let file = changes.file(&Comparison::default(), "src/lib.rs", Group::Unstaged, 0).unwrap();
     assert_eq!(file.hunks[0].lines[0].text, "pub fn b() {}");
 }
+
+#[test]
+fn runs_are_where_the_files_now_changed_and_files_changed_since_the_newer_side_are_apart() {
+    let (dir, repo) = repo();
+    write(dir.path(), "a.txt", "1\n2\n3\n4\n5\n6\n");
+    write(dir.path(), "b.txt", "x\n");
+    stage(&repo, &["a.txt", "b.txt"]);
+    commit(&repo, "first");
+    write(dir.path(), "a.txt", "1\ntwo\n3\n4\n5\n6\n");
+    stage(&repo, &["a.txt"]);
+    write(dir.path(), "a.txt", "1\ntwo\n3\n4\n6\nseven\n");
+    let changes = Changes::open(dir.path()).unwrap();
+    let now = changes.on_files(&Comparison::default()).unwrap();
+    assert!(now.moved.is_empty());
+    assert_eq!(now.files.len(), 1);
+    let runs: Vec<(u32, u32, u32)> = now.files[0].runs.iter().map(|r| (r.start, r.lines, r.removed)).collect();
+    assert_eq!(runs, [(2, 1, 1), (4, 0, 1), (6, 1, 0)], "staged and unstaged together: changed, removed after line 4, added");
+    let removed = now.files[0].runs[1];
+    assert!(removed.within(4, 4) && !removed.within(5, 9) && removed.lines_in(1, 9) == 0, "a removal sits on the line before it");
+    assert_eq!(now.files[0].runs[2].lines_in(1, 6), 1);
+    // Up to the staged files: a.txt changed since, so it's apart.
+    let staged = changes.on_files(&Comparison { from: Point::Head, to: Point::Index }).unwrap();
+    assert_eq!((staged.files.len(), staged.moved), (0, vec!["a.txt".to_owned()]));
+}

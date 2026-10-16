@@ -40,6 +40,8 @@ pub enum SpecItem {
     Finding(usize),
     /// The component's source (the code section's body).
     Source,
+    /// One of the changes in it (the changes section).
+    Hunk(usize),
     Comment(CommentId),
     Reply(CommentId, usize),
 }
@@ -203,6 +205,8 @@ pub enum GoTo {
     Graph,
     Tree,
     Queue,
+    /// What the desk's comparison changed in it (the Changes view).
+    Changes,
     /// Every use of it in the code (calls, types named, imports, paths).
     Uses,
     Callers,
@@ -249,6 +253,7 @@ impl GoTo {
             Self::Graph => "graph node",
             Self::Tree => "outline row",
             Self::Queue => "queue job",
+            Self::Changes => "changes",
             Self::Uses => "uses",
             Self::Callers => "callers",
             Self::Callees => "callees",

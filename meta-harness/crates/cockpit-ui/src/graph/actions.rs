@@ -26,6 +26,7 @@ pub(crate) enum GraphCommand {
     SetView,
     SetPlan,
     FullCode,
+    OnlyChanged,
     Flip,
     Depth(i32),
     GoIn,
@@ -88,6 +89,9 @@ impl ActionProvider for GraphState {
         out.push(f("graph.plan", "Show the code, or one plan", G::SetPlan).param(Param::Choice(self.source_choices())).header(Setting, "Source", None).group(Group::View).jump());
         if self.nav.source != Source::Code {
             out.push(f("graph.full_code", "Show the plan in the full code", G::FullCode).param(Param::Toggle { on: self.nav.full_code }).header(Setting, "Full code", None).group(Group::View).jump());
+        }
+        if self.nav.only_changed || !self.changed.is_empty() {
+            out.push(f("graph.only_changed", "Show only what the changes touch", G::OnlyChanged).param(Param::Toggle { on: self.nav.only_changed }).header(Setting, "Only changed", None).group(Group::View).importance(MINOR).jump());
         }
         out.push(f("graph.flip", self.flip_label(), G::Flip).header(Button, "", Some(egui_phosphor::regular::ARROWS_DOWN_UP)).group(Group::View).importance(SECONDARY).jump());
         out.push(f("graph.depth_less", "Show fewer levels", G::Depth(-1)).header(Button, "", Some(egui_phosphor::regular::MINUS)).group(Group::View).importance(MINOR).jump());
@@ -152,6 +156,14 @@ impl GraphState {
             }
             GraphCommand::SetPlan => self.pick_source(value),
             GraphCommand::FullCode => self.switch_full_code(value),
+            GraphCommand::OnlyChanged => {
+                let on = match value.as_deref() {
+                    Some("true") => true,
+                    Some("false") => false,
+                    _ => !self.nav.only_changed,
+                };
+                self.navigate(NavChange::OnlyChanged(on));
+            }
             GraphCommand::Flip => self.navigate(NavChange::Flip),
             GraphCommand::Zoom(factor) => {
                 let center = self.selected_card().map_or(self.canvas.center(), |c| self.to_screen(&c.rect).center());

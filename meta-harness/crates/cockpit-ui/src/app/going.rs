@@ -79,6 +79,7 @@ impl CockpitApp {
             GoTo::Graph => self.show_in(BufferKind::Graph, id, from),
             GoTo::Tree => self.show_in(BufferKind::Tree, id, from),
             GoTo::Queue => self.show_in(BufferKind::Queue, id, from),
+            GoTo::Changes => self.show_in(BufferKind::Changes, id, from),
             _ => {
                 let source = self.desk.graph.nav.source.clone();
                 match self.desk.details.get(&id, &source) {
@@ -153,7 +154,11 @@ impl CockpitApp {
     /// Shows a component in a view and moves focus there.
     pub(super) fn show_in(&mut self, kind: BufferKind, id: ComponentId, from: Jump) {
         match kind {
-            BufferKind::Code | BufferKind::Chat | BufferKind::Inbox | BufferKind::Changes => return,
+            BufferKind::Code | BufferKind::Chat | BufferKind::Inbox => return,
+            BufferKind::Changes if !self.desk.changes.reveal(&id) => {
+                self.note = Some(format!("The changes ({}) don't touch {}.", self.desk.changes.comparison, self.component_name(&id)));
+                return;
+            }
             BufferKind::Queue if !self.desk.queue.select_component(&id) => {
                 self.note = Some(match &self.desk.queue.plan {
                     None => "No plan, so no queue: pick a plan in the graph.".to_owned(),

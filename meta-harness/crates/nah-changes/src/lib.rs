@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use harness_contracts::changes::{ChangeList, Comparison, FileChanges, Group};
+use harness_contracts::changes::{ChangeList, Comparison, FileChanges, Group, Point};
 
 pub use timeline::{SNAPSHOT_REFS, Snapshot};
 
@@ -47,6 +47,53 @@ pub const CONTEXT: u32 = 3;
 
 /// How many files' changes are kept.
 const KEPT: usize = 256;
+
+/// A run of changed lines on a file's newer side: `lines` from `start`
+/// added or changed, `removed` lines gone there (with none added, they were
+/// after line `start`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Run {
+    pub start: u32,
+    pub lines: u32,
+    pub removed: u32,
+}
+
+impl Run {
+    /// The line it's at: its first, or (only removed lines) the one before
+    /// them (the first, at the top).
+    pub fn at(&self) -> u32 {
+        self.start.max(1)
+    }
+
+    /// Whether it touches lines `first..=last`.
+    pub fn within(&self, first: u32, last: u32) -> bool {
+        let end = self.start + self.lines.max(1) - 1;
+        self.at() <= last && end.max(self.at()) >= first
+    }
+
+    /// How many of its lines are in `first..=last`.
+    pub fn lines_in(&self, first: u32, last: u32) -> u32 {
+        let (a, b) = (self.start.max(first), (self.start + self.lines).min(last + 1));
+        b.saturating_sub(a)
+    }
+}
+
+/// A changed file's runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileRuns {
+    pub path: String,
+    pub runs: Vec<Run>,
+}
+
+/// Where a comparison changed the files as they are now, for matching to
+/// what's at those lines: each changed file's runs, and the files whose
+/// lines moved since the comparison's newer side (left out: their runs
+/// would point at the wrong lines).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OnFiles {
+    pub files: Vec<FileRuns>,
+    pub moved: Vec<String>,
+}
 
 /// One file's changes, by what was asked and what its sides were then.
 type Key = (String, String, Group, u32, String);
@@ -104,6 +151,19 @@ impl Changes {
         paths.sort();
         paths.dedup();
         Ok(paths)
+    }
+
+    /// Where `comparison` changed the files as they are now. Up to the
+    /// files, it's the comparison itself (staged and unstaged together);
+    /// otherwise its newer side's runs, less the files changed since.
+    pub fn on_files(&self, comparison: &Comparison) -> Result<OnFiles> {
+        let repo = self.repo()?;
+        if comparison.to == Point::Files {
+            return Ok(OnFiles { files: compare::runs(&repo, &comparison.on_files(), &self.prefix)?, moved: Vec::new() });
+        }
+        let moved = self.changed_paths(&Comparison { from: comparison.to.clone(), to: Point::Files })?;
+        let files = compare::runs(&repo, comparison, &self.prefix)?.into_iter().filter(|f| !moved.contains(&f.path)).collect();
+        Ok(OnFiles { files, moved })
     }
 
     /// `path`'s changes in `comparison` (its `group` of them, for the

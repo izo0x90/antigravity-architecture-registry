@@ -19,6 +19,8 @@ use crate::mcp::text::*;
 
 pub(crate) struct Explore {
     pub(crate) arch: Arc<ArchitectureService>,
+    /// The project's changes (git), for "only changed files".
+    pub(crate) changes: Option<Arc<nah_changes::Changes>>,
 }
 
 #[derive(Deserialize)]
@@ -38,6 +40,9 @@ struct SearchArgs {
     source: Source,
     #[serde(default)]
     limit: Option<usize>,
+    /// Only in the files a comparison changed (`from..to`).
+    #[serde(default)]
+    changed: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +67,9 @@ struct ViewArgs {
     source: Source,
     #[serde(default)]
     full_code: bool,
+    /// Only what a comparison (`from..to`) changed, and what holds it.
+    #[serde(default)]
+    changed: Option<String>,
     #[serde(default)]
     open: Vec<String>,
     #[serde(default)]
@@ -113,7 +121,8 @@ impl Explore {
                     "query": { "type": "string" },
                     "kind": { "type": "string", "enum": ["symbols", "files", "text"], "description": "symbols (the default), files or text" },
                     "source": source,
-                    "limit": { "type": "integer" }
+                    "limit": { "type": "integer" },
+                    "changed": { "type": "string", "description": "Only in files changed: from..to, e.g. HEAD..files (the uncommitted changes), rev:main..files, HEAD~3..HEAD" }
                 }, "required": ["query"] }),
             ),
             tool(
@@ -133,6 +142,7 @@ impl Explore {
                     "depth": { "type": "integer" },
                     "source": source,
                     "full_code": { "type": "boolean", "description": "With a plan: show it in the whole codebase, not only its items and what they plug into" },
+                    "changed": { "type": "string", "description": "Only what changed (and what holds it): from..to, e.g. HEAD..files (the uncommitted changes), rev:main..files" },
                     "open": { "type": "array", "items": card, "description": "Cards to open one level further" },
                     "expand": card,
                     "levels": { "type": "integer", "description": "With expand: how many levels (default 1)" },
@@ -192,8 +202,12 @@ impl ToolSet for Explore {
         "search" => {
             let a: SearchArgs = parse(args)?;
             let source = a.source.clone();
+            let within = match &a.changed {
+                Some(range) => Some(crate::routes::changes::changed_files(self.changes.clone(), range).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))?),
+                None => None,
+            };
             let (found, states) = blocking(&self.arch, move |s| {
-                let found = s.search(&a.query, a.kind, &source, a.limit)?;
+                let found = s.search(&a.query, a.kind, &source, a.limit, within.as_ref())?;
                 // Each card's status and stage, as the agent works by them.
                 let graph = s.graph(&source)?;
                 let states: Vec<String> = found
@@ -237,6 +251,10 @@ impl ToolSet for Explore {
             let a: ViewArgs = parse(args)?;
             let plan = a.source.plan().cloned();
             let view = arch_graph::tree::ViewKind::from_name(&a.view).ok_or_else(|| ServiceError::InvalidOp(format!("view '{}': use contains, calls or data_flow", a.view)))?;
+            let only = match &a.changed {
+                Some(range) => Some(crate::routes::changes::changed_components(self.arch.clone(), self.changes.clone(), range).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))?),
+                None => None,
+            };
             let request = arch_graph::tree::TreeRequest {
                 view,
                 source: a.source,
@@ -246,6 +264,7 @@ impl ToolSet for Explore {
                 opened: a.open.into_iter().map(|card| arch_graph::tree::Opened { card, levels: 1 }).collect(),
                 closed: Vec::new(),
                 full_code: a.full_code,
+                only,
             };
             let (expand, levels, context) = (a.expand, a.levels.unwrap_or(1), a.context);
             let mut out = blocking(&self.arch, move |s| {

@@ -49,9 +49,9 @@ fn the_data_flow_index_the_symbol_list_and_the_badges_are_built_once_per_snapsho
     service.tree(&TreeRequest { view: ViewKind::DataFlow, depth: Some(3), ..TreeRequest::default() }).unwrap();
     assert!(!stages(&service, "tree").contains(&"flow index".to_owned()), "kept for the next ones: {:?}", stages(&service, "tree"));
     assert!(!stages(&service, "tree").contains(&"badges".to_owned()));
-    service.search("run", SearchKind::Symbols, &Source::Code, None).unwrap();
+    service.search("run", SearchKind::Symbols, &Source::Code, None, None).unwrap();
     assert_eq!(service.symbol_lists_built(), 1, "built for the first search");
-    service.search("save", SearchKind::Symbols, &Source::Code, None).unwrap();
+    service.search("save", SearchKind::Symbols, &Source::Code, None, None).unwrap();
     assert_eq!(service.symbol_lists_built(), 1, "kept for the next ones");
     // A new snapshot: built again, once.
     let util = root.join("src/util.rs");
@@ -59,9 +59,9 @@ fn the_data_flow_index_the_symbol_list_and_the_badges_are_built_once_per_snapsho
     service.refresh(&[util]).unwrap();
     service.tree(&flows).unwrap();
     assert!(stages(&service, "tree").contains(&"flow index".to_owned()), "the code changed");
-    service.search("added", SearchKind::Symbols, &Source::Code, None).unwrap();
+    service.search("added", SearchKind::Symbols, &Source::Code, None, None).unwrap();
     assert_eq!(service.symbol_lists_built(), 2, "the code changed");
-    let found = service.search("added", SearchKind::Symbols, &Source::Code, None).unwrap();
+    let found = service.search("added", SearchKind::Symbols, &Source::Code, None, None).unwrap();
     assert!(found.hits.iter().any(|h| h.label.contains("added")), "the new snapshot's list");
     // A plan edited: the badges again.
     service.create_plan("p", "P", "", arch_graph::PlanKind::Change).unwrap();

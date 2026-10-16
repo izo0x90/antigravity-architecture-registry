@@ -86,6 +86,11 @@ impl Default for Comparison {
 }
 
 impl Comparison {
+    /// As one string, `from..to` (what `parse` reads).
+    pub fn range(&self) -> String {
+        format!("{}..{}", self.from, self.to)
+    }
+
     /// The uncommitted changes, kept apart as staged, unstaged and
     /// untracked (as git status does).
     pub fn is_uncommitted(&self) -> bool {
@@ -101,6 +106,16 @@ impl Comparison {
             p => p.clone(),
         };
         Comparison { from, to: Point::Files }
+    }
+}
+
+impl std::str::FromStr for Comparison {
+    type Err = String;
+
+    /// `from..to` (`HEAD..files`, `rev:main..snapshot:42`).
+    fn from_str(s: &str) -> Result<Self, String> {
+        let (from, to) = s.split_once("..").ok_or_else(|| format!("{s}: write from..to (HEAD..files, rev:main..HEAD)"))?;
+        Ok(Self { from: from.parse()?, to: to.parse()? })
     }
 }
 
@@ -232,6 +247,10 @@ pub struct ComponentChanges {
     pub removed: u32,
     /// The changed runs inside it (new side: start, lines).
     pub runs: Vec<(u32, u32)>,
+    /// Some of them are its own: in none of its parts (a container whose
+    /// changes are all in its functions isn't).
+    #[serde(default)]
+    pub direct: bool,
 }
 
 /// What a comparison changes in the components (where the index knows them).
@@ -304,5 +323,8 @@ mod tests {
         let json = serde_json::to_string(&Comparison::default()).unwrap();
         assert_eq!(json, r#"{"from":"HEAD","to":"files"}"#);
         assert!(Comparison::default().is_uncommitted());
+        let c = Comparison { from: Point::Rev("main".into()), to: Point::Snapshot("42".into()) };
+        assert_eq!(c.range().parse::<Comparison>().unwrap(), c);
+        assert!("HEAD".parse::<Comparison>().is_err());
     }
 }

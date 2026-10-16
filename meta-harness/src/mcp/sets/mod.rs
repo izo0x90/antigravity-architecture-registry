@@ -43,9 +43,9 @@ pub(crate) fn tool_defs(trees: &TreeConfig) -> Vec<ToolDef> {
 }
 
 /// The sets, in the same order as `list_tools`.
-pub(crate) fn all(arch: &Arc<ArchitectureService>, remote: &Arc<crate::remote::Remote>, slots: &Arc<harness_core::SlotManager>, notify: &Arc<nah_notify::NotifyHub>) -> Vec<Box<dyn ToolSet>> {
+pub(crate) fn all(arch: &Arc<ArchitectureService>, changes: &Option<Arc<nah_changes::Changes>>, remote: &Arc<crate::remote::Remote>, slots: &Arc<harness_core::SlotManager>, notify: &Arc<nah_notify::NotifyHub>) -> Vec<Box<dyn ToolSet>> {
     vec![
-        Box::new(explore::Explore { arch: arch.clone() }),
+        Box::new(explore::Explore { arch: arch.clone(), changes: changes.clone() }),
         Box::new(plans::Plans { arch: arch.clone() }),
         Box::new(build::Build { arch: arch.clone() }),
         Box::new(review::Review { arch: arch.clone() }),

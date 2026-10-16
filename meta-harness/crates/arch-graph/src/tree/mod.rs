@@ -118,6 +118,10 @@ pub struct TreeRequest {
     /// plan and the code it plugs into.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub full_code: bool,
+    /// Only these components and what holds them (the ones a comparison
+    /// changed, say; an empty list shows nothing); none: everything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only: Option<Vec<String>>,
 }
 
 /// How a planned thing and the code line up, as shown.

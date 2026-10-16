@@ -103,11 +103,19 @@ struct SearchQuery {
     source: Source,
     #[serde(default)]
     limit: Option<usize>,
+    /// Only in the files a comparison changed (`from..to`).
+    #[serde(default)]
+    changed: Option<String>,
 }
 
-/// Symbols, files or lines matching `q`; each hit names the card it stands for.
-async fn search(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(q): Query<SearchQuery>) -> ArchResult<arch_service::Found> {
-    Ok(Json(blocking(&state.arch, move |a| a.search(&q.q, q.kind, &q.source, q.limit)).await?))
+/// Symbols, files or lines matching `q`; each hit names the card it stands
+/// for.
+async fn search(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Query(q): Query<SearchQuery>) -> Result<Json<arch_service::Found>, Response> {
+    let within = match &q.changed {
+        Some(range) => Some(crate::routes::changes::changed_files(state.changes.clone(), range).await.map_err(|e| crate::routes::changes::ChangesFailed(e).into_response())?),
+        None => None,
+    };
+    Ok(Json(blocking(&state.arch, move |a| a.search(&q.q, q.kind, &q.source, q.limit, within.as_ref())).await.map_err(|e| ArchError(e).into_response())?))
 }
 
 // An argument it doesn't know is refused, never ignored.

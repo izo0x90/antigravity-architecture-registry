@@ -201,6 +201,9 @@ fn asked(request: &TreeRequest, card: Option<&str>) -> String {
     if !request.opened.is_empty() {
         out.push_str(&format!(", {} opened", request.opened.len()));
     }
+    if let Some(only) = &request.only {
+        out.push_str(&format!(", only {}", only.len()));
+    }
     out
 }
 
