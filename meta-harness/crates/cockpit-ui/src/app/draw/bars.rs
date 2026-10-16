@@ -11,7 +11,7 @@ pub(in crate::app) fn describe_jump(jump: &Jump) -> String {
         Place::Graph { selection: Some(key), .. } => short(&ComponentId::new(key.clone())),
         Place::Graph { selection: None, nav } => format!("{} view", nav.view.name().replace('_', " ")),
         Place::Tree { cursor } | Place::Queue { component: cursor } => cursor.as_ref().map_or_else(String::new, short),
-        Place::Inbox { item } => item.clone().unwrap_or_default(),
+        Place::Inbox { item } | Place::Changes { item } => item.clone().unwrap_or_default(),
         Place::Spec { component, .. } => component.as_ref().map_or_else(String::new, short),
     };
     format!("{} · {place}", jump.kind.name())

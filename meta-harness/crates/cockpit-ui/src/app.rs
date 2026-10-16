@@ -58,10 +58,11 @@ pub enum BufferKind {
     Spec,
     Queue,
     Inbox,
+    Changes,
 }
 
 impl BufferKind {
-    pub const ALL: [Self; 7] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec, Self::Queue, Self::Inbox];
+    pub const ALL: [Self; 8] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec, Self::Queue, Self::Inbox, Self::Changes];
 
     pub fn title(&self) -> &'static str {
         match self {
@@ -72,13 +73,14 @@ impl BufferKind {
             Self::Spec => "SPEC",
             Self::Queue => "QUEUE",
             Self::Inbox => "INBOX",
+            Self::Changes => "CHANGES",
         }
     }
 
-    /// There is one of these (the queue, the inbox); of the others, each
-    /// column can have its own.
+    /// There is one of these (the queue, the inbox, the changes: the
+    /// desk's comparison); of the others, each column can have its own.
     pub fn one_only(&self) -> bool {
-        matches!(self, Self::Queue | Self::Inbox)
+        matches!(self, Self::Queue | Self::Inbox | Self::Changes)
     }
 
     /// Lowercase name used in action ids ("buffer.chat").
@@ -91,6 +93,7 @@ impl BufferKind {
             Self::Spec => "spec",
             Self::Queue => "queue",
             Self::Inbox => "inbox",
+            Self::Changes => "changes",
         }
     }
 
@@ -103,6 +106,7 @@ impl BufferKind {
             Self::Spec => egui_phosphor::regular::ARTICLE,
             Self::Queue => egui_phosphor::regular::LIST_CHECKS,
             Self::Inbox => egui_phosphor::regular::TRAY,
+            Self::Changes => egui_phosphor::regular::GIT_DIFF,
         }
     }
 }

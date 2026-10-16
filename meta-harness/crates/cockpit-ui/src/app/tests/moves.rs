@@ -182,6 +182,10 @@ fn f_labels_what_is_on_screen_in_every_view() {
     let kind = harness_contracts::NotificationKind::TurnFinished;
     let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new("turn:1"), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, title: "done".into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
     app.desk.chat.process_event(harness_contracts::ClientEvent::NotificationUpdated { notification });
+    // A changed file, to label.
+    use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, FileStatus, Group};
+    let changed = ChangedFile { path: "src/a.rs".into(), old_path: None, status: FileStatus::Modified, group: Group::Unstaged, added: 1, removed: 0, binary: false };
+    app.desk.changes.take_list_for_test(ChangeList { comparison: Comparison::default(), files: vec![changed], offset: 0, total: 1 });
     for kind in BufferKind::ALL {
         focus(&ctx, &mut app, kind);
         let spots = app.desk.view(kind).spots();

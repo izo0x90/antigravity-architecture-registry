@@ -52,6 +52,7 @@ pub struct UiConfig {
     pub net: NetUi,
     pub code: CodeUi,
     pub columns: ColumnsUi,
+    pub changes: ChangesUi,
     /// Every state's word, icon and colour.
     #[serde(default)]
     pub status: crate::status::Statuses,
@@ -78,6 +79,30 @@ pub struct ColumnsUi {
 impl Default for ColumnsUi {
     fn default() -> Self {
         Self { max: 12 }
+    }
+}
+
+/// The changes view.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ChangesUi {
+    /// Unchanged lines shown around each change, and how many more a
+    /// "more context" adds.
+    pub context: u32,
+    pub more_context: u32,
+    /// Up to this many files, and this many changed lines in all, open by
+    /// themselves (the diff run together); more stay closed until opened.
+    pub open_up_to_files: usize,
+    pub open_up_to_lines: u32,
+    /// Seconds between asking for the list again while it's shown (the
+    /// index and staging change outside the files too).
+    pub refresh_s: f64,
+    /// Auto layout: side by side from this column width (points).
+    pub side_by_side_from: f32,
+}
+
+impl Default for ChangesUi {
+    fn default() -> Self {
+        Self { context: 3, more_context: 10, open_up_to_files: 30, open_up_to_lines: 600, refresh_s: 5.0, side_by_side_from: 900.0 }
     }
 }
 

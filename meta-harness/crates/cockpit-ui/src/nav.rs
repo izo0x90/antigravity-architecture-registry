@@ -24,6 +24,8 @@ pub enum Target {
     Job { component: ComponentId },
     /// A message in the chat, and the file it points to (if any).
     Message { thread: Option<String>, index: usize, link: Option<(String, Option<usize>)> },
+    /// A change (git): the file, at its first changed line.
+    Change { file: String, line: usize },
 }
 
 /// One navigable item in the spec view.
@@ -51,14 +53,14 @@ impl Target {
             Self::Line { within, .. } => within.as_ref(),
             Self::Spec { item: SpecItem::Relation { other, .. }, .. } => Some(other),
             Self::Spec { component, .. } => Some(component),
-            Self::Message { .. } => None,
+            Self::Message { .. } | Self::Change { .. } => None,
         }
     }
 
     /// A place in the code the target names directly (a line, a file link).
     pub fn code(&self) -> Option<(String, Option<usize>)> {
         match self {
-            Self::Line { file, line, .. } => Some((file.clone(), Some(*line))),
+            Self::Line { file, line, .. } | Self::Change { file, line } => Some((file.clone(), Some(*line))),
             Self::Message { link, .. } => link.clone(),
             _ => None,
         }
@@ -84,6 +86,8 @@ pub enum Place {
     Queue { component: Option<ComponentId> },
     /// The item shown, by its id.
     Inbox { item: Option<String> },
+    /// The cursor's file or change, by its key.
+    Changes { item: Option<String> },
 }
 
 /// A place in a slot: what the jump list and marks hold.

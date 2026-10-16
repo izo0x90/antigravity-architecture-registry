@@ -21,6 +21,8 @@ pub struct Desk {
     pub queue: crate::queue::QueueState,
     /// What needs the user, one at a time.
     pub inbox: crate::inbox::InboxView,
+    /// The changes (git) by the desk's comparison in use.
+    pub changes: crate::changes::ChangesView,
     pub review_seen: u64,
     /// The columns: the view each shows, and which has focus.
     pub columns: Columns,
@@ -75,6 +77,7 @@ impl Desk {
             review: ReviewState::default(),
             queue: crate::queue::QueueState::default(),
             inbox: Default::default(),
+            changes: Default::default(),
             review_seen: 0,
             columns: Columns::default(),
             parked: Parked::default(),
@@ -108,6 +111,7 @@ impl Desk {
             BufferKind::Spec => &self.spec,
             BufferKind::Queue => &self.queue,
             BufferKind::Inbox => &self.inbox,
+            BufferKind::Changes => &self.changes,
         }
     }
 
@@ -121,6 +125,7 @@ impl Desk {
             BufferKind::Spec => &self.spec,
             BufferKind::Queue => &self.queue,
             BufferKind::Inbox => &self.inbox,
+            BufferKind::Changes => &self.changes,
         }
     }
 
@@ -133,6 +138,7 @@ impl Desk {
             BufferKind::Spec => &mut self.spec,
             BufferKind::Queue => &mut self.queue,
             BufferKind::Inbox => &mut self.inbox,
+            BufferKind::Changes => &mut self.changes,
         }
     }
 
@@ -145,6 +151,7 @@ impl Desk {
             BufferKind::Spec => &self.spec,
             BufferKind::Queue => &self.queue,
             BufferKind::Inbox => &self.inbox,
+            BufferKind::Changes => &self.changes,
         }
     }
 
@@ -157,6 +164,7 @@ impl Desk {
             BufferKind::Spec => &mut self.spec,
             BufferKind::Queue => &mut self.queue,
             BufferKind::Inbox => &mut self.inbox,
+            BufferKind::Changes => &mut self.changes,
         }
     }
 

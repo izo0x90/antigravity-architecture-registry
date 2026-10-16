@@ -20,6 +20,8 @@ impl CockpitApp {
             jumps: self.desk.jumps.clone(),
             drafts: self.drafts(),
             agents: self.desk.remote.agents,
+            comparison: self.desk.changes.comparison.clone(),
+            diff_layout: self.desk.changes.layout,
         }
     }
 
@@ -56,6 +58,8 @@ impl CockpitApp {
         self.desk.marks = saved.marks.clone();
         self.desk.jumps = saved.jumps.clone().checked();
         self.desk.remote.agents = saved.agents;
+        self.desk.changes.compare(saved.comparison.clone());
+        self.desk.changes.layout = saved.diff_layout;
         for (pane, place) in &saved.views {
             self.swap_in(*pane);
             if pane.kind == BufferKind::Chat

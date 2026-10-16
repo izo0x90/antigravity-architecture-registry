@@ -39,6 +39,11 @@ pub struct SavedUi {
     /// The user lets agents drive the cockpit.
     #[serde(default)]
     pub agents: bool,
+    /// The desk's comparison in use (git), and how changes are laid out.
+    #[serde(default)]
+    pub comparison: harness_contracts::changes::Comparison,
+    #[serde(default)]
+    pub diff_layout: crate::changes::DiffLayout,
 }
 
 /// What came back from the server.
@@ -166,7 +171,7 @@ mod tests {
     use super::*;
 
     fn state(draft: &str) -> SavedUi {
-        SavedUi { version: VERSION, columns: Columns::default(), views: Vec::new(), pinned: Vec::new(), used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), drafts: BTreeMap::from([(0, draft.into())]), agents: false }
+        SavedUi { version: VERSION, columns: Columns::default(), views: Vec::new(), pinned: Vec::new(), used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), drafts: BTreeMap::from([(0, draft.into())]), agents: false, comparison: Default::default(), diff_layout: Default::default() }
     }
 
     fn arrive(keeper: &Keeper, value: Option<serde_json::Value>) {

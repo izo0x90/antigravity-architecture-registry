@@ -113,6 +113,7 @@ I = "Index"
 "buffer.spec" = { leader = "b s" }
 "buffer.queue" = { leader = "b q" }
 "buffer.inbox" = { leader = "b i" }
+"buffer.changes" = { leader = "b f" }
 # Every open view (on screen or hidden), to show in this column; a new one
 # here; this column's view deleted for good (closing a column only hides it).
 "buffer.list" = { leader = "b b" }
@@ -650,6 +651,18 @@ property = "text"
 # one queue). How many columns there may be:
 [columns]
 max = 12
+
+# The changes view (git): context lines around each change and how many
+# more "more context" adds; how many files (and changed lines in all) open
+# by themselves; how often the list is read again while shown; from what
+# column width "auto" shows changes side by side.
+[changes]
+context = 3
+more_context = 10
+open_up_to_files = 30
+open_up_to_lines = 600
+refresh_s = 5.0
+side_by_side_from = 900.0
 
 [net]
 reconnect_min_ms = 500

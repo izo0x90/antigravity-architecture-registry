@@ -48,7 +48,8 @@ impl CockpitApp {
                 self.choose(op, refs, from, origin, ctx);
                 return;
             }
-            if let (Target::Message { .. }, Some((file, line))) = (&target, target.code()) {
+            // A link to a file, or a change: the file, at that line.
+            if let (Target::Message { .. } | Target::Change { .. }, Some((file, line))) = (&target, target.code()) {
                 self.focus_kind(BufferKind::Code);
                 self.desk.code.load_file(&file, line, &self.desk.net, ctx.clone());
                 self.after_jump(from);
@@ -58,7 +59,7 @@ impl CockpitApp {
         match (target.component().cloned(), &target) {
             (Some(id), _) => self.goto_component(op, id, from, origin, ctx),
             // A line the index has nothing on yet: ask the server what's there.
-            (None, Target::Line { file, line, .. }) => {
+            (None, Target::Line { file, line, .. } | Target::Change { file, line }) => {
                 let inbox = self.desk.at_inbox.clone();
                 self.desk.net.arch_at(file, *line, &self.desk.graph.nav.source, ctx.clone(), move |r| {
                     if let Ok(mut i) = inbox.lock() {
@@ -144,7 +145,7 @@ impl CockpitApp {
                 self.desk.spec.show(to.id);
             }
             BufferKind::Queue if self.desk.queue.select_component(&to.id) => {}
-            BufferKind::Queue | BufferKind::Chat | BufferKind::Code | BufferKind::Inbox => return self.show_in(BufferKind::Graph, to.id, from),
+            BufferKind::Queue | BufferKind::Chat | BufferKind::Code | BufferKind::Inbox | BufferKind::Changes => return self.show_in(BufferKind::Graph, to.id, from),
         }
         self.after_jump(from);
     }
@@ -152,7 +153,7 @@ impl CockpitApp {
     /// Shows a component in a view and moves focus there.
     pub(super) fn show_in(&mut self, kind: BufferKind, id: ComponentId, from: Jump) {
         match kind {
-            BufferKind::Code | BufferKind::Chat | BufferKind::Inbox => return,
+            BufferKind::Code | BufferKind::Chat | BufferKind::Inbox | BufferKind::Changes => return,
             BufferKind::Queue if !self.desk.queue.select_component(&id) => {
                 self.note = Some(match &self.desk.queue.plan {
                     None => "No plan, so no queue: pick a plan in the graph.".to_owned(),
@@ -173,7 +174,7 @@ impl CockpitApp {
                 self.desk.spec.show(id);
             }
             BufferKind::Tree => self.desk.tree.reveal(&id, Scroll::Center),
-            BufferKind::Queue | BufferKind::Code | BufferKind::Chat | BufferKind::Inbox => {}
+            BufferKind::Queue | BufferKind::Code | BufferKind::Chat | BufferKind::Inbox | BufferKind::Changes => {}
         }
         self.after_jump(from);
     }

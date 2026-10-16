@@ -209,3 +209,18 @@ fn indexing_shows_its_state_everywhere_and_can_be_run_from_the_cockpit() {
 }
 
 
+
+/// The changes view: `Space b f` shows it; Enter on a change opens its
+/// file at the changed line in the code view.
+#[test]
+fn enter_on_a_change_opens_its_file_at_the_line() {
+    use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, FileStatus, Group};
+    let (ctx, mut app) = full_app();
+    from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"space b f"}"#).unwrap();
+    assert_eq!(app.desk.columns.focused_kind(), BufferKind::Changes, "Space b f shows the changes");
+    let list = ChangeList { comparison: Comparison::default(), files: vec![ChangedFile { path: "src/a.rs".into(), old_path: None, status: FileStatus::Modified, group: Group::Unstaged, added: 1, removed: 0, binary: false }], offset: 0, total: 1 };
+    app.desk.changes.take_list_for_test(list);
+    app.desk.changes.move_to("f:Unstaged:src/a.rs");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!((app.desk.columns.focused_kind(), app.desk.code.current_file.as_str()), (BufferKind::Code, "src/a.rs"));
+}

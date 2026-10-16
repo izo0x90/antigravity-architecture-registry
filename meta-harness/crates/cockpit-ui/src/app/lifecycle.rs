@@ -44,6 +44,7 @@ impl CockpitApp {
             for code in self.desk.codes() {
                 code.ui = code_ui.clone();
             }
+            self.desk.changes.ui = self.config.changes.clone();
         }
         self.start_fresh(ctx);
         self.use_focused();
@@ -133,6 +134,10 @@ impl CockpitApp {
                     _ => self.desk.graphs().for_each(|g| g.on_event(event)),
                 }
                 self.desk.queue.on_event(event);
+                // Files changed (read, or seen changing on disk): the changes too.
+                if matches!(event, arch_graph::ArchEvent::Changed { .. } | arch_graph::ArchEvent::Index { .. }) {
+                    self.desk.changes.invalidate();
+                }
                 // Only real changes refetch: a check result (often the spec
                 // view's own validation) must not trigger another round.
                 if matches!(event, arch_graph::ArchEvent::Changed { .. }) {

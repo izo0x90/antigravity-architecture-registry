@@ -110,6 +110,7 @@ impl CockpitApp {
             K::Tree => Some(("Next sibling row", "Previous sibling row")),
             K::Spec => Some(("Next section", "Previous section")),
             K::Code => Some(("Next definition at this level", "Previous definition at this level")),
+            K::Changes => Some(("Next file", "Previous file")),
             K::Queue | K::Chat | K::Inbox => None,
         };
         if let Some((next, prev)) = siblings {
@@ -124,6 +125,7 @@ impl CockpitApp {
             K::Queue => ("Show why it failed", "Hide that again"),
             K::Chat => ("Open the file it points to", "Follow the latest again"),
             K::Inbox => ("Answer with it, or open its chat", ""),
+            K::Changes => ("Open it in the code", "Up to its file"),
         };
         let enter = self.desk.view(kind).enter_label().unwrap_or_else(|| enter.to_owned());
         out.push(nav("nav.enter", &enter, S::Enter).importance(PRIMARY).when(When::Enter));

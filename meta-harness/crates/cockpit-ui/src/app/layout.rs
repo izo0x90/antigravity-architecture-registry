@@ -17,7 +17,7 @@ impl CockpitApp {
             BufferKind::Spec => swap_view(&mut self.desk.spec, &mut self.desk.parked.specs, current, pane.id),
             BufferKind::Tree => swap_view(&mut self.desk.tree, &mut self.desk.parked.trees, current, pane.id),
             BufferKind::Chat => swap_view(&mut self.desk.chat.ui, &mut self.desk.parked.chats, current, pane.id),
-            BufferKind::Queue | BufferKind::Inbox => false,
+            BufferKind::Queue | BufferKind::Inbox | BufferKind::Changes => false,
         };
         self.desk.active.insert(pane.kind, pane.id);
         if new {
@@ -62,7 +62,7 @@ impl CockpitApp {
                 self.desk.spec.comments.clone_from(&self.desk.review.comments);
                 self.desk.spec.diff.clone_from(&self.desk.review.diff);
             }
-            BufferKind::Tree | BufferKind::Chat | BufferKind::Queue | BufferKind::Inbox => {}
+            BufferKind::Tree | BufferKind::Chat | BufferKind::Queue | BufferKind::Inbox | BufferKind::Changes => {}
         }
     }
 
@@ -175,6 +175,7 @@ impl CockpitApp {
             }
             Some(Place::Queue { .. }) => "the plan's jobs".to_owned(),
             Some(Place::Inbox { .. }) => "what needs you".to_owned(),
+            Some(Place::Changes { .. }) => self.desk.changes.comparison.to_string(),
             None => "new".to_owned(),
         };
         format!("{} · {what}", pane.kind.name())
@@ -187,7 +188,7 @@ impl CockpitApp {
             BufferKind::Code => self.desk.code = CodeViewerState::default(),
             BufferKind::Spec => self.desk.spec = SpecState::default(),
             BufferKind::Tree => self.desk.tree = ArchitectureTreeState::default(),
-            BufferKind::Chat | BufferKind::Queue | BufferKind::Inbox => return,
+            BufferKind::Chat | BufferKind::Queue | BufferKind::Inbox | BufferKind::Changes => return,
         }
         self.set_up(kind);
     }
@@ -203,7 +204,7 @@ impl CockpitApp {
             BufferKind::Spec => self.desk.parked.specs.get(&pane.id).map(|v| v.place()),
             BufferKind::Tree => self.desk.parked.trees.get(&pane.id).map(|v| v.place()),
             BufferKind::Chat => self.desk.parked.chats.get(&pane.id).map(|v| v.place()),
-            BufferKind::Queue | BufferKind::Inbox => None,
+            BufferKind::Queue | BufferKind::Inbox | BufferKind::Changes => None,
         }
     }
 

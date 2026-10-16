@@ -14,6 +14,7 @@ impl CockpitApp {
             BufferKind::Spec => &mut self.desk.spec,
             BufferKind::Queue => &mut self.desk.queue,
             BufferKind::Inbox => &mut self.desk.inbox,
+            BufferKind::Changes => &mut self.desk.changes,
         };
         provider.run(action, value, &mut RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, asked: &mut self.asked });
     }
@@ -128,6 +129,11 @@ impl CockpitApp {
     /// Each one that sends the user somewhere is a jump.
     pub(super) fn link_views(&mut self, ctx: &egui::Context) {
         self.desk.graph.tick(&self.desk.net, ctx);
+        // The desk's comparison: read whether or not its view is shown (the
+        // code view and the graph show it too); asked again now and then
+        // while it is.
+        let shown = self.desk.columns.kinds().contains(&BufferKind::Changes) || self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Changes);
+        self.desk.changes.tick(&self.desk.net, ctx, shown);
         let source = self.desk.graph.nav.source.clone();
         let plan = source.plan().cloned();
         // Specs not pinned show what the graph used last has selected.

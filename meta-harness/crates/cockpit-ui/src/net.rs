@@ -616,6 +616,33 @@ impl NetClient {
     }
 
     /// A file's text and its analysis, in one answer.
+    /// The files `comparison` changes (a page), with their counts.
+    pub fn changes(&self, comparison: &harness_contracts::changes::Comparison, offset: usize, limit: usize, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::changes::ChangeList>) + Send + 'static) {
+        let path = format!("/api/changes?from={}&to={}&offset={offset}&limit={limit}", urlencoding::encode(&comparison.from.to_string()), urlencoding::encode(&comparison.to.to_string()));
+        self.call("GET", &path, None, ctx, on_done);
+    }
+
+    /// One file's changes in `comparison` (its `group` of them), with
+    /// `context` unchanged lines around each.
+    pub fn change_file(
+        &self,
+        comparison: &harness_contracts::changes::Comparison,
+        path: &str,
+        group: harness_contracts::changes::Group,
+        context: u32,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<harness_contracts::changes::FileChanges>) + Send + 'static,
+    ) {
+        let group = serde_json::to_value(group).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+        let url = format!(
+            "/api/changes/file?from={}&to={}&path={}&group={group}&context={context}",
+            urlencoding::encode(&comparison.from.to_string()),
+            urlencoding::encode(&comparison.to.to_string()),
+            urlencoding::encode(path)
+        );
+        self.call("GET", &url, None, ctx, on_done);
+    }
+
     pub fn code_analysis(&self, path: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::code::CodeAnalysis>) + Send + 'static) {
         self.call("GET", &format!("/api/code/analysis?path={}", urlencoding::encode(path)), None, ctx, on_done);
     }

@@ -44,6 +44,7 @@ impl CockpitApp {
             }
             BufferKind::Queue => self.desk.queue.render(ui, &mut cx),
             BufferKind::Inbox => self.desk.inbox.render(ui, &mut cx, &mut self.desk.chat),
+            BufferKind::Changes => self.desk.changes.render(ui, &mut cx),
         }
         self.pointer_on_content(kind, ui, content);
     }
