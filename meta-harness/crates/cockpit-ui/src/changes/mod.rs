@@ -219,6 +219,9 @@ impl ChangesView {
             self.closed.clear();
             self.cursor = 0;
             self.stale = true;
+            // A list still on its way is for the old comparison: its answer
+            // is dropped, so it's not waited for.
+            self.loading = false;
         }
     }
 

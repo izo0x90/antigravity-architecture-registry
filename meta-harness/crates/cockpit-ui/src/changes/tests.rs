@@ -171,3 +171,23 @@ fn the_user_stages_a_file_or_a_change_and_the_cursor_follows_the_file() {
     view.compare(Comparison { from: Point::Head, to: Point::Rev("main".into()) });
     assert!(!ids(&view).contains(&"changes.stage".to_owned()));
 }
+
+#[test]
+fn switching_the_comparison_while_a_list_is_on_its_way_asks_for_the_new_one() {
+    let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
+    let mut view = ChangesView::default();
+    view.tick(&net, &ctx, false);
+    assert!(view.loading, "the first list asked for");
+    let staged = Comparison { from: Point::Head, to: Point::Index };
+    view.compare(staged.clone());
+    view.tick(&net, &ctx, false);
+    let asked = |net: &NetClient| net.sent.lock().unwrap().iter().filter(|s| s.contains("/api/changes?")).count();
+    assert_eq!(asked(&net), 2, "the new comparison asked for at once, not after the old answer");
+    // The old answer comes late: dropped; the new one shows.
+    push(&view.inbox, Reply::List(Comparison::default(), Ok(ChangeList { comparison: Comparison::default(), files: vec![], offset: 0, total: 0 })));
+    view.tick(&net, &ctx, false);
+    assert!(view.loading && view.list().is_none(), "still waiting for the new one");
+    push(&view.inbox, Reply::List(staged.clone(), Ok(ChangeList { comparison: staged, files: vec![file(Group::Staged, "a.rs", FileStatus::Modified, 1, 0)], offset: 0, total: 1 })));
+    view.tick(&net, &ctx, false);
+    assert_eq!((view.loading, view.list().map(|l| l.total)), (false, Some(1)));
+}
