@@ -20,6 +20,8 @@ use crate::control::CommandLogin;
 /// given the code.
 const LINK_WAIT: Duration = Duration::from_secs(30);
 const FINISH_WAIT: Duration = Duration::from_secs(120);
+/// How long its output may still take to be read once it's exited.
+const READ_OUT_WAIT: Duration = Duration::from_secs(2);
 
 /// A link when the agent's settings don't say what its look like.
 const ANY_LINK: &str = r"https://\S+";
@@ -28,8 +30,9 @@ const ANY_LINK: &str = r"https://\S+";
 pub struct LoginRun {
     child: Child,
     stdin: Option<ChildStdin>,
-    /// What it printed, both streams.
+    /// What it printed, both streams, and the tasks reading them.
     output: Arc<Mutex<String>>,
+    readers: Vec<tokio::task::JoinHandle<()>>,
 }
 
 /// What a started login shows: the link, if it printed one, and its last
@@ -61,9 +64,10 @@ impl LoginRun {
         let found_tx = Arc::new(found_tx);
         let streams: [Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>>; 2] =
             [child.stdout.take().map(|s| Box::new(s) as _), child.stderr.take().map(|s| Box::new(s) as _)];
+        let mut readers = Vec::new();
         for stream in streams.into_iter().flatten() {
             let (output, found_tx, pattern) = (output.clone(), found_tx.clone(), pattern.clone());
-            tokio::spawn(async move {
+            readers.push(tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stream).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     if let Some(m) = pattern.find(&line) {
@@ -73,15 +77,22 @@ impl LoginRun {
                     out.push_str(&line);
                     out.push('\n');
                 }
-            });
+            }));
         }
         let stdin = child.stdin.take();
-        let mut run = Self { child, stdin, output };
-        let link = tokio::select! {
-            found = tokio::time::timeout(LINK_WAIT, found.wait_for(Option::is_some)) => found.ok().and_then(|f| f.ok().and_then(|l| l.clone())),
-            status = run.child.wait() => return Ok(Started { exited: Some(status.is_ok_and(|s| s.success())), link: None, run }),
+        let mut run = Self { child, stdin, output, readers };
+        // The link it printed, or how it ended (it finished by itself).
+        let first = tokio::select! {
+            found = tokio::time::timeout(LINK_WAIT, found.wait_for(Option::is_some)) => Ok(found.ok().and_then(|f| f.ok().and_then(|l| l.clone()))),
+            status = run.child.wait() => Err(status.is_ok_and(|s| s.success())),
         };
-        Ok(Started { run, link, exited: None })
+        match first {
+            Ok(link) => Ok(Started { run, link, exited: None }),
+            Err(ok) => {
+                run.read_out().await;
+                Ok(Started { run, link: None, exited: Some(ok) })
+            }
+        }
     }
 
     /// Hands it what the login page gave back and waits for it to finish.
@@ -92,10 +103,20 @@ impl LoginRun {
         let status = tokio::time::timeout(FINISH_WAIT, self.child.wait())
             .await
             .map_err(|_| HarnessError::Provider { reason: "the login didn't finish".into() })??;
+        self.read_out().await;
         if status.success() {
             Ok(())
         } else {
             Err(HarnessError::Provider { reason: format!("the login failed: {}", self.last_words()) })
+        }
+    }
+
+    /// Once it's exited: what it printed, read to the end (the streams can
+    /// still hold its last words when it exits). A stream something else
+    /// keeps open isn't waited on for long.
+    async fn read_out(&mut self) {
+        for reader in std::mem::take(&mut self.readers) {
+            let _ = tokio::time::timeout(READ_OUT_WAIT, reader).await;
         }
     }
 

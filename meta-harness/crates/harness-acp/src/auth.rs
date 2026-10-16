@@ -23,7 +23,7 @@ pub type AuthChanged = Arc<dyn Fn(Option<bool>) + Send + Sync>;
 
 enum Running {
     Agent(tokio::task::JoinHandle<()>),
-    Command(LoginRun),
+    Command(Box<LoginRun>),
 }
 
 pub struct AcpAuthController {
@@ -72,7 +72,7 @@ impl AcpAuthController {
             return Err(HarnessError::Provider { reason: format!("the login showed no link: {}", started.run.last_words()) });
         };
         let expects = settings.expects.clone().unwrap_or_else(|| "the code the page shows".into());
-        self.replace(Running::Command(started.run));
+        self.replace(Running::Command(Box::new(started.run)));
         Ok(AuthChallenge {
             url: Some(link),
             instructions: format!("Open the link, sign in, then paste {expects} here."),
