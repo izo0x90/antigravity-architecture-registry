@@ -15,6 +15,7 @@ use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target}
 use crate::net::{NetClient, NetResult};
 use crate::panel::{Status, Tone};
 use crate::theme::colors;
+use crate::viewport::{Go, Measured, Show};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueueCommand {
@@ -51,11 +52,10 @@ pub struct QueueState {
     pub requests: QueueRequests,
     loaded: Option<Option<PlanId>>,
     inbox: Arc<Mutex<Vec<Reply>>>,
-    /// Jobs drawn last frame, and where; and the viewport.
+    /// Jobs drawn last frame, and where.
     spots: Vec<Spot>,
-    view_h: f32,
-    /// Scroll the selected job into view next frame.
-    scroll: bool,
+    /// Where it's looking (the shared rules move it, a job a stop).
+    scrolling: Measured,
 }
 
 fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
@@ -153,11 +153,18 @@ impl QueueState {
         self.snapshot.as_ref().map_or(0, |s| s.jobs.len())
     }
 
-    fn put_cursor(&mut self, index: usize) {
+    fn put_cursor(&mut self, index: usize, show: Show) {
         let n = self.jobs();
         if n > 0 {
             self.selected = index.min(n - 1);
-            self.scroll = true;
+            self.scrolling.show(self.selected, show);
+        }
+    }
+
+    /// Moves by the shared rules.
+    fn go(&mut self, go: Go) {
+        if let Some(at) = self.scrolling.go(self.jobs(), Some(self.selected), go) {
+            self.selected = at;
         }
     }
 
@@ -169,20 +176,15 @@ impl QueueState {
     pub fn select_component(&mut self, id: &ComponentId) -> bool {
         let at = self.snapshot.as_ref().and_then(|s| s.jobs.iter().position(|j| &j.component == id));
         if let Some(i) = at {
-            self.put_cursor(i);
+            self.put_cursor(i, Show::Middle);
         }
         at.is_some()
     }
 
-    fn half_page_jobs(&self) -> usize {
-        let avg = if self.spots.is_empty() { 30.0 } else { self.spots.iter().map(|s| s.rect.height()).sum::<f32>() / self.spots.len() as f32 };
-        if self.view_h > 0.0 { ((self.view_h / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 5 }
-    }
-
     pub fn render(&mut self, ui: &mut egui::Ui, _cx: &mut RunCx<'_>) {
         let mut spots = Vec::new();
-        let scroll = std::mem::take(&mut self.scroll);
-        let output = egui::ScrollArea::vertical().id_salt("queue_jobs").auto_shrink([false, false]).show(ui, |ui| {
+        let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt("queue_jobs").auto_shrink([false, false]), ui.input(|i| i.time));
+        let output = area.show(ui, |ui| {
             let Some(snapshot) = &self.snapshot else {
                 ui.label(RichText::new("Nothing to show yet.").color(colors().muted));
                 return;
@@ -222,13 +224,16 @@ impl QueueState {
                         }
                     }
                 });
-                if selected && scroll {
-                    shown.response.scroll_to_me(None);
-                }
                 spots.push(Spot { key: i.to_string(), rect: shown.response.rect });
             }
         });
-        self.view_h = output.inner_rect.height();
+        for s in &spots {
+            self.scrolling.item(s.rect);
+        }
+        self.scrolling.drawn(&output);
+        if self.scrolling.busy() {
+            ui.ctx().request_repaint();
+        }
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
     }
 
@@ -339,13 +344,13 @@ impl Navigable for QueueState {
             return;
         }
         match motion {
-            Motion::Down => self.put_cursor(self.selected + count),
-            Motion::Up => self.put_cursor(self.selected.saturating_sub(count)),
-            Motion::HalfDown => self.put_cursor(self.selected + self.half_page_jobs() * count),
-            Motion::HalfUp => self.put_cursor(self.selected.saturating_sub(self.half_page_jobs() * count)),
-            Motion::First => self.put_cursor(0),
-            Motion::Last => self.put_cursor(n - 1),
-            Motion::Line(i) => self.put_cursor(i.saturating_sub(1)),
+            Motion::Down => self.go(Go::Down(count)),
+            Motion::Up => self.go(Go::Up(count)),
+            Motion::HalfDown => self.go(Go::HalfDown(count)),
+            Motion::HalfUp => self.go(Go::HalfUp(count)),
+            Motion::First => self.go(Go::First),
+            Motion::Last => self.go(Go::Last),
+            Motion::Line(i) => self.put_cursor(i.saturating_sub(1), Show::Middle),
             Motion::NextSibling | Motion::PrevSibling | Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
         }
     }
@@ -415,7 +420,7 @@ impl Navigable for QueueState {
 
     fn move_to(&mut self, key: &str) {
         if let Ok(i) = key.parse() {
-            self.put_cursor(i);
+            self.put_cursor(i, Show::Middle);
         }
     }
 }

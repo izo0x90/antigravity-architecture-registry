@@ -58,13 +58,20 @@ impl ChatStreamState {
 
             let scroll_height = (ui.available_height() - 105.0).max(50.0);
             self.ui.drawing.clear();
-            let stream = egui::ScrollArea::vertical()
-                .id_salt(("chat_stream", slot_idx))
-                .auto_shrink([false, false])
-                .stick_to_bottom(self.ui.cursor.is_none())
-                .max_height(scroll_height)
-                .show(ui, |ui| self.render_stream(ui));
-            self.ui.view = stream.inner_rect;
+            let area = egui::ScrollArea::vertical().id_salt(("chat_stream", slot_idx)).auto_shrink([false, false]).stick_to_bottom(self.ui.cursor.is_none()).max_height(scroll_height);
+            // Following the latest: the newest stays in view. Else where the
+            // shared rules say.
+            let area = if self.ui.cursor.is_some() { self.ui.scrolling.area(area, ui.input(|i| i.time)) } else { area };
+            let stream = area.show(ui, |ui| self.render_stream(ui));
+            // Each message's stop (its links aren't stops).
+            let messages: Vec<Rect> = self.ui.drawing.iter().filter(|s| !s.key.contains(':')).map(|s| s.rect).collect();
+            for rect in messages {
+                self.ui.scrolling.item(rect);
+            }
+            self.ui.scrolling.drawn(&stream);
+            if self.ui.scrolling.busy() {
+                ctx.request_repaint();
+            }
             self.ui.spots = std::mem::take(&mut self.ui.drawing).into_iter().filter(|s| s.rect.intersects(stream.inner_rect)).collect();
             feedback.register_inspectable(ui, &format!("slot_{}:chat:stream", slot_idx + 1), stream.inner_rect);
             ui.separator();
@@ -144,7 +151,6 @@ impl ChatStreamState {
             });
             return;
         };
-        let scroll = std::mem::take(&mut self.ui.scroll);
         let mut index = 0;
         for turn in &view.turns {
             ui.horizontal(|ui| {
@@ -168,9 +174,6 @@ impl ChatStreamState {
                     ui.set_width(ui.available_width());
                     self.render_item(ui, &view, item, index);
                 });
-                if on && scroll {
-                    shown.response.scroll_to_me(Some(egui::Align::Center));
-                }
                 self.ui.drawing.push(Spot { key: index.to_string(), rect: shown.response.rect });
                 index += 1;
                 ui.add_space(crate::theme::look().space_xs);
@@ -185,18 +188,23 @@ impl ChatStreamState {
         view.turns.iter().flat_map(|t| view.items_of(&t.id).cloned()).collect()
     }
 
-    pub(super) fn put_cursor(&mut self, index: usize) {
+    pub(super) fn put_cursor(&mut self, index: usize, show: crate::viewport::Show) {
         let n = self.stream().len();
         if n > 0 {
             self.ui.cursor = Some(index.min(n - 1));
             self.ui.link_pick = None;
-            self.ui.scroll = true;
+            self.ui.scrolling.show(index.min(n - 1), show);
         }
     }
 
-    pub(super) fn half_page_items(&self) -> usize {
-        let avg = if self.ui.spots.is_empty() { 40.0 } else { self.ui.spots.iter().map(|s| s.rect.height()).sum::<f32>() / self.ui.spots.len() as f32 };
-        if self.ui.view.height() > 0.0 { ((self.ui.view.height() / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 4 }
+    /// Moves by the shared rules (following the latest: from the newest).
+    pub(super) fn go(&mut self, go: crate::viewport::Go) {
+        let n = self.stream().len();
+        let from = self.ui.cursor.or(n.checked_sub(1));
+        if let Some(at) = self.ui.scrolling.go(n, from, go) {
+            self.ui.cursor = Some(at);
+            self.ui.link_pick = None;
+        }
     }
 
     pub(super) fn render_item(&mut self, ui: &mut egui::Ui, view: &ThreadView, item: &TurnItem, index: usize) {

@@ -64,6 +64,9 @@ pub struct Moved {
     pub offset: Vec2,
 }
 
+/// Items in half a window, before any are laid out.
+const UNKNOWN_HALF: usize = 10;
+
 /// How long a key's move glides, in seconds.
 pub const GLIDE_S: f64 = 1.0 / 6.0;
 
@@ -160,8 +163,10 @@ impl Viewport {
         let moved = match go {
             Go::Down(n) => to((at + n).min(last), Show::InView),
             Go::Up(n) => to(at.saturating_sub(n), Show::InView),
-            Go::First => to(0, Show::InView),
-            Go::Last => to(last, Show::InView),
+            // The ends of the content (what's above the first stop or below
+            // the last shows too).
+            Go::First => Moved { cursor: 0, offset: Vec2::new(offset.x, 0.0) },
+            Go::Last => Moved { cursor: last, offset: Vec2::new(offset.x, self.max_offset().y) },
             Go::To(index, show) => to(index.min(last), show),
             Go::HalfDown(n) | Go::HalfUp(n) => {
                 let down = matches!(go, Go::HalfDown(_));
@@ -173,7 +178,14 @@ impl Viewport {
                 } else {
                     // The view and the cursor move together, as far as the
                     // edges let the view; the cursor stays in view.
-                    let cursor = Self::stop_at(stops, (stops[at].top + if down { step } else { -step }).max(0.0));
+                    let mut cursor = Self::stop_at(stops, (stops[at].top + if down { step } else { -step }).max(0.0));
+                    // One starting above the room at the top would pull the
+                    // view back short of half a window: the next instead
+                    // (a stop taller than the window is moved through).
+                    let fits = stops[cursor].height + 2.0 * self.margin < self.window.y;
+                    if fits && stops[cursor].top - self.margin < y && cursor < last {
+                        cursor += 1;
+                    }
                     Moved { cursor, offset: Vec2::new(offset.x, self.showing(&stops[cursor], Show::InView, y)) }
                 }
             }
@@ -236,6 +248,98 @@ impl Viewport {
     }
 }
 
+/// The shared rules for a view egui lays out item by item (messages, a
+/// card's items, jobs): where each item was drawn last frame is its stop.
+#[derive(Clone, Debug, Default)]
+pub struct Measured {
+    pub viewport: Viewport,
+    /// The items' stops as last drawn (down the content).
+    stops: Vec<Stop>,
+    /// This frame's items as drawn (on screen), in order.
+    drawing: Vec<egui::Rect>,
+    /// An item to show as asked once laid out.
+    show: Option<(usize, Show)>,
+    clock: f64,
+}
+
+impl Measured {
+    /// Before drawing: the area, looking where the rules say (an item asked
+    /// for before it was laid out, shown now).
+    pub fn area(&mut self, area: egui::ScrollArea, now: f64) -> egui::ScrollArea {
+        self.clock = now;
+        self.drawing.clear();
+        if self.viewport.window.y > 0.0
+            && let Some((at, show)) = self.show.filter(|(at, _)| *at < self.stops.len())
+        {
+            self.show = None;
+            if let Some(moved) = self.viewport.go(&self.stops, Some(at), Go::To(at, show)) {
+                self.viewport.take(&moved, now, false);
+            }
+        }
+        match self.viewport.wanted(now) {
+            Some(offset) => area.vertical_scroll_offset(offset.y),
+            None => area,
+        }
+    }
+
+    /// An item drawn this frame (in order), where it is on screen.
+    pub fn item(&mut self, rect: egui::Rect) {
+        self.drawing.push(rect);
+    }
+
+    /// After drawing: what the area showed, and where each item went.
+    pub fn drawn<R>(&mut self, output: &egui::scroll_area::ScrollAreaOutput<R>) {
+        let top = output.inner_rect.top() - output.state.offset.y;
+        self.stops = self.drawing.iter().map(|r| Stop::new(r.top() - top, r.height())).collect();
+        self.viewport.drawn(output.state.offset, output.inner_rect.size(), output.content_size);
+    }
+
+    /// A key's move from item `cursor` among `items`: the item it lands on
+    /// (none: nothing changes). Not laid out as they are yet (just
+    /// arrived, never drawn): by count, shown once they are.
+    pub fn go(&mut self, items: usize, cursor: Option<usize>, go: Go) -> Option<usize> {
+        self.show = None;
+        if self.stops.len() != items {
+            let (at, last) = (cursor.unwrap_or(0), items.checked_sub(1)?);
+            let half = |n: usize| n * UNKNOWN_HALF;
+            let to = match go {
+                Go::Down(n) => (at + n).min(last),
+                Go::Up(n) => at.saturating_sub(n),
+                Go::HalfDown(n) => (at + half(n)).min(last),
+                Go::HalfUp(n) => at.saturating_sub(half(n)),
+                Go::First => 0,
+                Go::Last => last,
+                Go::To(i, _) => i.min(last),
+                Go::Sideways(_) | Go::Columns(_) => return None,
+            };
+            self.show = Some((to, Show::InView));
+            return (Some(to) != cursor).then_some(to);
+        }
+        let moved = self.viewport.go(&self.stops, cursor, go)?;
+        self.viewport.take(&moved, self.clock, true);
+        Some(moved.cursor)
+    }
+
+    /// Shows item `at` as asked, once it's laid out.
+    pub fn show(&mut self, at: usize, show: Show) {
+        self.show = Some((at, show));
+    }
+
+    /// Items as last laid out.
+    pub fn len(&self) -> usize {
+        self.stops.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.stops.is_empty()
+    }
+
+    /// Draw again: a move gliding, or an item waiting to be shown.
+    pub fn busy(&self) -> bool {
+        self.viewport.gliding() || self.show.is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +381,31 @@ mod tests {
         view.offset.y = 0.0;
         assert_eq!(y(view.go(&stops, Some(4), Go::HalfUp(1))), Some((0, 0.0)), "at the top: to the first");
         assert_eq!(y(view.go(&stops, Some(3), Go::HalfDown(2))), Some((13, 200.0)), "a count: that many halves");
+    }
+
+    #[test]
+    fn half_a_window_of_uneven_items_moves_the_view_a_full_half_each_time() {
+        // Messages 70 and 30 high in turn, in a window 200 high.
+        let mut top = 0.0;
+        let stops: Vec<Stop> = (0..40).map(|i| {
+            let h = if i % 2 == 0 { 70.0 } else { 30.0 };
+            top += h;
+            Stop::new(top - h, h)
+        }).collect();
+        let mut view = Viewport { window: Vec2::new(300.0, 200.0), content: Vec2::new(300.0, 2000.0), ..Viewport::default() };
+        let mut at = 0;
+        let mut seen = Vec::new();
+        while let Some(m) = view.go(&stops, Some(at), Go::HalfDown(1)) {
+            assert!(view.shows_at(&stops[m.cursor], m.offset.y), "the cursor shows");
+            seen.push(m.offset.y);
+            (at, view.offset) = (m.cursor, m.offset);
+        }
+        assert_eq!(&seen[..5], [100.0, 200.0, 300.0, 400.0, 500.0], "a half window each time");
+        assert_eq!((at, *seen.last().unwrap()), (39, 1800.0), "to the end");
+        // An item a bit taller than half the window is no wall.
+        let stops = vec![Stop::new(0.0, 150.0), Stop::new(150.0, 150.0), Stop::new(300.0, 150.0), Stop::new(450.0, 150.0)];
+        let view = Viewport { window: Vec2::new(300.0, 200.0), content: Vec2::new(300.0, 600.0), offset: Vec2::new(0.0, 150.0), ..Viewport::default() };
+        assert_eq!(y(view.go(&stops, Some(1), Go::HalfDown(1))), Some((2, 250.0)), "half a window, the next item whole");
     }
 
     #[test]
@@ -335,6 +464,52 @@ mod tests {
         let moved = view.go(&stops, Some(99), Go::To(0, Show::Middle)).unwrap();
         view.take(&moved, 20.0, false);
         assert_eq!((view.wanted(20.0), view.wanted(20.0)), (Some(Vec2::ZERO), None));
+    }
+
+    /// 100 items 20 high in an area 200 high, drawn at `now`; returns the
+    /// offset it showed.
+    fn draw_items(ctx: &egui::Context, list: &mut Measured, cursor: usize, now: f64) -> f32 {
+        let mut shown = 0.0;
+        let input = egui::RawInput { time: Some(now), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(400.0, 400.0))), ..Default::default() };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let area = list.area(egui::ScrollArea::vertical().max_height(200.0).auto_shrink([false, false]), now);
+                let output = area.show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    (0..100).map(|i| ui.add_sized([300.0, 20.0], egui::Label::new(if i == cursor { "here" } else { "item" })).rect).collect::<Vec<_>>()
+                });
+                for rect in &output.inner {
+                    list.item(*rect);
+                }
+                list.drawn(&output);
+                shown = output.state.offset.y;
+            });
+        });
+        shown
+    }
+
+    #[test]
+    fn a_list_laid_out_by_egui_moves_by_the_same_rules() {
+        let ctx = egui::Context::default();
+        let mut list = Measured::default();
+        assert_eq!(list.go(100, Some(0), Go::HalfDown(1)), Some(10), "before it's laid out: by count");
+        draw_items(&ctx, &mut list, 10, 0.0);
+        let before = draw_items(&ctx, &mut list, 10, 0.1);
+        assert_eq!((list.len(), before), (100, 20.0), "the eleventh just in view");
+        assert!(!list.busy(), "shown");
+        let at = list.go(100, Some(10), Go::HalfDown(1)).unwrap();
+        assert_eq!(at, 15, "half the window (100) is five items");
+        let mut now = 1.0;
+        let mut offset = draw_items(&ctx, &mut list, at, now);
+        while list.busy() {
+            now += 0.02;
+            offset = draw_items(&ctx, &mut list, at, now);
+        }
+        assert_eq!(offset, 120.0, "the view moved half a window with it");
+        let at = list.go(100, Some(at), Go::Last).unwrap();
+        while { now += 0.02; draw_items(&ctx, &mut list, at, now); list.busy() } {}
+        assert_eq!(draw_items(&ctx, &mut list, at, now + 1.0), 1800.0, "the last shows, no further");
+        assert_eq!(list.go(100, Some(99), Go::HalfDown(1)), None, "and half a page more does nothing");
     }
 
     #[test]

@@ -111,13 +111,12 @@ pub struct ChatView {
     pub cursor: Option<usize>,
     /// Which of its links a hint picked.
     pub(crate) link_pick: Option<usize>,
-    /// Scroll the cursor's message into view next frame.
-    pub(crate) scroll: bool,
-    /// Messages and links drawn last frame (and this one's, as drawn), and
-    /// the stream's viewport.
+    /// Where it's looking (the shared rules move it, a message a stop);
+    /// following the latest, the newest stays in view.
+    pub(crate) scrolling: crate::viewport::Measured,
+    /// Messages and links drawn last frame (and this one's, as drawn).
     pub(crate) spots: Vec<Spot>,
     pub(crate) drawing: Vec<Spot>,
-    pub(crate) view: Rect,
     /// Where its typing box is, while it's typed in.
     pub(crate) typing: Option<Rect>,
 }
@@ -130,10 +129,9 @@ impl Default for ChatView {
             markdown_cache: CommonMarkCache::default(),
             cursor: None,
             link_pick: None,
-            scroll: false,
+            scrolling: Default::default(),
             spots: Vec::new(),
             drawing: Vec::new(),
-            view: Rect::NOTHING,
             typing: None,
         }
     }

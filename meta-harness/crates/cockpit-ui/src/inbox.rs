@@ -15,6 +15,7 @@ use crate::chat::ChatStreamState;
 use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::panel::{Status, Tone};
 use crate::theme::colors;
+use crate::viewport::{Go, Measured, Show};
 
 /// What the inbox asks the shell to do.
 #[derive(Clone, Debug, PartialEq)]
@@ -55,8 +56,8 @@ pub struct InboxView {
     /// Where it is among every server's open ones (1-based), and how many.
     pub at: Option<(usize, usize)>,
     cursor: usize,
-    /// Scroll the cursor's part into view next frame.
-    scroll: bool,
+    /// Where it's looking (the shared rules move it, a part a stop).
+    scrolling: Measured,
     spots: Vec<Spot>,
     asks: Vec<InboxAsk>,
 }
@@ -75,7 +76,7 @@ impl InboxView {
     pub fn show(&mut self, id: NotificationId) {
         if self.item.as_ref() != Some(&id) {
             self.cursor = usize::MAX;
-            self.scroll = true;
+            self.scrolling = Measured::default();
         }
         self.item = Some(id);
     }
@@ -114,9 +115,18 @@ impl InboxView {
         std::iter::once(Part::Says).chain(request).chain(shown.said.as_ref().map(|_| Part::Said)).collect()
     }
 
-    fn put_cursor(&mut self, at: usize) {
+    fn put_cursor(&mut self, at: usize, show: Show) {
         self.cursor = at.min(self.parts().len().saturating_sub(1));
-        self.scroll = true;
+        self.scrolling.show(self.cursor, show);
+    }
+
+    /// Moves by the shared rules.
+    fn go(&mut self, go: Go) {
+        let n = self.parts().len();
+        let from = (self.cursor < n).then_some(self.cursor);
+        if let Some(at) = self.scrolling.go(n, from, go) {
+            self.cursor = at;
+        }
     }
 
     fn answer(&mut self, option: String) -> Step {
@@ -146,17 +156,15 @@ impl InboxView {
         };
         let parts = self.parts();
         let mut drawn = Vec::new();
-        let (cursor, scroll) = (self.cursor, std::mem::take(&mut self.scroll));
+        let cursor = self.cursor;
         let mark = |ui: &mut egui::Ui, rect: egui::Rect, index: usize, drawn: &mut Vec<Spot>| {
             drawn.push(Spot { key: index.to_string(), rect });
             if index == cursor {
                 ui.painter().rect_stroke(rect.expand(2.0), theme.radius_m, egui::Stroke::new(theme.line_thin, colors().focus), egui::StrokeKind::Outside);
-                if scroll {
-                    ui.scroll_to_rect(rect, Some(egui::Align::Center));
-                }
             }
         };
-        egui::ScrollArea::vertical().id_salt(("inbox", cx.slot)).auto_shrink([false, true]).show(ui, |ui| {
+        let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt(("inbox", cx.slot)).auto_shrink([false, true]), ui.input(|i| i.time));
+        let output = area.show(ui, |ui| {
             let says = ui
                 .vertical(|ui| {
                     ui.label(RichText::new(&shown.from).size(theme.text_small).color(colors().muted));
@@ -195,6 +203,16 @@ impl InboxView {
             }
             ui.allocate_space(Vec2::ZERO);
         });
+        // Each part's stop, in order (all of them drawn, or none counted).
+        if drawn.len() == parts.len() {
+            for spot in &drawn {
+                self.scrolling.item(spot.rect);
+            }
+        }
+        self.scrolling.drawn(&output);
+        if self.scrolling.busy() {
+            ui.ctx().request_repaint();
+        }
         self.spots = drawn;
     }
 }
@@ -220,13 +238,13 @@ impl Navigable for InboxView {
             return;
         }
         match motion {
-            Motion::Down => self.put_cursor(self.cursor + count),
-            Motion::Up => self.put_cursor(self.cursor.saturating_sub(count)),
-            Motion::HalfDown => self.put_cursor(self.cursor + n.div_ceil(2) * count),
-            Motion::HalfUp => self.put_cursor(self.cursor.saturating_sub(n.div_ceil(2) * count)),
-            Motion::First => self.put_cursor(0),
-            Motion::Last => self.put_cursor(n - 1),
-            Motion::Line(i) => self.put_cursor(i.saturating_sub(1)),
+            Motion::Down => self.go(Go::Down(count)),
+            Motion::Up => self.go(Go::Up(count)),
+            Motion::HalfDown => self.go(Go::HalfDown(count)),
+            Motion::HalfUp => self.go(Go::HalfUp(count)),
+            Motion::First => self.go(Go::First),
+            Motion::Last => self.go(Go::Last),
+            Motion::Line(i) => self.put_cursor(i.saturating_sub(1), Show::Middle),
             Motion::NextSibling | Motion::PrevSibling | Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
         }
     }
@@ -271,7 +289,7 @@ impl Navigable for InboxView {
 
     fn move_to(&mut self, key: &str) {
         if let Ok(at) = key.parse::<usize>() {
-            self.put_cursor(at);
+            self.put_cursor(at, Show::Middle);
         }
     }
 }

@@ -15,6 +15,7 @@ use crate::panel::{Status, Tone};
 use crate::nav::{Fold, GoTo, Item, Motion, Move, Navigable, Place, SpecItem, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
+use crate::viewport::{Go, Measured, Show};
 
 /// A file's changes, by the comparison and file they were asked for.
 type ChangesReply = (Comparison, String, NetResult<FileChanges>);
@@ -173,8 +174,8 @@ pub struct SpecState {
     /// The cursor: an index into `entries()`.
     pub cursor: usize,
     pub folded: BTreeSet<Section>,
-    /// Scroll the cursor's item into view next frame.
-    scroll: bool,
+    /// Where it's looking (the shared rules move it, an item a stop).
+    scrolling: Measured,
     pub(crate) loaded: Option<(ComponentId, Source)>,
     error: Option<String>,
     pub requests: SpecRequests,
@@ -199,9 +200,8 @@ pub struct SpecState {
     changes_inbox: Arc<Mutex<Option<ChangesReply>>>,
     /// The item a restored place is on, until the component's detail is in.
     restore_item: Option<String>,
-    /// Items drawn last frame, and where; and the viewport.
+    /// Items drawn last frame, and where.
     spots: Vec<Spot>,
-    view: Rect,
     /// Where the comment box is, while it's typed in.
     typing: Option<Rect>,
     inbox: Arc<Mutex<Vec<Reply>>>,
@@ -219,7 +219,7 @@ impl Default for SpecState {
             current: Section::Overview,
             cursor: 0,
             folded: BTreeSet::new(),
-            scroll: false,
+            scrolling: Measured::default(),
             loaded: None,
             error: None,
             requests: SpecRequests::default(),
@@ -236,7 +236,6 @@ impl Default for SpecState {
             changes_inbox: Arc::default(),
             restore_item: None,
             spots: Vec::new(),
-            view: Rect::NOTHING,
             typing: None,
             inbox: Arc::default(),
         }
@@ -423,7 +422,16 @@ impl SpecState {
         }
         self.cursor = index.min(entries.len() - 1);
         self.current = entries[self.cursor].section;
-        self.scroll = true;
+        self.scrolling.show(self.cursor, Show::InView);
+    }
+
+    /// Moves by the shared rules.
+    fn go(&mut self, go: Go) {
+        let entries = self.entries();
+        if let Some(at) = self.scrolling.go(entries.len(), Some(self.cursor), go) {
+            self.cursor = at;
+            self.current = entries[at].section;
+        }
     }
 
     /// Puts the cursor on an entry (opening its section).
@@ -651,12 +659,6 @@ impl SpecState {
         }
     }
 
-    fn half_page_items(&self) -> usize {
-        let heights: Vec<f32> = self.spots.iter().map(|s| s.rect.height()).collect();
-        let avg = if heights.is_empty() { 20.0 } else { heights.iter().sum::<f32>() / heights.len() as f32 };
-        if self.view.height() > 0.0 { ((self.view.height() / avg.max(8.0)) / 2.0).floor().max(1.0) as usize } else { 8 }
-    }
-
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         self.tick(cx.net, cx.ctx);
         self.render_composer(ui, cx);
@@ -678,12 +680,12 @@ impl SpecState {
         let c = &detail.component;
         let changed = self.changed_sections();
         let mut spots: Vec<Spot> = Vec::new();
-        let scroll = std::mem::take(&mut self.scroll);
         let relations = self.relations();
         let changed_items = self.changed_items();
         let missing = self.missing_required();
         let type_name = c.type_name.clone();
-        let output = egui::ScrollArea::vertical().id_salt("spec_items").auto_shrink([false, false]).show(ui, |ui| {
+        let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt("spec_items").auto_shrink([false, false]), ui.input(|i| i.time));
+        let output = area.show(ui, |ui| {
             // One item: highlighted under the cursor, scrolled to when it moved there.
             let mut item = |ui: &mut egui::Ui, entry: Entry, add: &mut dyn FnMut(&mut egui::Ui)| -> egui::Response {
                 let on = cursor_key.as_deref() == Some(entry.key().as_str());
@@ -692,9 +694,6 @@ impl SpecState {
                     ui.set_width(ui.available_width());
                     add(ui);
                 }).response;
-                if on && scroll {
-                    response.scroll_to_me(None);
-                }
                 // Changed since the review: a bar at its left edge.
                 if changed_items.contains(&entry.key()) {
                     let (_, word, color) = crate::status::look("changed");
@@ -892,7 +891,16 @@ impl SpecState {
                 });
             }
         });
-        self.view = output.inner_rect;
+        // Each item's stop, in the cursor's order.
+        for entry in &entries {
+            if let Some(s) = spots.iter().find(|s| s.key == entry.key()) {
+                self.scrolling.item(s.rect);
+            }
+        }
+        self.scrolling.drawn(&output);
+        if self.scrolling.busy() {
+            ui.ctx().request_repaint();
+        }
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
     }
 
@@ -1210,12 +1218,12 @@ impl Navigable for SpecState {
             return;
         }
         match motion {
-            Motion::Down => self.put_cursor(self.cursor + count),
-            Motion::Up => self.put_cursor(self.cursor.saturating_sub(count)),
-            Motion::HalfDown => self.put_cursor(self.cursor + self.half_page_items() * count),
-            Motion::HalfUp => self.put_cursor(self.cursor.saturating_sub(self.half_page_items() * count)),
-            Motion::First => self.put_cursor(0),
-            Motion::Last => self.put_cursor(n - 1),
+            Motion::Down => self.go(Go::Down(count)),
+            Motion::Up => self.go(Go::Up(count)),
+            Motion::HalfDown => self.go(Go::HalfDown(count)),
+            Motion::HalfUp => self.go(Go::HalfUp(count)),
+            Motion::First => self.go(Go::First),
+            Motion::Last => self.go(Go::Last),
             Motion::Line(i) => self.put_cursor(i.saturating_sub(1)),
             Motion::NextSibling => self.step_section(count as i32),
             Motion::PrevSibling => self.step_section(-(count as i32)),

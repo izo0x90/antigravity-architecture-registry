@@ -58,7 +58,9 @@ impl Navigable for ChatStreamState {
             }
             self.ui.cursor = *message;
             self.ui.link_pick = None;
-            self.ui.scroll = message.is_some();
+            if let Some(at) = message {
+                self.ui.scrolling.show(*at, crate::viewport::Show::Middle);
+            }
         }
     }
 
@@ -77,16 +79,18 @@ impl Navigable for ChatStreamState {
         if n == 0 {
             return;
         }
-        let at = self.ui.cursor.unwrap_or(n - 1);
+        use crate::viewport::{Go, Show};
         let fresh = self.ui.cursor.is_none();
         match motion {
-            Motion::Down => self.put_cursor(if fresh { at } else { at + count }),
-            Motion::Up => self.put_cursor(if fresh { at } else { at.saturating_sub(count) }),
-            Motion::HalfDown => self.put_cursor(at + self.half_page_items() * count),
-            Motion::HalfUp => self.put_cursor(at.saturating_sub(self.half_page_items() * count)),
-            Motion::First => self.put_cursor(0),
-            Motion::Last => self.put_cursor(n - 1),
-            Motion::Line(i) => self.put_cursor(i.saturating_sub(1)),
+            // Following the latest: the first move lands on the newest.
+            Motion::Down | Motion::Up if fresh => self.put_cursor(n - 1, Show::InView),
+            Motion::Down => self.go(Go::Down(count)),
+            Motion::Up => self.go(Go::Up(count)),
+            Motion::HalfDown => self.go(Go::HalfDown(count)),
+            Motion::HalfUp => self.go(Go::HalfUp(count)),
+            Motion::First => self.go(Go::First),
+            Motion::Last => self.go(Go::Last),
+            Motion::Line(i) => self.put_cursor(i.saturating_sub(1), Show::Middle),
             Motion::NextSibling | Motion::PrevSibling | Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
         }
     }
@@ -126,7 +130,7 @@ impl Navigable for ChatStreamState {
     fn move_to(&mut self, key: &str) {
         let mut parts = key.split(':');
         let Some(index) = parts.next().and_then(|i| i.parse::<usize>().ok()) else { return };
-        self.put_cursor(index);
+        self.put_cursor(index, crate::viewport::Show::Middle);
         self.ui.link_pick = parts.next().and_then(|n| n.parse().ok());
     }
 }

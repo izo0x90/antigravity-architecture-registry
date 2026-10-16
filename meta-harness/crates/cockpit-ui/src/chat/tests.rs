@@ -209,3 +209,40 @@ fn a_prompt_with_no_harness_anywhere_says_so() {
     chat.say(&net, &ctx, "hello".into());
     assert!(matches!(chat.session_status(), SessionStatus::Failed(e) if e.contains("No harness instance")));
 }
+
+#[test]
+fn a_long_chat_moves_by_the_shared_rules() {
+    let mut chat = conversation();
+    for n in 4..40 {
+        chat.process_event(item(n, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: format!("answer {n}") }], streaming: false }));
+    }
+    let ctx = egui::Context::default();
+    let net = NetClient::new("http://127.0.0.1:9");
+    let mut feedback = FeedbackInspectorState::default();
+    let mut now = 0.0;
+    let mut draw = |chat: &mut ChatStreamState, frames: usize| {
+        for _ in 0..frames {
+            now += 0.05;
+            let _ = ctx.run(egui::RawInput { time: Some(now), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0))), ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut mode = crate::keymap::InputMode::Normal;
+                    let mut note = None;
+                    let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut None };
+                    chat.render(ui, &mut feedback, true, &mut cx);
+                });
+            });
+        }
+        chat.ui.scrolling.viewport.offset.y
+    };
+    let bottom = draw(&mut chat, 3);
+    assert!(bottom > 0.0, "following the latest: at the bottom");
+    chat.motion(Motion::Up, 1);
+    assert_eq!((chat.ui.cursor, draw(&mut chat, 5)), (Some(39), bottom), "the first move lands on the newest, where it shows");
+    chat.motion(Motion::First, 1);
+    assert_eq!((chat.ui.cursor, draw(&mut chat, 5)), (Some(0), 0.0), "to the first: the top");
+    let half = chat.ui.scrolling.viewport.window.y / 2.0;
+    chat.motion(Motion::HalfDown, 1);
+    let cursor = chat.ui.cursor.unwrap();
+    assert_eq!(draw(&mut chat, 8), half, "half a page down: the view moves half a window");
+    assert!(cursor > 0, "and the cursor with it");
+}
