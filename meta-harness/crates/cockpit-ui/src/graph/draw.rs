@@ -18,10 +18,10 @@ use crate::graph_config::ChipMode;
 use crate::graph_style::{LegendEntry, Swatch, style};
 use crate::theme::colors;
 use crate::touch::Gesture;
+use crate::viewport::Show;
 
-/// How far out and in the camera zooms.
-const MIN_ZOOM: f32 = 0.03;
-const MAX_ZOOM: f32 = 4.0;
+/// How far in the camera zooms: twice the normal text size.
+const MAX_ZOOM: f32 = 2.0;
 
 /// "A little" sideways, in points.
 pub(super) const FEW: f32 = 48.0;
@@ -45,65 +45,170 @@ impl GraphState {
         self.canvas.min + self.camera.pan + Vec2::new(x, y) * self.camera.zoom
     }
 
-    pub(crate) fn zoom_by(&mut self, factor: f32, around: Pos2) {
-        self.fling = Vec2::ZERO;
-        let old = self.camera.zoom;
-        let new = (old * factor).clamp(MIN_ZOOM, MAX_ZOOM);
-        let world = (around - self.canvas.min - self.camera.pan) / old;
-        self.camera.zoom = new;
-        self.camera.pan = around - self.canvas.min - world * new;
+    /// How far it zooms: out to the whole tree on the screen (or the
+    /// normal size, if that already shows it all), in to twice the normal
+    /// text size.
+    pub(crate) fn zoom_limits(&self) -> (f32, f32) {
+        (self.whole_tree_zoom().min(1.0), MAX_ZOOM)
     }
 
-    /// The whole tree on the canvas, never smaller than
-    /// readable: past that, readable size from the selection (or the top).
-    pub(crate) fn fit_view(&mut self) {
-        self.fling = Vec2::ZERO;
-        let Some(tree) = &self.tree else { return };
+    /// The zoom that shows the whole tree, with room around it.
+    fn whole_tree_zoom(&self) -> f32 {
+        let Some(tree) = &self.tree else { return 1.0 };
+        let pad = crate::theme::look().space_xxxl;
         let (w, h) = (tree.size.0.max(1.0), tree.size.1.max(1.0));
+        ((self.canvas.width() - pad * 2.0) / w).min((self.canvas.height() - pad * 2.0) / h).max(f32::MIN_POSITIVE)
+    }
+
+    /// `camera` as the tree allows: zoomed within its limits, and never
+    /// past the tree's edges (a tree smaller than the screen stays whole
+    /// on it; a bigger one leaves no more than the room around it empty).
+    pub(crate) fn clamped(&self, camera: Camera) -> Camera {
+        let Some(tree) = &self.tree else { return camera };
+        let (min, max) = self.zoom_limits();
+        let zoom = camera.zoom.clamp(min, max);
+        let pad = crate::theme::look().space_xxxl;
+        let size = Vec2::new(tree.size.0, tree.size.1) * zoom;
+        let window = self.canvas.size();
+        let axis = |pan: f32, size: f32, window: f32| {
+            let (a, b) = (pad, window - size - pad);
+            pan.clamp(a.min(b), a.max(b))
+        };
+        Camera { pan: Vec2::new(axis(camera.pan.x, size.x, window.x), axis(camera.pan.y, size.y, window.y)), zoom }
+    }
+
+    /// Looks where `camera` says (as the tree allows): a key's move glides
+    /// there; anything else is there at once.
+    pub(crate) fn aim(&mut self, camera: Camera, glide: bool) {
+        self.fling = Vec2::ZERO;
+        let to = self.clamped(camera);
+        self.glide = (glide && to != self.camera).then_some((self.camera, to, None));
+        if !glide {
+            self.camera = to;
+        }
+    }
+
+    /// This frame's camera while a key's move glides (none: it's there).
+    fn glide_on(&mut self, now: f64) -> bool {
+        let Some((from, to, since)) = self.glide else { return false };
+        let since = since.unwrap_or(now);
+        let t = ((now - since) / crate::viewport::GLIDE_S).clamp(0.0, 1.0) as f32;
+        let eased = crate::viewport::eased(t);
+        self.camera = Camera { pan: from.pan + (to.pan - from.pan) * eased, zoom: from.zoom + (to.zoom - from.zoom) * eased };
+        self.glide = (t < 1.0).then_some((from, to, Some(since)));
+        self.glide.is_some()
+    }
+
+    /// Where it's going (where it is, if it isn't moving).
+    pub(crate) fn aimed(&self) -> Camera {
+        self.glide.map_or(self.camera, |(_, to, _)| to)
+    }
+
+    /// `camera` zoomed by `factor` around `around` (a point on the screen).
+    fn zoomed(&self, camera: Camera, factor: f32, around: Pos2) -> Camera {
+        let (min, max) = self.zoom_limits();
+        let zoom = (camera.zoom * factor).clamp(min, max);
+        let world = (around - self.canvas.min - camera.pan) / camera.zoom;
+        Camera { pan: around - self.canvas.min - world * zoom, zoom }
+    }
+
+    /// Zooms by hand (the wheel, a pinch): there at once.
+    pub(crate) fn zoom_by(&mut self, factor: f32, around: Pos2) {
+        let camera = self.zoomed(self.camera, factor, around);
+        self.moved_by_hand(camera);
+    }
+
+    /// A key's zoom: around the selected card if it's on the screen, else
+    /// around the middle.
+    pub(crate) fn zoom_key(&mut self, factor: f32) {
+        let selected = self.selected_card().map(|c| self.to_screen(&c.rect).center()).filter(|p| self.canvas.contains(*p));
+        let camera = self.zoomed(self.aimed(), factor, selected.unwrap_or(self.canvas.center()));
+        self.aim(camera, true);
+    }
+
+    /// Moved by hand to `camera`: there at once, a glide stops, and the
+    /// next key starts from what's on the screen.
+    fn moved_by_hand(&mut self, camera: Camera) {
+        self.glide = None;
+        self.camera = self.clamped(camera);
+        self.by_hand = true;
+    }
+
+    /// Where a new tree is first shown: the whole of it, unless that's too
+    /// small to read; then readable, from what's selected below the roots,
+    /// or the first root of a tidy tree, or the top.
+    pub(crate) fn place_tree(&mut self) {
+        let Some(tree) = &self.tree else { return };
         let area = self.canvas;
         let pad = crate::theme::look().space_xxxl;
-        let zoom = ((area.width() - pad * 2.0) / w).min((area.height() - pad * 2.0) / h).clamp(MIN_ZOOM, 1.0);
+        let zoom = self.whole_tree_zoom().min(1.0);
         if zoom >= self.ui.readable_zoom {
-            self.camera.zoom = zoom;
-            self.camera.pan = (area.size() - Vec2::new(w, h) * zoom) / 2.0;
+            self.fit_all(false);
             return;
         }
-        // Start from what's selected below the roots; else, in a tidy tree
-        // (its first card centred on what it holds), from the first root;
-        // boxes in boxes read from the top.
+        // In a tidy tree its first card is centred on what it holds; boxes
+        // in boxes read from the top.
         let first_root = (tree.request.view != ViewKind::Contains).then(|| tree.roots.first().and_then(|k| tree.card(k))).flatten();
-        let Some(focus) = self.selected_card().filter(|c| c.level > 0).or(first_root).map(|c| c.rect) else {
-            self.start_at_the_top();
-            return;
-        };
         let zoom = self.ui.readable_zoom;
-        self.camera.zoom = zoom;
-        // The selection's left edge a little in from the left, centred up and down.
-        let at = Vec2::new(focus.x, focus.y + focus.h / 2.0) * zoom;
-        self.camera.pan = Vec2::new(pad, area.height() / 2.0) - at;
+        let camera = match self.selected_card().filter(|c| c.level > 0).or(first_root).map(|c| c.rect) {
+            // Its left edge a little in from the left, centred up and down.
+            Some(focus) => Camera { pan: Vec2::new(pad, area.height() / 2.0) - Vec2::new(focus.x, focus.y + focus.h / 2.0) * zoom, zoom },
+            None => Camera { pan: Vec2::splat(pad), zoom },
+        };
+        self.aim(camera, false);
     }
 
-    /// Readable size, the drawing's top-left corner at the canvas's.
-    fn start_at_the_top(&mut self) {
+    /// The whole tree on the screen (`z z`).
+    pub(crate) fn fit_all(&mut self, glide: bool) {
+        let Some(tree) = &self.tree else { return };
+        let zoom = self.whole_tree_zoom().min(1.0);
+        let size = Vec2::new(tree.size.0, tree.size.1) * zoom;
+        self.aim(Camera { pan: (self.canvas.size() - size) / 2.0, zoom }, glide);
+    }
+
+    /// The selected card filling the screen, as near as the zoom goes (`z f`).
+    pub(crate) fn fit_card(&mut self) -> Result<(), String> {
+        let card = self.selected_card().ok_or("Select a card first.")?;
         let pad = crate::theme::look().space_xxxl;
-        self.camera.zoom = self.ui.readable_zoom;
-        self.camera.pan = Vec2::splat(pad);
+        let r = card.rect;
+        let (min, max) = self.zoom_limits();
+        let zoom = ((self.canvas.width() - pad * 2.0) / r.w.max(1.0)).min((self.canvas.height() - pad * 2.0) / r.h.max(1.0)).clamp(min, max);
+        let middle = Vec2::new(r.x + r.w / 2.0, r.y + r.h / 2.0) * zoom;
+        self.aim(Camera { pan: self.canvas.size() / 2.0 - middle, zoom }, true);
+        Ok(())
     }
 
-    /// Pans just enough to show `key` (when it isn't already).
-    pub(crate) fn bring_into_view(&mut self, key: &str) {
+    /// Shows card `key` as asked: in view, moving only as far as needed
+    /// (keeping room around it; a card bigger than the screen, its top-left
+    /// corner), gliding; or in the middle, at once (a jump).
+    pub(crate) fn show_card(&mut self, key: &str, show: Show) {
         let Some(card) = self.card(key) else { return };
-        let rect = self.to_screen(&card.rect);
-        if self.canvas.contains_rect(rect) {
-            return;
-        }
-        self.fling = Vec2::ZERO;
-        // Bigger than the screen (a box): its top-left corner; else centred.
-        if rect.width() > self.canvas.width() || rect.height() > self.canvas.height() {
-            let pad = crate::theme::look().space_xxxl;
-            self.camera.pan += (self.canvas.min + Vec2::splat(pad)) - rect.min;
-        } else {
-            self.camera.pan += self.canvas.center() - rect.center();
+        let camera = self.aimed();
+        let z = camera.zoom;
+        let rect = Rect::from_min_size(self.canvas.min + camera.pan + Vec2::new(card.rect.x, card.rect.y) * z, Vec2::new(card.rect.w, card.rect.h) * z);
+        let room = crate::theme::look().space_xxxl.min(self.canvas.width().min(self.canvas.height()) / 4.0);
+        let inside = self.canvas.shrink(room);
+        let axis = |lo: f32, hi: f32, min: f32, max: f32| {
+            // Bigger than the room: its start shows.
+            if hi - lo > max - min || lo < min {
+                min - lo
+            } else if hi > max {
+                max - hi
+            } else {
+                0.0
+            }
+        };
+        match show {
+            Show::InView => {
+                let by = Vec2::new(axis(rect.left(), rect.right(), inside.left(), inside.right()), axis(rect.top(), rect.bottom(), inside.top(), inside.bottom()));
+                if by != Vec2::ZERO {
+                    self.aim(Camera { pan: camera.pan + by, zoom: z }, true);
+                }
+            }
+            Show::Middle => {
+                let by = if rect.width() > inside.width() || rect.height() > inside.height() { inside.min - rect.min } else { self.canvas.center() - rect.center() };
+                self.aim(Camera { pan: camera.pan + by, zoom: z }, false);
+            }
         }
     }
 
@@ -131,16 +236,19 @@ impl GraphState {
         let time = ui.input(|i| i.time);
         if self.fit && self.tree.is_some() {
             self.fit = false;
-            self.fit_view();
+            self.place_tree();
         }
-        if let Some(key) = self.reveal_after_fit.take() {
-            self.bring_into_view(&key);
+        if let Some((key, show)) = self.reveal_after_fit.take() {
+            self.show_card(&key, show);
+        }
+        if self.glide_on(time) {
+            ui.ctx().request_repaint();
         }
         self.touch_seen |= ui.input(|i| i.any_touches());
         if pan_held && response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
-        self.by_hand(ui, &response);
+        self.hand(ui, &response);
         let look = crate::theme::look();
         match (&self.tree, &self.load) {
             (None, Load::Failed(err)) => {
@@ -171,7 +279,7 @@ impl GraphState {
             painter.text(canvas.left_bottom() + Vec2::new(8.0, -8.0), Align2::LEFT_BOTTOM, format!("refresh failed: {err}"), FontId::proportional(look.text_body), colors().error);
         }
         // Click or tap: a count opens its card; a card selects; a double
-        // one goes in (on nothing: the whole tree fits).
+        // one opens it (on nothing: the whole tree fits).
         if (response.clicked() || response.double_clicked())
             && let Some(pos) = response.interact_pointer_pos()
         {
@@ -179,9 +287,10 @@ impl GraphState {
                 self.navigate(NavChange::Open(key));
             } else {
                 let hit = self.hit(pos);
-                match hit.clone() {
-                    Some(key) if response.double_clicked() => self.pointer_jump(NavChange::GoIn(key)),
-                    None if response.double_clicked() => self.fit_view(),
+                match &hit {
+                    // A double click opens it, as everywhere: what Enter does.
+                    Some(_) if response.double_clicked() => *cx.asked = Some((crate::nav::Move::Enter.id().to_owned(), None)),
+                    None if response.double_clicked() => self.fit_all(true),
                     _ => {}
                 }
                 self.select(hit);
@@ -198,7 +307,7 @@ impl GraphState {
     /// (`[keymap.pointer] zoom`) zooms a step a notch, as the zoom keys do,
     /// and pinching (a trackpad, two fingers) zooms, around the pointer or
     /// the fingers. Two fingers on a screen also pan.
-    fn by_hand(&mut self, ui: &egui::Ui, response: &egui::Response) {
+    fn hand(&mut self, ui: &egui::Ui, response: &egui::Response) {
         let zoom_key = crate::keymap::local().pointer.zoom;
         let (touch, touching, scroll, notches, pinch, pointer, velocity, dt) = ui.input(|i| {
             let (mut notches, mut pinch) = (0.0, 1.0);
@@ -219,15 +328,13 @@ impl GraphState {
         });
         if let Some(touch) = touch.filter(|t| response.rect.contains(t.center_pos)) {
             (self.fling, self.pinching) = (Vec2::ZERO, true);
-            self.camera.pan += touch.translation_delta;
-            if touch.zoom_delta != 1.0 {
-                self.zoom_by(touch.zoom_delta, touch.center_pos);
-            }
+            let panned = Camera { pan: self.camera.pan + touch.translation_delta, zoom: self.camera.zoom };
+            self.moved_by_hand(self.zoomed(panned, touch.zoom_delta, touch.center_pos));
             return;
         }
         if response.dragged() {
             self.fling = Vec2::ZERO;
-            self.camera.pan += response.drag_delta();
+            self.moved_by_hand(Camera { pan: self.camera.pan + response.drag_delta(), zoom: self.camera.zoom });
         }
         if response.drag_stopped() && !self.pinching {
             self.fling = velocity;
@@ -238,7 +345,7 @@ impl GraphState {
         if response.hovered() {
             if scroll != Vec2::ZERO && notches == 0.0 {
                 self.fling = Vec2::ZERO;
-                self.camera.pan += scroll;
+                self.moved_by_hand(Camera { pan: self.camera.pan + scroll, zoom: self.camera.zoom });
             }
             let factor = self.ui.zoom_step.powf(notches) * pinch;
             if factor != 1.0 {
@@ -252,16 +359,21 @@ impl GraphState {
                 self.fling = Vec2::ZERO;
             } else {
                 self.fling *= slower / speed;
-                self.camera.pan += self.fling * dt;
+                let want = self.camera.pan + self.fling * dt;
+                self.moved_by_hand(Camera { pan: want, zoom: self.camera.zoom });
+                // At an edge: it stops there.
+                if self.camera.pan != want {
+                    self.fling = Vec2::ZERO;
+                }
                 ui.ctx().request_repaint();
             }
         }
     }
 
-    /// Moves what's shown by `by` (a key's: a flick stops).
+    /// A key's move of what's shown by `by` (on the screen).
     pub(crate) fn pan_by(&mut self, by: Vec2) {
-        self.fling = Vec2::ZERO;
-        self.camera.pan += by;
+        let camera = self.aimed();
+        self.aim(Camera { pan: camera.pan + by, zoom: camera.zoom }, true);
     }
 
     /// A long press on its canvas (the host hands it over) selects what's

@@ -525,12 +525,24 @@ Views also have their own keys:
   (`layout_ms`); what didn't fit in time is left out and said so.
 
   The same actions in all three:
-  - select (click, or `h`/`j`/`k`/`l`): what it's tied to stays bright,
-    the rest dims; the pills on its lines say what goes in and comes back,
-    and `q` shows its full card;
+  - select (click or tap): what it's tied to stays bright, the rest dims;
+    the pills on its lines say what goes in and comes back, and `q` shows
+    its full card;
+  - move with the keys the way the drawing goes: in calls and data flow
+    (left to right, a column a level), `h` goes to the card it hangs from,
+    `l` to its first card (opening it if it's closed), and `j` / `k` to
+    the next and previous card in its column, across branches; in
+    contains, `h` `j` `k` `l` go to the nearest box at the same depth, its
+    siblings first. `Enter` (or a double click) goes in: into a box, or to
+    a card's first; `Backspace` comes out to what holds it. `]]` / `[[` go
+    through its siblings, `gg` / `G` to the first and last card, and a
+    count repeats (`3j`). The view moves only as far as it needs to keep
+    the selection in sight, gliding; after moving it by hand, the next key
+    starts from what's on the screen;
   - open or close a card in place (`z o` / `z c`, or click its `+N`);
-  - go in (`Enter`, double-click): the card becomes the root; back
-    (`Backspace`) returns along the trail shown above the graph;
+  - make the selected card the root (`g f`): the view starts from it;
+    `Backspace` from the root returns along the trail shown above the
+    graph;
   - more or fewer levels (`+` / `-`), flip down and up (`r`), pick the
     view (`v` lists them);
   - pick the code, one plan or one walkthrough (the Source picker). A plan
@@ -543,8 +555,11 @@ Views also have their own keys:
   - move around (drag it, the wheel, `Ctrl+d` / `Ctrl+u` half a screen
     up and down, `Ctrl+h` / `Ctrl+l` or `z H` / `z L` half a screen
     sideways, `z h` / `z l` a little);
-  - zoom in and out (`z +` / `z -`, `Ctrl` + wheel or a pinch) and fit the
-    drawing to the screen (`z z`, or the button in the toolbar).
+  - zoom in and out (`i` / `o`, around the selected card when it's on the
+    screen; `Ctrl` + wheel or a pinch, around the pointer), fit the whole
+    tree to the screen (`z z`, or the button in the toolbar) or the
+    selected card (`z f`). It zooms out as far as the whole tree and in to
+    twice the text size, and never moves past the tree's edges.
 
   Nothing changes on its own: zoom only zooms. A tree bigger than one
   answer holds is cut at a whole level and says so ("showing 2 of 3

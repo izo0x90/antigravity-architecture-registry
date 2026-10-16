@@ -34,7 +34,6 @@ use egui::{Pos2, Rect, Vec2};
 pub use request::{Nav, NavChange};
 
 use crate::graph_config::GraphUi;
-use crate::nav::Place;
 use crate::net::{NetClient, NetResult};
 
 /// The agent moved the view: what it showed, and where the user was.
@@ -139,13 +138,19 @@ pub struct GraphState {
     /// Fit the camera to the tree once it arrives (after the user moved).
     fit: bool,
     refit: bool,
-    /// Bring this card into view once the frame's camera is settled.
-    reveal_after_fit: Option<String>,
+    /// Show this card (in view, or in the middle) once the frame's camera
+    /// is settled.
+    reveal_after_fit: Option<(String, crate::viewport::Show)>,
+    /// A key's move of the camera under way: from, to, since when (set
+    /// on the first frame it's drawn).
+    glide: Option<(Camera, Camera, Option<f64>)>,
+    /// Moved by hand (a drag, the wheel, fingers) since the last key: the
+    /// next key starts from what's on the screen.
+    by_hand: bool,
+    /// Opened to go to its first card: go there once it shows.
+    first_child_of: Option<String>,
     /// The agent moved the view (shown until the user moves).
     pub agent: Option<AgentMove>,
-    /// Where the graph was before a jump made with the pointer or a finger
-    /// (the shell records it in the jump list).
-    pub jumped: Option<Place>,
     pub requests: GraphRequests,
     canvas: Rect,
     inbox: Arc<Mutex<Vec<Reply>>>,
@@ -201,8 +206,10 @@ impl Default for GraphState {
             fit: true,
             refit: false,
             reveal_after_fit: None,
+            glide: None,
+            by_hand: false,
+            first_child_of: None,
             agent: None,
-            jumped: None,
             requests: GraphRequests::default(),
             canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
             inbox: Arc::default(),
@@ -294,7 +301,7 @@ impl GraphState {
                 if let Some(select) = &request.select {
                     if self.card(select).is_some() && !self.stale {
                         self.select(Some(select.clone()));
-                        self.reveal_after_fit = Some(select.clone());
+                        self.reveal_after_fit = Some((select.clone(), crate::viewport::Show::Middle));
                     } else {
                         self.pending_select = Some(select.clone());
                     }
@@ -379,9 +386,19 @@ impl GraphState {
         if let Some(pending) = self.pending_select.take() {
             if self.at.contains_key(&pending) {
                 self.selection = Some(pending.clone());
-                self.reveal_after_fit = Some(pending);
+                self.reveal_after_fit = Some((pending, crate::viewport::Show::Middle));
             } else {
                 self.remembered = Some(pending);
+            }
+        }
+        // Opened to go to its first card (none came: it says so).
+        if let Some(parent) = self.first_child_of.take() {
+            match select::children(&tree, &parent).first() {
+                Some(first) => {
+                    self.selection = Some(first.clone());
+                    self.reveal_after_fit = Some((first.clone(), crate::viewport::Show::InView));
+                }
+                None => self.note = Some(format!("Opened {}: nothing more came to show.", tree.card(&parent).map_or(parent.as_str(), |c| c.label.as_str()))),
             }
         }
         // Gone into something that holds nothing (Contains): show it where

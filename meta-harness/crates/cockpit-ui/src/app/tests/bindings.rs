@@ -131,13 +131,13 @@ fn actions_rank_by_importance_and_apply_to_the_target() {
     let ids: Vec<&str> = bar.iter().map(|b| b.action.id.as_str()).collect();
     assert!(ids.contains(&"nav.enter") && ids.contains(&"goto.code"), "{ids:?}");
     assert!(bar.windows(2).all(|w| w[0].action.importance <= w[1].action.importance), "most important first");
-    assert_eq!(bar.iter().find(|b| b.action.id == "nav.enter").unwrap().action.label, "Into step", "says what it does to the target");
+    assert_eq!(bar.iter().find(|b| b.action.id == "nav.enter").unwrap().action.label, "To save", "says what it does to the target: to what step calls");
     assert!(!ids.contains(&"nav.search_next"), "nothing searched yet");
     app.desk.searches.insert(BufferKind::Graph, "s".into());
     assert!(When::Searched.holds(&app.situation()));
     // The bar draws them, keys first; tappable.
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Enter Into step") && text.contains("f Jump to something on screen"), "{text}");
+    assert!(text.contains("Enter To save") && text.contains("f Jump to something on screen"), "{text}");
     // Narrow screens get big chips; the bar can be turned off.
     app.config = UiConfig::with_overrides("[keymap.bar]\nshow = false\n").unwrap();
     let text = texts(&frame(&ctx, &mut app, vec![]));
@@ -179,7 +179,7 @@ fn keys_are_given_out_again_only_when_the_actions_change() {
     app.desk.graph.select(Some("rust:a::step".into()));
     let selected = app.bound_actions();
     assert_ne!(kept_keys(&app), kept);
-    assert_eq!(selected.iter().find(|b| b.action.id == "nav.enter").unwrap().action.label, "Into step");
+    assert_eq!(selected.iter().find(|b| b.action.id == "nav.enter").unwrap().action.label, "To save");
     assert!(selected.iter().any(|b| b.action.id == "goto.code" && !b.keys.is_empty()), "the new go-to has its keys");
 }
 

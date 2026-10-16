@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use arch_graph::tree::{Rect as WorldRect, ViewKind};
+use arch_graph::tree::{Card, Rect as WorldRect, Tree, ViewKind};
 
 use arch_graph::ComponentId;
 
@@ -15,6 +15,7 @@ use egui::Vec2;
 use super::draw::FEW;
 use super::{GraphState, NavChange};
 use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
+use crate::viewport::Show;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dir {
@@ -22,6 +23,41 @@ pub enum Dir {
     Down,
     Up,
     Right,
+}
+
+/// Where a move goes: to a card, or opening one to go to its first card.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Goes {
+    To(String),
+    OpenFirst(String),
+}
+
+/// Where going in from `key` leads, as drawn (top to bottom, then left to
+/// right): the cards hanging from it; then, in the trees, the cards its
+/// lines lead to the way the tree grows that are shown elsewhere (a call
+/// to something already drawn in another branch).
+pub(super) fn children(tree: &Tree, key: &str) -> Vec<String> {
+    let order = |a: &&Card, b: &&Card| a.rect.y.total_cmp(&b.rect.y).then(a.rect.x.total_cmp(&b.rect.x));
+    let mut hanging: Vec<&Card> = tree.cards.iter().filter(|c| c.parent.as_deref() == Some(key)).collect();
+    hanging.sort_by(order);
+    if tree.request.view != ViewKind::Contains {
+        let parent = tree.card(key).and_then(|c| c.parent.as_deref());
+        let mut elsewhere: Vec<&Card> = tree
+            .lines
+            .iter()
+            // The way the tree grows: what it calls (where it goes), or flipped, what calls it.
+            .filter_map(|l| match tree.request.way {
+                arch_graph::tree::Way::Down => (l.from == key).then_some(&l.to),
+                arch_graph::tree::Way::Up => (l.to == key).then_some(&l.from),
+            })
+            .filter(|other| Some(other.as_str()) != parent && !hanging.iter().any(|c| &c.key == *other))
+            .filter_map(|other| tree.card(other))
+            .collect();
+        elsewhere.sort_by(order);
+        elsewhere.dedup_by(|a, b| a.key == b.key);
+        hanging.extend(elsewhere);
+    }
+    hanging.into_iter().map(|c| c.key.clone()).collect()
 }
 
 impl GraphState {
@@ -67,53 +103,113 @@ impl GraphState {
         self.selection.as_deref().is_some_and(|s| s == from || s == to)
     }
 
-    fn rect_of(&self, key: &str) -> Option<WorldRect> {
-        self.card(key).map(|c| c.rect)
-    }
 
-    /// Moves the selection to the nearest card that way on the drawing.
-    pub fn move_selection(&mut self, dir: Dir) {
-        let Some(tree) = &self.tree else { return };
-        let Some(current) = self.selection.as_deref().and_then(|s| self.rect_of(s)) else {
-            if let Some(first) = tree.roots.first().cloned() {
-                self.select(Some(first.clone()));
-                self.reveal_after_fit = Some(first);
-            }
-            return;
+    /// Where a move `dir` goes from the selection, by the layout. In the
+    /// trees (left to right, a column a level): left is the card it hangs
+    /// from, right its first card, down and up the next and previous card
+    /// in its column, across branches. In the boxes: the nearest box that
+    /// way at the same depth, its siblings first. Nothing selected: the
+    /// first card. Err: why nothing.
+    pub(crate) fn goes(&self, dir: Dir) -> Result<Goes, String> {
+        let tree = self.tree.as_ref().ok_or("Nothing shown yet.")?;
+        let Some(current) = self.selected_card() else {
+            return tree.roots.first().cloned().map(Goes::To).ok_or_else(|| "Nothing shown.".into());
         };
-        let center = |r: &WorldRect| r.center();
-        let (cx, cy) = center(&current);
-        let gap = |a0: f32, a1: f32, b0: f32, b1: f32| if a1 < b0 { b0 - a1 } else if b1 < a0 { a0 - b1 } else { 0.0 };
-        let best = tree
-            .cards
-            .iter()
-            // Not what it sits in, nor what sits in it: moves go between neighbours.
-            .filter(|c| Some(c.key.as_str()) != self.selection.as_deref() && !c.rect.contains(&current) && !current.contains(&c.rect))
-            .filter_map(|c| {
-                let r = &c.rect;
-                let (x, y) = center(r);
-                let (along, across) = match dir {
-                    Dir::Right => (x - cx, gap(current.y, current.bottom(), r.y, r.bottom())),
-                    Dir::Left => (cx - x, gap(current.y, current.bottom(), r.y, r.bottom())),
-                    Dir::Down => (y - cy, gap(current.x, current.right(), r.x, r.right())),
-                    Dir::Up => (cy - y, gap(current.x, current.right(), r.x, r.right())),
-                };
-                (along > 1.0 && across <= along * 2.0).then_some((across > 0.5, along + 2.0 * across, c.key.clone()))
-            })
-            // Cards in the same row (or column) first, then the nearest.
-            .min_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)))
-            .map(|(_, _, key)| key)
-            // Nothing beside it: a box's moves go into it.
-            .or_else(|| {
+        if tree.request.view == ViewKind::Contains {
+            let r = current.rect;
+            let (cx, cy) = r.center();
+            let gap = |a0: f32, a1: f32, b0: f32, b1: f32| if a1 < b0 { b0 - a1 } else if b1 < a0 { a0 - b1 } else { 0.0 };
+            let ways = |siblings: bool| {
                 tree.cards
                     .iter()
-                    .filter(|c| current.contains(&c.rect) && c.rect != current)
-                    .min_by(|a, b| (a.rect.y, a.rect.x).partial_cmp(&(b.rect.y, b.rect.x)).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|c| c.key.clone())
-            });
-        if let Some(best) = best {
-            self.select(Some(best.clone()));
-            self.reveal_after_fit = Some(best);
+                    .filter(|c| c.key != current.key && c.level == current.level && (!siblings || c.parent == current.parent))
+                    .filter_map(|c| {
+                        let (x, y) = c.rect.center();
+                        let (along, across) = match dir {
+                            Dir::Right => (x - cx, gap(r.y, r.bottom(), c.rect.y, c.rect.bottom())),
+                            Dir::Left => (cx - x, gap(r.y, r.bottom(), c.rect.y, c.rect.bottom())),
+                            Dir::Down => (y - cy, gap(r.x, r.right(), c.rect.x, c.rect.right())),
+                            Dir::Up => (cy - y, gap(r.x, r.right(), c.rect.x, c.rect.right())),
+                        };
+                        (along > 1.0 && across <= along * 2.0).then_some((across > 0.5, along + 2.0 * across, c.key.clone()))
+                    })
+                    // In the same row (or column) first, then the nearest.
+                    .min_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)))
+                    .map(|(_, _, key)| key)
+            };
+            return ways(true).or_else(|| ways(false)).map(Goes::To).ok_or_else(|| "Nothing that way at this depth.".into());
+        }
+        match dir {
+            Dir::Left => current.parent.clone().map(Goes::To).ok_or_else(|| "It's where the tree starts.".into()),
+            Dir::Right => self.goes_in(),
+            Dir::Down | Dir::Up => {
+                let mut column: Vec<&Card> = tree.cards.iter().filter(|c| c.level == current.level).collect();
+                column.sort_by(|a, b| a.rect.y.total_cmp(&b.rect.y).then(a.rect.x.total_cmp(&b.rect.x)));
+                let at = column.iter().position(|c| c.key == current.key).unwrap_or(0);
+                let next = if dir == Dir::Down { column.get(at + 1) } else { at.checked_sub(1).and_then(|i| column.get(i)) };
+                next.map(|c| Goes::To(c.key.clone())).ok_or_else(|| if dir == Dir::Down { "The last at this depth." } else { "The first at this depth." }.into())
+            }
+        }
+    }
+
+    /// In (Enter): the selected card's first card, opening it if it's
+    /// closed: the first box inside a box; the first card from a card in
+    /// the trees.
+    pub(crate) fn goes_in(&self) -> Result<Goes, String> {
+        let (tree, card) = (self.tree.as_ref().ok_or("Nothing shown yet.")?, self.selected_card().ok_or("Select a card first.")?);
+        let boxes = tree.request.view == ViewKind::Contains;
+        if let Some(first) = children(tree, &card.key).into_iter().next() {
+            return Ok(Goes::To(first));
+        }
+        if card.more > 0 && !card.open {
+            return Ok(Goes::OpenFirst(card.key.clone()));
+        }
+        Err(if boxes { format!("Nothing inside {}.", card.label) } else { format!("Nothing comes from {} here.", card.label) })
+    }
+
+    /// Out (Backspace): the card the selection hangs from.
+    pub(crate) fn goes_out(&self) -> Option<&Card> {
+        self.card(self.selected_card()?.parent.as_deref()?)
+    }
+
+    /// Takes a move: the card selected and kept in view; or opened, its
+    /// first card selected once it shows.
+    pub(crate) fn take(&mut self, goes: Goes) {
+        match goes {
+            Goes::To(key) => {
+                self.select(Some(key.clone()));
+                self.reveal_after_fit = Some((key, Show::InView));
+            }
+            Goes::OpenFirst(key) => {
+                self.first_child_of = Some(key.clone());
+                self.navigate(NavChange::Open(key));
+            }
+        }
+    }
+
+    /// In words, for its key.
+    fn goes_label(&self, goes: &Goes) -> String {
+        let name = |key: &str| self.card(key).map_or_else(|| key.to_owned(), |c| c.label.clone());
+        match goes {
+            Goes::To(key) => format!("To {}", name(key)),
+            Goes::OpenFirst(key) => format!("Open {} and go to its first", name(key)),
+        }
+    }
+
+    /// After moving by hand, a key starts from what's on the screen: the
+    /// selection, when it's off it, comes to the nearest card that shows.
+    fn start_from_what_shows(&mut self) {
+        if !std::mem::take(&mut self.by_hand) {
+            return;
+        }
+        let at = self.selected_card().map(|c| self.to_screen(&c.rect));
+        if at.is_some_and(|r| self.canvas.intersects(r)) {
+            return;
+        }
+        let from = at.map_or(self.canvas.center(), |r| r.center());
+        let nearest = self.on_screen().into_iter().map(|c| (self.to_screen(&c.rect).center().distance(from), c.key.clone())).min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, key)) = nearest {
+            self.select(Some(key));
         }
     }
 
@@ -131,7 +227,7 @@ impl GraphState {
         let next = if forward { (at + count).min(siblings.len() - 1) } else { at.saturating_sub(count) };
         let key = siblings[next].clone();
         self.select(Some(key.clone()));
-        self.reveal_after_fit = Some(key);
+        self.reveal_after_fit = Some((key, Show::InView));
     }
 
     /// The `index`th card in tree order, or the last.
@@ -143,23 +239,34 @@ impl GraphState {
         };
         if let Some(key) = card.map(|c| c.key.clone()) {
             self.select(Some(key.clone()));
-            self.reveal_after_fit = Some(key);
+            self.reveal_after_fit = Some((key, Show::InView));
         }
     }
 
-    /// Half a screen down (or up): the camera moves and the card nearest to
-    /// where the selection was on screen is selected.
-    /// Half a screen `way` (down: +y), the selection going with it: the
-    /// card nearest where it was on the screen.
+    /// Half a screen `way` (down: +y), as far as the tree's edges let the
+    /// view go; the selection moves the whole way, from where it is on the
+    /// screen (else the middle), to the card there.
     pub(crate) fn half_page(&mut self, way: Vec2, count: usize) {
-        if self.tree.is_none() {
+        let Some(tree) = &self.tree else { return };
+        let camera = self.aimed();
+        let by = way * self.canvas.size() / 2.0 * count as f32;
+        let to = self.clamped(super::Camera { pan: camera.pan - by, zoom: camera.zoom });
+        let on_screen = |r: &WorldRect| self.canvas.min + camera.pan + Vec2::new(r.x + r.w / 2.0, r.y + r.h / 2.0) * camera.zoom;
+        let anchor = self.selected_card().map(|c| on_screen(&c.rect)).filter(|p| self.canvas.contains(*p)).unwrap_or(self.canvas.center());
+        let world = (anchor - self.canvas.min - camera.pan + by) / camera.zoom;
+        // Still inside the selected card (a box bigger than the screen):
+        // moved through it. Else the nearest card there (in the boxes, at
+        // the selection's depth).
+        let current = self.selected_card();
+        let inside = current.filter(|c| c.rect.x <= world.x && world.x <= c.rect.right() && c.rect.y <= world.y && world.y <= c.rect.bottom()).map(|c| c.key.clone());
+        let same_depth = |c: &&Card| tree.request.view != ViewKind::Contains || current.is_none_or(|s| s.level == c.level);
+        let nearest = inside.or_else(|| tree.cards.iter().filter(same_depth).map(|c| ((Vec2::from(c.rect.center()) - world).length(), c.key.clone())).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, k)| k));
+        if nearest == self.selection && to == camera {
             return;
         }
-        let anchor = self.selection.as_deref().and_then(|s| self.rect_of(s)).map(|r| self.to_screen(&r).center()).filter(|p| self.canvas.contains(*p)).unwrap_or(self.canvas.center());
-        self.pan_by(-way * self.canvas.size() / 2.0 * count as f32);
-        let nearest = self.tree.as_ref().and_then(|t| t.cards.iter().map(|c| (self.to_screen(&c.rect).center().distance(anchor), c.key.clone())).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, k)| k));
+        self.aim(to, true);
         if let Some(key) = nearest {
-            self.select(Some(key));
+            self.take(Goes::To(key));
         }
     }
 }
@@ -176,7 +283,7 @@ impl GraphState {
         let key = id.0.clone();
         if self.card(&key).is_some() {
             self.select(Some(key.clone()));
-            self.reveal_after_fit = Some(key);
+            self.reveal_after_fit = Some((key, Show::Middle));
             return;
         }
         if self.nav.view == ViewKind::DataFlow {
@@ -191,9 +298,14 @@ impl GraphState {
     /// The shared moves where the cursor is, in the graph's words: between
     /// cards, into the selected card and back out, folding cards.
     pub(crate) fn moves(&self) -> Vec<crate::actions::Action> {
-        let mut out = crate::nav::list_moves();
-        out.push(Move::Motion(Motion::Left).offer("Left"));
-        out.push(Move::Motion(Motion::Right).offer("Right"));
+        // The four ways by the layout, each saying where it goes.
+        let mut out: Vec<crate::actions::Action> = crate::nav::list_moves().into_iter().filter(|a| a.id != Move::Motion(Motion::Down).id() && a.id != Move::Motion(Motion::Up).id()).collect();
+        for (motion, dir, plain) in [(Motion::Left, Dir::Left, "Left"), (Motion::Down, Dir::Down, "Down"), (Motion::Up, Dir::Up, "Up"), (Motion::Right, Dir::Right, "Right")] {
+            out.push(match self.goes(dir) {
+                Ok(goes) => Move::Motion(motion).offer(self.goes_label(&goes)),
+                Err(_) => Move::Motion(motion).offer_if(false, plain),
+            });
+        }
         // The canvas moves every way.
         let shown = self.tree.is_some();
         out.push(Move::Motion(Motion::HalfLeft).offer_if(shown, "Half a screen left"));
@@ -202,11 +314,17 @@ impl GraphState {
         out.push(Move::Motion(Motion::FewRight).offer_if(shown, "A little right"));
         out.push(Move::Motion(Motion::NextSibling).offer("Next sibling (same module)"));
         out.push(Move::Motion(Motion::PrevSibling).offer("Previous sibling"));
-        out.push(match self.selected_card().filter(|c| self.nav.root.as_ref() != Some(&c.key)) {
-            Some(card) => Move::Enter.offer(format!("Into {}", card.label)),
-            None => Move::Enter.offer_if(false, "Focus on it"),
+        let boxes = self.nav.view == ViewKind::Contains;
+        out.push(match (self.goes_in(), self.selected_card()) {
+            (Ok(_), Some(card)) if boxes => Move::Enter.offer(format!("Into {}", card.label)),
+            (Ok(goes), _) => Move::Enter.offer(self.goes_label(&goes)),
+            (Err(_), _) => Move::Enter.offer_if(false, if boxes { "Into it" } else { "To its first" }),
         });
-        let leave = self.leave_label();
+        let leave = match self.goes_out() {
+            Some(parent) if boxes => Some(format!("Out to {}", parent.label)),
+            Some(parent) => Some(format!("To {}", parent.label)),
+            None => self.leave_label(),
+        };
         out.push(Move::Leave.offer_if(leave.is_some(), leave.unwrap_or_else(|| "Back to the whole view".into())));
         let card = self.selected_card().filter(|c| c.open || c.more > 0);
         out.extend(crate::nav::fold_here(card.map(|c| (c.label.as_str(), !c.open))));
@@ -272,6 +390,7 @@ impl Navigable for GraphState {
     }
 
     fn motion(&mut self, motion: Motion, count: usize) {
+        self.start_from_what_shows();
         let dir = match motion {
             Motion::Left => Some(Dir::Left),
             Motion::Down => Some(Dir::Down),
@@ -281,7 +400,12 @@ impl Navigable for GraphState {
         };
         if let Some(dir) = dir {
             for _ in 0..count {
-                self.move_selection(dir);
+                match self.goes(dir) {
+                    Ok(Goes::To(key)) => self.take(Goes::To(key)),
+                    // Opening ends the move: its cards come with the next tree.
+                    Ok(opens) => return self.take(opens),
+                    Err(why) => return self.note = Some(why),
+                }
             }
             return;
         }
@@ -301,20 +425,28 @@ impl Navigable for GraphState {
         }
     }
 
-    /// Go in: the selected card becomes the root.
+    /// In: into the selected box, or to the selected card's first card,
+    /// opening it if it's closed.
     fn enter(&mut self) -> Step {
-        match self.selection.clone() {
-            Some(key) if self.nav.root.as_ref() != Some(&key) => {
-                self.navigate(NavChange::GoIn(key));
+        self.start_from_what_shows();
+        match self.goes_in() {
+            Ok(goes) => {
+                self.take(goes);
                 Step::Done
             }
-            Some(_) => Step::Nothing("It's the root already.".into()),
-            None => Step::Nothing("Select a card first.".into()),
+            Err(why) => Step::Nothing(why),
         }
     }
 
-    /// Back: where the last "go in" started, else out to what holds the root.
+    /// Out: to the box holding it, or the card it hangs from; from where
+    /// the view starts, back where the last "make it the root" started,
+    /// else out to what holds the root.
     fn leave(&mut self) -> Step {
+        self.start_from_what_shows();
+        if let Some(parent) = self.goes_out().map(|c| c.key.clone()) {
+            self.take(Goes::To(parent));
+            return Step::Done;
+        }
         if self.back() { Step::Done } else { Step::Nothing("Already at the view's starting points.".into()) }
     }
 
@@ -388,10 +520,11 @@ impl Navigable for GraphState {
         }
     }
 
+    /// A jump (a hint, a mark, a search): in the middle.
     fn move_to(&mut self, key: &str) {
         if self.card(key).is_some() {
             self.select(Some(key.to_owned()));
-            self.bring_into_view(key);
+            self.show_card(key, Show::Middle);
         }
     }
 }

@@ -172,10 +172,6 @@ impl CockpitApp {
         self.link_review(plan.as_ref(), ctx);
         self.link_queue(plan.as_ref(), ctx);
         self.desk.tree.set_source(&source);
-        // Jumps made in the graph with the pointer or a finger.
-        if let Some(place) = self.desk.graph.jumped.take() {
-            self.desk.jumps.record(Jump { slot: self.slot_of(BufferKind::Graph), kind: BufferKind::Graph, place });
-        }
         if let Some((file, start, end)) = self.desk.graph.requests.open_code.take() {
             self.desk.jumps.record(self.jump_of(BufferKind::Graph));
             self.show_code(&file, start, end, ctx);

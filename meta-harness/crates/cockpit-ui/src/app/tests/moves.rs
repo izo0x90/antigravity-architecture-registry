@@ -85,11 +85,6 @@ fn the_jump_list_crosses_views_and_slots() {
     assert_eq!((app.desk.columns.focused(), app.focused_kind(), selected(&app)), (1, BufferKind::Graph, "rust:a::step"), "back to the graph's slot, focused, where it was");
     ctrl(&ctx, &mut app, egui::Key::I);
     assert_eq!((app.focused_kind(), app.desk.code.target_line), (BufferKind::Code, Some(10)));
-    // Pointer jumps in the graph are in it too.
-    app.desk.graph.select(Some("rust:a::step".into()));
-    app.desk.graph.jumped = Some(app.desk.graph.place());
-    frame(&ctx, &mut app, vec![]);
-    assert!(app.desk.jumps.can_back());
     // Nothing left to go back to: says so.
     let mut fresh = CockpitApp::new("http://127.0.0.1:9");
     fresh.initialized = true;
@@ -161,10 +156,26 @@ fn the_graph_keys_flip_change_depth_switch_view_go_in_and_back() {
     frame(&ctx, &mut app, key("-"));
     assert_eq!(app.desk.graph.nav.depth, Some(3));
     app.desk.graph.select(Some("rust:a::step".into()));
-    frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert_eq!(app.desk.graph.nav.root.as_deref(), Some("rust:a::step"), "Enter goes in");
+    keys(&ctx, &mut app, "gf");
+    assert_eq!(app.desk.graph.nav.root.as_deref(), Some("rust:a::step"), "g f makes it the root");
+    let request = app.desk.graph.nav.request();
+    app.desk.graph.set_tree(crate::graph::tests::tree_of(&crate::graph::tests::sample_graph(), None, request));
     frame(&ctx, &mut app, press(egui::Key::Backspace, false));
-    assert_eq!(app.desk.graph.nav.root.as_deref(), Some("rust:a::run"), "Backspace comes back");
+    assert_eq!(app.desk.graph.nav.root.as_deref(), Some("rust:a::run"), "Backspace from the root comes back");
+    // i / o zoom, z f fits the card, z z the whole tree.
+    app.desk.graph.set_tree(sample_tree());
+    app.desk.graph.select(Some("rust:a::step".into()));
+    let zoom = |app: &CockpitApp| app.desk.graph.aimed().zoom;
+    keys(&ctx, &mut app, "zz");
+    let whole = zoom(&app);
+    frame(&ctx, &mut app, key("i"));
+    assert!(zoom(&app) > whole, "i zooms in");
+    frame(&ctx, &mut app, key("o"));
+    assert_eq!(zoom(&app), whole, "o zooms out");
+    keys(&ctx, &mut app, "zf");
+    assert!(zoom(&app) > whole, "z f: the card fills the screen");
+    keys(&ctx, &mut app, "zz");
+    assert_eq!(zoom(&app), whole);
     // v: the views to pick from.
     frame(&ctx, &mut app, key("v"));
     assert_eq!(app.input_mode, InputMode::Palette, "v offers the views");
@@ -201,13 +212,13 @@ fn f_labels_what_is_on_screen_in_every_view() {
         let at = cursor(&app).unwrap_or_default();
         assert!(spot.key == at || spot.key.starts_with(&format!("{at}:")), "{kind:?}: the cursor went to {} (at {at})", spot.key);
     }
-    // F opens: in the graph, it goes into the card.
+    // F opens: in the graph, what Enter does on the card (step: to save).
     focus(&ctx, &mut app, BufferKind::Graph);
     frame(&ctx, &mut app, key("F"));
     let Some(Capture::Hint(hint)) = &app.capture else { panic!() };
-    let (label, spot) = hint.labels.last().unwrap().clone();
+    let (label, _) = hint.labels.iter().find(|(_, spot)| spot.key == "rust:a::step").unwrap().clone();
     keys(&ctx, &mut app, &label);
-    assert_eq!((selected(&app), app.desk.graph.nav.root.as_deref()), (spot.key.as_str(), Some(spot.key.as_str())));
+    assert_eq!(selected(&app), "rust:a::save");
     // A key no label starts with gives up; Escape too.
     frame(&ctx, &mut app, key("f"));
     frame(&ctx, &mut app, key("z"));
@@ -255,14 +266,13 @@ fn enter_goes_in_and_backspace_comes_out_in_every_view() {
         frame(ctx, app, press(egui::Key::Backspace, false));
         frame(ctx, app, vec![])
     };
-    // Graph: go in, back.
+    // Graph: to what step calls, back to step.
     focus(&ctx, &mut app, BufferKind::Graph);
     app.desk.graph.select(Some("rust:a::step".into()));
     enter(&ctx, &mut app);
-    assert_eq!(app.desk.graph.nav.root.as_deref(), Some("rust:a::step"));
+    assert_eq!(selected(&app), "rust:a::save");
     leave(&ctx, &mut app);
-    assert_eq!(app.desk.graph.nav.root.as_deref(), Some("rust:a::run"), "back where going in started");
-    app.desk.graph.set_tree(sample_tree());
+    assert_eq!((selected(&app), app.desk.graph.nav.root.as_deref()), ("rust:a::step", Some("rust:a::run")), "back to what it hangs from");
     // Tree: Enter selects in the graph (focus stays).
     focus(&ctx, &mut app, BufferKind::Tree);
     app.desk.tree.move_to("rust:a::save");

@@ -70,6 +70,12 @@ const UNKNOWN_HALF: usize = 10;
 /// How long a key's move glides, in seconds.
 pub const GLIDE_S: f64 = 1.0 / 6.0;
 
+/// How far along a glide is at `t` (0 to 1 of its time): quick away,
+/// gentle arrival.
+pub fn eased(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
+}
+
 /// Where a view is looking: how far it's scrolled (down and sideways), how
 /// big its window and its content are, and the room kept around the
 /// cursor. Kept by the view, updated after every frame.
@@ -226,9 +232,7 @@ impl Viewport {
         if t >= 1.0 {
             self.glide = None;
         }
-        // Eased: quick away, gentle arrival.
-        let eased = 1.0 - (1.0 - t).powi(3);
-        let at = from + (to - from) * eased;
+        let at = from + (to - from) * eased(t);
         self.asked = Some(at);
         Some(at)
     }

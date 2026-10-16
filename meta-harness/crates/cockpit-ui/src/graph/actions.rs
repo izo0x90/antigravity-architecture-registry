@@ -32,9 +32,11 @@ pub(crate) enum GraphCommand {
     GoIn,
     AgentReturn,
     Find,
-    /// The camera: zoom by this factor (around the selection), or fit.
+    /// The camera: zoom by this factor (around the selection), fit the
+    /// whole tree, or fit the selected card.
     Zoom(f32),
     Fit,
+    FitCard,
     /// Show or hide the legend.
     Legend,
     /// Back along the path: its start (`top`), a root gone through
@@ -99,9 +101,11 @@ impl ActionProvider for GraphState {
         if let Some(card) = self.selected_card()
             && self.nav.root.as_deref() != Some(card.key.as_str())
         {
-            out.push(f("graph.go_in", &format!("Go into {}", card.label), G::GoIn).icon(egui_phosphor::regular::ARROW_SQUARE_IN).group(Group::Navigate).importance(SECONDARY).jump());
+            out.push(f("graph.go_in", &format!("Make {} the root", card.label), G::GoIn).icon(egui_phosphor::regular::ARROW_SQUARE_IN).group(Group::Navigate).importance(SECONDARY).jump());
         }
-        out.push(f("graph.fit", "Fit the drawing to the screen", G::Fit).header(Button, "", Some(egui_phosphor::regular::CORNERS_OUT)).group(Group::View).importance(MINOR));
+        out.push(f("graph.fit", "Fit the whole tree to the screen", G::Fit).header(Button, "", Some(egui_phosphor::regular::CORNERS_OUT)).group(Group::View).importance(MINOR));
+        let fit_card = f("graph.fit_card", "Fit the selected card to the screen", G::FitCard).group(Group::View).importance(MINOR);
+        out.push(if self.selection.is_some() { fit_card } else { fit_card.when(crate::actions::When::Unavailable) });
         out.push(f("graph.zoom_in", "Zoom in", G::Zoom(self.ui.zoom_step)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS).group(Group::View).importance(MINOR));
         out.push(f("graph.zoom_out", "Zoom out", G::Zoom(1.0 / self.ui.zoom_step)).icon(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS).group(Group::View).importance(MINOR));
         let (found, waiting) = self.find_choices();
@@ -165,11 +169,13 @@ impl GraphState {
                 self.navigate(NavChange::OnlyChanged(on));
             }
             GraphCommand::Flip => self.navigate(NavChange::Flip),
-            GraphCommand::Zoom(factor) => {
-                let center = self.selected_card().map_or(self.canvas.center(), |c| self.to_screen(&c.rect).center());
-                self.zoom_by(factor, center);
+            GraphCommand::Zoom(factor) => self.zoom_key(factor),
+            GraphCommand::Fit => self.fit_all(true),
+            GraphCommand::FitCard => {
+                if let Err(why) = self.fit_card() {
+                    self.note = Some(why);
+                }
             }
-            GraphCommand::Fit => self.fit_view(),
             GraphCommand::Depth(delta) => {
                 let base = self.depth();
                 self.navigate(NavChange::Depth { delta, base });

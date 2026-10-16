@@ -269,7 +269,7 @@ I = "Index"
 
 # Graph (when focused). Select with the moves (h j k l), open or close a
 # card with the folds (z o, z c), go in with Enter, back with Backspace.
-"graph.go_in" = { leader = "g f" }
+"graph.go_in" = { leader = "g f", keys = ["g f"] }
 "graph.depth_more" = { leader = "g +", keys = ["+"] }
 "graph.depth_less" = { leader = "g -", keys = ["-"] }
 "graph.flip" = { leader = "g r", keys = ["r"] }
@@ -278,9 +278,10 @@ I = "Index"
 "graph.full_code" = { leader = "g F" }
 "graph.agent_return" = { leader = "g a", keys = ["g a"] }
 "graph.find" = { leader = "g /", keys = ["g /"] }
-"graph.zoom_in" = { leader = "g =", keys = ["z +"] }
-"graph.zoom_out" = { leader = "g _", keys = ["z -"] }
+"graph.zoom_in" = { leader = "g =", keys = ["i"] }
+"graph.zoom_out" = { leader = "g _", keys = ["o"] }
 "graph.fit" = { leader = "g z", keys = ["z z"] }
+"graph.fit_card" = { leader = "g Z", keys = ["z f"] }
 
 # Spec view (when focused). j/k walk every item; J/K (and ]] / [[) jump
 # between sections. Review: comment on (or ask for a change to) the item

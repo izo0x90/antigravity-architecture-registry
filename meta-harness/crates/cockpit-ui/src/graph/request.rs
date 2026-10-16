@@ -6,7 +6,6 @@
 use arch_graph::tree::{Opened, TreeRequest, ViewKind, Way};
 use arch_graph::{Source, ViewRequest};
 
-use crate::nav::Navigable;
 
 /// What the graph shows: one view, over the code or one plan, from a root
 /// (or the view's starting points), one way, to a depth, with the cards
@@ -245,15 +244,6 @@ impl super::GraphState {
         self.stale = true;
         self.refit = true;
         self.agent = None;
-    }
-
-    /// A jump made with the pointer or a finger: remembers where it left
-    /// from for the jump list, then navigates.
-    pub(super) fn pointer_jump(&mut self, change: NavChange) {
-        if self.jumped.is_none() {
-            self.jumped = Some(self.place());
-        }
-        self.navigate(change);
     }
 }
 

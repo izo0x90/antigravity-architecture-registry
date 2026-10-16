@@ -32,6 +32,8 @@ fn zoom(app: &CockpitApp) -> f32 {
 #[test]
 fn on_the_graph_the_wheel_moves_ctrl_wheel_and_pinching_zoom_and_a_flick_glides() {
     let (ctx, mut app) = app_with_graph();
+    // Tall: room to move up, down and to the right (it starts at its left edge).
+    app.desk.graph = crate::graph::tests::showing(crate::graph::tests::wide_tree());
     frame(&ctx, &mut app, vec![]);
     let middle = app.slot_rects[1].center();
     frame(&ctx, &mut app, vec![egui::Event::PointerMoved(middle)]);
@@ -41,8 +43,8 @@ fn on_the_graph_the_wheel_moves_ctrl_wheel_and_pinching_zoom_and_a_flick_glides(
     assert_eq!(pan(&app) - before, egui::vec2(0.0, -5.0), "down");
     frame(&ctx, &mut app, wheel(egui::vec2(3.0, 4.0), Default::default()));
     assert_eq!(pan(&app) - before, egui::vec2(3.0, -1.0), "any way");
-    frame(&ctx, &mut app, wheel(egui::vec2(0.0, -5.0), egui::Modifiers::SHIFT));
-    assert_eq!(pan(&app) - before, egui::vec2(-2.0, -1.0), "Shift: sideways");
+    frame(&ctx, &mut app, wheel(egui::vec2(0.0, 5.0), egui::Modifiers::SHIFT));
+    assert_eq!(pan(&app) - before, egui::vec2(8.0, -1.0), "Shift: sideways");
     // Ctrl (Cmd) + one notch: one step of the zoom keys, around the pointer.
     let (step, z) = (app.desk.graph.ui.zoom_step, zoom(&app));
     frame(&ctx, &mut app, wheel(egui::vec2(0.0, 100.0), egui::Modifiers::COMMAND));
@@ -91,7 +93,8 @@ fn on_the_graph_fingers_tap_select_double_tap_go_in_drag_and_two_pinch_and_pan()
     feed(&mut app, finger(egui::TouchPhase::Start, step));
     feed(&mut app, finger(egui::TouchPhase::End, step));
     feed(&mut app, vec![]);
-    assert_eq!(app.desk.graph.nav.root.as_deref(), Some("rust:a::step"), "a double tap goes in");
+    assert_eq!(app.desk.graph.selection.as_deref(), Some("rust:a::save"), "a double tap opens it, as Enter: to what it calls");
+    assert!(app.desk.jumps.can_back(), "a jump, as Enter's");
     // One finger drags it, sideways too: it moves, it isn't a swipe back.
     feed(&mut app, vec![]);
     let middle = app.slot_rects[1].center();
@@ -101,8 +104,8 @@ fn on_the_graph_fingers_tap_select_double_tap_go_in_drag_and_two_pinch_and_pan()
     feed(&mut app, finger(egui::TouchPhase::Move, middle + egui::vec2(160.0, 0.0)));
     feed(&mut app, finger(egui::TouchPhase::End, middle + egui::vec2(160.0, 0.0)));
     feed(&mut app, vec![]);
-    assert!(pan(&app).x >= before.x + 150.0, "{:?} from {before:?}", pan(&app));
-    assert_eq!(app.desk.graph.nav.root.as_deref(), Some("rust:a::step"), "not back out");
+    assert!(pan(&app).x > before.x, "it moved (as far as the tree's edge lets it): {:?} from {before:?}", pan(&app));
+    assert!(!app.desk.jumps.can_forward() && app.desk.graph.selection.as_deref() == Some("rust:a::save"), "not a swipe back");
     // Two fingers: spread to zoom around them, moved together to pan.
     let two = |phase, a: egui::Pos2, b: egui::Pos2| {
         let touch = |id, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos, force: None };
@@ -154,4 +157,23 @@ fn a_swipe_where_the_view_moves_sideways_moves_it_instead() {
     assert!(app.desk.code.viewport.offset.x > 100.0, "the finger moved the long lines: {}", app.desk.code.viewport.offset.x);
     flick(&mut app, 150.0);
     assert_eq!(app.desk.code.target_line, Some(40), "not a swipe back (where nothing moves sideways it is: the chat's swipes)");
+}
+
+#[test]
+fn after_moving_the_graph_by_hand_a_key_starts_from_what_shows() {
+    let (ctx, mut app) = app_with_graph();
+    app.desk.graph = crate::graph::tests::showing(crate::graph::tests::wide_tree());
+    frame(&ctx, &mut app, vec![]);
+    keys(&ctx, &mut app, "gg");
+    let first = app.desk.graph.selection.clone().unwrap();
+    let middle = app.slot_rects[1].center();
+    frame(&ctx, &mut app, vec![egui::Event::PointerMoved(middle)]);
+    for n in 0..150 {
+        frame_at(&ctx, &mut app, wheel(egui::vec2(0.0, -7.0), Default::default()), 1.0 + n as f64 * 0.02);
+    }
+    let shows = |app: &CockpitApp, key: &str| app.desk.graph.on_screen().iter().any(|c| c.key == key);
+    assert!(!shows(&app, &first), "scrolled away from it");
+    keys(&ctx, &mut app, "j");
+    let now = app.desk.graph.selection.clone().unwrap();
+    assert!(now != first && shows(&app, &now), "j went on from a card that shows: {now}");
 }

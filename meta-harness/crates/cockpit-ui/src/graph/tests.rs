@@ -120,7 +120,7 @@ fn the_graph_offers_one_small_set_of_actions() {
     }
     // Depth, flip, switch view, pick source; finding where to start; the camera;
     // back along the path; the legend.
-    assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.find", "graph.fit", "graph.flip", "graph.legend", "graph.path", "graph.plan", "graph.view", "graph.zoom_in", "graph.zoom_out"]);
+    assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.find", "graph.fit", "graph.fit_card", "graph.flip", "graph.legend", "graph.path", "graph.plan", "graph.view", "graph.zoom_in", "graph.zoom_out"]);
     // A selection adds going into it.
     g.select(Some("rust:a::step".into()));
     assert!(ids(&g).contains(&"graph.go_in".to_owned()));
@@ -146,13 +146,13 @@ fn the_graph_offers_one_small_set_of_actions() {
 fn going_in_and_back_walk_a_trail_of_roots() {
     let mut g = showing(sample_tree());
     g.select(Some("rust:a::step".into()));
-    assert_eq!(g.enter(), Step::Done);
+    g.command(actions::GraphCommand::GoIn, None);
     assert_eq!(g.nav.root.as_deref(), Some("rust:a::step"));
     assert!(g.stale, "the new root is fetched");
     assert_eq!(g.trail_roots(), vec![Some("rust:a::run".to_owned())]);
     g.set_tree(tree_of(&sample_graph(), None, g.nav.request()));
     assert_eq!(g.selection.as_deref(), Some("rust:a::step"), "what was gone into is selected");
-    assert_eq!(g.leave(), Step::Done);
+    assert_eq!(g.leave(), Step::Done, "from the root, Backspace goes back");
     assert_eq!(g.nav.root.as_deref(), Some("rust:a::run"), "back to where going in started");
     g.set_tree(tree_of(&sample_graph(), None, g.nav.request()));
     assert_eq!(g.selection.as_deref(), Some("rust:a::step"), "with what was selected then");
@@ -360,7 +360,7 @@ fn the_graph_is_split_as_agreed() {
         ("request.rs", &["pub fn apply(", "pub fn navigate(", "pub fn back(", "pub fn back_to(", "struct Step"][..]),
         ("cards.rs", &["pub fn take(", "fn take_change("][..]),
         ("draw.rs", &["fn draw_pills(", "fn visible("][..]),
-        ("select.rs", &["pub fn select(", "pub fn reveal(", "fn related(", "pub fn move_selection("][..]),
+        ("select.rs", &["pub fn select(", "pub fn reveal(", "fn related(", "pub(crate) fn goes("][..]),
         ("details.rs", &["fn render_card_context(", "fn want_details("][..]),
         ("source.rs", &["fn source_choices", "fn switch_full_code"][..]),
         ("actions.rs", &["impl ActionProvider for GraphState", "fn command("][..]),
@@ -380,18 +380,9 @@ fn the_graph_is_split_as_agreed() {
 #[test]
 fn a_tree_too_big_to_fit_opens_on_its_root() {
     // A root that calls many: the tidy tree centres it on them, far below the top.
-    let mut graph = sample_graph();
-    let id = |s: &str| ComponentId::new(format!("rust:{s}"));
-    for i in 0..40 {
-        let name = format!("a::f{i}");
-        graph.upsert_component(component(&name, "function"), Provenance::OBSERVED);
-        let mut r = Relation::new(RelationKind::Calls, id("a::run"), id(&name), Provenance::OBSERVED);
-        r.order = Some(10 + i);
-        graph.upsert_relation(r);
-    }
-    let mut g = showing(tree_of(&graph, None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(1), ..TreeRequest::default() }));
+    let mut g = showing(wide_tree());
     g.canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-    g.fit_view();
+    g.place_tree();
     let root = g.to_screen(&g.card("rust:a::run").unwrap().rect);
     assert!(g.canvas.contains_rect(root), "the root is on screen: {root:?}");
 }
@@ -426,23 +417,100 @@ fn walkthroughs_are_picked_like_plans_and_named_as_walkthroughs() {
     assert_eq!(g.source_label(), "plan add-cache");
 }
 
+/// A calls tree too wide to show whole at a readable size: `run` calls 40.
+pub(crate) fn wide_tree() -> Tree {
+    let mut graph = sample_graph();
+    let id = |s: &str| ComponentId::new(format!("rust:{s}"));
+    for i in 0..40 {
+        let name = format!("a::f{i}");
+        graph.upsert_component(component(&name, "function"), Provenance::OBSERVED);
+        let mut r = Relation::new(RelationKind::Calls, id("a::run"), id(&name), Provenance::OBSERVED);
+        r.order = Some(10 + i);
+        graph.upsert_relation(r);
+    }
+    tree_of(&graph, None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(1), ..TreeRequest::default() })
+}
+
 #[test]
-fn the_camera_zooms_and_fits_from_keys_and_buttons() {
+fn the_camera_zooms_and_fits_from_keys_and_buttons_within_the_trees_limits() {
     let mut g = showing(sample_tree());
+    g.canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
     let has = |g: &GraphState, id: &str| g.actions().iter().any(|a| a.id == id);
-    assert!(has(&g, "graph.fit") && has(&g, "graph.zoom_in") && has(&g, "graph.zoom_out"));
-    let before = g.camera.zoom;
-    g.command(actions::GraphCommand::Zoom(g.ui.zoom_step), None);
-    assert!(g.camera.zoom > before, "zoomed in");
-    g.command(actions::GraphCommand::Zoom(1.0 / g.ui.zoom_step), None);
-    assert!((g.camera.zoom - before).abs() < 1e-4, "and back out");
-    g.command(actions::GraphCommand::Zoom(g.ui.zoom_step * 4.0), None);
+    assert!(has(&g, "graph.fit") && has(&g, "graph.fit_card") && has(&g, "graph.zoom_in") && has(&g, "graph.zoom_out"));
+    // Keys glide: where it's going is what they set.
+    let zoom = |g: &GraphState| g.aimed().zoom;
     g.command(actions::GraphCommand::Fit, None);
-    assert!(g.camera.zoom <= 1.0, "fit brings the drawing back to the screen");
+    assert_eq!(zoom(&g), 1.0, "a small tree shows whole at the normal size");
+    g.command(actions::GraphCommand::Zoom(g.ui.zoom_step), None);
+    assert!((zoom(&g) - g.ui.zoom_step).abs() < 1e-4, "zoomed in a step");
+    g.command(actions::GraphCommand::Zoom(1.0 / g.ui.zoom_step), None);
+    g.command(actions::GraphCommand::Zoom(1.0 / g.ui.zoom_step), None);
+    assert_eq!(zoom(&g), 1.0, "no further out than the whole tree");
+    g.command(actions::GraphCommand::Zoom(100.0), None);
+    assert_eq!(zoom(&g), 2.0, "in to twice the text size");
+    // z f: the selected card fills the screen, as near as the zoom goes.
+    g.command(actions::GraphCommand::Fit, None);
+    g.select(Some("rust:a::step".into()));
+    g.command(actions::GraphCommand::FitCard, None);
+    g.camera = g.aimed();
+    let card = g.to_screen(&g.card("rust:a::step").unwrap().rect);
+    assert!(g.canvas.contains_rect(card) && zoom(&g) == 2.0, "on the screen, as near the middle as the tree's edges let it: {card:?} at {}", zoom(&g));
+    // A wide tree: out to all of it, and never panned off it.
+    let mut g = showing(wide_tree());
+    g.canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    g.command(actions::GraphCommand::Fit, None);
+    g.camera = g.aimed();
+    let all = g.tree.as_ref().unwrap().size;
+    let whole = g.to_screen(&arch_graph::tree::Rect { x: 0.0, y: 0.0, w: all.0, h: all.1 });
+    assert!(g.canvas.contains_rect(whole) && zoom(&g) < 1.0, "z z: all of it ({whole:?})");
+    g.command(actions::GraphCommand::Zoom(2.0), None);
+    g.camera = g.aimed();
+    g.pan_by(egui::vec2(0.0, 100_000.0));
+    g.camera = g.aimed();
+    let whole = g.to_screen(&arch_graph::tree::Rect { x: 0.0, y: 0.0, w: all.0, h: all.1 });
+    assert!(whole.top() <= g.canvas.top() + crate::theme::look().space_xxxl + 0.5, "no further than the top's edge: {whole:?}");
     let keymap = include_str!("../../config/default.toml");
-    for bound in ["\"graph.zoom_in\" = { leader = \"g =\", keys = [\"z +\"] }", "\"graph.fit\" = { leader = \"g z\", keys = [\"z z\"] }"] {
+    for bound in ["\"graph.zoom_in\" = { leader = \"g =\", keys = [\"i\"] }", "\"graph.zoom_out\" = { leader = \"g _\", keys = [\"o\"] }", "\"graph.fit\" = { leader = \"g z\", keys = [\"z z\"] }", "\"graph.fit_card\" = { leader = \"g Z\", keys = [\"z f\"] }", "\"graph.go_in\" = { leader = \"g f\", keys = [\"g f\"] }"] {
         assert!(keymap.contains(bound), "{bound}");
     }
+}
+
+#[test]
+fn keys_follow_the_layout_a_tree_by_its_columns_boxes_at_their_depth() {
+    use super::select::{Dir, Goes};
+    let to = |key: &str| Ok(Goes::To(key.to_owned()));
+    // Calls: run calls step and log; step calls save. Left to right.
+    let mut g = showing(sample_tree());
+    assert_eq!(g.goes(Dir::Right), to("rust:a::run"), "nothing selected: the first card");
+    g.select(Some("rust:a::step".into()));
+    assert_eq!(g.goes(Dir::Left), to("rust:a::run"), "h: what it hangs from");
+    assert_eq!(g.goes(Dir::Right), to("rust:a::save"), "l: its first");
+    assert_eq!(g.goes(Dir::Down), to("rust:a::log"), "j: next in its column");
+    assert!(g.goes(Dir::Up).is_err(), "k: the first in its column");
+    assert_eq!(g.enter(), Step::Done);
+    assert_eq!(g.selection.as_deref(), Some("rust:a::save"), "Enter: its first, as l");
+    assert_eq!(g.leave(), Step::Done);
+    assert_eq!(g.selection.as_deref(), Some("rust:a::step"), "Backspace: what it hangs from, as h");
+    assert!(g.goes(Dir::Left).is_ok() && g.nav.root.as_deref() == Some("rust:a::run"), "the root stays");
+    // Closed: l opens it and goes to its first once it shows.
+    let mut g = showing(tree_of(&sample_graph(), None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(1), ..TreeRequest::default() }));
+    g.select(Some("rust:a::step".into()));
+    assert_eq!(g.goes(Dir::Right), Ok(Goes::OpenFirst("rust:a::step".into())));
+    g.motion(crate::nav::Motion::Right, 1);
+    g.set_tree(tree_of(&sample_graph(), None, g.nav.request()));
+    assert_eq!(g.selection.as_deref(), Some("rust:a::save"), "opened, on its first");
+    // Contains: a holds run, step, save, log; b holds util.
+    let mut g = showing(boxes_tree());
+    g.select(Some("rust:a".into()));
+    let across: Vec<_> = [Dir::Left, Dir::Down, Dir::Up, Dir::Right].into_iter().filter_map(|d| g.goes(d).ok()).collect();
+    assert_eq!(across, [Goes::To("rust:b".into())], "only the box beside it at its depth");
+    assert_eq!(g.enter(), Step::Done);
+    let inside = g.selection.clone().unwrap();
+    assert_eq!(g.card(&inside).unwrap().parent.as_deref(), Some("rust:a"), "Enter: into it");
+    let siblings: Vec<_> = [Dir::Left, Dir::Down, Dir::Up, Dir::Right].into_iter().filter_map(|d| g.goes(d).ok()).collect();
+    assert!(!siblings.is_empty() && siblings.iter().all(|s| matches!(s, Goes::To(k) if g.card(k).unwrap().parent.as_deref() == Some("rust:a"))), "its siblings first: {siblings:?}");
+    assert_eq!(g.leave(), Step::Done);
+    assert_eq!(g.selection.as_deref(), Some("rust:a"), "Backspace: out to what holds it");
 }
 
 #[test]
@@ -478,4 +546,35 @@ fn as_a_destination_it_shows_any_component_but_the_one_selected() {
     assert!(!g.can_show(&Target::Message { thread: None, turn: Some("u".into()), index: 0, link: None }), "a message isn't one");
     assert_eq!(g.show_target(&step), Ok(()));
     assert_eq!(g.selection.as_deref(), Some("rust:a::step"));
+}
+
+#[test]
+fn half_a_screen_moves_through_a_box_bigger_than_the_screen() {
+    let mut g = showing(boxes_tree());
+    g.canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0));
+    g.select(Some("rust:a".into()));
+    g.command(actions::GraphCommand::Zoom(100.0), None);
+    g.camera = g.aimed();
+    let a = g.to_screen(&g.card("rust:a").unwrap().rect);
+    assert!(a.height() > g.canvas.height(), "a is bigger than the screen: {a:?}");
+    let before = g.camera;
+    g.motion(crate::nav::Motion::HalfDown, 1);
+    assert_eq!(g.selection.as_deref(), Some("rust:a"), "moved through it");
+    assert!(g.aimed().pan.y < before.pan.y, "the view moved down");
+}
+
+#[test]
+fn going_in_follows_a_line_to_a_card_drawn_in_another_branch() {
+    // run calls step and log; step calls log too: log is drawn once, under run.
+    let mut graph = sample_graph();
+    let mut r = Relation::new(RelationKind::Calls, ComponentId::new("rust:a::step"), ComponentId::new("rust:a::log"), Provenance::OBSERVED);
+    r.order = Some(9);
+    graph.upsert_relation(r);
+    let mut g = showing(tree_of(&graph, None, TreeRequest { view: ViewKind::Calls, root: Some("rust:a::run".into()), depth: Some(3), ..TreeRequest::default() }));
+    g.select(Some("rust:a::save".into()));
+    assert!(g.goes_in().is_err(), "save calls nothing");
+    g.select(Some("rust:a::step".into()));
+    let leads = super::select::children(g.tree.as_ref().unwrap(), "rust:a::step");
+    assert!(leads.contains(&"rust:a::save".to_owned()) && leads.contains(&"rust:a::log".to_owned()), "its own, and log where it's drawn: {leads:?}");
+    assert!(!leads.contains(&"rust:a::run".to_owned()), "not what it hangs from");
 }

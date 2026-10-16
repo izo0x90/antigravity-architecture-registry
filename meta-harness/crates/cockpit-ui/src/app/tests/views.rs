@@ -24,7 +24,7 @@ fn the_size_note_offers_its_fixes_as_buttons() {
     assert_eq!(app.desk.graph.nav.depth, Some(2), "only the levels that fit");
     app.desk.graph.set_tree(cut_tree());
     app.desk.graph.select(Some("rust:a::step".into()));
-    click_on(&ctx, &mut app, "Go into step");
+    click_on(&ctx, &mut app, "Make step the root");
     assert_eq!(app.desk.graph.nav.root.as_deref(), Some("rust:a::step"), "started from the card");
 }
 
