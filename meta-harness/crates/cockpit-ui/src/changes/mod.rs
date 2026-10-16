@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::actions::{Action, ActionProvider, Choice, Group as ActionGroup, MINOR, Param, RunCx, SECONDARY, Style};
 use crate::config::ChangesUi;
 use crate::nav::{Fold, GoTo, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
+use crate::viewport::{Go, Show, Stop, Viewport};
 use crate::net::{NetClient, NetResult};
 use crate::panel::{Panel, Status, Tone};
 use crate::theme::colors;
@@ -70,13 +71,67 @@ struct Opened {
     asked_for: Option<(u32, u32)>,
 }
 
-/// A cursor stop: a file, or one of its changes; on the timeline, a
-/// window (newest first).
+/// A drawn row: a group's heading (staged, unstaged, untracked); a file;
+/// a change's first line (`@@ … @@`); one of its lines (side by side, a
+/// pair of them); on the timeline, a window (newest first). Every row but
+/// a heading is a cursor stop.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Row {
+    Group(Group),
     File(usize),
     Hunk(usize, usize),
+    Line(usize, usize, usize),
     Window(usize),
+}
+
+impl Row {
+    fn stop(&self) -> bool {
+        !matches!(self, Self::Group(_))
+    }
+}
+
+/// A row's height by its kind, as last drawn (rows are laid out by them).
+#[derive(Clone, Copy, Debug)]
+struct Heights {
+    group: f32,
+    file: f32,
+    hunk: f32,
+    line: f32,
+    window: f32,
+}
+
+impl Default for Heights {
+    fn default() -> Self {
+        Self { group: 22.0, file: 24.0, hunk: 18.0, line: 18.0, window: 26.0 }
+    }
+}
+
+impl Heights {
+    fn of(&self, row: &Row) -> f32 {
+        match row {
+            Row::Group(_) => self.group,
+            Row::File(_) => self.file,
+            Row::Hunk(..) => self.hunk,
+            Row::Line(..) => self.line,
+            Row::Window(_) => self.window,
+        }
+    }
+
+    /// Taller than it was drawn: kept (so rows don't overlap next frame).
+    fn grow(&mut self, row: &Row, drawn: f32) -> bool {
+        let h = match row {
+            Row::Group(_) => &mut self.group,
+            Row::File(_) => &mut self.file,
+            Row::Hunk(..) => &mut self.hunk,
+            Row::Line(..) => &mut self.line,
+            Row::Window(_) => &mut self.window,
+        };
+        let taller = drawn > *h + 0.5;
+        if taller {
+            *h = drawn;
+        }
+        taller
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -125,10 +180,15 @@ pub struct ChangesView {
     restore: Option<String>,
     /// A fold asked for (done when the network's at hand: opening asks).
     folding: Option<Fold>,
-    scroll: bool,
+    /// How to show the cursor once laid out (asked before it was).
+    show: Option<Show>,
+    /// Where it's looking (the shared rules move it), the time last drawn,
+    /// rows' heights, and whether changes were last laid out side by side.
+    viewport: Viewport,
+    clock: f64,
+    heights: Heights,
+    side: bool,
     spots: Vec<Spot>,
-    drawing: Vec<Spot>,
-    view_h: f32,
     /// When the list was last asked for (it's asked again now and then
     /// while shown: the index and staging change outside the files).
     asked_at: f64,
@@ -164,10 +224,12 @@ impl Default for ChangesView {
             cursor: 0,
             restore: None,
             folding: None,
-            scroll: false,
+            show: None,
+            viewport: Viewport::default(),
+            clock: 0.0,
+            heights: Heights::default(),
+            side: false,
             spots: Vec::new(),
-            drawing: Vec::new(),
-            view_h: 0.0,
             asked_at: f64::NEG_INFINITY,
             read: 0,
             components: None,
@@ -246,13 +308,68 @@ impl ChangesView {
         }
         let Some(list) = self.list() else { return Vec::new() };
         let mut rows = Vec::new();
+        let mut group = None;
         for (i, f) in list.files.iter().enumerate() {
+            if list.comparison.is_uncommitted() && group != Some(f.group) {
+                group = Some(f.group);
+                rows.push(Row::Group(f.group));
+            }
             rows.push(Row::File(i));
             if let Some(changes) = self.opened.get(&file_key(f)).and_then(|o| o.changes.as_ref()) {
-                rows.extend((0..changes.hunks.len()).map(|h| Row::Hunk(i, h)));
+                for (h, hunk) in changes.hunks.iter().enumerate() {
+                    rows.push(Row::Hunk(i, h));
+                    let lines = if self.side { paired(&hunk.lines).len() } else { hunk.lines.len() };
+                    rows.extend((0..lines).map(|n| Row::Line(i, h, n)));
+                }
             }
         }
         rows
+    }
+
+    /// Where the cursor can stop, laid out (each row's top and height), and
+    /// which row each is.
+    fn stops(&self, rows: &[Row]) -> (Vec<Stop>, Vec<usize>) {
+        let mut top = 0.0;
+        let mut out = (Vec::new(), Vec::new());
+        for (at, row) in rows.iter().enumerate() {
+            let h = self.heights.of(row);
+            if row.stop() {
+                out.0.push(Stop::new(top, h));
+                out.1.push(at);
+            }
+            top += h;
+        }
+        out
+    }
+
+    /// Moves by the shared rules from where the cursor is.
+    fn go(&mut self, go: Go) {
+        // A key's move: what was asked before it is done with.
+        self.show = None;
+        let rows = self.rows();
+        let (stops, at) = self.stops(&rows);
+        let cursor = at.iter().position(|r| *r == self.cursor);
+        if let Some(moved) = self.viewport.go(&stops, cursor, go) {
+            self.cursor = at[moved.cursor];
+            self.viewport.take(&moved, self.clock, true);
+        }
+    }
+
+    /// The change a row is in (its file's index, the change's).
+    fn hunk_of(row: &Row) -> Option<(usize, usize)> {
+        match row {
+            Row::Hunk(i, h) | Row::Line(i, h, _) => Some((*i, *h)),
+            _ => None,
+        }
+    }
+
+    /// The diff line a row is (one column: that line; side by side, the
+    /// pair's new side, else its old).
+    fn line_of(&self, row: &Row) -> Option<&DiffLine> {
+        let Row::Line(_, h, n) = row else { return None };
+        let file = self.file_of(row)?;
+        let hunk = self.file_changes(file.group, &file.path)?.hunks.get(*h)?;
+        if self.side { paired(&hunk.lines).get(*n).and_then(|(l, r)| r.or(*l)) } else { hunk.lines.get(*n) }
     }
 
     fn row_key(&self, row: &Row) -> String {
@@ -262,8 +379,10 @@ impl ChangesView {
         let Some(list) = self.list() else { return String::new() };
         match row {
             Row::Window(_) => String::new(),
+            Row::Group(g) => format!("g:{g:?}"),
             Row::File(i) => format!("f:{:?}:{}", list.files[*i].group, list.files[*i].path),
             Row::Hunk(i, h) => format!("h:{:?}:{}:{h}", list.files[*i].group, list.files[*i].path),
+            Row::Line(i, h, n) => format!("l:{:?}:{}:{h}:{n}", list.files[*i].group, list.files[*i].path),
         }
     }
 
@@ -271,14 +390,18 @@ impl ChangesView {
         self.rows().get(self.cursor).cloned()
     }
 
-    fn put_cursor(&mut self, at: usize) {
-        self.cursor = at.min(self.rows().len().saturating_sub(1));
-        self.scroll = true;
+    /// The cursor on row `at` (a heading: the row after it), shown as
+    /// asked once laid out.
+    fn put_cursor(&mut self, at: usize, show: Show) {
+        let rows = self.rows();
+        let at = at.min(rows.len().saturating_sub(1));
+        self.cursor = if rows.get(at).is_some_and(Row::stop) { at } else { (at + 1).min(rows.len().saturating_sub(1)) };
+        self.show = Some(show);
     }
 
     /// The file a row is in.
     fn file_of(&self, row: &Row) -> Option<&ChangedFile> {
-        let (Row::File(i) | Row::Hunk(i, _)) = row else { return None };
+        let (Row::File(i) | Row::Hunk(i, _) | Row::Line(i, ..)) = row else { return None };
         self.list()?.files.get(*i)
     }
 
@@ -296,8 +419,7 @@ impl ChangesView {
     pub fn show_timeline(&mut self, on: bool) {
         if on != self.on_timeline {
             self.on_timeline = on;
-            self.cursor = 0;
-            self.scroll = true;
+            self.put_cursor(0, Show::InView);
         }
     }
 
@@ -337,7 +459,7 @@ impl ChangesView {
                 Reply::List(asked, result) if asked == self.comparison => {
                     self.loading = false;
                     match result {
-                        Ok(list) => self.took_list(list, net, ctx),
+                        Ok(list) => self.keeping_cursor(|v| v.took_list(list, net, ctx)),
                         Err(e) => self.error = Some(e.into()),
                     }
                 }
@@ -355,8 +477,8 @@ impl ChangesView {
                     self.components = result.ok();
                     self.components_read += 1;
                 }
-                Reply::File(asked, key, result) if asked == self.comparison => {
-                    if let Some(opened) = self.opened.get_mut(&key) {
+                Reply::File(asked, key, result) if asked == self.comparison => self.keeping_cursor(|v| {
+                    if let Some(opened) = v.opened.get_mut(&key) {
                         opened.loading = false;
                         match result {
                             Ok(changes) => {
@@ -366,7 +488,7 @@ impl ChangesView {
                             Err(e) => opened.error = Some(e.into()),
                         }
                     }
-                }
+                }),
                 _ => {}
             }
         }
@@ -408,8 +530,8 @@ impl ChangesView {
         let rows = self.rows();
         let file_row = here.as_ref().and_then(|k| rows.iter().position(|r| matches!(r, Row::File(_)) && self.file_of(r).map(file_key).as_ref() == Some(k)));
         match (here, file_row) {
-            (Some(k), Some(at)) if !self.opened.contains_key(&k) => self.cursor = at,
-            _ => self.cursor = self.cursor.min(rows.len().saturating_sub(1)),
+            (Some(k), Some(at)) if !self.opened.contains_key(&k) => self.put_cursor(at, Show::InView),
+            _ => self.put_cursor(self.cursor, Show::InView),
         }
     }
 
@@ -458,7 +580,7 @@ impl ChangesView {
         let at = changes.hunks.iter().position(|h| h.new_range().contains(&(line as u32))).unwrap_or(0);
         let rows = self.rows();
         if let Some(row) = rows.iter().position(|r| matches!(r, Row::Hunk(_, h) if *h == at) && self.file_of(r).map(file_key).as_ref() == Some(&key)) {
-            self.put_cursor(row);
+            self.put_cursor(row, Show::Middle);
         }
         self.revealing = None;
     }
@@ -499,11 +621,29 @@ impl ChangesView {
         }
         if let Some(key) = self.restore.take() {
             match self.rows().iter().position(|r| self.row_key(r) == key) {
-                Some(at) => self.put_cursor(at),
+                Some(at) => self.put_cursor(at, Show::Middle),
                 None => self.restore = Some(key),
             }
         }
-        self.cursor = self.cursor.min(self.rows().len().saturating_sub(1));
+    }
+
+    /// Runs `change` keeping the cursor on the same row when it's still
+    /// there (the list and files read again under it), else on the nearest
+    /// stop.
+    fn keeping_cursor(&mut self, change: impl FnOnce(&mut Self)) {
+        let here = self.cursor_row().map(|r| self.row_key(&r));
+        change(self);
+        let rows = self.rows();
+        // A line no longer there (laid out the other way, read again): its change.
+        let change_of = |key: &str| key.strip_prefix("l:").and_then(|k| k.rsplit_once(':')).map(|(k, _)| format!("h:{k}"));
+        let found = |key: &str| rows.iter().position(|r| self.row_key(r) == key);
+        match here.and_then(|k| found(&k).or_else(|| change_of(&k).and_then(|h| found(&h)))) {
+            Some(at) => self.cursor = at,
+            None => self.cursor = self.cursor.min(rows.len().saturating_sub(1)),
+        }
+        if rows.get(self.cursor).is_some_and(|r| !r.stop()) {
+            self.cursor = (self.cursor + 1).min(rows.len().saturating_sub(1));
+        }
     }
 
     /// The list, as if it came from the server (tests drive the view
@@ -532,12 +672,17 @@ impl ChangesView {
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        if self.on_timeline {
-            self.render_timeline(ui, cx);
-            return;
-        }
         let look = crate::theme::look();
-        let Some(list) = self.list().cloned() else {
+        if self.on_timeline {
+            if self.windows().is_empty() {
+                let words = if self.timeline.is_some() { "Nothing yet: a snapshot is taken whenever a turn starts or ends." } else { "Reading the timeline…" };
+                ui.label(RichText::new(words).size(look.text_body).color(colors().muted));
+                self.spots.clear();
+                return;
+            }
+            return self.render_rows(ui, ("timeline", cx.slot));
+        }
+        let Some(list) = self.list() else {
             let words = match &self.error {
                 Some(e) => e.clone(),
                 None => "Reading the changes…".to_owned(),
@@ -550,106 +695,144 @@ impl ChangesView {
             self.spots.clear();
             return;
         }
+        // Laid out side by side or not by the column's width: the cursor
+        // stays on its change when that changes the rows.
         let side = self.side_by_side(ui.available_width());
-        let rows = self.rows();
-        let (cursor, scroll) = (self.cursor, std::mem::take(&mut self.scroll));
-        self.drawing.clear();
-        let output = egui::ScrollArea::vertical().id_salt(("changes", cx.slot)).auto_shrink([false, false]).show(ui, |ui| {
-            let mut group = None;
-            for (at, row) in rows.iter().enumerate() {
-                let on = at == cursor;
-                let file = &list.files[match row {
-                    Row::File(i) | Row::Hunk(i, _) => *i,
-                    Row::Window(_) => continue,
-                }];
-                if let Row::File(_) = row
-                    && group != Some(file.group)
-                {
-                    group = Some(file.group);
-                    if list.comparison.is_uncommitted() {
-                        let count = list.files.iter().filter(|f| f.group == file.group).count();
-                        ui.add_space(look.space_s);
-                        ui.label(RichText::new(format!("{} · {count}", file.group.title())).strong().size(look.text_small).color(colors().muted));
-                    }
-                }
-                let fill = if on { colors().selection } else { egui::Color32::TRANSPARENT };
-                let shown = egui::Frame::NONE.fill(fill).corner_radius(look.radius_s).inner_margin(crate::theme::margin2(look.space_xs, look.space_hair)).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    match row {
-                        Row::Window(_) => {}
-                        Row::File(_) => self.draw_file(ui, file),
-                        Row::Hunk(_, h) => {
-                            if let Some(hunk) = self.file_changes(file.group, &file.path).and_then(|c| c.hunks.get(*h)) {
-                                draw_hunk(ui, hunk, side);
-                            }
-                        }
-                    }
-                });
-                if on && scroll {
-                    shown.response.scroll_to_me(Some(egui::Align::Center));
-                }
-                self.drawing.push(Spot { key: self.row_key(row), rect: shown.response.rect });
-            }
-        });
-        self.view_h = output.inner_rect.height();
-        self.spots = std::mem::take(&mut self.drawing).into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
+        if side != self.side {
+            self.keeping_cursor(|v| v.side = side);
+        }
+        self.render_rows(ui, ("changes", cx.slot));
     }
 
-    /// The windows, newest first: when, who was working, how many files.
-    fn render_timeline(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        let look = crate::theme::look();
-        let windows: Vec<Window> = self.windows().into_iter().cloned().collect();
-        if windows.is_empty() {
-            let words = if self.timeline.is_some() { "Nothing yet: a snapshot is taken whenever a turn starts or ends." } else { "Reading the timeline…" };
-            ui.label(RichText::new(words).size(look.text_body).color(colors().muted));
-            self.spots.clear();
-            return;
+    /// The rows, laid out by their heights and drawn only where they show;
+    /// where it looks is the shared rules' (a cursor asked for before it
+    /// was laid out is shown now). The cursor's row is outlined.
+    fn render_rows(&mut self, ui: &mut egui::Ui, id: (&str, usize)) {
+        let rows = self.rows();
+        self.clock = ui.input(|i| i.time);
+        self.viewport.margin = 2.0 * self.heights.line;
+        if self.viewport.window.y > 0.0
+            && let Some(show) = self.show.take()
+        {
+            let (stops, at) = self.stops(&rows);
+            if let Some(stop) = at.iter().position(|r| *r == self.cursor)
+                && let Some(moved) = self.viewport.go(&stops, Some(stop), Go::To(stop, show))
+            {
+                self.viewport.take(&moved, self.clock, false);
+            }
         }
-        let now = crate::attention::now_ms();
-        let (cursor, scroll) = (self.cursor, std::mem::take(&mut self.scroll));
-        self.drawing.clear();
-        let output = egui::ScrollArea::vertical().id_salt(("timeline", cx.slot)).auto_shrink([false, false]).show(ui, |ui| {
-            for (at, w) in windows.iter().enumerate() {
-                let on = at == cursor;
-                let compared = w.comparison() == self.comparison;
-                let fill = if on { colors().selection } else { egui::Color32::TRANSPARENT };
-                let shown = egui::Frame::NONE.fill(fill).corner_radius(look.radius_s).inner_margin(crate::theme::margin2(look.space_xs, look.space_hair)).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        let when = match w.ended_ms {
-                            Some(end) => format!("{} → {}", crate::attention::age(w.started_ms, now), crate::attention::age(end, now)),
-                            None => format!("since {}", crate::attention::age(w.started_ms, now)),
-                        };
-                        ui.label(RichText::new(when).size(look.text_body).color(if compared { colors().accent } else { colors().text_strong }));
-                        let files = if w.files == 1 { "1 file".to_owned() } else { format!("{} files", w.files) };
-                        ui.label(RichText::new(files).monospace().size(look.text_small).color(if w.files > 0 { colors().ok } else { colors().muted }));
-                        let who = if w.working.is_empty() {
-                            "no session working".to_owned()
-                        } else {
-                            w.working.iter().map(|x| if x.slot.is_empty() { x.thread.clone() } else { x.slot.clone() }).collect::<Vec<_>>().join(", ")
-                        };
-                        ui.label(RichText::new(who).size(look.text_small).color(colors().muted));
-                    });
-                });
-                if on && scroll {
-                    shown.response.scroll_to_me(Some(egui::Align::Center));
+        let tops: Vec<f32> = rows.iter().scan(0.0, |top, row| {
+            let at = *top;
+            *top += self.heights.of(row);
+            Some(at)
+        }).collect();
+        let total = tops.last().zip(rows.last()).map_or(0.0, |(t, r)| t + self.heights.of(r));
+        let mut area = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]);
+        if let Some(offset) = self.viewport.wanted(self.clock) {
+            area = area.vertical_scroll_offset(offset.y);
+        }
+        let (mut drawn, mut spots) = (Vec::new(), Vec::new());
+        let output = area.show_viewport(ui, |ui, view| {
+            ui.set_height(total);
+            let (origin, width) = (ui.min_rect().min, ui.available_width());
+            let first = tops.partition_point(|t| *t <= view.min.y).saturating_sub(1);
+            for (at, row) in rows.iter().enumerate().skip(first).take_while(|(at, _)| tops[*at] < view.max.y) {
+                let rect = egui::Rect::from_min_size(origin + egui::vec2(0.0, tops[at]), egui::vec2(width, self.heights.of(row)));
+                let shown = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| self.draw_row(ui, row));
+                if at == self.cursor {
+                    let look = crate::theme::look();
+                    ui.painter().rect_stroke(rect, look.radius_s, egui::Stroke::new(look.line_thin * 1.5, colors().focus), egui::StrokeKind::Inside);
                 }
-                self.drawing.push(Spot { key: format!("w:{}", w.from), rect: shown.response.rect });
+                drawn.push((row.clone(), shown.response.rect.height()));
+                if row.stop() {
+                    spots.push(Spot { key: self.row_key(row), rect });
+                }
             }
         });
-        self.view_h = output.inner_rect.height();
-        self.spots = std::mem::take(&mut self.drawing).into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
+        let grew = drawn.iter().fold(false, |grew, (row, h)| self.heights.grow(row, *h) | grew);
+        self.viewport.drawn(output.state.offset, output.inner_rect.size(), output.content_size);
+        self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
+        if grew || self.viewport.gliding() || self.show.is_some() {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// One row, in its own space.
+    fn draw_row(&self, ui: &mut egui::Ui, row: &Row) {
+        let look = crate::theme::look();
+        let Some(list) = self.list().filter(|_| !self.on_timeline) else {
+            if let Row::Window(w) = row
+                && let Some(w) = self.windows().get(*w)
+            {
+                self.draw_window(ui, w);
+            }
+            return;
+        };
+        match row {
+            Row::Group(g) => {
+                let count = list.files.iter().filter(|f| f.group == *g).count();
+                ui.add_space(look.space_s);
+                ui.label(RichText::new(format!("{} · {count}", g.title())).strong().size(look.text_small).color(colors().muted));
+            }
+            Row::File(i) => self.draw_file(ui, &list.files[*i]),
+            Row::Hunk(..) => {
+                if let Some(hunk) = Self::hunk_of(row).and_then(|(i, h)| self.file_changes(list.files[i].group, &list.files[i].path)?.hunks.get(h)) {
+                    ui.label(RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines)).monospace().size(look.text_small).color(colors().faint));
+                }
+            }
+            Row::Line(i, h, n) => {
+                let Some(hunk) = self.file_changes(list.files[*i].group, &list.files[*i].path).and_then(|c| c.hunks.get(*h)) else { return };
+                if !self.side {
+                    if let Some(line) = hunk.lines.get(*n) {
+                        draw_line(ui, line, true);
+                    }
+                    return;
+                }
+                if let Some((left, right)) = paired(&hunk.lines).get(*n).copied() {
+                    ui.columns(2, |cols| {
+                        match left {
+                            Some(l) => draw_line(&mut cols[0], l, true),
+                            None => draw_gap(&mut cols[0]),
+                        }
+                        match right {
+                            Some(r) => draw_line(&mut cols[1], r, true),
+                            None => draw_gap(&mut cols[1]),
+                        }
+                    });
+                }
+            }
+            Row::Window(_) => {}
+        }
+    }
+
+    /// A timeline window: when, how many files, who was working.
+    fn draw_window(&self, ui: &mut egui::Ui, w: &Window) {
+        let look = crate::theme::look();
+        let now = crate::attention::now_ms();
+        let compared = w.comparison() == self.comparison;
+        ui.horizontal(|ui| {
+            let when = match w.ended_ms {
+                Some(end) => format!("{} → {}", crate::attention::age(w.started_ms, now), crate::attention::age(end, now)),
+                None => format!("since {}", crate::attention::age(w.started_ms, now)),
+            };
+            ui.label(RichText::new(when).size(look.text_body).color(if compared { colors().accent } else { colors().text_strong }));
+            let files = if w.files == 1 { "1 file".to_owned() } else { format!("{} files", w.files) };
+            ui.label(RichText::new(files).monospace().size(look.text_small).color(if w.files > 0 { colors().ok } else { colors().muted }));
+            let who = if w.working.is_empty() { "no session working".to_owned() } else { w.working.iter().map(|x| if x.slot.is_empty() { x.thread.clone() } else { x.slot.clone() }).collect::<Vec<_>>().join(", ") };
+            ui.add(egui::Label::new(RichText::new(who).size(look.text_small).color(colors().muted)).truncate());
+        });
     }
 
     fn draw_file(&self, ui: &mut egui::Ui, file: &ChangedFile) {
         let look = crate::theme::look();
         let opened = self.opened.get(&file_key(file));
-        ui.horizontal_wrapped(|ui| {
+        // One line (rows are laid out by height): a long path is cut.
+        ui.horizontal(|ui| {
             let caret = if opened.is_some() { egui_phosphor::regular::CARET_DOWN } else { egui_phosphor::regular::CARET_RIGHT };
             ui.label(RichText::new(caret).size(look.text_body).color(colors().muted));
             let (mark, color, word) = status_look(file.status);
             ui.label(RichText::new(mark).size(look.text_body).color(color)).on_hover_text(word);
-            ui.label(RichText::new(&file.path).monospace().size(look.text_body).color(colors().text_strong));
+            ui.add(egui::Label::new(RichText::new(&file.path).monospace().size(look.text_body).color(colors().text_strong)).truncate());
             if let Some(old) = &file.old_path {
                 ui.label(RichText::new(format!("← {old}")).monospace().size(look.text_small).color(colors().muted));
             }
@@ -788,11 +971,15 @@ impl ChangesView {
             out.push(Move::Enter.offer("Compare what changed then"));
             return out;
         }
-        out.push(Move::Motion(Motion::NextSibling).offer("Next file"));
-        out.push(Move::Motion(Motion::PrevSibling).offer("Previous file"));
+        out.push(Move::Motion(Motion::NextSibling).offer("Next change"));
+        out.push(Move::Motion(Motion::PrevSibling).offer("Previous change"));
         let file = row.as_ref().and_then(|r| self.file_of(r));
         out.push(Move::Enter.offer_if(file.is_some_and(|f| f.status != FileStatus::Deleted), "Open it in the code"));
-        out.push(Move::Leave.offer_if(matches!(row, Some(Row::Hunk(..))), "Up to its file"));
+        out.push(match row {
+            Some(Row::Line(..)) => Move::Leave.offer("Up to its change"),
+            Some(Row::Hunk(..)) => Move::Leave.offer("Up to its file"),
+            _ => Move::Leave.offer_if(false, "Up to its change or file"),
+        });
         out.extend(crate::nav::fold_here(file.map(|f| (f.path.as_str(), !self.opened.contains_key(&file_key(f))))));
         let closed = self.list().is_some_and(|l| l.files.iter().any(|f| !self.opened.contains_key(&file_key(f))));
         out.extend(crate::nav::fold_all((closed, "Unfold every file"), (!self.opened.is_empty(), "Fold every file")));
@@ -852,10 +1039,7 @@ impl ActionProvider for ChangesView {
             Some(Command::Stage(stage)) => {
                 let Some(row) = self.cursor_row() else { return };
                 let Some(file) = self.file_of(&row).cloned() else { return };
-                let hunk = match row {
-                    Row::Hunk(_, h) => self.opened.get(&file_key(&file)).and_then(|o| Some((o.changes.as_ref()?.hunks.get(h)?.clone(), o.context))).map(|(h, context)| (h.old_start, h.new_start, context)),
-                    _ => None,
-                };
+                let hunk = Self::hunk_of(&row).and_then(|(_, h)| self.opened.get(&file_key(&file)).and_then(|o| Some((o.changes.as_ref()?.hunks.get(h)?.clone(), o.context)))).map(|(h, context)| (h.old_start, h.new_start, context));
                 // A whole file: the cursor follows it to its new group.
                 if hunk.is_none() {
                     let to = if *stage { Group::Staged } else if file.status == FileStatus::Added && file.old_path.is_none() { Group::Untracked } else { Group::Unstaged };
@@ -920,46 +1104,53 @@ impl Navigable for ChangesView {
     fn restore(&mut self, place: &Place) {
         if let Place::Changes { item: Some(key) } = place {
             match self.rows().iter().position(|r| self.row_key(r) == *key) {
-                Some(at) => self.put_cursor(at),
+                Some(at) => self.put_cursor(at, Show::Middle),
                 None => self.restore = Some(key.clone()),
             }
         }
     }
 
-    /// A file's first change, or a change's first changed line.
+    /// A line: its place in the file (a removed one, where it was). A
+    /// file or a change: its first changed line.
     fn target(&self) -> Option<Target> {
         let row = self.cursor_row()?;
         let file = self.file_of(&row)?;
+        if let Some(line) = self.line_of(&row) {
+            return Some(Target::Change { file: file.path.clone(), line: line.new.or(line.old).unwrap_or(1) as usize });
+        }
         let hunks = self.file_changes(file.group, &file.path).map(|c| c.hunks.as_slice()).unwrap_or_default();
         let hunk = match row {
             Row::Hunk(_, h) => hunks.get(h),
-            Row::File(_) | Row::Window(_) => hunks.first(),
+            _ => hunks.first(),
         };
         let line = hunk.map_or(1, |h| h.lines.iter().find(|l| l.kind != LineKind::Context).and_then(|l| l.new.or(l.old)).unwrap_or(h.new_start.max(1)));
         Some(Target::Change { file: file.path.clone(), line: line as usize })
     }
 
+    /// By the shared rules, a line at a time; `]]` / `[[` from change to
+    /// change.
     fn motion(&mut self, motion: Motion, count: usize) {
         let rows = self.rows();
-        let n = rows.len().max(1);
-        let page = (self.view_h / 60.0).max(1.0) as usize;
-        let file_at = |r: &Row| matches!(r, Row::File(_));
+        let change = |r: &Row| matches!(r, Row::Hunk(..));
         match motion {
-            Motion::Down => self.put_cursor(self.cursor + count),
-            Motion::Up => self.put_cursor(self.cursor.saturating_sub(count)),
-            Motion::HalfDown => self.put_cursor(self.cursor + page * count),
-            Motion::HalfUp => self.put_cursor(self.cursor.saturating_sub(page * count)),
-            Motion::First => self.put_cursor(0),
-            Motion::Last => self.put_cursor(n - 1),
-            Motion::Line(i) => self.put_cursor(i.saturating_sub(1)),
-            Motion::NextSibling => {
-                if let Some(at) = rows.iter().enumerate().skip(self.cursor + 1).find(|(_, r)| file_at(r)).map(|(i, _)| i) {
-                    self.put_cursor(at);
+            Motion::Down => self.go(Go::Down(count)),
+            Motion::Up => self.go(Go::Up(count)),
+            Motion::HalfDown => self.go(Go::HalfDown(count)),
+            Motion::HalfUp => self.go(Go::HalfUp(count)),
+            Motion::First => self.go(Go::First),
+            Motion::Last => self.go(Go::Last),
+            Motion::Line(i) => self.put_cursor(i.saturating_sub(1), Show::Middle),
+            Motion::NextSibling | Motion::PrevSibling => {
+                let forward = motion == Motion::NextSibling;
+                let mut at = Some(self.cursor);
+                for _ in 0..count {
+                    at = at.and_then(|from| if forward { rows.iter().enumerate().skip(from + 1).find(|(_, r)| change(r)).map(|(i, _)| i) } else { rows.iter().enumerate().take(from).rev().find(|(_, r)| change(r)).map(|(i, _)| i) }).or(at);
                 }
-            }
-            Motion::PrevSibling => {
-                if let Some(at) = rows.iter().enumerate().take(self.cursor).rev().find(|(_, r)| file_at(r)).map(|(i, _)| i) {
-                    self.put_cursor(at);
+                if let Some(at) = at.filter(|a| *a != self.cursor) {
+                    let (_, stops) = self.stops(&rows);
+                    if let Some(stop) = stops.iter().position(|r| *r == at) {
+                        self.go(Go::To(stop, Show::InView));
+                    }
                 }
             }
             Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
@@ -982,16 +1173,20 @@ impl Navigable for ChangesView {
         }
     }
 
+    /// Up: from a line to its change, from a change to its file.
     fn leave(&mut self) -> Step {
-        match self.cursor_row() {
-            Some(Row::Hunk(i, _)) => {
-                if let Some(at) = self.rows().iter().position(|r| *r == Row::File(i)) {
-                    self.put_cursor(at);
-                }
-                Step::Done
+        let up = match self.cursor_row() {
+            Some(Row::Line(i, h, _)) => Row::Hunk(i, h),
+            Some(Row::Hunk(i, _)) => Row::File(i),
+            _ => return Step::Nothing("Already on a file.".into()),
+        };
+        if let Some(at) = self.rows().iter().position(|r| *r == up) {
+            let (_, stops) = self.stops(&self.rows());
+            if let Some(stop) = stops.iter().position(|r| *r == at) {
+                self.go(Go::To(stop, Show::InView));
             }
-            _ => Step::Nothing("Already on a file.".into()),
         }
+        Step::Done
     }
 
     fn fold(&mut self, fold: Fold) {
@@ -1006,13 +1201,12 @@ impl Navigable for ChangesView {
             .iter()
             .filter_map(|row| {
                 let (name, text) = match row {
+                    Row::Group(_) => return None,
                     Row::Window(w) => (String::new(), windows.get(*w).map(|w| w.working.iter().map(|x| format!("{} {}", x.slot, x.thread)).collect::<Vec<_>>().join(" ")).unwrap_or_default()),
                     Row::File(i) => (list?.files[*i].path.clone(), list?.files[*i].path.clone()),
-                    Row::Hunk(i, h) => {
-                        let f = &list?.files[*i];
-                        let text = self.file_changes(f.group, &f.path).and_then(|c| c.hunks.get(*h)).map(|h| h.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default();
-                        (String::new(), text)
-                    }
+                    Row::Hunk(..) => (String::new(), String::new()),
+                    // Each line found where it is, removed ones too.
+                    Row::Line(..) => (String::new(), self.line_of(row).map(|l| l.text.clone()).unwrap_or_default()),
                 };
                 Some(Item::new(self.row_key(row), name, text))
             })
@@ -1029,7 +1223,7 @@ impl Navigable for ChangesView {
 
     fn move_to(&mut self, key: &str) {
         if let Some(at) = self.rows().iter().position(|r| self.row_key(r) == key) {
-            self.put_cursor(at);
+            self.put_cursor(at, Show::Middle);
         }
     }
 }

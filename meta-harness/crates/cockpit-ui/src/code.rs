@@ -581,6 +581,8 @@ impl CodeViewerState {
 
     /// Moves by the shared rules from where the cursor is.
     fn go(&mut self, go: Go) {
+        // A key's move: what was asked before it is done with.
+        self.show = None;
         let (stops, lines) = self.stops();
         let cursor = self.target_line.and_then(|l| lines.iter().position(|v| *v >= l));
         if let Some(moved) = self.viewport.go(&stops, cursor, go) {

@@ -37,7 +37,8 @@ fn a_small_set_of_changes_opens_by_itself_and_a_big_one_waits_to_be_opened() {
     let (view, net, _) = view_with_changes();
     let asked: Vec<String> = net.sent.lock().unwrap().iter().filter(|s| s.contains("/api/changes/file")).cloned().collect();
     assert_eq!(asked.len(), 2, "both files asked for: {asked:?}");
-    assert_eq!(view.rows(), [Row::File(0), Row::Hunk(0, 0), Row::File(1), Row::Hunk(1, 0)], "the diff run together");
+    let (l, h) = (Row::Line, Row::Hunk);
+    assert_eq!(view.rows(), [Row::Group(Group::Unstaged), Row::File(0), h(0, 0), l(0, 0, 0), l(0, 0, 1), l(0, 0, 2), l(0, 0, 3), Row::File(1), h(1, 0), l(1, 0, 0), l(1, 0, 1)], "the diff run together, a row per line");
     // A big one: only its list.
     let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
     let mut big = ChangesView::default();
@@ -46,7 +47,7 @@ fn a_small_set_of_changes_opens_by_itself_and_a_big_one_waits_to_be_opened() {
     (big.stale, big.loading) = (false, true);
     big.tick(&net, &ctx, false);
     assert!(!net.sent.lock().unwrap().iter().any(|s| s.contains("/api/changes/file")), "40 files: none opened by itself");
-    assert_eq!(big.rows().len(), 40);
+    assert_eq!(big.rows().len(), 41, "its heading and its files");
 }
 
 #[test]
@@ -55,23 +56,35 @@ fn the_cursor_walks_files_and_changes_and_enter_opens_the_spot() {
     assert_eq!(view.target(), Some(Target::Change { file: "a.rs".into(), line: 3 }), "a file: its first changed line");
     view.motion(Motion::Down, 1);
     assert_eq!((view.cursor_key().as_deref(), view.enter()), (Some("h:Unstaged:a.rs:0"), Step::GoTo(GoTo::Code)));
-    assert!(view.actions().iter().any(|a| a.id == "nav.leave"), "on a change: up to its file");
+    // A line at a time: each line is where it is in the file (a removed
+    // one, where it was).
+    view.motion(Motion::Down, 2);
+    assert_eq!((view.cursor_key().as_deref(), view.target()), (Some("l:Unstaged:a.rs:0:1"), Some(Target::Change { file: "a.rs".into(), line: 3 })));
+    assert!(view.actions().iter().any(|a| a.id == "nav.leave" && a.label == "Up to its change"));
     view.leave();
-    assert_eq!(view.cursor_key().as_deref(), Some("f:Unstaged:a.rs"), "out: up to its file");
+    assert_eq!(view.cursor_key().as_deref(), Some("h:Unstaged:a.rs:0"), "out: up to its change");
+    view.leave();
+    assert_eq!(view.cursor_key().as_deref(), Some("f:Unstaged:a.rs"), "then its file");
+    // ]] and [[: from change to change, across files.
     view.motion(Motion::NextSibling, 1);
-    assert_eq!(view.cursor_key().as_deref(), Some("f:Unstaged:b.rs"), "]]: the next file");
+    assert_eq!(view.cursor_key().as_deref(), Some("h:Unstaged:a.rs:0"));
+    view.motion(Motion::NextSibling, 1);
+    assert_eq!(view.cursor_key().as_deref(), Some("h:Unstaged:b.rs:0"), "]]: the next change");
+    view.motion(Motion::PrevSibling, 1);
+    assert_eq!(view.cursor_key().as_deref(), Some("h:Unstaged:a.rs:0"), "[[: the one before");
+    view.move_to("f:Unstaged:b.rs");
     assert!(matches!(view.enter(), Step::Nothing(why) if why.contains("deleted")), "a deleted file has nothing to open");
     // Folds: its changes fold away, the cursor on the file.
     view.motion(Motion::Down, 1);
     view.fold(Fold::Close);
     view.tick(&net, &ctx, false);
-    assert_eq!((view.rows().len(), view.cursor_key().as_deref()), (3, Some("f:Unstaged:b.rs")));
+    assert_eq!((view.rows().len(), view.cursor_key().as_deref()), (8, Some("f:Unstaged:b.rs")));
     view.fold(Fold::CloseAll);
     view.tick(&net, &ctx, false);
-    assert_eq!(view.rows(), [Row::File(0), Row::File(1)]);
+    assert_eq!(view.rows(), [Row::Group(Group::Unstaged), Row::File(0), Row::File(1)]);
     // Places come back by key.
     let place = view.place();
-    view.put_cursor(0);
+    view.put_cursor(0, Show::InView);
     view.restore(&place);
     assert_eq!(view.cursor_key().as_deref(), Some("f:Unstaged:b.rs"));
 }
@@ -81,7 +94,8 @@ fn search_finds_file_names_and_changed_lines_removed_ones_too() {
     let (view, _, _) = view_with_changes();
     let items = view.items();
     assert!(items.iter().any(|i| i.key == "f:Unstaged:a.rs" && i.name == "a.rs"));
-    assert!(items.iter().any(|i| i.key == "h:Unstaged:a.rs:0" && i.text.contains("old three") && i.text.contains("new three")), "{items:?}");
+    assert!(items.iter().any(|i| i.key == "l:Unstaged:a.rs:0:1" && i.text == "old three"), "each line where it is, removed ones too: {items:?}");
+    assert!(items.iter().any(|i| i.key == "l:Unstaged:a.rs:0:2" && i.text == "new three"));
     assert!(items.iter().any(|i| i.text.contains("gone")), "a deleted file's lines");
 }
 
@@ -210,4 +224,64 @@ fn as_a_destination_it_shows_touched_components_and_turns_it_saw() {
     assert_eq!(view.show_target(&message("u1")), Ok(()));
     assert_eq!(view.comparison, turn, "its turn, compared");
     assert!(view.show_target(&message("u2")).is_err());
+}
+
+/// Draws the view in a window `h` high; the text drawn.
+fn drawn(view: &mut ChangesView, ctx: &egui::Context, h: f32) -> Vec<String> {
+    let net = NetClient::new("http://127.0.0.1:9");
+    let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, h))), ..Default::default() }, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
+            view.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut asked });
+        });
+    });
+    fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+            egui::Shape::Vec(list) => list.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+#[test]
+fn a_big_change_is_drawn_only_where_it_shows_and_moved_through_a_line_at_a_time() {
+    let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
+    let mut view = ChangesView::default();
+    let list = ChangeList { comparison: Comparison::default(), files: vec![file(Group::Untracked, "big.rs", FileStatus::Added, 5000, 0)], offset: 0, total: 1 };
+    push(&view.inbox, Reply::List(Comparison::default(), Ok(list)));
+    (view.stale, view.loading) = (false, true);
+    view.tick(&net, &ctx, false);
+    view.ask_file((Group::Untracked, "big.rs".into()), 3, &net, &ctx);
+    let lines = (1..=5000).map(|n| line(LineKind::Added, None, Some(n), &format!("let line_{n} = {n};"))).collect();
+    let big = FileChanges { comparison: Comparison::default(), path: "big.rs".into(), group: Group::Untracked, context: 3, binary: false, hunks: vec![Hunk { old_start: 0, old_lines: 0, new_start: 1, new_lines: 5000, lines }] };
+    push(&view.inbox, Reply::File(Comparison::default(), (Group::Untracked, "big.rs".into()), Ok(big)));
+    view.tick(&net, &ctx, false);
+    let mut texts = Vec::new();
+    for _ in 0..3 {
+        texts = drawn(&mut view, &ctx, 600.0);
+    }
+    let shown = texts.iter().filter(|t| t.starts_with("let line_")).count();
+    assert!(shown > 10 && shown < 80, "only the lines on screen are drawn: {shown}");
+    // Half a window down: the view and the cursor move together, a line
+    // being a stop.
+    view.move_to("l:Untracked:big.rs:0:0");
+    view.motion(Motion::HalfDown, 1);
+    for _ in 0..12 {
+        texts = drawn(&mut view, &ctx, 600.0);
+    }
+    let at: usize = view.cursor_key().unwrap().rsplit(':').next().unwrap().parse().unwrap();
+    assert!(at > 5 && at < 40, "half a window of lines: {at}");
+    assert!(texts.iter().any(|t| *t == format!("let line_{} = {};", at + 1, at + 1)), "the cursor's line shows");
+    view.motion(Motion::Last, 1);
+    for _ in 0..12 {
+        texts = drawn(&mut view, &ctx, 600.0);
+    }
+    assert!(texts.iter().any(|t| t == "let line_5000 = 5000;"), "the last line shows");
+    assert!(texts.iter().filter(|t| t.starts_with("let line_")).count() < 80, "still only what shows");
 }

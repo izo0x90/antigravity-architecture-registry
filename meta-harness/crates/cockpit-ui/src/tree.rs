@@ -274,6 +274,8 @@ impl ArchitectureTreeState {
 
     /// Moves by the shared rules from where the cursor is: a row each.
     fn go(&mut self, go: Go) {
+        // A key's move: what was asked before it is done with.
+        self.show = None;
         let rows = self.rows();
         let pitch = if self.pitch > 0.0 { self.pitch } else { ROW_H };
         let stops: Vec<Stop> = (0..rows.len()).map(|i| Stop::new(i as f32 * pitch, pitch)).collect();
