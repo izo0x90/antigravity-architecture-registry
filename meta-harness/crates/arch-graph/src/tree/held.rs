@@ -186,6 +186,16 @@ pub fn hold(tree: &mut Tree, cap: usize, newest: &str) -> Vec<String> {
     closed
 }
 
+/// Each card's count of what opening it would add, as a whole tree counts
+/// it: an open card, nothing; a closed one, its children (`children`)
+/// that aren't drawn anywhere.
+pub fn recount(tree: &mut Tree, children: impl Fn(&str) -> Vec<String>) {
+    let drawn: BTreeSet<String> = tree.cards.iter().map(|c| c.key.clone()).collect();
+    for card in &mut tree.cards {
+        card.more = if card.open { 0 } else { children(&card.key).into_iter().filter(|k| !drawn.contains(k)).collect::<BTreeSet<_>>().len() as u32 };
+    }
+}
+
 /// What a client holding `before` needs to hold `now`.
 pub fn expanded(before: &Tree, now: &Tree, closed: Vec<String>) -> Expanded {
     let held: BTreeSet<&str> = before.cards.iter().map(|c| c.key.as_str()).collect();

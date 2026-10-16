@@ -515,3 +515,21 @@ fn only_the_components_asked_for_show_with_what_holds_them() {
     assert_eq!(boxes, vec!["app", "run"]);
     assert!(f.tree(TreeRequest { only: Some(Vec::new()), ..ask(ViewKind::Contains, None, Way::Down, 2) }).cards.is_empty(), "none asked for: nothing");
 }
+
+#[test]
+fn opening_recounts_what_every_card_has_left_to_open() {
+    // run calls step and log; step calls save and util; log calls util.
+    let f = Fixture::new(sample());
+    let held = f.tree(ask(ViewKind::Calls, Some("app::run"), Way::Down, 1));
+    let more = |tree: &Tree, key: &str| tree.card(&id(key).0).map(|c| (c.open, c.more));
+    assert_eq!((more(&held, "app::step"), more(&held, "app::log")), (Some((false, 2)), Some((false, 1))));
+    // Opening step draws util: log's one call is drawn now, nothing left to open.
+    let (now, change) = expand(&f.input(), &held, &id("app::step").0, 1, 400);
+    assert_eq!(more(&now, "app::log"), Some((false, 0)), "util is drawn under step");
+    assert!(change.places.iter().any(|p| p.key == id("app::log").0 && p.more == 0), "and the client is told");
+    // Opening log adds no card, only its line to util; it has nothing more.
+    let (after, change) = expand(&f.input(), &now, &id("app::log").0, 1, 400);
+    assert!(change.cards.is_empty(), "nothing new");
+    assert_eq!(more(&after, "app::log"), Some((true, 0)));
+    assert!(line(&after, "log", "util").is_some(), "a line to where util is drawn");
+}

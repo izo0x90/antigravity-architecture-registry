@@ -510,6 +510,10 @@ pub fn expand<G: GraphRead>(input: &Input<G>, held: &Tree, card: &str, levels: u
     now.request = request;
     held::merge(&mut now, card, branch);
     let closed = held::hold(&mut now, cap, card);
+    // What the branch brought may be drawn elsewhere already (a call to a
+    // card another branch shows is a line there, not more to open): every
+    // card counts again what opening it would add.
+    held::recount(&mut now, |key| lens.children(key).into_iter().map(|c| c.key).collect());
     let view = now.request.view;
     layout::lay_out(&mut now, view, &input.config.layout, input.layout_out_of_time);
     let change = held::expanded(held, &now, closed);
