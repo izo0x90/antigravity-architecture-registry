@@ -470,7 +470,7 @@ fn the_camera_zooms_and_fits_from_keys_and_buttons_within_the_trees_limits() {
     let whole = g.to_screen(&arch_graph::tree::Rect { x: 0.0, y: 0.0, w: all.0, h: all.1 });
     assert!(whole.top() <= g.canvas.top() + crate::theme::look().space_xxxl + 0.5, "no further than the top's edge: {whole:?}");
     let keymap = include_str!("../../config/default.toml");
-    for bound in ["\"graph.zoom_in\" = { leader = \"g =\", keys = [\"i\"] }", "\"graph.zoom_out\" = { leader = \"g _\", keys = [\"o\"] }", "\"graph.fit\" = { leader = \"g z\", keys = [\"z z\"] }", "\"graph.fit_card\" = { leader = \"g Z\", keys = [\"z f\"] }", "\"graph.go_in\" = { leader = \"g f\", keys = [\"g f\"] }"] {
+    for bound in ["\"graph.zoom_in\" = { leader = \"g i\", keys = [\"i\"] }", "\"graph.zoom_out\" = { leader = \"g o\", keys = [\"o\"] }", "\"graph.fit\" = { leader = \"g z\", keys = [\"z z\"] }", "\"graph.fit_card\" = { leader = \"g Z\", keys = [\"z f\"] }", "\"graph.go_in\" = { leader = \"g f\", keys = [\"g f\"] }"] {
         assert!(keymap.contains(bound), "{bound}");
     }
 }

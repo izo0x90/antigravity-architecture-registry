@@ -85,6 +85,7 @@ r = "Requests"
 g = "Graph"
 e = "Links"
 I = "Index"
+D = "Developer"
 
 # Bindings, by action id. Keys:
 #   leader: keys after the leader, space separated; "#" is the next free key in
@@ -134,8 +135,8 @@ I = "Index"
 "layout.6" = { leader = "l 6", keys = ["alt+6"] }
 "panel.add" = { leader = "l a" }
 "panel.close" = { leader = "l x" }
-"inspector.toggle" = { leader = "i", keys = ["ctrl+shift+c"] }
-"issues.toggle" = { leader = "d", keys = ["F2"] }
+"inspector.toggle" = { leader = "D i", keys = ["ctrl+shift+c"] }
+"issues.toggle" = { leader = "D d", keys = ["F2"] }
 # The quick look: the full card of what the cursor is on, over the view
 # (hold to peek, tap to keep it open), and the same card sent to a panel.
 "quicklook.toggle" = { leader = "q q", keys = ["q"] }
@@ -143,7 +144,7 @@ I = "Index"
 # A box over whatever is on screen for talking to the agent (Enter sends,
 # Escape closes).
 "talk.open" = { leader = "t", keys = ["t"] }
-"cockpit.agents" = { leader = "a d" }
+"cockpit.agents" = { leader = "w d" }
 
 # Moving the cursor, in every view.
 "nav.left" = { keys = ["h"] }
@@ -278,8 +279,8 @@ I = "Index"
 "graph.full_code" = { leader = "g F" }
 "graph.agent_return" = { leader = "g a", keys = ["g a"] }
 "graph.find" = { leader = "g /", keys = ["g /"] }
-"graph.zoom_in" = { leader = "g =", keys = ["i"] }
-"graph.zoom_out" = { leader = "g _", keys = ["o"] }
+"graph.zoom_in" = { leader = "g i", keys = ["i"] }
+"graph.zoom_out" = { leader = "g o", keys = ["o"] }
 "graph.fit" = { leader = "g z", keys = ["z z"] }
 "graph.fit_card" = { leader = "g Z", keys = ["z f"] }
 

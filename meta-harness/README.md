@@ -712,7 +712,7 @@ set of calls with two ways in:
   browser drivers (DevTools, Playwright).
 - **The `cockpit_*` tools** for agents, over the cockpit's own socket
   (`/ws/cockpit`, opened with a one-time ticket only the cockpit's session gets). They work only while
-  you let agents drive it: `Space a d` ("Let agents drive the cockpit"),
+  you let agents drive it: `Space w d` ("Let agents drive the cockpit"),
   kept with the cockpit's state. Off, an agent can't click its own
   approvals.
 
