@@ -280,3 +280,16 @@ fn more_context_shows_that_many_more_unchanged_lines_on_each_side() {
     assert_eq!(around(3), (3, 3));
     assert_eq!(around(13), (13, 13), "ten more on each side");
 }
+
+#[test]
+fn snapshots_taken_in_the_same_millisecond_keep_the_order_they_were_taken_in() {
+    let (dir, _repo) = repo();
+    let changes = Changes::open(dir.path()).unwrap();
+    let mut taken = Vec::new();
+    for n in 0..20 {
+        write(dir.path(), "a.txt", &format!("edit {n}\n"));
+        taken.push(changes.snapshot("quick", taken.last()).unwrap().0);
+    }
+    let listed: Vec<String> = changes.snapshots().unwrap().into_iter().map(|s| s.id).collect();
+    assert_eq!(listed, taken.iter().map(|s| s.id.clone()).collect::<Vec<_>>());
+}

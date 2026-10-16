@@ -53,7 +53,9 @@ impl Changes {
         let head = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
         let who = git2::Signature::now("NAH", "nah@localhost")?;
         let commit = repo.commit(None, &who, &who, &format!("NAH snapshot: {why}"), &tree, &head.iter().collect::<Vec<_>>())?;
-        let at_ms = now_ms();
+        // Later than every one before it, even in the same millisecond:
+        // they're told apart, and listed, in the order they were taken.
+        let at_ms = now_ms().max(self.snapshots()?.last().map_or(0, |s| s.at_ms + 1));
         let id = format!("{at_ms}-{}", &commit.to_string()[..10]);
         repo.reference(&format!("{SNAPSHOT_REFS}{id}"), commit, true, "NAH snapshot")?;
         Ok((Snapshot { id, at_ms }, true))
