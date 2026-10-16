@@ -105,7 +105,8 @@ impl CockpitApp {
         let focused = self.desk.panels.focused();
         crate::remote::Status {
             mode: format!("{:?}", self.input_mode),
-            panels: self.desk.panels.buffers().iter().enumerate().map(|(i, p)| serde_json::json!({ "panel": i + 1, "buffer": self.describe(*p), "focused": i == focused })).collect(),
+            // The focused panel says where its cursor is (its item's key).
+            panels: self.desk.panels.buffers().iter().enumerate().map(|(i, p)| serde_json::json!({ "panel": i + 1, "buffer": self.describe(*p), "focused": i == focused, "cursor": if i == focused { self.desk.view(p.kind).cursor_key() } else { None } })).collect(),
             note: self.note.clone(),
             leader: (self.input_mode == InputMode::Leader).then(|| self.leader_path.iter().collect()),
             palette: self.palette.is_open(),

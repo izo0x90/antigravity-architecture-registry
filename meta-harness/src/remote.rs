@@ -140,7 +140,11 @@ pub fn screen_text(read: &Value) -> String {
         out.push_str(&format!("\nnote: {note}"));
     }
     for panel in read["panels"].as_array().into_iter().flatten() {
-        let focus = if panel["focused"] == true { " (focused)" } else { "" };
+        let focus = match panel["cursor"].as_str() {
+            _ if panel["focused"] != true => String::new(),
+            Some(cursor) => format!(" (focused, on {cursor})"),
+            None => " (focused)".to_owned(),
+        };
         out.push_str(&format!("\npanel {}: {}{focus}", panel["panel"], panel["buffer"].as_str().unwrap_or("?")));
     }
     out.push_str("\n\nOn screen (y: text @x ...):");
@@ -200,7 +204,7 @@ mod tests {
     fn a_read_is_rows_top_to_bottom() {
         let read = json!({
             "mode": "Normal", "note": null, "leader": null, "palette": false,
-            "panels": [{ "panel": 1, "buffer": "chat · the agent's session", "focused": true }],
+            "panels": [{ "panel": 1, "buffer": "chat · the agent's session", "focused": true, "cursor": "3" }, { "panel": 2, "buffer": "code · a.rs:1", "focused": false }],
             "texts": [
                 { "text": "Send", "x": 500.0, "y": 1200.0 },
                 { "text": "Harness:", "x": 17.0, "y": 104.0 },
@@ -208,7 +212,7 @@ mod tests {
             ]
         });
         let text = screen_text(&read);
-        assert!(text.contains("panel 1: chat · the agent's session (focused)"), "{text}");
+        assert!(text.contains("panel 1: chat · the agent's session (focused, on 3)\npanel 2: code · a.rs:1\n"), "{text}");
         assert!(text.contains("  104: Harness: @17 Antigravity @71\n 1200: Send @500"), "{text}");
     }
 
