@@ -400,12 +400,13 @@ impl CockpitApp {
         self.input_mode = InputMode::Palette;
     }
 
-    /// Runs an action, or opens the palette at its parameter if it needs one.
+    /// Runs an action (a switch's key flips it), or opens the palette at
+    /// its parameter if it needs one.
     pub(super) fn run_bound(&mut self, bound: &Bound, count: Option<u32>, ctx: &egui::Context) {
-        if bound.action.param == Param::None {
-            self.invoke_counted(Invocation { action: bound.action.clone(), origin: bound.origin, value: None }, count, ctx);
-        } else {
-            self.open_palette(Some(bound));
+        match &bound.action.param {
+            Param::None => self.invoke_counted(Invocation { action: bound.action.clone(), origin: bound.origin, value: None }, count, ctx),
+            Param::Toggle { on } => self.invoke(Invocation { action: bound.action.clone(), origin: bound.origin, value: Some((!on).to_string()) }, ctx),
+            _ => self.open_palette(Some(bound)),
         }
     }
 

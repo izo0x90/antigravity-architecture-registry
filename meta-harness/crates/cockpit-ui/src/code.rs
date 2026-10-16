@@ -1,14 +1,17 @@
 //! The code view: one file, a cursor line, and what the index knows about it
 //! (definitions and call sites, from the file's components). Gutter marks
-//! link to the graph; definitions fold; symbols on screen take hints.
+//! link to the graph; definitions fold; symbols on screen take hints. The
+//! desk's comparison marks the lines it changed, and shows the deleted ones
+//! in place.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use arch_graph::{Alignment, Component, ComponentId, FileView, RelationKind};
+use harness_contracts::changes::{Comparison, FileChanges, Group as ChangeGroup, LineKind};
 use egui::{Frame, Pos2, Rect, RichText, Stroke, Vec2};
 
-use crate::actions::{Action, ActionProvider, Group, MINOR, RunCx, Style};
+use crate::actions::{Action, ActionProvider, Group, MINOR, Param, RunCx, Style};
 use crate::panel::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
 use crate::nav::{Fold, Item, Motion, Navigable, Place, Scroll, Spot, Step, Target, scroll_offset};
@@ -17,6 +20,51 @@ use crate::theme::colors;
 
 /// A file's analysis, by the file it was asked for.
 type AnalysisReply = (String, NetResult<arch_graph::code::CodeAnalysis>);
+
+/// A file's changes, by the comparison and file they were asked for.
+type ChangesReply = (Comparison, String, NetResult<FileChanges>);
+
+/// How a line changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineChange {
+    Added,
+    Modified,
+}
+
+/// A file's changes by line: lines added or changed, and the lines deleted
+/// before a line (the line after the last: at the end).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OnLines {
+    pub changed: BTreeMap<usize, LineChange>,
+    pub deleted: BTreeMap<usize, Vec<String>>,
+}
+
+impl OnLines {
+    /// From a file's changes with no context around them.
+    pub fn of(changes: &FileChanges) -> Self {
+        let mut out = Self::default();
+        for h in &changes.hunks {
+            let deleted: Vec<String> = h.lines.iter().filter(|l| l.kind == LineKind::Removed).map(|l| l.text.clone()).collect();
+            let kind = if deleted.is_empty() { LineChange::Added } else { LineChange::Modified };
+            for line in h.lines.iter().filter(|l| l.kind == LineKind::Added).filter_map(|l| l.new) {
+                out.changed.insert(line as usize, kind);
+            }
+            if !deleted.is_empty() {
+                // Only deleted: git says the line they were after.
+                let before = if h.new_lines == 0 { h.new_start + 1 } else { h.new_start };
+                out.deleted.entry(before as usize).or_default().extend(deleted);
+            }
+        }
+        out
+    }
+}
+
+/// A drawn row: a line of the file, or a deleted one shown before `before`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Row {
+    Line(usize),
+    Deleted { before: usize, idx: usize },
+}
 
 /// What the gutter shows on a line, linked to its component.
 #[derive(Clone, Debug, PartialEq)]
@@ -150,6 +198,14 @@ pub struct CodeViewerState {
     pub file_stale: bool,
     /// Out of date, by the server's word or the index status (set by the app).
     pub out_of_date: bool,
+    /// The desk's comparison on this file's lines.
+    pub on_lines: OnLines,
+    /// Deleted lines shown in place (`z d`).
+    pub show_deleted: bool,
+    /// What its changes were last asked for: the comparison, the file and
+    /// the comparison's list as it was (asked again when that's read again).
+    changes_asked: Option<(Comparison, String, u64)>,
+    changes_inbox: Arc<Mutex<Option<ChangesReply>>>,
 }
 
 impl Default for CodeViewerState {
@@ -181,6 +237,10 @@ impl Default for CodeViewerState {
             select: None,
             file_stale: false,
             out_of_date: false,
+            on_lines: OnLines::default(),
+            show_deleted: true,
+            changes_asked: None,
+            changes_inbox: Arc::default(),
         }
     }
 }
@@ -199,7 +259,9 @@ impl CodeViewerState {
             self.marks.clear();
             self.file_view = None;
             self.analysis = None;
+            self.on_lines = OnLines::default();
         }
+        self.changes_asked = None;
         self.current_file = path.to_string();
         self.target_line = target_line;
         self.cursor_col = None;
@@ -216,6 +278,32 @@ impl CodeViewerState {
                 *a = Some((for_path, r));
             }
         });
+    }
+
+    /// Marks what `comparison` changed in the file shown: asked for when
+    /// the file, the comparison or its list (`read`, a count of the times
+    /// it was read) changes, once the file's text is in.
+    pub fn follow_changes(&mut self, comparison: &Comparison, read: u64, net: &NetClient, ctx: &egui::Context) {
+        let on_files = comparison.on_files();
+        if let Some((asked, path, result)) = self.changes_inbox.lock().ok().and_then(|mut r| r.take())
+            && asked == on_files
+            && path == self.current_file
+        {
+            // Not a repository (or gone): nothing to mark.
+            self.on_lines = result.map(|c| OnLines::of(&c)).unwrap_or_default();
+        }
+        let want = (on_files, self.current_file.clone(), read);
+        if self.is_loading || self.lines.is_empty() || self.changes_asked.as_ref() == Some(&want) {
+            return;
+        }
+        let inbox = self.changes_inbox.clone();
+        let (asked, path) = (want.0.clone(), want.1.clone());
+        net.change_file(&want.0, &want.1, ChangeGroup::Changes, 0, ctx.clone(), move |r| {
+            if let Ok(mut i) = inbox.lock() {
+                *i = Some((asked, path, r));
+            }
+        });
+        self.changes_asked = Some(want);
     }
 
     /// Opens `path` with lines `start..=end` highlighted and scrolled to.
@@ -237,6 +325,7 @@ impl CodeViewerState {
     }
 
     pub fn set_content(&mut self, content: String) {
+        self.changes_asked = None;
         self.lines = content.lines().map(|s| s.to_string()).collect();
         self.content = content;
         self.is_loading = false;
@@ -388,6 +477,65 @@ impl CodeViewerState {
         out
     }
 
+    /// Rows drawn, in order: the visible lines, and the deleted lines
+    /// before them when they're shown.
+    pub fn rows(&self) -> Vec<Row> {
+        let visible = self.visible_lines();
+        let mut out = Vec::with_capacity(visible.len());
+        let deleted = |before: usize, out: &mut Vec<Row>| {
+            if self.show_deleted {
+                let n = self.on_lines.deleted.get(&before).map_or(0, Vec::len);
+                out.extend((0..n).map(|idx| Row::Deleted { before, idx }));
+            }
+        };
+        for line in visible {
+            deleted(line, &mut out);
+            out.push(Row::Line(line));
+        }
+        deleted(self.lines.len() + 1, &mut out);
+        out
+    }
+
+    /// The gutter's change marks on a line: a bar on an added or changed
+    /// line, and, while deleted lines are hidden, a notch where some were.
+    fn change_marks(&self, ui: &egui::Ui, line: usize, last: usize, row_height: f32) {
+        let at = ui.max_rect().left_top();
+        let bar = |color: egui::Color32, from: f32, h: f32| {
+            ui.painter().rect_filled(Rect::from_min_size(at + Vec2::new(0.0, from), Vec2::new(3.0, h)), 0.0, color);
+        };
+        match self.on_lines.changed.get(&line) {
+            Some(LineChange::Added) => bar(colors().ok, 0.0, row_height),
+            Some(LineChange::Modified) => bar(colors().info, 0.0, row_height),
+            None => {}
+        }
+        if !self.show_deleted {
+            if self.on_lines.deleted.contains_key(&line) {
+                bar(colors().error, -1.5, 3.0);
+            }
+            if line == last && self.on_lines.deleted.contains_key(&(last + 1)) {
+                bar(colors().error, row_height - 1.5, 3.0);
+            }
+        }
+    }
+
+    /// A deleted line, shown in place: greyed, not a line of the file.
+    fn deleted_row(&self, ui: &mut egui::Ui, text: &str, gutter_w: f32, row_height: f32) -> egui::Response {
+        let size = crate::theme::look().text_body;
+        ui.horizontal(|ui| {
+            ui.set_min_height(row_height);
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.allocate_ui_with_layout(Vec2::new(gutter_w, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_min_width(gutter_w);
+                let at = ui.max_rect().left_top();
+                ui.painter().rect_filled(Rect::from_min_size(at, Vec2::new(3.0, row_height)), 0.0, colors().error);
+                ui.label(RichText::new("   −").monospace().size(size).color(colors().error));
+            });
+            ui.separator();
+            ui.label(RichText::new(text).monospace().size(size).color(colors().muted).strikethrough().background_color(colors().error_bg));
+        })
+        .response
+    }
+
     /// Definition names and calls on a line, as hint targets.
     fn symbols_on(&self, line: usize) -> Vec<Symbol> {
         let text = self.lines.get(line.wrapping_sub(1)).map(String::as_str).unwrap_or_default();
@@ -520,7 +668,7 @@ impl CodeViewerState {
             let mut opened = false;
             let mut go_to: Option<ComponentId> = None;
             let mut unfold: Option<usize> = None;
-            let visible = self.visible_lines();
+            let rows = self.rows();
             // Rows are laid out only when visible, so scrolling to a line is
             // done by offset, once the requested file's lines are in.
             let pitch = row_height + ui.spacing().item_spacing.y;
@@ -529,16 +677,25 @@ impl CodeViewerState {
             if !self.is_loading
                 && let (Some(how), Some(line)) = (self.scroll, self.target_line)
             {
-                let row = visible.iter().position(|l| *l >= line).unwrap_or(visible.len().saturating_sub(1));
+                let row = rows.iter().position(|r| matches!(r, Row::Line(l) if *l >= line)).unwrap_or(rows.len().saturating_sub(1));
                 let view_h = if self.view_h > 0.0 { self.view_h } else { ui.available_height() };
                 area = area.vertical_scroll_offset(scroll_offset(how, row, pitch, self.offset_y, view_h));
                 self.scroll = None;
                 scrolled = Some((how, view_h));
             }
             let mut drawn = Vec::new();
-            let viewer_res = area.show_rows(ui, row_height, visible.len(), |ui, rows| {
-                for row in rows {
-                    let line_no = visible[row];
+            let last = self.lines.len();
+            let viewer_res = area.show_rows(ui, row_height, rows.len(), |ui, shown| {
+                for row in shown {
+                    let line_no = match rows[row] {
+                        Row::Line(l) => l,
+                        Row::Deleted { before, idx } => {
+                            let text = self.on_lines.deleted.get(&before).and_then(|d| d.get(idx)).map_or("", String::as_str);
+                            let drawn_row = self.deleted_row(ui, text, gutter_w, row_height);
+                            measured = measured.max(drawn_row.rect.height());
+                            continue;
+                        }
+                    };
                     let idx = line_no - 1;
                     let highlighted = self.in_highlight(line_no);
                     let on_cursor = self.target_line == Some(line_no);
@@ -548,6 +705,7 @@ impl CodeViewerState {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         ui.allocate_ui_with_layout(Vec2::new(gutter_w, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.set_min_width(gutter_w);
+                            self.change_marks(ui, line_no, last, row_height);
                             let color = if on_cursor || highlighted { colors().warn } else { colors().faint };
                             ui.label(RichText::new(format!("{line_no:>4}")).monospace().size(crate::theme::look().text_body).color(color));
                             for mark in self.marks.get(&line_no).into_iter().flatten() {
@@ -656,6 +814,7 @@ enum CodeCommand {
     Def { forward: bool },
     Copy,
     Reload,
+    Deleted,
 }
 
 impl ActionProvider for CodeViewerState {
@@ -665,12 +824,13 @@ impl ActionProvider for CodeViewerState {
             out.push(Action::new("code.next_def", "Next definition", CodeCommand::Def { forward: true }).focused().group(Group::Navigate));
             out.push(Action::new("code.prev_def", "Previous definition", CodeCommand::Def { forward: false }).focused().group(Group::Navigate));
         }
+        out.push(Action::new("code.deleted", "Show deleted lines in place", CodeCommand::Deleted).focused().param(Param::Toggle { on: self.show_deleted }).header(Style::Setting, "Deleted lines", None).group(Group::View).importance(MINOR));
         out.push(Action::new("code.reload", "Load the file again", CodeCommand::Reload).focused().group(Group::View).importance(MINOR).header(Style::Button, "", Some(egui_phosphor::regular::ARROW_CLOCKWISE)));
         out.push(Action::new("code.copy", "Copy the file", CodeCommand::Copy).focused().importance(MINOR).header(Style::Button, "", Some(egui_phosphor::regular::COPY)));
         out
     }
 
-    fn run(&mut self, action: &Action, _value: Option<String>, cx: &mut RunCx<'_>) {
+    fn run(&mut self, action: &Action, value: Option<String>, cx: &mut RunCx<'_>) {
         match action.command::<CodeCommand>() {
             Some(CodeCommand::Def { forward }) => {
                 if let Err(why) = self.step_def(*forward, 1, false) {
@@ -678,6 +838,13 @@ impl ActionProvider for CodeViewerState {
                 }
             }
             Some(CodeCommand::Copy) => cx.ctx.copy_text(self.content.clone()),
+            Some(CodeCommand::Deleted) => {
+                self.show_deleted = match value.as_deref() {
+                    Some("true") => true,
+                    Some("false") => false,
+                    _ => !self.show_deleted,
+                };
+            }
             Some(CodeCommand::Reload) => {
                 let path = self.current_file.clone();
                 self.load_file(&path, self.target_line, cx.net, cx.ctx.clone());
@@ -1118,4 +1285,74 @@ pub(crate) mod tests {
         code.move_to(&spots[1].key);
         assert_eq!(code.target_line, Some(3));
     }
+
+    fn hunk(old_start: u32, old_lines: u32, new_start: u32, new_lines: u32, lines: &[(LineKind, Option<u32>, &str)]) -> harness_contracts::changes::Hunk {
+        let lines = lines.iter().map(|(kind, new, text)| harness_contracts::changes::DiffLine { kind: *kind, old: None, new: *new, text: (*text).to_owned() }).collect();
+        harness_contracts::changes::Hunk { old_start, old_lines, new_start, new_lines, lines }
+    }
+
+    /// A five-line file with line 2 changed, a line added after line 3, a
+    /// line deleted from the top and one from the end.
+    fn changed() -> CodeViewerState {
+        use LineKind::{Added, Removed};
+        let changes = FileChanges {
+            comparison: Comparison::default().on_files(),
+            path: "a.rs".into(),
+            group: ChangeGroup::Changes,
+            context: 0,
+            binary: false,
+            hunks: vec![
+                hunk(1, 1, 0, 0, &[(Removed, None, "// gone from the top")]),
+                hunk(3, 1, 2, 1, &[(Removed, None, "let b = 1;"), (Added, Some(2), "let b = 2;")]),
+                hunk(4, 0, 4, 1, &[(Added, Some(4), "let d = 4;")]),
+                hunk(6, 1, 5, 0, &[(Removed, None, "// gone from the end")]),
+            ],
+        };
+        let mut code = CodeViewerState::default();
+        code.set_content("let a = 1;\nlet b = 2;\nlet c = 3;\nlet d = 4;\nlet e = 5;\n".into());
+        code.on_lines = OnLines::of(&changes);
+        code
+    }
+
+    #[test]
+    fn changed_lines_are_marked_and_deleted_ones_sit_where_they_were() {
+        let mut code = changed();
+        assert_eq!(code.on_lines.changed, BTreeMap::from([(2, LineChange::Modified), (4, LineChange::Added)]));
+        let deleted: Vec<(usize, usize)> = code.on_lines.deleted.iter().map(|(b, d)| (*b, d.len())).collect();
+        assert_eq!(deleted, [(1, 1), (2, 1), (6, 1)], "before line 1, before the changed line, after the last");
+        let (d, l) = (|before, idx| Row::Deleted { before, idx }, Row::Line);
+        assert_eq!(code.rows(), [d(1, 0), l(1), d(2, 0), l(2), l(3), l(4), l(5), d(6, 0)]);
+        code.show_deleted = false;
+        assert_eq!(code.rows(), (1..=5).map(Row::Line).collect::<Vec<_>>(), "z d: hidden, only the file's lines");
+        // Drawn: the deleted lines' text is on screen between the file's.
+        code.show_deleted = true;
+        let ctx = egui::Context::default();
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            texts = render(&ctx, &mut code, 400.0);
+        }
+        let y = |text: &str| texts.iter().find(|(t, _)| t == text).map(|(_, r)| r.top()).unwrap_or_else(|| panic!("{text} isn't drawn"));
+        assert!(y("// gone from the top") < y("let a = 1;") && y("let a = 1;") < y("let b = 1;") && y("let b = 1;") < y("let b = 2;") && y("let e = 5;") < y("// gone from the end"));
+        // The cursor walks the file's lines only.
+        code.motion(Motion::First, 1);
+        code.motion(Motion::Down, 1);
+        assert_eq!(code.target_line, Some(2));
+    }
+
+
+    #[test]
+    fn its_changes_are_asked_for_the_files_against_the_comparison_and_again_when_the_list_is_read_again() {
+        let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
+        let mut code = changed();
+        code.current_file = "a.rs".into();
+        code.follow_changes(&Comparison::default(), 1, &net, &ctx);
+        let on_files = Comparison { from: harness_contracts::changes::Point::Rev("HEAD".into()), to: harness_contracts::changes::Point::Files };
+        assert_eq!(code.changes_asked, Some((on_files.clone(), "a.rs".into(), 1)), "staged and unstaged together: the files against the last commit");
+        code.changes_asked = Some((on_files.clone(), "a.rs".into(), 0));
+        code.follow_changes(&Comparison::default(), 1, &net, &ctx);
+        assert_eq!(code.changes_asked.as_ref().map(|a| a.2), Some(1), "the list read again: asked again");
+        code.set_content("let a = 1;\n".into());
+        assert_eq!(code.changes_asked, None, "new text: asked again");
+    }
+
 }

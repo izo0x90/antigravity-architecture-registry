@@ -123,6 +123,9 @@ pub struct ChangesView {
     /// When the list was last asked for (it's asked again now and then
     /// while shown: the index and staging change outside the files).
     asked_at: f64,
+    /// How many times the list was read (views that show the changes too
+    /// ask for theirs again when it is).
+    read: u64,
     inbox: Arc<Mutex<Vec<Reply>>>,
 }
 
@@ -146,6 +149,7 @@ impl Default for ChangesView {
             drawing: Vec::new(),
             view_h: 0.0,
             asked_at: f64::NEG_INFINITY,
+            read: 0,
             inbox: Arc::default(),
         }
     }
@@ -334,8 +338,14 @@ impl ChangesView {
         }
     }
 
+    /// How many times the list was read.
+    pub fn read(&self) -> u64 {
+        self.read
+    }
+
     fn took_list(&mut self, list: ChangeList, net: &NetClient, ctx: &egui::Context) {
         self.error = None;
+        self.read += 1;
         let keys: Vec<(FileKey, (u32, u32))> = list.files.iter().map(|f| (file_key(f), (f.added, f.removed))).collect();
         self.list = Some(list);
         // Gone files go; opened ones whose counts moved are asked again.

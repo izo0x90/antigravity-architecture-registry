@@ -93,9 +93,10 @@ fn diffs<'r>(repo: &'r Repository, comparison: &Comparison, context: u32, paths:
 }
 
 /// A delta's group (untracked files are their own among the unstaged), its
-/// status, its path and its path before (a rename's).
-fn described(delta: &git2::DiffDelta<'_>, group: Group) -> Option<(Group, FileStatus, String, Option<String>)> {
-    let path = |f: git2::DiffFile<'_>| f.path().map(|p| p.to_string_lossy().replace('\\', "/"));
+/// status, its path and its path before (a rename's), from the project's
+/// folder (`prefix`: where it is in the repository, `dir/` or empty).
+fn described(delta: &git2::DiffDelta<'_>, group: Group, prefix: &str) -> Option<(Group, FileStatus, String, Option<String>)> {
+    let path = |f: git2::DiffFile<'_>| f.path().map(|p| p.to_string_lossy().replace('\\', "/")).and_then(|p| p.strip_prefix(prefix).map(str::to_owned));
     let (status, group) = match delta.status() {
         Delta::Untracked => (FileStatus::Added, if group == Group::Unstaged { Group::Untracked } else { group }),
         Delta::Added | Delta::Copied => (FileStatus::Added, group),
@@ -112,12 +113,17 @@ fn described(delta: &git2::DiffDelta<'_>, group: Group) -> Option<(Group, FileSt
     Some((group, status, shown, before))
 }
 
-/// The files `comparison` changes, with their counts.
-pub(crate) fn files(repo: &Repository, comparison: &Comparison) -> Result<Vec<ChangedFile>> {
+/// The project's folder as a pathspec (none: the whole repository).
+fn within(prefix: &str) -> Vec<&str> {
+    prefix.strip_suffix('/').into_iter().collect()
+}
+
+/// The files `comparison` changes in the project's folder, with their counts.
+pub(crate) fn files(repo: &Repository, comparison: &Comparison, prefix: &str) -> Result<Vec<ChangedFile>> {
     let mut out = Vec::new();
-    for (group, diff) in diffs(repo, comparison, 0, &[])? {
+    for (group, diff) in diffs(repo, comparison, 0, &within(prefix))? {
         for (i, delta) in diff.deltas().enumerate() {
-            let Some((group, status, path, old_path)) = described(&delta, group) else { continue };
+            let Some((group, status, path, old_path)) = described(&delta, group, prefix) else { continue };
             let patch = Patch::from_diff(&diff, i)?;
             let binary = delta.flags().is_binary() || patch.is_none();
             let (added, removed) = match &patch {
@@ -130,12 +136,13 @@ pub(crate) fn files(repo: &Repository, comparison: &Comparison) -> Result<Vec<Ch
     Ok(out)
 }
 
-/// `path`'s changes in `group` of `comparison`.
-pub(crate) fn file(repo: &Repository, comparison: &Comparison, path: &str, group: Group, context: u32) -> Result<FileChanges> {
+/// `path`'s changes (from the project's folder) in `group` of `comparison`.
+pub(crate) fn file(repo: &Repository, comparison: &Comparison, path: &str, group: Group, context: u32, prefix: &str) -> Result<FileChanges> {
     let mut out = FileChanges { comparison: comparison.clone(), path: path.to_owned(), group, context, binary: false, hunks: Vec::new() };
-    for (diff_group, diff) in diffs(repo, comparison, context, &[path])? {
+    let full = format!("{prefix}{path}");
+    for (diff_group, diff) in diffs(repo, comparison, context, &[full.as_str()])? {
         for (i, delta) in diff.deltas().enumerate() {
-            let Some((delta_group, _, shown, old)) = described(&delta, diff_group) else { continue };
+            let Some((delta_group, _, shown, old)) = described(&delta, diff_group, prefix) else { continue };
             if delta_group != group || (shown != path && old.as_deref() != Some(path)) {
                 continue;
             }
@@ -169,7 +176,7 @@ pub(crate) fn file(repo: &Repository, comparison: &Comparison, path: &str, group
 /// What `path`'s changes in `comparison` depend on, cheaply: the commits'
 /// ids, the index's and the file's size and time. The same fingerprint,
 /// the same changes.
-pub(crate) fn fingerprint(repo: &Repository, comparison: &Comparison, path: &str) -> Result<String> {
+pub(crate) fn fingerprint(repo: &Repository, comparison: &Comparison, path: &str, prefix: &str) -> Result<String> {
     let stat = |p: &std::path::Path| {
         std::fs::metadata(p).map_or_else(|_| "-".to_owned(), |m| format!("{}:{:?}", m.len(), m.modified().ok()))
     };
@@ -180,7 +187,7 @@ pub(crate) fn fingerprint(repo: &Repository, comparison: &Comparison, path: &str
             Point::Rev(rev) => repo.revparse_single(rev).map_or_else(|_| format!("?{rev}"), |o| o.id().to_string()),
             Point::Snapshot(id) => id.clone(),
             Point::Index => stat(&repo.path().join("index")),
-            Point::Files => stat(&repo.workdir().unwrap_or(repo.path()).join(path)),
+            Point::Files => stat(&repo.workdir().unwrap_or(repo.path()).join(prefix).join(path)),
         });
     }
     if comparison.is_uncommitted() {

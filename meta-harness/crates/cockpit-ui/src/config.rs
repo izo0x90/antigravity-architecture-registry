@@ -98,11 +98,13 @@ pub struct ChangesUi {
     pub refresh_s: f64,
     /// Auto layout: side by side from this column width (points).
     pub side_by_side_from: f32,
+    /// The code view shows deleted lines in place (`z d` toggles them).
+    pub deleted_in_code: bool,
 }
 
 impl Default for ChangesUi {
     fn default() -> Self {
-        Self { context: 3, more_context: 10, open_up_to_files: 30, open_up_to_lines: 600, refresh_s: 5.0, side_by_side_from: 900.0 }
+        Self { context: 3, more_context: 10, open_up_to_files: 30, open_up_to_lines: 600, refresh_s: 5.0, side_by_side_from: 900.0, deleted_in_code: true }
     }
 }
 

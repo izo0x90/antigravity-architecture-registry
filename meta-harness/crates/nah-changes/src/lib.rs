@@ -54,19 +54,27 @@ type Key = (String, String, Group, u32, String);
 /// The project's changes: a repository, and the files' changes it's been
 /// asked for.
 pub struct Changes {
+    /// The repository's working folder, and the project's folder in it
+    /// (`dir/`, or empty when they're the same): paths in and out are the
+    /// project's, and only its folder's changes are listed.
+    workdir: PathBuf,
     root: PathBuf,
+    prefix: String,
     kept: Mutex<HashMap<Key, FileChanges>>,
 }
 
 impl Changes {
-    /// The repository `root` is in (or under).
-    pub fn open(root: &Path) -> Result<Self> {
-        let repo = git2::Repository::discover(root).map_err(|_| ChangesError::NotARepo(root.display().to_string()))?;
-        let root = repo.workdir().map(Path::to_path_buf).ok_or_else(|| ChangesError::NotARepo(format!("{} (a bare repository)", root.display())))?;
-        Ok(Self { root, kept: Mutex::default() })
+    /// The repository the project's folder `project` is in (or is).
+    pub fn open(project: &Path) -> Result<Self> {
+        let repo = git2::Repository::discover(project).map_err(|_| ChangesError::NotARepo(project.display().to_string()))?;
+        let workdir = repo.workdir().map(Path::to_path_buf).ok_or_else(|| ChangesError::NotARepo(format!("{} (a bare repository)", project.display())))?;
+        let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let inside = canonical(project).strip_prefix(canonical(&workdir)).map(Path::to_path_buf).unwrap_or_default();
+        let prefix = inside.components().map(|c| format!("{}/", c.as_os_str().to_string_lossy())).collect();
+        Ok(Self { workdir, root: project.to_path_buf(), prefix, kept: Mutex::default() })
     }
 
-    /// Its working folder.
+    /// The project's folder.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -74,14 +82,14 @@ impl Changes {
     /// A fresh handle: git2's isn't shared across threads, and opening one
     /// is cheap.
     fn repo(&self) -> Result<git2::Repository> {
-        Ok(git2::Repository::open(&self.root)?)
+        Ok(git2::Repository::open(&self.workdir)?)
     }
 
     /// The files `comparison` changes, in group then path order, `limit`
     /// of them from `offset`.
     pub fn list(&self, comparison: &Comparison, offset: usize, limit: usize) -> Result<ChangeList> {
         let repo = self.repo()?;
-        let mut files = compare::files(&repo, comparison)?;
+        let mut files = compare::files(&repo, comparison, &self.prefix)?;
         files.sort_by(|a, b| (a.group, &a.path).cmp(&(b.group, &b.path)));
         let total = files.len();
         let files = files.into_iter().skip(offset).take(limit).collect();
@@ -92,7 +100,7 @@ impl Changes {
     /// filters ("only changed files").
     pub fn changed_paths(&self, comparison: &Comparison) -> Result<Vec<String>> {
         let repo = self.repo()?;
-        let mut paths: Vec<String> = compare::files(&repo, comparison)?.into_iter().flat_map(|f| std::iter::once(f.path).chain(f.old_path)).collect();
+        let mut paths: Vec<String> = compare::files(&repo, comparison, &self.prefix)?.into_iter().flat_map(|f| std::iter::once(f.path).chain(f.old_path)).collect();
         paths.sort();
         paths.dedup();
         Ok(paths)
@@ -102,11 +110,11 @@ impl Changes {
     /// uncommitted ones), with `context` unchanged lines around each.
     pub fn file(&self, comparison: &Comparison, path: &str, group: Group, context: u32) -> Result<FileChanges> {
         let repo = self.repo()?;
-        let key = (comparison.to_string(), path.to_owned(), group, context, compare::fingerprint(&repo, comparison, path)?);
+        let key = (comparison.to_string(), path.to_owned(), group, context, compare::fingerprint(&repo, comparison, path, &self.prefix)?);
         if let Some(kept) = self.kept.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
             return Ok(kept.clone());
         }
-        let changes = compare::file(&repo, comparison, path, group, context)?;
+        let changes = compare::file(&repo, comparison, path, group, context, &self.prefix)?;
         let mut kept = self.kept.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if kept.len() >= KEPT {
             kept.clear();

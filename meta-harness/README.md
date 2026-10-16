@@ -322,8 +322,8 @@ command = "git-mcp"
 
 ## The cockpit
 
-The cockpit has seven kinds of view: chat, code, graph, tree, spec, queue
-and inbox.
+The cockpit has eight kinds of view: chat, code, graph, tree, spec, queue,
+inbox and changes.
 Each column has its own view: two graphs side by side (calls beside data
 flow), several code files, several cards, several chats (each shows an
 agent slot: the lead, or a sub-slot). There's one queue and one inbox
@@ -374,6 +374,22 @@ all of them:
   open, and `q` again, `Escape` or a click outside closes it. Inside it,
   the spec's keys work (`j`/`k`, sections, links; following a link shows
   that card). `Space q c` (or its button) opens the same card in a column.
+
+- **Changes (git):** each desk compares two points (a setting on the
+  Changes view, kept with the cockpit's state): by default the uncommitted
+  changes against the last commit, staged, unstaged and untracked kept
+  apart as git status does; or the last commit, the staged files, the
+  files, any commit or branch (`rev:main`) against each other. Only the
+  project's folder is read, by its own paths. `Space b f` shows the
+  Changes view: files then their hunks, run together (a few small files
+  open by themselves; `z o`/`z c` open and close one), one column or side
+  by side (a setting; auto: side by side when the column is wide enough).
+  `Enter` opens the spot in the code; an action shows more lines around a
+  hunk. The code view marks the lines changed against where the
+  comparison starts (a bar: green added, blue changed) and shows deleted
+  lines in place, struck through; `z d` hides and shows them. The server
+  reads git (`GET /api/changes?from=&to=`, `GET /api/changes/file`) and
+  never changes the repository, its index or its files.
 
 - **Talk to the agent:** `t` opens a box over whatever is on screen;
   Enter sends to the lead's session (opening one if there's none), the

@@ -43,6 +43,7 @@ impl CockpitApp {
             }
             for code in self.desk.codes() {
                 code.ui = code_ui.clone();
+                code.show_deleted = self.config.changes.deleted_in_code;
             }
             self.desk.changes.ui = self.config.changes.clone();
         }

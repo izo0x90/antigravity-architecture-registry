@@ -224,3 +224,15 @@ fn enter_on_a_change_opens_its_file_at_the_line() {
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!((app.desk.columns.focused_kind(), app.desk.code.current_file.as_str()), (BufferKind::Code, "src/a.rs"));
 }
+
+#[test]
+fn z_d_flips_the_deleted_lines_in_the_code_by_the_key_alone() {
+    let (ctx, mut app) = full_app();
+    from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"space b v"}"#).unwrap();
+    app.desk.code.set_content("let a = 1;\n".into());
+    let shown = app.desk.code.show_deleted;
+    from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"z d"}"#).unwrap();
+    assert_eq!((app.desk.code.show_deleted, app.input_mode), (!shown, InputMode::Normal), "a switch's key flips it: no palette");
+    from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"z d"}"#).unwrap();
+    assert_eq!(app.desk.code.show_deleted, shown);
+}

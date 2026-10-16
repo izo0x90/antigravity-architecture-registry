@@ -91,6 +91,17 @@ impl Comparison {
     pub fn is_uncommitted(&self) -> bool {
         self.from == Point::Head && self.to == Point::Files
     }
+
+    /// The files as they are against where this comparison starts, the
+    /// uncommitted groups together: what a view of the files themselves
+    /// (the code view) marks.
+    pub fn on_files(&self) -> Comparison {
+        let from = match &self.from {
+            Point::Head => Point::Rev("HEAD".into()),
+            p => p.clone(),
+        };
+        Comparison { from, to: Point::Files }
+    }
 }
 
 impl fmt::Display for Comparison {

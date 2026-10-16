@@ -153,3 +153,17 @@ fn a_folder_outside_git_says_so() {
     let dir = tempfile::tempdir().unwrap();
     assert!(matches!(Changes::open(dir.path()), Err(ChangesError::NotARepo(_))));
 }
+
+#[test]
+fn a_project_in_a_folder_of_the_repository_sees_its_own_files_by_its_own_paths() {
+    let (dir, repo) = repo();
+    write(dir.path(), "project/src/lib.rs", "pub fn a() {}\n");
+    stage(&repo, &["project/src/lib.rs"]);
+    commit(&repo, "project");
+    write(dir.path(), "project/src/lib.rs", "pub fn a() {}\npub fn b() {}\n");
+    write(dir.path(), "a.txt", "outside the project\n");
+    let changes = Changes::open(&dir.path().join("project")).unwrap();
+    assert_eq!(listed(&changes, &Comparison::default()), [(Group::Unstaged, "src/lib.rs".into(), FileStatus::Modified, 1, 0)], "only its folder, by its paths");
+    let file = changes.file(&Comparison::default(), "src/lib.rs", Group::Unstaged, 0).unwrap();
+    assert_eq!(file.hunks[0].lines[0].text, "pub fn b() {}");
+}

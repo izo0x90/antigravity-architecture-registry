@@ -134,6 +134,10 @@ impl CockpitApp {
         // while it is.
         let shown = self.desk.columns.kinds().contains(&BufferKind::Changes) || self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Changes);
         self.desk.changes.tick(&self.desk.net, ctx, shown);
+        let (comparison, read) = (self.desk.changes.comparison.clone(), self.desk.changes.read());
+        for code in std::iter::once(&mut self.desk.code).chain(self.desk.parked.codes.values_mut()) {
+            code.follow_changes(&comparison, read, &self.desk.net, ctx);
+        }
         let source = self.desk.graph.nav.source.clone();
         let plan = source.plan().cloned();
         // Specs not pinned show what the graph used last has selected.

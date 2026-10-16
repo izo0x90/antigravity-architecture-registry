@@ -300,6 +300,7 @@ I = "Index"
 # Code view: definitions in order.
 "code.next_def" = { keys = ["] f"] }
 "code.prev_def" = { keys = ["[ f"] }
+"code.deleted" = { keys = ["z d"] }
 
 # Indexing: re-read what changed, rebuild everything, re-read the open file.
 "index.changed" = { leader = "I r" }
@@ -663,6 +664,7 @@ open_up_to_files = 30
 open_up_to_lines = 600
 refresh_s = 5.0
 side_by_side_from = 900.0
+deleted_in_code = true
 
 [net]
 reconnect_min_ms = 500
