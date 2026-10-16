@@ -142,7 +142,11 @@ impl CockpitApp {
                 // Its controls (everywhere's placed actions, from the one list)
                 // first, where the lights' words, which come and go, can't push them.
                 let mine: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::Everywhere && b.action.control.as_ref().is_some_and(|c| c.at == crate::actions::At::Header)).collect();
-                let (end, start): (Vec<Bound>, Vec<Bound>) = mine.into_iter().partition(|b| b.action.control.as_ref().is_some_and(|c| c.end));
+                let (end, mut start): (Vec<Bound>, Vec<Bound>) = mine.into_iter().partition(|b| b.action.control.as_ref().is_some_and(|c| c.end));
+                // In the order it places them: those whose count comes and
+                // goes (the bell, the tray) after the ones that never change.
+                let order: Vec<String> = self.top_bar_placements().into_iter().map(|(id, _)| id).collect();
+                start.sort_by_key(|b| order.iter().position(|id| *id == b.action.id).unwrap_or(usize::MAX));
                 self.host_controls(ui, &start, self.desk.panels.focused());
 
                 ui.add_space(crate::theme::look().space_m);

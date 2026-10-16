@@ -197,6 +197,12 @@ fn what_comes_and_goes_on_the_top_and_bottom_lines_never_moves_a_button() {
     frame(&ctx, &mut app, vec![]);
     let before = frame(&ctx, &mut app, vec![]);
     let (fit, key) = (drawn_at(&before, "  z z").expect("the fit button"), drawn_at(&before, "f Jump to").expect("a key on the bar"));
+    let reread = drawn_at(&before, "Space I r").expect("the top bar's re-read button");
+    // Something waits on you: the bell counts it, and the tray an update.
+    for (id, kind) in [("q:1", harness_contracts::NotificationKind::Question), ("turn:1", harness_contracts::NotificationKind::TurnFinished)] {
+        let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, title: id.into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
+        app.desk.chat.process_event(harness_contracts::ClientEvent::NotificationUpdated { notification });
+    }
     // Busy (reading the view again), saying more, and a note at the bottom.
     app.desk.graph.navigate(crate::graph::NavChange::Depth { delta: 1, base: 3 });
     app.desk.graph.note = Some("a long thing to say about what just happened in the graph, long enough to wrap".into());
@@ -206,4 +212,5 @@ fn what_comes_and_goes_on_the_top_and_bottom_lines_never_moves_a_button() {
     assert!(texts(&after).contains("a long thing to say") && texts(&after).contains("a note on the bottom line"), "both said");
     assert_eq!(drawn_at(&after, "  z z"), Some(fit), "the top line's buttons stay put");
     assert_eq!(drawn_at(&after, "f Jump to"), Some(key), "the bottom line's keys stay put");
+    assert_eq!(drawn_at(&after, "Space I r"), Some(reread), "the top bar's buttons stay put when the bell counts");
 }
