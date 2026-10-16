@@ -7,7 +7,7 @@
 //! opened file's changes when its counts do. The cursor walks files and
 //! their changes; Enter opens the spot in the code view; `/` searches
 //! file names and the changes' lines, removed ones too. One column (the
-//! lines interleaved) or side by side, or by the column's width.
+//! lines interleaved) or side by side, or by the panel's width.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -21,7 +21,7 @@ use crate::config::ChangesUi;
 use crate::nav::{Fold, GoTo, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::viewport::{Go, Show, Stop, Viewport};
 use crate::net::{NetClient, NetResult};
-use crate::panel::{Panel, Status, Tone};
+use crate::hosted::{Hosted, Status, Tone};
 use crate::theme::colors;
 
 /// How a file's changes are laid out.
@@ -694,7 +694,7 @@ impl ChangesView {
         self.timeline_read += 1;
     }
 
-    /// Whether files show side by side in a column `width` wide.
+    /// Whether files show side by side in a panel `width` wide.
     fn side_by_side(&self, width: f32) -> bool {
         match self.layout {
             DiffLayout::Auto => width >= self.ui.side_by_side_from,
@@ -712,7 +712,7 @@ impl ChangesView {
                 self.spots.clear();
                 return;
             }
-            return self.render_rows(ui, ("timeline", cx.slot));
+            return self.render_rows(ui, ("timeline", cx.panel));
         }
         let Some(list) = self.list() else {
             let words = match &self.error {
@@ -727,13 +727,13 @@ impl ChangesView {
             self.spots.clear();
             return;
         }
-        // Laid out side by side or not by the column's width: the cursor
+        // Laid out side by side or not by the panel's width: the cursor
         // stays on its change when that changes the rows.
         let side = self.side_by_side(ui.available_width());
         if side != self.side {
             self.keeping_cursor(|v| v.side = side);
         }
-        self.render_rows(ui, ("changes", cx.slot));
+        self.render_rows(ui, ("changes", cx.panel));
     }
 
     /// The rows, laid out by their heights and drawn only where they show;
@@ -985,7 +985,7 @@ fn paired(lines: &[DiffLine]) -> Vec<(Option<&DiffLine>, Option<&DiffLine>)> {
     rows
 }
 
-impl Panel for ChangesView {
+impl Hosted for ChangesView {
     fn title(&self) -> Status {
         Status::new(format!("{} Changes", egui_phosphor::regular::GIT_DIFF), Tone::Plain)
     }

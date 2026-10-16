@@ -35,7 +35,7 @@ impl CockpitApp {
             match call {
                 Call::Read => {
                     let status = self.remote_status();
-                    respond(Ok(serde_json::json!({ "shown": false, "server": self.desk.server, "columns": status.columns, "note": elsewhere() })));
+                    respond(Ok(serde_json::json!({ "shown": false, "server": self.desk.server, "panels": status.panels, "note": elsewhere() })));
                 }
                 Call::Actions => respond(Ok(self.actions_listed())),
                 Call::Run { id, value } => respond(self.run_named(&id, value, ctx).map(|()| serde_json::json!({ "ran": id, "shown": false }))),
@@ -62,7 +62,7 @@ impl CockpitApp {
                     "id": b.action.id,
                     "label": b.action.label,
                     "detail": b.action.detail,
-                    "view": match b.origin { Origin::Shell => "shell", Origin::View(kind) => kind.name() },
+                    "buffer": match b.origin { Origin::Shell => "shell", Origin::View(kind) => kind.name() },
                     "keys": b.key_hint(),
                     "needs": needs,
                     "choices": choices.iter().map(|c| serde_json::json!({ "value": c.value, "label": c.label, "current": c.current })).collect::<Vec<_>>(),
@@ -102,10 +102,10 @@ impl CockpitApp {
 
     /// The app's state as a read from outside reports it.
     pub(super) fn remote_status(&self) -> crate::remote::Status {
-        let focused = self.desk.columns.focused();
+        let focused = self.desk.panels.focused();
         crate::remote::Status {
             mode: format!("{:?}", self.input_mode),
-            columns: self.desk.columns.panes().iter().enumerate().map(|(i, p)| serde_json::json!({ "column": i + 1, "view": self.describe(*p), "focused": i == focused })).collect(),
+            panels: self.desk.panels.buffers().iter().enumerate().map(|(i, p)| serde_json::json!({ "panel": i + 1, "buffer": self.describe(*p), "focused": i == focused })).collect(),
             note: self.note.clone(),
             leader: (self.input_mode == InputMode::Leader).then(|| self.leader_path.iter().collect()),
             palette: self.palette.is_open(),

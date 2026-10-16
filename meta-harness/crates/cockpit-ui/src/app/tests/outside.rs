@@ -8,16 +8,16 @@ fn from_outside_the_screen_is_read_and_actions_run_clicked_and_keyed_as_the_user
     focus(&ctx, &mut app, BufferKind::Graph);
     let read = from_outside(&ctx, &mut app, r#"{"op":"read"}"#).unwrap();
     assert_eq!(read["mode"], "Normal");
-    assert!(read["columns"].as_array().unwrap().iter().any(|c| c["focused"] == true && c["view"].as_str().unwrap().starts_with("graph")), "{}", read["columns"]);
+    assert!(read["panels"].as_array().unwrap().iter().any(|c| c["focused"] == true && c["buffer"].as_str().unwrap().starts_with("graph")), "{}", read["panels"]);
     assert!(read["texts"].as_array().unwrap().iter().any(|t| t["text"] == "step"), "what's drawn, with where");
 
     let actions = from_outside(&ctx, &mut app, r#"{"op":"actions"}"#).unwrap();
-    let add = actions.as_array().unwrap().iter().find(|a| a["id"] == "column.add").expect("listed");
+    let add = actions.as_array().unwrap().iter().find(|a| a["id"] == "panel.add").expect("listed");
     assert_eq!((add["keys"].as_str(), add["needs"].as_str()), (Some("Space l a"), Some("nothing")));
 
-    let before = app.desk.columns.len();
-    from_outside(&ctx, &mut app, r#"{"op":"run","id":"column.add"}"#).unwrap();
-    assert_eq!(app.desk.columns.len(), before + 1, "run as its key would");
+    let before = app.desk.panels.len();
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"panel.add"}"#).unwrap();
+    assert_eq!(app.desk.panels.len(), before + 1, "run as its key would");
     let err = from_outside(&ctx, &mut app, r#"{"op":"run","id":"no.such"}"#).unwrap_err();
     assert!(err.contains("no action"), "{err}");
     let err = from_outside(&ctx, &mut app, r#"{"op":"run","id":"cockpit.agents","value":"maybe"}"#).unwrap_err();
@@ -25,7 +25,7 @@ fn from_outside_the_screen_is_read_and_actions_run_clicked_and_keyed_as_the_user
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"cockpit.agents","value":"on"}"#).unwrap();
     assert!(app.desk.remote.agents && app.saved_ui().agents, "the user's say, kept");
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"cockpit.agents","value":"off"}"#).unwrap();
-    from_outside(&ctx, &mut app, r#"{"op":"run","id":"slot.focus.1"}"#).unwrap();
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"panel.focus.1"}"#).unwrap();
     focus(&ctx, &mut app, BufferKind::Graph);
 
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"space"}"#).unwrap();

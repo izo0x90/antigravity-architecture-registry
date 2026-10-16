@@ -29,8 +29,8 @@ impl CockpitApp {
         self.desk.inbox.show(id);
         if self.quick_look.is_none() {
             let now = ctx.input(|i| i.time);
-            let (slot, over) = (self.desk.columns.focused(), self.desk.columns.focused_kind());
-            self.quick_look = Some(QuickLook::open(BufferKind::Inbox, slot, over, self.desk.used_pane(BufferKind::Spec).id, None, now));
+            let (panel, over) = (self.desk.panels.focused(), self.desk.panels.focused_kind());
+            self.quick_look = Some(QuickLook::open(BufferKind::Inbox, panel, over, self.desk.used_buffer(BufferKind::Spec).id, None, now));
         }
     }
 
@@ -64,14 +64,14 @@ impl CockpitApp {
     }
 
     /// Shows item `id` of `server` in the inbox: in the quick look when
-    /// it's open, else in the inbox's column (the desk switched first).
+    /// it's open, else in the inbox's panel (the desk switched first).
     fn inbox_to(&mut self, server: &str, id: NotificationId, ctx: &egui::Context) {
         if self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Inbox) {
             let look = self.quick_look.take();
             self.switch_to(server, ctx);
-            // Over the desk shown now (else it'd close, its column gone).
+            // Over the desk shown now (else it'd close, its panel gone).
             self.quick_look = look.map(|mut look| {
-                (look.slot, look.over) = (self.desk.columns.focused(), self.desk.columns.focused_kind());
+                (look.panel, look.over) = (self.desk.panels.focused(), self.desk.panels.focused_kind());
                 look
             });
             self.desk.inbox.show(id);

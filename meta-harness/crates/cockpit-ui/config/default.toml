@@ -70,8 +70,8 @@ narrow_below = 600.0
 # Leader submenus, by key path.
 [keymap.groups]
 b = "Buffer"
-"b n" = "New view"
-l = "Layout"
+"b n" = "New buffer"
+l = "Panels"
 q = "Quick look"
 s = "Session"
 w = "Agent slots"
@@ -101,14 +101,14 @@ I = "Index"
 # a key are a count (3j, 2ctrl+d) everywhere.
 [keymap.bind]
 "palette.open" = { leader = "/", keys = [":"] }
-"slot.focus.1" = { leader = "1" }
-"slot.focus.2" = { leader = "2" }
-"slot.focus.3" = { leader = "3" }
-"slot.focus.4" = { leader = "4" }
-"slot.focus.5" = { leader = "5" }
-"slot.focus.6" = { leader = "6" }
-"slot.next" = { keys = ["Tab", "L"] }
-"slot.prev" = { keys = ["shift+Tab", "H"] }
+"panel.focus.1" = { leader = "1" }
+"panel.focus.2" = { leader = "2" }
+"panel.focus.3" = { leader = "3" }
+"panel.focus.4" = { leader = "4" }
+"panel.focus.5" = { leader = "5" }
+"panel.focus.6" = { leader = "6" }
+"panel.next" = { keys = ["Tab", "L"] }
+"panel.prev" = { keys = ["shift+Tab", "H"] }
 "buffer.chat" = { leader = "b c" }
 "buffer.code" = { leader = "b v" }
 "buffer.graph" = { leader = "b g" }
@@ -117,8 +117,8 @@ I = "Index"
 "buffer.queue" = { leader = "b q" }
 "buffer.inbox" = { leader = "b i" }
 "buffer.changes" = { leader = "b f" }
-# Every open view (on screen or hidden), to show in this column; a new one
-# here; this column's view deleted for good (closing a column only hides it).
+# Every open buffer (on screen or hidden), to show in this panel; a new one
+# here; this panel's buffer deleted for good (closing a panel only hides it).
 "buffer.list" = { leader = "b b" }
 "buffer.delete" = { leader = "b d" }
 "buffer.new.code" = { leader = "b n v" }
@@ -132,14 +132,14 @@ I = "Index"
 "layout.4" = { leader = "l 4", keys = ["alt+4"] }
 "layout.5" = { leader = "l 5", keys = ["alt+5"] }
 "layout.6" = { leader = "l 6", keys = ["alt+6"] }
-"column.add" = { leader = "l a" }
-"column.close" = { leader = "l x" }
+"panel.add" = { leader = "l a" }
+"panel.close" = { leader = "l x" }
 "inspector.toggle" = { leader = "i", keys = ["ctrl+shift+c"] }
 "issues.toggle" = { leader = "d", keys = ["F2"] }
 # The quick look: the full card of what the cursor is on, over the view
-# (hold to peek, tap to keep it open), and the same card sent to a column.
+# (hold to peek, tap to keep it open), and the same card sent to a panel.
 "quicklook.toggle" = { leader = "q q", keys = ["q"] }
-"quicklook.to_column" = { leader = "q c" }
+"quicklook.to_panel" = { leader = "q c" }
 # A box over whatever is on screen for talking to the agent (Enter sends,
 # Escape closes).
 "talk.open" = { leader = "t", keys = ["t"] }
@@ -221,7 +221,7 @@ I = "Index"
 "attention.next_waiting" = { leader = "n" }
 "attention.waiting" = { leader = "N" }
 "attention.updates" = { leader = "u" }
-# The inbox's own (in a column or the quick look): the next and previous
+# The inbox's own (in a panel or the quick look): the next and previous
 # item (on whichever server), its chat, put away; y/Y/A/d (or r 1, r 2…
 # when several answers are of one kind) answer its request.
 "inbox.next" = { keys = ["J"], gestures = ["swipe_left"] }
@@ -366,7 +366,7 @@ line_count_gain = 0.5
 line_count_max = 3.0
 # How long cards take to move, and going into or out of a level, in seconds (0: at once).
 move_seconds = 0.35
-# The quick look: at least this wide (its column's width, when wider), and
+# The quick look: at least this wide (its panel's width, when wider), and
 # this share of the screen's height.
 quick_look_width = 720.0
 quick_look_height = 0.8
@@ -659,15 +659,15 @@ property = "text"
 
 # The event socket: when it drops, try again after `reconnect_min_ms`, doubling
 # up to `reconnect_max_ms`; views refetch once it's back.
-# Each column shows its own view (graphs, code, specs, outlines; one chat and
-# one queue). How many columns there may be:
-[columns]
+# Each panel shows its own buffer (graphs, code, specs, outlines; one chat
+# and one queue). How many panels there may be:
+[panels]
 max = 12
 
 # The changes view (git): context lines around each change and how many
 # more "more context" adds; how many files (and changed lines in all) open
 # by themselves; how often the list is read again while shown; from what
-# column width "auto" shows changes side by side.
+# panel width "auto" shows changes side by side.
 [changes]
 context = 3
 more_context = 10
@@ -680,7 +680,7 @@ deleted_in_code = true
 [net]
 reconnect_min_ms = 500
 reconnect_max_ms = 10000
-# The layout (columns, where each view is, marks, unsent text) is saved on
+# The layout (panels, where each buffer is, marks, unsent text) is saved on
 # the server this long after it last changed.
 save_after_ms = 500
 

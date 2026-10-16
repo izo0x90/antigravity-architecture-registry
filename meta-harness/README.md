@@ -322,23 +322,27 @@ command = "git-mcp"
 
 ## The cockpit
 
-The cockpit has eight kinds of view: chat, code, graph, tree, spec, queue,
-inbox and changes.
-Each column has its own view: two graphs side by side (calls beside data
-flow), several code files, several cards, several chats (each shows an
-agent slot: the lead, or a sub-slot). There's one queue and one inbox
-(showing either in another column moves it). Picking a kind of view
-in a column (its tabs) gives it a new one, starting where the last one of
-that kind was. Columns: `H`/`L` (or `Tab`/`Shift+Tab`) go to the column left and right; `+`/`-` in the top bar, `Space l 1`…`l 6` (or
-`alt+1`…`alt+6`), `Space l a` adds one, up to `[columns] max` (12). Columns and views work like
-vim's windows and buffers: closing a column (`Space l x`, or the × on its
-header) or fewer columns only hide its view, with its state, and more
-columns bring hidden views back where they were. `Space b b` lists every
-open view (on screen or hidden; the top bar counts the hidden ones) to show
-one in this column; `Space b n` then a kind starts a new view here; `Space
-b d` deletes this column's view for good, the only way one is lost (the
-queue, there's one, is never deleted). Keys, links and the agent act on the view
-of each kind used last. Every view has a cursor, and the same keys drive
+The screen is split into panels, side by side, and each panel shows a
+buffer, as vim's windows show buffers (a panel is vim's window). A buffer
+is one open thing with its own state (this chat, that code file), of one
+of eight kinds: chat, code, graph, tree, spec, queue, inbox and changes.
+An agent slot is something else: an agent the server runs (the lead, or a
+sub-slot); a chat buffer shows one.
+Each panel has its own buffer: two graphs side by side (calls beside data
+flow), several code files, several cards, several chats. There's one
+queue and one inbox (showing either in another panel moves it). Picking a
+kind in a panel (its tabs) gives it a new buffer, starting where the last
+one of that kind was. Panels: `H`/`L` (or `Tab`/`Shift+Tab`) go to the
+panel left and right; `+`/`-` in the top bar, `Space l 1`…`l 6` (or
+`alt+1`…`alt+6`), `Space l a` adds one, up to `[panels] max` (12).
+Closing a panel (`Space l x`, or the × on its header) or fewer panels only
+hide its buffer, with its state, and more panels bring hidden buffers back
+where they were. `Space b b` lists every open buffer (on screen or hidden;
+the top bar counts the hidden ones) to show one in this panel; `Space b n`
+then a kind starts a new buffer here; `Space b d` deletes this panel's
+buffer for good, the only way one is lost (the queue, there's one, is
+never deleted). Keys, links and the agent act on the buffer of each kind
+used last. Every view has a cursor, and the same keys drive
 all of them:
 
 - **Move:**
@@ -361,19 +365,19 @@ all of them:
   - `g d` code, `g s` spec, `g m` graph, `g t` outline, `g q` queue job;
   - `g r` callers, `g c` callees, `g p` parent, `g n` members,
     `g i` implements, `g l` data flow;
-  - a number first picks the column it opens in: `1 g d` in the first
-    column, `3 g s` in the third, one past the last in a new column (not
-    the column you're in). Without one: the nearest column showing that
-    kind of view, else beside this one.
-- **Come back:** `ctrl+o`/`ctrl+i` walk one jump list across all views and
-  slots; `m` plus a letter sets a mark and `'` plus the letter returns to it.
+  - a number first picks the panel it opens in: `1 g d` in the first
+    panel, `3 g s` in the third, one past the last in a new panel (not
+    the panel you're in). Without one: the nearest panel showing that
+    kind of buffer, else beside this one.
+- **Come back:** `ctrl+o`/`ctrl+i` walk one jump list across all buffers
+  and panels; `m` plus a letter sets a mark and `'` plus the letter returns to it.
 - **Quick look:** `q` shows the full card of what the cursor is on (the
-  spec view, floating over the column), with what the graph says about it
-  on top, on the side away from that column (over it with one column).
+  spec, floating over the panel), with what the graph says about it on
+  top, on the side away from that panel (over it with one panel).
   Hold `q` to peek (it closes when you let go); tap it to keep it
   open, and `q` again, `Escape` or a click outside closes it. Inside it,
   the spec's keys work (`j`/`k`, sections, links; following a link shows
-  that card). `Space q c` (or its button) opens the same card in a column.
+  that card). `Space q c` (or its button) opens the same card in a panel.
 
 - **Changes (git):** each desk compares two points (a setting on the
   Changes view, kept with the cockpit's state): by default the uncommitted
@@ -382,7 +386,7 @@ all of them:
   files, any commit or branch (`rev:main`) against each other. Only the
   project's folder is read, by its own paths. `Space b f` shows the
   Changes view: files then their changes, run together, one column or
-  side by side (a setting; auto: side by side when the column is wide
+  side by side (a setting; auto: side by side when the panel is wide
   enough). `j` / `k` move a line at a time, `]]` / `[[` from change to
   change. A file folds and unfolds (a few small files open by
   themselves), and so does each change: `z a` folds or unfolds what the
@@ -456,8 +460,8 @@ all of them:
   screen puts its slot's updates away.
 
 The cockpit's state is kept on the server (`GET`/`PUT /api/ui/state`, in
-the project's state database, `.nah/state/state.sqlite`): the columns and
-the view in each, where every view is (each chat's agent slot; which are
+the project's state database, `.nah/state/state.sqlite`): the panels and
+the buffer in each, where every buffer is (each chat's agent slot; which are
 pinned, and which was used last), the marks and the jump list, and what
 each chat had typed and not sent. A reload, or another browser, comes back to
 it. It's saved half a second after it last changed (`[net] save_after_ms`).
@@ -468,11 +472,11 @@ folds) are offered by each view in its own words where they do something
 ("Fold run", "Up to its file", "Into cockpit-ui"; a fold also on the
 item); where they don't, they aren't shown and their key says why. Where
 you are is a stack of levels offering actions the same way: what you're
-on, the view, what holds it (its column, or the quick look), everywhere;
+on, the buffer, what holds it (its panel, or the quick look), everywhere;
 the go-tos ask the view they'd land in whether it can show what you're
 on. Pausing on a prefix (`g`, `z`, `[`, `]`, `m`, `'`) lists what can
 follow, and `?` lists every key where you are: a section for what you're
-on, this panel, what holds it (the quick look, the column) and
+on, this buffer, what holds it (the quick look, the panel) and
 everywhere, each action with every way to run it (keys, leader path,
 gesture), the mode's keys first while typing or in the palette, and the
 pointer and touch grammar. `Space` opens the
@@ -481,9 +485,12 @@ palette (`:42` goes to line 42). The palette and its pickers move with
 `Ctrl+J`/`Ctrl+K` (or `Ctrl+N`/`Ctrl+P`, or the arrows) and pick with
 `Enter`.
 
-Every view is drawn the same way by what holds it (a column, the quick
-look): its top line (its name, what it's doing, and its buttons and
-settings), then its content. What you're on shows its own buttons under
+Every buffer is drawn the same way by what holds it (a panel, the quick
+look): its top line (its buttons first, then a place for its busy mark,
+its name and what it says about itself, which grow and wrap after the
+buttons and never move them; its settings on a row under), then its
+content. The bottom line does the same: its keys first, then a search or
+a note. What you're on shows its own buttons under
 it, and only while you're on it: a review point's Reply, Accept and
 Reopen; a job's Approve or Retry; a card's Go into and go-tos; a request's
 answers (a list to pick from for a question, Allow and Deny for an
@@ -664,7 +671,7 @@ away and rebuilt when the reader changes.
 | Area | Tools |
 |---|---|
 | Changes | `changes`: what changed in the files (git): the files a comparison changes, one file's diff, the components touched, the timeline (when, who was working, each turn's changes). Reading only: staging is the user's |
-| Explore | `ingest`, `list_types`, `search`, `inspect`, `view`, `navigate` (moves your graph: the one in the `column` it names, else the one you used last); `search` and `view` take `changed` (`HEAD..files`, `rev:main..files`) to keep to what changed |
+| Explore | `ingest`, `list_types`, `search`, `inspect`, `view`, `navigate` (moves your graph: the one in the `panel` it names, else the one you used last); `search` and `view` take `changed` (`HEAD..files`, `rev:main..files`) to keep to what changed |
 | Plan | `plan_list`, `plan_create` (a change, or a walkthrough), `plan_import` (old `system_architecture.json`), `plan_edit`, `plan_validate`, `contract` |
 | Build | `verify`, `run_tools`, `review` |
 | Review | `review_comments`, `answer_comment`, `reply_comment` |
@@ -695,7 +702,7 @@ stopped expires at the next start: that agent session is gone.
 
 The cockpit can be driven from outside the way you drive it: list what can
 be run now (the actions the Space menu, keys and palette offer), run one by
-id, read what's on screen (the mode, each column's view, and every piece of
+id, read what's on screen (the mode, each panel's buffer, and every piece of
 text drawn, with where), click drawn text, type, and press keys. It's one
 set of calls with two ways in:
 

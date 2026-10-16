@@ -41,10 +41,10 @@ pub struct ViewRequest {
     /// The card to select (and point at) once it shows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub select: Option<String>,
-    /// Which of the user's columns shows it, counted from 1 on the left
+    /// Which of the user's panels shows it, counted from 1 on the left
     /// (made a graph if it isn't one); none: the graph they used last.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub column: Option<u32>,
+    pub panel: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

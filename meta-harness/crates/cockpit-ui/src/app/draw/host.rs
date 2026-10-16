@@ -1,14 +1,14 @@
-//! Hosts: a column and the quick look hold a view and draw it the same
+//! Hosts: a panel and the quick look hold a view and draw it the same
 //! way: the view's top line (its title and status, from `Panel`), then its
 //! content. A view draws no controls. Every control comes from the one
 //! bound list of where it is (`shown_at`): the panel's layer on its top
 //! line, what you're on under it, the host's own (tabs, closing, sending
-//! the quick look's card to a column) on the host's line. A control shows
+//! the quick look's card to a panel) on the host's line. A control shows
 //! the key its binding has, and used, asks for its action: the app runs it
 //! once the frame is drawn, the way its key runs it.
 //!
 //! Pointer and touch, the same in every view: a click or tap on an item
-//! moves the cursor there (the column is focused by it); a double click or
+//! moves the cursor there (the panel is focused by it); a double click or
 //! tap opens it (Enter); a long press lists what can be done (the palette,
 //! with the cursor on it). The view only says where its items are.
 
@@ -19,21 +19,21 @@ impl CockpitApp {
     /// Draws the view where `here` is (the one in use): its top line, then
     /// its content.
     pub(in crate::app) fn render_view(&mut self, here: Here, ui: &mut egui::Ui, is_focused: bool) {
-        let (kind, slot) = (here.kind, here.slot);
+        let (kind, panel) = (here.kind, here.panel);
         let ctx = ui.ctx().clone();
         let pan_held = ui.input(|i| self.config.keymap.leader.key_down(i));
-        let panel: Vec<Bound> = self.shown_at(here).into_iter().filter(|b| b.layer == Layer::Panel).collect();
-        let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, asked: &mut self.asked };
-        crate::panel::header(ui, self.desk.panel(kind), &panel, &mut cx);
+        let mine: Vec<Bound> = self.shown_at(here).into_iter().filter(|b| b.layer == Layer::Panel).collect();
+        let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked };
+        crate::hosted::header(ui, self.desk.hosted(kind), &mine, &mut cx);
         ui.separator();
         let content = ui.available_rect_before_wrap();
         match kind {
             BufferKind::Chat => self.desk.chat.render(ui, &mut self.feedback, is_focused, &mut cx),
             BufferKind::Code => self.desk.code.render(ui, &mut self.feedback, &mut cx),
-            BufferKind::Graph => self.desk.graph.render(ui, &mut self.feedback, slot, pan_held, &mut cx),
+            BufferKind::Graph => self.desk.graph.render(ui, &mut self.feedback, panel, pan_held, &mut cx),
             BufferKind::Tree => self.desk.tree.render(ui, &mut self.feedback, &mut cx),
             BufferKind::Spec => {
-                // A card over a column: what the graph says about it first.
+                // A card over a panel: what the graph says about it first.
                 if self.desk.spec.floating
                     && let Some(id) = self.desk.spec.target.clone()
                 {
@@ -52,7 +52,7 @@ impl CockpitApp {
     /// A click or double click on a view's content (not on something over
     /// it): on one of its items, the cursor goes there; a double opens it.
     fn pointer_on_content(&mut self, kind: BufferKind, ui: &egui::Ui, content: egui::Rect) {
-        if self.desk.panel(kind).own_pointer() {
+        if self.desk.hosted(kind).own_pointer() {
             return;
         }
         let (clicked, double, at) = ui.input(|i| (i.pointer.primary_clicked(), i.pointer.button_double_clicked(egui::PointerButton::Primary), i.pointer.interact_pos()));
@@ -65,9 +65,9 @@ impl CockpitApp {
     }
 
     /// A host's own controls: those of `bound` that have one.
-    pub(in crate::app) fn host_controls(&mut self, ui: &mut egui::Ui, bound: &[Bound], slot: usize) {
+    pub(in crate::app) fn host_controls(&mut self, ui: &mut egui::Ui, bound: &[Bound], panel: usize) {
         let ctx = ui.ctx().clone();
-        let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, asked: &mut self.asked };
+        let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked };
         crate::actions::controls(ui, bound, &mut cx);
     }
 
@@ -76,17 +76,17 @@ impl CockpitApp {
     /// Below it, or above when there's no room.
     pub(in crate::app) fn render_item_controls(&mut self, ctx: &egui::Context) {
         let kind = self.focused_kind();
-        let (slot, bounds) = match &self.quick_look {
-            Some(look) => (look.slot, ctx.memory(|m| m.area_rect(egui::Id::new("quick_look")))),
-            None => (self.desk.columns.focused(), self.slot_rects.get(self.desk.columns.focused()).copied()),
+        let (panel, bounds) = match &self.quick_look {
+            Some(look) => (look.panel, ctx.memory(|m| m.area_rect(egui::Id::new("quick_look")))),
+            None => (self.desk.panels.focused(), self.panel_rects.get(self.desk.panels.focused()).copied()),
         };
         let Some(bounds) = bounds else { return };
-        let panel = self.desk.panel(kind);
+        let hosted = self.desk.hosted(kind);
         let (at, anchor) = match self.input_mode {
-            InputMode::Insert { .. } => (At::Typing, panel.typing_rect()),
+            InputMode::Insert { .. } => (At::Typing, hosted.typing_rect()),
             _ => {
                 let view = self.desk.view(kind);
-                let here = panel.here().or_else(|| view.cursor_key());
+                let here = hosted.here().or_else(|| view.cursor_key());
                 (At::Item, view.spots().into_iter().find(|s| Some(&s.key) == here.as_ref()).map(|s| s.rect))
             }
         };
@@ -101,7 +101,7 @@ impl CockpitApp {
         let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(anchor.width(), look.text_title * 2.0), |r| r.size());
         let below = anchor.bottom() + look.space_s;
         let y = if below + size.y <= bounds.bottom() { below } else { (anchor.top() - look.space_s - size.y).max(bounds.top()) };
-        let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, asked: &mut self.asked };
+        let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked };
         egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(egui::pos2(anchor.left(), y)).show(ctx, |ui| {
             Frame::NONE.fill(colors().overlay_raised).stroke(Stroke::new(look.line_thin, colors().border)).corner_radius(look.radius_m).inner_margin(crate::theme::margin(look.space_s)).show(ui, |ui| {
                 ui.set_max_width(anchor.width().max(look.quick_look_width / 3.0).min(bounds.width()));
@@ -142,19 +142,19 @@ impl CockpitApp {
         }
     }
 
-    /// The view (and its column) at `pos`: the quick look's, over its
-    /// column; else the column's. None over anything else.
+    /// The view (and its panel) at `pos`: the quick look's, over its
+    /// panel; else the panel's. None over anything else.
     fn view_at(&self, ctx: &egui::Context, pos: egui::Pos2) -> Option<(usize, BufferKind)> {
         if let Some(look) = &self.quick_look
             && ctx.memory(|m| m.area_rect(egui::Id::new("quick_look"))).is_some_and(|r| r.contains(pos))
         {
-            return (ctx.layer_id_at(pos).map(|l| l.id) == Some(egui::Id::new("quick_look"))).then_some((look.slot, look.kind));
+            return (ctx.layer_id_at(pos).map(|l| l.id) == Some(egui::Id::new("quick_look"))).then_some((look.panel, look.kind));
         }
         if ctx.layer_id_at(pos).is_some_and(|l| l.order != egui::Order::Background) {
             return None;
         }
-        let slot = self.slot_rects.iter().position(|r| r.contains(pos))?;
-        Some((slot, self.desk.columns.kind(slot)))
+        let panel = self.panel_rects.iter().position(|r| r.contains(pos))?;
+        Some((panel, self.desk.panels.kind(panel)))
     }
 
     fn on_gesture(&mut self, gesture: crate::touch::Gesture, ctx: &egui::Context) {
@@ -162,13 +162,13 @@ impl CockpitApp {
         let at = match gesture {
             Gesture::LongPress(p) | Gesture::Swipe { from: p, .. } => p,
         };
-        let Some((slot, kind)) = self.view_at(ctx, at) else { return };
-        if self.quick_look.is_none() && self.desk.columns.focused() != slot {
-            self.desk.columns.focus(slot);
+        let Some((panel, kind)) = self.view_at(ctx, at) else { return };
+        if self.quick_look.is_none() && self.desk.panels.focused() != panel {
+            self.desk.panels.focus(panel);
             // Where you are moved: the list is gathered again.
             self.frame_actions.borrow_mut().take();
         }
-        let own = self.desk.panel(kind).own_pointer();
+        let own = self.desk.hosted(kind).own_pointer();
         match gesture {
             Gesture::Swipe { way, .. } => {
                 let bound = self.bound_actions();

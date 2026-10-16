@@ -3,24 +3,24 @@
 use super::*;
 
 impl CockpitApp {
-    /// The outermost level, everywhere: the shell's own (columns and
+    /// The outermost level, everywhere: the shell's own (panels and
     /// layouts, the inspector, what needs you, servers, the palette, the
     /// index).
     pub(crate) fn shell_actions(&self) -> Vec<Action> {
         use ShellCommand as S;
         let mut actions = Vec::new();
         let admin = |id: String, label: String, c: ShellCommand| Action::new(id, label, c).group(Group::View).importance(MINOR);
-        let max = self.config.columns.max;
-        for slot in 0..max {
-            actions.push(admin(format!("slot.focus.{}", slot + 1), format!("Focus slot {}", slot + 1), S::FocusSlot(slot)));
+        let max = self.config.panels.max;
+        for panel in 0..max {
+            actions.push(admin(format!("panel.focus.{}", panel + 1), format!("Focus panel {}", panel + 1), S::FocusPanel(panel)));
         }
-        actions.push(admin("slot.next".into(), "Next slot".into(), S::CycleSlot(1)));
-        actions.push(admin("slot.prev".into(), "Previous slot".into(), S::CycleSlot(-1)));
+        actions.push(admin("panel.next".into(), "Next panel".into(), S::CyclePanel(1)));
+        actions.push(admin("panel.prev".into(), "Previous panel".into(), S::CyclePanel(-1)));
         for cols in 1..=max {
-            actions.push(admin(format!("layout.{cols}"), format!("{cols}-column layout"), S::SetLayout(cols)));
+            actions.push(admin(format!("layout.{cols}"), format!("{cols}-panel layout"), S::SetLayout(cols)));
         }
-        actions.push(admin("column.add".into(), "Add a column".into(), S::SetLayout(self.desk.columns.len() + 1)));
-        actions.push(admin("column.fewer".into(), "One column fewer (its view is hidden, not lost)".into(), S::SetLayout(self.desk.columns.len().saturating_sub(1).max(1))));
+        actions.push(admin("panel.add".into(), "Add a panel".into(), S::SetLayout(self.desk.panels.len() + 1)));
+        actions.push(admin("panel.fewer".into(), "One panel fewer (its buffer is hidden, not lost)".into(), S::SetLayout(self.desk.panels.len().saturating_sub(1).max(1))));
         actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), S::ToggleInspector));
         actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), S::ToggleIssues));
         actions.extend(self.attention_actions());
@@ -39,38 +39,38 @@ impl CockpitApp {
         actions
     }
 
-    /// The level around the panel, its host: a column's own (what it
+    /// The level around the panel, its host: a panel's own (what it
     /// shows, closing it), or the quick look's.
     pub(crate) fn host_actions(&self, here: Here) -> Vec<Action> {
         use ShellCommand as S;
         if let Some(open) = self.quick_look.as_ref().filter(|_| here.look) {
             let look = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::View);
             let mut out = vec![look("quicklook.toggle", "Close the quick look", S::QuickLook).importance(PRIMARY)];
-            // It holds a card (or the inbox): a card can go to a column.
+            // It holds a card (or the inbox): a card can go to a panel.
             if open.kind == BufferKind::Spec {
-                out.push(look("quicklook.to_column", "Open this card in a column", S::QuickLookToColumn).importance(PRIMARY));
+                out.push(look("quicklook.to_panel", "Open this card in a panel", S::QuickLookToPanel).importance(PRIMARY));
             }
             return out;
         }
         let admin = |id: String, label: String, c: ShellCommand| Action::new(id, label, c).group(Group::View).importance(MINOR);
-        let mut actions = vec![Action::new("column.close", "Close this column (its view is hidden, not lost)", S::CloseColumn).group(Group::View).importance(MINOR)];
+        let mut actions = vec![Action::new("panel.close", "Close this panel (its buffer is hidden, not lost)", S::ClosePanel).group(Group::View).importance(MINOR)];
         for kind in BufferKind::ALL {
-            actions.push(admin(format!("buffer.{}", kind.name()), format!("Show {} in this slot", kind.title()), S::ShowBuffer(kind)));
+            actions.push(admin(format!("buffer.{}", kind.name()), format!("Show {} in this panel", kind.name()), S::ShowBuffer(kind)));
         }
         // Every open view, to show here: on screen (and where) or hidden.
         let views: Vec<Choice> = self
-            .desk.columns
-            .panes()
+            .desk.panels
+            .buffers()
             .iter()
             .enumerate()
-            .map(|(slot, p)| (*p, format!("column {}", slot + 1)))
-            .chain(self.desk.columns.put_away().map(|p| (p, "hidden".to_owned())))
-            .map(|(p, where_)| Choice::new(format!("{}:{}", p.kind.name(), p.id), self.describe(p)).detail(Some(where_)).current(p == self.desk.columns.focused_pane()))
+            .map(|(panel, p)| (*p, format!("panel {}", panel + 1)))
+            .chain(self.desk.panels.put_away().map(|p| (p, "hidden".to_owned())))
+            .map(|(p, where_)| Choice::new(format!("{}:{}", p.kind.name(), p.id), self.describe(p)).detail(Some(where_)).current(p == self.desk.panels.focused_buffer()))
             .collect();
-        actions.push(Action::new("buffer.list", "Open views: show one here", S::PickView).param(Param::Choice(views)).group(Group::View).importance(SECONDARY));
-        actions.push(admin("buffer.delete".into(), "Delete this column's view (for good)".into(), S::DeleteView));
+        actions.push(Action::new("buffer.list", "Open buffers: show one here", S::PickView).param(Param::Choice(views)).group(Group::View).importance(SECONDARY));
+        actions.push(admin("buffer.delete".into(), "Delete this panel's buffer (for good)".into(), S::DeleteView));
         for kind in BufferKind::ALL.into_iter().filter(|k| !k.one_only()) {
-            actions.push(admin(format!("buffer.new.{}", kind.name()), format!("New {} view here", kind.name()), S::NewView(kind)));
+            actions.push(admin(format!("buffer.new.{}", kind.name()), format!("New {} buffer here", kind.name()), S::NewView(kind)));
         }
         actions
     }
@@ -85,14 +85,14 @@ impl CockpitApp {
         let mut out = vec![
             nav("nav.hint", "Jump to something on screen", S::Hint { open: false }).importance(PRIMARY),
             nav("nav.hint_open", "Open something on screen", S::Hint { open: true }).importance(SECONDARY).icon(egui_phosphor::regular::CURSOR_CLICK),
-            nav("nav.search", "Search this view", S::Search).importance(PRIMARY).icon(egui_phosphor::regular::MAGNIFYING_GLASS),
+            nav("nav.search", "Search this buffer", S::Search).importance(PRIMARY).icon(egui_phosphor::regular::MAGNIFYING_GLASS),
             nav("nav.search_next", "Next match", S::SearchStep { forward: true }).importance(SECONDARY).when(When::Searched),
             nav("nav.search_prev", "Previous match", S::SearchStep { forward: false }).importance(MINOR).when(When::Searched),
             nav("nav.mark_set", "Set a mark here", S::MarkSet).importance(MINOR).icon(egui_phosphor::regular::BOOKMARK_SIMPLE),
             nav("nav.mark_jump", "Jump to a mark", S::MarkJump).importance(MINOR).when(When::Marked),
             nav("nav.back", "Back (jump list)", S::Back).importance(SECONDARY).when(When::Back).icon(egui_phosphor::regular::ARROW_LEFT),
             nav("nav.forward", "Forward (jump list)", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT),
-            Action::new("nav.keys", "Keys for this view", S::Keys).group(Group::View).importance(MINOR),
+            Action::new("nav.keys", "Keys for this buffer", S::Keys).group(Group::View).importance(MINOR),
             Action::new("talk.open", "Talk to the agent from here", S::Talk).group(Group::Act).importance(SECONDARY),
             nav("nav.line", "Go to line or row", S::Line).param(Param::Text { hint: "line or row number".into() }).importance(MINOR),
         ];
@@ -121,11 +121,11 @@ impl CockpitApp {
     }
 
     /// Where you are: the view with the keyboard, and what holds it (the
-    /// quick look, or its column).
+    /// quick look, or its panel).
     pub(crate) fn here(&self) -> Here {
         match &self.quick_look {
-            Some(look) => Here { slot: look.slot, kind: look.kind, look: true },
-            None => Here { slot: self.desk.columns.focused(), kind: self.desk.columns.focused_kind(), look: false },
+            Some(look) => Here { panel: look.panel, kind: look.kind, look: true },
+            None => Here { panel: self.desk.panels.focused(), kind: self.desk.panels.focused_kind(), look: false },
         }
     }
 
@@ -148,7 +148,7 @@ impl CockpitApp {
 
     /// What a view shows where it is (`here`), the same way: gathered,
     /// placed and in layers; bound to keys only when it's where you are
-    /// (`keyed`): a column not focused shows its controls without keys
+    /// (`keyed`): a panel not focused shows its controls without keys
     /// (they don't run it until it is).
     pub(crate) fn shown_at(&self, here: Here) -> Vec<Bound> {
         if here == self.here() { self.bound_actions() } else { self.gather(here, false) }
@@ -157,7 +157,7 @@ impl CockpitApp {
     /// The list for `here`: every level of where you are, innermost first,
     /// each offering its actions the same way: the panel (its view's own,
     /// its moves among them, and what every panel has), its host (the
-    /// column's or the quick look's), and everywhere (the shell's, and the
+    /// panel's or the quick look's), and everywhere (the shell's, and the
     /// other views' global actions). An action's layer is the level that
     /// offered it, or what you're on when its control is on the item. Each
     /// is placed (the panel's, its host's and the top bar's placements:
@@ -205,31 +205,31 @@ impl CockpitApp {
     }
 
     /// Every placement for `here`: the panel's (on its top line, or under
-    /// what you're on), its host's (a column's tabs), the top bar's.
+    /// what you're on), its host's (a panel's tabs), the top bar's.
     fn placements(&self, here: Here) -> Vec<(String, crate::actions::Control)> {
         use crate::actions::{At, Control, Style};
         use egui_phosphor::regular as icon;
-        let panel = self.desk.panel(here.kind).placed().into_iter();
+        let panel = self.desk.hosted(here.kind).placed().into_iter();
         let button = |caption: &str, glyph: &'static str| Control::new(At::Header, Style::Button, caption, Some(glyph));
         let host = if here.look {
-            vec![("quicklook.to_column".to_owned(), button("Open in a column", icon::COLUMNS)), ("quicklook.toggle".to_owned(), button("", icon::X))]
+            vec![("quicklook.to_panel".to_owned(), button("Open in a panel", icon::COLUMNS)), ("quicklook.toggle".to_owned(), button("", icon::X))]
         } else {
-            let mut own = self.tabs(here.slot);
-            if self.desk.columns.len() > 1 {
-                own.push(("column.close".to_owned(), button("", icon::X)));
+            let mut own = self.tabs(here.panel);
+            if self.desk.panels.len() > 1 {
+                own.push(("panel.close".to_owned(), button("", icon::X)));
             }
             own
         };
         panel.chain(host).chain(self.top_bar_placements()).collect()
     }
 
-    /// A column's tabs: the shell's `buffer.*` actions, the shown one named
+    /// A panel's tabs: the shell's `buffer.*` actions, the shown one named
     /// (when there's room) and lit.
-    fn tabs(&self, slot: usize) -> Vec<(String, crate::actions::Control)> {
+    fn tabs(&self, panel: usize) -> Vec<(String, crate::actions::Control)> {
         use crate::actions::{At, Control, Style, Tone};
-        let active = self.desk.columns.kind(slot);
+        let active = self.desk.panels.kind(panel);
         // Narrow (once its width is known): icons only.
-        let compact = self.slot_rects.get(slot).is_some_and(|r| r.is_positive() && r.width() < 340.0);
+        let compact = self.panel_rects.get(panel).is_some_and(|r| r.is_positive() && r.width() < 340.0);
         BufferKind::ALL
             .into_iter()
             .map(|kind| {
@@ -279,7 +279,7 @@ impl CockpitApp {
     }
 
     /// Runs an action with the count typed before its key, if one was: moves
-    /// take it, a go-to lands in that column, a view's own actions repeat,
+    /// take it, a go-to lands in that panel, a view's own actions repeat,
     /// anything else runs once.
     pub(super) fn invoke_counted(&mut self, invocation: Invocation, count: Option<u32>, ctx: &egui::Context) {
         // An action changes what can run as it goes: it sees the actions as
@@ -365,28 +365,28 @@ impl CockpitApp {
             | ShellCommand::ServerRemove
             | ShellCommand::ServerShutdown
             | ShellCommand::ServerShutdownConfirm => self.run_server(command, value, ctx),
-            ShellCommand::FocusSlot(slot) => {
-                self.desk.columns.focus(slot);
+            ShellCommand::FocusPanel(panel) => {
+                self.desk.panels.focus(panel);
             }
-            ShellCommand::CycleSlot(dir) => self.desk.columns.cycle(dir),
+            ShellCommand::CyclePanel(dir) => self.desk.panels.cycle(dir),
             ShellCommand::ShowBuffer(kind) => {
-                let pane = self.desk.columns.show(self.desk.columns.focused(), kind);
-                self.use_pane(pane);
+                let buffer = self.desk.panels.show(self.desk.panels.focused(), kind);
+                self.use_buffer(buffer);
             }
-            ShellCommand::SetLayout(cols) if cols > self.config.columns.max => self.note = Some(format!("{} columns at most (`[columns] max` in your UI config).", self.config.columns.max)),
-            ShellCommand::SetLayout(cols) => self.desk.columns.set_count(cols, self.config.columns.max),
-            ShellCommand::CloseColumn => self.close_column(self.desk.columns.focused()),
+            ShellCommand::SetLayout(cols) if cols > self.config.panels.max => self.note = Some(format!("{} panels at most (`[panels] max` in your UI config).", self.config.panels.max)),
+            ShellCommand::SetLayout(cols) => self.desk.panels.set_count(cols, self.config.panels.max),
+            ShellCommand::ClosePanel => self.close_panel(self.desk.panels.focused()),
             ShellCommand::DeleteView => self.delete_view(),
             ShellCommand::NewView(kind) => self.new_view(kind),
             ShellCommand::PickView => {
                 let picked = value.as_deref().and_then(|v| {
                     let (kind, id) = v.split_once(':')?;
                     let kind = BufferKind::ALL.into_iter().find(|k| k.name() == kind)?;
-                    Some(Pane::new(kind, id.parse().ok()?))
+                    Some(Buffer::new(kind, id.parse().ok()?))
                 });
-                match picked.filter(|p| self.desk.columns.has(*p)) {
-                    Some(pane) => self.show_view(pane),
-                    None => self.note = Some("That view isn't open any more.".into()),
+                match picked.filter(|p| self.desk.panels.has(*p)) {
+                    Some(buffer) => self.show_view(buffer),
+                    None => self.note = Some("That buffer isn't open any more.".into()),
                 }
             }
             ShellCommand::ToggleInspector => self.feedback.toggle_inspection(),
@@ -397,10 +397,10 @@ impl CockpitApp {
                 }
             }
             ShellCommand::QuickLook => self.toggle_quick_look(ctx),
-            ShellCommand::QuickLookToColumn => self.quick_look_to_column(),
+            ShellCommand::QuickLookToPanel => self.quick_look_to_panel(),
             ShellCommand::Talk => {
                 self.talk.get_or_insert_with(Default::default);
-                self.input_mode = InputMode::Insert { slot: self.desk.columns.focused() };
+                self.input_mode = InputMode::Insert { panel: self.desk.panels.focused() };
             }
             ShellCommand::Agents => {
                 self.desk.remote.agents = value.as_deref() == Some("true");
@@ -414,7 +414,7 @@ impl CockpitApp {
             ShellCommand::Hint { open } => self.start_hint(open),
             ShellCommand::Search => {
                 self.capture = Some(Capture::Search(Searching { kind, query: String::new(), before: self.jump_here() }));
-                self.input_mode = InputMode::Capture { slot: self.desk.columns.focused() };
+                self.input_mode = InputMode::Capture { panel: self.desk.panels.focused() };
                 self.desk.view_mut(kind).save_view();
                 // An empty search is a search too (a filter typed into goes blank).
                 self.desk.view_mut(kind).on_search(SearchEvent::Typing(""));
@@ -439,8 +439,8 @@ impl CockpitApp {
             }
             ShellCommand::Keys => self.key_sheet = Some(String::new()),
             ShellCommand::GoTo(op) => {
-                if let Some(column) = typed
-                    && !self.land_in(column)
+                if let Some(number) = typed
+                    && !self.land_in(number)
                 {
                     return;
                 }
@@ -473,7 +473,7 @@ impl CockpitApp {
 
     pub(super) fn start_capture(&mut self, capture: Capture) {
         self.capture = Some(capture);
-        self.input_mode = InputMode::Capture { slot: self.desk.columns.focused() };
+        self.input_mode = InputMode::Capture { panel: self.desk.panels.focused() };
         self.pending_since = 0.0;
     }
 

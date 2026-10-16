@@ -1,4 +1,4 @@
-//! The cockpit's state, kept by the server: the columns and the view in
+//! The cockpit's state, kept by the server: the panels and the view in
 //! each, where every view is (the same places the jump list and marks
 //! hold), which spec views are pinned and which view of each kind was used
 //! last, the marks and the jump list, and the chat's session and unsent
@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::columns::{Columns, Pane};
+use crate::panels::{Panels, Buffer};
 use crate::nav::{Jump, JumpList, Place};
 use crate::net::{NetClient, NetResult};
 
@@ -25,16 +25,16 @@ pub const VERSION: u32 = 3;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedUi {
     pub version: u32,
-    pub columns: Columns,
+    pub panels: Panels,
     /// Where each view is (shown or put away).
-    pub views: Vec<(Pane, Place)>,
+    pub views: Vec<(Buffer, Place)>,
     /// The spec views pinned to their card.
     pub pinned: Vec<u32>,
     /// The view of each kind used last.
-    pub used: Vec<Pane>,
+    pub used: Vec<Buffer>,
     pub marks: BTreeMap<char, Jump>,
     pub jumps: JumpList,
-    /// What was typed and not sent, by chat view (its pane's number).
+    /// What was typed and not sent, by chat view (its buffer's number).
     pub drafts: BTreeMap<u32, String>,
     /// The user lets agents drive the cockpit.
     #[serde(default)]
@@ -171,7 +171,7 @@ mod tests {
     use super::*;
 
     fn state(draft: &str) -> SavedUi {
-        SavedUi { version: VERSION, columns: Columns::default(), views: Vec::new(), pinned: Vec::new(), used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), drafts: BTreeMap::from([(0, draft.into())]), agents: false, comparison: Default::default(), diff_layout: Default::default() }
+        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), pinned: Vec::new(), used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), drafts: BTreeMap::from([(0, draft.into())]), agents: false, comparison: Default::default(), diff_layout: Default::default() }
     }
 
     fn arrive(keeper: &Keeper, value: Option<serde_json::Value>) {

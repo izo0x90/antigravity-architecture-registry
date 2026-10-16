@@ -37,11 +37,11 @@ fn what_the_audit_found_stays_fixed() {
     // A key that runs clears the last note.
     frame(&ctx, &mut app, key("j"));
     assert!(app.note.is_none());
-    // Fewer columns keep the focused view on screen.
-    app.desk.columns.focus(2);
-    app.desk.columns.show(2, BufferKind::Spec);
+    // Fewer panels keep the focused view on screen.
+    app.desk.panels.focus(2);
+    app.desk.panels.show(2, BufferKind::Spec);
     app.run_shell(ShellCommand::SetLayout(1), None, None, &ctx);
-    assert_eq!((app.desk.columns.focused(), app.desk.columns.kind(0)), (0, BufferKind::Spec));
+    assert_eq!((app.desk.panels.focused(), app.desk.panels.kind(0)), (0, BufferKind::Spec));
 }
 
 #[test]

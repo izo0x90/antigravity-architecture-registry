@@ -51,7 +51,7 @@ pub struct UiConfig {
     pub touch: crate::touch::TouchConfig,
     pub net: NetUi,
     pub code: CodeUi,
-    pub columns: ColumnsUi,
+    pub panels: PanelsUi,
     pub changes: ChangesUi,
     /// Every state's word, icon and colour.
     #[serde(default)]
@@ -70,13 +70,13 @@ fn merge(base: &mut toml::Table, over: toml::Table) {
     }
 }
 
-/// The columns: how many there may be.
+/// The panels: how many there may be.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct ColumnsUi {
+pub struct PanelsUi {
     pub max: usize,
 }
 
-impl Default for ColumnsUi {
+impl Default for PanelsUi {
     fn default() -> Self {
         Self { max: 12 }
     }
@@ -96,7 +96,7 @@ pub struct ChangesUi {
     /// Seconds between asking for the list again while it's shown (the
     /// index and staging change outside the files too).
     pub refresh_s: f64,
-    /// Auto layout: side by side from this column width (points).
+    /// Auto layout: side by side from this panel width (points).
     pub side_by_side_from: f32,
     /// The code view shows deleted lines in place (`z d` toggles them).
     pub deleted_in_code: bool,

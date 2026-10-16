@@ -54,10 +54,10 @@ fn tabs_are_icons_that_name_themselves_and_their_key() {
     let bound = app.bound_actions();
     let key = |id: &str| bound.iter().find(|b| b.action.id == id).map(|b| b.key_hint());
     assert_eq!((key("buffer.graph").as_deref(), key("buffer.queue").as_deref()), (Some("Space b g"), Some("Space b q")));
-    // Only each slot's active tab is named.
+    // Only each panel's active tab is named.
     let text = texts(&frame(&ctx, &mut app, vec![]));
     let named = |kind: BufferKind| text.lines().any(|l| l.starts_with(&format!("{} {}{}", kind.icon(), &kind.title()[..1], kind.title()[1..].to_lowercase())));
-    let active = app.desk.columns.kinds();
+    let active = app.desk.panels.kinds();
     for kind in BufferKind::ALL {
         assert_eq!(named(kind), active.contains(&kind), "{kind:?}: {text}");
     }
@@ -194,11 +194,11 @@ fn question_mark_lists_this_views_keys_grouped_and_searchable() {
     for expected in ["Keys", "Spec", "Navigate", "Go to", "Act", "g d", "Go to its code", "Comment on this item", "J", "Next section"] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
-    // Its column's own and everywhere's follow (found by filtering).
-    app.key_sheet = Some("column".into());
+    // Its panel's own and everywhere's follow (found by filtering).
+    app.key_sheet = Some("panel".into());
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Column") && text.contains("Close this column") && text.contains("Everywhere") && text.contains("Add a column"), "{text}");
-    assert!(text.find("Close this column") < text.find("Add a column"), "what holds it before everywhere's");
+    assert!(text.contains("Panel") && text.contains("Close this panel") && text.contains("Everywhere") && text.contains("Focus panel 1"), "{text}");
+    assert!(text.find("Close this panel") < text.find("Focus panel 1"), "what holds it before everywhere's");
     assert!(!text.contains("Next view"), "only this view's keys (and the shared ones)");
     app.key_sheet = Some("fold".into());
     let text = texts(&frame(&ctx, &mut app, vec![]));
@@ -391,7 +391,7 @@ fn a_swipe_runs_what_the_keymap_binds_to_it_in_the_view_it_started_on() {
     (sub.id, sub.role, sub.name) = (harness_contracts::SlotId::new("sub-1"), "sub".into(), "reviewer".into());
     app.desk.chat.process_event(harness_contracts::ClientEvent::SlotUpdated { slot: sub });
     focus(&ctx, &mut app, BufferKind::Chat);
-    let middle = app.slot_rects[app.desk.columns.focused()].center();
+    let middle = app.panel_rects[app.desk.panels.focused()].center();
     swipe(&ctx, &mut app, middle, -150.0, 1.0);
     assert_eq!(app.desk.chat.ui.slot.as_str(), "sub-1", "left: the chat's next slot (its own binding before the shell's)");
     swipe(&ctx, &mut app, middle, 150.0, 2.0);
@@ -441,9 +441,9 @@ fn every_key_shown_runs_the_action_it_shows() {
 fn shift_h_and_l_go_to_the_column_left_and_right() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Graph);
-    let at = app.desk.columns.focused();
+    let at = app.desk.panels.focused();
     frame(&ctx, &mut app, key("L"));
-    assert_eq!(app.desk.columns.focused(), (at + 1) % app.desk.columns.len(), "L: the next column");
+    assert_eq!(app.desk.panels.focused(), (at + 1) % app.desk.panels.len(), "L: the next panel");
     frame(&ctx, &mut app, key("H"));
-    assert_eq!(app.desk.columns.focused(), at, "H: back");
+    assert_eq!(app.desk.panels.focused(), at, "H: back");
 }

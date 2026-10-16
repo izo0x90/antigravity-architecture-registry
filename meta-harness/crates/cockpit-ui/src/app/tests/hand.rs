@@ -35,7 +35,7 @@ fn on_the_graph_the_wheel_moves_ctrl_wheel_and_pinching_zoom_and_a_flick_glides(
     // Tall: room to move up, down and to the right (it starts at its left edge).
     app.desk.graph = crate::graph::tests::showing(crate::graph::tests::wide_tree());
     frame(&ctx, &mut app, vec![]);
-    let middle = app.slot_rects[1].center();
+    let middle = app.panel_rects[1].center();
     frame(&ctx, &mut app, vec![egui::Event::PointerMoved(middle)]);
     // The wheel and two fingers on a trackpad move it, Shift sideways.
     let before = pan(&app);
@@ -97,7 +97,7 @@ fn on_the_graph_fingers_tap_select_double_tap_go_in_drag_and_two_pinch_and_pan()
     assert!(app.desk.jumps.can_back(), "a jump, as Enter's");
     // One finger drags it, sideways too: it moves, it isn't a swipe back.
     feed(&mut app, vec![]);
-    let middle = app.slot_rects[1].center();
+    let middle = app.panel_rects[1].center();
     let before = pan(&app);
     feed(&mut app, finger(egui::TouchPhase::Start, middle));
     feed(&mut app, finger(egui::TouchPhase::Move, middle + egui::vec2(60.0, 0.0)));
@@ -143,7 +143,7 @@ fn a_swipe_where_the_view_moves_sideways_moves_it_instead() {
     // A jump, to have somewhere to swipe back to.
     frame(&ctx, &mut app, key("G"));
     assert_eq!(app.desk.code.target_line, Some(40));
-    let middle = app.slot_rects[app.desk.columns.focused()].center();
+    let middle = app.panel_rects[app.desk.panels.focused()].center();
     let mut t = 5.0;
     let mut flick = |app: &mut CockpitApp, dx: f32| {
         for (phase, pos) in [(egui::TouchPhase::Start, middle), (egui::TouchPhase::Move, middle + egui::vec2(dx, 0.0)), (egui::TouchPhase::End, middle + egui::vec2(dx, 0.0))] {
@@ -166,7 +166,7 @@ fn after_moving_the_graph_by_hand_a_key_starts_from_what_shows() {
     frame(&ctx, &mut app, vec![]);
     keys(&ctx, &mut app, "gg");
     let first = app.desk.graph.selection.clone().unwrap();
-    let middle = app.slot_rects[1].center();
+    let middle = app.panel_rects[1].center();
     frame(&ctx, &mut app, vec![egui::Event::PointerMoved(middle)]);
     for n in 0..150 {
         frame_at(&ctx, &mut app, wheel(egui::vec2(0.0, -7.0), Default::default()), 1.0 + n as f64 * 0.02);

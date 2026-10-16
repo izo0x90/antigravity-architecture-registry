@@ -12,9 +12,9 @@ impl CockpitApp {
             }
             return;
         }
-        let kind = self.desk.columns.focused_kind();
+        let kind = self.desk.panels.focused_kind();
         if kind == BufferKind::Spec {
-            self.note = Some("The spec view shows the full card already.".into());
+            self.note = Some("The spec shows the full card already.".into());
             return;
         }
         let Some(id) = self.desk.view(kind).target().and_then(|t| t.component().cloned()) else {
@@ -26,9 +26,9 @@ impl CockpitApp {
             self.bound_actions().into_iter().find(|b| b.action.id == "quicklook.toggle").and_then(|b| b.keys.into_iter().filter(|seq| seq.len() == 1).map(|mut seq| seq.remove(0)).find(|chord| chord.key_down(i)))
         });
         let now = ctx.input(|i| i.time);
-        self.quick_look = Some(QuickLook::open(BufferKind::Spec, self.desk.columns.focused(), kind, self.desk.used_pane(BufferKind::Spec).id, key, now));
+        self.quick_look = Some(QuickLook::open(BufferKind::Spec, self.desk.panels.focused(), kind, self.desk.used_buffer(BufferKind::Spec).id, key, now));
         // Its own spec view, held on the card.
-        self.use_pane(Pane::new(BufferKind::Spec, crate::quick_look::PANE));
+        self.use_buffer(Buffer::new(BufferKind::Spec, crate::quick_look::PANE));
         self.desk.spec.pinned = true;
         self.desk.spec.floating = true;
         self.desk.spec.show(id);
@@ -37,31 +37,31 @@ impl CockpitApp {
     /// Closes the quick look: the spec view used before is used again.
     pub(super) fn close_quick_look(&mut self) {
         if let Some(look) = self.quick_look.take() {
-            self.use_pane(Pane::new(BufferKind::Spec, look.previous_spec));
+            self.use_buffer(Buffer::new(BufferKind::Spec, look.previous_spec));
         }
     }
 
-    /// Its card in a column: it becomes that column's spec view (the
-    /// nearest spec column's, else beside the focused column).
-    pub(super) fn quick_look_to_column(&mut self) {
+    /// Its card in a panel: it becomes that panel's spec view (the
+    /// nearest spec panel's, else beside the focused panel).
+    pub(super) fn quick_look_to_panel(&mut self) {
         if self.quick_look.take().is_none() {
             return;
         }
         let from = self.jump_here();
-        let pane = self.desk.columns.new_pane(BufferKind::Spec);
+        let buffer = self.desk.panels.new_buffer(BufferKind::Spec);
         self.desk.spec.floating = false;
-        self.desk.active.insert(BufferKind::Spec, pane.id);
-        self.desk.last_used.insert(BufferKind::Spec, pane.id);
-        let slot = self.desk.columns.ensure_visible(pane);
-        self.desk.columns.focus(slot);
+        self.desk.active.insert(BufferKind::Spec, buffer.id);
+        self.desk.last_used.insert(BufferKind::Spec, buffer.id);
+        let panel = self.desk.panels.ensure_visible(buffer);
+        self.desk.panels.focus(panel);
         self.after_jump(from);
     }
 
     /// A peek closes when its key is let go; the quick look closes when
-    /// focus moved to a column (a go-to landed there).
+    /// focus moved to a panel (a go-to landed there).
     pub(super) fn quick_look_tick(&mut self, ctx: &egui::Context) {
         let Some(look) = &mut self.quick_look else { return };
-        let moved = self.desk.columns.focused() != look.slot || self.desk.columns.kind(look.slot) != look.over;
+        let moved = self.desk.panels.focused() != look.panel || self.desk.panels.kind(look.panel) != look.over;
         let hold = self.config.keymap.peek_hold_ms as f64 / 1000.0;
         let (released, now) = ctx.input(|i| (look.key().is_some_and(|k| k.released(i)), i.time));
         if moved || (released && look.let_go(now, hold)) {
@@ -69,20 +69,20 @@ impl CockpitApp {
         }
     }
 
-    /// The quick look, over the column it was opened from: a host like a
-    /// column, holding its view (the card's spec view, or the inbox), its
+    /// The quick look, over the panel it was opened from: a host like a
+    /// panel, holding its view (the card's spec view, or the inbox), its
     /// own controls on its header.
     pub(super) fn render_quick_look(&mut self, ctx: &egui::Context) {
         let Some(look) = &self.quick_look else { return };
-        let (slot, kind) = (look.slot, look.kind);
-        let over = self.slot_rects.get(slot).copied().filter(|r| r.is_positive()).unwrap_or_else(|| ctx.content_rect());
+        let (panel, kind) = (look.panel, look.kind);
+        let over = self.panel_rects.get(panel).copied().filter(|r| r.is_positive()).unwrap_or_else(|| ctx.content_rect());
         let screen = ctx.content_rect();
         let theme = crate::theme::look();
         let size = egui::vec2(over.width().max(screen.width().min(theme.quick_look_width)).min(screen.width() - 2.0 * theme.space_l), screen.height() * theme.quick_look_height);
-        // On the side away from the column it's about, so that column stays
-        // in sight; with one column there's no other side: over it.
+        // On the side away from the panel it's about, so that panel stays
+        // in sight; with one panel there's no other side: over it.
         let (left, right) = (screen.left() + theme.space_l, (screen.right() - size.x - theme.space_l).max(screen.left()));
-        let x = match self.desk.columns.len() {
+        let x = match self.desk.panels.len() {
             1 => (over.center().x - size.x / 2.0).clamp(left, right),
             _ if over.center().x > screen.center().x => left,
             _ => right,
@@ -96,9 +96,9 @@ impl CockpitApp {
                 ui.set_max_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{} Quick look", egui_phosphor::regular::EYE)).strong().size(theme.text_label).color(colors().text_strong));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.host_controls(ui, &own, slot));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.host_controls(ui, &own, panel));
                 });
-                self.render_view(Here { slot, kind, look: true }, ui, true);
+                self.render_view(Here { panel, kind, look: true }, ui, true);
             });
         });
         // A click outside closes it (a peek's key closes it when let go).

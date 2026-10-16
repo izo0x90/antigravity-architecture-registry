@@ -141,7 +141,7 @@ Views (each a tree from one root, cut to a size limit that it reports):
 }
 
 ## navigate
-Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it. The user may have several graphs, one per column: `column` picks one (counted from 1 on the left; a column that isn't a graph becomes one); without it, the graph they used last moves.
+Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it. The user may have several graphs, one per panel: `panel` picks one (counted from 1 on the left; a panel that isn't a graph becomes one); without it, the graph they used last moves.
 Views (each a tree from one root, cut to a size limit that it reports):
 - contains: What's inside what: boxes inside boxes, no lines. Go into a box to make it the whole screen.
 - calls: Who calls whom, in the order the calls happen. Down: what it calls. Up: what calls it. The data going in and coming back sits on the selected card's lines.
@@ -179,9 +179,9 @@ Views (each a tree from one root, cut to a size limit that it reports):
       "type": "string",
       "description": "A card: a component id (rust:my_crate::server::run), in data_flow a data type as type:<Name> or a flow's start or end as start:<id> / end:<id>"
     },
-    "column": {
+    "panel": {
       "type": "integer",
-      "description": "The user's column to show it in, from 1 on the left (default: the graph they used last)"
+      "description": "The user's panel to show it in, from 1 on the left (default: the graph they used last)"
     }
   }
 }
@@ -1044,7 +1044,7 @@ Run the reviewers that apply to one planned component (faithfulness to the plan,
 }
 
 ## cockpit_read
-What the user's cockpit shows now: the input mode, each column's view (which has focus), the note line, and every piece of text drawn, row by row with its x. Works while the user lets agents drive the cockpit. Read again after acting: the screen updates as results arrive.
+What the user's cockpit shows now: the input mode, each panel's buffer (which has focus), the note line, and every piece of text drawn, row by row with its x. Works while the user lets agents drive the cockpit. Read again after acting: the screen updates as results arrive.
 {
   "type": "object",
   "properties": {}

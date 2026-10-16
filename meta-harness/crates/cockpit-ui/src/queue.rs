@@ -13,7 +13,7 @@ use harness_contracts::InstanceId;
 use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, Style, When};
 use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
-use crate::panel::{Status, Tone};
+use crate::hosted::{Status, Tone};
 use crate::theme::colors;
 use crate::viewport::{Go, Measured, Show};
 
@@ -425,7 +425,7 @@ impl Navigable for QueueState {
     }
 }
 
-impl crate::panel::Panel for QueueState {
+impl crate::hosted::Hosted for QueueState {
     /// The plan it works through.
     fn title(&self) -> Status {
         match &self.plan {
@@ -481,7 +481,7 @@ pub(crate) mod tests {
         assert_eq!(q.snapshot.as_ref().unwrap().jobs.len(), 3, "the pushed snapshot is shown");
         let mut mode = crate::keymap::InputMode::Normal;
         let mut note = None;
-        let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut None };
+        let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None };
         // The running job links to its session.
         assert!(ids(&q).contains(&"queue.open_session".to_owned()) && ids(&q).contains(&"queue.stop".to_owned()));
         q.apply(QueueCommand::OpenSession, &mut cx);
@@ -523,7 +523,7 @@ pub(crate) mod tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let mut mode = crate::keymap::InputMode::Normal;
                 let mut note = None;
-                let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut None };
+                let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None };
                 q.render(ui, &mut cx);
             });
         });
@@ -548,7 +548,7 @@ pub(crate) mod tests {
         let out = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let (mut mode, mut note) = (crate::keymap::InputMode::Normal, None);
-                q.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut None });
+                q.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None });
             });
         });
         fn collect(shape: &egui::Shape, out: &mut Vec<String>) {

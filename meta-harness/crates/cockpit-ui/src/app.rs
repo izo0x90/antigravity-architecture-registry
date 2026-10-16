@@ -10,8 +10,8 @@ use crate::actions::{Action, ActionProvider, Bound, Choice, Group, Invocation, L
 use crate::actions::Layer;
 use crate::chat::{ChatStreamState, SessionStatus};
 use crate::code::CodeViewerState;
-use crate::columns::{Columns, Pane};
-use crate::panes::{Parked, swap_view};
+use crate::panels::{Panels, Buffer};
+use crate::parked::{Parked, swap_view};
 use crate::quick_look::QuickLook;
 use crate::saved::SavedUi;
 use crate::config::UiConfig;
@@ -78,7 +78,7 @@ impl BufferKind {
     }
 
     /// There is one of these (the queue, the inbox, the changes: the
-    /// desk's comparison); of the others, each column can have its own.
+    /// desk's comparison); of the others, each panel can have its own.
     pub fn one_only(&self) -> bool {
         matches!(self, Self::Queue | Self::Inbox | Self::Changes)
     }
@@ -111,27 +111,27 @@ impl BufferKind {
     }
 }
 
-/// What the shell itself can do: slots, layout, overlays, and the keys every
+/// What the shell itself can do: panels, layout, overlays, and the keys every
 /// view shares (moves, hints, search, folds, marks, the jump list, go-tos).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ShellCommand {
-    FocusSlot(usize),
-    CycleSlot(i32),
+    FocusPanel(usize),
+    CyclePanel(i32),
     ShowBuffer(BufferKind),
     SetLayout(usize),
-    CloseColumn,
-    /// The focused column's view, gone for good.
+    ClosePanel,
+    /// The focused panel's view, gone for good.
     DeleteView,
-    /// A new view of this kind in the focused column.
+    /// A new view of this kind in the focused panel.
     NewView(BufferKind),
-    /// An open view (its value: `kind:number`) in the focused column.
+    /// An open view (its value: `kind:number`) in the focused panel.
     PickView,
     ToggleInspector,
     ToggleIssues,
     /// The quick look on what the cursor is on (or closed, when open).
     QuickLook,
-    /// The quick look's card in a column instead.
-    QuickLookToColumn,
+    /// The quick look's card in a panel instead.
+    QuickLookToPanel,
     /// The box for talking to the agent, over whatever is on screen.
     Talk,
     /// Lets agents drive the cockpit (its value: on or off).
@@ -182,7 +182,7 @@ pub enum IndexOp {
 /// Hint labels on what the focused view draws.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hinting {
-    pub slot: usize,
+    pub panel: usize,
     pub kind: BufferKind,
     /// `F`: open what the label lands on, not just move there.
     pub open: bool,
@@ -218,10 +218,10 @@ const MAX_COUNT: u32 = 999;
 type KeyedActions = (BufferKind, Vec<(Origin, String, Vec<String>)>);
 
 /// Where a list of actions is gathered for: a view, and what holds it (the
-/// quick look, or column `slot`).
+/// quick look, or panel `panel`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Here {
-    pub slot: usize,
+    pub panel: usize,
     pub kind: BufferKind,
     pub look: bool,
 }
@@ -262,7 +262,7 @@ pub struct CockpitApp {
     ran: std::cell::RefCell<Vec<String>>,
     pub feedback: FeedbackInspectorState,
 
-    /// The column a go-to lands in (a count before its keys).
+    /// The panel a go-to lands in (a count before its keys).
     landing: Option<usize>,
     /// An action a control asked for this frame (its id and value): run
     /// once everything is drawn, the way its key runs it.
@@ -304,8 +304,8 @@ pub struct CockpitApp {
     note_since: Option<f64>,
     /// The key sheet (`?`) is open, with this filter.
     pub key_sheet: Option<String>,
-    /// Where each slot was drawn last frame (hint labels stay inside theirs).
-    slot_rects: Vec<egui::Rect>,
+    /// Where each panel was drawn last frame (hint labels stay inside theirs).
+    panel_rects: Vec<egui::Rect>,
     palette: crate::palette::Palette,
 
     // Top-bar status LEDs
@@ -366,7 +366,7 @@ impl CockpitApp {
             note: None,
             note_since: None,
             key_sheet: None,
-            slot_rects: Vec::new(),
+            panel_rects: Vec::new(),
             palette: crate::palette::Palette::default(),
 
             srv_led: ActivityLed::default(),
@@ -531,12 +531,12 @@ impl CockpitApp {
 
         self.desk.chat.drawn.clear();
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.slot_rects.resize(self.desk.columns.len(), egui::Rect::NOTHING);
-            ui.columns(self.desk.columns.len(), |cols| {
+            self.panel_rects.resize(self.desk.panels.len(), egui::Rect::NOTHING);
+            ui.columns(self.desk.panels.len(), |cols| {
                 for (i, col) in cols.iter_mut().enumerate() {
-                    // Each column draws its own view.
-                    self.swap_in(self.desk.columns.pane(i));
-                    self.render_slot(i, col);
+                    // Each panel draws its own view.
+                    self.swap_in(self.desk.panels.buffer(i));
+                    self.render_panel(i, col);
                 }
             });
             self.back_to_used();
@@ -547,8 +547,8 @@ impl CockpitApp {
         self.feedback.render_inspection_overlay(ctx);
 
         // Developer Feedback modal (automatically pops up when an element is targeted)
-        let active_slots: Vec<String> = self.desk.columns.panes().iter().map(|p| p.kind.title().to_lowercase()).collect();
-        self.feedback.render_modal(ctx, &self.desk.net, self.desk.columns.len(), &active_slots);
+        let active_slots: Vec<String> = self.desk.panels.buffers().iter().map(|p| p.kind.title().to_lowercase()).collect();
+        self.feedback.render_modal(ctx, &self.desk.net, self.desk.panels.len(), &active_slots);
 
         // Issues & Feedback Explorer window
         self.feedback.render_issues_window(ctx, &self.desk.net);

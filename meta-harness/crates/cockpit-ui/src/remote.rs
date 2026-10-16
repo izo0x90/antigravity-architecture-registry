@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Call {
-    /// What's on screen: the mode, the columns, and every piece of text
+    /// What's on screen: the mode, the panels, and every piece of text
     /// drawn, where.
     Read,
     /// What can be run now: ids, labels, keys and what each needs.
@@ -136,7 +136,7 @@ enum Pending {
 #[derive(Default)]
 pub struct Status {
     pub mode: String,
-    pub columns: Vec<Value>,
+    pub panels: Vec<Value>,
     pub note: Option<String>,
     pub leader: Option<String>,
     pub palette: bool,
@@ -263,7 +263,7 @@ impl Remote {
             match pending {
                 Pending::Screen => respond(Ok(json!({
                     "mode": status.mode,
-                    "columns": status.columns,
+                    "panels": status.panels,
                     "note": status.note,
                     "leader": status.leader,
                     "palette": status.palette,

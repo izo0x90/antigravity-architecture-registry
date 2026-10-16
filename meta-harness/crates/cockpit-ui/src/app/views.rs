@@ -5,7 +5,7 @@ use super::*;
 impl CockpitApp {
     /// Runs a view's action with what it may touch (disjoint fields).
     pub(super) fn run_on(&mut self, kind: BufferKind, action: &Action, value: Option<String>, ctx: &egui::Context) {
-        let slot = self.slot_of(kind);
+        let panel = self.panel_of(kind);
         let provider: &mut dyn ActionProvider = match kind {
             BufferKind::Chat => &mut self.desk.chat,
             BufferKind::Code => &mut self.desk.code,
@@ -16,15 +16,15 @@ impl CockpitApp {
             BufferKind::Inbox => &mut self.desk.inbox,
             BufferKind::Changes => &mut self.desk.changes,
         };
-        provider.run(action, value, &mut RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, slot, note: &mut self.note, asked: &mut self.asked });
+        provider.run(action, value, &mut RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked });
     }
 
-    /// The place `kind` is at, in the slot showing it.
+    /// The place `kind` is at, in the panel showing it.
     pub(super) fn jump_of(&self, kind: BufferKind) -> Jump {
-        Jump { slot: self.slot_of(kind), kind, place: self.desk.view(kind).place() }
+        Jump { panel: self.panel_of(kind), kind, place: self.desk.view(kind).place() }
     }
 
-    /// Where the cursor is now: the focused slot, its view, its place.
+    /// Where the cursor is now: the focused panel, its view, its place.
     pub(super) fn jump_here(&self) -> Jump {
         self.jump_of(self.focused_kind())
     }
@@ -36,12 +36,12 @@ impl CockpitApp {
         }
     }
 
-    /// Goes to a recorded place: its view in its slot, focused.
+    /// Goes to a recorded place: its view in its panel, focused.
     pub(super) fn restore_jump(&mut self, jump: Jump, ctx: &egui::Context) {
-        let slot = if jump.slot < self.desk.columns.len() { jump.slot } else { self.ensure_visible(jump.kind) };
-        let pane = self.desk.columns.show(slot, jump.kind);
-        self.desk.columns.focus(slot);
-        self.use_pane(pane);
+        let panel = if jump.panel < self.desk.panels.len() { jump.panel } else { self.ensure_visible(jump.kind) };
+        let buffer = self.desk.panels.show(panel, jump.kind);
+        self.desk.panels.focus(panel);
+        self.use_buffer(buffer);
         self.restore_place(jump.kind, &jump.place, ctx);
     }
 
@@ -92,7 +92,7 @@ impl CockpitApp {
             if self.desk.chat.show_thread(&harness_contracts::ThreadId::new(&thread)) {
                 self.after_jump(from);
             } else {
-                self.note = Some(format!("No slot runs session {thread} now."));
+                self.note = Some(format!("No agent slot runs session {thread} now."));
             }
         }
     }
@@ -130,7 +130,7 @@ impl CockpitApp {
         // The desk's comparison: read whether or not its view is shown (the
         // code view and the graph show it too); asked again now and then
         // while it is.
-        let shown = self.desk.columns.kinds().contains(&BufferKind::Changes) || self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Changes);
+        let shown = self.desk.panels.kinds().contains(&BufferKind::Changes) || self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Changes);
         self.desk.changes.tick(&self.desk.net, ctx, shown);
         let (comparison, read) = (self.desk.changes.comparison.clone(), self.desk.changes.read());
         for code in std::iter::once(&mut self.desk.code).chain(self.desk.parked.codes.values_mut()) {
@@ -196,7 +196,7 @@ impl CockpitApp {
         }
         if std::mem::take(&mut self.desk.spec.requests.insert) {
             self.focus_kind(BufferKind::Spec);
-            self.input_mode = InputMode::Insert { slot: self.desk.columns.focused() };
+            self.input_mode = InputMode::Insert { panel: self.desk.panels.focused() };
         }
         // A name ctrl-clicked in the code: its definition.
         if let Some(id) = self.desk.code.open.take() {

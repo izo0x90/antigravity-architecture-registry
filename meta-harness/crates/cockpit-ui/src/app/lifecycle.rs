@@ -125,7 +125,7 @@ impl CockpitApp {
                     // The agent moves one graph (the one it names, else the
                     // one used last); that's a jump: back returns from it.
                     arch_graph::ArchEvent::ViewRequested { request, .. } => {
-                        self.agents_graph(request.column);
+                        self.agents_graph(request.panel);
                         let before = self.jump_of(BufferKind::Graph);
                         self.desk.graph.on_event(event);
                         if self.jump_of(BufferKind::Graph) != before {

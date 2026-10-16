@@ -1,26 +1,26 @@
-//! The quick look: the full card of what the cursor is on, over the column
-//! it was opened from, without taking that column. It's a spec view of its
+//! The quick look: the full card of what the cursor is on, over the panel
+//! it was opened from, without taking that panel. It's a spec view of its
 //! own, floating (its keys, sections and links work in it); sending it to a
-//! column makes it that column's spec view. Or it shows the inbox (what
+//! panel makes it that panel's spec view. Or it shows the inbox (what
 //! needs the user, one at a time), the same way: the view it holds has the
 //! keyboard.
 //!
 //! Its key held is a peek (it closes when let go); tapped, it stays open
 //! until Escape, the key again, a click outside it, or focus moving to a
-//! column.
+//! panel.
 
 use crate::app::BufferKind;
 use crate::keymap::Chord;
 
-/// The quick look's own spec view (its pane's number; never a column's).
+/// The quick look's own spec view (its buffer's number; never a panel's).
 pub const PANE: u32 = u32::MAX;
 
 pub struct QuickLook {
     /// The view it holds (and gives the keyboard to): its own spec view
     /// (a component's full card), or the inbox.
     pub kind: BufferKind,
-    /// The column it's over, and the view that column showed.
-    pub slot: usize,
+    /// The panel it's over, and the buffer that panel showed.
+    pub panel: usize,
     pub over: BufferKind,
     /// The spec view used before it opened (used again when it closes).
     pub previous_spec: u32,
@@ -29,10 +29,10 @@ pub struct QuickLook {
 }
 
 impl QuickLook {
-    /// Opened over column `slot` (showing `over`) at `now`, by `key` if a
+    /// Opened over panel `panel` (showing `over`) at `now`, by `key` if a
     /// key opened it (and is still down).
-    pub fn open(kind: BufferKind, slot: usize, over: BufferKind, previous_spec: u32, key: Option<Chord>, now: f64) -> Self {
-        Self { kind, slot, over, previous_spec, held: key.map(|k| (k, now)) }
+    pub fn open(kind: BufferKind, panel: usize, over: BufferKind, previous_spec: u32, key: Option<Chord>, now: f64) -> Self {
+        Self { kind, panel, over, previous_spec, held: key.map(|k| (k, now)) }
     }
 
 

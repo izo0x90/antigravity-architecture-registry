@@ -183,7 +183,7 @@ look! {
     /// How long things take to move (cards rearranging, going into a
     /// level or out of it), in seconds (0: at once).
     move_seconds,
-    /// The quick look: at least this wide (or its column's width, when
+    /// The quick look: at least this wide (or its panel's width, when
     /// wider), and this share of the screen's height.
     quick_look_width,
     quick_look_height,
@@ -294,7 +294,7 @@ mod glyph_tests {
         ("app/outside.rs", include_str!("app/outside.rs")),
         ("app/views.rs", include_str!("app/views.rs")),
         ("app/draw/bars.rs", include_str!("app/draw/bars.rs")),
-        ("app/draw/slots.rs", include_str!("app/draw/slots.rs")),
+        ("app/draw/panels.rs", include_str!("app/draw/panels.rs")),
         ("app/draw/top_bar.rs", include_str!("app/draw/top_bar.rs")),
         ("app/draw/which_key.rs", include_str!("app/draw/which_key.rs")),
         ("chat.rs", include_str!("chat.rs")),

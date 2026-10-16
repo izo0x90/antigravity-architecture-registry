@@ -29,7 +29,7 @@ fn search_marks_counts_and_ends_work_through_the_keys() {
     assert_eq!(selected(&app), "rust:a::run", "ctrl+i goes forward again");
     // / searches incrementally; Enter jumps; Escape gives up.
     frame(&ctx, &mut app, key("/"));
-    assert_eq!(app.input_mode, InputMode::Capture { slot: 1 });
+    assert_eq!(app.input_mode, InputMode::Capture { panel: 1 });
     frame(&ctx, &mut app, key("s"));
     assert_eq!(selected(&app), "rust:a::step", "first match shows while typing");
     assert!(texts(&frame(&ctx, &mut app, vec![])).contains("/s| 2 matches"));
@@ -75,14 +75,14 @@ fn the_jump_list_crosses_views_and_slots() {
     app.desk.graph.select(Some("rust:a::step".into()));
     frame(&ctx, &mut app, vec![]);
     keys(&ctx, &mut app, "gd");
-    assert_eq!((app.focused_kind(), app.desk.columns.focused()), (BufferKind::Code, 0), "the code opened beside the graph, with focus");
+    assert_eq!((app.focused_kind(), app.desk.panels.focused()), (BufferKind::Code, 0), "the code opened beside the graph, with focus");
     app.desk.code.set_content((1..=40).map(|i| format!("line {i}\n")).collect());
     keys(&ctx, &mut app, "G");
     assert_eq!(app.desk.code.target_line, Some(40));
     ctrl(&ctx, &mut app, egui::Key::O);
     assert_eq!(app.desk.code.target_line, Some(10), "back within the code");
     ctrl(&ctx, &mut app, egui::Key::O);
-    assert_eq!((app.desk.columns.focused(), app.focused_kind(), selected(&app)), (1, BufferKind::Graph, "rust:a::step"), "back to the graph's slot, focused, where it was");
+    assert_eq!((app.desk.panels.focused(), app.focused_kind(), selected(&app)), (1, BufferKind::Graph, "rust:a::step"), "back to the graph's panel, focused, where it was");
     ctrl(&ctx, &mut app, egui::Key::I);
     assert_eq!((app.focused_kind(), app.desk.code.target_line), (BufferKind::Code, Some(10)));
     // Nothing left to go back to: says so.
@@ -340,16 +340,16 @@ fn marks_work_across_views() {
     focus(&ctx, &mut app, BufferKind::Code);
     app.desk.code.move_to("6");
     keys(&ctx, &mut app, "mc");
-    app.desk.columns.focus(2);
+    app.desk.panels.focus(2);
     focus(&ctx, &mut app, BufferKind::Tree);
     app.desk.tree.move_to("rust:b");
     keys(&ctx, &mut app, "mt");
-    app.desk.columns.focus(0);
+    app.desk.panels.focus(0);
     focus(&ctx, &mut app, BufferKind::Graph);
     keys(&ctx, &mut app, "'c");
-    assert_eq!((app.desk.columns.focused(), app.focused_kind(), app.desk.code.target_line), (1, BufferKind::Code, Some(6)), "back to the code, in its slot");
+    assert_eq!((app.desk.panels.focused(), app.focused_kind(), app.desk.code.target_line), (1, BufferKind::Code, Some(6)), "back to the code, in its panel");
     keys(&ctx, &mut app, "'t");
-    assert_eq!((app.desk.columns.focused(), app.desk.tree.cursor.as_ref().map(|c| c.as_str())), (2, Some("rust:b")));
+    assert_eq!((app.desk.panels.focused(), app.desk.tree.cursor.as_ref().map(|c| c.as_str())), (2, Some("rust:b")));
     ctrl(&ctx, &mut app, egui::Key::O);
     assert_eq!(app.focused_kind(), BufferKind::Code, "a mark jump is in the jump list");
     // The popup after ' lists them.
@@ -441,7 +441,7 @@ fn spec_keys_walk_items_and_review_them() {
     assert_eq!(app.desk.spec.entry().unwrap().item, crate::nav::SpecItem::Step(0));
     frame(&ctx, &mut app, key("c"));
     frame(&ctx, &mut app, vec![]);
-    assert_eq!(app.input_mode, InputMode::Insert { slot: 1 }, "c: the composer has the keyboard");
+    assert_eq!(app.input_mode, InputMode::Insert { panel: 1 }, "c: the composer has the keyboard");
     assert!(app.desk.spec.composer.is_some());
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert_eq!(app.input_mode, InputMode::Normal);
@@ -449,16 +449,16 @@ fn spec_keys_walk_items_and_review_them() {
 
 #[test]
 fn hint_labels_sit_beside_their_items() {
-    let slot = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(400.0, 400.0));
+    let panel = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(400.0, 400.0));
     let size = egui::vec2(24.0, 18.0);
-    let room_left = hint_chip(egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 20.0)), size, slot, &[]);
+    let room_left = hint_chip(egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 20.0)), size, panel, &[]);
     assert!(room_left.right() <= 100.0, "left of it: {room_left:?}");
-    let at_edge = hint_chip(egui::Rect::from_min_size(egui::pos2(4.0, 50.0), egui::vec2(80.0, 20.0)), size, slot, &[]);
+    let at_edge = hint_chip(egui::Rect::from_min_size(egui::pos2(4.0, 50.0), egui::vec2(80.0, 20.0)), size, panel, &[]);
     assert!(at_edge.left() >= 84.0, "right of it: {at_edge:?}");
-    let full = hint_chip(egui::Rect::from_min_size(egui::pos2(4.0, 50.0), egui::vec2(394.0, 20.0)), size, slot, &[]);
+    let full = hint_chip(egui::Rect::from_min_size(egui::pos2(4.0, 50.0), egui::vec2(394.0, 20.0)), size, panel, &[]);
     assert!(full.right() <= 398.0 && full.left() > 300.0, "inside its right end: {full:?}");
     // Never on a label already placed: the next spot over.
-    let crowded = hint_chip(egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 20.0)), size, slot, &[room_left]);
+    let crowded = hint_chip(egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 20.0)), size, panel, &[room_left]);
     assert!(!crowded.intersects(room_left) && crowded.left() >= 180.0, "{crowded:?}");
 }
 
@@ -490,10 +490,10 @@ fn searches_and_restores_put_things_back_exactly() {
     app.desk.spec.restore(&place);
     assert_eq!(app.desk.spec.entry().unwrap().item, crate::nav::SpecItem::Step(1));
     assert_eq!(app.desk.spec.current, crate::spec::Section::Logic);
-    // One column and back: the slots as they were.
-    app.desk.columns = columns_of(&[BufferKind::Code, BufferKind::Graph, BufferKind::Queue], 2);
+    // One panel and back: the panels as they were.
+    app.desk.panels = panels_of(&[BufferKind::Code, BufferKind::Graph, BufferKind::Queue], 2);
     app.run_shell(ShellCommand::SetLayout(1), None, None, &ctx);
-    assert_eq!(app.desk.columns.kind(0), BufferKind::Queue);
+    assert_eq!(app.desk.panels.kind(0), BufferKind::Queue);
     app.run_shell(ShellCommand::SetLayout(3), None, None, &ctx);
-    assert_eq!((app.desk.columns.kinds(), app.desk.columns.focused()), (vec![BufferKind::Code, BufferKind::Graph, BufferKind::Queue], 2));
+    assert_eq!((app.desk.panels.kinds(), app.desk.panels.focused()), (vec![BufferKind::Code, BufferKind::Graph, BufferKind::Queue], 2));
 }

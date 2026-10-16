@@ -117,10 +117,10 @@ pub enum Place {
     Changes { item: Option<String> },
 }
 
-/// A place in a slot: what the jump list and marks hold.
+/// A place in a panel: what the jump list and marks hold.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Jump {
-    pub slot: usize,
+    pub panel: usize,
     pub kind: BufferKind,
     pub place: Place,
 }
@@ -605,7 +605,7 @@ pub trait Navigable {
     /// Shows `target` at its cursor (a go-to arrived); why not, when it
     /// can't.
     fn show_target(&mut self, _target: &Target) -> Result<(), String> {
-        Err("This view doesn't show things gone to.".into())
+        Err("This buffer doesn't show things gone to.".into())
     }
 
     /// Opens or goes into an item (`F` on a hint).
@@ -633,7 +633,7 @@ mod tests {
     use super::*;
 
     fn at(line: usize) -> Jump {
-        Jump { slot: 0, kind: BufferKind::Code, place: Place::Code { file: "a.rs".into(), line } }
+        Jump { panel: 0, kind: BufferKind::Code, place: Place::Code { file: "a.rs".into(), line } }
     }
 
     #[test]
@@ -654,7 +654,7 @@ mod tests {
         assert!(!list.can_forward(), "a new jump drops what was ahead");
         assert_eq!(list.back(at(20)), Some(at(5)));
         // Another view in another slot is just another entry.
-        let graph = Jump { slot: 1, kind: BufferKind::Graph, place: Place::Tree { cursor: None } };
+        let graph = Jump { panel: 1, kind: BufferKind::Graph, place: Place::Tree { cursor: None } };
         list.record(graph.clone());
         assert_eq!(list.back(at(3)), Some(graph));
     }

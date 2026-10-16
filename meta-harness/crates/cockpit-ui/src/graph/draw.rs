@@ -12,7 +12,7 @@ use arch_graph::tree::{Card, Line as TreeLine, LineKind, Rect as WorldRect, View
 
 use super::{Camera, GraphState, Load, NavChange};
 use crate::actions::{At, Control, RunCx, Style};
-use crate::panel::{Status, Tone};
+use crate::hosted::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
 use crate::graph_config::ChipMode;
 use crate::graph_style::{LegendEntry, Swatch, style};
@@ -223,12 +223,12 @@ impl GraphState {
         self.more_rects.iter().find(|(_, r)| r.contains(pos)).map(|(k, _)| k.clone())
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, slot_idx: usize, pan_held: bool, cx: &mut RunCx<'_>) {
+    pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, panel: usize, pan_held: bool, cx: &mut RunCx<'_>) {
         self.tick(cx.net, cx.ctx);
         self.render_where(ui);
         let canvas = ui.available_rect_before_wrap();
         self.canvas = canvas;
-        feedback.register_inspectable(ui, &format!("slot_{}:graph:canvas", slot_idx + 1), canvas);
+        feedback.register_inspectable(ui, &format!("panel_{}:graph:canvas", panel + 1), canvas);
         let response = ui.allocate_rect(canvas, Sense::click_and_drag());
         let painter = ui.painter_at(canvas);
         painter.rect_filled(canvas, 0.0, colors().bg);
@@ -839,7 +839,7 @@ fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, width: f32) -> O
     (lo > 0).then(|| format!("{}…", chars[..lo].iter().collect::<String>()))
 }
 
-impl crate::panel::Panel for GraphState {
+impl crate::hosted::Hosted for GraphState {
     /// What it shows: the code, or a plan.
     fn title(&self) -> Status {
         Status::new(format!("{} {}", egui_phosphor::regular::GRAPH, self.source_label()), Tone::Plain)

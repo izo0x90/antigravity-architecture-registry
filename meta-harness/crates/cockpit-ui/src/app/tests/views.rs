@@ -94,7 +94,7 @@ fn the_graph_says_when_an_answer_was_slow_or_cut() {
     assert!(shown.contains("showing 2 of 3 levels: 7 more (out of time)"), "{shown}");
     // The status line says it too, with the graph out of sight.
     focus(&ctx, &mut app, BufferKind::Code);
-    app.desk.columns = columns_of(&[BufferKind::Code], 0);
+    app.desk.panels = panels_of(&[BufferKind::Code], 0);
     let shown = texts(&frame(&ctx, &mut app, vec![]));
     assert!(shown.contains("graph cut (out of time), slow: 340 ms"), "{shown}");
 }
@@ -116,7 +116,7 @@ fn find_in_the_code_asks_the_graph_as_its_typed() {
 #[test]
 fn the_code_view_scrolls_with_a_chat_beside_it() {
     let (ctx, mut app) = full_app();
-    app.desk.columns = columns_of(&[BufferKind::Chat, BufferKind::Code, BufferKind::Tree], 1);
+    app.desk.panels = panels_of(&[BufferKind::Chat, BufferKind::Code, BufferKind::Tree], 1);
     app.desk.code.set_content((1..=500).map(|i| format!("fn line_{i}() {{}}\n")).collect());
     for _ in 0..3 {
         frame(&ctx, &mut app, vec![]);
@@ -218,12 +218,12 @@ fn enter_on_a_change_opens_its_file_at_the_line() {
     use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, FileStatus, Group};
     let (ctx, mut app) = full_app();
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"space b f"}"#).unwrap();
-    assert_eq!(app.desk.columns.focused_kind(), BufferKind::Changes, "Space b f shows the changes");
+    assert_eq!(app.desk.panels.focused_kind(), BufferKind::Changes, "Space b f shows the changes");
     let list = ChangeList { comparison: Comparison::default(), files: vec![ChangedFile { path: "src/a.rs".into(), old_path: None, status: FileStatus::Modified, group: Group::Unstaged, added: 1, removed: 0, binary: false }], offset: 0, total: 1 };
     app.desk.changes.take_list_for_test(list);
     app.desk.changes.move_to("f:Unstaged:src/a.rs");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert_eq!((app.desk.columns.focused_kind(), app.desk.code.current_file.as_str()), (BufferKind::Code, "src/a.rs"));
+    assert_eq!((app.desk.panels.focused_kind(), app.desk.code.current_file.as_str()), (BufferKind::Code, "src/a.rs"));
 }
 
 #[test]
@@ -246,11 +246,11 @@ fn g_x_on_a_message_compares_its_turns_changes() {
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"space b c"}"#).unwrap();
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g g"}"#).unwrap();
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g x"}"#).unwrap();
-    assert_eq!(app.desk.columns.focused_kind(), BufferKind::Chat, "the timeline hasn't seen it: nothing to go to");
+    assert_eq!(app.desk.panels.focused_kind(), BufferKind::Chat, "the timeline hasn't seen it: nothing to go to");
     let turn = Comparison { from: Point::Snapshot("1-a".into()), to: Point::Snapshot("2-b".into()) };
     app.desk.changes.take_timeline_for_test(Timeline { windows: vec![], turns: vec![TurnChanges { thread: "t".into(), turn: "turn".into(), comparison: turn.clone(), files: 3, alongside: vec![] }] });
     frame(&ctx, &mut app, Vec::new());
     assert_eq!(app.desk.chat.turn_files.get("turn"), Some(&3), "the chat knows how much each turn changed");
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g x"}"#).unwrap();
-    assert_eq!((app.desk.columns.focused_kind(), app.desk.changes.comparison.clone()), (BufferKind::Changes, turn));
+    assert_eq!((app.desk.panels.focused_kind(), app.desk.changes.comparison.clone()), (BufferKind::Changes, turn));
 }

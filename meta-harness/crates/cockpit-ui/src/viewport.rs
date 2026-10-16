@@ -45,7 +45,7 @@ pub enum Go {
     /// Half the window sideways, `n` times (negative: left).
     Sideways(i32),
     /// `n` columns sideways (negative: left).
-    Columns(i32),
+    Panels(i32),
 }
 
 /// How a stop gone to is shown.
@@ -156,7 +156,7 @@ impl Viewport {
         if stops.is_empty() {
             return match go {
                 Go::Sideways(n) => self.sideways(cursor.unwrap_or(0), self.window.x / 2.0 * n as f32),
-                Go::Columns(n) => self.sideways(cursor.unwrap_or(0), self.column * n as f32),
+                Go::Panels(n) => self.sideways(cursor.unwrap_or(0), self.column * n as f32),
                 _ => None,
             };
         }
@@ -199,7 +199,7 @@ impl Viewport {
                 }
             }
             Go::Sideways(n) => return self.sideways(at, self.window.x / 2.0 * n as f32),
-            Go::Columns(n) => return self.sideways(at, self.column * n as f32),
+            Go::Panels(n) => return self.sideways(at, self.column * n as f32),
         };
         (moved.cursor != cursor.unwrap_or(usize::MAX) || moved.offset != self.offset).then_some(moved)
     }
@@ -323,7 +323,7 @@ impl Measured {
                 Go::First => 0,
                 Go::Last => last,
                 Go::To(i, _) => i.min(last),
-                Go::Sideways(_) | Go::Columns(_) => return None,
+                Go::Sideways(_) | Go::Panels(_) => return None,
             };
             self.show = Some((to, Show::InView));
             return (Some(to) != cursor).then_some(to);
@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(view.go(&stops, Some(3), Go::Sideways(-3)).map(|m| m.offset.x), Some(0.0));
         view.offset.x = 0.0;
         view.column = 8.0;
-        assert_eq!(view.go(&stops, Some(3), Go::Columns(4)).map(|m| m.offset.x), Some(32.0), "a few columns");
+        assert_eq!(view.go(&stops, Some(3), Go::Panels(4)).map(|m| m.offset.x), Some(32.0), "a few columns");
         view.content.x = 200.0;
         view.offset.x = 0.0;
         assert_eq!(view.go(&stops, Some(3), Go::Sideways(1)), None, "narrower than the window: nothing");

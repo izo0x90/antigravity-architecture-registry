@@ -1,7 +1,7 @@
 //! Drawing the chat: controls, banners, the stream, items, the input.
 
 use super::*;
-use crate::panel::{Status, Tone};
+use crate::hosted::{Status, Tone};
 
 pub(super) fn mcp_label(server: &McpServer) -> String {
     match &server.transport {
@@ -47,7 +47,7 @@ pub(super) fn block_detail(block: &ContentBlock) -> String {
 
 impl ChatStreamState {
     pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
-        let (net, slot_idx) = (cx.net, cx.slot);
+        let (net, panel) = (cx.net, cx.panel);
         let ctx = ui.ctx().clone();
         self.drain_replies(net, &ctx);
         self.drawn.insert(self.ui.slot.clone());
@@ -58,7 +58,7 @@ impl ChatStreamState {
 
             let scroll_height = (ui.available_height() - 105.0).max(50.0);
             self.ui.drawing.clear();
-            let area = egui::ScrollArea::vertical().id_salt(("chat_stream", slot_idx)).auto_shrink([false, false]).stick_to_bottom(self.ui.cursor.is_none()).max_height(scroll_height);
+            let area = egui::ScrollArea::vertical().id_salt(("chat_stream", panel)).auto_shrink([false, false]).stick_to_bottom(self.ui.cursor.is_none()).max_height(scroll_height);
             // Following the latest: the newest stays in view. Else where the
             // shared rules say.
             let area = if self.ui.cursor.is_some() { self.ui.scrolling.area(area, ui.input(|i| i.time)) } else { area };
@@ -73,14 +73,14 @@ impl ChatStreamState {
                 ctx.request_repaint();
             }
             self.ui.spots = std::mem::take(&mut self.ui.drawing).into_iter().filter(|s| s.rect.intersects(stream.inner_rect)).collect();
-            feedback.register_inspectable(ui, &format!("slot_{}:chat:stream", slot_idx + 1), stream.inner_rect);
+            feedback.register_inspectable(ui, &format!("panel_{}:chat:stream", panel + 1), stream.inner_rect);
             ui.separator();
 
             let start = ui.cursor().min;
             let w = ui.available_width();
             self.render_input(ui, feedback, is_focused, cx);
             let input = Rect::from_min_size(Pos2::new(start.x, start.y), Vec2::new(w, (ui.cursor().min.y - start.y).max(40.0)));
-            feedback.register_inspectable(ui, &format!("slot_{}:chat:input_bar", slot_idx + 1), input);
+            feedback.register_inspectable(ui, &format!("panel_{}:chat:input_bar", panel + 1), input);
         });
     }
 
@@ -301,13 +301,13 @@ impl ChatStreamState {
     }
 
     pub(super) fn render_input(&mut self, ui: &mut egui::Ui, feedback: &FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
-        let (net, slot_idx) = (cx.net, cx.slot);
+        let (net, panel) = (cx.net, cx.panel);
         let input_mode = &mut *cx.input_mode;
         let ctx = ui.ctx().clone();
 
         ui.horizontal(|ui| {
             let text_w = ui.available_width();
-            let inserting = *input_mode == crate::keymap::InputMode::Insert { slot: slot_idx };
+            let inserting = *input_mode == crate::keymap::InputMode::Insert { panel };
             let steerable = self.instance().is_some_and(|s| s.capabilities.turns.active_steering) && self.thread().and_then(|t| t.running_turn()).is_some();
             let keys = crate::keymap::local();
             let hint = if inserting && steerable {
@@ -319,7 +319,7 @@ impl ChatStreamState {
             };
             let output = ui.add(
                 keys.text_box(&mut self.ui.input_buffer)
-                    .id(egui::Id::new(("chat_persistent_input_text_edit", slot_idx)))
+                    .id(egui::Id::new(("chat_persistent_input_text_edit", panel)))
                     .desired_rows(2)
                     .desired_width(text_w)
                     .hint_text(hint),
@@ -328,7 +328,7 @@ impl ChatStreamState {
                 output.request_focus();
             }
             if output.clicked() || output.gained_focus() {
-                *input_mode = crate::keymap::InputMode::Insert { slot: slot_idx };
+                *input_mode = crate::keymap::InputMode::Insert { panel };
             }
             // Its Send (and Add) are actions, under it while it's typed in.
             self.ui.typing = inserting.then_some(output.rect);
@@ -347,7 +347,7 @@ impl ChatStreamState {
     }
 }
 
-impl crate::panel::Panel for ChatStreamState {
+impl crate::hosted::Hosted for ChatStreamState {
     /// The agent slot it shows (its role on hover).
     fn title(&self) -> Status {
         match self.slot() {

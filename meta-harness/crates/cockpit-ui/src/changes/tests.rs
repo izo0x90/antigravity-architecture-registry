@@ -115,7 +115,7 @@ fn side_by_side_puts_a_run_of_removed_lines_beside_the_added_ones() {
     let rows: Vec<(Option<&str>, Option<&str>)> = paired(&lines).into_iter().map(|(l, r)| (l.map(|l| l.text.as_str()), r.map(|r| r.text.as_str()))).collect();
     assert_eq!(rows, [(Some("a"), Some("a")), (Some("b"), Some("B")), (Some("c"), None), (Some("d"), Some("d"))]);
     let mut view = ChangesView::default();
-    assert!(view.side_by_side(1200.0) && !view.side_by_side(500.0), "auto: by the column's width");
+    assert!(view.side_by_side(1200.0) && !view.side_by_side(500.0), "auto: by the panel's width");
     view.layout = DiffLayout::Unified;
     assert!(!view.side_by_side(1200.0));
 }
@@ -161,7 +161,7 @@ fn the_timeline_lists_windows_newest_first_and_picking_one_compares_it() {
     view.tick(&net, &ctx, false);
     assert_eq!(view.timeline().1, 1);
     let mut cx_net = (NetClient::new("http://127.0.0.1:9"), None, None, crate::keymap::InputMode::Normal);
-    let mut cx = RunCx { net: &cx_net.0, ctx: &ctx, input_mode: &mut cx_net.3, slot: 0, note: &mut cx_net.1, asked: &mut cx_net.2 };
+    let mut cx = RunCx { net: &cx_net.0, ctx: &ctx, input_mode: &mut cx_net.3, panel: 0, note: &mut cx_net.1, asked: &mut cx_net.2 };
     let timeline = view.actions().into_iter().find(|a| a.id == "changes.timeline").unwrap();
     view.run(&timeline, None, &mut cx);
     assert_eq!(view.rows(), [Row::Window(0), Row::Window(1)]);
@@ -181,7 +181,7 @@ fn the_timeline_lists_windows_newest_first_and_picking_one_compares_it() {
 fn the_user_stages_a_file_or_a_change_and_the_cursor_follows_the_file() {
     let (mut view, net, ctx) = view_with_changes();
     let mut parts = (None, None, crate::keymap::InputMode::Normal);
-    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut parts.2, slot: 0, note: &mut parts.0, asked: &mut parts.1 };
+    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut parts.2, panel: 0, note: &mut parts.0, asked: &mut parts.1 };
     let ids = |view: &ChangesView| view.actions().into_iter().map(|a| a.id).collect::<Vec<_>>();
     assert!(ids(&view).contains(&"changes.stage".to_owned()) && !ids(&view).contains(&"changes.unstage".to_owned()), "unstaged: stage it");
     let stage = view.actions().into_iter().find(|a| a.id == "changes.stage").unwrap();
@@ -242,7 +242,7 @@ fn drawn(view: &mut ChangesView, ctx: &egui::Context, h: f32) -> Vec<String> {
     let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, h))), ..Default::default() }, |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-            view.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut asked });
+            view.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
         });
     });
     fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
@@ -340,7 +340,7 @@ fn more_context_is_offered_where_theres_more_to_show_and_adds_ten_lines_each_sid
     let more = view.actions().into_iter().find(|a| a.id == "changes.more_context").unwrap();
     assert_eq!(more.label, "Show 10 more lines around its changes");
     let mut parts = (None, None, crate::keymap::InputMode::Normal);
-    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut parts.2, slot: 0, note: &mut parts.0, asked: &mut parts.1 };
+    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut parts.2, panel: 0, note: &mut parts.0, asked: &mut parts.1 };
     view.run(&more, None, &mut cx);
     assert!(net.sent.lock().unwrap().last().is_some_and(|s| s.contains("a.rs") && s.contains("context=13")), "{:?}", net.sent.lock().unwrap().last());
     let ctx_line = |n: u32| line(LineKind::Context, Some(n), Some(n), "same");

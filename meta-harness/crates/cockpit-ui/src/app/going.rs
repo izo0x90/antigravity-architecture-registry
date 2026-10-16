@@ -7,24 +7,24 @@ impl CockpitApp {
         self.desk.graph.component(id).map(|c| c.name.clone()).unwrap_or_else(|| crate::nav::short_name(id))
     }
 
-    /// A go-to's count names the column it lands in (1 is the leftmost; one
-    /// past the last adds a column). Not the column it starts from: false,
+    /// A go-to's count names the panel it lands in (1 is the leftmost; one
+    /// past the last adds a panel). Not the panel it starts from: false,
     /// and the user is told why.
-    pub(super) fn land_in(&mut self, column: usize) -> bool {
-        let count = self.desk.columns.len();
-        let Some(slot) = column.checked_sub(1) else { return true };
-        if slot == self.desk.columns.focused() {
-            self.note = Some(format!("Column {column} is this one: give another column's number (1 to {count}, or {} for a new one).", count + 1));
+    pub(super) fn land_in(&mut self, number: usize) -> bool {
+        let count = self.desk.panels.len();
+        let Some(panel) = number.checked_sub(1) else { return true };
+        if panel == self.desk.panels.focused() {
+            self.note = Some(format!("Panel {number} is this one: give another panel's number (1 to {count}, or {} for a new one).", count + 1));
             return false;
         }
-        if slot > count || slot >= self.config.columns.max {
-            self.note = Some(format!("There are {count} columns: give 1 to {count}, or {} for a new one.", count + 1));
+        if panel > count || panel >= self.config.panels.max {
+            self.note = Some(format!("There are {count} panels: give 1 to {count}, or {} for a new one.", count + 1));
             return false;
         }
-        if slot == count {
-            self.desk.columns.set_count(count + 1, self.config.columns.max);
+        if panel == count {
+            self.desk.panels.set_count(count + 1, self.config.panels.max);
         }
-        self.landing = Some(slot);
+        self.landing = Some(panel);
         true
     }
 
@@ -71,7 +71,7 @@ impl CockpitApp {
                         i.push(r);
                     }
                 });
-                self.desk.pending_goto = Some(Pending { wait: Wait::At { op }, from, origin, column: self.landing });
+                self.desk.pending_goto = Some(Pending { wait: Wait::At { op }, from, origin, panel: self.landing });
             }
             (None, _) => self.note = Some("There's no component here.".into()),
         }
@@ -98,7 +98,7 @@ impl CockpitApp {
                     }
                     None => {
                         self.desk.details.want(&id, &source, &self.desk.net, ctx);
-                        self.desk.pending_goto = Some(Pending { wait: Wait::Relations { op, component: id }, from, origin, column: self.landing });
+                        self.desk.pending_goto = Some(Pending { wait: Wait::Relations { op, component: id }, from, origin, panel: self.landing });
                     }
                 }
             }
@@ -111,7 +111,7 @@ impl CockpitApp {
             0 => {}
             1 => self.arrive(op, found[0].clone(), from, origin, ctx),
             _ => {
-                self.desk.choosing = Some(Choosing { op, from, origin, candidates: found, column: self.landing });
+                self.desk.choosing = Some(Choosing { op, from, origin, candidates: found, panel: self.landing });
                 if let Some(pick) = self.bound_actions().into_iter().find(|b| b.action.id == "goto.pick") {
                     self.open_palette(Some(&pick));
                 }
@@ -122,7 +122,7 @@ impl CockpitApp {
     pub(super) fn goto_pick(&mut self, value: Option<String>, ctx: &egui::Context) {
         let (Some(choosing), Some(value)) = (self.desk.choosing.take(), value) else { return };
         if let Some(c) = choosing.candidates.iter().find(|c| c.id.as_str() == value) {
-            self.landing = choosing.column;
+            self.landing = choosing.panel;
             self.arrive(choosing.op, c.clone(), choosing.from, choosing.origin, ctx);
             self.landing = None;
         }
@@ -136,7 +136,7 @@ impl CockpitApp {
             self.open_component_code(to.id, to.line, from, ctx);
             return;
         }
-        // Where it started, when that view can show it (in the column a
+        // Where it started, when that view can show it (in the panel a
         // count named, a view of that kind there); else the graph.
         let target = Target::Component(to.id);
         let kind = if self.desk.view(origin).can_show(&target) { origin } else { BufferKind::Graph };
@@ -151,15 +151,15 @@ impl CockpitApp {
     /// Shows `target` in a view of `kind` (as it says) and moves focus
     /// there; when it can't, says why and nothing moves.
     pub(super) fn show_target_in(&mut self, kind: BufferKind, target: &Target, from: Jump) {
-        let used = self.desk.used_pane(kind);
+        let used = self.desk.used_buffer(kind);
         if let Err(why) = self.desk.view_mut(kind).show_target(target) {
             self.note = Some(why);
             return;
         }
-        // The view it lands in (a column's own of that kind), shown there
+        // The view it lands in (a panel's own of that kind), shown there
         // too when it's another.
         self.focus_kind(kind);
-        if self.desk.used_pane(kind) != used {
+        if self.desk.used_buffer(kind) != used {
             let _ = self.desk.view_mut(kind).show_target(target);
         }
         // A card shown follows in the graph, unless its view is pinned.
@@ -214,7 +214,7 @@ impl CockpitApp {
             None => {
                 let source = self.desk.graph.nav.source.clone();
                 self.desk.details.want(&id, &source, &self.desk.net, ctx);
-                self.desk.pending_goto = Some(Pending { wait: Wait::Code { component: id, line }, from, origin: self.focused_kind(), column: self.landing });
+                self.desk.pending_goto = Some(Pending { wait: Wait::Code { component: id, line }, from, origin: self.focused_kind(), panel: self.landing });
             }
         }
     }
@@ -231,9 +231,9 @@ impl CockpitApp {
         }
         let at = std::mem::take(&mut *self.desk.at_inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for reply in at {
-            let Some(Pending { wait: Wait::At { op }, from, origin, column }) = self.desk.pending_goto.clone() else { continue };
+            let Some(Pending { wait: Wait::At { op }, from, origin, panel }) = self.desk.pending_goto.clone() else { continue };
             self.desk.pending_goto = None;
-            self.landing = column;
+            self.landing = panel;
             match reply {
                 Ok(component) => self.goto_component(op, component.id, from, origin, ctx),
                 Err(_) => self.note = Some("No component at this line.".into()),
@@ -244,8 +244,8 @@ impl CockpitApp {
             Some(Pending { wait: Wait::Relations { component, .. } | Wait::Code { component, .. }, .. }) => self.desk.details.get(component, &source).is_some(),
             _ => false,
         };
-        if ready && let Some(Pending { wait, from, origin, column }) = self.desk.pending_goto.take() {
-            self.landing = column;
+        if ready && let Some(Pending { wait, from, origin, panel }) = self.desk.pending_goto.take() {
+            self.landing = panel;
             match wait {
                 Wait::Relations { op, component } => self.goto_component(op, component, from, origin, ctx),
                 Wait::Code { component, line } => self.open_component_code(component, line, from, ctx),

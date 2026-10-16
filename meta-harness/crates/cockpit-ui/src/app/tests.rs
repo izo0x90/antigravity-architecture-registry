@@ -94,18 +94,18 @@ fn from_outside(ctx: &egui::Context, app: &mut CockpitApp, call: &str) -> crate:
     panic!("{call} wasn't answered");
 }
 
-/// Columns showing these kinds, one view each.
-fn columns_of(kinds: &[BufferKind], focused: usize) -> crate::columns::Columns {
-    crate::columns::Columns::new(kinds.iter().map(|k| Pane::new(*k, 0)).collect(), focused)
+/// Panels showing these kinds, one view each.
+fn panels_of(kinds: &[BufferKind], focused: usize) -> crate::panels::Panels {
+    crate::panels::Panels::new(kinds.iter().map(|k| Buffer::new(*k, 0)).collect(), focused)
 }
 
-/// An app with the graph in slot 2 (focused) showing the sample view.
+/// An app with the graph in panel 2 (focused) showing the sample view.
 fn app_with_graph() -> (egui::Context, CockpitApp) {
     let ctx = egui::Context::default();
     let mut app = CockpitApp::new("http://127.0.0.1:9");
     app.initialized = true; // skip network bootstrapping
     app.desk.graph = showing(sample_tree());
-    app.desk.columns.focus(1);
+    app.desk.panels.focus(1);
     (ctx, app)
 }
 
@@ -153,7 +153,7 @@ fn call(a: &str, b: &str, order: u32, line: u32) -> Relation {
     r
 }
 
-/// Every view with something in it: the graph (slot 2, focused) on plan
+/// Every view with something in it: the graph (panel 2, focused) on plan
 /// `p`, the outline, a code file with definitions and calls, a spec
 /// (pinned on step), the queue and a conversation.
 fn full_app() -> (egui::Context, CockpitApp) {
@@ -178,16 +178,16 @@ fn full_app() -> (egui::Context, CockpitApp) {
     for n in 4..40 {
         app.desk.chat.process_event(crate::chat::tests::item(n, harness_contracts::ItemBody::UserMessage { text: format!("message {n}") }));
     }
-    app.desk.columns.set_count(3, 12);
+    app.desk.panels.set_count(3, 12);
     (ctx, app)
 }
 
-/// Moves the view of `kind` in use to the focused slot and draws it (so
+/// Moves the view of `kind` in use to the focused panel and draws it (so
 /// it knows its size).
 fn focus(ctx: &egui::Context, app: &mut CockpitApp, kind: BufferKind) {
-    let pane = app.desk.used_pane(kind);
-    app.desk.columns.place(app.desk.columns.focused(), pane);
-    app.use_pane(pane);
+    let buffer = app.desk.used_buffer(kind);
+    app.desk.panels.place(app.desk.panels.focused(), buffer);
+    app.use_buffer(buffer);
     for _ in 0..3 {
         frame(ctx, app, vec![]);
     }
@@ -206,9 +206,9 @@ fn peek_key(ctx: &egui::Context, app: &mut CockpitApp, pressed: bool, time: f64)
     frame_at(ctx, app, events, time);
 }
 
-/// The agent moving the graph, in column `column` if it names one.
-fn agent_moves(app: &mut CockpitApp, select: &str, column: Option<u32>) {
-    let request = arch_graph::ViewRequest { select: Some(select.into()), column, ..Default::default() };
+/// The agent moving the graph, in panel `panel` if it names one.
+fn agent_moves(app: &mut CockpitApp, select: &str, panel: Option<u32>) {
+    let request = arch_graph::ViewRequest { select: Some(select.into()), panel, ..Default::default() };
     let event = arch_graph::ArchEvent::ViewRequested { request: Box::new(request), by: arch_graph::Requester::Agent };
     app.desk.net.incoming.lock().unwrap().push(harness_contracts::ClientEvent::Architecture { event });
 }

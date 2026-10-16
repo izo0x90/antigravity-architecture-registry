@@ -4,11 +4,11 @@ use super::*;
 
 /// Where a hint label goes so it hides as little as it can, and never on
 /// another label: just left of its item, else just right of it (inside the
-/// slot), else at the right end of a wide item, else over its corner.
-pub(super) fn hint_chip(item: egui::Rect, size: egui::Vec2, slot: egui::Rect, taken: &[egui::Rect]) -> egui::Rect {
+/// panel), else at the right end of a wide item, else over its corner.
+pub(super) fn hint_chip(item: egui::Rect, size: egui::Vec2, panel: egui::Rect, taken: &[egui::Rect]) -> egui::Rect {
     let top = item.top() + ((item.height().min(18.0) - size.y) / 2.0).min(0.0);
     let at = |x: f32| egui::Rect::from_min_size(egui::pos2(x, top), size);
-    let inside = |r: &egui::Rect| !slot.is_positive() || (r.left() >= slot.left() && r.right() <= slot.right());
+    let inside = |r: &egui::Rect| !panel.is_positive() || (r.left() >= panel.left() && r.right() <= panel.right());
     let mut places = vec![at(item.left() - size.x - 2.0), at(item.right() + 2.0)];
     if item.width() > size.x * 3.0 {
         places.push(at(item.right() - size.x - 2.0));
@@ -28,7 +28,7 @@ impl CockpitApp {
             self.note = Some("Nothing on screen to label.".into());
             return;
         }
-        self.start_capture(Capture::Hint(Hinting { slot: self.desk.columns.focused(), kind, open, typed: String::new(), labels: labels.into_iter().zip(spots).collect() }));
+        self.start_capture(Capture::Hint(Hinting { panel: self.desk.panels.focused(), kind, open, typed: String::new(), labels: labels.into_iter().zip(spots).collect() }));
     }
 
     /// A hint label was typed (or tapped): move there, or open it.
@@ -195,7 +195,7 @@ impl CockpitApp {
                 continue;
             }
             let galley = painter.layout_no_wrap(label.to_uppercase(), egui::FontId::monospace(crate::theme::look().text_title), colors().on_bright);
-            let chip = hint_chip(spot.rect, galley.size() + egui::vec2(8.0, 4.0), self.slot_rects.get(hint.slot).copied().unwrap_or(egui::Rect::EVERYTHING), &taken);
+            let chip = hint_chip(spot.rect, galley.size() + egui::vec2(8.0, 4.0), self.panel_rects.get(hint.panel).copied().unwrap_or(egui::Rect::EVERYTHING), &taken);
             taken.push(chip);
             painter.rect_filled(chip, 3.0, colors().key);
             painter.galley(chip.min + egui::vec2(4.0, 2.0), galley, colors().on_bright);

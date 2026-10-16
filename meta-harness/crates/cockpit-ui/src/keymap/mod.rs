@@ -23,9 +23,9 @@ pub enum InputMode {
     /// The command palette owns the keyboard.
     Palette,
     /// Keystrokes flow into the text field of this slot.
-    Insert { slot: usize },
+    Insert { panel: usize },
     /// The view in this slot reads typed keys itself (e.g. hint labels).
-    Capture { slot: usize },
+    Capture { panel: usize },
 }
 
 /// Tells a leader tap from a leader hold (holding Space pans the graph).

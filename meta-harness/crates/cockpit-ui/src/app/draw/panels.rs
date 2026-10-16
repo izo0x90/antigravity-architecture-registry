@@ -1,42 +1,42 @@
-//! Each column's frame, its tabs, and the palette.
+//! Each panel's frame, its tabs, and the palette.
 
 use super::super::*;
 
 impl CockpitApp {
-    pub fn render_slot(&mut self, slot_idx: usize, ui: &mut egui::Ui) {
-        let is_focused = self.desk.columns.focused() == slot_idx;
+    pub fn render_panel(&mut self, panel: usize, ui: &mut egui::Ui) {
+        let is_focused = self.desk.panels.focused() == panel;
         let border_color = if is_focused { colors().focus } else { colors().border };
 
-        let slot_id = format!("slot_{}", slot_idx + 1);
-        self.feedback.register_inspectable(ui, &slot_id, ui.available_rect_before_wrap());
+        let panel_id = format!("panel_{}", panel + 1);
+        self.feedback.register_inspectable(ui, &panel_id, ui.available_rect_before_wrap());
 
         Frame::NONE.fill(colors().bg).stroke(Stroke::new(crate::theme::look().line_thin, border_color)).corner_radius(crate::theme::look().radius_m).inner_margin(crate::theme::margin(crate::theme::look().space_m)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.set_height(ui.available_height());
 
             ui.vertical(|ui| {
-                let active_kind = self.desk.columns.kind(slot_idx);
+                let active_kind = self.desk.panels.kind(panel);
 
-                // Quiet chrome: the slot's number, then its controls. The row
-                // wraps rather than widen the slot.
+                // Quiet chrome: the panel's number, then its controls. The row
+                // wraps rather than widen the panel.
                 let header_res = ui.horizontal_wrapped(|ui| {
                     let number_color = if is_focused { colors().focus } else { colors().faint };
-                    ui.label(RichText::new((slot_idx + 1).to_string()).strong().monospace().size(crate::theme::look().text_body).color(number_color))
-                        .on_hover_text(format!("Slot {}: {}", slot_idx + 1, active_kind.title().to_lowercase()));
+                    ui.label(RichText::new((panel + 1).to_string()).strong().monospace().size(crate::theme::look().text_body).color(number_color))
+                        .on_hover_text(format!("Panel {}: {}", panel + 1, active_kind.title().to_lowercase()));
                     // Its own controls from the one list (its host's layer
                     // where it is): a tab per kind of view, closing it.
-                    let here = Here { slot: slot_idx, kind: active_kind, look: false };
+                    let here = Here { panel, kind: active_kind, look: false };
                     let own: Vec<Bound> = self.shown_at(here).into_iter().filter(|b| b.layer == Layer::Host).collect();
-                    self.host_controls(ui, &own, slot_idx);
+                    self.host_controls(ui, &own, panel);
                 });
-                self.feedback.register_inspectable(ui, &format!("slot_{}:header", slot_idx + 1), header_res.response.rect);
+                self.feedback.register_inspectable(ui, &format!("panel_{}:header", panel + 1), header_res.response.rect);
                 ui.separator();
 
-                self.render_view(Here { slot: slot_idx, kind: active_kind, look: false }, ui, is_focused);
+                self.render_view(Here { panel, kind: active_kind, look: false }, ui, is_focused);
             });
         });
 
-        if let Some(rect) = self.slot_rects.get_mut(slot_idx) {
+        if let Some(rect) = self.panel_rects.get_mut(panel) {
             *rect = ui.min_rect();
         }
         // Frame-level click-to-focus detection
@@ -44,7 +44,7 @@ impl CockpitApp {
             && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
             && ui.min_rect().contains(pos)
         {
-            self.desk.columns.focus(slot_idx);
+            self.desk.panels.focus(panel);
         }
     }
 

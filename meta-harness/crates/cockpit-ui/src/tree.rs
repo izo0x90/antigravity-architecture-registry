@@ -291,10 +291,10 @@ impl ArchitectureTreeState {
 
 
     pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
-        let (net, slot_idx) = (cx.net, cx.slot);
+        let (net, panel) = (cx.net, cx.panel);
         self.tick(net, ui.ctx());
         let header = ui.horizontal(|ui| ui.add(egui::TextEdit::singleline(&mut self.search_filter).hint_text("filter…").desired_width(f32::INFINITY)));
-        feedback.register_inspectable(ui, &format!("slot_{}:tree:header", slot_idx + 1), header.response.rect);
+        feedback.register_inspectable(ui, &format!("panel_{}:tree:header", panel + 1), header.response.rect);
         ui.separator();
         if self.result.is_none() {
             ui.label(RichText::new(self.error.clone().unwrap_or_else(|| "Loading…".into())).color(colors().muted));
@@ -414,9 +414,9 @@ impl ActionProvider for ArchitectureTreeState {
     }
 }
 
-impl crate::panel::Panel for ArchitectureTreeState {
-    fn title(&self) -> crate::panel::Status {
-        crate::panel::Status::new(format!("{} Outline", egui_phosphor::regular::TREE_STRUCTURE), crate::panel::Tone::Info)
+impl crate::hosted::Hosted for ArchitectureTreeState {
+    fn title(&self) -> crate::hosted::Status {
+        crate::hosted::Status::new(format!("{} Outline", egui_phosphor::regular::TREE_STRUCTURE), crate::hosted::Tone::Info)
     }
 }
 
@@ -733,7 +733,7 @@ pub(crate) mod tests {
             let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 160.0))), ..Default::default() }, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-                    t.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut asked });
+                    t.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
                 });
             });
         }

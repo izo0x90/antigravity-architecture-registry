@@ -2,7 +2,7 @@
 //! notifications), one at a time. A view like the others: the cursor moves
 //! over its parts (what it says, its request, what the agent said last);
 //! on its request, the request's answers show under it (its actions, with
-//! their keys); Enter opens its chat. It shows in a column, or in the quick look over
+//! their keys); Enter opens its chat. It shows in a panel, or in the quick look over
 //! one. What it asks for beyond itself (the next item on another server,
 //! its chat, putting it away, an answer) it hands the shell as an ask.
 
@@ -13,7 +13,7 @@ use harness_contracts::{Level, Notification, NotificationId, RequestId, RuntimeR
 use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, Style};
 use crate::chat::ChatStreamState;
 use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
-use crate::panel::{Status, Tone};
+use crate::hosted::{Status, Tone};
 use crate::theme::colors;
 use crate::viewport::{Go, Measured, Show};
 
@@ -163,7 +163,7 @@ impl InboxView {
                 ui.painter().rect_stroke(rect.expand(2.0), theme.radius_m, egui::Stroke::new(theme.line_thin, colors().focus), egui::StrokeKind::Outside);
             }
         };
-        let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt(("inbox", cx.slot)).auto_shrink([false, true]), ui.input(|i| i.time));
+        let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt(("inbox", cx.panel)).auto_shrink([false, true]), ui.input(|i| i.time));
         let output = area.show(ui, |ui| {
             let says = ui
                 .vertical(|ui| {
@@ -356,7 +356,7 @@ impl ActionProvider for InboxView {
     }
 }
 
-impl crate::panel::Panel for InboxView {
+impl crate::hosted::Hosted for InboxView {
     /// What the item shown is: waiting on you, an update, handled, or none.
     fn title(&self) -> Status {
         match self.shown.as_ref().map(|s| s.notification.level) {

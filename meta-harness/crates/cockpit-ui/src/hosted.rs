@@ -1,6 +1,7 @@
-//! What a view tells its host about itself, and the header the host draws
-//! from it. A view draws its content; its top line (its controls, what
-//! it's doing, its title) is the host's, the same for every view: its
+//! What a buffer tells its host (a panel, the quick look) about itself, and
+//! the header the host draws from it. A buffer draws its content; its top
+//! line (its controls, what it's doing, its title) is the host's, the same
+//! for every buffer: its
 //! header buttons first, where nothing that comes and goes can push them;
 //! then a place kept for its busy mark; then its title and each status,
 //! wrapping after them (one line that wraps); its settings on a row under.
@@ -33,7 +34,7 @@ impl Status {
 }
 
 /// A view as its host shows it.
-pub trait Panel {
+pub trait Hosted {
     /// Its name on the top line.
     fn title(&self) -> Status;
 
@@ -78,7 +79,7 @@ pub trait Panel {
 /// The panel's top line: its bound actions' header buttons (`bound`: the
 /// panel's layer of where you are), the place for its busy mark, its title
 /// and status; its settings on a row under.
-pub fn header(ui: &mut egui::Ui, panel: &dyn Panel, bound: &[Bound], cx: &mut RunCx<'_>) {
+pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], cx: &mut RunCx<'_>) {
     let look = crate::theme::look();
     let at_header = |style: Style| bound.iter().filter(move |b| b.action.control.as_ref().is_some_and(|c| c.at == At::Header && c.style == style));
     let said = |ui: &mut egui::Ui, status: &Status, strong: bool| {
@@ -91,7 +92,7 @@ pub fn header(ui: &mut egui::Ui, panel: &dyn Panel, bound: &[Bound], cx: &mut Ru
             label.on_hover_text(detail);
         }
     };
-    // One line that wraps (a narrow column, a phone): nothing overlaps.
+    // One line that wraps (a narrow panel, a phone): nothing overlaps.
     // The buttons first: what follows them grows and wraps after them.
     ui.horizontal_wrapped(|ui| {
         crate::actions::controls(ui, at_header(Style::Button), cx);

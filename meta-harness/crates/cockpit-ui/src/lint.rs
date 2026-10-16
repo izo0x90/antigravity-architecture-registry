@@ -15,8 +15,8 @@
 //!   a kind of view: no naming one, no reading one's state, to label or
 //!   offer something. A view says that about itself.
 //! - **Controls**: views draw content; hosts draw every control. Outside
-//!   the hosts (the top bar, columns, the quick look, the key bar and
-//!   menus: `app/draw/`), the one control (`actions.rs`, `panel.rs`) and
+//!   the hosts (the top bar, panels, the quick look, the key bar and
+//!   menus: `app/draw/`), the one control (`actions.rs`, `hosted.rs`) and
 //!   the palette, no code draws a button, link, switch, picker or anything
 //!   clicked. A view's actions are placed (`Control`) and the host draws
 //!   them.
@@ -145,7 +145,7 @@ fn only_the_hosts_say_keys_and_only_from_a_bound_action() {
 
 /// Where controls are drawn: the hosts, the one control, the palette; and
 /// the developer tools (their own subsystem).
-const HOSTS: &[&str] = &["app/draw/", "actions.rs", "panel.rs", "palette.rs", "feedback.rs"];
+const HOSTS: &[&str] = &["app/draw/", "actions.rs", "hosted.rs", "palette.rs", "feedback.rs"];
 
 /// What draws a control, or reads a click.
 const CONTROLS: &[&str] = &[".button(", "small_button(", "selectable_label(", ".link(", ".hyperlink(", "hyperlink_to(", ".checkbox(", "ComboBox::", "egui::Button::", "Sense::click", "radio", "toggle_value("];
@@ -182,7 +182,7 @@ const VIEWS: &[&str] = &["self.desk.chat", "self.desk.code", "self.desk.graph", 
 /// Allowed in a level, by what it says, and why.
 const LEVELS_ALLOWED: &[(&str, &str)] = &[
     // The quick look holds a card (or the inbox): only a card can go to a
-    // column. What it holds is its own.
+    // panel. What it holds is its own.
     ("open.kind == BufferKind::Spec", "the quick look's own: what it holds"),
 ];
 
@@ -220,7 +220,7 @@ fn text_naming_a_key_is_caught_and_words_are_not() {
     for named in ["Esc closes", "Enter sends", "ctrl+Enter", "Shift+Enter new line", "g d", "J / K", "a", "SPC I f", "(Space S a)"] {
         assert!(names_a_key(named).is_some(), "{named}");
     }
-    for words in ["Open in a column", "entered", "Put away", "Re-read it", "", "—", "On", "It said last"] {
+    for words in ["Open in a panel", "entered", "Put away", "Re-read it", "", "—", "On", "It said last"] {
         assert_eq!(names_a_key(words), None, "{words}");
     }
 }

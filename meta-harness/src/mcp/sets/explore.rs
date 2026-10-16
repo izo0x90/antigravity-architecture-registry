@@ -98,7 +98,7 @@ struct NavigateArgs {
     #[serde(default)]
     select: Option<String>,
     #[serde(default)]
-    column: Option<u32>,
+    panel: Option<u32>,
 }
 
 impl Explore {
@@ -152,7 +152,7 @@ impl Explore {
             tool(
                 Capability::ViewDrive,
                 "navigate",
-                &format!("Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it. The user may have several graphs, one per column: `column` picks one (counted from 1 on the left; a column that isn't a graph becomes one); without it, the graph they used last moves.\n{tree_help}"),
+                &format!("Show something in the user's graph (moves their view; they can go back). Use it to point at what you're discussing. Leave out what should stay as the user has it. The user may have several graphs, one per panel: `panel` picks one (counted from 1 on the left; a panel that isn't a graph becomes one); without it, the graph they used last moves.\n{tree_help}"),
                 json!({ "type": "object", "properties": {
                     "view": { "type": "string", "enum": ViewKind::ALL.iter().map(|v| v.name()).collect::<Vec<_>>() },
                     "source": source,
@@ -160,7 +160,7 @@ impl Explore {
                     "way": { "type": "string", "enum": ["down", "up"] },
                     "depth": { "type": "integer" },
                     "select": card,
-                    "column": { "type": "integer", "description": "The user's column to show it in, from 1 on the left (default: the graph they used last)" }
+                    "panel": { "type": "integer", "description": "The user's panel to show it in, from 1 on the left (default: the graph they used last)" }
                 } }),
             ),
         ]
@@ -285,7 +285,7 @@ impl ToolSet for Explore {
         "navigate" => {
             let a: NavigateArgs = parse(args)?;
             let view = a.view.as_deref().map(|v| arch_graph::tree::ViewKind::from_name(v).ok_or_else(|| ServiceError::InvalidOp(format!("view '{v}': use contains, calls or data_flow")))).transpose()?;
-            let request = ViewRequest { view, source: a.source, root: a.root, way: a.way, depth: a.depth, select: a.select, column: a.column };
+            let request = ViewRequest { view, source: a.source, root: a.root, way: a.way, depth: a.depth, select: a.select, panel: a.panel };
             blocking(&self.arch, move |s| s.request_view(request, Requester::Agent)).await?;
             Ok("The user's graph now shows it (they can go back).\n\nNext: explain what they're looking at, or continue with the plan.".into())
         }

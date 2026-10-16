@@ -12,7 +12,7 @@ use harness_contracts::changes::{Comparison, FileChanges, Group as ChangeGroup, 
 use egui::{Frame, Pos2, Rect, RichText, Stroke, Vec2};
 
 use crate::actions::{Action, ActionProvider, Group, MINOR, Param, RunCx, Style};
-use crate::panel::{Status, Tone};
+use crate::hosted::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
 use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::viewport::{Go, Show, Stop, Viewport};
@@ -614,7 +614,7 @@ impl CodeViewerState {
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
-        let (net, slot_idx) = (cx.net, cx.slot);
+        let (net, panel) = (cx.net, cx.panel);
         // Replies for a file that's no longer the one shown (an earlier load
         // answering late) are dropped, so they can't use up its scroll.
         let incoming = self.analysis_inbox.lock().ok().and_then(|mut a| a.take());
@@ -655,7 +655,7 @@ impl CodeViewerState {
             });
             let end_y = ui.cursor().min.y;
             let toolbar_rect = Rect::from_min_size(Pos2::new(start_x, start_y), Vec2::new(w, (end_y - start_y).max(22.0)));
-            feedback.register_inspectable(ui, &format!("slot_{}:code:toolbar", slot_idx + 1), toolbar_rect);
+            feedback.register_inspectable(ui, &format!("panel_{}:code:toolbar", panel + 1), toolbar_rect);
             ui.separator();
 
             // Out of date: the marks and spans below come from an older read.
@@ -812,7 +812,7 @@ impl CodeViewerState {
             if let Some(start) = unfold {
                 self.folds.remove(&start);
             }
-            feedback.register_inspectable(ui, &format!("slot_{}:code:viewer", slot_idx + 1), viewer_res.inner_rect);
+            feedback.register_inspectable(ui, &format!("panel_{}:code:viewer", panel + 1), viewer_res.inner_rect);
         });
     }
 }
@@ -926,7 +926,7 @@ impl ActionProvider for CodeViewerState {
     }
 }
 
-impl crate::panel::Panel for CodeViewerState {
+impl crate::hosted::Hosted for CodeViewerState {
     /// The file it shows (its path on hover).
     fn title(&self) -> Status {
         let name = self.current_file.rsplit('/').next().unwrap_or(&self.current_file);
@@ -994,8 +994,8 @@ impl Navigable for CodeViewerState {
             Motion::Last => self.go(Go::Last),
             Motion::HalfLeft => self.go(Go::Sideways(-sideways(count))),
             Motion::HalfRight => self.go(Go::Sideways(sideways(count))),
-            Motion::FewLeft => self.go(Go::Columns(-sideways(count) * FEW_COLUMNS)),
-            Motion::FewRight => self.go(Go::Columns(sideways(count) * FEW_COLUMNS)),
+            Motion::FewLeft => self.go(Go::Panels(-sideways(count) * FEW_COLUMNS)),
+            Motion::FewRight => self.go(Go::Panels(sideways(count) * FEW_COLUMNS)),
             Motion::Line(n) => self.put_cursor(n, Show::Middle),
             Motion::NextSibling | Motion::PrevSibling => {
                 let _ = self.step_def(motion == Motion::NextSibling, count, true);
@@ -1124,7 +1124,7 @@ pub(crate) mod tests {
         let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, h))), ..Default::default() }, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-                code.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut asked });
+                code.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
             });
         });
         placed(&output)

@@ -24,7 +24,7 @@ impl Cockpit {
             tool(
                 Capability::ViewRead,
                 "cockpit_read",
-                "What the user's cockpit shows now: the input mode, each column's view (which has focus), the note line, and every piece of text drawn, row by row with its x. Works while the user lets agents drive the cockpit. Read again after acting: the screen updates as results arrive.",
+                "What the user's cockpit shows now: the input mode, each panel's buffer (which has focus), the note line, and every piece of text drawn, row by row with its x. Works while the user lets agents drive the cockpit. Read again after acting: the screen updates as results arrive.",
                 json!({ "type": "object", "properties": {} }),
             ),
             tool(

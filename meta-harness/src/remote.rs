@@ -126,7 +126,7 @@ pub async fn socket(_: Ticketed, ws: WebSocketUpgrade, State(remote): State<Arc<
     ws.on_upgrade(move |socket| async move { stopping.or_stop(remote.serve(socket)).await })
 }
 
-/// A read as text: the mode, the columns, then what's drawn, row by row
+/// A read as text: the mode, the panels, then what's drawn, row by row
 /// (top to bottom, left to right), each piece with where it is.
 pub fn screen_text(read: &Value) -> String {
     let mut out = format!("mode: {}", read["mode"].as_str().unwrap_or("?"));
@@ -139,9 +139,9 @@ pub fn screen_text(read: &Value) -> String {
     if let Some(note) = read["note"].as_str() {
         out.push_str(&format!("\nnote: {note}"));
     }
-    for column in read["columns"].as_array().into_iter().flatten() {
-        let focus = if column["focused"] == true { " (focused)" } else { "" };
-        out.push_str(&format!("\ncolumn {}: {}{focus}", column["column"], column["view"].as_str().unwrap_or("?")));
+    for panel in read["panels"].as_array().into_iter().flatten() {
+        let focus = if panel["focused"] == true { " (focused)" } else { "" };
+        out.push_str(&format!("\npanel {}: {}{focus}", panel["panel"], panel["buffer"].as_str().unwrap_or("?")));
     }
     out.push_str("\n\nOn screen (y: text @x ...):");
     let mut texts: Vec<(f64, f64, &str)> = read["texts"]
@@ -200,7 +200,7 @@ mod tests {
     fn a_read_is_rows_top_to_bottom() {
         let read = json!({
             "mode": "Normal", "note": null, "leader": null, "palette": false,
-            "columns": [{ "column": 1, "view": "chat · the agent's session", "focused": true }],
+            "panels": [{ "panel": 1, "buffer": "chat · the agent's session", "focused": true }],
             "texts": [
                 { "text": "Send", "x": 500.0, "y": 1200.0 },
                 { "text": "Harness:", "x": 17.0, "y": 104.0 },
@@ -208,7 +208,7 @@ mod tests {
             ]
         });
         let text = screen_text(&read);
-        assert!(text.contains("column 1: chat · the agent's session (focused)"), "{text}");
+        assert!(text.contains("panel 1: chat · the agent's session (focused)"), "{text}");
         assert!(text.contains("  104: Harness: @17 Antigravity @71\n 1200: Send @500"), "{text}");
     }
 

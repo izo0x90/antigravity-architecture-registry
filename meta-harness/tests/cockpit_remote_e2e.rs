@@ -41,7 +41,7 @@ async fn the_cockpit_tools_reach_the_cockpit_only_while_it_lets_agents_drive() {
             let answer = match message["call"]["op"].as_str() {
                 Some("read") => json!({ "id": message["id"], "ok": {
                     "mode": "Normal", "palette": false, "note": null, "leader": null,
-                    "columns": [{ "column": 1, "view": "chat · the agent's session", "focused": true }],
+                    "panels": [{ "panel": 1, "buffer": "chat · the agent's session", "focused": true }],
                     "texts": [{ "text": "Connect", "x": 520.0, "y": 90.0 }]
                 } }),
                 _ => json!({ "id": message["id"], "error": "\"Nowhere\" isn't on screen (read shows what is)" }),
@@ -54,7 +54,7 @@ async fn the_cockpit_tools_reach_the_cockpit_only_while_it_lets_agents_drive() {
         calls
     });
     let (failed, text) = tool(&mut mcp, "cockpit_read", json!({})).await;
-    assert!(!failed && text.contains("column 1: chat · the agent's session (focused)") && text.contains("Connect @520"), "{text}");
+    assert!(!failed && text.contains("panel 1: chat · the agent's session (focused)") && text.contains("Connect @520"), "{text}");
     let (failed, text) = tool(&mut mcp, "cockpit_click", json!({ "text": "Nowhere" })).await;
     assert!(failed && text.contains("isn't on screen"), "the cockpit's own reason: {text}");
     let calls = tokio::time::timeout(Duration::from_secs(5), answering).await.unwrap().unwrap();

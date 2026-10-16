@@ -16,6 +16,6 @@ fn frames_render_and_leader_opens() {
     assert_eq!(app.input_mode, cockpit_ui::keymap::InputMode::Leader);
     let _ = ctx.run(input(vec![egui::Event::Text("l".into())]), |ctx| app.frame(ctx));
     let _ = ctx.run(input(vec![egui::Event::Text("3".into())]), |ctx| app.frame(ctx));
-    assert_eq!(app.desk.columns.len(), 3);
+    assert_eq!(app.desk.panels.len(), 3);
     assert_eq!(app.input_mode, cockpit_ui::keymap::InputMode::Normal);
 }

@@ -1,4 +1,4 @@
-//! The top bar: brand, LEDs, the index light, the mode, columns.
+//! The top bar: brand, LEDs, the index light, the mode, panels.
 
 use super::super::*;
 
@@ -72,7 +72,7 @@ pub(in crate::app) fn server_line(s: &arch_graph::ServerStatus) -> String {
 impl CockpitApp {
     /// The top bar's placements (it's the shell's host): on the left,
     /// reading the code again, the server shown, the bell and the tray; at
-    /// the end, the palette, the columns and the developer tools. The
+    /// the end, the palette, the panels and the developer tools. The
     /// shell's actions, placed with what they say now.
     pub(in crate::app) fn top_bar_placements(&self) -> Vec<(String, crate::actions::Control)> {
         use crate::actions::{At, Control, Style, Tone};
@@ -102,17 +102,17 @@ impl CockpitApp {
         if updates > 0 {
             left.push(("attention.updates".to_owned(), button(updates.to_string(), Some(icon::TRAY)).tone(Tone::Muted).hover(format!("{updates} update(s)"))));
         }
-        let (count, max) = (self.desk.columns.len(), self.config.columns.max);
+        let (count, max) = (self.desk.panels.len(), self.config.panels.max);
         left.push(("palette.open".to_owned(), end("Actions".to_owned(), Some(icon::COMMAND))));
-        let hidden = self.desk.columns.hidden();
+        let hidden = self.desk.panels.hidden();
         if hidden > 0 {
             left.push(("buffer.list".to_owned(), end(format!("{hidden} hidden"), None).tone(Tone::Info)));
         }
         if count > 1 {
-            left.push(("column.fewer".to_owned(), end(String::new(), Some(icon::MINUS))));
+            left.push(("panel.fewer".to_owned(), end(String::new(), Some(icon::MINUS))));
         }
         if count < max {
-            left.push(("column.add".to_owned(), end(String::new(), Some(icon::PLUS))));
+            left.push(("panel.add".to_owned(), end(String::new(), Some(icon::PLUS))));
         }
         let (inspector, inspecting) = if self.feedback.is_inspecting { (format!("{} ACTIVE", icon::CROSSHAIR), Tone::Warn) } else { (format!("{} Inspector", icon::PENCIL_SIMPLE), Tone::Plain) };
         left.push(("inspector.toggle".to_owned(), end(inspector, None).tone(inspecting)));
@@ -143,7 +143,7 @@ impl CockpitApp {
                 // first, where the lights' words, which come and go, can't push them.
                 let mine: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::Everywhere && b.action.control.as_ref().is_some_and(|c| c.at == crate::actions::At::Header)).collect();
                 let (end, start): (Vec<Bound>, Vec<Bound>) = mine.into_iter().partition(|b| b.action.control.as_ref().is_some_and(|c| c.end));
-                self.host_controls(ui, &start, self.desk.columns.focused());
+                self.host_controls(ui, &start, self.desk.panels.focused());
 
                 ui.add_space(crate::theme::look().space_m);
 
@@ -191,7 +191,7 @@ impl CockpitApp {
                     ),
                     InputMode::Leader => (self.leader_title("LEADER"), colors().key, colors().warn_bg),
                     InputMode::Palette => ("PALETTE".to_string(), colors().info, colors().info_bg),
-                    InputMode::Insert { slot } => (format!("INSERT [S{}]", slot + 1), colors().ok, colors().ok_bg),
+                    InputMode::Insert { panel } => (format!("INSERT [{}]", panel + 1), colors().ok, colors().ok_bg),
                     InputMode::Capture { .. } => (
                         match &self.capture {
                             Some(Capture::Search(_)) => "SEARCH",
@@ -220,11 +220,11 @@ impl CockpitApp {
                 }
 
                 // On the right, in the order listed (drawn right to left):
-                // the columns, then the developer tools.
+                // the panels, then the developer tools.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let end: Vec<Bound> = end.into_iter().rev().collect();
-                    self.host_controls(ui, &end, self.desk.columns.focused());
-                    ui.label(RichText::new(format!("Columns: {}", self.desk.columns.len())).size(crate::theme::look().text_body).color(colors().muted));
+                    self.host_controls(ui, &end, self.desk.panels.focused());
+                    ui.label(RichText::new(format!("Panels: {}", self.desk.panels.len())).size(crate::theme::look().text_body).color(colors().muted));
                 });
             });
         });

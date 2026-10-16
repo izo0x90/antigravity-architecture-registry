@@ -249,7 +249,7 @@ impl ActionProvider for ChatStreamState {
             && let Some(request) = view.requests.iter().find(|r| r.status == RequestStatus::Pending)
         {
             // Under the request while you're on it.
-            let here = crate::panel::Panel::here(self).or_else(|| self.ui.cursor.map(|c| c.to_string())) == self.pending_item().map(|i| i.to_string());
+            let here = crate::hosted::Hosted::here(self).or_else(|| self.ui.cursor.map(|c| c.to_string())) == self.pending_item().map(|i| i.to_string());
             if let Some(url) = crate::request_card::page(request) {
                 out.push(crate::request_card::place_page(Action::new(format!("request.{}.page", request.id), format!("Open the page: {}", request.title), C::OpenPage(url)).focused(), here));
             }
@@ -287,7 +287,7 @@ impl ActionProvider for ChatStreamState {
         let mailbox = self.mailbox.clone();
         let done = move |r: NetResult<()>| post(&mailbox, Reply::Done(r));
         match command {
-            ChatCommand::Insert => *cx.input_mode = crate::keymap::InputMode::Insert { slot: cx.slot },
+            ChatCommand::Insert => *cx.input_mode = crate::keymap::InputMode::Insert { panel: cx.panel },
             ChatCommand::ClearPrompt => self.ui.input_buffer.clear(),
             ChatCommand::NewSession => self.open_thread(net, ctx, None),
             ChatCommand::ResumeSession => match value {

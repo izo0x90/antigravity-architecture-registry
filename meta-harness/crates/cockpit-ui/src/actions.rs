@@ -71,7 +71,7 @@ impl Choice {
 pub enum Scope {
     /// Wherever focus is.
     Global,
-    /// Only while its view has the focused slot.
+    /// Only while its view has the focused panel.
     Focused,
 }
 
@@ -85,9 +85,9 @@ pub enum Layer {
     On,
     /// The focused panel's own, and the moves and go-tos on its cursor.
     Panel,
-    /// What holds the panel: the quick look, the column.
+    /// What holds the panel: the quick look, the panel.
     Host,
-    /// The rest: columns, servers, the palette, the bell.
+    /// The rest: panels, servers, the palette, the bell.
     Everywhere,
 }
 
@@ -150,7 +150,7 @@ pub struct Control {
     pub tone: Option<Tone>,
     /// More on hover, after what it does and its key.
     pub hover: Option<String>,
-    /// At the far end of its row (the top bar's columns and tools).
+    /// At the far end of its row (the top bar's panels and tools).
     pub end: bool,
 }
 
@@ -393,7 +393,7 @@ impl Action {
 /// Who runs an action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
-    /// The app shell (slots, layout, overlays).
+    /// The app shell (panels, layout, overlays).
     Shell,
     View(BufferKind),
 }
@@ -452,8 +452,8 @@ pub struct RunCx<'a> {
     pub net: &'a NetClient,
     pub ctx: &'a egui::Context,
     pub input_mode: &'a mut InputMode,
-    /// The focused slot.
-    pub slot: usize,
+    /// The focused panel.
+    pub panel: usize,
     /// A short note for the status line (why something didn't happen).
     pub note: &'a mut Option<String>,
     /// An action a control asked to run (its id, and its value if it has
@@ -607,7 +607,7 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
             let caption = tinted(format!("{text}:"));
             let shown = choices.iter().find(|c| c.current).map(|c| c.label.clone()).unwrap_or_else(|| "—".into());
             // Caption and picker stay on one row: wrap first if they won't fit, and
-            // truncate the picker rather than let it push the slot wider.
+            // truncate the picker rather than let it push the panel wider.
             let measure = |ui: &egui::Ui, text: egui::WidgetText| text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button).size().x;
             let spacing = ui.spacing();
             let gap = spacing.item_spacing.x;
@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn leader_tree_is_built_from_resolved_paths() {
-        let all = vec![bound("slot", "1"), bound("new", "sn"), bound("resume", "sr"), bound("palette-only", "")];
+        let all = vec![bound("panel", "1"), bound("new", "sn"), bound("resume", "sr"), bound("palette-only", "")];
         let root = leader_entries(&all, &[]);
         assert!(root.contains(&LeaderEntry::Group { key: 's' }));
         assert!(root.contains(&LeaderEntry::Action { key: '1', index: 0 }));
@@ -672,7 +672,7 @@ mod tests {
 
     #[test]
     fn leader_entries_closest_to_where_you_are_come_first() {
-        let mut all = vec![bound("slot", "1"), bound("new", "sn"), bound("graph.view", "gv"), bound("graph.flip", "z")];
+        let mut all = vec![bound("panel", "1"), bound("new", "sn"), bound("graph.view", "gv"), bound("graph.flip", "z")];
         (all[2].layer, all[3].layer) = (Layer::Panel, Layer::Panel);
         let root = leader_entries(&all, &[]);
         assert_eq!(root[..2], [LeaderEntry::Group { key: 'g' }, LeaderEntry::Action { key: 'z', index: 3 }], "the panel's own first: {root:?}");

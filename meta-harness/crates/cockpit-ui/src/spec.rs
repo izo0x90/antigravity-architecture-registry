@@ -11,7 +11,7 @@ use egui::{Rect, RichText};
 use harness_contracts::changes::{Comparison, FileChanges, Hunk};
 
 use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style, When};
-use crate::panel::{Status, Tone};
+use crate::hosted::{Status, Tone};
 use crate::nav::{Fold, GoTo, Item, Motion, Move, Navigable, Place, SpecItem, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
@@ -921,14 +921,14 @@ impl SpecState {
             (Compose::Reopen(id), _) => format!("Why reopen {id}?"),
         };
         ui.label(RichText::new(what).size(crate::theme::look().text_body).color(colors().muted));
-        let inserting = *cx.input_mode == crate::keymap::InputMode::Insert { slot: cx.slot };
+        let inserting = *cx.input_mode == crate::keymap::InputMode::Insert { panel: cx.panel };
         let keys = crate::keymap::local();
-        let output = ui.add(keys.text_box(&mut composer.text).id(egui::Id::new(("spec_composer", cx.slot))).desired_rows(2).desired_width(f32::INFINITY).hint_text("Write it here…"));
+        let output = ui.add(keys.text_box(&mut composer.text).id(egui::Id::new(("spec_composer", cx.panel))).desired_rows(2).desired_width(f32::INFINITY).hint_text("Write it here…"));
         if inserting {
             output.request_focus();
         }
         if output.clicked() || output.gained_focus() {
-            *cx.input_mode = crate::keymap::InputMode::Insert { slot: cx.slot };
+            *cx.input_mode = crate::keymap::InputMode::Insert { panel: cx.panel };
         }
         self.typing = inserting.then_some(output.rect);
         if inserting && output.has_focus() && ui.input(|i| crate::keymap::local().input.sent(i).is_some()) {
@@ -1339,7 +1339,7 @@ impl SpecState {
     }
 }
 
-impl crate::panel::Panel for SpecState {
+impl crate::hosted::Hosted for SpecState {
     /// The component it shows.
     fn title(&self) -> Status {
         match &self.detail {
@@ -1351,7 +1351,7 @@ impl crate::panel::Panel for SpecState {
     /// On its code: going to it in the code view.
     fn placed(&self) -> Vec<(String, crate::actions::Control)> {
         match self.entries().get(self.cursor).map(|e| &e.item) {
-            Some(SpecItem::Source) => vec![("goto.code".to_owned(), crate::actions::Control::new(crate::actions::At::Item, Style::Button, "Open in the code view", None))],
+            Some(SpecItem::Source) => vec![("goto.code".to_owned(), crate::actions::Control::new(crate::actions::At::Item, Style::Button, "Open in the code", None))],
             _ => Vec::new(),
         }
     }
@@ -1421,7 +1421,7 @@ pub(crate) mod tests {
         let mut note = None;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: mode, slot, note: &mut note, asked: &mut None });
+                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: mode, panel: slot, note: &mut note, asked: &mut None });
             });
         });
     }
@@ -1510,7 +1510,7 @@ pub(crate) mod tests {
         assert_eq!(s.enter(), Step::GoTo(GoTo::Spec));
         let comment_action = s.actions().into_iter().find(|a| a.id == "spec.comment").unwrap();
         let (ctx, net, mut mode, mut note) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
-        s.run(&comment_action, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut None });
+        s.run(&comment_action, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None });
         assert_eq!(s.composer.as_ref().unwrap().anchor, Some(CommentAnchor::Relation { kind: RelationKind::Calls, source: id.clone(), target: other.clone() }));
         s.composer = None;
         // Search finds items; hints label what's drawn.
@@ -1611,7 +1611,7 @@ pub(crate) mod tests {
         assert_eq!(s.current, Section::Logic);
         let request = actions.iter().find(|a| a.id == "spec.request_change").unwrap().clone();
         let mut note = None;
-        s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, slot: 1, note: &mut note, asked: &mut None });
+        s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, panel: 1, note: &mut note, asked: &mut None });
         assert!(s.requests.insert);
         assert_eq!(
             s.composer,
@@ -1619,7 +1619,7 @@ pub(crate) mod tests {
         );
         // It all renders: markers, threads with their buttons, the composer.
         s.loaded = Some((id.clone(), s.source.clone()));
-        mode = crate::keymap::InputMode::Insert { slot: 1 };
+        mode = crate::keymap::InputMode::Insert { panel: 1 };
         for _ in 0..2 {
             frame(&mut s, &ctx, &mut mode, 1);
         }
@@ -1634,7 +1634,7 @@ pub(crate) mod tests {
         let (net, mut mode, mut note) = (NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
         let out = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, slot: 0, note: &mut note, asked: &mut None });
+                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None });
             });
         });
         fn collect(shape: &egui::Shape, out: &mut String) {
@@ -1704,7 +1704,7 @@ pub(crate) mod tests {
         let title = |name: &str| text.lines().find(|l| l.trim_start().contains(name) && l.contains("  ")).unwrap_or_default().to_owned();
         assert!(title("Overview").contains(&format!("{} 1 {}", crate::status::look("required_missing").0, word("required_missing"))), "{text}");
         assert!(title("Signature").contains(&format!("1 {}", word("required_missing"))), "{text}");
-        let review: String = crate::panel::Panel::status(&s).into_iter().map(|st| st.text).collect();
+        let review: String = crate::hosted::Hosted::status(&s).into_iter().map(|st| st.text).collect();
         assert!(review.contains("spec.logic_steps") && !review.contains("spec.logic_steps.1"), "the review line names fields, not items: {review}");
         assert!(text.contains("description: none yet, required for a function.") && text.contains("signature: none yet, required for a function."));
         assert!(!text.contains("logic steps: none yet"), "it has logic steps");

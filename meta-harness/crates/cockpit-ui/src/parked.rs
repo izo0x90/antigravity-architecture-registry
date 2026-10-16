@@ -1,7 +1,7 @@
-//! Every column's own view. The cockpit works on one view of each kind at a
-//! time (`CockpitApp::graph`, `code`, `spec`, `tree`, the chat's `ui`): the
-//! one used last.
-//! The others wait here, by their pane's number, until their column is
+//! Every panel's own buffer. The cockpit works on one buffer of each kind
+//! at a time (`CockpitApp::graph`, `code`, `spec`, `tree`, the chat's
+//! `ui`): the one used last.
+//! The others wait here, by their buffer's number, until their panel is
 //! used or drawn; then they change places with the one in use.
 
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ pub struct Parked {
 }
 
 impl Parked {
-    /// Drops the views of panes no column has any more (and that aren't
+    /// Drops the views of buffers no panel has any more (and that aren't
     /// put away to come back).
     pub fn keep_only(&mut self, kept: impl Fn(crate::app::BufferKind, u32) -> bool) {
         use crate::app::BufferKind as K;
@@ -53,7 +53,7 @@ mod tests {
     fn views_change_places_and_a_new_one_says_so() {
         let mut live = String::from("first");
         let mut parked = BTreeMap::new();
-        assert!(swap_view(&mut live, &mut parked, 0, 1), "pane 1 had no view yet");
+        assert!(swap_view(&mut live, &mut parked, 0, 1), "buffer 1 had no view yet");
         assert_eq!((live.as_str(), parked.get(&0).map(String::as_str)), ("", Some("first")));
         live.push_str("second");
         assert!(!swap_view(&mut live, &mut parked, 1, 0));

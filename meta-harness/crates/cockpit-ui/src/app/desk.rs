@@ -24,16 +24,16 @@ pub struct Desk {
     /// The changes (git) by the desk's comparison in use.
     pub changes: crate::changes::ChangesView,
     pub review_seen: u64,
-    /// The columns: the view each shows, and which has focus.
-    pub columns: Columns,
-    /// The views not in use now (each column's own; see `panes`).
+    /// The panels: the view each shows, and which has focus.
+    pub panels: Panels,
+    /// The views not in use now (each panel's own; see `buffers`).
     pub parked: Parked,
-    /// For each kind with a view per column: the view in use now, and the
+    /// For each kind with a view per panel: the view in use now, and the
     /// one used last (what keys, links and the agent act on).
     pub active: BTreeMap<BufferKind, u32>,
     pub last_used: BTreeMap<BufferKind, u32>,
     /// New views, to start where the view of their kind used before was.
-    pub fresh: Vec<(Pane, Place)>,
+    pub fresh: Vec<(Buffer, Place)>,
     /// The component types, for each spec view.
     pub types: Option<arch_graph::TypeSystem>,
     /// Loads and saves the cockpit's state on the server.
@@ -79,7 +79,7 @@ impl Desk {
             inbox: Default::default(),
             changes: Default::default(),
             review_seen: 0,
-            columns: Columns::default(),
+            panels: Panels::default(),
             parked: Parked::default(),
             active: BTreeMap::new(),
             last_used: BTreeMap::new(),
@@ -116,7 +116,7 @@ impl Desk {
     }
 
     /// The view of `kind` as its host shows it (its top line).
-    pub fn panel(&self, kind: BufferKind) -> &dyn crate::panel::Panel {
+    pub fn hosted(&self, kind: BufferKind) -> &dyn crate::hosted::Hosted {
         match kind {
             BufferKind::Chat => &self.chat,
             BufferKind::Code => &self.code,
@@ -169,8 +169,8 @@ impl Desk {
     }
 
     /// The view of `kind` in use: the one used last.
-    pub fn used_pane(&self, kind: BufferKind) -> Pane {
-        Pane::new(kind, self.last_used.get(&kind).copied().unwrap_or(0))
+    pub fn used_buffer(&self, kind: BufferKind) -> Buffer {
+        Buffer::new(kind, self.last_used.get(&kind).copied().unwrap_or(0))
     }
 
     /// Every graph (the one in use first).
@@ -190,8 +190,8 @@ impl Desk {
         std::iter::once(&mut self.tree).chain(self.parked.trees.values_mut())
     }
 
-    /// Whether `pane`'s spec view is pinned.
-    pub fn pinned(&self, pane: Pane) -> bool {
-        if self.active.get(&BufferKind::Spec).copied().unwrap_or(0) == pane.id { self.spec.pinned } else { self.parked.specs.get(&pane.id).is_some_and(|s| s.pinned) }
+    /// Whether `buffer`'s spec view is pinned.
+    pub fn pinned(&self, buffer: Buffer) -> bool {
+        if self.active.get(&BufferKind::Spec).copied().unwrap_or(0) == buffer.id { self.spec.pinned } else { self.parked.specs.get(&buffer.id).is_some_and(|s| s.pinned) }
     }
 }
