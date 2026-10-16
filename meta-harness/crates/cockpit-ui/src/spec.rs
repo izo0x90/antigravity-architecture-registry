@@ -1150,7 +1150,7 @@ impl SpecState {
         out.push(Move::Enter.offer_if(enter.is_some(), enter.unwrap_or_else(|| "Open: fold a section, follow a relation, reply".into())));
         out.push(Move::Leave.offer_if(entry.as_ref().is_some_and(|e| e.item != SpecItem::Header), "Up to the section title"));
         out.extend(crate::nav::fold_here(Some((&format!("the {} section", self.current.title()), self.folded.contains(&self.current)))));
-        out.extend(crate::nav::fold_all(true, "Unfold every section", "Fold every section"));
+        out.extend(crate::nav::fold_all((!self.folded.is_empty(), "Unfold every section"), (self.folded.len() < Section::ALL.len(), "Fold every section")));
         out
     }
 }

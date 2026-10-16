@@ -15,7 +15,7 @@ fn line(kind: LineKind, old: Option<u32>, new: Option<u32>, text: &str) -> DiffL
 }
 
 /// a.rs: one change (line 3 replaced); b.rs deleted.
-fn view_with_changes() -> (ChangesView, NetClient, egui::Context) {
+pub(crate) fn view_with_changes() -> (ChangesView, NetClient, egui::Context) {
     let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
     let mut view = ChangesView::default();
     let list = ChangeList { comparison: Comparison::default(), files: vec![file(Group::Unstaged, "a.rs", FileStatus::Modified, 1, 1), file(Group::Unstaged, "b.rs", FileStatus::Deleted, 0, 2)], offset: 0, total: 2 };

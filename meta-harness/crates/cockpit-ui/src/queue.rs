@@ -298,7 +298,8 @@ impl QueueState {
         out.push(Move::Enter.offer_if(failed.is_some(), if open { "Hide why it failed" } else { "Show why it failed" }));
         out.push(Move::Leave.offer_if(open, "Hide why it failed"));
         out.extend(crate::nav::fold_here(failed.map(|_| ("why it failed", !open))));
-        out.extend(crate::nav::fold_all(self.snapshot.as_ref().is_some_and(|s| s.jobs.iter().any(|j| !j.findings.is_empty())), "Show why each failed", "Hide why each failed"));
+        let hidden = self.snapshot.as_ref().is_some_and(|s| s.jobs.iter().any(|j| !j.findings.is_empty() && !self.expanded.contains(&j.component)));
+        out.extend(crate::nav::fold_all((hidden, "Show why each failed"), (!self.expanded.is_empty(), "Hide why each failed")));
         out
     }
 }

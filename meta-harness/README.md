@@ -453,7 +453,14 @@ each chat had typed and not sent. A reload, or another browser, comes back to
 it. It's saved half a second after it last changed (`[net] save_after_ms`).
 
 The key bar at the bottom shows the keys that matter for what the cursor
-is on. Pausing on a prefix (`g`, `z`, `[`, `]`, `m`, `'`) lists what can
+is on. The keys every view shares (moving, `Enter` and `Backspace`, the
+folds) are offered by each view in its own words where they do something
+("Fold run", "Up to its file", "Into cockpit-ui"; a fold also on the
+item); where they don't, they aren't shown and their key says why. Where
+you are is a stack of levels offering actions the same way: what you're
+on, the view, what holds it (its column, or the quick look), everywhere;
+the go-tos ask the view they'd land in whether it can show what you're
+on. Pausing on a prefix (`g`, `z`, `[`, `]`, `m`, `'`) lists what can
 follow, and `?` lists every key where you are: a section for what you're
 on, this panel, what holds it (the quick look, the column) and
 everywhere, each action with every way to run it (keys, leader path,

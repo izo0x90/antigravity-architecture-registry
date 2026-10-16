@@ -9,6 +9,11 @@
 //! - **Key text**: keys are said only from a bound action (its binding's
 //!   own: `Bound::key_hint`, `Bound::ways`), and only by the hosts, the
 //!   control, the palette and the keymap. A view never says a key.
+//! - **Levels**: where you are is a stack of levels offering actions the
+//!   same way (the panel, its host, everywhere). The levels around a
+//!   view (what every panel has, the hosts, the shell) never decide about
+//!   a kind of view: no naming one, no reading one's state, to label or
+//!   offer something. A view says that about itself.
 //! - **Controls**: views draw content; hosts draw every control. Outside
 //!   the hosts (the top bar, columns, the quick look, the key bar and
 //!   menus: `app/draw/`), the one control (`actions.rs`, `panel.rs`) and
@@ -165,6 +170,48 @@ fn views_draw_no_controls_the_hosts_draw_them() {
         }
     }
     assert!(found.is_empty(), "controls drawn outside the hosts (give the view an action with a Control, the host draws it):\n{}", found.join("\n"));
+}
+
+/// The levels around a view, as written: each one's function in
+/// `app/commands.rs`.
+const LEVELS: &[&str] = &["fn panel_actions(", "fn host_actions(", "fn shell_actions("];
+
+/// The views' state, by its name on the desk.
+const VIEWS: &[&str] = &["self.desk.chat", "self.desk.code", "self.desk.graph", "self.desk.tree", "self.desk.spec", "self.desk.queue", "self.desk.inbox", "self.desk.changes"];
+
+/// Allowed in a level, by what it says, and why.
+const LEVELS_ALLOWED: &[(&str, &str)] = &[
+    // The quick look holds a card (or the inbox): only a card can go to a
+    // column. What it holds is its own.
+    ("open.kind == BufferKind::Spec", "the quick look's own: what it holds"),
+];
+
+/// The body of the function starting at `start` (to its closing brace at
+/// the same indent).
+fn body<'a>(code: &'a str, start: &str) -> &'a str {
+    let Some(at) = code.find(start) else { return "" };
+    let from = &code[at..];
+    let indent = code[..at].rsplit('\n').next().unwrap_or_default().len();
+    let close = format!("\n{}}}\n", " ".repeat(indent));
+    from.find(&close).map_or(from, |end| &from[..end])
+}
+
+#[test]
+fn the_levels_around_a_view_never_decide_about_a_kind_of_view() {
+    let commands = code().into_iter().find(|(name, _)| name == "app/commands.rs").map(|(_, code)| code).unwrap();
+    let mut found = Vec::new();
+    for level in LEVELS {
+        let body = body(&commands, level);
+        assert!(!body.is_empty(), "{level} is gone: say where that level's actions are made");
+        for (n, line) in lines(body) {
+            let named = line.match_indices("BufferKind::").any(|(at, _)| !line[at..].starts_with("BufferKind::ALL")) || line.contains(" K::");
+            let read = VIEWS.iter().any(|v| line.contains(v));
+            if (named || read) && !LEVELS_ALLOWED.iter().any(|(allowed, _)| line.contains(allowed)) {
+                found.push(format!("{level}…) line {n}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(found.is_empty(), "a level around a view decides about a kind of view (let the view offer it, or answer as a destination):\n{}", found.join("\n"));
 }
 
 #[test]

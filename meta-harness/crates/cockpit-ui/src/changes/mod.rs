@@ -794,7 +794,8 @@ impl ChangesView {
         out.push(Move::Enter.offer_if(file.is_some_and(|f| f.status != FileStatus::Deleted), "Open it in the code"));
         out.push(Move::Leave.offer_if(matches!(row, Some(Row::Hunk(..))), "Up to its file"));
         out.extend(crate::nav::fold_here(file.map(|f| (f.path.as_str(), !self.opened.contains_key(&file_key(f))))));
-        out.extend(crate::nav::fold_all(self.list().is_some_and(|l| !l.files.is_empty()), "Unfold every file", "Fold every file"));
+        let closed = self.list().is_some_and(|l| l.files.iter().any(|f| !self.opened.contains_key(&file_key(f))));
+        out.extend(crate::nav::fold_all((closed, "Unfold every file"), (!self.opened.is_empty(), "Fold every file")));
         out
     }
 }
@@ -1034,4 +1035,4 @@ impl Navigable for ChangesView {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

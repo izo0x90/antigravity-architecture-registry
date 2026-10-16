@@ -7,6 +7,7 @@ mod bindings;
 mod keys_snapshot;
 mod layout;
 mod look;
+mod offers;
 mod moves;
 mod outside;
 mod split;

@@ -367,7 +367,8 @@ impl ArchitectureTreeState {
         let row = id.and_then(|id| if self.has_children(id) { Some(id) } else { self.parent.get(id) });
         let name = row.map(|r| self.name(r));
         out.extend(crate::nav::fold_here(row.zip(name.as_deref()).map(|(r, n)| (n, self.closed.contains(r) || self.children.get(r).is_none_or(Vec::is_empty)))));
-        out.extend(crate::nav::fold_all(self.children.values().any(|k| !k.is_empty()), "Unfold everything", "Fold everything"));
+        let open = self.children.iter().any(|(id, k)| !k.is_empty() && !self.closed.contains(id));
+        out.extend(crate::nav::fold_all((!self.closed.is_empty(), "Unfold everything"), (open, "Fold everything")));
         out
     }
 }

@@ -310,10 +310,10 @@ pub fn fold_here(here: Option<(&str, bool)>) -> Vec<crate::actions::Action> {
     ]
 }
 
-/// Folding and unfolding everything, each in the view's words, when there's
-/// anything to fold.
-pub fn fold_all(applies: bool, unfold: &str, fold: &str) -> Vec<crate::actions::Action> {
-    vec![Move::Fold(Fold::OpenAll).offer_if(applies, unfold), Move::Fold(Fold::CloseAll).offer_if(applies, fold)]
+/// Unfolding everything (when something's folded) and folding everything
+/// (when something isn't), each in the view's words.
+pub fn fold_all((any_folded, unfold): (bool, &str), (any_open, fold): (bool, &str)) -> Vec<crate::actions::Action> {
+    vec![Move::Fold(Fold::OpenAll).offer_if(any_folded, unfold), Move::Fold(Fold::CloseAll).offer_if(any_open, fold)]
 }
 
 /// Where a go-to key sends the cursor's target.
