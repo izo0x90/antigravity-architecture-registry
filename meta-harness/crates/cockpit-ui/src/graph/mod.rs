@@ -57,8 +57,8 @@ pub struct GraphRequests {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Camera {
-    pan: Vec2,
-    zoom: f32,
+    pub(crate) pan: Vec2,
+    pub(crate) zoom: f32,
 }
 
 impl Default for Camera {
@@ -153,6 +153,11 @@ pub struct GraphState {
     pub ui: GraphUi,
     /// A finger touched it (its chips show from then on).
     touch_seen: bool,
+    /// A flick gliding on (points a second), slowing as a list's does.
+    fling: Vec2,
+    /// Two fingers took part in what the pointer is doing (lifting them
+    /// isn't a flick).
+    pinching: bool,
     /// The "+N" counts drawn this frame (click one to open its card).
     pub(crate) more_rects: Vec<(String, Rect)>,
     /// The camera before a search started previewing matches.
@@ -203,6 +208,8 @@ impl Default for GraphState {
             inbox: Arc::default(),
             ui: GraphUi::default(),
             touch_seen: false,
+            fling: Vec2::ZERO,
+            pinching: false,
             more_rects: Vec::new(),
             saved_view: None,
             legend_open: false,

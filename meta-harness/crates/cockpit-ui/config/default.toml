@@ -28,14 +28,14 @@ which_key_delay_ms = 300
 # leader path of their own get the next free keys in it).
 view_menu = ","
 
-# Touch gestures (every view): how far a finger may wander and still tap or
-# long-press, the double tap and long press times, and what's a swipe (a
-# quick sideways flick at least this long). What a swipe does is bound in
-# [keymap.bind] like a key (`gestures = ["swipe_left"]`).
+# Touch gestures (every view): how far a finger may wander and still
+# long-press, the long press time, and what's a swipe (a quick sideways
+# flick at least this long). What a swipe does is bound in [keymap.bind]
+# like a key (`gestures = ["swipe_left"]`). Taps, drags and two fingers are
+# the pointer's, as with a mouse.
 [touch]
-# Points a finger may wander and still tap or long-press.
+# Points a finger may wander and still long-press.
 tap_slop = 12.0
-double_tap_ms = 320.0
 long_press_ms = 550.0
 swipe_min = 90.0
 swipe_max_ms = 450.0
@@ -52,9 +52,12 @@ send = ["Enter"]
 add = ["ctrl+Enter"]
 newline = "shift+Enter"     # a new line in the box
 
-# Held while clicking a name in the code: go to what it names.
+# Held with the pointer (ctrl is Cmd on a Mac): clicking a name in the code
+# goes to what it names; turning the wheel zooms where a view zooms (the
+# graph; a trackpad's pinch zooms too).
 [keymap.pointer]
 go_to = "ctrl"
+zoom = "ctrl"
 
 # The key bar at the bottom: the keys that matter for what the cursor is on.
 [keymap.bar]

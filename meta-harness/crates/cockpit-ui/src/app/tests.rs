@@ -3,6 +3,7 @@
 mod attention;
 mod desks;
 mod audits;
+mod hand;
 mod bindings;
 mod keys_snapshot;
 mod layout;

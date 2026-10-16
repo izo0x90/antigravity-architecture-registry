@@ -484,15 +484,28 @@ the palette and every button read one list of what can run where you are,
 so a key is shown wherever it runs and runs what it shows. A panel that
 isn't focused shows its buttons without keys (they run it once it is).
 
-The mouse and fingers work the same way in every view: a click or tap on
-an item puts the cursor there; a double click or tap opens it (Enter); a
-long press lists what can be done with it (the palette). A swipe runs
-what it's bound to in the view it starts on (`gestures = ["swipe_left"]`
-in `[keymap.bind]`, like keys): in a chat, the next and previous agent
-slot; elsewhere, back and forward. The graph's canvas reads its own (a
-tap selects, a double tap goes in, two fingers pan and zoom), and so does
-the code's text (`[keymap.pointer] go_to` with a click goes to a name).
-Thresholds are in `[touch]`.
+The mouse, the trackpad and fingers work the same way in every view, the
+graph included:
+
+- the wheel moves up and down, `Shift` + wheel sideways, and two fingers
+  on a trackpad any way; `Ctrl` + wheel (`Cmd` on a Mac;
+  `[keymap.pointer] zoom`) zooms where a view zooms (the graph), a step a
+  notch, as its zoom keys do, and so does a trackpad's pinch;
+- dragging (the mouse, one finger) moves what's shown, and a quick flick
+  glides on, slowing to a stop; two fingers on a screen pinch to zoom
+  around them and pan as they move;
+- a click or tap on an item puts the cursor there; a double click or tap
+  opens it (Enter; on the graph's empty space, the whole tree fits); a
+  long press lists what can be done with it (the palette; on the graph,
+  it selects the card and its controls show under it);
+- after moving by hand, the next key starts from what's on the screen.
+
+A swipe runs what it's bound to in the view it starts on (`gestures =
+["swipe_left"]` in `[keymap.bind]`, like keys): in a chat, the next and
+previous agent slot; elsewhere, back and forward. Where the view moves
+sideways (the graph, long lines of code), the finger moves it instead.
+The code's text also takes `[keymap.pointer] go_to` with a click (it goes
+to a name). Thresholds are in `[touch]`.
 
 Views also have their own keys:
 
@@ -527,7 +540,10 @@ Views also have their own keys:
     components the same way, each with what the agent wrote about it;
   - find anything in the code (`g /`), and go back to where you were
     before the agent moved the view;
-  - zoom in and out (`z +` / `z -`, the wheel or a pinch) and fit the
+  - move around (drag it, the wheel, `Ctrl+d` / `Ctrl+u` half a screen
+    up and down, `Ctrl+h` / `Ctrl+l` or `z H` / `z L` half a screen
+    sideways, `z h` / `z l` a little);
+  - zoom in and out (`z +` / `z -`, `Ctrl` + wheel or a pinch) and fit the
     drawing to the screen (`z z`, or the button in the toolbar).
 
   Nothing changes on its own: zoom only zooms. A tree bigger than one

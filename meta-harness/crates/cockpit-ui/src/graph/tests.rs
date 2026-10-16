@@ -337,22 +337,12 @@ fn plan_marks_show_on_cards() {
 }
 
 #[test]
-fn fingers_select_go_in_offer_actions_pan_zoom_and_walk_back() {
+fn a_long_press_selects_what_its_on() {
     use crate::touch::Gesture;
     let mut g = showing(sample_tree());
-    let at = |g: &GraphState, key: &str| g.to_screen(&g.card(key).unwrap().rect).center();
-    let step = at(&g, "rust:a::step");
-    g.on_gesture(Gesture::Tap(step));
-    assert_eq!(g.selection.as_deref(), Some("rust:a::step"), "a tap selects");
+    let step = g.to_screen(&g.card("rust:a::step").unwrap().rect).center();
     g.on_gesture(Gesture::LongPress(step));
-    assert_eq!(g.selection.as_deref(), Some("rust:a::step"), "a long press selects (its controls show under it)");
-    g.on_gesture(Gesture::DoubleTap(step));
-    assert_eq!(g.nav.root.as_deref(), Some("rust:a::step"), "a double tap goes in");
-    let before = g.camera();
-    g.on_gesture(Gesture::Pan(egui::vec2(30.0, 0.0)));
-    g.on_gesture(Gesture::Pinch { factor: 1.5, center: egui::Pos2::new(100.0, 100.0) });
-    assert!(g.camera() != before, "two fingers move the camera");
-
+    assert_eq!(g.selection.as_deref(), Some("rust:a::step"), "its controls show under it");
 }
 
 #[test]

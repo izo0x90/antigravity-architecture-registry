@@ -111,10 +111,11 @@ impl CockpitApp {
     }
 
     /// This frame's fingers, as gestures, on the view each started on: a
-    /// swipe runs what the keymap binds to it there (the view's own first);
-    /// a long press puts the cursor on the item under it and lists what can
-    /// be done (the palette); a view that reads its canvas itself (the
-    /// graph) gets the rest. Taps are the pointer's (a click).
+    /// swipe runs what the keymap binds to it there (the view's own first),
+    /// unless the view moves sideways (the finger moves it); a long press
+    /// puts the cursor on the item under it and lists what can be done (the
+    /// palette), or is the view's when it reads its canvas itself (the
+    /// graph). Taps, drags and two fingers are the pointer's.
     pub(in crate::app) fn touch_tick(&mut self, ctx: &egui::Context) {
         let (events, time) = ctx.input(|i| {
             let touches: Vec<(u64, crate::touch::Phase, egui::Pos2)> = i.events.iter().filter_map(|e| match e {
@@ -159,10 +160,9 @@ impl CockpitApp {
     fn on_gesture(&mut self, gesture: crate::touch::Gesture, ctx: &egui::Context) {
         use crate::touch::Gesture;
         let at = match gesture {
-            Gesture::Tap(p) | Gesture::DoubleTap(p) | Gesture::LongPress(p) | Gesture::Pinch { center: p, .. } | Gesture::Swipe { from: p, .. } => Some(p),
-            Gesture::Pan(_) => None,
+            Gesture::LongPress(p) | Gesture::Swipe { from: p, .. } => p,
         };
-        let Some((slot, kind)) = at.map_or_else(|| Some((self.desk.columns.focused(), self.focused_kind())), |p| self.view_at(ctx, p)) else { return };
+        let Some((slot, kind)) = self.view_at(ctx, at) else { return };
         if self.quick_look.is_none() && self.desk.columns.focused() != slot {
             self.desk.columns.focus(slot);
             // Where you are moved: the list is gathered again.
@@ -173,6 +173,11 @@ impl CockpitApp {
             Gesture::Swipe { way, .. } => {
                 let bound = self.bound_actions();
                 let situation = self.situation();
+                // Where the view moves sideways, the finger moved it.
+                let sideways = [Move::Motion(Motion::HalfLeft), Move::Motion(Motion::HalfRight)].map(|m| m.id());
+                if bound.iter().any(|b| b.origin == Origin::View(kind) && sideways.contains(&b.action.id.as_str()) && b.action.when.holds(&situation)) {
+                    return;
+                }
                 let runs = |b: &&Bound| b.runs_on(way.name()) && b.action.when.holds(&situation);
                 // The closest one to where you are.
                 let found = bound.iter().filter(runs).min_by_key(|b| b.layer);
@@ -186,8 +191,7 @@ impl CockpitApp {
                     self.asked = Some(("palette.open".to_owned(), None));
                 }
             }
-            other if own => self.desk.view_mut(kind).gesture(other),
-            _ => {}
+            Gesture::LongPress(_) => self.desk.view_mut(kind).gesture(gesture),
         }
     }
 

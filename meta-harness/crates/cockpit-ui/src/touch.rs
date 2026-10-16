@@ -1,22 +1,22 @@
 //! Touch gestures: raw finger events in, gestures out. Pure state (no egui
 //! UI), so every gesture is testable on its own. The host runs one for the
 //! whole cockpit: a swipe runs what the keymap binds to it in the view it
-//! started on, a long press lists what can be done with the item under it,
-//! and a view that reads its canvas itself (the graph) gets the rest.
-//! Thresholds come from `[touch]`.
+//! started on, and a long press lists what can be done with the item under
+//! it (the graph's selects it). The rest of what fingers do is the
+//! pointer's, as egui makes it of them, the same as a mouse in every view:
+//! a tap clicks, a double tap double-clicks, a finger drags; two fingers
+//! pan and pinch. Thresholds come from `[touch]`.
 
 use std::collections::BTreeMap;
 
-use egui::{Pos2, Vec2};
+use egui::Pos2;
 use serde::Deserialize;
 
 /// Gesture thresholds (screen points and milliseconds).
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct TouchConfig {
-    /// How far a finger may wander and still tap or long-press.
+    /// How far a finger may wander and still long-press.
     pub tap_slop: f32,
-    /// Longest gap between two taps of a double tap.
-    pub double_tap_ms: f64,
     /// How long a finger rests for a long press.
     pub long_press_ms: f64,
     /// Shortest horizontal travel of a swipe.
@@ -27,7 +27,7 @@ pub struct TouchConfig {
 
 impl TouchConfig {
     pub fn check(&self) -> Result<(), String> {
-        if self.tap_slop <= 0.0 || self.double_tap_ms <= 0.0 || self.long_press_ms <= 0.0 || self.swipe_min <= self.tap_slop || self.swipe_max_ms <= 0.0 {
+        if self.tap_slop <= 0.0 || self.long_press_ms <= 0.0 || self.swipe_min <= self.tap_slop || self.swipe_max_ms <= 0.0 {
             return Err("touch: thresholds must be positive and a swipe longer than the tap slop".into());
         }
         Ok(())
@@ -63,13 +63,7 @@ pub enum Swipe {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Gesture {
-    Tap(Pos2),
-    DoubleTap(Pos2),
     LongPress(Pos2),
-    /// Two fingers moved together by this much.
-    Pan(Vec2),
-    /// Two fingers spread (factor > 1) or pinched around `center`.
-    Pinch { factor: f32, center: Pos2 },
     /// One finger flicked sideways, starting at `from`.
     Swipe { way: Swipe, from: Pos2 },
 }
@@ -103,11 +97,6 @@ pub struct Gestures {
     /// More than one finger took part since the last time all were lifted.
     multi: bool,
     long_fired: bool,
-    last_tap: Option<(f64, Pos2)>,
-}
-
-fn centroid(a: Pos2, b: Pos2) -> Pos2 {
-    a + (b - a) / 2.0
 }
 
 impl Gestures {
@@ -139,21 +128,10 @@ impl Gestures {
                 }
             }
             Phase::Move => {
-                let before: Vec<Pos2> = self.tracks.values().map(|t| t.pos).collect();
                 let Some(track) = self.tracks.get_mut(&id) else { return out };
                 track.pos = pos;
                 if track.pos.distance(track.start) > cfg.tap_slop {
                     track.wandered = true;
-                }
-                if let ([a0, b0], [a1, b1]) = (before.as_slice(), self.tracks.values().map(|t| t.pos).collect::<Vec<_>>().as_slice()) {
-                    let (c0, c1) = (centroid(*a0, *b0), centroid(*a1, *b1));
-                    if c1 != c0 {
-                        out.push(Gesture::Pan(c1 - c0));
-                    }
-                    let (d0, d1) = (a0.distance(*b0), a1.distance(*b1));
-                    if d0 > 1.0 && (d1 - d0).abs() > f32::EPSILON {
-                        out.push(Gesture::Pinch { factor: d1 / d0, center: c1 });
-                    }
                 }
             }
             Phase::End | Phase::Cancel => {
@@ -175,7 +153,6 @@ impl Gestures {
         match self.long_press_due(cfg) {
             Some(due) if time >= due => {
                 self.long_fired = true;
-                self.last_tap = None;
                 self.tracks.values().next().map(|t| vec![Gesture::LongPress(t.pos)]).unwrap_or_default()
             }
             _ => Vec::new(),
@@ -183,22 +160,10 @@ impl Gestures {
     }
 
     /// A lone finger lifted: a tap, a double tap, a swipe, or nothing.
+    /// A finger lifted on its own: a quick sideways flick is a swipe.
     fn lifted(&mut self, track: Track, pos: Pos2, time: f64, cfg: &TouchConfig) -> Vec<Gesture> {
         let held_ms = (time - track.start_time) * 1000.0;
         let travel = pos - track.start;
-        if !track.wandered && pos.distance(track.start) <= cfg.tap_slop {
-            if self.long_fired || held_ms >= cfg.long_press_ms {
-                return Vec::new();
-            }
-            return match self.last_tap.take() {
-                Some((at, where_)) if (time - at) * 1000.0 <= cfg.double_tap_ms && where_.distance(pos) <= cfg.tap_slop * 2.0 => vec![Gesture::DoubleTap(pos)],
-                _ => {
-                    self.last_tap = Some((time, pos));
-                    vec![Gesture::Tap(pos)]
-                }
-            };
-        }
-        self.last_tap = None;
         if held_ms <= cfg.swipe_max_ms && travel.x.abs() >= cfg.swipe_min && travel.x.abs() > travel.y.abs() * 2.0 {
             return vec![Gesture::Swipe { way: if travel.x > 0.0 { Swipe::Right } else { Swipe::Left }, from: track.start }];
         }
@@ -219,17 +184,10 @@ mod tests {
     }
 
     #[test]
-    fn taps_double_taps_and_long_presses() {
+    fn a_resting_finger_long_presses_once_and_a_tap_is_the_pointers() {
         let (cfg, mut g) = (cfg(), Gestures::default());
         assert!(g.feed(1, Phase::Start, p(10.0, 10.0), 0.0, &cfg).is_empty());
-        assert_eq!(g.feed(1, Phase::End, p(12.0, 11.0), 0.05, &cfg), vec![Gesture::Tap(p(12.0, 11.0))]);
-        g.feed(2, Phase::Start, p(11.0, 10.0), 0.15, &cfg);
-        assert_eq!(g.feed(2, Phase::End, p(11.0, 10.0), 0.2, &cfg), vec![Gesture::DoubleTap(p(11.0, 10.0))]);
-        // Too slow for a double tap: two taps.
-        g.feed(3, Phase::Start, p(10.0, 10.0), 1.0, &cfg);
-        g.feed(3, Phase::End, p(10.0, 10.0), 1.05, &cfg);
-        g.feed(4, Phase::Start, p(10.0, 10.0), 2.0, &cfg);
-        assert_eq!(g.feed(4, Phase::End, p(10.0, 10.0), 2.05, &cfg), vec![Gesture::Tap(p(10.0, 10.0))]);
+        assert!(g.feed(1, Phase::End, p(12.0, 11.0), 0.05, &cfg).is_empty(), "a tap: the pointer's click");
         // Resting fires a long press once; lifting after it is nothing.
         g.feed(5, Phase::Start, p(50.0, 50.0), 3.0, &cfg);
         assert!(g.tick(3.1, &cfg).is_empty());
@@ -241,16 +199,19 @@ mod tests {
         g.feed(6, Phase::Move, p(50.0 + cfg.tap_slop * 3.0, 50.0), 5.1, &cfg);
         assert!(g.tick(7.0, &cfg).is_empty());
         assert!(g.feed(6, Phase::End, p(50.0 + cfg.tap_slop * 3.0, 50.0), 7.1, &cfg).is_empty());
+        // So does a second finger.
+        g.feed(7, Phase::Start, p(50.0, 50.0), 8.0, &cfg);
+        g.feed(8, Phase::Start, p(90.0, 50.0), 8.05, &cfg);
+        assert!(g.tick(9.0, &cfg).is_empty());
     }
 
     #[test]
-    fn two_fingers_pan_and_pinch_and_quick_flicks_swipe() {
+    fn quick_sideways_flicks_swipe_and_two_fingers_never_do() {
         let (cfg, mut g) = (cfg(), Gestures::default());
         g.feed(1, Phase::Start, p(100.0, 100.0), 0.0, &cfg);
         g.feed(2, Phase::Start, p(200.0, 100.0), 0.0, &cfg);
-        assert_eq!(g.feed(1, Phase::Move, p(50.0, 100.0), 0.1, &cfg), vec![Gesture::Pan(Vec2::new(-25.0, 0.0)), Gesture::Pinch { factor: 1.5, center: p(125.0, 100.0) }]);
-        assert_eq!(g.feed(2, Phase::Move, p(200.0, 140.0), 0.1, &cfg)[0], Gesture::Pan(Vec2::new(0.0, 20.0)));
-        assert!(g.feed(1, Phase::End, p(50.0, 100.0), 0.2, &cfg).is_empty(), "no tap after a two-finger gesture");
+        g.feed(1, Phase::Move, p(100.0 + cfg.swipe_min + 10.0, 100.0), 0.1, &cfg);
+        assert!(g.feed(1, Phase::End, p(100.0 + cfg.swipe_min + 10.0, 100.0), 0.2, &cfg).is_empty(), "two fingers: no swipe");
         assert!(g.feed(2, Phase::End, p(200.0, 140.0), 0.2, &cfg).is_empty());
         // A quick horizontal flick swipes; a slow drag doesn't.
         g.feed(3, Phase::Start, p(100.0, 300.0), 1.0, &cfg);

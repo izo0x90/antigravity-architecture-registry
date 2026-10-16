@@ -90,11 +90,14 @@ pub struct Viewport {
     /// A move under way: from where, to where, since when (none: there
     /// at once, next frame).
     glide: Option<(Vec2, Vec2, Option<f64>)>,
+    /// Where it asked to be drawn this frame (a hand moving it while it
+    /// glides takes over).
+    asked: Option<Vec2>,
 }
 
 impl Default for Viewport {
     fn default() -> Self {
-        Self { offset: Vec2::ZERO, window: Vec2::ZERO, content: Vec2::ZERO, margin: 0.0, column: 0.0, by_hand: false, at: Vec2::ZERO, glide: None }
+        Self { offset: Vec2::ZERO, window: Vec2::ZERO, content: Vec2::ZERO, margin: 0.0, column: 0.0, by_hand: false, at: Vec2::ZERO, glide: None, asked: None }
     }
 }
 
@@ -225,7 +228,9 @@ impl Viewport {
         }
         // Eased: quick away, gentle arrival.
         let eased = 1.0 - (1.0 - t).powi(3);
-        Some(from + (to - from) * eased)
+        let at = from + (to - from) * eased;
+        self.asked = Some(at);
+        Some(at)
     }
 
     /// Whether a key's move is still gliding (draw again).
@@ -238,12 +243,16 @@ impl Viewport {
     /// hand.
     pub fn drawn(&mut self, offset: Vec2, window: Vec2, content: Vec2) {
         (self.window, self.content, self.at) = (window, content, offset);
+        let asked = self.asked.take();
         if self.glide.is_none() {
             // Where it was asked to look, as the content now allows.
             if (offset - self.clamp(self.offset)).length() > 0.5 {
                 self.by_hand = true;
             }
             self.offset = offset;
+        } else if asked.is_some_and(|asked| (offset - self.clamp(asked)).length() > 0.5) {
+            // A hand moved it while it glided: the hand's.
+            (self.glide, self.by_hand, self.offset) = (None, true, offset);
         }
     }
 }
@@ -510,6 +519,21 @@ mod tests {
         while { now += 0.02; draw_items(&ctx, &mut list, at, now); list.busy() } {}
         assert_eq!(draw_items(&ctx, &mut list, at, now + 1.0), 1800.0, "the last shows, no further");
         assert_eq!(list.go(100, Some(99), Go::HalfDown(1)), None, "and half a page more does nothing");
+    }
+
+    #[test]
+    fn a_hand_moving_it_while_it_glides_takes_over() {
+        let (stops, mut view) = lines();
+        let moved = view.go(&stops, Some(0), Go::Last).unwrap();
+        view.take(&moved, 10.0, true);
+        let on_the_way = view.wanted(10.0 + GLIDE_S / 2.0).unwrap();
+        view.drawn(on_the_way, view.window, view.content);
+        assert!(view.gliding() && !view.by_hand, "drawn where it asked: still gliding");
+        let wanted = view.wanted(10.0 + GLIDE_S * 0.75).unwrap();
+        view.drawn(wanted - Vec2::new(0.0, 120.0), view.window, view.content);
+        assert!(!view.gliding() && view.by_hand, "a wheel moved it: the glide stops");
+        assert_eq!(view.offset, wanted - Vec2::new(0.0, 120.0), "where the hand left it");
+        assert_eq!(view.wanted(11.0), None, "nothing more asked");
     }
 
     #[test]

@@ -147,11 +147,13 @@ impl Modifier {
 pub struct PointerKeys {
     /// Held while clicking a name in the code: go to what it names.
     pub go_to: Modifier,
+    /// Held while turning the wheel: zoom, where a view zooms (the graph).
+    pub zoom: Modifier,
 }
 
 impl Default for PointerKeys {
     fn default() -> Self {
-        Self { go_to: Modifier::Ctrl }
+        Self { go_to: Modifier::Ctrl, zoom: Modifier::Ctrl }
     }
 }
 

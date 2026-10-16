@@ -10,6 +10,9 @@ use arch_graph::tree::{Rect as WorldRect, ViewKind};
 
 use arch_graph::ComponentId;
 
+use egui::Vec2;
+
+use super::draw::FEW;
 use super::{GraphState, NavChange};
 use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 
@@ -146,13 +149,14 @@ impl GraphState {
 
     /// Half a screen down (or up): the camera moves and the card nearest to
     /// where the selection was on screen is selected.
-    pub(crate) fn half_page(&mut self, down: bool, count: usize) {
+    /// Half a screen `way` (down: +y), the selection going with it: the
+    /// card nearest where it was on the screen.
+    pub(crate) fn half_page(&mut self, way: Vec2, count: usize) {
         if self.tree.is_none() {
             return;
         }
         let anchor = self.selection.as_deref().and_then(|s| self.rect_of(s)).map(|r| self.to_screen(&r).center()).filter(|p| self.canvas.contains(*p)).unwrap_or(self.canvas.center());
-        let dy = self.canvas.height() / 2.0 * count as f32;
-        self.camera.pan.y += if down { -dy } else { dy };
+        self.pan_by(-way * self.canvas.size() / 2.0 * count as f32);
         let nearest = self.tree.as_ref().and_then(|t| t.cards.iter().map(|c| (self.to_screen(&c.rect).center().distance(anchor), c.key.clone())).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, k)| k));
         if let Some(key) = nearest {
             self.select(Some(key));
@@ -190,6 +194,12 @@ impl GraphState {
         let mut out = crate::nav::list_moves();
         out.push(Move::Motion(Motion::Left).offer("Left"));
         out.push(Move::Motion(Motion::Right).offer("Right"));
+        // The canvas moves every way.
+        let shown = self.tree.is_some();
+        out.push(Move::Motion(Motion::HalfLeft).offer_if(shown, "Half a screen left"));
+        out.push(Move::Motion(Motion::HalfRight).offer_if(shown, "Half a screen right"));
+        out.push(Move::Motion(Motion::FewLeft).offer_if(shown, "A little left"));
+        out.push(Move::Motion(Motion::FewRight).offer_if(shown, "A little right"));
         out.push(Move::Motion(Motion::NextSibling).offer("Next sibling (same module)"));
         out.push(Move::Motion(Motion::PrevSibling).offer("Previous sibling"));
         out.push(match self.selected_card().filter(|c| self.nav.root.as_ref() != Some(&c.key)) {
@@ -276,16 +286,18 @@ impl Navigable for GraphState {
             return;
         }
         match motion {
-            Motion::HalfDown => self.half_page(true, count),
-            Motion::HalfUp => self.half_page(false, count),
+            Motion::HalfDown => self.half_page(Vec2::Y, count),
+            Motion::HalfUp => self.half_page(-Vec2::Y, count),
+            Motion::HalfLeft => self.half_page(-Vec2::X, count),
+            Motion::HalfRight => self.half_page(Vec2::X, count),
+            Motion::FewLeft => self.pan_by(Vec2::new(FEW * count as f32, 0.0)),
+            Motion::FewRight => self.pan_by(Vec2::new(-FEW * count as f32, 0.0)),
             Motion::First => self.select_index(Some(0)),
             Motion::Last => self.select_index(None),
             Motion::Line(n) => self.select_index(Some(n.saturating_sub(1))),
             Motion::NextSibling => self.step_sibling(true, count),
             Motion::PrevSibling => self.step_sibling(false, count),
             Motion::Left | Motion::Down | Motion::Up | Motion::Right => {}
-            // Sideways: the camera, with the graph's own keys (to come).
-            Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
         }
     }
 

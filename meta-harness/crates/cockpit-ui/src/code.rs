@@ -189,7 +189,7 @@ pub struct CodeViewerState {
     /// (asked before they were).
     show: Option<Show>,
     /// Where it's looking (the shared rules move it).
-    viewport: Viewport,
+    pub(crate) viewport: Viewport,
     /// The time last drawn (a key's move glides from then).
     clock: f64,
     /// A row's height with the space under it (rows are laid out by it).

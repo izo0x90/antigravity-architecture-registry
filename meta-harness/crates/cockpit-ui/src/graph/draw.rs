@@ -23,6 +23,18 @@ use crate::touch::Gesture;
 const MIN_ZOOM: f32 = 0.03;
 const MAX_ZOOM: f32 = 4.0;
 
+/// "A little" sideways, in points.
+pub(super) const FEW: f32 = 48.0;
+
+/// One notch of a mouse wheel, as browsers send it: in points, in lines.
+const NOTCH_POINTS: f32 = 100.0;
+const NOTCH_LINES: f32 = 3.0;
+
+/// A flick slows as a list's does (egui's): by this many points a second,
+/// each second, and stops below this speed.
+const FRICTION: f32 = 1000.0;
+const STOP_SPEED: f32 = 20.0;
+
 impl GraphState {
     pub(crate) fn to_screen(&self, r: &WorldRect) -> Rect {
         let z = self.camera.zoom;
@@ -34,6 +46,7 @@ impl GraphState {
     }
 
     pub(crate) fn zoom_by(&mut self, factor: f32, around: Pos2) {
+        self.fling = Vec2::ZERO;
         let old = self.camera.zoom;
         let new = (old * factor).clamp(MIN_ZOOM, MAX_ZOOM);
         let world = (around - self.canvas.min - self.camera.pan) / old;
@@ -44,6 +57,7 @@ impl GraphState {
     /// The whole tree on the canvas, never smaller than
     /// readable: past that, readable size from the selection (or the top).
     pub(crate) fn fit_view(&mut self) {
+        self.fling = Vec2::ZERO;
         let Some(tree) = &self.tree else { return };
         let (w, h) = (tree.size.0.max(1.0), tree.size.1.max(1.0));
         let area = self.canvas;
@@ -83,6 +97,7 @@ impl GraphState {
         if self.canvas.contains_rect(rect) {
             return;
         }
+        self.fling = Vec2::ZERO;
         // Bigger than the screen (a box): its top-left corner; else centred.
         if rect.width() > self.canvas.width() || rect.height() > self.canvas.height() {
             let pad = crate::theme::look().space_xxxl;
@@ -121,27 +136,11 @@ impl GraphState {
         if let Some(key) = self.reveal_after_fit.take() {
             self.bring_into_view(&key);
         }
-        // Fingers are the host's gestures (on_gesture); the pointer egui
-        // makes of them isn't read twice.
-        let touched = ui.input(|i| i.any_touches() || i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. })));
-        self.touch_seen |= touched;
-        if !touched {
-            if response.dragged() {
-                self.camera.pan += response.drag_delta();
-            }
-            if pan_held && response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-            }
-            if response.hovered() {
-                let (scroll, pinch, pointer) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta(), i.pointer.hover_pos()));
-                let around = pointer.unwrap_or(canvas.center());
-                if pinch != 1.0 {
-                    self.zoom_by(pinch, around);
-                } else if scroll != 0.0 {
-                    self.zoom_by((1.0 + scroll * 0.0015).clamp(0.8, 1.25), around);
-                }
-            }
+        self.touch_seen |= ui.input(|i| i.any_touches());
+        if pan_held && response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
+        self.by_hand(ui, &response);
         let look = crate::theme::look();
         match (&self.tree, &self.load) {
             (None, Load::Failed(err)) => {
@@ -171,19 +170,19 @@ impl GraphState {
         {
             painter.text(canvas.left_bottom() + Vec2::new(8.0, -8.0), Align2::LEFT_BOTTOM, format!("refresh failed: {err}"), FontId::proportional(look.text_body), colors().error);
         }
-        // Click: a count opens its card; a card selects; a double click goes in.
-        if !touched
-            && (response.clicked() || response.double_clicked())
+        // Click or tap: a count opens its card; a card selects; a double
+        // one goes in (on nothing: the whole tree fits).
+        if (response.clicked() || response.double_clicked())
             && let Some(pos) = response.interact_pointer_pos()
         {
             if let Some(key) = self.hit_more(pos) {
                 self.navigate(NavChange::Open(key));
             } else {
                 let hit = self.hit(pos);
-                if response.double_clicked()
-                    && let Some(key) = hit.clone()
-                {
-                    self.pointer_jump(NavChange::GoIn(key));
+                match hit.clone() {
+                    Some(key) if response.double_clicked() => self.pointer_jump(NavChange::GoIn(key)),
+                    None if response.double_clicked() => self.fit_view(),
+                    _ => {}
                 }
                 self.select(hit);
             }
@@ -193,37 +192,87 @@ impl GraphState {
         }
     }
 
-    /// What a gesture on its canvas does (the host hands them over): a tap
-    /// selects (or opens a count), a double tap goes in, a long press
-    /// selects (its controls show under it), two fingers pan and zoom.
-    /// Swipes are the keymap's (the host runs what they're bound to).
+    /// Moved by hand, as every view is: a drag (the mouse, a finger) moves
+    /// it and a flick glides on; the wheel and two fingers on a trackpad
+    /// move it (Shift: sideways); the wheel with the zoom key held
+    /// (`[keymap.pointer] zoom`) zooms a step a notch, as the zoom keys do,
+    /// and pinching (a trackpad, two fingers) zooms, around the pointer or
+    /// the fingers. Two fingers on a screen also pan.
+    fn by_hand(&mut self, ui: &egui::Ui, response: &egui::Response) {
+        let zoom_key = crate::keymap::local().pointer.zoom;
+        let (touch, touching, scroll, notches, pinch, pointer, velocity, dt) = ui.input(|i| {
+            let (mut notches, mut pinch) = (0.0, 1.0);
+            for event in &i.events {
+                match event {
+                    egui::Event::MouseWheel { unit, delta, modifiers } if zoom_key.held(*modifiers) => {
+                        notches += match unit {
+                            egui::MouseWheelUnit::Point => delta.y / NOTCH_POINTS,
+                            egui::MouseWheelUnit::Line => delta.y / NOTCH_LINES,
+                            egui::MouseWheelUnit::Page => delta.y,
+                        };
+                    }
+                    egui::Event::Zoom(factor) => pinch *= factor,
+                    _ => {}
+                }
+            }
+            (i.multi_touch(), i.any_touches(), i.smooth_scroll_delta, notches, pinch, i.pointer.hover_pos(), i.pointer.velocity(), i.stable_dt.min(0.1))
+        });
+        if let Some(touch) = touch.filter(|t| response.rect.contains(t.center_pos)) {
+            (self.fling, self.pinching) = (Vec2::ZERO, true);
+            self.camera.pan += touch.translation_delta;
+            if touch.zoom_delta != 1.0 {
+                self.zoom_by(touch.zoom_delta, touch.center_pos);
+            }
+            return;
+        }
+        if response.dragged() {
+            self.fling = Vec2::ZERO;
+            self.camera.pan += response.drag_delta();
+        }
+        if response.drag_stopped() && !self.pinching {
+            self.fling = velocity;
+        }
+        if !touching {
+            self.pinching = false;
+        }
+        if response.hovered() {
+            if scroll != Vec2::ZERO && notches == 0.0 {
+                self.fling = Vec2::ZERO;
+                self.camera.pan += scroll;
+            }
+            let factor = self.ui.zoom_step.powf(notches) * pinch;
+            if factor != 1.0 {
+                self.zoom_by(factor, pointer.unwrap_or(self.canvas.center()));
+            }
+        }
+        let speed = self.fling.length();
+        if speed > 0.0 {
+            let slower = speed - FRICTION * dt;
+            if slower < STOP_SPEED {
+                self.fling = Vec2::ZERO;
+            } else {
+                self.fling *= slower / speed;
+                self.camera.pan += self.fling * dt;
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+
+    /// Moves what's shown by `by` (a key's: a flick stops).
+    pub(crate) fn pan_by(&mut self, by: Vec2) {
+        self.fling = Vec2::ZERO;
+        self.camera.pan += by;
+    }
+
+    /// A long press on its canvas (the host hands it over) selects what's
+    /// under it; its controls show under it. Everything else fingers do is
+    /// the pointer's.
     pub fn on_gesture(&mut self, gesture: Gesture) {
         self.touch_seen = true;
-        match gesture {
-            Gesture::Tap(pos) => {
-                match self.hit_more(pos) {
-                    Some(key) => self.navigate(NavChange::Open(key)),
-                    None => {
-                        let hit = self.hit(pos);
-                        self.select(hit);
-                    }
-                }
-            }
-            Gesture::DoubleTap(pos) => match self.hit(pos) {
-                Some(key) => {
-                    self.select(Some(key.clone()));
-                    self.pointer_jump(NavChange::GoIn(key));
-                }
-                None => self.fit_view(),
-            },
-            Gesture::LongPress(pos) => {
-                if let Some(key) = self.hit(pos) {
-                    self.select(Some(key));
-                }
-            }
-            Gesture::Pan(delta) => self.camera.pan += delta,
-            Gesture::Pinch { factor, center } => self.zoom_by(factor, center),
-            Gesture::Swipe { .. } => {}
+        if let Gesture::LongPress(pos) = gesture
+            && let Some(key) = self.hit(pos)
+        {
+            self.select(Some(key));
         }
     }
 
