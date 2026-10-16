@@ -260,3 +260,23 @@ fn a_big_repository_and_a_30000_line_file_stay_fast() {
     let kept_in = started.elapsed();
     assert!(listed_in.as_millis() < 1500 && read_in.as_millis() < 1000 && kept_in < read_in, "list {listed_in:?}, the big file {read_in:?}, again {kept_in:?}");
 }
+
+#[test]
+fn more_context_shows_that_many_more_unchanged_lines_on_each_side() {
+    let (dir, repo) = repo();
+    let text: String = (1..=60).map(|n| format!("line {n}\n")).collect();
+    write(dir.path(), "long.txt", &text);
+    stage(&repo, &["long.txt"]);
+    commit(&repo, "long");
+    write(dir.path(), "long.txt", &text.replace("line 30\n", "LINE 30\n"));
+    let changes = Changes::open(dir.path()).unwrap();
+    let around = |context: u32| {
+        let file = changes.file(&Comparison::default(), "long.txt", Group::Unstaged, context).unwrap();
+        let lines = &file.hunks[0].lines;
+        let before = lines.iter().take_while(|l| l.kind == LineKind::Context).count();
+        let after = lines.iter().rev().take_while(|l| l.kind == LineKind::Context).count();
+        (before, after)
+    };
+    assert_eq!(around(3), (3, 3));
+    assert_eq!(around(13), (13, 13), "ten more on each side");
+}

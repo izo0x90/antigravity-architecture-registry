@@ -326,3 +326,37 @@ fn a_change_folds_to_one_line_and_opens_again_and_everything_folds_and_unfolds()
     arrive(&mut view, &net, &ctx);
     assert_eq!(view.rows().len(), 11, "every file and change open");
 }
+
+#[test]
+fn more_context_is_offered_where_theres_more_to_show_and_adds_ten_lines_each_side() {
+    let (mut view, net, ctx) = view_with_changes();
+    let offered = |view: &ChangesView| view.actions().iter().any(|a| a.id == "changes.more_context");
+    view.move_to("h:Unstaged:a.rs:0");
+    assert!(offered(&view), "a change in an edited file");
+    view.move_to("h:Unstaged:b.rs:0");
+    assert!(!offered(&view), "a deleted file's change is the whole of it");
+    // Asked for: ten more lines on each side, and each change says so.
+    view.move_to("h:Unstaged:a.rs:0");
+    let more = view.actions().into_iter().find(|a| a.id == "changes.more_context").unwrap();
+    assert_eq!(more.label, "Show 10 more lines around its changes");
+    let mut parts = (None, None, crate::keymap::InputMode::Normal);
+    let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut parts.2, slot: 0, note: &mut parts.0, asked: &mut parts.1 };
+    view.run(&more, None, &mut cx);
+    assert!(net.sent.lock().unwrap().last().is_some_and(|s| s.contains("a.rs") && s.contains("context=13")), "{:?}", net.sent.lock().unwrap().last());
+    let ctx_line = |n: u32| line(LineKind::Context, Some(n), Some(n), "same");
+    let mut lines: Vec<DiffLine> = (20..33).map(ctx_line).collect();
+    lines.extend([line(LineKind::Removed, Some(33), None, "old"), line(LineKind::Added, None, Some(33), "new")]);
+    lines.extend((34..47).map(ctx_line));
+    let hunk = Hunk { old_start: 20, old_lines: 27, new_start: 20, new_lines: 27, lines };
+    assert_eq!(around_words(&hunk), "13 unchanged lines around");
+    push(&view.inbox, Reply::File(Comparison::default(), (Group::Unstaged, "a.rs".into()), Ok(FileChanges { comparison: Comparison::default(), path: "a.rs".into(), group: Group::Unstaged, context: 13, binary: false, hunks: vec![hunk] })));
+    view.tick(&net, &ctx, false);
+    assert!(offered(&view), "still more of the file to show");
+    // The whole file shown: from its first line, stopping short of the lines asked for after it.
+    let whole = Hunk { old_start: 1, old_lines: 4, new_start: 1, new_lines: 4, lines: vec![ctx_line(1), line(LineKind::Removed, Some(2), None, "old"), line(LineKind::Added, None, Some(2), "new"), ctx_line(3), ctx_line(4)] };
+    assert_eq!(around_words(&whole), "1 unchanged line before, 2 after");
+    push(&view.inbox, Reply::File(Comparison::default(), (Group::Unstaged, "a.rs".into()), Ok(FileChanges { comparison: Comparison::default(), path: "a.rs".into(), group: Group::Unstaged, context: 13, binary: false, hunks: vec![whole] })));
+    view.tick(&net, &ctx, false);
+    view.move_to("h:Unstaged:a.rs:0");
+    assert!(!offered(&view), "nothing more to show");
+}

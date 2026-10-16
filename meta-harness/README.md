@@ -391,8 +391,11 @@ all of them:
   change is one line, where it is and how many lines it adds and
   removes, and Fold / Unfold is also a button on the cursor's item.
   `Enter` (or a double click) opens a folded file or change, and
-  otherwise the spot in the code; an action shows more lines around a
-  change. The code view marks the lines changed against where the
+  otherwise the spot in the code. Each change says how many unchanged
+  lines are shown around it; "More context" shows 10 more on each side
+  (`more_context`), offered on an edited file's changes only: a new or
+  deleted file's change is the whole of it, and nothing more is offered
+  once the whole file shows. The code view marks the lines changed against where the
   comparison starts (a bar: green added, blue changed) and shows deleted
   lines in place, struck through; `z d` hides and shows them. Changes
   land on the components whose lines they touch (and what holds them):

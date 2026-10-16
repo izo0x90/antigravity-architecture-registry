@@ -816,6 +816,10 @@ impl ChangesView {
                     ui.label(RichText::new(caret).size(look.text_small).color(colors().muted));
                     if !folded {
                         ui.label(RichText::new(format!("@@ −{},{} +{},{} @@", hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines)).monospace().size(look.text_small).color(colors().faint));
+                        // A new or deleted file's change is the whole of it: nothing around.
+                        if !matches!(file.status, FileStatus::Added | FileStatus::Deleted) {
+                            ui.label(RichText::new(around_words(hunk)).size(look.text_small).color(colors().muted));
+                        }
                         return;
                     }
                     // Folded: where it is and how much changed.
@@ -1041,7 +1045,42 @@ impl ChangesView {
     }
 }
 
+/// The unchanged lines shown before and after a change.
+fn around(hunk: &Hunk) -> (usize, usize) {
+    let before = hunk.lines.iter().take_while(|l| l.kind == LineKind::Context).count();
+    let after = hunk.lines.iter().rev().take_while(|l| l.kind == LineKind::Context).count();
+    if before == hunk.lines.len() { (before, 0) } else { (before, after) }
+}
+
+/// The unchanged lines around a change, in words.
+fn around_words(hunk: &Hunk) -> String {
+    let lines = |n: usize| if n == 1 { "1 unchanged line".to_owned() } else { format!("{n} unchanged lines") };
+    match around(hunk) {
+        (b, a) if b == a => format!("{} around", lines(b)),
+        (b, a) => format!("{} before, {a} after", lines(b)),
+    }
+}
+
 impl ChangesView {
+    /// The file whose changes more lines can be shown around: the cursor's,
+    /// open, edited (a new or deleted file's change is the whole of it),
+    /// and not already shown whole (one change from its first line that
+    /// stops short of the lines asked for after it: its end).
+    fn more_context_here(&self) -> Option<FileKey> {
+        let file = self.file_of(&self.cursor_row()?)?;
+        if file.binary || !matches!(file.status, FileStatus::Modified | FileStatus::Renamed | FileStatus::TypeChanged) {
+            return None;
+        }
+        let key = file_key(file);
+        let opened = self.opened.get(&key)?;
+        let hunks = &opened.changes.as_ref()?.hunks;
+        let whole = match hunks.as_slice() {
+            [only] => only.old_start <= 1 && only.new_start <= 1 && around(only).1 < opened.context as usize,
+            _ => false,
+        };
+        (!hunks.is_empty() && !whole).then_some(key)
+    }
+
     /// What's folded where the cursor is, in words: its file (on a folded
     /// file's row) or its change (on a folded change).
     fn folded_here(&self) -> Option<String> {
@@ -1079,8 +1118,8 @@ impl ActionProvider for ChangesView {
         }
         if let Some(Row::Window(_)) = self.cursor_row() {
             out.push(f("changes.since", "Compare from here to the files now", Command::Since).on_item(Style::Button, "Since here", None).group(ActionGroup::View).importance(MINOR));
-        } else if self.cursor_row().is_some() {
-            out.push(f("changes.more_context", "Show more lines around its changes", Command::MoreContext).on_item(Style::Button, "More context", None).group(ActionGroup::View).importance(MINOR));
+        } else if self.more_context_here().is_some() {
+            out.push(f("changes.more_context", &format!("Show {} more lines around its changes", self.ui.more_context), Command::MoreContext).on_item(Style::Button, "More context", None).group(ActionGroup::View).importance(MINOR));
         }
         out
     }
@@ -1128,13 +1167,13 @@ impl ActionProvider for ChangesView {
                 self.stale = true;
                 self.opened.values_mut().for_each(|o| o.asked_for = None);
             }
-            Some(Command::MoreContext) => {
-                if let Some(file) = self.cursor_row().and_then(|r| self.file_of(&r).cloned()) {
-                    let key = file_key(&file);
+            Some(Command::MoreContext) => match self.more_context_here() {
+                Some(key) => {
                     let context = self.opened.get(&key).map_or(self.ui.context, |o| o.context) + self.ui.more_context;
                     self.ask_file(key, context, cx.net, cx.ctx);
                 }
-            }
+                None => *cx.note = Some("There's nothing more to show around these changes.".into()),
+            },
             None => {}
         }
     }
