@@ -202,7 +202,7 @@ fn question_mark_lists_this_views_keys_grouped_and_searchable() {
     assert!(!text.contains("Next view"), "only this view's keys (and the shared ones)");
     app.key_sheet = Some("fold".into());
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("View") && text.contains("Fold or unfold") && text.contains("z a"), "{text}");
+    assert!(text.contains("View") && text.contains("Fold the Overview section") && text.contains("z a"), "the spec's fold, in its words: {text}");
     app.key_sheet = Some("callee".into());
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("Go to a callee") && !text.contains("Half a page down"), "{text}");
@@ -240,7 +240,7 @@ fn a_pause_on_a_prefix_shows_what_can_follow() {
     assert!(!popup(&texts(&frame_at(&ctx, &mut app, vec![], 31.0)), "z"));
     frame_at(&ctx, &mut app, vec![], 32.05);
     let text = texts(&frame_at(&ctx, &mut app, vec![], 32.1));
-    assert!(popup(&text, "z") && text.contains("Fold everything"), "{text}");
+    assert!(popup(&text, "z") && text.contains("Show one more level"), "the graph's z keys, in its words: {text}");
     // With nothing selected, the go-tos that need a target aren't listed.
     frame_at(&ctx, &mut app, press(egui::Key::Escape, false), 33.0);
     app.desk.graph.select(None);
@@ -262,6 +262,7 @@ fn the_palette_still_reaches_other_views_actions() {
     let was = app.desk.spec.pinned;
     app.invoke(Invocation { action: pin.action.clone(), origin: pin.origin, value: None }, &ctx);
     assert_ne!(app.desk.spec.pinned, was, "it runs on its view");
+    assert!(!palette.iter().any(|b| b.action.label.starts_with("Spec · ") && b.action.id.starts_with("nav.")), "not its shared moves: they act where you are");
     // `:` then a number goes to that line or row.
     assert!(palette.iter().any(|b| b.action.id == "nav.line"));
     focus(&ctx, &mut app, BufferKind::Code);
@@ -323,27 +324,27 @@ fn enter_and_backspace_are_only_offered_where_they_act() {
         let bound = app.bound_actions();
         app.bar_keys(&bound).iter().any(|b| b.action.id == id)
     };
+    let has = |app: &CockpitApp, id: &str| app.bound_actions().iter().any(|b| b.action.id == id && b.action.when.holds(&app.situation()));
     // Graph: Backspace only once gone in somewhere.
     focus(&ctx, &mut app, BufferKind::Graph);
     app.desk.graph = showing(crate::graph::tests::tree_of(&crate::graph::tests::sample_graph(), None, arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() }));
     app.desk.graph.nav.source = Source::Plan(PlanId::new("p").unwrap());
     app.desk.graph.select(Some("rust:a::run".into()));
-    assert!(!app.situation().can_leave, "the starting points already");
-    assert!(!offered(&app, "nav.leave"));
+    assert!(!has(&app, "nav.leave") && !offered(&app, "nav.leave"), "the starting points already");
     app.desk.graph.navigate(crate::graph::NavChange::GoIn("rust:a::run".into()));
-    assert!(app.situation().can_leave);
+    assert!(has(&app, "nav.leave"));
     // Code: Enter on a call, Backspace inside a definition.
     focus(&ctx, &mut app, BufferKind::Code);
     app.desk.code.move_to("2");
-    assert!(!app.situation().can_enter && !app.situation().can_leave, "run's first line: no call, not inside");
+    assert!(!has(&app, "nav.enter") && !has(&app, "nav.leave"), "run's first line: no call, not inside");
     app.desk.code.move_to("3");
-    assert!(app.situation().can_enter && app.situation().can_leave);
+    assert!(has(&app, "nav.enter") && has(&app, "nav.leave"));
     // Queue: Enter only on a job with findings.
     focus(&ctx, &mut app, BufferKind::Queue);
     app.desk.queue.move_to("0");
-    assert!(!app.situation().can_enter, "queued, no findings");
+    assert!(!has(&app, "nav.enter"), "queued, no findings");
     app.desk.queue.move_to("2");
-    assert!(app.situation().can_enter);
+    assert!(has(&app, "nav.enter"));
     // Spec: on a comment, reply leads the bar.
     focus(&ctx, &mut app, BufferKind::Spec);
     let step = ComponentId::new("rust:a::step");

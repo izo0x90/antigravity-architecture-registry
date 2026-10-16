@@ -16,7 +16,7 @@ use egui_phosphor::regular as icon;
 
 use crate::actions::{Action, ActionProvider, Choice, MINOR, Param, RunCx, Style};
 use crate::feedback::FeedbackInspectorState;
-use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, Spot, Step, Target};
+use crate::nav::{Fold, GoTo, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::net::{AuthChallenge, NetClient, NetResult, OpenSlotSession, SlotOpened};
 use crate::request_card::{Drafts, render_request};
 use crate::store::{Store, ThreadView};

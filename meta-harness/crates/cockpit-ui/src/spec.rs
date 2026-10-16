@@ -12,7 +12,7 @@ use harness_contracts::changes::{Comparison, FileChanges, Hunk};
 
 use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style, When};
 use crate::panel::{Status, Tone};
-use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, SpecItem, Spot, Step, Target};
+use crate::nav::{Fold, GoTo, Item, Motion, Move, Navigable, Place, SpecItem, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
 
@@ -1019,7 +1019,7 @@ impl ActionProvider for SpecState {
     fn actions(&self) -> Vec<Action> {
         use SpecCommand as S;
         let f = |id: &str, label: &str, c: SpecCommand| Action::new(id, label, c).focused();
-        let mut out = vec![];
+        let mut out = self.moves();
         if self.composer.is_some() {
             out.push(f("spec.send", "Send what's written", S::Send).importance(PRIMARY).on_typing(Style::Button, "Send", Some(egui_phosphor::regular::PAPER_PLANE_RIGHT)));
             out.push(f("spec.cancel", "Throw away what's being written", S::CancelCompose).importance(PRIMARY).on_typing(Style::Button, "Cancel", None));
@@ -1130,6 +1130,31 @@ impl ActionProvider for SpecState {
     }
 }
 
+impl SpecState {
+    /// The shared moves where the cursor is, in the card's words: through
+    /// its items and sections, into an item (a fold, a link, a reply), up to
+    /// its section's title, folding sections.
+    fn moves(&self) -> Vec<Action> {
+        let mut out = crate::nav::list_moves();
+        out.push(Move::Motion(Motion::NextSibling).offer("Next section"));
+        out.push(Move::Motion(Motion::PrevSibling).offer("Previous section"));
+        let entry = self.entry();
+        let enter = entry.as_ref().and_then(|e| match &e.item {
+            SpecItem::Header if self.folded.contains(&self.current) => Some("Unfold this section".to_owned()),
+            SpecItem::Header => Some("Fold this section".to_owned()),
+            SpecItem::Relation { other, .. } => Some(format!("Follow to {}", crate::nav::short_name(other))),
+            SpecItem::Source | SpecItem::Placeholder(_) | SpecItem::Hunk(_) => Some("Open in the code".to_owned()),
+            SpecItem::Comment(_) | SpecItem::Reply(..) => Some("Reply".to_owned()),
+            SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_) => None,
+        });
+        out.push(Move::Enter.offer_if(enter.is_some(), enter.unwrap_or_else(|| "Open: fold a section, follow a relation, reply".into())));
+        out.push(Move::Leave.offer_if(entry.as_ref().is_some_and(|e| e.item != SpecItem::Header), "Up to the section title"));
+        out.extend(crate::nav::fold_here(Some((&format!("the {} section", self.current.title()), self.folded.contains(&self.current)))));
+        out.extend(crate::nav::fold_all(true, "Unfold every section", "Fold every section"));
+        out
+    }
+}
+
 impl Navigable for SpecState {
     /// Any component, but the one whose card it shows (a relation's other
     /// end is another).
@@ -1217,26 +1242,6 @@ impl Navigable for SpecState {
             SpecItem::Placeholder(_) => Step::GoTo(GoTo::Code),
             SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_) => Step::Nothing("c comments on it, C asks for a change.".into()),
         }
-    }
-
-    fn can_enter(&self) -> bool {
-        self.entry().is_some_and(|e| !matches!(e.item, SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_)))
-    }
-
-    fn can_leave(&self) -> bool {
-        self.entry().is_some_and(|e| e.item != SpecItem::Header)
-    }
-
-    fn enter_label(&self) -> Option<String> {
-        let name = |id: &ComponentId| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned();
-        Some(match self.entry()?.item {
-            SpecItem::Header if self.folded.contains(&self.current) => "Unfold this section".to_owned(),
-            SpecItem::Header => "Fold this section".to_owned(),
-            SpecItem::Relation { other, .. } => format!("Follow to {}", name(&other)),
-            SpecItem::Source | SpecItem::Placeholder(_) | SpecItem::Hunk(_) => "Open in the code".to_owned(),
-            SpecItem::Comment(_) | SpecItem::Reply(..) => "Reply".to_owned(),
-            SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_) => return None,
-        })
     }
 
     /// Up to the section's title.

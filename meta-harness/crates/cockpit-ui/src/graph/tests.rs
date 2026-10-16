@@ -112,8 +112,12 @@ fn ids(g: &GraphState) -> Vec<String> {
 #[test]
 fn the_graph_offers_one_small_set_of_actions() {
     let mut g = showing(sample_tree());
-    let mut all = ids(&g);
+    let mut all: Vec<String> = ids(&g).into_iter().filter(|id| id.starts_with("graph.")).collect();
     all.sort();
+    let moves: Vec<String> = ids(&g).into_iter().filter(|id| id.starts_with("nav.")).collect();
+    for m in ["nav.down", "nav.left", "nav.enter", "nav.leave", "nav.fold_toggle", "nav.fold_open_all", "nav.next_sibling"] {
+        assert!(moves.contains(&m.to_owned()), "the graph offers its moves: {m}");
+    }
     // Depth, flip, switch view, pick source; finding where to start; the camera;
     // back along the path; the legend.
     assert_eq!(all, ["graph.depth_less", "graph.depth_more", "graph.find", "graph.fit", "graph.flip", "graph.legend", "graph.path", "graph.plan", "graph.view", "graph.zoom_in", "graph.zoom_out"]);

@@ -121,7 +121,7 @@ fn the_code_view_scrolls_with_a_chat_beside_it() {
     for _ in 0..3 {
         frame(&ctx, &mut app, vec![]);
     }
-    app.run_shell(ShellCommand::Motion(Motion::Line(300)), None, None, &ctx);
+    app.run_move(app.focused_kind(), Move::Motion(Motion::Line(300)), None, &ctx);
     let mut text = String::new();
     for _ in 0..3 {
         text = texts(&frame(&ctx, &mut app, vec![]));

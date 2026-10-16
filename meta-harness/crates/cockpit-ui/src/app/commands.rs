@@ -85,71 +85,22 @@ impl CockpitApp {
     /// The keys every view shares, labelled for the focused view and marked
     /// with when they apply.
     pub(super) fn nav_actions(&self) -> Vec<Action> {
-        use BufferKind as K;
         use ShellCommand as S;
         let kind = self.focused_kind();
         let nav = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::Navigate).layer(Layer::Panel);
-        let mut out = vec![nav("nav.down", "Down", S::Motion(Motion::Down)).importance(SECONDARY), nav("nav.up", "Up", S::Motion(Motion::Up)).importance(SECONDARY)];
-        match kind {
-            K::Graph => {
-                out.push(nav("nav.left", "Left", S::Motion(Motion::Left)).importance(MINOR));
-                out.push(nav("nav.right", "Right", S::Motion(Motion::Right)).importance(MINOR));
-            }
-            K::Tree => {
-                out.push(nav("nav.left", "Fold, or up to what holds it", S::Motion(Motion::Left)).importance(SECONDARY));
-                out.push(nav("nav.right", "Unfold, or into its first child", S::Motion(Motion::Right)).importance(SECONDARY));
-            }
-            _ => {}
-        }
-        out.push(nav("nav.half_down", "Half a page down", S::Motion(Motion::HalfDown)).importance(MINOR));
-        out.push(nav("nav.half_up", "Half a page up", S::Motion(Motion::HalfUp)).importance(MINOR));
-        out.push(nav("nav.first", "First", S::Motion(Motion::First)).importance(MINOR));
-        out.push(nav("nav.last", "Last", S::Motion(Motion::Last)).importance(MINOR));
-        let siblings = match kind {
-            K::Graph => Some(("Next sibling (same module)", "Previous sibling")),
-            K::Tree => Some(("Next sibling row", "Previous sibling row")),
-            K::Spec => Some(("Next section", "Previous section")),
-            K::Code => Some(("Next definition at this level", "Previous definition at this level")),
-            K::Changes => Some(("Next file", "Previous file")),
-            K::Queue | K::Chat | K::Inbox => None,
-        };
-        if let Some((next, prev)) = siblings {
-            out.push(nav("nav.next_sibling", next, S::Motion(Motion::NextSibling)).importance(MINOR));
-            out.push(nav("nav.prev_sibling", prev, S::Motion(Motion::PrevSibling)).importance(MINOR));
-        }
-        let (enter, leave) = match kind {
-            K::Graph => ("Focus on it", "Back to the whole view"),
-            K::Tree => ("Unfold, or select in the graph", "Fold, or up to what holds it"),
-            K::Code => ("Go to what's named here", "Out to the definition's start"),
-            K::Spec => ("Open: fold a section, follow a relation, reply", "Up to the section title"),
-            K::Queue => ("Show why it failed", "Hide that again"),
-            K::Chat => ("Open the file it points to", "Follow the latest again"),
-            K::Inbox => ("Answer with it, or open its chat", ""),
-            K::Changes => ("Open it in the code", "Up to its file"),
-        };
-        let enter = self.desk.view(kind).enter_label().unwrap_or_else(|| enter.to_owned());
-        out.push(nav("nav.enter", &enter, S::Enter).importance(PRIMARY).when(When::Enter));
-        let leave = self.desk.view(kind).leave_label().unwrap_or_else(|| leave.to_owned());
-        out.push(nav("nav.leave", &leave, S::Leave).importance(SECONDARY).when(When::Leave));
-        out.push(nav("nav.hint", "Jump to something on screen", S::Hint { open: false }).importance(PRIMARY));
-        out.push(nav("nav.hint_open", "Open something on screen", S::Hint { open: true }).importance(SECONDARY).icon(egui_phosphor::regular::CURSOR_CLICK));
-        out.push(nav("nav.search", "Search this view", S::Search).importance(PRIMARY).icon(egui_phosphor::regular::MAGNIFYING_GLASS));
-        out.push(nav("nav.search_next", "Next match", S::SearchStep { forward: true }).importance(SECONDARY).when(When::Searched));
-        out.push(nav("nav.search_prev", "Previous match", S::SearchStep { forward: false }).importance(MINOR).when(When::Searched));
-        if kind != K::Chat {
-            let fold = |id: &str, label: &str, f: Fold| Action::new(id, label, S::Fold(f)).group(Group::View).importance(MINOR).when(When::Target);
-            out.push(fold("nav.fold_open", "Unfold", Fold::Open));
-            out.push(fold("nav.fold_close", "Fold", Fold::Close));
-            out.push(fold("nav.fold_toggle", "Fold or unfold", Fold::Toggle).importance(SECONDARY));
-            out.push(fold("nav.fold_open_all", "Unfold everything", Fold::OpenAll));
-            out.push(fold("nav.fold_close_all", "Fold everything", Fold::CloseAll));
-        }
-        out.push(nav("nav.mark_set", "Set a mark here", S::MarkSet).importance(MINOR).icon(egui_phosphor::regular::BOOKMARK_SIMPLE));
-        out.push(nav("nav.mark_jump", "Jump to a mark", S::MarkJump).importance(MINOR).when(When::Marked));
-        out.push(nav("nav.back", "Back (jump list)", S::Back).importance(SECONDARY).when(When::Back).icon(egui_phosphor::regular::ARROW_LEFT));
-        out.push(nav("nav.forward", "Forward (jump list)", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT));
-        out.push(Action::new("nav.keys", "Keys for this view", S::Keys).group(Group::View).importance(MINOR));
-        out.push(nav("nav.line", "Go to line or row", S::Line).param(Param::Text { hint: "line or row number".into() }).importance(MINOR));
+        let mut out = vec![
+            nav("nav.hint", "Jump to something on screen", S::Hint { open: false }).importance(PRIMARY),
+            nav("nav.hint_open", "Open something on screen", S::Hint { open: true }).importance(SECONDARY).icon(egui_phosphor::regular::CURSOR_CLICK),
+            nav("nav.search", "Search this view", S::Search).importance(PRIMARY).icon(egui_phosphor::regular::MAGNIFYING_GLASS),
+            nav("nav.search_next", "Next match", S::SearchStep { forward: true }).importance(SECONDARY).when(When::Searched),
+            nav("nav.search_prev", "Previous match", S::SearchStep { forward: false }).importance(MINOR).when(When::Searched),
+            nav("nav.mark_set", "Set a mark here", S::MarkSet).importance(MINOR).icon(egui_phosphor::regular::BOOKMARK_SIMPLE),
+            nav("nav.mark_jump", "Jump to a mark", S::MarkJump).importance(MINOR).when(When::Marked),
+            nav("nav.back", "Back (jump list)", S::Back).importance(SECONDARY).when(When::Back).icon(egui_phosphor::regular::ARROW_LEFT),
+            nav("nav.forward", "Forward (jump list)", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT),
+            Action::new("nav.keys", "Keys for this view", S::Keys).group(Group::View).importance(MINOR),
+            nav("nav.line", "Go to line or row", S::Line).param(Param::Text { hint: "line or row number".into() }).importance(MINOR),
+        ];
         // Each go-to's destination says whether it can show what the
         // cursor is on; the relational ones, whether its relations lead
         // anywhere.
@@ -306,7 +257,8 @@ impl CockpitApp {
         // the next free keys under the view-menu key.
         let menu = self.config.keymap.view_menu;
         let mut taken: Vec<char> = bound.iter().filter_map(|b| b.leader.as_ref().filter(|l| l.len() == 2 && l[0] == menu).map(|l| l[1])).collect();
-        for b in bound.iter_mut().filter(|b| b.origin == Origin::View(focused) && b.leader.is_none()) {
+        // The shared moves a view offers have their keys in the keymap.
+        for b in bound.iter_mut().filter(|b| b.origin == Origin::View(focused) && b.leader.is_none() && b.action.command::<Move>().is_none()) {
             if let Some(key) = crate::keymap::AUTO_KEYS.chars().find(|c| !taken.contains(c)) {
                 taken.push(key);
                 b.leader = Some(vec![menu, key]);
@@ -321,7 +273,8 @@ impl CockpitApp {
         let mut out = self.bound_actions();
         let focused = self.focused_kind();
         for kind in BufferKind::ALL.into_iter().filter(|k| *k != focused) {
-            for mut action in self.desk.provider(kind).actions().into_iter().filter(|a| a.scope == Scope::Focused) {
+            // Their own actions; not their shared moves, which act where you are.
+            for mut action in self.desk.provider(kind).actions().into_iter().filter(|a| a.scope == Scope::Focused && a.command::<Move>().is_none()) {
                 action.label = format!("{}{} · {}", &kind.title()[..1], kind.title()[1..].to_lowercase(), action.label);
                 out.push(Bound { action, origin: Origin::View(kind), leader: None, keys: Vec::new(), gestures: Vec::new(), layer: Layer::Everywhere });
             }
@@ -356,6 +309,12 @@ impl CockpitApp {
             Origin::Shell => {
                 if let Some(command) = action.command::<ShellCommand>() {
                     self.run_shell(*command, value, count.map(|c| c as usize), ctx);
+                }
+            }
+            // A shared move a view offered: run the same way for every view.
+            Origin::View(kind) if action.command::<Move>().is_some() => {
+                if let Some(m) = action.command::<Move>() {
+                    self.run_move(kind, *m, count.map(|c| c as usize), ctx);
                 }
             }
             Origin::View(kind) => {
@@ -456,24 +415,10 @@ impl CockpitApp {
                 self.note = Some(if self.desk.remote.agents { "Agents can drive the cockpit (the server's cockpit tools)." } else { "Agents can't drive the cockpit." }.into());
             }
             ShellCommand::OpenPalette => self.open_palette(None),
-            ShellCommand::Motion(motion) => {
-                let before = self.jump_here();
-                self.desk.view_mut(kind).motion(motion, count);
-                // Big moves are jumps; small ones aren't.
-                if matches!(motion, Motion::First | Motion::Last | Motion::Line(_)) {
-                    self.after_jump(before);
-                }
-            }
             ShellCommand::Line => match value.as_deref().map(str::trim).and_then(|v| v.parse::<usize>().ok()) {
-                Some(n) => self.run_shell(ShellCommand::Motion(Motion::Line(n)), None, None, ctx),
+                Some(n) => self.run_move(kind, Move::Motion(Motion::Line(n)), None, ctx),
                 None => self.note = Some("Give a line number.".into()),
             },
-            ShellCommand::Enter | ShellCommand::Leave => {
-                let before = self.jump_here();
-                let step = if command == ShellCommand::Enter { self.desk.view_mut(kind).enter() } else { self.desk.view_mut(kind).leave() };
-                self.take_step(step, before, ctx);
-            }
-            ShellCommand::Fold(fold) => self.desk.view_mut(kind).fold(fold),
             ShellCommand::Hint { open } => self.start_hint(open),
             ShellCommand::Search => {
                 self.capture = Some(Capture::Search(Searching { kind, query: String::new(), before: self.jump_here() }));
@@ -512,6 +457,25 @@ impl CockpitApp {
             }
             ShellCommand::GotoPick => self.goto_pick(value, ctx),
             ShellCommand::Index(op) => self.run_index(op, ctx),
+        }
+    }
+
+    /// A shared move, on the view of `kind`: the same for every view. Big
+    /// moves and going in or out are jumps; small ones aren't.
+    pub(crate) fn run_move(&mut self, kind: BufferKind, m: Move, count: Option<usize>, ctx: &egui::Context) {
+        let before = self.jump_here();
+        match m {
+            Move::Motion(motion) => {
+                self.desk.view_mut(kind).motion(motion, count.unwrap_or(1).max(1));
+                if matches!(motion, Motion::First | Motion::Last | Motion::Line(_)) {
+                    self.after_jump(before);
+                }
+            }
+            Move::Enter | Move::Leave => {
+                let step = if m == Move::Enter { self.desk.view_mut(kind).enter() } else { self.desk.view_mut(kind).leave() };
+                self.take_step(step, before, ctx);
+            }
+            Move::Fold(fold) => self.desk.view_mut(kind).fold(fold),
         }
     }
 

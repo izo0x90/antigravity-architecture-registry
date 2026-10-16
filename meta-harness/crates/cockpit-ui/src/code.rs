@@ -14,7 +14,7 @@ use egui::{Frame, Pos2, Rect, RichText, Stroke, Vec2};
 use crate::actions::{Action, ActionProvider, Group, MINOR, Param, RunCx, Style};
 use crate::panel::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
-use crate::nav::{Fold, Item, Motion, Navigable, Place, Scroll, Spot, Step, Target, scroll_offset};
+use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Scroll, Spot, Step, Target, scroll_offset};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
 
@@ -817,9 +817,37 @@ enum CodeCommand {
     Deleted,
 }
 
+impl CodeViewerState {
+    /// The shared moves where the cursor is, in the code's words: through
+    /// the lines, between definitions, into what a line names, out to its
+    /// definition, folding definitions.
+    fn moves(&self) -> Vec<Action> {
+        let mut out = crate::nav::list_moves();
+        let line = self.target_line.unwrap_or(1);
+        let defs = !self.defs.is_empty();
+        out.push(Move::Motion(Motion::NextSibling).offer_if(defs, "Next definition at this level"));
+        out.push(Move::Motion(Motion::PrevSibling).offer_if(defs, "Previous definition at this level"));
+        let refs = self.refs_at(line);
+        let enter = match refs.as_slice() {
+            _ if self.target_line.is_none() => None,
+            _ if self.folds.contains(&line) => Some("Unfold".to_owned()),
+            [] => None,
+            [one] => Some(format!("Go to {}", crate::nav::short_name(one))),
+            _ => Some(format!("Go to one of {} named here", refs.len())),
+        };
+        out.push(Move::Enter.offer_if(enter.is_some(), enter.unwrap_or_else(|| "Go to what's named here".into())));
+        out.push(Move::Leave.offer_if(self.defs.iter().any(|d| d.start < line && line <= d.end), "Out to the definition's start"));
+        // Definitions spanning lines fold: the innermost the cursor is in.
+        let def = self.defs.iter().filter(|d| d.start <= line && line <= d.end && d.end > d.start).min_by_key(|d| d.end - d.start);
+        out.extend(crate::nav::fold_here(def.map(|d| (d.name.as_str(), self.folds.contains(&d.start)))));
+        out.extend(crate::nav::fold_all(self.defs.iter().any(|d| d.end > d.start), "Unfold every definition", "Fold every definition"));
+        out
+    }
+}
+
 impl ActionProvider for CodeViewerState {
     fn actions(&self) -> Vec<Action> {
-        let mut out = Vec::new();
+        let mut out = self.moves();
         if !self.defs.is_empty() {
             out.push(Action::new("code.next_def", "Next definition", CodeCommand::Def { forward: true }).focused().group(Group::Navigate));
             out.push(Action::new("code.prev_def", "Previous definition", CodeCommand::Def { forward: false }).focused().group(Group::Navigate));
@@ -942,29 +970,6 @@ impl Navigable for CodeViewerState {
                 Step::Done
             }
             _ => Step::Nothing("Nothing named here goes anywhere.".into()),
-        }
-    }
-
-    fn can_enter(&self) -> bool {
-        self.target_line.is_some_and(|line| !self.refs_at(line).is_empty() || self.folds.contains(&line))
-    }
-
-    fn can_leave(&self) -> bool {
-        let line = self.target_line.unwrap_or(1);
-        self.defs.iter().any(|d| d.start < line && line <= d.end)
-    }
-
-    fn enter_label(&self) -> Option<String> {
-        let line = self.target_line?;
-        if self.folds.contains(&line) {
-            return Some("Unfold".into());
-        }
-        let refs = self.refs_at(line);
-        let name = |id: &ComponentId| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned();
-        match refs.as_slice() {
-            [one] => Some(format!("Go to {}", name(one))),
-            [] => None,
-            _ => Some(format!("Go to one of {} named here", refs.len())),
         }
     }
 

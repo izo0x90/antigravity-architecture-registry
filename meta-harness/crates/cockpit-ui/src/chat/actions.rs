@@ -52,7 +52,7 @@ impl ActionProvider for ChatStreamState {
     fn actions(&self) -> Vec<Action> {
         use ChatCommand as C;
         use Style::{Button, Setting};
-        let mut out = Vec::new();
+        let mut out = self.moves();
         let snapshot = self.instance();
         let caps = snapshot.map(|s| s.capabilities.clone()).unwrap_or_default();
         let view = self.thread();

@@ -31,6 +31,21 @@ pub(super) fn item_text(item: &TurnItem) -> String {
     }
 }
 
+impl ChatStreamState {
+    /// The shared moves where the cursor is, in the chat's words: through
+    /// the messages, opening the file one points to, following the latest
+    /// again.
+    pub(super) fn moves(&self) -> Vec<Action> {
+        let mut out = crate::nav::list_moves();
+        out.push(match self.target() {
+            Some(Target::Message { link: Some((path, _)), .. }) => Move::Enter.offer(format!("Open {path}")),
+            _ => Move::Enter.offer_if(false, "Open the file it points to"),
+        });
+        out.push(Move::Leave.offer_if(self.ui.cursor.is_some(), "Follow the latest again"));
+        out
+    }
+}
+
 impl Navigable for ChatStreamState {
     fn place(&self) -> Place {
         self.ui.place()
@@ -82,21 +97,6 @@ impl Navigable for ChatStreamState {
             Some(Target::Message { link: Some(_), .. }) => Step::GoTo(GoTo::Code),
             Some(_) => Step::Nothing("No file in this message.".into()),
             None => Step::Nothing("Move to a message first (j / k).".into()),
-        }
-    }
-
-    fn can_enter(&self) -> bool {
-        matches!(self.target(), Some(Target::Message { link: Some(_), .. }))
-    }
-
-    fn can_leave(&self) -> bool {
-        self.ui.cursor.is_some()
-    }
-
-    fn enter_label(&self) -> Option<String> {
-        match self.target()? {
-            Target::Message { link: Some((path, _)), .. } => Some(format!("Open {path}")),
-            _ => None,
         }
     }
 

@@ -76,7 +76,7 @@ impl ActionProvider for GraphState {
     fn actions(&self) -> Vec<Action> {
         use GraphCommand as G;
         use Style::{Button, Setting};
-        let mut out = Vec::new();
+        let mut out = self.moves();
         let f = |id: &str, label: &str, c: GraphCommand| Action::new(id, label, c).focused();
         let views = ViewKind::ALL
             .iter()

@@ -55,7 +55,7 @@ fn the_cursor_walks_files_and_changes_and_enter_opens_the_spot() {
     assert_eq!(view.target(), Some(Target::Change { file: "a.rs".into(), line: 3 }), "a file: its first changed line");
     view.motion(Motion::Down, 1);
     assert_eq!((view.cursor_key().as_deref(), view.enter()), (Some("h:Unstaged:a.rs:0"), Step::GoTo(GoTo::Code)));
-    assert!(view.can_leave());
+    assert!(view.actions().iter().any(|a| a.id == "nav.leave"), "on a change: up to its file");
     view.leave();
     assert_eq!(view.cursor_key().as_deref(), Some("f:Unstaged:a.rs"), "out: up to its file");
     view.motion(Motion::NextSibling, 1);

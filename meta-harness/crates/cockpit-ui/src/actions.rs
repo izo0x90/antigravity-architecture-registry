@@ -220,9 +220,6 @@ pub enum When {
     Forward,
     /// A mark is set.
     Marked,
-    /// Enter (or Backspace) would do something here.
-    Enter,
-    Leave,
     /// A relational go-to that leads somewhere from the target (when its
     /// relations are known; until then, it may).
     Reaches(crate::nav::GoTo),
@@ -238,8 +235,6 @@ pub struct Situation {
     pub can_back: bool,
     pub can_forward: bool,
     pub marked: bool,
-    pub can_enter: bool,
-    pub can_leave: bool,
     /// The relational go-tos that lead somewhere from the target, once its
     /// relations are known.
     pub reaches: Option<Vec<crate::nav::GoTo>>,
@@ -258,8 +253,6 @@ impl When {
             Self::Back => s.can_back,
             Self::Forward => s.can_forward,
             Self::Marked => s.marked,
-            Self::Enter => s.can_enter,
-            Self::Leave => s.can_leave,
             Self::Reaches(op) => Self::Component.holds(s) && s.reaches.as_ref().is_none_or(|r| r.contains(&op)),
             Self::Unavailable => false,
         }

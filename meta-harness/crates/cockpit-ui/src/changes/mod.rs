@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::actions::{Action, ActionProvider, Choice, Group as ActionGroup, MINOR, Param, RunCx, SECONDARY, Style};
 use crate::config::ChangesUi;
-use crate::nav::{Fold, GoTo, Item, Motion, Navigable, Place, Spot, Step, Target};
+use crate::nav::{Fold, GoTo, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::panel::{Panel, Status, Tone};
 use crate::theme::colors;
@@ -777,6 +777,28 @@ impl Panel for ChangesView {
     }
 }
 
+impl ChangesView {
+    /// The shared moves where the cursor is, in the Changes view's words:
+    /// through files and their changes, into the code (or, on the
+    /// timeline, comparing a window), up to a change's file, folding files.
+    fn moves(&self) -> Vec<Action> {
+        let mut out = crate::nav::list_moves();
+        let row = self.cursor_row();
+        if let Some(Row::Window(_)) = row {
+            out.push(Move::Enter.offer("Compare what changed then"));
+            return out;
+        }
+        out.push(Move::Motion(Motion::NextSibling).offer("Next file"));
+        out.push(Move::Motion(Motion::PrevSibling).offer("Previous file"));
+        let file = row.as_ref().and_then(|r| self.file_of(r));
+        out.push(Move::Enter.offer_if(file.is_some_and(|f| f.status != FileStatus::Deleted), "Open it in the code"));
+        out.push(Move::Leave.offer_if(matches!(row, Some(Row::Hunk(..))), "Up to its file"));
+        out.extend(crate::nav::fold_here(file.map(|f| (f.path.as_str(), !self.opened.contains_key(&file_key(f))))));
+        out.extend(crate::nav::fold_all(self.list().is_some_and(|l| !l.files.is_empty()), "Unfold every file", "Fold every file"));
+        out
+    }
+}
+
 impl ActionProvider for ChangesView {
     fn actions(&self) -> Vec<Action> {
         let f = |id: &str, label: &str, c: Command| Action::new(id, label, c).focused();
@@ -785,11 +807,12 @@ impl ActionProvider for ChangesView {
             choices.push(Choice::new(self.comparison.range(), self.comparison.to_string()).current(true));
         }
         let layouts = DiffLayout::ALL.iter().map(|(l, label)| Choice::new(l.name(), *label).current(*l == self.layout)).collect();
-        let mut out = vec![
+        let mut out = self.moves();
+        out.extend([
             f("changes.compare", "Compare what with what", Command::Compare).param(Param::Choice(choices)).header(Style::Setting, "Compare", None).group(ActionGroup::View).importance(SECONDARY),
             f("changes.layout", "Lay changes out", Command::Layout).param(Param::Choice(layouts)).header(Style::Setting, "Layout", None).group(ActionGroup::View).importance(MINOR),
             f("changes.refresh", "Read the changes again", Command::Refresh).header(Style::Button, "", Some(egui_phosphor::regular::ARROW_CLOCKWISE)).group(ActionGroup::View).importance(MINOR),
-        ];
+        ]);
         out.push(f("changes.timeline", "Show when the files changed and who was working", Command::Timeline).param(Param::Toggle { on: self.on_timeline }).header(Style::Setting, "Timeline", None).group(ActionGroup::View).importance(SECONDARY));
         // Staging: the user's own act, on the uncommitted changes.
         if let Some(row) = self.cursor_row().filter(|_| self.comparison.is_uncommitted())
@@ -956,22 +979,6 @@ impl Navigable for ChangesView {
             Some(_) => Step::GoTo(GoTo::Code),
             None => Step::Nothing("No changes here.".into()),
         }
-    }
-
-    fn can_enter(&self) -> bool {
-        self.cursor_row().is_some()
-    }
-
-    fn enter_label(&self) -> Option<String> {
-        Some(if self.on_timeline { "Compare what changed then" } else { "Open it in the code" }.to_owned())
-    }
-
-    fn can_leave(&self) -> bool {
-        matches!(self.cursor_row(), Some(Row::Hunk(..)))
-    }
-
-    fn leave_label(&self) -> Option<String> {
-        Some("Up to its file".to_owned())
     }
 
     fn leave(&mut self) -> Step {

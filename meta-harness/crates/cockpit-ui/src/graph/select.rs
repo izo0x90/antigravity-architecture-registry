@@ -11,7 +11,7 @@ use arch_graph::tree::{Rect as WorldRect, ViewKind};
 use arch_graph::ComponentId;
 
 use super::{GraphState, NavChange};
-use crate::nav::{Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
+use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dir {
@@ -183,6 +183,45 @@ impl GraphState {
     }
 }
 
+impl GraphState {
+    /// The shared moves where the cursor is, in the graph's words: between
+    /// cards, into the selected card and back out, folding cards.
+    pub(crate) fn moves(&self) -> Vec<crate::actions::Action> {
+        let mut out = crate::nav::list_moves();
+        out.push(Move::Motion(Motion::Left).offer("Left"));
+        out.push(Move::Motion(Motion::Right).offer("Right"));
+        out.push(Move::Motion(Motion::NextSibling).offer("Next sibling (same module)"));
+        out.push(Move::Motion(Motion::PrevSibling).offer("Previous sibling"));
+        out.push(match self.selected_card().filter(|c| self.nav.root.as_ref() != Some(&c.key)) {
+            Some(card) => Move::Enter.offer(format!("Into {}", card.label)),
+            None => Move::Enter.offer_if(false, "Focus on it"),
+        });
+        let leave = self.leave_label();
+        out.push(Move::Leave.offer_if(leave.is_some(), leave.unwrap_or_else(|| "Back to the whole view".into())));
+        let card = self.selected_card().filter(|c| c.open || c.more > 0);
+        out.extend(crate::nav::fold_here(card.map(|c| (c.label.as_str(), !c.open))));
+        out.push(Move::Fold(Fold::OpenAll).offer_if(self.tree.is_some(), "Show one more level"));
+        out.push(Move::Fold(Fold::CloseAll).offer_if(!self.nav.opened.is_empty() || !self.nav.closed.is_empty(), "Put back what was opened and closed by hand"));
+        out
+    }
+
+    /// What Backspace does now, in words ("Back to crates"), when it does
+    /// anything.
+    fn leave_label(&self) -> Option<String> {
+        if let Some(back) = self.trail_roots().last() {
+            return Some(match back.as_deref().and_then(|k| self.card(k).map(|c| c.label.clone()).or(Some(k.rsplit([':', '.']).next().unwrap_or(k).to_owned()))) {
+                Some(name) => format!("Back to {name}"),
+                None => "Back to the starting points".to_owned(),
+            });
+        }
+        self.nav.root.as_ref()?;
+        Some(match self.tree.as_ref().and_then(|t| t.path.last()) {
+            Some(holder) if self.nav.view == arch_graph::tree::ViewKind::Contains => format!("Out to {}", holder.label),
+            _ => "Out to the starting points".to_owned(),
+        })
+    }
+}
+
 impl Navigable for GraphState {
     fn gesture(&mut self, gesture: crate::touch::Gesture) {
         self.on_gesture(gesture);
@@ -258,32 +297,6 @@ impl Navigable for GraphState {
             Some(_) => Step::Nothing("It's the root already.".into()),
             None => Step::Nothing("Select a card first.".into()),
         }
-    }
-
-    fn can_enter(&self) -> bool {
-        self.selection.as_ref().is_some_and(|s| self.nav.root.as_ref() != Some(s))
-    }
-
-    fn enter_label(&self) -> Option<String> {
-        self.selected_card().map(|c| format!("Into {}", c.label))
-    }
-
-    fn can_leave(&self) -> bool {
-        !self.trail_roots().is_empty() || self.nav.root.is_some()
-    }
-
-    fn leave_label(&self) -> Option<String> {
-        if let Some(back) = self.trail_roots().last() {
-            return Some(match back.as_deref().and_then(|k| self.card(k).map(|c| c.label.clone()).or(Some(k.rsplit([':', '.']).next().unwrap_or(k).to_owned()))) {
-                Some(name) => format!("Back to {name}"),
-                None => "Back to the starting points".to_owned(),
-            });
-        }
-        self.nav.root.as_ref()?;
-        Some(match self.tree.as_ref().and_then(|t| t.path.last()) {
-            Some(holder) if self.nav.view == arch_graph::tree::ViewKind::Contains => format!("Out to {}", holder.label),
-            _ => "Out to the starting points".to_owned(),
-        })
     }
 
     /// Back: where the last "go in" started, else out to what holds the root.

@@ -11,7 +11,7 @@ use egui::RichText;
 use harness_contracts::InstanceId;
 
 use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, Style, When};
-use crate::nav::{Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
+use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::panel::{Status, Tone};
 use crate::theme::colors;
@@ -22,7 +22,6 @@ pub enum QueueCommand {
     Stop,
     Approve,
     Retry,
-    Expand,
     OpenSession,
 }
 
@@ -249,13 +248,6 @@ impl QueueState {
                 Some(job) => cx.net.arch_queue_retry(&plan, &job.component, cx.ctx.clone(), self.done()),
                 None => *cx.note = Some("Only a failed job can be retried.".into()),
             },
-            QueueCommand::Expand => {
-                if let Some(id) = self.job().map(|j| j.component.clone())
-                    && !self.expanded.remove(&id)
-                {
-                    self.expanded.insert(id);
-                }
-            }
             QueueCommand::OpenSession => match self.job().map(|j| &j.state) {
                 Some(JobState::Running { thread: Some(t) }) => self.requests.open_thread = Some(t.clone()),
                 _ => *cx.note = Some("Only a running job has a session.".into()),
@@ -268,10 +260,10 @@ impl ActionProvider for QueueState {
     fn actions(&self) -> Vec<Action> {
         use QueueCommand as Q;
         let f = |id: &str, label: &str, c: QueueCommand| Action::new(id, label, c).focused();
-        let mut out = Vec::new();
         if self.plan.is_none() {
-            return out;
+            return Vec::new();
         }
+        let mut out = self.moves();
         let running = matches!(self.status(), Some(QueueStatus::Running | QueueStatus::WaitingForUser | QueueStatus::Stopping));
         if running {
             out.push(f("queue.stop", "Stop the queue (after the running job)", Q::Stop).header(Style::Button, "Stop", Some(egui_phosphor::regular::STOP)).importance(MINOR));
@@ -279,9 +271,6 @@ impl ActionProvider for QueueState {
             out.push(f("queue.start", "Start working through the plan", Q::Start).header(Style::Button, "Start", Some(egui_phosphor::regular::PLAY)));
         }
         if let Some(job) = self.job() {
-            if !job.findings.is_empty() {
-                out.push(f("queue.expand", "Show or hide why the last attempt failed", Q::Expand).group(Group::View).on_item(Style::Button, "Findings", None));
-            }
             // Always listed (the key sheet shows them); they apply to some jobs.
             let applies = |yes: bool| if yes { When::Always } else { When::Unavailable };
             out.push(f("queue.approve", "Approve this component's design", Q::Approve).importance(PRIMARY).when(applies(job.state == JobState::AwaitingApproval)).on_item(Style::Button, format!("Approve {:?}", job.kind.goal()), Some(egui_phosphor::regular::CHECK)));
@@ -295,6 +284,22 @@ impl ActionProvider for QueueState {
         if let Some(c) = action.command::<QueueCommand>().copied() {
             self.apply(c, cx);
         }
+    }
+}
+
+impl QueueState {
+    /// The shared moves where the cursor is, in the queue's words: through
+    /// the jobs, showing and hiding why one failed (Enter and Backspace,
+    /// and its fold).
+    fn moves(&self) -> Vec<Action> {
+        let mut out = crate::nav::list_moves();
+        let failed = self.job().filter(|j| !j.findings.is_empty());
+        let open = failed.is_some_and(|j| self.expanded.contains(&j.component));
+        out.push(Move::Enter.offer_if(failed.is_some(), if open { "Hide why it failed" } else { "Show why it failed" }));
+        out.push(Move::Leave.offer_if(open, "Hide why it failed"));
+        out.extend(crate::nav::fold_here(failed.map(|_| ("why it failed", !open))));
+        out.extend(crate::nav::fold_all(self.snapshot.as_ref().is_some_and(|s| s.jobs.iter().any(|j| !j.findings.is_empty())), "Show why each failed", "Hide why each failed"));
+        out
     }
 }
 
@@ -357,14 +362,6 @@ impl Navigable for QueueState {
             Some(_) => Step::Nothing("No findings on this job.".into()),
             None => Step::Nothing("The queue is empty.".into()),
         }
-    }
-
-    fn can_enter(&self) -> bool {
-        self.job().is_some_and(|j| !j.findings.is_empty())
-    }
-
-    fn can_leave(&self) -> bool {
-        self.job().is_some_and(|j| self.expanded.contains(&j.component))
     }
 
     fn leave(&mut self) -> Step {
@@ -489,11 +486,11 @@ pub(crate) mod tests {
         assert_eq!(q.target(), Some(crate::nav::Target::Job { component: id("a") }), "the job's component is the cursor's target");
         // Failed work shows why and can be retried.
         q.motion(Motion::Down, 1);
-        assert!(ids(&q).contains(&"queue.retry".to_owned()) && ids(&q).contains(&"queue.expand".to_owned()));
+        assert!(ids(&q).contains(&"queue.retry".to_owned()) && ids(&q).contains(&"nav.fold_toggle".to_owned()), "its findings fold");
         assert_eq!(q.enter(), Step::Done, "Enter shows the findings");
         assert!(q.expanded.contains(&id("c")));
         assert_eq!(q.leave(), Step::Done, "Backspace hides them");
-        q.apply(QueueCommand::Expand, &mut cx);
+        q.fold(Fold::Toggle);
         assert!(q.expanded.contains(&id("c")));
         q.motion(Motion::Down, 1);
         assert_eq!(q.selected, 2, "stops at the last job");

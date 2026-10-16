@@ -12,7 +12,7 @@ use harness_contracts::{Level, Notification, NotificationId, RequestId, RuntimeR
 
 use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, Style};
 use crate::chat::ChatStreamState;
-use crate::nav::{Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
+use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::panel::{Status, Tone};
 use crate::theme::colors;
 
@@ -239,19 +239,6 @@ impl Navigable for InboxView {
         }
     }
 
-    fn can_enter(&self) -> bool {
-        self.shown.is_some()
-    }
-
-    fn enter_label(&self) -> Option<String> {
-        self.parts().get(self.cursor)?;
-        self.shown.as_ref()?.notification.slot.as_ref().map(|_| "Open its chat".to_owned())
-    }
-
-    fn can_leave(&self) -> bool {
-        false
-    }
-
     fn leave(&mut self) -> Step {
         Step::Nothing("The inbox has nothing to go out of.".into())
     }
@@ -289,10 +276,21 @@ impl Navigable for InboxView {
     }
 }
 
+impl InboxView {
+    /// The shared moves where the cursor is, in the inbox's words: through
+    /// an item's parts, and opening its chat from one.
+    fn moves(&self) -> Vec<Action> {
+        let mut out = crate::nav::list_moves();
+        let chat = self.parts().get(self.cursor).is_some() && self.shown.as_ref().is_some_and(|s| s.notification.slot.is_some());
+        out.push(Move::Enter.offer_if(chat, "Open its chat"));
+        out
+    }
+}
+
 impl ActionProvider for InboxView {
     fn actions(&self) -> Vec<Action> {
         let act = |id: &str, label: &str, c: Command| Action::new(id, label, c).focused().group(Group::Act);
-        let mut out = Vec::new();
+        let mut out = self.moves();
         if self.at.is_some_and(|(_, of)| of > 1) || self.shown.is_none() && self.item.is_some() {
             out.push(act("inbox.prev", "Previous", Command::Step(-1)).importance(SECONDARY).header(Style::Button, "", Some(icon::CARET_LEFT)));
             out.push(act("inbox.next", "Next", Command::Step(1)).importance(PRIMARY).header(Style::Button, "", Some(icon::CARET_RIGHT)));

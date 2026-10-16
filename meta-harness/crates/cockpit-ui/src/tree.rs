@@ -14,7 +14,7 @@ use egui::RichText;
 
 use crate::actions::{Action, ActionProvider, RunCx};
 use crate::feedback::FeedbackInspectorState;
-use crate::nav::{Fold, Item, Motion, Navigable, Place, Scroll, SearchEvent, Spot, Step, Target, scroll_offset};
+use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Scroll, SearchEvent, Spot, Step, Target, scroll_offset};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
 
@@ -342,9 +342,39 @@ enum TreeCommand {
     ClearFilter,
 }
 
+impl ArchitectureTreeState {
+    /// The shared moves where the cursor is, in the outline's words:
+    /// through the rows, into and out of a row (unfolding and folding it),
+    /// between siblings, selecting in the graph, folding rows.
+    fn moves(&self) -> Vec<Action> {
+        use crate::actions::SECONDARY;
+        let mut out = crate::nav::list_moves();
+        out.push(Move::Motion(Motion::Left).offer("Fold, or up to what holds it").importance(SECONDARY));
+        out.push(Move::Motion(Motion::Right).offer("Unfold, or into its first child").importance(SECONDARY));
+        out.push(Move::Motion(Motion::NextSibling).offer("Next sibling row"));
+        out.push(Move::Motion(Motion::PrevSibling).offer("Previous sibling row"));
+        let id = self.cursor.as_ref();
+        out.push(match id {
+            Some(id) => Move::Enter.offer(if self.closed.contains(id) { "Unfold".to_owned() } else { format!("Select {} in the graph", self.name(id)) }),
+            None => Move::Enter.offer_if(false, "Unfold, or select in the graph"),
+        });
+        out.push(match id {
+            Some(id) if self.has_children(id) && !self.closed.contains(id) => Move::Leave.offer(format!("Fold {}", self.name(id))),
+            Some(id) if self.parent.contains_key(id) => Move::Leave.offer(format!("Up to {}", self.name(&self.parent[id]))),
+            _ => Move::Leave.offer_if(false, "Fold, or up to what holds it"),
+        });
+        // On a leaf, the fold is the row that holds it.
+        let row = id.and_then(|id| if self.has_children(id) { Some(id) } else { self.parent.get(id) });
+        let name = row.map(|r| self.name(r));
+        out.extend(crate::nav::fold_here(row.zip(name.as_deref()).map(|(r, n)| (n, self.closed.contains(r) || self.children.get(r).is_none_or(Vec::is_empty)))));
+        out.extend(crate::nav::fold_all(self.children.values().any(|k| !k.is_empty()), "Unfold everything", "Fold everything"));
+        out
+    }
+}
+
 impl ActionProvider for ArchitectureTreeState {
     fn actions(&self) -> Vec<Action> {
-        let mut out = Vec::new();
+        let mut out = self.moves();
         if !self.search_filter.is_empty() {
             out.push(Action::new("tree.clear_filter", "Clear the filter", TreeCommand::ClearFilter).focused().importance(crate::actions::MINOR).header(crate::actions::Style::Button, "", Some(egui_phosphor::regular::X)));
         }
@@ -452,19 +482,6 @@ impl Navigable for ArchitectureTreeState {
         }
         self.select = Some(id);
         Step::Done
-    }
-
-    fn can_enter(&self) -> bool {
-        self.cursor.is_some()
-    }
-
-    fn enter_label(&self) -> Option<String> {
-        let id = self.cursor.as_ref()?;
-        Some(if self.closed.contains(id) { "Unfold".to_owned() } else { format!("Select {} in the graph", self.name(id)) })
-    }
-
-    fn can_leave(&self) -> bool {
-        self.cursor.as_ref().is_some_and(|id| (self.has_children(id) && !self.closed.contains(id)) || self.parent.contains_key(id))
     }
 
     /// Folds an open row; otherwise goes to what contains it.
@@ -665,10 +682,10 @@ pub(crate) mod tests {
         assert_eq!(ids(&t.rows()), ["a", "  a::run", "    a::log"], "typing opens the way to matches");
         t.on_search(SearchEvent::Cancelled);
         assert_eq!(t.rows().len(), 5, "giving up the search folds back what it opened");
-        assert_eq!(t.enter_label().as_deref(), Some("Unfold"), "Enter says what it does");
+        assert_eq!(t.actions().into_iter().find(|a| a.id == "nav.enter").map(|a| a.label).as_deref(), Some("Unfold"), "Enter says what it does");
         t.fold(Fold::OpenAll);
         assert_eq!(t.rows().len(), 6);
-        assert_eq!(t.enter_label().as_deref(), Some("Select run in the graph"));
+        assert_eq!(t.actions().into_iter().find(|a| a.id == "nav.enter").map(|a| a.label).as_deref(), Some("Select run in the graph"));
         let items = t.items();
         assert_eq!(items[rank_matches(&items, "step")[0]].key, "rust:a::step");
         // Restoring a place opens the way to it.

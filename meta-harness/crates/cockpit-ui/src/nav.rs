@@ -222,6 +222,100 @@ pub enum Fold {
     CloseAll,
 }
 
+/// The moves every view shares: one vocabulary, each with its fixed id
+/// (what the keymap binds), run the same way for every view (the app's
+/// `run_move`: counts, the jump list, then the view's `Navigable`). A view
+/// offers the ones that apply where its cursor is, in its own words
+/// (`Move::offer`), with its own actions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Move {
+    Motion(Motion),
+    Enter,
+    Leave,
+    Fold(Fold),
+}
+
+impl Move {
+    /// Its action's id.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Motion(Motion::Down) => "nav.down",
+            Self::Motion(Motion::Up) => "nav.up",
+            Self::Motion(Motion::Left) => "nav.left",
+            Self::Motion(Motion::Right) => "nav.right",
+            Self::Motion(Motion::HalfDown) => "nav.half_down",
+            Self::Motion(Motion::HalfUp) => "nav.half_up",
+            Self::Motion(Motion::First) => "nav.first",
+            Self::Motion(Motion::Last) => "nav.last",
+            Self::Motion(Motion::NextSibling) => "nav.next_sibling",
+            Self::Motion(Motion::PrevSibling) => "nav.prev_sibling",
+            Self::Motion(Motion::Line(_)) => "nav.line",
+            Self::Enter => "nav.enter",
+            Self::Leave => "nav.leave",
+            Self::Fold(Fold::Open) => "nav.fold_open",
+            Self::Fold(Fold::Close) => "nav.fold_close",
+            Self::Fold(Fold::Toggle) => "nav.fold_toggle",
+            Self::Fold(Fold::OpenAll) => "nav.fold_open_all",
+            Self::Fold(Fold::CloseAll) => "nav.fold_close_all",
+        }
+    }
+
+    /// How much it matters where it's offered (the key bar shows the most
+    /// important first); a view can say otherwise.
+    fn importance(self) -> u8 {
+        use crate::actions::{MINOR, PRIMARY, SECONDARY};
+        match self {
+            Self::Enter => PRIMARY,
+            Self::Leave | Self::Motion(Motion::Down | Motion::Up) | Self::Fold(Fold::Toggle) => SECONDARY,
+            Self::Motion(_) | Self::Fold(_) => MINOR,
+        }
+    }
+
+    /// The move as an action of the view offering it, in its words.
+    pub fn offer(self, label: impl Into<String>) -> crate::actions::Action {
+        use crate::actions::{Action, Group};
+        let group = if matches!(self, Self::Fold(_)) { Group::View } else { Group::Navigate };
+        Action::new(self.id(), label, self).group(group).importance(self.importance()).focused()
+    }
+
+    /// Offered whether or not it applies where the cursor is: when it
+    /// doesn't, it isn't shown, and its key says why (the view's `Step` or
+    /// note).
+    pub fn offer_if(self, applies: bool, label: impl Into<String>) -> crate::actions::Action {
+        let offer = self.offer(label);
+        if applies { offer } else { offer.when(crate::actions::When::Unavailable) }
+    }
+}
+
+/// The moves through a list every list view offers: down and up, half a
+/// page, first and last.
+pub fn list_moves() -> Vec<crate::actions::Action> {
+    let m = |motion: Motion, label: &str| Move::Motion(motion).offer(label);
+    vec![m(Motion::Down, "Down"), m(Motion::Up, "Up"), m(Motion::HalfDown, "Half a page down"), m(Motion::HalfUp, "Half a page up"), m(Motion::First, "First"), m(Motion::Last, "Last")]
+}
+
+/// Folding what the cursor is on: `here` is what it is, in words, and
+/// whether it's folded, when it folds. Then its toggle (on the item too)
+/// and the way it can go now apply; otherwise they're offered but don't.
+pub fn fold_here(here: Option<(&str, bool)>) -> Vec<crate::actions::Action> {
+    use crate::actions::Style;
+    let Some((what, folded)) = here else {
+        return vec![Move::Fold(Fold::Toggle).offer_if(false, "Fold or unfold"), Move::Fold(Fold::Open).offer_if(false, "Unfold"), Move::Fold(Fold::Close).offer_if(false, "Fold")];
+    };
+    let (word, icon) = if folded { ("Unfold", egui_phosphor::regular::CARET_RIGHT) } else { ("Fold", egui_phosphor::regular::CARET_DOWN) };
+    vec![
+        Move::Fold(Fold::Toggle).offer(format!("{word} {what}")).on_item(Style::Button, word, Some(icon)),
+        Move::Fold(Fold::Open).offer_if(folded, format!("Unfold {what}")),
+        Move::Fold(Fold::Close).offer_if(!folded, format!("Fold {what}")),
+    ]
+}
+
+/// Folding and unfolding everything, each in the view's words, when there's
+/// anything to fold.
+pub fn fold_all(applies: bool, unfold: &str, fold: &str) -> Vec<crate::actions::Action> {
+    vec![Move::Fold(Fold::OpenAll).offer_if(applies, unfold), Move::Fold(Fold::CloseAll).offer_if(applies, fold)]
+}
+
 /// Where a go-to key sends the cursor's target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GoTo {
@@ -494,28 +588,11 @@ pub trait Navigable {
     /// Moves the cursor (`count` times where that means something).
     fn motion(&mut self, motion: Motion, count: usize);
 
-    /// Enter: go in, open, follow.
+    /// Enter: go in, open, follow (offered, in its words, with its actions
+    /// when it applies: `Move::Enter`).
     fn enter(&mut self) -> Step;
 
-    /// Whether Enter (or Backspace) would do something now (what the key
-    /// bar offers).
-    fn can_enter(&self) -> bool;
-
-    /// What Enter does to what the cursor is on, in words ("Follow to
-    /// save"); the view's general wording when `None`.
-    fn enter_label(&self) -> Option<String> {
-        None
-    }
-
-    fn can_leave(&self) -> bool;
-
-    /// What Backspace does now, in words ("Up to crates"); the view's
-    /// general wording when `None`.
-    fn leave_label(&self) -> Option<String> {
-        None
-    }
-
-    /// Backspace: go out, up.
+    /// Backspace: go out, up (`Move::Leave`).
     fn leave(&mut self) -> Step;
 
     fn fold(&mut self, fold: Fold);

@@ -19,7 +19,7 @@ use crate::feedback::FeedbackInspectorState;
 use crate::goto::{Candidate, Choosing, Details, Pending, Wait, candidates};
 use crate::graph::GraphState;
 use crate::keymap::{Chord, InputMode, SeqMatch, TapTracker, continuations, match_sequence};
-use crate::nav::{Fold, GoTo, Jump, JumpList, Motion, Navigable, Place, SearchEvent, Spot, Step, Target, hint_labels, rank_matches, step_match};
+use crate::nav::{GoTo, Jump, JumpList, Motion, Move, Navigable, Place, SearchEvent, Spot, Step, Target, hint_labels, rank_matches, step_match};
 use crate::net::{NetClient, NetResult, WsState};
 use crate::review::ReviewState;
 use crate::spec::SpecState;
@@ -137,12 +137,8 @@ enum ShellCommand {
     /// Lets agents drive the cockpit (its value: on or off).
     Agents,
     OpenPalette,
-    Motion(Motion),
     /// Row or line N (its value).
     Line,
-    Enter,
-    Leave,
-    Fold(Fold),
     Hint { open: bool },
     Search,
     SearchStep { forward: bool },

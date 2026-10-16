@@ -67,8 +67,6 @@ impl CockpitApp {
             can_back: self.desk.jumps.can_back(),
             can_forward: self.desk.jumps.can_forward(),
             marked: !self.desk.marks.is_empty(),
-            can_enter: self.desk.view(kind).can_enter(),
-            can_leave: self.desk.view(kind).can_leave(),
             reaches: self.reaches(),
         }
     }
