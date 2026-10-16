@@ -1,8 +1,9 @@
 //! What a view tells its host about itself, and the header the host draws
-//! from it. A view draws its content; its top line (a title, what it's
-//! doing, and the controls for the whole view) is the host's, the same for
-//! every view: the title, then each status, then the view's header buttons
-//! (one line that wraps), and its settings on a row under them.
+//! from it. A view draws its content; its top line (its controls, what
+//! it's doing, its title) is the host's, the same for every view: its
+//! header buttons first, where nothing that comes and goes can push them;
+//! then a place kept for its busy mark; then its title and each status,
+//! wrapping after them (one line that wraps); its settings on a row under.
 
 use egui::RichText;
 
@@ -36,9 +37,16 @@ pub trait Panel {
     /// Its name on the top line.
     fn title(&self) -> Status;
 
-    /// What it's doing, after the title.
+    /// What it says about itself, after the title.
     fn status(&self) -> Vec<Status> {
         Vec::new()
+    }
+
+    /// What it's waiting on right now (loading, connecting), in words: a
+    /// mark in a place kept for it, so it comes and goes without moving
+    /// anything.
+    fn busy(&self) -> Option<String> {
+        None
     }
 
     /// Actions it shows (its own or the shell's, by id), with the control
@@ -67,9 +75,9 @@ pub trait Panel {
     }
 }
 
-/// The panel's top line: the title, its status, and its bound actions'
-/// header controls (`bound`: the panel's layer of where you are; buttons on
-/// the line, settings on a row under).
+/// The panel's top line: its bound actions' header buttons (`bound`: the
+/// panel's layer of where you are), the place for its busy mark, its title
+/// and status; its settings on a row under.
 pub fn header(ui: &mut egui::Ui, panel: &dyn Panel, bound: &[Bound], cx: &mut RunCx<'_>) {
     let look = crate::theme::look();
     let at_header = |style: Style| bound.iter().filter(move |b| b.action.control.as_ref().is_some_and(|c| c.at == At::Header && c.style == style));
@@ -84,12 +92,21 @@ pub fn header(ui: &mut egui::Ui, panel: &dyn Panel, bound: &[Bound], cx: &mut Ru
         }
     };
     // One line that wraps (a narrow column, a phone): nothing overlaps.
+    // The buttons first: what follows them grows and wraps after them.
     ui.horizontal_wrapped(|ui| {
+        crate::actions::controls(ui, at_header(Style::Button), cx);
+        // The busy mark's place, kept whether it shows or not.
+        let mark = egui::WidgetText::from(RichText::new(egui_phosphor::regular::HOURGLASS).size(look.text_label).color(Tone::Warn.color()));
+        let galley = mark.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
+        let (rect, response) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+        if let Some(doing) = panel.busy() {
+            ui.painter().galley(rect.min, galley, Tone::Warn.color());
+            response.on_hover_text(doing);
+        }
         said(ui, &panel.title(), true);
         for status in panel.status() {
             said(ui, &status, false);
         }
-        crate::actions::controls(ui, at_header(Style::Button), cx);
     });
     if at_header(Style::Setting).next().is_some() {
         ui.horizontal_wrapped(|ui| crate::actions::controls(ui, at_header(Style::Setting), cx));

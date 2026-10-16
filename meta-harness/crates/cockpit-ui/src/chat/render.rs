@@ -365,9 +365,13 @@ impl crate::panel::Panel for ChatStreamState {
         self.ui.cursor.is_none().then(|| self.pending_item()).flatten().map(|i| i.to_string())
     }
 
+    fn busy(&self) -> Option<String> {
+        (self.active_thread().is_none() && self.opening()).then(|| "Connecting".into())
+    }
+
     /// Its harness, who it's signed in as, what of its configuration
-    /// couldn't be read, its session (or that it's connecting), its tool
-    /// servers and how much of its context is used.
+    /// couldn't be read, its session, its tool servers and how much of its
+    /// context is used.
     fn status(&self) -> Vec<Status> {
         let mut out = vec![Status::new(self.instance().map(|s| s.display_name.clone()).unwrap_or_else(|| "No harness".into()), Tone::Plain)];
         if let Some(account) = self.instance().and_then(|s| s.auth.account.clone()) {
@@ -380,8 +384,6 @@ impl crate::panel::Panel for ChatStreamState {
         }
         if let Some(thread) = &self.active_thread() {
             out.push(Status::new(format!("[{}]", thread.as_str().chars().take(8).collect::<String>()), Tone::Info));
-        } else if self.opening() {
-            out.push(Status::new(format!("{} Connecting…", icon::HOURGLASS), Tone::Warn));
         }
         if let Some(thread) = self.thread().map(|v| &v.thread)
             && !thread.mcp_servers.is_empty()

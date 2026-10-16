@@ -990,7 +990,11 @@ impl Panel for ChangesView {
         Status::new(format!("{} Changes", egui_phosphor::regular::GIT_DIFF), Tone::Plain)
     }
 
-    /// What's compared, how much changed, and loading.
+    fn busy(&self) -> Option<String> {
+        self.loading.then(|| "Reading the changes".into())
+    }
+
+    /// What's compared, and how much changed.
     fn status(&self) -> Vec<Status> {
         let mut out = vec![Status::new(self.comparison.to_string(), Tone::Info)];
         if let Some(list) = self.list() {
@@ -998,9 +1002,6 @@ impl Panel for ChangesView {
             out.push(Status::new(format!("{} files", list.total), Tone::Muted));
             out.push(Status::new(format!("+{added}"), Tone::Ok));
             out.push(Status::new(format!("−{removed}"), Tone::Error));
-        }
-        if self.loading {
-            out.push(Status::new(egui_phosphor::regular::HOURGLASS, Tone::Warn).detail("Reading the changes"));
         }
         if let Some(e) = &self.error {
             out.push(Status::new(e.clone(), Tone::Error));

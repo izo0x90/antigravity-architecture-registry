@@ -948,13 +948,8 @@ impl crate::panel::Panel for CodeViewerState {
         }
     }
 
-    /// Loading, and out of date with the index.
-    fn status(&self) -> Vec<Status> {
-        let mut out = Vec::new();
-        if self.is_loading {
-            out.push(Status::new(egui_phosphor::regular::HOURGLASS, Tone::Warn).detail("Loading"));
-        }
-        out
+    fn busy(&self) -> Option<String> {
+        self.is_loading.then(|| "Loading the file".into())
     }
 }
 

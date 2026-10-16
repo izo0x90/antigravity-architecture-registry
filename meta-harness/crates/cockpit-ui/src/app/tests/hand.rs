@@ -177,3 +177,33 @@ fn after_moving_the_graph_by_hand_a_key_starts_from_what_shows() {
     let now = app.desk.graph.selection.clone().unwrap();
     assert!(now != first && shows(&app, &now), "j went on from a card that shows: {now}");
 }
+
+/// Where the drawn text `label` starts (the first one drawn).
+fn drawn_at(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
+    fn find(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.text().contains(label) => Some(t.pos),
+            egui::Shape::Vec(list) => list.iter().find_map(|s| find(s, label)),
+            _ => None,
+        }
+    }
+    output.shapes.iter().find_map(|c| find(&c.shape, label))
+}
+
+#[test]
+fn what_comes_and_goes_on_the_top_and_bottom_lines_never_moves_a_button() {
+    let (ctx, mut app) = app_with_graph();
+    app.desk.graph.select(Some("rust:a::step".into()));
+    frame(&ctx, &mut app, vec![]);
+    let before = frame(&ctx, &mut app, vec![]);
+    let (fit, key) = (drawn_at(&before, "  z z").expect("the fit button"), drawn_at(&before, "f Jump to").expect("a key on the bar"));
+    // Busy (reading the view again), saying more, and a note at the bottom.
+    app.desk.graph.navigate(crate::graph::NavChange::Depth { delta: 1, base: 3 });
+    app.desk.graph.note = Some("a long thing to say about what just happened in the graph, long enough to wrap".into());
+    app.note = Some("a note on the bottom line, also long enough to need room of its own".into());
+    frame(&ctx, &mut app, vec![]);
+    let after = frame(&ctx, &mut app, vec![]);
+    assert!(texts(&after).contains("a long thing to say") && texts(&after).contains("a note on the bottom line"), "both said");
+    assert_eq!(drawn_at(&after, "  z z"), Some(fit), "the top line's buttons stay put");
+    assert_eq!(drawn_at(&after, "f Jump to"), Some(key), "the bottom line's keys stay put");
+}

@@ -850,13 +850,14 @@ impl crate::panel::Panel for GraphState {
         true
     }
 
-    /// Loading, the files changed since they were read, the agent having
-    /// moved it, and what it has to say.
+    fn busy(&self) -> Option<String> {
+        (self.load == Load::Loading).then(|| "Loading the view".into())
+    }
+
+    /// The files changed since they were read, the agent having moved it,
+    /// and what it has to say.
     fn status(&self) -> Vec<Status> {
         let mut out = Vec::new();
-        if self.load == Load::Loading {
-            out.push(Status::new(egui_phosphor::regular::HOURGLASS, Tone::Warn).detail("Loading"));
-        }
         if !self.stale_files.is_empty() {
             let (glyph, word, _) = crate::status::look("stale");
             out.push(Status::new(format!("{glyph} {} {word}", self.stale_files.len()), Tone::Warn).detail(self.stale_files.join("\n")));

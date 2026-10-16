@@ -66,38 +66,44 @@ impl CockpitApp {
             return;
         }
         egui::TopBottomPanel::bottom("key_bar").show(ctx, |ui| {
+            // The keys first: what's said after them (a search, a note)
+            // grows and wraps after them and never moves them.
             ui.horizontal_wrapped(|ui| {
+                if show_keys {
+                    self.draw_bar_keys(ui, &bound, narrow, &mut run);
+                }
                 if let Some((text, color)) = &status {
                     ui.label(RichText::new(text).monospace().size(crate::theme::look().text_body).color(*color));
                 }
                 if let Some(note) = &self.note {
                     ui.label(RichText::new(note).size(crate::theme::look().text_body).color(colors().warn));
                 }
-                if !show_keys {
-                    return;
-                }
-                // While a mode has the keys, its keys are what matter.
-                if let Some((_, typing)) = self.mode_keys() {
-                    for (keys, what) in typing {
-                        ui.label(RichText::new(format!("{keys} {what}")).size(crate::theme::look().text_body).color(colors().muted));
-                    }
-                    return;
-                }
-                for b in self.bar_keys(&bound) {
-                    let keys = b.key_hint();
-                    let text = RichText::new(format!("{keys} {}", b.action.label)).size(if narrow { crate::theme::look().text_title } else { crate::theme::look().text_body });
-                    let mut button = egui::Button::new(text).corner_radius(crate::theme::look().radius_m);
-                    if narrow {
-                        button = button.min_size(egui::vec2(32.0, 32.0));
-                    }
-                    if ui.add(button).on_hover_text(&b.action.label).clicked() {
-                        run = Some(b.clone());
-                    }
-                }
             });
         });
         if let Some(b) = run {
             self.run_bound(&b, None, ctx);
+        }
+    }
+
+    /// The keys that matter now (while a mode has the keys, its keys),
+    /// tappable; the one tapped in `run`.
+    fn draw_bar_keys(&self, ui: &mut egui::Ui, bound: &[Bound], narrow: bool, run: &mut Option<Bound>) {
+        if let Some((_, typing)) = self.mode_keys() {
+            for (keys, what) in typing {
+                ui.label(RichText::new(format!("{keys} {what}")).size(crate::theme::look().text_body).color(colors().muted));
+            }
+            return;
+        }
+        for b in self.bar_keys(bound) {
+            let keys = b.key_hint();
+            let text = RichText::new(format!("{keys} {}", b.action.label)).size(if narrow { crate::theme::look().text_title } else { crate::theme::look().text_body });
+            let mut button = egui::Button::new(text).corner_radius(crate::theme::look().radius_m);
+            if narrow {
+                button = button.min_size(egui::vec2(32.0, 32.0));
+            }
+            if ui.add(button).on_hover_text(&b.action.label).clicked() {
+                *run = Some(b.clone());
+            }
         }
     }
 

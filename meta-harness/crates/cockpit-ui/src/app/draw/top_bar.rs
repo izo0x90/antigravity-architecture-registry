@@ -139,6 +139,14 @@ impl CockpitApp {
 
                 ui.add_space(crate::theme::look().space_m);
 
+                // Its controls (everywhere's placed actions, from the one list)
+                // first, where the lights' words, which come and go, can't push them.
+                let mine: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::Everywhere && b.action.control.as_ref().is_some_and(|c| c.at == crate::actions::At::Header)).collect();
+                let (end, start): (Vec<Bound>, Vec<Bound>) = mine.into_iter().partition(|b| b.action.control.as_ref().is_some_and(|c| c.end));
+                self.host_controls(ui, &start, self.desk.columns.focused());
+
+                ui.add_space(crate::theme::look().space_m);
+
                 // Status LEDs: SRV = event WebSocket to the meta-harness server,
                 // AGENT = the agent session behind it. Both flicker on traffic.
                 let ws = self.desk.net.ws_state.lock().map(|s| *s).unwrap_or(WsState::Closed);
@@ -167,12 +175,6 @@ impl CockpitApp {
                 ui.add_space(crate::theme::look().space_sm);
                 let index_res = self.render_index_light(ui);
                 self.feedback.register_inspectable(ui, "top_bar:index_status", index_res.rect);
-                ui.add_space(crate::theme::look().space_sm);
-                // Its controls: everywhere's placed actions, from the one list.
-                let mine: Vec<Bound> = self.bound_actions().into_iter().filter(|b| b.layer == Layer::Everywhere && b.action.control.as_ref().is_some_and(|c| c.at == crate::actions::At::Header)).collect();
-                let (end, start): (Vec<Bound>, Vec<Bound>) = mine.into_iter().partition(|b| b.action.control.as_ref().is_some_and(|c| c.end));
-                self.host_controls(ui, &start, self.desk.columns.focused());
-
                 ui.add_space(crate::theme::look().space_m);
 
                 // Input mode indicator.
@@ -229,7 +231,7 @@ impl CockpitApp {
     }
 
     /// The INDEX light: its state's colour and word, progress while it runs,
-    /// the last run on hover (reading the code again is a control beside it).
+    /// the last run on hover (reading the code again is a control on the bar).
     pub(in crate::app) fn render_index_light(&mut self, ui: &mut egui::Ui) -> egui::Response {
         let state = index_state(&self.desk.index);
         let (_, word, color) = crate::status::look(state);
