@@ -5,7 +5,7 @@ use arch_graph::{CodeAnchor, Component, ComponentId, Graph, Plan, PlanId, Proven
 
 use super::*;
 use crate::actions::ActionProvider;
-use crate::nav::{Fold, Navigable, Step};
+use crate::nav::{Fold, Navigable, Step, Target};
 
 fn component(symbol: &str, ty: &str) -> Component {
     Component {
@@ -472,4 +472,16 @@ fn changed_components_get_a_badge_and_only_they_show_when_asked() {
     assert_eq!(g.nav.asking(g.changed_directly()).only, Some(Vec::new()), "nothing changed: nothing shown");
     g.command(super::actions::GraphCommand::OnlyChanged, Some("false".into()));
     assert_eq!(g.nav.asking(g.changed_directly()).only, None);
+}
+
+#[test]
+fn as_a_destination_it_shows_any_component_but_the_one_selected() {
+    let mut g = showing(sample_tree());
+    g.select(Some("rust:a::run".into()));
+    let (run, step) = (Target::Component(ComponentId::new("rust:a::run")), Target::Component(ComponentId::new("rust:a::step")));
+    assert!(!g.can_show(&run) && g.can_show(&step), "selected already, and another");
+    assert!(g.can_show(&Target::Line { file: "a.rs".into(), line: 3, within: None, refs: vec![] }), "a line is in some component");
+    assert!(!g.can_show(&Target::Message { thread: None, turn: Some("u".into()), index: 0, link: None }), "a message isn't one");
+    assert_eq!(g.show_target(&step), Ok(()));
+    assert_eq!(g.selection.as_deref(), Some("rust:a::step"));
 }

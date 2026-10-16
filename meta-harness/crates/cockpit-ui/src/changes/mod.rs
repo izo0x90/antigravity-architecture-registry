@@ -865,6 +865,30 @@ impl ActionProvider for ChangesView {
 }
 
 impl Navigable for ChangesView {
+    /// A message whose turn the timeline saw, or a component the changes
+    /// touch (a line whose component isn't known yet may be one); not a
+    /// change: that's what it shows.
+    fn can_show(&self, target: &Target) -> bool {
+        match target {
+            Target::Message { turn, .. } => turn.as_deref().is_some_and(|t| self.turn(t).is_some()),
+            Target::Change { .. } => false,
+            other => other.in_component() && other.component().is_none_or(|id| self.touches(id)),
+        }
+    }
+
+    /// A message: its turn's changes, compared. A component: its first
+    /// change.
+    fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        if let Target::Message { turn, .. } = target {
+            let comparison = turn.as_deref().and_then(|t| self.turn(t)).map(|t| t.comparison.clone()).ok_or("The timeline didn't see this turn's start.")?;
+            self.compare(comparison);
+            self.show_timeline(false);
+            return Ok(());
+        }
+        let id = target.component().ok_or("There's no component here.")?;
+        if self.reveal(id) { Ok(()) } else { Err(format!("The changes ({}) don't touch {}.", self.comparison, crate::nav::short_name(id))) }
+    }
+
     fn place(&self) -> Place {
         Place::Changes { item: self.cursor_row().map(|r| self.row_key(&r)) }
     }

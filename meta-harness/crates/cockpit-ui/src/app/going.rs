@@ -4,10 +4,7 @@ use super::*;
 
 impl CockpitApp {
     pub(super) fn component_name(&self, id: &ComponentId) -> String {
-        self.desk.graph.component(id).map(|c| c.name.clone()).unwrap_or_else(|| {
-            let symbol = id.as_str().split_once(':').map_or(id.as_str(), |(_, s)| s);
-            symbol.rsplit([':', '.']).next().unwrap_or(symbol).to_owned()
-        })
+        self.desk.graph.component(id).map(|c| c.name.clone()).unwrap_or_else(|| crate::nav::short_name(id))
     }
 
     /// A go-to's count names the column it lands in (1 is the leftmost; one
@@ -39,19 +36,6 @@ impl CockpitApp {
             self.note = Some("Nothing under the cursor.".into());
             return;
         };
-        // A message's changes: its turn's, compared.
-        if let (GoTo::Changes, Target::Message { turn: Some(turn), .. }) = (op, &target) {
-            match self.desk.changes.turn(turn).map(|t| t.comparison.clone()) {
-                Some(comparison) => {
-                    self.desk.changes.compare(comparison);
-                    self.desk.changes.show_timeline(false);
-                    self.focus_kind(BufferKind::Changes);
-                    self.after_jump(from);
-                }
-                None => self.note = Some("The timeline didn't see this turn's start.".into()),
-            }
-            return;
-        }
         if op == GoTo::Code {
             // A call goes to what it calls; a file link opens as it is.
             if let Target::Line { refs, .. } = &target
@@ -68,6 +52,14 @@ impl CockpitApp {
                 self.after_jump(from);
                 return;
             }
+        }
+        // Not a component, nor a place the index can say one is at (a
+        // message's turn): its destination shows it as it is, if it can.
+        if target.component().is_none()
+            && !target.in_code()
+            && let Some(view) = op.view().filter(|v| self.desk.view(*v).can_show(&target))
+        {
+            return self.show_target_in(view, &target, from);
         }
         match (target.component().cloned(), &target) {
             (Some(id), _) => self.goto_component(op, id, from, origin, ctx),
@@ -144,55 +136,38 @@ impl CockpitApp {
             self.open_component_code(to.id, to.line, from, ctx);
             return;
         }
-        // In the column a count named: the same kind of view, there.
-        if self.landing.is_some() {
-            let kind = if matches!(origin, BufferKind::Graph | BufferKind::Tree | BufferKind::Spec) { origin } else { BufferKind::Graph };
-            return self.show_in(kind, to.id, from);
-        }
-        match origin {
-            BufferKind::Graph => self.desk.graph.reveal(to.id),
-            BufferKind::Tree => self.desk.tree.reveal(&to.id, Scroll::Center),
-            BufferKind::Spec => {
-                if !self.desk.spec.pinned {
-                    self.desk.graph.reveal(to.id.clone());
-                }
-                self.desk.spec.show(to.id);
-            }
-            BufferKind::Queue if self.desk.queue.select_component(&to.id) => {}
-            BufferKind::Queue | BufferKind::Chat | BufferKind::Code | BufferKind::Inbox | BufferKind::Changes => return self.show_in(BufferKind::Graph, to.id, from),
-        }
-        self.after_jump(from);
+        // Where it started, when that view can show it (in the column a
+        // count named, a view of that kind there); else the graph.
+        let target = Target::Component(to.id);
+        let kind = if self.desk.view(origin).can_show(&target) { origin } else { BufferKind::Graph };
+        self.show_target_in(kind, &target, from);
     }
 
     /// Shows a component in a view and moves focus there.
     pub(super) fn show_in(&mut self, kind: BufferKind, id: ComponentId, from: Jump) {
-        match kind {
-            BufferKind::Code | BufferKind::Chat | BufferKind::Inbox => return,
-            BufferKind::Changes if !self.desk.changes.reveal(&id) => {
-                self.note = Some(format!("The changes ({}) don't touch {}.", self.desk.changes.comparison, self.component_name(&id)));
-                return;
-            }
-            BufferKind::Queue if !self.desk.queue.select_component(&id) => {
-                self.note = Some(match &self.desk.queue.plan {
-                    None => "No plan, so no queue: pick a plan in the graph.".to_owned(),
-                    Some(_) => format!("{} has no job in the queue.", self.component_name(&id)),
-                });
-                return;
-            }
-            _ => {}
+        self.show_target_in(kind, &Target::Component(id), from);
+    }
+
+    /// Shows `target` in a view of `kind` (as it says) and moves focus
+    /// there; when it can't, says why and nothing moves.
+    pub(super) fn show_target_in(&mut self, kind: BufferKind, target: &Target, from: Jump) {
+        let used = self.desk.used_pane(kind);
+        if let Err(why) = self.desk.view_mut(kind).show_target(target) {
+            self.note = Some(why);
+            return;
         }
-        // The view it lands in first (a column's own), then shown there.
+        // The view it lands in (a column's own of that kind), shown there
+        // too when it's another.
         self.focus_kind(kind);
-        match kind {
-            BufferKind::Graph => self.desk.graph.reveal(id),
-            BufferKind::Spec => {
-                if !self.desk.spec.pinned {
-                    self.desk.graph.reveal(id.clone());
-                }
-                self.desk.spec.show(id);
-            }
-            BufferKind::Tree => self.desk.tree.reveal(&id, Scroll::Center),
-            BufferKind::Queue | BufferKind::Code | BufferKind::Chat | BufferKind::Inbox | BufferKind::Changes => {}
+        if self.desk.used_pane(kind) != used {
+            let _ = self.desk.view_mut(kind).show_target(target);
+        }
+        // A card shown follows in the graph, unless its view is pinned.
+        if kind == BufferKind::Spec
+            && !self.desk.spec.pinned
+            && let Some(id) = target.component()
+        {
+            self.desk.graph.reveal(id.clone());
         }
         self.after_jump(from);
     }

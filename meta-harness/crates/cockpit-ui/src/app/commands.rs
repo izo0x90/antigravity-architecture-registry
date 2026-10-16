@@ -150,34 +150,18 @@ impl CockpitApp {
         out.push(nav("nav.forward", "Forward (jump list)", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT));
         out.push(Action::new("nav.keys", "Keys for this view", S::Keys).group(Group::View).importance(MINOR));
         out.push(nav("nav.line", "Go to line or row", S::Line).param(Param::Text { hint: "line or row number".into() }).importance(MINOR));
-        let go = |id: &str, label: &str, op: GoTo, when: When, importance: u8| Action::new(id, label, S::GoTo(op)).group(Group::GoTo).when(when).importance(importance).layer(Layer::Panel);
-        out.push(go("goto.code", "Go to its code", GoTo::Code, When::Code, PRIMARY));
-        out.push(go("goto.spec", "Go to its spec", GoTo::Spec, When::Component, SECONDARY));
-        if kind != K::Graph {
-            out.push(go("goto.graph", "Show it in the graph", GoTo::Graph, When::Component, SECONDARY));
-        }
-        if kind != K::Tree {
-            out.push(go("goto.tree", "Show it in the outline", GoTo::Tree, When::Component, MINOR));
-        }
-        if kind != K::Queue && self.desk.queue.plan.is_some() {
-            let has_job = self.desk.view(kind).target().and_then(|t| t.component().cloned()).is_none_or(|id| self.desk.queue.has_job(&id));
-            out.push(go("goto.queue", "Go to its queue job", GoTo::Queue, if has_job { When::Component } else { When::Unavailable }, MINOR));
-        }
-        if kind != K::Changes {
-            // A component's changes, or a message's turn's.
-            let has = match self.desk.view(kind).target() {
-                Some(Target::Message { turn, .. }) => turn.is_some_and(|t| self.desk.changes.turn(&t).is_some()),
-                target => target.and_then(|t| t.component().cloned()).is_none_or(|id| self.desk.changes.touches(&id)),
+        // Each go-to's destination says whether it can show what the
+        // cursor is on; the relational ones, whether its relations lead
+        // anywhere.
+        let target = self.desk.view(kind).target();
+        for op in GoTo::ALL {
+            let when = match op.view() {
+                Some(view) if target.as_ref().is_some_and(|t| self.desk.view(view).can_show(t)) => When::Always,
+                Some(_) => When::Unavailable,
+                None => When::Reaches(op),
             };
-            out.push(go("goto.changes", "Go to its changes", GoTo::Changes, if has { When::Target } else { When::Unavailable }, MINOR));
+            out.push(Action::new(op.id(), op.label(), S::GoTo(op)).group(Group::GoTo).when(when).importance(op.importance()).layer(Layer::Panel));
         }
-        out.push(go("goto.uses", "Go to a use", GoTo::Uses, When::Reaches(GoTo::Uses), SECONDARY));
-        out.push(go("goto.callers", "Go to a caller", GoTo::Callers, When::Reaches(GoTo::Callers), SECONDARY));
-        out.push(go("goto.callees", "Go to a callee", GoTo::Callees, When::Reaches(GoTo::Callees), SECONDARY));
-        out.push(go("goto.parent", "Go to what holds it", GoTo::Parent, When::Reaches(GoTo::Parent), MINOR));
-        out.push(go("goto.members", "Go to a member", GoTo::Members, When::Reaches(GoTo::Members), MINOR));
-        out.push(go("goto.implements", "Go to what it implements", GoTo::Implements, When::Reaches(GoTo::Implements), MINOR));
-        out.push(go("goto.flows", "Follow its data flow", GoTo::Flows, When::Reaches(GoTo::Flows), MINOR));
         if let Some(choosing) = &self.desk.choosing {
             let name = |id: &ComponentId| self.component_name(id);
             let choices = choosing.candidates.iter().map(|c| Choice::new(c.id.as_str(), name(&c.id)).detail(Some(c.id.to_string()))).collect();

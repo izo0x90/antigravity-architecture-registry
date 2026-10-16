@@ -313,6 +313,20 @@ impl Navigable for QueueState {
         self.job().map(|j| Target::Job { component: j.component.clone() })
     }
 
+    /// A component with a job in the plan's queue (a line whose component
+    /// isn't known yet may be one), not the job selected.
+    fn can_show(&self, target: &Target) -> bool {
+        self.plan.is_some() && target.in_component() && target.component().is_none_or(|id| self.has_job(id)) && target.elsewhere(self.target().as_ref())
+    }
+
+    fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        let id = target.component().ok_or("Not a component.")?;
+        if self.plan.is_none() {
+            return Err("No plan, so no queue: pick a plan in the graph.".into());
+        }
+        if self.select_component(id) { Ok(()) } else { Err(format!("{} has no job in the queue.", crate::nav::short_name(id))) }
+    }
+
     fn motion(&mut self, motion: Motion, count: usize) {
         let n = self.jobs();
         if n == 0 {
@@ -554,4 +568,21 @@ pub(crate) mod tests {
             assert!(texts.iter().any(|t| *t == format!("{glyph} {word}")), "{state} as a chip: {texts:?}");
         }
     }
+
+    #[test]
+    fn as_a_destination_it_shows_components_with_a_job_but_not_the_one_selected() {
+        use crate::nav::Target as T;
+        let (net, ctx) = (NetClient::new("http://localhost:0"), egui::Context::default());
+        let mut q = QueueState::default();
+        assert!(!q.can_show(&T::Component(id("a"))), "no plan: no queue");
+        assert_eq!(q.show_target(&T::Component(id("a"))), Err("No plan, so no queue: pick a plan in the graph.".into()));
+        q.tick(&net, &ctx, Some(&PlanId::new("p").unwrap()));
+        q.on_event(&ArchEvent::QueueUpdated { snapshot: Box::new(snapshot(QueueStatus::Running)) });
+        assert!(q.can_show(&T::Component(id("a"))) && !q.can_show(&T::Component(id("zz"))), "a job, or not");
+        assert!(!q.can_show(&T::Component(id("b"))), "b's job is the one selected");
+        assert_eq!(q.show_target(&T::Component(id("a"))), Ok(()));
+        assert_eq!(q.target(), Some(T::Job { component: id("a") }));
+        assert!(q.show_target(&T::Component(id("zz"))).unwrap_err().contains("zz has no job"));
+    }
+
 }

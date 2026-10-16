@@ -251,7 +251,7 @@ impl When {
             Self::Always => true,
             Self::Target => s.target.is_some(),
             // A line of code is in some component, even before the index says which.
-            Self::Component => s.target.as_ref().is_some_and(|t| t.component().is_some() || matches!(t, Target::Line { .. })),
+            Self::Component => s.target.as_ref().is_some_and(Target::in_component),
             Self::Code => s.target.as_ref().is_some_and(|t| t.code().is_some() || t.component().is_some()),
             Self::Named => matches!(&s.target, Some(Target::Line { refs, .. }) if !refs.is_empty()),
             Self::Searched => s.searched,

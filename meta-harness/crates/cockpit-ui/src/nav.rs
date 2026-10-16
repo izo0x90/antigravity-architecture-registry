@@ -10,6 +10,13 @@ use crate::app::BufferKind;
 use crate::graph::Nav;
 use crate::spec::Section;
 
+/// A component's name from its id alone (`rust:a::b::run` → `run`), for
+/// when nothing here knows its card.
+pub fn short_name(id: &ComponentId) -> String {
+    let symbol = id.as_str().split_once(':').map_or(id.as_str(), |(_, s)| s);
+    symbol.rsplit([':', '.']).next().unwrap_or(symbol).to_owned()
+}
+
 /// What a view's cursor is on.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
@@ -57,6 +64,24 @@ impl Target {
             Self::Spec { component, .. } => Some(component),
             Self::Message { .. } | Self::Change { .. } => None,
         }
+    }
+
+    /// Whether it is (or is in) a component: a line of code is in some
+    /// component, even before the index says which.
+    pub fn in_component(&self) -> bool {
+        self.component().is_some() || matches!(self, Self::Line { .. })
+    }
+
+    /// A place in the code (a line, a change): the index can say which
+    /// component it's in.
+    pub fn in_code(&self) -> bool {
+        matches!(self, Self::Line { .. } | Self::Change { .. })
+    }
+
+    /// Whether it's about another component than `at` (a view's cursor),
+    /// or about no component at all.
+    pub fn elsewhere(&self, at: Option<&Target>) -> bool {
+        self.component().is_none() || at.and_then(Target::component) != self.component()
     }
 
     /// A place in the code the target names directly (a line, a file link).
@@ -218,6 +243,70 @@ pub enum GoTo {
 }
 
 impl GoTo {
+    pub const ALL: [GoTo; 13] = [Self::Code, Self::Spec, Self::Graph, Self::Tree, Self::Queue, Self::Changes, Self::Uses, Self::Callers, Self::Callees, Self::Parent, Self::Members, Self::Implements, Self::Flows];
+
+    /// Its action's id (what the keymap binds).
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Code => "goto.code",
+            Self::Spec => "goto.spec",
+            Self::Graph => "goto.graph",
+            Self::Tree => "goto.tree",
+            Self::Queue => "goto.queue",
+            Self::Changes => "goto.changes",
+            Self::Uses => "goto.uses",
+            Self::Callers => "goto.callers",
+            Self::Callees => "goto.callees",
+            Self::Parent => "goto.parent",
+            Self::Members => "goto.members",
+            Self::Implements => "goto.implements",
+            Self::Flows => "goto.flows",
+        }
+    }
+
+    /// What it does, in words.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Code => "Go to its code",
+            Self::Spec => "Go to its spec",
+            Self::Graph => "Show it in the graph",
+            Self::Tree => "Show it in the outline",
+            Self::Queue => "Go to its queue job",
+            Self::Changes => "Go to its changes",
+            Self::Uses => "Go to a use",
+            Self::Callers => "Go to a caller",
+            Self::Callees => "Go to a callee",
+            Self::Parent => "Go to what holds it",
+            Self::Members => "Go to a member",
+            Self::Implements => "Go to what it implements",
+            Self::Flows => "Follow its data flow",
+        }
+    }
+
+    pub fn importance(self) -> u8 {
+        use crate::actions::{MINOR, PRIMARY, SECONDARY};
+        match self {
+            Self::Code => PRIMARY,
+            Self::Spec | Self::Graph | Self::Uses | Self::Callers | Self::Callees => SECONDARY,
+            Self::Tree | Self::Queue | Self::Changes | Self::Parent | Self::Members | Self::Implements | Self::Flows => MINOR,
+        }
+    }
+
+    /// The view it shows the target in, when it's one view's (the
+    /// relational ones pick among what's related, and land where they
+    /// started or in the code).
+    pub fn view(self) -> Option<BufferKind> {
+        match self {
+            Self::Code => Some(BufferKind::Code),
+            Self::Spec => Some(BufferKind::Spec),
+            Self::Graph => Some(BufferKind::Graph),
+            Self::Tree => Some(BufferKind::Tree),
+            Self::Queue => Some(BufferKind::Queue),
+            Self::Changes => Some(BufferKind::Changes),
+            Self::Uses | Self::Callers | Self::Callees | Self::Parent | Self::Members | Self::Implements | Self::Flows => None,
+        }
+    }
+
     /// The relation a relational go-to follows, and in which direction.
     pub fn relation(self) -> Option<(RelationKind, bool)> {
         match self {
@@ -442,6 +531,18 @@ pub trait Navigable {
 
     /// Moves the cursor to an item and brings it into view.
     fn move_to(&mut self, key: &str);
+
+    /// As a go-to's destination: whether it can show `target`, and isn't
+    /// showing it at its cursor already.
+    fn can_show(&self, _target: &Target) -> bool {
+        false
+    }
+
+    /// Shows `target` at its cursor (a go-to arrived); why not, when it
+    /// can't.
+    fn show_target(&mut self, _target: &Target) -> Result<(), String> {
+        Err("This view doesn't show things gone to.".into())
+    }
 
     /// Opens or goes into an item (`F` on a hint).
     fn open_item(&mut self, key: &str) -> Step {

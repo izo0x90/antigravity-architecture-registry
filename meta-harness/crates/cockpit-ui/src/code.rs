@@ -887,6 +887,12 @@ impl crate::panel::Panel for CodeViewerState {
 }
 
 impl Navigable for CodeViewerState {
+    /// Anything with code: a line, a file link, a component (its code is
+    /// opened by the app, which knows where components are).
+    fn can_show(&self, target: &Target) -> bool {
+        target.code().is_some() || target.component().is_some()
+    }
+
     fn place(&self) -> Place {
         Place::Code { file: self.current_file.clone(), line: self.target_line.unwrap_or(1) }
     }

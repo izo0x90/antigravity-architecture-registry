@@ -379,6 +379,17 @@ impl Navigable for ArchitectureTreeState {
         self.cursor.clone().map(Target::Component)
     }
 
+    /// Any component, not the one under the cursor.
+    fn can_show(&self, target: &Target) -> bool {
+        target.in_component() && target.elsewhere(self.target().as_ref())
+    }
+
+    fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        let id = target.component().ok_or("Not a component.")?;
+        self.reveal(id, Scroll::Center);
+        Ok(())
+    }
+
     fn motion(&mut self, motion: Motion, count: usize) {
         let rows = self.rows();
         if rows.is_empty() {
@@ -691,4 +702,17 @@ pub(crate) mod tests {
         t.motion(Motion::HalfDown, 1);
         assert_eq!(t.cursor_index(&t.rows()), Some(half));
     }
+
+    #[test]
+    fn as_a_destination_it_shows_any_component_but_the_one_under_the_cursor() {
+        let mut t = ArchitectureTreeState::default();
+        t.set_result(outline());
+        t.motion(Motion::Down, 1);
+        let here = t.target().unwrap();
+        let other = Target::Component(ComponentId::new(format!("{}::step", here.component().unwrap().as_str())));
+        assert!(!t.can_show(&here) && t.can_show(&other));
+        assert_eq!(t.show_target(&other), Ok(()));
+        assert_eq!(t.target(), Some(other));
+    }
+
 }

@@ -211,6 +211,17 @@ impl Navigable for GraphState {
         self.selected_card().and_then(|c| c.component.clone()).map(Target::Component)
     }
 
+    /// Any component (a line too: it's in one), not the one selected.
+    fn can_show(&self, target: &Target) -> bool {
+        target.in_component() && target.elsewhere(self.target().as_ref())
+    }
+
+    fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        let id = target.component().ok_or("Not a component.")?;
+        self.reveal(id.clone());
+        Ok(())
+    }
+
     fn motion(&mut self, motion: Motion, count: usize) {
         let dir = match motion {
             Motion::Left => Some(Dir::Left),

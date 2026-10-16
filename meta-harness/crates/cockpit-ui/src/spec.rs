@@ -1131,6 +1131,18 @@ impl ActionProvider for SpecState {
 }
 
 impl Navigable for SpecState {
+    /// Any component, but the one whose card it shows (a relation's other
+    /// end is another).
+    fn can_show(&self, target: &Target) -> bool {
+        target.in_component() && target.component() != self.target.as_ref()
+    }
+
+    fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        let id = target.component().ok_or("Not a component.")?;
+        self.show(id.clone());
+        Ok(())
+    }
+
     fn place(&self) -> Place {
         Place::Spec { component: self.target.clone(), item: self.entry().map(|e| e.key()) }
     }
@@ -1719,6 +1731,19 @@ pub(crate) mod tests {
         assert!(s.items().iter().any(|i| i.text.contains("in it")), "searchable");
         let mut mode = crate::keymap::InputMode::Normal;
         frame(&mut s, &ctx, &mut mode, 0);
+    }
+
+
+    #[test]
+    fn as_a_destination_it_shows_any_component_but_the_one_whose_card_is_shown() {
+        let (a, b) = (ComponentId::new("rust:a::run"), ComponentId::new("rust:a::step"));
+        let mut s = SpecState::default();
+        s.follow(Some(&a), &Source::Code);
+        assert!(!s.can_show(&Target::Component(a.clone())) && s.can_show(&Target::Component(b.clone())));
+        let relation = Target::Spec { component: a.clone(), section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: b.clone(), outgoing: true } };
+        assert!(s.can_show(&relation), "a relation's other end is another card");
+        assert_eq!(s.show_target(&Target::Component(b.clone())), Ok(()));
+        assert_eq!(s.target.as_ref(), Some(&b));
     }
 
 }

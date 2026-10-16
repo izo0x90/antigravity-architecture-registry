@@ -310,10 +310,10 @@ fn a_code_line_offers_every_go_to() {
     for expected in ["Show it in the graph", "Go to a caller", "Go to its spec", "Go to its queue job"] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
-    // No plan: no queue to go to.
+    // No plan: no queue to go to (the queue says so).
     frame_at(&ctx, &mut app, press(egui::Key::Escape, false), 72.0);
     app.desk.queue.plan = None;
-    assert!(!app.shell_actions().iter().any(|a| a.id == "goto.queue"));
+    assert!(app.shell_actions().iter().any(|a| a.id == "goto.queue" && a.when == When::Unavailable));
 }
 
 #[test]

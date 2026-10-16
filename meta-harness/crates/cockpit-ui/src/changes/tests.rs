@@ -191,3 +191,23 @@ fn switching_the_comparison_while_a_list_is_on_its_way_asks_for_the_new_one() {
     view.tick(&net, &ctx, false);
     assert_eq!((view.loading, view.list().map(|l| l.total)), (false, Some(1)));
 }
+
+#[test]
+fn as_a_destination_it_shows_touched_components_and_turns_it_saw() {
+    let (mut view, net, ctx) = view_with_changes();
+    let id = arch_graph::ComponentId::new("rust:a::three");
+    let component = Target::Component(id.clone());
+    assert!(!view.can_show(&component), "nothing known to touch it");
+    let list = ComponentChangeList { comparison: Comparison::default(), components: vec![harness_contracts::changes::ComponentChanges { component: id.as_str().into(), file: "a.rs".into(), added: 1, removed: 1, runs: vec![(3, 1)], direct: true }], out_of_date: vec![] };
+    push(&view.inbox, Reply::Components(Comparison::default(), Ok(list)));
+    view.tick(&net, &ctx, false);
+    assert!(view.can_show(&component));
+    assert!(!view.can_show(&Target::Change { file: "a.rs".into(), line: 3 }), "a change is what it shows");
+    let message = |turn: &str| Target::Message { thread: None, turn: Some(turn.into()), index: 0, link: None };
+    let turn = Comparison { from: Point::Snapshot("1-a".into()), to: Point::Snapshot("2-b".into()) };
+    view.take_timeline_for_test(Timeline { windows: vec![], turns: vec![harness_contracts::changes::TurnChanges { thread: "t".into(), turn: "u1".into(), comparison: turn.clone(), files: 1, alongside: vec![] }] });
+    assert!(view.can_show(&message("u1")) && !view.can_show(&message("u2")));
+    assert_eq!(view.show_target(&message("u1")), Ok(()));
+    assert_eq!(view.comparison, turn, "its turn, compared");
+    assert!(view.show_target(&message("u2")).is_err());
+}
