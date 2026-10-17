@@ -212,7 +212,7 @@ impl QueueState {
             QueueCommand::OpenSession => match self.job().map(|j| &j.state) {
                 Some(JobState::Running { thread: Some(t) }) => {
                     let target = Target::Agent { slot: None, thread: Some(harness_contracts::ThreadId::new(t)) };
-                    self.asks.push(Ask::Show { target, in_: crate::kind::BufferKind::Chat });
+                    self.asks.push(Ask::Show { target, in_: Some(crate::kind::BufferKind::Chat) });
                 }
                 _ => *cx.note = Some("Only a running job has a session.".into()),
             },
@@ -519,7 +519,7 @@ pub(crate) mod tests {
         assert!(ids(&q).contains(&"queue.open_session".to_owned()) && ids(&q).contains(&"queue.stop".to_owned()));
         q.apply(QueueCommand::OpenSession, &mut cx);
         let session = crate::nav::Target::Agent { slot: None, thread: Some(harness_contracts::ThreadId::new("t1")) };
-        assert_eq!(q.take_asks(), [Ask::Show { target: session, in_: crate::kind::BufferKind::Chat }]);
+        assert_eq!(q.take_asks(), [Ask::Show { target: session, in_: Some(crate::kind::BufferKind::Chat) }]);
         // Approval waits on the user: the action is offered on that job only.
         q.motion(Motion::Down, 1);
         assert!(ids(&q).contains(&"queue.approve".to_owned()) && !ids(&q).contains(&"queue.retry".to_owned()));

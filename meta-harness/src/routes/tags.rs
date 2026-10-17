@@ -3,7 +3,7 @@
 //! rename, recolour or note one, delete one; a tag by its id (or its
 //! name). Reading needs `view.read`; changing them `tags.edit` (agents
 //! change them through their tools, as their role allows). What the user
-//! does is theirs: `by` is "you".
+//! does is theirs: `by` is "user" (as the activity kept names them).
 
 use std::sync::Arc;
 
@@ -59,8 +59,8 @@ async fn read(_: Needs<can::ViewRead>, State(state): State<TagsState>, Path(tag)
     blocking(&state.tags, move |t| t.read(&tag)).await.map(Json)
 }
 
-/// Who the cockpit's changes are by.
-const YOU: &str = "you";
+/// Who the cockpit's changes are by: the user.
+const USER: &str = "user";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,7 +71,7 @@ struct Tagging {
 }
 
 async fn tag(_: Needs<can::TagsEdit>, State(state): State<TagsState>, Json(body): Json<Tagging>) -> Result<Json<Tag>, Refused> {
-    blocking(&state.tags, move |t| t.tag(&body.tag, body.subject, YOU)).await.map(Json)
+    blocking(&state.tags, move |t| t.tag(&body.tag, body.subject, USER)).await.map(Json)
 }
 
 #[derive(Deserialize)]
@@ -81,7 +81,7 @@ struct Untagging {
 }
 
 async fn untag(_: Needs<can::TagsEdit>, State(state): State<TagsState>, Path(tag): Path<String>, Json(body): Json<Untagging>) -> Result<Json<Tag>, Refused> {
-    blocking(&state.tags, move |t| t.untag(&tag, &body.subject)).await.map(Json)
+    blocking(&state.tags, move |t| t.untag(&tag, &body.subject, USER)).await.map(Json)
 }
 
 #[derive(Deserialize)]
@@ -93,9 +93,9 @@ struct Editing {
 }
 
 async fn edit(_: Needs<can::TagsEdit>, State(state): State<TagsState>, Path(tag): Path<String>, Json(body): Json<Editing>) -> Result<Json<Tag>, Refused> {
-    blocking(&state.tags, move |t| t.edit(&tag, Edit { name: body.name, colour: body.colour, note: body.note }, YOU)).await.map(Json)
+    blocking(&state.tags, move |t| t.edit(&tag, Edit { name: body.name, colour: body.colour, note: body.note }, USER)).await.map(Json)
 }
 
 async fn delete(_: Needs<can::TagsEdit>, State(state): State<TagsState>, Path(tag): Path<String>) -> Result<StatusCode, Refused> {
-    blocking(&state.tags, move |t| t.delete(&tag)).await.map(|()| StatusCode::NO_CONTENT)
+    blocking(&state.tags, move |t| t.delete(&tag, USER)).await.map(|()| StatusCode::NO_CONTENT)
 }

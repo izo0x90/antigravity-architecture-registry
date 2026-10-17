@@ -65,7 +65,9 @@ impl CockpitApp {
         if let Some(ask) = self.palette.take_search() {
             match ask.origin {
                 Origin::View(kind) => self.desk.view_mut(kind).search(&ask.action, &ask.query),
-                Origin::Shell => self.desk.tag_query = ask.query,
+                Origin::Shell => {
+                    self.desk.shell_searches.insert(ask.action, ask.query);
+                }
             }
         }
         if let Some(invocation) = picked {

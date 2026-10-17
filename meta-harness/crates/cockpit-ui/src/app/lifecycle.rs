@@ -103,9 +103,6 @@ impl CockpitApp {
         self.desk.shared.agents.get_mut().tick(&self.desk.net, ctx);
         self.desk.shared.terminals.get_mut().tick(&self.desk.net, ctx);
         self.desk.shared.tags.get_mut().tick();
-        if let Some(said) = self.desk.shared.tags.get_mut().take_said() {
-            self.note = Some(said.unwrap_or_else(|e| format!("Tags: {e}")));
-        }
         let events = self.desk.net.incoming.lock().map(|mut lock| lock.drain(..).collect::<Vec<_>>()).unwrap_or_default();
         for event in events {
             if let harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::Index { status } } = &event {

@@ -221,7 +221,7 @@ pub fn notifications(hub: &Arc<EventHub>, state: &Arc<nah_state::StateDb>, slots
 /// come back ended. How long a command runs before its end is news:
 /// `.nah/terminals.toml`'s `long_command_secs` (10 by default). Their lines
 /// and commands can be tagged.
-pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, tags: &nah_tags::Tags) -> Result<Arc<crate::terminals::Terminals>, StartError> {
+pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, tags: &Arc<nah_tags::Tags>) -> Result<Arc<crate::terminals::Terminals>, StartError> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Settings {
@@ -238,6 +238,14 @@ pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hu
     let hooks = arch_service::state_dir(arch.root())?.join("terminal-hooks");
     let terminals = crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), std::time::Duration::from_secs(settings.long_command_secs))?;
     tags.register(terminals.clone());
+    // Tagged lines kept where they are now when they move (off the
+    // terminal's own threads: tags are kept in the state database).
+    let weak = Arc::downgrade(tags);
+    terminals.when_moved(move || {
+        if let Some(tags) = weak.upgrade() {
+            std::thread::spawn(move || tags.refresh());
+        }
+    });
     Ok(terminals)
 }
 

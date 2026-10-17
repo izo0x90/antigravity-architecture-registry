@@ -43,6 +43,32 @@ fn texts(output: &egui::FullOutput) -> String {
     out
 }
 
+/// Where the text `label` is drawn (each place it is).
+fn drawn_rects(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
+    fn collect(shape: &egui::Shape, label: &str, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Text(t) if t.galley.text() == label => out.push(egui::Rect::from_min_size(t.pos, t.galley.size())),
+            egui::Shape::Vec(list) => list.iter().for_each(|s| collect(s, label, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        collect(&clipped.shape, label, &mut out);
+    }
+    out
+}
+
+/// What the calls to `call` ("POST /api/tags") sent, since last asked.
+fn bodies(app: &CockpitApp, call: &str) -> Vec<serde_json::Value> {
+    std::mem::take(&mut *app.desk.net.bodies.lock().unwrap()).into_iter().filter(|(c, _)| c == call).map(|(_, b)| b).collect()
+}
+
+/// The server says `event` on the event stream.
+fn told(app: &CockpitApp, event: harness_contracts::ClientEvent) {
+    app.desk.net.incoming.lock().unwrap().push(event);
+}
+
 /// Double-clicks the drawn text `label`.
 fn double_click_on(ctx: &egui::Context, app: &mut CockpitApp, label: &str) {
     fn find(shape: &egui::Shape, label: &str) -> Option<egui::Rect> {

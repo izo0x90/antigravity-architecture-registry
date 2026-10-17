@@ -292,7 +292,7 @@ impl GraphState {
             if let Some(file) = &hit.file {
                 let line = hit.line.unwrap_or(1);
                 let line = line as usize;
-                self.asks.push(crate::nav::Ask::Show { target: crate::nav::Target::Span { file: file.clone(), start: line, end: line }, in_: crate::kind::BufferKind::Code });
+                self.asks.push(crate::nav::Ask::Show { target: crate::nav::Target::Span { file: file.clone(), start: line, end: line }, in_: Some(crate::kind::BufferKind::Code) });
             }
             return;
         };
@@ -364,7 +364,7 @@ mod tests {
 
         // A line nothing in the graph stands for opens in the code.
         g.command(crate::graph::actions::GraphCommand::Find, Some(value_of(&g, "// step by step")));
-        let shown = crate::nav::Ask::Show { target: crate::nav::Target::Span { file: "src/a.rs".into(), start: 3, end: 3 }, in_: crate::kind::BufferKind::Code };
+        let shown = crate::nav::Ask::Show { target: crate::nav::Target::Span { file: "src/a.rs".into(), start: 3, end: 3 }, in_: Some(crate::kind::BufferKind::Code) };
         assert!(g.take_asks().contains(&shown), "it asks the code to show it");
 
         // Answers to an older query are dropped.

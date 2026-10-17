@@ -45,8 +45,13 @@ pub struct Desk {
     pub details: Details,
     pub pending_goto: Option<Pending>,
     pub choosing: Option<Choosing>,
-    /// What's typed in the tag picker (tagging what the cursor's on).
-    pub tag_query: String,
+    /// What's typed in each of the shell's searches (by its action's id).
+    pub shell_searches: BTreeMap<String, String>,
+    /// The tag `g T` picked, while the palette asks which of its things.
+    pub tag_picking: Option<harness_contracts::TagId>,
+    /// The tag stepped through last (`] t`): stepped through again, when
+    /// the thing you're on has several.
+    pub tag_stepping: Option<harness_contracts::TagId>,
     pub at_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
     /// Code indexing's status, as asked for.
     pub index_inbox: Arc<Mutex<Vec<NetResult<arch_graph::IndexStatus>>>>,
@@ -78,7 +83,9 @@ impl Desk {
             details: Details::default(),
             pending_goto: None,
             choosing: None,
-            tag_query: String::new(),
+            shell_searches: BTreeMap::new(),
+            tag_picking: None,
+            tag_stepping: None,
             at_inbox: Arc::default(),
             index_inbox: Arc::default(),
             types_inbox: Arc::default(),

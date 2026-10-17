@@ -345,6 +345,11 @@ impl Terminal {
         lock(&self.state).commands.list().cloned().collect()
     }
 
+    /// Command `id`, while it's kept.
+    pub fn command(&self, id: u64) -> Option<harness_contracts::TerminalCommand> {
+        lock(&self.state).commands.get(id).cloned()
+    }
+
     /// The shell ended (with its code when it had one).
     pub fn ended(&self) -> Option<Option<i32>> {
         lock(&self.state).ended

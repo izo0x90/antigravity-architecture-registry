@@ -12,6 +12,7 @@ testing = []
 harness-contracts = { path = "../harness-contracts" }
 harness-core = { path = "../harness-core" }
 thiserror = "2.0"
+tracing = "0.1.44"
 uuid = { version = "1.26.1", features = ["v4"] }
 
 [dev-dependencies]

@@ -24,13 +24,8 @@ use crate::shared::{Reader, Shared};
 use crate::terminals::{TermAct, TermLink, Terminals};
 use crate::viewport::Go;
 
-/// The terminal a tagged subject is in, when it's a terminal's.
-fn tagged_terminal(subject: &Subject) -> Option<&TerminalId> {
-    match subject {
-        Subject::TerminalLines { terminal, .. } | Subject::TerminalCommand { terminal, .. } => Some(terminal),
-        _ => None,
-    }
-}
+/// How many lines can be tagged at once (as many as agents can name).
+const TAGGED_LINES: u64 = 200;
 
 #[derive(Clone, Debug)]
 enum TermCommand {
@@ -92,12 +87,15 @@ pub struct TerminalBuffer {
     /// Said to the user when it's next drawn (what came of asking).
     said: Option<String>,
     /// Lines or a command a go-to asked for, shown once its lines come.
-    going_to: Option<Subject>,
+    going_to: Option<Target>,
     /// A row's height, as last drawn.
     row_h: f32,
     /// Its panel had focus last frame, with a shell running (gaining it
     /// starts typing).
     was_focused: bool,
+    /// A go-to is landing on its lines: gaining focus for that doesn't
+    /// start typing (you came to look).
+    landing: bool,
     /// It was typed in last frame.
     typing: bool,
     /// Asked for a new terminal: shows it once the desk has made more than this.
@@ -113,12 +111,14 @@ pub struct TerminalBuffer {
     grid: Option<egui::Rect>,
 }
 
-/// Where it is: the terminal. (Not its cursor: a line's number is only
-/// the shell's it was given in, and the cursor is there only while not
-/// typing.)
+/// Where it is: the terminal, and the line its cursor's on while it isn't
+/// typed in (with the start of its shell it's in: a line's number is only
+/// that start's).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TermPlace {
     id: Option<TerminalId>,
+    #[serde(default)]
+    at: Option<(u64, u64)>,
 }
 
 impl TerminalBuffer {
@@ -143,18 +143,23 @@ impl TerminalBuffer {
     /// Where a go-to asked it to go (lines, a command), once its lines are
     /// here: the cursor there; in another start of its shell, said.
     fn go_where_asked(&mut self) {
-        let Some(subject) = &self.going_to else { return };
-        let (shell, line) = match subject {
-            Subject::TerminalLines { shell, first, .. } => (*shell, Some(*first)),
-            Subject::TerminalCommand { shell, command, .. } => (*shell, self.lines.command(*command).map(|c| c.prompt)),
+        let Some(target) = &self.going_to else { return };
+        let (shell, line) = match target {
+            Target::TerminalLines { shell, first, .. } => (*shell, Some(*first)),
+            Target::TerminalCommand { shell, command, .. } => (*shell, self.lines.command(*command).map(|c| c.prompt)),
             _ => (0, None),
         };
-        if self.lines.shell() == 0 {
+        // No lines yet: they'll come; unless its shell didn't outlive the
+        // server (none will).
+        if self.lines.shell() == 0 && self.ended() != Some(None) {
             return;
         }
         self.going_to = None;
         match line.filter(|_| shell == self.lines.shell()).and_then(|l| l.checked_sub(self.lines.first())) {
+            // The cursor there (a move to where it already is moves nothing),
+            // in view.
             Some(at) => {
+                self.cursor = Some(self.lines.first() + at);
                 self.go(Go::To(at as usize, crate::viewport::Show::Middle));
             }
             None => self.said = Some("It's gone from the terminal (an earlier start of its shell, or its lines went).".into()),
@@ -180,7 +185,7 @@ impl TerminalBuffer {
             self.drop_link();
             self.lines = lines::Lines::default();
             self.view = view::View::default();
-            (self.drawn, self.cursor, self.selection, self.copying) = (None, None, None, None);
+            (self.drawn, self.cursor, self.selection, self.copying, self.going_to) = (None, None, None, None, None);
         }
     }
 
@@ -303,10 +308,11 @@ impl crate::buffer::Buffer for TerminalBuffer {
         // Its panel gaining focus starts typing (in a terminal, that's what
         // you came to do), once there's a shell running to type into.
         let runs = self.info().is_some() && self.ended().is_none();
-        if drawing.focused && !self.was_focused && runs {
+        if drawing.focused && !self.was_focused && runs && !self.landing {
             *cx.input_mode = crate::keymap::InputMode::Insert { at: cx.at };
         }
         self.was_focused = drawing.focused && (self.was_focused || runs);
+        self.landing &= !drawing.focused;
         // The frame typing starts in, its keys were the cockpit's (the key
         // that started it): the program gets keys from the next.
         let keys = match (drawing.typing, self.typing) {
@@ -414,23 +420,32 @@ impl Navigable for TerminalBuffer {
     }
 
     fn place(&self) -> Place {
-        Place::of(&TermPlace { id: self.id.clone() })
+        Place::of(&TermPlace { id: self.id.clone(), at: self.cursor.filter(|_| self.lines.shell() != 0).map(|line| (self.lines.shell(), line)) })
     }
 
     fn place_in_words(&self, place: &Place) -> String {
-        place.read::<TermPlace>().and_then(|p| p.id).map(|id| format!("terminal {id}")).unwrap_or_default()
+        match place.read::<TermPlace>() {
+            Some(TermPlace { id: Some(id), at: Some((_, line)) }) => format!("terminal {id} line {line}"),
+            Some(TermPlace { id: Some(id), at: None }) => format!("terminal {id}"),
+            _ => String::new(),
+        }
     }
 
+    /// The terminal; its line, when it had one (as a go-to lands there).
     fn restore(&mut self, place: &Place) {
-        if let Some(id) = place.read::<TermPlace>().and_then(|p| p.id) {
-            self.show(id);
+        let Some(TermPlace { id: Some(id), at }) = place.read::<TermPlace>() else { return };
+        match at {
+            Some((shell, line)) => {
+                let _ = self.show_target(&Target::TerminalLines { terminal: id, shell, first: line, last: line });
+            }
+            None => self.show(id),
         }
     }
 
     fn can_show(&self, target: &Target) -> bool {
         match target {
             Target::Terminal(id) => self.id.as_ref() != Some(id),
-            Target::Subject(subject) => tagged_terminal(subject).is_some(),
+            Target::TerminalLines { .. } | Target::TerminalCommand { .. } => true,
             _ => false,
         }
     }
@@ -438,39 +453,50 @@ impl Navigable for TerminalBuffer {
     /// A terminal; or lines or a command of one (shown once its lines come).
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
         let id = match target {
-            Target::Terminal(id) => id,
-            Target::Subject(subject) => {
-                let id = tagged_terminal(subject).ok_or("Not a terminal's.")?;
-                self.going_to = Some(subject.clone());
-                // Landing on lines to look at: focused, it doesn't start typing.
-                self.was_focused = true;
-                id
-            }
+            Target::Terminal(id) | Target::TerminalLines { terminal: id, .. } | Target::TerminalCommand { terminal: id, .. } => id,
             _ => return Err("Not a terminal.".into()),
         };
+        let terminals = self.terminals.get();
+        if terminals.known() && terminals.get(id).is_none() {
+            return Err(format!("Terminal {id} is closed."));
+        }
+        drop(terminals);
         self.show(id.clone());
+        if !matches!(target, Target::Terminal(_)) {
+            self.going_to = Some(target.clone());
+            self.landing = true;
+        }
         self.go_where_asked();
         Ok(())
     }
 
     /// The command on its prompt's line, or the line (the selection's
-    /// lines, when it's in it): what a tag is put on.
+    /// lines, when it's in it; at most `TAGGED_LINES` of them): what a tag
+    /// is put on. Nothing while a program has the whole screen (its lines
+    /// aren't the terminal's to keep).
     fn subject(&self, key: &str) -> Option<Subject> {
         let line: u64 = key.split(':').next()?.parse().ok()?;
+        if self.lines.alternate() {
+            return None;
+        }
         let (terminal, shell) = (self.id.clone()?, self.lines.shell());
         if let Some(command) = self.lines.command_at(line).filter(|c| c.prompt == line && c.output.is_some()) {
             return Some(Subject::TerminalCommand { terminal, shell, command: command.id });
         }
-        let ((first, _), (last, _)) = match self.selection {
-            Some((a, b)) if (a.0.min(b.0)..=a.0.max(b.0)).contains(&line) => (a.min(b), a.max(b)),
-            _ => ((line, 0), (line, 0)),
+        let (first, last) = match self.selection {
+            Some((a, b)) if (a.0.min(b.0)..=a.0.max(b.0)).contains(&line) => (a.0.min(b.0), a.0.max(b.0)),
+            _ => (line, line),
         };
-        Some(Subject::TerminalLines { terminal, shell, first, last })
+        Some(Subject::TerminalLines { terminal, shell, first, last: last.min(first + TAGGED_LINES - 1) })
     }
 
-    /// Lines (their first), or a command (its prompt's line), while they show.
+    /// Lines (their first), or a command (its prompt's line), while they
+    /// show (not while a program has the whole screen).
     fn drawn_at(&self, subject: &Subject) -> Option<egui::Rect> {
         let (grid, top) = (self.grid?, self.drawn?);
+        if self.lines.alternate() {
+            return None;
+        }
         let line = match subject {
             Subject::TerminalLines { terminal, shell, first, .. } if Some(terminal) == self.id.as_ref() && *shell == self.lines.shell() => *first,
             Subject::TerminalCommand { terminal, shell, command } if Some(terminal) == self.id.as_ref() && *shell == self.lines.shell() => self.lines.command(*command)?.prompt,
@@ -516,7 +542,7 @@ impl Navigable for TerminalBuffer {
         match self.link_here().map(|l| l.to) {
             Some(links::To::File { path, line }) => {
                 let line = line.unwrap_or(1) as usize;
-                self.asks.push(Ask::Show { target: Target::Span { file: path, start: line, end: line }, in_: crate::kind::BufferKind::Code });
+                self.asks.push(Ask::Show { target: Target::Span { file: path, start: line, end: line }, in_: Some(crate::kind::BufferKind::Code) });
                 return Step::Done;
             }
             Some(links::To::Url(url)) => {
@@ -777,6 +803,23 @@ pub(crate) mod tests {
         let rows = (0..24u16).map(|r| (r, lines.get(usize::from(r)).map(|l| vec![Run { text: (*l).to_owned(), style: Style::default(), wide: false }]).unwrap_or_default())).collect();
         let cursor = Cursor { row: lines.len().saturating_sub(1) as u16, col: 2, visible: true };
         FromTerminal::Screen { update: ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 24 }, full: true, rows, cursor, top: 0, oldest: 0, alternate: false, title: "bash".into(), shell: 1, commands: Vec::new() } }
+    }
+
+    #[test]
+    fn a_tag_goes_on_two_hundred_lines_at_most_and_on_nothing_while_a_program_has_the_whole_screen() {
+        let mut t = TerminalBuffer { id: Some(TerminalId::new("t1")), ..TerminalBuffer::default() };
+        let FromTerminal::Screen { update } = numbered(1000, 0) else { unreachable!() };
+        t.lines.take(&update);
+        let lines = |first, last| Some(Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last });
+        t.selection = Some(((1023, 3), (100, 0)));
+        assert_eq!(t.subject("500"), lines(100, 299), "the selection's, from its first");
+        assert_eq!(t.subject("50"), lines(50, 50), "outside it: the line");
+        (t.grid, t.drawn, t.window, t.row_h) = (Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 240.0))), Some(1000), 24, 10.0);
+        assert_eq!(t.drawn_at(&lines(1005, 1007).unwrap()).map(|r| r.top()), Some(50.0));
+        let FromTerminal::Screen { mut update } = numbered(1000, 0) else { unreachable!() };
+        update.alternate = true;
+        t.lines.take(&update);
+        assert_eq!((t.subject("1010"), t.drawn_at(&lines(1005, 1007).unwrap())), (None, None));
     }
 
     impl TerminalBuffer {

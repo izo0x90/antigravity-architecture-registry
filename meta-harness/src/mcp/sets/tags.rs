@@ -54,16 +54,22 @@ fn refused(e: nah_tags::TagError) -> ServiceError {
     }
 }
 
+/// Who changed something, to an agent: the user, or an agent's slot.
+fn who(by: &str) -> &str {
+    match by {
+        "user" => "the user",
+        "" => "?",
+        slot => slot,
+    }
+}
+
 /// A tag in a line.
 fn said(tag: &harness_contracts::Tag) -> String {
-    let count = match tag.on.len() {
-        1 => "on 1 thing".to_owned(),
-        n => format!("on {n} things"),
-    };
+    let count = harness_contracts::on_things(tag.on.len());
     match (tag.note.as_str(), tag.noted_by.as_str()) {
         ("", _) => format!("{} ({count})", tag.name),
         (note, "") => format!("{} ({count}): {note}", tag.name),
-        (note, by) => format!("{} ({count}): {note} (noted by {by})", tag.name),
+        (note, by) => format!("{} ({count}): {note} (noted by {})", tag.name, who(by)),
     }
 }
 
@@ -93,15 +99,14 @@ impl ToolSet for Tags {
                     let read = t.read(&tag).map_err(refused)?;
                     let mut out = vec![said(&read.tag)];
                     for on in read.on {
-                        let when = format!("tagged by {}", if on.tagged.by.is_empty() { "?" } else { &on.tagged.by });
+                        let when = format!("tagged by {}", who(&on.tagged.by));
+                        let what = &on.tagged.what;
                         out.push(match on.now {
-                            Some(now) => match now.now {
-                                Some(text) if text == on.tagged.said => format!("- {} ({when}):\n{text}", now.what),
-                                Some(text) => format!("- {} ({when}), now:\n{text}\n  when tagged:\n{}", now.what, on.tagged.said),
-                                None => format!("- {} ({when}): gone; when tagged:\n{}", now.what, on.tagged.said),
-                            },
                             // Its owner isn't here (no shells run here): what it said isn't given.
-                            None => format!("- something nothing here can show ({when})"),
+                            _ if what.is_empty() => format!("- something nothing here can show ({when})"),
+                            Some(text) if text == on.tagged.said => format!("- {what} ({when}):\n{text}"),
+                            Some(text) => format!("- {what} ({when}), now:\n{text}\n  when tagged:\n{}", on.tagged.said),
+                            None => format!("- {what} ({when}): gone; when tagged:\n{}", on.tagged.said),
                         });
                     }
                     Ok(out.join("\n"))
@@ -113,7 +118,7 @@ impl ToolSet for Tags {
                 let tagging = name == "tag";
                 blocking(Box::new(move |t| {
                     let subject = t.named(&words).map_err(refused)?;
-                    let done = if tagging { t.tag(&tag, subject, &by) } else { t.untag(&tag, &subject) }.map_err(refused)?;
+                    let done = if tagging { t.tag(&tag, subject, &by) } else { t.untag(&tag, &subject, &by) }.map_err(refused)?;
                     Ok(format!("{}. tag_read shows what it's on.", said(&done)))
                 }))
                 .await
@@ -128,7 +133,7 @@ impl ToolSet for Tags {
                 let delete = args["delete"].as_bool().unwrap_or(false);
                 blocking(Box::new(move |t| {
                     if delete {
-                        t.delete(&tag).map_err(refused)?;
+                        t.delete(&tag, &by).map_err(refused)?;
                         return Ok(format!("Deleted {tag}."));
                     }
                     Ok(said(&t.edit(&tag, edit, &by).map_err(refused)?))

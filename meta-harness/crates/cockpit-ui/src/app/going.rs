@@ -152,12 +152,22 @@ impl CockpitApp {
         self.show_target_in(kind, &Target::Component(id), from);
     }
 
-    /// Where a buffer's `Ask::Show` lands: `target` in a buffer of `kind`,
-    /// as a go-to lands it (a component's code found first).
-    pub(super) fn land(&mut self, kind: BufferKind, target: &Target, from: Jump, ctx: &egui::Context) {
+    /// Where a buffer's `Ask::Show` lands: `target` in a buffer of `kind`
+    /// (none: the kind that can show it), as a go-to lands it (a
+    /// component's code found first).
+    pub(super) fn land(&mut self, kind: Option<BufferKind>, target: &Target, from: Jump, ctx: &egui::Context) {
+        let Some(kind) = kind else { return self.show_where_shown(target, from) };
         match (kind, target) {
             (BufferKind::Code, Target::Component(id)) => self.open_component_code(id.clone(), None, from, ctx),
             _ => self.show_target_in(kind, target, from),
+        }
+    }
+
+    /// Shows `target` in the kind of view that can show it.
+    pub(super) fn show_where_shown(&mut self, target: &Target, from: Jump) {
+        match BufferKind::ALL.into_iter().find(|k| self.desk.view(*k).can_show(target)) {
+            Some(kind) => self.show_target_in(kind, target, from),
+            None => self.note = Some(format!("Nothing in this cockpit shows {}.", target.in_words())),
         }
     }
 

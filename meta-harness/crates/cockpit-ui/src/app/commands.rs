@@ -426,7 +426,7 @@ impl CockpitApp {
             }
             ShellCommand::SearchStep { forward } => self.search_step(forward, count),
             ShellCommand::MarkSet => self.start_capture(Capture::MarkSet),
-            ShellCommand::Tag | ShellCommand::Untag | ShellCommand::TagGoTo | ShellCommand::TagStep { .. } => self.run_tag(&command, value, ctx),
+            ShellCommand::Tag | ShellCommand::Untag | ShellCommand::TagGoTo | ShellCommand::TagGoToPick | ShellCommand::TagStep { .. } => self.run_tag(&command, value, ctx),
             ShellCommand::MarkJump => self.start_capture(Capture::MarkJump),
             ShellCommand::Back | ShellCommand::Forward => {
                 let here = self.jump_here();

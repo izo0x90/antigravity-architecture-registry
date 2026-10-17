@@ -246,17 +246,21 @@ mod terminals {
     }
 
     #[test]
-    fn tags_are_kept_in_the_order_made_and_each_change_replaces_what_was_kept() {
-        use nah_tags::TagStore;
+    fn tags_are_kept_in_the_order_made_and_each_change_replaces_what_was_kept_with_who_made_it() {
+        use nah_tags::{Change, TagStore};
         let dir = tempfile::tempdir().unwrap();
         let tag = |id: &str, name: &str| harness_contracts::Tag { id: harness_contracts::TagId::new(id), name: name.into(), colour: 1, note: String::new(), noted_by: String::new(), on: Vec::new() };
         {
             let db = StateDb::open(dir.path(), &settings()).unwrap();
-            db.put(&tag("a", "first")).unwrap();
-            db.put(&tag("b", "second")).unwrap();
-            db.put(&tag("a", "renamed")).unwrap();
-            db.put(&tag("c", "gone")).unwrap();
-            db.remove(&harness_contracts::TagId::new("c")).unwrap();
+            let change = |action, detail: &str| Change { by: "lead".into(), action, detail: detail.into() };
+            db.put(&tag("a", "first"), Some(&change("tagged", "terminal t1 command 3"))).unwrap();
+            db.put(&tag("b", "second"), None).unwrap();
+            db.put(&tag("a", "renamed"), Some(&change("renamed", "was first"))).unwrap();
+            db.put(&tag("c", "gone"), None).unwrap();
+            db.remove(&tag("c", "gone"), &change("deleted", "")).unwrap();
+            let kept: Vec<_> = db.activity(10).unwrap().into_iter().map(|a| (a.actor, a.action, a.subject, a.detail)).collect();
+            let entry = |action: &str, subject: &str, detail: Option<&str>| ("lead".to_owned(), action.to_owned(), subject.to_owned(), detail.map(str::to_owned));
+            assert_eq!(kept, [entry("deleted", "tag gone", None), entry("renamed", "tag renamed", Some("was first")), entry("tagged", "tag first", Some("terminal t1 command 3"))], "who changed what, newest first; a move by its owner isn't anyone's");
         }
         let db = StateDb::open(dir.path(), &settings()).unwrap();
         // One a later build kept, of a kind of subject this one doesn't know: left alone.

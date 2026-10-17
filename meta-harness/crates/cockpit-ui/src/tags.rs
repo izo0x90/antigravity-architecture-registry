@@ -1,36 +1,19 @@
-//! The desk's tags: which the server has (from the event stream) and what
-//! each is on, and changing them (what's asked, `Ask::Tags`): tagging
-//! something, taking a tag off, renaming, recolouring, noting, deleting;
-//! what a tag's things say now, read when asked. Kept on the desk
-//! (`Shared::tags`); buffers read it through a reader, and know nothing of
-//! it: the shell tags what a buffer says it shows (`Navigable::subject`),
-//! and draws tags on what's drawn (`Navigable::drawn_at`).
+//! The desk's tags: which the server has and what each is on (from the
+//! event stream, its one source), changing them (what's asked,
+//! `Ask::Tags`): tagging something, taking a tag off, renaming,
+//! recolouring, noting, deleting; and what a tag's things say now, read
+//! when asked. Kept on the desk (`Shared::tags`); buffers read it through a
+//! reader, and know nothing of it: the shell tags what a buffer says it
+//! shows (`Navigable::subject`), and draws tags on what's drawn
+//! (`Navigable::drawn_at`). It knows no kind of subject: their names are
+//! their owners' (`Tagged::what`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use harness_contracts::{ClientEvent, Subject, Tag, TagId, TagRead};
 
-use crate::kind::BufferKind;
 use crate::net::{NetClient, NetResult};
-
-/// A subject in a few words (as a go-to says where it goes).
-pub fn in_words(subject: &Subject) -> String {
-    match subject {
-        Subject::TerminalLines { terminal, first, last, .. } if first == last => format!("terminal {terminal}, line {first}"),
-        Subject::TerminalLines { terminal, first, last, .. } => format!("terminal {terminal}, lines {first} to {last}"),
-        Subject::TerminalCommand { terminal, command, .. } => format!("terminal {terminal}, command {command}"),
-        _ => "something this cockpit doesn't know".into(),
-    }
-}
-
-/// The kind of buffer that shows a subject (none: none here does).
-pub fn shown_in(subject: &Subject) -> Option<BufferKind> {
-    match subject {
-        Subject::TerminalLines { .. } | Subject::TerminalCommand { .. } => Some(BufferKind::Terminal),
-        _ => None,
-    }
-}
 
 /// What's asked of the tags.
 #[derive(Clone, Debug, PartialEq)]
@@ -40,38 +23,42 @@ pub enum TagAct {
     Untag { tag: TagId, subject: Subject },
     Rename { tag: TagId, name: String },
     Recolour { tag: TagId, colour: u8 },
+    /// Its note (empty: none).
     Note { tag: TagId, note: String },
     Delete { tag: TagId },
     /// What its things say now (read again).
     Read { tag: TagId },
 }
 
-enum Reply {
-    Changed(String, NetResult<Tag>),
-    Deleted(NetResult<()>),
-    Read(NetResult<TagRead>),
+/// A thing's name (its owner's: `Tagged::what`), or that nothing here
+/// names it.
+pub fn thing_name(what: &str) -> String {
+    if what.is_empty() { "something this server can't show".into() } else { what.to_owned() }
 }
 
-type Mailbox = Arc<Mutex<Vec<Reply>>>;
-
-/// A reply's answer, posted to `mailbox` as `reply` makes it.
-fn posting<T>(mailbox: &Mailbox, reply: impl FnOnce(NetResult<T>) -> Reply + Send + 'static) -> impl FnOnce(NetResult<T>) + Send + 'static {
-    let mailbox = mailbox.clone();
-    move |r| {
-        if let Ok(mut m) = mailbox.lock() {
-            m.push(reply(r));
-        }
-    }
+/// A text's first line, cut short (what a list shows of what a thing said).
+pub fn first_line(text: &str) -> String {
+    text.lines().next().unwrap_or_default().chars().take(120).collect()
 }
+
+/// What each of a tag's things says now (none: it's gone), as last read.
+pub type Now = HashMap<Subject, Option<String>>;
+
+type Read = Arc<Mutex<Vec<(TagId, NetResult<TagRead>)>>>;
 
 #[derive(Default)]
 pub struct Tags {
     tags: BTreeMap<TagId, Tag>,
-    /// What each tag's things say now, as last read.
-    read: BTreeMap<TagId, TagRead>,
-    /// What went wrong last, and what went right (said to the user once).
-    said: Option<Result<String, String>>,
-    mailbox: Mailbox,
+    /// Bumped whenever they change: what's made of them is made again
+    /// only then.
+    version: u64,
+    /// Bumped when they're all told again (a resync): what was asked of
+    /// them before is asked again.
+    told_again: u64,
+    now: BTreeMap<TagId, Now>,
+    /// Why what a tag's things say now couldn't be read.
+    unread: BTreeMap<TagId, String>,
+    read: Read,
 }
 
 impl Tags {
@@ -83,14 +70,25 @@ impl Tags {
             }
             ClientEvent::TagRemoved { tag_id } => {
                 self.tags.remove(tag_id);
-                self.read.remove(tag_id);
+                self.now.remove(tag_id);
             }
             ClientEvent::Resync => {
                 self.tags.clear();
-                self.read.clear();
+                self.now.clear();
+                self.unread.clear();
+                self.told_again += 1;
             }
-            _ => {}
+            _ => return,
         }
+        self.version += 1;
+    }
+
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    pub fn told_again(&self) -> u64 {
+        self.told_again
     }
 
     /// Every tag, by name.
@@ -104,51 +102,88 @@ impl Tags {
         self.tags.get(id)
     }
 
-    /// The tags on `subject`.
-    pub fn on(&self, subject: &Subject) -> Vec<&Tag> {
-        self.list().into_iter().filter(|t| t.on.iter().any(|on| on.subject == *subject)).collect()
+    /// The tag named `name` (in capitals or not, as the server finds it).
+    pub fn named(&self, name: &str) -> Option<&Tag> {
+        self.tags.values().find(|t| t.name.eq_ignore_ascii_case(name))
+    }
+
+    /// The tags on `subject` (on it, or on something it's in: lines with
+    /// it among them), by name, each with what it's on.
+    pub fn on(&self, subject: &Subject) -> Vec<(&Tag, &Subject)> {
+        self.list().into_iter().filter_map(|t| Some((t, &t.on.iter().find(|on| on.subject.contains(subject))?.subject))).collect()
     }
 
     /// What tag `id`'s things say now, as last read.
-    pub fn read(&self, id: &TagId) -> Option<&TagRead> {
-        self.read.get(id)
+    pub fn now(&self, id: &TagId) -> Option<&Now> {
+        self.now.get(id)
     }
 
-    /// What came of the last change (once).
-    pub fn take_said(&mut self) -> Option<Result<String, String>> {
-        self.said.take()
+    /// Why what tag `id`'s things say now couldn't be read.
+    pub fn unread(&self, id: &TagId) -> Option<&str> {
+        self.unread.get(id).map(String::as_str)
     }
 
-    /// Does what was asked.
-    pub fn act(&mut self, act: TagAct, net: &NetClient, ctx: &egui::Context) {
+    /// Does what was asked; what came of a change is said (`notes`): the
+    /// change itself comes on the event stream.
+    pub fn act(&mut self, act: TagAct, net: &NetClient, ctx: &egui::Context, notes: &Arc<Mutex<Vec<String>>>) {
         let ctx = ctx.clone();
-        let changed = |done: &'static str| posting(&self.mailbox, move |r| Reply::Changed(done.to_owned(), r));
+        let say = |done: Box<dyn FnOnce(&Tag) -> String + Send>, failed: &'static str| {
+            let notes = notes.clone();
+            move |r: NetResult<Tag>| {
+                if let Ok(mut notes) = notes.lock() {
+                    notes.push(match r {
+                        Ok(tag) => done(&tag),
+                        Err(e) => format!("{failed}: {}", e.message),
+                    });
+                }
+            }
+        };
         match act {
-            TagAct::Tag { tag, subject } => net.tag(&tag, &subject, ctx, changed("Tagged")),
-            TagAct::Untag { tag, subject } => net.untag(&tag, &subject, ctx, changed("Taken off")),
-            TagAct::Rename { tag, name } => net.edit_tag(&tag, serde_json::json!({ "name": name }), ctx, changed("Renamed")),
-            TagAct::Recolour { tag, colour } => net.edit_tag(&tag, serde_json::json!({ "colour": colour }), ctx, changed("Recoloured")),
-            TagAct::Note { tag, note } => net.edit_tag(&tag, serde_json::json!({ "note": note }), ctx, changed("Noted")),
-            TagAct::Delete { tag } => net.delete_tag(&tag, ctx, posting(&self.mailbox, Reply::Deleted)),
-            TagAct::Read { tag } => net.read_tag(&tag, ctx, posting(&self.mailbox, Reply::Read)),
+            TagAct::Tag { tag, subject } => net.tag(&tag, &subject, ctx, say(Box::new(|t| format!("Tagged with {}.", t.name)), "Couldn't tag it")),
+            TagAct::Untag { tag, subject } => net.untag(&tag, &subject, ctx, say(Box::new(|t| format!("Took {} off it.", t.name)), "Couldn't take the tag off")),
+            TagAct::Rename { tag, name } => net.edit_tag(&tag, serde_json::json!({ "name": name }), ctx, say(Box::new(|t| format!("Renamed it {}.", t.name)), "Couldn't rename the tag")),
+            TagAct::Recolour { tag, colour } => net.edit_tag(&tag, serde_json::json!({ "colour": colour }), ctx, say(Box::new(|t| format!("Gave {} another colour.", t.name)), "Couldn't recolour the tag")),
+            TagAct::Note { tag, note } => {
+                let cleared = note.is_empty();
+                net.edit_tag(&tag, serde_json::json!({ "note": note }), ctx, say(Box::new(move |t| if cleared { format!("Cleared {}'s note.", t.name) } else { format!("Noted {}.", t.name) }), "Couldn't change the tag's note"));
+            }
+            TagAct::Delete { tag } => {
+                let name = self.tags.get(&tag).map_or_else(|| "the tag".to_owned(), |t| t.name.clone());
+                let notes = notes.clone();
+                net.delete_tag(&tag, ctx, move |r| {
+                    if let Ok(mut notes) = notes.lock() {
+                        notes.push(match r {
+                            Ok(()) => format!("Deleted {name}."),
+                            Err(e) => format!("Couldn't delete {name}: {}", e.message),
+                        });
+                    }
+                });
+            }
+            TagAct::Read { tag } => {
+                let read = self.read.clone();
+                net.read_tag(&tag.clone(), ctx, move |r| {
+                    if let Ok(mut read) = read.lock() {
+                        read.push((tag, r));
+                    }
+                });
+            }
         }
     }
 
-    /// Takes the replies to what was asked.
+    /// Takes what was read.
     pub fn tick(&mut self) {
-        let replies = self.mailbox.lock().map(|mut m| std::mem::take(&mut *m)).unwrap_or_default();
-        for reply in replies {
-            match reply {
-                Reply::Changed(done, Ok(tag)) => {
-                    self.said = Some(Ok(format!("{done}: {}.", tag.name)));
-                    self.tags.insert(tag.id.clone(), tag);
+        let read = self.read.lock().map(|mut r| std::mem::take(&mut *r)).unwrap_or_default();
+        for (tag, r) in read {
+            match r {
+                Ok(read) => {
+                    self.unread.remove(&tag);
+                    self.now.insert(tag, read.on.into_iter().map(|t| (t.tagged.subject, t.now)).collect());
                 }
-                Reply::Deleted(Ok(())) => self.said = Some(Ok("Deleted.".into())),
-                Reply::Read(Ok(read)) => {
-                    self.read.insert(read.tag.id.clone(), read);
+                Err(e) => {
+                    self.unread.insert(tag, e.message);
                 }
-                Reply::Changed(_, Err(e)) | Reply::Deleted(Err(e)) | Reply::Read(Err(e)) => self.said = Some(Err(e.to_string())),
             }
+            self.version += 1;
         }
     }
 }

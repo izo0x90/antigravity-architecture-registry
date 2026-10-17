@@ -140,7 +140,16 @@ pub struct NetClient {
     /// Every call made (method and path), for tests to check.
     #[cfg(test)]
     pub sent: Arc<Mutex<Vec<String>>>,
+    /// What each call sent (method and path, and its body), for tests to check.
+    #[cfg(test)]
+    pub bodies: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    /// Calls waiting on an answer (method and path), for tests to give one.
+    #[cfg(test)]
+    waiting: Arc<Mutex<Waiting>>,
 }
+
+#[cfg(test)]
+type Waiting = Vec<(String, Box<dyn FnOnce(ehttp::Result<ehttp::Response>) + Send>)>;
 
 /// A socket opened with a one-time ticket (the server checks the cockpit's
 /// session on the ticket's request: proxies may drop cookies from a
@@ -228,6 +237,10 @@ impl NetClient {
             on_arrival: None,
             #[cfg(test)]
             sent: Arc::default(),
+            #[cfg(test)]
+            bodies: Arc::default(),
+            #[cfg(test)]
+            waiting: Arc::default(),
             incoming: Arc::new(Mutex::new(Vec::new())),
             from_home: Arc::default(),
             ws_state: Arc::new(Mutex::new(WsState::Closed)),
@@ -255,9 +268,9 @@ impl NetClient {
     /// All HTTP goes through here so the activity LED sees requests and responses.
     fn fetch(&self, request: ehttp::Request, on_done: impl 'static + Send + FnOnce(ehttp::Result<ehttp::Response>)) {
         // Tests answer for the server themselves (what was asked is in
-        // `sent`): nothing goes out, so no real answer races theirs.
+        // `sent`; `answer`): nothing goes out, so no real answer races theirs.
         #[cfg(test)]
-        let _ = (request, on_done);
+        self.waiting.lock().unwrap().push((format!("{} {}", request.method, request.url.strip_prefix(&self.base_url).unwrap_or(&request.url)), Box::new(on_done)));
         #[cfg(not(test))]
         {
             self.activity.fetch_add(1, Ordering::Relaxed);
@@ -293,7 +306,10 @@ impl NetClient {
         on_done: impl FnOnce(NetResult<T>) + Send + 'static,
     ) {
         #[cfg(test)]
-        self.sent.lock().unwrap().push(format!("{method} {path}"));
+        {
+            self.sent.lock().unwrap().push(format!("{method} {path}"));
+            self.bodies.lock().unwrap().push((format!("{method} {path}"), body.clone().unwrap_or_default()));
+        }
         let url = format!("{}{}", self.base_url, path);
         let mut request = match body {
             Some(json) => {
@@ -321,6 +337,19 @@ impl NetClient {
             on_done(outcome);
             ctx.request_repaint();
         });
+    }
+
+    /// Answers the first call waiting that was `call` (method and path) as
+    /// the server would: with `status` and `body`. False: none waits.
+    #[cfg(test)]
+    pub fn answer(&self, call: &str, status: u16, body: &serde_json::Value) -> bool {
+        let mut waiting = self.waiting.lock().unwrap();
+        let Some(at) = waiting.iter().position(|(c, _)| c == call) else { return false };
+        let (_, on_done) = waiting.remove(at);
+        drop(waiting);
+        let bytes = if body.is_null() { Vec::new() } else { serde_json::to_vec(body).unwrap() };
+        on_done(Ok(ehttp::Response { url: call.into(), ok: (200..300).contains(&status), status, status_text: String::new(), headers: ehttp::Headers::default(), bytes }));
+        true
     }
 
     /// Starts connecting the event socket: a ticket first, then the socket.

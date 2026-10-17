@@ -162,9 +162,14 @@ impl Theme {
         [self.term_black, self.term_red, self.term_green, self.term_yellow, self.term_blue, self.term_magenta, self.term_cyan, self.term_white, self.term_bright_black, self.term_bright_red, self.term_bright_green, self.term_bright_yellow, self.term_bright_blue, self.term_bright_magenta, self.term_bright_cyan, self.term_bright_white][usize::from(n & 15)]
     }
 
-    /// Tag colour `n` (0-7).
+    /// Tag colour `n` (one of `TAG_COLOURS`).
     pub fn tag(&self, n: u8) -> Color32 {
-        [self.tag_0, self.tag_1, self.tag_2, self.tag_3, self.tag_4, self.tag_5, self.tag_6, self.tag_7][usize::from(n & 7)]
+        [self.tag_0, self.tag_1, self.tag_2, self.tag_3, self.tag_4, self.tag_5, self.tag_6, self.tag_7][usize::from(n % harness_contracts::TAG_COLOURS)]
+    }
+
+    /// Tag colour `n` in a word, as this theme has it ("orange").
+    pub fn tag_name(&self, n: u8) -> &'static str {
+        colour_name(self.tag(n))
     }
 
     /// Applies the theme to egui's own widgets (panels, windows, selection).
@@ -310,6 +315,19 @@ mod tests {
         };
         let (a, b) = (lum(fg), lum(bg));
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn each_themes_tag_colours_have_names_of_their_own() {
+        for preset in ["", "preset = \"classic\"\n"] {
+            let theme = crate::config::UiConfig::with_overrides(preset).unwrap().theme;
+            let names: Vec<&str> = (0..harness_contracts::TAG_COLOURS).map(|n| theme.tag_name(n)).collect();
+            let mut unique = names.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), names.len(), "{preset:?}: {names:?}");
+        }
+        assert_eq!((colour_name(Color32::from_rgb(56, 189, 248)), colour_name(Color32::from_rgb(128, 128, 130))), ("blue", "grey"));
     }
 
     #[test]
@@ -474,4 +492,21 @@ mod glyph_tests {
         assert_eq!((config.look.text_body, config.theme.accent), (15.0, egui::Color32::from_rgb(255, 0, 255)));
         assert!(crate::config::UiConfig::with_overrides("preset = \"nope\"\n").unwrap_err().contains("no preset `nope`"));
     }
+}
+
+/// A colour in a word, by its hue as written ("grey" when it has little).
+pub fn colour_name(colour: Color32) -> &'static str {
+    let [r, g, b] = [colour.r(), colour.g(), colour.b()].map(|c| f32::from(c) / 255.0);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    if max - min < 0.2 * max.max(f32::EPSILON) {
+        return "grey";
+    }
+    let sector = match max {
+        m if m == r => (g - b) / (max - min),
+        m if m == g => 2.0 + (b - r) / (max - min),
+        _ => 4.0 + (r - g) / (max - min),
+    };
+    let hue = (sector * 60.0).rem_euclid(360.0);
+    let names = [(15.0, "red"), (42.0, "orange"), (70.0, "yellow"), (160.0, "green"), (195.0, "teal"), (250.0, "blue"), (290.0, "violet"), (340.0, "pink"), (360.0, "red")];
+    names.into_iter().find(|(below, _)| hue < *below).map_or("red", |(_, name)| name)
 }

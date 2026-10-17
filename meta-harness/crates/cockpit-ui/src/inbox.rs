@@ -145,7 +145,7 @@ impl InboxView {
             (None, Some(terminal)) => (Target::Terminal(terminal.clone()), BufferKind::Terminal),
             (None, None) => return Step::Nothing("It's from no agent's chat or terminal.".into()),
         };
-        self.asks.push(Ask::Show { target, in_ });
+        self.asks.push(Ask::Show { target, in_: Some(in_) });
         Step::Done
     }
 

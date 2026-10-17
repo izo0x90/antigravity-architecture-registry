@@ -88,8 +88,12 @@ enum ShellCommand {
     Tag,
     /// Takes a tag (its value) off what the cursor's on.
     Untag,
-    /// Goes to something a tag is on (its value: `tag#n`).
+    /// Goes to what a tag (its value: its id) is on: on one thing, there;
+    /// on several, the palette asks which (`TagGoToPick`).
     TagGoTo,
+    /// Goes to one of the things the tag picked is on (its value: the
+    /// thing, as JSON).
+    TagGoToPick,
     /// The next (or previous) thing the tag on what the cursor's on is on.
     TagStep { forward: bool },
     Back,

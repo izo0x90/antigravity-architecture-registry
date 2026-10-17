@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use harness_contracts::{ClientEvent, Found, Row, ScreenUpdate, Subject, SubjectNow, TermSize, Terminal, TerminalId, TerminalInput, TerminalNews, TerminalStatus};
+use harness_contracts::{ClientEvent, Found, Row, ScreenUpdate, Subject, TermSize, Terminal, TerminalId, TerminalInput, TerminalNews, TerminalStatus};
 use harness_core::EventHub;
 use nah_terminal::{Happening, Options};
 use tokio::sync::watch;
@@ -64,6 +64,10 @@ pub struct Terminals {
     open: Mutex<BTreeMap<TerminalId, Arc<Open>>>,
     /// A command that ran at least this long is news when it finishes.
     long: std::time::Duration,
+    /// Told when tagged lines may have moved, or their names changed (a
+    /// new width, a shell started again or closed): the tags keep them
+    /// where they are now.
+    moved: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 /// One terminal: how it is, its shell (none once the server restarted
@@ -89,11 +93,22 @@ impl Terminals {
     pub fn load(folder: PathBuf, hooks: PathBuf, hub: Arc<EventHub>, state: Arc<nah_state::StateDb>, long: std::time::Duration) -> Result<Arc<Self>, nah_state::StateError> {
         let kept = state.terminals()?;
         let open = kept.into_iter().map(|t| (t.id.clone(), Arc::new(Open::new(t)))).collect();
-        let terminals = Arc::new(Self { folder, hooks, hub, state, open: Mutex::new(open), long });
+        let terminals = Arc::new(Self { folder, hooks, hub, state, open: Mutex::new(open), long, moved: std::sync::OnceLock::new() });
         for t in terminals.list() {
             terminals.hub.publish(ClientEvent::TerminalUpdated { terminal: t });
         }
         Ok(terminals)
+    }
+
+    /// Tells `moved` when tagged lines may have moved, from now on.
+    pub fn when_moved(&self, moved: impl Fn() + Send + Sync + 'static) {
+        let _ = self.moved.set(Box::new(moved));
+    }
+
+    fn tell_moved(&self) {
+        if let Some(moved) = self.moved.get() {
+            moved();
+        }
     }
 
     pub fn list(&self) -> Vec<Terminal> {
@@ -134,6 +149,7 @@ impl Terminals {
         lock(&open.shell).take();
         self.state.forget_terminal(id)?;
         self.hub.publish(ClientEvent::TerminalClosed { terminal_id: id.clone() });
+        self.tell_moved();
         Ok(())
     }
 
@@ -161,6 +177,7 @@ impl Terminals {
         *lock(&open.shell) = Some(shell);
         open.bump();
         self.said(open);
+        self.tell_moved();
         Ok(())
     }
 
@@ -227,9 +244,13 @@ impl Terminals {
             tracing::warn!("Terminal {} can't be resized: {e}", open.info().id);
             return;
         }
-        lock(&open.info).size = size;
+        let new_width = std::mem::replace(&mut lock(&open.info).size, size).cols != size.cols;
         open.bump();
         self.said(open);
+        // A new width lays its lines out anew.
+        if new_width {
+            self.tell_moved();
+        }
     }
 }
 
@@ -290,6 +311,11 @@ impl Open {
         lock(&self.shell).as_ref().map_or_else(Vec::new, |s| s.commands())
     }
 
+    /// Command `id`, while it's kept.
+    pub fn command(&self, id: u64) -> Option<harness_contracts::TerminalCommand> {
+        lock(&self.shell).as_ref().and_then(|s| s.command(id))
+    }
+
     /// Command `id`'s output as text, and how many of its first lines
     /// were left out (it had more than `most`).
     pub fn command_output(&self, id: u64, most: u64) -> Option<(String, u64)> {
@@ -324,26 +350,33 @@ impl Open {
     }
 }
 
-/// The terminals own their lines and commands as subjects of tags: what
-/// they say now (in the start of the shell they were tagged in), their
+/// The terminals own their lines and commands as subjects of tags: their
 /// names (`terminal t1 lines 120-124`, `terminal t1 command 3`; another
-/// start's: `terminal t1@<start> …`), and where lines are after a new width.
+/// start's: `terminal t1@<start> …`), what they say now (in the start of
+/// the shell they were tagged in; of many lines, the first
+/// `TAGGED_LINES`), and where lines are after a new width.
 impl nah_tags::Resolve for Terminals {
-    fn now(&self, subject: &Subject) -> Option<SubjectNow> {
+    fn name(&self, subject: &Subject) -> Option<String> {
+        match subject {
+            Subject::TerminalLines { terminal, shell, first, last } => Some(self.words(terminal, *shell, &format!("lines {first}-{last}"))),
+            Subject::TerminalCommand { terminal, shell, command } => Some(self.words(terminal, *shell, &format!("command {command}"))),
+            _ => None,
+        }
+    }
+
+    fn now(&self, subject: &Subject) -> Option<String> {
         let started = |terminal: &TerminalId, shell: u64| self.get(terminal).ok().filter(|o| o.started() == shell);
         match subject {
-            Subject::TerminalLines { terminal, shell, first, last } => Some(SubjectNow {
-                what: self.words(terminal, *shell, &format!("lines {first}-{last}")),
-                now: started(terminal, *shell).and_then(|o| o.lines_text(*first, last.checked_add(1)?)),
-            }),
+            Subject::TerminalLines { terminal, shell, first, last } => {
+                let end = last.checked_add(1)?.min(first.saturating_add(TAGGED_LINES));
+                let text = started(terminal, *shell)?.lines_text(*first, end)?;
+                Some(if end <= *last { format!("{text}\n(and {} lines more)", last + 1 - end) } else { text })
+            }
             Subject::TerminalCommand { terminal, shell, command } => {
-                let open = started(terminal, *shell);
-                let ran = open.as_ref().and_then(|o| o.commands().into_iter().find(|c| c.id == *command && c.output.is_some()));
-                let now = ran.map(|c| {
-                    let output = open.as_ref().and_then(|o| o.command_output(c.id, TAGGED_OUTPUT)).map(|(text, _)| text).unwrap_or_default();
-                    if output.is_empty() { in_words(&c) } else { format!("{}\n{output}", in_words(&c)) }
-                });
-                Some(SubjectNow { what: self.words(terminal, *shell, &format!("command {command}")), now })
+                let open = started(terminal, *shell)?;
+                let ran = open.command(*command).filter(|c| c.output.is_some())?;
+                let output = open.command_output(ran.id, TAGGED_OUTPUT).map(|(text, _)| text).unwrap_or_default();
+                Some(if output.is_empty() { in_words(&ran) } else { format!("{}\n{output}", in_words(&ran)) })
             }
             _ => None,
         }
@@ -397,6 +430,7 @@ impl Terminals {
 }
 
 /// How much of a tagged command's output it says (its last lines), and
-/// how many lines can be tagged at once.
+/// how many lines can be tagged at once (agents name at most these; of
+/// more, what they say is their first these).
 const TAGGED_OUTPUT: u64 = 20;
 const TAGGED_LINES: u64 = 200;

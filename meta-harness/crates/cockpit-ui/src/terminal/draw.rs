@@ -223,12 +223,14 @@ impl TerminalBuffer {
     }
 
     /// The pointer on the grid: dragging selects (a finger scrolls
-    /// instead); a click lets go of a selection.
+    /// instead), the cursor where it ends; a click puts the cursor on the
+    /// line clicked and lets go of a selection.
     fn pointer(&mut self, ui: &egui::Ui, response: &egui::Response, grid: Grid, bar: Rect) {
         let by_hand = self.thumb_held.is_some() || ui.input(|i| i.any_touches()) || response.interact_pointer_pos().is_some_and(|p| bar.contains(p));
+        // From where it was pressed (it's a drag only once it's moved a little).
         if response.drag_started()
             && !by_hand
-            && let Some(pos) = response.interact_pointer_pos()
+            && let Some(pos) = ui.input(|i| i.pointer.press_origin()).or(response.interact_pointer_pos())
         {
             let at = self.cell_at(pos, grid);
             self.selection = Some((at, at));
@@ -237,10 +239,23 @@ impl TerminalBuffer {
             && !by_hand
             && let (Some(pos), Some((from, _))) = (response.interact_pointer_pos(), self.selection)
         {
-            self.selection = Some((from, self.cell_at(pos, grid)));
+            let to = self.cell_at(pos, grid);
+            self.selection = Some((from, to));
+            self.put_cursor(to.0);
         }
         if response.clicked() {
             self.selection = None;
+            if let Some(pos) = response.interact_pointer_pos() {
+                self.put_cursor(self.cell_at(pos, grid).0);
+            }
+        }
+    }
+
+    /// The cursor on `line`, where the pointer is (not while typing: there's
+    /// none then).
+    fn put_cursor(&mut self, line: u64) {
+        if !self.typing {
+            (self.cursor, self.cursor_col) = (Some(line), None);
         }
     }
 

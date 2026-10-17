@@ -39,8 +39,10 @@ pub enum Target {
     Notification(NotificationId),
     /// A terminal (a shell the server runs).
     Terminal(harness_contracts::TerminalId),
-    /// Something a tag is on (in the buffer that shows its kind).
-    Subject(harness_contracts::Subject),
+    /// Lines of a terminal (by their numbers, in one start of its shell).
+    TerminalLines { terminal: harness_contracts::TerminalId, shell: u64, first: u64, last: u64 },
+    /// A command a terminal's shell ran (in one start of it).
+    TerminalCommand { terminal: harness_contracts::TerminalId, shell: u64, command: u64 },
 }
 
 /// What a buffer asks of the rest of the cockpit: the one way it reaches
@@ -48,9 +50,10 @@ pub enum Target {
 /// each the same way, whichever buffer asked.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Ask {
-    /// Show `target` in a buffer of kind `in_`: the go-to path (whether it
-    /// can, which panel, focus, the jump list).
-    Show { target: Target, in_: BufferKind },
+    /// Show `target` in a buffer of kind `in_` (none: the kind that can
+    /// show it): the go-to path (whether it can, which panel, focus, the
+    /// jump list).
+    Show { target: Target, in_: Option<BufferKind> },
     /// The component the user is on now: buffers that follow it move to it.
     Follow(ComponentId),
     /// Read this file into the index again.
@@ -108,8 +111,20 @@ impl Target {
             Self::Message { index, .. } => format!("message {}", index + 1),
             Self::Agent { slot: Some(slot), .. } => format!("agent slot {slot}"),
             Self::Agent { thread, .. } => format!("session {}", thread.as_ref().map_or("?", |t| t.as_str())),
-            Self::Subject(subject) => crate::tags::in_words(subject),
+            Self::TerminalLines { terminal, first, last, .. } if first == last => format!("terminal {terminal} line {first}"),
+            Self::TerminalLines { terminal, first, last, .. } => format!("terminal {terminal} lines {first}-{last}"),
+            Self::TerminalCommand { terminal, command, .. } => format!("terminal {terminal} command {command}"),
         }
+    }
+
+    /// Where something a tag is on is (none: nothing here shows its kind).
+    pub fn of_subject(subject: &harness_contracts::Subject) -> Option<Target> {
+        use harness_contracts::Subject;
+        Some(match subject.clone() {
+            Subject::TerminalLines { terminal, shell, first, last } => Self::TerminalLines { terminal, shell, first, last },
+            Subject::TerminalCommand { terminal, shell, command } => Self::TerminalCommand { terminal, shell, command },
+            _ => return None,
+        })
     }
 
     /// The component the target is about.
@@ -117,7 +132,7 @@ impl Target {
         match self {
             Self::Component(id) | Self::Job { component: id } => Some(id),
             Self::Line { within, .. } => within.as_ref(),
-            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::Subject(_) => None,
+            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } => None,
         }
     }
 

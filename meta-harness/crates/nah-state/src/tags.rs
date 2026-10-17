@@ -1,11 +1,19 @@
 //! Tags as kept: each by its id, in the order made, the whole of it as
-//! written (its name too, as a column, to look at by hand).
+//! written (its name too, as a column, to look at by hand); each change
+//! with who made it, in the activity kept (in the same transaction).
 
-use harness_contracts::{Tag, TagId};
-use nah_tags::TagStore;
-use rusqlite::params;
+use harness_contracts::Tag;
+use nah_tags::{Change, TagStore};
+use rusqlite::{Transaction, params};
 
-use crate::{StateDb, failed};
+use crate::{Activity, StateDb, StateError, failed, log_in};
+
+/// `change` to `tag`, as activity.
+fn logged(tx: &Transaction<'_>, tag: &Tag, change: &Change) -> Result<(), StateError> {
+    let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+    let detail = (!change.detail.is_empty()).then(|| change.detail.clone());
+    log_in(tx, &Activity { at_ms, actor: change.by.clone(), action: change.action.to_owned(), subject: format!("tag {}", tag.name), detail })
+}
 
 impl TagStore for StateDb {
     fn tags(&self) -> Result<Vec<Tag>, String> {
@@ -18,7 +26,7 @@ impl TagStore for StateDb {
         .map_err(|e| e.to_string())
     }
 
-    fn put(&self, tag: &Tag) -> Result<(), String> {
+    fn put(&self, tag: &Tag, change: Option<&Change>) -> Result<(), String> {
         self.transaction(|tx| {
             tx.execute(
                 "INSERT INTO tags (id, name, json, seq) VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(seq), 0) + 1 FROM tags))
@@ -26,12 +34,16 @@ impl TagStore for StateDb {
                 params![tag.id.as_str(), tag.name, serde_json::to_string(tag).map_err(failed)?],
             )
             .map_err(failed)?;
-            Ok(())
+            change.map_or(Ok(()), |c| logged(tx, tag, c))
         })
         .map_err(|e| e.to_string())
     }
 
-    fn remove(&self, id: &TagId) -> Result<(), String> {
-        self.transaction(|tx| tx.execute("DELETE FROM tags WHERE id = ?1", params![id.as_str()]).map(|_| ()).map_err(failed)).map_err(|e| e.to_string())
+    fn remove(&self, tag: &Tag, change: &Change) -> Result<(), String> {
+        self.transaction(|tx| {
+            tx.execute("DELETE FROM tags WHERE id = ?1", params![tag.id.as_str()]).map_err(failed)?;
+            logged(tx, tag, change)
+        })
+        .map_err(|e| e.to_string())
     }
 }
