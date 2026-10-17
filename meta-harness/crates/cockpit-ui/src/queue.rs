@@ -45,6 +45,8 @@ pub struct QueueState {
     pub error: Option<String>,
     /// What it asked of the rest of the cockpit, not taken yet.
     asks: Vec<Ask>,
+    /// The plan in use (the source's), and the one loaded.
+    wanted: Option<PlanId>,
     loaded: Option<Option<PlanId>>,
     inbox: Arc<Mutex<Vec<Reply>>>,
     /// Jobs drawn last frame, and where.
@@ -102,7 +104,7 @@ impl QueueState {
     }
 
     /// Applies replies; fetches when the plan changes or after `invalidate`.
-    pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context, plan: Option<&PlanId>) {
+    pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
         let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for reply in replies {
             match reply {
@@ -115,7 +117,7 @@ impl QueueState {
                 Reply::Snapshot(..) => {}
             }
         }
-        let wanted = plan.cloned();
+        let wanted = self.wanted.clone();
         if self.loaded.as_ref() == Some(&wanted) {
             return;
         }
@@ -312,6 +314,14 @@ impl Navigable for QueueState {
         std::mem::take(&mut self.asks)
     }
 
+    /// The plan in use (the source's) and who approves.
+    fn share(&mut self, shared: &crate::shared::Shared) {
+        self.wanted = shared.source.get().plan().cloned();
+        if self.author != *shared.user.get() {
+            self.author.clone_from(shared.user.get());
+        }
+    }
+
     fn place(&self) -> Place {
         Place::Queue { component: self.job().map(|j| j.component.clone()) }
     }
@@ -449,6 +459,7 @@ impl crate::hosted::Hosted for QueueState {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::shared::on_plan;
     use arch_graph::{Finding, FindingCode, JobKind, Target};
 
     fn id(s: &str) -> ComponentId {
@@ -478,7 +489,8 @@ pub(crate) mod tests {
         let ctx = egui::Context::default();
         let net = NetClient::new("http://localhost:0");
         let mut q = QueueState { author: "izo".into(), ..QueueState::default() };
-        q.tick(&net, &ctx, Some(&PlanId::new("p").unwrap()));
+        q.share(&on_plan("p"));
+        q.tick(&net, &ctx);
         q.on_event(&ArchEvent::QueueUpdated { snapshot: Box::new(snapshot(QueueStatus::Running)) });
         assert_eq!(q.snapshot.as_ref().unwrap().jobs.len(), 3, "the pushed snapshot is shown");
         let mut mode = crate::keymap::InputMode::Normal;
@@ -540,7 +552,8 @@ pub(crate) mod tests {
         crate::theme::set(config.theme.clone(), &ctx);
         let net = NetClient::new("http://localhost:0");
         let mut q = QueueState::default();
-        q.tick(&net, &ctx, Some(&PlanId::new("p").unwrap()));
+        q.share(&on_plan("p"));
+        q.tick(&net, &ctx);
         q.on_event(&ArchEvent::QueueUpdated { snapshot: Box::new(snapshot(QueueStatus::Running)) });
         let jobs = q.snapshot.clone().unwrap().jobs;
         // The design job is on the first step, the implement jobs on the last.
@@ -582,7 +595,8 @@ pub(crate) mod tests {
         let mut q = QueueState::default();
         assert!(!q.can_show(&T::Component(id("a"))), "no plan: no queue");
         assert_eq!(q.show_target(&T::Component(id("a"))), Err("No plan, so no queue: pick a plan in the graph.".into()));
-        q.tick(&net, &ctx, Some(&PlanId::new("p").unwrap()));
+        q.share(&on_plan("p"));
+        q.tick(&net, &ctx);
         q.on_event(&ArchEvent::QueueUpdated { snapshot: Box::new(snapshot(QueueStatus::Running)) });
         assert!(q.can_show(&T::Component(id("a"))) && !q.can_show(&T::Component(id("zz"))), "a job, or not");
         assert!(!q.can_show(&T::Component(id("b"))), "b's job is the one selected");

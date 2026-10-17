@@ -63,7 +63,7 @@ impl CockpitApp {
             // A line the index has nothing on yet: ask the server what's there.
             (None, Target::Line { file, line, .. } | Target::Change { file, line }) => {
                 let inbox = self.desk.at_inbox.clone();
-                self.desk.net.arch_at(file, *line, &self.desk.graph.nav.source, ctx.clone(), move |r| {
+                self.desk.net.arch_at(file, *line, self.desk.shared.source.get(), ctx.clone(), move |r| {
                     if let Ok(mut i) = inbox.lock() {
                         i.push(r);
                     }
@@ -83,7 +83,7 @@ impl CockpitApp {
             GoTo::Queue => self.show_in(BufferKind::Queue, id, from),
             GoTo::Changes => self.show_in(BufferKind::Changes, id, from),
             _ => {
-                let source = self.desk.graph.nav.source.clone();
+                let source = self.desk.shared.source.get().clone();
                 match self.desk.details.get(&id, &source) {
                     Some(detail) => {
                         let found = candidates(op, detail);
@@ -185,7 +185,7 @@ impl CockpitApp {
             (None, None) => None,
         };
         let in_file = self.desk.code.defs.iter().find(|d| &d.id == id).map(|d| Some((self.desk.code.current_file.clone(), d.start as u32, d.end as u32)));
-        let known = [in_file, self.desk.graph.component(id).map(of), self.desk.details.get(id, &self.desk.graph.nav.source).map(|d| of(&d.component))];
+        let known = [in_file, self.desk.graph.component(id).map(of), self.desk.details.get(id, self.desk.shared.source.get()).map(|d| of(&d.component))];
         let mut answer = None;
         for found in known.into_iter().flatten() {
             if found.is_some() {
@@ -205,13 +205,13 @@ impl CockpitApp {
                 self.show_target_in(BufferKind::Code, &Target::Span { file, start: start as usize, end: end as usize }, from);
                 // Planned, not written: the file it's planned in.
                 let planned = |c: &arch_graph::Component| c.anchor.is_none() && c.proposed.is_some();
-                if self.desk.graph.component(&id).is_some_and(planned) || self.desk.details.get(&id, &self.desk.graph.nav.source).is_some_and(|d| planned(&d.component)) {
+                if self.desk.graph.component(&id).is_some_and(planned) || self.desk.details.get(&id, self.desk.shared.source.get()).is_some_and(|d| planned(&d.component)) {
                     self.note = Some(format!("{} isn't written yet: this is the file it's planned in.", self.component_name(&id)));
                 }
             }
             Some(None) => self.note = Some(format!("{} isn't in the code yet.", self.component_name(&id))),
             None => {
-                let source = self.desk.graph.nav.source.clone();
+                let source = self.desk.shared.source.get().clone();
                 self.desk.details.want(&id, &source, &self.desk.net, ctx);
                 self.desk.pending_goto = Some(Pending { wait: Wait::Code { component: id, line }, from, origin: self.focused_kind(), panel: self.landing });
             }
@@ -238,7 +238,7 @@ impl CockpitApp {
                 Err(_) => self.note = Some("No component at this line.".into()),
             }
         }
-        let source = self.desk.graph.nav.source.clone();
+        let source = self.desk.shared.source.get().clone();
         let ready = match &self.desk.pending_goto {
             Some(Pending { wait: Wait::Relations { component, .. } | Wait::Code { component, .. }, .. }) => self.desk.details.get(component, &source).is_some(),
             _ => false,

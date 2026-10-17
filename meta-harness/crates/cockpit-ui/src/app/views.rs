@@ -62,39 +62,15 @@ impl CockpitApp {
     /// its relations are here.
     pub(super) fn reaches(&self) -> Option<Vec<GoTo>> {
         let target = self.desk.view(self.focused_kind()).target()?;
-        let detail = self.desk.details.get(target.component()?, &self.desk.graph.nav.source)?;
+        let detail = self.desk.details.get(target.component()?, self.desk.shared.source.get())?;
         let ops = [GoTo::Uses, GoTo::Callers, GoTo::Callees, GoTo::Parent, GoTo::Members, GoTo::Implements, GoTo::Flows];
         Some(ops.into_iter().filter(|op| !candidates(*op, detail).is_empty()).collect())
     }
 
-    /// The queue view runs on the graph's plan with the chat's harness.
-    pub(super) fn link_queue(&mut self, plan: Option<&arch_graph::PlanId>, ctx: &egui::Context) {
-        self.desk.queue.author = self.config.user.name.clone();
+    /// The queue view runs with the chat's harness.
+    pub(super) fn link_queue(&mut self, ctx: &egui::Context) {
         self.desk.queue.instance = self.desk.chat.active_instance();
-        self.desk.queue.tick(&self.desk.net, ctx, plan);
-    }
-
-    /// The plan's review state feeds the graph's badges and the spec's threads.
-    pub(super) fn link_review(&mut self, plan: Option<&arch_graph::PlanId>, ctx: &egui::Context) {
-        self.desk.review.tick(&self.desk.net, ctx, plan);
-        if self.desk.review.generation != self.desk.review_seen {
-            self.desk.review_seen = self.desk.review.generation;
-            let marks = self.desk.review.marks();
-            for graph in self.desk.graphs() {
-                graph.marks.clone_from(&marks);
-            }
-            let (comments, diff) = (self.desk.review.comments.clone(), self.desk.review.diff.clone());
-            for spec in self.desk.specs() {
-                spec.comments.clone_from(&comments);
-                spec.diff.clone_from(&diff);
-            }
-        }
-        let author = self.config.user.name.clone();
-        for spec in self.desk.specs() {
-            if spec.author != author {
-                spec.author.clone_from(&author);
-            }
-        }
+        self.desk.queue.tick(&self.desk.net, ctx);
     }
 
     /// What the views show in common: the desk's comparison and what it
@@ -127,11 +103,8 @@ impl CockpitApp {
                 graph.set_changed(changed.get_or_insert_with(|| self.desk.changes.by_component()).clone(), &self.desk.changes.comparison, read);
             }
         }
-        let source = self.desk.graph.nav.source.clone();
-        let plan = source.plan().cloned();
-        for spec in self.desk.specs() {
-            spec.follow_source(&source);
-        }
+        let plan = self.desk.shared.source.get().plan().cloned();
+        self.desk.shared.review.tick(&self.desk.net, ctx, plan.as_ref());
         // One truth for where code is: if the spec fetched a newer anchor for
         // the selection than the view on screen has, the view is stale.
         if let (Some(detail), Some(shown)) = (&self.desk.spec.detail, self.desk.graph.selected())
@@ -141,8 +114,6 @@ impl CockpitApp {
         {
             self.desk.graph.invalidate();
         }
-        self.link_review(plan.as_ref(), ctx);
-        self.link_queue(plan.as_ref(), ctx);
-        self.desk.tree.set_source(&source);
+        self.link_queue(ctx);
     }
 }

@@ -16,14 +16,11 @@ pub struct Desk {
     pub graph: GraphState,
     pub spec: SpecState,
     pub tree: ArchitectureTreeState,
-    /// The current plan's comments and changes since review.
-    pub review: ReviewState,
     pub queue: crate::queue::QueueState,
     /// What needs the user, one at a time.
     pub inbox: crate::inbox::InboxView,
     /// The changes (git) by the desk's comparison in use.
     pub changes: crate::changes::ChangesView,
-    pub review_seen: u64,
     /// The panels: the view each shows, and which has focus.
     pub panels: Panels,
     /// The views not in use now (each panel's own; see `buffers`).
@@ -34,8 +31,8 @@ pub struct Desk {
     pub last_used: BTreeMap<BufferKind, u32>,
     /// New views, to start where the view of their kind used before was.
     pub fresh: Vec<(Buffer, Place)>,
-    /// The component types, for each spec view.
-    pub types: Option<arch_graph::TypeSystem>,
+    /// What the buffers show in common (each reads what it needs).
+    pub shared: crate::shared::Shared,
     /// Loads and saves the cockpit's state on the server.
     pub keeper: crate::saved::Keeper,
     /// Calls from outside: scripts in the page, and agents while allowed.
@@ -53,8 +50,7 @@ pub struct Desk {
     pub pending_goto: Option<Pending>,
     pub choosing: Option<Choosing>,
     pub at_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
-    /// Code indexing: running or not, progress, last run, stale files.
-    pub index: arch_graph::IndexStatus,
+    /// Code indexing's status, as asked for.
     pub index_inbox: Arc<Mutex<Vec<NetResult<arch_graph::IndexStatus>>>>,
     pub types_inbox: Arc<Mutex<Option<NetResult<arch_graph::TypeSystem>>>>,
     /// The spec's anchor we last refetched the view for (so a mismatch the
@@ -74,17 +70,15 @@ impl Desk {
             graph: GraphState::default(),
             spec: SpecState::default(),
             tree: ArchitectureTreeState::default(),
-            review: ReviewState::default(),
             queue: crate::queue::QueueState::default(),
             inbox: Default::default(),
             changes: Default::default(),
-            review_seen: 0,
             panels: Panels::default(),
             parked: Parked::default(),
             active: BTreeMap::new(),
             last_used: BTreeMap::new(),
             fresh: Vec::new(),
-            types: None,
+            shared: Default::default(),
             keeper: Default::default(),
             remote: crate::remote::Remote::new(host_origin, name),
             jumps: JumpList::default(),
@@ -95,7 +89,6 @@ impl Desk {
             pending_goto: None,
             choosing: None,
             at_inbox: Arc::default(),
-            index: arch_graph::IndexStatus::default(),
             index_inbox: Arc::default(),
             types_inbox: Arc::default(),
             anchor_checked: None,
@@ -139,6 +132,17 @@ impl Desk {
             BufferKind::Queue => &mut self.queue,
             BufferKind::Inbox => &mut self.inbox,
             BufferKind::Changes => &mut self.changes,
+        }
+    }
+
+    /// Every buffer, in use or parked, reads what they share (a parked
+    /// chat is only its view of the one chat: it has nothing to read).
+    pub fn share(&mut self) {
+        let Self { shared, chat, code, graph, spec, tree, queue, inbox, changes, parked, .. } = self;
+        let used: [&mut dyn Navigable; 8] = [chat, code, graph, spec, tree, queue, inbox, changes];
+        let parked = parked.graphs.values_mut().map(|v| v as &mut dyn Navigable).chain(parked.codes.values_mut().map(|v| v as &mut dyn Navigable)).chain(parked.specs.values_mut().map(|v| v as &mut dyn Navigable)).chain(parked.trees.values_mut().map(|v| v as &mut dyn Navigable));
+        for view in used.into_iter().chain(parked) {
+            view.share(shared);
         }
     }
 

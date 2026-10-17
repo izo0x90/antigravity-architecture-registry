@@ -91,3 +91,42 @@ fn a_card_unpinned_catches_up_with_what_the_user_is_on() {
     assert!(!app.desk.spec.pinned);
     assert_eq!(app.desk.spec.target.as_ref().map(ComponentId::as_str), Some("rust:a::save"), "unpinned: on what the user is on");
 }
+
+#[test]
+fn what_buffers_share_reaches_each_one_shown_or_parked() {
+    let (ctx, mut app) = full_app();
+    // A second graph and a second card, parked.
+    let shown = app.desk.panels.buffer(1);
+    let second = app.desk.panels.show(2, BufferKind::Graph);
+    app.use_buffer(second);
+    app.use_buffer(shown);
+    let card = Buffer::new(BufferKind::Spec, 7);
+    app.use_buffer(card);
+    app.use_buffer(Buffer::new(BufferKind::Spec, 0));
+    // The review (its plan's asked for first), the types, the index, the
+    // settings, the source.
+    frame(&ctx, &mut app, vec![]);
+    let save = ComponentId::new("rust:a::save");
+    app.desk.shared.review.comments = vec![crate::review::tests::comment(1, arch_graph::CommentAnchor::Component { id: save.clone() }, arch_graph::CommentStatus::Open)];
+    app.desk.shared.review.generation += 1;
+    app.desk.shared.types.set(Some(arch_graph::TypeSystem::defaults().unwrap()));
+    app.desk.shared.index.set(arch_graph::IndexStatus { stale: vec!["src/a.rs".into()], ..Default::default() });
+    app.config.graph.readable_zoom = 0.37;
+    app.config.user.name = "ada".into();
+    frame(&ctx, &mut app, vec![]);
+    for graph in app.desk.graphs() {
+        assert_eq!((graph.marks[&save].open, graph.ui.readable_zoom), (1, 0.37), "every graph: the badges, the settings");
+    }
+    for spec in app.desk.specs() {
+        assert!(spec.types.is_some() && spec.comments.len() == 1 && spec.author == "ada", "every card: types, comments, the user");
+    }
+    app.desk.code.current_file = "src/a.rs".into();
+    frame(&ctx, &mut app, vec![]);
+    assert!(app.desk.code.out_of_date, "the code: its file changed since it was read");
+    // The source the graph shows is every buffer's.
+    app.desk.graph.navigate(crate::graph::NavChange::Source(arch_graph::Source::Code));
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.desk.shared.source.get(), &arch_graph::Source::Code);
+    assert_eq!(app.desk.queue.plan, None, "the queue: no plan, no jobs");
+}

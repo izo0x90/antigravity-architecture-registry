@@ -24,12 +24,10 @@ impl CockpitApp {
 
         self.apply_user_config();
         if let Some(Ok(types)) = self.desk.types_inbox.lock().ok().and_then(|mut t| t.take()) {
-            self.desk.types = Some(types);
-            let types = self.desk.types.clone();
-            for spec in self.desk.specs() {
-                spec.types.clone_from(&types);
-            }
+            self.desk.shared.types.set(Some(types));
         }
+        self.desk.shared.settings.set(crate::shared::Settings::of(&self.config));
+        self.desk.shared.user.set(self.config.user.name.clone());
         if std::mem::take(&mut self.theme_dirty) {
             crate::theme::set(self.config.theme.clone(), ctx);
             crate::graph_style::set(self.config.graph_style.clone());
@@ -37,15 +35,6 @@ impl CockpitApp {
             crate::theme::set_look(self.config.look.clone());
             crate::keymap::set_local(self.config.keymap.local());
             self.home.set_backoff(self.config.net.reconnect_min_ms, self.config.net.reconnect_max_ms);
-            let (graph_ui, code_ui) = (self.config.graph.clone(), self.config.code.clone());
-            for graph in self.desk.graphs() {
-                graph.ui = graph_ui.clone();
-            }
-            for code in self.desk.codes() {
-                code.ui = code_ui.clone();
-                code.show_deleted = self.config.changes.deleted_in_code;
-            }
-            self.desk.changes.ui = self.config.changes.clone();
         }
         self.start_fresh();
         self.use_focused();
@@ -59,7 +48,7 @@ impl CockpitApp {
             self.desk.graphs().for_each(GraphState::invalidate);
             self.desk.specs().for_each(SpecState::invalidate);
             self.desk.trees().for_each(ArchitectureTreeState::invalidate);
-            self.desk.review.invalidate();
+            self.desk.shared.review.invalidate();
             self.desk.queue.invalidate();
             self.desk.details.clear();
             self.fetch_index_status(ctx);
@@ -69,12 +58,12 @@ impl CockpitApp {
         self.sync_inbox();
         self.link_views(ctx);
         self.take_asks(ctx);
-        self.mark_out_of_date();
+        self.desk.share();
         self.goto_tick(ctx);
         // The focused target's relations, so the bar and popup offer only
         // the go-tos that lead somewhere.
         if let Some(id) = self.desk.view(self.focused_kind()).target().and_then(|t| t.component().cloned()) {
-            let source = self.desk.graph.nav.source.clone();
+            let source = self.desk.shared.source.get().clone();
             self.desk.details.want(&id, &source, &self.desk.net, ctx);
         }
 
@@ -119,7 +108,7 @@ impl CockpitApp {
         let events = self.desk.net.incoming.lock().map(|mut lock| lock.drain(..).collect::<Vec<_>>()).unwrap_or_default();
         for event in events {
             if let harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::Index { status } } = &event {
-                self.desk.index = (**status).clone();
+                self.desk.shared.index.set((**status).clone());
             }
             if let harness_contracts::ClientEvent::Architecture { event } = &event {
                 match event {
@@ -145,7 +134,7 @@ impl CockpitApp {
                 if matches!(event, arch_graph::ArchEvent::Changed { .. }) {
                     self.desk.specs().for_each(SpecState::invalidate);
                     self.desk.trees().for_each(ArchitectureTreeState::invalidate);
-                    self.desk.review.invalidate();
+                    self.desk.shared.review.invalidate();
                     self.desk.details.clear();
                 }
             }
@@ -153,7 +142,7 @@ impl CockpitApp {
         }
         for reply in std::mem::take(&mut *self.desk.index_inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
             match reply {
-                Ok(status) => self.desk.index = status,
+                Ok(status) => self.desk.shared.index.set(status),
                 Err(e) => self.note = Some(format!("Couldn't read the index status: {e}")),
             }
         }
@@ -166,17 +155,6 @@ impl CockpitApp {
                 i.push(r);
             }
         });
-    }
-
-    /// Tells the views what's out of date (they mark it, never wait for it).
-    pub(super) fn mark_out_of_date(&mut self) {
-        let code_stale = self.desk.code.file_stale || self.desk.index.is_stale(&self.desk.code.current_file);
-        self.desk.code.out_of_date = code_stale;
-        let spec_file = self.desk.spec.detail.as_ref().and_then(|d| d.component.anchor.as_ref()).map(|a| a.file.to_string());
-        self.desk.spec.out_of_date = self.desk.spec.detail.as_ref().is_some_and(|d| d.stale) || spec_file.is_some_and(|f| self.desk.index.is_stale(&f));
-        if self.desk.graph.stale_files != self.desk.index.stale {
-            self.desk.graph.stale_files = self.desk.index.stale.clone();
-        }
     }
 
     /// Reads the code again, as the user asked.

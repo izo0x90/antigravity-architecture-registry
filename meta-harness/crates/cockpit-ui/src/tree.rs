@@ -76,7 +76,7 @@ const ROW_H: f32 = 20.0;
 type Answer = (u64, NetResult<Tree>);
 
 impl ArchitectureTreeState {
-    pub fn set_source(&mut self, source: &Source) {
+    fn set_source(&mut self, source: &Source) {
         if &self.source != source {
             self.source = source.clone();
             self.opened.clear();
@@ -503,6 +503,11 @@ impl crate::hosted::Hosted for ArchitectureTreeState {
 }
 
 impl Navigable for ArchitectureTreeState {
+    /// The source in use: its outline.
+    fn share(&mut self, shared: &crate::shared::Shared) {
+        self.set_source(shared.source.get());
+    }
+
     fn place(&self) -> Place {
         Place::Tree { cursor: self.cursor.clone() }
     }

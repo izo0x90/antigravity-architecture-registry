@@ -28,6 +28,7 @@ pub mod remote;
 pub mod request_card;
 pub mod review;
 pub mod saved;
+pub mod shared;
 pub mod spec;
 pub mod status;
 pub mod talk;

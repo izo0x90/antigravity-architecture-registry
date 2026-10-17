@@ -352,6 +352,8 @@ impl GraphState {
 
 impl Navigable for GraphState {
     /// What it asked, and its selection when that changed: the user is on it.
+    /// What it asked, its selection when that changed (the user is on
+    /// it), and its source when that did (every buffer reads from it).
     fn take_asks(&mut self) -> Vec<crate::nav::Ask> {
         if let Some(on) = self.current()
             && self.said.as_ref() != Some(&on)
@@ -359,7 +361,24 @@ impl Navigable for GraphState {
             self.said = Some(on.clone());
             self.asks.push(crate::nav::Ask::Follow(on));
         }
+        if self.said_source.as_ref() != Some(&self.nav.source) {
+            self.said_source = Some(self.nav.source.clone());
+            self.asks.push(crate::nav::Ask::Source(self.nav.source.clone()));
+        }
         std::mem::take(&mut self.asks)
+    }
+
+    /// Its settings, the review's badges, the files changed since read.
+    fn share(&mut self, shared: &crate::shared::Shared) {
+        if let Some(settings) = shared.settings.since(&mut self.seen.settings) {
+            self.ui = settings.graph.clone();
+        }
+        if let Some(review) = shared.review_since(&mut self.seen.review) {
+            self.marks = review.marks();
+        }
+        if let Some(index) = shared.index.since(&mut self.seen.index) {
+            self.stale_files.clone_from(&index.stale);
+        }
     }
 
     /// Moves to the component the user is on, unless it's selected here.

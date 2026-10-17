@@ -109,9 +109,9 @@ pub struct GraphState {
     /// Details by card and plan, fetched for the selection.
     pub(crate) details: BTreeMap<(String, Source), Detail>,
     /// Files changed since they were indexed (their cards are marked).
-    pub stale_files: Vec<String>,
+    stale_files: Vec<String>,
     /// Review badges: changed since the last review, unaddressed comments.
-    pub marks: BTreeMap<ComponentId, crate::review::NodeMark>,
+    pub(crate) marks: BTreeMap<ComponentId, crate::review::NodeMark>,
     /// What the desk's comparison changed, by component: a badge on each;
     /// the only-changed filter shows those changed themselves (and what
     /// holds them).
@@ -145,12 +145,16 @@ pub struct GraphState {
     pub agent: Option<AgentMove>,
     /// What it asked of the rest of the cockpit, not taken yet.
     asks: Vec<crate::nav::Ask>,
-    /// The component it last said the user is on (its selection).
+    /// The component it last said the user is on (its selection), and
+    /// the source it last said it shows.
     said: Option<ComponentId>,
+    said_source: Option<Source>,
+    /// What it took last from what the buffers share.
+    seen: crate::shared::Seen,
     canvas: Rect,
     inbox: Arc<Mutex<Vec<Reply>>>,
     /// Behavior settings (chips, zoom), from the UI config.
-    pub ui: GraphUi,
+    pub(crate) ui: GraphUi,
     /// A finger touched it (its chips show from then on).
     touch_seen: bool,
     /// A flick gliding on (points a second), slowing as a list's does.
@@ -207,6 +211,8 @@ impl Default for GraphState {
             agent: None,
             asks: Vec::new(),
             said: None,
+            said_source: None,
+            seen: Default::default(),
             canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
             inbox: Arc::default(),
             ui: GraphUi::default(),

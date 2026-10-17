@@ -202,6 +202,8 @@ pub struct CodeViewerState {
     asks: Vec<Ask>,
     /// The file shown is to be fetched (its text and analysis) when next drawn.
     fetch: bool,
+    /// What it took last from what the buffers share.
+    seen: crate::shared::Seen,
     /// The server says this file changed since it was indexed.
     pub file_stale: bool,
     /// Out of date, by the server's word or the index status (set by the app).
@@ -244,6 +246,7 @@ impl Default for CodeViewerState {
             char_w: 7.0,
             asks: Vec::new(),
             fetch: false,
+            seen: Default::default(),
             file_stale: false,
             out_of_date: false,
             on_lines: OnLines::default(),
@@ -986,6 +989,15 @@ impl Navigable for CodeViewerState {
 
     fn take_asks(&mut self) -> Vec<Ask> {
         std::mem::take(&mut self.asks)
+    }
+
+    /// Its settings, and whether its file changed since it was read.
+    fn share(&mut self, shared: &crate::shared::Shared) {
+        if let Some(settings) = shared.settings.since(&mut self.seen.settings) {
+            self.ui = settings.code.clone();
+            self.show_deleted = settings.changes.deleted_in_code;
+        }
+        self.out_of_date = self.file_stale || shared.index.get().is_stale(&self.current_file);
     }
 
     fn place(&self) -> Place {

@@ -167,6 +167,8 @@ pub struct ChangesView {
     pub comparison: Comparison,
     pub layout: DiffLayout,
     pub ui: ChangesUi,
+    /// What it took last from what the buffers share.
+    seen: crate::shared::Seen,
     list: Option<ChangeList>,
     loading: bool,
     error: Option<String>,
@@ -217,6 +219,7 @@ impl Default for ChangesView {
             comparison: Comparison::default(),
             layout: DiffLayout::default(),
             ui: ChangesUi::default(),
+            seen: Default::default(),
             list: None,
             loading: false,
             error: None,
@@ -1181,6 +1184,12 @@ impl ActionProvider for ChangesView {
 }
 
 impl Navigable for ChangesView {
+    fn share(&mut self, shared: &crate::shared::Shared) {
+        if let Some(settings) = shared.settings.since(&mut self.seen.settings) {
+            self.ui = settings.changes.clone();
+        }
+    }
+
     /// A message whose turn the timeline saw, or a component the changes
     /// touch (a line whose component isn't known yet may be one); not a
     /// change: that's what it shows.

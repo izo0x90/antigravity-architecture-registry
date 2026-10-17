@@ -243,29 +243,30 @@ impl CockpitApp {
     /// The INDEX light: its state's colour and word, progress while it runs,
     /// the last run on hover (reading the code again is a control on the bar).
     pub(in crate::app) fn render_index_light(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        let state = index_state(&self.desk.index);
+        let index = self.desk.shared.index.get();
+        let state = index_state(index);
         let (_, word, color) = crate::status::look(state);
         let detail = match state {
-            "indexing" => format!("{word} {} of {}", self.desk.index.done, self.desk.index.total),
-            "stale" => format!("{} {word}", self.desk.index.stale.len()),
+            "indexing" => format!("{word} {} of {}", index.done, index.total),
+            "stale" => format!("{} {word}", index.stale.len()),
             _ => word,
         };
-        let mut hover = match &self.desk.index.last {
+        let mut hover = match &index.last {
             Some(l) => format!("Last read {}: {} files ({} re-read) in {} ms; {} components, {} connections, {} calls not linked for certain.", l.at, l.files, l.parsed, l.millis, l.components, l.relations, l.unresolved),
             None => "Not read yet.".to_owned(),
         };
-        if let Some(e) = &self.desk.index.error {
+        if let Some(e) = &index.error {
             hover.push_str(&format!("\nThe last run failed: {e}"));
         }
-        for s in &self.desk.index.servers {
+        for s in &index.servers {
             hover.push('\n');
             hover.push_str(&server_line(s));
         }
-        if !self.desk.index.stale.is_empty() {
-            hover.push_str(&format!("\nChanged since read: {}", self.desk.index.stale.join(", ")));
+        if !index.stale.is_empty() {
+            hover.push_str(&format!("\nChanged since read: {}", index.stale.join(", ")));
         }
         // Flickers while files go by.
-        let activity = if state == "indexing" { self.desk.index.done as u64 } else { 0 };
+        let activity = if state == "indexing" { index.done as u64 } else { 0 };
         ui.horizontal(|ui| {
             let led = self.index_led.show(ui, "INDEX", color, activity, &hover);
             let text = ui.label(RichText::new(detail).size(crate::theme::look().text_small).color(color)).on_hover_text(&hover);

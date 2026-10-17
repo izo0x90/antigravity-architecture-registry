@@ -168,6 +168,8 @@ pub struct SpecState {
     asks: Vec<Ask>,
     /// The component the user was on last (shown once it's unpinned).
     followed: Option<ComponentId>,
+    /// What it took last from what the buffers share.
+    seen: crate::shared::Seen,
     /// The cockpit user (author of comments and reviews).
     pub author: String,
     /// The plan's comments (all of them) and its diff since the last review.
@@ -213,6 +215,7 @@ impl Default for SpecState {
             error: None,
             asks: Vec::new(),
             followed: None,
+            seen: Default::default(),
             author: String::new(),
             comments: Vec::new(),
             diff: PlanDiff::default(),
@@ -234,7 +237,7 @@ impl Default for SpecState {
 
 impl SpecState {
     /// Reads components from `source` (unless pinned).
-    pub fn follow_source(&mut self, source: &Source) {
+    fn follow_source(&mut self, source: &Source) {
         if !self.pinned && &self.source != source {
             self.source = source.clone();
         }
@@ -1179,6 +1182,24 @@ impl Navigable for SpecState {
 
     fn take_asks(&mut self) -> Vec<Ask> {
         std::mem::take(&mut self.asks)
+    }
+
+    /// The types, the user, the review, the source (unless pinned), and
+    /// whether its code changed since it was read.
+    fn share(&mut self, shared: &crate::shared::Shared) {
+        if let Some(types) = shared.types.since(&mut self.seen.types) {
+            self.types.clone_from(types);
+        }
+        if let Some(user) = shared.user.since(&mut self.seen.user) {
+            self.author.clone_from(user);
+        }
+        if let Some(review) = shared.review_since(&mut self.seen.review) {
+            self.comments.clone_from(&review.comments);
+            self.diff.clone_from(&review.diff);
+        }
+        self.follow_source(shared.source.get());
+        let file = self.detail.as_ref().and_then(|d| d.component.anchor.as_ref()).map(|a| a.file.to_string());
+        self.out_of_date = self.detail.as_ref().is_some_and(|d| d.stale) || file.is_some_and(|f| shared.index.get().is_stale(&f));
     }
 
     /// Shows the component the user is on; pinned, remembers it (shown

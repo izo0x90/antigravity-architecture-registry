@@ -6,11 +6,13 @@ use crate::nav::Ask;
 
 impl CockpitApp {
     /// Takes the asks of every buffer in use and does them (each frame, and
-    /// after every action).
+    /// after every action). What they changed is drawn (and read by the
+    /// buffers) in the next frame, asked for now.
     pub(super) fn take_asks(&mut self, ctx: &egui::Context) {
         for kind in BufferKind::ALL {
             for ask in self.desk.view_mut(kind).take_asks() {
                 self.do_ask(kind, ask, ctx);
+                ctx.request_repaint();
             }
         }
     }
@@ -33,7 +35,8 @@ impl CockpitApp {
                 self.focus_kind(from);
                 self.input_mode = InputMode::Insert { panel: self.desk.panels.focused() };
             }
-            Ask::ReviewChanged => self.desk.review.invalidate(),
+            Ask::ReviewChanged => self.desk.shared.review.invalidate(),
+            Ask::Source(source) => self.desk.shared.source.set(source),
             Ask::Waiting(waiting) => self.do_waiting(waiting, ctx),
         }
     }

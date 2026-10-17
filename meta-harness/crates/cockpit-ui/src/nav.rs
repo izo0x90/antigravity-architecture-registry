@@ -58,6 +58,8 @@ pub enum Ask {
     ReviewChanged,
     /// What waits on the user, across servers (the inbox's).
     Waiting(Waiting),
+    /// The source the user picked (the graph's): every buffer reads from it.
+    Source(arch_graph::Source),
 }
 
 /// What the inbox asks about what waits on the user.
@@ -665,6 +667,10 @@ pub trait Navigable {
     /// The component the user is on now (`Ask::Follow`, from any buffer):
     /// a buffer that follows it moves to it.
     fn follow(&mut self, _id: &ComponentId) {}
+
+    /// What the buffers show in common (every frame, shown or parked): it
+    /// takes what it needs, when that changed (`Kept::since`).
+    fn share(&mut self, _shared: &crate::shared::Shared) {}
 
     /// Opens or goes into an item (`F` on a hint).
     fn open_item(&mut self, key: &str) -> Step {

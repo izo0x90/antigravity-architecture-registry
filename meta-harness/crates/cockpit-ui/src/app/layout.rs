@@ -21,7 +21,8 @@ impl CockpitApp {
         };
         self.desk.active.insert(buffer.kind, buffer.id);
         if new {
-            self.set_up(buffer.kind);
+            // What the buffers share, read before it's first drawn.
+            self.desk.share();
             if buffer.id != crate::quick_look::PANE {
                 self.desk.fresh.push((buffer, place));
             }
@@ -48,21 +49,6 @@ impl CockpitApp {
     pub(super) fn back_to_used(&mut self) {
         for kind in BufferKind::ALL.into_iter().filter(|k| !k.one_only()) {
             self.swap_in(self.desk.used_buffer(kind));
-        }
-    }
-
-    /// A new view gets what every view of its kind has.
-    pub(super) fn set_up(&mut self, kind: BufferKind) {
-        match kind {
-            BufferKind::Graph => self.desk.graph.ui = self.config.graph.clone(),
-            BufferKind::Code => self.desk.code.ui = self.config.code.clone(),
-            BufferKind::Spec => {
-                self.desk.spec.types.clone_from(&self.desk.types);
-                self.desk.spec.author.clone_from(&self.config.user.name);
-                self.desk.spec.comments.clone_from(&self.desk.review.comments);
-                self.desk.spec.diff.clone_from(&self.desk.review.diff);
-            }
-            BufferKind::Tree | BufferKind::Chat | BufferKind::Queue | BufferKind::Inbox | BufferKind::Changes => {}
         }
     }
 
@@ -190,7 +176,7 @@ impl CockpitApp {
             BufferKind::Tree => self.desk.tree = ArchitectureTreeState::default(),
             BufferKind::Chat | BufferKind::Queue | BufferKind::Inbox | BufferKind::Changes => return,
         }
-        self.set_up(kind);
+        self.desk.share();
     }
 
     /// Where `buffer`'s view is, wherever it's kept.

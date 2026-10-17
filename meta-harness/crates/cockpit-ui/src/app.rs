@@ -21,7 +21,6 @@ use crate::graph::GraphState;
 use crate::keymap::{Chord, InputMode, SeqMatch, TapTracker, continuations, match_sequence};
 use crate::nav::{GoTo, Jump, JumpList, Motion, Move, Navigable, Place, SearchEvent, Spot, Step, Target, hint_labels, rank_matches, step_match};
 use crate::net::{NetClient, NetResult, WsState};
-use crate::review::ReviewState;
 use crate::spec::SpecState;
 use crate::theme::colors;
 use crate::tree::ArchitectureTreeState;

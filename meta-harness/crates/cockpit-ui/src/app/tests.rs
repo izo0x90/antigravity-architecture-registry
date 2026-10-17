@@ -173,7 +173,9 @@ fn full_app() -> (egui::Context, CockpitApp) {
     app.desk.spec.show(step.clone());
     app.desk.spec.source = Source::Plan(plan.clone());
     app.desk.spec.detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
-    app.desk.queue.tick(&app.desk.net, &ctx, Some(&plan));
+    app.desk.shared.source.set(Source::Plan(plan.clone()));
+    app.desk.share();
+    app.desk.queue.tick(&app.desk.net, &ctx);
     // Enough jobs and messages that half a page means something.
     let mut snapshot = crate::queue::tests::snapshot(arch_graph::QueueStatus::Idle);
     for i in 0..30 {
