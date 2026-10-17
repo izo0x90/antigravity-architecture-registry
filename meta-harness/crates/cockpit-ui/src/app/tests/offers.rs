@@ -14,7 +14,8 @@ const CHECKED: [Move; 7] = [Move::Enter, Move::Leave, Move::Fold(Fold::Toggle), 
 /// The app with every view holding something, the Changes view included.
 fn app() -> (egui::Context, CockpitApp) {
     let (ctx, mut app) = full_app();
-    app.desk.changes = crate::changes::tests::view_with_changes().0;
+    let fed = crate::changes::tests::view_with_changes();
+    (app.desk.changes, app.desk.shared.changes) = (fed.view, fed.shared.changes);
     (ctx, app)
 }
 

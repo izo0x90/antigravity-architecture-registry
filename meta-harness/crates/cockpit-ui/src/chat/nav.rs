@@ -47,6 +47,15 @@ impl ChatStreamState {
 }
 
 impl Navigable for ChatStreamState {
+    /// How many files each turn changed (the desk's timeline).
+    fn share(&mut self, shared: &crate::shared::Shared) {
+        let (timeline, read) = shared.changes.timeline();
+        if read != self.turn_files_read {
+            self.turn_files = timeline.map(|t| t.turns.iter().map(|x| (x.turn.clone(), x.files)).collect()).unwrap_or_default();
+            self.turn_files_read = read;
+        }
+    }
+
     fn place(&self) -> Place {
         self.ui.place()
     }

@@ -379,6 +379,10 @@ impl Navigable for GraphState {
         if let Some(index) = shared.index.since(&mut self.seen.index) {
             self.stale_files.clone_from(&index.stale);
         }
+        let (_, read) = shared.changes.components();
+        if read != self.changed_read() {
+            self.set_changed(shared.changes.by_component(), shared.changes.comparison(), read);
+        }
     }
 
     /// Moves to the component the user is on, unless it's selected here.

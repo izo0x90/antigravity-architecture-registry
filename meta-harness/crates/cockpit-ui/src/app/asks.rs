@@ -35,7 +35,9 @@ impl CockpitApp {
                 self.focus_kind(from);
                 self.input_mode = InputMode::Insert { panel: self.desk.panels.focused() };
             }
-            Ask::ReviewChanged => self.desk.shared.review.invalidate(),
+            Ask::Refresh(crate::nav::Refresh::Review) => self.desk.shared.review.invalidate(),
+            Ask::Refresh(crate::nav::Refresh::Changes) => self.desk.shared.changes.invalidate(),
+            Ask::Compare(comparison) => self.desk.shared.changes.compare(comparison),
             Ask::Source(source) => self.desk.shared.source.set(source),
             Ask::Waiting(waiting) => self.do_waiting(waiting, ctx),
         }

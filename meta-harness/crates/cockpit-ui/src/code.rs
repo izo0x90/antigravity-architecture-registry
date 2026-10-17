@@ -215,6 +215,8 @@ pub struct CodeViewerState {
     /// What its changes were last asked for: the comparison, the file and
     /// the comparison's list as it was (asked again when that's read again).
     changes_asked: Option<(Comparison, String, u64)>,
+    /// The desk's comparison and the read of its list (what it marks).
+    comparing: (Comparison, u64),
     changes_inbox: Arc<Mutex<Option<ChangesReply>>>,
 }
 
@@ -252,6 +254,7 @@ impl Default for CodeViewerState {
             on_lines: OnLines::default(),
             show_deleted: true,
             changes_asked: None,
+            comparing: Default::default(),
             changes_inbox: Arc::default(),
         }
     }
@@ -301,10 +304,11 @@ impl CodeViewerState {
         });
     }
 
-    /// Marks what `comparison` changed in the file shown: asked for when
-    /// the file, the comparison or its list (`read`, a count of the times
+    /// Marks what the desk's comparison changed in the file shown: asked
+    /// for when the file, the comparison or its list (a count of the times
     /// it was read) changes, once the file's text is in.
-    pub fn follow_changes(&mut self, comparison: &Comparison, read: u64, net: &NetClient, ctx: &egui::Context) {
+    fn follow_changes(&mut self, net: &NetClient, ctx: &egui::Context) {
+        let (comparison, read) = (&self.comparing.0, self.comparing.1);
         let on_files = comparison.on_files();
         if let Some((asked, path, result)) = self.changes_inbox.lock().ok().and_then(|mut r| r.take())
             && asked == on_files
@@ -631,6 +635,7 @@ impl CodeViewerState {
     pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
         let panel = cx.panel;
         self.fetch_wanted(cx.net, cx.ctx);
+        self.follow_changes(cx.net, cx.ctx);
         // Replies for a file that's no longer the one shown (an earlier load
         // answering late) are dropped, so they can't use up its scroll.
         let incoming = self.analysis_inbox.lock().ok().and_then(|mut a| a.take());
@@ -998,6 +1003,10 @@ impl Navigable for CodeViewerState {
             self.show_deleted = settings.changes.deleted_in_code;
         }
         self.out_of_date = self.file_stale || shared.index.get().is_stale(&self.current_file);
+        let desk = &shared.changes;
+        if (desk.comparison(), desk.read()) != (&self.comparing.0, self.comparing.1) {
+            self.comparing = (desk.comparison().clone(), desk.read());
+        }
     }
 
     fn place(&self) -> Place {
@@ -1453,11 +1462,13 @@ pub(crate) mod tests {
         let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
         let mut code = changed();
         code.current_file = "a.rs".into();
-        code.follow_changes(&Comparison::default(), 1, &net, &ctx);
+        code.comparing = (Comparison::default(), 1);
+        code.follow_changes(&net, &ctx);
         let on_files = Comparison { from: harness_contracts::changes::Point::Rev("HEAD".into()), to: harness_contracts::changes::Point::Files };
         assert_eq!(code.changes_asked, Some((on_files.clone(), "a.rs".into(), 1)), "staged and unstaged together: the files against the last commit");
         code.changes_asked = Some((on_files.clone(), "a.rs".into(), 0));
-        code.follow_changes(&Comparison::default(), 1, &net, &ctx);
+        code.comparing = (Comparison::default(), 1);
+        code.follow_changes(&net, &ctx);
         assert_eq!(code.changes_asked.as_ref().map(|a| a.2), Some(1), "the list read again: asked again");
         code.set_content("let a = 1;\n".into());
         assert_eq!(code.changes_asked, None, "new text: asked again");

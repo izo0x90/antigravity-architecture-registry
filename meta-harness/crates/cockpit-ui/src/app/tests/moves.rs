@@ -196,7 +196,8 @@ fn f_labels_what_is_on_screen_in_every_view() {
     // A changed file, to label.
     use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, FileStatus, Group};
     let changed = ChangedFile { path: "src/a.rs".into(), old_path: None, status: FileStatus::Modified, group: Group::Unstaged, added: 1, removed: 0, binary: false };
-    app.desk.changes.take_list_for_test(ChangeList { comparison: Comparison::default(), files: vec![changed], offset: 0, total: 1 });
+    app.desk.shared.changes.take_list_for_test(ChangeList { comparison: Comparison::default(), files: vec![changed], offset: 0, total: 1 });
+    app.desk.share();
     for kind in BufferKind::ALL {
         focus(&ctx, &mut app, kind);
         let spots = app.desk.view(kind).spots();

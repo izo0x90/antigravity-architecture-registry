@@ -76,6 +76,8 @@ pub struct Shared {
     /// The cockpit's user (who comments, approves, reviews).
     pub user: Kept<String>,
     pub settings: Kept<Settings>,
+    /// The desk's comparison and what it changes (files, components, when).
+    pub changes: crate::changes::Comparing,
 }
 
 impl Shared {

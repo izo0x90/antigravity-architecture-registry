@@ -1,6 +1,7 @@
 //! The changes view: what the desk's comparison changes, the diff run
-//! together (files, then their changes). The comparison is the desk's one
-//! in use (the code view and the graph read it too); the view holds it.
+//! together (files, then their changes). The comparison and its list are
+//! the desk's (`Comparing`, shared: the code view and the graph read them
+//! too); the view shows them and asks to compare something else.
 //!
 //! A file's changes are asked for when it's opened (a few small ones open
 //! by themselves); the list is asked for again when files change, and an
@@ -13,12 +14,12 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use egui::RichText;
-use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, ComponentChangeList, ComponentChanges, Timeline, TurnChanges, Window, DiffLine, FileChanges, FileStatus, Group, Hunk, LineKind, Point};
+use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, ComponentChangeList, Timeline, TurnChanges, Window, DiffLine, FileChanges, FileStatus, Group, Hunk, LineKind, Point};
 use serde::{Deserialize, Serialize};
 
 use crate::actions::{Action, ActionProvider, Choice, Group as ActionGroup, MINOR, Param, RunCx, SECONDARY, Style};
 use crate::config::ChangesUi;
-use crate::nav::{Fold, GoTo, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
+use crate::nav::{Ask, Fold, GoTo, Item, Motion, Move, Navigable, Place, Refresh, Spot, Step, Target};
 use crate::viewport::{Go, Show, Stop, Viewport};
 use crate::net::{NetClient, NetResult};
 use crate::hosted::{Hosted, Status, Tone};
@@ -51,11 +52,11 @@ impl DiffLayout {
 /// A file in the list: its group and path.
 type FileKey = (Group, String);
 
+mod comparing;
+pub use comparing::Comparing;
+
 enum Reply {
-    List(Comparison, NetResult<ChangeList>),
     File(Comparison, FileKey, NetResult<FileChanges>),
-    Components(Comparison, NetResult<ComponentChangeList>),
-    Timeline(NetResult<Timeline>),
     /// Staged or unstaged: read it all again (or say why not).
     Staged(NetResult<serde_json::Value>),
 }
@@ -163,17 +164,23 @@ fn compared(value: &str) -> Option<Comparison> {
 }
 
 pub struct ChangesView {
-    /// The desk's comparison in use.
-    pub comparison: Comparison,
+    /// The desk's comparison, and its list (as last read there).
+    comparison: Comparison,
+    list: Option<ChangeList>,
     pub layout: DiffLayout,
     pub ui: ChangesUi,
     /// What it took last from what the buffers share.
     seen: crate::shared::Seen,
-    list: Option<ChangeList>,
+    /// The desk reading the list, and why it couldn't.
     loading: bool,
+    list_error: Option<String>,
+    /// Why staging failed.
     error: Option<String>,
-    /// Asked for again (files changed, or the comparison did).
-    stale: bool,
+    /// What it asked of the rest of the cockpit, not taken yet.
+    asks: Vec<Ask>,
+    /// Files whose changes are to be asked for (when next drawn), with the
+    /// lines of context around them.
+    to_ask: Vec<(FileKey, u32)>,
     opened: BTreeMap<FileKey, Opened>,
     /// Files the user closed (not opened by themselves again).
     closed: std::collections::BTreeSet<FileKey>,
@@ -182,8 +189,6 @@ pub struct ChangesView {
     cursor: usize,
     /// A place to put the cursor back on once the list is in.
     restore: Option<String>,
-    /// A fold asked for (done when the network's at hand: opening asks).
-    folding: Option<Fold>,
     /// How to show the cursor once laid out (asked before it was).
     show: Option<Show>,
     /// Where it's looking (the shared rules move it), the time last drawn,
@@ -193,20 +198,15 @@ pub struct ChangesView {
     heights: Heights,
     side: bool,
     spots: Vec<Spot>,
-    /// When the list was last asked for (it's asked again now and then
-    /// while shown: the index and staging change outside the files).
-    asked_at: f64,
-    /// How many times the list was read (views that show the changes too
-    /// ask for theirs again when it is).
+    /// The read of the desk's list it took.
     read: u64,
-    /// Which components it changed (asked for each time the list is read),
-    /// and how many times that was read.
+    /// Which components the changes touch, and the read of them it took.
     components: Option<ComponentChangeList>,
     components_read: u64,
     /// A spot to put the cursor on once its file's changes are in (`g x`).
     revealing: Option<(FileKey, usize)>,
-    /// When the files changed and who was working (asked for with each
-    /// list), and whether the view shows it instead of the changes.
+    /// When the files changed and who was working (the read of it it took),
+    /// and whether the view shows it instead of the changes.
     timeline: Option<Timeline>,
     timeline_read: u64,
     pub on_timeline: bool,
@@ -217,26 +217,26 @@ impl Default for ChangesView {
     fn default() -> Self {
         Self {
             comparison: Comparison::default(),
+            list: None,
             layout: DiffLayout::default(),
             ui: ChangesUi::default(),
             seen: Default::default(),
-            list: None,
             loading: false,
+            list_error: None,
             error: None,
-            stale: true,
+            asks: Vec::new(),
+            to_ask: Vec::new(),
             opened: BTreeMap::new(),
             closed: Default::default(),
             folded: Default::default(),
             cursor: 0,
             restore: None,
-            folding: None,
             show: None,
             viewport: Viewport::default(),
             clock: 0.0,
             heights: Heights::default(),
             side: false,
             spots: Vec::new(),
-            asked_at: f64::NEG_INFINITY,
             read: 0,
             components: None,
             components_read: 0,
@@ -273,29 +273,25 @@ fn status_look(status: FileStatus) -> (&'static str, egui::Color32, &'static str
 }
 
 impl ChangesView {
-    /// Asks for everything again (files changed).
-    pub fn invalidate(&mut self) {
-        self.stale = true;
+    /// The desk compares `comparison` now: its files' changes start over.
+    fn compared(&mut self, comparison: Comparison) {
+        self.comparison = comparison;
+        self.list = None;
+        self.opened.clear();
+        self.closed.clear();
+        self.folded.clear();
+        self.cursor = 0;
     }
 
-    /// Compares `comparison` from now on (the files' changes asked afresh).
-    pub fn compare(&mut self, comparison: Comparison) {
+    /// Asks the desk to compare `comparison`.
+    fn compare(&mut self, comparison: Comparison) {
         if comparison != self.comparison {
-            self.comparison = comparison;
-            self.list = None;
-            self.opened.clear();
-            self.closed.clear();
-            self.folded.clear();
-            self.cursor = 0;
-            self.stale = true;
-            // A list still on its way is for the old comparison: its answer
-            // is dropped, so it's not waited for.
-            self.loading = false;
+            self.asks.push(Ask::Compare(comparison));
         }
     }
 
     /// The list in, if it's for the comparison in use.
-    pub fn list(&self) -> Option<&ChangeList> {
+    fn list(&self) -> Option<&ChangeList> {
         self.list.as_ref().filter(|l| l.comparison == self.comparison)
     }
 
@@ -415,13 +411,8 @@ impl ChangesView {
         self.list()?.files.get(*i)
     }
 
-    /// The timeline as last read, and how many times that was.
-    pub fn timeline(&self) -> (Option<&Timeline>, u64) {
-        (self.timeline.as_ref(), self.timeline_read)
-    }
-
     /// A turn's changes, if the timeline saw it.
-    pub fn turn(&self, turn: &str) -> Option<&TurnChanges> {
+    fn turn(&self, turn: &str) -> Option<&TurnChanges> {
         self.timeline.as_ref()?.turn(turn)
     }
 
@@ -433,21 +424,22 @@ impl ChangesView {
         }
     }
 
-    fn open(&mut self, key: FileKey, net: &NetClient, ctx: &egui::Context) {
+    fn open(&mut self, key: FileKey) {
         self.closed.remove(&key);
         let context = self.opened.get(&key).map_or(self.ui.context, |o| o.context);
-        self.ask_file(key, context, net, ctx);
+        self.ask_file(key, context);
     }
 
-    fn ask_file(&mut self, key: FileKey, context: u32, net: &NetClient, ctx: &egui::Context) {
+    /// Opens a file, its changes (with `context` lines around) asked for
+    /// when next drawn.
+    fn ask_file(&mut self, key: FileKey, context: u32) {
         let counts = self.list().and_then(|l| l.files.iter().find(|f| file_key(f) == key)).map(|f| (f.added, f.removed));
         let opened = self.opened.entry(key.clone()).or_default();
         opened.context = context;
         opened.loading = true;
         opened.asked_for = counts;
-        let (inbox, comparison) = (self.inbox.clone(), self.comparison.clone());
-        let (asked, path, group) = (comparison.clone(), key.1.clone(), key.0);
-        net.change_file(&comparison, &path, group, context, ctx.clone(), move |r| push(&inbox, Reply::File(asked, key, r)));
+        self.to_ask.retain(|(k, _)| *k != key);
+        self.to_ask.push((key, context));
     }
 
     fn close(&mut self, key: &FileKey) {
@@ -455,37 +447,25 @@ impl ChangesView {
         self.closed.insert(key.clone());
     }
 
-    fn toggle(&mut self, key: FileKey, net: &NetClient, ctx: &egui::Context) {
-        if self.opened.contains_key(&key) { self.close(&key) } else { self.open(key, net, ctx) }
+    fn toggle(&mut self, key: FileKey) {
+        if self.opened.contains_key(&key) { self.close(&key) } else { self.open(key) }
     }
 
-    /// Applies replies; asks for the list when it's stale (or now and then
-    /// while shown), and an opened file's changes when its counts changed.
-    pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context, shown: bool) {
-        let now = ctx.input(|i| i.time);
+    /// The desk's list read again: its files' changes too.
+    fn read_again(&mut self) {
+        self.opened.values_mut().for_each(|o| o.asked_for = None);
+        self.asks.push(Ask::Refresh(Refresh::Changes));
+    }
+
+    /// Applies replies (its files' changes, staging), lands on what was
+    /// revealed, and asks for the files' changes asked for.
+    fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
         let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for reply in replies {
             match reply {
-                Reply::List(asked, result) if asked == self.comparison => {
-                    self.loading = false;
-                    match result {
-                        Ok(list) => self.keeping_cursor(|v| v.took_list(list, net, ctx)),
-                        Err(e) => self.error = Some(e.into()),
-                    }
-                }
                 Reply::Staged(result) => {
-                    self.stale = true;
-                    self.opened.values_mut().for_each(|o| o.asked_for = None);
+                    self.read_again();
                     self.error = result.err().map(String::from);
-                }
-                Reply::Timeline(Ok(timeline)) => {
-                    self.timeline = Some(timeline);
-                    self.timeline_read += 1;
-                }
-                Reply::Components(asked, result) if asked == self.comparison => {
-                    // Not there (not a repository, an older server): none.
-                    self.components = result.ok();
-                    self.components_read += 1;
                 }
                 Reply::File(asked, key, result) if asked == self.comparison => self.keeping_cursor(|v| {
                     if let Some(opened) = v.opened.get_mut(&key) {
@@ -506,28 +486,18 @@ impl ChangesView {
                 _ => {}
             }
         }
-        self.go_to_revealed(net, ctx);
-        if let Some(fold) = self.folding.take() {
-            self.apply_fold(fold, net, ctx);
-        }
-        let due = shown && now - self.asked_at >= self.ui.refresh_s;
-        if (self.stale || due) && !self.loading {
-            self.stale = false;
-            self.loading = true;
-            self.asked_at = now;
+        self.go_to_revealed();
+        for (key, context) in std::mem::take(&mut self.to_ask) {
             let (inbox, comparison) = (self.inbox.clone(), self.comparison.clone());
-            let asked = comparison.clone();
-            net.changes(&comparison, 0, nah_page(), ctx.clone(), move |r| push(&inbox, Reply::List(asked, r)));
-        }
-        if shown {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(self.ui.refresh_s.max(0.5)));
+            let (asked, path, group) = (comparison.clone(), key.1.clone(), key.0);
+            net.change_file(&comparison, &path, group, context, ctx.clone(), move |r| push(&inbox, Reply::File(asked, key, r)));
         }
     }
 
     /// Folds or unfolds what the cursor is in: its change (on a change or
     /// one of its lines), or its file (on the file); or everything: every
     /// file folded, or every file and change unfolded.
-    fn apply_fold(&mut self, fold: Fold, net: &NetClient, ctx: &egui::Context) {
+    fn apply_fold(&mut self, fold: Fold) {
         let all: Vec<FileKey> = self.list().map(|l| l.files.iter().map(file_key).collect()).unwrap_or_default();
         let row = self.cursor_row();
         let file = row.as_ref().and_then(|r| self.file_of(r).map(file_key));
@@ -536,7 +506,7 @@ impl ChangesView {
             (Fold::OpenAll, ..) => {
                 self.folded.clear();
                 for k in all.into_iter().filter(|k| !self.opened.contains_key(k)).collect::<Vec<_>>() {
-                    self.open(k, net, ctx);
+                    self.open(k);
                 }
             }
             (Fold::CloseAll, ..) => all.iter().for_each(|k| self.close(k)),
@@ -551,8 +521,8 @@ impl ChangesView {
             (Fold::Close, Some(c), _) => {
                 self.folded.insert(c);
             }
-            (Fold::Toggle, None, Some(k)) => self.toggle(k, net, ctx),
-            (Fold::Open, None, Some(k)) if !self.opened.contains_key(&k) => self.open(k, net, ctx),
+            (Fold::Toggle, None, Some(k)) => self.toggle(k),
+            (Fold::Open, None, Some(k)) if !self.opened.contains_key(&k) => self.open(k),
             (Fold::Close, None, Some(k)) => self.close(&k),
             _ => {}
         }
@@ -570,25 +540,14 @@ impl ChangesView {
         }
     }
 
-    /// How many times the list was read.
-    pub fn read(&self) -> u64 {
-        self.read
-    }
-
-    /// Which components it changed, as last read, and how many times that
-    /// was read.
-    pub fn components(&self) -> (Option<&ComponentChangeList>, u64) {
-        (self.components.as_ref(), self.components_read)
-    }
-
     /// Whether it changed component `id`.
-    pub fn touches(&self, id: &arch_graph::ComponentId) -> bool {
+    fn touches(&self, id: &arch_graph::ComponentId) -> bool {
         self.components.as_ref().is_some_and(|l| l.components.iter().any(|c| c.component == id.as_str()))
     }
 
     /// Puts the cursor on component `id`'s first change (its file opened),
     /// once it's in. False when it changed nothing there.
-    pub fn reveal(&mut self, id: &arch_graph::ComponentId) -> bool {
+    fn reveal(&mut self, id: &arch_graph::ComponentId) -> bool {
         let Some(changed) = self.components.as_ref().and_then(|l| l.components.iter().find(|c| c.component == id.as_str())) else { return false };
         let line = changed.runs.first().map_or(1, |(start, _)| (*start).max(1) as usize);
         // The file as it is now: its unstaged changes before its staged ones.
@@ -600,10 +559,10 @@ impl ChangesView {
 
     /// The spot asked for by `reveal`: its file opened, then the cursor on
     /// the change at its line.
-    fn go_to_revealed(&mut self, net: &NetClient, ctx: &egui::Context) {
+    fn go_to_revealed(&mut self) {
         let Some((key, line)) = self.revealing.clone() else { return };
         let Some(opened) = self.opened.get(&key) else {
-            self.open(key, net, ctx);
+            self.open(key);
             return;
         };
         let Some(changes) = &opened.changes else {
@@ -620,18 +579,9 @@ impl ChangesView {
         self.revealing = None;
     }
 
-    /// What it changed in each component.
-    pub fn by_component(&self) -> BTreeMap<arch_graph::ComponentId, ComponentChanges> {
-        self.components.iter().flat_map(|l| &l.components).map(|c| (arch_graph::ComponentId::new(&c.component), c.clone())).collect()
-    }
-
-    fn took_list(&mut self, list: ChangeList, net: &NetClient, ctx: &egui::Context) {
-        self.error = None;
-        self.read += 1;
-        let (inbox, asked) = (self.inbox.clone(), list.comparison.clone());
-        net.change_components(&list.comparison, ctx.clone(), move |r| push(&inbox, Reply::Components(asked, r)));
-        let inbox = self.inbox.clone();
-        net.change_timeline(ctx.clone(), move |r| push(&inbox, Reply::Timeline(r)));
+    /// The desk's list, read again: gone files go, opened ones whose
+    /// counts moved are asked for again, a few small ones open by themselves.
+    fn took_list(&mut self, list: ChangeList) {
         let keys: Vec<(FileKey, (u32, u32))> = list.files.iter().map(|f| (file_key(f), (f.added, f.removed))).collect();
         self.list = Some(list);
         // Gone files go; opened ones whose counts moved are asked again.
@@ -642,7 +592,7 @@ impl ChangesView {
                 && !o.loading
             {
                 let context = o.context;
-                self.ask_file(key.clone(), context, net, ctx);
+                self.ask_file(key.clone(), context);
             }
         }
         // A few small ones open by themselves: the diff run together.
@@ -650,7 +600,7 @@ impl ChangesView {
         if keys.len() <= self.ui.open_up_to_files && lines <= self.ui.open_up_to_lines {
             for (key, _) in keys {
                 if !self.opened.contains_key(&key) && !self.closed.contains(&key) {
-                    self.ask_file(key, self.ui.context, net, ctx);
+                    self.ask_file(key, self.ui.context);
                 }
             }
         }
@@ -681,22 +631,6 @@ impl ChangesView {
         }
     }
 
-    /// The list, as if it came from the server (tests drive the view
-    /// without one).
-    #[cfg(test)]
-    pub(crate) fn take_list_for_test(&mut self, list: ChangeList) {
-        self.comparison = list.comparison.clone();
-        let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
-        self.took_list(list, &net, &ctx);
-    }
-
-    /// The timeline, as if it came from the server.
-    #[cfg(test)]
-    pub(crate) fn take_timeline_for_test(&mut self, timeline: Timeline) {
-        self.timeline = Some(timeline);
-        self.timeline_read += 1;
-    }
-
     /// Whether files show side by side in a panel `width` wide.
     fn side_by_side(&self, width: f32) -> bool {
         match self.layout {
@@ -707,6 +641,7 @@ impl ChangesView {
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
+        self.tick(cx.net, cx.ctx);
         let look = crate::theme::look();
         if self.on_timeline {
             if self.windows().is_empty() {
@@ -718,7 +653,7 @@ impl ChangesView {
             return self.render_rows(ui, ("timeline", cx.panel));
         }
         let Some(list) = self.list() else {
-            let words = match &self.error {
+            let words = match &self.list_error {
                 Some(e) => e.clone(),
                 None => "Reading the changes…".to_owned(),
             };
@@ -907,11 +842,6 @@ impl ChangesView {
     }
 }
 
-/// How many files a page lists (the server's own page).
-fn nah_page() -> usize {
-    500
-}
-
 /// One line of a change: its numbers, its mark and its text, tinted by
 /// what happened to it.
 fn draw_line(ui: &mut egui::Ui, line: &DiffLine, numbers: bool) {
@@ -1006,7 +936,7 @@ impl Hosted for ChangesView {
             out.push(Status::new(format!("+{added}"), Tone::Ok));
             out.push(Status::new(format!("−{removed}"), Tone::Error));
         }
-        if let Some(e) = &self.error {
+        if let Some(e) = self.list_error.as_ref().or(self.error.as_ref()) {
             out.push(Status::new(e.clone(), Tone::Error));
         }
         out
@@ -1167,14 +1097,11 @@ impl ActionProvider for ChangesView {
                     self.show_timeline(false);
                 }
             }
-            Some(Command::Refresh) => {
-                self.stale = true;
-                self.opened.values_mut().for_each(|o| o.asked_for = None);
-            }
+            Some(Command::Refresh) => self.read_again(),
             Some(Command::MoreContext) => match self.more_context_here() {
                 Some(key) => {
                     let context = self.opened.get(&key).map_or(self.ui.context, |o| o.context) + self.ui.more_context;
-                    self.ask_file(key, context, cx.net, cx.ctx);
+                    self.ask_file(key, context);
                 }
                 None => *cx.note = Some("There's nothing more to show around these changes.".into()),
             },
@@ -1184,10 +1111,38 @@ impl ActionProvider for ChangesView {
 }
 
 impl Navigable for ChangesView {
+    /// Its settings, and the desk's comparison: its list (read again: the
+    /// cursor stays on its row), the components it touches, the timeline.
     fn share(&mut self, shared: &crate::shared::Shared) {
         if let Some(settings) = shared.settings.since(&mut self.seen.settings) {
             self.ui = settings.changes.clone();
         }
+        let desk = &shared.changes;
+        if *desk.comparison() != self.comparison {
+            self.compared(desk.comparison().clone());
+        }
+        if desk.read() != self.read {
+            self.read = desk.read();
+            if let Some(list) = desk.list().cloned() {
+                self.keeping_cursor(|v| v.took_list(list));
+            }
+        }
+        let (components, read) = desk.components();
+        if read != self.components_read {
+            (self.components, self.components_read) = (components.cloned(), read);
+        }
+        let (timeline, read) = desk.timeline();
+        if read != self.timeline_read {
+            (self.timeline, self.timeline_read) = (timeline.cloned(), read);
+        }
+        self.loading = desk.loading();
+        if self.list_error.as_deref() != desk.error() {
+            self.list_error = desk.error().map(str::to_owned);
+        }
+    }
+
+    fn take_asks(&mut self) -> Vec<Ask> {
+        std::mem::take(&mut self.asks)
     }
 
     /// A message whose turn the timeline saw, or a component the changes
@@ -1285,7 +1240,7 @@ impl Navigable for ChangesView {
         }
         // A folded file or change: it opens.
         if self.folded_here().is_some() {
-            self.folding = Some(Fold::Open);
+            self.apply_fold(Fold::Open);
             return Step::Done;
         }
         match self.cursor_row().and_then(|r| self.file_of(&r).cloned()) {
@@ -1312,8 +1267,7 @@ impl Navigable for ChangesView {
     }
 
     fn fold(&mut self, fold: Fold) {
-        // Folds need the network: they're asked here and done next tick.
-        self.folding = Some(fold);
+        self.apply_fold(fold);
     }
 
     fn items(&self) -> Vec<Item> {

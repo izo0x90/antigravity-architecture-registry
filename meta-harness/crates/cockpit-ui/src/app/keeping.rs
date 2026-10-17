@@ -20,7 +20,7 @@ impl CockpitApp {
             jumps: self.desk.jumps.clone(),
             drafts: self.drafts(),
             agents: self.desk.remote.agents,
-            comparison: self.desk.changes.comparison.clone(),
+            comparison: self.desk.shared.changes.comparison().clone(),
             diff_layout: self.desk.changes.layout,
             item_buttons: self.item_buttons,
         }
@@ -59,7 +59,7 @@ impl CockpitApp {
         self.desk.marks = saved.marks.clone();
         self.desk.jumps = saved.jumps.clone().checked();
         self.desk.remote.agents = saved.agents;
-        self.desk.changes.compare(saved.comparison.clone());
+        self.desk.shared.changes.compare(saved.comparison.clone());
         self.desk.changes.layout = saved.diff_layout;
         self.item_buttons = saved.item_buttons;
         for (buffer, place) in &saved.views {

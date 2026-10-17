@@ -188,6 +188,9 @@ pub struct SpecState {
     /// file, the list as read); and the answer's way back.
     changes: Vec<Hunk>,
     changes_asked: Option<(Comparison, String, u64)>,
+    /// The desk's comparison, the read of its list, and the lines of
+    /// context around a change (what it shows).
+    comparing: (Comparison, u64, u32),
     changes_inbox: Arc<Mutex<Option<ChangesReply>>>,
     /// The item a restored place is on, until the component's detail is in.
     restore_item: Option<String>,
@@ -226,6 +229,7 @@ impl Default for SpecState {
             types: None,
             changes: Vec::new(),
             changes_asked: None,
+            comparing: Default::default(),
             changes_inbox: Arc::default(),
             restore_item: None,
             spots: Vec::new(),
@@ -260,10 +264,11 @@ impl SpecState {
         Some((anchor.file.as_str().to_owned(), anchor.span.start_line, anchor.span.end_line.max(anchor.span.start_line)))
     }
 
-    /// Shows what `comparison` changed in its code (`context` lines around
-    /// each change): asked for when the component, the comparison or its
-    /// list (`read`: the times it was read) changes.
-    pub fn follow_changes(&mut self, comparison: &Comparison, read: u64, context: u32, net: &NetClient, ctx: &egui::Context) {
+    /// Shows what the desk's comparison changed in its code (with lines of
+    /// context around each change): asked for when the component, the
+    /// comparison or its list (the times it was read) changes.
+    fn follow_changes(&mut self, net: &NetClient, ctx: &egui::Context) {
+        let (comparison, read, context) = (&self.comparing.0, self.comparing.1, self.comparing.2);
         let on_files = comparison.on_files();
         let lines = self.code_lines();
         if let Some((asked, path, result)) = self.changes_inbox.lock().ok().and_then(|mut r| r.take())
@@ -335,7 +340,7 @@ impl SpecState {
                 }
                 Reply::Posted(Ok(())) => {
                     self.note = None;
-                    self.asks.push(Ask::ReviewChanged);
+                    self.asks.push(Ask::Refresh(crate::nav::Refresh::Review));
                 }
                 Reply::Posted(Err(e)) => self.note = Some(e),
                 _ => {}
@@ -659,6 +664,7 @@ impl SpecState {
 
     pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         self.tick(cx.net, cx.ctx);
+        self.follow_changes(cx.net, cx.ctx);
         self.render_composer(ui, cx);
         let Some(detail) = self.detail.clone() else {
             let msg = match (&self.target, &self.error) {
@@ -1198,6 +1204,10 @@ impl Navigable for SpecState {
             self.diff.clone_from(&review.diff);
         }
         self.follow_source(shared.source.get());
+        let desk = (shared.changes.comparison(), shared.changes.read(), shared.settings.get().changes.context);
+        if desk != (&self.comparing.0, self.comparing.1, self.comparing.2) {
+            self.comparing = (desk.0.clone(), desk.1, desk.2);
+        }
         let file = self.detail.as_ref().and_then(|d| d.component.anchor.as_ref()).map(|a| a.file.to_string());
         self.out_of_date = self.detail.as_ref().is_some_and(|d| d.stale) || file.is_some_and(|f| shared.index.get().is_stale(&f));
     }
@@ -1772,12 +1782,14 @@ pub(crate) mod tests {
         s.detail = Some(d);
         s.loaded = Some((a.clone(), Source::Code));
         let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
-        s.follow_changes(&Comparison::default(), 1, 3, &net, &ctx);
+        s.comparing = (Comparison::default(), 1, 3);
+        s.follow_changes(&net, &ctx);
         assert!(net.sent.lock().unwrap().iter().any(|u| u.contains("/api/changes/file?from=rev%3AHEAD&to=files&path=src%2Fa.rs")), "its file, against the files");
         let hunk = |start: u32, text: &str| Hunk { old_start: start, old_lines: 1, new_start: start, new_lines: 1, lines: vec![DiffLine { kind: LineKind::Added, old: None, new: Some(start), text: text.into() }] };
         let file = FileChanges { comparison: Comparison::default().on_files(), path: "src/a.rs".into(), group: harness_contracts::changes::Group::Changes, context: 3, binary: false, hunks: vec![hunk(2, "above it"), hunk(12, "in it"), hunk(30, "below it")] };
         *s.changes_inbox.lock().unwrap() = Some((Comparison::default().on_files(), "src/a.rs".into(), Ok(file)));
-        s.follow_changes(&Comparison::default(), 1, 3, &net, &ctx);
+        s.comparing = (Comparison::default(), 1, 3);
+        s.follow_changes(&net, &ctx);
         assert_eq!(s.changes.iter().map(|h| h.new_start).collect::<Vec<_>>(), [12], "only what touches its lines");
         let at = s.entries().iter().position(|e| e.item == SpecItem::Hunk(0)).expect("a cursor stop");
         s.put_cursor(at);

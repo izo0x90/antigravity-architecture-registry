@@ -81,28 +81,7 @@ impl CockpitApp {
         // code view and the graph show it too); asked again now and then
         // while it is.
         let shown = self.desk.panels.kinds().contains(&BufferKind::Changes) || self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Changes);
-        self.desk.changes.tick(&self.desk.net, ctx, shown);
-        let (comparison, read) = (self.desk.changes.comparison.clone(), self.desk.changes.read());
-        for code in std::iter::once(&mut self.desk.code).chain(self.desk.parked.codes.values_mut()) {
-            code.follow_changes(&comparison, read, &self.desk.net, ctx);
-        }
-        let context = self.desk.changes.ui.context;
-        for spec in std::iter::once(&mut self.desk.spec).chain(self.desk.parked.specs.values_mut()) {
-            spec.follow_changes(&comparison, read, context, &self.desk.net, ctx);
-        }
-        // Which components it changed: badges, and the only-changed filter.
-        let (timeline, turns_read) = self.desk.changes.timeline();
-        if turns_read != self.desk.chat.turn_files_read {
-            self.desk.chat.turn_files = timeline.map(|t| t.turns.iter().map(|x| (x.turn.clone(), x.files)).collect()).unwrap_or_default();
-            self.desk.chat.turn_files_read = turns_read;
-        }
-        let (_, read) = self.desk.changes.components();
-        let mut changed = None;
-        for graph in std::iter::once(&mut self.desk.graph).chain(self.desk.parked.graphs.values_mut()) {
-            if graph.changed_read() != read {
-                graph.set_changed(changed.get_or_insert_with(|| self.desk.changes.by_component()).clone(), &self.desk.changes.comparison, read);
-            }
-        }
+        self.desk.shared.changes.tick(&self.desk.net, ctx, shown, self.config.changes.refresh_s);
         let plan = self.desk.shared.source.get().plan().cloned();
         self.desk.shared.review.tick(&self.desk.net, ctx, plan.as_ref());
         // One truth for where code is: if the spec fetched a newer anchor for

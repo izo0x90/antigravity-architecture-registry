@@ -54,12 +54,23 @@ pub enum Ask {
     Reread(String),
     /// A typing box opened in it: the keyboard goes there.
     Type,
-    /// The plan's review changed (a write went through): read it again.
-    ReviewChanged,
+    /// Something shared changed where it's kept: read it again.
+    Refresh(Refresh),
+    /// The desk compares this from now on (what the changes show).
+    Compare(harness_contracts::changes::Comparison),
     /// What waits on the user, across servers (the inbox's).
     Waiting(Waiting),
     /// The source the user picked (the graph's): every buffer reads from it.
     Source(arch_graph::Source),
+}
+
+/// What's read again on a buffer's word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refresh {
+    /// The plan's review (a comment or a review went through).
+    Review,
+    /// The desk's comparison (files were staged).
+    Changes,
 }
 
 /// What the inbox asks about what waits on the user.

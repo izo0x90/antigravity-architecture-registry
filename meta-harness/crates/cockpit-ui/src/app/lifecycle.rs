@@ -127,7 +127,7 @@ impl CockpitApp {
                 self.desk.queue.on_event(event);
                 // Files changed (read, or seen changing on disk): the changes too.
                 if matches!(event, arch_graph::ArchEvent::Changed { .. } | arch_graph::ArchEvent::Index { .. }) {
-                    self.desk.changes.invalidate();
+                    self.desk.shared.changes.invalidate();
                 }
                 // Only real changes refetch: a check result (often the spec
                 // view's own validation) must not trigger another round.

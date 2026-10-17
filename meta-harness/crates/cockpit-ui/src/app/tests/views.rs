@@ -220,7 +220,8 @@ fn enter_on_a_change_opens_its_file_at_the_line() {
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"space b f"}"#).unwrap();
     assert_eq!(app.desk.panels.focused_kind(), BufferKind::Changes, "Space b f shows the changes");
     let list = ChangeList { comparison: Comparison::default(), files: vec![ChangedFile { path: "src/a.rs".into(), old_path: None, status: FileStatus::Modified, group: Group::Unstaged, added: 1, removed: 0, binary: false }], offset: 0, total: 1 };
-    app.desk.changes.take_list_for_test(list);
+    app.desk.shared.changes.take_list_for_test(list);
+    app.desk.share();
     app.desk.changes.move_to("f:Unstaged:src/a.rs");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!((app.desk.panels.focused_kind(), app.desk.code.current_file.as_str()), (BufferKind::Code, "src/a.rs"));
@@ -248,9 +249,10 @@ fn g_x_on_a_message_compares_its_turns_changes() {
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g x"}"#).unwrap();
     assert_eq!(app.desk.panels.focused_kind(), BufferKind::Chat, "the timeline hasn't seen it: nothing to go to");
     let turn = Comparison { from: Point::Snapshot("1-a".into()), to: Point::Snapshot("2-b".into()) };
-    app.desk.changes.take_timeline_for_test(Timeline { windows: vec![], turns: vec![TurnChanges { thread: "t".into(), turn: "turn".into(), comparison: turn.clone(), files: 3, alongside: vec![] }] });
+    app.desk.shared.changes.take_timeline_for_test(Timeline { windows: vec![], turns: vec![TurnChanges { thread: "t".into(), turn: "turn".into(), comparison: turn.clone(), files: 3, alongside: vec![] }] });
     frame(&ctx, &mut app, Vec::new());
     assert_eq!(app.desk.chat.turn_files.get("turn"), Some(&3), "the chat knows how much each turn changed");
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g x"}"#).unwrap();
-    assert_eq!((app.desk.panels.focused_kind(), app.desk.changes.comparison.clone()), (BufferKind::Changes, turn));
+    frame(&ctx, &mut app, Vec::new());
+    assert_eq!((app.desk.panels.focused_kind(), app.desk.shared.changes.comparison().clone()), (BufferKind::Changes, turn));
 }

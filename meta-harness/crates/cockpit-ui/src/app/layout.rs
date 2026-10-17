@@ -161,7 +161,7 @@ impl CockpitApp {
             }
             Some(Place::Queue { .. }) => "the plan's jobs".to_owned(),
             Some(Place::Inbox { .. }) => "what needs you".to_owned(),
-            Some(Place::Changes { .. }) => self.desk.changes.comparison.to_string(),
+            Some(Place::Changes { .. }) => self.desk.shared.changes.comparison().to_string(),
             None => "new".to_owned(),
         };
         format!("{} · {what}", buffer.kind.name())
