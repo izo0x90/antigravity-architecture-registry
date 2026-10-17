@@ -51,6 +51,26 @@ impl Navigable for ChatStreamState {
         self.ui.place()
     }
 
+    /// An agent's chat: its slot, or the one running the session.
+    fn can_show(&self, target: &Target) -> bool {
+        matches!(target, Target::Agent { .. })
+    }
+
+    fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        let Target::Agent { slot, thread } = target else { return Err("Not an agent's chat.".into()) };
+        let running = |t: &ThreadId| self.store.slots.values().find(|s| s.current_thread() == Some(t)).map(|s| s.id.clone());
+        let found = slot.clone().filter(|s| self.store.slots.contains_key(s)).or_else(|| thread.as_ref().and_then(running));
+        let Some(slot) = found else {
+            return Err(match (slot, thread) {
+                (_, Some(thread)) => format!("No agent slot runs session {thread} now."),
+                _ => "That agent slot is closed.".into(),
+            });
+        };
+        self.ui.slot = slot;
+        self.ui.cursor = None;
+        Ok(())
+    }
+
     fn restore(&mut self, place: &Place) {
         if let Place::Chat { message, slot } = place {
             if let Some(slot) = slot {

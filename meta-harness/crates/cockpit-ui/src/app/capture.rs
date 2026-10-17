@@ -129,7 +129,7 @@ impl CockpitApp {
                     match self.desk.marks.get(&letter).cloned() {
                         Some(mark) => {
                             let before = self.jump_here();
-                            self.restore_jump(mark, ctx);
+                            self.restore_jump(mark);
                             self.after_jump(before);
                         }
                         None => self.note = Some(format!("No mark {letter}.")),

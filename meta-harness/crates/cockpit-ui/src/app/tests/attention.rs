@@ -51,10 +51,6 @@ fn waiting_app() -> (egui::Context, CockpitApp) {
     (ctx, app)
 }
 
-fn sent(app: &CockpitApp) -> Vec<String> {
-    std::mem::take(&mut *app.desk.net.sent.lock().unwrap())
-}
-
 fn looked_at(app: &CockpitApp) -> Option<&str> {
     app.looked_at().map(|id| id.as_str())
 }

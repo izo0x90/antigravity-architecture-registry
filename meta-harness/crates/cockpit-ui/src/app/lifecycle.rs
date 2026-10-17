@@ -47,7 +47,7 @@ impl CockpitApp {
             }
             self.desk.changes.ui = self.config.changes.clone();
         }
-        self.start_fresh(ctx);
+        self.start_fresh();
         self.use_focused();
 
         // Every server's events, each to its desk.
@@ -66,8 +66,9 @@ impl CockpitApp {
         }
         self.take_events(ctx);
         self.tick_away(ctx);
-        self.inbox_tick(ctx);
+        self.sync_inbox();
         self.link_views(ctx);
+        self.take_asks(ctx);
         self.mark_out_of_date();
         self.goto_tick(ctx);
         // The focused target's relations, so the bar and popup offer only
@@ -192,11 +193,6 @@ impl CockpitApp {
             IndexOp::Changed => self.desk.net.arch_ingest(false, ctx.clone(), failed),
             IndexOp::Rebuild => self.desk.net.arch_ingest(true, ctx.clone(), failed),
         }
-    }
-
-    pub(super) fn show_code(&mut self, file: &str, start: u32, end: u32, ctx: &egui::Context) {
-        self.ensure_visible(BufferKind::Code);
-        self.desk.code.show_span(file, start as usize, end as usize, &self.desk.net, ctx.clone());
     }
 
     /// Merges the user's UI config over the defaults once the server answers.

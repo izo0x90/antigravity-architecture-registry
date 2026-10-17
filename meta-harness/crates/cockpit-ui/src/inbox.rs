@@ -8,24 +8,15 @@
 
 use egui::{RichText, Vec2};
 use egui_phosphor::regular as icon;
-use harness_contracts::{Level, Notification, NotificationId, RequestId, RuntimeRequest, SlotId, ThreadId};
+use harness_contracts::{Level, Notification, NotificationId, RuntimeRequest};
 
 use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, Style};
 use crate::chat::ChatStreamState;
-use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
+use crate::app::BufferKind;
+use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target, Waiting};
 use crate::hosted::{Status, Tone};
 use crate::theme::colors;
 use crate::viewport::{Go, Measured, Show};
-
-/// What the inbox asks the shell to do.
-#[derive(Clone, Debug, PartialEq)]
-pub enum InboxAsk {
-    /// The next (or previous) item, on whichever server it is.
-    Step(i32),
-    OpenChat(SlotId),
-    Dismiss(NotificationId),
-    Answer { thread: ThreadId, request: RequestId, option: String },
-}
 
 /// The item shown, as last read from the store.
 #[derive(Clone, Debug, PartialEq)]
@@ -59,7 +50,7 @@ pub struct InboxView {
     /// Where it's looking (the shared rules move it, a part a stop).
     scrolling: Measured,
     spots: Vec<Spot>,
-    asks: Vec<InboxAsk>,
+    asks: Vec<Ask>,
 }
 
 #[derive(Clone, Debug)]
@@ -104,11 +95,6 @@ impl InboxView {
         self.cursor = self.cursor.min(parts.len().saturating_sub(1));
     }
 
-    /// What it asked for since last taken.
-    pub fn take_asks(&mut self) -> Vec<InboxAsk> {
-        std::mem::take(&mut self.asks)
-    }
-
     fn parts(&self) -> Vec<Part> {
         let Some(shown) = &self.shown else { return Vec::new() };
         let request = shown.request.as_ref().map(|_| Part::Request);
@@ -131,14 +117,15 @@ impl InboxView {
 
     fn answer(&mut self, option: String) -> Step {
         let Some(request) = self.shown.as_ref().and_then(|s| s.request.as_ref()) else { return Step::Nothing("Nothing to answer: it was answered already.".into()) };
-        self.asks.push(InboxAsk::Answer { thread: request.thread_id.clone(), request: request.id.clone(), option });
+        self.asks.push(Ask::Waiting(Waiting::Answer { thread: request.thread_id.clone(), request: request.id.clone(), option }));
         Step::Done
     }
 
     fn open_chat(&mut self) -> Step {
         match self.shown.as_ref().and_then(|s| s.notification.slot.clone()) {
             Some(slot) => {
-                self.asks.push(InboxAsk::OpenChat(slot));
+                let thread = self.shown.as_ref().and_then(|s| s.notification.thread.clone());
+                self.asks.push(Ask::Show { target: Target::Agent { slot: Some(slot), thread }, in_: BufferKind::Chat });
                 Step::Done
             }
             None => Step::Nothing("It's from no agent's chat.".into()),
@@ -218,6 +205,10 @@ impl InboxView {
 }
 
 impl Navigable for InboxView {
+    fn take_asks(&mut self) -> Vec<Ask> {
+        std::mem::take(&mut self.asks)
+    }
+
     fn place(&self) -> Place {
         Place::Inbox { item: self.item.as_ref().map(|i| i.to_string()) }
     }
@@ -333,13 +324,13 @@ impl ActionProvider for InboxView {
         let Some(command) = action.command::<Command>().cloned() else { return };
         let step = match command {
             Command::Step(by) => {
-                self.asks.push(InboxAsk::Step(by));
+                self.asks.push(Ask::Waiting(Waiting::Step(by)));
                 Step::Done
             }
             Command::OpenChat => self.open_chat(),
             Command::Dismiss => match &self.shown {
                 Some(shown) => {
-                    self.asks.push(InboxAsk::Dismiss(shown.notification.id.clone()));
+                    self.asks.push(Ask::Waiting(Waiting::Dismiss(shown.notification.id.clone())));
                     Step::Done
                 }
                 None => Step::Nothing("Already handled.".into()),

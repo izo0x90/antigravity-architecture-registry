@@ -485,6 +485,16 @@ palette (`:42` goes to line 42). The palette and its pickers move with
 `Ctrl+J`/`Ctrl+K` (or `Ctrl+N`/`Ctrl+P`, or the arrows) and pick with
 `Enter`.
 
+A buffer reaches past itself only by asking, and every ask is done the
+one way whichever buffer asked: showing something in another buffer is
+a go-to (it lands, takes focus, is a jump `ctrl+o` comes back from, and
+says why when it can't), a typing box opened takes the keyboard, a file
+is read into the index again. What you're on is followed: the graph and
+the card in use (each kind's used last) move to the component you
+select, land on or click (a mark in the code's margin). A pinned card
+stays, and shows what you're on once unpinned; another panel's graph
+keeps its own place.
+
 Every buffer is drawn the same way by what holds it (a panel, the quick
 look): its top line (its buttons first, then a place for its busy mark,
 its name and what it says about itself, which grow and wrap after the

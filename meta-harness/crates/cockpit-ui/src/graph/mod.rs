@@ -46,14 +46,6 @@ pub struct AgentMove {
     pub return_selection: Option<String>,
 }
 
-/// Things the graph asks other parts of the cockpit to do.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct GraphRequests {
-    /// Open this file at these lines in the code view.
-    pub open_code: Option<(String, u32, u32)>,
-    pub open_spec: bool,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Camera {
     pub(crate) pan: Vec2,
@@ -151,7 +143,10 @@ pub struct GraphState {
     first_child_of: Option<String>,
     /// The agent moved the view (shown until the user moves).
     pub agent: Option<AgentMove>,
-    pub requests: GraphRequests,
+    /// What it asked of the rest of the cockpit, not taken yet.
+    asks: Vec<crate::nav::Ask>,
+    /// The component it last said the user is on (its selection).
+    said: Option<ComponentId>,
     canvas: Rect,
     inbox: Arc<Mutex<Vec<Reply>>>,
     /// Behavior settings (chips, zoom), from the UI config.
@@ -210,7 +205,8 @@ impl Default for GraphState {
             by_hand: false,
             first_child_of: None,
             agent: None,
-            requests: GraphRequests::default(),
+            asks: Vec::new(),
+            said: None,
             canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
             inbox: Arc::default(),
             ui: GraphUi::default(),

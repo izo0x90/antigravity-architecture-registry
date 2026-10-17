@@ -44,8 +44,8 @@ impl CockpitApp {
         let state = self.saved_ui();
         for event in self.desk.keeper.tick(&state, now, after, &self.desk.net, ctx) {
             match event {
-                crate::saved::Event::Restore(saved) => self.restore_saved(*saved, ctx),
-                crate::saved::Event::Fresh => self.desk.code.load_file("Cargo.toml", None, &self.desk.net, ctx.clone()),
+                crate::saved::Event::Restore(saved) => self.restore_saved(*saved),
+                crate::saved::Event::Fresh => self.desk.view_mut(BufferKind::Code).restore(&Place::Code { file: "Cargo.toml".into(), line: 1 }),
                 crate::saved::Event::Note(note) => self.note = Some(note),
             }
         }
@@ -53,7 +53,7 @@ impl CockpitApp {
 
     /// Puts the saved state back: the panels, each view where it was, the
     /// marks and jumps, and each chat view's unsent text.
-    pub(super) fn restore_saved(&mut self, saved: SavedUi, ctx: &egui::Context) {
+    pub(super) fn restore_saved(&mut self, saved: SavedUi) {
         self.close_quick_look();
         self.desk.panels = saved.panels.clone().checked();
         self.desk.marks = saved.marks.clone();
@@ -77,7 +77,7 @@ impl CockpitApp {
                     continue;
                 }
             }
-            self.restore_place(buffer.kind, place, ctx);
+            self.desk.view_mut(buffer.kind).restore(place);
         }
         // Put back as saved: not started from another view's place.
         self.desk.fresh.retain(|(buffer, _)| !saved.views.iter().any(|(p, _)| p == buffer));

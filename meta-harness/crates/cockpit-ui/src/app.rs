@@ -27,6 +27,7 @@ use crate::theme::colors;
 use crate::tree::ArchitectureTreeState;
 
 pub(crate) mod attention;
+mod asks;
 mod capture;
 mod commands;
 mod desk;

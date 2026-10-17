@@ -351,6 +351,24 @@ impl GraphState {
 }
 
 impl Navigable for GraphState {
+    /// What it asked, and its selection when that changed: the user is on it.
+    fn take_asks(&mut self) -> Vec<crate::nav::Ask> {
+        if let Some(on) = self.current()
+            && self.said.as_ref() != Some(&on)
+        {
+            self.said = Some(on.clone());
+            self.asks.push(crate::nav::Ask::Follow(on));
+        }
+        std::mem::take(&mut self.asks)
+    }
+
+    /// Moves to the component the user is on, unless it's selected here.
+    fn follow(&mut self, id: &ComponentId) {
+        if self.current().as_ref() != Some(id) {
+            self.reveal(id.clone());
+        }
+    }
+
     fn gesture(&mut self, gesture: crate::touch::Gesture) {
         self.on_gesture(gesture);
     }

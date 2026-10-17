@@ -1,0 +1,52 @@
+//! What buffers ask of the rest of the cockpit: taken from every buffer
+//! the same way, and done here, whichever buffer asked.
+
+use super::*;
+use crate::nav::Ask;
+
+impl CockpitApp {
+    /// Takes the asks of every buffer in use and does them (each frame, and
+    /// after every action).
+    pub(super) fn take_asks(&mut self, ctx: &egui::Context) {
+        for kind in BufferKind::ALL {
+            for ask in self.desk.view_mut(kind).take_asks() {
+                self.do_ask(kind, ask, ctx);
+            }
+        }
+    }
+
+    fn do_ask(&mut self, from: BufferKind, ask: Ask, ctx: &egui::Context) {
+        match ask {
+            Ask::Show { target, in_ } => {
+                let jump = self.jump_of(from);
+                self.land(in_, &target, jump, ctx);
+            }
+            // The buffers in use (each kind's used last) follow the user's
+            // moves; a parked one keeps its own place.
+            Ask::Follow(id) => {
+                for kind in BufferKind::ALL {
+                    self.desk.view_mut(kind).follow(&id);
+                }
+            }
+            Ask::Reread(file) => self.reread(file, ctx),
+            Ask::Type => {
+                self.focus_kind(from);
+                self.input_mode = InputMode::Insert { panel: self.desk.panels.focused() };
+            }
+            Ask::ReviewChanged => self.desk.review.invalidate(),
+            Ask::Waiting(waiting) => self.do_waiting(waiting, ctx),
+        }
+    }
+
+    /// Reads `file` into the index again (a failure is said with the index's).
+    fn reread(&mut self, file: String, ctx: &egui::Context) {
+        let notes = self.desk.index_inbox.clone();
+        self.desk.net.arch_refresh(&[file], ctx.clone(), move |r| {
+            if let Err(e) = r
+                && let Ok(mut i) = notes.lock()
+            {
+                i.push(Err(e));
+            }
+        });
+    }
+}

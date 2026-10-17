@@ -291,7 +291,8 @@ impl GraphState {
             // Nothing in the graph stands for it (a file no pack reads): show the code.
             if let Some(file) = &hit.file {
                 let line = hit.line.unwrap_or(1);
-                self.requests.open_code = Some((file.clone(), line, line));
+                let line = line as usize;
+                self.asks.push(crate::nav::Ask::Show { target: crate::nav::Target::Span { file: file.clone(), start: line, end: line }, in_: crate::app::BufferKind::Code });
             }
             return;
         };
@@ -318,6 +319,7 @@ impl GraphState {
 mod tests {
     use super::*;
     use crate::graph::tests::{sample_tree, showing};
+    use crate::nav::Navigable;
 
     fn hit(kind: SearchKind, key: Option<&str>, label: &str, callable: bool, data: Option<&str>) -> Hit {
         Hit { kind, key: key.map(Into::into), label: label.into(), detail: "d".into(), file: Some("src/a.rs".into()), line: Some(3), callable, data: data.map(Into::into) }
@@ -362,7 +364,8 @@ mod tests {
 
         // A line nothing in the graph stands for opens in the code.
         g.command(crate::graph::actions::GraphCommand::Find, Some(value_of(&g, "// step by step")));
-        assert_eq!(g.requests.open_code, Some(("src/a.rs".into(), 3, 3)));
+        let shown = crate::nav::Ask::Show { target: crate::nav::Target::Span { file: "src/a.rs".into(), start: 3, end: 3 }, in_: crate::app::BufferKind::Code };
+        assert!(g.take_asks().contains(&shown), "it asks the code to show it");
 
         // Answers to an older query are dropped.
         let stale = g.find.asked;

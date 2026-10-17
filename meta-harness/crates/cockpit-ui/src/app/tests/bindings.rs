@@ -296,7 +296,7 @@ fn the_leader_menu_opens_with_the_focused_views_own_menu() {
     assert!(text.contains("SPEC") && text.contains("All spec actions…"), "{text}");
     frame(&ctx, &mut app, key(","));
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("LEADER > ALL SPEC ACTIONS") && text.contains("Unpin (follow the graph)"), "{text}");
+    assert!(text.contains("LEADER > ALL SPEC ACTIONS") && text.contains("Unpin (follow what you're on)"), "{text}");
 }
 
 #[test]

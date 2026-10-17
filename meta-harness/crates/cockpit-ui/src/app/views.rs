@@ -1,4 +1,4 @@
-//! Dispatch to the views, jumps between them, and linking what they show.
+//! Dispatch to the views, jumps between them, and what they show in common.
 
 use super::*;
 
@@ -37,25 +37,12 @@ impl CockpitApp {
     }
 
     /// Goes to a recorded place: its view in its panel, focused.
-    pub(super) fn restore_jump(&mut self, jump: Jump, ctx: &egui::Context) {
+    pub(super) fn restore_jump(&mut self, jump: Jump) {
         let panel = if jump.panel < self.desk.panels.len() { jump.panel } else { self.ensure_visible(jump.kind) };
         let buffer = self.desk.panels.show(panel, jump.kind);
         self.desk.panels.focus(panel);
         self.use_buffer(buffer);
-        self.restore_place(jump.kind, &jump.place, ctx);
-    }
-
-    /// Puts view `kind` back at `place` (fetching what it needs).
-    pub(super) fn restore_place(&mut self, kind: BufferKind, place: &Place, ctx: &egui::Context) {
-        match place {
-            Place::Code { file, line } if !self.desk.code.shows(file) => self.desk.code.load_file(file, Some(*line), &self.desk.net, ctx.clone()),
-            Place::Spec { component: Some(id), .. } if !self.desk.spec.pinned && self.desk.graph.selection.as_deref() != Some(id.as_str()) => {
-                // The spec shows the graph's selection: move that first.
-                self.desk.graph.reveal(id.clone());
-                self.desk.spec.restore(place);
-            }
-            place => self.desk.view_mut(kind).restore(place),
-        }
+        self.desk.view_mut(jump.kind).restore(&jump.place);
     }
 
     /// What `When` conditions are judged against, for the focused view.
@@ -80,28 +67,15 @@ impl CockpitApp {
         Some(ops.into_iter().filter(|op| !candidates(*op, detail).is_empty()).collect())
     }
 
-    /// The queue view runs on the graph's plan with the chat's harness, and
-    /// sends the user to its workers' sessions.
+    /// The queue view runs on the graph's plan with the chat's harness.
     pub(super) fn link_queue(&mut self, plan: Option<&arch_graph::PlanId>, ctx: &egui::Context) {
         self.desk.queue.author = self.config.user.name.clone();
         self.desk.queue.instance = self.desk.chat.active_instance();
         self.desk.queue.tick(&self.desk.net, ctx, plan);
-        if let Some(thread) = self.desk.queue.requests.open_thread.take() {
-            let from = self.jump_of(BufferKind::Queue);
-            self.focus_kind(BufferKind::Chat);
-            if self.desk.chat.show_thread(&harness_contracts::ThreadId::new(&thread)) {
-                self.after_jump(from);
-            } else {
-                self.note = Some(format!("No agent slot runs session {thread} now."));
-            }
-        }
     }
 
     /// The plan's review state feeds the graph's badges and the spec's threads.
     pub(super) fn link_review(&mut self, plan: Option<&arch_graph::PlanId>, ctx: &egui::Context) {
-        if std::mem::take(&mut self.desk.spec.requests.review_changed) {
-            self.desk.review.invalidate();
-        }
         self.desk.review.tick(&self.desk.net, ctx, plan);
         if self.desk.review.generation != self.desk.review_seen {
             self.desk.review_seen = self.desk.review.generation;
@@ -123,8 +97,8 @@ impl CockpitApp {
         }
     }
 
-    /// Carries requests between views: graph ↔ code ↔ spec ↔ outline ↔ chat.
-    /// Each one that sends the user somewhere is a jump.
+    /// What the views show in common: the desk's comparison and what it
+    /// changed, the source, the review, the queue's plan.
     pub(super) fn link_views(&mut self, ctx: &egui::Context) {
         self.desk.graph.tick(&self.desk.net, ctx);
         // The desk's comparison: read whether or not its view is shown (the
@@ -155,10 +129,8 @@ impl CockpitApp {
         }
         let source = self.desk.graph.nav.source.clone();
         let plan = source.plan().cloned();
-        // Specs not pinned show what the graph used last has selected.
-        let selected = self.desk.graph.current();
         for spec in self.desk.specs() {
-            spec.follow(selected.as_ref(), &source);
+            spec.follow_source(&source);
         }
         // One truth for where code is: if the spec fetched a newer anchor for
         // the selection than the view on screen has, the view is stale.
@@ -172,47 +144,5 @@ impl CockpitApp {
         self.link_review(plan.as_ref(), ctx);
         self.link_queue(plan.as_ref(), ctx);
         self.desk.tree.set_source(&source);
-        if let Some((file, start, end)) = self.desk.graph.requests.open_code.take() {
-            self.desk.jumps.record(self.jump_of(BufferKind::Graph));
-            self.show_code(&file, start, end, ctx);
-        }
-        if std::mem::take(&mut self.desk.graph.requests.open_spec) {
-            self.ensure_visible(BufferKind::Spec);
-        }
-        if let Some((file, start, end)) = self.desk.spec.requests.open_code.take() {
-            self.desk.jumps.record(self.jump_of(BufferKind::Spec));
-            self.show_code(&file, start, end, ctx);
-        }
-        // Files a view asked to read into the index again.
-        for file in [self.desk.spec.requests.reread.take(), self.desk.code.reread.take()].into_iter().flatten() {
-            let notes = self.desk.index_inbox.clone();
-            self.desk.net.arch_refresh(&[file], ctx.clone(), move |r| {
-                if let Err(e) = r
-                    && let Ok(mut i) = notes.lock()
-                {
-                    i.push(Err(e));
-                }
-            });
-        }
-        if std::mem::take(&mut self.desk.spec.requests.insert) {
-            self.focus_kind(BufferKind::Spec);
-            self.input_mode = InputMode::Insert { panel: self.desk.panels.focused() };
-        }
-        // A name ctrl-clicked in the code: its definition.
-        if let Some(id) = self.desk.code.open.take() {
-            let from = self.jump_of(BufferKind::Code);
-            self.goto_component(GoTo::Code, id, from, BufferKind::Code, ctx);
-        }
-        for (kind, id) in [(BufferKind::Spec, self.desk.spec.requests.select.take()), (BufferKind::Code, self.desk.code.select.take())] {
-            if let Some(id) = id {
-                // In the quick look, a link followed shows its card there too.
-                if kind == BufferKind::Spec && self.quick_look.is_some() {
-                    self.desk.spec.show(id.clone());
-                }
-                self.desk.jumps.record(self.jump_of(kind));
-                self.ensure_visible(BufferKind::Graph);
-                self.desk.graph.reveal(id);
-            }
-        }
     }
 }

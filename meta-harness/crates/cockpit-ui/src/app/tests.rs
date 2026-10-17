@@ -1,5 +1,6 @@
 //! The shell's tests; helpers here, tests by topic below.
 
+mod asks;
 mod attention;
 mod desks;
 mod audits;
@@ -140,6 +141,11 @@ fn ctrl(ctx: &egui::Context, app: &mut CockpitApp, key: egui::Key) {
     let modifiers = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
     let raw = egui::RawInput { events: press(key, true), modifiers, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)), ..Default::default() };
     let _ = ctx.run(raw, |ctx| app.frame(ctx));
+}
+
+/// The calls sent to the server since last asked ("POST /api/…").
+fn sent(app: &CockpitApp) -> Vec<String> {
+    std::mem::take(&mut *app.desk.net.sent.lock().unwrap())
 }
 
 fn selected(app: &CockpitApp) -> &str {

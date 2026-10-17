@@ -1,12 +1,12 @@
 //! What needs the user, in the shell: the bell (what's waiting, and
 //! whether system notifications are on) and the tray (updates), their
-//! lists, the quick look on the inbox, the inbox's asks (the next item on
-//! whichever server, its chat, putting it away, an answer), chats seen.
+//! lists, the quick look on the inbox, what the inbox asks about them (the
+//! next item on whichever server, putting it away, an answer), chats seen.
 
 use harness_contracts::{Level, Notification, NotificationId, SlotId};
 
 use super::*;
-use crate::inbox::InboxAsk;
+use crate::nav::Waiting;
 
 /// How often a chat on screen says its slot was seen (seconds).
 const SEEN_EVERY: f64 = 2.0;
@@ -148,12 +148,6 @@ impl CockpitApp {
         }
     }
 
-    /// The inbox reads what it shows (each frame) and its asks are done.
-    pub(super) fn inbox_tick(&mut self, ctx: &egui::Context) {
-        self.sync_inbox();
-        self.inbox_asks(ctx);
-    }
-
     pub(super) fn sync_inbox(&mut self) {
         let all: Vec<(String, NotificationId)> = self.all_open(None).into_iter().map(|(s, n)| (s, n.id)).collect();
         let server = self.desk.server.clone();
@@ -161,38 +155,27 @@ impl CockpitApp {
         self.desk.inbox.sync(&self.desk.chat, at, crate::attention::now_ms());
     }
 
-    /// Does what the inbox asked (after its keys, and each frame for its buttons).
-    pub(super) fn inbox_asks(&mut self, ctx: &egui::Context) {
-        for ask in self.desk.inbox.take_asks() {
-            match ask {
-                InboxAsk::Step(by) => match self.step(by) {
-                    Some((server, next)) => self.inbox_to(&server, next, ctx),
-                    None => self.note = Some(if by > 0 { "That was the last one." } else { "That was the first one." }.into()),
-                },
-                InboxAsk::OpenChat(slot) => {
-                    self.close_quick_look();
-                    let from = self.jump_here();
-                    self.focus_kind(BufferKind::Chat);
-                    self.use_focused();
-                    self.desk.chat.ui.slot = slot;
-                    self.desk.chat.ui.cursor = None;
-                    self.after_jump(from);
-                }
-                InboxAsk::Dismiss(id) => {
-                    let next = self.step(1);
-                    let later = self.notes_later.clone();
-                    self.desk.net.dismiss_notification(&id, ctx.clone(), move |r| {
-                        if let (Err(e), Ok(mut notes)) = (r, later.lock()) {
-                            notes.push(format!("It couldn't be put away: {}", e.message));
-                        }
-                    });
-                    match next {
-                        Some((server, next)) => self.inbox_to(&server, next, ctx),
-                        None => self.close_quick_look(),
+    /// Does what the inbox asked about what waits on the user.
+    pub(super) fn do_waiting(&mut self, ask: Waiting, ctx: &egui::Context) {
+        match ask {
+            Waiting::Step(by) => match self.step(by) {
+                Some((server, next)) => self.inbox_to(&server, next, ctx),
+                None => self.note = Some(if by > 0 { "That was the last one." } else { "That was the first one." }.into()),
+            },
+            Waiting::Dismiss(id) => {
+                let next = self.step(1);
+                let later = self.notes_later.clone();
+                self.desk.net.dismiss_notification(&id, ctx.clone(), move |r| {
+                    if let (Err(e), Ok(mut notes)) = (r, later.lock()) {
+                        notes.push(format!("It couldn't be put away: {}", e.message));
                     }
+                });
+                match next {
+                    Some((server, next)) => self.inbox_to(&server, next, ctx),
+                    None => self.close_quick_look(),
                 }
-                InboxAsk::Answer { thread, request, option } => self.desk.chat.answer(&self.desk.net, ctx, &thread, &request, &option),
             }
+            Waiting::Answer { thread, request, option } => self.desk.chat.answer(&self.desk.net, ctx, &thread, &request, &option),
         }
     }
 

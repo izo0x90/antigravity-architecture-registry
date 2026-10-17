@@ -5,6 +5,7 @@
 //! `Navigable`; the shell owns the keys, the history, marks, search and hints.
 
 use arch_graph::{CommentId, ComponentId, RelationKind};
+use harness_contracts::{NotificationId, RequestId, SlotId, ThreadId};
 
 use crate::app::BufferKind;
 use crate::graph::Nav;
@@ -33,6 +34,41 @@ pub enum Target {
     Message { thread: Option<String>, turn: Option<String>, index: usize, link: Option<(String, Option<usize>)> },
     /// A change (git): the file, at its first changed line.
     Change { file: String, line: usize },
+    /// Lines `start..=end` of a file (where a component's code is).
+    Span { file: String, start: usize, end: usize },
+    /// An agent's chat: its slot, or the slot running a session.
+    Agent { slot: Option<SlotId>, thread: Option<ThreadId> },
+}
+
+/// What a buffer asks of the rest of the cockpit: the one way it reaches
+/// past itself. The shell takes every buffer's asks (`take_asks`) and does
+/// each the same way, whichever buffer asked.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Ask {
+    /// Show `target` in a buffer of kind `in_`: the go-to path (whether it
+    /// can, which panel, focus, the jump list).
+    Show { target: Target, in_: BufferKind },
+    /// The component the user is on now: buffers that follow it move to it.
+    Follow(ComponentId),
+    /// Read this file into the index again.
+    Reread(String),
+    /// A typing box opened in it: the keyboard goes there.
+    Type,
+    /// The plan's review changed (a write went through): read it again.
+    ReviewChanged,
+    /// What waits on the user, across servers (the inbox's).
+    Waiting(Waiting),
+}
+
+/// What the inbox asks about what waits on the user.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Waiting {
+    /// The next (or previous) item, on whichever server it is.
+    Step(i32),
+    /// Put it away.
+    Dismiss(NotificationId),
+    /// Answer an agent's request.
+    Answer { thread: ThreadId, request: RequestId, option: String },
 }
 
 /// One navigable item in the spec view.
@@ -59,8 +95,10 @@ impl Target {
         let file = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
         match self {
             Self::Component(id) | Self::Job { component: id } | Self::Spec { component: id, .. } => short_name(id),
-            Self::Line { file: path, line, .. } | Self::Change { file: path, line } => format!("{}:{line}", file(path)),
+            Self::Line { file: path, line, .. } | Self::Change { file: path, line } | Self::Span { file: path, start: line, .. } => format!("{}:{line}", file(path)),
             Self::Message { index, .. } => format!("message {}", index + 1),
+            Self::Agent { slot: Some(slot), .. } => format!("agent slot {slot}"),
+            Self::Agent { thread, .. } => format!("session {}", thread.as_ref().map_or("?", |t| t.as_str())),
         }
     }
 
@@ -72,7 +110,7 @@ impl Target {
             Self::Line { within, .. } => within.as_ref(),
             Self::Spec { item: SpecItem::Relation { other, .. }, .. } => Some(other),
             Self::Spec { component, .. } => Some(component),
-            Self::Message { .. } | Self::Change { .. } => None,
+            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } => None,
         }
     }
 
@@ -82,10 +120,10 @@ impl Target {
         self.component().is_some() || matches!(self, Self::Line { .. })
     }
 
-    /// A place in the code (a line, a change): the index can say which
-    /// component it's in.
+    /// A place in the code (a line, a change, lines): the index can say
+    /// which component it's in.
     pub fn in_code(&self) -> bool {
-        matches!(self, Self::Line { .. } | Self::Change { .. })
+        matches!(self, Self::Line { .. } | Self::Change { .. } | Self::Span { .. })
     }
 
     /// Whether it's about another component than `at` (a view's cursor),
@@ -97,7 +135,7 @@ impl Target {
     /// A place in the code the target names directly (a line, a file link).
     pub fn code(&self) -> Option<(String, Option<usize>)> {
         match self {
-            Self::Line { file, line, .. } | Self::Change { file, line } => Some((file.clone(), Some(*line))),
+            Self::Line { file, line, .. } | Self::Change { file, line } | Self::Span { file, start: line, .. } => Some((file.clone(), Some(*line))),
             Self::Message { link, .. } => link.clone(),
             _ => None,
         }
@@ -617,6 +655,16 @@ pub trait Navigable {
     fn show_target(&mut self, _target: &Target) -> Result<(), String> {
         Err("This buffer doesn't show things gone to.".into())
     }
+
+    /// What it asked of the rest of the cockpit since it was last asked
+    /// (the shell takes them every frame and after every action).
+    fn take_asks(&mut self) -> Vec<Ask> {
+        Vec::new()
+    }
+
+    /// The component the user is on now (`Ask::Follow`, from any buffer):
+    /// a buffer that follows it moves to it.
+    fn follow(&mut self, _id: &ComponentId) {}
 
     /// Opens or goes into an item (`F` on a hint).
     fn open_item(&mut self, key: &str) -> Step {

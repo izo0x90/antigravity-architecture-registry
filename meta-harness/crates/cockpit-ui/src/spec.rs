@@ -12,7 +12,7 @@ use harness_contracts::changes::{Comparison, FileChanges, Hunk};
 
 use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style, When};
 use crate::hosted::{Status, Tone};
-use crate::nav::{Fold, GoTo, Item, Motion, Move, Navigable, Place, SpecItem, Spot, Step, Target};
+use crate::nav::{Ask, Fold, GoTo, Item, Motion, Move, Navigable, Place, SpecItem, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
 use crate::viewport::{Go, Measured, Show};
@@ -130,20 +130,6 @@ enum Reply {
     Posted(Result<(), String>),
 }
 
-#[derive(Default)]
-pub struct SpecRequests {
-    /// Select this component in the graph.
-    pub select: Option<ComponentId>,
-    /// Open this file at these lines.
-    pub open_code: Option<(String, u32, u32)>,
-    /// A review write went through: refresh the plan's review state.
-    pub review_changed: bool,
-    /// The composer opened: the keyboard goes to it.
-    pub insert: bool,
-    /// Read this file again (its code changed since it was indexed).
-    pub reread: Option<String>,
-}
-
 /// One cursor stop: an item in a section.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
@@ -178,7 +164,10 @@ pub struct SpecState {
     scrolling: Measured,
     pub(crate) loaded: Option<(ComponentId, Source)>,
     error: Option<String>,
-    pub requests: SpecRequests,
+    /// What it asked of the rest of the cockpit, not taken yet.
+    asks: Vec<Ask>,
+    /// The component the user was on last (shown once it's unpinned).
+    followed: Option<ComponentId>,
     /// The cockpit user (author of comments and reviews).
     pub author: String,
     /// The plan's comments (all of them) and its diff since the last review.
@@ -222,7 +211,8 @@ impl Default for SpecState {
             scrolling: Measured::default(),
             loaded: None,
             error: None,
-            requests: SpecRequests::default(),
+            asks: Vec::new(),
+            followed: None,
             author: String::new(),
             comments: Vec::new(),
             diff: PlanDiff::default(),
@@ -243,13 +233,9 @@ impl Default for SpecState {
 }
 
 impl SpecState {
-    /// Follows the graph (unless pinned).
-    pub fn follow(&mut self, selection: Option<&ComponentId>, source: &Source) {
-        if !self.pinned {
-            if self.target.as_ref() != selection {
-                self.leave_component();
-            }
-            self.target = selection.cloned();
+    /// Reads components from `source` (unless pinned).
+    pub fn follow_source(&mut self, source: &Source) {
+        if !self.pinned && &self.source != source {
             self.source = source.clone();
         }
     }
@@ -304,6 +290,15 @@ impl SpecState {
     }
 
     /// Shows `id` even while pinned (a go-to asked for it).
+    /// Shows `id` where the user went: not pinned, it's what the user is on
+    /// now (what follows that moves to it too).
+    fn land_on(&mut self, id: ComponentId) {
+        if !self.pinned {
+            self.asks.push(Ask::Follow(id.clone()));
+        }
+        self.show(id);
+    }
+
     pub fn show(&mut self, id: ComponentId) {
         if self.target.as_ref() != Some(&id) {
             self.leave_component();
@@ -337,7 +332,7 @@ impl SpecState {
                 }
                 Reply::Posted(Ok(())) => {
                     self.note = None;
-                    self.requests.review_changed = true;
+                    self.asks.push(Ask::ReviewChanged);
                 }
                 Reply::Posted(Err(e)) => self.note = Some(e),
                 _ => {}
@@ -599,7 +594,7 @@ impl SpecState {
             _ => None,
         };
         self.composer = Some(Composer { purpose, anchor, section, text: String::new() });
-        self.requests.insert = true;
+        self.asks.push(Ask::Type);
     }
 
     fn posted<T: Send + 'static>(&self) -> impl FnOnce(NetResult<T>) + Send + 'static {
@@ -1038,7 +1033,7 @@ impl ActionProvider for SpecState {
         ]);
         if !self.floating {
             out.push(
-                f("spec.pin", if self.pinned { "Unpin (follow the graph)" } else { "Pin this component" }, S::Pin)
+                f("spec.pin", if self.pinned { "Unpin (follow what you're on)" } else { "Pin this component" }, S::Pin)
                     .header(Style::Button, if self.pinned { "Pinned" } else { "Pin" }, Some(egui_phosphor::regular::PUSH_PIN))
                     .group(Group::View)
                     .importance(MINOR),
@@ -1124,7 +1119,7 @@ impl ActionProvider for SpecState {
                 self.send_composer(cx.net, cx.ctx);
                 *cx.input_mode = crate::keymap::InputMode::Normal;
             }
-            Some(SpecCommand::Reread) => self.requests.reread = self.code_location().map(|(file, _, _)| file),
+            Some(SpecCommand::Reread) => self.asks.extend(self.code_location().map(|(file, _, _)| Ask::Reread(file))),
             Some(SpecCommand::NextSection) => self.step_section(1),
             Some(SpecCommand::PrevSection) => self.step_section(-1),
             Some(SpecCommand::Section) => {
@@ -1132,7 +1127,13 @@ impl ActionProvider for SpecState {
                     self.put_on(&Entry { section: *section, item: SpecItem::Header });
                 }
             }
-            Some(SpecCommand::Pin) => self.pinned = !self.pinned,
+            Some(SpecCommand::Pin) => {
+                self.pinned = !self.pinned;
+                // Unpinned: on what the user is on now.
+                if let Some(id) = self.followed.clone().filter(|_| !self.pinned) {
+                    self.show(id);
+                }
+            }
             None => {}
         }
     }
@@ -1172,20 +1173,32 @@ impl Navigable for SpecState {
 
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
         let id = target.component().ok_or("Not a component.")?;
-        self.show(id.clone());
+        self.land_on(id.clone());
         Ok(())
+    }
+
+    fn take_asks(&mut self) -> Vec<Ask> {
+        std::mem::take(&mut self.asks)
+    }
+
+    /// Shows the component the user is on; pinned, remembers it (shown
+    /// when it's unpinned).
+    fn follow(&mut self, id: &ComponentId) {
+        self.followed = Some(id.clone());
+        if !self.pinned {
+            self.show(id.clone());
+        }
     }
 
     fn place(&self) -> Place {
         Place::Spec { component: self.target.clone(), item: self.entry().map(|e| e.key()) }
     }
 
-    /// Back to the component (pinned there, so the graph doesn't take it
-    /// away) and the item.
+    /// Back to the component and the item.
     fn restore(&mut self, place: &Place) {
         if let Place::Spec { component, item } = place {
             if let Some(id) = component {
-                self.show(id.clone());
+                self.land_on(id.clone());
             }
             let loaded = self.detail.as_ref().is_some_and(|d| Some(&d.component.id) == self.target.as_ref());
             match item.as_deref().and_then(|key| self.all_entries().into_iter().find(|e| e.key() == key)) {
@@ -1431,13 +1444,16 @@ pub(crate) mod tests {
         let mut s = SpecState::default();
         let a = ComponentId::new("rust:a::run");
         let b = ComponentId::new("rust:a::step");
-        s.follow(Some(&a), &Source::Code);
+        s.follow_source(&Source::Code);
+        s.follow(&a);
         assert_eq!(s.target.as_ref(), Some(&a));
         s.pinned = true;
-        s.follow(Some(&b), &Source::Code);
+        s.follow_source(&Source::Code);
+        s.follow(&b);
         assert_eq!(s.target.as_ref(), Some(&a), "pinned");
         s.pinned = false;
-        s.follow(Some(&b), &Source::Plan(PlanId::new("p").unwrap()));
+        s.follow_source(&Source::Plan(PlanId::new("p").unwrap()));
+        s.follow(&b);
         assert_eq!((s.target.as_ref(), s.source.plan().is_some()), (Some(&b), true));
 
         s.step_section(1);
@@ -1473,7 +1489,8 @@ pub(crate) mod tests {
         let id = ComponentId::new("rust:a::step");
         let other = ComponentId::new("rust:a::save");
         let mut s = SpecState::default();
-        s.follow(Some(&id), &Source::Plan(PlanId::new("p").unwrap()));
+        s.follow_source(&Source::Plan(PlanId::new("p").unwrap()));
+        s.follow(&id);
         s.detail = Some(detail(&id, &other));
         s.loaded = Some((id.clone(), s.source.clone()));
         let mut answered = comment(1, CommentAnchor::Section { id: id.clone(), section: "logic".into() }, CommentStatus::Answered);
@@ -1495,7 +1512,7 @@ pub(crate) mod tests {
         }
         assert_eq!(s.enter(), Step::Done);
         assert_eq!(s.composer.as_ref().map(|c| c.purpose.clone()), Some(Compose::Reply(CommentId("c1".into()))));
-        assert!(std::mem::take(&mut s.requests.insert), "the composer takes the keyboard");
+        assert_eq!(s.take_asks(), [Ask::Type], "the composer takes the keyboard");
         s.composer = None;
         // Backspace goes up to the title; Enter on a title folds it.
         assert_eq!(s.leave(), Step::Done);
@@ -1558,7 +1575,8 @@ pub(crate) mod tests {
         let id = ComponentId::new("rust:a::step");
         let other = ComponentId::new("rust:a::run");
         let mut s = SpecState::default();
-        s.follow(Some(&id), &Source::Plan(PlanId::new("p").unwrap()));
+        s.follow_source(&Source::Plan(PlanId::new("p").unwrap()));
+        s.follow(&id);
         s.author = "izo".into();
         // Diff fields land in the sections that show them.
         s.diff = PlanDiff {
@@ -1612,7 +1630,7 @@ pub(crate) mod tests {
         let request = actions.iter().find(|a| a.id == "spec.request_change").unwrap().clone();
         let mut note = None;
         s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, panel: 1, note: &mut note, asked: &mut None });
-        assert!(s.requests.insert);
+        assert_eq!(s.take_asks(), [Ask::Type]);
         assert_eq!(
             s.composer,
             Some(Composer { purpose: Compose::New(CommentKind::ChangeRequest), anchor: Some(CommentAnchor::Section { id: id.clone(), section: "logic".into() }), section: Section::Logic, text: String::new() })
@@ -1664,7 +1682,8 @@ pub(crate) mod tests {
         let (id, other) = (ComponentId::new("rust:a::step"), ComponentId::new("rust:a::run"));
         let plan = PlanId::new("p").unwrap();
         let mut s = SpecState::default();
-        s.follow(Some(&id), &Source::Plan(plan.clone()));
+        s.follow_source(&Source::Plan(plan.clone()));
+        s.follow(&id);
         let mut d = detail(&id, &other);
         d.component.description.clear();
         s.detail = Some(d);
@@ -1725,7 +1744,8 @@ pub(crate) mod tests {
         use harness_contracts::changes::{DiffLine, LineKind};
         let (a, b) = (ComponentId::new("rust:a::step"), ComponentId::new("rust:a::run"));
         let mut s = SpecState::default();
-        s.follow(Some(&a), &Source::Code);
+        s.follow_source(&Source::Code);
+        s.follow(&a);
         let mut d = detail(&a, &b);
         d.component.anchor = Some(arch_graph::CodeAnchor { language: "rust".into(), syntax_kind: "function_item".into(), file: arch_graph::RepoPath::new("src/a.rs").unwrap(), symbol: "a::step".into(), span: arch_graph::Span { start_line: 10, end_line: 20, start_byte: 0, end_byte: 0 }, content_hash: String::new() });
         s.detail = Some(d);
@@ -1751,7 +1771,8 @@ pub(crate) mod tests {
     fn as_a_destination_it_shows_any_component_but_the_one_whose_card_is_shown() {
         let (a, b) = (ComponentId::new("rust:a::run"), ComponentId::new("rust:a::step"));
         let mut s = SpecState::default();
-        s.follow(Some(&a), &Source::Code);
+        s.follow_source(&Source::Code);
+        s.follow(&a);
         assert!(!s.can_show(&Target::Component(a.clone())) && s.can_show(&Target::Component(b.clone())));
         let relation = Target::Spec { component: a.clone(), section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: b.clone(), outgoing: true } };
         assert!(s.can_show(&relation), "a relation's other end is another card");

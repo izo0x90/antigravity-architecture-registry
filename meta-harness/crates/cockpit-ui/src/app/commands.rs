@@ -291,8 +291,8 @@ impl CockpitApp {
         #[cfg(test)]
         self.ran.borrow_mut().push(invocation.action.id.clone());
         self.run_counted(invocation, count, ctx);
-        // What the inbox asked for, done now (its next item, its chat…).
-        self.inbox_asks(ctx);
+        // What the buffers asked for, done now (the inbox's next item, a chat…).
+        self.take_asks(ctx);
         self.sync_inbox();
         self.in_frame.set(drawing);
         self.frame_actions.borrow_mut().take();
@@ -441,7 +441,7 @@ impl CockpitApp {
                     }
                 }
                 match to {
-                    Some(jump) => self.restore_jump(jump, ctx),
+                    Some(jump) => self.restore_jump(jump),
                     None => self.note = Some(if command == ShellCommand::Back { "Nothing to go back to." } else { "Nothing to go forward to." }.into()),
                 }
             }

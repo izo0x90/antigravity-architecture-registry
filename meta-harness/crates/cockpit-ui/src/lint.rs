@@ -14,6 +14,10 @@
 //!   view (what every panel has, the hosts, the shell) never decide about
 //!   a kind of view: no naming one, no reading one's state, to label or
 //!   offer something. A view says that about itself.
+//! - **Asks**: a buffer reaches past itself only by asking (`nav::Ask`).
+//!   The shell takes the asks in one place (`app/asks.rs`) and does each
+//!   the same way whichever buffer asked; no buffer keeps fields for the
+//!   shell to poll.
 //! - **Controls**: views draw content; hosts draw every control. Outside
 //!   the hosts (the top bar, panels, the quick look, the key bar and
 //!   menus: `app/draw/`), the one control (`actions.rs`, `hosted.rs`) and
@@ -212,6 +216,21 @@ fn the_levels_around_a_view_never_decide_about_a_kind_of_view() {
         }
     }
     assert!(found.is_empty(), "a level around a view decides about a kind of view (let the view offer it, or answer as a destination):\n{}", found.join("\n"));
+}
+
+#[test]
+fn buffers_reach_past_themselves_only_by_asking() {
+    let mut found = Vec::new();
+    for (name, code) in code() {
+        for (n, line) in lines(&code) {
+            let polled = line.contains(".take_asks()") && name != "app/asks.rs";
+            let fields = line.contains("struct ") && line.contains("Requests");
+            if polled || fields {
+                found.push(format!("{name}:{n}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(found.is_empty(), "the shell polls a buffer outside app/asks.rs, or a buffer keeps fields for it to poll (push an Ask):\n{}", found.join("\n"));
 }
 
 #[test]

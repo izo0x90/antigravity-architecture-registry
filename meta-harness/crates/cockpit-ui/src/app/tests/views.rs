@@ -60,8 +60,8 @@ fn graph_and_code_link_both_ways() {
     frame(&ctx, &mut app, vec![]);
     assert_eq!((app.desk.code.current_file.as_str(), app.desk.code.highlight), ("src/a.rs", Some((10, 20))));
     assert_eq!(app.focused_kind(), BufferKind::Code);
-    // Code -> graph: a gutter mark selects its component.
-    app.desk.code.select = Some(ComponentId::new("rust:a::save"));
+    // Code -> graph: a name clicked is what the user is on; the graph follows.
+    app.desk.code.name_clicked(ComponentId::new("rust:a::save"), false);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(selected(&app), "rust:a::save");
     // No follow mode: selecting in the graph leaves the code where it is.

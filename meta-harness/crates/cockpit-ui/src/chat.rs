@@ -188,15 +188,6 @@ impl ChatView {
 }
 
 impl ChatStreamState {
-    /// Shows the slot running `thread` (one of the queue's workers, say);
-    /// false when no slot runs it.
-    pub fn show_thread(&mut self, thread: &ThreadId) -> bool {
-        let Some(slot) = self.store.slots.values().find(|s| s.current_thread() == Some(thread)) else { return false };
-        self.ui.slot = slot.id.clone();
-        self.ui.cursor = None;
-        true
-    }
-
     pub fn process_event(&mut self, event: ClientEvent) {
         if let ClientEvent::SlotClosed { slot_id } = &event
             && slot_id == &self.ui.slot

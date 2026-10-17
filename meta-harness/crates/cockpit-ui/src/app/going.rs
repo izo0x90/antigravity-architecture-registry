@@ -46,11 +46,8 @@ impl CockpitApp {
                 return;
             }
             // A link to a file, or a change: the file, at that line.
-            if let (Target::Message { .. } | Target::Change { .. }, Some((file, line))) = (&target, target.code()) {
-                self.focus_kind(BufferKind::Code);
-                self.desk.code.load_file(&file, line, &self.desk.net, ctx.clone());
-                self.after_jump(from);
-                return;
+            if matches!(target, Target::Message { .. } | Target::Change { .. }) && target.code().is_some() {
+                return self.show_target_in(BufferKind::Code, &target, from);
             }
         }
         // Not a component, nor a place the index can say one is at (a
@@ -148,9 +145,20 @@ impl CockpitApp {
         self.show_target_in(kind, &Target::Component(id), from);
     }
 
+    /// Where a buffer's `Ask::Show` lands: `target` in a buffer of `kind`,
+    /// as a go-to lands it (a component's code found first).
+    pub(super) fn land(&mut self, kind: BufferKind, target: &Target, from: Jump, ctx: &egui::Context) {
+        match (kind, target) {
+            (BufferKind::Code, Target::Component(id)) => self.open_component_code(id.clone(), None, from, ctx),
+            _ => self.show_target_in(kind, target, from),
+        }
+    }
+
     /// Shows `target` in a view of `kind` (as it says) and moves focus
-    /// there; when it can't, says why and nothing moves.
+    /// there; when it can't, says why and nothing moves. It lands in a
+    /// panel: the quick look (over one) closes.
     pub(super) fn show_target_in(&mut self, kind: BufferKind, target: &Target, from: Jump) {
+        self.close_quick_look();
         let used = self.desk.used_buffer(kind);
         if let Err(why) = self.desk.view_mut(kind).show_target(target) {
             self.note = Some(why);
@@ -161,13 +169,6 @@ impl CockpitApp {
         self.focus_kind(kind);
         if self.desk.used_buffer(kind) != used {
             let _ = self.desk.view_mut(kind).show_target(target);
-        }
-        // A card shown follows in the graph, unless its view is pinned.
-        if kind == BufferKind::Spec
-            && !self.desk.spec.pinned
-            && let Some(id) = target.component()
-        {
-            self.desk.graph.reveal(id.clone());
         }
         self.after_jump(from);
     }
@@ -201,9 +202,7 @@ impl CockpitApp {
         match self.code_location(&id) {
             Some(Some((file, start, end))) => {
                 let (start, end) = line.map_or((start, end), |l| (l, l));
-                self.show_code(&file, start, end, ctx);
-                self.focus_kind(BufferKind::Code);
-                self.after_jump(from);
+                self.show_target_in(BufferKind::Code, &Target::Span { file, start: start as usize, end: end as usize }, from);
                 // Planned, not written: the file it's planned in.
                 let planned = |c: &arch_graph::Component| c.anchor.is_none() && c.proposed.is_some();
                 if self.desk.graph.component(&id).is_some_and(planned) || self.desk.details.get(&id, &self.desk.graph.nav.source).is_some_and(|d| planned(&d.component)) {

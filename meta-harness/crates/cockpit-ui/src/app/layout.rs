@@ -67,10 +67,10 @@ impl CockpitApp {
     }
 
     /// New views start where the view of their kind used before them was.
-    pub(super) fn start_fresh(&mut self, ctx: &egui::Context) {
+    pub(super) fn start_fresh(&mut self) {
         for (buffer, place) in std::mem::take(&mut self.desk.fresh) {
             self.swap_in(buffer);
-            self.restore_place(buffer.kind, &place, ctx);
+            self.desk.view_mut(buffer.kind).restore(&place);
         }
         self.back_to_used();
     }

@@ -11,7 +11,7 @@ use egui::RichText;
 use harness_contracts::InstanceId;
 
 use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, Style, When};
-use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
+use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::hosted::{Status, Tone};
 use crate::theme::colors;
@@ -31,12 +31,6 @@ enum Reply {
     Done(NetResult<()>),
 }
 
-/// What the queue view asks of the other views.
-#[derive(Default)]
-pub struct QueueRequests {
-    pub open_thread: Option<String>,
-}
-
 #[derive(Default)]
 pub struct QueueState {
     pub plan: Option<PlanId>,
@@ -49,7 +43,8 @@ pub struct QueueState {
     /// The harness instance that runs the sessions (the chat's).
     pub instance: Option<InstanceId>,
     pub error: Option<String>,
-    pub requests: QueueRequests,
+    /// What it asked of the rest of the cockpit, not taken yet.
+    asks: Vec<Ask>,
     loaded: Option<Option<PlanId>>,
     inbox: Arc<Mutex<Vec<Reply>>>,
     /// Jobs drawn last frame, and where.
@@ -254,7 +249,10 @@ impl QueueState {
                 None => *cx.note = Some("Only a failed job can be retried.".into()),
             },
             QueueCommand::OpenSession => match self.job().map(|j| &j.state) {
-                Some(JobState::Running { thread: Some(t) }) => self.requests.open_thread = Some(t.clone()),
+                Some(JobState::Running { thread: Some(t) }) => {
+                    let target = Target::Agent { slot: None, thread: Some(harness_contracts::ThreadId::new(t)) };
+                    self.asks.push(Ask::Show { target, in_: crate::app::BufferKind::Chat });
+                }
                 _ => *cx.note = Some("Only a running job has a session.".into()),
             },
         }
@@ -310,6 +308,10 @@ impl QueueState {
 }
 
 impl Navigable for QueueState {
+    fn take_asks(&mut self) -> Vec<Ask> {
+        std::mem::take(&mut self.asks)
+    }
+
     fn place(&self) -> Place {
         Place::Queue { component: self.job().map(|j| j.component.clone()) }
     }
@@ -485,7 +487,8 @@ pub(crate) mod tests {
         // The running job links to its session.
         assert!(ids(&q).contains(&"queue.open_session".to_owned()) && ids(&q).contains(&"queue.stop".to_owned()));
         q.apply(QueueCommand::OpenSession, &mut cx);
-        assert_eq!(q.requests.open_thread.take(), Some("t1".into()));
+        let session = crate::nav::Target::Agent { slot: None, thread: Some(harness_contracts::ThreadId::new("t1")) };
+        assert_eq!(q.take_asks(), [Ask::Show { target: session, in_: crate::app::BufferKind::Chat }]);
         // Approval waits on the user: the action is offered on that job only.
         q.motion(Motion::Down, 1);
         assert!(ids(&q).contains(&"queue.approve".to_owned()) && !ids(&q).contains(&"queue.retry".to_owned()));

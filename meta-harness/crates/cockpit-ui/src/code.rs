@@ -14,7 +14,7 @@ use egui::{Frame, Pos2, Rect, RichText, Stroke, Vec2};
 use crate::actions::{Action, ActionProvider, Group, MINOR, Param, RunCx, Style};
 use crate::hosted::{Status, Tone};
 use crate::feedback::FeedbackInspectorState;
-use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
+use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::viewport::{Go, Show, Stop, Viewport};
 
 /// How many columns `z h` / `z l` move sideways.
@@ -181,8 +181,6 @@ pub struct CodeViewerState {
     analysis_inbox: Arc<Mutex<Option<AnalysisReply>>>,
     /// Syntax colours (from the UI config).
     pub ui: crate::config::CodeUi,
-    /// Asks the app to open this component's code (a name ctrl-clicked).
-    pub open: Option<ComponentId>,
     /// Folded definitions, by start line.
     folds: BTreeSet<usize>,
     /// How to show the cursor once the right file's lines are laid out
@@ -200,10 +198,10 @@ pub struct CodeViewerState {
     /// Where each drawn row's text starts, and a character's width.
     drawn: Vec<(usize, Pos2)>,
     char_w: f32,
-    /// Asks the app to select this component in the graph.
-    pub select: Option<ComponentId>,
-    /// Asks the app to read this file into the index again.
-    pub reread: Option<String>,
+    /// What it asked of the rest of the cockpit, not taken yet.
+    asks: Vec<Ask>,
+    /// The file shown is to be fetched (its text and analysis) when next drawn.
+    fetch: bool,
     /// The server says this file changed since it was indexed.
     pub file_stale: bool,
     /// Out of date, by the server's word or the index status (set by the app).
@@ -236,7 +234,6 @@ impl Default for CodeViewerState {
             analysis: None,
             analysis_inbox: Arc::default(),
             ui: crate::config::CodeUi::default(),
-            open: None,
             folds: BTreeSet::new(),
             show: None,
             viewport: Viewport::default(),
@@ -245,8 +242,8 @@ impl Default for CodeViewerState {
             row_h: 0.0,
             drawn: Vec::new(),
             char_w: 7.0,
-            select: None,
-            reread: None,
+            asks: Vec::new(),
+            fetch: false,
             file_stale: false,
             out_of_date: false,
             on_lines: OnLines::default(),
@@ -263,7 +260,9 @@ impl CodeViewerState {
         path == self.current_file && (self.is_loading || !self.content.is_empty())
     }
 
-    pub fn load_file(&mut self, path: &str, target_line: Option<usize>, net: &NetClient, ctx: egui::Context) {
+    /// Shows `path` (its text and analysis fetched when next drawn), the
+    /// cursor on `target_line`.
+    fn load_file(&mut self, path: &str, target_line: Option<usize>) {
         if path != self.current_file {
             self.folds.clear();
             self.defs.clear();
@@ -281,11 +280,18 @@ impl CodeViewerState {
         self.show = target_line.map(|_| Show::Middle);
         self.is_loading = true;
         self.error_message = None;
-        // The text, its components and its analysis, in one answer (the
-        // same content).
+        self.fetch = true;
+    }
+
+    /// Fetches the file shown, when asked to: the text, its components and
+    /// its analysis, in one answer (the same content).
+    fn fetch_wanted(&mut self, net: &NetClient, ctx: &egui::Context) {
+        if !std::mem::take(&mut self.fetch) {
+            return;
+        }
         let analysis = self.analysis_inbox.clone();
-        let for_path = path.to_owned();
-        net.code_analysis(path, ctx, move |r| {
+        let for_path = self.current_file.clone();
+        net.code_analysis(&self.current_file, ctx.clone(), move |r| {
             if let Ok(mut a) = analysis.lock() {
                 *a = Some((for_path, r));
             }
@@ -318,9 +324,15 @@ impl CodeViewerState {
         self.changes_asked = Some(want);
     }
 
+    /// A name (or its gutter mark) clicked: the user is on its component
+    /// now; with the go-to modifier, its code.
+    pub(crate) fn name_clicked(&mut self, id: ComponentId, go_to: bool) {
+        self.asks.push(if go_to { Ask::Show { target: Target::Component(id), in_: crate::app::BufferKind::Code } } else { Ask::Follow(id) });
+    }
+
     /// Opens `path` with lines `start..=end` highlighted and scrolled to.
-    pub fn show_span(&mut self, path: &str, start: usize, end: usize, net: &NetClient, ctx: egui::Context) {
-        self.load_file(path, Some(start), net, ctx);
+    fn show_span(&mut self, path: &str, start: usize, end: usize) {
+        self.load_file(path, Some(start));
         self.highlight = Some((start, end.max(start)));
     }
 
@@ -614,7 +626,8 @@ impl CodeViewerState {
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
-        let (net, panel) = (cx.net, cx.panel);
+        let panel = cx.panel;
+        self.fetch_wanted(cx.net, cx.ctx);
         // Replies for a file that's no longer the one shown (an earlier load
         // answering late) are dropped, so they can't use up its scroll.
         let incoming = self.analysis_inbox.lock().ok().and_then(|mut a| a.take());
@@ -646,8 +659,7 @@ impl CodeViewerState {
                 let mut path_edit = self.current_file.clone();
                 let resp = ui.add(egui::TextEdit::singleline(&mut path_edit).desired_width(edit_w).font(egui::TextStyle::Monospace));
                 if resp.lost_focus() && ui.input(|i| crate::keymap::local().input.sent(i).is_some()) {
-                    let ctx = ui.ctx().clone();
-                    self.load_file(&path_edit, None, net, ctx);
+                    self.load_file(&path_edit, None);
                 }
                 if let Some(target) = self.target_line {
                     ui.label(RichText::new(format!(":{}", target)).monospace().strong().size(crate::theme::look().text_body).color(colors().warn));
@@ -797,8 +809,8 @@ impl CodeViewerState {
             }
             let clip = viewer_res.inner_rect;
             self.drawn = drawn.into_iter().filter(|(_, at)| clip.contains(*at + Vec2::new(1.0, 1.0))).collect();
-            if clicked.is_some() {
-                self.select = clicked;
+            if let Some(id) = clicked {
+                self.name_clicked(id, false);
             }
             if let Some(line) = put_cursor {
                 self.move_cursor(line);
@@ -806,8 +818,8 @@ impl CodeViewerState {
             if opened {
                 *cx.asked = Some(("nav.enter".to_owned(), None));
             }
-            if go_to.is_some() {
-                self.open = go_to;
+            if let Some(id) = go_to {
+                self.name_clicked(id, true);
             }
             if let Some(start) = unfold {
                 self.folds.remove(&start);
@@ -909,7 +921,7 @@ impl ActionProvider for CodeViewerState {
                 }
             }
             Some(CodeCommand::Copy) => cx.ctx.copy_text(self.content.clone()),
-            Some(CodeCommand::Reread) => self.reread = Some(self.current_file.clone()),
+            Some(CodeCommand::Reread) => self.asks.push(Ask::Reread(self.current_file.clone())),
             Some(CodeCommand::Deleted) => {
                 self.show_deleted = match value.as_deref() {
                     Some("true") => true,
@@ -919,7 +931,7 @@ impl ActionProvider for CodeViewerState {
             }
             Some(CodeCommand::Reload) => {
                 let path = self.current_file.clone();
-                self.load_file(&path, self.target_line, cx.net, cx.ctx.clone());
+                self.load_file(&path, self.target_line);
             }
             None => {}
         }
@@ -954,19 +966,38 @@ impl crate::hosted::Hosted for CodeViewerState {
 }
 
 impl Navigable for CodeViewerState {
-    /// Anything with code: a line, a file link, a component (its code is
-    /// opened by the app, which knows where components are).
+    /// A place in a file (a line, lines, a change, a message's file link),
+    /// or a component: the go-to finds where its code is (what the index
+    /// knows) and lands here on those lines.
     fn can_show(&self, target: &Target) -> bool {
         target.code().is_some() || target.component().is_some()
+    }
+
+    fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        match target {
+            Target::Span { file, start, end } => self.show_span(file, *start, *end),
+            _ => {
+                let (file, line) = target.code().ok_or("Not a place in a file: where its code is is looked up first.")?;
+                self.load_file(&file, line);
+            }
+        }
+        Ok(())
+    }
+
+    fn take_asks(&mut self) -> Vec<Ask> {
+        std::mem::take(&mut self.asks)
     }
 
     fn place(&self) -> Place {
         Place::Code { file: self.current_file.clone(), line: self.target_line.unwrap_or(1) }
     }
 
-    /// Puts the cursor back (the shell loads the file when it differs).
+    /// Back to the file (loaded again when it isn't the one shown) and the line.
     fn restore(&mut self, place: &Place) {
-        if let Place::Code { line, .. } = place {
+        if let Place::Code { file, line } = place {
+            if !self.shows(file) {
+                self.load_file(file, Some(*line));
+            }
             self.target_line = Some(*line);
             self.cursor_col = None;
             self.show = Some(Show::Middle);

@@ -14,8 +14,8 @@ fn the_layout_comes_back_as_it_was_saved() {
     let saved = app.saved_ui();
     // Through the server (as JSON) into a cockpit that just opened.
     let json = serde_json::to_value(&saved).unwrap();
-    let (ctx2, mut fresh) = full_app();
-    fresh.restore_saved(serde_json::from_value(json).unwrap(), &ctx2);
+    let (_, mut fresh) = full_app();
+    fresh.restore_saved(serde_json::from_value(json).unwrap());
     assert_eq!((fresh.desk.panels.kinds(), fresh.desk.panels.focused()), (saved.panels.kinds(), 2));
     assert_eq!((fresh.desk.marks.clone(), fresh.desk.jumps.clone(), fresh.desk.chat.ui.input_buffer.as_str()), (saved.marks.clone(), saved.jumps.clone(), "half a thought"));
     let graph_place = |s: &SavedUi| s.views.iter().find(|(p, _)| p.kind == BufferKind::Graph).map(|(_, p)| p.clone());
@@ -26,7 +26,7 @@ fn the_layout_comes_back_as_it_was_saved() {
     let mut opened = CockpitApp::new("http://127.0.0.1:9");
     let mut only_code = saved.clone();
     only_code.views = vec![(Buffer::new(BufferKind::Code, 0), Place::Code { file: opened.desk.code.current_file.clone(), line: 3 })];
-    opened.restore_saved(only_code, &ctx2);
+    opened.restore_saved(only_code);
     assert!(opened.desk.code.is_loading, "the saved file is fetched");
 }
 
@@ -71,8 +71,8 @@ fn each_column_keeps_its_own_graph_and_the_agent_moves_the_one_named_or_used_las
     // Saved and put back: both graphs, each where it was.
     let saved = app.saved_ui();
     assert_eq!(saved.views.iter().filter(|(p, _)| p.kind == BufferKind::Graph).count(), 2);
-    let (ctx2, mut fresh) = full_app();
-    fresh.restore_saved(saved.clone(), &ctx2);
+    let (_, mut fresh) = full_app();
+    fresh.restore_saved(saved.clone());
     // (Each one's selection comes back when its tree is in.)
     let nav = |place: Option<Place>| match place {
         Some(Place::Graph { nav, .. }) => Some(nav),
@@ -181,8 +181,8 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     assert!(!app.desk.chat.actions().iter().any(|a| a.id == "agent.close"), "the lead isn't closed");
     // Saved and opened again: each view on its slot, with its draft.
     let saved = serde_json::to_value(app.saved_ui()).unwrap();
-    let (ctx2, mut fresh) = full_app();
-    fresh.restore_saved(serde_json::from_value(saved).unwrap(), &ctx2);
+    let (_, mut fresh) = full_app();
+    fresh.restore_saved(serde_json::from_value(saved).unwrap());
     let view = |app: &mut CockpitApp, buffer| {
         app.use_buffer(buffer);
         (app.desk.chat.ui.slot.to_string(), app.desk.chat.ui.input_buffer.clone())
