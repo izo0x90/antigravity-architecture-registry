@@ -15,7 +15,7 @@ mod view;
 
 use std::collections::BTreeMap;
 
-use harness_contracts::{FromTerminal, TermSize, Terminal, TerminalId, TerminalInput, TerminalStatus, ToTerminal};
+use harness_contracts::{FromTerminal, Subject, TermSize, Terminal, TerminalId, TerminalInput, TerminalStatus, ToTerminal};
 
 use crate::actions::{Action, ActionProvider, MINOR, PRIMARY, RunCx};
 use crate::hosted::{Hosted, Status, Tone};
@@ -23,6 +23,14 @@ use crate::nav::{Ask, Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
 use crate::shared::{Reader, Shared};
 use crate::terminals::{TermAct, TermLink, Terminals};
 use crate::viewport::Go;
+
+/// The terminal a tagged subject is in, when it's a terminal's.
+fn tagged_terminal(subject: &Subject) -> Option<&TerminalId> {
+    match subject {
+        Subject::TerminalLines { terminal, .. } | Subject::TerminalCommand { terminal, .. } => Some(terminal),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Debug)]
 enum TermCommand {
@@ -83,6 +91,10 @@ pub struct TerminalBuffer {
     copying: Option<u64>,
     /// Said to the user when it's next drawn (what came of asking).
     said: Option<String>,
+    /// Lines or a command a go-to asked for, shown once its lines come.
+    going_to: Option<Subject>,
+    /// A row's height, as last drawn.
+    row_h: f32,
     /// Its panel had focus last frame, with a shell running (gaining it
     /// starts typing).
     was_focused: bool,
@@ -126,6 +138,27 @@ impl TerminalBuffer {
     fn run_on(&self) -> Result<&harness_contracts::TerminalCommand, String> {
         let command = self.cursor.and_then(|c| self.lines.command_at(c)).ok_or("The cursor isn't on a command the shell marked (bash and zsh mark theirs).")?;
         if command.output.is_none() { Err("That command hasn't run yet.".into()) } else { Ok(command) }
+    }
+
+    /// Where a go-to asked it to go (lines, a command), once its lines are
+    /// here: the cursor there; in another start of its shell, said.
+    fn go_where_asked(&mut self) {
+        let Some(subject) = &self.going_to else { return };
+        let (shell, line) = match subject {
+            Subject::TerminalLines { shell, first, .. } => (*shell, Some(*first)),
+            Subject::TerminalCommand { shell, command, .. } => (*shell, self.lines.command(*command).map(|c| c.prompt)),
+            _ => (0, None),
+        };
+        if self.lines.shell() == 0 {
+            return;
+        }
+        self.going_to = None;
+        match line.filter(|_| shell == self.lines.shell()).and_then(|l| l.checked_sub(self.lines.first())) {
+            Some(at) => {
+                self.go(Go::To(at as usize, crate::viewport::Show::Middle));
+            }
+            None => self.said = Some("It's gone from the terminal (an earlier start of its shell, or its lines went).".into()),
+        }
     }
 
     /// Its cursor's line gone (cleared, past what's kept): on the nearest
@@ -221,6 +254,7 @@ impl TerminalBuffer {
                 }
             }
         }
+        self.go_where_asked();
     }
 
     /// The text of the selection (or, with none, of the cursor's line).
@@ -394,13 +428,56 @@ impl Navigable for TerminalBuffer {
     }
 
     fn can_show(&self, target: &Target) -> bool {
-        matches!(target, Target::Terminal(id) if self.id.as_ref() != Some(id))
+        match target {
+            Target::Terminal(id) => self.id.as_ref() != Some(id),
+            Target::Subject(subject) => tagged_terminal(subject).is_some(),
+            _ => false,
+        }
     }
 
+    /// A terminal; or lines or a command of one (shown once its lines come).
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
-        let Target::Terminal(id) = target else { return Err("Not a terminal.".into()) };
+        let id = match target {
+            Target::Terminal(id) => id,
+            Target::Subject(subject) => {
+                let id = tagged_terminal(subject).ok_or("Not a terminal's.")?;
+                self.going_to = Some(subject.clone());
+                // Landing on lines to look at: focused, it doesn't start typing.
+                self.was_focused = true;
+                id
+            }
+            _ => return Err("Not a terminal.".into()),
+        };
         self.show(id.clone());
+        self.go_where_asked();
         Ok(())
+    }
+
+    /// The command on its prompt's line, or the line (the selection's
+    /// lines, when it's in it): what a tag is put on.
+    fn subject(&self, key: &str) -> Option<Subject> {
+        let line: u64 = key.split(':').next()?.parse().ok()?;
+        let (terminal, shell) = (self.id.clone()?, self.lines.shell());
+        if let Some(command) = self.lines.command_at(line).filter(|c| c.prompt == line && c.output.is_some()) {
+            return Some(Subject::TerminalCommand { terminal, shell, command: command.id });
+        }
+        let ((first, _), (last, _)) = match self.selection {
+            Some((a, b)) if (a.0.min(b.0)..=a.0.max(b.0)).contains(&line) => (a.min(b), a.max(b)),
+            _ => ((line, 0), (line, 0)),
+        };
+        Some(Subject::TerminalLines { terminal, shell, first, last })
+    }
+
+    /// Lines (their first), or a command (its prompt's line), while they show.
+    fn drawn_at(&self, subject: &Subject) -> Option<egui::Rect> {
+        let (grid, top) = (self.grid?, self.drawn?);
+        let line = match subject {
+            Subject::TerminalLines { terminal, shell, first, .. } if Some(terminal) == self.id.as_ref() && *shell == self.lines.shell() => *first,
+            Subject::TerminalCommand { terminal, shell, command } if Some(terminal) == self.id.as_ref() && *shell == self.lines.shell() => self.lines.command(*command)?.prompt,
+            _ => return None,
+        };
+        let row = line.checked_sub(top)?;
+        (row < self.window).then(|| egui::Rect::from_min_size(grid.min + egui::vec2(0.0, row as f32 * self.row_h), egui::vec2(grid.width(), self.row_h)))
     }
 
     /// The file the cursor's on (a go-to takes it to the code), else the terminal.

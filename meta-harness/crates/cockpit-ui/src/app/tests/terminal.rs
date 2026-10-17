@@ -436,3 +436,72 @@ fn not_typing_it_moves_by_command_and_copies_one_s_output_or_runs_it_again() {
     assert_eq!(inputs(&app).len(), before);
     assert!(app.note.as_deref().is_some_and(|n| n.starts_with("Not at an empty prompt")), "{:?}", app.note);
 }
+
+#[test]
+fn what_the_cursor_is_on_is_tagged_from_the_shell_its_tags_show_on_it_and_a_go_to_lands_there() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![command(1, 1003, Some(1008), "make")])]);
+    not_typing(&ctx, &mut app);
+    keys(&ctx, &mut app, "kk");
+    assert_eq!(cursor(&app).as_deref(), Some("1021"));
+    // M: the tag picker, a new tag by the name typed.
+    keys(&ctx, &mut app, "M");
+    keys(&ctx, &mut app, "flaky");
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("New tag \u{201c}flaky\u{201d}"), "{drawn}");
+    sent(&app);
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert!(sent(&app).contains(&"POST /api/tags".to_owned()), "{:?}", app.note);
+    // The server says it's on that line (and the command): its chips show there.
+    let line = harness_contracts::Subject::TerminalLines { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, first: 1021, last: 1021 };
+    let make = harness_contracts::Subject::TerminalCommand { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, command: 1 };
+    let tagged = |subject| harness_contracts::Tagged { subject, said: "line 1021".into(), at_ms: 0, by: "you".into() };
+    let tag = harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "flaky".into(), colour: 2, note: String::new(), noted_by: String::new(), on: vec![tagged(line.clone()), tagged(make)] };
+    app.desk.shared.tags.get_mut().apply(&harness_contracts::ClientEvent::TagUpdated { tag });
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert_eq!(drawn.matches("flaky").count(), 2, "a chip on the line and on the command's prompt: {drawn}");
+    // ] t: the next thing with its tag (the command, on its prompt's line).
+    keys(&ctx, &mut app, "]t");
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(cursor(&app).as_deref(), Some("1003"));
+    // g T: anything tagged, picked by name.
+    keys(&ctx, &mut app, "gT");
+    keys(&ctx, &mut app, "line 1021");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(cursor(&app).as_deref(), Some("1021"));
+    // Taken off: picked from the tags on it.
+    keys(&ctx, &mut app, ":");
+    keys(&ctx, &mut app, "take a tag off");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert!(sent(&app).contains(&"POST /api/tags/x1/untag".to_owned()));
+}
+
+#[test]
+fn the_tags_buffer_lists_tags_and_what_they_are_on_goes_to_one_and_manages_them() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![command(1, 1003, Some(1008), "make")])]);
+    let make = harness_contracts::Subject::TerminalCommand { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, command: 1 };
+    let tag = harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "flaky".into(), colour: 2, note: "fails on Mondays".into(), noted_by: "lead".into(), on: vec![harness_contracts::Tagged { subject: make, said: "$ make (exit code 2)".into(), at_ms: 0, by: "lead".into() }] };
+    app.desk.shared.tags.get_mut().apply(&harness_contracts::ClientEvent::TagUpdated { tag });
+    focus(&ctx, &mut app, BufferKind::Tags);
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    for words in ["flaky", "fails on Mondays (lead)", "terminal t1, command 1", "$ make (exit code 2)", "tagged by lead"] {
+        assert!(drawn.contains(words), "{words}: {drawn}");
+    }
+    assert!(sent(&app).contains(&"GET /api/tags/x1".to_owned()), "what its things say now, asked for");
+    // Renamed through its action.
+    keys(&ctx, &mut app, ":");
+    keys(&ctx, &mut app, "rename the tag");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    keys(&ctx, &mut app, "flaky-ci");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert!(sent(&app).contains(&"POST /api/tags/x1/edit".to_owned()));
+    // Enter on the thing: the terminal, its cursor on the command.
+    keys(&ctx, &mut app, "j");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.focused_kind(), BufferKind::Terminal);
+    assert_eq!(cursor(&app).as_deref(), Some("1003"));
+}

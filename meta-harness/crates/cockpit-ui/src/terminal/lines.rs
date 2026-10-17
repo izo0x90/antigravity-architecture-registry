@@ -190,6 +190,16 @@ impl Lines {
     pub(super) fn alternate(&self) -> bool {
         self.alternate
     }
+
+    /// Which start of its shell these lines are.
+    pub(super) fn shell(&self) -> u64 {
+        self.shell
+    }
+
+    /// Command `id` (in this start of the shell).
+    pub(super) fn command(&self, id: u64) -> Option<&TerminalCommand> {
+        self.commands.binary_search_by_key(&id, |c| c.id).ok().map(|i| &self.commands[i])
+    }
 }
 
 #[cfg(test)]

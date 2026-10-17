@@ -45,6 +45,8 @@ pub struct Desk {
     pub details: Details,
     pub pending_goto: Option<Pending>,
     pub choosing: Option<Choosing>,
+    /// What's typed in the tag picker (tagging what the cursor's on).
+    pub tag_query: String,
     pub at_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
     /// Code indexing's status, as asked for.
     pub index_inbox: Arc<Mutex<Vec<NetResult<arch_graph::IndexStatus>>>>,
@@ -76,6 +78,7 @@ impl Desk {
             details: Details::default(),
             pending_goto: None,
             choosing: None,
+            tag_query: String::new(),
             at_inbox: Arc::default(),
             index_inbox: Arc::default(),
             types_inbox: Arc::default(),

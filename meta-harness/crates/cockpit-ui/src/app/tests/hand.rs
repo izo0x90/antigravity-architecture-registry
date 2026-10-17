@@ -145,6 +145,13 @@ fn a_swipe_where_the_view_moves_sideways_moves_it_instead() {
     assert_eq!(app.desk.code().target_line, Some(40));
     let middle = app.panel_rects[app.desk.panels.focused()].center();
     let mut t = 5.0;
+    // A finger first touches the code (a tap), as on a phone: from then on
+    // a drag on its text moves it rather than selecting.
+    for phase in [egui::TouchPhase::Start, egui::TouchPhase::End] {
+        t += 0.05;
+        frame_at(&ctx, &mut app, finger(phase, middle), t);
+    }
+    let line = app.desk.code().target_line;
     let mut flick = |app: &mut CockpitApp, dx: f32| {
         for (phase, pos) in [(egui::TouchPhase::Start, middle), (egui::TouchPhase::Move, middle + egui::vec2(dx, 0.0)), (egui::TouchPhase::End, middle + egui::vec2(dx, 0.0))] {
             t += 0.05;
@@ -156,7 +163,7 @@ fn a_swipe_where_the_view_moves_sideways_moves_it_instead() {
     flick(&mut app, -150.0);
     assert!(app.desk.code().viewport.offset.x > 100.0, "the finger moved the long lines: {}", app.desk.code().viewport.offset.x);
     flick(&mut app, 150.0);
-    assert_eq!(app.desk.code().target_line, Some(40), "not a swipe back (where nothing moves sideways it is: the chat's swipes)");
+    assert_eq!(app.desk.code().target_line, line, "not a swipe back (where nothing moves sideways it is: the chat's swipes)");
 }
 
 #[test]

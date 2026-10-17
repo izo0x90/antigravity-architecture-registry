@@ -145,6 +145,8 @@ pub struct Shared {
     pub agents: Held<crate::agents::Agents>,
     /// The server's terminals: which, and how each is.
     pub terminals: Held<crate::terminals::Terminals>,
+    /// The server's tags: each one and what it's on.
+    pub tags: Held<crate::tags::Tags>,
     /// The desk's server (`here`: home's own).
     pub server: String,
     /// Every server's open notifications, in the order they're gone through.

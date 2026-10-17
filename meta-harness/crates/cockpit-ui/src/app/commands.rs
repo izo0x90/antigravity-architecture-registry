@@ -96,6 +96,7 @@ impl CockpitApp {
             Action::new("terminal.popup", if self.popped_terminal() { "Hide the pop-up terminal" } else { "Pop up a terminal over everything" }, S::PopTerminal).group(Group::Act).importance(SECONDARY),
             nav("nav.line", "Go to line or row", S::Line).param(Param::Text { hint: "line or row number".into() }).importance(MINOR),
         ];
+        out.extend(self.tag_actions(here));
         // Each go-to's destination says whether it can show what the
         // cursor is on; the relational ones, whether its relations lead
         // anywhere.
@@ -425,6 +426,7 @@ impl CockpitApp {
             }
             ShellCommand::SearchStep { forward } => self.search_step(forward, count),
             ShellCommand::MarkSet => self.start_capture(Capture::MarkSet),
+            ShellCommand::Tag | ShellCommand::Untag | ShellCommand::TagGoTo | ShellCommand::TagStep { .. } => self.run_tag(&command, value, ctx),
             ShellCommand::MarkJump => self.start_capture(Capture::MarkJump),
             ShellCommand::Back | ShellCommand::Forward => {
                 let here = self.jump_here();

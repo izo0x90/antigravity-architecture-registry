@@ -114,5 +114,6 @@ pub fn new(kind: BufferKind) -> Box<dyn Buffer> {
         BufferKind::Inbox => Box::<crate::inbox::InboxView>::default(),
         BufferKind::Changes => Box::<crate::changes::ChangesView>::default(),
         BufferKind::Terminal => Box::<crate::terminal::TerminalBuffer>::default(),
+        BufferKind::Tags => Box::<crate::tag_list::TagList>::default(),
     }
 }

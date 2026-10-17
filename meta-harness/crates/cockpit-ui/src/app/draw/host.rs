@@ -63,7 +63,39 @@ impl CockpitApp {
             ui.painter().hline(whole.x_range(), content.bottom(), egui::Stroke::new(crate::theme::look().line_thin, colors().border));
             ui.allocate_rect(whole, egui::Sense::hover());
         }
+        self.draw_tags(kind, ui, content);
         self.pointer_on_content(kind, ui, content);
+    }
+
+    /// The tags on what the buffer draws, where it draws it (it says
+    /// where; it draws no tags itself): a chip each, from the right.
+    fn draw_tags(&self, kind: BufferKind, ui: &egui::Ui, content: egui::Rect) {
+        let tags = self.desk.shared.tags.get();
+        let view = self.desk.view(kind);
+        let mut at: Vec<(egui::Rect, Vec<(String, u8)>)> = Vec::new();
+        for tag in tags.list() {
+            for on in &tag.on {
+                let Some(rect) = view.drawn_at(&on.subject).filter(|r| content.intersects(*r)) else { continue };
+                match at.iter_mut().find(|(r, _)| *r == rect) {
+                    Some((_, names)) => names.push((tag.name.clone(), tag.colour)),
+                    None => at.push((rect, vec![(tag.name.clone(), tag.colour)])),
+                }
+            }
+        }
+        let (look, theme) = (crate::theme::look(), colors());
+        let painter = ui.painter().with_clip_rect(content);
+        let font = egui::FontId::proportional(look.text_small);
+        for (rect, names) in at {
+            let mut right = rect.right().min(content.right()) - look.space_s;
+            for (name, colour) in names {
+                let galley = painter.layout_no_wrap(name, font.clone(), theme.on_bright);
+                let size = galley.size() + egui::vec2(look.space_s * 2.0, 0.0);
+                let chip = egui::Rect::from_min_size(egui::pos2(right - size.x, rect.center().y - size.y / 2.0), size);
+                painter.rect_filled(chip, size.y / 2.0, theme.tag(colour));
+                painter.galley(chip.min + egui::vec2(look.space_s, 0.0), galley, theme.on_bright);
+                right = chip.left() - look.space_s / 2.0;
+            }
+        }
     }
 
     /// What the buffers in use, but the one of `kind`, say about what it

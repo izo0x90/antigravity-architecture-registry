@@ -82,7 +82,7 @@ impl TerminalBuffer {
             self.size_sent = Some(size);
             self.send(&ToTerminal::Size { size });
         }
-        self.window = u64::from(size.rows);
+        (self.window, self.row_h) = (u64::from(size.rows), row_h);
         let bar = Rect::from_min_max(pos2(grid_rect.right(), rect.top()), rect.max);
         self.scroll_by_hand(ui, &response, bar, row_h);
 

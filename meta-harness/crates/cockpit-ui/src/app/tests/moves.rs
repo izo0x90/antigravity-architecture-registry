@@ -197,6 +197,10 @@ fn f_labels_what_is_on_screen_in_every_view() {
     use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, FileStatus, Group};
     let changed = ChangedFile { path: "src/a.rs".into(), old_path: None, status: FileStatus::Modified, group: Group::Unstaged, added: 1, removed: 0, binary: false };
     app.desk.shared.changes.take_list_for_test(ChangeList { comparison: Comparison::default(), files: vec![changed], offset: 0, total: 1 });
+    // A tag, to label in the tags.
+    let subject = harness_contracts::Subject::TerminalLines { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, first: 1, last: 1 };
+    let tag = harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "seen".into(), colour: 0, note: String::new(), noted_by: String::new(), on: vec![harness_contracts::Tagged { subject, said: "Cargo.toml  src".into(), at_ms: 0, by: "you".into() }] };
+    app.desk.shared.tags.get_mut().apply(&harness_contracts::ClientEvent::TagUpdated { tag });
     app.desk.share();
     for kind in BufferKind::ALL {
         focus(&ctx, &mut app, kind);

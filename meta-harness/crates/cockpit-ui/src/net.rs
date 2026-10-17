@@ -627,6 +627,29 @@ impl NetClient {
         self.call("DELETE", &format!("/api/terminals/{}", urlencoding::encode(id.as_str())), None, ctx, on_done);
     }
 
+    /// Tags `subject` with `tag` (a tag's id, or a new tag's name).
+    pub fn tag(&self, tag: &str, subject: &harness_contracts::Subject, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Tag>) + Send + 'static) {
+        self.call("POST", "/api/tags", Some(serde_json::json!({ "tag": tag, "subject": subject })), ctx, on_done);
+    }
+
+    pub fn untag(&self, tag: &harness_contracts::TagId, subject: &harness_contracts::Subject, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Tag>) + Send + 'static) {
+        self.call("POST", &format!("/api/tags/{}/untag", urlencoding::encode(tag.as_str())), Some(serde_json::json!({ "subject": subject })), ctx, on_done);
+    }
+
+    /// Renames, recolours or notes a tag (what's given).
+    pub fn edit_tag(&self, tag: &harness_contracts::TagId, edit: serde_json::Value, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Tag>) + Send + 'static) {
+        self.call("POST", &format!("/api/tags/{}/edit", urlencoding::encode(tag.as_str())), Some(edit), ctx, on_done);
+    }
+
+    pub fn delete_tag(&self, tag: &harness_contracts::TagId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call("DELETE", &format!("/api/tags/{}", urlencoding::encode(tag.as_str())), None, ctx, on_done);
+    }
+
+    /// A tag and what each thing it's on says now.
+    pub fn read_tag(&self, tag: &harness_contracts::TagId, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::TagRead>) + Send + 'static) {
+        self.call("GET", &format!("/api/tags/{}", urlencoding::encode(tag.as_str())), None, ctx, on_done);
+    }
+
     pub fn tool_servers(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::ToolServers>) + Send + 'static) {
         self.call("GET", "/api/mcp/servers", None, ctx, on_done);
     }

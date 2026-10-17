@@ -124,6 +124,7 @@ D = "Developer"
 "buffer.inbox" = { leader = "b i" }
 "buffer.changes" = { leader = "b f" }
 "buffer.terminal" = { leader = "b r" }
+"buffer.tags" = { leader = "b T" }
 # Every open buffer (on screen or hidden), to show in this panel; a new one
 # here; this panel's buffer deleted for good (closing a panel only hides it).
 "buffer.list" = { leader = "b b" }
@@ -191,6 +192,12 @@ D = "Developer"
 # any view).
 "nav.mark_set" = { keys = ["m"] }
 "nav.mark_jump" = { keys = ["'"] }
+# Tags: tag what you're on (pick a tag or name a new one), go to something
+# tagged, step through the rest of what its tag is on.
+"tag.add" = { keys = ["M"] }
+"tag.goto" = { keys = ["g T"] }
+"tag.next" = { keys = ["] t"] }
+"tag.prev" = { keys = ["[ t"] }
 # The jump list: back to where a jump left from, and forward again.
 "nav.back" = { keys = ["ctrl+o"], gestures = ["swipe_right"] }
 "nav.forward" = { keys = ["ctrl+i"], gestures = ["swipe_left"] }
@@ -446,6 +453,15 @@ term_bright_blue = "#93c5fd"
 term_bright_magenta = "#d8b4fe"
 term_bright_cyan = "#a5f3fc"
 term_bright_white = "#f4f8ff"
+# Tags' colours (a tag is one, by its number).
+tag_0 = "#f59e0b"
+tag_1 = "#2dd4bf"
+tag_2 = "#f472b6"
+tag_3 = "#a78bfa"
+tag_4 = "#a3e635"
+tag_5 = "#38bdf8"
+tag_6 = "#fb7185"
+tag_7 = "#fcd34d"
 
 # How each state looks wherever it's shown: a word, an icon (by name) and a
 # theme colour (token name from [theme]). Views never colour a state alone.
@@ -782,6 +798,15 @@ term_bright_blue = "#8cc8ff"
 term_bright_magenta = "#d0a8ff"
 term_bright_cyan = "#90e0f0"
 term_bright_white = "#ffffff"
+# Tags' colours (a tag is one, by its number).
+tag_0 = "#e8a33c"
+tag_1 = "#3cc8b4"
+tag_2 = "#e87aaf"
+tag_3 = "#a08cf0"
+tag_4 = "#a0d250"
+tag_5 = "#50b4e6"
+tag_6 = "#f07882"
+tag_7 = "#f0d264"
 
 # How each state looks wherever it's shown: a word, an icon (by name) and a
 # theme colour (token name from [theme]). Views never colour a state alone.

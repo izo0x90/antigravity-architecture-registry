@@ -35,6 +35,7 @@ mod layout;
 mod lifecycle;
 mod look;
 mod outside;
+mod tagging;
 mod views;
 
 pub use desk::Desk;
@@ -83,6 +84,14 @@ enum ShellCommand {
     SearchStep { forward: bool },
     MarkSet,
     MarkJump,
+    /// Tags what the cursor's on (its value: a tag's id, or a new one's name).
+    Tag,
+    /// Takes a tag (its value) off what the cursor's on.
+    Untag,
+    /// Goes to something a tag is on (its value: `tag#n`).
+    TagGoTo,
+    /// The next (or previous) thing the tag on what the cursor's on is on.
+    TagStep { forward: bool },
     Back,
     Forward,
     Keys,

@@ -39,6 +39,8 @@ pub enum Target {
     Notification(NotificationId),
     /// A terminal (a shell the server runs).
     Terminal(harness_contracts::TerminalId),
+    /// Something a tag is on (in the buffer that shows its kind).
+    Subject(harness_contracts::Subject),
 }
 
 /// What a buffer asks of the rest of the cockpit: the one way it reaches
@@ -71,6 +73,8 @@ pub enum Ask {
     Agents { slot: SlotId, act: crate::agents::Act },
     /// Something for the terminals to do (to terminal `id`, or a new one).
     Terminals { id: Option<harness_contracts::TerminalId>, act: crate::terminals::TermAct },
+    /// Something for the tags to do.
+    Tags(crate::tags::TagAct),
 }
 
 /// What's read again on a buffer's word.
@@ -104,6 +108,7 @@ impl Target {
             Self::Message { index, .. } => format!("message {}", index + 1),
             Self::Agent { slot: Some(slot), .. } => format!("agent slot {slot}"),
             Self::Agent { thread, .. } => format!("session {}", thread.as_ref().map_or("?", |t| t.as_str())),
+            Self::Subject(subject) => crate::tags::in_words(subject),
         }
     }
 
@@ -112,7 +117,7 @@ impl Target {
         match self {
             Self::Component(id) | Self::Job { component: id } => Some(id),
             Self::Line { within, .. } => within.as_ref(),
-            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) => None,
+            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::Subject(_) => None,
         }
     }
 
@@ -645,6 +650,18 @@ pub trait Navigable {
 
     /// Moves the cursor to an item and brings it into view.
     fn move_to(&mut self, key: &str);
+
+    /// What item `key` is, as something a tag can be on (none: it can't
+    /// be tagged). The shell tags it; a buffer has no tagging of its own.
+    fn subject(&self, _key: &str) -> Option<harness_contracts::Subject> {
+        None
+    }
+
+    /// Where `subject` is drawn now, when it's drawn (the shell draws its
+    /// tags there).
+    fn drawn_at(&self, _subject: &harness_contracts::Subject) -> Option<egui::Rect> {
+        None
+    }
 
     /// As a go-to's destination: whether it can show `target`, and isn't
     /// showing it at its cursor already.

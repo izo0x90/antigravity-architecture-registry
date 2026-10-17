@@ -62,10 +62,11 @@ impl CockpitApp {
             }
         }
         let picked = self.palette.render(ctx, &bound, &self.config.keymap);
-        if let Some(ask) = self.palette.take_search()
-            && let Origin::View(kind) = ask.origin
-        {
-            self.desk.view_mut(kind).search(&ask.action, &ask.query);
+        if let Some(ask) = self.palette.take_search() {
+            match ask.origin {
+                Origin::View(kind) => self.desk.view_mut(kind).search(&ask.action, &ask.query),
+                Origin::Shell => self.desk.tag_query = ask.query,
+            }
         }
         if let Some(invocation) = picked {
             self.input_mode = InputMode::Normal;

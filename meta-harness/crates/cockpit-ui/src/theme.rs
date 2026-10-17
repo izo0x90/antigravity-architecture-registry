@@ -123,6 +123,15 @@ theme! {
     term_bright_magenta,
     term_bright_cyan,
     term_bright_white,
+    /// Tags' colours: a tag is one of these, by its number (0-7).
+    tag_0,
+    tag_1,
+    tag_2,
+    tag_3,
+    tag_4,
+    tag_5,
+    tag_6,
+    tag_7,
 }
 
 impl Theme {
@@ -151,6 +160,11 @@ impl Theme {
     /// A terminal's named colour `n` (0-15).
     pub fn term(&self, n: u8) -> Color32 {
         [self.term_black, self.term_red, self.term_green, self.term_yellow, self.term_blue, self.term_magenta, self.term_cyan, self.term_white, self.term_bright_black, self.term_bright_red, self.term_bright_green, self.term_bright_yellow, self.term_bright_blue, self.term_bright_magenta, self.term_bright_cyan, self.term_bright_white][usize::from(n & 15)]
+    }
+
+    /// Tag colour `n` (0-7).
+    pub fn tag(&self, n: u8) -> Color32 {
+        [self.tag_0, self.tag_1, self.tag_2, self.tag_3, self.tag_4, self.tag_5, self.tag_6, self.tag_7][usize::from(n & 7)]
     }
 
     /// Applies the theme to egui's own widgets (panels, windows, selection).

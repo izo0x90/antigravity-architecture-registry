@@ -155,6 +155,8 @@ struct Symbol {
 }
 
 pub struct CodeViewerState {
+    /// A finger has been on it (its text isn't selected by dragging since).
+    touched: bool,
     pub current_file: String,
     pub content: String,
     pub lines: Vec<String>,
@@ -223,6 +225,7 @@ pub struct CodeViewerState {
 impl Default for CodeViewerState {
     fn default() -> Self {
         Self {
+            touched: false,
             current_file: "Cargo.toml".to_string(),
             content: String::new(),
             lines: Vec::new(),
@@ -956,6 +959,13 @@ pub(crate) struct CodePlace {
 
 impl crate::buffer::Buffer for CodeViewerState {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
+        // Once a finger's been on it, a finger on the code moves it wherever
+        // it lands (selecting the text under it would take the drag: egui
+        // gives a press to what was drawn there the frame before).
+        self.touched |= ui.input(|i| i.any_touches() || i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. })));
+        if self.touched {
+            ui.style_mut().interaction.selectable_labels = false;
+        }
         self.draw(ui, drawing.feedback, cx);
     }
 
