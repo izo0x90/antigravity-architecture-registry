@@ -83,6 +83,6 @@ pub(crate) fn all(s: &Services) -> Vec<Box<dyn ToolSet>> {
         Box::new(cockpit::Cockpit { remote: s.remote.clone() }),
         Box::new(slots::Slots { slots: s.slots.clone(), notify: s.notify.clone() }),
         Box::new(terminals::Terminals { terminals: s.terminals.clone() }),
-        Box::new(tags::Tags { tags: s.tags.clone(), terminals: s.terminals.clone() }),
+        Box::new(tags::Tags { tags: s.tags.clone() }),
     ]
 }

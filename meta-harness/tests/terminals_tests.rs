@@ -350,15 +350,20 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
 
     // The user tags the line: a new tag, told to everyone.
     let subject = json!({ "kind": "terminal_lines", "terminal": terminal.id, "shell": screen.shell, "first": line, "last": line });
-    let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "name": "seen-it", "subject": subject }).to_string())).await;
+    let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "tag": "seen-it", "subject": subject }).to_string())).await;
     assert_eq!(status, 200, "{body}");
     let tag: harness_contracts::Tag = serde_json::from_str(&body).unwrap();
-    assert_eq!((tag.name.as_str(), tag.on[0].said.as_str()), ("seen-it", "tagged-line"), "kept with what it said");
+    assert_eq!((tag.name.as_str(), tag.on[0].said.as_str(), tag.on[0].by.as_str()), ("seen-it", "tagged-line", "you"), "kept with what it said, and who tagged it");
     event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id)).await;
-    let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "name": "two words", "subject": subject }).to_string())).await;
+    let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "tag": "two words", "subject": subject }).to_string())).await;
     assert!(status == 400 && body.contains("can't be a tag's name"), "{status} {body}");
     let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
-    assert!(read.contains("\"now\":[{\"what\":\"terminal") && read.contains("tagged-line"), "what it says now: {read}");
+    assert!(read.contains(&format!("\"what\":\"terminal {} lines {line}-{line}\"", terminal.id)) && read.contains("\"now\":\"tagged-line\""), "what it says now, named: {read}");
+    // A narrower reader lays the lines out anew: the tag follows its line.
+    reader.say(ToTerminal::Size { size: TermSize { cols: 40, rows: 20 } }).await;
+    while !matches!(reader.next().await, FromTerminal::Screen { update } if update.size.cols == 40) {}
+    let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
+    assert!(read.contains("\"now\":\"tagged-line\""), "still found, numbered anew: {read}");
 
     // An agent whose role may (the lead's) tags a command, by its number.
     let mut lead = Mcp::lead(addr).await;
@@ -367,10 +372,16 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
             reader.next().await;
         }
         let number = reader.commands.values().find(|c| c.text == "echo tagged-line").unwrap().id;
-        let (error, said) = lead.tool("tag", json!({ "tag": "seen-it", "terminal": terminal.id, "command": number })).await;
+        let command = format!("terminal {} command {number}", terminal.id);
+        let (error, said) = lead.tool("tag", json!({ "tag": "seen-it", "subject": command })).await;
         assert!(!error && said.starts_with("seen-it (on 2 things)"), "{said}");
         let (_, read) = lead.tool("tag_read", json!({ "tag": "seen-it" })).await;
-        assert!(read.contains(&format!("terminal {}, command {number}", terminal.id)) && read.contains("$ echo tagged-line (exit code 0"), "{read}");
+        assert!(read.contains(&format!("- {command} (tagged by lead)")) && read.contains("$ echo tagged-line (exit code 0"), "{read}");
+        // Taken off by the name tag_read gives; again: it isn't on it, and says so.
+        let (error, said) = lead.tool("untag", json!({ "tag": "seen-it", "subject": command })).await;
+        assert!(!error && said.starts_with("seen-it (on 1 thing)"), "{said}");
+        let (error, said) = lead.tool("untag", json!({ "tag": "seen-it", "subject": command })).await;
+        assert!(error && said.contains("isn't on that"), "{said}");
     }
     let (error, said) = lead.tool("tag_edit", json!({ "tag": "seen-it", "name": "checked", "note": "the echo works" })).await;
     assert!(!error && said.contains("checked") && said.contains("the echo works"), "{said}");

@@ -13,12 +13,16 @@ use crate::ids::{TagId, TerminalId};
 pub struct Tag {
     /// Stays when it's renamed.
     pub id: TagId,
-    /// What it's called (`flaky-build`): no spaces, unique on its server.
+    /// What it's called (`flaky-build`): letters, digits, `-` and `_`,
+    /// unique on its server.
     pub name: String,
     /// Which of the theme's tag colours (`tag_0`…`tag_7`).
     pub colour: u8,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// Who wrote the note (`you`, or an agent's slot).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub noted_by: String,
     /// What it's on, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on: Vec<Tagged>,
@@ -32,16 +36,22 @@ pub const TAG_COLOURS: u8 = 8;
 #[serde(rename_all = "camelCase")]
 pub struct Tagged {
     pub subject: Subject,
+    /// What it said when tagged (some of it, when it said a lot).
     pub said: String,
-    /// When it was tagged (ms since 1970).
+    /// When it was tagged (ms since 1970), and who tagged it (`you`, or an
+    /// agent's slot).
     pub at_ms: u64,
+    #[serde(default)]
+    pub by: String,
 }
 
 /// One thing in the project, durably: what a tag is on. Each kind is its
-/// owner's (it says what one says now); kinds are added as owners support
-/// them.
+/// owner's (it says what one says now, and names it); kinds are added as
+/// owners support them, so whatever reads one allows for kinds it doesn't
+/// know.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", rename_all_fields = "camelCase")]
+#[non_exhaustive]
 pub enum Subject {
     /// Lines of a terminal (`first` to `last`, by their numbers), in one
     /// start of its shell (`ScreenUpdate::shell`: a new start's lines are
@@ -56,17 +66,26 @@ pub enum Subject {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubjectNow {
-    /// What and where it is, in a few words (`terminal t1, lines 120–124`).
+    /// Its name, as its owner names it (`terminal t1 lines 120-124`): it
+    /// names it back, to tag or untag it.
     pub what: String,
     /// What it says now (none: it's gone).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub now: Option<String>,
 }
 
-/// A tag with each subject as it is now (none: its owner can't say, here).
+/// What a tag is on, and each as it is now (none: no owner here can say).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TagRead {
     pub tag: Tag,
-    pub now: Vec<Option<SubjectNow>>,
+    pub on: Vec<TaggedNow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaggedNow {
+    pub tagged: Tagged,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub now: Option<SubjectNow>,
 }

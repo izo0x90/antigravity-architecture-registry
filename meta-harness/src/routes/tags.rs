@@ -1,8 +1,9 @@
 //! Tags, for the cockpit: list them, read one (what each subject says
 //! now), tag a subject (a new tag when the name is new), take one off,
-//! rename, recolour or note one, delete one. Reading needs `view.read`;
-//! changing them `tags.edit` (agents change them through their tools, as
-//! their role allows).
+//! rename, recolour or note one, delete one; a tag by its id (or its
+//! name). Reading needs `view.read`; changing them `tags.edit` (agents
+//! change them through their tools, as their role allows). What the user
+//! does is theirs: `by` is "you".
 
 use std::sync::Arc;
 
@@ -35,8 +36,8 @@ impl IntoResponse for Refused {
     fn into_response(self) -> Response {
         let status = match self.0 {
             TagError::NotFound(_) => StatusCode::NOT_FOUND,
-            TagError::Taken(_) => StatusCode::CONFLICT,
-            TagError::BadName(_) | TagError::BadColour | TagError::Subject(_) => StatusCode::BAD_REQUEST,
+            TagError::Taken(_) | TagError::NotOn(_) => StatusCode::CONFLICT,
+            TagError::BadName(_) | TagError::BadColour | TagError::Subject(_) | TagError::TooMany => StatusCode::BAD_REQUEST,
             TagError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
@@ -58,15 +59,19 @@ async fn read(_: Needs<can::ViewRead>, State(state): State<TagsState>, Path(tag)
     blocking(&state.tags, move |t| t.read(&tag)).await.map(Json)
 }
 
+/// Who the cockpit's changes are by.
+const YOU: &str = "you";
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Tagging {
-    name: String,
+    /// A tag's id, or a name (a new tag when there's none of that name).
+    tag: String,
     subject: Subject,
 }
 
 async fn tag(_: Needs<can::TagsEdit>, State(state): State<TagsState>, Json(body): Json<Tagging>) -> Result<Json<Tag>, Refused> {
-    blocking(&state.tags, move |t| t.tag(&body.name, body.subject)).await.map(Json)
+    blocking(&state.tags, move |t| t.tag(&body.tag, body.subject, YOU)).await.map(Json)
 }
 
 #[derive(Deserialize)]
@@ -88,7 +93,7 @@ struct Editing {
 }
 
 async fn edit(_: Needs<can::TagsEdit>, State(state): State<TagsState>, Path(tag): Path<String>, Json(body): Json<Editing>) -> Result<Json<Tag>, Refused> {
-    blocking(&state.tags, move |t| t.edit(&tag, Edit { name: body.name, colour: body.colour, note: body.note })).await.map(Json)
+    blocking(&state.tags, move |t| t.edit(&tag, Edit { name: body.name, colour: body.colour, note: body.note }, YOU)).await.map(Json)
 }
 
 async fn delete(_: Needs<can::TagsEdit>, State(state): State<TagsState>, Path(tag): Path<String>) -> Result<StatusCode, Refused> {

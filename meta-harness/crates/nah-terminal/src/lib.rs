@@ -77,9 +77,25 @@ struct State {
     /// What it's called when the program gives it no title.
     named: String,
     commands: Commands,
+    /// The last few times its lines were laid out anew (a new width): how
+    /// a line numbered before is found after.
+    relaid: std::collections::VecDeque<Relaid>,
+    /// Lines numbered below this were laid out anew longer ago than is kept.
+    relaid_forgotten: u64,
     /// The shell ended (and its code).
     ended: Option<Option<i32>>,
 }
+
+/// Lines laid out anew: those numbered below `end` were numbered as in
+/// `before`, and are in `after` now (none: they couldn't be read then, a
+/// program had the whole screen).
+struct Relaid {
+    end: u64,
+    layouts: Option<(screen::Layout, screen::Layout)>,
+}
+
+/// How many layouts back a line can be followed.
+const RELAID_KEPT: usize = 4;
 
 /// What the emulator says while it reads output: kept, then acted on once
 /// it's done with what was read.
@@ -155,6 +171,8 @@ impl Terminal {
             title: named.clone(),
             named,
             commands: Commands::default(),
+            relaid: std::collections::VecDeque::new(),
+            relaid_forgotten: 0,
             ended: None,
         }));
         let killer = child.clone_killer();
@@ -192,22 +210,28 @@ impl Terminal {
             return Ok(());
         }
         lock(&self.master).resize(pty_size(size)).map_err(io_error)?;
-        let State { term, feed, changes, commands, .. } = &mut *state;
-        let (end, cols) = (feed.top() + term.screen_lines() as u64, term.columns());
-        // A new width lays the lines out anew: the commands move with them
-        // (unless a program has the whole screen: the lines can't be read).
-        let before = (!term.mode().contains(TermMode::ALT_SCREEN)).then(|| screen::Layout::of(term, feed));
+        let State { term, feed, changes, commands, relaid, relaid_forgotten, .. } = &mut *state;
+        let end = feed.top() + term.screen_lines() as u64;
+        // A new width lays the lines out anew: the commands move with them,
+        // and how lines moved is kept a while (unless a program has the
+        // whole screen: the lines can't be read).
+        let new_width = usize::from(size.cols.max(1)) != term.columns();
+        let readable = |term: &Term<Listener>| !term.mode().contains(TermMode::ALT_SCREEN);
+        let before = (new_width && readable(term)).then(|| screen::Layout::of(term, feed));
         term.resize(Size(size));
-        let relaid = term.columns() != cols;
-        feed.resized(term, end, relaid);
+        feed.resized(term, end, new_width);
         changes.take(term);
-        if relaid {
-            match before.filter(|_| !term.mode().contains(TermMode::ALT_SCREEN)) {
-                Some(before) => {
-                    let after = screen::Layout::of(term, feed);
-                    commands.moved(changes.bump(), |line, col| after.place(&before, line, col), |line| after.after(&before, line));
-                }
+        if new_width {
+            let layouts = before.filter(|_| readable(term)).map(|before| (before, screen::Layout::of(term, feed)));
+            match &layouts {
+                Some((before, after)) => commands.moved(changes.bump(), |line, col| after.place(before, line, col), |line| after.after(before, line)),
                 None => commands.lost_places(feed.top(), changes.bump()),
+            }
+            relaid.push_back(Relaid { end, layouts });
+            if relaid.len() > RELAID_KEPT
+                && let Some(gone) = relaid.pop_front()
+            {
+                *relaid_forgotten = gone.end;
             }
         }
         if commands.any_before(feed.oldest()) {
@@ -262,15 +286,40 @@ impl Terminal {
     /// they aren't all kept (gone, or a program has the whole screen).
     pub fn lines_text(&self, from: u64, to: u64) -> Option<String> {
         let state = lock(&self.state);
+        if state.term.mode().contains(TermMode::ALT_SCREEN) {
+            return None;
+        }
         let (first, _) = screen::lines(&state.term, &state.feed, from, 0);
         let end = state.feed.top() + state.term.screen_lines() as u64;
         (first == from && to <= end && from < to).then(|| screen::text(&state.term, &state.feed, from, to))
     }
 
+    /// Where lines `first` to `last`, numbered so some layouts ago, are
+    /// now (as they are, when no new width came since); none when that
+    /// can't be told (too many layouts ago, or one that couldn't be read).
+    pub fn lines_now(&self, first: u64, last: u64) -> Option<(u64, u64)> {
+        let state = lock(&self.state);
+        if first < state.relaid_forgotten {
+            return None;
+        }
+        let (mut first, mut last) = (first, last);
+        for relaid in &state.relaid {
+            if first < relaid.end {
+                let (before, after) = relaid.layouts.as_ref()?;
+                (first, last) = (after.place(before, first, 0)?.0, after.place(before, last, u16::MAX)?.0);
+            }
+        }
+        Some((first, last))
+    }
+
     /// The screen's rows, with up to `back` rows of scrollback above them,
-    /// each with its number (a row each, as shown).
+    /// each with its number (a row each, as shown); none while a program
+    /// has the whole screen (its rows aren't numbered lines).
     pub fn numbered(&self, back: u32) -> Vec<(u64, String)> {
         let state = lock(&self.state);
+        if state.term.mode().contains(TermMode::ALT_SCREEN) {
+            return Vec::new();
+        }
         let rows = state.term.screen_lines() as u32;
         let (from, lines) = screen::lines(&state.term, &state.feed, state.feed.top().saturating_sub(u64::from(back)), back + rows);
         let mut out: Vec<(u64, String)> = (from..).zip(lines.iter().map(|row| row.iter().map(|run| run.text.as_str()).collect())).collect();

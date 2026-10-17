@@ -170,11 +170,14 @@ impl Layout {
         Some(self.first + row as u64)
     }
 
-    /// Where a place in `before` (the same lines, another width) is in this.
+    /// Where a place in `before` (the same lines, another width) is in this
+    /// (a column past the row's end: its last).
     pub fn place(&self, before: &Layout, line: u64, col: u16) -> Option<(u64, u16)> {
         let (up, part) = *before.rows.get(usize::try_from(line.checked_sub(before.first)?).ok()?)?;
-        let offset = part * before.cols + usize::from(col);
-        let row = *self.starts.get(up)? + offset / self.cols.max(1);
+        let offset = part * before.cols + usize::from(col).min(before.cols.saturating_sub(1));
+        // Within the line it's in (a place past the line's end: its last row).
+        let last_row = up.checked_sub(1).and_then(|next| self.starts.get(next)).map_or(self.rows.len(), |s| *s).checked_sub(1)?;
+        let row = (*self.starts.get(up)? + offset / self.cols.max(1)).min(last_row);
         (row < self.rows.len()).then(|| (self.first + row as u64, (offset % self.cols.max(1)) as u16))
     }
 }

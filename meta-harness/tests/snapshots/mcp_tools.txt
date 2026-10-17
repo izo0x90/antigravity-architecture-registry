@@ -1273,7 +1273,7 @@ The project's tags (names given to things to find them again): each one's name, 
 }
 
 ## tag_read
-What a tag (by its name) is on: each thing, where it is, what it says now (or that it's gone) and what it said when tagged.
+What a tag is on: each thing's name, what it says now (or that it's gone) and what it said when tagged, and who tagged it.
 {
   "type": "object",
   "properties": {
@@ -1287,58 +1287,42 @@ What a tag (by its name) is on: each thing, where it is, what it says now (or th
 }
 
 ## tag
-Tag something with `tag` (a new tag when the name is new): a terminal's command (`terminal` and `command`) or lines (`terminal` and `lines`).
+Tag something.
 {
   "type": "object",
   "properties": {
-    "terminal": {
-      "type": "string",
-      "description": "A terminal's id (from `terminals`)"
-    },
-    "command": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "One of its commands, by its number (from `terminal_read`)"
-    },
-    "lines": {
-      "type": "string",
-      "description": "Some of its lines, by their numbers: `120` or `120-124` (`terminal_read` with `numbered` shows them)"
-    },
     "tag": {
-      "type": "string"
+      "type": "string",
+      "description": "Its name (a new tag when there's none of that name: letters, digits, - and _)"
+    },
+    "subject": {
+      "type": "string",
+      "description": "What to tag, named as its owner names it: `tag_read` shows each thing's name; a terminal's are `terminal t1 command 3` and `terminal t1 lines 120-124` (`terminal_read` gives the numbers)"
     }
   },
   "required": [
     "tag",
-    "terminal"
+    "subject"
   ]
 }
 
 ## untag
-Take `tag` off something it's on (named as `tag` names it).
+Take a tag off something it's on.
 {
   "type": "object",
   "properties": {
-    "terminal": {
-      "type": "string",
-      "description": "A terminal's id (from `terminals`)"
-    },
-    "command": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "One of its commands, by its number (from `terminal_read`)"
-    },
-    "lines": {
-      "type": "string",
-      "description": "Some of its lines, by their numbers: `120` or `120-124` (`terminal_read` with `numbered` shows them)"
-    },
     "tag": {
-      "type": "string"
+      "type": "string",
+      "description": "Its name (a new tag when there's none of that name: letters, digits, - and _)"
+    },
+    "subject": {
+      "type": "string",
+      "description": "What to tag, named as its owner names it: `tag_read` shows each thing's name; a terminal's are `terminal t1 command 3` and `terminal t1 lines 120-124` (`terminal_read` gives the numbers)"
     }
   },
   "required": [
     "tag",
-    "terminal"
+    "subject"
   ]
 }
 
@@ -1352,7 +1336,7 @@ Rename a tag, give it another colour or a note, or delete it.
     },
     "name": {
       "type": "string",
-      "description": "A new name (letters, digits, - _ . /; no spaces)"
+      "description": "A new name (letters, digits, - and _)"
     },
     "colour": {
       "type": "integer",

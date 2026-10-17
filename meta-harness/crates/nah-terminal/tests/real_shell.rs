@@ -202,6 +202,8 @@ fn bash_says_where_each_command_is_what_was_typed_and_how_it_ended_through_a_new
     assert_eq!((echo.text.as_str(), echo.code), ("echo one; echo two", Some(0)));
     assert_eq!((long.text.as_str(), long.code), ("printf 'a long line of output %.0s' 1 2 3 4; echo; false", Some(1)));
     assert!(echo.prompt <= echo.input && echo.input < echo.output.unwrap(), "{echo:?}");
+    let before_output = echo.output.unwrap();
+    assert_eq!(sh.terminal.lines_now(before_output, before_output), Some((before_output, before_output)), "no new width: where it was");
     let output = |id| sh.terminal.command_output(id, 100).unwrap().0;
     assert_eq!(output(echo.id), "one\ntwo", "its output");
     // Narrower: the long output wraps on more rows; the commands move with their lines.
@@ -210,6 +212,9 @@ fn bash_says_where_each_command_is_what_was_typed_and_how_it_ended_through_a_new
     let [echo, long] = &commands[commands.len() - 2..] else { unreachable!() };
     assert_eq!(output(echo.id), "one\ntwo");
     assert_eq!(output(long.id), "a long line of output ".repeat(4).trim_end(), "its lines, as it wrote them, on the rows they wrap on now");
+    // A line numbered before the new width is found where it is now.
+    let (first, last) = sh.terminal.lines_now(before_output, before_output).unwrap();
+    assert_eq!(sh.terminal.lines_text(first, last + 1).as_deref(), Some("one"));
 }
 
 /// Waits until `count` commands have ended; them.

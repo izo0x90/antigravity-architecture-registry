@@ -219,8 +219,9 @@ pub fn notifications(hub: &Arc<EventHub>, state: &Arc<nah_state::StateDb>, slots
 /// The terminals: the user's shells, started in the project's folder (their
 /// start-up hooks kept in the state folder); those kept from the last run
 /// come back ended. How long a command runs before its end is news:
-/// `.nah/terminals.toml`'s `long_command_secs` (10 by default).
-pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>) -> Result<Arc<crate::terminals::Terminals>, StartError> {
+/// `.nah/terminals.toml`'s `long_command_secs` (10 by default). Their lines
+/// and commands can be tagged.
+pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, tags: &nah_tags::Tags) -> Result<Arc<crate::terminals::Terminals>, StartError> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Settings {
@@ -235,18 +236,16 @@ pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hu
         Err(_) => Settings { long_command_secs: ten() },
     };
     let hooks = arch_service::state_dir(arch.root())?.join("terminal-hooks");
-    Ok(crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), std::time::Duration::from_secs(settings.long_command_secs))?)
+    let terminals = crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), std::time::Duration::from_secs(settings.long_command_secs))?;
+    tags.register(terminals.clone());
+    Ok(terminals)
 }
 
 /// Tags: kept in the state database, told on the event stream; what a
-/// tagged subject says now is its owner's to tell (the terminals', when
-/// the server runs shells).
-pub fn tags(state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, terminals: Option<&Arc<crate::terminals::Terminals>>) -> Result<Arc<nah_tags::Tags>, StartError> {
-    let tags = nah_tags::Tags::open(state.clone(), hub.clone()).map_err(|e| e.to_string())?;
-    if let Some(terminals) = terminals {
-        tags.register(terminals.clone());
-    }
-    Ok(Arc::new(tags))
+/// tagged subject says now is its owner's to tell (each owner registers
+/// itself as it's made).
+pub fn tags(state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>) -> Result<Arc<nah_tags::Tags>, StartError> {
+    Ok(Arc::new(nah_tags::Tags::open(state.clone(), hub.clone()).map_err(|e| e.to_string())?))
 }
 
 /// What each agent role may do: the shipped roles, with the project's

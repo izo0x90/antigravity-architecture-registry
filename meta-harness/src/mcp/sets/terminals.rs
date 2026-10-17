@@ -121,14 +121,14 @@ impl ToolSet for Terminals {
                     let command = commands.iter().find(|c| c.id == number).ok_or_else(no_such)?;
                     let (output, left_out) = open.command_output(number, MOST_BACK).ok_or_else(no_such)?;
                     let cut = if left_out > 0 { format!("({left_out} lines before these left out)\n") } else { String::new() };
-                    return Ok(format!("{}\n{cut}{output}", crate::terminals::said(command)));
+                    return Ok(format!("{}\n{cut}{output}", crate::terminals::in_words(command)));
                 }
                 let back = args["back"].as_u64().unwrap_or(0).min(MOST_BACK) as u32;
                 let text = if args["numbered"].as_bool().unwrap_or(false) { open.numbered(back).into_iter().map(|(n, row)| format!("{n}\t{row}")).collect::<Vec<_>>().join("\n") } else { open.text(back) };
                 let mut out = if text.is_empty() { "(nothing on its screen)".to_owned() } else { text };
-                let ran: Vec<String> = commands.iter().rev().filter(|c| c.output.is_some()).take(LAST_COMMANDS).map(crate::terminals::said).collect();
+                let ran: Vec<String> = commands.iter().rev().filter(|c| c.output.is_some()).take(LAST_COMMANDS).map(crate::terminals::in_words).collect();
                 if !ran.is_empty() {
-                    out.push_str("\n\nIts last commands (newest first; `command` reads one's output):\n");
+                    out.push_str(&format!("\n\nIts last commands (newest first; `command` reads one's output; tag one as `terminal {} command <number>`):\n", open.info().id));
                     out.push_str(&ran.join("\n"));
                 }
                 Ok(out)

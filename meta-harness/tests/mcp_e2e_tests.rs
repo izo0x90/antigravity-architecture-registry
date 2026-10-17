@@ -279,14 +279,15 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     let service = &state.project.mcp_state.service;
     let as_role = |role: &str| McpCaller { principal: Principal::agent(role), slot: None, label: role.into() };
     let names = |who: &Principal| service.tools_for(who).iter().map(|t| t.name.clone()).collect::<Vec<_>>();
-    let reads = ["ingest", "list_types", "search", "inspect", "view", "changes", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions", "terminals", "terminal_read"];
+    let reads = ["ingest", "list_types", "search", "inspect", "view", "changes", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions", "terminals", "terminal_read", "tags", "tag_read"];
     assert_eq!(names(&Principal::agent("external")), reads, "read-only, in the list's order");
-    // The slots' tools come before the terminals' in the list.
+    // The slots' tools come before the terminals', the tags' after them.
     let mut sub = reads.map(String::from).to_vec();
     sub.splice(11..11, ["tell_lead".into(), "tell_user".into()]);
-    assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, and reports to the lead and the user");
+    sub.extend(["tag", "untag", "tag_edit"].map(String::from));
+    assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, reports to the lead and the user, and tags");
     let lead = names(&Principal::agent("lead"));
-    assert!(lead.len() == 33 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself and typing into terminals: {lead:?}");
+    assert!(lead.len() == 38 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself and typing into terminals: {lead:?}");
     assert!(!lead.contains(&"terminal_type".to_owned()), "typing into the user's terminals is no role's unless granted");
     assert!(names(&Principal::Anonymous).is_empty());
 

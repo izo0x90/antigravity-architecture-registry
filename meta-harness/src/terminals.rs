@@ -39,7 +39,7 @@ pub enum TerminalError {
 
 /// A command in a line: its number, its command line, how it ended (as
 /// notifications say it).
-pub fn said(command: &harness_contracts::TerminalCommand) -> String {
+pub fn in_words(command: &harness_contracts::TerminalCommand) -> String {
     let typed = if command.text.is_empty() { "(the shell didn't say)" } else { command.text.as_str() };
     let ended = match (command.end, command.code) {
         (None, _) => "running".to_owned(),
@@ -301,6 +301,11 @@ impl Open {
         lock(&self.shell).as_ref().map_or_else(Vec::new, |s| s.numbered(back))
     }
 
+    /// Where lines numbered `first` to `last` are now (after a new width).
+    pub fn lines_now(&self, first: u64, last: u64) -> Option<(u64, u64)> {
+        lock(&self.shell).as_ref().and_then(|s| s.lines_now(first, last))
+    }
+
     /// Lines `from..to` as text, when they're kept.
     pub fn lines_text(&self, from: u64, to: u64) -> Option<String> {
         lock(&self.shell).as_ref().and_then(|s| s.lines_text(from, to))
@@ -320,27 +325,78 @@ impl Open {
 }
 
 /// The terminals own their lines and commands as subjects of tags: what
-/// they say now, in the start of the shell they were tagged in.
+/// they say now (in the start of the shell they were tagged in), their
+/// names (`terminal t1 lines 120-124`, `terminal t1 command 3`; another
+/// start's: `terminal t1@<start> …`), and where lines are after a new width.
 impl nah_tags::Resolve for Terminals {
     fn now(&self, subject: &Subject) -> Option<SubjectNow> {
         let started = |terminal: &TerminalId, shell: u64| self.get(terminal).ok().filter(|o| o.started() == shell);
-        Some(match subject {
-            Subject::TerminalLines { terminal, shell, first, last } => SubjectNow {
-                what: if first == last { format!("terminal {terminal}, line {first}") } else { format!("terminal {terminal}, lines {first} to {last}") },
-                now: started(terminal, *shell).and_then(|o| o.lines_text(*first, last + 1)),
-            },
+        match subject {
+            Subject::TerminalLines { terminal, shell, first, last } => Some(SubjectNow {
+                what: self.words(terminal, *shell, &format!("lines {first}-{last}")),
+                now: started(terminal, *shell).and_then(|o| o.lines_text(*first, last.checked_add(1)?)),
+            }),
             Subject::TerminalCommand { terminal, shell, command } => {
                 let open = started(terminal, *shell);
                 let ran = open.as_ref().and_then(|o| o.commands().into_iter().find(|c| c.id == *command && c.output.is_some()));
                 let now = ran.map(|c| {
                     let output = open.as_ref().and_then(|o| o.command_output(c.id, TAGGED_OUTPUT)).map(|(text, _)| text).unwrap_or_default();
-                    if output.is_empty() { said(&c) } else { format!("{}\n{output}", said(&c)) }
+                    if output.is_empty() { in_words(&c) } else { format!("{}\n{output}", in_words(&c)) }
                 });
-                SubjectNow { what: format!("terminal {terminal}, command {command}"), now }
+                Some(SubjectNow { what: self.words(terminal, *shell, &format!("command {command}")), now })
             }
-        })
+            _ => None,
+        }
+    }
+
+    fn named(&self, words: &str) -> Option<Result<Subject, String>> {
+        let rest = words.trim().strip_prefix("terminal ")?;
+        let (who, what) = rest.split_once(' ')?;
+        let (id, start) = match who.split_once('@') {
+            Some((id, start)) => (id, Some(start)),
+            None => (who, None),
+        };
+        let terminal = TerminalId::new(id);
+        Some((|| {
+            let shell = match start {
+                Some(start) => start.parse().map_err(|_| format!("{start:?} isn't a start of a shell"))?,
+                None => self.get(&terminal).map_err(|e| e.to_string())?.started(),
+            };
+            let number = |n: &str| n.trim().parse::<u64>().map_err(|_| format!("{n:?} isn't a number"));
+            if let Some(command) = what.strip_prefix("command ") {
+                return Ok(Subject::TerminalCommand { terminal, shell, command: number(command)? });
+            }
+            let lines = what.strip_prefix("lines ").or_else(|| what.strip_prefix("line ")).ok_or("a terminal's `command <n>`, `line <n>` or `lines <a>-<b>`")?;
+            let (first, last) = match lines.split_once('-') {
+                Some((a, b)) => (number(a)?, number(b)?),
+                None => (number(lines)?, number(lines)?),
+            };
+            let (first, last) = (first.min(last), first.max(last));
+            if last - first >= TAGGED_LINES {
+                return Err(format!("at most {TAGGED_LINES} lines"));
+            }
+            Ok(Subject::TerminalLines { terminal, shell, first, last })
+        })())
+    }
+
+    /// Lines laid out anew (a new width) since they were numbered: where they are now.
+    fn moved(&self, subject: &Subject) -> Option<Subject> {
+        let Subject::TerminalLines { terminal, shell, first, last } = subject else { return None };
+        let open = self.get(terminal).ok().filter(|o| o.started() == *shell)?;
+        let (now_first, now_last) = open.lines_now(*first, *last)?;
+        ((now_first, now_last) != (*first, *last)).then(|| Subject::TerminalLines { terminal: terminal.clone(), shell: *shell, first: now_first, last: now_last })
     }
 }
 
-/// How much of a tagged command's output it says (its last lines).
+impl Terminals {
+    /// A subject's name: in the shell's current start as it is, in another
+    /// with which start.
+    fn words(&self, terminal: &TerminalId, shell: u64, what: &str) -> String {
+        if self.get(terminal).is_ok_and(|o| o.started() == shell) { format!("terminal {terminal} {what}") } else { format!("terminal {terminal}@{shell} {what}") }
+    }
+}
+
+/// How much of a tagged command's output it says (its last lines), and
+/// how many lines can be tagged at once.
 const TAGGED_OUTPUT: u64 = 20;
+const TAGGED_LINES: u64 = 200;

@@ -5,14 +5,15 @@ use harness_contracts::{Tag, TagId};
 use nah_tags::TagStore;
 use rusqlite::params;
 
-use crate::{StateDb, StateError, failed};
+use crate::{StateDb, failed};
 
 impl TagStore for StateDb {
     fn tags(&self) -> Result<Vec<Tag>, String> {
         self.transaction(|tx| {
             let mut stmt = tx.prepare("SELECT json FROM tags ORDER BY seq").map_err(failed)?;
             let rows: Vec<String> = stmt.query_map([], |r| r.get(0)).map_err(failed)?.collect::<Result<_, _>>().map_err(failed)?;
-            rows.into_iter().map(|json| serde_json::from_str(&json).map_err(|e| StateError::Invalid(format!("a kept tag can't be read ({e}): {json}")))).collect()
+            // One this build can't read (a newer kind of subject) stays as kept.
+            Ok(rows.into_iter().filter_map(|json| serde_json::from_str(&json).ok()).collect::<Vec<Tag>>())
         })
         .map_err(|e| e.to_string())
     }

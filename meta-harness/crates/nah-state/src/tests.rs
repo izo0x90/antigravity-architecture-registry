@@ -249,7 +249,7 @@ mod terminals {
     fn tags_are_kept_in_the_order_made_and_each_change_replaces_what_was_kept() {
         use nah_tags::TagStore;
         let dir = tempfile::tempdir().unwrap();
-        let tag = |id: &str, name: &str| harness_contracts::Tag { id: harness_contracts::TagId::new(id), name: name.into(), colour: 1, note: String::new(), on: Vec::new() };
+        let tag = |id: &str, name: &str| harness_contracts::Tag { id: harness_contracts::TagId::new(id), name: name.into(), colour: 1, note: String::new(), noted_by: String::new(), on: Vec::new() };
         {
             let db = StateDb::open(dir.path(), &settings()).unwrap();
             db.put(&tag("a", "first")).unwrap();
@@ -259,6 +259,8 @@ mod terminals {
             db.remove(&harness_contracts::TagId::new("c")).unwrap();
         }
         let db = StateDb::open(dir.path(), &settings()).unwrap();
+        // One a later build kept, of a kind of subject this one doesn't know: left alone.
+        db.transaction(|tx| tx.execute("INSERT INTO tags (id, name, json, seq) VALUES ('z', 'newer', '{\"id\":\"z\",\"name\":\"newer\",\"colour\":0,\"on\":[{\"subject\":{\"kind\":\"chat_message\"},\"said\":\"x\",\"atMs\":0}]}', 99)", []).map(|_| ()).map_err(crate::failed)).unwrap();
         assert_eq!(db.tags().unwrap().iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["renamed", "second"]);
     }
 }
