@@ -46,7 +46,7 @@ impl CockpitApp {
         // It has the keyboard while typing is in its host (and no
         // developer window has it).
         let typing = self.input_mode == (InputMode::Insert { at: here.at }) && !self.feedback.is_modal_open && !self.feedback.is_issues_window_open && !self.feedback.is_inspecting;
-        let mut drawing = crate::buffer::Drawing { feedback: &mut self.feedback, focused: is_focused, leader_held, typing };
+        let mut drawing = crate::buffer::Drawing { feedback: &mut self.feedback, focused: is_focused, leader_held, typing, fingers: self.fingers };
         let drawn = self.desk.in_use(kind);
         self.desk.on_screen(drawn);
         let (buffer, net) = self.desk.view_with_net(kind);
@@ -206,13 +206,19 @@ impl CockpitApp {
     /// palette), or is the view's when it reads its canvas itself (the
     /// graph). Taps, drags and two fingers are the pointer's.
     pub(in crate::app) fn touch_tick(&mut self, ctx: &egui::Context) {
-        let (events, time) = ctx.input(|i| {
+        let (events, pointed, time) = ctx.input(|i| {
             let touches: Vec<(u64, crate::touch::Phase, egui::Pos2)> = i.events.iter().filter_map(|e| match e {
                 egui::Event::Touch { id, phase, pos, .. } => Some((id.0, crate::touch::Phase::from(*phase), *pos)),
                 _ => None,
             }).collect();
-            (touches, i.time)
+            (touches, i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. })), i.time)
         });
+        // A finger's pointer comes with its touches; a mouse's alone.
+        if !events.is_empty() {
+            self.fingers = true;
+        } else if pointed {
+            self.fingers = false;
+        }
         let cfg = self.config.touch.clone();
         let mut gestures = Vec::new();
         for (id, phase, pos) in events {

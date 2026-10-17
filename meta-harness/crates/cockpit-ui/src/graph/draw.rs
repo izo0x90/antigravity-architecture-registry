@@ -243,7 +243,6 @@ impl GraphState {
         if self.glide_on(time) {
             ui.ctx().request_repaint();
         }
-        self.touch_seen |= ui.input(|i| i.any_touches());
         if pan_held && response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
@@ -379,7 +378,6 @@ impl GraphState {
     /// under it; its controls show under it. Everything else fingers do is
     /// the pointer's.
     pub fn on_gesture(&mut self, gesture: Gesture) {
-        self.touch_seen = true;
         if let Gesture::LongPress(pos) = gesture
             && let Some(key) = self.hit(pos)
         {
@@ -391,7 +389,7 @@ impl GraphState {
         match self.ui.chips.show {
             ChipMode::Always => true,
             ChipMode::Never => false,
-            ChipMode::Auto => self.touch_seen || self.canvas.width() < self.ui.chips.narrow_below,
+            ChipMode::Auto => self.fingers || self.canvas.width() < self.ui.chips.narrow_below,
         }
     }
 

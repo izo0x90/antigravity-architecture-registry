@@ -216,6 +216,10 @@ pub struct CockpitApp {
     asked: Option<(String, Option<String>)>,
     /// Fingers, turned into gestures (for every view).
     touch: crate::touch::Gestures,
+    /// The pointer is a finger (one touched last; a mouse moving makes it
+    /// a mouse's again): views move what a finger drags on rather than
+    /// select it.
+    fingers: bool,
     /// The quick look, while it's open.
     pub quick_look: Option<QuickLook>,
     /// The browser's notifications.
@@ -297,6 +301,7 @@ impl CockpitApp {
             landing: None,
             asked: None,
             touch: Default::default(),
+            fingers: false,
             quick_look: None,
             alerts,
             notes_later: Arc::default(),

@@ -155,8 +155,6 @@ struct Symbol {
 }
 
 pub struct CodeViewerState {
-    /// A finger has been on it (its text isn't selected by dragging since).
-    touched: bool,
     pub current_file: String,
     pub content: String,
     pub lines: Vec<String>,
@@ -225,7 +223,6 @@ pub struct CodeViewerState {
 impl Default for CodeViewerState {
     fn default() -> Self {
         Self {
-            touched: false,
             current_file: "Cargo.toml".to_string(),
             content: String::new(),
             lines: Vec::new(),
@@ -337,7 +334,7 @@ impl CodeViewerState {
     /// A name (or its gutter mark) clicked: the user is on its component
     /// now; with the go-to modifier, its code.
     pub(crate) fn name_clicked(&mut self, id: ComponentId, go_to: bool) {
-        self.asks.push(if go_to { Ask::Show { target: Target::Component(id), in_: crate::kind::BufferKind::Code } } else { Ask::Follow(id) });
+        self.asks.push(if go_to { Ask::Show { target: Target::Component(id), in_: Some(crate::kind::BufferKind::Code) } } else { Ask::Follow(id) });
     }
 
     /// Opens `path` with lines `start..=end` highlighted and scrolled to.
@@ -959,11 +956,9 @@ pub(crate) struct CodePlace {
 
 impl crate::buffer::Buffer for CodeViewerState {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
-        // Once a finger's been on it, a finger on the code moves it wherever
-        // it lands (selecting the text under it would take the drag: egui
-        // gives a press to what was drawn there the frame before).
-        self.touched |= ui.input(|i| i.any_touches() || i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. })));
-        if self.touched {
+        // A finger on the code moves it wherever it lands (selecting the
+        // text under it would take the drag); a mouse selects it.
+        if drawing.fingers {
             ui.style_mut().interaction.selectable_labels = false;
         }
         self.draw(ui, drawing.feedback, cx);

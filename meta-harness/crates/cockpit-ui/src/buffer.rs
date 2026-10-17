@@ -27,6 +27,8 @@ pub struct Drawing<'a> {
     pub typing: bool,
     /// The leader key is down (the pointer pans what can be panned).
     pub leader_held: bool,
+    /// The pointer is a finger (the host says, from what touched last).
+    pub fingers: bool,
 }
 
 /// What a buffer knows about a component.

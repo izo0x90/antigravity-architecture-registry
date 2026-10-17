@@ -160,8 +160,8 @@ pub struct GraphState {
     inbox: Arc<Mutex<Vec<Reply>>>,
     /// Behavior settings (chips, zoom), from the UI config.
     pub(crate) ui: GraphUi,
-    /// A finger touched it (its chips show from then on).
-    touch_seen: bool,
+    /// The pointer is a finger (the host says): its chips show.
+    fingers: bool,
     /// A flick gliding on (points a second), slowing as a list's does.
     fling: Vec2,
     /// Two fingers took part in what the pointer is doing (lifting them
@@ -222,7 +222,7 @@ impl Default for GraphState {
             canvas: Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)),
             inbox: Arc::default(),
             ui: GraphUi::default(),
-            touch_seen: false,
+            fingers: false,
             fling: Vec2::ZERO,
             pinching: false,
             more_rects: Vec::new(),
@@ -434,6 +434,7 @@ impl GraphState {
 
 impl crate::buffer::Buffer for GraphState {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut crate::actions::RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
+        self.fingers = drawing.fingers;
         self.draw(ui, drawing.feedback, drawing.leader_held, cx);
     }
 
