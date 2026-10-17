@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{SlotId, TerminalId, ThreadId, TurnId};
+use crate::ids::{SlotId, TagId, TerminalId, ThreadId, TurnId};
 use crate::snapshot::ProviderSnapshot;
 use crate::items::TurnItem;
 use crate::notifications::Notification;
@@ -60,6 +60,9 @@ pub enum ClientEvent {
     /// Something a terminal's program or shell did (a bell, its end, a long
     /// command finishing): news, not kept.
     TerminalNews { terminal: crate::terminals::Terminal, news: crate::terminals::TerminalNews },
+    /// A tag was made or changed (its name, colour, note, what it's on).
+    TagUpdated { tag: crate::tags::Tag },
+    TagRemoved { tag_id: TagId },
     /// The stream fell behind: drop what you hold; the whole state follows.
     Resync,
 }

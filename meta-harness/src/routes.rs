@@ -12,5 +12,6 @@ pub(crate) mod mcp;
 pub(crate) mod notifications;
 pub(crate) mod server;
 pub(crate) mod slots;
+pub(crate) mod tags;
 pub(crate) mod terminals;
 pub(crate) mod tool_servers;

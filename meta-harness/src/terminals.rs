@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use harness_contracts::{ClientEvent, Found, Row, ScreenUpdate, TermSize, Terminal, TerminalId, TerminalInput, TerminalNews, TerminalStatus};
+use harness_contracts::{ClientEvent, Found, Row, ScreenUpdate, Subject, SubjectNow, TermSize, Terminal, TerminalId, TerminalInput, TerminalNews, TerminalStatus};
 use harness_core::EventHub;
 use nah_terminal::{Happening, Options};
 use tokio::sync::watch;
@@ -35,6 +35,19 @@ pub enum TerminalError {
     Store(#[from] nah_state::StateError),
     #[error("the work was dropped: {0}")]
     Dropped(#[from] tokio::task::JoinError),
+}
+
+/// A command in a line: its number, its command line, how it ended (as
+/// notifications say it).
+pub fn said(command: &harness_contracts::TerminalCommand) -> String {
+    let typed = if command.text.is_empty() { "(the shell didn't say)" } else { command.text.as_str() };
+    let ended = match (command.end, command.code) {
+        (None, _) => "running".to_owned(),
+        (Some(_), Some(code)) => format!("exit code {code}"),
+        (Some(_), None) => "ended".to_owned(),
+    };
+    let ran = command.ran_ms.map(|ms| format!(", after {}", nah_notify::rules::took(ms))).unwrap_or_default();
+    format!("{}. $ {typed} ({ended}{ran})", command.id)
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -283,6 +296,16 @@ impl Open {
         lock(&self.shell).as_ref().and_then(|s| s.command_output(id, most))
     }
 
+    /// The screen's rows (with `back` more above), each with its number.
+    pub fn numbered(&self, back: u32) -> Vec<(u64, String)> {
+        lock(&self.shell).as_ref().map_or_else(Vec::new, |s| s.numbered(back))
+    }
+
+    /// Lines `from..to` as text, when they're kept.
+    pub fn lines_text(&self, from: u64, to: u64) -> Option<String> {
+        lock(&self.shell).as_ref().and_then(|s| s.lines_text(from, to))
+    }
+
     /// The screen as text, with up to `back` lines of scrollback.
     pub fn text(&self, back: u32) -> String {
         lock(&self.shell).as_ref().map_or_else(String::new, |s| s.text(back))
@@ -295,3 +318,29 @@ impl Open {
         Ok(shell.input(input)?)
     }
 }
+
+/// The terminals own their lines and commands as subjects of tags: what
+/// they say now, in the start of the shell they were tagged in.
+impl nah_tags::Resolve for Terminals {
+    fn now(&self, subject: &Subject) -> Option<SubjectNow> {
+        let started = |terminal: &TerminalId, shell: u64| self.get(terminal).ok().filter(|o| o.started() == shell);
+        Some(match subject {
+            Subject::TerminalLines { terminal, shell, first, last } => SubjectNow {
+                what: if first == last { format!("terminal {terminal}, line {first}") } else { format!("terminal {terminal}, lines {first} to {last}") },
+                now: started(terminal, *shell).and_then(|o| o.lines_text(*first, last + 1)),
+            },
+            Subject::TerminalCommand { terminal, shell, command } => {
+                let open = started(terminal, *shell);
+                let ran = open.as_ref().and_then(|o| o.commands().into_iter().find(|c| c.id == *command && c.output.is_some()));
+                let now = ran.map(|c| {
+                    let output = open.as_ref().and_then(|o| o.command_output(c.id, TAGGED_OUTPUT)).map(|(text, _)| text).unwrap_or_default();
+                    if output.is_empty() { said(&c) } else { format!("{}\n{output}", said(&c)) }
+                });
+                SubjectNow { what: format!("terminal {terminal}, command {command}"), now }
+            }
+        })
+    }
+}
+
+/// How much of a tagged command's output it says (its last lines).
+const TAGGED_OUTPUT: u64 = 20;

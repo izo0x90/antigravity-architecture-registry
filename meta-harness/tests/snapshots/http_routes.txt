@@ -24,6 +24,10 @@
 /api/terminals/t1 DELETE
 /api/terminals/t1/restart POST
 /ws/terminals/t1 GET,HEAD
+/api/tags GET,HEAD,POST
+/api/tags/x DELETE,GET,HEAD
+/api/tags/x/edit POST
+/api/tags/x/untag POST
 /api/notifications GET,HEAD
 /api/ui/shell GET,HEAD,PUT
 /api/server/shutdown POST

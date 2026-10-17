@@ -1,0 +1,18 @@
+[package]
+name = "nah-tags"
+version = "0.1.0"
+edition = "2024"
+description = "Tags: names given to things in the project (on subjects, each kept with what it said), kept, told on the event stream; what a subject says now is its owner's to tell (Resolve)."
+
+[features]
+# An in-memory store and a resolver of made-up subjects, for tests.
+testing = []
+
+[dependencies]
+harness-contracts = { path = "../harness-contracts" }
+harness-core = { path = "../harness-core" }
+thiserror = "2.0"
+uuid = { version = "1.26.1", features = ["v4"] }
+
+[dev-dependencies]
+nah-tags = { path = ".", features = ["testing"] }

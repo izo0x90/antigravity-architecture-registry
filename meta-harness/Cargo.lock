@@ -3406,6 +3406,7 @@ dependencies = [
  "nah-notify",
  "nah-packs",
  "nah-state",
+ "nah-tags",
  "nah-terminal",
  "nah-timeline",
  "notify-debouncer-full",
@@ -3618,12 +3619,24 @@ dependencies = [
  "harness-contracts",
  "harness-core",
  "nah-notify",
+ "nah-tags",
  "nah-timeline",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "nah-tags"
+version = "0.1.0"
+dependencies = [
+ "harness-contracts",
+ "harness-core",
+ "nah-tags",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]

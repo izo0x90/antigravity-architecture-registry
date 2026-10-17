@@ -9,6 +9,7 @@ arch-store = { path = "../arch-store" }
 harness-contracts = { path = "../harness-contracts" }
 harness-core = { path = "../harness-core" }
 nah-notify = { path = "../nah-notify" }
+nah-tags = { path = "../nah-tags" }
 nah-timeline = { path = "../nah-timeline" }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }

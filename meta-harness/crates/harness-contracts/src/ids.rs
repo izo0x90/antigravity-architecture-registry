@@ -55,4 +55,6 @@ id_type!(
     NotificationId,
     /// A shell the project server runs for the user.
     TerminalId,
+    /// A tag (stays when it's renamed).
+    TagId,
 );

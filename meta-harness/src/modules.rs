@@ -55,7 +55,7 @@ macro_rules! gated {
     )*};
 }
 
-gated!(CockpitState, HarnessState, NotifyState, ProjectState, HomeState, ServerState, TerminalsState);
+gated!(CockpitState, HarnessState, NotifyState, ProjectState, HomeState, ServerState, TerminalsState, TagsState);
 
 /// Asks the server to stop (as Ctrl-C does); its serving waits on it.
 #[derive(Clone, Default)]
@@ -197,6 +197,20 @@ impl Module for TerminalsState {
     }
 }
 
+/// Tags: names given to things in the project, to find them again and to
+/// point agents at them.
+#[derive(Clone)]
+pub struct TagsState {
+    pub gate: Gate,
+    pub tags: Arc<nah_tags::Tags>,
+}
+
+impl Module for TagsState {
+    fn routes(&self) -> Router {
+        routes::tags::routes().with_state(self.clone())
+    }
+}
+
 /// What needs the user, and what happened.
 #[derive(Clone)]
 pub struct NotifyState {
@@ -243,6 +257,7 @@ pub struct AppState {
     pub notify: NotifyState,
     pub project: ProjectState,
     pub terminals: Option<TerminalsState>,
+    pub tags: TagsState,
 }
 
 /// What a project's server is made of, before it's split into its parts.
@@ -264,6 +279,7 @@ pub struct Parts {
     pub timeline: Option<Arc<nah_timeline::Timeline>>,
     /// None: the server runs no shells (`--no-shells`).
     pub terminals: Option<Arc<crate::terminals::Terminals>>,
+    pub tags: Arc<nah_tags::Tags>,
 }
 
 impl AppState {
@@ -279,12 +295,13 @@ impl AppState {
             harness: HarnessState { gate: gate.clone(), stopping: stopping.clone(), registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
             terminals: p.terminals.map(|terminals| TerminalsState { gate: gate.clone(), stopping: stopping.clone(), terminals }),
+            tags: TagsState { gate: gate.clone(), tags: p.tags },
             project: ProjectState { gate, arch: p.arch, queue: p.queue, sessions: p.sessions, slots: p.slots, mcp_state: p.mcp_state, changes: p.changes, timeline: p.timeline },
         })
     }
 
     pub fn modules(&self) -> Vec<&dyn Module> {
         let terminals = self.terminals.as_ref().map(|t| t as &dyn Module);
-        [&self.server as &dyn Module, &self.cockpit, &self.home, &self.harness, &self.notify, &self.project].into_iter().chain(terminals).collect()
+        [&self.server as &dyn Module, &self.cockpit, &self.home, &self.harness, &self.notify, &self.project, &self.tags].into_iter().chain(terminals).collect()
     }
 }

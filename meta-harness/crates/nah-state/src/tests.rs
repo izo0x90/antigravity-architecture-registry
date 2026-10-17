@@ -244,4 +244,21 @@ mod terminals {
         assert_eq!(kept.iter().map(|t| (t.id.as_str(), t.title.as_str())).collect::<Vec<_>>(), [("t1", "make"), ("t2", "bash")], "kept again: its place stays");
         assert!(kept.iter().all(|t| t.status == TerminalStatus::Ended { code: None }), "their shells didn't outlive the server");
     }
+
+    #[test]
+    fn tags_are_kept_in_the_order_made_and_each_change_replaces_what_was_kept() {
+        use nah_tags::TagStore;
+        let dir = tempfile::tempdir().unwrap();
+        let tag = |id: &str, name: &str| harness_contracts::Tag { id: harness_contracts::TagId::new(id), name: name.into(), colour: 1, note: String::new(), on: Vec::new() };
+        {
+            let db = StateDb::open(dir.path(), &settings()).unwrap();
+            db.put(&tag("a", "first")).unwrap();
+            db.put(&tag("b", "second")).unwrap();
+            db.put(&tag("a", "renamed")).unwrap();
+            db.put(&tag("c", "gone")).unwrap();
+            db.remove(&harness_contracts::TagId::new("c")).unwrap();
+        }
+        let db = StateDb::open(dir.path(), &settings()).unwrap();
+        assert_eq!(db.tags().unwrap().iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["renamed", "second"]);
+    }
 }

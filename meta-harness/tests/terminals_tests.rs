@@ -322,3 +322,66 @@ async fn a_bell_and_a_shells_end_are_notifications_put_away_once_the_terminal_is
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+/// The events sent on `events` until one `matches` (within 10 s).
+async fn event_until(events: &mut Socket, matches: impl Fn(&harness_contracts::ClientEvent) -> bool) -> harness_contracts::ClientEvent {
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(10), events.next()).await.expect("an event within 10 s").unwrap().unwrap();
+        let Message::Text(json) = message else { continue };
+        if let Ok(event) = serde_json::from_str::<harness_contracts::ClientEvent>(&json)
+            && matches(&event)
+        {
+            return event;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_whose_role_may() {
+    let (addr, _) = spawn_app().await;
+    let mut events = common::events_socket(addr).await;
+    let terminal = open(addr).await;
+    let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
+    reader.next().await;
+    reader.run("echo tagged-line").await;
+    reader.until_shows("tagged-line").await;
+    let screen = reader.last.clone().unwrap();
+    let line = screen.top + reader.rows.iter().position(|r| r.trim_start_matches(['#', '$', ' ']) == "tagged-line").unwrap() as u64;
+
+    // The user tags the line: a new tag, told to everyone.
+    let subject = json!({ "kind": "terminal_lines", "terminal": terminal.id, "shell": screen.shell, "first": line, "last": line });
+    let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "name": "seen-it", "subject": subject }).to_string())).await;
+    assert_eq!(status, 200, "{body}");
+    let tag: harness_contracts::Tag = serde_json::from_str(&body).unwrap();
+    assert_eq!((tag.name.as_str(), tag.on[0].said.as_str()), ("seen-it", "tagged-line"), "kept with what it said");
+    event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id)).await;
+    let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "name": "two words", "subject": subject }).to_string())).await;
+    assert!(status == 400 && body.contains("can't be a tag's name"), "{status} {body}");
+    let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
+    assert!(read.contains("\"now\":[{\"what\":\"terminal") && read.contains("tagged-line"), "what it says now: {read}");
+
+    // An agent whose role may (the lead's) tags a command, by its number.
+    let mut lead = Mcp::lead(addr).await;
+    if ["bash", "zsh"].iter().any(|s| terminal.shell.ends_with(s)) {
+        while !reader.commands.values().any(|c| c.text == "echo tagged-line" && c.end.is_some()) {
+            reader.next().await;
+        }
+        let number = reader.commands.values().find(|c| c.text == "echo tagged-line").unwrap().id;
+        let (error, said) = lead.tool("tag", json!({ "tag": "seen-it", "terminal": terminal.id, "command": number })).await;
+        assert!(!error && said.starts_with("seen-it (on 2 things)"), "{said}");
+        let (_, read) = lead.tool("tag_read", json!({ "tag": "seen-it" })).await;
+        assert!(read.contains(&format!("terminal {}, command {number}", terminal.id)) && read.contains("$ echo tagged-line (exit code 0"), "{read}");
+    }
+    let (error, said) = lead.tool("tag_edit", json!({ "tag": "seen-it", "name": "checked", "note": "the echo works" })).await;
+    assert!(!error && said.contains("checked") && said.contains("the echo works"), "{said}");
+    // One that may only read can't.
+    let mut external = Mcp::connect(addr).await;
+    let (_, listed) = external.tool("tags", json!({})).await;
+    assert!(listed.starts_with("checked ("), "{listed}");
+    let (error, said) = external.tool("tag_edit", json!({ "tag": "checked", "delete": true })).await;
+    assert!(error && said.contains("tags.edit"), "refused: {said}");
+    // The user deletes it: gone, told.
+    let (status, _) = http(addr, "DELETE", "/api/tags/checked", None).await;
+    assert_eq!(status, 204);
+    event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagRemoved { tag_id } if *tag_id == tag.id)).await;
+}

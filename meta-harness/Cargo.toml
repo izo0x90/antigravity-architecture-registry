@@ -25,6 +25,7 @@ members = [
     "crates/nah-changes",
     "crates/nah-timeline",
     "crates/nah-terminal",
+    "crates/nah-tags",
 ]
 
 # Debug builds (tests, and the server as run in development) optimize the
@@ -63,6 +64,7 @@ nah-notify = { path = "crates/nah-notify" }
 nah-changes = { path = "crates/nah-changes" }
 nah-timeline = { path = "crates/nah-timeline" }
 nah-terminal = { path = "crates/nah-terminal" }
+nah-tags = { path = "crates/nah-tags" }
 include_dir = "0.7"
 clap = { version = "4", features = ["derive"] }
 tokio-tungstenite = "0.29"

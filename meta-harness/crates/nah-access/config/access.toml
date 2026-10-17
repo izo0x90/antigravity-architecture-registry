@@ -11,15 +11,15 @@
 
 # The lead slot: drives the IDE, plans and builds, runs the sub-slots.
 [roles.lead]
-can = ["view.read", "view.drive", "plan.edit", "code.check", "slots.observe", "slots.manage", "slots.message", "user.notify"]
+can = ["view.read", "view.drive", "plan.edit", "code.check", "slots.observe", "slots.manage", "slots.message", "user.notify", "tags.edit"]
 
 # A sub-slot: reads the IDE, reports to the lead and the user.
 [roles.sub]
-can = ["view.read", "slots.report", "user.notify"]
+can = ["view.read", "slots.report", "user.notify", "tags.edit"]
 
 # A work-queue job: plans and builds its component.
 [roles.worker]
-can = ["view.read", "plan.edit", "code.check", "user.notify"]
+can = ["view.read", "plan.edit", "code.check", "user.notify", "tags.edit"]
 
 # An agent NAH didn't start (no key): reads only.
 [roles.external]

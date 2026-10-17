@@ -19,6 +19,7 @@ mod plans;
 mod review;
 mod schema;
 mod slots;
+mod tags;
 mod terminals;
 
 /// A tool as agents see it, and the capability a caller needs to use it.
@@ -50,6 +51,7 @@ pub(crate) fn tool_defs(trees: &TreeConfig) -> Vec<ToolDef> {
         cockpit::Cockpit::schemas(trees),
         slots::Slots::schemas(trees),
         terminals::Terminals::schemas(trees),
+        tags::Tags::schemas(trees),
     ]
     .into_iter()
     .flatten()
@@ -67,6 +69,7 @@ pub struct Services {
     pub slots: Arc<harness_core::SlotManager>,
     pub notify: Arc<nah_notify::NotifyHub>,
     pub terminals: Option<Arc<crate::terminals::Terminals>>,
+    pub tags: Arc<nah_tags::Tags>,
 }
 
 /// The sets, in the same order as `list_tools`.
@@ -80,5 +83,6 @@ pub(crate) fn all(s: &Services) -> Vec<Box<dyn ToolSet>> {
         Box::new(cockpit::Cockpit { remote: s.remote.clone() }),
         Box::new(slots::Slots { slots: s.slots.clone(), notify: s.notify.clone() }),
         Box::new(terminals::Terminals { terminals: s.terminals.clone() }),
+        Box::new(tags::Tags { tags: s.tags.clone(), terminals: s.terminals.clone() }),
     ]
 }

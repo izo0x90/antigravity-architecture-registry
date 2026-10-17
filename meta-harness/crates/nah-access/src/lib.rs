@@ -46,6 +46,7 @@ capabilities! {
     SessionsControl => "sessions.control",
     ChangesStage => "changes.stage",
     ShellDrive => "shell.drive",
+    TagsEdit => "tags.edit",
 }
 
 impl fmt::Display for Capability {
@@ -208,9 +209,9 @@ mod tests {
     #[test]
     fn the_shipped_roles_are_as_agreed() {
         let access = Access::defaults();
-        assert_eq!(access.role("lead"), Some(set(&["view.read", "view.drive", "plan.edit", "code.check", "slots.observe", "slots.manage", "slots.message", "user.notify"])));
-        assert_eq!(access.role("sub"), Some(set(&["view.read", "slots.report", "user.notify"])));
-        assert_eq!(access.role("worker"), Some(set(&["view.read", "plan.edit", "code.check", "user.notify"])));
+        assert_eq!(access.role("lead"), Some(set(&["view.read", "view.drive", "plan.edit", "code.check", "slots.observe", "slots.manage", "slots.message", "user.notify", "tags.edit"])));
+        assert_eq!(access.role("sub"), Some(set(&["view.read", "slots.report", "user.notify", "tags.edit"])));
+        assert_eq!(access.role("worker"), Some(set(&["view.read", "plan.edit", "code.check", "user.notify", "tags.edit"])));
         assert_eq!(access.role("external"), Some(set(&["view.read"])));
     }
 

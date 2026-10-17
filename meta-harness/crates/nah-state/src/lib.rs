@@ -21,6 +21,7 @@ mod migrations;
 mod notifications;
 mod servers;
 mod slots;
+mod tags;
 mod terminals;
 mod timeline;
 

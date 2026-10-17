@@ -1241,7 +1241,7 @@ The user's terminals (shells the server runs): each one's id, title, whether its
 }
 
 ## terminal_read
-What a terminal shows now, as text: its screen, with `back` lines of scrollback above it (default 0, at most 2000), and the last commands its shell ran (each with its number in this start of the shell, its exit code and how long it ran; bash and zsh say). With `command` (a number), that command and its output instead (its last 2000 lines at most).
+What a terminal shows now, as text: its screen, with `back` lines of scrollback above it (default 0, at most 2000; `numbered`: each row with its line's number, as `tag` names lines), and the last commands its shell ran (each with its number in this start of the shell, its exit code and how long it ran; bash and zsh say). With `command` (a number), that command and its output instead (its last 2000 lines at most).
 {
   "type": "object",
   "properties": {
@@ -1252,6 +1252,9 @@ What a terminal shows now, as text: its screen, with `back` lines of scrollback 
       "type": "integer",
       "minimum": 0
     },
+    "numbered": {
+      "type": "boolean"
+    },
     "command": {
       "type": "integer",
       "minimum": 1
@@ -1259,6 +1262,113 @@ What a terminal shows now, as text: its screen, with `back` lines of scrollback 
   },
   "required": [
     "terminal"
+  ]
+}
+
+## tags
+The project's tags (names given to things to find them again): each one's name, how many things it's on, and its note.
+{
+  "type": "object",
+  "properties": {}
+}
+
+## tag_read
+What a tag (by its name) is on: each thing, where it is, what it says now (or that it's gone) and what it said when tagged.
+{
+  "type": "object",
+  "properties": {
+    "tag": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tag"
+  ]
+}
+
+## tag
+Tag something with `tag` (a new tag when the name is new): a terminal's command (`terminal` and `command`) or lines (`terminal` and `lines`).
+{
+  "type": "object",
+  "properties": {
+    "terminal": {
+      "type": "string",
+      "description": "A terminal's id (from `terminals`)"
+    },
+    "command": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "One of its commands, by its number (from `terminal_read`)"
+    },
+    "lines": {
+      "type": "string",
+      "description": "Some of its lines, by their numbers: `120` or `120-124` (`terminal_read` with `numbered` shows them)"
+    },
+    "tag": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tag",
+    "terminal"
+  ]
+}
+
+## untag
+Take `tag` off something it's on (named as `tag` names it).
+{
+  "type": "object",
+  "properties": {
+    "terminal": {
+      "type": "string",
+      "description": "A terminal's id (from `terminals`)"
+    },
+    "command": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "One of its commands, by its number (from `terminal_read`)"
+    },
+    "lines": {
+      "type": "string",
+      "description": "Some of its lines, by their numbers: `120` or `120-124` (`terminal_read` with `numbered` shows them)"
+    },
+    "tag": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "tag",
+    "terminal"
+  ]
+}
+
+## tag_edit
+Rename a tag, give it another colour or a note, or delete it.
+{
+  "type": "object",
+  "properties": {
+    "tag": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "description": "A new name (letters, digits, - _ . /; no spaces)"
+    },
+    "colour": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 7
+    },
+    "note": {
+      "type": "string"
+    },
+    "delete": {
+      "type": "boolean",
+      "description": "Delete the tag (from everything it's on)"
+    }
+  },
+  "required": [
+    "tag"
   ]
 }
 

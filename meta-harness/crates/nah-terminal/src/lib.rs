@@ -258,6 +258,28 @@ impl Terminal {
         Some((screen::text(&state.term, &state.feed, from + left_out, end), left_out))
     }
 
+    /// Lines `from..to` as text (lines that wrapped joined); none when
+    /// they aren't all kept (gone, or a program has the whole screen).
+    pub fn lines_text(&self, from: u64, to: u64) -> Option<String> {
+        let state = lock(&self.state);
+        let (first, _) = screen::lines(&state.term, &state.feed, from, 0);
+        let end = state.feed.top() + state.term.screen_lines() as u64;
+        (first == from && to <= end && from < to).then(|| screen::text(&state.term, &state.feed, from, to))
+    }
+
+    /// The screen's rows, with up to `back` rows of scrollback above them,
+    /// each with its number (a row each, as shown).
+    pub fn numbered(&self, back: u32) -> Vec<(u64, String)> {
+        let state = lock(&self.state);
+        let rows = state.term.screen_lines() as u32;
+        let (from, lines) = screen::lines(&state.term, &state.feed, state.feed.top().saturating_sub(u64::from(back)), back + rows);
+        let mut out: Vec<(u64, String)> = (from..).zip(lines.iter().map(|row| row.iter().map(|run| run.text.as_str()).collect())).collect();
+        while out.last().is_some_and(|(_, text)| text.is_empty()) {
+            out.pop();
+        }
+        out
+    }
+
     /// The screen as plain text, with up to `back` lines of scrollback above it.
     pub fn text(&self, back: u32) -> String {
         let state = lock(&self.state);

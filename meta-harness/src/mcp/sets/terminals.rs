@@ -22,18 +22,6 @@ pub(crate) struct Terminals {
 const MOST_BACK: u64 = 2000;
 const LAST_COMMANDS: usize = 10;
 
-/// A command in a line: its number, its command line, how it ended (as
-/// notifications say it).
-fn said(command: &harness_contracts::TerminalCommand) -> String {
-    let typed = if command.text.is_empty() { "(the shell didn't say)" } else { command.text.as_str() };
-    let ended = match (command.end, command.code) {
-        (None, _) => "running".to_owned(),
-        (Some(_), Some(code)) => format!("exit code {code}"),
-        (Some(_), None) => "ended".to_owned(),
-    };
-    let ran = command.ran_ms.map(|ms| format!(", after {}", nah_notify::rules::took(ms))).unwrap_or_default();
-    format!("{}. $ {typed} ({ended}{ran})", command.id)
-}
 
 impl Terminals {
     pub(crate) fn schemas(trees: &TreeConfig) -> Vec<ToolDef> {
@@ -43,8 +31,8 @@ impl Terminals {
             tool(
                 Capability::ViewRead,
                 "terminal_read",
-                "What a terminal shows now, as text: its screen, with `back` lines of scrollback above it (default 0, at most 2000), and the last commands its shell ran (each with its number in this start of the shell, its exit code and how long it ran; bash and zsh say). With `command` (a number), that command and its output instead (its last 2000 lines at most).",
-                json!({ "type": "object", "properties": { "terminal": { "type": "string" }, "back": { "type": "integer", "minimum": 0 }, "command": { "type": "integer", "minimum": 1 } }, "required": ["terminal"] }),
+                "What a terminal shows now, as text: its screen, with `back` lines of scrollback above it (default 0, at most 2000; `numbered`: each row with its line's number, as `tag` names lines), and the last commands its shell ran (each with its number in this start of the shell, its exit code and how long it ran; bash and zsh say). With `command` (a number), that command and its output instead (its last 2000 lines at most).",
+                json!({ "type": "object", "properties": { "terminal": { "type": "string" }, "back": { "type": "integer", "minimum": 0 }, "numbered": { "type": "boolean" }, "command": { "type": "integer", "minimum": 1 } }, "required": ["terminal"] }),
             ),
             tool(
                 Capability::ShellDrive,
@@ -133,12 +121,12 @@ impl ToolSet for Terminals {
                     let command = commands.iter().find(|c| c.id == number).ok_or_else(no_such)?;
                     let (output, left_out) = open.command_output(number, MOST_BACK).ok_or_else(no_such)?;
                     let cut = if left_out > 0 { format!("({left_out} lines before these left out)\n") } else { String::new() };
-                    return Ok(format!("{}\n{cut}{output}", said(command)));
+                    return Ok(format!("{}\n{cut}{output}", crate::terminals::said(command)));
                 }
                 let back = args["back"].as_u64().unwrap_or(0).min(MOST_BACK) as u32;
-                let text = open.text(back);
+                let text = if args["numbered"].as_bool().unwrap_or(false) { open.numbered(back).into_iter().map(|(n, row)| format!("{n}\t{row}")).collect::<Vec<_>>().join("\n") } else { open.text(back) };
                 let mut out = if text.is_empty() { "(nothing on its screen)".to_owned() } else { text };
-                let ran: Vec<String> = commands.iter().rev().filter(|c| c.output.is_some()).take(LAST_COMMANDS).map(said).collect();
+                let ran: Vec<String> = commands.iter().rev().filter(|c| c.output.is_some()).take(LAST_COMMANDS).map(crate::terminals::said).collect();
                 if !ran.is_empty() {
                     out.push_str("\n\nIts last commands (newest first; `command` reads one's output):\n");
                     out.push_str(&ran.join("\n"));

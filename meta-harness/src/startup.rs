@@ -238,6 +238,17 @@ pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hu
     Ok(crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), std::time::Duration::from_secs(settings.long_command_secs))?)
 }
 
+/// Tags: kept in the state database, told on the event stream; what a
+/// tagged subject says now is its owner's to tell (the terminals', when
+/// the server runs shells).
+pub fn tags(state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, terminals: Option<&Arc<crate::terminals::Terminals>>) -> Result<Arc<nah_tags::Tags>, StartError> {
+    let tags = nah_tags::Tags::open(state.clone(), hub.clone()).map_err(|e| e.to_string())?;
+    if let Some(terminals) = terminals {
+        tags.register(terminals.clone());
+    }
+    Ok(Arc::new(tags))
+}
+
 /// What each agent role may do: the shipped roles, with the project's
 /// `.nah/access.toml` over them.
 pub fn access(project: &std::path::Path) -> Result<nah_access::Access, StartError> {

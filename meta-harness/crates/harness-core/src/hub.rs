@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, NotificationId, NotificationState, SlotId, TerminalId, ThreadId};
+use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, NotificationId, NotificationState, SlotId, TagId, TerminalId, ThreadId};
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -24,6 +24,7 @@ enum Key {
     Slot(SlotId),
     Notification(NotificationId),
     Terminal(TerminalId),
+    Tag(TagId),
 }
 
 struct Entry {
@@ -56,6 +57,11 @@ impl Cache {
             }
             // News, not state: a late client needs the notifications made of it.
             ClientEvent::TerminalNews { .. } => return,
+            ClientEvent::TagUpdated { tag } => (Key::Tag(tag.id.clone()), None),
+            ClientEvent::TagRemoved { tag_id } => {
+                self.entries.remove(&Key::Tag(tag_id.clone()));
+                return;
+            }
             // Open ones only: a late client needs what's still open.
             ClientEvent::NotificationUpdated { notification } => {
                 let key = Key::Notification(notification.id.clone());
