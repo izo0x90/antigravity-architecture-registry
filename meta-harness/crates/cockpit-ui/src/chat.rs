@@ -18,7 +18,7 @@ use harness_contracts::{
 use egui_phosphor::regular as icon;
 
 use crate::actions::{Action, ActionProvider, Choice, MINOR, Param, RunCx, Style};
-use crate::agents::{Act, Agents, AgentsView};
+use crate::agents::{Act, Agents};
 use crate::feedback::FeedbackInspectorState;
 use crate::nav::{Ask, Fold, GoTo, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::request_card::{Drafts, render_request};
@@ -37,7 +37,7 @@ use render::mcp_label;
 #[derive(Default)]
 pub struct ChatStreamState {
     /// The desk's agents, read.
-    agents: AgentsView,
+    agents: crate::shared::Reader<Agents>,
     /// This view's own state (each chat view has one; the one in use is here).
     pub ui: ChatView,
     /// What it asked of the rest of the cockpit, not taken yet.

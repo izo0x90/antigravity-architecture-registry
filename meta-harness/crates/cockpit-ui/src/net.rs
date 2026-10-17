@@ -269,8 +269,8 @@ impl NetClient {
         }
     }
 
-    /// Sends JSON (or no body for GET) and decodes a JSON reply into `T`
-    /// (`()` accepts any 2xx with no body).
+    /// Sends JSON (or no body for GET) to this desk's server and decodes a
+    /// JSON reply into `T` (`()` accepts any 2xx with no body).
     fn call<T: DeserializeOwned + Send + 'static>(
         &self,
         method: &str,
@@ -279,9 +279,22 @@ impl NetClient {
         ctx: egui::Context,
         on_done: impl FnOnce(NetResult<T>) + Send + 'static,
     ) {
+        let at = format!("{}{path}", self.prefix);
+        self.call_at(method, &at, body, ctx, on_done);
+    }
+
+    /// The same, to `path` on home itself (whichever server the desk's is).
+    fn call_at<T: DeserializeOwned + Send + 'static>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+        ctx: egui::Context,
+        on_done: impl FnOnce(NetResult<T>) + Send + 'static,
+    ) {
         #[cfg(test)]
-        self.sent.lock().unwrap().push(format!("{method} {}{path}", self.prefix));
-        let url = format!("{}{}{}", self.base_url, self.prefix, path);
+        self.sent.lock().unwrap().push(format!("{method} {path}"));
+        let url = format!("{}{}", self.base_url, path);
         let mut request = match body {
             Some(json) => {
                 let mut r = ehttp::Request::post(&url, serde_json::to_vec(&json).unwrap_or_default());
@@ -579,6 +592,35 @@ impl NetClient {
             ticket: String,
         }
         self.call::<Ticket>("POST", "/api/cockpit/ticket", Some(serde_json::json!({})), ctx, move |r| on_done(r.map(|t| t.ticket)));
+    }
+
+    /// A one-time ticket from home, for a socket through it (a terminal's).
+    pub fn home_ticket(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<String>) + Send + 'static) {
+        #[derive(serde::Deserialize)]
+        struct Ticket {
+            ticket: String,
+        }
+        self.call_at::<Ticket>("POST", "/api/cockpit/ticket", Some(serde_json::json!({})), ctx, move |r| on_done(r.map(|t| t.ticket)));
+    }
+
+    /// Where this desk's server's socket `path` is (through home).
+    pub fn socket_url(&self, path: &str) -> String {
+        let base = if self.base_url.starts_with("https://") { self.base_url.replacen("https://", "wss://", 1) } else { self.base_url.replacen("http://", "ws://", 1) };
+        format!("{base}{}{path}", self.prefix)
+    }
+
+    // ---- terminals ----
+
+    pub fn open_terminal(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Terminal>) + Send + 'static) {
+        self.call("POST", "/api/terminals", Some(serde_json::json!({})), ctx, on_done);
+    }
+
+    pub fn restart_terminal(&self, id: &harness_contracts::TerminalId, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Terminal>) + Send + 'static) {
+        self.call("POST", &format!("/api/terminals/{}/restart", urlencoding::encode(id.as_str())), Some(serde_json::json!({})), ctx, on_done);
+    }
+
+    pub fn close_terminal(&self, id: &harness_contracts::TerminalId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call("DELETE", &format!("/api/terminals/{}", urlencoding::encode(id.as_str())), None, ctx, on_done);
     }
 
     pub fn tool_servers(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::ToolServers>) + Send + 'static) {

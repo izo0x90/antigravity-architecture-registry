@@ -5,6 +5,9 @@
 //! (`Navigable::share`), skipping what it has (each part counts its
 //! changes), and changes it only by asking.
 
+use std::cell::{Ref, RefCell, RefMut};
+use std::rc::Rc;
+
 use arch_graph::{IndexStatus, Source, TypeSystem};
 
 use crate::config::{ChangesUi, CodeUi, UiConfig};
@@ -35,6 +38,66 @@ impl<T: PartialEq> Kept<T> {
     /// The value when it changed since `seen` (which moves to now).
     pub fn since(&self, seen: &mut u64) -> Option<&T> {
         (std::mem::replace(seen, self.changes) != self.changes).then_some(&self.value)
+    }
+}
+
+/// A service the desk keeps (the agents, the terminals), held by the
+/// shell: it alone changes it; buffers get a `Reader`.
+pub struct Held<T>(Rc<RefCell<T>>);
+
+impl<T: Default> Default for Held<T> {
+    fn default() -> Self {
+        Self(Rc::default())
+    }
+}
+
+impl<T> Held<T> {
+    pub fn get(&self) -> Ref<'_, T> {
+        self.0.borrow()
+    }
+
+    /// To change it: the shell's alone (it holds it mutably).
+    pub fn get_mut(&mut self) -> RefMut<'_, T> {
+        self.0.borrow_mut()
+    }
+
+    /// A reader for a buffer.
+    pub fn reader(&self) -> Reader<T> {
+        Reader(self.0.clone())
+    }
+}
+
+/// A buffer's reader of a service the desk keeps (it changes it only by
+/// asking).
+pub struct Reader<T>(Rc<RefCell<T>>);
+
+impl<T: Default> Default for Reader<T> {
+    fn default() -> Self {
+        Self(Rc::default())
+    }
+}
+
+impl<T> Clone for Reader<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> Reader<T> {
+    pub fn get(&self) -> Ref<'_, T> {
+        self.0.borrow()
+    }
+
+    /// Whether it reads `held`.
+    pub fn reads(&self, held: &Held<T>) -> bool {
+        Rc::ptr_eq(&self.0, &held.0)
+    }
+
+    /// Reads `held` from now on (when it reads another).
+    pub fn follow(&mut self, held: &Held<T>) {
+        if !self.reads(held) {
+            *self = held.reader();
+        }
     }
 }
 
@@ -79,7 +142,9 @@ pub struct Shared {
     /// The desk's comparison and what it changes (files, components, when).
     pub changes: crate::changes::Comparing,
     /// The server's agents: slots, sessions, harnesses, what waits on the user.
-    pub agents: crate::agents::AgentsCell,
+    pub agents: Held<crate::agents::Agents>,
+    /// The server's terminals: which, and how each is.
+    pub terminals: Held<crate::terminals::Terminals>,
     /// The desk's server (`here`: home's own).
     pub server: String,
     /// Every server's open notifications, in the order they're gone through.
@@ -104,6 +169,19 @@ pub(crate) fn on_plan(plan: &str) -> Shared {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reader_sees_what_the_shell_changes_and_follows_another_desks() {
+        let mut held = Held::<Vec<u32>>::default();
+        let mut reader = Reader::default();
+        assert!(!reader.reads(&held));
+        reader.follow(&held);
+        held.get_mut().push(7);
+        assert_eq!(*reader.get(), [7]);
+        let other = Held::<Vec<u32>>::default();
+        reader.follow(&other);
+        assert!(reader.reads(&other) && reader.get().is_empty());
+    }
 
     #[test]
     fn a_reader_takes_a_value_once_per_change() {

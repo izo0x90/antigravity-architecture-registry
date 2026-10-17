@@ -37,6 +37,8 @@ pub enum Target {
     Agent { slot: Option<SlotId>, thread: Option<ThreadId> },
     /// Something that needs the user, or that happened (the inbox's).
     Notification(NotificationId),
+    /// A terminal (a shell the server runs).
+    Terminal(harness_contracts::TerminalId),
 }
 
 /// What a buffer asks of the rest of the cockpit: the one way it reaches
@@ -67,6 +69,8 @@ pub enum Ask {
     /// Something for the agents to do, for agent slot `slot` (where it
     /// shows; its errors show there).
     Agents { slot: SlotId, act: crate::agents::Act },
+    /// Something for the terminals to do (to terminal `id`, or a new one).
+    Terminals { id: Option<harness_contracts::TerminalId>, act: crate::terminals::TermAct },
 }
 
 /// What's read again on a buffer's word.
@@ -95,6 +99,7 @@ impl Target {
         match self {
             Self::Component(id) | Self::Job { component: id } => short_name(id),
             Self::Notification(id) => format!("item {id}"),
+            Self::Terminal(id) => format!("terminal {id}"),
             Self::Line { file: path, line, .. } | Self::Change { file: path, line } | Self::Span { file: path, start: line, .. } => format!("{}:{line}", file(path)),
             Self::Message { index, .. } => format!("message {}", index + 1),
             Self::Agent { slot: Some(slot), .. } => format!("agent slot {slot}"),
@@ -107,7 +112,7 @@ impl Target {
         match self {
             Self::Component(id) | Self::Job { component: id } => Some(id),
             Self::Line { within, .. } => within.as_ref(),
-            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) => None,
+            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) => None,
         }
     }
 

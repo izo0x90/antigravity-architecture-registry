@@ -80,9 +80,7 @@ impl Navigable for ChatStreamState {
     /// The desk's agents (read from now on), and how many files each turn
     /// changed (the desk's timeline).
     fn share(&mut self, shared: &crate::shared::Shared) {
-        if !self.agents.reads(&shared.agents) {
-            self.agents = shared.agents.view();
-        }
+        self.agents.follow(&shared.agents);
         self.took();
         let (timeline, read) = shared.changes.timeline();
         if read != self.turn_files_read {

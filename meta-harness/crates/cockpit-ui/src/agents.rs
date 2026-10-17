@@ -7,9 +7,7 @@
 //!  A buffer holds a reader (`AgentsView`): only the
 //! shell changes it.
 
-use std::cell::{Ref, RefCell, RefMut};
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use harness_contracts::{
@@ -400,41 +398,6 @@ pub fn block_summary(block: &ContentBlock) -> String {
     }
 }
 
-/// The desk's agents, kept by the shell: buffers get a reader.
-#[derive(Default)]
-pub struct AgentsCell(Rc<RefCell<Agents>>);
-
-impl AgentsCell {
-    pub fn get(&self) -> Ref<'_, Agents> {
-        self.0.borrow()
-    }
-
-    /// To change them: the shell's alone (it holds the cell mutably).
-    pub fn get_mut(&mut self) -> RefMut<'_, Agents> {
-        self.0.borrow_mut()
-    }
-
-    /// A reader for a buffer.
-    pub fn view(&self) -> AgentsView {
-        AgentsView(self.0.clone())
-    }
-}
-
-/// A buffer's reader of the desk's agents (it changes them only by asking).
-#[derive(Clone, Default)]
-pub struct AgentsView(Rc<RefCell<Agents>>);
-
-impl AgentsView {
-    pub fn get(&self) -> Ref<'_, Agents> {
-        self.0.borrow()
-    }
-
-    /// Whether it reads `cell`.
-    pub fn reads(&self, cell: &AgentsCell) -> bool {
-        Rc::ptr_eq(&self.0, &cell.0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,14 +439,5 @@ mod tests {
         agents.act(SlotId::new(LEAD), Act::Prompt { text: "hello".into(), add: false }, &net, &ctx);
         assert!(matches!(agents.lead_status(), SessionStatus::Failed(e) if e.contains("No harness instance")));
         assert_eq!(agents.error(&SlotId::new(LEAD)).map(String::as_str), Some("No harness instance is available yet."), "said in the lead's chat");
-    }
-
-    #[test]
-    fn a_reader_sees_what_the_shell_applies_and_cant_change_it() {
-        let mut cell = AgentsCell::default();
-        let view = cell.view();
-        assert!(view.reads(&cell) && !AgentsView::default().reads(&cell));
-        cell.get_mut().apply(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Ready) });
-        assert_eq!(view.get().store().instances.len(), 1);
     }
 }

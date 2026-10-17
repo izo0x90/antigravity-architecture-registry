@@ -50,6 +50,7 @@ impl CockpitApp {
             Ask::Located { id, anchor } => self.desk.each_buffer(|b| b.located(&id, anchor.as_ref())),
             Ask::Waiting(waiting) => self.do_waiting(waiting, ctx),
             Ask::Agents { slot, act } => self.desk.shared.agents.get_mut().act(slot, act, &self.desk.net, ctx),
+            Ask::Terminals { id, act } => self.desk.shared.terminals.get_mut().act(id, act, &self.desk.net, ctx),
         }
     }
 

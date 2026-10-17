@@ -1046,6 +1046,7 @@ dependencies = [
  "getrandom 0.3.4",
  "harness-contracts",
  "js-sys",
+ "log",
  "petgraph 0.6.5",
  "serde",
  "serde_json",

@@ -35,6 +35,7 @@ pub mod shared;
 pub mod spec;
 pub mod status;
 pub mod store;
+pub mod terminals;
 pub mod theme;
 pub mod touch;
 pub mod tree;
