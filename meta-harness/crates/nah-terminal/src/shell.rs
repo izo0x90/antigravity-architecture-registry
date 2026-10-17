@@ -55,13 +55,39 @@ fn write(dir: &Path, name: &str, text: &str) -> std::io::Result<PathBuf> {
 /// marked where it starts and where typing starts (wrapped around `PS1`,
 /// last, after the user's own made it), and before each command runs
 /// (`PS0`) the command line (the history's newest, when it took one) and
-/// a mark. bash 5.1 takes `PROMPT_COMMAND` as a list: the user's stay as
-/// they are; older ones get one line (the user's last `;` taken off).
+/// a mark. A history that keeps out a line the same as the one before
+/// (`ignoredups`, `ignoreboth`: Debian's default) takes it in while it's
+/// read, and it's taken out again once it ran, as bash would have: the
+/// newest is the line typed then too (only a line kept out for its
+/// leading space isn't said). bash 5.1 takes `PROMPT_COMMAND` as a list:
+/// the user's stay as they are; older ones get one line (the user's last
+/// `;` taken off).
 const BASH: &str = r#"[ -f ~/.bashrc ] && . ~/.bashrc
-__nah_done() { local code=$?; printf '\e]133;D;%s\a' "$code"; return $code; }
+__nah_done() {
+  local code=$?
+  printf '\e]133;D;%s\a' "$code"
+  if [[ -n ${__nah_dups-} ]]; then
+    local two
+    two=$(HISTTIMEFORMAT= builtin history 2)
+    if [[ $two =~ ^[[:space:]]*[0-9]+[*[:space:]][[:space:]]*(.*)$'\n'[[:space:]]*([0-9]+)[*[:space:]][[:space:]]*(.*)$ && ${BASH_REMATCH[1]} == "${BASH_REMATCH[3]}" ]]; then
+      builtin history -d "${BASH_REMATCH[2]}"
+    fi
+    # Theirs again (unless they changed it meanwhile).
+    [[ $HISTCONTROL == "$__nah_ours" ]] && HISTCONTROL=$__nah_dups
+    __nah_dups=
+  fi
+  return $code
+}
 __nah_prompt() {
   local code=$?
   [[ $PS1 == *'133;A'* ]] || PS1=$'\[\e]133;A\a\]'"$PS1"$'\[\e]133;B\a\]'
+  case :$HISTCONTROL: in
+    *:ignoredups:*|*:ignoreboth:*)
+      __nah_dups=$HISTCONTROL
+      HISTCONTROL=${HISTCONTROL//ignoredups/}
+      HISTCONTROL=${HISTCONTROL//ignoreboth/ignorespace}
+      __nah_ours=$HISTCONTROL ;;
+  esac
   __nah_newest=$(HISTTIMEFORMAT= builtin history 1)
   return $code
 }

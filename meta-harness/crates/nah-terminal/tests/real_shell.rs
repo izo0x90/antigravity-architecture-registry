@@ -243,6 +243,19 @@ fn the_shell_says_the_command_line_itself_not_what_the_screen_shows() {
     let lines: Vec<&str> = done[1..].iter().map(|c| c.text.as_str()).collect();
     assert!(lines[0].starts_with("for i in 1 2; do") && lines[0].contains("echo \"n$i\"") && lines[0].ends_with("done"), "{lines:?}");
     assert_eq!(lines[1], "", "not in its history: not said (so it isn't run again as something else)");
+    // bash keeping out a line the same as the one before (Debian's
+    // default): each is said, and its history keeps one, as it would have.
+    let sh = open("bash", 80, 24);
+    sh.run("HISTCONTROL=ignoreboth");
+    sh.run("echo same");
+    sh.run("echo same");
+    sh.run(" echo secret");
+    sh.run("history 3");
+    let done = ended(&sh, 5);
+    assert_eq!(done[1..].iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), ["echo same", "echo same", "", "history 3"]);
+    let output = sh.terminal.command_output(done[4].id, 100).map(|(text, _)| text).unwrap_or_default();
+    let kept: Vec<&str> = output.lines().map(|l| l.trim_start().split_once("  ").map_or(l, |(_, typed)| typed)).collect();
+    assert_eq!(kept, ["HISTCONTROL=ignoreboth", "echo same", "history 3"], "kept once: {output:?}");
     // zsh: what the right prompt shows isn't part of it.
     let sh = open("zsh", 80, 24);
     sh.run("RPROMPT=right");
