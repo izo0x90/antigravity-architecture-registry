@@ -18,6 +18,7 @@ mod views;
 use super::*;
 use crate::actions::ActionProvider;
 use crate::buffer::Buffer;
+use crate::keymap::Host;
 use crate::nav::Navigable;
 
 use crate::graph::tests::{loading, sample_tree, showing};

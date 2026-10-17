@@ -35,8 +35,8 @@ pub(super) fn block_detail(block: &ContentBlock) -> String {
 }
 
 impl ChatStreamState {
-    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
-        let panel = cx.panel;
+    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, typing: bool, cx: &mut RunCx<'_>) {
+        let host = cx.at.name();
         let ctx = ui.ctx().clone();
 
         ui.vertical(|ui| {
@@ -45,7 +45,7 @@ impl ChatStreamState {
 
             let scroll_height = (ui.available_height() - 105.0).max(50.0);
             self.ui.drawing.clear();
-            let area = egui::ScrollArea::vertical().id_salt(("chat_stream", panel)).auto_shrink([false, false]).stick_to_bottom(self.ui.cursor.is_none()).max_height(scroll_height);
+            let area = egui::ScrollArea::vertical().id_salt(("chat_stream", cx.at)).auto_shrink([false, false]).stick_to_bottom(self.ui.cursor.is_none()).max_height(scroll_height);
             // Where the shared rules say (following the latest, nothing's
             // asked: the newest stays in view); each frame's messages are
             // measured either way, for the first move from it.
@@ -61,14 +61,14 @@ impl ChatStreamState {
                 ctx.request_repaint();
             }
             self.ui.spots = std::mem::take(&mut self.ui.drawing).into_iter().filter(|s| s.rect.intersects(stream.inner_rect)).collect();
-            feedback.register_inspectable(ui, &format!("panel_{}:chat:stream", panel + 1), stream.inner_rect);
+            feedback.register_inspectable(ui, &format!("{host}:chat:stream"), stream.inner_rect);
             ui.separator();
 
             let start = ui.cursor().min;
             let w = ui.available_width();
-            self.render_input(ui, feedback, is_focused, cx);
+            self.render_input(ui, typing, cx);
             let input = Rect::from_min_size(Pos2::new(start.x, start.y), Vec2::new(w, (ui.cursor().min.y - start.y).max(40.0)));
-            feedback.register_inspectable(ui, &format!("panel_{}:chat:input_bar", panel + 1), input);
+            feedback.register_inspectable(ui, &format!("{host}:chat:input_bar"), input);
         });
     }
 
@@ -293,13 +293,14 @@ impl ChatStreamState {
         }
     }
 
-    pub(super) fn render_input(&mut self, ui: &mut egui::Ui, feedback: &FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
-        let panel = cx.panel;
+    /// Its text field: it has the keyboard while `typing` (its host says).
+    pub(super) fn render_input(&mut self, ui: &mut egui::Ui, typing: bool, cx: &mut RunCx<'_>) {
+        let at = cx.at;
         let input_mode = &mut *cx.input_mode;
 
         ui.horizontal(|ui| {
             let text_w = ui.available_width();
-            let inserting = *input_mode == crate::keymap::InputMode::Insert { panel };
+            let inserting = typing;
             let steerable = self.steerable();
             let keys = crate::keymap::local();
             let hint = if inserting && steerable {
@@ -311,16 +312,16 @@ impl ChatStreamState {
             };
             let output = ui.add(
                 keys.text_box(&mut self.ui.input_buffer)
-                    .id(egui::Id::new(("chat_persistent_input_text_edit", panel)))
+                    .id(egui::Id::new(("chat_persistent_input_text_edit", at)))
                     .desired_rows(2)
                     .desired_width(text_w)
                     .hint_text(hint),
             );
-            if inserting && is_focused && !feedback.is_modal_open && !feedback.is_issues_window_open && !feedback.is_inspecting {
+            if inserting {
                 output.request_focus();
             }
             if output.clicked() || output.gained_focus() {
-                *input_mode = crate::keymap::InputMode::Insert { panel };
+                *input_mode = crate::keymap::InputMode::Insert { at };
             }
             // Its Send (and Add) are actions, under it while it's typed in.
             self.ui.typing = inserting.then_some(output.rect);

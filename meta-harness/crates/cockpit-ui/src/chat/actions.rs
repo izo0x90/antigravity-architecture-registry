@@ -283,7 +283,7 @@ impl ActionProvider for ChatStreamState {
         let Some(command) = action.command::<ChatCommand>() else { return };
         let ctx = cx.ctx;
         match command {
-            ChatCommand::Insert => *cx.input_mode = crate::keymap::InputMode::Insert { panel: cx.panel },
+            ChatCommand::Insert => *cx.input_mode = crate::keymap::InputMode::Insert { at: cx.at },
             ChatCommand::ClearPrompt => self.ui.input_buffer.clear(),
             ChatCommand::NewSession | ChatCommand::Retry => self.open_thread(None),
             ChatCommand::ResumeSession => match value {

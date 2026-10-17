@@ -6,8 +6,8 @@ impl CockpitApp {
     /// The cockpit's state now, as it's saved.
     pub fn saved_ui(&self) -> SavedUi {
         let buffers: Vec<BufferId> = self.desk.panels.buffers().iter().copied().chain(self.desk.panels.put_away()).collect();
-        let used = BufferKind::ALL.iter().filter(|k| !k.one_only()).map(|k| match (&self.quick_look, k) {
-            (Some(look), BufferKind::Spec) => BufferId::new(*k, look.previous_spec),
+        let used = BufferKind::ALL.iter().filter(|k| !k.one_only()).map(|k| match &self.quick_look {
+            Some(look) if look.kind() == *k => look.before,
             _ => self.desk.used_buffer(*k),
         });
         SavedUi {

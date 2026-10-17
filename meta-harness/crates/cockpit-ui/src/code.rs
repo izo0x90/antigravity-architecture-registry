@@ -654,7 +654,7 @@ impl CodeViewerState {
     }
 
     pub(crate) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
-        let panel = cx.panel;
+        let host = cx.at.name();
         ui.vertical(|ui| {
             let start_y = ui.cursor().min.y;
             let start_x = ui.cursor().min.x;
@@ -676,7 +676,7 @@ impl CodeViewerState {
             });
             let end_y = ui.cursor().min.y;
             let toolbar_rect = Rect::from_min_size(Pos2::new(start_x, start_y), Vec2::new(w, (end_y - start_y).max(22.0)));
-            feedback.register_inspectable(ui, &format!("panel_{}:code:toolbar", panel + 1), toolbar_rect);
+            feedback.register_inspectable(ui, &format!("{host}:code:toolbar"), toolbar_rect);
             ui.separator();
 
             // Out of date: the marks and spans below come from an older read.
@@ -833,7 +833,7 @@ impl CodeViewerState {
             if let Some(start) = unfold {
                 self.folds.remove(&start);
             }
-            feedback.register_inspectable(ui, &format!("panel_{}:code:viewer", panel + 1), viewer_res.inner_rect);
+            feedback.register_inspectable(ui, &format!("{host}:code:viewer"), viewer_res.inner_rect);
         });
     }
 }
@@ -1214,7 +1214,7 @@ pub(crate) mod tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
                 code.tick(&net, ctx);
-                code.draw(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
+                code.draw(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut asked });
             });
         });
         placed(&output)

@@ -13,6 +13,7 @@
 //! with the cursor on it). The view only says where its items are.
 
 use super::super::*;
+use crate::keymap::Host;
 use crate::actions::At;
 use crate::hosted::ItemButtons;
 
@@ -20,14 +21,14 @@ impl CockpitApp {
     /// Draws the view where `here` is (the one in use): its top line, then
     /// its content.
     pub(in crate::app) fn render_view(&mut self, here: Here, ui: &mut egui::Ui, is_focused: bool) {
-        let (kind, panel) = (here.kind, here.panel);
+        let kind = here.kind;
         let ctx = ui.ctx().clone();
         let leader_held = ui.input(|i| self.config.keymap.leader.key_down(i));
         // A card over a panel: what the other buffers say about what it shows.
-        let says = if here.look { self.others_say(kind) } else { Vec::new() };
+        let says = if here.at == Host::Look { self.others_say(kind) } else { Vec::new() };
         let mine: Vec<Bound> = self.shown_at(here).into_iter().filter(|b| b.layer == Layer::Panel).collect();
         let buttons = self.item_buttons_now();
-        let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked };
+        let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, at: here.at, note: &mut self.note, asked: &mut self.asked };
         crate::hosted::header(ui, self.desk.view(kind), &mine, &mut cx);
         ui.separator();
         // The buttons of what you're on in a bar: their row kept along the
@@ -38,13 +39,16 @@ impl CockpitApp {
             ItemButtons::Bar => {
                 let height = ui.spacing().interact_size.y + crate::theme::look().space_s * 2.0;
                 let bar = egui::Rect::from_min_max(egui::pos2(whole.left(), whole.bottom() - height), whole.right_bottom());
-                self.item_bars.push(((here.look, panel), bar));
+                self.item_bars.push((here.at, bar));
                 egui::Rect::from_min_max(whole.min, egui::pos2(whole.right(), bar.top()))
             }
         };
-        let mut drawing = crate::buffer::Drawing { feedback: &mut self.feedback, focused: is_focused, leader_held };
+        // It has the keyboard while typing is in its host (and no
+        // developer window has it).
+        let typing = self.input_mode == (InputMode::Insert { at: here.at }) && !self.feedback.is_modal_open && !self.feedback.is_issues_window_open && !self.feedback.is_inspecting;
+        let mut drawing = crate::buffer::Drawing { feedback: &mut self.feedback, focused: is_focused, leader_held, typing };
         let (buffer, net) = self.desk.view_with_net(kind);
-        let mut cx = RunCx { net, ctx: &ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked };
+        let mut cx = RunCx { net, ctx: &ctx, input_mode: &mut self.input_mode, at: here.at, note: &mut self.note, asked: &mut self.asked };
         ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
             if !says.is_empty() {
                 crate::hosted::says(ui, &says);
@@ -89,9 +93,9 @@ impl CockpitApp {
     }
 
     /// A host's own controls: those of `bound` that have one.
-    pub(in crate::app) fn host_controls(&mut self, ui: &mut egui::Ui, bound: &[Bound], panel: usize) {
+    pub(in crate::app) fn host_controls(&mut self, ui: &mut egui::Ui, bound: &[Bound], host: Host) {
         let ctx = ui.ctx().clone();
-        let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked };
+        let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, at: host, note: &mut self.note, asked: &mut self.asked };
         crate::actions::controls(ui, bound, &mut cx);
     }
 
@@ -101,9 +105,9 @@ impl CockpitApp {
     /// there's no room.
     pub(in crate::app) fn render_item_controls(&mut self, ctx: &egui::Context) {
         let kind = self.focused_kind();
-        let (panel, bounds) = match &self.quick_look {
-            Some(look) => (look.panel, ctx.memory(|m| m.area_rect(egui::Id::new("quick_look")))),
-            None => (self.desk.panels.focused(), self.panel_rects.get(self.desk.panels.focused()).copied()),
+        let (host, bounds) = match &self.quick_look {
+            Some(_) => (Host::Look, ctx.memory(|m| m.area_rect(egui::Id::new("quick_look")))),
+            None => (Host::Panel(self.desk.panels.focused()), self.panel_rects.get(self.desk.panels.focused()).copied()),
         };
         let Some(bounds) = bounds else { return };
         let hosted = self.desk.view(kind);
@@ -123,11 +127,10 @@ impl CockpitApp {
         }
         let id = egui::Id::new("item_controls");
         let look = crate::theme::look();
-        let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked };
+        let mut cx = RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, at: host, note: &mut self.note, asked: &mut self.asked };
         // In a bar: its host's row, the buttons then what they act on
         // (whether or not the item is on screen). Floating: under the item (above it
         // when there's no room).
-        let host = (self.quick_look.is_some(), panel);
         match self.item_bars.iter().find(|(h, _)| *h == host).map(|(_, rect)| *rect) {
             Some(bar) => {
                 let what = self.desk.view(kind).target().map(|t| t.in_words());
@@ -200,7 +203,7 @@ impl CockpitApp {
         if let Some(look) = &self.quick_look
             && ctx.memory(|m| m.area_rect(egui::Id::new("quick_look"))).is_some_and(|r| r.contains(pos))
         {
-            return (ctx.layer_id_at(pos).map(|l| l.id) == Some(egui::Id::new("quick_look"))).then_some((look.panel, look.kind));
+            return (ctx.layer_id_at(pos).map(|l| l.id) == Some(egui::Id::new("quick_look"))).then_some((look.panel, look.kind()));
         }
         if ctx.layer_id_at(pos).is_some_and(|l| l.order != egui::Order::Background) {
             return None;

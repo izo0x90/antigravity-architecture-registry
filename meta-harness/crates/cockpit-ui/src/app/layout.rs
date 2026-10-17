@@ -135,7 +135,16 @@ impl CockpitApp {
     /// The view the keys go to: the quick look's, while it's open (its
     /// card's spec view, or the inbox); else the focused panel's.
     pub(super) fn focused_kind(&self) -> BufferKind {
-        self.quick_look.as_ref().map_or_else(|| self.desk.panels.focused_kind(), |q| q.kind)
+        self.quick_look.as_ref().map_or_else(|| self.desk.panels.focused_kind(), |q| q.kind())
+    }
+
+    /// What holds the buffer of `kind` in use: the quick look, while it
+    /// holds it; else its panel.
+    pub(super) fn host_of(&self, kind: BufferKind) -> crate::keymap::Host {
+        match &self.quick_look {
+            Some(look) if look.kind() == kind => crate::keymap::Host::Look,
+            _ => crate::keymap::Host::Panel(self.panel_of(kind)),
+        }
     }
 
     /// The panel showing the view of `kind` in use (else the nearest of

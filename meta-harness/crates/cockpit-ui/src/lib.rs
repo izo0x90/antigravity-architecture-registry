@@ -34,7 +34,6 @@ pub mod saved;
 pub mod shared;
 pub mod spec;
 pub mod status;
-pub mod talk;
 pub mod store;
 pub mod theme;
 pub mod touch;

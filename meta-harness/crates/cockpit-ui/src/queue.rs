@@ -514,7 +514,7 @@ pub(crate) mod tests {
         assert_eq!(q.snapshot.as_ref().unwrap().jobs.len(), 3, "the pushed snapshot is shown");
         let mut mode = crate::keymap::InputMode::Normal;
         let mut note = None;
-        let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None };
+        let mut cx = RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None };
         // The running job links to its session.
         assert!(ids(&q).contains(&"queue.open_session".to_owned()) && ids(&q).contains(&"queue.stop".to_owned()));
         q.apply(QueueCommand::OpenSession, &mut cx);

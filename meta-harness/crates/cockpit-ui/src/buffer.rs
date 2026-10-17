@@ -22,6 +22,9 @@ pub struct Drawing<'a> {
     pub feedback: &'a mut FeedbackInspectorState,
     /// Its panel has focus.
     pub focused: bool,
+    /// It has the keyboard: its text field takes what's typed. Its host
+    /// says so; a buffer never takes the keyboard on its own.
+    pub typing: bool,
     /// The leader key is down (the pointer pans what can be panned).
     pub leader_held: bool,
 }

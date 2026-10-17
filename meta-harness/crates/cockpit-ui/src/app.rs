@@ -154,13 +154,12 @@ const MAX_COUNT: u32 = 999;
 /// order, and the focused view (its actions get the view menu's letters).
 type KeyedActions = (BufferKind, Vec<(Origin, String, Vec<String>)>);
 
-/// Where a list of actions is gathered for: a view, and what holds it (the
-/// quick look, or panel `panel`).
+/// Where a list of actions is gathered for: a view, and what holds it (a
+/// panel, or the quick look).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Here {
-    pub panel: usize,
+    pub at: crate::keymap::Host,
     pub kind: BufferKind,
-    pub look: bool,
 }
 /// One action's keys: its leader path and direct sequences.
 type Keys = (Option<Vec<char>>, Vec<Vec<Chord>>, Vec<String>);
@@ -212,8 +211,6 @@ pub struct CockpitApp {
     pub alerts: crate::alerts::Alerts,
     /// What a call that finished later has to say (shown as the note).
     notes_later: Arc<Mutex<Vec<String>>>,
-    /// The box for talking to the agent, while it's open.
-    pub talk: Option<crate::talk::Talk>,
     pub initialized: bool,
 
     pub config: UiConfig,
@@ -245,7 +242,7 @@ pub struct CockpitApp {
     /// the UI config says), and this frame's row kept for them by each host
     /// (the quick look, or a panel by its number) while they're in a bar.
     pub(crate) item_buttons: Option<crate::hosted::ItemButtons>,
-    item_bars: Vec<((bool, usize), egui::Rect)>,
+    item_bars: Vec<(crate::keymap::Host, egui::Rect)>,
     palette: crate::palette::Palette,
 
     // Top-bar status LEDs
@@ -288,7 +285,6 @@ impl CockpitApp {
             quick_look: None,
             alerts,
             notes_later: Arc::default(),
-            talk: None,
             initialized: false,
 
             config,
@@ -504,7 +500,6 @@ impl CockpitApp {
         // What the buffers asked while drawn (a click, a chat on screen):
         // done in the frame they asked.
         self.take_asks(ctx);
-        self.render_talk(ctx);
         self.render_hints(ctx);
         self.render_prefix_popup(ctx);
         self.render_which_key_hud(ctx);

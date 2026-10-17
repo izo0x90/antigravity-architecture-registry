@@ -153,7 +153,7 @@ impl CockpitApp {
                 // goes (the bell, the tray) after the ones that never change.
                 let order: Vec<String> = self.top_bar_placements().into_iter().map(|(id, _)| id).collect();
                 start.sort_by_key(|b| order.iter().position(|id| *id == b.action.id).unwrap_or(usize::MAX));
-                self.host_controls(ui, &start, self.desk.panels.focused());
+                self.host_controls(ui, &start, self.here().at);
 
                 ui.add_space(crate::theme::look().space_m);
 
@@ -204,7 +204,14 @@ impl CockpitApp {
                     ),
                     InputMode::Leader => (self.leader_title("LEADER"), colors().key, colors().warn_bg),
                     InputMode::Palette => ("PALETTE".to_string(), colors().info, colors().info_bg),
-                    InputMode::Insert { panel } => (format!("INSERT [{}]", panel + 1), colors().ok, colors().ok_bg),
+                    InputMode::Insert { at } => (
+                        match at {
+                            crate::keymap::Host::Panel(panel) => format!("INSERT [{}]", panel + 1),
+                            crate::keymap::Host::Look => "INSERT [look]".to_owned(),
+                        },
+                        colors().ok,
+                        colors().ok_bg,
+                    ),
                     InputMode::Capture { .. } => (
                         match &self.capture {
                             Some(Capture::Search(_)) => "SEARCH",
@@ -240,7 +247,7 @@ impl CockpitApp {
                 // the panels, then the developer tools.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let end: Vec<Bound> = end.into_iter().rev().collect();
-                    self.host_controls(ui, &end, self.desk.panels.focused());
+                    self.host_controls(ui, &end, self.here().at);
                     ui.label(RichText::new(format!("Panels: {}", self.desk.panels.len())).size(crate::theme::look().text_body).color(colors().muted));
                 });
             });

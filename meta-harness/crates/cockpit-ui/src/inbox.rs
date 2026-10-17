@@ -166,7 +166,7 @@ impl InboxView {
                 ui.painter().rect_stroke(rect.expand(2.0), theme.radius_m, egui::Stroke::new(theme.line_thin, colors().focus), egui::StrokeKind::Outside);
             }
         };
-        let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt(("inbox", cx.panel)).auto_shrink([false, true]), ui.input(|i| i.time));
+        let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt(("inbox", cx.at)).auto_shrink([false, true]), ui.input(|i| i.time));
         let output = area.show(ui, |ui| {
             let says = ui
                 .vertical(|ui| {

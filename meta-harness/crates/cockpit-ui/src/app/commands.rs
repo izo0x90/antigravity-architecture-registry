@@ -1,6 +1,7 @@
 //! The actions: gathering, binding, invoking, and the shell's own commands.
 
 use super::*;
+use crate::keymap::Host;
 use crate::hosted::ItemButtons;
 
 impl CockpitApp {
@@ -46,14 +47,9 @@ impl CockpitApp {
     /// shows, closing it), or the quick look's.
     pub(crate) fn host_actions(&self, here: Here) -> Vec<Action> {
         use ShellCommand as S;
-        if let Some(open) = self.quick_look.as_ref().filter(|_| here.look) {
+        if here.at == Host::Look && self.quick_look.is_some() {
             let look = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::View);
-            let mut out = vec![look("quicklook.toggle", "Close the quick look", S::QuickLook).importance(PRIMARY)];
-            // It holds a card (or the inbox): a card can go to a panel.
-            if open.kind == BufferKind::Spec {
-                out.push(look("quicklook.to_panel", "Open this card in a panel", S::QuickLookToPanel).importance(PRIMARY));
-            }
-            return out;
+            return vec![look("quicklook.toggle", "Close the quick look", S::QuickLook).importance(PRIMARY), look("quicklook.to_panel", "Open it in a panel", S::QuickLookToPanel).importance(PRIMARY)];
         }
         let admin = |id: String, label: String, c: ShellCommand| Action::new(id, label, c).group(Group::View).importance(MINOR);
         let mut actions = vec![Action::new("panel.close", "Close this panel (its buffer is hidden, not lost)", S::ClosePanel).group(Group::View).importance(MINOR)];
@@ -127,8 +123,8 @@ impl CockpitApp {
     /// quick look, or its panel).
     pub(crate) fn here(&self) -> Here {
         match &self.quick_look {
-            Some(look) => Here { panel: look.panel, kind: look.kind, look: true },
-            None => Here { panel: self.desk.panels.focused(), kind: self.desk.panels.focused_kind(), look: false },
+            Some(look) => Here { at: Host::Look, kind: look.kind() },
+            None => Here { at: Host::Panel(self.desk.panels.focused()), kind: self.desk.panels.focused_kind() },
         }
     }
 
@@ -214,14 +210,15 @@ impl CockpitApp {
         use egui_phosphor::regular as icon;
         let panel = self.desk.view(here.kind).placed().into_iter();
         let button = |caption: &str, glyph: &'static str| Control::new(At::Header, Style::Button, caption, Some(glyph));
-        let host = if here.look {
-            vec![("quicklook.to_panel".to_owned(), button("Open in a panel", icon::COLUMNS)), ("quicklook.toggle".to_owned(), button("", icon::X))]
-        } else {
-            let mut own = self.tabs(here.panel);
-            if self.desk.panels.len() > 1 {
-                own.push(("panel.close".to_owned(), button("", icon::X)));
+        let host = match here.at {
+            Host::Look => vec![("quicklook.to_panel".to_owned(), button("Open in a panel", icon::COLUMNS)), ("quicklook.toggle".to_owned(), button("", icon::X))],
+            Host::Panel(panel) => {
+                let mut own = self.tabs(panel);
+                if self.desk.panels.len() > 1 {
+                    own.push(("panel.close".to_owned(), button("", icon::X)));
+                }
+                own
             }
-            own
         };
         panel.chain(host).chain(self.top_bar_placements()).collect()
     }
@@ -401,10 +398,7 @@ impl CockpitApp {
             }
             ShellCommand::QuickLook => self.toggle_quick_look(ctx),
             ShellCommand::QuickLookToPanel => self.quick_look_to_panel(),
-            ShellCommand::Talk => {
-                self.talk.get_or_insert_with(Default::default);
-                self.input_mode = InputMode::Insert { panel: self.desk.panels.focused() };
-            }
+            ShellCommand::Talk => self.talk(ctx),
             ShellCommand::ItemButtons => {
                 let bar = value.as_deref() == Some("true");
                 self.item_buttons = Some(if bar { ItemButtons::Bar } else { ItemButtons::Floating });
@@ -422,7 +416,7 @@ impl CockpitApp {
             ShellCommand::Hint { open } => self.start_hint(open),
             ShellCommand::Search => {
                 self.capture = Some(Capture::Search(Searching { kind, query: String::new(), before: self.jump_here() }));
-                self.input_mode = InputMode::Capture { panel: self.desk.panels.focused() };
+                self.input_mode = InputMode::Capture { at: self.here().at };
                 self.desk.view_mut(kind).save_view();
                 // An empty search is a search too (a filter typed into goes blank).
                 self.desk.view_mut(kind).on_search(SearchEvent::Typing(""));
@@ -481,7 +475,7 @@ impl CockpitApp {
 
     pub(super) fn start_capture(&mut self, capture: Capture) {
         self.capture = Some(capture);
-        self.input_mode = InputMode::Capture { panel: self.desk.panels.focused() };
+        self.input_mode = InputMode::Capture { at: self.here().at };
         self.pending_since = 0.0;
     }
 

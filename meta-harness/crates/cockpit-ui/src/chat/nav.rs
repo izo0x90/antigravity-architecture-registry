@@ -48,7 +48,7 @@ impl ChatStreamState {
 
 impl crate::buffer::Buffer for ChatStreamState {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
-        self.draw(ui, drawing.feedback, drawing.focused, cx);
+        self.draw(ui, drawing.feedback, drawing.typing, cx);
     }
 
     /// While it's on screen, its slot's updates are seen.

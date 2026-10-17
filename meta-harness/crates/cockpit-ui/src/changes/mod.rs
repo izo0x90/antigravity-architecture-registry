@@ -613,7 +613,7 @@ impl ChangesView {
                 self.spots.clear();
                 return;
             }
-            return self.render_rows(ui, ("timeline", cx.panel));
+            return self.render_rows(ui, ("timeline", cx.at));
         }
         let Some(list) = self.list() else {
             let words = match &self.list_error {
@@ -634,13 +634,13 @@ impl ChangesView {
         if side != self.side {
             self.keeping_cursor(|v| v.side = side);
         }
-        self.render_rows(ui, ("changes", cx.panel));
+        self.render_rows(ui, ("changes", cx.at));
     }
 
     /// The rows, laid out by their heights and drawn only where they show;
     /// where it looks is the shared rules' (a cursor asked for before it
     /// was laid out is shown now). The cursor's row is outlined.
-    fn render_rows(&mut self, ui: &mut egui::Ui, id: (&str, usize)) {
+    fn render_rows(&mut self, ui: &mut egui::Ui, id: (&str, crate::keymap::Host)) {
         let rows = self.rows();
         self.clock = ui.input(|i| i.time);
         self.viewport.margin = 2.0 * self.heights.line;

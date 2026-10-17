@@ -210,7 +210,7 @@ fn the_timeline_lists_windows_newest_first_and_picking_one_compares_it() {
     fed.timeline(Timeline { windows: vec![window("1-a", Some("2-b"), 1, &["lead"], 2), window("2-b", None, 2, &[], 1)], turns: vec![] });
     let mut cx_net = (NetClient::new("http://127.0.0.1:9"), None, None, crate::keymap::InputMode::Normal);
     let ctx = egui::Context::default();
-    let mut cx = RunCx { net: &cx_net.0, ctx: &ctx, input_mode: &mut cx_net.3, panel: 0, note: &mut cx_net.1, asked: &mut cx_net.2 };
+    let mut cx = RunCx { net: &cx_net.0, ctx: &ctx, input_mode: &mut cx_net.3, at: crate::keymap::Host::Panel(0), note: &mut cx_net.1, asked: &mut cx_net.2 };
     let timeline = fed.view.actions().into_iter().find(|a| a.id == "changes.timeline").unwrap();
     fed.view.run(&timeline, None, &mut cx);
     assert_eq!(fed.view.rows(), [Row::Window(0), Row::Window(1)]);
@@ -235,7 +235,7 @@ fn the_user_stages_a_file_or_a_change_and_the_cursor_follows_the_file() {
     let ids = |view: &ChangesView| view.actions().into_iter().map(|a| a.id).collect::<Vec<_>>();
     assert!(ids(&fed.view).contains(&"changes.stage".to_owned()) && !ids(&fed.view).contains(&"changes.unstage".to_owned()), "unstaged: stage it");
     let stage = fed.view.actions().into_iter().find(|a| a.id == "changes.stage").unwrap();
-    fed.view.run(&stage, None, &mut RunCx { net: &fed.net, ctx: &fed.ctx, input_mode: &mut parts.2, panel: 0, note: &mut parts.0, asked: &mut parts.1 });
+    fed.view.run(&stage, None, &mut RunCx { net: &fed.net, ctx: &fed.ctx, input_mode: &mut parts.2, at: crate::keymap::Host::Panel(0), note: &mut parts.0, asked: &mut parts.1 });
     assert_eq!(fed.sent("POST /api/changes/stage"), 1);
     assert_eq!(fed.view.restore.as_deref(), Some("f:Staged:a.rs"), "the cursor follows it");
     push(&fed.view.inbox, Reply::Staged(Ok(serde_json::Value::Null)));
@@ -272,7 +272,7 @@ fn drawn(view: &mut ChangesView, ctx: &egui::Context, h: f32) -> Vec<String> {
     let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, h))), ..Default::default() }, |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-            view.draw(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
+            view.draw(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut asked });
         });
     });
     fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
@@ -364,7 +364,7 @@ fn more_context_is_offered_where_theres_more_to_show_and_adds_ten_lines_each_sid
     let more = view.actions().into_iter().find(|a| a.id == "changes.more_context").unwrap();
     assert_eq!(more.label, "Show 10 more lines around its changes");
     let mut parts = (None, None, crate::keymap::InputMode::Normal);
-    let mut cx = RunCx { net, ctx, input_mode: &mut parts.2, panel: 0, note: &mut parts.0, asked: &mut parts.1 };
+    let mut cx = RunCx { net, ctx, input_mode: &mut parts.2, at: crate::keymap::Host::Panel(0), note: &mut parts.0, asked: &mut parts.1 };
     view.run(&more, None, &mut cx);
     view.tick(net, ctx);
     assert!(net.sent.lock().unwrap().last().is_some_and(|s| s.contains("a.rs") && s.contains("context=13")), "{:?}", net.sent.lock().unwrap().last());

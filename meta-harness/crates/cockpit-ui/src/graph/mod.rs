@@ -434,7 +434,7 @@ impl GraphState {
 
 impl crate::buffer::Buffer for GraphState {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut crate::actions::RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
-        self.draw(ui, drawing.feedback, cx.panel, drawing.leader_held, cx);
+        self.draw(ui, drawing.feedback, drawing.leader_held, cx);
     }
 
     /// Fetches what's missing or stale and applies replies. Call every frame.

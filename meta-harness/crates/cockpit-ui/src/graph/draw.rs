@@ -223,11 +223,11 @@ impl GraphState {
         self.more_rects.iter().find(|(_, r)| r.contains(pos)).map(|(k, _)| k.clone())
     }
 
-    pub(super) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, panel: usize, pan_held: bool, cx: &mut RunCx<'_>) {
+    pub(super) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, pan_held: bool, cx: &mut RunCx<'_>) {
         self.render_where(ui);
         let canvas = ui.available_rect_before_wrap();
         self.canvas = canvas;
-        feedback.register_inspectable(ui, &format!("panel_{}:graph:canvas", panel + 1), canvas);
+        feedback.register_inspectable(ui, &format!("{}:graph:canvas", cx.at.name()), canvas);
         let response = ui.allocate_rect(canvas, Sense::click_and_drag());
         let painter = ui.painter_at(canvas);
         painter.rect_filled(canvas, 0.0, colors().bg);

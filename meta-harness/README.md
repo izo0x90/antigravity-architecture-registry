@@ -428,9 +428,10 @@ all of them:
   /api/search?changed=from..to`) and never changes the repository, its
   index or its files.
 
-- **Talk to the agent:** `t` opens a box over whatever is on screen;
-  Enter sends to the lead's session (opening one if there's none), the
-  agent's reply shows above it, and `Escape` closes it. Nothing moves.
+- **Talk to the agent:** `t` shows the lead's chat in the quick look,
+  typing, over whatever is on screen; Enter sends to the lead's session
+  (opening one if there's none). `Escape` stops typing, `Escape` again
+  closes it; `Space q c` makes it a panel's chat. Nothing moves.
 
 - **Servers:** the cockpit shows one server's project at a time and keeps
   every linked one live (each has its own desk: views, layout, marks, its

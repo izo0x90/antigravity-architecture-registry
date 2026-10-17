@@ -29,7 +29,7 @@ fn search_marks_counts_and_ends_work_through_the_keys() {
     assert_eq!(selected(&app), "rust:a::run", "ctrl+i goes forward again");
     // / searches incrementally; Enter jumps; Escape gives up.
     frame(&ctx, &mut app, key("/"));
-    assert_eq!(app.input_mode, InputMode::Capture { panel: 1 });
+    assert_eq!(app.input_mode, InputMode::Capture { at: Host::Panel(1) });
     frame(&ctx, &mut app, key("s"));
     assert_eq!(selected(&app), "rust:a::step", "first match shows while typing");
     assert!(texts(&frame(&ctx, &mut app, vec![])).contains("/s| 2 matches"));
@@ -444,7 +444,7 @@ fn spec_keys_walk_items_and_review_them() {
     assert_eq!(app.desk.spec().entry().unwrap().item, crate::spec::SpecItem::Step(0));
     frame(&ctx, &mut app, key("c"));
     frame(&ctx, &mut app, vec![]);
-    assert_eq!(app.input_mode, InputMode::Insert { panel: 1 }, "c: the composer has the keyboard");
+    assert_eq!(app.input_mode, InputMode::Insert { at: Host::Panel(1) }, "c: the composer has the keyboard");
     assert!(app.desk.spec().composer.is_some());
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert_eq!(app.input_mode, InputMode::Normal);

@@ -31,9 +31,17 @@ impl CockpitApp {
                 }
             }
             Ask::Reread(file) => self.reread(file, ctx),
+            // Typing where it is: the quick look, while it holds it; else
+            // its panel, focused.
             Ask::Type => {
-                self.focus_kind(from);
-                self.input_mode = InputMode::Insert { panel: self.desk.panels.focused() };
+                let at = match &self.quick_look {
+                    Some(look) if look.kind() == from => crate::keymap::Host::Look,
+                    _ => {
+                        self.focus_kind(from);
+                        crate::keymap::Host::Panel(self.desk.panels.focused())
+                    }
+                };
+                self.input_mode = InputMode::Insert { at };
             }
             Ask::Refresh(crate::nav::Refresh::Review) => self.desk.shared.review.invalidate(),
             Ask::Refresh(crate::nav::Refresh::Changes) => self.desk.shared.changes.invalidate(),

@@ -466,8 +466,8 @@ pub struct RunCx<'a> {
     pub net: &'a NetClient,
     pub ctx: &'a egui::Context,
     pub input_mode: &'a mut InputMode,
-    /// The focused panel.
-    pub panel: usize,
+    /// Where it runs: what holds the buffer you're in.
+    pub at: crate::keymap::Host,
     /// A short note for the status line (why something didn't happen).
     pub note: &'a mut Option<String>,
     /// An action a control asked to run (its id, and its value if it has

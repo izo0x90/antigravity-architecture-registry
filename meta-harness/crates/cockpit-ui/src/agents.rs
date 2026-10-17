@@ -4,7 +4,7 @@
 //! sessions, prompting, answering, their settings, tool servers, signing
 //! in. Kept on the desk (`Shared::agents`): the chat and the inbox show it
 //! and ask it to act (`Ask::Agents`); the AGENT light, the bell and the
-//! talk box read it. A buffer holds a reader (`AgentsView`): only the
+//!  A buffer holds a reader (`AgentsView`): only the
 //! shell changes it.
 
 use std::cell::{Ref, RefCell, RefMut};
@@ -207,24 +207,6 @@ impl Agents {
         self.thread_in(&SlotId::new(LEAD)).map_or(0, |t| t.activity)
     }
 
-    /// The lead, as the talk box names it: its harness and its session.
-    pub fn who(&self) -> String {
-        let lead = SlotId::new(LEAD);
-        let name = self.instance_in(&lead).map_or_else(|| "the agent".to_owned(), |i| i.display_name.clone());
-        match self.thread_in(&lead) {
-            Some(t) => {
-                let session: String = t.thread.id.to_string().chars().take(8).collect();
-                format!("{name} · session {session} · {}", format!("{:?}", t.thread.status).to_lowercase())
-            }
-            None => format!("{name} · a new session"),
-        }
-    }
-
-    /// The lead's last message, as text.
-    pub fn last_reply(&self) -> Option<String> {
-        self.last_said(&self.thread_id_in(&SlotId::new(LEAD))?)
-    }
-
     /// The agent's last message in `thread`, as text.
     pub fn last_said(&self, thread: &ThreadId) -> Option<String> {
         self.store.threads.get(thread)?.items.iter().rev().find_map(|item| match &item.body {
@@ -233,7 +215,7 @@ impl Agents {
         })
     }
 
-    /// Does what `slot`'s chat (or the inbox, or the talk box) asked.
+    /// Does what `slot`'s chat (or the inbox) asked.
     pub fn act(&mut self, slot: SlotId, act: Act, net: &NetClient, ctx: &egui::Context) {
         let mailbox = self.mailbox.clone();
         let for_slot = slot.clone();

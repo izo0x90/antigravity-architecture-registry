@@ -1,8 +1,36 @@
-//! The quick look and the talk box.
+//! The quick look: a buffer over a panel (a card, the inbox, the lead's
+//! chat).
 
 use super::*;
+use crate::keymap::Host;
+use crate::quick_look::PANE;
 
 impl CockpitApp {
+    /// Shows `buffer` in the quick look, over the focused panel (what it
+    /// held is put back first); `key` opened it, if it's down.
+    pub(super) fn look_at(&mut self, buffer: BufferId, key: Option<Chord>, ctx: &egui::Context) {
+        self.close_quick_look();
+        let now = ctx.input(|i| i.time);
+        let before = self.desk.used_buffer(buffer.kind);
+        self.quick_look = Some(QuickLook::open(buffer, before, self.desk.panels.focused(), self.desk.panels.focused_kind(), key, now));
+        self.use_buffer(buffer);
+        if buffer.id == PANE {
+            self.desk.view_mut(buffer.kind).as_card(true);
+        }
+    }
+
+    /// Talking to the agent from anywhere: the lead's chat in the quick
+    /// look, typing.
+    pub(super) fn talk(&mut self, ctx: &egui::Context) {
+        let chat = BufferId::new(BufferKind::Chat, PANE);
+        if self.quick_look.as_ref().map(|q| q.buffer) != Some(chat) {
+            self.look_at(chat, None, ctx);
+            let lead = Target::Agent { slot: Some(harness_contracts::SlotId::new(harness_contracts::LEAD)), thread: None };
+            let _ = self.desk.view_mut(BufferKind::Chat).show_target(&lead);
+        }
+        self.input_mode = InputMode::Insert { at: Host::Look };
+    }
+
     /// Opens the quick look on what the cursor is on, or closes it.
     pub(super) fn toggle_quick_look(&mut self, ctx: &egui::Context) {
         if let Some(open) = &self.quick_look {
@@ -25,35 +53,43 @@ impl CockpitApp {
         let key = ctx.input(|i| {
             self.bound_actions().into_iter().find(|b| b.action.id == "quicklook.toggle").and_then(|b| b.keys.into_iter().filter(|seq| seq.len() == 1).map(|mut seq| seq.remove(0)).find(|chord| chord.key_down(i)))
         });
-        let now = ctx.input(|i| i.time);
-        self.quick_look = Some(QuickLook::open(BufferKind::Spec, self.desk.panels.focused(), kind, self.desk.used_buffer(BufferKind::Spec).id, key, now));
         // Its own card, held on what it shows.
-        self.use_buffer(BufferId::new(BufferKind::Spec, crate::quick_look::PANE));
-        let card = self.desk.view_mut(BufferKind::Spec);
-        card.as_card(true);
-        let _ = card.show_target(&Target::Component(id));
+        self.look_at(BufferId::new(BufferKind::Spec, PANE), key, ctx);
+        let _ = self.desk.view_mut(BufferKind::Spec).show_target(&Target::Component(id));
     }
 
-    /// Closes the quick look: the spec view used before is used again.
+    /// Closes the quick look: the buffer of its kind used before is used
+    /// again, and typing in it stops.
     pub(super) fn close_quick_look(&mut self) {
         if let Some(look) = self.quick_look.take() {
-            self.use_buffer(BufferId::new(BufferKind::Spec, look.previous_spec));
+            self.use_buffer(look.before);
+            if matches!(self.input_mode, InputMode::Insert { at: Host::Look } | InputMode::Capture { at: Host::Look }) {
+                self.input_mode = InputMode::Normal;
+            }
         }
     }
 
-    /// Its card in a panel: it becomes that panel's spec view (the
-    /// nearest spec panel's, else beside the focused panel).
+    /// What it holds, in a panel: a buffer of its own becomes a new
+    /// buffer of a panel (the nearest of its kind, else beside the focused
+    /// one); another is shown where it is, or there. Typing in it goes on
+    /// there.
     pub(super) fn quick_look_to_panel(&mut self) {
-        if self.quick_look.take().is_none() {
-            return;
-        }
+        let Some(look) = self.quick_look.take() else { return };
         let from = self.jump_here();
-        let buffer = self.desk.panels.new_buffer(BufferKind::Spec);
-        self.desk.rekey(BufferId::new(BufferKind::Spec, crate::quick_look::PANE), buffer);
+        let buffer = if look.own() {
+            let buffer = self.desk.panels.new_buffer(look.kind());
+            self.desk.rekey(look.buffer, buffer);
+            buffer
+        } else {
+            look.buffer
+        };
         self.use_buffer(buffer);
-        self.desk.view_mut(BufferKind::Spec).as_card(false);
+        self.desk.view_mut(buffer.kind).as_card(false);
         let panel = self.desk.panels.ensure_visible(buffer);
         self.desk.panels.focus(panel);
+        if self.input_mode == (InputMode::Insert { at: Host::Look }) {
+            self.input_mode = InputMode::Insert { at: Host::Panel(panel) };
+        }
         self.after_jump(from);
     }
 
@@ -74,7 +110,7 @@ impl CockpitApp {
     /// own controls on its header.
     pub(super) fn render_quick_look(&mut self, ctx: &egui::Context) {
         let Some(look) = &self.quick_look else { return };
-        let (panel, kind) = (look.panel, look.kind);
+        let (panel, kind) = (look.panel, look.kind());
         let over = self.panel_rects.get(panel).copied().filter(|r| r.is_positive()).unwrap_or_else(|| ctx.content_rect());
         let screen = ctx.content_rect();
         let theme = crate::theme::look();
@@ -96,9 +132,9 @@ impl CockpitApp {
                 ui.set_max_size(size - egui::vec2(2.0 * theme.space_m, 2.0 * theme.space_m));
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{} Quick look", egui_phosphor::regular::EYE)).strong().size(theme.text_label).color(colors().text_strong));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.host_controls(ui, &own, panel));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.host_controls(ui, &own, Host::Look));
                 });
-                self.render_view(Here { panel, kind, look: true }, ui, true);
+                self.render_view(Here { at: Host::Look, kind }, ui, true);
             });
         });
         // A click outside closes it (a peek's key closes it when let go).
@@ -107,13 +143,4 @@ impl CockpitApp {
         }
     }
 
-    /// The box for talking to the agent: it has the keyboard while open.
-    pub(super) fn render_talk(&mut self, ctx: &egui::Context) {
-        let Some(talk) = &mut self.talk else { return };
-        if talk.render(ctx, &mut self.desk.shared.agents.get_mut(), &self.desk.net) == crate::talk::Outcome::Close {
-            self.talk = None;
-            self.input_mode = InputMode::Normal;
-            release_keyboard(ctx);
-        }
-    }
 }

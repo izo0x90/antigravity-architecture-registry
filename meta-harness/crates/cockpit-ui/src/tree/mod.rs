@@ -347,9 +347,9 @@ impl TreeBuffer {
     }
 
     pub(crate) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
-        let panel = cx.panel;
+        let host = cx.at.name();
         let header = ui.horizontal(|ui| ui.add(egui::TextEdit::singleline(&mut self.search_filter).hint_text("filter…").desired_width(f32::INFINITY)));
-        feedback.register_inspectable(ui, &format!("panel_{}:tree:header", panel + 1), header.response.rect);
+        feedback.register_inspectable(ui, &format!("{host}:tree:header"), header.response.rect);
         ui.separator();
         if !self.answered_once {
             ui.label(RichText::new(self.error.clone().unwrap_or_else(|| "Loading…".into())).color(colors().muted));
@@ -926,7 +926,7 @@ pub(crate) mod tests {
             let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 160.0))), ..Default::default() }, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-                    t.draw(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
+                    t.draw(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut asked });
                 });
             });
         }

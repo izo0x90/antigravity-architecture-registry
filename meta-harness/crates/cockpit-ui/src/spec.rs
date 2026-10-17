@@ -619,8 +619,9 @@ impl SpecState {
         crate::buffer::code_of(&self.detail.as_ref()?.component)
     }
 
-    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        self.render_composer(ui, cx);
+    /// Draws it; its composer has the keyboard while `typing`.
+    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, typing: bool) {
+        self.render_composer(ui, cx, typing);
         let Some(detail) = self.detail.clone() else {
             let msg = match (&self.target, &self.error) {
                 (_, Some(e)) => format!("Couldn't load it: {e}"),
@@ -865,7 +866,7 @@ impl SpecState {
 
     /// The review line under the toolbar: what changed since the review, and
     /// the composer when writing a comment, reply or reason to reopen.
-    fn render_composer(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
+    fn render_composer(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, typing: bool) {
         self.typing = None;
         let Some(composer) = self.composer.as_mut() else { return };
         let what = match (&composer.purpose, &composer.anchor) {
@@ -880,14 +881,14 @@ impl SpecState {
             (Compose::Reopen(id), _) => format!("Why reopen {id}?"),
         };
         ui.label(RichText::new(what).size(crate::theme::look().text_body).color(colors().muted));
-        let inserting = *cx.input_mode == crate::keymap::InputMode::Insert { panel: cx.panel };
+        let inserting = typing;
         let keys = crate::keymap::local();
-        let output = ui.add(keys.text_box(&mut composer.text).id(egui::Id::new(("spec_composer", cx.panel))).desired_rows(2).desired_width(f32::INFINITY).hint_text("Write it here…"));
+        let output = ui.add(keys.text_box(&mut composer.text).id(egui::Id::new(("spec_composer", cx.at))).desired_rows(2).desired_width(f32::INFINITY).hint_text("Write it here…"));
         if inserting {
             output.request_focus();
         }
         if output.clicked() || output.gained_focus() {
-            *cx.input_mode = crate::keymap::InputMode::Insert { panel: cx.panel };
+            *cx.input_mode = crate::keymap::InputMode::Insert { at: cx.at };
         }
         self.typing = inserting.then_some(output.rect);
         if inserting && output.has_focus() && ui.input(|i| crate::keymap::local().input.sent(i).is_some()) {
@@ -1355,8 +1356,8 @@ pub(crate) struct SpecPlace {
 }
 
 impl crate::buffer::Buffer for SpecState {
-    fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, _drawing: &mut crate::buffer::Drawing<'_>) {
-        self.draw(ui, cx);
+    fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
+        self.draw(ui, cx, drawing.typing);
     }
 
     /// Fetches the target's detail (and its plan findings) when it changes.
@@ -1538,7 +1539,8 @@ pub(crate) mod tests {
         let mut note = None;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                s.draw(ui, &mut RunCx { net: &net, ctx, input_mode: mode, panel: slot, note: &mut note, asked: &mut None });
+                let typing = *mode == crate::keymap::InputMode::Insert { at: crate::keymap::Host::Panel(slot) };
+                s.draw(ui, &mut RunCx { net: &net, ctx, input_mode: mode, at: crate::keymap::Host::Panel(slot), note: &mut note, asked: &mut None }, typing);
             });
         });
     }
@@ -1631,7 +1633,7 @@ pub(crate) mod tests {
         assert_eq!(s.enter(), Step::GoTo(GoTo::Spec));
         let comment_action = s.actions().into_iter().find(|a| a.id == "spec.comment").unwrap();
         let (ctx, net, mut mode, mut note) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
-        s.run(&comment_action, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None });
+        s.run(&comment_action, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None });
         assert_eq!(s.composer.as_ref().unwrap().anchor, Some(CommentAnchor::Relation { kind: RelationKind::Calls, source: id.clone(), target: other.clone() }));
         s.composer = None;
         // Search finds items; hints label what's drawn.
@@ -1733,7 +1735,7 @@ pub(crate) mod tests {
         assert_eq!(s.current, Section::Logic);
         let request = actions.iter().find(|a| a.id == "spec.request_change").unwrap().clone();
         let mut note = None;
-        s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, panel: 1, note: &mut note, asked: &mut None });
+        s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(1), note: &mut note, asked: &mut None });
         assert_eq!(s.take_asks(), [Ask::Type]);
         assert_eq!(
             s.composer,
@@ -1741,7 +1743,7 @@ pub(crate) mod tests {
         );
         // It all renders: markers, threads with their buttons, the composer.
         s.loaded = Some((id.clone(), s.source.clone()));
-        mode = crate::keymap::InputMode::Insert { panel: 1 };
+        mode = crate::keymap::InputMode::Insert { at: crate::keymap::Host::Panel(1) };
         for _ in 0..2 {
             frame(&mut s, &ctx, &mut mode, 1);
         }
@@ -1756,7 +1758,7 @@ pub(crate) mod tests {
         let (net, mut mode, mut note) = (NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
         let out = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                s.draw(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None });
+                s.draw(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None }, false);
             });
         });
         fn collect(shape: &egui::Shape, out: &mut String) {

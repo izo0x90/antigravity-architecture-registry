@@ -22,10 +22,28 @@ pub enum InputMode {
     Leader,
     /// The command palette owns the keyboard.
     Palette,
-    /// Keystrokes flow into the text field of this slot.
-    Insert { panel: usize },
-    /// The view in this slot reads typed keys itself (e.g. hint labels).
-    Capture { panel: usize },
+    /// Keystrokes flow into the text field of the buffer this holds.
+    Insert { at: Host },
+    /// The shell reads typed keys for the buffer this holds (search, hint
+    /// labels, marks).
+    Capture { at: Host },
+}
+
+/// What holds a buffer on screen: a panel, or the quick look (over one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Host {
+    Panel(usize),
+    Look,
+}
+
+impl Host {
+    /// Its name for the developer inspector ("panel_2", "quick_look").
+    pub fn name(&self) -> String {
+        match self {
+            Host::Panel(panel) => format!("panel_{}", panel + 1),
+            Host::Look => "quick_look".to_owned(),
+        }
+    }
 }
 
 /// Tells a leader tap from a leader hold (holding Space pans the graph).

@@ -15,21 +15,16 @@ impl CockpitApp {
     /// The item the quick look shows, while it shows the inbox.
     #[cfg(test)]
     pub(super) fn looked_at(&self) -> Option<NotificationId> {
-        self.quick_look.as_ref().filter(|q| q.kind == BufferKind::Inbox)?;
+        self.quick_look.as_ref().filter(|q| q.kind() == BufferKind::Inbox)?;
         self.inbox_item()
     }
 
-    /// The quick look on the inbox, showing `id` (a card shown there is closed first).
+    /// The quick look on the inbox, showing `id` (what it held is put back first).
     pub(super) fn open_attention(&mut self, id: NotificationId, ctx: &egui::Context) {
-        if self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Spec) {
-            self.close_quick_look();
+        if self.quick_look.as_ref().is_none_or(|q| q.kind() != BufferKind::Inbox) {
+            self.look_at(BufferId::new(BufferKind::Inbox, 0), None, ctx);
         }
         self.inbox_show(id);
-        if self.quick_look.is_none() {
-            let now = ctx.input(|i| i.time);
-            let (panel, over) = (self.desk.panels.focused(), self.desk.panels.focused_kind());
-            self.quick_look = Some(QuickLook::open(BufferKind::Inbox, panel, over, self.desk.used_buffer(BufferKind::Spec).id, None, now));
-        }
     }
 
     /// The quick look on server `server`'s item `id` (its desk shown first).
@@ -78,7 +73,7 @@ impl CockpitApp {
     /// Shows item `id` of `server` in the inbox: in the quick look when
     /// it's open, else in the inbox's panel (the desk switched first).
     fn inbox_to(&mut self, server: &str, id: NotificationId, ctx: &egui::Context) {
-        if self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Inbox) {
+        if self.quick_look.as_ref().is_some_and(|q| q.kind() == BufferKind::Inbox) {
             let look = self.quick_look.take();
             self.switch_to(server, ctx);
             // Over the desk shown now (else it'd close, its panel gone).

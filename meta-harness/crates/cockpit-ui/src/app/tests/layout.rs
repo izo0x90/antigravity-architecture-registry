@@ -201,13 +201,44 @@ fn the_agent_is_talked_to_from_anywhere_without_moving_anything() {
     frame(&ctx, &mut app, vec![t(true), egui::Event::Text("t".into())]);
     frame(&ctx, &mut app, vec![t(false)]);
     frame(&ctx, &mut app, vec![]);
-    assert!(app.talk.is_some() && matches!(app.input_mode, InputMode::Insert { .. }), "t opens the box, the keyboard in it");
+    let chat = BufferId::new(BufferKind::Chat, crate::quick_look::PANE);
+    assert_eq!((app.quick_look.as_ref().map(|q| q.buffer), app.input_mode), (Some(chat), InputMode::Insert { at: Host::Look }), "t: the lead's chat in the quick look, typing");
+    assert_eq!(app.desk.chat().ui.slot.as_str(), "lead");
     frame(&ctx, &mut app, key("what calls step?"));
-    assert_eq!(app.talk.as_ref().unwrap().text, "what calls step?", "typing goes into it, not to the keys");
+    assert_eq!(app.desk.chat().ui.input_buffer, "what calls step?", "typing goes into it, not to the keys");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert!(app.talk.as_ref().unwrap().text.is_empty(), "sent");
+    assert!(app.desk.chat().ui.input_buffer.is_empty(), "sent");
     assert!(matches!(app.desk.shared.agents.get().lead_status(), SessionStatus::Failed(e) if e.contains("No harness instance")), "it went to the lead (no harness here)");
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
-    assert!(app.talk.is_none() && app.input_mode == InputMode::Normal);
+    assert_eq!((app.quick_look.is_some(), app.input_mode), (true, InputMode::Normal), "Escape stops typing");
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
+    assert!(app.quick_look.is_none(), "and again closes it");
     assert_eq!((app.desk.panels.clone(), app.desk.graph().place()), before, "nothing on screen moved");
+}
+
+#[test]
+fn typing_in_the_quick_look_stays_there_over_a_chat_or_a_spec() {
+    for kind in [BufferKind::Chat, BufferKind::Spec] {
+        let (ctx, mut app) = full_app();
+        focus(&ctx, &mut app, kind);
+        // The panel's own box has the keyboard first.
+        match kind {
+            BufferKind::Spec => drop(from_outside(&ctx, &mut app, r#"{"op":"run","id":"spec.comment"}"#).unwrap()),
+            _ => app.input_mode = InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) },
+        }
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.input_mode, InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) }, "{kind:?}: its box has the keyboard");
+        frame(&ctx, &mut app, press(egui::Key::Escape, false));
+        frame(&ctx, &mut app, key("t"));
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, key("hello"));
+        frame(&ctx, &mut app, vec![]);
+        let in_look = app.desk.chat().ui.input_buffer.clone();
+        app.close_quick_look();
+        let in_panel = match kind {
+            BufferKind::Chat => app.desk.chat().ui.input_buffer.clone(),
+            _ => app.desk.spec().composer.as_ref().map(|c| c.text.clone()).unwrap_or_default(),
+        };
+        assert_eq!((in_look.as_str(), in_panel.as_str()), ("hello", ""), "over a {kind:?}: typing goes into the quick look, not the panel under it");
+    }
 }

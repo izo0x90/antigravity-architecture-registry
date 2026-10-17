@@ -166,8 +166,10 @@ impl CockpitApp {
             match layer {
                 Layer::On => "On what you're on".to_owned(),
                 Layer::Panel => self.desk.view(here.kind).title().text,
-                Layer::Host if here.look => "Quick look".to_owned(),
-                Layer::Host => format!("Panel {}", here.panel + 1),
+                Layer::Host => match here.at {
+                    crate::keymap::Host::Look => "Quick look".to_owned(),
+                    crate::keymap::Host::Panel(panel) => format!("Panel {}", panel + 1),
+                },
                 Layer::Everywhere => "Everywhere".to_owned(),
             }
         };
