@@ -354,3 +354,31 @@ fn a_new_width_or_a_new_start_of_the_shell_keeps_the_view_sensible() {
     let drawn = drawn_lines(&frame(&ctx, &mut app, vec![]));
     assert_eq!(drawn.last(), Some(&53), "{drawn:?}");
 }
+
+#[test]
+fn the_cursor_is_there_only_while_not_typing_from_the_programs_line_and_never_on_a_line_gone() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1000, 0)]);
+    focus(&ctx, &mut app, BufferKind::Terminal);
+    assert_eq!(cursor(&app), None, "typing: no cursor");
+    not_typing(&ctx, &mut app);
+    // The screen helper's program cursor is on its last row.
+    assert_eq!(cursor(&app).as_deref(), Some("1023"), "on the program's line");
+    keys(&ctx, &mut app, "kk");
+    assert_eq!(cursor(&app).as_deref(), Some("1021"));
+    frame(&ctx, &mut app, key("i"));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(cursor(&app), None, "typing drops it");
+    assert!(app.desk.terminal().status().is_empty(), "and the view follows the live screen");
+    not_typing(&ctx, &mut app);
+    keys(&ctx, &mut app, "kk");
+    // Its line goes (a clear): the nearest there is.
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1100, 1100)]);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(cursor(&app).as_deref(), Some("1100"));
+    // Where the terminal is doesn't keep it.
+    let place = app.desk.view(BufferKind::Terminal).place();
+    app.desk.view_mut(BufferKind::Terminal).leave();
+    app.desk.view_mut(BufferKind::Terminal).restore(&place);
+    assert_eq!(cursor(&app), None);
+}

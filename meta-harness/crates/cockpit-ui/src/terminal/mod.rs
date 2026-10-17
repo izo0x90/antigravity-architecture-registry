@@ -94,11 +94,12 @@ pub struct TerminalBuffer {
     grid: Option<egui::Rect>,
 }
 
-/// Where it is: the terminal, and the line its cursor is on.
+/// Where it is: the terminal. (Not its cursor: a line's number is only
+/// the shell's it was given in, and the cursor is there only while not
+/// typing.)
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TermPlace {
     id: Option<TerminalId>,
-    cursor: Option<u64>,
 }
 
 impl TerminalBuffer {
@@ -112,6 +113,13 @@ impl TerminalBuffer {
             TerminalStatus::Ended { code } => Some(code),
             TerminalStatus::Running => None,
         }
+    }
+
+    /// Its cursor's line gone (cleared, past what's kept): on the nearest
+    /// line there is; none there: no cursor.
+    fn keep_cursor_on_a_line(&mut self) {
+        let (first, end) = (self.lines.first(), self.lines.end());
+        self.cursor = self.cursor.filter(|_| end > first).map(|c| c.clamp(first, end - 1));
     }
 
     /// The lines there are and the window's rows.
@@ -247,7 +255,19 @@ impl crate::buffer::Buffer for TerminalBuffer {
             (true, false) => draw::Keys::Starting,
             (true, true) => draw::Keys::Typing,
         };
+        // Its cursor is there only while it isn't typed in: typing drops
+        // it (and the view follows the live screen again); leaving typing
+        // puts it where the program's cursor is.
+        match (drawing.typing, self.typing) {
+            (true, false) => {
+                (self.cursor, self.cursor_col) = (None, None);
+                self.view.go_live();
+            }
+            (false, true) => (self.cursor, self.cursor_col) = (Some(self.lines.cursor().0), None),
+            _ => {}
+        }
         self.typing = drawing.typing;
+        self.keep_cursor_on_a_line();
         self.draw(ui, cx, keys);
     }
 
@@ -335,7 +355,7 @@ impl Navigable for TerminalBuffer {
     }
 
     fn place(&self) -> Place {
-        Place::of(&TermPlace { id: self.id.clone(), cursor: self.cursor })
+        Place::of(&TermPlace { id: self.id.clone() })
     }
 
     fn place_in_words(&self, place: &Place) -> String {
@@ -347,7 +367,6 @@ impl Navigable for TerminalBuffer {
             if let Some(id) = p.id {
                 self.show(id);
             }
-            self.cursor = p.cursor;
         }
     }
 
