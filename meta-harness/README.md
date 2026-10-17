@@ -610,6 +610,15 @@ Views also have their own keys:
   `]f`/`[f` move between definitions. A file edited since it was analysed
   is marked stale until it's read again. Colours map to theme tokens in
   `[code.highlight]`.
+- **Outline:** what contains what, as rows. A row with parts shows an
+  arrow; it's folded when it's shut or its parts aren't loaded yet, and
+  unfolding it loads them (as often as asked). `Enter` goes in (unfolds
+  the row, then into its first part), `Backspace` out to what holds it;
+  `l`/`h` the same, `h` folding an open row first; `z a`/`z o`/`z c`
+  fold one row, `z R` unfolds every row (loading those not here), `z M`
+  folds them all. `/` filters. A row that would go over what one answer
+  holds is closed again and named on its top line, as is an answer the
+  server cut. `g m` shows the row in the graph.
 - **Spec:**
   - `J`/`K` move between sections;
   - `c`/`C` comment on or ask for a change to the item under the cursor;

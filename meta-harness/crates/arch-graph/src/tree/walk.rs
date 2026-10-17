@@ -163,6 +163,26 @@ impl<G: GraphRead> Growing<'_, '_, G> {
         hidden
     }
 
+    /// Opens `opened`'s card further, its branch whole or not at all: false
+    /// (and nothing added) when it doesn't fit.
+    fn open_by_hand(&mut self, opened: &super::Opened, out_of_time: &dyn Fn() -> bool) -> bool {
+        let frontier = self.leaves_under(self.at[&opened.card]);
+        let before = (self.cards.len(), self.lines.len(), self.drawn.clone(), self.at.clone(), self.cards.iter().map(|c| (c.open, c.links_left_out)).collect::<Vec<_>>(), self.links_left);
+        if self.deepen(frontier, opened.levels, true, out_of_time).is_none() {
+            return true;
+        }
+        self.cards.truncate(before.0);
+        self.lines.truncate(before.1);
+        self.drawn = before.2;
+        self.at = before.3;
+        for (c, (open, left_out)) in self.cards.iter_mut().zip(before.4) {
+            c.open = open;
+            c.links_left_out = left_out;
+        }
+        self.links_left = before.5;
+        false
+    }
+
     /// Cards under `card` (itself included) that aren't open: where opening
     /// it further continues.
     fn leaves_under(&self, card: usize) -> Vec<usize> {
@@ -211,27 +231,22 @@ pub(super) fn walk_known<G: GraphRead>(lens: &Lens<G>, input: &Input<G>, request
     } else if starts_left_out > 0 {
         cut = Some(Cut { reason: CutReason::Budget, starts_left_out, shown: depth, asked: depth, hidden: 0 });
     }
-    // Cards opened by hand, the latest first (it's what was asked for last).
+    // Cards opened by hand, the latest first (it's what was asked for last,
+    // so it wins the budget). A card opened under another opened card is
+    // only there once that one is open: passes go on while one opens.
+    // Cards never there (under a closed card, gone) stay as asked.
     let mut dropped = Vec::new();
-    for opened in request.opened.iter().rev() {
-        let Some(&card) = grow.at.get(&opened.card) else { continue };
-        if grow.closed.contains(&opened.card) {
-            continue;
+    let mut waiting: Vec<&super::Opened> = request.opened.iter().rev().filter(|o| !grow.closed.contains(&o.card)).collect();
+    loop {
+        let (here, later): (Vec<_>, Vec<_>) = waiting.into_iter().partition(|o| grow.at.contains_key(&o.card));
+        if here.is_empty() {
+            break;
         }
-        let frontier = grow.leaves_under(card);
-        // A branch is opened whole or not at all.
-        let before = (grow.cards.len(), grow.lines.len(), grow.drawn.clone(), grow.at.clone(), grow.cards.iter().map(|c| (c.open, c.links_left_out)).collect::<Vec<_>>(), grow.links_left);
-        if grow.deepen(frontier, opened.levels, true, input.out_of_time).is_some() {
-            grow.cards.truncate(before.0);
-            grow.lines.truncate(before.1);
-            grow.drawn = before.2;
-            grow.at = before.3;
-            for (c, (open, left_out)) in grow.cards.iter_mut().zip(before.4) {
-                c.open = open;
-                c.links_left_out = left_out;
+        waiting = later;
+        for opened in here {
+            if !grow.open_by_hand(opened, input.out_of_time) {
+                dropped.push(opened.card.clone());
             }
-            grow.links_left = before.5;
-            dropped.push(opened.card.clone());
         }
     }
     let hidden = grow.count_hidden();

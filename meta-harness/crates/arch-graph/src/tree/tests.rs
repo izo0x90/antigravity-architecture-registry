@@ -533,3 +533,23 @@ fn opening_recounts_what_every_card_has_left_to_open() {
     assert_eq!(more(&after, "app::log"), Some((true, 0)));
     assert!(line(&after, "log", "util").is_some(), "a line to where util is drawn");
 }
+
+#[test]
+fn a_card_opened_inside_another_opened_card_opens_too() {
+    let f = Fixture::new(sample());
+    let base = ask(ViewKind::Calls, Some("app::run"), Way::Down, 0);
+    let open = |cards: &[&str]| TreeRequest { opened: cards.iter().map(|c| Opened { card: id(c).0, levels: 1 }).collect(), ..base.clone() };
+    // step only shows once run is open; it was opened after run.
+    let t = f.tree(open(&["app::run", "app::step"]));
+    assert!(t.card(&id("app::save").0).is_some() && t.card(&id("app::step").0).unwrap().open, "{:?}", keys(&t));
+    assert!(t.dropped.is_empty());
+    // A card under a closed one isn't there: it stays as asked, not dropped.
+    let shut = f.tree(TreeRequest { closed: vec![id("app::run").0], ..open(&["app::run", "app::step"]) });
+    assert!(shut.card(&id("app::step").0).is_none() && shut.dropped.is_empty());
+    // The inner one doesn't fit: only it is closed again, and said.
+    let mut tight = Fixture::new(sample());
+    tight.budget = 3;
+    let t = tight.tree(open(&["app::run", "app::step"]));
+    assert_eq!(t.dropped, vec![id("app::step").0]);
+    assert!(t.card(&id("app::step").0).is_some() && t.card(&id("app::save").0).is_none());
+}

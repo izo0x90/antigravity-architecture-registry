@@ -273,13 +273,14 @@ fn enter_goes_in_and_backspace_comes_out_in_every_view() {
     assert_eq!(selected(&app), "rust:a::save");
     leave(&ctx, &mut app);
     assert_eq!((selected(&app), app.desk.graph.nav.root.as_deref()), ("rust:a::step", Some("rust:a::run")), "back to what it hangs from");
-    // Tree: Enter selects in the graph (focus stays).
+    // Tree: Enter into the row's first part, Backspace out (the graph stays).
     focus(&ctx, &mut app, BufferKind::Tree);
-    app.desk.tree.move_to("rust:a::save");
+    app.desk.tree.move_to("rust:a::run");
     enter(&ctx, &mut app);
-    assert_eq!((selected(&app), app.focused_kind()), ("rust:a::save", BufferKind::Tree));
+    assert_eq!((cursor(&app).as_deref(), selected(&app), app.focused_kind()), (Some("rust:a::log"), "rust:a::step", BufferKind::Tree));
     leave(&ctx, &mut app);
-    assert_eq!(cursor(&app).as_deref(), Some("rust:a"), "Backspace: up to what holds it");
+    leave(&ctx, &mut app);
+    assert_eq!(cursor(&app).as_deref(), Some("rust:a"), "Backspace: out to what holds it");
     // Code: Enter on a call goes to its definition.
     focus(&ctx, &mut app, BufferKind::Code);
     app.desk.code.move_to("3");

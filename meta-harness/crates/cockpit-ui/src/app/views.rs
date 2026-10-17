@@ -214,10 +214,5 @@ impl CockpitApp {
                 self.desk.graph.reveal(id);
             }
         }
-        // The outline's Enter: the graph follows (focus stays in the outline).
-        if let Some(id) = self.desk.tree.select.take() {
-            self.ensure_visible(BufferKind::Graph);
-            self.desk.graph.reveal(id);
-        }
     }
 }
