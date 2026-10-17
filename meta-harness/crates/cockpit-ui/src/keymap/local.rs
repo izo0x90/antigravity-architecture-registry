@@ -97,19 +97,19 @@ impl InputKeys {
         }
     }
 
-    /// The send key in words, for a box's hint.
-    pub fn send_label(&self) -> String {
-        self.send.first().map(Chord::label).unwrap_or_default()
-    }
-
-    pub fn add_label(&self) -> String {
-        self.add.first().map(Chord::label).unwrap_or_default()
+    /// The first key that does `sent`, in words.
+    pub fn label(&self, sent: Sent) -> String {
+        let keys = match sent {
+            Sent::Send => &self.send,
+            Sent::Add => &self.add,
+        };
+        keys.first().map(Chord::label).unwrap_or_default()
     }
 
     /// What a typing box's keys do (`leave`: what the way back out does),
     /// each key with its words.
     pub fn keys(&self, back: &Chord, leave: &'static str) -> Vec<(String, &'static str)> {
-        vec![(self.send_label(), "sends"), (self.newline.label(), "new line"), (back.label(), leave)]
+        vec![(self.label(Sent::Send), "sends"), (self.newline.label(), "new line"), (back.label(), leave)]
     }
 }
 

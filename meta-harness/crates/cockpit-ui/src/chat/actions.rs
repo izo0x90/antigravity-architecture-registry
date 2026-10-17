@@ -216,7 +216,7 @@ impl ActionProvider for ChatStreamState {
             && caps.turns.active_steering
             && !self.ui.input_buffer.trim().is_empty()
         {
-            out.push(Action::new("chat.inject", "Add the prompt to what it's doing", C::AddToTurn).focused().on_typing(Button, "Add to what it's doing", None));
+            out.push(Action::new("chat.inject", "Add the prompt to what it's doing", C::AddToTurn).focused().typed(crate::keymap::Sent::Add).on_typing(Button, "Add to what it's doing", None));
         }
 
         // Harness commands; typing `/` and its start, those it matches show
@@ -259,7 +259,7 @@ impl ActionProvider for ChatStreamState {
             }
         }
         // Typed in: sending it.
-        out.push(Action::new("chat.send", "Send the prompt", C::Send).focused().importance(crate::actions::PRIMARY).on_typing(Button, "Send", Some(icon::PAPER_PLANE_RIGHT)));
+        out.push(Action::new("chat.send", "Send the prompt", C::Send).focused().importance(crate::actions::PRIMARY).typed(crate::keymap::Sent::Send).on_typing(Button, "Send", Some(icon::PAPER_PLANE_RIGHT)));
         // What the chat says on its own line, and its ways out.
         if agents.login().is_some() {
             out.push(Action::new("auth.cancel", "Stop signing in", C::CancelLogin).focused().importance(MINOR).header(Button, "Cancel sign-in", None));

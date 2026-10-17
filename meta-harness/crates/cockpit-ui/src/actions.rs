@@ -283,6 +283,9 @@ pub struct Action {
     pub when: When,
     /// Running it is a jump: where the cursor was goes in the jump list.
     pub jump: bool,
+    /// While typing, it's what this typing key does (Enter sends): the key
+    /// it's said with.
+    pub typed: Option<crate::keymap::Sent>,
     command: Rc<dyn Any>,
 }
 
@@ -307,6 +310,7 @@ impl Action {
             importance: SECONDARY,
             when: When::Always,
             jump: false,
+            typed: None,
             command: Rc::new(command),
         }
     }
@@ -373,6 +377,12 @@ impl Action {
         self
     }
 
+    /// What a typing key does while its box is typed in (`[keymap.input]`).
+    pub fn typed(mut self, sent: crate::keymap::Sent) -> Self {
+        self.typed = Some(sent);
+        self
+    }
+
     /// Shown under the box being typed in, while it's typed in.
     pub fn on_typing(mut self, style: Style, caption: impl Into<String>, icon: Option<&'static str>) -> Self {
         self.control = Some(Control::new(At::Typing, style, caption, icon));
@@ -418,6 +428,9 @@ impl Bound {
     /// else its leader path (empty with neither). What every control and
     /// the key bar show.
     pub fn key_hint(&self) -> String {
+        if let Some(sent) = self.action.typed {
+            return crate::keymap::local().input.label(sent);
+        }
         match self.keys.first() {
             Some(seq) => seq.iter().map(Chord::label).collect::<Vec<_>>().join(" "),
             None => self.leader.as_ref().map(|path| crate::keymap::local().leader_hint(path)).unwrap_or_default(),
@@ -427,7 +440,8 @@ impl Bound {
     /// Every way to run it: its keys, its leader path, its gestures (what
     /// the `?` sheet lists).
     pub fn ways(&self) -> Vec<String> {
-        let keys = self.keys.iter().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" "));
+        let typed = self.action.typed.map(|sent| crate::keymap::local().input.label(sent));
+        let keys = typed.into_iter().chain(self.keys.iter().map(|seq| seq.iter().map(Chord::label).collect::<Vec<_>>().join(" ")));
         let leader = self.leader.iter().map(|path| crate::keymap::local().leader_hint(path));
         let gestures = self.gestures.iter().map(|g| g.replace('_', " "));
         keys.chain(leader).chain(gestures).collect()

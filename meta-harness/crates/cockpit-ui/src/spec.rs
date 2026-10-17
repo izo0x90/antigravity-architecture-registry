@@ -988,7 +988,7 @@ impl ActionProvider for SpecState {
         let f = |id: &str, label: &str, c: SpecCommand| Action::new(id, label, c).focused();
         let mut out = self.moves();
         if self.composer.is_some() {
-            out.push(f("spec.send", "Send what's written", S::Send).importance(PRIMARY).on_typing(Style::Button, "Send", Some(egui_phosphor::regular::PAPER_PLANE_RIGHT)));
+            out.push(f("spec.send", "Send what's written", S::Send).importance(PRIMARY).typed(crate::keymap::Sent::Send).on_typing(Style::Button, "Send", Some(egui_phosphor::regular::PAPER_PLANE_RIGHT)));
             out.push(f("spec.cancel", "Throw away what's being written", S::CancelCompose).importance(PRIMARY).on_typing(Style::Button, "Cancel", None));
         }
         out.extend([

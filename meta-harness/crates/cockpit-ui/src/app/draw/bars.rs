@@ -31,7 +31,7 @@ impl CockpitApp {
         let local = crate::keymap::local();
         let back = local.back.label();
         match (&self.capture, self.input_mode) {
-            (Some(Capture::Search(_)), _) => Some(("Searching", vec![(local.input.send_label(), "jumps to it"), (back, "gives up")])),
+            (Some(Capture::Search(_)), _) => Some(("Searching", vec![(local.input.label(crate::keymap::Sent::Send), "jumps to it"), (back, "gives up")])),
             (Some(Capture::Hint(_)), _) => Some(("Labels", vec![("a label".into(), "goes there"), (back, "gives up")])),
             (Some(Capture::MarkSet | Capture::MarkJump), _) => Some(("Marks", vec![("a letter".into(), "the mark"), (back, "gives up")])),
             (None, InputMode::Insert { .. }) => Some(("Typing", local.input.keys(&local.back, "leaves the field"))),

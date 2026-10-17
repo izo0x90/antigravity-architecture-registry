@@ -145,7 +145,7 @@ fn only_the_hosts_say_keys_and_only_from_a_bound_action() {
     let mut found = Vec::new();
     for (name, code) in code().iter().filter(|(name, _)| !KEY_TEXT_MAKERS.iter().any(|h| name.starts_with(h))) {
         for (n, line) in lines(code) {
-            for token in ["key_hint(", ".ways(", "leader_hint(", "send_label(", "add_label(", "pick_label(", ".label()", ".keys(&"].iter().filter(|t| line.contains(*t)) {
+            for token in ["key_hint(", ".ways(", "leader_hint(", "input.label(", "pick_label(", ".label()", ".keys(&"].iter().filter(|t| line.contains(*t)) {
                 found.push(format!("{name}:{n}: {token}"));
             }
         }
