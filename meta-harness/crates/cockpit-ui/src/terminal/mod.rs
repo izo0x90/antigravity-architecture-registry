@@ -26,8 +26,9 @@ struct Screen {
     rows: Vec<Row>,
     size: TermSize,
     cursor: Cursor,
-    /// Lines in the scrollback above it.
-    history: u32,
+    /// Its first row's number, and the oldest line's kept.
+    top: u64,
+    oldest: u64,
     alternate: bool,
     title: String,
 }
@@ -42,7 +43,7 @@ impl Screen {
                 *r = runs;
             }
         }
-        (self.size, self.cursor, self.history, self.alternate, self.title) = (update.size, update.cursor, update.history, update.alternate, update.title);
+        (self.size, self.cursor, self.top, self.oldest, self.alternate, self.title) = (update.size, update.cursor, update.top, update.oldest, update.alternate, update.title);
     }
 }
 
@@ -141,7 +142,7 @@ impl TerminalBuffer {
     }
 
     fn history(&self) -> u32 {
-        if self.screen.alternate { 0 } else { self.screen.history }
+        if self.screen.alternate { 0 } else { (self.screen.top - self.screen.oldest) as u32 }
     }
 
     /// Line `line`'s runs: the screen's, or the scrollback's (none until fetched).
@@ -197,16 +198,15 @@ impl TerminalBuffer {
         for said in polled.said {
             match said {
                 FromTerminal::Screen { update } => {
-                    let before = self.screen.history;
-                    if update.history < before {
+                    if update.oldest != self.screen.oldest {
                         self.back.clear();
                     }
                     self.screen.take(update);
                 }
                 FromTerminal::Lines { from, rows } => {
-                    let top = i64::from(self.screen.history) + from;
+                    let oldest = self.screen.oldest;
                     for (i, row) in rows.into_iter().enumerate() {
-                        if let Ok(line) = u64::try_from(top + i as i64) {
+                        if let Some(line) = (from + i as u64).checked_sub(oldest) {
                             self.back.insert(line, row);
                         }
                     }
@@ -214,8 +214,8 @@ impl TerminalBuffer {
                 }
                 FromTerminal::Found { query, found } => {
                     if self.found.as_ref().is_some_and(|(asked, _)| *asked == query) {
-                        let history = i64::from(self.screen.history);
-                        let lines = found.into_iter().filter_map(|f| u64::try_from(history + f.line).ok().map(|l| (l, f.text))).collect();
+                        let oldest = self.screen.oldest;
+                        let lines = found.into_iter().filter_map(|f| f.line.checked_sub(oldest).map(|l| (l, f.text))).collect();
                         self.found = Some((query, lines));
                     }
                 }
@@ -236,7 +236,7 @@ impl TerminalBuffer {
         let from = first.saturating_sub(rows);
         let count = ((last + rows).min(history) - from) as u32;
         self.asked = Some((from, count));
-        self.send(&ToTerminal::Lines { from: from as i64 - history as i64, count });
+        self.send(&ToTerminal::Lines { from: self.screen.oldest + from, count });
     }
 
     /// The text of the selection (or, with none, of the cursor's line).
@@ -650,7 +650,7 @@ pub(crate) mod tests {
     /// A whole screen showing `lines`, 80 wide, with `history` lines above it.
     pub(crate) fn screen_under(lines: &[&str], history: u32) -> FromTerminal {
         let FromTerminal::Screen { mut update } = screen(lines) else { unreachable!() };
-        update.history = history;
+        update.top = u64::from(history);
         FromTerminal::Screen { update }
     }
 
@@ -658,7 +658,7 @@ pub(crate) mod tests {
     pub(crate) fn screen(lines: &[&str]) -> FromTerminal {
         let rows = (0..24u16).map(|r| (r, lines.get(usize::from(r)).map(|l| vec![Run { text: (*l).to_owned(), style: Style::default(), wide: false }]).unwrap_or_default())).collect();
         let cursor = Cursor { row: lines.len().saturating_sub(1) as u16, col: 2, visible: true };
-        FromTerminal::Screen { update: ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 24 }, full: true, rows, cursor, history: 0, alternate: false, title: "bash".into() } }
+        FromTerminal::Screen { update: ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 24 }, full: true, rows, cursor, top: 0, oldest: 0, alternate: false, title: "bash".into() } }
     }
 
     impl TerminalBuffer {

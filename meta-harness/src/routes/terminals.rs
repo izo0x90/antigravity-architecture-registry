@@ -84,6 +84,7 @@ async fn serve(socket: WebSocket, terminals: Arc<Terminals>, open: Arc<Open>) {
     let (mut sink, mut incoming) = socket.split();
     let viewer = open.viewer();
     let mut changed = open.watch();
+    let mut started = open.started();
     let first = open.screen(None);
     let mut seen = first.seq;
     let mut title = first.title.clone();
@@ -98,7 +99,9 @@ async fn serve(socket: WebSocket, terminals: Arc<Terminals>, open: Arc<Open>) {
                 }
                 tokio::time::sleep(FRAME).await;
                 changed.borrow_and_update();
-                let update = open.screen(Some(seen));
+                // A new start of its shell: its screen whole, numbered anew.
+                let restarted = std::mem::replace(&mut started, open.started()) != started;
+                let update = open.screen(if restarted { None } else { Some(seen) });
                 if update.full || update.seq != seen || update.title != title {
                     (seen, title) = (update.seq, update.title.clone());
                     if send(&mut sink, &FromTerminal::Screen { update }).await.is_err() {

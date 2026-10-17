@@ -129,8 +129,9 @@ fn colours_come_as_the_program_asked_for_them() {
     sh.run(r"printf '\033[31mR\033[38;5;200mI\033[38;2;1;2;3mT\033[1;44mB\033[0m\n'");
     sh.until("the coloured line", |t| shows(t, "RITB"));
     let screen = sh.terminal.screen(None);
-    let runs = screen.rows.iter().map(|(_, r)| r).find(|r| r.iter().map(|x| x.text.as_str()).collect::<String>() == "RITB").unwrap();
-    let styles: Vec<_> = runs.iter().map(|r| (r.text.as_str(), r.style.fg, r.style.bg, r.style.has(harness_contracts::Style::BOLD))).collect();
+    // Its last four runs (a prompt is in front of it when the keys came before the prompt).
+    let runs = screen.rows.iter().map(|(_, r)| r).find(|r| shows(&r.iter().map(|x| x.text.as_str()).collect::<String>(), "RITB")).unwrap();
+    let styles: Vec<_> = runs[runs.len().saturating_sub(4)..].iter().map(|r| (r.text.as_str(), r.style.fg, r.style.bg, r.style.has(harness_contracts::Style::BOLD))).collect();
     assert_eq!(
         styles,
         [("R", Colour::Named(1), Colour::Default, false), ("I", Colour::Indexed(200), Colour::Default, false), ("T", Colour::Rgb(1, 2, 3), Colour::Default, false), ("B", Colour::Rgb(1, 2, 3), Colour::Named(4), true)]
@@ -138,16 +139,32 @@ fn colours_come_as_the_program_asked_for_them() {
 }
 
 #[test]
-fn the_scrollback_keeps_what_scrolled_off_and_can_be_searched() {
-    let sh = open("/bin/sh", 80, 10);
-    sh.run("seq 1 200");
-    sh.until("the last number", |t| shows(t, "200"));
-    let screen = sh.terminal.screen(None);
-    assert!(screen.history >= 190, "lines above the screen: {}", screen.history);
-    let found = sh.terminal.search("150");
+fn a_line_keeps_its_number_in_the_scrollback_past_whats_kept_and_through_a_clear() {
+    // 1000 lines kept: `seq` prints three times as many.
+    let sh = open("/bin/bash", 80, 10);
+    sh.run("seq 1 3000");
+    sh.until("the last number", |t| shows(t, "3000"));
+    let found = sh.terminal.search("2950");
     assert_eq!(found.len(), 1, "{found:?}");
-    let (from, rows) = sh.terminal.lines(found[0].line, 1);
-    assert_eq!((from < 0, rows[0][0].text.as_str()), (true, "150"), "it's in the scrollback");
+    let number = found[0].line;
+    let screen = sh.terminal.screen(None);
+    assert!(number < screen.top && number >= screen.oldest, "it's in the scrollback: {number} of {}..{}", screen.oldest, screen.top);
+    assert!(screen.top - screen.oldest >= 1000, "what's kept is kept");
+    assert!(sh.terminal.lines(0, 1).0 == screen.oldest, "older than what's kept: from the oldest kept");
+    let line = |n: u64| Some(sh.terminal.lines(n, 1)).filter(|(from, _)| *from == n).and_then(|(_, rows)| rows.first().map(|r| r.iter().map(|run| run.text.as_str()).collect::<String>()));
+    assert_eq!(line(number).as_deref(), Some("2950"));
+    // More output: it keeps its number.
+    sh.run("seq 1 100");
+    sh.until("the second run", |t| t.contains("\n100\n"));
+    assert_eq!(line(number).as_deref(), Some("2950"));
+    // `clear` takes the scrollback: no number is given again.
+    let top = sh.terminal.screen(None).top;
+    sh.run("clear");
+    sh.until("the screen cleared", |t| !t.contains("100"));
+    let screen = sh.terminal.screen(None);
+    assert_eq!(screen.oldest, screen.top, "nothing above the screen");
+    assert!(screen.top >= top, "{} after {top}", screen.top);
+    assert_eq!(line(number), None, "gone with the clear");
 }
 
 #[test]

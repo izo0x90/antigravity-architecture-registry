@@ -128,10 +128,16 @@ pub struct ScreenUpdate {
     /// Changed rows: their number on the screen, and what they show now.
     pub rows: Vec<(u16, Row)>,
     pub cursor: Cursor,
-    /// Lines in the scrollback above the screen.
-    pub history: u32,
+    /// The number of the screen's first row. Lines are numbered by how
+    /// many went into the scrollback before them, so a line keeps its
+    /// number for its life (the row below it is `top + 1`, and so on).
+    pub top: u64,
+    /// The oldest line kept: lines from it up to `top` are the scrollback,
+    /// to ask for. Below it they're gone (past what's kept, or cleared).
+    pub oldest: u64,
     /// The program shows its own full screen (an editor, a pager): there's
-    /// no scrollback to go through while it does.
+    /// no scrollback to go through while it does, and its rows aren't
+    /// numbered lines (they're gone when it's done).
     pub alternate: bool,
     pub title: String,
 }
@@ -197,8 +203,8 @@ pub enum TerminalNews {
 /// A match of a search through a terminal's lines.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Found {
-    /// Its line (0: the screen's first, below 0: the scrollback's) and column.
-    pub line: i64,
+    /// Its line's number (`ScreenUpdate::top`) and column.
+    pub line: u64,
     pub col: u16,
     pub len: u16,
     /// The line's text.
@@ -213,8 +219,8 @@ pub enum ToTerminal {
     Input { input: TerminalInput },
     /// The size this reader shows it at (the smallest of all readers wins).
     Size { size: TermSize },
-    /// Lines `from` (0: the screen's first, below 0: the scrollback's), `count` of them.
-    Lines { from: i64, count: u32 },
+    /// Lines from the one numbered `from` (`ScreenUpdate::top`), `count` of them.
+    Lines { from: u64, count: u32 },
     /// Where `query` is, newest first.
     Search { query: String },
 }
@@ -224,6 +230,8 @@ pub enum ToTerminal {
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum FromTerminal {
     Screen { update: ScreenUpdate },
-    Lines { from: i64, rows: Vec<Row> },
+    /// Lines from the one numbered `from` (the first kept, when an older
+    /// one was asked for), up to the screen's last.
+    Lines { from: u64, rows: Vec<Row> },
     Found { query: String, found: Vec<Found> },
 }

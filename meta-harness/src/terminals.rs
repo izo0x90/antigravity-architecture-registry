@@ -228,6 +228,12 @@ impl Open {
         self.changed.send_modify(|n| *n += 1);
     }
 
+    /// Which start of its shell is the current one (a reader of an
+    /// earlier one needs the whole screen).
+    pub fn started(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
     /// A number for a new reader of it.
     pub fn viewer(&self) -> u64 {
         self.next_viewer.fetch_add(1, Ordering::Relaxed)
@@ -245,12 +251,12 @@ impl Open {
             Some(shell) => shell.screen(since),
             None => {
                 let info = self.info();
-                ScreenUpdate { seq: 0, size: info.size, full: since.is_none(), rows: Vec::new(), cursor: Default::default(), history: 0, alternate: false, title: info.title }
+                ScreenUpdate { seq: 0, size: info.size, full: since.is_none(), rows: Vec::new(), cursor: Default::default(), top: 0, oldest: 0, alternate: false, title: info.title }
             }
         }
     }
 
-    pub fn lines(&self, from: i64, count: u32) -> (i64, Vec<Row>) {
+    pub fn lines(&self, from: u64, count: u32) -> (u64, Vec<Row>) {
         lock(&self.shell).as_ref().map_or((from, Vec::new()), |s| s.lines(from, count))
     }
 

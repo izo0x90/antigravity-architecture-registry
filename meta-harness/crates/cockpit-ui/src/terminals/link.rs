@@ -188,7 +188,7 @@ mod tests {
     use super::*;
 
     fn screen(seq: u64) -> FromTerminal {
-        FromTerminal::Screen { update: ScreenUpdate { seq, size: TermSize { cols: 80, rows: 24 }, full: false, rows: Vec::new(), cursor: Default::default(), history: 0, alternate: false, title: String::new() } }
+        FromTerminal::Screen { update: ScreenUpdate { seq, size: TermSize { cols: 80, rows: 24 }, full: false, rows: Vec::new(), cursor: Default::default(), top: 0, oldest: 0, alternate: false, title: String::new() } }
     }
 
     #[test]

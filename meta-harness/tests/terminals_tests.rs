@@ -69,6 +69,11 @@ impl Reader {
         }
     }
 
+    /// Reads what it was sent until nothing more comes for a while.
+    async fn drain(&mut self) {
+        while let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(300), self.socket.next()).await {}
+    }
+
     /// Reads until a row shows `wanted` (after a prompt, if one's there).
     async fn until_shows(&mut self, wanted: &str) {
         let start = std::time::Instant::now();
@@ -196,11 +201,15 @@ async fn an_ended_shell_is_started_again_in_the_same_terminal() {
         assert!(start.elapsed() < Duration::from_secs(10), "its end is said, with its code");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    reader.drain().await;
     let (status, body) = http(addr, "POST", &format!("/api/terminals/{}/restart", terminal.id), Some("{}")).await;
     assert!(status == 200 && body.contains(r#""state":"running""#), "{body}");
+    // The reader still there gets the new shell's whole screen.
+    while !matches!(reader.next().await, FromTerminal::Screen { update } if update.full) {}
+    reader.run("echo again").await;
+    reader.until_shows("again").await;
     let mut again = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
     again.next().await;
-    again.run("echo again").await;
     again.until_shows("again").await;
 }
 

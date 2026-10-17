@@ -172,8 +172,8 @@ fn search_goes_through_the_whole_scrollback_on_the_server() {
     keys(&ctx, &mut app, "/make");
     let asked: Vec<String> = app.desk.terminal().sent().into_iter().filter_map(|s| if let ToTerminal::Search { query } = s { Some(query) } else { None }).collect();
     assert_eq!(asked.last().map(String::as_str), Some("make"), "the server is asked as it's typed: {asked:?}");
-    // The server found it 500 lines up: line 100 from the scrollback's top.
-    let found = harness_contracts::Found { line: -500, col: 2, len: 4, text: "$ make all".into() };
+    // The server found it 500 lines up: line 100.
+    let found = harness_contracts::Found { line: 100, col: 2, len: 4, text: "$ make all".into() };
     app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Found { query: "make".into(), found: vec![found] }]);
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, press(egui::Key::Enter, false));

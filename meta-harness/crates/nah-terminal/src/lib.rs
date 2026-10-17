@@ -8,26 +8,27 @@
 //! Knows nothing of the server, its events or the cockpit: the types it
 //! shares with them are `harness-contracts`'.
 
+mod feed;
 mod input;
-mod marks;
+mod scan;
 mod screen;
 mod shell;
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::{Config, TermMode};
-use alacritty_terminal::vte::ansi::Processor;
 use harness_contracts::{Found, Row, ScreenUpdate, TermSize, TerminalInput};
 use portable_pty::{ChildKiller, MasterPty, PtySize};
 
+use feed::Feed;
 pub use input::{Modes, encode};
-pub use marks::{Mark, Marks};
+use scan::Seen;
 pub use shell::users_shell;
 
 /// How to start one.
@@ -69,12 +70,11 @@ pub struct Terminal {
 
 struct State {
     term: Term<Listener>,
-    parser: Processor,
+    feed: Feed,
     changes: screen::Changes,
     title: String,
     /// What it's called when the program gives it no title.
     named: String,
-    marks: Marks,
     /// When the running command started.
     started: Option<Instant>,
     /// The shell ended (and its code).
@@ -146,26 +146,31 @@ impl Terminal {
         let reader = pair.master.try_clone_reader().map_err(io_error)?;
         let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(pair.master.take_writer().map_err(io_error)?));
         let listener = Listener::default();
-        let config = Config { scrolling_history: options.history, ..Config::default() };
+        let config = Config { scrolling_history: Feed::room(options.history), ..Config::default() };
         let named = std::path::Path::new(&options.shell).file_name().map_or_else(|| options.shell.clone(), |n| n.to_string_lossy().into_owned());
         let state = Arc::new(Mutex::new(State {
             term: Term::new(config, &Size(options.size), listener.clone()),
-            parser: Processor::new(),
+            feed: Feed::new(options.history),
             changes: screen::Changes::default(),
             title: named.clone(),
             named,
-            marks: Marks::default(),
             started: None,
             ended: None,
         }));
         let killer = child.clone_killer();
         let pid = child.process_id();
+        let on: Arc<dyn Fn(Happening) + Send + Sync> = Arc::new(on);
+        let waker = {
+            let (state, on) = (Arc::downgrade(&state), on.clone());
+            std::thread::Builder::new().name("terminal-sync".into()).spawn(move || release_held(&state, &*on))?
+        };
         {
             let (state, writer) = (state.clone(), writer.clone());
             std::thread::Builder::new().name("terminal".into()).spawn(move || {
-                read(reader, &state, &listener, &writer, &on);
+                read(reader, &state, &listener, &writer, &*on, waker.thread());
                 let code = child.wait().ok().map(|s| s.exit_code() as i32);
                 lock(&state).ended = Some(code);
+                waker.thread().unpark();
                 on(Happening::Ended(code));
             })?;
         }
@@ -188,8 +193,9 @@ impl Terminal {
             return Ok(());
         }
         lock(&self.master).resize(pty_size(size)).map_err(io_error)?;
-        let State { term, changes, .. } = &mut *state;
+        let State { term, feed, changes, .. } = &mut *state;
         term.resize(Size(size));
+        feed.resized(term);
         changes.take(term);
         Ok(())
     }
@@ -205,24 +211,27 @@ impl Terminal {
     /// What changed after `since` (the whole screen given none).
     pub fn screen(&self, since: Option<u64>) -> ScreenUpdate {
         let state = lock(&self.state);
-        state.changes.since(&state.term, since, &state.title)
+        state.changes.since(&state.term, &state.feed, since, &state.title)
     }
 
-    /// Lines `from` (0: the screen's first, below: the scrollback's), up to `count`.
-    pub fn lines(&self, from: i64, count: u32) -> (i64, Vec<Row>) {
-        screen::lines(&lock(&self.state).term, from, count)
+    /// The lines numbered `from` on (`ScreenUpdate::top`), up to `count`,
+    /// within what's kept: where they start, and them.
+    pub fn lines(&self, from: u64, count: u32) -> (u64, Vec<Row>) {
+        let state = lock(&self.state);
+        screen::lines(&state.term, &state.feed, from, count)
     }
 
     /// Where `query` is, newest first.
     pub fn search(&self, query: &str) -> Vec<Found> {
-        screen::search(&lock(&self.state).term, query, 500)
+        let state = lock(&self.state);
+        screen::search(&state.term, &state.feed, query, 500)
     }
 
     /// The screen as plain text, with up to `back` lines of scrollback above it.
     pub fn text(&self, back: u32) -> String {
         let state = lock(&self.state);
         let rows = state.term.screen_lines() as u32;
-        let (_, lines) = screen::lines(&state.term, -i64::from(back), back + rows);
+        let (_, lines) = screen::lines(&state.term, &state.feed, state.feed.top().saturating_sub(u64::from(back)), back + rows);
         let mut text: Vec<String> = lines.iter().map(|row| row.iter().map(|run| run.text.as_str()).collect()).collect();
         while text.last().is_some_and(String::is_empty) {
             text.pop();
@@ -257,7 +266,7 @@ impl Drop for Terminal {
 
 /// Reads the shell's output until it ends: feeds the emulator, reads the
 /// marks, answers the program, and tells `on` what happened.
-fn read(mut reader: Box<dyn Read + Send>, state: &Mutex<State>, listener: &Listener, writer: &Mutex<Box<dyn Write + Send>>, on: &(impl Fn(Happening) + Send + Sync)) {
+fn read(mut reader: Box<dyn Read + Send>, state: &Mutex<State>, listener: &Listener, writer: &Mutex<Box<dyn Write + Send>>, on: &(dyn Fn(Happening) + Send + Sync), waker: &std::thread::Thread) {
     let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = match reader.read(&mut buf) {
@@ -269,19 +278,23 @@ fn read(mut reader: Box<dyn Read + Send>, state: &Mutex<State>, listener: &Liste
         let mut answers = Vec::new();
         {
             let mut guard = lock(state);
-            let State { term, parser, changes, title, named, marks, started, .. } = &mut *guard;
+            let State { term, feed, changes, title, named, started, .. } = &mut *guard;
             let before = changes.seq();
-            for mark in marks.read(bytes) {
+            feed.overdue(term);
+            for mark in feed.output(term, bytes) {
                 match mark {
-                    Mark::Started => *started = Some(Instant::now()),
-                    Mark::Finished(code) => {
+                    Seen::Started => *started = Some(Instant::now()),
+                    Seen::Finished(code) => {
                         if let Some(at) = started.take() {
                             happened.push(Happening::CommandFinished { code, ran: at.elapsed() });
                         }
                     }
+                    _ => {}
                 }
             }
-            parser.advance(term, bytes);
+            if feed.due_in().is_some() {
+                waker.unpark();
+            }
             changes.take(term);
             for said in std::mem::take(&mut *lock(&listener.0)) {
                 match said {
@@ -310,6 +323,39 @@ fn read(mut reader: Box<dyn Read + Send>, state: &Mutex<State>, listener: &Liste
         }
         for happening in happened {
             on(happening);
+        }
+    }
+}
+
+/// Feeds each synchronized update that's waited long enough (its
+/// program never said it ended), on its own thread: woken when one is
+/// held, done when the shell ends.
+fn release_held(state: &Weak<Mutex<State>>, on: &(dyn Fn(Happening) + Send + Sync)) {
+    loop {
+        std::thread::park();
+        loop {
+            let Some(state) = state.upgrade() else { return };
+            let due = {
+                let mut guard = lock(&state);
+                let State { term, feed, changes, ended, .. } = &mut *guard;
+                if ended.is_some() {
+                    return;
+                }
+                if feed.overdue(term) {
+                    let before = changes.seq();
+                    changes.take(term);
+                    if changes.seq() != before {
+                        drop(guard);
+                        on(Happening::Changed);
+                    }
+                    break;
+                }
+                feed.due_in()
+            };
+            match due {
+                Some(wait) => std::thread::park_timeout(wait),
+                None => break,
+            }
         }
     }
 }

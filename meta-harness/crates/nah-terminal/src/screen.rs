@@ -11,6 +11,8 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use harness_contracts::{Colour, Cursor, Found, Row, Run, ScreenUpdate, Style, TermSize};
 
+use crate::feed::Feed;
+
 /// Which rows changed when, so each reader gets what's new to it.
 #[derive(Default)]
 pub struct Changes {
@@ -53,7 +55,7 @@ impl Changes {
 
     /// What changed after `since` (all of it when `since` is none or from
     /// before the screen last changed whole).
-    pub fn since<T: EventListener>(&self, term: &Term<T>, since: Option<u64>, title: &str) -> ScreenUpdate {
+    pub fn since<T: EventListener>(&self, term: &Term<T>, feed: &Feed, since: Option<u64>, title: &str) -> ScreenUpdate {
         let full = since.is_none_or(|s| s < self.whole);
         let rows = (0..term.screen_lines())
             .filter(|&r| full || since.is_some_and(|s| self.rows.get(r).copied().unwrap_or(0) > s))
@@ -66,39 +68,52 @@ impl Changes {
             full,
             rows,
             cursor: Cursor { row: point.line.0.max(0) as u16, col: point.column.0 as u16, visible: term.mode().contains(TermMode::SHOW_CURSOR) },
-            history: term.history_size() as u32,
+            top: feed.top(),
+            oldest: feed.oldest(),
             alternate: term.mode().contains(TermMode::ALT_SCREEN),
             title: title.to_owned(),
         }
     }
 }
 
-/// Lines `from` (0: the screen's first, below: the scrollback's), up to
-/// `count` of them, within what there is.
-pub fn lines<T: EventListener>(term: &Term<T>, from: i64, count: u32) -> (i64, Vec<Row>) {
-    let top = -(term.history_size() as i64);
-    let bottom = term.screen_lines() as i64;
-    let from = from.clamp(top, bottom);
-    let to = (from + i64::from(count)).min(bottom);
-    (from, (from..to).map(|l| row(term, Line(l as i32))).collect())
+/// The lines numbered `from` on, up to `count` of them, within what's
+/// kept (from the oldest, when it's older).
+pub fn lines<T: EventListener>(term: &Term<T>, feed: &Feed, from: u64, count: u32) -> (u64, Vec<Row>) {
+    let (first, end) = kept(term, feed);
+    let from = from.clamp(first, end);
+    let to = from.saturating_add(u64::from(count)).min(end);
+    (from, (from..to).map(|n| row(term, grid_line(feed, n))).collect())
+}
+
+/// The numbers of the lines kept: the scrollback's (none while the
+/// alternate screen shows) and the screen's.
+fn kept<T: EventListener>(term: &Term<T>, feed: &Feed) -> (u64, u64) {
+    let top = feed.top();
+    (top - term.history_size() as u64, top + term.screen_lines() as u64)
+}
+
+/// Where line `number` is in the emulator's grid.
+fn grid_line(feed: &Feed, number: u64) -> Line {
+    Line((number as i64 - feed.top() as i64) as i32)
 }
 
 /// Where `query` is in the scrollback and on the screen, newest first (at
 /// most `most`); case doesn't matter unless the query has a capital.
-pub fn search<T: EventListener>(term: &Term<T>, query: &str, most: usize) -> Vec<Found> {
+pub fn search<T: EventListener>(term: &Term<T>, feed: &Feed, query: &str, most: usize) -> Vec<Found> {
     if query.is_empty() {
         return Vec::new();
     }
     let exact = query.chars().any(char::is_uppercase);
     let fold = |s: &str| if exact { s.to_owned() } else { s.to_lowercase() };
     let wanted = fold(query);
-    let top = -(term.history_size() as i64);
+    let (first, end) = kept(term, feed);
     let mut found = Vec::new();
-    for line in (top..term.screen_lines() as i64).rev() {
+    for number in (first..end).rev() {
+        let line = grid_line(feed, number);
         // The line's text, and the column each char is in.
         let mut text = String::new();
         let mut cols = Vec::new();
-        let grid_line = &term.grid()[Line(line as i32)];
+        let grid_line = &term.grid()[line];
         for col in 0..term.columns() {
             let cell = &grid_line[Column(col)];
             if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
@@ -110,13 +125,13 @@ pub fn search<T: EventListener>(term: &Term<T>, query: &str, most: usize) -> Vec
             }
         }
         let mut at = 0;
-        let shown = || row(term, Line(line as i32)).iter().map(|r| r.text.as_str()).collect::<String>();
+        let shown = || row(term, line).iter().map(|r| r.text.as_str()).collect::<String>();
         while let Some(i) = text[at..].find(&wanted) {
             let start = at + i;
             let first = text[..start].chars().count();
             let last = first + wanted.chars().count() - 1;
             if let (Some(&c0), Some(&c1)) = (cols.get(first), cols.get(last)) {
-                found.push(Found { line, col: c0 as u16, len: (c1 - c0 + 1) as u16, text: shown() });
+                found.push(Found { line: number, col: c0 as u16, len: (c1 - c0 + 1) as u16, text: shown() });
             }
             at = start + wanted.len().max(1);
         }
