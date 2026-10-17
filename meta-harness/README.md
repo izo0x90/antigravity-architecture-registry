@@ -42,7 +42,9 @@ doesn't reach: loopback, a LAN (10/8, 172.16/12, 192.168/16), Tailscale's
 100.64/10, IPv6 unique-local and link-local; anything else, `0.0.0.0`
 included, is refused unless you pass `--listen-public`. `--no-cockpit`
 serves the project without the cockpit's page; `--no-project` serves the
-cockpit alone (its state in `~/.local/share/nah/home/`), reading no code.
+cockpit alone (its state in `~/.local/share/nah/home/`), reading no code;
+`--no-shells` runs no terminals (the cockpit's and the agents' terminal
+tools are left out).
 
 The server that serves the cockpit is a home: it links to other servers
 (one per project), listed in its state database with each one's address
@@ -428,6 +430,34 @@ all of them:
   /api/search?changed=from..to`) and never changes the repository, its
   index or its files.
 
+- **Terminals:** the server runs your shell (`$SHELL`, in the project's
+  folder) in a pseudo-terminal and keeps its screen; a terminal buffer
+  (`Space b r`; another one here: `Space b n r`) shows it in a panel, in
+  the program's colours as the theme shows them (`term_*` in `[theme]`).
+  Focusing it starts typing, and while typing every key is the program's
+  (Escape is vim's, Tab completes, Ctrl+C interrupts); `Escape Escape` or
+  `ctrl+\ n` stops typing (`[keymap.input] leave`: a sequence's first key
+  waits `leave_wait_ms`, then reaches the program). Not typing, the keys
+  are the cockpit's: `j`/`k`, `gg`/`G` and the wheel go through the
+  scrollback (fetched from the server as it shows), `/` searches all of it
+  on the server, `f` labels the files (`src/a.rs:12`) and links on screen,
+  `g d` on a file opens it in the code at that line, Enter on a link opens
+  it, `c` copies the selection (drag to select) or the line, `J`/`K` show
+  the next or previous terminal, `i` types again. `` ctrl+` `` (or `Space T`)
+  pops a terminal of its own over everything, in the quick look; the key
+  again hides it. Each panel showing a terminal is a reader at its own
+  size: the smallest wins. A shell outlives the cockpit (reload, open it
+  elsewhere: the same screen), not the server: after a restart a terminal
+  says its shell ended, and Enter starts it again in the same folder. A
+  bell, the shell's end, and a command that ran `long_command_secs` or
+  longer finishing (bash and zsh mark their commands, through a start-up
+  hook the server adds after your own files) are notifications about it,
+  put away once you look at the terminal. Its screen and keys go on its own
+  socket (`/ws/terminals/{id}`, through home for another server), never on
+  the event stream. Typing into a terminal is yours; an agent reads one
+  (`terminal_read`) and types (`terminal_type`) only if its role is given
+  `shell.drive` in `.nah/access.toml`.
+
 - **Talk to the agent:** `t` shows the lead's chat in the quick look,
   typing, over whatever is on screen; Enter sends to the lead's session
   (opening one if there's none). `Escape` stops typing, `Escape` again
@@ -665,6 +695,7 @@ overrides them in its own `.nah/` folder:
 | `.nah/schema_dsl.toml` | extra shorthand type names for schemas |
 | `.nah/mcp.toml` | the project's tool servers, given to every harness's sessions |
 | `.nah/changes.toml` | `[timeline]`: how long snapshots and turns are kept (`keep_days`, 14) and a closed session's turns after it closed (`closed_session_days`, 1) |
+| `.nah/terminals.toml` | `long_command_secs` (10): a command that ran this long is a notification when it finishes |
 | `.nah/access.toml` | what each agent role (lead, sub, worker, external) may do with NAH's tools. A role named here replaces the shipped one. It covers NAH's tools only; a slot's own harness tools follow its mode and your approvals |
 
 How long things take is visible: every answer is timed stage by stage
@@ -704,6 +735,7 @@ away and rebuilt when the reader changes.
 | Review | `review_comments`, `answer_comment`, `reply_comment` |
 | Cockpit | `cockpit_read`, `cockpit_actions`, `cockpit_run`, `cockpit_click`, `cockpit_type`, `cockpit_keys` (only while you let agents drive it) |
 | Slots | the lead's: `slot_list`, `slot_read`, `slot_start`, `slot_close`, `slot_send` (optionally waiting for the answer); a sub-slot's: `tell_lead` (the user sees it too); any slot's: `tell_user` |
+| Terminals | `terminals`, `terminal_read` (a screen, with scrollback); `terminal_type` (text and keys) only for a role given `shell.drive`, which none has by default |
 
 Every result ends with next steps, given in dependency order.
 
@@ -720,8 +752,8 @@ sign-in) is a notification until it's answered, and so is what happened
 that the user would want to know: a session that stopped unasked, a failed
 or finished turn, a sub-slot's report, an agent's `tell_user`. They're kept
 in the state database (`GET /api/notifications`, `?state=recent` for the
-latest in any state; `POST /api/notifications/seen` with a slot puts its
-updates away; `POST /api/notifications/{id}/dismiss` one). Answering a
+latest in any state; `POST /api/notifications/seen` with a slot, or a
+terminal, puts its updates away; `POST /api/notifications/{id}/dismiss` one). Answering a
 request stays the request's own route. What waited when the server
 stopped expires at the next start: that agent session is gone.
 
