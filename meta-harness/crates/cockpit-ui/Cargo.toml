@@ -38,3 +38,6 @@ js-sys = "0.3"
 # Native (non-wasm) builds, e.g. unit tests on Linux, need a winit windowing backend.
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { version = "0.33.3", default-features = false, features = ["x11", "wayland"] }
+
+[dev-dependencies]
+proptest = "1"

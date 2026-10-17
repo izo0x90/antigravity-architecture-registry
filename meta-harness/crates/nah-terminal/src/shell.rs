@@ -50,11 +50,14 @@ fn write(dir: &Path, name: &str, text: &str) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-/// bash: the user's `.bashrc`, then a mark before each command runs (`PS0`)
-/// and one with its code before each prompt (`PROMPT_COMMAND`, first).
+/// bash: the user's `.bashrc`, then a mark before each command runs (`PS0`),
+/// one with its code before each prompt (`PROMPT_COMMAND`, first), and
+/// the prompt marked where it starts and where typing starts (wrapped
+/// around `PS1` after the user's own `PROMPT_COMMAND` made it).
 const BASH: &str = r#"[ -f ~/.bashrc ] && . ~/.bashrc
 __nah_done() { local code=$?; printf '\e]133;D;%s\a' "$code"; return $code; }
-PROMPT_COMMAND="__nah_done${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+__nah_prompt() { local code=$?; [[ $PS1 == *'133;A'* ]] || PS1=$'\[\e]133;A\a\]'"$PS1"$'\[\e]133;B\a\]'; return $code; }
+PROMPT_COMMAND="__nah_done${PROMPT_COMMAND:+;$PROMPT_COMMAND};__nah_prompt"
 PS0=$'\e]133;C\a'"${PS0}"
 "#;
 
@@ -72,7 +75,8 @@ unset __nah_hooks
 const ZSHRC: &str = r#"ZDOTDIR="$NAH_USER_ZDOTDIR"
 [ -f "$ZDOTDIR/.zshrc" ] && . "$ZDOTDIR/.zshrc"
 __nah_precmd() { local code=$?; printf '\e]133;D;%s\a' "$code"; }
+__nah_prompt() { [[ $PS1 == *'133;A'* ]] || PS1=$'%{\e]133;A\a%}'"$PS1"$'%{\e]133;B\a%}'; }
 __nah_preexec() { printf '\e]133;C\a'; }
-precmd_functions=(__nah_precmd $precmd_functions)
+precmd_functions=(__nah_precmd $precmd_functions __nah_prompt)
 preexec_functions+=(__nah_preexec)
 "#;

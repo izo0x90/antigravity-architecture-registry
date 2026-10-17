@@ -106,4 +106,17 @@ mod tests {
         assert!(links("--release -v", "/p").is_empty(), "flags aren't");
         assert!(links("a.rs:x", "/p").is_empty(), "a line is a number");
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Whatever a line says, what's found is in it, where it says.
+        #[test]
+        fn links_found_are_in_the_line(text in "[ -~é漢]{0,80}") {
+            let width = text.chars().count();
+            for link in links(&text, "/p") {
+                prop_assert!(link.len > 0 && usize::from(link.col) + usize::from(link.len) <= width, "{link:?} in {text:?}");
+            }
+        }
+    }
 }

@@ -8,6 +8,7 @@
 //! Knows nothing of the server, its events or the cockpit: the types it
 //! shares with them are `harness-contracts`'.
 
+mod commands;
 mod feed;
 mod input;
 mod scan;
@@ -17,7 +18,7 @@ mod shell;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
@@ -26,9 +27,9 @@ use alacritty_terminal::term::{Config, TermMode};
 use harness_contracts::{Found, Row, ScreenUpdate, TermSize, TerminalInput};
 use portable_pty::{ChildKiller, MasterPty, PtySize};
 
+use commands::Commands;
 use feed::Feed;
 pub use input::{Modes, encode};
-use scan::Seen;
 pub use shell::users_shell;
 
 /// How to start one.
@@ -75,8 +76,7 @@ struct State {
     title: String,
     /// What it's called when the program gives it no title.
     named: String,
-    /// When the running command started.
-    started: Option<Instant>,
+    commands: Commands,
     /// The shell ended (and its code).
     ended: Option<Option<i32>>,
 }
@@ -154,7 +154,7 @@ impl Terminal {
             changes: screen::Changes::default(),
             title: named.clone(),
             named,
-            started: None,
+            commands: Commands::default(),
             ended: None,
         }));
         let killer = child.clone_killer();
@@ -192,11 +192,25 @@ impl Terminal {
             return Ok(());
         }
         lock(&self.master).resize(pty_size(size)).map_err(io_error)?;
-        let State { term, feed, changes, .. } = &mut *state;
+        let State { term, feed, changes, commands, .. } = &mut *state;
         let (end, cols) = (feed.top() + term.screen_lines() as u64, term.columns());
+        // A new width lays the lines out anew: the commands move with them
+        // (unless a program has the whole screen: the lines can't be read).
+        let before = (!term.mode().contains(TermMode::ALT_SCREEN)).then(|| screen::Layout::of(term, feed));
         term.resize(Size(size));
-        feed.resized(term, end, term.columns() != cols);
+        let relaid = term.columns() != cols;
+        feed.resized(term, end, relaid);
         changes.take(term);
+        if relaid {
+            match before.filter(|_| !term.mode().contains(TermMode::ALT_SCREEN)) {
+                Some(before) => {
+                    let after = screen::Layout::of(term, feed);
+                    commands.moved(changes.bump(), |line, col| after.place(&before, line, col), |line| after.after(&before, line));
+                }
+                None => commands.clear(),
+            }
+        }
+        commands.gone_before(feed.oldest());
         Ok(())
     }
 
@@ -211,7 +225,7 @@ impl Terminal {
     /// What changed after `since` (the whole screen given none).
     pub fn screen(&self, since: Option<u64>) -> ScreenUpdate {
         let state = lock(&self.state);
-        state.changes.since(&state.term, &state.feed, since, &state.title)
+        state.changes.since(&state.term, &state.feed, &state.commands, since, &state.title)
     }
 
     /// The scrollback's lines numbered `from` on (`ScreenUpdate::top`),
@@ -230,6 +244,13 @@ impl Terminal {
         screen::search(&state.term, &state.feed, query, 500)
     }
 
+    /// Lines `from..to` (the scrollback's and the screen's) as plain text.
+    pub fn text_of(&self, from: u64, to: u64) -> String {
+        let state = lock(&self.state);
+        let (_, lines) = screen::lines(&state.term, &state.feed, from, to.saturating_sub(from).min(u64::from(u32::MAX)) as u32);
+        lines.iter().map(|row| row.iter().map(|run| run.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n").trim_end().to_owned()
+    }
+
     /// The screen as plain text, with up to `back` lines of scrollback above it.
     pub fn text(&self, back: u32) -> String {
         let state = lock(&self.state);
@@ -244,6 +265,11 @@ impl Terminal {
 
     pub fn title(&self) -> String {
         lock(&self.state).title.clone()
+    }
+
+    /// The commands the shell ran (oldest first), as far back as kept.
+    pub fn commands(&self) -> Vec<harness_contracts::TerminalCommand> {
+        lock(&self.state).commands.list().cloned().collect()
     }
 
     /// The shell ended (with its code when it had one).
@@ -303,21 +329,17 @@ impl Reading {
         let mut answers = Vec::new();
         let holding = {
             let mut guard = lock(&self.state);
-            let State { term, feed, changes, title, named, started, .. } = &mut *guard;
+            let State { term, feed, changes, title, named, commands, .. } = &mut *guard;
             let before = changes.seq();
             let mut marks = feed.overdue(term, all);
             marks.extend(feed.output(term, bytes));
-            for mark in marks {
-                match mark {
-                    Seen::Started => *started = Some(Instant::now()),
-                    Seen::Finished(code) => {
-                        if let Some(at) = started.take() {
-                            happened.push(Happening::CommandFinished { code, ran: at.elapsed() });
-                        }
-                    }
-                    _ => {}
+            for (seen, at) in marks {
+                let finished = commands.mark(seen, at, changes.bump(), |from, to| screen::text_between(term, feed, from, to));
+                if let Some((code, ran)) = finished {
+                    happened.push(Happening::CommandFinished { code, ran });
                 }
             }
+            commands.gone_before(feed.oldest());
             changes.take(term);
             for said in std::mem::take(&mut *lock(&self.listener.0)) {
                 match said {

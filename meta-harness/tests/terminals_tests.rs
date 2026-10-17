@@ -38,6 +38,8 @@ struct Reader {
     /// its screen (as it had them, or as sent again when they'd changed),
     /// and those asked for.
     lines: std::collections::BTreeMap<u64, String>,
+    /// The commands it was told of, by number.
+    commands: std::collections::BTreeMap<u64, harness_contracts::TerminalCommand>,
 }
 
 fn text(row: &harness_contracts::Row) -> String {
@@ -46,7 +48,7 @@ fn text(row: &harness_contracts::Row) -> String {
 
 impl Reader {
     async fn at(addr: SocketAddr, path: &str) -> Self {
-        Self { socket: connect(addr, path).await, screen: ReaderScreen::default(), rows: Vec::new(), last: None, lines: Default::default() }
+        Self { socket: connect(addr, path).await, screen: ReaderScreen::default(), rows: Vec::new(), last: None, lines: Default::default(), commands: Default::default() }
     }
 
     async fn say(&mut self, said: ToTerminal) {
@@ -71,6 +73,7 @@ impl Reader {
                         self.lines.entry(n).or_insert_with(|| text(row));
                     }
                     self.rows = self.screen.rows().iter().map(text).collect();
+                    self.commands.extend(update.commands.iter().map(|c| (c.id, c.clone())));
                     self.last = Some(update.clone());
                 }
                 FromTerminal::Lines { from, rows } => self.lines.extend((*from..).zip(rows.iter().map(text))),
@@ -269,6 +272,19 @@ async fn agents_read_terminals_and_type_only_with_shell_drive() {
     assert!(!error && listed.contains(terminal.id.as_str()), "{listed}");
     let (error, text) = lead.tool("terminal_read", json!({ "terminal": terminal.id })).await;
     assert!(!error && text.contains("for-the-agent"), "{text}");
+    // The shell's commands, when it says them (bash and zsh do).
+    if ["bash", "zsh"].iter().any(|s| terminal.shell.ends_with(s)) {
+        let start = std::time::Instant::now();
+        while !reader.commands.values().any(|c| c.text == "echo for-the-agent" && c.end.is_some()) {
+            assert!(start.elapsed() < Duration::from_secs(10), "the reader is told of it: {:?}", reader.commands);
+            reader.next().await;
+        }
+        let (_, text) = lead.tool("terminal_read", json!({ "terminal": terminal.id })).await;
+        let line = text.lines().find(|l| l.contains("$ echo for-the-agent (exit 0")).unwrap_or_else(|| panic!("named with its end: {text}"));
+        let number: u64 = line.split('.').next().unwrap().parse().unwrap();
+        let (error, output) = lead.tool("terminal_read", json!({ "terminal": terminal.id, "command": number })).await;
+        assert!(!error && output.lines().nth(1) == Some("for-the-agent"), "{output}");
+    }
     let tools = lead.rpc("tools/list", json!({})).await;
     assert!(!tools.to_string().contains("terminal_type"), "not offered to a role without shell.drive");
     let (error, said) = lead.tool("terminal_type", json!({ "terminal": terminal.id, "text": "echo nope", "keys": "enter" })).await;

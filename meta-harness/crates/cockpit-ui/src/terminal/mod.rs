@@ -33,6 +33,8 @@ enum TermCommand {
     Restart,
     Close,
     Copy,
+    CopyOutput,
+    RunAgain,
 }
 
 /// How often it says again that its updates were seen (while some are there).
@@ -76,6 +78,8 @@ pub struct TerminalBuffer {
     open_url: Option<String>,
     /// Cells selected (from, to: in order as dragged).
     selection: Option<(Cell, Cell)>,
+    /// A command's output to copy once its lines are here.
+    copying: Option<std::ops::Range<u64>>,
     /// Its panel had focus last frame, with a shell running (gaining it
     /// starts typing).
     was_focused: bool,
@@ -112,6 +116,24 @@ impl TerminalBuffer {
         match self.info()?.status {
             TerminalStatus::Ended { code } => Some(code),
             TerminalStatus::Running => None,
+        }
+    }
+
+    /// The command output asked to be copied, copied once its lines are here
+    /// (asked for until they are).
+    fn copy_when_here(&mut self, cx: &mut RunCx<'_>) {
+        let Some(lines) = self.copying.clone() else { return };
+        match self.lines.text_of(lines.clone()) {
+            Some(text) => {
+                cx.ctx.copy_text(text);
+                *cx.note = Some("Copied its output.".into());
+                self.copying = None;
+            }
+            None => {
+                if let Some((from, count)) = self.lines.wanted(lines) {
+                    self.send(&ToTerminal::Lines { from, count });
+                }
+            }
         }
     }
 
@@ -398,7 +420,15 @@ impl Navigable for TerminalBuffer {
             Motion::First => self.go(Go::First),
             Motion::Last => self.go(Go::Last),
             Motion::Line(n) => self.go(Go::To(n.saturating_sub(1), crate::viewport::Show::Middle)),
-            Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight | Motion::NextSibling | Motion::PrevSibling => {}
+            // By command (the shell's marks): to the next one's prompt.
+            Motion::NextSibling | Motion::PrevSibling => {
+                let from = self.cursor.unwrap_or(self.lines.cursor().0);
+                for _ in 0..count.max(1) {
+                    let Some(line) = self.lines.command_beside(self.cursor.unwrap_or(from), motion == Motion::PrevSibling) else { break };
+                    self.go(Go::To((line - self.lines.first()) as usize, crate::viewport::Show::InView));
+                }
+            }
+            Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
         }
     }
 
@@ -501,6 +531,14 @@ impl ActionProvider for TerminalBuffer {
         out.push(crate::nav::Move::Leave.offer_if(self.cursor.is_some() || self.selection.is_some() || !self.view.live(), "Back to the live screen"));
         out.push(Action::new("terminal.type", "Type into the terminal", C::Type).focused().importance(PRIMARY).when(if has && !ended && !self.typing { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
         out.push(Action::new("terminal.copy", if self.selection.is_some() { "Copy the selection" } else { "Copy the line" }, C::Copy).focused().importance(MINOR));
+        // The command the cursor's on (the shell's marks say where).
+        let commands = self.lines.command_beside(self.lines.first().saturating_sub(1), false).is_some();
+        out.push(crate::nav::Move::Motion(Motion::NextSibling).offer_if(commands, "Next command"));
+        out.push(crate::nav::Move::Motion(Motion::PrevSibling).offer_if(commands, "Previous command"));
+        let on = self.cursor.and_then(|c| self.lines.command_at(c)).filter(|c| c.output.is_some());
+        let when = |ok: bool| if ok { crate::actions::When::Always } else { crate::actions::When::Unavailable };
+        out.push(Action::new("terminal.copy_output", "Copy the command's output", C::CopyOutput).focused().importance(MINOR).when(when(on.is_some())));
+        out.push(Action::new("terminal.run_again", "Run the command again", C::RunAgain).focused().importance(MINOR).when(when(on.is_some() && !ended)));
         let many = self.terminals.get().list().count() > 1;
         out.push(Action::new("terminal.next", "Next terminal", C::Step(1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
         out.push(Action::new("terminal.prev", "Previous terminal", C::Step(-1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
@@ -551,6 +589,20 @@ impl ActionProvider for TerminalBuffer {
                 }
                 None => *cx.note = Some("Nothing to copy: select some text, or put the cursor on a line.".into()),
             },
+            TermCommand::CopyOutput => {
+                if let Some(command) = self.cursor.and_then(|c| self.lines.command_at(c)) {
+                    let lines = command.output.unwrap_or(command.input)..command.end.unwrap_or_else(|| self.lines.end());
+                    // Its lines may not be here yet: copied once they are.
+                    self.copying = Some(lines);
+                    self.copy_when_here(cx);
+                }
+            }
+            TermCommand::RunAgain => {
+                if let Some(text) = self.cursor.and_then(|c| self.lines.command_at(c)).map(|c| c.text.clone()) {
+                    self.type_in(TerminalInput::Text { text });
+                    self.type_in(TerminalInput::Key { key: harness_contracts::TermKey::Enter, mods: harness_contracts::Mods::default() });
+                }
+            }
         }
     }
 }
@@ -636,7 +688,7 @@ pub(crate) mod tests {
     pub(crate) fn screen(lines: &[&str]) -> FromTerminal {
         let rows = (0..24u16).map(|r| (r, lines.get(usize::from(r)).map(|l| vec![Run { text: (*l).to_owned(), style: Style::default(), wide: false }]).unwrap_or_default())).collect();
         let cursor = Cursor { row: lines.len().saturating_sub(1) as u16, col: 2, visible: true };
-        FromTerminal::Screen { update: ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 24 }, full: true, rows, cursor, top: 0, oldest: 0, alternate: false, title: "bash".into(), shell: 1 } }
+        FromTerminal::Screen { update: ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 24 }, full: true, rows, cursor, top: 0, oldest: 0, alternate: false, title: "bash".into(), shell: 1, commands: Vec::new() } }
     }
 
     impl TerminalBuffer {

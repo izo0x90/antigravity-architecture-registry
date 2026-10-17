@@ -185,6 +185,46 @@ fn bash_marks_its_commands_and_a_finished_one_is_told_with_its_code_and_time() {
     assert!(ran >= Duration::from_millis(300), "it ran {ran:?}");
 }
 
+/// The text of lines `from..to`.
+fn lines_text(sh: &Shell, from: u64, to: u64) -> Vec<String> {
+    let (_, rows) = sh.terminal.scrollback(from, (to - from) as u32);
+    let screen = sh.terminal.screen(None);
+    let mut texts: Vec<String> = rows.iter().map(|r| r.iter().map(|run| run.text.as_str()).collect()).collect();
+    for n in (from + texts.len() as u64)..to {
+        let row = screen.rows.get((n - screen.top) as usize).map(|(_, r)| r.iter().map(|run| run.text.as_str()).collect()).unwrap_or_default();
+        texts.push(row);
+    }
+    texts
+}
+
+#[test]
+fn bash_says_where_each_command_is_what_was_typed_and_how_it_ended_through_a_new_width() {
+    let sh = open("bash", 80, 24);
+    sh.run("echo one; echo two");
+    sh.run("printf 'a long line of output %.0s' 1 2 3 4; echo; false");
+    let done = || sh.terminal.commands().iter().filter(|c| c.end.is_some()).count() >= 2;
+    let start = Instant::now();
+    while !done() {
+        assert!(start.elapsed() < Duration::from_secs(10), "{:?}", sh.terminal.commands());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let ran = || sh.terminal.commands().into_iter().filter(|c| c.end.is_some()).collect::<Vec<_>>();
+    let commands = ran();
+    let [echo, long] = &commands[commands.len() - 2..] else { unreachable!() };
+    assert_eq!((echo.text.as_str(), echo.code), ("echo one; echo two", Some(0)));
+    assert_eq!((long.text.as_str(), long.code), ("printf 'a long line of output %.0s' 1 2 3 4; echo; false", Some(1)));
+    let (output, end) = (echo.output.unwrap(), echo.end.unwrap());
+    assert!(echo.prompt <= echo.input && echo.input < output, "{echo:?}");
+    assert_eq!(lines_text(&sh, output, end), ["one", "two"], "its output's lines");
+    // Narrower: the long output wraps on more rows; the commands move with their lines.
+    sh.terminal.resize(TermSize { cols: 30, rows: 24 }).unwrap();
+    let commands = ran();
+    let [echo, long] = &commands[commands.len() - 2..] else { unreachable!() };
+    assert_eq!(lines_text(&sh, echo.output.unwrap(), echo.end.unwrap()), ["one", "two"]);
+    let output = lines_text(&sh, long.output.unwrap(), long.end.unwrap()).concat();
+    assert_eq!(output, "a long line of output ".repeat(4).trim_end(), "on the rows it wraps on now");
+}
+
 #[test]
 fn the_title_the_program_sets_is_told() {
     let sh = open("/bin/sh", 80, 24);

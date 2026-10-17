@@ -256,7 +256,7 @@ impl Open {
             Some(shell) => shell.screen(since),
             None => {
                 let info = self.info();
-                ScreenUpdate { seq: 0, size: info.size, full: since.is_none(), rows: Vec::new(), cursor: Default::default(), top: 0, oldest: 0, alternate: false, title: info.title, shell: 0 }
+                ScreenUpdate { seq: 0, size: info.size, full: since.is_none(), rows: Vec::new(), cursor: Default::default(), top: 0, oldest: 0, alternate: false, title: info.title, shell: 0, commands: Vec::new() }
             }
         };
         update.shell = self.started();
@@ -270,6 +270,16 @@ impl Open {
 
     pub fn search(&self, query: &str) -> Vec<Found> {
         lock(&self.shell).as_ref().map_or_else(Vec::new, |s| s.search(query))
+    }
+
+    /// The commands its shell ran (oldest first), as far back as kept.
+    pub fn commands(&self) -> Vec<harness_contracts::TerminalCommand> {
+        lock(&self.shell).as_ref().map_or_else(Vec::new, |s| s.commands())
+    }
+
+    /// Lines `from..to` as text.
+    pub fn text_of(&self, from: u64, to: u64) -> String {
+        lock(&self.shell).as_ref().map_or_else(String::new, |s| s.text_of(from, to))
     }
 
     /// The screen as text, with up to `back` lines of scrollback.

@@ -1,7 +1,8 @@
 //! What the crate reads in a terminal's output beside the emulator, with
 //! the parser the emulator uses (vte's), so both read the same sequences
 //! the same way: the shell's command marks (OSC 133, the marks VS Code and
-//! iTerm read), the scrollback being cleared, and synchronized updates (a
+//! iTerm read: its prompt, what's typed, the output, the end), the
+//! scrollback being cleared, and synchronized updates (a
 //! program asking that what it draws between two marks shows at once).
 //! Each is told at the byte that ends it, so the output can be cut there;
 //! a sequence split across reads is told when its last byte comes.
@@ -11,6 +12,10 @@ use alacritty_terminal::vte::{Params, Parser, Perform};
 /// Something seen in the output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Seen {
+    /// The prompt starts (`OSC 133 ; A`).
+    Prompt,
+    /// What's typed starts (`OSC 133 ; B`).
+    Input,
     /// A command started running (`OSC 133 ; C`).
     Started,
     /// The command ended, with its exit code when given (`OSC 133 ; D ; <code>`).
@@ -52,6 +57,8 @@ impl Perform for Performer {
             return;
         }
         self.0 = match params.get(1).copied() {
+            Some(b"A") => Some(Seen::Prompt),
+            Some(b"B") => Some(Seen::Input),
             Some(b"C") => Some(Seen::Started),
             Some(b"D") => Some(Seen::Finished(params.get(2).and_then(|c| std::str::from_utf8(c).ok()).and_then(|c| c.parse().ok()))),
             _ => None,
@@ -111,8 +118,8 @@ mod tests {
 
     #[test]
     fn what_matters_is_seen_where_it_ends_even_split_across_reads() {
-        let out: &[u8] = b"$ make\x1b]133;C\x07building\r\n\x1b]0;title\x07done\x1b]133;D;2\x1b\\$ \x1b[31mred\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[?2026hframe\x1b[?2026l\x1b[?1049h\x1bc";
-        let want = [Seen::Started, Seen::Finished(Some(2)), Seen::ClearedHistory, Seen::SyncStart, Seen::SyncEnd, Seen::AltScreen, Seen::Reset];
+        let out: &[u8] = b"\x1b]133;A\x07$ \x1b]133;B\x07make\x1b]133;C\x07building\r\n\x1b]0;title\x07done\x1b]133;D;2\x1b\\$ \x1b[31mred\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[?2026hframe\x1b[?2026l\x1b[?1049h\x1bc";
+        let want = [Seen::Prompt, Seen::Input, Seen::Started, Seen::Finished(Some(2)), Seen::ClearedHistory, Seen::SyncStart, Seen::SyncEnd, Seen::AltScreen, Seen::Reset];
         let whole = seen(&[out]);
         assert_eq!(whole.iter().map(|(_, s)| *s).collect::<Vec<_>>(), want, "another OSC, colours, 2J aren't");
         for (end, s) in &whole {
@@ -129,5 +136,29 @@ mod tests {
     fn a_mark_without_a_code_and_a_mode_list_with_sync_in_it() {
         let found: Vec<Seen> = seen(&[b"\x1b]133;D\x07\x1b[?1049;2026h\x1b[?25l"]).into_iter().map(|(_, s)| s).collect();
         assert_eq!(found, [Seen::Finished(None), Seen::SyncStart]);
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// However the output is cut into reads, the same is seen at the
+        /// same places (any bytes, marks among them).
+        #[test]
+        fn what_is_seen_doesnt_depend_on_how_output_is_read(chunks in prop::collection::vec(prop_oneof![
+            prop::collection::vec(any::<u8>(), 0..40),
+            prop::sample::select(vec![&b"\x1b]133;A\x07"[..], b"\x1b]133;C\x07", b"\x1b]133;D;7\x1b\\", b"\x1b[3J", b"\x1b[?2026h", b"\x1b[?2026l", b"\x1b[?1049h", b"\x1bc"]).prop_map(|b| b.to_vec()),
+        ], 0..30), cuts in prop::collection::vec(0usize..2000, 0..10)) {
+            let out: Vec<u8> = chunks.concat();
+            let mut cuts: Vec<usize> = cuts.into_iter().map(|c| c.min(out.len())).collect();
+            cuts.sort_unstable();
+            let mut reads = Vec::new();
+            let mut from = 0;
+            for cut in cuts {
+                reads.push(&out[from..cut]);
+                from = cut;
+            }
+            reads.push(&out[from..]);
+            prop_assert_eq!(seen(&reads), seen(&[&out]));
+        }
     }
 }

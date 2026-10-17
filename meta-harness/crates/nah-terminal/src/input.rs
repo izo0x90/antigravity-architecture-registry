@@ -139,4 +139,26 @@ mod tests {
         assert_eq!(encode(&text, Modes { bracketed_paste: true, ..Modes::default() }), b"\x1b[200~a\nb[201~c\x1b[201~");
         assert_eq!(encode(&TerminalInput::Paste { text: "a\nb".into() }, Modes::default()), b"a\rb", "unbracketed: lines end as Enter sends them");
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Whatever is pasted, it can't end the bracket early (a program
+        /// would run the rest as typed).
+        #[test]
+        fn nothing_pasted_ends_the_bracket(text in ".*") {
+            let bytes = encode(&TerminalInput::Paste { text }, Modes { bracketed_paste: true, ..Modes::default() });
+            let inside = &bytes[6..bytes.len() - 6];
+            prop_assert!(bytes.starts_with(b"\x1b[200~") && bytes.ends_with(b"\x1b[201~"));
+            prop_assert!(!inside.contains(&0x1b));
+        }
+
+        /// Every key, with every modifier, in every mode, is some bytes.
+        #[test]
+        fn every_key_is_bytes(n in 0u8..=12, c in any::<char>(), which in 0usize..16, ctrl: bool, alt: bool, shift: bool, app_cursor: bool) {
+            let keys = [TermKey::Enter, TermKey::Tab, TermKey::Backspace, TermKey::Escape, TermKey::Up, TermKey::Down, TermKey::Left, TermKey::Right, TermKey::Home, TermKey::End, TermKey::PageUp, TermKey::PageDown, TermKey::Insert, TermKey::Delete, TermKey::F(n.max(1)), TermKey::Char(c)];
+            let bytes = encode(&key(keys[which], ctrl, alt, shift), Modes { app_cursor, ..Modes::default() });
+            prop_assert!(!bytes.is_empty());
+        }
+    }
 }

@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use harness_contracts::{Cursor, ReaderScreen, Row, ScreenUpdate, TermSize};
+use harness_contracts::{Cursor, ReaderScreen, Row, ScreenUpdate, TermSize, TerminalCommand};
 
 /// The most lines asked for at once (the server's own limit).
 const MOST_ASKED: u64 = 1000;
@@ -43,6 +43,8 @@ pub(super) struct Lines {
     /// Lines asked for that the answer didn't have: not asked again until
     /// the next update.
     refused: Option<Range<u64>>,
+    /// The commands the shell ran, by their prompt's line.
+    commands: BTreeMap<u64, TerminalCommand>,
 }
 
 impl Lines {
@@ -65,6 +67,11 @@ impl Lines {
         }
         self.back = self.back.split_off(&update.oldest);
         self.refused = None;
+        for command in &update.commands {
+            self.commands.retain(|_, c| c.id != command.id);
+            self.commands.insert(command.prompt, command.clone());
+        }
+        self.commands = self.commands.split_off(&update.oldest);
         (self.size, self.cursor, self.oldest, self.alternate, self.shell) = (update.size, update.cursor, update.oldest, update.alternate, update.shell);
         self.title.clone_from(&update.title);
         took
@@ -88,6 +95,7 @@ impl Lines {
     /// Everything of the scrollback forgotten.
     fn forget(&mut self) {
         self.back.clear();
+        self.commands.clear();
         self.unasked();
     }
 
@@ -150,6 +158,24 @@ impl Lines {
         Some((from, (to - from) as u32))
     }
 
+    /// The command line `number` is in (its prompt, what was typed, its output).
+    pub(super) fn command_at(&self, number: u64) -> Option<&TerminalCommand> {
+        self.commands.range(..=number).next_back().map(|(_, c)| c).filter(|c| c.end.is_none_or(|end| number < end))
+    }
+
+    /// The prompt's line of the next command after line `number` (back:
+    /// the one before).
+    pub(super) fn command_beside(&self, number: u64, back: bool) -> Option<u64> {
+        let at = self.command_at(number).map_or(number, |c| c.prompt);
+        if back { self.commands.range(..at).next_back() } else { self.commands.range(at + 1..).next() }.map(|(line, _)| *line)
+    }
+
+    /// Lines `range` as text, when they're all here.
+    pub(super) fn text_of(&self, range: Range<u64>) -> Option<String> {
+        let lines: Option<Vec<String>> = range.map(|n| self.text(n)).collect();
+        lines.map(|l| l.join("\n").trim_end().to_owned())
+    }
+
     /// The screen's cursor: its line's number, its column, whether it shows.
     pub(super) fn cursor(&self) -> (u64, u16, bool) {
         (self.screen.top() + u64::from(self.cursor.row), self.cursor.col, self.cursor.visible)
@@ -172,7 +198,7 @@ mod tests {
 
     /// A 3-row screen of `lines` from line `top`, the scrollback from `oldest`.
     fn update(lines: [&str; 3], top: u64, oldest: u64) -> ScreenUpdate {
-        ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 3 }, full: false, rows: (0..3).map(|r| (r, row(lines[usize::from(r)]))).collect(), cursor: Cursor::default(), top, oldest, alternate: false, title: String::new(), shell: 7 }
+        ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 3 }, full: false, rows: (0..3).map(|r| (r, row(lines[usize::from(r)]))).collect(), cursor: Cursor::default(), top, oldest, alternate: false, title: String::new(), shell: 7, commands: Vec::new() }
     }
 
     #[test]
@@ -201,6 +227,27 @@ mod tests {
         wider.size.cols = 100;
         assert_eq!(lines.take(&wider), Took::Relaid { by: 8 });
         assert_eq!(lines.text(91), None);
+    }
+
+    #[test]
+    fn commands_are_found_by_their_lines_and_go_with_them() {
+        let mut lines = Lines::default();
+        let command = |id, prompt, end: Option<u64>| TerminalCommand { id, prompt, input: prompt, input_col: 2, output: Some(prompt + 1), end, text: format!("c{id}"), code: Some(0), ran_ms: Some(1) };
+        let mut first = update(["a", "b", "c"], 100, 0);
+        first.commands = vec![command(1, 10, Some(14)), command(2, 14, Some(20)), command(3, 20, None)];
+        lines.take(&first);
+        assert_eq!(lines.command_at(12).map(|c| c.id), Some(1));
+        assert_eq!(lines.command_at(14).map(|c| c.id), Some(2));
+        assert_eq!(lines.command_at(5).map(|c| c.id), None, "before any");
+        assert_eq!(lines.command_beside(12, false), Some(14));
+        assert_eq!(lines.command_beside(12, true), None);
+        assert_eq!(lines.command_beside(21, true), Some(14), "from the running one, the one before it");
+        // The third ended; the first's lines went.
+        let mut next = update(["a", "b", "c"], 100, 12);
+        next.commands = vec![command(3, 20, Some(25))];
+        lines.take(&next);
+        assert_eq!(lines.command_at(12).map(|c| c.id), None);
+        assert_eq!(lines.command_at(30).map(|c| c.id), None, "past its end");
     }
 
     #[test]

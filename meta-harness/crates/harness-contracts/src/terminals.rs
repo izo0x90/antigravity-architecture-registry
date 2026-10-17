@@ -144,6 +144,36 @@ pub struct ScreenUpdate {
     /// from the beginning again (they're other lines).
     #[serde(default)]
     pub shell: u64,
+    /// Commands that are new or changed (all of them when `full`); one is
+    /// gone once its prompt's line is (below `oldest`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<TerminalCommand>,
+}
+
+/// A command the shell ran, as its marks say where (bash's and zsh's,
+/// set up when they start): kept while its prompt's line is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCommand {
+    /// Its number in this start of the shell.
+    pub id: u64,
+    /// The line its prompt starts on, and where what's typed starts.
+    pub prompt: u64,
+    pub input: u64,
+    pub input_col: u16,
+    /// The line its output starts on (none: still being typed), and the
+    /// line after its last (none: still running).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<u64>,
+    /// What was typed.
+    pub text: String,
+    /// How it ended (the shell said no code: none), and how long it ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ran_ms: Option<u64>,
 }
 
 /// A screen as a reader has it, from the updates it was sent: the one
@@ -302,7 +332,7 @@ mod tests {
 
     fn update(top: u64, rows: &[(u16, &str)], full: bool) -> ScreenUpdate {
         let rows = rows.iter().map(|(r, t)| (*r, vec![Run { text: (*t).into(), style: Style::default(), wide: false }])).collect();
-        ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 3 }, full, rows, cursor: Cursor::default(), top, oldest: 0, alternate: false, title: String::new(), shell: 1 }
+        ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 3 }, full, rows, cursor: Cursor::default(), top, oldest: 0, alternate: false, title: String::new(), shell: 1, commands: Vec::new() }
     }
 
     fn text(row: &Row) -> String {

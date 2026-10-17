@@ -11,7 +11,8 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use harness_contracts::{Colour, Cursor, Found, Row, Run, ScreenUpdate, Style, TermSize};
 
-use crate::feed::Feed;
+use crate::commands::Commands;
+use crate::feed::{At, Feed};
 
 /// Which rows changed when, so each reader gets what's new to it.
 #[derive(Default)]
@@ -53,9 +54,15 @@ impl Changes {
         self.seq
     }
 
+    /// Something besides the rows changed (a command): the count of that change.
+    pub fn bump(&mut self) -> u64 {
+        self.seq += 1;
+        self.seq
+    }
+
     /// What changed after `since` (all of it when `since` is none or from
     /// before the screen last changed whole).
-    pub fn since<T: EventListener>(&self, term: &Term<T>, feed: &Feed, since: Option<u64>, title: &str) -> ScreenUpdate {
+    pub fn since<T: EventListener>(&self, term: &Term<T>, feed: &Feed, commands: &Commands, since: Option<u64>, title: &str) -> ScreenUpdate {
         let full = since.is_none_or(|s| s < self.whole);
         let rows = (0..term.screen_lines())
             .filter(|&r| full || since.is_some_and(|s| self.rows.get(r).copied().unwrap_or(0) > s))
@@ -74,6 +81,7 @@ impl Changes {
             title: title.to_owned(),
             // Which start of the shell it is: the server's to say.
             shell: 0,
+            commands: commands.since(since.filter(|_| !full)),
         }
     }
 }
@@ -92,6 +100,87 @@ pub fn lines<T: EventListener>(term: &Term<T>, feed: &Feed, from: u64, count: u3
 fn kept<T: EventListener>(term: &Term<T>, feed: &Feed) -> (u64, u64) {
     let top = feed.top();
     (top - term.history_size() as u64, top + term.screen_lines() as u64)
+}
+
+/// The text from `from` to the end of the line before `to` (the rows of a
+/// line that wraps joined; others on lines of their own), trimmed.
+pub fn text_between<T: EventListener>(term: &Term<T>, feed: &Feed, from: At, to: u64) -> String {
+    let (first, end) = kept(term, feed);
+    let mut text = String::new();
+    for number in from.line.max(first)..to.min(end) {
+        let line = grid_line(feed, number);
+        let plain: String = row(term, line).iter().map(|run| run.text.as_str()).collect();
+        let skip = if number == from.line { usize::from(from.col) } else { 0 };
+        text.extend(plain.chars().skip(skip));
+        if !wraps(term, line) {
+            text.push('\n');
+        }
+    }
+    text.trim_end().to_owned()
+}
+
+/// Whether a row goes on in the next (it wrapped at the screen's edge).
+fn wraps<T: EventListener>(term: &Term<T>, line: Line) -> bool {
+    term.grid()[line][Column(term.columns() - 1)].flags.contains(Flags::WRAPLINE)
+}
+
+/// The rows from the oldest kept to the cursor's, as the lines the program
+/// wrote (a row that wraps goes on in the next): what a new width keeps.
+/// Counted up from the cursor's line (the bottom stays where it was).
+pub struct Layout {
+    /// The first row's number, the width.
+    first: u64,
+    cols: usize,
+    /// Each row's line (counted up from the cursor's) and which of its rows it is.
+    rows: Vec<(usize, usize)>,
+    /// Each line's first row (by the line, counted up).
+    starts: Vec<usize>,
+}
+
+impl Layout {
+    pub fn of<T: EventListener>(term: &Term<T>, feed: &Feed) -> Self {
+        let (first, _) = kept(term, feed);
+        let cursor = feed.top() + term.grid().cursor.point.line.0.max(0) as u64;
+        let mut from_top = Vec::new();
+        let (mut line, mut part) = (0usize, 0usize);
+        for number in first..=cursor {
+            from_top.push((line, part));
+            if wraps(term, grid_line(feed, number)) {
+                part += 1;
+            } else {
+                (line, part) = (line + 1, 0);
+            }
+        }
+        let last = from_top.last().map_or(0, |(l, _)| *l);
+        let rows: Vec<(usize, usize)> = from_top.iter().map(|(l, p)| (last - l, *p)).collect();
+        let mut starts = vec![0; last + 1];
+        for (i, (up, part)) in rows.iter().enumerate() {
+            if *part == 0 {
+                starts[*up] = i;
+            }
+        }
+        Self { first, cols: term.columns(), rows, starts }
+    }
+
+    /// The row after the line (as the program wrote it) that row `line` of
+    /// `before` is on, in this.
+    pub fn after(&self, before: &Layout, line: u64) -> Option<u64> {
+        let (up, _) = *before.rows.get(usize::try_from(line.checked_sub(before.first)?).ok()?)?;
+        let row = match up.checked_sub(1) {
+            Some(next) => *self.starts.get(next)?,
+            // The cursor's own line: its last row's next.
+            None => self.rows.len(),
+        };
+        Some(self.first + row as u64)
+    }
+
+    /// Where a place in `before` (the same lines, another width) is in this.
+    pub fn place(&self, before: &Layout, line: u64, col: u16) -> Option<(u64, u16)> {
+        let (up, part) = *before.rows.get(usize::try_from(line.checked_sub(before.first)?).ok()?)?;
+        let offset = part * before.cols + usize::from(col);
+        let row = *self.starts.get(up)? + offset / self.cols.max(1);
+        (row < self.rows.len()).then(|| (self.first + row as u64, (offset % self.cols.max(1)) as u16))
+    }
 }
 
 /// Where line `number` is in the emulator's grid.

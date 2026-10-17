@@ -24,6 +24,14 @@ use alacritty_terminal::vte::ansi::{Processor, Timeout};
 
 use crate::scan::{Scan, Seen};
 
+/// Where something was seen: the line's number and the column the
+/// emulator's cursor was on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct At {
+    pub line: u64,
+    pub col: u16,
+}
+
 /// How far past what's kept the emulator's scrollback may grow before
 /// it's cut back: under the emulator's spare rows (1000), so the rows a
 /// cut frees are used again rather than freed and made anew.
@@ -95,8 +103,9 @@ impl Feed {
     }
 
     /// Reads `bytes` of output: fed to `term`, or held while a program
-    /// draws a synchronized update; the shell's command marks fed with it.
-    pub fn output<T: EventListener>(&mut self, term: &mut Term<T>, bytes: &[u8]) -> Vec<Seen> {
+    /// draws a synchronized update; the shell's command marks fed with it,
+    /// and where they were.
+    pub fn output<T: EventListener>(&mut self, term: &mut Term<T>, bytes: &[u8]) -> Vec<(Seen, At)> {
         let mut marks = Vec::new();
         let mut rest = bytes;
         while !rest.is_empty() {
@@ -134,7 +143,7 @@ impl Feed {
 
     /// Feeds a held update that's waited long enough (or, `now`, any held
     /// update: the shell ended): the marks in it.
-    pub fn overdue<T: EventListener>(&mut self, term: &mut Term<T>, now: bool) -> Vec<Seen> {
+    pub fn overdue<T: EventListener>(&mut self, term: &mut Term<T>, now: bool) -> Vec<(Seen, At)> {
         match self.due_in() {
             Some(wait) if now || wait.is_zero() => self.release(term),
             _ => Vec::new(),
@@ -153,7 +162,7 @@ impl Feed {
     }
 
     /// Feeds the held update, cut where something was seen in it.
-    fn release<T: EventListener>(&mut self, term: &mut Term<T>) -> Vec<Seen> {
+    fn release<T: EventListener>(&mut self, term: &mut Term<T>) -> Vec<(Seen, At)> {
         self.since = None;
         let held = std::mem::take(&mut self.held);
         let mut marks = Vec::new();
@@ -181,8 +190,9 @@ impl Feed {
     /// Feeds `bytes`, which end with what was `seen`: a clear of the
     /// scrollback or a reset count what they take (looked at just before
     /// their last byte), the alternate screen is entered with the main
-    /// screen's scrollback counted. A command mark is given back.
-    fn feed_to<T: EventListener>(&mut self, term: &mut Term<T>, bytes: &[u8], seen: Seen) -> Option<Seen> {
+    /// screen's scrollback counted. A command mark is given back, with
+    /// where it was.
+    fn feed_to<T: EventListener>(&mut self, term: &mut Term<T>, bytes: &[u8], seen: Seen) -> Option<(Seen, At)> {
         let (before, last) = bytes.split_at(bytes.len().saturating_sub(1));
         self.feed(term, before);
         let alternate = term.mode().contains(TermMode::ALT_SCREEN);
@@ -198,7 +208,9 @@ impl Feed {
         self.dropped += gone as u64;
         self.history = self.history.saturating_sub(gone);
         self.settle(term);
-        matches!(seen, Seen::Started | Seen::Finished(_)).then_some(seen)
+        let point = term.grid().cursor.point;
+        let at = At { line: (self.top() as i64 + i64::from(point.line.0)).max(0) as u64, col: point.column.0 as u16 };
+        matches!(seen, Seen::Prompt | Seen::Input | Seen::Started | Seen::Finished(_)).then_some((seen, at))
     }
 
     /// Cuts the scrollback back to what's kept, counting what goes.

@@ -125,6 +125,7 @@ impl TerminalBuffer {
             }
         }
         self.spots = spots;
+        self.copy_when_here(cx);
         if let Some(url) = self.open_url.take() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }
