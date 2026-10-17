@@ -145,6 +145,9 @@ pub struct GraphState {
     pub agent: Option<AgentMove>,
     /// What it asked of the rest of the cockpit, not taken yet.
     asks: Vec<crate::nav::Ask>,
+    /// The code place the server last said a component it shows is at
+    /// (read again once when it differs from what it has).
+    located: Option<Option<arch_graph::CodeAnchor>>,
     /// The component it last said the user is on (its selection), and
     /// the source it last said it shows.
     said: Option<ComponentId>,
@@ -210,6 +213,7 @@ impl Default for GraphState {
             first_child_of: None,
             agent: None,
             asks: Vec::new(),
+            located: None,
             said: None,
             said_source: None,
             seen: Default::default(),
@@ -280,40 +284,8 @@ impl GraphState {
         self.nav.depth.or_else(|| self.tree.as_ref().and_then(|t| t.request.depth)).or_else(|| self.config.as_ref().map(|c| c.view(self.nav.view).depth)).unwrap_or(0)
     }
 
-    pub fn on_event(&mut self, event: &ArchEvent) {
-        match event {
-            // Changed code or plans: the same tree again (the camera stays).
-            ArchEvent::Changed { reason, .. } => {
-                self.stale = true;
-                self.details.clear();
-                if matches!(reason, ChangeReason::PlanEdited) {
-                    self.plans_stale = true;
-                }
-            }
-            ArchEvent::Validated { .. } | ArchEvent::QueueUpdated { .. } | ArchEvent::Index { .. } => {}
-            ArchEvent::ViewRequested { request, by } => {
-                if *by == Requester::Agent {
-                    let (return_to, return_selection) = match &self.agent {
-                        Some(a) => (a.return_to.clone(), a.return_selection.clone()),
-                        None => (self.nav.clone(), self.selection.clone()),
-                    };
-                    self.agent = Some(AgentMove { what: self.describe(request), select: request.select.clone(), return_to, return_selection });
-                }
-                self.navigate(NavChange::Request(request.clone()));
-                if let Some(select) = &request.select {
-                    if self.card(select).is_some() && !self.stale {
-                        self.select(Some(select.clone()));
-                        self.reveal_after_fit = Some((select.clone(), crate::viewport::Show::Middle));
-                    } else {
-                        self.pending_select = Some(select.clone());
-                    }
-                }
-            }
-        }
-    }
-
     /// What a view request shows, in words.
-    fn describe(&self, request: &ViewRequest) -> String {
+    fn describe_request(&self, request: &ViewRequest) -> String {
         let name = |key: &str| self.card(key).map_or_else(|| key.rsplit([':', '.']).next().unwrap_or(key).to_owned(), |c| c.label.clone());
         let mut parts = vec![format!("{} view", request.view.unwrap_or(self.nav.view).name().replace('_', " "))];
         if let Some(source) = &request.source {
@@ -352,13 +324,6 @@ impl GraphState {
     /// The components changed themselves.
     fn changed_directly(&self) -> impl Iterator<Item = &ComponentId> {
         self.changed.iter().filter(|(_, c)| c.direct).map(|(id, _)| id)
-    }
-
-    /// Fetch everything again (events may have been missed).
-    pub fn invalidate(&mut self) {
-        self.stale = true;
-        self.plans_stale = true;
-        self.details.clear();
     }
 
     /// Takes a tree the server sent: keeps the selection when it's still
@@ -425,8 +390,53 @@ impl GraphState {
         }
     }
 
+    /// The answer shown, when the server cut it or took longer than its
+    /// limit: a few words for the status line, and more on hover.
+    pub(crate) fn answer_status(&self) -> Option<(String, String)> {
+        let tree = self.tree.as_ref()?;
+        let mut words = Vec::new();
+        let mut more = Vec::new();
+        if let Some(cut) = &tree.cut {
+            let why = if cut.reason == arch_graph::tree::CutReason::Time { "out of time" } else { "too big" };
+            words.push(format!("cut ({why})"));
+            more.push(format!("The graph shows {} of {} levels ({} more left out). Go into a card, or show fewer levels.", cut.shown, cut.asked, cut.hidden));
+        }
+        if let Some(ms) = tree.slow_ms {
+            words.push(format!("slow: {ms} ms"));
+            more.push("The server took longer than its limit to build it. Each stage's time is at /api/perf.".to_owned());
+        }
+        (!words.is_empty()).then(|| (format!("graph {}", words.join(", ")), more.join("\n")))
+    }
+
+    /// A tree that couldn't be had: a root that isn't there shows the
+    /// view's starting points and says so. Otherwise, under a plan, the
+    /// plans are asked for again (whether it's gone is theirs to say); the
+    /// error shows meanwhile.
+    fn failed(&mut self, error: crate::net::NetError) {
+        // The server's 404: there's no such thing (not a word in its message).
+        let missing = error.not_found();
+        let error = String::from(error);
+        if missing && let Some(root) = self.nav.root.clone() {
+            self.navigate(NavChange::Top);
+            self.note = Some(format!("{root} isn't in this view: showing where it starts."));
+            return;
+        }
+        if missing && let Source::Plan(plan) = self.nav.source.clone() {
+            self.plans_stale = true;
+            self.plan_unsure = Some(plan);
+        }
+        self.load = Load::Failed(error);
+    }
+}
+
+
+impl crate::buffer::Buffer for GraphState {
+    fn render(&mut self, ui: &mut egui::Ui, cx: &mut crate::actions::RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
+        self.draw(ui, drawing.feedback, cx.panel, drawing.leader_held, cx);
+    }
+
     /// Fetches what's missing or stale and applies replies. Call every frame.
-    pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
+    fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
         let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for reply in replies {
             match reply {
@@ -493,42 +503,84 @@ impl GraphState {
         self.send_find(net, ctx);
     }
 
-    /// The answer shown, when the server cut it or took longer than its
-    /// limit: a few words for the status line, and more on hover.
-    pub fn answer_status(&self) -> Option<(String, String)> {
-        let tree = self.tree.as_ref()?;
-        let mut words = Vec::new();
-        let mut more = Vec::new();
-        if let Some(cut) = &tree.cut {
-            let why = if cut.reason == arch_graph::tree::CutReason::Time { "out of time" } else { "too big" };
-            words.push(format!("cut ({why})"));
-            more.push(format!("The graph shows {} of {} levels ({} more left out). Go into a card, or show fewer levels.", cut.shown, cut.asked, cut.hidden));
+
+    fn on_event(&mut self, event: &ArchEvent) {
+        match event {
+            // Changed code or plans: the same tree again (the camera stays).
+            ArchEvent::Changed { reason, .. } => {
+                self.stale = true;
+                self.details.clear();
+                if matches!(reason, ChangeReason::PlanEdited) {
+                    self.plans_stale = true;
+                }
+            }
+            ArchEvent::Validated { .. } | ArchEvent::QueueUpdated { .. } | ArchEvent::Index { .. } => {}
+            ArchEvent::ViewRequested { request, by } => {
+                if *by == Requester::Agent {
+                    let (return_to, return_selection) = match &self.agent {
+                        Some(a) => (a.return_to.clone(), a.return_selection.clone()),
+                        None => (self.nav.clone(), self.selection.clone()),
+                    };
+                    self.agent = Some(AgentMove { what: self.describe_request(request), select: request.select.clone(), return_to, return_selection });
+                }
+                self.navigate(NavChange::Request(request.clone()));
+                if let Some(select) = &request.select {
+                    if self.card(select).is_some() && !self.stale {
+                        self.select(Some(select.clone()));
+                        self.reveal_after_fit = Some((select.clone(), crate::viewport::Show::Middle));
+                    } else {
+                        self.pending_select = Some(select.clone());
+                    }
+                }
+            }
         }
-        if let Some(ms) = tree.slow_ms {
-            words.push(format!("slow: {ms} ms"));
-            more.push("The server took longer than its limit to build it. Each stage's time is at /api/perf.".to_owned());
-        }
-        (!words.is_empty()).then(|| (format!("graph {}", words.join(", ")), more.join("\n")))
     }
 
-    /// A tree that couldn't be had: a root that isn't there shows the
-    /// view's starting points and says so. Otherwise, under a plan, the
-    /// plans are asked for again (whether it's gone is theirs to say); the
-    /// error shows meanwhile.
-    fn failed(&mut self, error: crate::net::NetError) {
-        // The server's 404: there's no such thing (not a word in its message).
-        let missing = error.not_found();
-        let error = String::from(error);
-        if missing && let Some(root) = self.nav.root.clone() {
-            self.navigate(NavChange::Top);
-            self.note = Some(format!("{root} isn't in this view: showing where it starts."));
-            return;
+
+    /// Fetch everything again (events may have been missed).
+    fn invalidate(&mut self) {
+        self.stale = true;
+        self.plans_stale = true;
+        self.details.clear();
+    }
+
+
+    /// Its name and code place (fetched), and what its card says.
+    fn knows(&self, id: &ComponentId) -> Option<crate::buffer::Known> {
+        let card = self.tree.as_ref().and_then(|t| t.cards.iter().find(|c| c.component.as_ref() == Some(id)));
+        let component = self.component(id);
+        if card.is_none() && component.is_none() {
+            return None;
         }
-        if missing && let Source::Plan(plan) = self.nav.source.clone() {
-            self.plans_stale = true;
-            self.plan_unsure = Some(plan);
+        let known = component.map(crate::buffer::Known::of).unwrap_or_else(|| crate::buffer::Known { name: card.map(|c| c.label.clone()), ..Default::default() });
+        Some(crate::buffer::Known { says: self.card_says(id), ..known })
+    }
+
+    /// A component it shows whose code moved: the view again (once per place).
+    fn located(&mut self, id: &ComponentId, anchor: Option<&arch_graph::CodeAnchor>) {
+        let moved = self.selected().is_some_and(|shown| shown.id == *id && shown.anchor.as_ref() != anchor);
+        if moved && self.located.replace(anchor.cloned()) != Some(anchor.cloned()) {
+            crate::buffer::Buffer::invalidate(self);
         }
-        self.load = Load::Failed(error);
+    }
+
+    /// Its view, source, root and selection.
+    fn describe(&self) -> String {
+        let name = |key: &str| {
+            let id = ComponentId::new(key);
+            self.component(&id).map(|c| c.name.clone()).or_else(|| self.card(key).map(|c| c.label.clone())).unwrap_or_else(|| crate::nav::short_name(&id))
+        };
+        let mut out = format!("{} view", self.nav.view.name().replace('_', " "));
+        if self.nav.source != Source::Code {
+            out.push_str(&format!(", {}", self.nav.source));
+        }
+        if let Some(root) = &self.nav.root {
+            out.push_str(&format!(", from {}", name(root)));
+        }
+        if let Some(at) = &self.selection {
+            out.push_str(&format!(", at {}", name(at)));
+        }
+        out
     }
 }
 

@@ -3,8 +3,14 @@
 use super::*;
 
 impl CockpitApp {
+    /// What the buffers in use, and the details fetched, know about component `id`.
+    fn known(&self, id: &ComponentId) -> Vec<crate::buffer::Known> {
+        let fetched = self.desk.details.get(id, self.desk.shared.source.get()).map(|d| crate::buffer::Known::of(&d.component));
+        BufferKind::ALL.into_iter().filter_map(|k| self.desk.view(k).knows(id)).chain(fetched).collect()
+    }
+
     pub(super) fn component_name(&self, id: &ComponentId) -> String {
-        self.desk.graph.component(id).map(|c| c.name.clone()).unwrap_or_else(|| crate::nav::short_name(id))
+        self.known(id).into_iter().find_map(|k| k.name).unwrap_or_else(|| crate::nav::short_name(id))
     }
 
     /// A go-to's count names the panel it lands in (1 is the leftmost; one
@@ -173,21 +179,12 @@ impl CockpitApp {
         self.after_jump(from);
     }
 
-    /// Where a component's code is, from whatever here knows it (the code
-    /// view's file, the graph, fetched details): `Some(None)` when they know
-    /// the component but it isn't in the code, `None` when nothing here
-    /// knows it.
+    /// Where a component's code is, from whatever here knows it (the
+    /// buffers in use, fetched details): `Some(None)` when they know the
+    /// component but it isn't in the code, `None` when nothing here knows it.
     pub(super) fn code_location(&self, id: &ComponentId) -> Option<Option<(String, u32, u32)>> {
-        let of = |c: &arch_graph::Component| match (&c.anchor, &c.proposed) {
-            (Some(a), _) if crate::status::is_folder(a) => None,
-            (Some(a), _) => Some((a.file.to_string(), a.span.start_line, a.span.end_line)),
-            (None, Some(p)) => Some((p.file.to_string(), 1, 1)),
-            (None, None) => None,
-        };
-        let in_file = self.desk.code.defs.iter().find(|d| &d.id == id).map(|d| Some((self.desk.code.current_file.clone(), d.start as u32, d.end as u32)));
-        let known = [in_file, self.desk.graph.component(id).map(of), self.desk.details.get(id, self.desk.shared.source.get()).map(|d| of(&d.component))];
         let mut answer = None;
-        for found in known.into_iter().flatten() {
+        for found in self.known(id).into_iter().filter_map(|k| k.code) {
             if found.is_some() {
                 return Some(found);
             }
@@ -204,8 +201,7 @@ impl CockpitApp {
                 let (start, end) = line.map_or((start, end), |l| (l, l));
                 self.show_target_in(BufferKind::Code, &Target::Span { file, start: start as usize, end: end as usize }, from);
                 // Planned, not written: the file it's planned in.
-                let planned = |c: &arch_graph::Component| c.anchor.is_none() && c.proposed.is_some();
-                if self.desk.graph.component(&id).is_some_and(planned) || self.desk.details.get(&id, self.desk.shared.source.get()).is_some_and(|d| planned(&d.component)) {
+                if self.known(&id).iter().any(|k| k.planned) {
                     self.note = Some(format!("{} isn't written yet: this is the file it's planned in.", self.component_name(&id)));
                 }
             }

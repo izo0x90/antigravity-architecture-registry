@@ -18,6 +18,9 @@
 //!   The shell takes the asks in one place (`app/asks.rs`) and does each
 //!   the same way whichever buffer asked; no buffer keeps fields for the
 //!   shell to poll.
+//! - **Buffers behind their trait**: the shell (`app/`, `app.rs`) holds
+//!   every buffer as a `Buffer` and names no buffer's type: it can reach
+//!   nothing a buffer doesn't offer through the trait.
 //! - **Controls**: views draw content; hosts draw every control. Outside
 //!   the hosts (the top bar, panels, the quick look, the key bar and
 //!   menus: `app/draw/`), the one control (`actions.rs`, `hosted.rs`) and
@@ -231,6 +234,22 @@ fn buffers_reach_past_themselves_only_by_asking() {
         }
     }
     assert!(found.is_empty(), "the shell polls a buffer outside app/asks.rs, or a buffer keeps fields for it to poll (push an Ask):\n{}", found.join("\n"));
+}
+
+/// The buffers' types.
+const BUFFER_TYPES: &[&str] = &["ChatStreamState", "CodeViewerState", "GraphState", "ArchitectureTreeState", "SpecState", "QueueState", "InboxView", "ChangesView"];
+
+#[test]
+fn the_shell_names_no_buffer_type() {
+    let mut found = Vec::new();
+    for (name, code) in code().into_iter().filter(|(name, _)| name.starts_with("app/") || name == "app.rs") {
+        for (n, line) in lines(&code) {
+            if let Some(ty) = BUFFER_TYPES.iter().find(|t| line.contains(*t)) {
+                found.push(format!("{name}:{n}: {ty}"));
+            }
+        }
+    }
+    assert!(found.is_empty(), "the shell names a buffer's type (drive it through `Buffer`):\n{}", found.join("\n"));
 }
 
 #[test]

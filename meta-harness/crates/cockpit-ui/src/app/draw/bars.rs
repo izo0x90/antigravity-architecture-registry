@@ -174,7 +174,7 @@ impl CockpitApp {
         let layer_title = |layer: Layer| -> String {
             match layer {
                 Layer::On => "On what you're on".to_owned(),
-                Layer::Panel => self.desk.hosted(here.kind).title().text,
+                Layer::Panel => self.desk.view(here.kind).title().text,
                 Layer::Host if here.look => "Quick look".to_owned(),
                 Layer::Host => format!("Panel {}", here.panel + 1),
                 Layer::Everywhere => "Everywhere".to_owned(),

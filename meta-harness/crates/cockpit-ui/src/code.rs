@@ -632,12 +632,10 @@ impl CodeViewerState {
         Ok(())
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
-        let panel = cx.panel;
-        self.fetch_wanted(cx.net, cx.ctx);
-        self.follow_changes(cx.net, cx.ctx);
-        // Replies for a file that's no longer the one shown (an earlier load
-        // answering late) are dropped, so they can't use up its scroll.
+    /// The file it shows, as answered (replies for a file no longer shown,
+    /// an earlier load answering late, are dropped: they can't use up its
+    /// scroll).
+    fn take_analysis(&mut self) {
         let incoming = self.analysis_inbox.lock().ok().and_then(|mut a| a.take());
         if let Some((path, res)) = incoming
             && path == self.current_file
@@ -653,7 +651,10 @@ impl CodeViewerState {
                 Err(e) => self.set_error(e.to_string()),
             }
         }
+    }
 
+    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
+        let panel = cx.panel;
         ui.vertical(|ui| {
             let start_y = ui.cursor().min.y;
             let start_x = ui.cursor().min.x;
@@ -946,6 +947,30 @@ impl ActionProvider for CodeViewerState {
     }
 }
 
+impl crate::buffer::Buffer for CodeViewerState {
+    fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
+        self.draw(ui, drawing.feedback, cx);
+    }
+
+    /// The file it shows (asked for, then taken), and what the desk's
+    /// comparison changed in it.
+    fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
+        self.fetch_wanted(net, ctx);
+        self.take_analysis();
+        self.follow_changes(net, ctx);
+    }
+
+    /// A definition in its file: its name and lines.
+    fn knows(&self, id: &ComponentId) -> Option<crate::buffer::Known> {
+        let def = self.defs.iter().find(|d| &d.id == id)?;
+        Some(crate::buffer::Known { name: Some(def.name.clone()), code: Some(Some((self.current_file.clone(), def.start as u32, def.end as u32))), ..Default::default() })
+    }
+
+    fn describe(&self) -> String {
+        format!("{}:{}", self.current_file, self.target_line.unwrap_or(1))
+    }
+}
+
 impl crate::hosted::Hosted for CodeViewerState {
     /// The file it shows (its path on hover).
     fn title(&self) -> Status {
@@ -1147,6 +1172,7 @@ impl Navigable for CodeViewerState {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::buffer::Buffer;
     use arch_graph::{CodeAnchor, Relation, RepoPath, Span, Stage, Status};
 
     /// The marks on one row of the code view.
@@ -1176,7 +1202,8 @@ pub(crate) mod tests {
         let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, h))), ..Default::default() }, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-                code.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
+                code.tick(&net, ctx);
+                code.draw(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
             });
         });
         placed(&output)

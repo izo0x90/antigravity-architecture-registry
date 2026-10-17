@@ -14,8 +14,9 @@ const SWITCH: &str = "alerts";
 impl CockpitApp {
     /// The item the quick look shows, while it shows the inbox.
     #[cfg(test)]
-    pub(super) fn looked_at(&self) -> Option<&NotificationId> {
-        self.quick_look.as_ref().filter(|q| q.kind == BufferKind::Inbox).and(self.desk.inbox.item.as_ref())
+    pub(super) fn looked_at(&self) -> Option<NotificationId> {
+        self.quick_look.as_ref().filter(|q| q.kind == BufferKind::Inbox)?;
+        self.inbox_item()
     }
 
     /// The quick look on the inbox, showing `id` (a card shown there is closed first).
@@ -23,7 +24,7 @@ impl CockpitApp {
         if self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Spec) {
             self.close_quick_look();
         }
-        self.desk.inbox.show(id);
+        self.inbox_show(id);
         if self.quick_look.is_none() {
             let now = ctx.input(|i| i.time);
             let (panel, over) = (self.desk.panels.focused(), self.desk.panels.focused_kind());
@@ -47,11 +48,25 @@ impl CockpitApp {
         all
     }
 
+    /// The item the inbox shows.
+    fn inbox_item(&self) -> Option<NotificationId> {
+        match self.desk.view(BufferKind::Inbox).place() {
+            Place::Inbox { item } => item.map(NotificationId::new),
+            _ => None,
+        }
+    }
+
+    /// The inbox shows item `id`.
+    fn inbox_show(&mut self, id: NotificationId) {
+        self.desk.view_mut(BufferKind::Inbox).restore(&Place::Inbox { item: Some(id.to_string()) });
+    }
+
     /// The one `by` steps from the inbox's, across every server (none past
     /// either end; from one handled meanwhile, the list's start or end).
     fn step(&self, by: i32) -> Option<(String, NotificationId)> {
         let all = self.all_open(None);
-        let from = self.desk.inbox.item.as_ref();
+        let from = self.inbox_item();
+        let from = from.as_ref();
         let at = match all.iter().position(|(s, n)| *s == self.desk.server && Some(&n.id) == from) {
             Some(at) => at as i64 + i64::from(by),
             None if by > 0 => 0,
@@ -71,10 +86,10 @@ impl CockpitApp {
                 (look.panel, look.over) = (self.desk.panels.focused(), self.desk.panels.focused_kind());
                 look
             });
-            self.desk.inbox.show(id);
+            self.inbox_show(id.clone());
         } else {
             self.switch_to(server, ctx);
-            self.desk.inbox.show(id);
+            self.inbox_show(id.clone());
         }
     }
 

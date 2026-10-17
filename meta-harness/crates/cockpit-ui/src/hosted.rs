@@ -57,6 +57,12 @@ pub trait Hosted {
         Vec::new()
     }
 
+    /// What it has to say to the whole desk (the top bar shows it): an
+    /// answer cut short or slow.
+    fn alert(&self) -> Option<Status> {
+        None
+    }
+
     /// What it's waiting on right now (loading, connecting), in words: a
     /// mark in a place kept for it, so it comes and goes without moving
     /// anything.
@@ -96,16 +102,6 @@ pub trait Hosted {
 pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], cx: &mut RunCx<'_>) {
     let look = crate::theme::look();
     let at_header = |style: Style| bound.iter().filter(move |b| b.action.control.as_ref().is_some_and(|c| c.at == At::Header && c.style == style));
-    let said = |ui: &mut egui::Ui, status: &Status, strong: bool| {
-        let mut text = RichText::new(&status.text).size(if strong { look.text_label } else { look.text_small }).color(status.tone.color());
-        if strong {
-            text = text.strong();
-        }
-        let label = ui.add(egui::Label::new(text).extend());
-        if let Some(detail) = &status.detail {
-            label.on_hover_text(detail);
-        }
-    };
     // One line that wraps (a narrow panel, a phone): nothing overlaps.
     // The buttons first: what follows them grows and wraps after them.
     ui.horizontal_wrapped(|ui| {
@@ -118,12 +114,34 @@ pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], cx: &mut R
             ui.painter().galley(rect.min, galley, Tone::Warn.color());
             response.on_hover_text(doing);
         }
-        said(ui, &panel.title(), true);
+        said(ui, &panel.title(), look.text_label, true);
         for status in panel.status() {
-            said(ui, &status, false);
+            said(ui, &status, look.text_small, false);
         }
     });
     if at_header(Style::Setting).next().is_some() {
         ui.horizontal_wrapped(|ui| crate::actions::controls(ui, at_header(Style::Setting), cx));
+    }
+}
+
+/// What other buffers say about what a card shows (the quick look's,
+/// above its card): one line that wraps.
+pub fn says(ui: &mut egui::Ui, statuses: &[Status]) {
+    ui.horizontal_wrapped(|ui| {
+        for status in statuses {
+            said(ui, status, crate::theme::look().text_body, false);
+        }
+    });
+}
+
+/// One thing said, in its tone (more on hover).
+fn said(ui: &mut egui::Ui, status: &Status, size: f32, strong: bool) {
+    let mut text = RichText::new(&status.text).size(size).color(status.tone.color());
+    if strong {
+        text = text.strong();
+    }
+    let label = ui.add(egui::Label::new(text).extend());
+    if let Some(detail) = &status.detail {
+        label.on_hover_text(detail);
     }
 }

@@ -27,17 +27,17 @@ impl CockpitApp {
         });
         let now = ctx.input(|i| i.time);
         self.quick_look = Some(QuickLook::open(BufferKind::Spec, self.desk.panels.focused(), kind, self.desk.used_buffer(BufferKind::Spec).id, key, now));
-        // Its own spec view, held on the card.
-        self.use_buffer(Buffer::new(BufferKind::Spec, crate::quick_look::PANE));
-        self.desk.spec.pinned = true;
-        self.desk.spec.floating = true;
-        self.desk.spec.show(id);
+        // Its own card, held on what it shows.
+        self.use_buffer(BufferId::new(BufferKind::Spec, crate::quick_look::PANE));
+        let card = self.desk.view_mut(BufferKind::Spec);
+        card.as_card(true);
+        let _ = card.show_target(&Target::Component(id));
     }
 
     /// Closes the quick look: the spec view used before is used again.
     pub(super) fn close_quick_look(&mut self) {
         if let Some(look) = self.quick_look.take() {
-            self.use_buffer(Buffer::new(BufferKind::Spec, look.previous_spec));
+            self.use_buffer(BufferId::new(BufferKind::Spec, look.previous_spec));
         }
     }
 
@@ -49,9 +49,9 @@ impl CockpitApp {
         }
         let from = self.jump_here();
         let buffer = self.desk.panels.new_buffer(BufferKind::Spec);
-        self.desk.spec.floating = false;
-        self.desk.active.insert(BufferKind::Spec, buffer.id);
-        self.desk.last_used.insert(BufferKind::Spec, buffer.id);
+        self.desk.rekey(BufferId::new(BufferKind::Spec, crate::quick_look::PANE), buffer);
+        self.use_buffer(buffer);
+        self.desk.view_mut(BufferKind::Spec).as_card(false);
         let panel = self.desk.panels.ensure_visible(buffer);
         self.desk.panels.focus(panel);
         self.after_jump(from);

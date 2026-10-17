@@ -46,10 +46,9 @@ pub(super) fn block_detail(block: &ContentBlock) -> String {
 }
 
 impl ChatStreamState {
-    pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
+    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
         let panel = cx.panel;
         let ctx = ui.ctx().clone();
-        self.seen_now(ctx.input(|i| i.time));
 
         ui.vertical(|ui| {
             self.render_banners(ui);

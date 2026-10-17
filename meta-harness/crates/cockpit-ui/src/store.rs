@@ -52,6 +52,8 @@ pub struct Store {
     pub slots: BTreeMap<SlotId, Slot>,
     /// The open notifications (an ended one leaves).
     pub notifications: BTreeMap<NotificationId, Notification>,
+    /// Slots closed (a chat showing one goes back to the lead).
+    pub closed: std::collections::BTreeSet<SlotId>,
 }
 
 impl Store {
@@ -67,10 +69,12 @@ impl Store {
             // The whole state follows: start from nothing.
             ClientEvent::Resync => *self = Self::default(),
             ClientEvent::SlotUpdated { slot } => {
+                self.closed.remove(&slot.id);
                 self.slots.insert(slot.id.clone(), slot);
             }
             ClientEvent::SlotClosed { slot_id } => {
                 self.slots.remove(&slot_id);
+                self.closed.insert(slot_id);
             }
             ClientEvent::NotificationUpdated { notification } => {
                 if notification.state == NotificationState::Open {

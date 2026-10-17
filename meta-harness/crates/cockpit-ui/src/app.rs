@@ -6,25 +6,20 @@ use std::sync::{Arc, Mutex};
 
 use arch_graph::ComponentId;
 
-use crate::actions::{Action, ActionProvider, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, When, is_primary, leader_entries};
+use crate::actions::{Action, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, When, is_primary, leader_entries};
 use crate::actions::Layer;
 use crate::agents::SessionStatus;
-use crate::chat::ChatStreamState;
-use crate::code::CodeViewerState;
-use crate::panels::{Panels, Buffer};
-use crate::parked::{Parked, swap_view};
+use crate::buffer::Buffer;
+use crate::panels::{Panels, BufferId};
 use crate::quick_look::QuickLook;
 use crate::saved::SavedUi;
 use crate::config::UiConfig;
 use crate::feedback::FeedbackInspectorState;
 use crate::goto::{Candidate, Choosing, Details, Pending, Wait, candidates};
-use crate::graph::GraphState;
 use crate::keymap::{Chord, InputMode, SeqMatch, TapTracker, continuations, match_sequence};
-use crate::nav::{GoTo, Jump, JumpList, Motion, Move, Navigable, Place, SearchEvent, Spot, Step, Target, hint_labels, rank_matches, step_match};
+use crate::nav::{GoTo, Jump, JumpList, Motion, Move, Place, SearchEvent, Spot, Step, Target, hint_labels, rank_matches, step_match};
 use crate::net::{NetClient, NetResult, WsState};
-use crate::spec::SpecState;
 use crate::theme::colors;
-use crate::tree::ArchitectureTreeState;
 
 pub(crate) mod attention;
 mod asks;
@@ -542,11 +537,11 @@ impl CockpitApp {
             ui.columns(self.desk.panels.len(), |cols| {
                 for (i, col) in cols.iter_mut().enumerate() {
                     // Each panel draws its own view.
-                    self.swap_in(self.desk.panels.buffer(i));
+                    self.draw_as(self.desk.panels.buffer(i));
                     self.render_panel(i, col);
                 }
             });
-            self.back_to_used();
+            self.desk.drawn();
         });
         self.say_seen(ctx);
 

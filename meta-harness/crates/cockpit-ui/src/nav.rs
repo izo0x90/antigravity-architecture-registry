@@ -62,6 +62,9 @@ pub enum Ask {
     Waiting(Waiting),
     /// The source the user picked (the graph's): every buffer reads from it.
     Source(arch_graph::Source),
+    /// Where the server says a component's code is now: buffers showing it
+    /// may be out of date.
+    Located { id: ComponentId, anchor: Option<arch_graph::CodeAnchor> },
     /// Something for the agents to do, for agent slot `slot` (where it
     /// shows; its errors show there).
     Agents { slot: SlotId, act: crate::agents::Act },

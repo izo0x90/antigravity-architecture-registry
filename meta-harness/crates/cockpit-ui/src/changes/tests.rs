@@ -5,6 +5,7 @@
 use harness_contracts::changes::{ChangedFile, ComponentChanges, DiffLine};
 
 use super::*;
+use crate::buffer::Buffer;
 use crate::shared::Shared;
 
 /// The view and what it shares with the desk: the desk's comparison read
@@ -271,7 +272,7 @@ fn drawn(view: &mut ChangesView, ctx: &egui::Context, h: f32) -> Vec<String> {
     let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, h))), ..Default::default() }, |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-            view.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
+            view.draw(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
         });
     });
     fn walk(shape: &egui::Shape, out: &mut Vec<String>) {

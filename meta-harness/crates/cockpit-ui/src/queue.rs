@@ -86,51 +86,10 @@ fn waiting(state: &JobState) -> Option<&'static str> {
 }
 
 impl QueueState {
-    pub fn invalidate(&mut self) {
-        self.loaded = None;
-    }
-
-    pub fn on_event(&mut self, event: &ArchEvent) {
-        match event {
-            ArchEvent::QueueUpdated { snapshot } if Some(&snapshot.plan) == self.plan.as_ref() => self.set(snapshot.as_ref().clone()),
-            ArchEvent::Changed { .. } => self.invalidate(),
-            _ => {}
-        }
-    }
 
     fn set(&mut self, snapshot: QueueSnapshot) {
         self.selected = self.selected.min(snapshot.jobs.len().saturating_sub(1));
         self.snapshot = Some(snapshot);
-    }
-
-    /// Applies replies; fetches when the plan changes or after `invalidate`.
-    pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
-        let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        for reply in replies {
-            match reply {
-                Reply::Snapshot(p, Ok(s)) if Some(&p) == self.plan.as_ref() => self.set(s),
-                Reply::Snapshot(_, Err(e)) | Reply::Done(Err(e)) => self.error = Some(e.into()),
-                Reply::Done(Ok(())) => {
-                    self.error = None;
-                    self.invalidate();
-                }
-                Reply::Snapshot(..) => {}
-            }
-        }
-        let wanted = self.wanted.clone();
-        if self.loaded.as_ref() == Some(&wanted) {
-            return;
-        }
-        self.loaded = Some(wanted.clone());
-        if self.plan != wanted {
-            self.snapshot = None;
-            self.selected = 0;
-        }
-        self.plan = wanted.clone();
-        let Some(plan) = wanted else { return };
-        let inbox = self.inbox.clone();
-        let p = plan.clone();
-        net.arch_queue(&plan, ctx.clone(), move |r| push(&inbox, Reply::Snapshot(p, r)));
     }
 
     pub fn job(&self) -> Option<&Job> {
@@ -178,7 +137,7 @@ impl QueueState {
         at.is_some()
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, _cx: &mut RunCx<'_>) {
+    pub(crate) fn draw(&mut self, ui: &mut egui::Ui) {
         let mut spots = Vec::new();
         let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt("queue_jobs").auto_shrink([false, false]), ui.input(|i| i.time));
         let output = area.show(ui, |ui| {
@@ -306,6 +265,61 @@ impl QueueState {
         let hidden = self.snapshot.as_ref().is_some_and(|s| s.jobs.iter().any(|j| !j.findings.is_empty() && !self.expanded.contains(&j.component)));
         out.extend(crate::nav::fold_all((hidden, "Show why each failed"), (!self.expanded.is_empty(), "Hide why each failed")));
         out
+    }
+}
+
+impl crate::buffer::Buffer for QueueState {
+    fn render(&mut self, ui: &mut egui::Ui, _cx: &mut RunCx<'_>, _drawing: &mut crate::buffer::Drawing<'_>) {
+        self.draw(ui);
+    }
+
+    /// Applies replies; fetches when the plan changes or after `invalidate`.
+    fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
+        let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        for reply in replies {
+            match reply {
+                Reply::Snapshot(p, Ok(s)) if Some(&p) == self.plan.as_ref() => self.set(s),
+                Reply::Snapshot(_, Err(e)) | Reply::Done(Err(e)) => self.error = Some(e.into()),
+                Reply::Done(Ok(())) => {
+                    self.error = None;
+                    self.invalidate();
+                }
+                Reply::Snapshot(..) => {}
+            }
+        }
+        let wanted = self.wanted.clone();
+        if self.loaded.as_ref() == Some(&wanted) {
+            return;
+        }
+        self.loaded = Some(wanted.clone());
+        if self.plan != wanted {
+            self.snapshot = None;
+            self.selected = 0;
+        }
+        self.plan = wanted.clone();
+        let Some(plan) = wanted else { return };
+        let inbox = self.inbox.clone();
+        let p = plan.clone();
+        net.arch_queue(&plan, ctx.clone(), move |r| push(&inbox, Reply::Snapshot(p, r)));
+    }
+
+
+    fn on_event(&mut self, event: &ArchEvent) {
+        match event {
+            ArchEvent::QueueUpdated { snapshot } if Some(&snapshot.plan) == self.plan.as_ref() => self.set(snapshot.as_ref().clone()),
+            ArchEvent::Changed { .. } => crate::buffer::Buffer::invalidate(self),
+            _ => {}
+        }
+    }
+
+
+    fn invalidate(&mut self) {
+        self.loaded = None;
+    }
+
+
+    fn describe(&self) -> String {
+        "the plan's jobs".to_owned()
     }
 }
 
@@ -459,6 +473,7 @@ impl crate::hosted::Hosted for QueueState {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::buffer::Buffer;
     use crate::shared::on_plan;
     use arch_graph::{Finding, FindingCode, JobKind, Target};
 
@@ -535,12 +550,7 @@ pub(crate) mod tests {
         assert_eq!(q.status(), Some(QueueStatus::Idle));
         // It renders headless.
         let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let mut mode = crate::keymap::InputMode::Normal;
-                let mut note = None;
-                let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None };
-                q.render(ui, &mut cx);
-            });
+            egui::CentralPanel::default().show(ctx, |ui| q.draw(ui));
         });
     }
 
@@ -563,8 +573,7 @@ pub(crate) mod tests {
         q.expanded.insert(id("c"));
         let out = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let (mut mode, mut note) = (crate::keymap::InputMode::Normal, None);
-                q.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None });
+                q.draw(ui);
             });
         });
         fn collect(shape: &egui::Shape, out: &mut Vec<String>) {

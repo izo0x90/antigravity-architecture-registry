@@ -11,38 +11,30 @@ pub struct Desk {
     /// It was shown once (and loaded what it shows then).
     pub opened: bool,
     pub net: NetClient,
-    pub chat: ChatStreamState,
-    pub code: CodeViewerState,
-    pub graph: GraphState,
-    pub spec: SpecState,
-    pub tree: ArchitectureTreeState,
-    pub queue: crate::queue::QueueState,
-    /// What needs the user, one at a time.
-    pub inbox: crate::inbox::InboxView,
-    /// The changes (git) by the desk's comparison in use.
-    pub changes: crate::changes::ChangesView,
-    /// The panels: the view each shows, and which has focus.
+    /// Every buffer, by its id: shown in a panel, hidden, or the quick
+    /// look's card. The shell drives them through `Buffer` alone.
+    buffers: BTreeMap<BufferId, Box<dyn Buffer>>,
+    /// The panels: the buffer each shows, and which has focus.
     pub panels: Panels,
-    /// The views not in use now (each panel's own; see `buffers`).
-    pub parked: Parked,
-    /// For each kind with a view per panel: the view in use now, and the
-    /// one used last (what keys, links and the agent act on).
-    pub active: BTreeMap<BufferKind, u32>,
+    /// For each kind with a buffer per panel: the one used last (what
+    /// keys, links and the agent act on), and the one being drawn (its
+    /// panel's, while it's drawn).
     pub last_used: BTreeMap<BufferKind, u32>,
-    /// New views, to start where the view of their kind used before was.
-    pub fresh: Vec<(Buffer, Place)>,
+    active: BTreeMap<BufferKind, u32>,
+    /// New buffers, to start where the buffer of their kind used before was.
+    pub fresh: Vec<(BufferId, Place)>,
     /// What the buffers show in common (each reads what it needs).
     pub shared: crate::shared::Shared,
     /// Loads and saves the cockpit's state on the server.
     pub keeper: crate::saved::Keeper,
     /// Calls from outside: scripts in the page, and agents while allowed.
     pub remote: crate::remote::Remote,
-    /// Where jumps left from, across views and slots.
+    /// Where jumps left from, across buffers and slots.
     pub jumps: JumpList,
     /// Marks by letter.
     pub marks: BTreeMap<char, Jump>,
-    /// The last search in each view (one that found something), and the
-    /// last that found nothing (so `n` can say so).
+    /// The last search in each kind of buffer (one that found something),
+    /// and the last that found nothing (so `n` can say so).
     pub searches: BTreeMap<BufferKind, String>,
     pub missed: BTreeMap<BufferKind, String>,
     /// Go-tos: component details, and one under way or being picked.
@@ -53,30 +45,20 @@ pub struct Desk {
     /// Code indexing's status, as asked for.
     pub index_inbox: Arc<Mutex<Vec<NetResult<arch_graph::IndexStatus>>>>,
     pub types_inbox: Arc<Mutex<Option<NetResult<arch_graph::TypeSystem>>>>,
-    /// The spec's anchor we last refetched the view for (so a mismatch the
-    /// server itself holds doesn't refetch every frame).
-    pub anchor_checked: Option<Option<arch_graph::CodeAnchor>>,
 }
 
 impl Desk {
     /// Server `name`'s desk, its calls going through home at `host_origin`.
     pub fn new(host_origin: &str, name: &str) -> Self {
+        let buffers = BufferKind::ALL.into_iter().map(|kind| (BufferId::new(kind, 0), crate::buffer::new(kind))).collect();
         Self {
             server: name.to_owned(),
             opened: false,
             net: NetClient::for_server(host_origin, name),
-            chat: ChatStreamState::default(),
-            code: CodeViewerState::default(),
-            graph: GraphState::default(),
-            spec: SpecState::default(),
-            tree: ArchitectureTreeState::default(),
-            queue: crate::queue::QueueState::default(),
-            inbox: Default::default(),
-            changes: Default::default(),
+            buffers,
             panels: Panels::default(),
-            parked: Parked::default(),
-            active: BTreeMap::new(),
             last_used: BTreeMap::new(),
+            active: BTreeMap::new(),
             fresh: Vec::new(),
             shared: crate::shared::Shared { server: name.to_owned(), ..Default::default() },
             keeper: Default::default(),
@@ -91,111 +73,104 @@ impl Desk {
             at_inbox: Arc::default(),
             index_inbox: Arc::default(),
             types_inbox: Arc::default(),
-            anchor_checked: None,
         }
     }
 
-    pub fn provider(&self, kind: BufferKind) -> &dyn ActionProvider {
-        match kind {
-            BufferKind::Chat => &self.chat,
-            BufferKind::Code => &self.code,
-            BufferKind::Graph => &self.graph,
-            BufferKind::Tree => &self.tree,
-            BufferKind::Spec => &self.spec,
-            BufferKind::Queue => &self.queue,
-            BufferKind::Inbox => &self.inbox,
-            BufferKind::Changes => &self.changes,
+    /// The buffer of `kind` in use: the one used last.
+    pub fn used_buffer(&self, kind: BufferKind) -> BufferId {
+        BufferId::new(kind, if kind.one_only() { 0 } else { self.last_used.get(&kind).copied().unwrap_or(0) })
+    }
+
+    pub fn buffer(&self, id: BufferId) -> Option<&dyn Buffer> {
+        self.buffers.get(&id).map(|b| b.as_ref())
+    }
+
+    pub fn buffer_mut(&mut self, id: BufferId) -> Option<&mut (dyn Buffer + 'static)> {
+        self.buffers.get_mut(&id).map(|b| b.as_mut())
+    }
+
+    /// Makes `id`'s buffer if there's none yet; true when it's new.
+    pub fn ensure(&mut self, id: BufferId) -> bool {
+        let id = if id.kind.one_only() { BufferId::new(id.kind, 0) } else { id };
+        if self.buffers.contains_key(&id) {
+            return false;
+        }
+        self.buffers.insert(id, crate::buffer::new(id.kind));
+        true
+    }
+
+    /// The buffer `from` is `to`'s from now on (the quick look's card,
+    /// sent to a panel).
+    pub fn rekey(&mut self, from: BufferId, to: BufferId) {
+        if let Some(buffer) = self.buffers.remove(&from) {
+            self.buffers.insert(to, buffer);
         }
     }
 
-    /// The view of `kind` as its host shows it (its top line).
-    pub fn hosted(&self, kind: BufferKind) -> &dyn crate::hosted::Hosted {
-        match kind {
-            BufferKind::Chat => &self.chat,
-            BufferKind::Code => &self.code,
-            BufferKind::Graph => &self.graph,
-            BufferKind::Tree => &self.tree,
-            BufferKind::Spec => &self.spec,
-            BufferKind::Queue => &self.queue,
-            BufferKind::Inbox => &self.inbox,
-            BufferKind::Changes => &self.changes,
+    /// `id`'s buffer, new again.
+    pub fn renew(&mut self, id: BufferId) {
+        self.buffers.insert(id, crate::buffer::new(id.kind));
+    }
+
+    /// The buffer of `kind` in use: the one being drawn, else the one
+    /// used last.
+    fn in_use(&self, kind: BufferKind) -> BufferId {
+        match self.active.get(&kind) {
+            Some(id) if !kind.one_only() => BufferId::new(kind, *id),
+            _ => self.used_buffer(kind),
         }
     }
 
-    pub fn provider_mut(&mut self, kind: BufferKind) -> &mut dyn ActionProvider {
-        match kind {
-            BufferKind::Chat => &mut self.chat,
-            BufferKind::Code => &mut self.code,
-            BufferKind::Graph => &mut self.graph,
-            BufferKind::Tree => &mut self.tree,
-            BufferKind::Spec => &mut self.spec,
-            BufferKind::Queue => &mut self.queue,
-            BufferKind::Inbox => &mut self.inbox,
-            BufferKind::Changes => &mut self.changes,
+    pub fn view(&self, kind: BufferKind) -> &dyn Buffer {
+        self.buffers.get(&self.in_use(kind)).expect("the buffer in use is kept").as_ref()
+    }
+
+    pub fn view_mut(&mut self, kind: BufferKind) -> &mut dyn Buffer {
+        let id = self.in_use(kind);
+        self.buffers.get_mut(&id).expect("the buffer in use is kept").as_mut()
+    }
+
+    /// The buffer of `kind` in use, and the desk's calls (to draw it).
+    pub fn view_with_net(&mut self, kind: BufferKind) -> (&mut dyn Buffer, &NetClient) {
+        let id = self.in_use(kind);
+        (self.buffers.get_mut(&id).expect("the buffer in use is kept").as_mut(), &self.net)
+    }
+
+    /// `id` is the buffer of its kind in use while it's drawn.
+    pub fn drawing(&mut self, id: BufferId) {
+        self.active.insert(id.kind, id.id);
+    }
+
+    /// Drawn: the buffers used last are in use again.
+    pub fn drawn(&mut self) {
+        self.active.clear();
+    }
+
+    /// Every buffer, shown, hidden or the quick look's.
+    pub fn each_buffer(&mut self, mut f: impl FnMut(&mut dyn Buffer)) {
+        for buffer in self.buffers.values_mut() {
+            f(buffer.as_mut());
         }
     }
 
-    /// Every buffer, in use or parked, reads what they share (a parked
-    /// chat is only its view of the one chat: it has nothing to read).
+    /// Every buffer, by its id.
+    pub fn buffers(&self) -> impl Iterator<Item = (BufferId, &dyn Buffer)> {
+        self.buffers.iter().map(|(id, b)| (*id, b.as_ref()))
+    }
+
+    /// Every buffer reads what they share.
     pub fn share(&mut self) {
-        let Self { shared, chat, code, graph, spec, tree, queue, inbox, changes, parked, .. } = self;
-        let used: [&mut dyn Navigable; 8] = [chat, code, graph, spec, tree, queue, inbox, changes];
-        let parked = parked.graphs.values_mut().map(|v| v as &mut dyn Navigable).chain(parked.codes.values_mut().map(|v| v as &mut dyn Navigable)).chain(parked.specs.values_mut().map(|v| v as &mut dyn Navigable)).chain(parked.trees.values_mut().map(|v| v as &mut dyn Navigable));
-        for view in used.into_iter().chain(parked) {
-            view.share(shared);
+        let Self { shared, buffers, .. } = self;
+        for buffer in buffers.values_mut() {
+            buffer.share(shared);
         }
     }
 
-    pub fn view(&self, kind: BufferKind) -> &dyn Navigable {
-        match kind {
-            BufferKind::Chat => &self.chat,
-            BufferKind::Code => &self.code,
-            BufferKind::Graph => &self.graph,
-            BufferKind::Tree => &self.tree,
-            BufferKind::Spec => &self.spec,
-            BufferKind::Queue => &self.queue,
-            BufferKind::Inbox => &self.inbox,
-            BufferKind::Changes => &self.changes,
-        }
-    }
-
-    pub fn view_mut(&mut self, kind: BufferKind) -> &mut dyn Navigable {
-        match kind {
-            BufferKind::Chat => &mut self.chat,
-            BufferKind::Code => &mut self.code,
-            BufferKind::Graph => &mut self.graph,
-            BufferKind::Tree => &mut self.tree,
-            BufferKind::Spec => &mut self.spec,
-            BufferKind::Queue => &mut self.queue,
-            BufferKind::Inbox => &mut self.inbox,
-            BufferKind::Changes => &mut self.changes,
-        }
-    }
-
-    /// The view of `kind` in use: the one used last.
-    pub fn used_buffer(&self, kind: BufferKind) -> Buffer {
-        Buffer::new(kind, self.last_used.get(&kind).copied().unwrap_or(0))
-    }
-
-    /// Every graph (the one in use first).
-    pub fn graphs(&mut self) -> impl Iterator<Item = &mut GraphState> {
-        std::iter::once(&mut self.graph).chain(self.parked.graphs.values_mut())
-    }
-
-    pub fn codes(&mut self) -> impl Iterator<Item = &mut CodeViewerState> {
-        std::iter::once(&mut self.code).chain(self.parked.codes.values_mut())
-    }
-
-    pub fn specs(&mut self) -> impl Iterator<Item = &mut SpecState> {
-        std::iter::once(&mut self.spec).chain(self.parked.specs.values_mut())
-    }
-
-    pub fn trees(&mut self) -> impl Iterator<Item = &mut ArchitectureTreeState> {
-        std::iter::once(&mut self.tree).chain(self.parked.trees.values_mut())
-    }
-
-    /// Whether `buffer`'s spec view is pinned.
-    pub fn pinned(&self, buffer: Buffer) -> bool {
-        if self.active.get(&BufferKind::Spec).copied().unwrap_or(0) == buffer.id { self.spec.pinned } else { self.parked.specs.get(&buffer.id).is_some_and(|s| s.pinned) }
+    /// Keeps only the buffers `held` says are (a panel shows or hides
+    /// them); the one of each kind in use, and the first, are always kept.
+    pub fn keep_only(&mut self, held: impl Fn(BufferId) -> bool) {
+        let used: Vec<BufferId> = BufferKind::ALL.into_iter().map(|k| self.used_buffer(k)).collect();
+        self.buffers.retain(|id, _| id.id == 0 || used.contains(id) || held(*id));
     }
 }
+

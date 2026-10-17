@@ -45,11 +45,8 @@ impl CockpitApp {
             self.desk.keeper.reconnected();
             self.desk.keeper.load(&self.desk.net, ctx);
             // Back after a drop: what changed meanwhile wasn't heard.
-            self.desk.graphs().for_each(GraphState::invalidate);
-            self.desk.specs().for_each(SpecState::invalidate);
-            self.desk.trees().for_each(ArchitectureTreeState::invalidate);
+            self.desk.each_buffer(|b| b.invalidate());
             self.desk.shared.review.invalidate();
-            self.desk.queue.invalidate();
             self.desk.details.clear();
             self.fetch_index_status(ctx);
         }
@@ -116,14 +113,13 @@ impl CockpitApp {
                     arch_graph::ArchEvent::ViewRequested { request, .. } => {
                         self.agents_graph(request.panel);
                         let before = self.jump_of(BufferKind::Graph);
-                        self.desk.graph.on_event(event);
+                        self.desk.view_mut(BufferKind::Graph).on_event(event);
                         if self.jump_of(BufferKind::Graph) != before {
                             self.desk.jumps.record(before);
                         }
                     }
-                    _ => self.desk.graphs().for_each(|g| g.on_event(event)),
+                    _ => self.desk.each_buffer(|b| b.on_event(event)),
                 }
-                self.desk.queue.on_event(event);
                 // Files changed (read, or seen changing on disk): the changes too.
                 if matches!(event, arch_graph::ArchEvent::Changed { .. } | arch_graph::ArchEvent::Index { .. }) {
                     self.desk.shared.changes.invalidate();
@@ -131,8 +127,6 @@ impl CockpitApp {
                 // Only real changes refetch: a check result (often the spec
                 // view's own validation) must not trigger another round.
                 if matches!(event, arch_graph::ArchEvent::Changed { .. }) {
-                    self.desk.specs().for_each(SpecState::invalidate);
-                    self.desk.trees().for_each(ArchitectureTreeState::invalidate);
                     self.desk.shared.review.invalidate();
                     self.desk.details.clear();
                 }

@@ -1,8 +1,8 @@
-//! The cockpit's state, kept by the server: the panels and the view in
-//! each, where every view is (the same places the jump list and marks
-//! hold), which spec views are pinned and which view of each kind was used
-//! last, the marks and the jump list, and the chat's session and unsent
-//! text. This structure is the one definition of what's kept; the server
+//! The cockpit's state, kept by the server: the panels and the buffer in
+//! each, where every buffer is (the same places the jump list and marks
+//! hold) and what each keeps of its own (a card pinned, a chat's unsent
+//! text), which buffer of each kind was used last, the marks and the jump
+//! list. This structure is the one definition of what's kept; the server
 //! stores it as written.
 //!
 //! Loaded once when the cockpit opens (nothing is saved before that, so a
@@ -14,36 +14,33 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::panels::{Panels, Buffer};
+use crate::panels::{Panels, BufferId};
 use crate::nav::{Jump, JumpList, Place};
 use crate::net::{NetClient, NetResult};
 
 /// Bumped when a change to this structure can't read an older one (an older
 /// one is then left unread, and the cockpit opens as new).
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedUi {
     pub version: u32,
     pub panels: Panels,
     /// Where each view is (shown or put away).
-    pub views: Vec<(Buffer, Place)>,
-    /// The spec views pinned to their card.
-    pub pinned: Vec<u32>,
+    pub views: Vec<(BufferId, Place)>,
     /// The view of each kind used last.
-    pub used: Vec<Buffer>,
+    pub used: Vec<BufferId>,
     pub marks: BTreeMap<char, Jump>,
     pub jumps: JumpList,
-    /// What was typed and not sent, by chat view (its buffer's number).
-    pub drafts: BTreeMap<u32, String>,
+    /// What each buffer keeps of its own (a card pinned, a chat's unsent
+    /// text, how changes are laid out).
+    pub kept: Vec<(BufferId, serde_json::Value)>,
     /// The user lets agents drive the cockpit.
     #[serde(default)]
     pub agents: bool,
-    /// The desk's comparison in use (git), and how changes are laid out.
+    /// The desk's comparison in use (git).
     #[serde(default)]
     pub comparison: harness_contracts::changes::Comparison,
-    #[serde(default)]
-    pub diff_layout: crate::changes::DiffLayout,
     /// Where the buttons of what you're on show, once changed here (else
     /// the UI config says).
     #[serde(default)]
@@ -175,7 +172,7 @@ mod tests {
     use super::*;
 
     fn state(draft: &str) -> SavedUi {
-        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), pinned: Vec::new(), used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), drafts: BTreeMap::from([(0, draft.into())]), agents: false, comparison: Default::default(), diff_layout: Default::default(), item_buttons: None }
+        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), kept: vec![(BufferId::new(crate::app::BufferKind::Chat, 0), serde_json::Value::String(draft.into()))], used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), agents: false, comparison: Default::default(), item_buttons: None }
     }
 
     fn arrive(keeper: &Keeper, value: Option<serde_json::Value>) {

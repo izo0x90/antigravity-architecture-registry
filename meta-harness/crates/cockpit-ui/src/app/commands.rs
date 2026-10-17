@@ -171,7 +171,7 @@ impl CockpitApp {
             self.gathered.set(self.gathered.get() + 1);
         }
         let kind = here.kind;
-        let view = |k: BufferKind, all: bool| self.desk.provider(k).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(k), a));
+        let view = |k: BufferKind, all: bool| self.desk.view(k).actions().into_iter().filter(move |a| all || a.scope == Scope::Global).map(move |a| (Origin::View(k), a));
         let mut levels: Vec<(Layer, Origin, Action)> = Vec::new();
         levels.extend(view(kind, true).map(|(o, a)| (Layer::Panel, o, a)));
         levels.extend(self.panel_actions(here).into_iter().map(|a| (Layer::Panel, Origin::Shell, a)));
@@ -212,7 +212,7 @@ impl CockpitApp {
     fn placements(&self, here: Here) -> Vec<(String, crate::actions::Control)> {
         use crate::actions::{At, Control, Style};
         use egui_phosphor::regular as icon;
-        let panel = self.desk.hosted(here.kind).placed().into_iter();
+        let panel = self.desk.view(here.kind).placed().into_iter();
         let button = |caption: &str, glyph: &'static str| Control::new(At::Header, Style::Button, caption, Some(glyph));
         let host = if here.look {
             vec![("quicklook.to_panel".to_owned(), button("Open in a panel", icon::COLUMNS)), ("quicklook.toggle".to_owned(), button("", icon::X))]
@@ -269,7 +269,7 @@ impl CockpitApp {
         let focused = self.focused_kind();
         for kind in BufferKind::ALL.into_iter().filter(|k| *k != focused) {
             // Their own actions; not their shared moves, which act where you are.
-            for mut action in self.desk.provider(kind).actions().into_iter().filter(|a| a.scope == Scope::Focused && a.command::<Move>().is_none()) {
+            for mut action in self.desk.view(kind).actions().into_iter().filter(|a| a.scope == Scope::Focused && a.command::<Move>().is_none()) {
                 action.label = format!("{}{} · {}", &kind.title()[..1], kind.title()[1..].to_lowercase(), action.label);
                 out.push(Bound { action, origin: Origin::View(kind), leader: None, keys: Vec::new(), gestures: Vec::new(), layer: Layer::Everywhere });
             }
@@ -385,7 +385,7 @@ impl CockpitApp {
                 let picked = value.as_deref().and_then(|v| {
                     let (kind, id) = v.split_once(':')?;
                     let kind = BufferKind::ALL.into_iter().find(|k| k.name() == kind)?;
-                    Some(Buffer::new(kind, id.parse().ok()?))
+                    Some(BufferId::new(kind, id.parse().ok()?))
                 });
                 match picked.filter(|p| self.desk.panels.has(*p)) {
                     Some(buffer) => self.show_view(buffer),

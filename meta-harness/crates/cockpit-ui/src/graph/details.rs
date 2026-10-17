@@ -3,14 +3,12 @@
 //! a component's card (shown above its spec in the quick look). Only shows;
 //! never changes what's on the graph.
 
-use egui::RichText;
-
 use arch_graph::tree::{Mark, PillRole};
 use arch_graph::{ComponentId, Signature, Source};
 
 use super::{Detail, GraphState, Reply, push};
+use crate::hosted::{Status, Tone};
 use crate::net::NetClient;
-use crate::theme::colors;
 
 fn signature(sig: &Signature) -> String {
     let params: Vec<String> = sig.params.iter().map(|p| p.ty.as_ref().map_or_else(|| p.name.clone(), |t| format!("{}: {t}", p.name))).collect();
@@ -54,27 +52,24 @@ impl GraphState {
     /// itself: its kind and plan mark, what else changes it, what's under
     /// it, its review marks, and what's on its lines. Nothing when it has no
     /// card on screen.
-    pub(crate) fn render_card_context(&self, ui: &mut egui::Ui, component: &ComponentId) {
+    pub(crate) fn card_says(&self, component: &ComponentId) -> Vec<Status> {
         let card = match self.selected_card().filter(|c| c.component.as_ref() == Some(component)) {
             Some(card) => card,
             None => match self.tree.as_ref().and_then(|t| t.cards.iter().find(|c| c.component.as_ref() == Some(component))) {
                 Some(card) => card,
-                None => return,
+                None => return Vec::new(),
             },
         };
-        let look = crate::theme::look();
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(format!("In the graph: {}", card.kind)).size(look.text_body).color(colors().muted));
-            if card.mark != Mark::Code {
-                ui.label(RichText::new(crate::graph_style::mark_label(card.mark)).size(look.text_body).color(style_color(card.mark)));
-            }
-            if card.outside_plan {
-                ui.label(RichText::new("code the plan plugs into").size(look.text_body).color(colors().muted));
-            }
-            if card.more > 0 {
-                ui.label(RichText::new(format!("{} more under it", card.more)).size(look.text_body).color(colors().muted));
-            }
-        });
+        let mut out = vec![Status::new(format!("In the graph: {}", card.kind), Tone::Muted)];
+        if card.mark != Mark::Code {
+            out.push(Status::new(crate::graph_style::mark_label(card.mark), mark_tone(card.mark)));
+        }
+        if card.outside_plan {
+            out.push(Status::new("code the plan plugs into", Tone::Muted));
+        }
+        if card.more > 0 {
+            out.push(Status::new(format!("{} more under it", card.more), Tone::Muted));
+        }
         // A planned change to its signature, beside the code's own.
         let signature_in = |source: &Source| match self.detail(&card.key, source) {
             Some(Detail::Ready(d)) => d.component.signature.clone(),
@@ -85,22 +80,20 @@ impl GraphState {
             && let (Some(planned), Some(real)) = (signature_in(&self.nav.source), signature_in(&Source::Code))
             && planned != real
         {
-            ui.label(RichText::new(format!("In the plan: {}", signature(&planned))).monospace().size(look.text_small).color(colors().warn));
-            ui.label(RichText::new(format!("In the code: {}", signature(&real))).monospace().size(look.text_small).color(colors().text));
+            out.push(Status::new(format!("In the plan: {}", signature(&planned)), Tone::Warn));
+            out.push(Status::new(format!("In the code: {}", signature(&real)), Tone::Plain));
         }
         if !card.other_plans.is_empty() {
             let names: Vec<&str> = card.other_plans.iter().map(|p| p.0.as_str()).collect();
-            ui.label(RichText::new(format!("Also changed by {}", names.join(", "))).size(look.text_body).color(colors().special));
+            out.push(Status::new(format!("Also changed by {}", names.join(", ")), Tone::Accent));
         }
         if let Some(mark) = self.marks.get(component) {
-            ui.horizontal_wrapped(|ui| {
-                if mark.changed {
-                    ui.label(RichText::new("changed since review").size(look.text_body).color(colors().info));
-                }
-                if mark.open > 0 {
-                    ui.label(RichText::new(format!("{} open review points", mark.open)).size(look.text_body).color(colors().warn));
-                }
-            });
+            if mark.changed {
+                out.push(Status::new("changed since review", Tone::Info));
+            }
+            if mark.open > 0 {
+                out.push(Status::new(format!("{} open review points", mark.open), Tone::Warn));
+            }
         }
         // What's on its lines (its pills, listed).
         if let Some(tree) = &self.tree {
@@ -116,12 +109,20 @@ impl GraphState {
                         PillRole::Step => format!("via {}", p.text),
                     })
                     .collect();
-                ui.label(RichText::new(format!("{name}: {}", pills.join(" · "))).monospace().size(look.text_small).color(colors().muted));
+                out.push(Status::new(format!("{name}: {}", pills.join(" · ")), Tone::Muted));
             }
         }
+        out
     }
 }
 
-fn style_color(mark: Mark) -> egui::Color32 {
-    crate::graph_style::style().node_outline(&colors(), mark, false).color
+/// How a plan's mark on a card is said.
+fn mark_tone(mark: Mark) -> Tone {
+    match mark {
+        Mark::Code => Tone::Plain,
+        Mark::New => Tone::Accent,
+        Mark::Changed => Tone::Warn,
+        Mark::Done => Tone::Ok,
+        Mark::Mismatch => Tone::Error,
+    }
 }

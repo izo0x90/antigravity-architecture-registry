@@ -148,7 +148,7 @@ impl InboxView {
         }
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
+    fn draw(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         let theme = crate::theme::look();
         let Some(shown) = self.shown.clone() else {
             if self.item.is_some() {
@@ -218,6 +218,16 @@ impl InboxView {
             ui.ctx().request_repaint();
         }
         self.spots = drawn;
+    }
+}
+
+impl crate::buffer::Buffer for InboxView {
+    fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, _drawing: &mut crate::buffer::Drawing<'_>) {
+        self.draw(ui, cx);
+    }
+
+    fn describe(&self) -> String {
+        "what needs you".to_owned()
     }
 }
 

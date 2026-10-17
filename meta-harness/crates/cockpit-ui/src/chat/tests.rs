@@ -134,7 +134,7 @@ fn messages_take_a_cursor_and_their_links_open() {
                 let mut mode = crate::keymap::InputMode::Normal;
                 let mut note = None;
                 let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None };
-                chat.render(ui, &mut feedback, true, &mut cx);
+                chat.draw(ui, &mut feedback, true, &mut cx);
             });
         });
     }
@@ -240,7 +240,7 @@ fn a_long_chat_moves_by_the_shared_rules() {
                     let mut mode = crate::keymap::InputMode::Normal;
                     let mut note = None;
                     let mut cx = RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None };
-                    chat.render(ui, &mut feedback, true, &mut cx);
+                    chat.draw(ui, &mut feedback, true, &mut cx);
                 });
             });
         }

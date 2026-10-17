@@ -46,6 +46,32 @@ impl ChatStreamState {
     }
 }
 
+impl crate::buffer::Buffer for ChatStreamState {
+    fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
+        self.draw(ui, drawing.feedback, drawing.focused, cx);
+    }
+
+    /// While it's on screen, its slot's updates are seen.
+    fn tick(&mut self, _net: &crate::net::NetClient, ctx: &egui::Context) {
+        self.seen_now(ctx.input(|i| i.time));
+    }
+
+    /// What's typed and not sent.
+    fn keep(&self) -> Option<serde_json::Value> {
+        (!self.ui.input_buffer.is_empty()).then(|| serde_json::Value::String(self.ui.input_buffer.clone()))
+    }
+
+    fn restore_kept(&mut self, kept: &serde_json::Value) {
+        if let Some(draft) = kept.as_str().filter(|_| self.ui.input_buffer.is_empty()) {
+            self.ui.input_buffer = draft.to_owned();
+        }
+    }
+
+    fn describe(&self) -> String {
+        self.slot().map_or_else(|| "the agent's session".to_owned(), |s| format!("agent slot {}", s.name))
+    }
+}
+
 impl Navigable for ChatStreamState {
     fn take_asks(&mut self) -> Vec<Ask> {
         std::mem::take(&mut self.asks)

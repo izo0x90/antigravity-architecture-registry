@@ -314,61 +314,6 @@ impl SpecState {
         self.target = Some(id);
     }
 
-    /// The architecture changed: load again.
-    pub fn invalidate(&mut self) {
-        self.loaded = None;
-    }
-
-    /// Fetches the target's detail (and its plan findings) when it changes.
-    pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
-        let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        for reply in replies {
-            match reply {
-                Reply::Detail(id, result) if Some(&id) == self.target.as_ref() => match *result {
-                    Ok(detail) => {
-                        self.detail = Some(detail);
-                        self.error = None;
-                        // A restored place whose item only exists once this is in.
-                        if let Some(key) = self.restore_item.take() {
-                            self.move_to(&key);
-                        }
-                    }
-                    Err(e) => self.error = Some(e.into()),
-                },
-                Reply::Report(id, Ok(report)) if Some(&id) == self.target.as_ref() => {
-                    self.findings = report.findings.into_iter().filter(|f| f.component() == Some(&id)).collect();
-                }
-                Reply::Posted(Ok(())) => {
-                    self.note = None;
-                    self.asks.push(Ask::Refresh(crate::nav::Refresh::Review));
-                }
-                Reply::Posted(Err(e)) => self.note = Some(e),
-                _ => {}
-            }
-        }
-        let Some(target) = self.target.clone() else {
-            self.detail = None;
-            return;
-        };
-        // Never another component's content under this one's name.
-        if self.detail.as_ref().is_some_and(|d| d.component.id != target) {
-            self.detail = None;
-        }
-        let key = (target.clone(), self.source.clone());
-        if self.loaded.as_ref() == Some(&key) {
-            return;
-        }
-        self.loaded = Some(key);
-        self.findings.clear();
-        let inbox = self.inbox.clone();
-        let id = target.clone();
-        net.arch_component(&target, &self.source, ctx.clone(), move |r| push(&inbox, Reply::Detail(id, Box::new(r))));
-        if let Some(plan) = self.source.plan() {
-            let inbox = self.inbox.clone();
-            net.arch_validate(plan, ctx.clone(), move |r| push(&inbox, Reply::Report(target, r)));
-        }
-    }
-
     /// The relations shown, in order: by kind, outgoing then incoming.
     fn relations(&self) -> Vec<(RelationKind, ComponentId, bool)> {
         let Some(detail) = &self.detail else { return Vec::new() };
@@ -653,18 +598,10 @@ impl SpecState {
     }
 
     fn code_location(&self) -> Option<(String, u32, u32)> {
-        let c = &self.detail.as_ref()?.component;
-        match (&c.anchor, &c.proposed) {
-            (Some(a), _) if crate::status::is_folder(a) => None,
-            (Some(a), _) => Some((a.file.to_string(), a.span.start_line, a.span.end_line)),
-            (None, Some(p)) => Some((p.file.to_string(), 1, 1)),
-            (None, None) => None,
-        }
+        crate::buffer::code_of(&self.detail.as_ref()?.component)
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        self.tick(cx.net, cx.ctx);
-        self.follow_changes(cx.net, cx.ctx);
+    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         self.render_composer(ui, cx);
         let Some(detail) = self.detail.clone() else {
             let msg = match (&self.target, &self.error) {
@@ -1383,6 +1320,107 @@ impl SpecState {
     }
 }
 
+impl crate::buffer::Buffer for SpecState {
+    fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, _drawing: &mut crate::buffer::Drawing<'_>) {
+        self.draw(ui, cx);
+    }
+
+    /// Fetches the target's detail (and its plan findings) when it changes.
+    fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
+        let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        for reply in replies {
+            match reply {
+                Reply::Detail(id, result) if Some(&id) == self.target.as_ref() => match *result {
+                    Ok(detail) => {
+                        // Where its code is now: what shows it elsewhere may be out of date.
+                        self.asks.push(Ask::Located { id: detail.component.id.clone(), anchor: detail.component.anchor.clone() });
+                        self.detail = Some(detail);
+                        self.error = None;
+                        // A restored place whose item only exists once this is in.
+                        if let Some(key) = self.restore_item.take() {
+                            self.move_to(&key);
+                        }
+                    }
+                    Err(e) => self.error = Some(e.into()),
+                },
+                Reply::Report(id, Ok(report)) if Some(&id) == self.target.as_ref() => {
+                    self.findings = report.findings.into_iter().filter(|f| f.component() == Some(&id)).collect();
+                }
+                Reply::Posted(Ok(())) => {
+                    self.note = None;
+                    self.asks.push(Ask::Refresh(crate::nav::Refresh::Review));
+                }
+                Reply::Posted(Err(e)) => self.note = Some(e),
+                _ => {}
+            }
+        }
+        let Some(target) = self.target.clone() else {
+            self.detail = None;
+            return;
+        };
+        // Never another component's content under this one's name.
+        if self.detail.as_ref().is_some_and(|d| d.component.id != target) {
+            self.detail = None;
+        }
+        let key = (target.clone(), self.source.clone());
+        if self.loaded.as_ref() == Some(&key) {
+            return;
+        }
+        self.loaded = Some(key);
+        self.findings.clear();
+        let inbox = self.inbox.clone();
+        let id = target.clone();
+        net.arch_component(&target, &self.source, ctx.clone(), move |r| push(&inbox, Reply::Detail(id, Box::new(r))));
+        if let Some(plan) = self.source.plan() {
+            let inbox = self.inbox.clone();
+            net.arch_validate(plan, ctx.clone(), move |r| push(&inbox, Reply::Report(target, r)));
+        }
+        self.follow_changes(net, ctx);
+    }
+
+    /// Changed code or plans: its component read again.
+    fn on_event(&mut self, event: &arch_graph::ArchEvent) {
+        if matches!(event, arch_graph::ArchEvent::Changed { .. }) {
+            crate::buffer::Buffer::invalidate(self);
+        }
+    }
+
+    /// The architecture changed: load again.
+    fn invalidate(&mut self) {
+        self.loaded = None;
+    }
+
+
+    /// Whether it's pinned.
+    fn keep(&self) -> Option<serde_json::Value> {
+        self.pinned.then_some(serde_json::Value::Bool(true))
+    }
+
+    fn restore_kept(&mut self, kept: &serde_json::Value) {
+        self.pinned = kept.as_bool().unwrap_or(false);
+    }
+
+    /// The component it shows: its name and where its code is.
+    fn knows(&self, id: &ComponentId) -> Option<crate::buffer::Known> {
+        Some(crate::buffer::Known::of(&self.detail.as_ref().filter(|d| d.component.id == *id)?.component))
+    }
+
+    /// A card over a panel (the quick look): held on its component; in a
+    /// panel again, still held on it.
+    fn as_card(&mut self, card: bool) {
+        self.floating = card;
+        self.pinned |= card;
+    }
+
+    fn describe(&self) -> String {
+        let card = self.target.as_ref().map_or_else(|| "following what you're on".to_owned(), |id| match &self.detail {
+            Some(d) if d.component.id == *id => d.component.name.clone(),
+            _ => crate::nav::short_name(id),
+        });
+        if self.pinned { format!("{card} (pinned)") } else { card }
+    }
+}
+
 impl crate::hosted::Hosted for SpecState {
     /// The component it shows.
     fn title(&self) -> Status {
@@ -1425,6 +1463,7 @@ impl crate::hosted::Hosted for SpecState {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::buffer::Buffer;
     use arch_graph::{Alignment, Component, ImplementationSpec, Invariant, LogicStep, PlanId, Relation, Stage, Status};
 
     pub(crate) fn detail(id: &ComponentId, other: &ComponentId) -> ComponentDetail {
@@ -1465,7 +1504,7 @@ pub(crate) mod tests {
         let mut note = None;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: mode, panel: slot, note: &mut note, asked: &mut None });
+                s.draw(ui, &mut RunCx { net: &net, ctx, input_mode: mode, panel: slot, note: &mut note, asked: &mut None });
             });
         });
     }
@@ -1683,7 +1722,7 @@ pub(crate) mod tests {
         let (net, mut mode, mut note) = (NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
         let out = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                s.render(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None });
+                s.draw(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut None });
             });
         });
         fn collect(shape: &egui::Shape, out: &mut String) {
@@ -1798,7 +1837,6 @@ pub(crate) mod tests {
         let mut mode = crate::keymap::InputMode::Normal;
         frame(&mut s, &ctx, &mut mode, 0);
     }
-
 
     #[test]
     fn as_a_destination_it_shows_any_component_but_the_one_whose_card_is_shown() {

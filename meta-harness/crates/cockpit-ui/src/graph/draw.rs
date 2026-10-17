@@ -223,8 +223,7 @@ impl GraphState {
         self.more_rects.iter().find(|(_, r)| r.contains(pos)).map(|(k, _)| k.clone())
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, panel: usize, pan_held: bool, cx: &mut RunCx<'_>) {
-        self.tick(cx.net, cx.ctx);
+    pub(super) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, panel: usize, pan_held: bool, cx: &mut RunCx<'_>) {
         self.render_where(ui);
         let canvas = ui.available_rect_before_wrap();
         self.canvas = canvas;
@@ -852,6 +851,11 @@ impl crate::hosted::Hosted for GraphState {
 
     fn busy(&self) -> Option<String> {
         (self.load == Load::Loading).then(|| "Loading the view".into())
+    }
+
+    /// An answer cut short or slow (said on the top bar).
+    fn alert(&self) -> Option<Status> {
+        self.answer_status().map(|(words, more)| Status::new(words, Tone::Warn).detail(more))
     }
 
     /// The files changed since they were read, the agent having moved it,

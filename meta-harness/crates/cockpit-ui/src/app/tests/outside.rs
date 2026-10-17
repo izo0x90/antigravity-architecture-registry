@@ -35,10 +35,10 @@ fn from_outside_the_screen_is_read_and_actions_run_clicked_and_keyed_as_the_user
 
     let mut tree = crate::graph::tests::sample_tree();
     tree.cut = Some(arch_graph::tree::Cut { reason: arch_graph::tree::CutReason::Budget, starts_left_out: 0, shown: 2, asked: 3, hidden: 7 });
-    app.desk.graph.set_tree(tree);
+    app.desk.graph_mut().set_tree(tree);
     let clicked = from_outside(&ctx, &mut app, r#"{"op":"click","text":"Show 2 levels"}"#).unwrap();
     assert!(clicked["clicked"].as_str().is_some_and(|c| c.starts_with("Show 2 levels")), "{clicked}");
-    assert_eq!(app.desk.graph.nav.depth, Some(2), "clicked as the user would");
+    assert_eq!(app.desk.graph().nav.depth, Some(2), "clicked as the user would");
     let err = from_outside(&ctx, &mut app, r#"{"op":"click","text":"Nowhere at all"}"#).unwrap_err();
     assert!(err.contains("isn't on screen"), "{err}");
 }

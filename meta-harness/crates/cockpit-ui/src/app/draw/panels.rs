@@ -54,7 +54,7 @@ impl CockpitApp {
         let bound = self.palette_actions();
         // A view asked for an action's picker (e.g. Resume once sessions loaded).
         for kind in BufferKind::ALL {
-            if let Some(id) = self.desk.provider_mut(kind).take_palette_request()
+            if let Some(id) = self.desk.view_mut(kind).take_palette_request()
                 && let Some(action) = bound.iter().find(|b| b.action.id == id)
             {
                 self.open_palette(Some(action));
@@ -64,7 +64,7 @@ impl CockpitApp {
         if let Some(ask) = self.palette.take_search()
             && let Origin::View(kind) = ask.origin
         {
-            self.desk.provider_mut(kind).search(&ask.action, &ask.query);
+            self.desk.view_mut(kind).search(&ask.action, &ask.query);
         }
         if let Some(invocation) = picked {
             self.input_mode = InputMode::Normal;

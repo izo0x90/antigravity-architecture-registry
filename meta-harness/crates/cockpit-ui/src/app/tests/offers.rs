@@ -15,7 +15,7 @@ const CHECKED: [Move; 7] = [Move::Enter, Move::Leave, Move::Fold(Fold::Toggle), 
 fn app() -> (egui::Context, CockpitApp) {
     let (ctx, mut app) = full_app();
     let fed = crate::changes::tests::view_with_changes();
-    (app.desk.changes, app.desk.shared.changes) = (fed.view, fed.shared.changes);
+    (*app.desk.changes_mut(), app.desk.shared.changes) = (fed.view, fed.shared.changes);
     (ctx, app)
 }
 
@@ -31,7 +31,7 @@ fn seen(app: &CockpitApp) -> String {
 
 /// Why nothing happened, if anything said so.
 fn said(app: &CockpitApp) -> Option<String> {
-    app.note.clone().or_else(|| app.desk.graph.note.clone())
+    app.note.clone().or_else(|| app.desk.graph().note.clone())
 }
 
 fn at(kind: BufferKind, key: &str) -> (egui::Context, CockpitApp) {
@@ -39,7 +39,7 @@ fn at(kind: BufferKind, key: &str) -> (egui::Context, CockpitApp) {
     focus(&ctx, &mut app, kind);
     app.desk.view_mut(kind).move_to(key);
     frame(&ctx, &mut app, vec![]);
-    (app.note, app.desk.graph.note) = (None, None);
+    (app.note, app.desk.graph_mut().note) = (None, None);
     (ctx, app)
 }
 

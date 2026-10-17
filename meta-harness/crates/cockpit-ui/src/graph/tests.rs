@@ -4,6 +4,7 @@ use arch_graph::tree::{Input, Mark, Tree, TreeConfig, TreeRequest, ViewKind, Way
 use arch_graph::{CodeAnchor, Component, ComponentId, Graph, Plan, PlanId, Provenance, Relation, RelationKind, RepoPath, Span, Stage, Status, TypeSystem};
 
 use super::*;
+use crate::buffer::Buffer;
 use crate::actions::ActionProvider;
 use crate::nav::{Fold, Navigable, Step, Target};
 
@@ -361,7 +362,7 @@ fn the_graph_is_split_as_agreed() {
         ("cards.rs", &["pub fn take(", "fn take_change("][..]),
         ("draw.rs", &["fn draw_pills(", "fn visible("][..]),
         ("select.rs", &["pub fn select(", "pub fn reveal(", "fn related(", "pub(crate) fn goes("][..]),
-        ("details.rs", &["fn render_card_context(", "fn want_details("][..]),
+        ("details.rs", &["fn card_says(", "fn want_details("][..]),
         ("source.rs", &["fn source_choices", "fn switch_full_code"][..]),
         ("actions.rs", &["impl ActionProvider for GraphState", "fn command("][..]),
     ] {

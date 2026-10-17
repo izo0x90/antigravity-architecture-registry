@@ -51,8 +51,8 @@ impl ChatStreamState {
     }
 
     /// What the agents did since: a sub-slot made from this slot is shown;
-    /// the saved sessions waited on open in the palette; a slot closed
-    /// leaves for the lead.
+    /// the saved sessions waited on open in the palette; its slot closed,
+    /// it shows the lead.
     pub(super) fn took(&mut self) {
         let made = self.agents().made().0;
         if made != self.made_seen {
@@ -66,11 +66,8 @@ impl ChatStreamState {
         if self.after_saved.is_some() && self.agents().saved().is_some() {
             self.pending_palette = self.after_saved.take();
         }
-        let gone = {
-            let agents = self.agents();
-            !agents.store().slots.is_empty() && agents.slot(&self.ui.slot).is_none()
-        };
-        if gone && self.ui.slot.as_str() != LEAD {
+        let gone = self.agents().store().closed.contains(&self.ui.slot);
+        if gone {
             self.ui.slot = SlotId::new(LEAD);
             self.ui.cursor = None;
         }

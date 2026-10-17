@@ -14,10 +14,10 @@ fn search_marks_counts_and_ends_work_through_the_keys() {
     assert_eq!((selected(&app), app.pending_count), ("rust:a::step", None));
     // ... and repeats a view's own actions: 2+ adds two levels, as one jump.
     keys(&ctx, &mut app, "2+");
-    assert_eq!(app.desk.graph.nav.depth, Some(5));
+    assert_eq!(app.desk.graph().nav.depth, Some(5));
     ctrl(&ctx, &mut app, egui::Key::O);
-    assert_eq!(app.desk.graph.nav.depth, Some(3), "back undoes both");
-    app.desk.graph.set_tree(sample_tree());
+    assert_eq!(app.desk.graph().nav.depth, Some(3), "back undoes both");
+    app.desk.graph_mut().set_tree(sample_tree());
     // G / gg: last and first card in tree order, as jumps.
     frame(&ctx, &mut app, key("G"));
     assert_eq!(selected(&app), "rust:a::save");
@@ -70,21 +70,21 @@ fn search_marks_counts_and_ends_work_through_the_keys() {
 #[test]
 fn the_jump_list_crosses_views_and_slots() {
     let (ctx, mut app) = app_with_graph();
-    app.desk.graph = showing(sample_tree());
-    crate::graph::tests::with_detail(&mut app.desk.graph, "rust:a::step", "src/a.rs", 10, 20);
-    app.desk.graph.select(Some("rust:a::step".into()));
+    *app.desk.graph_mut() = showing(sample_tree());
+    crate::graph::tests::with_detail(app.desk.graph_mut(), "rust:a::step", "src/a.rs", 10, 20);
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
     frame(&ctx, &mut app, vec![]);
     keys(&ctx, &mut app, "gd");
     assert_eq!((app.focused_kind(), app.desk.panels.focused()), (BufferKind::Code, 0), "the code opened beside the graph, with focus");
-    app.desk.code.set_content((1..=40).map(|i| format!("line {i}\n")).collect());
+    app.desk.code_mut().set_content((1..=40).map(|i| format!("line {i}\n")).collect());
     keys(&ctx, &mut app, "G");
-    assert_eq!(app.desk.code.target_line, Some(40));
+    assert_eq!(app.desk.code().target_line, Some(40));
     ctrl(&ctx, &mut app, egui::Key::O);
-    assert_eq!(app.desk.code.target_line, Some(10), "back within the code");
+    assert_eq!(app.desk.code().target_line, Some(10), "back within the code");
     ctrl(&ctx, &mut app, egui::Key::O);
     assert_eq!((app.desk.panels.focused(), app.focused_kind(), selected(&app)), (1, BufferKind::Graph, "rust:a::step"), "back to the graph's panel, focused, where it was");
     ctrl(&ctx, &mut app, egui::Key::I);
-    assert_eq!((app.focused_kind(), app.desk.code.target_line), (BufferKind::Code, Some(10)));
+    assert_eq!((app.focused_kind(), app.desk.code().target_line), (BufferKind::Code, Some(10)));
     // Nothing left to go back to: says so.
     let mut fresh = CockpitApp::new("http://127.0.0.1:9");
     fresh.initialized = true;
@@ -96,8 +96,8 @@ fn the_jump_list_crosses_views_and_slots() {
 fn the_same_moves_work_in_every_view() {
     let (ctx, mut app) = full_app();
     // A longer file, so half pages mean something.
-    app.desk.code.set_content((1..=300).map(|i| format!("line {i}\n")).collect());
-    app.desk.code.target_line = Some(1);
+    app.desk.code_mut().set_content((1..=300).map(|i| format!("line {i}\n")).collect());
+    app.desk.code_mut().target_line = Some(1);
     for _ in 0..3 {
         app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::ThreadClosed { thread_id: harness_contracts::ThreadId::new("none") });
     }
@@ -149,23 +149,23 @@ fn the_graph_keys_flip_change_depth_switch_view_go_in_and_back() {
     let (ctx, mut app) = app_with_graph();
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, key("r"));
-    assert_eq!(app.desk.graph.nav.way, arch_graph::tree::Way::Up, "r flips");
+    assert_eq!(app.desk.graph().nav.way, arch_graph::tree::Way::Up, "r flips");
     frame(&ctx, &mut app, key("r"));
     frame(&ctx, &mut app, key("+"));
-    assert_eq!(app.desk.graph.nav.depth, Some(4), "+ shows a level more");
+    assert_eq!(app.desk.graph().nav.depth, Some(4), "+ shows a level more");
     frame(&ctx, &mut app, key("-"));
-    assert_eq!(app.desk.graph.nav.depth, Some(3));
-    app.desk.graph.select(Some("rust:a::step".into()));
+    assert_eq!(app.desk.graph().nav.depth, Some(3));
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
     keys(&ctx, &mut app, "gf");
-    assert_eq!(app.desk.graph.nav.root.as_deref(), Some("rust:a::step"), "g f makes it the root");
-    let request = app.desk.graph.nav.request();
-    app.desk.graph.set_tree(crate::graph::tests::tree_of(&crate::graph::tests::sample_graph(), None, request));
+    assert_eq!(app.desk.graph().nav.root.as_deref(), Some("rust:a::step"), "g f makes it the root");
+    let request = app.desk.graph_mut().nav.request();
+    app.desk.graph_mut().set_tree(crate::graph::tests::tree_of(&crate::graph::tests::sample_graph(), None, request));
     frame(&ctx, &mut app, press(egui::Key::Backspace, false));
-    assert_eq!(app.desk.graph.nav.root.as_deref(), Some("rust:a::run"), "Backspace from the root comes back");
+    assert_eq!(app.desk.graph().nav.root.as_deref(), Some("rust:a::run"), "Backspace from the root comes back");
     // i / o zoom, z f fits the card, z z the whole tree.
-    app.desk.graph.set_tree(sample_tree());
-    app.desk.graph.select(Some("rust:a::step".into()));
-    let zoom = |app: &CockpitApp| app.desk.graph.aimed().zoom;
+    app.desk.graph_mut().set_tree(sample_tree());
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
+    let zoom = |app: &CockpitApp| app.desk.graph().aimed().zoom;
     keys(&ctx, &mut app, "zz");
     let whole = zoom(&app);
     frame(&ctx, &mut app, key("i"));
@@ -182,13 +182,13 @@ fn the_graph_keys_flip_change_depth_switch_view_go_in_and_back() {
     let switch = app.bound_actions().into_iter().find(|b| b.action.id == "graph.view").unwrap();
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     app.invoke(Invocation { action: switch.action, origin: switch.origin, value: Some("data_flow".into()) }, &ctx);
-    assert_eq!(app.desk.graph.nav.view, arch_graph::tree::ViewKind::DataFlow, "the view picked");
+    assert_eq!(app.desk.graph().nav.view, arch_graph::tree::ViewKind::DataFlow, "the view picked");
 }
 
 #[test]
 fn f_labels_what_is_on_screen_in_every_view() {
     let (ctx, mut app) = full_app();
-    app.desk.graph.set_tree(sample_tree());
+    app.desk.graph_mut().set_tree(sample_tree());
     // Something in the inbox, to label.
     let kind = harness_contracts::NotificationKind::TurnFinished;
     let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new("turn:1"), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, title: "done".into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
@@ -269,14 +269,14 @@ fn enter_goes_in_and_backspace_comes_out_in_every_view() {
     };
     // Graph: to what step calls, back to step.
     focus(&ctx, &mut app, BufferKind::Graph);
-    app.desk.graph.select(Some("rust:a::step".into()));
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
     enter(&ctx, &mut app);
     assert_eq!(selected(&app), "rust:a::save");
     leave(&ctx, &mut app);
-    assert_eq!((selected(&app), app.desk.graph.nav.root.as_deref()), ("rust:a::step", Some("rust:a::run")), "back to what it hangs from");
+    assert_eq!((selected(&app), app.desk.graph().nav.root.as_deref()), ("rust:a::step", Some("rust:a::run")), "back to what it hangs from");
     // Tree: Enter into the row's first part, Backspace out (the graph stays).
     focus(&ctx, &mut app, BufferKind::Tree);
-    app.desk.tree.move_to("rust:a::run");
+    app.desk.tree_mut().move_to("rust:a::run");
     enter(&ctx, &mut app);
     assert_eq!((cursor(&app).as_deref(), selected(&app), app.focused_kind()), (Some("rust:a::log"), "rust:a::step", BufferKind::Tree));
     leave(&ctx, &mut app);
@@ -284,30 +284,30 @@ fn enter_goes_in_and_backspace_comes_out_in_every_view() {
     assert_eq!(cursor(&app).as_deref(), Some("rust:a"), "Backspace: out to what holds it");
     // Code: Enter on a call goes to its definition.
     focus(&ctx, &mut app, BufferKind::Code);
-    app.desk.code.move_to("3");
+    app.desk.code_mut().move_to("3");
     enter(&ctx, &mut app);
-    assert_eq!(app.desk.code.target_line, Some(6), "step's definition");
+    assert_eq!(app.desk.code().target_line, Some(6), "step's definition");
     leave(&ctx, &mut app);
     // Spec: Enter on a section title folds it.
     focus(&ctx, &mut app, BufferKind::Spec);
     keys(&ctx, &mut app, "gg");
     enter(&ctx, &mut app);
-    assert!(app.desk.spec.folded.contains(&crate::spec::Section::Overview));
+    assert!(app.desk.spec().folded.contains(&crate::spec::Section::Overview));
     // Queue: Enter shows a failed job's findings.
     focus(&ctx, &mut app, BufferKind::Queue);
-    app.desk.queue.move_to("2");
+    app.desk.queue_mut().move_to("2");
     enter(&ctx, &mut app);
-    assert!(app.desk.queue.expanded.contains(&ComponentId::new("rust:c")));
+    assert!(app.desk.queue().expanded.contains(&ComponentId::new("rust:c")));
     leave(&ctx, &mut app);
-    assert!(app.desk.queue.expanded.is_empty());
+    assert!(app.desk.queue().expanded.is_empty());
     // Chat: Enter on a message with a file opens it in the code view.
     focus(&ctx, &mut app, BufferKind::Chat);
-    app.desk.chat.move_to("2");
+    app.desk.chat_mut().move_to("2");
     enter(&ctx, &mut app);
-    assert_eq!((app.focused_kind(), app.desk.code.current_file.as_str()), (BufferKind::Code, "src/parse.rs"));
+    assert_eq!((app.focused_kind(), app.desk.code().current_file.as_str()), (BufferKind::Code, "src/parse.rs"));
     // Nothing to do: it says why.
     focus(&ctx, &mut app, BufferKind::Chat);
-    app.desk.chat.move_to("0");
+    app.desk.chat_mut().move_to("0");
     enter(&ctx, &mut app);
     assert!(app.note.as_deref().unwrap_or_default().contains("No file"));
 }
@@ -316,42 +316,42 @@ fn enter_goes_in_and_backspace_comes_out_in_every_view() {
 fn z_keys_fold_in_every_view_that_folds() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Code);
-    app.desk.code.move_to("3");
+    app.desk.code_mut().move_to("3");
     keys(&ctx, &mut app, "zc");
-    assert_eq!(app.desk.code.visible_lines().len(), 6);
+    assert_eq!(app.desk.code().visible_lines().len(), 6);
     keys(&ctx, &mut app, "zo");
-    assert_eq!(app.desk.code.visible_lines().len(), 9);
+    assert_eq!(app.desk.code().visible_lines().len(), 9);
     keys(&ctx, &mut app, "zM");
-    assert_eq!(app.desk.code.visible_lines().len(), 4);
+    assert_eq!(app.desk.code().visible_lines().len(), 4);
     keys(&ctx, &mut app, "zR");
     focus(&ctx, &mut app, BufferKind::Tree);
     keys(&ctx, &mut app, "zM");
-    assert_eq!(app.desk.tree.rows().len(), 2);
+    assert_eq!(app.desk.tree().rows().len(), 2);
     keys(&ctx, &mut app, "zR");
-    assert_eq!(app.desk.tree.rows().len(), 6);
+    assert_eq!(app.desk.tree().rows().len(), 6);
     focus(&ctx, &mut app, BufferKind::Spec);
     keys(&ctx, &mut app, "zM");
-    assert_eq!(app.desk.spec.folded.len(), crate::spec::Section::ALL.len());
+    assert_eq!(app.desk.spec().folded.len(), crate::spec::Section::ALL.len());
     keys(&ctx, &mut app, "za");
-    assert_eq!(app.desk.spec.folded.len(), crate::spec::Section::ALL.len() - 1);
+    assert_eq!(app.desk.spec().folded.len(), crate::spec::Section::ALL.len() - 1);
 }
 
 #[test]
 fn marks_work_across_views() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Code);
-    app.desk.code.move_to("6");
+    app.desk.code_mut().move_to("6");
     keys(&ctx, &mut app, "mc");
     app.desk.panels.focus(2);
     focus(&ctx, &mut app, BufferKind::Tree);
-    app.desk.tree.move_to("rust:b");
+    app.desk.tree_mut().move_to("rust:b");
     keys(&ctx, &mut app, "mt");
     app.desk.panels.focus(0);
     focus(&ctx, &mut app, BufferKind::Graph);
     keys(&ctx, &mut app, "'c");
-    assert_eq!((app.desk.panels.focused(), app.focused_kind(), app.desk.code.target_line), (1, BufferKind::Code, Some(6)), "back to the code, in its panel");
+    assert_eq!((app.desk.panels.focused(), app.focused_kind(), app.desk.code().target_line), (1, BufferKind::Code, Some(6)), "back to the code, in its panel");
     keys(&ctx, &mut app, "'t");
-    assert_eq!((app.desk.panels.focused(), app.desk.tree.cursor.as_ref().map(|c| c.as_str())), (2, Some("rust:b")));
+    assert_eq!((app.desk.panels.focused(), app.desk.tree().cursor.as_ref().map(|c| c.as_str())), (2, Some("rust:b")));
     ctrl(&ctx, &mut app, egui::Key::O);
     assert_eq!(app.focused_kind(), BufferKind::Code, "a mark jump is in the jump list");
     // The popup after ' lists them.
@@ -369,61 +369,62 @@ fn go_to_keys_work_from_every_view() {
     let (ctx, mut app) = full_app();
     // Outline -> graph: g m shows it and moves focus there.
     focus(&ctx, &mut app, BufferKind::Tree);
-    app.desk.tree.move_to("rust:a::step");
+    app.desk.tree_mut().move_to("rust:a::step");
     keys(&ctx, &mut app, "gm");
     assert_eq!((app.focused_kind(), selected(&app)), (BufferKind::Graph, "rust:a::step"));
     // Graph -> outline: g t.
-    app.desk.graph.select(Some("rust:a::log".into()));
+    app.desk.graph_mut().select(Some("rust:a::log".into()));
     keys(&ctx, &mut app, "gt");
-    assert_eq!((app.focused_kind(), app.desk.tree.cursor.as_ref().map(|c| c.as_str())), (BufferKind::Tree, Some("rust:a::log")));
+    assert_eq!((app.focused_kind(), app.desk.tree().cursor.as_ref().map(|c| c.as_str())), (BufferKind::Tree, Some("rust:a::log")));
     // Queue -> spec: g s (a pinned spec shows it anyway).
     focus(&ctx, &mut app, BufferKind::Queue);
-    app.desk.queue.move_to("1");
+    app.desk.queue_mut().move_to("1");
     keys(&ctx, &mut app, "gs");
-    assert_eq!((app.focused_kind(), app.desk.spec.target.as_ref().map(|c| c.as_str())), (BufferKind::Spec, Some("rust:a")));
+    assert_eq!((app.focused_kind(), app.desk.spec().target.as_ref().map(|c| c.as_str())), (BufferKind::Spec, Some("rust:a")));
     // The queue's own keys: o shows the slot running the job's session.
     let mut worker = crate::chat::tests::lead(Some("t1"));
     (worker.id, worker.role) = (harness_contracts::SlotId::new("worker-1"), "worker".into());
     app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::SlotUpdated { slot: worker });
     focus(&ctx, &mut app, BufferKind::Queue);
-    app.desk.queue.on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(crate::queue::tests::snapshot(arch_graph::QueueStatus::Running)) });
+    app.desk.queue_mut().on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(crate::queue::tests::snapshot(arch_graph::QueueStatus::Running)) });
     keys(&ctx, &mut app, "gg");
     frame(&ctx, &mut app, key("o"));
     frame(&ctx, &mut app, vec![]);
-    assert_eq!((app.focused_kind(), app.desk.chat.active_thread().as_ref().map(|t| t.as_str())), (BufferKind::Chat, Some("t1")));
-    assert_eq!(app.desk.chat.ui.slot.as_str(), "worker-1");
+    assert_eq!((app.focused_kind(), app.desk.chat().active_thread().as_ref().map(|t| t.as_str())), (BufferKind::Chat, Some("t1")));
+    assert_eq!(app.desk.chat().ui.slot.as_str(), "worker-1");
     // Graph -> queue: g q finds the component's job, or says there isn't one.
     focus(&ctx, &mut app, BufferKind::Graph);
-    app.desk.graph.select(Some("rust:a::run".into()));
+    app.desk.graph_mut().select(Some("rust:a::run".into()));
     keys(&ctx, &mut app, "gq");
     assert!(app.note.as_deref().unwrap_or_default().contains("no job"), "{:?}", app.note);
     // Code: g r on a definition lists every use of it; one: straight to it.
     focus(&ctx, &mut app, BufferKind::Code);
-    app.desk.code.move_to("6");
+    app.desk.code_mut().move_to("6");
     let mut step = crate::goto::tests::detail("rust:a::step", vec![], vec![call("rust:a::run", "rust:a::step", 0, 3)]);
     step.references = vec![arch_graph::code::Reference { file: "src/a.rs".into(), line: 3, start: 0, end: 4, kind: "call".into(), within: Some(arch_graph::ComponentId::new("rust:a::run")), evidence: "name".into(), stale: false }];
-    app.desk.details.insert(step, &app.desk.graph.nav.source);
+    let source = app.desk.graph().nav.source.clone();
+    app.desk.details.insert(step, &source);
     keys(&ctx, &mut app, "gr");
-    assert_eq!(app.desk.code.target_line, Some(3), "at the use in run");
+    assert_eq!(app.desk.code().target_line, Some(3), "at the use in run");
     // A detail not here yet: the go-to waits for it.
-    app.desk.code.move_to("2");
+    app.desk.code_mut().move_to("2");
     keys(&ctx, &mut app, "gc");
     assert!(app.desk.pending_goto.is_some(), "waiting for run's relations");
-    app.desk.details.insert(crate::goto::tests::detail("rust:a::run", vec![call("rust:a::run", "rust:a::step", 0, 3), call("rust:a::run", "rust:x::log", 1, 4)], vec![]), &app.desk.graph.nav.source);
+    app.desk.details.insert(crate::goto::tests::detail("rust:a::run", vec![call("rust:a::run", "rust:a::step", 0, 3), call("rust:a::run", "rust:x::log", 1, 4)], vec![]), &source);
     frame(&ctx, &mut app, vec![]);
     assert!(app.desk.pending_goto.is_none() && app.input_mode == InputMode::Palette, "two callees: pick one");
     let pick = app.bound_actions().into_iter().find(|b| b.action.id == "goto.pick").unwrap();
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     app.invoke(Invocation { action: pick.action, origin: pick.origin, value: Some("rust:a::step".into()) }, &ctx);
-    assert_eq!(app.desk.code.target_line, Some(6), "picked: step's definition");
+    assert_eq!(app.desk.code().target_line, Some(6), "picked: step's definition");
     // Spec: a relation's g s (or Enter) follows it.
     let step = ComponentId::new("rust:a::step");
-    app.desk.spec.show(step.clone());
-    app.desk.spec.detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
+    app.desk.spec_mut().show(step.clone());
+    app.desk.spec_mut().detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
     focus(&ctx, &mut app, BufferKind::Spec);
-    app.desk.spec.move_to(&crate::spec::Entry { section: crate::spec::Section::Relations, item: crate::nav::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true } }.key());
+    app.desk.spec_mut().move_to(&crate::spec::Entry { section: crate::spec::Section::Relations, item: crate::nav::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true } }.key());
     keys(&ctx, &mut app, "gs");
-    assert_eq!(app.desk.spec.target.as_ref().map(|c| c.as_str()), Some("rust:a::save"));
+    assert_eq!(app.desk.spec().target.as_ref().map(|c| c.as_str()), Some("rust:a::save"));
     // Nothing under the cursor: says so.
     let (ctx, mut empty) = app_with_graph();
     frame(&ctx, &mut empty, vec![]);
@@ -436,15 +437,15 @@ fn spec_keys_walk_items_and_review_them() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Spec);
     keys(&ctx, &mut app, "J");
-    assert_eq!(app.desk.spec.current, crate::spec::Section::Signature);
+    assert_eq!(app.desk.spec().current, crate::spec::Section::Signature);
     keys(&ctx, &mut app, "]]");
-    assert_eq!(app.desk.spec.current, crate::spec::Section::Logic);
+    assert_eq!(app.desk.spec().current, crate::spec::Section::Logic);
     keys(&ctx, &mut app, "j");
-    assert_eq!(app.desk.spec.entry().unwrap().item, crate::nav::SpecItem::Step(0));
+    assert_eq!(app.desk.spec().entry().unwrap().item, crate::nav::SpecItem::Step(0));
     frame(&ctx, &mut app, key("c"));
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.input_mode, InputMode::Insert { panel: 1 }, "c: the composer has the keyboard");
-    assert!(app.desk.spec.composer.is_some());
+    assert!(app.desk.spec().composer.is_some());
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert_eq!(app.input_mode, InputMode::Normal);
 }
@@ -469,7 +470,7 @@ fn searches_and_restores_put_things_back_exactly() {
     let (ctx, mut app) = full_app();
     // A graph search that matches nothing, from no selection, ends with no selection.
     focus(&ctx, &mut app, BufferKind::Graph);
-    app.desk.graph.select(None);
+    app.desk.graph_mut().select(None);
     keys(&ctx, &mut app, "/sa");
     assert_eq!(selected(&app), "rust:a::save", "a preview");
     keys(&ctx, &mut app, "zz");
@@ -485,13 +486,13 @@ fn searches_and_restores_put_things_back_exactly() {
     assert!(app.search_status().is_none() && !app.desk.searches.contains_key(&BufferKind::Tree));
     // The spec comes back to the item, not just its old position.
     focus(&ctx, &mut app, BufferKind::Spec);
-    app.desk.spec.move_to("logic#Step(1)");
-    let place = app.desk.spec.place();
-    app.desk.spec.folded.insert(crate::spec::Section::Overview);
-    app.desk.spec.motion(Motion::First, 1);
-    app.desk.spec.restore(&place);
-    assert_eq!(app.desk.spec.entry().unwrap().item, crate::nav::SpecItem::Step(1));
-    assert_eq!(app.desk.spec.current, crate::spec::Section::Logic);
+    app.desk.spec_mut().move_to("logic#Step(1)");
+    let place = app.desk.spec_mut().place();
+    app.desk.spec_mut().folded.insert(crate::spec::Section::Overview);
+    app.desk.spec_mut().motion(Motion::First, 1);
+    app.desk.spec_mut().restore(&place);
+    assert_eq!(app.desk.spec().entry().unwrap().item, crate::nav::SpecItem::Step(1));
+    assert_eq!(app.desk.spec().current, crate::spec::Section::Logic);
     // One panel and back: the panels as they were.
     app.desk.panels = panels_of(&[BufferKind::Code, BufferKind::Graph, BufferKind::Queue], 2);
     app.run_shell(ShellCommand::SetLayout(1), None, None, &ctx);

@@ -16,6 +16,9 @@ mod split;
 mod views;
 
 use super::*;
+use crate::actions::ActionProvider;
+use crate::buffer::Buffer;
+use crate::nav::Navigable;
 
 use crate::graph::tests::{loading, sample_tree, showing};
 use arch_graph::{CodeAnchor, PlanId, Provenance, Relation, RelationKind, RepoPath, Source, Span};
@@ -97,7 +100,7 @@ fn from_outside(ctx: &egui::Context, app: &mut CockpitApp, call: &str) -> crate:
 
 /// Panels showing these kinds, one view each.
 fn panels_of(kinds: &[BufferKind], focused: usize) -> crate::panels::Panels {
-    crate::panels::Panels::new(kinds.iter().map(|k| Buffer::new(*k, 0)).collect(), focused)
+    crate::panels::Panels::new(kinds.iter().map(|k| BufferId::new(*k, 0)).collect(), focused)
 }
 
 /// An app with the graph in panel 2 (focused) showing the sample view.
@@ -105,7 +108,7 @@ fn app_with_graph() -> (egui::Context, CockpitApp) {
     let ctx = egui::Context::default();
     let mut app = CockpitApp::new("http://127.0.0.1:9");
     app.initialized = true; // skip network bootstrapping
-    app.desk.graph = showing(sample_tree());
+    *app.desk.graph_mut() = showing(sample_tree());
     app.desk.panels.focus(1);
     (ctx, app)
 }
@@ -149,7 +152,7 @@ fn sent(app: &CockpitApp) -> Vec<String> {
 }
 
 fn selected(app: &CockpitApp) -> &str {
-    app.desk.graph.selection.as_ref().map_or("", |s| s.as_str())
+    app.desk.graph().selection.as_ref().map_or("", |s| s.as_str())
 }
 
 fn call(a: &str, b: &str, order: u32, line: u32) -> Relation {
@@ -165,23 +168,24 @@ fn call(a: &str, b: &str, order: u32, line: u32) -> Relation {
 fn full_app() -> (egui::Context, CockpitApp) {
     let (ctx, mut app) = app_with_graph();
     let plan = PlanId::new("p").unwrap();
-    app.desk.graph.nav.source = Source::Plan(plan.clone());
-    app.desk.tree.set_result(crate::tree::tests::outline());
-    app.desk.code = crate::code::tests::sample();
+    app.desk.graph_mut().nav.source = Source::Plan(plan.clone());
+    app.desk.tree_mut().set_result(crate::tree::tests::outline());
+    *app.desk.code_mut() = crate::code::tests::sample();
     let step = ComponentId::new("rust:a::step");
-    app.desk.spec.pinned = true;
-    app.desk.spec.show(step.clone());
-    app.desk.spec.source = Source::Plan(plan.clone());
-    app.desk.spec.detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
+    app.desk.spec_mut().pinned = true;
+    app.desk.spec_mut().show(step.clone());
+    app.desk.spec_mut().source = Source::Plan(plan.clone());
+    app.desk.spec_mut().detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
     app.desk.shared.source.set(Source::Plan(plan.clone()));
     app.desk.share();
-    app.desk.queue.tick(&app.desk.net, &ctx);
+    let (queue, net) = app.desk.view_with_net(BufferKind::Queue);
+    queue.tick(net, &ctx);
     // Enough jobs and messages that half a page means something.
     let mut snapshot = crate::queue::tests::snapshot(arch_graph::QueueStatus::Idle);
     for i in 0..30 {
         snapshot.jobs.push(arch_graph::Job { component: ComponentId::new(format!("rust:q{i}")), kind: arch_graph::JobKind::Implement, state: arch_graph::JobState::Queued, attempts: 0, findings: vec![] });
     }
-    app.desk.queue.on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(snapshot) });
+    app.desk.queue_mut().on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(snapshot) });
     crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
     for n in 4..40 {
         app.desk.shared.agents.get_mut().apply(crate::chat::tests::item(n, harness_contracts::ItemBody::UserMessage { text: format!("message {n}") }));
@@ -228,4 +232,82 @@ fn kept_keys(app: &CockpitApp) -> *const Keys {
 
 fn index_event(status: arch_graph::IndexStatus) -> harness_contracts::ClientEvent {
     harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::Index { status: Box::new(status) } }
+}
+
+/// The buffers in use, by their types (tests look inside them).
+impl Desk {
+    fn typed<T: Buffer>(&self, kind: BufferKind) -> &T {
+        let any: &dyn std::any::Any = self.view(kind);
+        any.downcast_ref().expect("the buffer of its kind")
+    }
+
+    fn typed_mut<T: Buffer>(&mut self, kind: BufferKind) -> &mut T {
+        let any: &mut dyn std::any::Any = self.view_mut(kind);
+        any.downcast_mut().expect("the buffer of its kind")
+    }
+
+    pub fn chat(&self) -> &crate::chat::ChatStreamState {
+        self.typed(BufferKind::Chat)
+    }
+
+    pub fn chat_mut(&mut self) -> &mut crate::chat::ChatStreamState {
+        self.typed_mut(BufferKind::Chat)
+    }
+
+    pub fn code(&self) -> &crate::code::CodeViewerState {
+        self.typed(BufferKind::Code)
+    }
+
+    pub fn code_mut(&mut self) -> &mut crate::code::CodeViewerState {
+        self.typed_mut(BufferKind::Code)
+    }
+
+    pub fn graph(&self) -> &crate::graph::GraphState {
+        self.typed(BufferKind::Graph)
+    }
+
+    pub fn graph_mut(&mut self) -> &mut crate::graph::GraphState {
+        self.typed_mut(BufferKind::Graph)
+    }
+
+    pub fn tree(&self) -> &crate::tree::ArchitectureTreeState {
+        self.typed(BufferKind::Tree)
+    }
+
+    pub fn tree_mut(&mut self) -> &mut crate::tree::ArchitectureTreeState {
+        self.typed_mut(BufferKind::Tree)
+    }
+
+    pub fn spec(&self) -> &crate::spec::SpecState {
+        self.typed(BufferKind::Spec)
+    }
+
+    pub fn spec_mut(&mut self) -> &mut crate::spec::SpecState {
+        self.typed_mut(BufferKind::Spec)
+    }
+
+    pub fn queue(&self) -> &crate::queue::QueueState {
+        self.typed(BufferKind::Queue)
+    }
+
+    pub fn queue_mut(&mut self) -> &mut crate::queue::QueueState {
+        self.typed_mut(BufferKind::Queue)
+    }
+
+    pub fn inbox(&self) -> &crate::inbox::InboxView {
+        self.typed(BufferKind::Inbox)
+    }
+
+    pub fn changes(&self) -> &crate::changes::ChangesView {
+        self.typed(BufferKind::Changes)
+    }
+
+    pub fn changes_mut(&mut self) -> &mut crate::changes::ChangesView {
+        self.typed_mut(BufferKind::Changes)
+    }
+
+    /// Every buffer of `kind`, shown or hidden.
+    pub fn all_of<T: Buffer>(&self, kind: BufferKind) -> Vec<&T> {
+        self.buffers().filter(|(id, _)| id.kind == kind).filter_map(|(_, b)| (b as &dyn std::any::Any).downcast_ref()).collect()
+    }
 }

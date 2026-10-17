@@ -50,7 +50,7 @@ fn each_server_gets_a_desk_fed_its_own_events_and_whats_waiting_is_counted_acros
 #[test]
 fn switching_keeps_each_desk_as_it_was_and_its_calls_go_to_its_server() {
     let (ctx, mut app) = two_desks();
-    app.desk.graph.select(Some("rust:a::step".into()));
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
     app.desk.net.sent.lock().unwrap().clear();
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"server.switch","value":"cloud"}"#).unwrap();
     frame(&ctx, &mut app, vec![]);
@@ -66,9 +66,9 @@ fn switching_keeps_each_desk_as_it_was_and_its_calls_go_to_its_server() {
 fn the_next_waiting_crosses_servers_and_a_removed_server_takes_its_desk_away() {
     let (ctx, mut app) = two_desks();
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.next_waiting"}"#).unwrap();
-    assert_eq!((app.desk.server.as_str(), app.looked_at().map(|id| id.as_str())), ("cloud", Some("req:c1")), "its desk shown, the look on it");
+    assert_eq!((app.desk.server.as_str(), app.looked_at().map(|id| id.to_string()).as_deref()), ("cloud", Some("req:c1")), "its desk shown, the look on it");
     keys(&ctx, &mut app, "J");
-    assert_eq!((app.desk.server.as_str(), app.looked_at().map(|id| id.as_str())), ("here", Some("turn:h1")), "J crosses to here's update");
+    assert_eq!((app.desk.server.as_str(), app.looked_at().map(|id| id.to_string()).as_deref()), ("here", Some("turn:h1")), "J crosses to here's update");
     let actions = from_outside(&ctx, &mut app, r#"{"op":"actions"}"#).unwrap();
     let waiting = actions.as_array().unwrap().iter().find(|a| a["id"] == "attention.waiting").expect("listed");
     assert!(waiting.to_string().contains("\"cloud/req:c1\""), "{waiting}");

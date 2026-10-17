@@ -6,17 +6,8 @@ impl CockpitApp {
     /// Runs a view's action with what it may touch (disjoint fields).
     pub(super) fn run_on(&mut self, kind: BufferKind, action: &Action, value: Option<String>, ctx: &egui::Context) {
         let panel = self.panel_of(kind);
-        let provider: &mut dyn ActionProvider = match kind {
-            BufferKind::Chat => &mut self.desk.chat,
-            BufferKind::Code => &mut self.desk.code,
-            BufferKind::Graph => &mut self.desk.graph,
-            BufferKind::Tree => &mut self.desk.tree,
-            BufferKind::Spec => &mut self.desk.spec,
-            BufferKind::Queue => &mut self.desk.queue,
-            BufferKind::Inbox => &mut self.desk.inbox,
-            BufferKind::Changes => &mut self.desk.changes,
-        };
-        provider.run(action, value, &mut RunCx { net: &self.desk.net, ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked });
+        let (buffer, net) = self.desk.view_with_net(kind);
+        buffer.run(action, value, &mut RunCx { net, ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked });
     }
 
     /// The place `kind` is at, in the panel showing it.
@@ -67,27 +58,15 @@ impl CockpitApp {
         Some(ops.into_iter().filter(|op| !candidates(*op, detail).is_empty()).collect())
     }
 
-
-    /// What the views show in common: the desk's comparison and what it
-    /// changed, the source, the review, the queue's plan.
+    /// What the buffers show in common, read where it's kept: the desk's
+    /// comparison and the plan's review (each buffer reads them itself).
     pub(super) fn link_views(&mut self, ctx: &egui::Context) {
-        self.desk.graph.tick(&self.desk.net, ctx);
-        // The desk's comparison: read whether or not its view is shown (the
-        // code view and the graph show it too); asked again now and then
-        // while it is.
+        // The desk's comparison: read whether or not the changes are shown
+        // (the code view and the graph show it too); asked again now and
+        // then while they are.
         let shown = self.desk.panels.kinds().contains(&BufferKind::Changes) || self.quick_look.as_ref().is_some_and(|q| q.kind == BufferKind::Changes);
         self.desk.shared.changes.tick(&self.desk.net, ctx, shown, self.config.changes.refresh_s);
         let plan = self.desk.shared.source.get().plan().cloned();
         self.desk.shared.review.tick(&self.desk.net, ctx, plan.as_ref());
-        // One truth for where code is: if the spec fetched a newer anchor for
-        // the selection than the view on screen has, the view is stale.
-        if let (Some(detail), Some(shown)) = (&self.desk.spec.detail, self.desk.graph.selected())
-            && detail.component.id == shown.id
-            && detail.component.anchor != shown.anchor
-            && self.desk.anchor_checked.replace(detail.component.anchor.clone()) != Some(detail.component.anchor.clone())
-        {
-            self.desk.graph.invalidate();
-        }
-        self.desk.queue.tick(&self.desk.net, ctx);
     }
 }

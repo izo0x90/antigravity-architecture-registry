@@ -133,10 +133,6 @@ impl ArchitectureTreeState {
         true
     }
 
-    pub fn invalidate(&mut self) {
-        self.stale = true;
-    }
-
     /// Takes a fetched Contains tree: who contains whom, in tree order.
     pub fn set_result(&mut self, result: Tree) {
         self.children.clear();
@@ -183,32 +179,6 @@ impl ArchitectureTreeState {
         }
         self.result = Some(result);
         self.error = None;
-    }
-
-    fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
-        let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        for (number, reply) in replies {
-            self.answer(number, reply);
-        }
-        if self.stale || !self.loaded_once {
-            self.stale = false;
-            self.loaded_once = true;
-            self.asked += 1;
-            let (inbox, number) = (self.inbox.clone(), self.asked);
-            let request = TreeRequest {
-                view: ViewKind::Contains,
-                source: self.source.clone(),
-                opened: self.opened.iter().map(|card| Opened { card: card.clone(), levels: 1 }).collect(),
-                // With a plan: the plan inside the whole codebase.
-                full_code: true,
-                ..TreeRequest::default()
-            };
-            net.graph_tree(&request, ctx.clone(), move |r| {
-                if let Ok(mut i) = inbox.lock() {
-                    i.push((number, r));
-                }
-            });
-        }
     }
 
     /// Takes the answer to request `number`, when it's the last one asked.
@@ -346,10 +316,8 @@ impl ArchitectureTreeState {
         self.cursor.as_ref().and_then(|c| rows.iter().position(|r| &r.id == c))
     }
 
-
-    pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
-        let (net, panel) = (cx.net, cx.panel);
-        self.tick(net, ui.ctx());
+    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, cx: &mut RunCx<'_>) {
+        let panel = cx.panel;
         let header = ui.horizontal(|ui| ui.add(egui::TextEdit::singleline(&mut self.search_filter).hint_text("filter…").desired_width(f32::INFINITY)));
         feedback.register_inspectable(ui, &format!("panel_{}:tree:header", panel + 1), header.response.rect);
         ui.separator();
@@ -471,6 +439,60 @@ impl ActionProvider for ArchitectureTreeState {
         if let Some(TreeCommand::ClearFilter) = action.command::<TreeCommand>() {
             self.search_filter.clear();
         }
+    }
+}
+
+impl crate::buffer::Buffer for ArchitectureTreeState {
+    fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
+        self.draw(ui, drawing.feedback, cx);
+    }
+
+    fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
+        let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        for (number, reply) in replies {
+            self.answer(number, reply);
+        }
+        if self.stale || !self.loaded_once {
+            self.stale = false;
+            self.loaded_once = true;
+            self.asked += 1;
+            let (inbox, number) = (self.inbox.clone(), self.asked);
+            let request = TreeRequest {
+                view: ViewKind::Contains,
+                source: self.source.clone(),
+                opened: self.opened.iter().map(|card| Opened { card: card.clone(), levels: 1 }).collect(),
+                // With a plan: the plan inside the whole codebase.
+                full_code: true,
+                ..TreeRequest::default()
+            };
+            net.graph_tree(&request, ctx.clone(), move |r| {
+                if let Ok(mut i) = inbox.lock() {
+                    i.push((number, r));
+                }
+            });
+        }
+    }
+
+
+    /// Changed code or plans: the outline read again.
+    fn on_event(&mut self, event: &arch_graph::ArchEvent) {
+        if matches!(event, arch_graph::ArchEvent::Changed { .. }) {
+            crate::buffer::Buffer::invalidate(self);
+        }
+    }
+
+    fn invalidate(&mut self) {
+        self.stale = true;
+    }
+
+
+    /// A row's name.
+    fn knows(&self, id: &ComponentId) -> Option<crate::buffer::Known> {
+        self.cards.get(id).map(|c| crate::buffer::Known { name: Some(c.label.clone()), ..Default::default() })
+    }
+
+    fn describe(&self) -> String {
+        self.cursor.as_ref().map_or_else(|| "the outline".to_owned(), |id| format!("at {}", self.name(id)))
     }
 }
 
@@ -874,7 +896,7 @@ pub(crate) mod tests {
             let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 160.0))), ..Default::default() }, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let (mut mode, mut note, mut asked) = (crate::keymap::InputMode::Normal, None, None);
-                    t.render(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
+                    t.draw(ui, &mut feedback, &mut RunCx { net: &net, ctx, input_mode: &mut mode, panel: 0, note: &mut note, asked: &mut asked });
                 });
             });
         }

@@ -222,9 +222,13 @@ impl CockpitApp {
                     ui.label(RichText::new(mode_label).monospace().strong().size(crate::theme::look().text_small).color(mode_color));
                 });
 
-                // An answer cut short or slow, whichever view is showing it.
-                if let Some((words, more)) = self.desk.graph.answer_status() {
-                    ui.label(RichText::new(format!("{} {words}", egui_phosphor::regular::WARNING)).size(crate::theme::look().text_body).color(colors().warn)).on_hover_text(more);
+                // What a buffer in use has to say to the whole desk (an answer
+                // cut short or slow).
+                for alert in BufferKind::ALL.into_iter().filter_map(|k| self.desk.view(k).alert()) {
+                    let label = ui.label(RichText::new(format!("{} {}", egui_phosphor::regular::WARNING, alert.text)).size(crate::theme::look().text_body).color(alert.tone.color()));
+                    if let Some(more) = &alert.detail {
+                        label.on_hover_text(more);
+                    }
                 }
 
                 if let Some(err) = &self.config_error {

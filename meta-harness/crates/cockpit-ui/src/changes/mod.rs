@@ -457,43 +457,6 @@ impl ChangesView {
         self.asks.push(Ask::Refresh(Refresh::Changes));
     }
 
-    /// Applies replies (its files' changes, staging), lands on what was
-    /// revealed, and asks for the files' changes asked for.
-    fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
-        let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        for reply in replies {
-            match reply {
-                Reply::Staged(result) => {
-                    self.read_again();
-                    self.error = result.err().map(String::from);
-                }
-                Reply::File(asked, key, result) if asked == self.comparison => self.keeping_cursor(|v| {
-                    if let Some(opened) = v.opened.get_mut(&key) {
-                        opened.loading = false;
-                        match result {
-                            Ok(changes) => {
-                                // Its changes cut differently: what was folded is no longer where it was.
-                                if opened.changes.as_ref().is_some_and(|c| c.hunks.len() != changes.hunks.len()) {
-                                    v.folded.retain(|(k, _)| *k != key);
-                                }
-                                opened.changes = Some(changes);
-                                opened.error = None;
-                            }
-                            Err(e) => opened.error = Some(e.into()),
-                        }
-                    }
-                }),
-                _ => {}
-            }
-        }
-        self.go_to_revealed();
-        for (key, context) in std::mem::take(&mut self.to_ask) {
-            let (inbox, comparison) = (self.inbox.clone(), self.comparison.clone());
-            let (asked, path, group) = (comparison.clone(), key.1.clone(), key.0);
-            net.change_file(&comparison, &path, group, context, ctx.clone(), move |r| push(&inbox, Reply::File(asked, key, r)));
-        }
-    }
-
     /// Folds or unfolds what the cursor is in: its change (on a change or
     /// one of its lines), or its file (on the file); or everything: every
     /// file folded, or every file and change unfolded.
@@ -640,8 +603,7 @@ impl ChangesView {
         }
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
-        self.tick(cx.net, cx.ctx);
+    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         let look = crate::theme::look();
         if self.on_timeline {
             if self.windows().is_empty() {
@@ -1107,6 +1069,65 @@ impl ActionProvider for ChangesView {
             },
             None => {}
         }
+    }
+}
+
+impl crate::buffer::Buffer for ChangesView {
+    fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, _drawing: &mut crate::buffer::Drawing<'_>) {
+        self.draw(ui, cx);
+    }
+
+    /// Applies replies (its files' changes, staging), lands on what was
+    /// revealed, and asks for the files' changes asked for.
+    fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
+        let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        for reply in replies {
+            match reply {
+                Reply::Staged(result) => {
+                    self.read_again();
+                    self.error = result.err().map(String::from);
+                }
+                Reply::File(asked, key, result) if asked == self.comparison => self.keeping_cursor(|v| {
+                    if let Some(opened) = v.opened.get_mut(&key) {
+                        opened.loading = false;
+                        match result {
+                            Ok(changes) => {
+                                // Its changes cut differently: what was folded is no longer where it was.
+                                if opened.changes.as_ref().is_some_and(|c| c.hunks.len() != changes.hunks.len()) {
+                                    v.folded.retain(|(k, _)| *k != key);
+                                }
+                                opened.changes = Some(changes);
+                                opened.error = None;
+                            }
+                            Err(e) => opened.error = Some(e.into()),
+                        }
+                    }
+                }),
+                _ => {}
+            }
+        }
+        self.go_to_revealed();
+        for (key, context) in std::mem::take(&mut self.to_ask) {
+            let (inbox, comparison) = (self.inbox.clone(), self.comparison.clone());
+            let (asked, path, group) = (comparison.clone(), key.1.clone(), key.0);
+            net.change_file(&comparison, &path, group, context, ctx.clone(), move |r| push(&inbox, Reply::File(asked, key, r)));
+        }
+    }
+
+
+    /// How its changes are laid out.
+    fn keep(&self) -> Option<serde_json::Value> {
+        serde_json::to_value(self.layout).ok()
+    }
+
+    fn restore_kept(&mut self, kept: &serde_json::Value) {
+        if let Ok(layout) = serde_json::from_value(kept.clone()) {
+            self.layout = layout;
+        }
+    }
+
+    fn describe(&self) -> String {
+        self.comparison.to_string()
     }
 }
 

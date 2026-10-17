@@ -19,12 +19,12 @@ fn vim_sequences_and_leader_drive_the_graph_and_are_rebindable() {
     assert_eq!(app.input_mode, InputMode::Normal, "Escape closes the palette");
     frame(&ctx, &mut app, vec![]);
     assert!(!text_input_focused(&ctx), "the palette's field let go of the keyboard");
-    app.desk.graph.select(Some("rust:a::run".into()));
+    app.desk.graph_mut().select(Some("rust:a::run".into()));
     frame(&ctx, &mut app, key("l"));
     assert_eq!(selected(&app), "rust:a::step", "keys work right after the palette");
     // A button holding the keyboard (Tab) doesn't swallow keys either.
     ctx.memory_mut(|m| m.request_focus(egui::Id::new("a button")));
-    app.desk.graph.select(Some("rust:a::run".into()));
+    app.desk.graph_mut().select(Some("rust:a::run".into()));
     frame(&ctx, &mut app, key("l"));
     assert_eq!(selected(&app), "rust:a::step", "keys work while a button has focus");
     assert!(ctx.memory(|m| m.focused()).is_none(), "and the button gave the keyboard back");
@@ -42,7 +42,7 @@ fn vim_sequences_and_leader_drive_the_graph_and_are_rebindable() {
     assert!(entries.iter().any(|e| matches!(e, LeaderEntry::Action { key: 'v', index } if bound[*index].action.id == "graph.view")));
     // Rebinding from config takes effect.
     app.config = UiConfig::with_overrides("[keymap.bind]\n\"nav.right\" = { keys = [\"w\"] }\n").unwrap();
-    app.desk.graph.select(Some("rust:a::run".into()));
+    app.desk.graph_mut().select(Some("rust:a::run".into()));
     frame(&ctx, &mut app, key("w"));
     assert_eq!(selected(&app), "rust:a::step");
 }
@@ -99,7 +99,7 @@ fn every_key_comes_from_config_and_no_two_actions_in_a_view_share_one() {
     }
     // Live: whatever each view offers, no key runs two things.
     let (ctx, mut app) = full_app();
-    app.desk.graph.select(Some("rust:a::run".into()));
+    app.desk.graph_mut().select(Some("rust:a::run".into()));
     for kind in BufferKind::ALL {
         focus(&ctx, &mut app, kind);
         let bound = app.bound_actions();
@@ -125,7 +125,7 @@ fn actions_rank_by_importance_and_apply_to_the_target() {
     assert!(bar.len() <= app.config.keymap.bar.max);
     assert!(!bar.iter().any(|id| id.starts_with("goto.")), "nothing selected: no go-tos: {bar:?}");
     assert!(bar.contains(&"nav.hint".to_owned()) && bar.contains(&"nav.search".to_owned()));
-    app.desk.graph.select(Some("rust:a::step".into()));
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
     let bound = app.bound_actions();
     let bar: Vec<&Bound> = app.bar_keys(&bound);
     let ids: Vec<&str> = bar.iter().map(|b| b.action.id.as_str()).collect();
@@ -176,7 +176,7 @@ fn keys_are_given_out_again_only_when_the_actions_change() {
     assert_eq!(kept_keys(&app), kept);
     assert!(first.iter().zip(&again).all(|(a, b)| a.action.id == b.action.id && a.leader == b.leader && a.keys == b.keys));
     // A selection changes what can run: given out again, current labels.
-    app.desk.graph.select(Some("rust:a::step".into()));
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
     let selected = app.bound_actions();
     assert_ne!(kept_keys(&app), kept);
     assert_eq!(selected.iter().find(|b| b.action.id == "nav.enter").unwrap().action.label, "To save");
@@ -206,18 +206,18 @@ fn question_mark_lists_this_views_keys_grouped_and_searchable() {
     app.key_sheet = Some("callee".into());
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("Go to a callee") && !text.contains("Half a page down"), "{text}");
-    let selection = app.desk.graph.selection.clone();
+    let selection = app.desk.graph_mut().selection.clone();
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert!(app.key_sheet.is_none());
     frame(&ctx, &mut app, vec![]);
     assert!(!text_input_focused(&ctx));
-    assert_eq!(app.desk.graph.selection, selection, "Escape closed the sheet and nothing else");
+    assert_eq!(app.desk.graph().selection, selection, "Escape closed the sheet and nothing else");
 }
 
 #[test]
 fn a_pause_on_a_prefix_shows_what_can_follow() {
     let (ctx, mut app) = app_with_graph();
-    app.desk.graph.select(Some("rust:a::step".into()));
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
     frame_at(&ctx, &mut app, vec![], 10.0);
     frame_at(&ctx, &mut app, key("g"), 10.0);
     // The popup: its title is the keys so far, and it says how to cancel.
@@ -243,7 +243,7 @@ fn a_pause_on_a_prefix_shows_what_can_follow() {
     assert!(popup(&text, "z") && text.contains("Show one more level"), "the graph's z keys, in its words: {text}");
     // With nothing selected, the go-tos that need a target aren't listed.
     frame_at(&ctx, &mut app, press(egui::Key::Escape, false), 33.0);
-    app.desk.graph.select(None);
+    app.desk.graph_mut().select(None);
     frame_at(&ctx, &mut app, key("g"), 40.0);
     frame_at(&ctx, &mut app, vec![], 42.9);
     let text = texts(&frame_at(&ctx, &mut app, vec![], 43.0));
@@ -259,16 +259,16 @@ fn the_palette_still_reaches_other_views_actions() {
     let palette = app.palette_actions();
     let pin = palette.iter().find(|b| b.action.id == "spec.pin").expect("in the palette");
     assert!(pin.action.label.starts_with("Spec · ") && pin.keys.is_empty() && pin.leader.is_none());
-    let was = app.desk.spec.pinned;
+    let was = app.desk.spec_mut().pinned;
     app.invoke(Invocation { action: pin.action.clone(), origin: pin.origin, value: None }, &ctx);
-    assert_ne!(app.desk.spec.pinned, was, "it runs on its view");
+    assert_ne!(app.desk.spec().pinned, was, "it runs on its view");
     assert!(!palette.iter().any(|b| b.action.label.starts_with("Spec · ") && b.action.id.starts_with("nav.")), "not its shared moves: they act where you are");
     // `:` then a number goes to that line or row.
     assert!(palette.iter().any(|b| b.action.id == "nav.line"));
     focus(&ctx, &mut app, BufferKind::Code);
     let line = app.palette_actions().into_iter().find(|b| b.action.id == "nav.line").unwrap();
     app.invoke(Invocation { action: line.action, origin: line.origin, value: Some("7".into()) }, &ctx);
-    assert_eq!(app.desk.code.target_line, Some(7));
+    assert_eq!(app.desk.code().target_line, Some(7));
 }
 
 #[test]
@@ -303,7 +303,7 @@ fn the_leader_menu_opens_with_the_focused_views_own_menu() {
 fn a_code_line_offers_every_go_to() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Code);
-    app.desk.code.move_to("1");
+    app.desk.code_mut().move_to("1");
     assert!(When::Component.holds(&app.situation()), "a line is in some component, even before the index says which");
     frame_at(&ctx, &mut app, key("g"), 70.0);
     frame_at(&ctx, &mut app, vec![], 71.0);
@@ -313,7 +313,7 @@ fn a_code_line_offers_every_go_to() {
     }
     // No plan: no queue to go to (the queue says so).
     frame_at(&ctx, &mut app, press(egui::Key::Escape, false), 72.0);
-    app.desk.queue.plan = None;
+    app.desk.queue_mut().plan = None;
     assert!(app.bound_actions().iter().any(|b| b.action.id == "goto.queue" && b.action.when == When::Unavailable));
 }
 
@@ -327,29 +327,29 @@ fn enter_and_backspace_are_only_offered_where_they_act() {
     let has = |app: &CockpitApp, id: &str| app.bound_actions().iter().any(|b| b.action.id == id && b.action.when.holds(&app.situation()));
     // Graph: Backspace only once gone in somewhere.
     focus(&ctx, &mut app, BufferKind::Graph);
-    app.desk.graph = showing(crate::graph::tests::tree_of(&crate::graph::tests::sample_graph(), None, arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() }));
-    app.desk.graph.nav.source = Source::Plan(PlanId::new("p").unwrap());
-    app.desk.graph.select(Some("rust:a::run".into()));
+    *app.desk.graph_mut() = showing(crate::graph::tests::tree_of(&crate::graph::tests::sample_graph(), None, arch_graph::tree::TreeRequest { view: arch_graph::tree::ViewKind::Calls, ..Default::default() }));
+    app.desk.graph_mut().nav.source = Source::Plan(PlanId::new("p").unwrap());
+    app.desk.graph_mut().select(Some("rust:a::run".into()));
     assert!(!has(&app, "nav.leave") && !offered(&app, "nav.leave"), "the starting points already");
-    app.desk.graph.navigate(crate::graph::NavChange::GoIn("rust:a::run".into()));
+    app.desk.graph_mut().navigate(crate::graph::NavChange::GoIn("rust:a::run".into()));
     assert!(has(&app, "nav.leave"));
     // Code: Enter on a call, Backspace inside a definition.
     focus(&ctx, &mut app, BufferKind::Code);
-    app.desk.code.move_to("2");
+    app.desk.code_mut().move_to("2");
     assert!(!has(&app, "nav.enter") && !has(&app, "nav.leave"), "run's first line: no call, not inside");
-    app.desk.code.move_to("3");
+    app.desk.code_mut().move_to("3");
     assert!(has(&app, "nav.enter") && has(&app, "nav.leave"));
     // Queue: Enter only on a job with findings.
     focus(&ctx, &mut app, BufferKind::Queue);
-    app.desk.queue.move_to("0");
+    app.desk.queue_mut().move_to("0");
     assert!(!has(&app, "nav.enter"), "queued, no findings");
-    app.desk.queue.move_to("2");
+    app.desk.queue_mut().move_to("2");
     assert!(has(&app, "nav.enter"));
     // Spec: on a comment, reply leads the bar.
     focus(&ctx, &mut app, BufferKind::Spec);
     let step = ComponentId::new("rust:a::step");
-    app.desk.spec.comments = vec![crate::review::tests::comment(1, arch_graph::CommentAnchor::Section { id: step, section: "logic".into() }, arch_graph::CommentStatus::Open)];
-    app.desk.spec.move_to("logic#Comment(CommentId(\"c1\"))");
+    app.desk.spec_mut().comments = vec![crate::review::tests::comment(1, arch_graph::CommentAnchor::Section { id: step, section: "logic".into() }, arch_graph::CommentStatus::Open)];
+    app.desk.spec_mut().move_to("logic#Comment(CommentId(\"c1\"))");
     let bound = app.bound_actions();
     let bar: Vec<String> = app.bar_keys(&bound).into_iter().map(|b| b.action.id.clone()).collect();
     assert_eq!(bar.first().map(String::as_str), Some("spec.reply"), "{bar:?}");
@@ -393,9 +393,9 @@ fn a_swipe_runs_what_the_keymap_binds_to_it_in_the_view_it_started_on() {
     focus(&ctx, &mut app, BufferKind::Chat);
     let middle = app.panel_rects[app.desk.panels.focused()].center();
     swipe(&ctx, &mut app, middle, -150.0, 1.0);
-    assert_eq!(app.desk.chat.ui.slot.as_str(), "sub-1", "left: the chat's next slot (its own binding before the shell's)");
+    assert_eq!(app.desk.chat().ui.slot.as_str(), "sub-1", "left: the chat's next slot (its own binding before the shell's)");
     swipe(&ctx, &mut app, middle, 150.0, 2.0);
-    assert_eq!(app.desk.chat.ui.slot.as_str(), harness_contracts::LEAD, "right: back");
+    assert_eq!(app.desk.chat().ui.slot.as_str(), harness_contracts::LEAD, "right: back");
     assert!(UiConfig::with_overrides("[keymap.bind]\n\"chat.next_slot\" = { gestures = [\"wiggle\"] }\n").unwrap_err().contains("no gesture `wiggle`"));
 }
 
@@ -406,13 +406,13 @@ fn a_swipe_runs_what_the_keymap_binds_to_it_in_the_view_it_started_on() {
 fn every_key_shown_runs_the_action_it_shows() {
     fn on_a_card() -> (egui::Context, CockpitApp) {
         let (ctx, mut app) = app_with_graph();
-        app.desk.graph.select(Some("rust:a::step".into()));
+        app.desk.graph_mut().select(Some("rust:a::step".into()));
         frame(&ctx, &mut app, vec![]);
         (ctx, app)
     }
     fn in_the_quick_look() -> (egui::Context, CockpitApp) {
         let (ctx, mut app) = on_a_card();
-        crate::graph::tests::with_detail(&mut app.desk.graph, "rust:a::step", "src/a.rs", 10, 20);
+        crate::graph::tests::with_detail(app.desk.graph_mut(), "rust:a::step", "src/a.rs", 10, 20);
         from_outside(&ctx, &mut app, r#"{"op":"run","id":"quicklook.toggle"}"#).unwrap();
         assert!(app.quick_look.is_some());
         (ctx, app)

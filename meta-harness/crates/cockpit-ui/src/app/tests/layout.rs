@@ -6,34 +6,34 @@ use super::*;
 fn the_layout_comes_back_as_it_was_saved() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Code);
-    app.desk.code.move_to("6");
+    app.desk.code_mut().move_to("6");
     keys(&ctx, &mut app, "mc");
     app.desk.panels = panels_of(&[BufferKind::Tree, BufferKind::Graph, BufferKind::Chat, BufferKind::Code], 2);
-    app.desk.graph.select(Some("rust:a::step".into()));
-    app.desk.chat.ui.input_buffer = "half a thought".into();
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
+    app.desk.chat_mut().ui.input_buffer = "half a thought".into();
     let saved = app.saved_ui();
     // Through the server (as JSON) into a cockpit that just opened.
     let json = serde_json::to_value(&saved).unwrap();
     let (_, mut fresh) = full_app();
     fresh.restore_saved(serde_json::from_value(json).unwrap());
     assert_eq!((fresh.desk.panels.kinds(), fresh.desk.panels.focused()), (saved.panels.kinds(), 2));
-    assert_eq!((fresh.desk.marks.clone(), fresh.desk.jumps.clone(), fresh.desk.chat.ui.input_buffer.as_str()), (saved.marks.clone(), saved.jumps.clone(), "half a thought"));
+    assert_eq!((fresh.desk.marks.clone(), fresh.desk.jumps.clone(), fresh.desk.chat().ui.input_buffer.as_str()), (saved.marks.clone(), saved.jumps.clone(), "half a thought"));
     let graph_place = |s: &SavedUi| s.views.iter().find(|(p, _)| p.kind == BufferKind::Graph).map(|(_, p)| p.clone());
-    assert_eq!(fresh.desk.graph.place(), graph_place(&saved).unwrap(), "the graph where it was, the same card selected");
+    assert_eq!(fresh.desk.graph().place(), graph_place(&saved).unwrap(), "the graph where it was, the same card selected");
     assert!(matches!(fresh.saved_ui().views.iter().find(|(p, _)| p.kind == BufferKind::Code), Some((_, Place::Code { line: 6, .. }))));
     // A cockpit that has loaded nothing loads the saved file, even one
     // named like the file it starts on.
     let mut opened = CockpitApp::new("http://127.0.0.1:9");
     let mut only_code = saved.clone();
-    only_code.views = vec![(Buffer::new(BufferKind::Code, 0), Place::Code { file: opened.desk.code.current_file.clone(), line: 3 })];
+    only_code.views = vec![(BufferId::new(BufferKind::Code, 0), Place::Code { file: opened.desk.code_mut().current_file.clone(), line: 3 })];
     opened.restore_saved(only_code);
-    assert!(opened.desk.code.is_loading, "the saved file is fetched");
+    assert!(opened.desk.code().is_loading, "the saved file is fetched");
 }
 
 #[test]
 fn each_column_keeps_its_own_graph_and_the_agent_moves_the_one_named_or_used_last() {
     let (ctx, mut app) = app_with_graph();
-    app.desk.graph.select(Some("rust:a::run".into()));
+    app.desk.graph_mut().select(Some("rust:a::run".into()));
     // A second graph, in a third panel, showing its own selection.
     app.desk.panels.set_count(3, 12);
     let second = app.desk.panels.show(2, BufferKind::Graph);
@@ -42,11 +42,15 @@ fn each_column_keeps_its_own_graph_and_the_agent_moves_the_one_named_or_used_las
     frame(&ctx, &mut app, vec![]);
     // It starts where the first one was (its view; its selection once
     // its tree is in).
-    let first_nav = app.desk.parked.graphs.get(&0).map(|g| g.nav.clone());
+    let nav = |place: Option<Place>| match place {
+        Some(Place::Graph { nav, .. }) => Some(nav),
+        _ => None,
+    };
+    let first_nav = nav(app.desk.buffer(BufferId::new(BufferKind::Graph, 0)).map(|g| g.place()));
     frame(&ctx, &mut app, vec![]);
-    assert_eq!(Some(app.desk.graph.nav.clone()), first_nav);
-    app.desk.graph = showing(sample_tree());
-    app.desk.graph.select(Some("rust:a::step".into()));
+    assert_eq!(nav(Some(app.desk.view(BufferKind::Graph).place())), first_nav);
+    *app.desk.graph_mut() = showing(sample_tree());
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
     frame(&ctx, &mut app, vec![]);
     assert_eq!(selected(&app), "rust:a::step");
     // Focus back on the first: its own selection, untouched.
@@ -56,10 +60,10 @@ fn each_column_keeps_its_own_graph_and_the_agent_moves_the_one_named_or_used_las
     // The agent names the third panel: that graph moves, this one doesn't.
     agent_moves(&mut app, "rust:a::save", Some(3));
     frame(&ctx, &mut app, vec![]);
-    assert!(app.desk.graph.agent.is_none(), "the focused graph wasn't moved");
+    assert!(app.desk.graph().agent.is_none(), "the focused graph wasn't moved");
     app.desk.panels.focus(2);
     frame(&ctx, &mut app, vec![]);
-    assert!(app.desk.graph.agent.is_some(), "the third panel's was");
+    assert!(app.desk.graph().agent.is_some(), "the third panel's was");
     // Naming none: the graph used last (this one, focused last).
     app.desk.panels.focus(0);
     frame(&ctx, &mut app, vec![]);
@@ -67,7 +71,7 @@ fn each_column_keeps_its_own_graph_and_the_agent_moves_the_one_named_or_used_las
     frame(&ctx, &mut app, vec![]);
     app.desk.panels.focus(1);
     frame(&ctx, &mut app, vec![]);
-    assert!(app.desk.graph.agent.is_none(), "the first graph, not used last, stayed");
+    assert!(app.desk.graph().agent.is_none(), "the first graph, not used last, stayed");
     // Saved and put back: both graphs, each where it was.
     let saved = app.saved_ui();
     assert_eq!(saved.views.iter().filter(|(p, _)| p.kind == BufferKind::Graph).count(), 2);
@@ -86,13 +90,13 @@ fn each_column_keeps_its_own_graph_and_the_agent_moves_the_one_named_or_used_las
 #[test]
 fn views_are_hidden_by_closing_and_gone_only_when_deleted() {
     let (ctx, mut app) = app_with_graph();
-    app.desk.graph.select(Some("rust:a::run".into()));
+    app.desk.graph_mut().select(Some("rust:a::run".into()));
     app.desk.panels.set_count(3, 12);
     let second = app.desk.panels.show(2, BufferKind::Graph);
     app.desk.panels.focus(2);
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, vec![]);
-    app.desk.graph.select(Some("rust:a::step".into()));
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
     // Closing its panel hides it; the list shows it, and picking it
     // brings it back, as it was, in the focused panel.
     app.run_shell(ShellCommand::ClosePanel, None, None, &ctx);
@@ -109,14 +113,14 @@ fn views_are_hidden_by_closing_and_gone_only_when_deleted() {
     app.run_shell(ShellCommand::NewView(BufferKind::Graph), None, None, &ctx);
     frame(&ctx, &mut app, vec![]);
     assert!(app.desk.panels.focused_buffer() != second && app.desk.panels.has(second));
-    assert_eq!(app.desk.graph.nav, crate::graph::Nav::default(), "new, not a copy");
+    assert_eq!(app.desk.graph().nav, crate::graph::Nav::default(), "new, not a copy");
     // Deleting: gone for good; the view hidden last shows instead.
     app.run_shell(ShellCommand::DeleteView, None, None, &ctx);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.desk.panels.focused_buffer(), second, "the graph hidden last came back");
     app.run_shell(ShellCommand::DeleteView, None, None, &ctx);
     frame(&ctx, &mut app, vec![]);
-    assert!(!app.desk.panels.has(second) && !app.desk.parked.graphs.contains_key(&second.id), "deleted: not anywhere");
+    assert!(!app.desk.panels.has(second) && app.desk.buffer(second).is_none(), "deleted: not anywhere");
     // The queue isn't deleted (there's one of it).
     app.desk.panels.show(0, BufferKind::Queue);
     app.desk.panels.focus(0);
@@ -134,8 +138,8 @@ fn views_are_hidden_by_closing_and_gone_only_when_deleted() {
 fn a_count_before_a_go_to_names_the_panel_it_opens_in() {
     let (ctx, mut app) = app_with_graph();
     app.desk.panels.set_count(3, 12);
-    crate::graph::tests::with_detail(&mut app.desk.graph, "rust:a::step", "src/a.rs", 10, 20);
-    app.desk.graph.select(Some("rust:a::step".into()));
+    crate::graph::tests::with_detail(app.desk.graph_mut(), "rust:a::step", "src/a.rs", 10, 20);
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
     frame(&ctx, &mut app, vec![]);
     // Not this panel: it says so, and nothing moves.
     keys(&ctx, &mut app, "2gd");
@@ -145,7 +149,7 @@ fn a_count_before_a_go_to_names_the_panel_it_opens_in() {
     assert!(app.note.as_deref().unwrap_or_default().contains("There are 3 panels"), "{:?}", app.note);
     // The first panel: the code opens there (the chat put away).
     keys(&ctx, &mut app, "1gd");
-    assert_eq!((app.desk.panels.focused(), app.desk.panels.kind(0), app.desk.code.current_file.as_str()), (0, BufferKind::Code, "src/a.rs"));
+    assert_eq!((app.desk.panels.focused(), app.desk.panels.kind(0), app.desk.code().current_file.as_str()), (0, BufferKind::Code, "src/a.rs"));
     // One past the last: a new panel, with a code view of its own.
     app.desk.panels.focus(1);
     frame(&ctx, &mut app, vec![]);
@@ -161,31 +165,31 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     let mut sub = crate::chat::tests::lead(None);
     (sub.id, sub.role, sub.name) = (harness_contracts::SlotId::new("sub-1"), "sub".into(), "reviewer".into());
     app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::SlotUpdated { slot: sub });
-    let (first, second) = (Buffer::new(BufferKind::Chat, 0), Buffer::new(BufferKind::Chat, 1));
+    let (first, second) = (BufferId::new(BufferKind::Chat, 0), BufferId::new(BufferKind::Chat, 1));
     app.desk.panels = crate::panels::Panels::new(vec![first, second], 0);
     app.use_buffer(first);
-    app.desk.chat.ui.input_buffer = "to the lead".into();
+    app.desk.chat_mut().ui.input_buffer = "to the lead".into();
     app.desk.panels.focus(1);
     app.use_buffer(second);
     frame(&ctx, &mut app, vec![]);
-    assert_eq!(app.desk.chat.ui.slot.as_str(), "lead", "a new chat view starts where the one before it was");
-    assert!(app.desk.chat.ui.input_buffer.is_empty(), "with its own prompt");
-    app.desk.chat.ui.slot = harness_contracts::SlotId::new("sub-1");
-    app.desk.chat.ui.input_buffer = "to the reviewer".into();
-    assert_eq!(app.desk.chat.active_thread(), None, "the sub-slot runs no session");
-    let ids: Vec<String> = app.desk.chat.actions().into_iter().map(|a| a.id).collect();
+    assert_eq!(app.desk.chat().ui.slot.as_str(), "lead", "a new chat view starts where the one before it was");
+    assert!(app.desk.chat().ui.input_buffer.is_empty(), "with its own prompt");
+    app.desk.chat_mut().ui.slot = harness_contracts::SlotId::new("sub-1");
+    app.desk.chat_mut().ui.input_buffer = "to the reviewer".into();
+    assert_eq!(app.desk.chat().active_thread(), None, "the sub-slot runs no session");
+    let ids: Vec<String> = app.desk.chat_mut().actions().into_iter().map(|a| a.id).collect();
     assert!(ids.contains(&"agent.close".to_owned()) && ids.contains(&"agent.pick".to_owned()), "{ids:?}");
     app.desk.panels.focus(0);
     frame(&ctx, &mut app, vec![]);
-    assert_eq!((app.desk.chat.ui.slot.as_str(), app.desk.chat.ui.input_buffer.as_str(), app.desk.chat.active_thread().map(|t| t.to_string())), ("lead", "to the lead", Some("t".into())));
-    assert!(!app.desk.chat.actions().iter().any(|a| a.id == "agent.close"), "the lead isn't closed");
+    assert_eq!((app.desk.chat().ui.slot.as_str(), app.desk.chat().ui.input_buffer.as_str(), app.desk.chat().active_thread().map(|t| t.to_string())), ("lead", "to the lead", Some("t".into())));
+    assert!(!app.desk.chat().actions().iter().any(|a| a.id == "agent.close"), "the lead isn't closed");
     // Saved and opened again: each view on its slot, with its draft.
     let saved = serde_json::to_value(app.saved_ui()).unwrap();
     let (_, mut fresh) = full_app();
     fresh.restore_saved(serde_json::from_value(saved).unwrap());
     let view = |app: &mut CockpitApp, buffer| {
         app.use_buffer(buffer);
-        (app.desk.chat.ui.slot.to_string(), app.desk.chat.ui.input_buffer.clone())
+        (app.desk.chat_mut().ui.slot.to_string(), app.desk.chat_mut().ui.input_buffer.clone())
     };
     assert_eq!(view(&mut fresh, second), ("sub-1".into(), "to the reviewer".into()));
     assert_eq!(view(&mut fresh, first), ("lead".into(), "to the lead".into()));
@@ -194,9 +198,9 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
 #[test]
 fn the_agent_is_talked_to_from_anywhere_without_moving_anything() {
     let (ctx, mut app) = app_with_graph();
-    app.desk.graph.select(Some("rust:a::step".into()));
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
     frame(&ctx, &mut app, vec![]);
-    let before = (app.desk.panels.clone(), app.desk.graph.place());
+    let before = (app.desk.panels.clone(), app.desk.graph_mut().place());
     // As a browser sends it: the key down with its text, then up.
     let t = |pressed| egui::Event::Key { key: egui::Key::T, physical_key: Some(egui::Key::T), pressed, repeat: false, modifiers: Default::default() };
     frame(&ctx, &mut app, vec![t(true), egui::Event::Text("t".into())]);
@@ -210,5 +214,5 @@ fn the_agent_is_talked_to_from_anywhere_without_moving_anything() {
     assert!(matches!(app.desk.shared.agents.get().lead_status(), SessionStatus::Failed(e) if e.contains("No harness instance")), "it went to the lead (no harness here)");
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert!(app.talk.is_none() && app.input_mode == InputMode::Normal);
-    assert_eq!((app.desk.panels.clone(), app.desk.graph.place()), before, "nothing on screen moved");
+    assert_eq!((app.desk.panels.clone(), app.desk.graph().place()), before, "nothing on screen moved");
 }

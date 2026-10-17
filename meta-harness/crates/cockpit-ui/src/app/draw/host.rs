@@ -22,11 +22,13 @@ impl CockpitApp {
     pub(in crate::app) fn render_view(&mut self, here: Here, ui: &mut egui::Ui, is_focused: bool) {
         let (kind, panel) = (here.kind, here.panel);
         let ctx = ui.ctx().clone();
-        let pan_held = ui.input(|i| self.config.keymap.leader.key_down(i));
+        let leader_held = ui.input(|i| self.config.keymap.leader.key_down(i));
+        // A card over a panel: what the other buffers say about what it shows.
+        let says = if here.look { self.others_say(kind) } else { Vec::new() };
         let mine: Vec<Bound> = self.shown_at(here).into_iter().filter(|b| b.layer == Layer::Panel).collect();
         let buttons = self.item_buttons_now();
         let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked };
-        crate::hosted::header(ui, self.desk.hosted(kind), &mine, &mut cx);
+        crate::hosted::header(ui, self.desk.view(kind), &mine, &mut cx);
         ui.separator();
         // The buttons of what you're on in a bar: their row kept along the
         // bottom (drawn there once everything is laid out), the buffer above.
@@ -40,30 +42,29 @@ impl CockpitApp {
                 egui::Rect::from_min_max(whole.min, egui::pos2(whole.right(), bar.top()))
             }
         };
-        ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| match kind {
-            BufferKind::Chat => self.desk.chat.render(ui, &mut self.feedback, is_focused, &mut cx),
-            BufferKind::Code => self.desk.code.render(ui, &mut self.feedback, &mut cx),
-            BufferKind::Graph => self.desk.graph.render(ui, &mut self.feedback, panel, pan_held, &mut cx),
-            BufferKind::Tree => self.desk.tree.render(ui, &mut self.feedback, &mut cx),
-            BufferKind::Spec => {
-                // A card over a panel: what the graph says about it first.
-                if self.desk.spec.floating
-                    && let Some(id) = self.desk.spec.target.clone()
-                {
-                    self.desk.graph.render_card_context(ui, &id);
-                    ui.separator();
-                }
-                self.desk.spec.render(ui, &mut cx);
+        let mut drawing = crate::buffer::Drawing { feedback: &mut self.feedback, focused: is_focused, leader_held };
+        let (buffer, net) = self.desk.view_with_net(kind);
+        let mut cx = RunCx { net, ctx: &ctx, input_mode: &mut self.input_mode, panel, note: &mut self.note, asked: &mut self.asked };
+        ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
+            if !says.is_empty() {
+                crate::hosted::says(ui, &says);
+                ui.separator();
             }
-            BufferKind::Queue => self.desk.queue.render(ui, &mut cx),
-            BufferKind::Inbox => self.desk.inbox.render(ui, &mut cx),
-            BufferKind::Changes => self.desk.changes.render(ui, &mut cx),
+            buffer.tick(net, &ctx);
+            buffer.render(ui, &mut cx, &mut drawing);
         });
         if content != whole {
             ui.painter().hline(whole.x_range(), content.bottom(), egui::Stroke::new(crate::theme::look().line_thin, colors().border));
             ui.allocate_rect(whole, egui::Sense::hover());
         }
         self.pointer_on_content(kind, ui, content);
+    }
+
+    /// What the buffers in use, but the one of `kind`, say about what it
+    /// shows (a component).
+    fn others_say(&self, kind: BufferKind) -> Vec<crate::hosted::Status> {
+        let Some(id) = self.desk.view(kind).target().and_then(|t| t.component().cloned()) else { return Vec::new() };
+        BufferKind::ALL.into_iter().filter(|k| *k != kind).filter_map(|k| self.desk.view(k).knows(&id)).flat_map(|known| known.says).collect()
     }
 
     /// Where the buttons of what you're on show now: as changed here, else
@@ -75,7 +76,7 @@ impl CockpitApp {
     /// A click or double click on a view's content (not on something over
     /// it): on one of its items, the cursor goes there; a double opens it.
     fn pointer_on_content(&mut self, kind: BufferKind, ui: &egui::Ui, content: egui::Rect) {
-        if self.desk.hosted(kind).own_pointer() {
+        if self.desk.view(kind).own_pointer() {
             return;
         }
         let (clicked, double, at) = ui.input(|i| (i.pointer.primary_clicked(), i.pointer.button_double_clicked(egui::PointerButton::Primary), i.pointer.interact_pos()));
@@ -105,7 +106,7 @@ impl CockpitApp {
             None => (self.desk.panels.focused(), self.panel_rects.get(self.desk.panels.focused()).copied()),
         };
         let Some(bounds) = bounds else { return };
-        let hosted = self.desk.hosted(kind);
+        let hosted = self.desk.view(kind);
         let (at, anchor) = match self.input_mode {
             InputMode::Insert { .. } => (At::Typing, hosted.typing_rect()),
             _ => {
@@ -219,7 +220,7 @@ impl CockpitApp {
             // Where you are moved: the list is gathered again.
             self.frame_actions.borrow_mut().take();
         }
-        let own = self.desk.hosted(kind).own_pointer();
+        let own = self.desk.view(kind).own_pointer();
         match gesture {
             Gesture::Swipe { way, .. } => {
                 let bound = self.bound_actions();
