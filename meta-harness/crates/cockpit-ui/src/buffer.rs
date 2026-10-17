@@ -57,6 +57,11 @@ pub trait Buffer: Navigable + ActionProvider + Hosted + Any {
     /// what it needs asked for.
     fn tick(&mut self, _net: &NetClient, _ctx: &egui::Context) {}
 
+    /// It was drawn last frame and isn't now (its panel went, another
+    /// buffer is shown there, the desk was put away): what it holds open
+    /// while it's drawn, it lets go of.
+    fn hidden(&mut self) {}
+
     /// The architecture changed on the server (an event).
     fn on_event(&mut self, _event: &ArchEvent) {}
 
@@ -108,5 +113,6 @@ pub fn new(kind: BufferKind) -> Box<dyn Buffer> {
         BufferKind::Queue => Box::<crate::queue::QueueState>::default(),
         BufferKind::Inbox => Box::<crate::inbox::InboxView>::default(),
         BufferKind::Changes => Box::<crate::changes::ChangesView>::default(),
+        BufferKind::Terminal => Box::<crate::terminal::TerminalBuffer>::default(),
     }
 }

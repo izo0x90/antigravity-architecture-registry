@@ -200,6 +200,13 @@ fn f_labels_what_is_on_screen_in_every_view() {
     app.desk.share();
     for kind in BufferKind::ALL {
         focus(&ctx, &mut app, kind);
+        // A terminal: focusing it starts typing; its leave keys stop it.
+        if kind == BufferKind::Terminal {
+            assert!(matches!(app.input_mode, InputMode::Insert { .. }), "focusing a terminal starts typing");
+            frame(&ctx, &mut app, press(egui::Key::Escape, false));
+            frame(&ctx, &mut app, press(egui::Key::Escape, false));
+            assert_eq!(app.input_mode, InputMode::Normal, "Escape twice stops typing");
+        }
         let spots = app.desk.view(kind).spots();
         assert!(!spots.is_empty(), "{kind:?}: something drawn to label");
         frame(&ctx, &mut app, key("f"));

@@ -94,6 +94,12 @@ pub trait Hosted {
     fn typing_rect(&self) -> Option<egui::Rect> {
         None
     }
+
+    /// What its field takes while typed in: text (the way back out leaves
+    /// it), or every key (only `[keymap.input] leave` leaves it).
+    fn field(&self) -> crate::keymap::Field {
+        crate::keymap::Field::Text
+    }
 }
 
 /// The panel's top line: its bound actions' header buttons (`bound`: the
@@ -134,13 +140,15 @@ pub fn says(ui: &mut egui::Ui, statuses: &[Status]) {
     });
 }
 
-/// One thing said, in its tone (more on hover).
+/// One thing said, in its tone (more on hover). Cut to fit the line, all
+/// of it on hover: what a buffer says (a terminal's title is whatever its
+/// program sets) never makes its panel wider.
 fn said(ui: &mut egui::Ui, status: &Status, size: f32, strong: bool) {
     let mut text = RichText::new(&status.text).size(size).color(status.tone.color());
     if strong {
         text = text.strong();
     }
-    let label = ui.add(egui::Label::new(text).extend());
+    let label = ui.add(egui::Label::new(text).truncate());
     if let Some(detail) = &status.detail {
         label.on_hover_text(detail);
     }

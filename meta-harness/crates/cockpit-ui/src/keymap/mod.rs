@@ -2,8 +2,10 @@
 //! `config/default.toml`); actions never carry keys themselves.
 
 mod local;
+mod typing;
 
 pub use local::{InputKeys, ListKeys, LocalKeys, Modifier, PointerKeys, Sent, local, set_local};
+pub use typing::{Leaving, Typed, Typing, terminal_input};
 
 use std::collections::BTreeMap;
 
@@ -27,6 +29,17 @@ pub enum InputMode {
     /// The shell reads typed keys for the buffer this holds (search, hint
     /// labels, marks).
     Capture { at: Host },
+}
+
+/// What a buffer's field takes while it's typed in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Field {
+    /// Text: the way back out (`back`) leaves it.
+    #[default]
+    Text,
+    /// Every key (a terminal's program has Escape): only `[keymap.input]
+    /// leave` leaves it.
+    Keys,
 }
 
 /// What holds a buffer on screen: a panel, or the quick look (over one).
@@ -207,6 +220,29 @@ impl Chord {
         };
         let mods = [(self.ctrl, "ctrl+"), (self.alt, "alt+"), (self.shift, "shift+")];
         mods.iter().filter(|(on, _)| *on).map(|(_, m)| *m).collect::<String>() + &key
+    }
+}
+
+/// Keys pressed one after another: "Escape Escape", "ctrl+\\ n".
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct Sequence(pub Vec<Chord>);
+
+impl TryFrom<String> for Sequence {
+    type Error = String;
+
+    fn try_from(spec: String) -> Result<Self, String> {
+        let keys = spec.split_whitespace().map(|k| Chord::try_from(k.to_owned())).collect::<Result<Vec<_>, _>>()?;
+        if keys.is_empty() {
+            return Err("a key sequence names at least one key".into());
+        }
+        Ok(Self(keys))
+    }
+}
+
+impl Sequence {
+    pub fn label(&self) -> String {
+        self.0.iter().map(Chord::label).collect::<Vec<_>>().join(" ")
     }
 }
 

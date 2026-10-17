@@ -69,12 +69,28 @@ pub struct InputKeys {
     pub add: Vec<Chord>,
     /// A new line in the box (the box's own return key).
     pub newline: Chord,
+    /// What leaves typing in a field that takes every key (a terminal,
+    /// where Escape is the program's): each a sequence of keys.
+    #[serde(default = "default_leave")]
+    pub leave: Vec<super::Sequence>,
+    /// How long a sequence's first key waits for the next: past it, the
+    /// key goes into the field after all.
+    #[serde(default = "default_leave_wait")]
+    pub leave_wait_ms: u64,
+}
+
+fn default_leave() -> Vec<super::Sequence> {
+    ["Escape Escape", "ctrl+\\ n"].into_iter().map(|s| super::Sequence::try_from(s.to_owned()).expect("a sequence")).collect()
+}
+
+fn default_leave_wait() -> u64 {
+    300
 }
 
 impl Default for InputKeys {
     fn default() -> Self {
         let [newline] = <[Chord; 1]>::try_from(chords(&["shift+Enter"])).expect("one key");
-        Self { send: chords(&["Enter"]), add: chords(&["ctrl+Enter"]), newline }
+        Self { send: chords(&["Enter"]), add: chords(&["ctrl+Enter"]), newline, leave: default_leave(), leave_wait_ms: default_leave_wait() }
     }
 }
 
@@ -110,6 +126,11 @@ impl InputKeys {
     /// each key with its words.
     pub fn keys(&self, back: &Chord, leave: &'static str) -> Vec<(String, &'static str)> {
         vec![(self.label(Sent::Send), "sends"), (self.newline.label(), "new line"), (back.label(), leave)]
+    }
+
+    /// What a field that takes every key says about its keys: how to leave.
+    pub fn leave_keys(&self) -> Vec<(String, &'static str)> {
+        self.leave.iter().map(|s| (s.label(), "stops typing")).collect()
     }
 }
 

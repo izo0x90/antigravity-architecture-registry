@@ -13,6 +13,7 @@ mod offers;
 mod moves;
 mod outside;
 mod split;
+mod terminal;
 mod views;
 
 use super::*;
@@ -196,6 +197,12 @@ fn full_app() -> (egui::Context, CockpitApp) {
     for n in 4..40 {
         app.desk.shared.agents.get_mut().apply(crate::chat::tests::item(n, harness_contracts::ItemBody::UserMessage { text: format!("message {n}") }));
     }
+    // A terminal with lines on its screen, come over its socket.
+    app.desk.shared.terminals.get_mut().apply(&harness_contracts::ClientEvent::TerminalUpdated { terminal: crate::terminals::tests::terminal("t1") });
+    app.desk.share();
+    let (terminal, net) = app.desk.view_with_net(BufferKind::Terminal);
+    terminal.tick(net, &ctx);
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::screen(&["$ ls", "Cargo.toml  src", "$ "])]);
     app.desk.panels.set_count(3, 12);
     (ctx, app)
 }
@@ -302,6 +309,14 @@ impl Desk {
 
     pub fn inbox(&self) -> &crate::inbox::InboxView {
         self.typed(BufferKind::Inbox)
+    }
+
+    pub fn terminal(&self) -> &crate::terminal::TerminalBuffer {
+        self.typed(BufferKind::Terminal)
+    }
+
+    pub fn terminal_mut(&mut self) -> &mut crate::terminal::TerminalBuffer {
+        self.typed_mut(BufferKind::Terminal)
     }
 
     pub fn changes(&self) -> &crate::changes::ChangesView {

@@ -329,8 +329,8 @@ mod tests {
         assert_eq!((c.kinds(), c.focused_kind()), (vec![K::Spec], K::Spec));
         c.set_count(4, 12);
         assert_eq!((c.buffers(), c.focused()), (buffers.as_slice(), 3), "as they were, focus on the same view");
-        c.set_count(9, 8);
-        assert_eq!(c.len(), 8, "up to the most there may be");
+        c.set_count(12, 10);
+        assert_eq!(c.len(), 10, "up to the most there may be");
         assert!(K::ALL.iter().all(|k| c.panel_of_kind(*k).is_some()), "every kind first, then more code views");
     }
 

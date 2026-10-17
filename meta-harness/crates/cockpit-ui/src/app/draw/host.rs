@@ -47,6 +47,8 @@ impl CockpitApp {
         // developer window has it).
         let typing = self.input_mode == (InputMode::Insert { at: here.at }) && !self.feedback.is_modal_open && !self.feedback.is_issues_window_open && !self.feedback.is_inspecting;
         let mut drawing = crate::buffer::Drawing { feedback: &mut self.feedback, focused: is_focused, leader_held, typing };
+        let drawn = self.desk.in_use(kind);
+        self.desk.on_screen(drawn);
         let (buffer, net) = self.desk.view_with_net(kind);
         let mut cx = RunCx { net, ctx: &ctx, input_mode: &mut self.input_mode, at: here.at, note: &mut self.note, asked: &mut self.asked };
         ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {

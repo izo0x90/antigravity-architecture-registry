@@ -11,10 +11,11 @@ pub enum BufferKind {
     Queue,
     Inbox,
     Changes,
+    Terminal,
 }
 
 impl BufferKind {
-    pub const ALL: [Self; 8] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec, Self::Queue, Self::Inbox, Self::Changes];
+    pub const ALL: [Self; 9] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec, Self::Queue, Self::Inbox, Self::Changes, Self::Terminal];
 
     pub fn title(&self) -> &'static str {
         match self {
@@ -26,6 +27,7 @@ impl BufferKind {
             Self::Queue => "QUEUE",
             Self::Inbox => "INBOX",
             Self::Changes => "CHANGES",
+            Self::Terminal => "TERMINAL",
         }
     }
 
@@ -46,6 +48,7 @@ impl BufferKind {
             Self::Queue => "queue",
             Self::Inbox => "inbox",
             Self::Changes => "changes",
+            Self::Terminal => "terminal",
         }
     }
 
@@ -59,6 +62,7 @@ impl BufferKind {
             Self::Queue => egui_phosphor::regular::LIST_CHECKS,
             Self::Inbox => egui_phosphor::regular::TRAY,
             Self::Changes => egui_phosphor::regular::GIT_DIFF,
+            Self::Terminal => egui_phosphor::regular::TERMINAL_WINDOW,
         }
     }
 }

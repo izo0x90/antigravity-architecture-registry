@@ -50,6 +50,18 @@ impl CockpitApp {
         let leader_tapped = leader_released && self.leader_tap.release();
 
         match self.input_mode {
+            // A field that takes every key: only the leave keys leave it
+            // (a sequence's first key held until the next, or the wait).
+            InputMode::Insert { at } if self.field_at(at) == crate::keymap::Field::Keys => {
+                let keys = &self.config.keymap.input;
+                let typing = ctx.input_mut(|i| self.leaving.filter(i, keys));
+                if typing == crate::keymap::Typing::Leaves {
+                    self.input_mode = InputMode::Normal;
+                    release_keyboard(ctx);
+                } else if let Some(wait) = self.leaving.waiting(keys, ctx.input(|i| i.time)) {
+                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
+                }
+            }
             InputMode::Insert { .. } => {
                 if back {
                     self.input_mode = InputMode::Normal;

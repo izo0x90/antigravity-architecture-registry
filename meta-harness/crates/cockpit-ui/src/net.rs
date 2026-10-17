@@ -606,6 +606,10 @@ impl NetClient {
 
     // ---- terminals ----
 
+    pub fn terminals(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<harness_contracts::Terminal>>) + Send + 'static) {
+        self.call("GET", "/api/terminals", None, ctx, on_done);
+    }
+
     pub fn open_terminal(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Terminal>) + Send + 'static) {
         self.call("POST", "/api/terminals", Some(serde_json::json!({})), ctx, on_done);
     }

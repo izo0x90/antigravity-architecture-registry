@@ -34,6 +34,7 @@ impl CockpitApp {
             (Some(Capture::Search(_)), _) => Some(("Searching", vec![(local.input.label(crate::keymap::Sent::Send), "jumps to it"), (back, "gives up")])),
             (Some(Capture::Hint(_)), _) => Some(("Labels", vec![("a label".into(), "goes there"), (back, "gives up")])),
             (Some(Capture::MarkSet | Capture::MarkJump), _) => Some(("Marks", vec![("a letter".into(), "the mark"), (back, "gives up")])),
+            (None, InputMode::Insert { at }) if self.field_at(at) == crate::keymap::Field::Keys => Some(("Typing", local.input.leave_keys())),
             (None, InputMode::Insert { .. }) => Some(("Typing", local.input.keys(&local.back, "leaves the field"))),
             (None, InputMode::Palette) => Some(("The palette", local.list.keys(&local.back, "closes"))),
             (None, _) => None,

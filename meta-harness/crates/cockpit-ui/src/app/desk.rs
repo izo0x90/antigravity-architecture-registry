@@ -21,6 +21,10 @@ pub struct Desk {
     /// panel's, while it's drawn).
     pub last_used: BTreeMap<BufferKind, u32>,
     active: BTreeMap<BufferKind, u32>,
+    /// The buffers drawn this frame, and last frame (one drawn then and
+    /// not now is told it's hidden).
+    on_screen: std::collections::BTreeSet<BufferId>,
+    was_on_screen: std::collections::BTreeSet<BufferId>,
     /// New buffers, to start where the buffer of their kind used before was.
     pub fresh: Vec<(BufferId, Place)>,
     /// What the buffers show in common (each reads what it needs).
@@ -59,6 +63,8 @@ impl Desk {
             panels: Panels::default(),
             last_used: BTreeMap::new(),
             active: BTreeMap::new(),
+            on_screen: Default::default(),
+            was_on_screen: Default::default(),
             fresh: Vec::new(),
             shared: crate::shared::Shared { server: name.to_owned(), ..Default::default() },
             keeper: Default::default(),
@@ -114,7 +120,7 @@ impl Desk {
 
     /// The buffer of `kind` in use: the one being drawn, else the one
     /// used last.
-    fn in_use(&self, kind: BufferKind) -> BufferId {
+    pub fn in_use(&self, kind: BufferKind) -> BufferId {
         match self.active.get(&kind) {
             Some(id) if !kind.one_only() => BufferId::new(kind, *id),
             _ => self.used_buffer(kind),
@@ -144,6 +150,35 @@ impl Desk {
     /// Drawn: the buffers used last are in use again.
     pub fn drawn(&mut self) {
         self.active.clear();
+    }
+
+    /// The desk is put away (another is shown): every buffer drawn is hidden.
+    pub fn put_away(&mut self) {
+        let drawn: Vec<BufferId> = self.was_on_screen.union(&self.on_screen).copied().collect();
+        for id in drawn {
+            if let Some(buffer) = self.buffers.get_mut(&id) {
+                buffer.hidden();
+            }
+        }
+        self.was_on_screen.clear();
+        self.on_screen.clear();
+    }
+
+    /// `id` was drawn this frame.
+    pub fn on_screen(&mut self, id: BufferId) {
+        self.on_screen.insert(id);
+    }
+
+    /// The frame's done: a buffer drawn last frame and not this one is
+    /// told it's hidden.
+    pub fn frame_done(&mut self) {
+        let gone: Vec<BufferId> = self.was_on_screen.difference(&self.on_screen).copied().collect();
+        for id in gone {
+            if let Some(buffer) = self.buffers.get_mut(&id) {
+                buffer.hidden();
+            }
+        }
+        self.was_on_screen = std::mem::take(&mut self.on_screen);
     }
 
     /// Every buffer, shown, hidden or the quick look's.

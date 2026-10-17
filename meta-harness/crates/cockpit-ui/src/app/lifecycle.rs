@@ -101,7 +101,7 @@ impl CockpitApp {
     /// frame: the ones not shown take theirs as the one shown, in turn).
     pub(super) fn take_events(&mut self, ctx: &egui::Context) {
         self.desk.shared.agents.get_mut().tick(&self.desk.net, ctx);
-        self.desk.shared.terminals.get_mut().tick();
+        self.desk.shared.terminals.get_mut().tick(&self.desk.net, ctx);
         let events = self.desk.net.incoming.lock().map(|mut lock| lock.drain(..).collect::<Vec<_>>()).unwrap_or_default();
         for event in events {
             if let harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::Index { status } } = &event {

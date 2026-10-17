@@ -221,6 +221,8 @@ pub struct CockpitApp {
     theme_dirty: bool,
     pub input_mode: InputMode,
     leader_tap: TapTracker,
+    /// Typing in a field that takes every key: a leave sequence's first key, held.
+    leaving: crate::keymap::Leaving,
     /// Keys typed so far in leader mode (after the leader).
     leader_path: Vec<char>,
     /// The start of a multi-key sequence typed in normal mode (e.g. `g`).
@@ -295,6 +297,7 @@ impl CockpitApp {
             theme_dirty: true,
             input_mode: InputMode::Normal,
             leader_tap: TapTracker::default(),
+            leaving: Default::default(),
             leader_path: Vec::new(),
             pending_keys: Vec::new(),
             pending_since: 0.0,
@@ -507,6 +510,7 @@ impl CockpitApp {
         self.render_which_key_hud(ctx);
         self.render_key_sheet(ctx);
         self.render_palette(ctx);
+        self.desk.frame_done();
     }
 }
 

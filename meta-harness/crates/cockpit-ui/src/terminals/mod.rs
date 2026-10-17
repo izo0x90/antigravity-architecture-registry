@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use harness_contracts::{ClientEvent, Terminal, TerminalId};
 
-pub use link::TermLink;
+pub use link::{LinkState, TermLink};
 
 use crate::net::{NetClient, NetResult};
 
@@ -28,6 +28,7 @@ pub enum TermAct {
 }
 
 enum Reply {
+    Listed(NetResult<Vec<Terminal>>),
     Opened(NetResult<Terminal>),
     Restarted(TerminalId, NetResult<Terminal>),
     Closed(TerminalId, NetResult<()>),
@@ -38,6 +39,10 @@ type Mailbox = Arc<Mutex<Vec<Reply>>>;
 #[derive(Default)]
 pub struct Terminals {
     list: BTreeMap<TerminalId, Terminal>,
+    /// The server said which it has (its list asked for once; the event
+    /// stream keeps it since): until then, none isn't known to be none.
+    known: bool,
+    listing: bool,
     /// What went wrong, by terminal (none: opening one).
     errors: BTreeMap<Option<TerminalId>, String>,
     /// How many were opened here, and the last one.
@@ -60,6 +65,11 @@ impl Terminals {
             ClientEvent::Resync => self.list.clear(),
             _ => {}
         }
+    }
+
+    /// Whether the server said which it has.
+    pub fn known(&self) -> bool {
+        self.known
     }
 
     pub fn list(&self) -> impl Iterator<Item = &Terminal> {
@@ -120,11 +130,33 @@ impl Terminals {
         }
     }
 
-    /// Takes the replies to what was asked.
-    pub fn tick(&mut self) {
+    /// Takes the replies to what was asked; asks which there are, once.
+    pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
+        if !self.known && !self.listing {
+            self.listing = true;
+            let mailbox = self.mailbox.clone();
+            net.terminals(ctx.clone(), move |r| {
+                if let Ok(mut m) = mailbox.lock() {
+                    m.push(Reply::Listed(r));
+                }
+            });
+        }
         let replies = self.mailbox.lock().map(|mut m| std::mem::take(&mut *m)).unwrap_or_default();
         for reply in replies {
             match reply {
+                Reply::Listed(Ok(list)) => {
+                    self.known = true;
+                    for terminal in list {
+                        self.list.entry(terminal.id.clone()).or_insert(terminal);
+                    }
+                }
+                // Asked again next tick (a server with no shells says so: none).
+                Reply::Listed(Err(e)) => {
+                    self.listing = false;
+                    if e.status == Some(404) {
+                        self.known = true;
+                    }
+                }
                 Reply::Opened(Ok(terminal)) => {
                     self.opening = false;
                     self.made = (self.made.0 + 1, Some(terminal.id.clone()));
@@ -150,6 +182,14 @@ impl Terminals {
         }
     }
 
+    /// Tests: the server listed `list`.
+    #[cfg(test)]
+    pub(crate) fn answered_list(&mut self, list: Vec<Terminal>) {
+        if let Ok(mut m) = self.mailbox.lock() {
+            m.push(Reply::Listed(Ok(list)));
+        }
+    }
+
     /// A reply arrived (tests: what the server would have answered).
     #[cfg(test)]
     pub(crate) fn answered_open(&mut self, result: NetResult<Terminal>) {
@@ -160,7 +200,7 @@ impl Terminals {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use harness_contracts::{TermSize, TerminalStatus};
 
     use super::*;
@@ -177,11 +217,19 @@ mod tests {
         terminals.apply(&ClientEvent::TerminalClosed { terminal_id: TerminalId::new("t1") });
         assert_eq!(terminals.list().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["t2"]);
         let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
+        assert!(!terminals.known());
+        terminals.tick(&net, &ctx);
+        terminals.tick(&net, &ctx);
+        assert_eq!(net.sent.lock().unwrap().as_slice(), ["GET /api/terminals"], "which there are, asked once");
+        terminals.answered_list(vec![terminal("t2")]);
+        terminals.tick(&net, &ctx);
+        assert!(terminals.known());
+        net.sent.lock().unwrap().clear();
         terminals.act(None, TermAct::Open, &net, &ctx);
         assert!(terminals.opening());
         assert_eq!(net.sent.lock().unwrap().as_slice(), ["POST /api/terminals"]);
         terminals.answered_open(Ok(terminal("t3")));
-        terminals.tick();
+        terminals.tick(&net, &ctx);
         assert_eq!(terminals.made(), (1, Some(&TerminalId::new("t3"))));
         assert!(!terminals.opening() && terminals.get(&TerminalId::new("t3")).is_some());
         assert_eq!(terminals.beside(Some(&TerminalId::new("t3")), 1), Some(TerminalId::new("t2")), "stepping wraps");

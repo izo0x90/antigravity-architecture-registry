@@ -169,6 +169,7 @@ const CONTROLS: &[&str] = &[".button(", "small_button(", "selectable_label(", ".
 const CONTROLS_ALLOWED: &[(&str, &str, &str)] = &[
     ("graph/draw.rs", "Sense::click_and_drag", "its canvas reads the pointer itself (cards, dragging, two fingers)"),
     ("code.rs", "Sense::click", "its text reads the pointer itself (the line, the name under it, the go-to modifier)"),
+    ("terminal/draw.rs", "Sense::click_and_drag", "its grid reads the pointer itself (selecting, the keyboard's focus)"),
     ("request_card/draw.rs", "selectable_label(", "a form's fields are inputs, like a text box"),
 ];
 

@@ -104,9 +104,55 @@ theme! {
     card_special_selected,
     card_ok,
     card_ok_selected,
+    /// A terminal's 16 named colours (what programs ask for by number,
+    /// 0-7 then their bright 8-15); its default text and background are
+    /// `text` and `bg`.
+    term_black,
+    term_red,
+    term_green,
+    term_yellow,
+    term_blue,
+    term_magenta,
+    term_cyan,
+    term_white,
+    term_bright_black,
+    term_bright_red,
+    term_bright_green,
+    term_bright_yellow,
+    term_bright_blue,
+    term_bright_magenta,
+    term_bright_cyan,
+    term_bright_white,
 }
 
 impl Theme {
+    /// A colour a terminal's program asked for, as this theme shows it:
+    /// the named ones the theme's, the rest of the 256 by xterm's formula
+    /// (a 6×6×6 cube, then greys), RGB as it is. None: the terminal's own.
+    pub fn term_colour(&self, colour: harness_contracts::Colour) -> Option<Color32> {
+        use harness_contracts::Colour;
+        const CUBE: [u8; 6] = [0, 95, 135, 175, 215, 255];
+        match colour {
+            Colour::Default => None,
+            Colour::Named(n) => Some(self.term(n)),
+            Colour::Indexed(i) if i < 16 => Some(self.term(i)),
+            Colour::Indexed(i) if i < 232 => {
+                let i = i - 16;
+                Some(Color32::from_rgb(CUBE[usize::from(i / 36)], CUBE[usize::from((i / 6) % 6)], CUBE[usize::from(i % 6)]))
+            }
+            Colour::Indexed(i) => {
+                let grey = 8 + 10 * (i - 232);
+                Some(Color32::from_rgb(grey, grey, grey))
+            }
+            Colour::Rgb(r, g, b) => Some(Color32::from_rgb(r, g, b)),
+        }
+    }
+
+    /// A terminal's named colour `n` (0-15).
+    pub fn term(&self, n: u8) -> Color32 {
+        [self.term_black, self.term_red, self.term_green, self.term_yellow, self.term_blue, self.term_magenta, self.term_cyan, self.term_white, self.term_bright_black, self.term_bright_red, self.term_bright_green, self.term_bright_yellow, self.term_bright_blue, self.term_bright_magenta, self.term_bright_cyan, self.term_bright_white][usize::from(n & 15)]
+    }
+
     /// Applies the theme to egui's own widgets (panels, windows, selection).
     pub fn apply(&self, ctx: &egui::Context) {
         let mut visuals = egui::Visuals::dark();

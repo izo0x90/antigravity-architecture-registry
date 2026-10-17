@@ -51,6 +51,11 @@ pick = ["Enter"]
 send = ["Enter"]
 add = ["ctrl+Enter"]
 newline = "shift+Enter"     # a new line in the box
+# Leaving typing in a terminal, where Escape is the program's (vim's): each
+# a key sequence. The first key of one waits for the next; past the wait it
+# goes to the program after all (`ctrl+\` too, which would stop it).
+leave = ["Escape Escape", "ctrl+\\ n"]
+leave_wait_ms = 300
 
 # Held with the pointer (ctrl is Cmd on a Mac): clicking a name in the code
 # goes to what it names; turning the wheel zooms where a view zooms (the
@@ -118,6 +123,7 @@ D = "Developer"
 "buffer.queue" = { leader = "b q" }
 "buffer.inbox" = { leader = "b i" }
 "buffer.changes" = { leader = "b f" }
+"buffer.terminal" = { leader = "b r" }
 # Every open buffer (on screen or hidden), to show in this panel; a new one
 # here; this panel's buffer deleted for good (closing a panel only hides it).
 "buffer.list" = { leader = "b b" }
@@ -127,6 +133,7 @@ D = "Developer"
 "buffer.new.tree" = { leader = "b n t" }
 "buffer.new.spec" = { leader = "b n s" }
 "buffer.new.chat" = { leader = "b n c" }
+"buffer.new.terminal" = { leader = "b n r" }
 "layout.1" = { leader = "l 1", keys = ["alt+1"] }
 "layout.2" = { leader = "l 2", keys = ["alt+2"] }
 "layout.3" = { leader = "l 3", keys = ["alt+3"] }
@@ -230,6 +237,13 @@ D = "Developer"
 "inbox.prev" = { keys = ["K"], gestures = ["swipe_right"] }
 "inbox.open_chat" = { keys = ["o"] }
 "inbox.dismiss" = { keys = ["x"] }
+# A terminal's own (not typing: typing, every key is its program's): type
+# into it, copy the selection (or the cursor's line: y and Y answer requests
+# everywhere), its neighbours.
+"terminal.type" = { keys = ["i"] }
+"terminal.copy" = { keys = ["c"] }
+"terminal.next" = { keys = ["J"], gestures = ["swipe_left"] }
+"terminal.prev" = { keys = ["K"], gestures = ["swipe_right"] }
 
 "server.switch" = { leader = "S S" }
 "server.add" = { leader = "S a" }
@@ -414,6 +428,23 @@ card_ok_selected = "#12241b"
 chrome = "#0b0e14"
 widget_selection = "#0b4f5f"
 link = "#5fdcff"
+# A terminal's 16 named colours (0-7, then bright 8-15).
+term_black = "#1a202b"
+term_red = "#f87171"
+term_green = "#4ade80"
+term_yellow = "#fbbf24"
+term_blue = "#60a5fa"
+term_magenta = "#c084fc"
+term_cyan = "#3ee6ff"
+term_white = "#c6d3e3"
+term_bright_black = "#4f5b6d"
+term_bright_red = "#fca5a5"
+term_bright_green = "#86efac"
+term_bright_yellow = "#fde68a"
+term_bright_blue = "#93c5fd"
+term_bright_magenta = "#d8b4fe"
+term_bright_cyan = "#a5f3fc"
+term_bright_white = "#f4f8ff"
 
 # How each state looks wherever it's shown: a word, an icon (by name) and a
 # theme colour (token name from [theme]). Views never colour a state alone.
@@ -733,6 +764,23 @@ card_ok_selected = "#1a241e"
 chrome = "#1b1b1b"
 widget_selection = "#005c80"
 link = "#5aaaff"
+# A terminal's 16 named colours (0-7, then bright 8-15).
+term_black = "#1e2430"
+term_red = "#f05050"
+term_green = "#50c878"
+term_yellow = "#fab432"
+term_blue = "#64a0f0"
+term_magenta = "#b478ff"
+term_cyan = "#5ac8dc"
+term_white = "#c8d7e6"
+term_bright_black = "#5a6e87"
+term_bright_red = "#ff8080"
+term_bright_green = "#80e0a0"
+term_bright_yellow = "#ffd27a"
+term_bright_blue = "#8cc8ff"
+term_bright_magenta = "#d0a8ff"
+term_bright_cyan = "#90e0f0"
+term_bright_white = "#ffffff"
 
 # How each state looks wherever it's shown: a word, an icon (by name) and a
 # theme colour (token name from [theme]). Views never colour a state alone.

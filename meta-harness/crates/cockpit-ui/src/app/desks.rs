@@ -134,6 +134,7 @@ impl CockpitApp {
         };
         self.close_quick_look();
         self.input_mode = InputMode::Normal;
+        self.desk.put_away();
         std::mem::swap(&mut self.desk, &mut desk);
         desk.remote.hand_over(&mut self.desk.remote);
         self.away.insert(desk.server.clone(), desk);

@@ -33,7 +33,7 @@ pub enum TerminalStatus {
     Ended { code: Option<i32> },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TermSize {
     pub cols: u16,
     pub rows: u16,
