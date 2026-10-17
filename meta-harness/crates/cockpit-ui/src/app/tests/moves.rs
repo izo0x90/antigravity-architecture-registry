@@ -351,7 +351,7 @@ fn marks_work_across_views() {
     keys(&ctx, &mut app, "'c");
     assert_eq!((app.desk.panels.focused(), app.focused_kind(), app.desk.code().target_line), (1, BufferKind::Code, Some(6)), "back to the code, in its panel");
     keys(&ctx, &mut app, "'t");
-    assert_eq!((app.desk.panels.focused(), app.desk.tree().cursor.as_ref().map(|c| c.as_str())), (2, Some("rust:b")));
+    assert_eq!((app.desk.panels.focused(), app.desk.tree().cursor.as_deref()), (2, Some("rust:b")));
     ctrl(&ctx, &mut app, egui::Key::O);
     assert_eq!(app.focused_kind(), BufferKind::Code, "a mark jump is in the jump list");
     // The popup after ' lists them.
@@ -375,7 +375,7 @@ fn go_to_keys_work_from_every_view() {
     // Graph -> outline: g t.
     app.desk.graph_mut().select(Some("rust:a::log".into()));
     keys(&ctx, &mut app, "gt");
-    assert_eq!((app.focused_kind(), app.desk.tree().cursor.as_ref().map(|c| c.as_str())), (BufferKind::Tree, Some("rust:a::log")));
+    assert_eq!((app.focused_kind(), app.desk.tree().cursor.as_deref()), (BufferKind::Tree, Some("rust:a::log")));
     // Queue -> spec: g s (a pinned spec shows it anyway).
     focus(&ctx, &mut app, BufferKind::Queue);
     app.desk.queue_mut().move_to("1");

@@ -169,7 +169,7 @@ fn full_app() -> (egui::Context, CockpitApp) {
     let (ctx, mut app) = app_with_graph();
     let plan = PlanId::new("p").unwrap();
     app.desk.graph_mut().nav.source = Source::Plan(plan.clone());
-    app.desk.tree_mut().set_result(crate::tree::tests::outline());
+    app.desk.tree_mut().take(crate::tree::tests::outline());
     *app.desk.code_mut() = crate::code::tests::sample();
     let step = ComponentId::new("rust:a::step");
     app.desk.spec_mut().pinned = true;
@@ -270,11 +270,11 @@ impl Desk {
         self.typed_mut(BufferKind::Graph)
     }
 
-    pub fn tree(&self) -> &crate::tree::ArchitectureTreeState {
+    pub fn tree(&self) -> &crate::tree::TreeBuffer {
         self.typed(BufferKind::Tree)
     }
 
-    pub fn tree_mut(&mut self) -> &mut crate::tree::ArchitectureTreeState {
+    pub fn tree_mut(&mut self) -> &mut crate::tree::TreeBuffer {
         self.typed_mut(BufferKind::Tree)
     }
 

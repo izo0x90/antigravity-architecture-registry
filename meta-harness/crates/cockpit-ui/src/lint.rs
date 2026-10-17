@@ -240,7 +240,7 @@ fn buffers_reach_past_themselves_only_by_asking() {
 }
 
 /// The buffers' types.
-const BUFFER_TYPES: &[&str] = &["ChatStreamState", "CodeViewerState", "GraphState", "ArchitectureTreeState", "SpecState", "QueueState", "InboxView", "ChangesView"];
+const BUFFER_TYPES: &[&str] = &["ChatStreamState", "CodeViewerState", "GraphState", "TreeBuffer", "CodeOutline", "SpecState", "QueueState", "InboxView", "ChangesView"];
 
 #[test]
 fn the_shell_names_no_buffer_type() {
@@ -271,6 +271,13 @@ fn a_buffer_names_neither_the_shell_nor_another_buffer() {
         }
     }
     assert!(found.is_empty(), "a buffer reaches the shell or another buffer (read what's shared, ask for the rest):\n{}", found.join("\n"));
+}
+
+#[test]
+fn the_tree_buffer_knows_rows_not_code() {
+    let tree = code().into_iter().find(|(name, _)| name == "tree/mod.rs").map(|(_, code)| code).unwrap();
+    let found: Vec<String> = lines(&tree).filter(|(_, l)| ["TreeRequest", "Card", "ViewKind", "Source::", "arch_graph::Source", "crate::graph", "arch_graph::tree"].iter().any(|w| l.contains(w))).map(|(n, l)| format!("tree/mod.rs:{n}: {}", l.trim())).collect();
+    assert!(found.is_empty(), "the tree buffer names the code outline's terms (they're its source's):\n{}", found.join("\n"));
 }
 
 #[test]

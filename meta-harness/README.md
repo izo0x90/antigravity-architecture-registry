@@ -620,8 +620,10 @@ Views also have their own keys:
   `]f`/`[f` move between definitions. A file edited since it was analysed
   is marked stale until it's read again. Colours map to theme tokens in
   `[code.highlight]`.
-- **Outline:** what contains what, as rows. A row with parts shows an
-  arrow; it's folded when it's shut or its parts aren't loaded yet, and
+- **Outline:** what contains what, as rows (a tree buffer: its rows come
+  from a source, the code's outline here, and nothing in it is about code;
+  a plan's steps or a document's headings fit the same). A row with parts
+  shows an arrow; it's folded when it's shut or its parts aren't loaded yet, and
   unfolding it loads them (as often as asked). `Enter` goes in (unfolds
   the row, then into its first part), `Backspace` out to what holds it;
   `l`/`h` the same, `h` folding an open row first; `z a`/`z o`/`z c`

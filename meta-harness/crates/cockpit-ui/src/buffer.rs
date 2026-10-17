@@ -100,7 +100,7 @@ pub fn new(kind: BufferKind) -> Box<dyn Buffer> {
         BufferKind::Chat => Box::<crate::chat::ChatStreamState>::default(),
         BufferKind::Code => Box::<crate::code::CodeViewerState>::default(),
         BufferKind::Graph => Box::<crate::graph::GraphState>::default(),
-        BufferKind::Tree => Box::<crate::tree::ArchitectureTreeState>::default(),
+        BufferKind::Tree => Box::new(crate::tree::TreeBuffer::new(Box::<crate::tree::CodeOutline>::default())),
         BufferKind::Spec => Box::<crate::spec::SpecState>::default(),
         BufferKind::Queue => Box::<crate::queue::QueueState>::default(),
         BufferKind::Inbox => Box::<crate::inbox::InboxView>::default(),

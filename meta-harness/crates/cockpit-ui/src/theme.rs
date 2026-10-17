@@ -279,7 +279,7 @@ pub fn font_definitions() -> egui::FontDefinitions {
 #[cfg(test)]
 mod glyph_tests {
     /// Every UI source file: whatever text they draw must have glyphs.
-    const SOURCES: [(&str, &str); 39] = [
+    const SOURCES: &[(&str, &str)] = &[
         ("actions.rs", include_str!("actions.rs")),
         ("app.rs", include_str!("app.rs")),
         ("inbox.rs", include_str!("inbox.rs")),
@@ -316,7 +316,10 @@ mod glyph_tests {
         ("queue.rs", include_str!("queue.rs")),
         ("review.rs", include_str!("review.rs")),
         ("spec.rs", include_str!("spec.rs")),
-        ("tree.rs", include_str!("tree.rs")),
+        ("tree/mod.rs", include_str!("tree/mod.rs")),
+        ("tree/outline.rs", include_str!("tree/outline.rs")),
+        ("diff.rs", include_str!("diff.rs")),
+        ("agents.rs", include_str!("agents.rs")),
         ("touch.rs", include_str!("touch.rs")),
         ("../config/default.toml", include_str!("../config/default.toml")),
     ];

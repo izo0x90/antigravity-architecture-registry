@@ -1,44 +1,53 @@
-//! The outline: the Contains view as a collapsible list (what contains
-//! what), driven by keys like every view: a cursor row, folds, a filter that
-//! `/` types into. Enter goes in (unfolds the row, then into its first
-//! part), Backspace out (to what holds it); showing a row elsewhere is a
-//! go-to, as anywhere. It holds what the server sent (the view's depth, plus
-//! the rows opened further): a row is folded when it's shut or its parts
-//! aren't here yet, and unfolding it loads them.
+//! A tree buffer: rows in a tree, from a source (the code's outline is
+//! one; a plan's steps, a document's headings are others), as a
+//! collapsible list driven by keys like every buffer: a cursor row, folds,
+//! a filter that `/` types into. Enter goes in (unfolds the row, then into
+//! its first part), Backspace out (to what holds it); showing a row
+//! elsewhere is a go-to, as anywhere. It holds what its source answered
+//! (the rows it sends, plus those opened further): a row is folded when
+//! it's shut or its parts aren't here yet, and unfolding it asks the source
+//! for them. What a row stands for elsewhere is its source's to say.
+
+mod outline;
+mod source;
+
+pub use outline::CodeOutline;
+pub use source::{RowData, Rows, TreeSource};
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
 
-use arch_graph::tree::{Card, Opened, Tree, TreeRequest, ViewKind};
-use arch_graph::{ComponentId, Source};
 use egui::RichText;
 
 use crate::actions::{Action, ActionProvider, RunCx};
 use crate::feedback::FeedbackInspectorState;
 use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, SearchEvent, Spot, Step, Target};
 use crate::viewport::{Go, Show, Stop, Viewport};
-use crate::net::{NetClient, NetResult};
+use crate::hosted::Status;
+use crate::net::NetClient;
 use crate::theme::colors;
 
-/// One drawn row: a component at a depth in the outline.
+/// One drawn row: a row at a depth in the tree.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
-    pub id: ComponentId,
+    pub id: String,
     pub depth: usize,
 }
 
-#[derive(Default)]
-pub struct ArchitectureTreeState {
+pub struct TreeBuffer {
+    /// Where its rows come from.
+    source: Box<dyn TreeSource>,
     /// Rows shown: those matching it, and what contains them.
     pub search_filter: String,
     /// The filter before a search started typing into it (Escape returns it).
     filter_before: Option<String>,
     /// Rows the search being typed opened (closed again as it changes).
-    opened_by_search: BTreeSet<ComponentId>,
-    source: Source,
-    result: Option<Tree>,
-    /// Cards by key in what was sent.
-    cards: BTreeMap<ComponentId, Card>,
+    opened_by_search: BTreeSet<String>,
+    /// It has an answer (rows, or why not).
+    answered_once: bool,
+    /// The rows by key, as answered.
+    known: BTreeMap<String, RowData>,
+    /// What the source left out of the last answer.
+    cut: Option<Status>,
     /// Rows unfolded past the view's depth (their parts loaded), oldest first.
     opened: Vec<String>,
     stale: bool,
@@ -51,13 +60,12 @@ pub struct ArchitectureTreeState {
     /// would undo what was asked since).
     asked: u64,
     answered: u64,
-    inbox: Arc<Mutex<Vec<Answer>>>,
-    children: BTreeMap<ComponentId, Vec<ComponentId>>,
-    parent: BTreeMap<ComponentId, ComponentId>,
-    roots: Vec<ComponentId>,
+    children: BTreeMap<String, Vec<String>>,
+    parent: BTreeMap<String, String>,
+    roots: Vec<String>,
     /// Rows folded shut (everything else is open).
-    closed: BTreeSet<ComponentId>,
-    pub cursor: Option<ComponentId>,
+    closed: BTreeSet<String>,
+    pub cursor: Option<String>,
     /// How to show the cursor once the rows are laid out.
     show: Option<Show>,
     /// Where it's looking (the shared rules move it), the time last drawn,
@@ -72,40 +80,59 @@ pub struct ArchitectureTreeState {
 
 const ROW_H: f32 = 20.0;
 
-/// An answer, with the number of the request it answers.
-type Answer = (u64, NetResult<Tree>);
-
-impl ArchitectureTreeState {
-    fn set_source(&mut self, source: &Source) {
-        if &self.source != source {
-            self.source = source.clone();
-            self.opened.clear();
-            self.stale = true;
+impl TreeBuffer {
+    pub fn new(source: Box<dyn TreeSource>) -> Self {
+        Self {
+            source,
+            search_filter: String::new(),
+            filter_before: None,
+            opened_by_search: BTreeSet::new(),
+            answered_once: false,
+            known: BTreeMap::new(),
+            cut: None,
+            opened: Vec::new(),
+            stale: false,
+            loaded_once: false,
+            error: None,
+            note: None,
+            asked: 0,
+            answered: 0,
+            children: BTreeMap::new(),
+            parent: BTreeMap::new(),
+            roots: Vec::new(),
+            closed: BTreeSet::new(),
+            cursor: None,
+            show: None,
+            viewport: Viewport::default(),
+            clock: 0.0,
+            pitch: 0.0,
+            row_h: 0.0,
+            spots: Vec::new(),
         }
     }
 
     /// Whether a row's parts are here.
-    fn loaded(&self, id: &ComponentId) -> bool {
+    fn loaded(&self, id: &String) -> bool {
         self.children.get(id).is_some_and(|k| !k.is_empty())
     }
 
     /// Whether a row holds parts (here, or still to load).
-    fn has_children(&self, id: &ComponentId) -> bool {
-        self.loaded(id) || self.cards.get(id).is_some_and(|c| c.more > 0)
+    fn has_children(&self, id: &String) -> bool {
+        self.loaded(id) || self.known.get(id).is_some_and(|c| c.more > 0)
     }
 
     /// A row with parts that doesn't show them: shut by hand, or its parts
     /// not loaded yet. The one meaning of folded (the arrow, every key).
-    fn folded(&self, id: &ComponentId) -> bool {
+    fn folded(&self, id: &String) -> bool {
         self.has_children(id) && (self.closed.contains(id) || !self.loaded(id))
     }
 
     /// Asks for the rows' parts (every time: an answer that didn't bring
     /// them is never the last word).
-    fn load(&mut self, ids: &[ComponentId]) {
+    fn load(&mut self, ids: &[String]) {
         for id in ids {
             if !self.opened.iter().any(|o| o == id.as_str()) {
-                self.opened.push(id.0.clone());
+                self.opened.push(id.clone());
             }
         }
         self.stale |= !ids.is_empty();
@@ -113,7 +140,7 @@ impl ArchitectureTreeState {
 
     /// Unfolds a folded row (loading its parts when they aren't here).
     /// Returns whether it was folded.
-    fn unfold(&mut self, id: &ComponentId) -> bool {
+    fn unfold(&mut self, id: &String) -> bool {
         if !self.folded(id) {
             return false;
         }
@@ -125,7 +152,7 @@ impl ArchitectureTreeState {
     }
 
     /// Folds an open row. Returns whether it was open.
-    fn fold_row(&mut self, id: &ComponentId) -> bool {
+    fn fold_row(&mut self, id: &String) -> bool {
         if !self.has_children(id) || self.folded(id) {
             return false;
         }
@@ -133,27 +160,26 @@ impl ArchitectureTreeState {
         true
     }
 
-    /// Takes a fetched Contains tree: who contains whom, in tree order.
-    pub fn set_result(&mut self, result: Tree) {
+    /// Takes its source's rows: what holds what, in tree order.
+    pub fn take(&mut self, rows: Rows) {
         self.children.clear();
         self.parent.clear();
-        self.opened.retain(|o| !result.dropped.contains(o));
-        self.cards = result.cards.iter().map(|c| (ComponentId::new(c.key.clone()), c.clone())).collect();
-        self.note = (!result.dropped.is_empty()).then(|| {
-            let names: Vec<String> = result.dropped.iter().map(|k| self.name(&ComponentId::new(k.clone()))).collect();
-            format!("Couldn't open {}: it goes over what one view holds.", names.join(", "))
+        self.opened.retain(|o| !rows.dropped.contains(o));
+        self.known = rows.rows.iter().map(|r| (r.key.clone(), r.clone())).collect();
+        self.note = (!rows.dropped.is_empty()).then(|| {
+            let names: Vec<String> = rows.dropped.iter().map(|k| self.name(k)).collect();
+            format!("Couldn't open {}: it goes over what one answer holds.", names.join(", "))
         });
-        for c in &result.cards {
-            if let Some(p) = &c.parent
-                && p != &c.key
+        for r in &rows.rows {
+            if let Some(p) = &r.parent
+                && p != &r.key
             {
-                let (id, p) = (ComponentId::new(c.key.clone()), ComponentId::new(p.clone()));
-                self.parent.insert(id.clone(), p.clone());
-                self.children.entry(p).or_default().push(id);
+                self.parent.insert(r.key.clone(), p.clone());
+                self.children.entry(p.clone()).or_default().push(r.key.clone());
             }
         }
         // Containment loops: whatever can't reach a root becomes one.
-        let reaches_root = |id: &ComponentId| {
+        let reaches_root = |id: &String| {
             let mut seen = BTreeSet::new();
             let mut at = id;
             while let Some(p) = self.parent.get(at) {
@@ -164,7 +190,7 @@ impl ArchitectureTreeState {
             }
             true
         };
-        let looped: Vec<ComponentId> = self.cards.keys().filter(|id| !reaches_root(id)).cloned().collect();
+        let looped: Vec<String> = self.known.keys().filter(|id| !reaches_root(id)).cloned().collect();
         for id in looped {
             if let Some(p) = self.parent.remove(&id)
                 && let Some(kids) = self.children.get_mut(&p)
@@ -172,32 +198,36 @@ impl ArchitectureTreeState {
                 kids.retain(|k| k != &id);
             }
         }
-        self.roots = result.cards.iter().map(|c| ComponentId::new(c.key.clone())).filter(|id| !self.parent.contains_key(id)).collect();
-        self.closed.retain(|id| self.cards.contains_key(id));
-        if self.cursor.as_ref().is_some_and(|c| !self.cards.contains_key(c)) {
+        self.roots = rows.rows.iter().map(|r| r.key.clone()).filter(|id| !self.parent.contains_key(id)).collect();
+        self.closed.retain(|id| self.known.contains_key(id));
+        if self.cursor.as_ref().is_some_and(|c| !self.known.contains_key(c)) {
             self.cursor = None;
         }
-        self.result = Some(result);
+        self.cut = rows.cut;
+        self.answered_once = true;
         self.error = None;
     }
 
     /// Takes the answer to request `number`, when it's the last one asked.
-    fn answer(&mut self, number: u64, reply: NetResult<Tree>) {
+    fn answer(&mut self, number: u64, reply: Result<Rows, String>) {
         if number != self.asked {
             return;
         }
         self.answered = number;
         match reply {
-            Ok(result) => self.set_result(result),
-            Err(e) => self.error = Some(e.into()),
+            Ok(rows) => self.take(rows),
+            Err(e) => {
+                self.error = Some(e);
+                self.answered_once = true;
+            }
         }
     }
 
-    fn name(&self, id: &ComponentId) -> String {
-        self.cards.get(id).map_or_else(|| id.to_string(), |c| c.label.clone())
+    fn name(&self, id: &String) -> String {
+        self.known.get(id).map_or_else(|| id.to_string(), |c| c.label.clone())
     }
 
-    fn matches(&self, id: &ComponentId) -> bool {
+    fn matches(&self, id: &String) -> bool {
         let filter = self.search_filter.to_lowercase();
         filter.is_empty() || self.name(id).to_lowercase().contains(&filter) || id.as_str().to_lowercase().contains(&filter)
     }
@@ -205,7 +235,7 @@ impl ArchitectureTreeState {
     /// The rows on screen, in order: open rows' children under them; with a
     /// filter, only matches and what contains them (opened up).
     pub fn rows(&self) -> Vec<Row> {
-        fn walk(tree: &ArchitectureTreeState, id: &ComponentId, depth: usize, keep: &dyn Fn(&ComponentId) -> bool, out: &mut Vec<Row>, seen: &mut BTreeSet<ComponentId>) {
+        fn walk(tree: &TreeBuffer, id: &String, depth: usize, keep: &dyn Fn(&String) -> bool, out: &mut Vec<Row>, seen: &mut BTreeSet<String>) {
             if !seen.insert(id.clone()) || !keep(id) {
                 return;
             }
@@ -216,7 +246,7 @@ impl ArchitectureTreeState {
                 }
             }
         }
-        let mut keep_ids: Option<BTreeSet<ComponentId>> = None;
+        let mut keep_ids: Option<BTreeSet<String>> = None;
         if !self.search_filter.is_empty() {
             let mut keep = BTreeSet::new();
             for id in self.all_ids() {
@@ -230,7 +260,7 @@ impl ArchitectureTreeState {
             }
             keep_ids = Some(keep);
         }
-        let keep = |id: &ComponentId| keep_ids.as_ref().is_none_or(|k| k.contains(id));
+        let keep = |id: &String| keep_ids.as_ref().is_none_or(|k| k.contains(id));
         let mut out = Vec::new();
         let mut seen = BTreeSet::new();
         for root in &self.roots {
@@ -239,9 +269,9 @@ impl ArchitectureTreeState {
         out
     }
 
-    /// Every component in outline order (open or not).
-    fn all_ids(&self) -> Vec<ComponentId> {
-        fn walk(tree: &ArchitectureTreeState, id: &ComponentId, out: &mut Vec<ComponentId>, seen: &mut BTreeSet<ComponentId>) {
+    /// Every row in tree order (open or not).
+    fn all_ids(&self) -> Vec<String> {
+        fn walk(tree: &TreeBuffer, id: &String, out: &mut Vec<String>, seen: &mut BTreeSet<String>) {
             if !seen.insert(id.clone()) {
                 return;
             }
@@ -259,7 +289,7 @@ impl ArchitectureTreeState {
     }
 
     /// Opens what contains `id`, so its row shows.
-    fn open_to(&mut self, id: &ComponentId) {
+    fn open_to(&mut self, id: &String) {
         let mut at = self.parent.get(id).cloned();
         while let Some(p) = at {
             self.closed.remove(&p);
@@ -268,19 +298,19 @@ impl ArchitectureTreeState {
     }
 
     /// Into an open row's first part. Returns whether there was one.
-    fn go_in(&mut self, id: &ComponentId) -> bool {
+    fn go_in(&mut self, id: &String) -> bool {
         let first = (!self.folded(id)).then(|| self.children.get(id).and_then(|k| k.first()).cloned()).flatten();
         first.inspect(|first| self.reveal(first, Show::InView)).is_some()
     }
 
     /// Out to what holds the row. Returns whether something does.
-    fn go_out(&mut self, id: &ComponentId) -> bool {
+    fn go_out(&mut self, id: &String) -> bool {
         self.parent.get(id).cloned().inspect(|p| self.reveal(p, Show::InView)).is_some()
     }
 
     /// Puts the cursor on `id` (opening what contains it) and shows it.
-    pub fn reveal(&mut self, id: &ComponentId, how: Show) {
-        if self.cards.contains_key(id) || self.parent.contains_key(id) || self.roots.contains(id) {
+    pub fn reveal(&mut self, id: &String, how: Show) {
+        if self.known.contains_key(id) || self.parent.contains_key(id) || self.roots.contains(id) {
             self.open_to(id);
             if !self.rows().iter().any(|r| &r.id == id) {
                 // Filtered out: the filter goes so the row can show.
@@ -321,7 +351,7 @@ impl ArchitectureTreeState {
         let header = ui.horizontal(|ui| ui.add(egui::TextEdit::singleline(&mut self.search_filter).hint_text("filter…").desired_width(f32::INFINITY)));
         feedback.register_inspectable(ui, &format!("panel_{}:tree:header", panel + 1), header.response.rect);
         ui.separator();
-        if self.result.is_none() {
+        if !self.answered_once {
             ui.label(RichText::new(self.error.clone().unwrap_or_else(|| "Loading…".into())).color(colors().muted));
             return;
         }
@@ -362,7 +392,7 @@ impl ArchitectureTreeState {
                         } else {
                             ui.add_space(crate::theme::look().space_xl);
                         }
-                        let c = self.cards.get(&row.id);
+                        let c = self.known.get(&row.id);
                         let (name, kind) = c.map_or_else(|| (row.id.to_string(), String::new()), |c| (c.label.clone(), c.kind.clone()));
                         let color = if self.matches(&row.id) { colors().text } else { colors().faint };
                         let text = RichText::new(format!("{name} ")).size(crate::theme::look().text_label).color(if on_cursor { colors().text_strong } else { color });
@@ -386,13 +416,13 @@ impl ArchitectureTreeState {
     }
 }
 
-/// What the outline's own actions do.
+/// What the tree buffer's own actions do.
 enum TreeCommand {
     ClearFilter,
 }
 
-impl ArchitectureTreeState {
-    /// The shared moves where the cursor is, in the outline's words:
+impl TreeBuffer {
+    /// The shared moves where the cursor is, in the tree's words:
     /// through the rows, into and out of a row (unfolding and folding it),
     /// between siblings, folding rows.
     fn moves(&self) -> Vec<Action> {
@@ -426,7 +456,7 @@ impl ArchitectureTreeState {
     }
 }
 
-impl ActionProvider for ArchitectureTreeState {
+impl ActionProvider for TreeBuffer {
     fn actions(&self) -> Vec<Action> {
         let mut out = self.moves();
         if !self.search_filter.is_empty() {
@@ -442,42 +472,29 @@ impl ActionProvider for ArchitectureTreeState {
     }
 }
 
-impl crate::buffer::Buffer for ArchitectureTreeState {
+impl crate::buffer::Buffer for TreeBuffer {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
         self.draw(ui, drawing.feedback, cx);
     }
 
+    /// The source's answers (only the last request's is taken), and its
+    /// rows asked for again when they're stale.
     fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
-        let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        for (number, reply) in replies {
+        for (number, reply) in self.source.answers() {
             self.answer(number, reply);
         }
         if self.stale || !self.loaded_once {
             self.stale = false;
             self.loaded_once = true;
             self.asked += 1;
-            let (inbox, number) = (self.inbox.clone(), self.asked);
-            let request = TreeRequest {
-                view: ViewKind::Contains,
-                source: self.source.clone(),
-                opened: self.opened.iter().map(|card| Opened { card: card.clone(), levels: 1 }).collect(),
-                // With a plan: the plan inside the whole codebase.
-                full_code: true,
-                ..TreeRequest::default()
-            };
-            net.graph_tree(&request, ctx.clone(), move |r| {
-                if let Ok(mut i) = inbox.lock() {
-                    i.push((number, r));
-                }
-            });
+            self.source.ask(self.asked, &self.opened, net, ctx);
         }
     }
 
-
-    /// Changed code or plans: the outline read again.
+    /// What changed on the server, as its source says it: read again.
     fn on_event(&mut self, event: &arch_graph::ArchEvent) {
-        if matches!(event, arch_graph::ArchEvent::Changed { .. }) {
-            crate::buffer::Buffer::invalidate(self);
+        if self.source.on_event(event) {
+            self.stale = true;
         }
     }
 
@@ -485,38 +502,30 @@ impl crate::buffer::Buffer for ArchitectureTreeState {
         self.stale = true;
     }
 
-
-    /// A row's name.
-    fn knows(&self, id: &ComponentId) -> Option<crate::buffer::Known> {
-        self.cards.get(id).map(|c| crate::buffer::Known { name: Some(c.label.clone()), ..Default::default() })
+    /// A row's name, for what it stands for.
+    fn knows(&self, id: &arch_graph::ComponentId) -> Option<crate::buffer::Known> {
+        let key = self.source.key_of(&Target::Component(id.clone()))?;
+        self.known.get(&key).map(|r| crate::buffer::Known { name: Some(r.label.clone()), ..Default::default() })
     }
 
     fn describe(&self) -> String {
-        self.cursor.as_ref().map_or_else(|| "the outline".to_owned(), |id| format!("at {}", self.name(id)))
+        self.cursor.as_ref().map_or_else(|| self.source.title(), |id| format!("at {}", self.name(id)))
     }
 }
 
-impl crate::hosted::Hosted for ArchitectureTreeState {
+impl crate::hosted::Hosted for TreeBuffer {
     fn title(&self) -> crate::hosted::Status {
-        crate::hosted::Status::new(format!("{} Outline", egui_phosphor::regular::TREE_STRUCTURE), crate::hosted::Tone::Info)
+        crate::hosted::Status::new(format!("{} {}", egui_phosphor::regular::TREE_STRUCTURE, self.source.title()), crate::hosted::Tone::Info)
     }
 
     fn busy(&self) -> Option<String> {
-        (self.asked != self.answered).then(|| "Loading the outline".into())
+        (self.asked != self.answered).then(|| format!("Loading the {}", self.source.title().to_lowercase()))
     }
 
     /// What the server left out of the last answer, and what it couldn't open.
     fn status(&self) -> Vec<crate::hosted::Status> {
-        use crate::hosted::{Status, Tone};
-        let mut out = Vec::new();
-        if let Some(cut) = self.result.as_ref().and_then(|t| t.cut.as_ref()) {
-            let why = if cut.reason == arch_graph::tree::CutReason::Time { "out of time" } else { "too big" };
-            let mut more = format!("It shows {} of {} levels; {} parts left out. Unfold a row to load what's in it.", cut.shown, cut.asked, cut.hidden);
-            if cut.starts_left_out > 0 {
-                more.push_str(&format!(" {} top-level parts aren't shown.", cut.starts_left_out));
-            }
-            out.push(Status::new(format!("cut ({why})"), Tone::Warn).detail(more));
-        }
+        use crate::hosted::Tone;
+        let mut out: Vec<Status> = self.cut.iter().cloned().collect();
         if let Some(note) = &self.note {
             out.push(Status::new(note.clone(), Tone::Warn));
         }
@@ -524,10 +533,14 @@ impl crate::hosted::Hosted for ArchitectureTreeState {
     }
 }
 
-impl Navigable for ArchitectureTreeState {
-    /// The source in use: its outline.
+impl Navigable for TreeBuffer {
+    /// What the buffers share, as its source reads it: its rows from
+    /// scratch when that changed them (another source in use).
     fn share(&mut self, shared: &crate::shared::Shared) {
-        self.set_source(shared.source.get());
+        if self.source.share(shared) {
+            self.opened.clear();
+            self.stale = true;
+        }
     }
 
     /// Its cursor's row.
@@ -536,27 +549,28 @@ impl Navigable for ArchitectureTreeState {
     }
 
     fn place_in_words(&self, place: &Place) -> String {
-        place.read::<Option<ComponentId>>().flatten().map(|id| self.name(&id)).unwrap_or_default()
+        place.read::<Option<String>>().flatten().map(|id| self.name(&id)).unwrap_or_default()
     }
 
     fn restore(&mut self, place: &Place) {
-        if let Some(Some(id)) = place.read::<Option<ComponentId>>() {
+        if let Some(Some(id)) = place.read::<Option<String>>() {
             self.reveal(&id, Show::Middle);
         }
     }
 
+    /// What its cursor's row stands for, as its source says.
     fn target(&self) -> Option<Target> {
-        self.cursor.clone().map(Target::Component)
+        self.cursor.as_ref().and_then(|key| self.source.target(key))
     }
 
-    /// Any component, not the one under the cursor.
+    /// A row its source has for the target, not the one under the cursor.
     fn can_show(&self, target: &Target) -> bool {
-        target.in_component() && target.elsewhere(self.target().as_ref())
+        self.source.key_of(target).is_some() && target.elsewhere(self.target().as_ref())
     }
 
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
-        let id = target.component().ok_or("Not a component.")?;
-        self.reveal(id, Show::Middle);
+        let key = self.source.key_of(target).ok_or("It has no row for that.")?;
+        self.reveal(&key, Show::Middle);
         Ok(())
     }
 
@@ -595,11 +609,11 @@ impl Navigable for ArchitectureTreeState {
             }
             Motion::NextSibling | Motion::PrevSibling => {
                 let Some(id) = self.cursor.clone() else { return };
-                let siblings: Vec<ComponentId> = match self.parent.get(&id) {
+                let siblings: Vec<String> = match self.parent.get(&id) {
                     Some(p) => self.children.get(p).cloned().unwrap_or_default(),
                     None => self.roots.clone(),
                 };
-                let shown: Vec<&ComponentId> = siblings.iter().filter(|s| rows.iter().any(|r| &r.id == *s)).collect();
+                let shown: Vec<&String> = siblings.iter().filter(|s| rows.iter().any(|r| &r.id == *s)).collect();
                 if let Some(i) = shown.iter().position(|s| **s == id) {
                     let next = if motion == Motion::NextSibling { (i + count).min(shown.len() - 1) } else { i.saturating_sub(count) };
                     let target = shown[next].clone();
@@ -634,7 +648,7 @@ impl Navigable for ArchitectureTreeState {
             // Every folded row, one level: shut ones open, the rest load.
             Fold::OpenAll => {
                 self.closed.clear();
-                let unloaded: Vec<ComponentId> = self.all_ids().into_iter().filter(|id| self.folded(id)).collect();
+                let unloaded: Vec<String> = self.all_ids().into_iter().filter(|id| self.folded(id)).collect();
                 self.load(&unloaded);
             }
             Fold::CloseAll => {
@@ -680,7 +694,7 @@ impl Navigable for ArchitectureTreeState {
     }
 
     fn move_to(&mut self, key: &str) {
-        self.reveal(&ComponentId::new(key), Show::Middle);
+        self.reveal(&key.to_owned(), Show::Middle);
     }
 
     /// `/` types into the filter; Escape puts back the one there was.
@@ -696,7 +710,7 @@ impl Navigable for ArchitectureTreeState {
                 let opened = std::mem::take(&mut self.opened_by_search);
                 self.closed.extend(opened);
                 if !query.is_empty() {
-                    let found: Vec<ComponentId> = self.all_ids().into_iter().filter(|id| self.matches(id)).collect();
+                    let found: Vec<String> = self.all_ids().into_iter().filter(|id| self.matches(id)).collect();
                     for id in found {
                         let mut at = self.parent.get(&id).cloned();
                         while let Some(p) = at {
@@ -727,16 +741,25 @@ impl Navigable for ArchitectureTreeState {
 pub(crate) mod tests {
     use super::*;
     use crate::nav::rank_matches;
-    use arch_graph::tree::{TreeRequest, ViewKind};
-    use arch_graph::{Graph, Provenance, Relation, RelationKind};
+    use arch_graph::tree::{Tree, TreeRequest, ViewKind};
+    use arch_graph::{ComponentId, Graph, Provenance, Relation, RelationKind};
+
+    /// The code's outline, its rows as answered.
+    pub(crate) fn code_outline() -> TreeBuffer {
+        TreeBuffer::new(Box::<CodeOutline>::default())
+    }
 
     /// Two modules: `a` holds run, step and save (and run holds log); `b` is empty.
-    pub(crate) fn outline() -> Tree {
+    pub(crate) fn outline() -> Rows {
         outline_to(3)
     }
 
     /// The outline sent `depth` levels deep.
-    fn outline_to(depth: u32) -> Tree {
+    fn outline_to(depth: u32) -> Rows {
+        outline::rows_of(outline_tree(depth))
+    }
+
+    fn outline_tree(depth: u32) -> Tree {
         let sample = crate::graph::tests::sample_graph();
         let mut g = Graph::default();
         for id in ["rust:a", "rust:b", "rust:a::run", "rust:a::step", "rust:a::save", "rust:a::log"] {
@@ -752,14 +775,14 @@ pub(crate) mod tests {
         rows.iter().map(|r| format!("{}{}", "  ".repeat(r.depth), r.id.as_str().trim_start_matches("rust:"))).collect()
     }
 
-    fn cursor(t: &ArchitectureTreeState) -> &str {
+    fn cursor(t: &TreeBuffer) -> &str {
         t.cursor.as_ref().map_or("", |c| c.as_str().trim_start_matches("rust:"))
     }
 
     #[test]
     fn the_outline_is_driven_by_keys() {
-        let mut t = ArchitectureTreeState::default();
-        t.set_result(outline());
+        let mut t = code_outline();
+        t.take(outline());
         assert_eq!(ids(&t.rows()), ["a", "  a::run", "    a::log", "  a::save", "  a::step", "b"], "parts by name");
         // j/k with counts, gg/G.
         t.motion(Motion::Down, 1);
@@ -797,7 +820,7 @@ pub(crate) mod tests {
         assert_eq!(t.leave(), Step::Done);
         assert_eq!((cursor(&t), t.rows().len()), ("a::run", 6), "Backspace goes out without folding");
         t.motion(Motion::Left, 1);
-        assert!(t.folded(&ComponentId::new("rust:a::run")));
+        assert!(t.folded(&"rust:a::run".to_owned()));
         assert_eq!(t.enter(), Step::Done, "Enter on a folded row unfolds it");
         assert_eq!((cursor(&t), t.rows().len()), ("a::run", 6));
         t.leave();
@@ -822,7 +845,7 @@ pub(crate) mod tests {
         assert_eq!(ids(&t.rows()), ["a", "  a::run", "    a::log"], "typing opens the way to matches");
         t.on_search(SearchEvent::Cancelled);
         assert_eq!(t.rows().len(), 5, "giving up the search folds back what it opened");
-        let label = |t: &ArchitectureTreeState, id: &str| t.actions().into_iter().find(|a| a.id == id).map(|a| a.label);
+        let label = |t: &TreeBuffer, id: &str| t.actions().into_iter().find(|a| a.id == id).map(|a| a.label);
         assert_eq!(label(&t, "nav.enter").as_deref(), Some("Unfold run"), "Enter says what it does");
         t.fold(Fold::OpenAll);
         assert_eq!(t.rows().len(), 6);
@@ -832,20 +855,21 @@ pub(crate) mod tests {
         assert_eq!(items[rank_matches(&items, "step")[0]].key, "rust:a::step");
         // Restoring a place opens the way to it.
         t.fold(Fold::CloseAll);
-        t.restore(&Place::of(&Some(ComponentId::new("rust:a::log"))));
+        t.restore(&Place::of(&Some("rust:a::log")));
         assert_eq!(cursor(&t), "a::log");
         assert!(t.rows().iter().any(|r| r.id.as_str() == "rust:a::log"));
     }
 
     #[test]
     fn a_row_whose_parts_arent_here_is_folded_and_unfolding_it_loads_them() {
-        let run = ComponentId::new("rust:a::run");
-        let mut t = ArchitectureTreeState { loaded_once: true, ..Default::default() };
-        t.set_result(outline_to(1));
+        let run = "rust:a::run".to_owned();
+        let mut t = code_outline();
+        t.loaded_once = true;
+        t.take(outline_to(1));
         assert_eq!(ids(&t.rows()), ["a", "  a::run", "  a::save", "  a::step", "b"]);
         assert!(t.folded(&run) && t.has_children(&run), "run holds log, not sent yet: folded like a shut row");
         t.move_to("rust:a::run");
-        let label = |t: &ArchitectureTreeState, id: &str| t.actions().into_iter().find(|a| a.id == id).map(|a| a.label);
+        let label = |t: &TreeBuffer, id: &str| t.actions().into_iter().find(|a| a.id == id).map(|a| a.label);
         assert_eq!(label(&t, "nav.enter").as_deref(), Some("Unfold run"));
         // h on it goes out (it's folded); l and Enter ask for its parts.
         t.motion(Motion::Left, 1);
@@ -868,25 +892,25 @@ pub(crate) mod tests {
         assert_eq!(t.enter(), Step::Done);
         assert_eq!(cursor(&t), "a::log");
         // Unfold everything loads every row not loaded.
-        let mut all = ArchitectureTreeState::default();
-        all.set_result(outline_to(1));
+        let mut all = code_outline();
+        all.take(outline_to(1));
         all.fold(Fold::OpenAll);
         assert_eq!(all.opened, ["rust:a::run"]);
     }
 
     #[test]
     fn a_row_that_didnt_fit_says_so() {
-        let mut t = ArchitectureTreeState::default();
-        t.set_result(outline_to(1));
-        t.load(&[ComponentId::new("rust:a::run")]);
-        let mut answer = outline_to(1);
+        let mut t = code_outline();
+        t.take(outline_to(1));
+        t.load(&["rust:a::run".to_owned()]);
+        let mut answer = outline_tree(1);
         answer.dropped = vec!["rust:a::run".into()];
         answer.cut = Some(arch_graph::tree::Cut { reason: arch_graph::tree::CutReason::Budget, starts_left_out: 0, shown: 1, asked: 2, hidden: 1 });
-        t.set_result(answer);
+        t.take(outline::rows_of(answer));
         let said: Vec<String> = crate::hosted::Hosted::status(&t).into_iter().map(|s| s.text).collect();
-        assert_eq!(said, ["cut (too big)", "Couldn't open run: it goes over what one view holds."]);
-        assert!(t.opened.is_empty() && t.folded(&ComponentId::new("rust:a::run")), "it stays folded, and asking again asks again");
-        t.set_result(outline_to(3));
+        assert_eq!(said, ["cut (too big)", "Couldn't open run: it goes over what one answer holds."]);
+        assert!(t.opened.is_empty() && t.folded(&"rust:a::run".to_owned()), "it stays folded, and asking again asks again");
+        t.take(outline_to(3));
         assert!(crate::hosted::Hosted::status(&t).is_empty(), "said until the next answer");
     }
 
@@ -895,8 +919,9 @@ pub(crate) mod tests {
         let ctx = egui::Context::default();
         let net = NetClient::new("http://127.0.0.1:9");
         let mut feedback = FeedbackInspectorState::default();
-        let mut t = ArchitectureTreeState { loaded_once: true, ..Default::default() };
-        t.set_result(outline());
+        let mut t = code_outline();
+        t.loaded_once = true;
+        t.take(outline());
         for _ in 0..2 {
             let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 160.0))), ..Default::default() }, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -919,8 +944,8 @@ pub(crate) mod tests {
 
     #[test]
     fn as_a_destination_it_shows_any_component_but_the_one_under_the_cursor() {
-        let mut t = ArchitectureTreeState::default();
-        t.set_result(outline());
+        let mut t = code_outline();
+        t.take(outline());
         t.motion(Motion::Down, 1);
         let here = t.target().unwrap();
         let other = Target::Component(ComponentId::new(format!("{}::step", here.component().unwrap().as_str())));
@@ -929,4 +954,67 @@ pub(crate) mod tests {
         assert_eq!(t.target(), Some(other));
     }
 
+    /// A source that knows nothing of code: a document's headings, each
+    /// heading's subheadings loaded when it's opened.
+    #[derive(Default)]
+    struct Headings {
+        answered: Vec<(u64, Result<Rows, String>)>,
+    }
+
+    impl Headings {
+        fn row(key: &str, parent: Option<&str>, more: u32) -> RowData {
+            RowData { key: key.into(), label: key.rsplit('/').next().unwrap().into(), kind: "heading".into(), parent: parent.map(Into::into), more }
+        }
+    }
+
+    impl TreeSource for Headings {
+        fn title(&self) -> String {
+            "Headings".into()
+        }
+
+        fn ask(&mut self, number: u64, opened: &[String], _net: &NetClient, _ctx: &egui::Context) {
+            let mut rows = vec![Self::row("Plan", None, 0), Self::row("Plan/Goals", Some("Plan"), 0), Self::row("Plan/Steps", Some("Plan"), 2)];
+            if opened.iter().any(|o| o == "Plan/Steps") {
+                rows.extend([Self::row("Plan/Steps/Read", Some("Plan/Steps"), 0), Self::row("Plan/Steps/Write", Some("Plan/Steps"), 0)]);
+                rows[2].more = 0;
+            }
+            self.answered.push((number, Ok(Rows { rows, ..Rows::default() })));
+        }
+
+        fn answers(&mut self) -> Vec<(u64, Result<Rows, String>)> {
+            std::mem::take(&mut self.answered)
+        }
+
+        /// A heading stands for nothing elsewhere.
+        fn target(&self, _key: &str) -> Option<Target> {
+            None
+        }
+
+        fn key_of(&self, _target: &Target) -> Option<String> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_tree_of_anything_unfolds_and_moves_the_same_way() {
+        let (net, ctx) = (NetClient::new("http://127.0.0.1:9"), egui::Context::default());
+        let mut t = TreeBuffer::new(Box::<Headings>::default());
+        crate::buffer::Buffer::tick(&mut t, &net, &ctx);
+        crate::buffer::Buffer::tick(&mut t, &net, &ctx);
+        let shown = |t: &TreeBuffer| t.rows().iter().map(|r| format!("{}{}", "  ".repeat(r.depth), t.name(&r.id))).collect::<Vec<_>>();
+        assert_eq!(shown(&t), ["Plan", "  Goals", "  Steps"]);
+        assert_eq!(crate::hosted::Hosted::title(&t).text, format!("{} Headings", egui_phosphor::regular::TREE_STRUCTURE), "its source names it");
+        t.move_to("Plan/Steps");
+        assert!(t.folded(&"Plan/Steps".to_owned()), "its parts aren't here: folded");
+        assert_eq!(t.enter(), Step::Done);
+        crate::buffer::Buffer::tick(&mut t, &net, &ctx);
+        crate::buffer::Buffer::tick(&mut t, &net, &ctx);
+        assert_eq!(shown(&t), ["Plan", "  Goals", "  Steps", "    Read", "    Write"], "loaded on asking");
+        assert_eq!(t.enter(), Step::Done);
+        assert_eq!(t.cursor.as_deref(), Some("Plan/Steps/Read"), "Enter goes in");
+        assert_eq!(t.leave(), Step::Done);
+        assert_eq!(t.cursor.as_deref(), Some("Plan/Steps"), "Backspace comes out");
+        assert_eq!(t.target(), None, "a heading stands for nothing elsewhere");
+        assert!(!t.can_show(&Target::Component(ComponentId::new("rust:a"))), "nor shows code");
+    }
 }
