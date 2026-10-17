@@ -80,7 +80,8 @@ pub struct TerminalBuffer {
     cursor: Option<u64>,
     /// Cells selected (from, to: in order as dragged).
     selection: Option<(Cell, Cell)>,
-    /// Its panel had focus last frame (gaining it starts typing).
+    /// Its panel had focus last frame, with a shell running (gaining it
+    /// starts typing).
     was_focused: bool,
     /// It was typed in last frame.
     typing: bool,
@@ -88,6 +89,9 @@ pub struct TerminalBuffer {
     awaiting: Option<u64>,
     /// Asked once for a terminal, having none to show.
     opened: bool,
+    /// Popped up over everything (the quick look's own): it has a terminal
+    /// of its own (sharing one would size a panel's to it).
+    popped: bool,
     /// Typing went on: the view goes back to the live screen.
     to_live: bool,
     clock: f64,
@@ -253,11 +257,12 @@ impl TerminalBuffer {
 impl crate::buffer::Buffer for TerminalBuffer {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
         // Its panel gaining focus starts typing (in a terminal, that's what
-        // you came to do), while its shell runs.
-        if drawing.focused && !self.was_focused && self.id.is_some() && self.ended().is_none() {
+        // you came to do), once there's a shell running to type into.
+        let runs = self.info().is_some() && self.ended().is_none();
+        if drawing.focused && !self.was_focused && runs {
             *cx.input_mode = crate::keymap::InputMode::Insert { at: cx.at };
         }
-        self.was_focused = drawing.focused;
+        self.was_focused = drawing.focused && (self.was_focused || runs);
         // The frame typing starts in, its keys were the cockpit's (the key
         // that started it): the program gets keys from the next.
         let started = drawing.typing && !self.typing;
@@ -270,9 +275,26 @@ impl crate::buffer::Buffer for TerminalBuffer {
         self.take_link(net, ctx);
     }
 
-    /// Not drawn any more: its socket closes (it opens again when it is).
+    /// Not drawn any more: its socket closes (it opens again when it is),
+    /// and drawn again, focused, it starts typing again.
     fn hidden(&mut self) {
         self.drop_link();
+        (self.was_focused, self.typing) = (false, false);
+    }
+
+    fn as_card(&mut self, card: bool) {
+        self.popped = card;
+    }
+
+    /// The terminal it shows (the pop-up's is its own across reloads).
+    fn keep(&self) -> Option<serde_json::Value> {
+        self.id.as_ref().map(|id| serde_json::Value::String(id.to_string()))
+    }
+
+    fn restore_kept(&mut self, kept: &serde_json::Value) {
+        if let Some(id) = kept.as_str() {
+            self.show(TerminalId::new(id));
+        }
     }
 
     fn describe(&self) -> String {
@@ -307,7 +329,8 @@ impl Navigable for TerminalBuffer {
         if self.id.is_none() {
             let (first, known) = {
                 let terminals = self.terminals.get();
-                (terminals.list().next().map(|t| t.id.clone()), terminals.known())
+                // Popped up: one of its own, not the first there is.
+                (terminals.list().next().map(|t| t.id.clone()).filter(|_| !self.popped), terminals.known())
             };
             match first {
                 None if !known => {}

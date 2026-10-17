@@ -13,10 +13,14 @@ impl CockpitApp {
         let now = ctx.input(|i| i.time);
         let before = self.desk.used_buffer(buffer.kind);
         self.quick_look = Some(QuickLook::open(buffer, before, self.desk.panels.focused(), self.desk.panels.focused_kind(), key, now));
-        self.use_buffer(buffer);
+        // One of its own is told so before it reads anything.
         if buffer.id == PANE {
-            self.desk.view_mut(buffer.kind).as_card(true);
+            self.desk.ensure(buffer);
+            if let Some(own) = self.desk.buffer_mut(buffer) {
+                own.as_card(true);
+            }
         }
+        self.use_buffer(buffer);
     }
 
     /// Talking to the agent from anywhere: the lead's chat in the quick
@@ -56,6 +60,21 @@ impl CockpitApp {
         // Its own card, held on what it shows.
         self.look_at(BufferId::new(BufferKind::Spec, PANE), key, ctx);
         let _ = self.desk.view_mut(BufferKind::Spec).show_target(&Target::Component(id));
+    }
+
+    /// The desk's pop-up terminal: its own terminal buffer in the quick
+    /// look (focused, it starts typing); shown already, hidden.
+    pub(super) fn pop_terminal(&mut self, ctx: &egui::Context) {
+        if self.popped_terminal() {
+            self.close_quick_look();
+        } else {
+            self.look_at(BufferId::new(BufferKind::Terminal, PANE), None, ctx);
+        }
+    }
+
+    /// The quick look shows the pop-up terminal.
+    pub(super) fn popped_terminal(&self) -> bool {
+        self.quick_look.as_ref().is_some_and(|q| q.buffer == BufferId::new(BufferKind::Terminal, PANE))
     }
 
     /// Closes the quick look: the buffer of its kind used before is used

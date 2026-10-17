@@ -93,6 +93,7 @@ impl CockpitApp {
             nav("nav.forward", "Forward (jump list)", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT),
             Action::new("nav.keys", "Keys for this buffer", S::Keys).group(Group::View).importance(MINOR),
             Action::new("talk.open", "Talk to the agent from here", S::Talk).group(Group::Act).importance(SECONDARY),
+            Action::new("terminal.popup", if self.popped_terminal() { "Hide the pop-up terminal" } else { "Pop up a terminal over everything" }, S::PopTerminal).group(Group::Act).importance(SECONDARY),
             nav("nav.line", "Go to line or row", S::Line).param(Param::Text { hint: "line or row number".into() }).importance(MINOR),
         ];
         // Each go-to's destination says whether it can show what the
@@ -399,6 +400,7 @@ impl CockpitApp {
             ShellCommand::QuickLook => self.toggle_quick_look(ctx),
             ShellCommand::QuickLookToPanel => self.quick_look_to_panel(),
             ShellCommand::Talk => self.talk(ctx),
+            ShellCommand::PopTerminal => self.pop_terminal(ctx),
             ShellCommand::ItemButtons => {
                 let bar = value.as_deref() == Some("true");
                 self.item_buttons = Some(if bar { ItemButtons::Bar } else { ItemButtons::Floating });

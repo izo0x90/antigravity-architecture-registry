@@ -152,6 +152,7 @@ D = "Developer"
 # A box over whatever is on screen for talking to the agent (Enter sends,
 # Escape closes).
 "talk.open" = { leader = "t", keys = ["t"] }
+"terminal.popup" = { leader = "T", keys = ["ctrl+`"] }
 "cockpit.agents" = { leader = "w d" }
 
 # Moving the cursor, in every view.

@@ -69,8 +69,10 @@ enum ShellCommand {
     QuickLook,
     /// The quick look's card in a panel instead.
     QuickLookToPanel,
-    /// The box for talking to the agent, over whatever is on screen.
+    /// Talking to the agent: the lead's chat in the quick look, typing.
     Talk,
+    /// The desk's pop-up terminal in the quick look (shown: hidden).
+    PopTerminal,
     /// Lets agents drive the cockpit (its value: on or off).
     Agents,
     OpenPalette,

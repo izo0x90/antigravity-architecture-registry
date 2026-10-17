@@ -120,3 +120,37 @@ fn with_no_terminal_one_is_opened_and_shown_and_an_ended_one_starts_again() {
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert!(sent(&app).contains(&"POST /api/terminals/t7/restart".to_owned()));
 }
+
+#[test]
+fn the_pop_up_terminal_is_its_own_over_everything_and_its_key_hides_it() {
+    let (ctx, mut app) = full_app();
+    app.desk.shared.terminals.get_mut().answered_list(vec![crate::terminals::tests::terminal("t1")]);
+    frame(&ctx, &mut app, vec![]);
+    sent(&app);
+    let pop = BufferId::new(BufferKind::Terminal, crate::quick_look::PANE);
+    ctrl(&ctx, &mut app, egui::Key::Backtick);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.quick_look.as_ref().map(|q| q.buffer), Some(pop), "over everything, in the quick look");
+    assert!(sent(&app).contains(&"POST /api/terminals".to_owned()), "a terminal of its own, not the panel's");
+    app.desk.shared.terminals.get_mut().answered_open(Ok(crate::terminals::tests::terminal("t9")));
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    assert_eq!(app.desk.view(BufferKind::Terminal).target(), Some(Target::Terminal(harness_contracts::TerminalId::new("t9"))));
+    assert_eq!(app.input_mode, InputMode::Insert { at: Host::Look }, "focused, it types");
+    // Leave typing; its key hides it.
+    frame_at(&ctx, &mut app, press(egui::Key::Escape, false), 30.0);
+    frame_at(&ctx, &mut app, press(egui::Key::Escape, false), 30.1);
+    ctrl(&ctx, &mut app, egui::Key::Backtick);
+    assert!(app.quick_look.is_none(), "the same key hides it");
+    // Again: the same terminal, typing again; and kept for the next load.
+    ctrl(&ctx, &mut app, egui::Key::Backtick);
+    for _ in 0..2 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    assert_eq!(app.desk.view(BufferKind::Terminal).target(), Some(Target::Terminal(harness_contracts::TerminalId::new("t9"))));
+    assert!(!sent(&app).contains(&"POST /api/terminals".to_owned()), "no new one");
+    assert_eq!(app.input_mode, InputMode::Insert { at: Host::Look });
+    let kept = app.saved_ui().kept;
+    assert!(kept.iter().any(|(b, v)| *b == pop && v == "t9"), "its terminal is kept: {kept:?}");
+}

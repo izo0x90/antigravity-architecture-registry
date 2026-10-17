@@ -14,7 +14,14 @@ impl CockpitApp {
             version: crate::saved::VERSION,
             panels: self.desk.panels.clone(),
             views: buffers.iter().filter_map(|p| self.place_of(*p).map(|place| (*p, place))).collect(),
-            kept: buffers.iter().chain(BufferKind::ALL.iter().filter(|k| k.one_only()).map(|k| BufferId::new(*k, 0)).collect::<Vec<_>>().iter()).filter_map(|p| Some((*p, self.desk.buffer(*p)?.keep()?))).collect(),
+            // The panels' buffers, the one-only kinds', and the quick look's own.
+            kept: buffers
+                .iter()
+                .copied()
+                .chain(BufferKind::ALL.iter().filter(|k| k.one_only()).map(|k| BufferId::new(*k, 0)))
+                .chain(BufferKind::ALL.iter().map(|k| BufferId::new(*k, crate::quick_look::PANE)))
+                .filter_map(|p| Some((p, self.desk.buffer(p)?.keep()?)))
+                .collect(),
             used: used.collect(),
             marks: self.desk.marks.clone(),
             jumps: self.desk.jumps.clone(),
