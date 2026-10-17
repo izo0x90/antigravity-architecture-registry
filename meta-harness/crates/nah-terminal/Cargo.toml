@@ -1,0 +1,16 @@
+[package]
+name = "nah-terminal"
+version = "0.1.0"
+edition = "2024"
+description = "Terminals: a shell in a pseudo-terminal, its screen kept by an emulator; what changed on it, its scrollback, and the keys typed into it. Knows nothing of the server or the cockpit."
+
+[dependencies]
+harness-contracts = { path = "../harness-contracts" }
+portable-pty = "0.9"
+alacritty_terminal = "0.26"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

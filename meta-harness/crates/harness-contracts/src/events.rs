@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{SlotId, ThreadId, TurnId};
+use crate::ids::{SlotId, TerminalId, ThreadId, TurnId};
 use crate::snapshot::ProviderSnapshot;
 use crate::items::TurnItem;
 use crate::notifications::Notification;
@@ -53,6 +53,10 @@ pub enum ClientEvent {
     SlotClosed { slot_id: SlotId },
     /// A notification appeared or changed state.
     NotificationUpdated { notification: Notification },
+    /// A terminal was opened or changed (its title, its status, its size);
+    /// its screen goes on its own socket.
+    TerminalUpdated { terminal: crate::terminals::Terminal },
+    TerminalClosed { terminal_id: TerminalId },
     /// The stream fell behind: drop what you hold; the whole state follows.
     Resync,
 }

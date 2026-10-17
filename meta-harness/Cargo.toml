@@ -24,6 +24,7 @@ members = [
     "crates/nah-notify",
     "crates/nah-changes",
     "crates/nah-timeline",
+    "crates/nah-terminal",
 ]
 
 # Debug builds (tests, and the server as run in development) optimize the

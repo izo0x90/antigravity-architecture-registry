@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, NotificationId, NotificationState, SlotId, ThreadId};
+use harness_contracts::{AdapterEvent, ClientEvent, InstanceId, NotificationId, NotificationState, SlotId, TerminalId, ThreadId};
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -23,6 +23,7 @@ enum Key {
     Queue(String),
     Slot(SlotId),
     Notification(NotificationId),
+    Terminal(TerminalId),
 }
 
 struct Entry {
@@ -46,6 +47,11 @@ impl Cache {
             ClientEvent::SlotUpdated { slot } => (Key::Slot(slot.id.clone()), None),
             ClientEvent::SlotClosed { slot_id } => {
                 self.entries.remove(&Key::Slot(slot_id.clone()));
+                return;
+            }
+            ClientEvent::TerminalUpdated { terminal } => (Key::Terminal(terminal.id.clone()), None),
+            ClientEvent::TerminalClosed { terminal_id } => {
+                self.entries.remove(&Key::Terminal(terminal_id.clone()));
                 return;
             }
             // Open ones only: a late client needs what's still open.

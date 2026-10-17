@@ -53,4 +53,6 @@ id_type!(
     SessionKey,
     /// A notification, by its subject (`req:<request>`, `turn:<turn>`, ...).
     NotificationId,
+    /// A shell the project server runs for the user.
+    TerminalId,
 );

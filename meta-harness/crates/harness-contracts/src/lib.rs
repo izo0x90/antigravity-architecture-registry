@@ -18,6 +18,7 @@ pub mod requests;
 pub mod session;
 pub mod slots;
 pub mod snapshot;
+pub mod terminals;
 
 pub use capabilities::*;
 pub use events::*;
@@ -32,3 +33,4 @@ pub use requests::*;
 pub use session::*;
 pub use slots::*;
 pub use snapshot::*;
+pub use terminals::*;
