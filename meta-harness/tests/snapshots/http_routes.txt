@@ -20,6 +20,10 @@
 /api/slots/s1/sessions/k1 DELETE
 /api/slots/s1/current POST
 /api/slots/s1/prompt POST
+/api/terminals GET,HEAD,POST
+/api/terminals/t1 DELETE
+/api/terminals/t1/restart POST
+/ws/terminals/t1 GET,HEAD
 /api/notifications GET,HEAD
 /api/ui/shell GET,HEAD,PUT
 /api/server/shutdown POST

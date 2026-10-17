@@ -62,6 +62,7 @@ nah-state = { path = "crates/nah-state" }
 nah-notify = { path = "crates/nah-notify" }
 nah-changes = { path = "crates/nah-changes" }
 nah-timeline = { path = "crates/nah-timeline" }
+nah-terminal = { path = "crates/nah-terminal" }
 include_dir = "0.7"
 clap = { version = "4", features = ["derive"] }
 tokio-tungstenite = "0.29"

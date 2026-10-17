@@ -27,6 +27,10 @@ struct ServeArgs {
     /// Serve no project: the cockpit only (a lighter process).
     #[arg(long)]
     no_project: bool,
+    /// Run no shells: the cockpit's terminals and the agents' terminal
+    /// tools are left out.
+    #[arg(long)]
+    no_shells: bool,
     /// Where to listen, as address:port (default: HOST and PORT, else
     /// 127.0.0.1:8080).
     #[arg(long)]
@@ -208,12 +212,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notify = meta_harness::startup::notifications(&hub, &state, &slots)?;
     let changes = meta_harness::startup::changes(&arch);
     let timeline = meta_harness::startup::timeline(&arch, &changes, &state, &hub)?;
-    let mcp_state = McpServerState::new(Arc::new(McpService::new(arch.clone(), changes.clone(), timeline.clone(), remote.clone(), access.clone(), slots.clone(), notify.clone())), meta_harness::startup::mcp_callers(&slots));
+    let terminals = if serve.no_shells { None } else { Some(meta_harness::startup::terminals(&arch, &state, &hub)?) };
+    let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone() };
+    let mcp_state = McpServerState::new(Arc::new(McpService::new(services, access.clone())), meta_harness::startup::mcp_callers(&slots));
 
     let queue = meta_harness::server::queue_runner(&arch, meta_harness::startup::queue_config(&arch)?, &hub);
     let cockpit_path = cockpit.launch_path();
     let streams = mcp_state.sessions.clone();
-    let app = AppState::new(Parts { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, notify, changes, timeline })?;
+    let app = AppState::new(Parts { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, notify, changes, timeline, terminals })?;
     let parts: Vec<&dyn meta_harness::modules::Module> = app.modules().into_iter().filter(|m| !(serve.no_cockpit && m.is_cockpit())).collect();
     let router = create_router(&parts);
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");

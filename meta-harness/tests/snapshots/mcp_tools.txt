@@ -1233,3 +1233,28 @@ Tell the user something they should know (a result, a blocker, a decision you ne
   ]
 }
 
+## terminals
+The user's terminals (shells the server runs): each one's id, title, whether its shell runs, its folder and size.
+{
+  "type": "object",
+  "properties": {}
+}
+
+## terminal_read
+What a terminal shows now, as text: its screen, with `back` lines of scrollback above it (default 0, at most 2000).
+{
+  "type": "object",
+  "properties": {
+    "terminal": {
+      "type": "string"
+    },
+    "back": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "terminal"
+  ]
+}
+

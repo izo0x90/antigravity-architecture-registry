@@ -216,6 +216,14 @@ pub fn notifications(hub: &Arc<EventHub>, state: &Arc<nah_state::StateDb>, slots
     Ok(nah_notify::NotifyHub::start(hub.clone(), state.clone(), slots.clone(), Vec::new())?)
 }
 
+/// The terminals: the user's shells, started in the project's folder (their
+/// start-up hooks kept in the state folder); those kept from the last run
+/// come back ended.
+pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>) -> Result<Arc<crate::terminals::Terminals>, StartError> {
+    let hooks = arch_service::state_dir(arch.root())?.join("terminal-hooks");
+    Ok(crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), Arc::new(|_, _| {}))?)
+}
+
 /// What each agent role may do: the shipped roles, with the project's
 /// `.nah/access.toml` over them.
 pub fn access(project: &std::path::Path) -> Result<nah_access::Access, StartError> {

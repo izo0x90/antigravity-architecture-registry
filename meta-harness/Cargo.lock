@@ -3379,6 +3379,7 @@ dependencies = [
  "nah-notify",
  "nah-packs",
  "nah-state",
+ "nah-terminal",
  "nah-timeline",
  "notify-debouncer-full",
  "regex",

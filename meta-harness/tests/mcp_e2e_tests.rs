@@ -279,19 +279,23 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     let service = &state.project.mcp_state.service;
     let as_role = |role: &str| McpCaller { principal: Principal::agent(role), slot: None, label: role.into() };
     let names = |who: &Principal| service.tools_for(who).iter().map(|t| t.name.clone()).collect::<Vec<_>>();
-    let reads = ["ingest", "list_types", "search", "inspect", "view", "changes", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions"];
+    let reads = ["ingest", "list_types", "search", "inspect", "view", "changes", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions", "terminals", "terminal_read"];
     assert_eq!(names(&Principal::agent("external")), reads, "read-only, in the list's order");
+    // The slots' tools come before the terminals' in the list.
     let mut sub = reads.map(String::from).to_vec();
-    sub.extend(["tell_lead".into(), "tell_user".into()]);
+    sub.splice(11..11, ["tell_lead".into(), "tell_user".into()]);
     assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, and reports to the lead and the user");
     let lead = names(&Principal::agent("lead"));
-    assert!(lead.len() == 31 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself: {lead:?}");
+    assert!(lead.len() == 33 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself and typing into terminals: {lead:?}");
+    assert!(!lead.contains(&"terminal_type".to_owned()), "typing into the user's terminals is no role's unless granted");
     assert!(names(&Principal::Anonymous).is_empty());
 
     let err = service.call("navigate", json!({ "view": "calls" }), &as_role("sub")).await.unwrap_err().to_string();
     assert_eq!(err, "not allowed: this session's role (sub) can't use navigate (it needs view.drive)");
     let err = service.call("plan_create", json!({ "id": "x", "title": "X" }), &as_role("external")).await.unwrap_err().to_string();
     assert!(err.contains("(it needs plan.edit)"), "{err}");
+    let err = service.call("terminal_type", json!({ "terminal": "t1", "text": "ls" }), &as_role("lead")).await.unwrap_err().to_string();
+    assert!(err.contains("(it needs shell.drive)"), "{err}");
     assert!(service.call("list_types", json!({}), &as_role("sub")).await.is_ok(), "what it may use works");
     assert!(service.call("no_such_tool", json!({}), &as_role("lead")).await.unwrap_err().to_string().contains("tool 'no_such_tool'"));
 }

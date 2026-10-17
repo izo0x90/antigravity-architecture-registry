@@ -8,7 +8,7 @@ use common::{http_anonymous, spawn_app};
 
 /// Open on purpose: health, the launch link, the agents' endpoint (their
 /// session's key says who they are), and the sockets (a ticket each).
-const OPEN_HANDLERS: &[&str] = &["crate::cockpit::launch", "mcp_sse_proxy", "mcp_messages_proxy", "ws_events_handler", "crate::remote::socket", "home_socket", "pass_socket"];
+const OPEN_HANDLERS: &[&str] = &["crate::cockpit::launch", "mcp_sse_proxy", "mcp_messages_proxy", "ws_events_handler", "crate::remote::socket", "home_socket", "pass_socket", "terminal_socket"];
 const OPEN_PATHS: &[&str] = &["/health", "/cockpit", "/api/mcp/sse", "/api/mcp/messages", "/ws/events", "/ws/cockpit", "/ws/home", "/s/w1/ws/events"];
 
 #[test]

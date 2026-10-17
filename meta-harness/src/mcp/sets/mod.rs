@@ -19,6 +19,7 @@ mod plans;
 mod review;
 mod schema;
 mod slots;
+mod terminals;
 
 /// A tool as agents see it, and the capability a caller needs to use it.
 pub(crate) struct ToolDef {
@@ -40,18 +41,44 @@ pub fn list_tools(trees: &TreeConfig) -> Vec<McpTool> {
 
 /// Every tool with the capability it needs, in the same order.
 pub(crate) fn tool_defs(trees: &TreeConfig) -> Vec<ToolDef> {
-    [explore::Explore::schemas(trees), changes::Changes::schemas(trees), plans::Plans::schemas(trees), build::Build::schemas(trees), review::Review::schemas(trees), cockpit::Cockpit::schemas(trees), slots::Slots::schemas(trees)].into_iter().flatten().collect()
+    [
+        explore::Explore::schemas(trees),
+        changes::Changes::schemas(trees),
+        plans::Plans::schemas(trees),
+        build::Build::schemas(trees),
+        review::Review::schemas(trees),
+        cockpit::Cockpit::schemas(trees),
+        slots::Slots::schemas(trees),
+        terminals::Terminals::schemas(trees),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// What the tools work with: the server's services (git's changes and the
+/// timeline only in a git repository; the terminals unless the server
+/// runs no shells).
+pub struct Services {
+    pub arch: Arc<ArchitectureService>,
+    pub changes: Option<Arc<nah_changes::Changes>>,
+    pub timeline: Option<Arc<nah_timeline::Timeline>>,
+    pub remote: Arc<crate::remote::Remote>,
+    pub slots: Arc<harness_core::SlotManager>,
+    pub notify: Arc<nah_notify::NotifyHub>,
+    pub terminals: Option<Arc<crate::terminals::Terminals>>,
 }
 
 /// The sets, in the same order as `list_tools`.
-pub(crate) fn all(arch: &Arc<ArchitectureService>, changes: &Option<Arc<nah_changes::Changes>>, timeline: &Option<Arc<nah_timeline::Timeline>>, remote: &Arc<crate::remote::Remote>, slots: &Arc<harness_core::SlotManager>, notify: &Arc<nah_notify::NotifyHub>) -> Vec<Box<dyn ToolSet>> {
+pub(crate) fn all(s: &Services) -> Vec<Box<dyn ToolSet>> {
     vec![
-        Box::new(explore::Explore { arch: arch.clone(), changes: changes.clone() }),
-        Box::new(changes::Changes { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone() }),
-        Box::new(plans::Plans { arch: arch.clone() }),
-        Box::new(build::Build { arch: arch.clone() }),
-        Box::new(review::Review { arch: arch.clone() }),
-        Box::new(cockpit::Cockpit { remote: remote.clone() }),
-        Box::new(slots::Slots { slots: slots.clone(), notify: notify.clone() }),
+        Box::new(explore::Explore { arch: s.arch.clone(), changes: s.changes.clone() }),
+        Box::new(changes::Changes { arch: s.arch.clone(), changes: s.changes.clone(), timeline: s.timeline.clone() }),
+        Box::new(plans::Plans { arch: s.arch.clone() }),
+        Box::new(build::Build { arch: s.arch.clone() }),
+        Box::new(review::Review { arch: s.arch.clone() }),
+        Box::new(cockpit::Cockpit { remote: s.remote.clone() }),
+        Box::new(slots::Slots { slots: s.slots.clone(), notify: s.notify.clone() }),
+        Box::new(terminals::Terminals { terminals: s.terminals.clone() }),
     ]
 }

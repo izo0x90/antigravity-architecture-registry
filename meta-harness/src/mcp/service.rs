@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use arch_service::{ArchitectureService, ServiceError};
+use arch_service::ServiceError;
 use nah_access::{Access, Capability, Principal};
 use serde_json::{Value, json};
 
@@ -41,8 +41,9 @@ pub struct McpService {
 }
 
 impl McpService {
-    pub fn new(arch: Arc<ArchitectureService>, changes: Option<Arc<nah_changes::Changes>>, timeline: Option<Arc<nah_timeline::Timeline>>, remote: Arc<crate::remote::Remote>, access: Arc<Access>, slots: Arc<harness_core::SlotManager>, notify: Arc<nah_notify::NotifyHub>) -> Self {
-        let sets = all(&arch, &changes, &timeline, &remote, &slots, &notify);
+    pub fn new(services: crate::mcp::sets::Services, access: Arc<Access>) -> Self {
+        let sets = all(&services);
+        let arch = &services.arch;
         let mut index = HashMap::new();
         let mut names = Vec::new();
         for (i, set) in sets.iter().enumerate() {

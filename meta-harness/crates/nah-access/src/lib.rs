@@ -45,6 +45,7 @@ capabilities! {
     PlansApprove => "plans.approve",
     SessionsControl => "sessions.control",
     ChangesStage => "changes.stage",
+    ShellDrive => "shell.drive",
 }
 
 impl fmt::Display for Capability {

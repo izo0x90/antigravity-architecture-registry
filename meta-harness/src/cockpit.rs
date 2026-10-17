@@ -150,7 +150,7 @@ pub mod can {
         };
     }
 
-    markers!(ViewRead, ViewDrive, PlanEdit, CodeCheck, SlotsObserve, SlotsManage, SlotsMessage, SlotsReport, UserNotify, RequestsAnswer, PlansApprove, SessionsControl, ChangesStage);
+    markers!(ViewRead, ViewDrive, PlanEdit, CodeCheck, SlotsObserve, SlotsManage, SlotsMessage, SlotsReport, UserNotify, RequestsAnswer, PlansApprove, SessionsControl, ChangesStage, ShellDrive);
 }
 
 /// Extractor: the request's caller has the capability `C`, else 403. Put it

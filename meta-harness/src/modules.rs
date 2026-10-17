@@ -55,7 +55,7 @@ macro_rules! gated {
     )*};
 }
 
-gated!(CockpitState, HarnessState, NotifyState, ProjectState, HomeState, ServerState);
+gated!(CockpitState, HarnessState, NotifyState, ProjectState, HomeState, ServerState, TerminalsState);
 
 /// Asks the server to stop (as Ctrl-C does); its serving waits on it.
 #[derive(Clone, Default)]
@@ -92,7 +92,7 @@ macro_rules! stoppable {
     )*};
 }
 
-stoppable!(CockpitState, HarnessState, HomeState);
+stoppable!(CockpitState, HarnessState, HomeState, TerminalsState);
 
 /// Every server's own part: being asked to stop.
 #[derive(Clone)]
@@ -181,6 +181,22 @@ impl Module for HarnessState {
     }
 }
 
+/// The terminals: shells the server runs for the user (left out by
+/// `--no-shells`).
+#[derive(Clone)]
+pub struct TerminalsState {
+    pub gate: Gate,
+    /// Their sockets end when the server stops.
+    pub stopping: Shutdown,
+    pub terminals: Arc<crate::terminals::Terminals>,
+}
+
+impl Module for TerminalsState {
+    fn routes(&self) -> Router {
+        routes::terminals::routes().with_state(self.clone())
+    }
+}
+
 /// What needs the user, and what happened.
 #[derive(Clone)]
 pub struct NotifyState {
@@ -217,7 +233,7 @@ impl Module for ProjectState {
     }
 }
 
-/// A project's server: every part.
+/// A project's server: every part (the terminals unless left out).
 #[derive(Clone)]
 pub struct AppState {
     pub server: ServerState,
@@ -226,6 +242,7 @@ pub struct AppState {
     pub harness: HarnessState,
     pub notify: NotifyState,
     pub project: ProjectState,
+    pub terminals: Option<TerminalsState>,
 }
 
 /// What a project's server is made of, before it's split into its parts.
@@ -245,6 +262,8 @@ pub struct Parts {
     pub notify: Arc<nah_notify::NotifyHub>,
     pub changes: Option<Arc<nah_changes::Changes>>,
     pub timeline: Option<Arc<nah_timeline::Timeline>>,
+    /// None: the server runs no shells (`--no-shells`).
+    pub terminals: Option<Arc<crate::terminals::Terminals>>,
 }
 
 impl AppState {
@@ -257,13 +276,15 @@ impl AppState {
             server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },
             home: HomeState { gate: gate.clone(), stopping: stopping.clone(), home },
             cockpit: CockpitState { gate: gate.clone(), stopping: stopping.clone(), state: p.state, remote: p.remote },
-            harness: HarnessState { gate: gate.clone(), stopping, registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
+            harness: HarnessState { gate: gate.clone(), stopping: stopping.clone(), registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
+            terminals: p.terminals.map(|terminals| TerminalsState { gate: gate.clone(), stopping: stopping.clone(), terminals }),
             project: ProjectState { gate, arch: p.arch, queue: p.queue, sessions: p.sessions, slots: p.slots, mcp_state: p.mcp_state, changes: p.changes, timeline: p.timeline },
         })
     }
 
-    pub fn modules(&self) -> [&dyn Module; 6] {
-        [&self.server, &self.cockpit, &self.home, &self.harness, &self.notify, &self.project]
+    pub fn modules(&self) -> Vec<&dyn Module> {
+        let terminals = self.terminals.as_ref().map(|t| t as &dyn Module);
+        [&self.server as &dyn Module, &self.cockpit, &self.home, &self.harness, &self.notify, &self.project].into_iter().chain(terminals).collect()
     }
 }

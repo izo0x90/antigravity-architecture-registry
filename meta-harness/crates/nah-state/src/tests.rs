@@ -218,3 +218,30 @@ mod timeline {
         assert_eq!((db.snapshots().unwrap(), db.turns().unwrap().len()), (vec![b], 0));
     }
 }
+
+mod terminals {
+    use harness_contracts::{TermSize, Terminal, TerminalId, TerminalStatus};
+
+    use super::*;
+
+    fn terminal(id: &str, title: &str) -> Terminal {
+        Terminal { id: TerminalId::new(id), title: title.into(), status: TerminalStatus::Running, size: TermSize { cols: 80, rows: 24 }, shell: "/bin/bash".into(), folder: "/p".into() }
+    }
+
+    #[test]
+    fn terminals_come_back_ended_in_the_order_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let db = StateDb::open(dir.path(), &settings()).unwrap();
+            db.keep_terminal(&terminal("t1", "bash")).unwrap();
+            db.keep_terminal(&terminal("t2", "bash")).unwrap();
+            db.keep_terminal(&terminal("t1", "make")).unwrap();
+            db.keep_terminal(&terminal("t3", "bash")).unwrap();
+            db.forget_terminal(&TerminalId::new("t3")).unwrap();
+        }
+        let db = StateDb::open(dir.path(), &settings()).unwrap();
+        let kept = db.terminals().unwrap();
+        assert_eq!(kept.iter().map(|t| (t.id.as_str(), t.title.as_str())).collect::<Vec<_>>(), [("t1", "make"), ("t2", "bash")], "kept again: its place stays");
+        assert!(kept.iter().all(|t| t.status == TerminalStatus::Ended { code: None }), "their shells didn't outlive the server");
+    }
+}

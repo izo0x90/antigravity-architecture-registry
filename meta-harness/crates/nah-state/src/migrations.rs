@@ -34,6 +34,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
      CREATE TABLE timeline_turns (turn TEXT PRIMARY KEY, thread TEXT NOT NULL, slot TEXT NOT NULL, started_ms INTEGER NOT NULL, start TEXT NOT NULL, ended_ms INTEGER, end_snapshot TEXT, files INTEGER, closed_ms INTEGER);
      CREATE INDEX timeline_turns_by_thread ON timeline_turns (thread);",
     ),
+    (7, "CREATE TABLE terminals (id TEXT PRIMARY KEY, title TEXT NOT NULL, shell TEXT NOT NULL, folder TEXT NOT NULL, cols INTEGER NOT NULL, rows INTEGER NOT NULL, seq INTEGER NOT NULL);"),
 ];
 
 /// The newest layout this NAH knows.

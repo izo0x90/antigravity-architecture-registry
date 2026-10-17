@@ -3,6 +3,9 @@
 # A project replaces a role by naming it in .nah/access.toml. The user (and
 # home, relaying the user) can do everything and isn't configured here.
 #
+# Typing into the user's terminals (`shell.drive`) is in no role: a project
+# grants it by adding it to a role here.
+#
 # These cover NAH's tools only: a slot's own harness tools (its file edits,
 # its shell) are governed by that slot's mode and the approvals you answer.
 
