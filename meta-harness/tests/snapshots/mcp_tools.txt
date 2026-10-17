@@ -1241,7 +1241,7 @@ The user's terminals (shells the server runs): each one's id, title, whether its
 }
 
 ## terminal_read
-What a terminal shows now, as text: its screen, with `back` lines of scrollback above it (default 0, at most 2000).
+What a terminal shows now, as text: its screen, with `back` lines of scrollback above it (default 0, at most 2000), and the last commands its shell ran (each with its number in this start of the shell, its exit code and how long it ran; bash and zsh say). With `command` (a number), that command and its output instead (its last 2000 lines at most).
 {
   "type": "object",
   "properties": {
@@ -1251,6 +1251,10 @@ What a terminal shows now, as text: its screen, with `back` lines of scrollback 
     "back": {
       "type": "integer",
       "minimum": 0
+    },
+    "command": {
+      "type": "integer",
+      "minimum": 1
     }
   },
   "required": [

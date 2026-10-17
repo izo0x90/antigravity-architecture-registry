@@ -277,9 +277,10 @@ impl Open {
         lock(&self.shell).as_ref().map_or_else(Vec::new, |s| s.commands())
     }
 
-    /// Lines `from..to` as text.
-    pub fn text_of(&self, from: u64, to: u64) -> String {
-        lock(&self.shell).as_ref().map_or_else(String::new, |s| s.text_of(from, to))
+    /// Command `id`'s output as text, and how many of its first lines
+    /// were left out (it had more than `most`).
+    pub fn command_output(&self, id: u64, most: u64) -> Option<(String, u64)> {
+        lock(&self.shell).as_ref().and_then(|s| s.command_output(id, most))
     }
 
     /// The screen as text, with up to `back` lines of scrollback.

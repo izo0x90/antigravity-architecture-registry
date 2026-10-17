@@ -185,18 +185,6 @@ fn bash_marks_its_commands_and_a_finished_one_is_told_with_its_code_and_time() {
     assert!(ran >= Duration::from_millis(300), "it ran {ran:?}");
 }
 
-/// The text of lines `from..to`.
-fn lines_text(sh: &Shell, from: u64, to: u64) -> Vec<String> {
-    let (_, rows) = sh.terminal.scrollback(from, (to - from) as u32);
-    let screen = sh.terminal.screen(None);
-    let mut texts: Vec<String> = rows.iter().map(|r| r.iter().map(|run| run.text.as_str()).collect()).collect();
-    for n in (from + texts.len() as u64)..to {
-        let row = screen.rows.get((n - screen.top) as usize).map(|(_, r)| r.iter().map(|run| run.text.as_str()).collect()).unwrap_or_default();
-        texts.push(row);
-    }
-    texts
-}
-
 #[test]
 fn bash_says_where_each_command_is_what_was_typed_and_how_it_ended_through_a_new_width() {
     let sh = open("bash", 80, 24);
@@ -213,16 +201,50 @@ fn bash_says_where_each_command_is_what_was_typed_and_how_it_ended_through_a_new
     let [echo, long] = &commands[commands.len() - 2..] else { unreachable!() };
     assert_eq!((echo.text.as_str(), echo.code), ("echo one; echo two", Some(0)));
     assert_eq!((long.text.as_str(), long.code), ("printf 'a long line of output %.0s' 1 2 3 4; echo; false", Some(1)));
-    let (output, end) = (echo.output.unwrap(), echo.end.unwrap());
-    assert!(echo.prompt <= echo.input && echo.input < output, "{echo:?}");
-    assert_eq!(lines_text(&sh, output, end), ["one", "two"], "its output's lines");
+    assert!(echo.prompt <= echo.input && echo.input < echo.output.unwrap(), "{echo:?}");
+    let output = |id| sh.terminal.command_output(id, 100).unwrap().0;
+    assert_eq!(output(echo.id), "one\ntwo", "its output");
     // Narrower: the long output wraps on more rows; the commands move with their lines.
     sh.terminal.resize(TermSize { cols: 30, rows: 24 }).unwrap();
     let commands = ran();
     let [echo, long] = &commands[commands.len() - 2..] else { unreachable!() };
-    assert_eq!(lines_text(&sh, echo.output.unwrap(), echo.end.unwrap()), ["one", "two"]);
-    let output = lines_text(&sh, long.output.unwrap(), long.end.unwrap()).concat();
-    assert_eq!(output, "a long line of output ".repeat(4).trim_end(), "on the rows it wraps on now");
+    assert_eq!(output(echo.id), "one\ntwo");
+    assert_eq!(output(long.id), "a long line of output ".repeat(4).trim_end(), "its lines, as it wrote them, on the rows they wrap on now");
+}
+
+/// Waits until `count` commands have ended; them.
+fn ended(sh: &Shell, count: usize) -> Vec<harness_contracts::TerminalCommand> {
+    let start = Instant::now();
+    loop {
+        let done: Vec<_> = sh.terminal.commands().into_iter().filter(|c| c.end.is_some()).collect();
+        if done.len() >= count {
+            return done;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "{:?}", sh.terminal.commands());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn the_shell_says_the_command_line_itself_not_what_the_screen_shows() {
+    // bash: a command over several lines, and one it keeps out of its history.
+    let sh = open("bash", 80, 24);
+    sh.run("HISTCONTROL=ignorespace");
+    sh.run("for i in 1 2; do");
+    sh.run("echo \"n$i\"");
+    sh.run("done");
+    sh.run(" echo secret");
+    let done = ended(&sh, 3);
+    let lines: Vec<&str> = done[1..].iter().map(|c| c.text.as_str()).collect();
+    assert!(lines[0].starts_with("for i in 1 2; do") && lines[0].contains("echo \"n$i\"") && lines[0].ends_with("done"), "{lines:?}");
+    assert_eq!(lines[1], "", "not in its history: not said (so it isn't run again as something else)");
+    // zsh: what the right prompt shows isn't part of it.
+    let sh = open("zsh", 80, 24);
+    sh.run("RPROMPT=right");
+    sh.run("echo one");
+    let done = ended(&sh, 2);
+    assert_eq!(done[1].text, "echo one");
+    assert_eq!(sh.terminal.command_output(done[1].id, 100).map(|(text, _)| text), Some("one".into()));
 }
 
 #[test]

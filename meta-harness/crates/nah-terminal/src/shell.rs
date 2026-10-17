@@ -50,15 +50,34 @@ fn write(dir: &Path, name: &str, text: &str) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-/// bash: the user's `.bashrc`, then a mark before each command runs (`PS0`),
-/// one with its code before each prompt (`PROMPT_COMMAND`, first), and
-/// the prompt marked where it starts and where typing starts (wrapped
-/// around `PS1` after the user's own `PROMPT_COMMAND` made it).
+/// bash: the user's `.bashrc`, then the marks: one with the last
+/// command's code before each prompt (`PROMPT_COMMAND`, first), the prompt
+/// marked where it starts and where typing starts (wrapped around `PS1`,
+/// last, after the user's own made it), and before each command runs
+/// (`PS0`) the command line (the history's newest, when it took one) and
+/// a mark. bash 5.1 takes `PROMPT_COMMAND` as a list: the user's stay as
+/// they are; older ones get one line (the user's last `;` taken off).
 const BASH: &str = r#"[ -f ~/.bashrc ] && . ~/.bashrc
 __nah_done() { local code=$?; printf '\e]133;D;%s\a' "$code"; return $code; }
-__nah_prompt() { local code=$?; [[ $PS1 == *'133;A'* ]] || PS1=$'\[\e]133;A\a\]'"$PS1"$'\[\e]133;B\a\]'; return $code; }
-PROMPT_COMMAND="__nah_done${PROMPT_COMMAND:+;$PROMPT_COMMAND};__nah_prompt"
-PS0=$'\e]133;C\a'"${PS0}"
+__nah_prompt() {
+  local code=$?
+  [[ $PS1 == *'133;A'* ]] || PS1=$'\[\e]133;A\a\]'"$PS1"$'\[\e]133;B\a\]'
+  __nah_newest=$(HISTTIMEFORMAT= builtin history 1)
+  return $code
+}
+__nah_escape() { local s=${1//\\/\\\\}; s=${s//;/\\x3b}; s=${s//$'\n'/\\x0a}; s=${s//$'\r'/\\x0d}; s=${s//$'\e'/\\x1b}; s=${s//$'\a'/\\x07}; printf '%s' "$s"; }
+__nah_typed() {
+  local newest
+  newest=$(HISTTIMEFORMAT= builtin history 1)
+  [[ $newest != "$__nah_newest" && $newest =~ ^[[:space:]]*[0-9]+[*[:space:]][[:space:]]*(.*)$ ]] && printf '\e]633;E;%s\a' "$(__nah_escape "${BASH_REMATCH[1]}")"
+}
+if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
+  PROMPT_COMMAND=(__nah_done "${PROMPT_COMMAND[@]}" __nah_prompt)
+else
+  __nah_theirs=${PROMPT_COMMAND%"${PROMPT_COMMAND##*[![:space:];]}"}
+  PROMPT_COMMAND="__nah_done${__nah_theirs:+;$__nah_theirs};__nah_prompt"
+fi
+PS0='$(__nah_typed)'$'\e]133;C\a'"${PS0}"
 "#;
 
 /// zsh reads `.zshenv` then `.zshrc` from `ZDOTDIR`: each reads the user's
@@ -76,7 +95,31 @@ const ZSHRC: &str = r#"ZDOTDIR="$NAH_USER_ZDOTDIR"
 [ -f "$ZDOTDIR/.zshrc" ] && . "$ZDOTDIR/.zshrc"
 __nah_precmd() { local code=$?; printf '\e]133;D;%s\a' "$code"; }
 __nah_prompt() { [[ $PS1 == *'133;A'* ]] || PS1=$'%{\e]133;A\a%}'"$PS1"$'%{\e]133;B\a%}'; }
-__nah_preexec() { printf '\e]133;C\a'; }
+__nah_escape() { local s=${1//\\/\\\\}; s=${s//;/\\x3b}; s=${s//$'\n'/\\x0a}; s=${s//$'\r'/\\x0d}; s=${s//$'\e'/\\x1b}; s=${s//$'\a'/\\x07}; printf '%s' "$s"; }
+__nah_preexec() { printf '\e]633;E;%s\a\e]133;C\a' "$(__nah_escape "$1")"; }
 precmd_functions=(__nah_precmd $precmd_functions __nah_prompt)
 preexec_functions+=(__nah_preexec)
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// bash with the user's start-up file saying `theirs`: what each
+    /// prompt runs, run; what it wrote on its error stream.
+    fn prompt_errors(theirs: &str) -> String {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join(".bashrc"), theirs).unwrap();
+        let rc = write(home.path(), "nah-bashrc", BASH).unwrap();
+        let run = r#". "$1"; for c in "${PROMPT_COMMAND[@]}"; do eval "$c"; done; [[ $PS1 == *'133;A'* ]] || echo "no prompt marks" >&2"#;
+        let out = std::process::Command::new("bash").args(["-c", run, "bash"]).arg(&rc).env("HOME", home.path()).output().unwrap();
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    }
+
+    #[test]
+    fn bash_keeps_the_users_prompt_command_whatever_it_ends_with() {
+        for theirs in ["", "PROMPT_COMMAND='history -a; '", "PROMPT_COMMAND='history -a;'", "PROMPT_COMMAND=(': one' 'PS1=\"x$ \"')"] {
+            assert_eq!(prompt_errors(theirs), "", "{theirs}");
+        }
+    }
+}

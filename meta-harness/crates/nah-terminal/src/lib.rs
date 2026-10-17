@@ -207,10 +207,12 @@ impl Terminal {
                     let after = screen::Layout::of(term, feed);
                     commands.moved(changes.bump(), |line, col| after.place(&before, line, col), |line| after.after(&before, line));
                 }
-                None => commands.clear(),
+                None => commands.lost_places(feed.top(), changes.bump()),
             }
         }
-        commands.gone_before(feed.oldest());
+        if commands.any_before(feed.oldest()) {
+            commands.gone_before(feed.oldest(), changes.bump());
+        }
         Ok(())
     }
 
@@ -244,23 +246,23 @@ impl Terminal {
         screen::search(&state.term, &state.feed, query, 500)
     }
 
-    /// Lines `from..to` (the scrollback's and the screen's) as plain text.
-    pub fn text_of(&self, from: u64, to: u64) -> String {
+    /// The output of command `id` as text (lines that wrap joined), and
+    /// how many of its lines were left out at its start (it had more than
+    /// `most`); none when there's no such command.
+    pub fn command_output(&self, id: u64, most: u64) -> Option<(String, u64)> {
         let state = lock(&self.state);
-        let (_, lines) = screen::lines(&state.term, &state.feed, from, to.saturating_sub(from).min(u64::from(u32::MAX)) as u32);
-        lines.iter().map(|row| row.iter().map(|run| run.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n").trim_end().to_owned()
+        let command = state.commands.get(id)?;
+        let Some(from) = command.output else { return Some((String::new(), 0)) };
+        let end = command.end.unwrap_or_else(|| state.feed.top() + state.term.screen_lines() as u64);
+        let left_out = end.saturating_sub(from).saturating_sub(most);
+        Some((screen::text(&state.term, &state.feed, from + left_out, end), left_out))
     }
 
     /// The screen as plain text, with up to `back` lines of scrollback above it.
     pub fn text(&self, back: u32) -> String {
         let state = lock(&self.state);
-        let rows = state.term.screen_lines() as u32;
-        let (_, lines) = screen::lines(&state.term, &state.feed, state.feed.top().saturating_sub(u64::from(back)), back + rows);
-        let mut text: Vec<String> = lines.iter().map(|row| row.iter().map(|run| run.text.as_str()).collect()).collect();
-        while text.last().is_some_and(String::is_empty) {
-            text.pop();
-        }
-        text.join("\n")
+        let top = state.feed.top();
+        screen::text(&state.term, &state.feed, top.saturating_sub(u64::from(back)), top + state.term.screen_lines() as u64)
     }
 
     pub fn title(&self) -> String {
@@ -334,12 +336,13 @@ impl Reading {
             let mut marks = feed.overdue(term, all);
             marks.extend(feed.output(term, bytes));
             for (seen, at) in marks {
-                let finished = commands.mark(seen, at, changes.bump(), |from, to| screen::text_between(term, feed, from, to));
-                if let Some((code, ran)) = finished {
+                if let Some((code, ran)) = commands.mark(&seen, at, changes.bump()) {
                     happened.push(Happening::CommandFinished { code, ran });
                 }
             }
-            commands.gone_before(feed.oldest());
+            if commands.any_before(feed.oldest()) {
+                commands.gone_before(feed.oldest(), changes.bump());
+            }
             changes.take(term);
             for said in std::mem::take(&mut *lock(&self.listener.0)) {
                 match said {

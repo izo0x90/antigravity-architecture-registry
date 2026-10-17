@@ -78,7 +78,7 @@ impl Reader {
                 }
                 FromTerminal::Lines { from, rows } => self.lines.extend((*from..).zip(rows.iter().map(text))),
                 FromTerminal::ScrolledOff { lines } => self.lines.extend(lines.iter().map(|(n, row)| (*n, text(row)))),
-                FromTerminal::Found { .. } => {}
+                FromTerminal::Found { .. } | FromTerminal::CommandOutput { .. } => {}
             }
             return said;
         }
@@ -280,7 +280,7 @@ async fn agents_read_terminals_and_type_only_with_shell_drive() {
             reader.next().await;
         }
         let (_, text) = lead.tool("terminal_read", json!({ "terminal": terminal.id })).await;
-        let line = text.lines().find(|l| l.contains("$ echo for-the-agent (exit 0")).unwrap_or_else(|| panic!("named with its end: {text}"));
+        let line = text.lines().find(|l| l.contains("$ echo for-the-agent (exit code 0")).unwrap_or_else(|| panic!("named with its end: {text}"));
         let number: u64 = line.split('.').next().unwrap().parse().unwrap();
         let (error, output) = lead.tool("terminal_read", json!({ "terminal": terminal.id, "command": number })).await;
         assert!(!error && output.lines().nth(1) == Some("for-the-agent"), "{output}");

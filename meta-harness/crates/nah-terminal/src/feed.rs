@@ -196,7 +196,7 @@ impl Feed {
         let (before, last) = bytes.split_at(bytes.len().saturating_sub(1));
         self.feed(term, before);
         let alternate = term.mode().contains(TermMode::ALT_SCREEN);
-        let gone = match seen {
+        let gone = match &seen {
             // The alternate screen has no scrollback of its own to clear.
             Seen::ClearedHistory if alternate => 0,
             Seen::ClearedHistory => self.history,
@@ -210,7 +210,7 @@ impl Feed {
         self.settle(term);
         let point = term.grid().cursor.point;
         let at = At { line: (self.top() as i64 + i64::from(point.line.0)).max(0) as u64, col: point.column.0 as u16 };
-        matches!(seen, Seen::Prompt | Seen::Input | Seen::Started | Seen::Finished(_)).then_some((seen, at))
+        matches!(seen, Seen::Prompt | Seen::Input | Seen::Typed(_) | Seen::Started | Seen::Finished(_)).then_some((seen, at))
     }
 
     /// Cuts the scrollback back to what's kept, counting what goes.

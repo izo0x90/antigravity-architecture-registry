@@ -144,18 +144,20 @@ pub struct ScreenUpdate {
     /// from the beginning again (they're other lines).
     #[serde(default)]
     pub shell: u64,
-    /// Commands that are new or changed (all of them when `full`); one is
-    /// gone once its prompt's line is (below `oldest`).
+    /// Commands that are new or changed (all of them when `full`); a
+    /// finished one is gone once its lines are (its `end` at or below
+    /// `oldest`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<TerminalCommand>,
 }
 
 /// A command the shell ran, as its marks say where (bash's and zsh's,
-/// set up when they start): kept while its prompt's line is.
+/// set up when they start): kept while any of its lines is (a running one
+/// always).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalCommand {
-    /// Its number in this start of the shell.
+    /// Its number in this start of the shell (a new start counts from 1 again).
     pub id: u64,
     /// The line its prompt starts on, and where what's typed starts.
     pub prompt: u64,
@@ -167,7 +169,8 @@ pub struct TerminalCommand {
     pub output: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<u64>,
-    /// What was typed.
+    /// The command line, as the shell said it (empty: it didn't say, as
+    /// bash doesn't for a command its history doesn't keep).
     pub text: String,
     /// How it ended (the shell said no code: none), and how long it ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -308,6 +311,8 @@ pub enum ToTerminal {
     Lines { from: u64, count: u32 },
     /// Where `query` is, newest first.
     Search { query: String },
+    /// The output of a command (`TerminalCommand::id`) as text.
+    CommandOutput { command: u64 },
 }
 
 /// What a terminal's socket sends its reader.
@@ -324,6 +329,9 @@ pub enum FromTerminal {
     /// rest are as the reader had them (`ReaderScreen::take`).
     ScrolledOff { lines: Vec<(u64, Row)> },
     Found { query: String, found: Vec<Found> },
+    /// A command's output as text (lines that wrapped joined; none: there's
+    /// no such command now).
+    CommandOutput { command: u64, text: Option<String> },
 }
 
 #[cfg(test)]

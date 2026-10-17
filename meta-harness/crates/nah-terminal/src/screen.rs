@@ -4,7 +4,7 @@
 use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::TermDamage;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
@@ -12,7 +12,7 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use harness_contracts::{Colour, Cursor, Found, Row, Run, ScreenUpdate, Style, TermSize};
 
 use crate::commands::Commands;
-use crate::feed::{At, Feed};
+use crate::feed::Feed;
 
 /// Which rows changed when, so each reader gets what's new to it.
 #[derive(Default)]
@@ -102,21 +102,17 @@ fn kept<T: EventListener>(term: &Term<T>, feed: &Feed) -> (u64, u64) {
     (top - term.history_size() as u64, top + term.screen_lines() as u64)
 }
 
-/// The text from `from` to the end of the line before `to` (the rows of a
-/// line that wraps joined; others on lines of their own), trimmed.
-pub fn text_between<T: EventListener>(term: &Term<T>, feed: &Feed, from: At, to: u64) -> String {
+/// Lines `from..to` as text, within what's kept: a line that wraps is
+/// one line (as the program wrote it), wide characters once each.
+pub fn text<T: EventListener>(term: &Term<T>, feed: &Feed, from: u64, to: u64) -> String {
     let (first, end) = kept(term, feed);
-    let mut text = String::new();
-    for number in from.line.max(first)..to.min(end) {
-        let line = grid_line(feed, number);
-        let plain: String = row(term, line).iter().map(|run| run.text.as_str()).collect();
-        let skip = if number == from.line { usize::from(from.col) } else { 0 };
-        text.extend(plain.chars().skip(skip));
-        if !wraps(term, line) {
-            text.push('\n');
-        }
+    let (from, to) = (from.max(first), to.min(end));
+    if from >= to {
+        return String::new();
     }
-    text.trim_end().to_owned()
+    let start = Point::new(grid_line(feed, from), Column(0));
+    let last = Point::new(grid_line(feed, to - 1), Column(term.columns() - 1));
+    term.bounds_to_string(start, last).trim_end().to_owned()
 }
 
 /// Whether a row goes on in the next (it wrapped at the screen's edge).

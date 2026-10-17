@@ -397,7 +397,10 @@ fn command(id: u64, prompt: u64, end: Option<u64>, text: &str) -> harness_contra
 #[test]
 fn not_typing_it_moves_by_command_and_copies_one_s_output_or_runs_it_again() {
     let (ctx, mut app) = full_app();
-    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![command(1, 1003, Some(1008), "make"), command(2, 1008, Some(1012), "make test"), command(3, 1012, None, "")])]);
+    // The third waits at an empty prompt on the screen's last line (where the program's cursor is).
+    let mut waiting = command(3, 1023, None, "");
+    waiting.output = None;
+    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![command(1, 1003, Some(1008), "make"), command(2, 1008, Some(1012), "make test"), waiting])]);
     not_typing(&ctx, &mut app);
     keys(&ctx, &mut app, "[[");
     assert_eq!(cursor(&app).as_deref(), Some("1008"), "from the program's line (in the third, running), the one before");
@@ -405,15 +408,31 @@ fn not_typing_it_moves_by_command_and_copies_one_s_output_or_runs_it_again() {
     assert_eq!(cursor(&app).as_deref(), Some("1003"));
     keys(&ctx, &mut app, "]]");
     assert_eq!(cursor(&app).as_deref(), Some("1008"));
-    // Its output copied: lines 1009 to 1011.
+    // Its output, as the server has it, copied when it comes.
     keys(&ctx, &mut app, ":");
     keys(&ctx, &mut app, "copy the command's output");
-    let out = frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert!(app.desk.terminal().sent().contains(&ToTerminal::CommandOutput { command: 2 }), "asked for");
+    app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::CommandOutput { command: 2, text: Some("ok 1\nok 2".into()) }]);
+    let out = frame(&ctx, &mut app, vec![]);
     let copied: Vec<&String> = out.platform_output.commands.iter().filter_map(|c| if let egui::OutputCommand::CopyText(t) = c { Some(t) } else { None }).collect();
-    assert_eq!(copied, ["line 1009\nline 1010\nline 1011"], "{:?}", app.note);
-    // Run again: typed in, as the user would.
+    assert_eq!(copied, ["ok 1\nok 2"]);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.note.as_deref(), Some("Copied its output."));
+    // Run again: typed in, as the user would, at the empty prompt.
     keys(&ctx, &mut app, ":");
     keys(&ctx, &mut app, "run the command again");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!(inputs(&app)[inputs(&app).len() - 2..], [text("make test"), named(TermKey::Enter, false)]);
+    // Something typed at the prompt (its cursor moved on): not run over it.
+    let mut typed = command(3, 1023, None, "");
+    (typed.output, typed.input_col) = (None, 0);
+    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![typed])]);
+    frame(&ctx, &mut app, vec![]);
+    let before = inputs(&app).len();
+    keys(&ctx, &mut app, ":");
+    keys(&ctx, &mut app, "run the command again");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(inputs(&app).len(), before);
+    assert!(app.note.as_deref().is_some_and(|n| n.starts_with("Not at an empty prompt")), "{:?}", app.note);
 }

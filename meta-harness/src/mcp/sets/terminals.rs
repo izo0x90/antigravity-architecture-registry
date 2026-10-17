@@ -22,15 +22,17 @@ pub(crate) struct Terminals {
 const MOST_BACK: u64 = 2000;
 const LAST_COMMANDS: usize = 10;
 
-/// A command in a line: its number, what was typed, how it ended.
+/// A command in a line: its number, its command line, how it ended (as
+/// notifications say it).
 fn said(command: &harness_contracts::TerminalCommand) -> String {
+    let typed = if command.text.is_empty() { "(the shell didn't say)" } else { command.text.as_str() };
     let ended = match (command.end, command.code) {
         (None, _) => "running".to_owned(),
-        (Some(_), Some(code)) => format!("exit {code}"),
+        (Some(_), Some(code)) => format!("exit code {code}"),
         (Some(_), None) => "ended".to_owned(),
     };
-    let ran = command.ran_ms.map(|ms| format!(", {:.1} s", ms as f64 / 1000.0)).unwrap_or_default();
-    format!("{}. $ {} ({ended}{ran})", command.id, command.text)
+    let ran = command.ran_ms.map(|ms| format!(", after {}", nah_notify::rules::took(ms))).unwrap_or_default();
+    format!("{}. $ {typed} ({ended}{ran})", command.id)
 }
 
 impl Terminals {
@@ -41,7 +43,7 @@ impl Terminals {
             tool(
                 Capability::ViewRead,
                 "terminal_read",
-                "What a terminal shows now, as text: its screen, with `back` lines of scrollback above it (default 0, at most 2000), and the last commands its shell ran (each with its number, its exit code and how long it ran; bash and zsh say). With `command` (a number), that command and its whole output instead.",
+                "What a terminal shows now, as text: its screen, with `back` lines of scrollback above it (default 0, at most 2000), and the last commands its shell ran (each with its number in this start of the shell, its exit code and how long it ran; bash and zsh say). With `command` (a number), that command and its output instead (its last 2000 lines at most).",
                 json!({ "type": "object", "properties": { "terminal": { "type": "string" }, "back": { "type": "integer", "minimum": 0 }, "command": { "type": "integer", "minimum": 1 } }, "required": ["terminal"] }),
             ),
             tool(
@@ -127,9 +129,11 @@ impl ToolSet for Terminals {
                 let open = terminals.get(&id()?).map_err(missing)?;
                 let commands = open.commands();
                 if let Some(number) = args["command"].as_u64() {
-                    let command = commands.iter().find(|c| c.id == number).ok_or_else(|| ServiceError::InvalidOp(format!("there's no command {number} (kept while its lines are: terminal_read lists them)")))?;
-                    let output = command.output.map(|from| open.text_of(from, command.end.unwrap_or(u64::MAX))).unwrap_or_default();
-                    return Ok(format!("{}\n{output}", said(command)));
+                    let no_such = || ServiceError::InvalidOp(format!("there's no command {number} (kept while its lines are: terminal_read lists them)"));
+                    let command = commands.iter().find(|c| c.id == number).ok_or_else(no_such)?;
+                    let (output, left_out) = open.command_output(number, MOST_BACK).ok_or_else(no_such)?;
+                    let cut = if left_out > 0 { format!("({left_out} lines before these left out)\n") } else { String::new() };
+                    return Ok(format!("{}\n{cut}{output}", said(command)));
                 }
                 let back = args["back"].as_u64().unwrap_or(0).min(MOST_BACK) as u32;
                 let text = open.text(back);

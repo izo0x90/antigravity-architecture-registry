@@ -78,8 +78,11 @@ pub struct TerminalBuffer {
     open_url: Option<String>,
     /// Cells selected (from, to: in order as dragged).
     selection: Option<(Cell, Cell)>,
-    /// A command's output to copy once its lines are here.
-    copying: Option<std::ops::Range<u64>>,
+    /// A command whose output was asked for, to copy when it comes (its
+    /// number, in this start of the shell).
+    copying: Option<u64>,
+    /// Said to the user when it's next drawn (what came of asking).
+    said: Option<String>,
     /// Its panel had focus last frame, with a shell running (gaining it
     /// starts typing).
     was_focused: bool,
@@ -119,22 +122,10 @@ impl TerminalBuffer {
         }
     }
 
-    /// The command output asked to be copied, copied once its lines are here
-    /// (asked for until they are).
-    fn copy_when_here(&mut self, cx: &mut RunCx<'_>) {
-        let Some(lines) = self.copying.clone() else { return };
-        match self.lines.text_of(lines.clone()) {
-            Some(text) => {
-                cx.ctx.copy_text(text);
-                *cx.note = Some("Copied its output.".into());
-                self.copying = None;
-            }
-            None => {
-                if let Some((from, count)) = self.lines.wanted(lines) {
-                    self.send(&ToTerminal::Lines { from, count });
-                }
-            }
-        }
+    /// The command the cursor's on, once it ran; else why there's none.
+    fn run_on(&self) -> Result<&harness_contracts::TerminalCommand, String> {
+        let command = self.cursor.and_then(|c| self.lines.command_at(c)).ok_or("The cursor isn't on a command the shell marked (bash and zsh mark theirs).")?;
+        if command.output.is_none() { Err("That command hasn't run yet.".into()) } else { Ok(command) }
     }
 
     /// Its cursor's line gone (cleared, past what's kept): on the nearest
@@ -156,7 +147,7 @@ impl TerminalBuffer {
             self.drop_link();
             self.lines = lines::Lines::default();
             self.view = view::View::default();
-            (self.drawn, self.cursor, self.selection) = (None, None, None);
+            (self.drawn, self.cursor, self.selection, self.copying) = (None, None, None, None);
         }
     }
 
@@ -206,11 +197,23 @@ impl TerminalBuffer {
                     }
                     lines::Took::Restarted => {
                         self.view.go_live();
-                        (self.cursor, self.selection, self.found, self.drawn) = (None, None, None, None);
+                        (self.cursor, self.selection, self.found, self.drawn, self.copying) = (None, None, None, None, None);
                     }
                 },
                 FromTerminal::Lines { from, rows } => self.lines.arrived(from, rows),
                 FromTerminal::ScrolledOff { lines } => self.lines.scrolled_off(lines),
+                FromTerminal::CommandOutput { command, text } => {
+                    if self.copying.take_if(|asked| *asked == command).is_some() {
+                        self.said = Some(match text {
+                            Some(text) if text.is_empty() => "It printed nothing to copy.".into(),
+                            Some(text) => {
+                                ctx.copy_text(text);
+                                "Copied its output.".into()
+                            }
+                            None => "That command is gone (its lines went).".into(),
+                        });
+                    }
+                }
                 FromTerminal::Found { query, found } => {
                     if self.found.as_ref().is_some_and(|(asked, _)| *asked == query) {
                         self.found = Some((query, found.into_iter().map(|f| (f.line, f.text)).collect()));
@@ -385,10 +388,8 @@ impl Navigable for TerminalBuffer {
     }
 
     fn restore(&mut self, place: &Place) {
-        if let Some(p) = place.read::<TermPlace>() {
-            if let Some(id) = p.id {
-                self.show(id);
-            }
+        if let Some(id) = place.read::<TermPlace>().and_then(|p| p.id) {
+            self.show(id);
         }
     }
 
@@ -424,8 +425,8 @@ impl Navigable for TerminalBuffer {
             Motion::NextSibling | Motion::PrevSibling => {
                 let from = self.cursor.unwrap_or(self.lines.cursor().0);
                 for _ in 0..count.max(1) {
-                    let Some(line) = self.lines.command_beside(self.cursor.unwrap_or(from), motion == Motion::PrevSibling) else { break };
-                    self.go(Go::To((line - self.lines.first()) as usize, crate::viewport::Show::InView));
+                    let Some(at) = self.lines.command_beside(self.cursor.unwrap_or(from), motion == Motion::PrevSibling).and_then(|line| line.checked_sub(self.lines.first())) else { break };
+                    self.go(Go::To(at as usize, crate::viewport::Show::InView));
                 }
             }
             Motion::Left | Motion::Right | Motion::HalfLeft | Motion::HalfRight | Motion::FewLeft | Motion::FewRight => {}
@@ -531,14 +532,6 @@ impl ActionProvider for TerminalBuffer {
         out.push(crate::nav::Move::Leave.offer_if(self.cursor.is_some() || self.selection.is_some() || !self.view.live(), "Back to the live screen"));
         out.push(Action::new("terminal.type", "Type into the terminal", C::Type).focused().importance(PRIMARY).when(if has && !ended && !self.typing { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
         out.push(Action::new("terminal.copy", if self.selection.is_some() { "Copy the selection" } else { "Copy the line" }, C::Copy).focused().importance(MINOR));
-        // The command the cursor's on (the shell's marks say where).
-        let commands = self.lines.command_beside(self.lines.first().saturating_sub(1), false).is_some();
-        out.push(crate::nav::Move::Motion(Motion::NextSibling).offer_if(commands, "Next command"));
-        out.push(crate::nav::Move::Motion(Motion::PrevSibling).offer_if(commands, "Previous command"));
-        let on = self.cursor.and_then(|c| self.lines.command_at(c)).filter(|c| c.output.is_some());
-        let when = |ok: bool| if ok { crate::actions::When::Always } else { crate::actions::When::Unavailable };
-        out.push(Action::new("terminal.copy_output", "Copy the command's output", C::CopyOutput).focused().importance(MINOR).when(when(on.is_some())));
-        out.push(Action::new("terminal.run_again", "Run the command again", C::RunAgain).focused().importance(MINOR).when(when(on.is_some() && !ended)));
         let many = self.terminals.get().list().count() > 1;
         out.push(Action::new("terminal.next", "Next terminal", C::Step(1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
         out.push(Action::new("terminal.prev", "Previous terminal", C::Step(-1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
@@ -551,6 +544,13 @@ impl ActionProvider for TerminalBuffer {
         if has {
             out.push(Action::new("terminal.close", "Close the terminal (its shell ends)", C::Close).focused().importance(MINOR));
         }
+        // The command the cursor's on (the shell's marks say where).
+        let commands = !self.lines.alternate() && self.lines.command_beside(self.lines.first().saturating_sub(1), false).is_some();
+        out.push(crate::nav::Move::Motion(Motion::NextSibling).offer_if(commands, "Next command"));
+        out.push(crate::nav::Move::Motion(Motion::PrevSibling).offer_if(commands, "Previous command"));
+        let when = |ok: bool| if ok { crate::actions::When::Always } else { crate::actions::When::Unavailable };
+        out.push(Action::new("terminal.copy_output", "Copy the command's output", C::CopyOutput).focused().importance(MINOR).when(when(self.run_on().is_ok())));
+        out.push(Action::new("terminal.run_again", "Run the command again", C::RunAgain).focused().importance(MINOR).when(when(self.run_on().is_ok_and(|c| !c.text.is_empty()) && self.lines.at_empty_prompt().is_some() && !ended)));
         out
     }
 
@@ -589,18 +589,29 @@ impl ActionProvider for TerminalBuffer {
                 }
                 None => *cx.note = Some("Nothing to copy: select some text, or put the cursor on a line.".into()),
             },
-            TermCommand::CopyOutput => {
-                if let Some(command) = self.cursor.and_then(|c| self.lines.command_at(c)) {
-                    let lines = command.output.unwrap_or(command.input)..command.end.unwrap_or_else(|| self.lines.end());
-                    // Its lines may not be here yet: copied once they are.
-                    self.copying = Some(lines);
-                    self.copy_when_here(cx);
+            // Its output as the server has it (lines that wrapped joined, all
+            // of it), copied when it comes.
+            TermCommand::CopyOutput => match self.run_on().map(|c| c.id) {
+                Ok(id) => {
+                    self.copying = Some(id);
+                    self.send(&ToTerminal::CommandOutput { command: id });
                 }
-            }
+                Err(why) => *cx.note = Some(why),
+            },
+            // Typed in as the user would, at an empty prompt.
             TermCommand::RunAgain => {
-                if let Some(text) = self.cursor.and_then(|c| self.lines.command_at(c)).map(|c| c.text.clone()) {
-                    self.type_in(TerminalInput::Text { text });
-                    self.type_in(TerminalInput::Key { key: harness_contracts::TermKey::Enter, mods: harness_contracts::Mods::default() });
+                let text = match (self.run_on().map(|c| c.text.clone()), self.lines.at_empty_prompt()) {
+                    (Err(why), _) => Err(why),
+                    (Ok(text), _) if text.is_empty() => Err("The shell didn't say what that command was (bash doesn't for one its history doesn't keep).".to_owned()),
+                    (Ok(_), None) => Err("Not at an empty prompt: wait for what runs to end, and clear what's typed.".to_owned()),
+                    (Ok(text), Some(_)) => Ok(text),
+                };
+                match text {
+                    Ok(text) => {
+                        self.type_in(TerminalInput::Text { text });
+                        self.type_in(TerminalInput::Key { key: harness_contracts::TermKey::Enter, mods: harness_contracts::Mods::default() });
+                    }
+                    Err(why) => *cx.note = Some(why),
                 }
             }
         }

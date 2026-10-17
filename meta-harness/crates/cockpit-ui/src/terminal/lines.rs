@@ -43,8 +43,8 @@ pub(super) struct Lines {
     /// Lines asked for that the answer didn't have: not asked again until
     /// the next update.
     refused: Option<Range<u64>>,
-    /// The commands the shell ran, by their prompt's line.
-    commands: BTreeMap<u64, TerminalCommand>,
+    /// The commands the shell ran, in order (by number: by their lines too).
+    commands: Vec<TerminalCommand>,
 }
 
 impl Lines {
@@ -68,10 +68,13 @@ impl Lines {
         self.back = self.back.split_off(&update.oldest);
         self.refused = None;
         for command in &update.commands {
-            self.commands.retain(|_, c| c.id != command.id);
-            self.commands.insert(command.prompt, command.clone());
+            match self.commands.binary_search_by_key(&command.id, |c| c.id) {
+                Ok(i) => self.commands[i].clone_from(command),
+                Err(i) => self.commands.insert(i, command.clone()),
+            }
         }
-        self.commands = self.commands.split_off(&update.oldest);
+        // A finished one goes with its lines (as the server's do).
+        self.commands.retain(|c| c.end.is_none_or(|end| end > update.oldest));
         (self.size, self.cursor, self.oldest, self.alternate, self.shell) = (update.size, update.cursor, update.oldest, update.alternate, update.shell);
         self.title.clone_from(&update.title);
         took
@@ -160,20 +163,23 @@ impl Lines {
 
     /// The command line `number` is in (its prompt, what was typed, its output).
     pub(super) fn command_at(&self, number: u64) -> Option<&TerminalCommand> {
-        self.commands.range(..=number).next_back().map(|(_, c)| c).filter(|c| c.end.is_none_or(|end| number < end))
+        let after = self.commands.partition_point(|c| c.prompt <= number);
+        self.commands.get(after.checked_sub(1)?).filter(|c| c.end.is_none_or(|end| number < end))
     }
 
     /// The prompt's line of the next command after line `number` (back:
-    /// the one before).
+    /// the one before), within the lines there are.
     pub(super) fn command_beside(&self, number: u64, back: bool) -> Option<u64> {
         let at = self.command_at(number).map_or(number, |c| c.prompt);
-        if back { self.commands.range(..at).next_back() } else { self.commands.range(at + 1..).next() }.map(|(line, _)| *line)
+        let prompts = self.commands.iter().map(|c| c.prompt).filter(|p| (self.first()..self.end()).contains(p));
+        if back { prompts.filter(|p| *p < at).next_back() } else { prompts.into_iter().find(|p| *p > at) }
     }
 
-    /// Lines `range` as text, when they're all here.
-    pub(super) fn text_of(&self, range: Range<u64>) -> Option<String> {
-        let lines: Option<Vec<String>> = range.map(|n| self.text(n)).collect();
-        lines.map(|l| l.join("\n").trim_end().to_owned())
+    /// The command waiting at an empty prompt (nothing running, nothing
+    /// typed yet): where a command can be typed in whole.
+    pub(super) fn at_empty_prompt(&self) -> Option<&TerminalCommand> {
+        let (line, col, _) = self.cursor();
+        self.commands.last().filter(|c| !self.alternate && c.output.is_none() && (c.input, c.input_col) == (line, col))
     }
 
     /// The screen's cursor: its line's number, its column, whether it shows.
@@ -235,6 +241,8 @@ mod tests {
         let command = |id, prompt, end: Option<u64>| TerminalCommand { id, prompt, input: prompt, input_col: 2, output: Some(prompt + 1), end, text: format!("c{id}"), code: Some(0), ran_ms: Some(1) };
         let mut first = update(["a", "b", "c"], 100, 0);
         first.commands = vec![command(1, 10, Some(14)), command(2, 14, Some(20)), command(3, 20, None)];
+        // (Lines 10 on are here.)
+        first.oldest = 5;
         lines.take(&first);
         assert_eq!(lines.command_at(12).map(|c| c.id), Some(1));
         assert_eq!(lines.command_at(14).map(|c| c.id), Some(2));
@@ -243,11 +251,12 @@ mod tests {
         assert_eq!(lines.command_beside(12, true), None);
         assert_eq!(lines.command_beside(21, true), Some(14), "from the running one, the one before it");
         // The third ended; the first's lines went.
-        let mut next = update(["a", "b", "c"], 100, 12);
+        let mut next = update(["a", "b", "c"], 100, 14);
         next.commands = vec![command(3, 20, Some(25))];
         lines.take(&next);
-        assert_eq!(lines.command_at(12).map(|c| c.id), None);
+        assert_eq!(lines.command_at(13).map(|c| c.id), None, "its lines went, so did it");
         assert_eq!(lines.command_at(30).map(|c| c.id), None, "past its end");
+        assert_eq!(lines.command_at(15).map(|c| c.id), Some(2), "the second's last line is still here");
     }
 
     #[test]

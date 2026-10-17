@@ -159,7 +159,7 @@ fn terminal_news(terminal: &Terminal, news: TerminalNews, world: &dyn World) -> 
 }
 
 /// How long something took, in words ("12 s", "3 min 4 s").
-fn took(ms: u64) -> String {
+pub fn took(ms: u64) -> String {
     let secs = ms / 1000;
     match secs {
         0..60 => format!("{secs} s"),

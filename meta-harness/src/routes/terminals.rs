@@ -183,6 +183,10 @@ async fn said_to(terminals: &Arc<Terminals>, open: &Arc<Open>, viewer: u64, said
             let found = read(open, move |o| o.search(&asked)).await.ok()?;
             Some(FromTerminal::Found { query, found })
         }
+        ToTerminal::CommandOutput { command } => {
+            let text = read(open, move |o| o.command_output(command, u64::MAX)).await.ok()?.map(|(text, _)| text);
+            Some(FromTerminal::CommandOutput { command, text })
+        }
     }
 }
 
