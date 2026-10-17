@@ -44,68 +44,7 @@ use keys::release_keyboard;
 #[cfg(test)]
 use {capture::hint_chip, draw::top_bar::server_line, keys::text_input_focused};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BufferKind {
-    Chat,
-    Code,
-    Graph,
-    Tree,
-    Spec,
-    Queue,
-    Inbox,
-    Changes,
-}
-
-impl BufferKind {
-    pub const ALL: [Self; 8] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec, Self::Queue, Self::Inbox, Self::Changes];
-
-    pub fn title(&self) -> &'static str {
-        match self {
-            Self::Chat => "CHAT",
-            Self::Code => "CODE",
-            Self::Graph => "GRAPH",
-            Self::Tree => "TREE",
-            Self::Spec => "SPEC",
-            Self::Queue => "QUEUE",
-            Self::Inbox => "INBOX",
-            Self::Changes => "CHANGES",
-        }
-    }
-
-    /// There is one of these (the queue, the inbox, the changes: the
-    /// desk's comparison); of the others, each panel can have its own.
-    pub fn one_only(&self) -> bool {
-        matches!(self, Self::Queue | Self::Inbox | Self::Changes)
-    }
-
-    /// Lowercase name used in action ids ("buffer.chat").
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Chat => "chat",
-            Self::Code => "code",
-            Self::Graph => "graph",
-            Self::Tree => "tree",
-            Self::Spec => "spec",
-            Self::Queue => "queue",
-            Self::Inbox => "inbox",
-            Self::Changes => "changes",
-        }
-    }
-
-    pub fn icon(&self) -> &'static str {
-        match self {
-            Self::Chat => egui_phosphor::regular::CHAT_TEARDROP_TEXT,
-            Self::Code => egui_phosphor::regular::CODE,
-            Self::Graph => egui_phosphor::regular::GIT_FORK,
-            Self::Tree => egui_phosphor::regular::TREE_STRUCTURE,
-            Self::Spec => egui_phosphor::regular::ARTICLE,
-            Self::Queue => egui_phosphor::regular::LIST_CHECKS,
-            Self::Inbox => egui_phosphor::regular::TRAY,
-            Self::Changes => egui_phosphor::regular::GIT_DIFF,
-        }
-    }
-}
+pub use crate::kind::BufferKind;
 
 /// What the shell itself can do: panels, layout, overlays, and the keys every
 /// view shares (moves, hints, search, folds, marks, the jump list, go-tos).

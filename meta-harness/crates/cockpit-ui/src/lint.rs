@@ -19,8 +19,11 @@
 //!   the same way whichever buffer asked; no buffer keeps fields for the
 //!   shell to poll.
 //! - **Buffers behind their trait**: the shell (`app/`, `app.rs`) holds
-//!   every buffer as a `Buffer` and names no buffer's type: it can reach
-//!   nothing a buffer doesn't offer through the trait.
+//!   every buffer as a `Buffer` and names no buffer's type, nor looks
+//!   behind the trait (no downcasting): it can reach nothing a buffer
+//!   doesn't offer through it. A buffer names neither the shell nor
+//!   another buffer: what it needs from the rest it reads from what's
+//!   shared and asks for.
 //! - **Controls**: views draw content; hosts draw every control. Outside
 //!   the hosts (the top bar, panels, the quick look, the key bar and
 //!   menus: `app/draw/`), the one control (`actions.rs`, `hosted.rs`) and
@@ -244,12 +247,30 @@ fn the_shell_names_no_buffer_type() {
     let mut found = Vec::new();
     for (name, code) in code().into_iter().filter(|(name, _)| name.starts_with("app/") || name == "app.rs") {
         for (n, line) in lines(&code) {
-            if let Some(ty) = BUFFER_TYPES.iter().find(|t| line.contains(*t)) {
+            if let Some(ty) = BUFFER_TYPES.iter().chain(&["downcast", "dyn Any", "dyn std::any::Any"]).find(|t| line.contains(*t)) {
                 found.push(format!("{name}:{n}: {ty}"));
             }
         }
     }
-    assert!(found.is_empty(), "the shell names a buffer's type (drive it through `Buffer`):\n{}", found.join("\n"));
+    assert!(found.is_empty(), "the shell names a buffer's type or looks behind the trait (drive it through `Buffer`):\n{}", found.join("\n"));
+}
+
+/// The buffers, by their modules.
+const BUFFERS: &[&str] = &["chat", "code", "graph", "tree", "spec", "queue", "inbox", "changes"];
+
+#[test]
+fn a_buffer_names_neither_the_shell_nor_another_buffer() {
+    let mut found = Vec::new();
+    for (name, code) in code() {
+        let Some(own) = BUFFERS.iter().find(|b| name == format!("{b}.rs") || name.starts_with(&format!("{b}/"))) else { continue };
+        for (n, line) in lines(&code) {
+            let other = BUFFERS.iter().filter(|b| *b != own).find(|b| line.contains(&format!("crate::{b}::")));
+            if line.contains("crate::app::") || other.is_some() {
+                found.push(format!("{name}:{n}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(found.is_empty(), "a buffer reaches the shell or another buffer (read what's shared, ask for the rest):\n{}", found.join("\n"));
 }
 
 #[test]

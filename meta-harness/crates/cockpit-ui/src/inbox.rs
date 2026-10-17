@@ -13,7 +13,7 @@ use harness_contracts::{Level, Notification, NotificationId, RuntimeRequest};
 use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, Style};
 use crate::agents::Act;
 use crate::request_card::{Drafts, render_request};
-use crate::app::BufferKind;
+use crate::kind::BufferKind;
 use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target, Waiting};
 use crate::shared::Shared;
 use crate::hosted::{Status, Tone};
@@ -240,18 +240,34 @@ impl Navigable for InboxView {
         self.sync(shared);
     }
 
+    /// The item it shows.
     fn place(&self) -> Place {
-        Place::Inbox { item: self.item.as_ref().map(|i| i.to_string()) }
+        Place::of(&self.item)
+    }
+
+    fn place_in_words(&self, place: &Place) -> String {
+        place.read::<Option<NotificationId>>().flatten().map(|id| id.to_string()).unwrap_or_default()
     }
 
     fn restore(&mut self, place: &Place) {
-        if let Place::Inbox { item: Some(id) } = place {
-            self.show(NotificationId::new(id.as_str()));
+        if let Some(Some(id)) = place.read::<Option<NotificationId>>() {
+            self.show(id);
         }
     }
 
+    /// Any item.
+    fn can_show(&self, target: &Target) -> bool {
+        matches!(target, Target::Notification(_))
+    }
+
+    fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        let Target::Notification(id) = target else { return Err("Not something that needs you.".into()) };
+        self.show(id.clone());
+        Ok(())
+    }
+
     fn target(&self) -> Option<Target> {
-        None
+        self.item.clone().map(Target::Notification)
     }
 
     fn motion(&mut self, motion: Motion, count: usize) {

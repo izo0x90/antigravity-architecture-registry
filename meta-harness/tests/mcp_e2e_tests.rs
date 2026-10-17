@@ -218,6 +218,7 @@ async fn the_agent_moves_the_users_view_to_a_plan_and_back_to_code() {
     assert!(!mcp.tool("ingest", json!({})).await.0);
     assert!(!mcp.tool("plan_create", json!({ "id": "val", "title": "Validate input" })).await.0);
     // The user's graph, as the cockpit holds it.
+    use cockpit_ui::buffer::Buffer;
     let mut graph = cockpit_ui::graph::GraphState::default();
     let mut events = state.harness.hub.subscribe().1;
     let (err, text) = mcp.tool("navigate", json!({ "view": "calls", "source": "plan:val" })).await;

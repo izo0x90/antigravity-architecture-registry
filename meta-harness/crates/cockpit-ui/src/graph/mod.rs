@@ -32,6 +32,8 @@ use arch_graph::{ArchEvent, ChangeReason, Component, ComponentDetail, ComponentI
 use egui::{Pos2, Rect, Vec2};
 
 pub use request::{Nav, NavChange};
+#[cfg(test)]
+pub(crate) use select::GraphPlace;
 
 use crate::graph_config::GraphUi;
 use crate::net::{NetClient, NetResult};

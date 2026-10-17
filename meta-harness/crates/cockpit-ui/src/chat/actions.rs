@@ -3,10 +3,7 @@
 use super::*;
 use crate::store::Store;
 
-/// Snake/kebab name of a contract enum as serialized, for keymap names.
-pub(crate) fn wire_name(value: &impl serde::Serialize) -> String {
-    serde_json::to_value(value).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()
-}
+use crate::actions::wire_name;
 
 #[derive(Clone, Debug)]
 enum ChatCommand {

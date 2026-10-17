@@ -21,17 +21,6 @@ pub(super) fn render_steps(ui: &mut egui::Ui, steps: &[PlanStep]) {
     }
 }
 
-pub(crate) fn block_summary(block: &ContentBlock) -> String {
-    match block {
-        ContentBlock::Text { text } => text.clone(),
-        ContentBlock::Image { mime_type, .. } => format!("[image {mime_type}]"),
-        ContentBlock::ResourceLink { uri, name } => format!("[link {}]", name.clone().unwrap_or_else(|| uri.clone())),
-        ContentBlock::Resource { uri, .. } => format!("[resource {uri}]"),
-        ContentBlock::Diff(d) => format!("[diff {}]", d.path),
-        ContentBlock::Unsupported => "[unsupported content]".into(),
-    }
-}
-
 pub(super) fn block_detail(block: &ContentBlock) -> String {
     match block {
         ContentBlock::Diff(d) => {

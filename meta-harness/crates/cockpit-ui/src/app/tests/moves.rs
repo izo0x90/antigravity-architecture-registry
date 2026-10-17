@@ -422,7 +422,7 @@ fn go_to_keys_work_from_every_view() {
     app.desk.spec_mut().show(step.clone());
     app.desk.spec_mut().detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
     focus(&ctx, &mut app, BufferKind::Spec);
-    app.desk.spec_mut().move_to(&crate::spec::Entry { section: crate::spec::Section::Relations, item: crate::nav::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true } }.key());
+    app.desk.spec_mut().move_to(&crate::spec::Entry { section: crate::spec::Section::Relations, item: crate::spec::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true } }.key());
     keys(&ctx, &mut app, "gs");
     assert_eq!(app.desk.spec().target.as_ref().map(|c| c.as_str()), Some("rust:a::save"));
     // Nothing under the cursor: says so.
@@ -441,7 +441,7 @@ fn spec_keys_walk_items_and_review_them() {
     keys(&ctx, &mut app, "]]");
     assert_eq!(app.desk.spec().current, crate::spec::Section::Logic);
     keys(&ctx, &mut app, "j");
-    assert_eq!(app.desk.spec().entry().unwrap().item, crate::nav::SpecItem::Step(0));
+    assert_eq!(app.desk.spec().entry().unwrap().item, crate::spec::SpecItem::Step(0));
     frame(&ctx, &mut app, key("c"));
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.input_mode, InputMode::Insert { panel: 1 }, "c: the composer has the keyboard");
@@ -491,7 +491,7 @@ fn searches_and_restores_put_things_back_exactly() {
     app.desk.spec_mut().folded.insert(crate::spec::Section::Overview);
     app.desk.spec_mut().motion(Motion::First, 1);
     app.desk.spec_mut().restore(&place);
-    assert_eq!(app.desk.spec().entry().unwrap().item, crate::nav::SpecItem::Step(1));
+    assert_eq!(app.desk.spec().entry().unwrap().item, crate::spec::SpecItem::Step(1));
     assert_eq!(app.desk.spec().current, crate::spec::Section::Logic);
     // One panel and back: the panels as they were.
     app.desk.panels = panels_of(&[BufferKind::Code, BufferKind::Graph, BufferKind::Queue], 2);

@@ -9,7 +9,7 @@
 //! until Escape, the key again, a click outside it, or focus moving to a
 //! panel.
 
-use crate::app::BufferKind;
+use crate::kind::BufferKind;
 use crate::keymap::Chord;
 
 /// The quick look's own spec view (its buffer's number; never a panel's).

@@ -334,7 +334,7 @@ impl CodeViewerState {
     /// A name (or its gutter mark) clicked: the user is on its component
     /// now; with the go-to modifier, its code.
     pub(crate) fn name_clicked(&mut self, id: ComponentId, go_to: bool) {
-        self.asks.push(if go_to { Ask::Show { target: Target::Component(id), in_: crate::app::BufferKind::Code } } else { Ask::Follow(id) });
+        self.asks.push(if go_to { Ask::Show { target: Target::Component(id), in_: crate::kind::BufferKind::Code } } else { Ask::Follow(id) });
     }
 
     /// Opens `path` with lines `start..=end` highlighted and scrolled to.
@@ -947,6 +947,13 @@ impl ActionProvider for CodeViewerState {
     }
 }
 
+/// Where the code view is: its file and line.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct CodePlace {
+    pub file: String,
+    pub line: usize,
+}
+
 impl crate::buffer::Buffer for CodeViewerState {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
         self.draw(ui, drawing.feedback, cx);
@@ -1035,16 +1042,20 @@ impl Navigable for CodeViewerState {
     }
 
     fn place(&self) -> Place {
-        Place::Code { file: self.current_file.clone(), line: self.target_line.unwrap_or(1) }
+        Place::of(&CodePlace { file: self.current_file.clone(), line: self.target_line.unwrap_or(1) })
+    }
+
+    fn place_in_words(&self, place: &Place) -> String {
+        place.read::<CodePlace>().map(|p| format!("{}:{}", p.file, p.line)).unwrap_or_default()
     }
 
     /// Back to the file (loaded again when it isn't the one shown) and the line.
     fn restore(&mut self, place: &Place) {
-        if let Place::Code { file, line } = place {
-            if !self.shows(file) {
-                self.load_file(file, Some(*line));
+        if let Some(CodePlace { file, line }) = place.read() {
+            if !self.shows(&file) {
+                self.load_file(&file, Some(line));
             }
-            self.target_line = Some(*line);
+            self.target_line = Some(line);
             self.cursor_col = None;
             self.show = Some(Show::Middle);
         }

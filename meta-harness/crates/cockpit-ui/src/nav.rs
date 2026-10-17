@@ -4,12 +4,10 @@
 //! view offers to search (`Item`) and to hints (`Spot`). Views implement
 //! `Navigable`; the shell owns the keys, the history, marks, search and hints.
 
-use arch_graph::{CommentId, ComponentId, RelationKind};
+use arch_graph::{ComponentId, RelationKind};
 use harness_contracts::{NotificationId, SlotId, ThreadId};
 
-use crate::app::BufferKind;
-use crate::graph::Nav;
-use crate::spec::Section;
+use crate::kind::BufferKind;
 
 /// A component's name from its id alone (`rust:a::b::run` → `run`), for
 /// when nothing here knows its card.
@@ -21,13 +19,12 @@ pub fn short_name(id: &ComponentId) -> String {
 /// What a view's cursor is on.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
-    /// A component (a graph node, an outline row).
+    /// A component (a graph node, an outline row, an item of its card;
+    /// a relation: its other end).
     Component(ComponentId),
     /// A line of code: the component it's in, and the components named on
     /// it (what it calls, the types it uses), the one under the cursor first.
     Line { file: String, line: usize, within: Option<ComponentId>, refs: Vec<ComponentId> },
-    /// An item in a component's spec.
-    Spec { component: ComponentId, section: Section, item: SpecItem },
     /// A job in the work queue.
     Job { component: ComponentId },
     /// A message in the chat: its turn, and the file it points to (if any).
@@ -38,6 +35,8 @@ pub enum Target {
     Span { file: String, start: usize, end: usize },
     /// An agent's chat: its slot, or the slot running a session.
     Agent { slot: Option<SlotId>, thread: Option<ThreadId> },
+    /// Something that needs the user, or that happened (the inbox's).
+    Notification(NotificationId),
 }
 
 /// What a buffer asks of the rest of the cockpit: the one way it reaches
@@ -89,30 +88,13 @@ pub enum Waiting {
 
 }
 
-/// One navigable item in the spec view.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SpecItem {
-    /// The section's title row.
-    Header,
-    Relation { kind: RelationKind, other: ComponentId, outgoing: bool },
-    Step(usize),
-    Invariant(usize),
-    Placeholder(usize),
-    Finding(usize),
-    /// The component's source (the code section's body).
-    Source,
-    /// One of the changes in it (the changes section).
-    Hunk(usize),
-    Comment(CommentId),
-    Reply(CommentId, usize),
-}
-
 impl Target {
     /// What it is, in a few words ("run", "a.rs:12", "message 3").
     pub fn in_words(&self) -> String {
         let file = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
         match self {
-            Self::Component(id) | Self::Job { component: id } | Self::Spec { component: id, .. } => short_name(id),
+            Self::Component(id) | Self::Job { component: id } => short_name(id),
+            Self::Notification(id) => format!("item {id}"),
             Self::Line { file: path, line, .. } | Self::Change { file: path, line } | Self::Span { file: path, start: line, .. } => format!("{}:{line}", file(path)),
             Self::Message { index, .. } => format!("message {}", index + 1),
             Self::Agent { slot: Some(slot), .. } => format!("agent slot {slot}"),
@@ -120,15 +102,12 @@ impl Target {
         }
     }
 
-    /// The component the target is about: for a relation in the spec, the
-    /// other end (what the cursor points at).
+    /// The component the target is about.
     pub fn component(&self) -> Option<&ComponentId> {
         match self {
             Self::Component(id) | Self::Job { component: id } => Some(id),
             Self::Line { within, .. } => within.as_ref(),
-            Self::Spec { item: SpecItem::Relation { other, .. }, .. } => Some(other),
-            Self::Spec { component, .. } => Some(component),
-            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } => None,
+            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) => None,
         }
     }
 
@@ -160,27 +139,22 @@ impl Target {
     }
 }
 
-/// Where a view is, enough to come back to it.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Place {
-    /// The chat: which slot it shows, and the message.
-    Chat {
-        message: Option<usize>,
-        #[serde(default)]
-        slot: Option<harness_contracts::SlotId>,
-    },
-    Code { file: String, line: usize },
-    /// The graph: where it looks, and the selected card's key.
-    Graph { nav: Nav, selection: Option<String> },
-    Tree { cursor: Option<ComponentId> },
-    /// The item by its key (indexes shift as the spec loads).
-    Spec { component: Option<ComponentId>, item: Option<String> },
-    Queue { component: Option<ComponentId> },
-    /// The item shown, by its id.
-    Inbox { item: Option<String> },
-    /// The cursor's file or change, by its key.
-    Changes { item: Option<String> },
+/// Where a buffer is, enough to come back to it: its own, in its own
+/// terms (the rest of the cockpit keeps it, compares it and hands it back).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Place(serde_json::Value);
+
+impl Place {
+    /// A buffer's place, as it says it.
+    pub fn of(place: &impl serde::Serialize) -> Self {
+        Self(serde_json::to_value(place).unwrap_or_default())
+    }
+
+    /// The buffer's place, read back (none: not one of its).
+    pub fn read<T: serde::de::DeserializeOwned>(&self) -> Option<T> {
+        serde_json::from_value(self.0.clone()).ok()
+    }
 }
 
 /// A place in a panel: what the jump list and marks hold.
@@ -635,6 +609,11 @@ pub trait Navigable {
     /// Goes back to a place it reported (a jump, a mark).
     fn restore(&mut self, place: &Place);
 
+    /// One of its places, in a few words (a mark's line).
+    fn place_in_words(&self, _place: &Place) -> String {
+        String::new()
+    }
+
     /// What the cursor is on.
     fn target(&self) -> Option<Target>;
 
@@ -713,7 +692,7 @@ mod tests {
     use super::*;
 
     fn at(line: usize) -> Jump {
-        Jump { panel: 0, kind: BufferKind::Code, place: Place::Code { file: "a.rs".into(), line } }
+        Jump { panel: 0, kind: BufferKind::Code, place: Place::of(&("a.rs", line)) }
     }
 
     #[test]
@@ -734,7 +713,7 @@ mod tests {
         assert!(!list.can_forward(), "a new jump drops what was ahead");
         assert_eq!(list.back(at(20)), Some(at(5)));
         // Another view in another slot is just another entry.
-        let graph = Jump { panel: 1, kind: BufferKind::Graph, place: Place::Tree { cursor: None } };
+        let graph = Jump { panel: 1, kind: BufferKind::Graph, place: Place::of(&"the top") };
         list.record(graph.clone());
         assert_eq!(list.back(at(3)), Some(graph));
     }
@@ -775,10 +754,6 @@ mod tests {
         assert_eq!(Target::Component(a.clone()).component(), Some(&a));
         let line = Target::Line { file: "src/a.rs".into(), line: 4, within: Some(a.clone()), refs: vec![b.clone()] };
         assert_eq!((line.component(), line.code()), (Some(&a), Some(("src/a.rs".into(), Some(4)))));
-        let relation = Target::Spec { component: a.clone(), section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: b.clone(), outgoing: true } };
-        assert_eq!(relation.component(), Some(&b), "a relation points at its other end");
-        let step = Target::Spec { component: a.clone(), section: Section::Logic, item: SpecItem::Step(0) };
-        assert_eq!(step.component(), Some(&a));
         assert_eq!(Target::Job { component: b.clone() }.component(), Some(&b));
         let message = Target::Message { thread: None, turn: None, index: 2, link: Some(("src/b.rs".into(), Some(7))) };
         assert_eq!((message.component(), message.code()), (None, Some(("src/b.rs".into(), Some(7)))));

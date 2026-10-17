@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::app::BufferKind;
+use crate::kind::BufferKind;
 
 /// One view: its kind, and which one of that kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

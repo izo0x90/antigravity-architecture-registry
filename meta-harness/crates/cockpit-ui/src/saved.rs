@@ -20,7 +20,7 @@ use crate::net::{NetClient, NetResult};
 
 /// Bumped when a change to this structure can't read an older one (an older
 /// one is then left unread, and the cockpit opens as new).
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedUi {
@@ -172,7 +172,7 @@ mod tests {
     use super::*;
 
     fn state(draft: &str) -> SavedUi {
-        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), kept: vec![(BufferId::new(crate::app::BufferKind::Chat, 0), serde_json::Value::String(draft.into()))], used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), agents: false, comparison: Default::default(), item_buttons: None }
+        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), kept: vec![(BufferId::new(crate::kind::BufferKind::Chat, 0), serde_json::Value::String(draft.into()))], used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), agents: false, comparison: Default::default(), item_buttons: None }
     }
 
     fn arrive(keeper: &Keeper, value: Option<serde_json::Value>) {

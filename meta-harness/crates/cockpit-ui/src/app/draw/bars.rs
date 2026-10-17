@@ -2,22 +2,13 @@
 
 use super::super::*;
 
-/// A mark in words: its view and where.
-pub(in crate::app) fn describe_jump(jump: &Jump) -> String {
-    let short = |id: &ComponentId| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned();
-    let place = match &jump.place {
-        Place::Chat { message, .. } => message.map_or("latest".to_owned(), |m| format!("message {}", m + 1)),
-        Place::Code { file, line } => format!("{file}:{line}"),
-        Place::Graph { selection: Some(key), .. } => short(&ComponentId::new(key.clone())),
-        Place::Graph { selection: None, nav } => format!("{} view", nav.view.name().replace('_', " ")),
-        Place::Tree { cursor } | Place::Queue { component: cursor } => cursor.as_ref().map_or_else(String::new, short),
-        Place::Inbox { item } | Place::Changes { item } => item.clone().unwrap_or_default(),
-        Place::Spec { component, .. } => component.as_ref().map_or_else(String::new, short),
-    };
-    format!("{} · {place}", jump.kind.name())
-}
-
 impl CockpitApp {
+    /// A mark in words: its kind of buffer and where (as a buffer of that
+    /// kind says its places).
+    fn describe_jump(&self, jump: &Jump) -> String {
+        format!("{} · {}", jump.kind.name(), self.desk.view(jump.kind).place_in_words(&jump.place))
+    }
+
     /// The keys the key bar shows: what applies where you are (what you're
     /// on, this panel, what holds it), most important first; among equals,
     /// the closest, and in a layer the panel's own before the moves it
@@ -133,7 +124,7 @@ impl CockpitApp {
             next.sort_by_key(|(b, _)| b.layer);
             next.into_iter().map(|(b, rest)| (rest.iter().map(Chord::label).collect::<Vec<_>>().join(" "), b.action.label.clone())).collect()
         } else {
-            let mut rows: Vec<(String, String)> = self.desk.marks.iter().map(|(letter, jump)| (letter.to_string(), describe_jump(jump))).collect();
+            let mut rows: Vec<(String, String)> = self.desk.marks.iter().map(|(letter, jump)| (letter.to_string(), self.describe_jump(jump))).collect();
             if matches!(self.capture, Some(Capture::MarkSet)) {
                 rows.insert(0, ("a–z".into(), "set a mark here (replaces one with that letter)".into()));
             }

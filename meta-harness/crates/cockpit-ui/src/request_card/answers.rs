@@ -82,7 +82,7 @@ pub fn answers(request: &RuntimeRequest) -> Vec<Answer> {
             id: format!("request.{}.{}", request.id, o.id),
             option: o.id.clone(),
             label: format!("{}: {}", o.label, request.title),
-            alias: alone(o.decision).then(|| format!("request.{}", crate::chat::actions::wire_name(&o.decision))),
+            alias: alone(o.decision).then(|| format!("request.{}", crate::actions::wire_name(&o.decision))),
             warning: o.warning.clone(),
             caption: o.label.clone(),
             style,

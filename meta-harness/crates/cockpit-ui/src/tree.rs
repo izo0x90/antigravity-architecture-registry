@@ -530,13 +530,18 @@ impl Navigable for ArchitectureTreeState {
         self.set_source(shared.source.get());
     }
 
+    /// Its cursor's row.
     fn place(&self) -> Place {
-        Place::Tree { cursor: self.cursor.clone() }
+        Place::of(&self.cursor)
+    }
+
+    fn place_in_words(&self, place: &Place) -> String {
+        place.read::<Option<ComponentId>>().flatten().map(|id| self.name(&id)).unwrap_or_default()
     }
 
     fn restore(&mut self, place: &Place) {
-        if let Place::Tree { cursor: Some(id) } = place {
-            self.reveal(&id.clone(), Show::Middle);
+        if let Some(Some(id)) = place.read::<Option<ComponentId>>() {
+            self.reveal(&id, Show::Middle);
         }
     }
 
@@ -827,7 +832,7 @@ pub(crate) mod tests {
         assert_eq!(items[rank_matches(&items, "step")[0]].key, "rust:a::step");
         // Restoring a place opens the way to it.
         t.fold(Fold::CloseAll);
-        t.restore(&Place::Tree { cursor: Some(ComponentId::new("rust:a::log")) });
+        t.restore(&Place::of(&Some(ComponentId::new("rust:a::log"))));
         assert_eq!(cursor(&t), "a::log");
         assert!(t.rows().iter().any(|r| r.id.as_str() == "rust:a::log"));
     }

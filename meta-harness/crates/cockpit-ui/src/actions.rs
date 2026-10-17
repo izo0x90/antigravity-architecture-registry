@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use egui::RichText;
 
-use crate::app::BufferKind;
+use crate::kind::BufferKind;
 use crate::keymap::{Chord, InputMode};
 use crate::nav::Target;
 use crate::net::NetClient;
@@ -642,6 +642,12 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
         (Param::None, _) => ui.button(tinted(text)).on_hover_text(tip).clicked().then_some(ControlUse::Run(None)),
         _ => ui.button(tinted(text)).on_hover_text(tip).clicked().then_some(ControlUse::OpenPalette),
     }
+}
+
+
+/// Snake/kebab name of a contract enum as serialized, for keymap names.
+pub fn wire_name(value: &impl serde::Serialize) -> String {
+    serde_json::to_value(value).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()
 }
 
 #[cfg(test)]

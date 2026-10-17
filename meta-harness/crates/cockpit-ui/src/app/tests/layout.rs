@@ -20,12 +20,13 @@ fn the_layout_comes_back_as_it_was_saved() {
     assert_eq!((fresh.desk.marks.clone(), fresh.desk.jumps.clone(), fresh.desk.chat().ui.input_buffer.as_str()), (saved.marks.clone(), saved.jumps.clone(), "half a thought"));
     let graph_place = |s: &SavedUi| s.views.iter().find(|(p, _)| p.kind == BufferKind::Graph).map(|(_, p)| p.clone());
     assert_eq!(fresh.desk.graph().place(), graph_place(&saved).unwrap(), "the graph where it was, the same card selected");
-    assert!(matches!(fresh.saved_ui().views.iter().find(|(p, _)| p.kind == BufferKind::Code), Some((_, Place::Code { line: 6, .. }))));
+    let code = fresh.saved_ui().views.into_iter().find(|(p, _)| p.kind == BufferKind::Code).and_then(|(_, place)| place.read::<crate::code::CodePlace>());
+    assert_eq!(code.map(|c| c.line), Some(6));
     // A cockpit that has loaded nothing loads the saved file, even one
     // named like the file it starts on.
     let mut opened = CockpitApp::new("http://127.0.0.1:9");
     let mut only_code = saved.clone();
-    only_code.views = vec![(BufferId::new(BufferKind::Code, 0), Place::Code { file: opened.desk.code_mut().current_file.clone(), line: 3 })];
+    only_code.views = vec![(BufferId::new(BufferKind::Code, 0), Place::of(&crate::code::CodePlace { file: opened.desk.code().current_file.clone(), line: 3 }))];
     opened.restore_saved(only_code);
     assert!(opened.desk.code().is_loading, "the saved file is fetched");
 }
@@ -42,10 +43,7 @@ fn each_column_keeps_its_own_graph_and_the_agent_moves_the_one_named_or_used_las
     frame(&ctx, &mut app, vec![]);
     // It starts where the first one was (its view; its selection once
     // its tree is in).
-    let nav = |place: Option<Place>| match place {
-        Some(Place::Graph { nav, .. }) => Some(nav),
-        _ => None,
-    };
+    let nav = |place: Option<Place>| place.and_then(|p| p.read::<crate::graph::GraphPlace>()).map(|p| p.nav);
     let first_nav = nav(app.desk.buffer(BufferId::new(BufferKind::Graph, 0)).map(|g| g.place()));
     frame(&ctx, &mut app, vec![]);
     assert_eq!(nav(Some(app.desk.view(BufferKind::Graph).place())), first_nav);
@@ -78,10 +76,7 @@ fn each_column_keeps_its_own_graph_and_the_agent_moves_the_one_named_or_used_las
     let (_, mut fresh) = full_app();
     fresh.restore_saved(saved.clone());
     // (Each one's selection comes back when its tree is in.)
-    let nav = |place: Option<Place>| match place {
-        Some(Place::Graph { nav, .. }) => Some(nav),
-        _ => None,
-    };
+    let nav = |place: Option<Place>| place.and_then(|p| p.read::<crate::graph::GraphPlace>()).map(|p| p.nav);
     for (buffer, place) in saved.views.iter().filter(|(p, _)| p.kind == BufferKind::Graph) {
         assert_eq!(nav(fresh.place_of(*buffer)), nav(Some(place.clone())), "{buffer:?} where it was");
     }

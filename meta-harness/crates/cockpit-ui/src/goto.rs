@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use arch_graph::{ComponentDetail, ComponentId, RelationKind, Source};
 
-use crate::app::BufferKind;
+use crate::kind::BufferKind;
 use crate::nav::{GoTo, Jump};
 use crate::net::{NetClient, NetResult};
 

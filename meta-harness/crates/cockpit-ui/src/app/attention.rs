@@ -50,15 +50,15 @@ impl CockpitApp {
 
     /// The item the inbox shows.
     fn inbox_item(&self) -> Option<NotificationId> {
-        match self.desk.view(BufferKind::Inbox).place() {
-            Place::Inbox { item } => item.map(NotificationId::new),
+        match self.desk.view(BufferKind::Inbox).target() {
+            Some(Target::Notification(id)) => Some(id),
             _ => None,
         }
     }
 
     /// The inbox shows item `id`.
     fn inbox_show(&mut self, id: NotificationId) {
-        self.desk.view_mut(BufferKind::Inbox).restore(&Place::Inbox { item: Some(id.to_string()) });
+        let _ = self.desk.view_mut(BufferKind::Inbox).show_target(&Target::Notification(id));
     }
 
     /// The one `by` steps from the inbox's, across every server (none past

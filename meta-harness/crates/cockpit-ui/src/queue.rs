@@ -212,7 +212,7 @@ impl QueueState {
             QueueCommand::OpenSession => match self.job().map(|j| &j.state) {
                 Some(JobState::Running { thread: Some(t) }) => {
                     let target = Target::Agent { slot: None, thread: Some(harness_contracts::ThreadId::new(t)) };
-                    self.asks.push(Ask::Show { target, in_: crate::app::BufferKind::Chat });
+                    self.asks.push(Ask::Show { target, in_: crate::kind::BufferKind::Chat });
                 }
                 _ => *cx.note = Some("Only a running job has a session.".into()),
             },
@@ -337,12 +337,16 @@ impl Navigable for QueueState {
     }
 
     fn place(&self) -> Place {
-        Place::Queue { component: self.job().map(|j| j.component.clone()) }
+        Place::of(&self.job().map(|j| j.component.clone()))
+    }
+
+    fn place_in_words(&self, place: &Place) -> String {
+        place.read::<Option<ComponentId>>().flatten().map(|id| crate::nav::short_name(&id)).unwrap_or_default()
     }
 
     fn restore(&mut self, place: &Place) {
-        if let Place::Queue { component: Some(id) } = place {
-            self.select_component(id);
+        if let Some(Some(id)) = place.read::<Option<ComponentId>>() {
+            self.select_component(&id);
         }
     }
 
@@ -515,7 +519,7 @@ pub(crate) mod tests {
         assert!(ids(&q).contains(&"queue.open_session".to_owned()) && ids(&q).contains(&"queue.stop".to_owned()));
         q.apply(QueueCommand::OpenSession, &mut cx);
         let session = crate::nav::Target::Agent { slot: None, thread: Some(harness_contracts::ThreadId::new("t1")) };
-        assert_eq!(q.take_asks(), [Ask::Show { target: session, in_: crate::app::BufferKind::Chat }]);
+        assert_eq!(q.take_asks(), [Ask::Show { target: session, in_: crate::kind::BufferKind::Chat }]);
         // Approval waits on the user: the action is offered on that job only.
         q.motion(Motion::Down, 1);
         assert!(ids(&q).contains(&"queue.approve".to_owned()) && !ids(&q).contains(&"queue.retry".to_owned()));

@@ -12,13 +12,31 @@ use harness_contracts::changes::{Comparison, FileChanges, Hunk};
 
 use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style, When};
 use crate::hosted::{Status, Tone};
-use crate::nav::{Ask, Fold, GoTo, Item, Motion, Move, Navigable, Place, SpecItem, Spot, Step, Target};
+use crate::nav::{Ask, Fold, GoTo, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
 use crate::theme::colors;
 use crate::viewport::{Go, Measured, Show};
 
 /// A file's changes, by the comparison and file they were asked for.
 type ChangesReply = (Comparison, String, NetResult<FileChanges>);
+
+/// One navigable item in the spec view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpecItem {
+    /// The section's title row.
+    Header,
+    Relation { kind: RelationKind, other: ComponentId, outgoing: bool },
+    Step(usize),
+    Invariant(usize),
+    Placeholder(usize),
+    Finding(usize),
+    /// The component's source (the code section's body).
+    Source,
+    /// One of the changes in it (the changes section).
+    Hunk(usize),
+    Comment(CommentId),
+    Reply(CommentId, usize),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Section {
@@ -784,7 +802,7 @@ impl SpecState {
                             }
                             for (i, hunk) in self.changes.iter().enumerate() {
                                 item(ui, Entry { section, item: SpecItem::Hunk(i) }, &mut |ui| {
-                                    crate::changes::draw_hunk(ui, hunk, false);
+                                    crate::diff::draw_hunk(ui, hunk, false);
                                 });
                             }
                         }
@@ -1159,21 +1177,25 @@ impl Navigable for SpecState {
     }
 
     fn place(&self) -> Place {
-        Place::Spec { component: self.target.clone(), item: self.entry().map(|e| e.key()) }
+        Place::of(&SpecPlace { component: self.target.clone(), item: self.entry().map(|e| e.key()) })
+    }
+
+    fn place_in_words(&self, place: &Place) -> String {
+        place.read::<SpecPlace>().and_then(|p| p.component).map(|id| crate::nav::short_name(&id)).unwrap_or_default()
     }
 
     /// Back to the component and the item.
     fn restore(&mut self, place: &Place) {
-        if let Place::Spec { component, item } = place {
+        if let Some(SpecPlace { component, item }) = place.read() {
             if let Some(id) = component {
-                self.land_on(id.clone());
+                self.land_on(id);
             }
             let loaded = self.detail.as_ref().is_some_and(|d| Some(&d.component.id) == self.target.as_ref());
             match item.as_deref().and_then(|key| self.all_entries().into_iter().find(|e| e.key() == key)) {
                 Some(entry) if loaded => self.put_on(&entry),
                 // Not in yet: land there when it is.
                 _ if !loaded => {
-                    self.restore_item = item.clone();
+                    self.restore_item = item;
                     self.put_cursor(0);
                 }
                 _ => self.put_cursor(0),
@@ -1190,7 +1212,11 @@ impl Navigable for SpecState {
         {
             return Some(Target::Change { file, line: hunk.new_start.max(1) as usize });
         }
-        Some(Target::Spec { component, section: entry.section, item: entry.item })
+        // A relation: its other end; anything else: the card's component.
+        Some(Target::Component(match entry.item {
+            SpecItem::Relation { other, .. } => other,
+            _ => component,
+        }))
     }
 
     fn motion(&mut self, motion: Motion, count: usize) {
@@ -1318,6 +1344,14 @@ impl SpecState {
             self.put_cursor(i);
         }
     }
+}
+
+/// Where a card is: its component, and the item (by its key: indexes
+/// shift as the card loads).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct SpecPlace {
+    pub component: Option<ComponentId>,
+    pub item: Option<String>,
 }
 
 impl crate::buffer::Buffer for SpecState {
@@ -1628,7 +1662,7 @@ pub(crate) mod tests {
         let mut s = SpecState { pinned: true, ..Default::default() };
         s.show(save.clone());
         let relation = Entry { section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: save.clone(), outgoing: true } }.key();
-        s.restore(&Place::Spec { component: Some(step.clone()), item: Some(relation.clone()) });
+        s.restore(&Place::of(&SpecPlace { component: Some(step.clone()), item: Some(relation.clone()) }));
         assert_eq!(s.cursor, 0, "not loaded yet");
         s.loaded = Some((step.clone(), Source::Code));
         push(&s.inbox, Reply::Detail(step.clone(), Box::new(Ok(detail(&step, &save)))));
@@ -1845,8 +1879,6 @@ pub(crate) mod tests {
         s.follow_source(&Source::Code);
         s.follow(&a);
         assert!(!s.can_show(&Target::Component(a.clone())) && s.can_show(&Target::Component(b.clone())));
-        let relation = Target::Spec { component: a.clone(), section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: b.clone(), outgoing: true } };
-        assert!(s.can_show(&relation), "a relation's other end is another card");
         assert_eq!(s.show_target(&Target::Component(b.clone())), Ok(()));
         assert_eq!(s.target.as_ref(), Some(&b));
     }

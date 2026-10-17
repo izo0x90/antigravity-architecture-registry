@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use harness_contracts::{
-    ClientEvent, InstanceId, ItemBody, McpServer, ModelSelection, NativeId, ProviderSnapshot, ProviderStatus, RequestId, RequestResponse, RuntimePolicy, SavedSession, SessionKey, Slot, SlotId, SteerInput, ThreadId, ThreadStatus,
+    ClientEvent, ContentBlock, InstanceId, ItemBody, McpServer, ModelSelection, NativeId, ProviderSnapshot, ProviderStatus, RequestId, RequestResponse, RuntimePolicy, SavedSession, SessionKey, Slot, SlotId, SteerInput, ThreadId, ThreadStatus,
     ToolServers, LEAD,
 };
 
@@ -228,7 +228,7 @@ impl Agents {
     /// The agent's last message in `thread`, as text.
     pub fn last_said(&self, thread: &ThreadId) -> Option<String> {
         self.store.threads.get(thread)?.items.iter().rev().find_map(|item| match &item.body {
-            ItemBody::AssistantMessage { content, .. } => Some(content.iter().map(crate::chat::block_summary).collect::<Vec<_>>().join(" ")),
+            ItemBody::AssistantMessage { content, .. } => Some(content.iter().map(block_summary).collect::<Vec<_>>().join(" ")),
             _ => None,
         })
     }
@@ -403,6 +403,18 @@ impl Agents {
     /// The tool servers, as if the server sent them.
     pub(crate) fn take_tools_for_test(&mut self, tools: ToolServers) {
         self.tools = Some(tools);
+    }
+}
+
+/// A message's part in a few words (text as it is; the rest named).
+pub fn block_summary(block: &ContentBlock) -> String {
+    match block {
+        ContentBlock::Text { text } => text.clone(),
+        ContentBlock::Image { mime_type, .. } => format!("[image {mime_type}]"),
+        ContentBlock::ResourceLink { uri, name } => format!("[link {}]", name.clone().unwrap_or_else(|| uri.clone())),
+        ContentBlock::Resource { uri, .. } => format!("[resource {uri}]"),
+        ContentBlock::Diff(d) => format!("[diff {}]", d.path),
+        ContentBlock::Unsupported => "[unsupported content]".into(),
     }
 }
 

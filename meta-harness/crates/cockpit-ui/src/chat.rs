@@ -31,7 +31,7 @@ mod render;
 mod session;
 pub(crate) mod slots;
 
-pub(crate) use render::block_summary;
+use crate::agents::block_summary;
 use render::mcp_label;
 
 #[derive(Default)]
@@ -139,10 +139,18 @@ fn banner(ui: &mut egui::Ui, fill: Color32, stroke: Color32, add: impl FnOnce(&m
     ui.add_space(crate::theme::look().space_s);
 }
 
+/// Where a chat is: its slot, and the message.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct ChatPlace {
+    pub message: Option<usize>,
+    #[serde(default)]
+    pub slot: Option<SlotId>,
+}
+
 impl ChatView {
     /// Where it is: its slot, and its message.
     pub fn place(&self) -> Place {
-        Place::Chat { message: self.cursor, slot: Some(self.slot.clone()) }
+        Place::of(&ChatPlace { message: self.cursor, slot: Some(self.slot.clone()) })
     }
 }
 

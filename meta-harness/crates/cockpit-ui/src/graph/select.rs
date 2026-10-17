@@ -350,6 +350,13 @@ impl GraphState {
     }
 }
 
+/// Where the graph is: where it looks, and the selected card's key.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct GraphPlace {
+    pub nav: super::Nav,
+    pub selection: Option<String>,
+}
+
 impl Navigable for GraphState {
     /// What it asked, and its selection when that changed: the user is on it.
     /// What it asked, its selection when that changed (the user is on
@@ -397,15 +404,23 @@ impl Navigable for GraphState {
     }
 
     fn place(&self) -> Place {
-        Place::Graph { nav: self.nav.clone(), selection: self.selection.clone() }
+        Place::of(&GraphPlace { nav: self.nav.clone(), selection: self.selection.clone() })
+    }
+
+    fn place_in_words(&self, place: &Place) -> String {
+        match place.read::<GraphPlace>() {
+            Some(GraphPlace { selection: Some(key), .. }) => self.card(&key).map_or_else(|| crate::nav::short_name(&ComponentId::new(key)), |c| c.label.clone()),
+            Some(GraphPlace { nav, .. }) => format!("{} view", nav.view.name().replace('_', " ")),
+            None => String::new(),
+        }
     }
 
     fn restore(&mut self, place: &Place) {
-        if let Place::Graph { nav, selection } = place {
-            self.navigate(NavChange::Restore(Box::new(nav.clone())));
+        if let Some(GraphPlace { nav, selection }) = place.read() {
+            self.navigate(NavChange::Restore(Box::new(nav)));
             match selection {
-                Some(key) if self.card(key).is_some() && !self.stale => self.select(Some(key.clone())),
-                Some(key) => self.pending_select = Some(key.clone()),
+                Some(key) if self.card(&key).is_some() && !self.stale => self.select(Some(key)),
+                Some(key) => self.pending_select = Some(key),
                 // Back to nothing selected means nothing selected.
                 None => {
                     self.selection = None;

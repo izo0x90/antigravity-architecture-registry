@@ -118,15 +118,19 @@ impl Navigable for ChatStreamState {
         Ok(())
     }
 
+    fn place_in_words(&self, place: &Place) -> String {
+        place.read::<ChatPlace>().map(|p| p.message.map_or("latest".to_owned(), |m| format!("message {}", m + 1))).unwrap_or_default()
+    }
+
     fn restore(&mut self, place: &Place) {
-        if let Place::Chat { message, slot } = place {
+        if let Some(ChatPlace { message, slot }) = place.read() {
             if let Some(slot) = slot {
-                self.ui.slot = slot.clone();
+                self.ui.slot = slot;
             }
-            self.ui.cursor = *message;
+            self.ui.cursor = message;
             self.ui.link_pick = None;
             if let Some(at) = message {
-                self.ui.scrolling.show(*at, crate::viewport::Show::Middle);
+                self.ui.scrolling.show(at, crate::viewport::Show::Middle);
             }
         }
     }

@@ -33,7 +33,9 @@ impl CockpitApp {
         for event in self.desk.keeper.tick(&state, now, after, &self.desk.net, ctx) {
             match event {
                 crate::saved::Event::Restore(saved) => self.restore_saved(*saved),
-                crate::saved::Event::Fresh => self.desk.view_mut(BufferKind::Code).restore(&Place::Code { file: "Cargo.toml".into(), line: 1 }),
+                crate::saved::Event::Fresh => {
+                    let _ = self.desk.view_mut(BufferKind::Code).show_target(&Target::Span { file: "Cargo.toml".into(), start: 1, end: 1 });
+                }
                 crate::saved::Event::Note(note) => self.note = Some(note),
             }
         }

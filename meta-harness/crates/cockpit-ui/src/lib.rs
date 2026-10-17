@@ -8,6 +8,7 @@ pub mod chat;
 pub mod code;
 pub mod panels;
 pub mod config;
+pub mod diff;
 pub mod feedback;
 pub mod graph;
 pub mod inbox;
@@ -16,6 +17,7 @@ pub mod graph_config;
 pub mod goto;
 pub mod graph_style;
 pub mod keymap;
+pub mod kind;
 #[cfg(test)]
 mod lint;
 pub mod nav;
