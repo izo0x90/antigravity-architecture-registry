@@ -256,8 +256,9 @@ impl Open {
         }
     }
 
-    pub fn lines(&self, from: u64, count: u32) -> (u64, Vec<Row>) {
-        lock(&self.shell).as_ref().map_or((from, Vec::new()), |s| s.lines(from, count))
+    /// The scrollback's lines from `from` (`nah_terminal::Terminal::scrollback`).
+    pub fn scrollback(&self, from: u64, count: u32) -> (u64, Vec<Row>) {
+        lock(&self.shell).as_ref().map_or((from, Vec::new()), |s| s.scrollback(from, count))
     }
 
     pub fn search(&self, query: &str) -> Vec<Found> {

@@ -32,11 +32,13 @@ struct Reader {
     socket: Socket,
     rows: Vec<String>,
     last: Option<ScreenUpdate>,
+    /// Lines of the scrollback it was sent, by number.
+    lines: std::collections::BTreeMap<u64, String>,
 }
 
 impl Reader {
     async fn at(addr: SocketAddr, path: &str) -> Self {
-        Self { socket: connect(addr, path).await, rows: Vec::new(), last: None }
+        Self { socket: connect(addr, path).await, rows: Vec::new(), last: None, lines: Default::default() }
     }
 
     async fn say(&mut self, said: ToTerminal) {
@@ -64,6 +66,9 @@ impl Reader {
                     }
                 }
                 self.last = Some(update.clone());
+            }
+            if let FromTerminal::Lines { from, rows } = &said {
+                self.lines.extend((*from..).zip(rows.iter().map(|r| r.iter().map(|run| run.text.as_str()).collect())));
             }
             return said;
         }
@@ -144,7 +149,7 @@ async fn shown_at_two_sizes_the_smallest_wins_until_that_reader_goes() {
 }
 
 #[tokio::test]
-async fn a_reader_asks_for_scrollback_and_searches_it() {
+async fn a_reader_is_sent_lines_as_they_scroll_off_and_asks_for_scrollback_and_searches_it() {
     let (addr, _) = spawn_app().await;
     let terminal = open(addr).await;
     let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
@@ -152,6 +157,10 @@ async fn a_reader_asks_for_scrollback_and_searches_it() {
     reader.say(ToTerminal::Size { size: TermSize { cols: 80, rows: 10 } }).await;
     reader.run("seq 1 300").await;
     reader.until_shows("300").await;
+    // The line above the screen came as it scrolled off, unasked.
+    let screen = reader.last.clone().unwrap();
+    let first: u64 = reader.rows[0].parse().expect("the screen's first row is a number");
+    assert_eq!(reader.lines.get(&(screen.top - 1)), Some(&(first - 1).to_string()), "{:?}", reader.lines);
     reader.say(ToTerminal::Search { query: "150".into() }).await;
     let found = loop {
         if let FromTerminal::Found { found, .. } = reader.next().await {
@@ -161,7 +170,9 @@ async fn a_reader_asks_for_scrollback_and_searches_it() {
     assert_eq!(found.len(), 1, "{found:?}");
     reader.say(ToTerminal::Lines { from: found[0].line, count: 2 }).await;
     let rows = loop {
-        if let FromTerminal::Lines { rows, .. } = reader.next().await {
+        if let FromTerminal::Lines { from, rows } = reader.next().await
+            && from == found[0].line
+        {
             break rows;
         }
     };

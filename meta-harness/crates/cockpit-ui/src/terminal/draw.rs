@@ -3,7 +3,7 @@
 //! program asked for as the theme shows them; the cursor, the selection;
 //! and, while it's typed in, what's typed sent as typed.
 
-use egui::{Color32, Rect, RichText, Sense, Stroke, Vec2, pos2, vec2};
+use egui::{Color32, Rect, RichText, Sense, Stroke, pos2, vec2};
 use harness_contracts::{Colour, Mods, Row, Style, TermKey, TermSize, TerminalInput, ToTerminal};
 
 use super::{Cell, TerminalBuffer};
@@ -16,6 +16,9 @@ pub(super) enum Keys {
     Starting,
     Typing,
 }
+
+/// How long what was drawn stays while the lines the view wants come.
+const WAIT_S: f64 = 0.5;
 
 /// The grid as drawn this frame: where, from which line, how tall a row.
 #[derive(Clone, Copy)]
@@ -56,7 +59,6 @@ impl TerminalBuffer {
         let font = egui::FontId::monospace(look.text_body);
         self.char_w = ui.fonts_mut(|f| f.glyph_width(&font, 'M')).max(1.0);
         let row_h = ui.fonts_mut(|f| f.row_height(&font)).max(1.0);
-        self.pitch = row_h;
         self.clock = ui.input(|i| i.time);
         if self.id.is_none() {
             let words = if self.awaiting.is_some() { "Opening a terminal…" } else { "No terminal here yet." };
@@ -69,58 +71,54 @@ impl TerminalBuffer {
             ui.label(RichText::new(ended).size(look.text_body).color(theme.warn));
         }
 
-        // Its size: what fits (the scrollbar's room kept).
-        let room = ui.available_size() - vec2(ui.spacing().scroll.bar_width + ui.spacing().scroll.bar_outer_margin, 0.0);
-        let size = TermSize { cols: (room.x / self.char_w).floor().clamp(10.0, 1000.0) as u16, rows: (room.y / row_h).floor().clamp(3.0, 500.0) as u16 };
+        // The grid: whole rows of what fits, the scrollbar beside it.
+        let bar_w = ui.spacing().scroll.bar_width;
+        let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+        let id = egui::Id::new(("terminal_grid", cx.at));
+        let response = ui.interact(rect, id, Sense::click_and_drag());
+        let grid_rect = Rect::from_min_max(rect.min, pos2((rect.right() - bar_w).max(rect.left()), rect.bottom()));
+        let size = TermSize { cols: (grid_rect.width() / self.char_w).floor().clamp(10.0, 1000.0) as u16, rows: (grid_rect.height() / row_h).floor().clamp(3.0, 500.0) as u16 };
         if self.link.is_some() && self.size_sent != Some(size) {
             self.size_sent = Some(size);
             self.send(&ToTerminal::Size { size });
         }
+        self.window = u64::from(size.rows);
+        let bar = Rect::from_min_max(pos2(grid_rect.right(), rect.top()), rect.max);
+        self.scroll_by_hand(ui, &response, bar, row_h);
 
-        let total = self.total() as usize;
-        self.viewport.margin = 2.0 * row_h;
-        self.viewport.column = self.char_w;
-        let mut area = egui::ScrollArea::vertical().id_salt(("terminal", cx.at)).auto_shrink([false, false]).stick_to_bottom(self.cursor.is_none());
-        if std::mem::take(&mut self.to_live) {
-            area = area.vertical_scroll_offset(total as f32 * row_h);
-        } else if let Some(offset) = self.viewport.wanted(self.clock) {
-            area = area.vertical_scroll_offset(offset.y);
+        // What shows: the view's lines; until they've come, what showed
+        // before (a moment at most), so no frame draws blank rows.
+        let span = self.span();
+        let wanted = self.view.top(span);
+        let rows = |top: u64| top..(top + span.window).min(span.end);
+        let missing = !self.lines.has(rows(wanted));
+        self.waiting = if missing { Some(self.waiting.unwrap_or(self.clock)) } else { None };
+        let top = match self.drawn {
+            Some(before) if missing && before >= span.first && self.lines.has(rows(before)) && self.waiting.is_some_and(|since| self.clock - since < WAIT_S) => before,
+            _ => wanted,
+        };
+        self.drawn = Some(top);
+        if let Some((from, count)) = self.lines.wanted(wanted.saturating_sub(span.window)..(wanted + 2 * span.window).min(span.end)) {
+            self.send(&ToTerminal::Lines { from, count });
         }
-        let id = egui::Id::new(("terminal_grid", cx.at));
-        let mut shown = 0..0;
-        let mut grid = (Rect::NOTHING, None::<egui::Response>);
-        let output = ui
-            .scope(|ui| {
-                ui.spacing_mut().item_spacing = Vec2::ZERO;
-                area.show_rows(ui, row_h, total, |ui, range| {
-                    let width = ui.available_width().max(self.char_w * f32::from(size.cols));
-                    let (rect, _) = ui.allocate_exact_size(vec2(width, range.len() as f32 * row_h), Sense::hover());
-                    let response = ui.interact(rect, id, Sense::click_and_drag());
-                    self.paint(ui.painter(), rect, range.clone(), &font, typing, &theme);
-                    shown = range;
-                    grid = (rect, Some(response));
-                })
-            })
-            .inner;
-        self.viewport.drawn(output.state.offset, output.inner_rect.size(), output.content_size);
-        if self.viewport.gliding() {
+        if missing {
             ui.ctx().request_repaint();
         }
-        self.grid = Some(output.inner_rect);
-        self.want_lines(shown.start as u64..shown.end as u64);
-        let (rect, response) = grid;
-        let grid = Grid { rect, first: shown.start as u64, row_h };
+        let grid = Grid { rect: grid_rect, first: top, row_h };
+        self.paint(ui.painter_at(rect), grid, rows(top), &font, typing, &theme);
+        self.paint_bar(ui.painter(), bar, span, &theme);
+        self.grid = Some(grid_rect);
+
         // What hints label: the files and web links on screen.
-        let clip = output.inner_rect;
         let folder = self.info().map(|t| t.folder).unwrap_or_default();
         let char_w = self.char_w;
         let mut spots = Vec::new();
-        for l in shown.start as u64..shown.end as u64 {
-            let text: String = self.line(l).map(|r| r.iter().map(|run| run.text.as_str()).collect()).unwrap_or_default();
-            let top = rect.top() + (l - shown.start as u64) as f32 * row_h;
+        for l in rows(top) {
+            let text = self.lines.text(l).unwrap_or_default();
+            let y = grid_rect.top() + (l - top) as f32 * row_h;
             for link in super::links::links(&text, &folder) {
-                let at = Rect::from_min_size(pos2(rect.left() + f32::from(link.col) * char_w, top), vec2(f32::from(link.len) * char_w, row_h));
-                if at.intersects(clip) {
+                let at = Rect::from_min_size(pos2(grid_rect.left() + f32::from(link.col) * char_w, y), vec2(f32::from(link.len) * char_w, row_h));
+                if at.intersects(grid_rect) {
                     spots.push(crate::nav::Spot { key: format!("{l}:{}", link.col), rect: at });
                 }
             }
@@ -129,9 +127,8 @@ impl TerminalBuffer {
         if let Some(url) = self.open_url.take() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }
-        let Some(response) = response else { return };
-        self.pointer(&response, grid);
-        if self.screen.alternate {
+        self.pointer(ui, &response, grid, bar);
+        if self.lines.alternate() {
             self.wheel_as_keys(ui, &response, row_h);
         }
         if typing {
@@ -139,13 +136,46 @@ impl TerminalBuffer {
         }
     }
 
-    /// Lines `range` on `rect`, a row each.
-    fn paint(&self, painter: &egui::Painter, rect: Rect, range: std::ops::Range<usize>, font: &egui::FontId, typing: bool, theme: &Theme) {
-        let (row_h, char_w) = (self.pitch, self.char_w);
-        let history = u64::from(self.history());
+    /// The wheel, a finger, the scrollbar: the view moves by whole lines
+    /// (a program with the whole screen gets the wheel as keys instead).
+    fn scroll_by_hand(&mut self, ui: &egui::Ui, response: &egui::Response, bar: Rect, row_h: f32) {
+        let span = self.span();
+        if !self.lines.alternate() && response.hovered() {
+            let delta = ui.input(|i| i.raw_scroll_delta.y);
+            if delta != 0.0 {
+                self.view.wheel(delta, row_h, span);
+            }
+        }
+        let touch = ui.input(|i| i.any_touches());
+        let Some(pos) = response.interact_pointer_pos() else {
+            self.thumb_held = None;
+            return;
+        };
+        if response.drag_started() && bar.contains(pos) {
+            // Held where it was grabbed (a click off the thumb jumps it there).
+            let (at, len) = self.view.thumb(span).unwrap_or((0.0, 1.0));
+            let grabbed = (pos.y - bar.top()) / bar.height();
+            self.thumb_held = Some(if (at..at + len).contains(&grabbed) { grabbed - at } else { len / 2.0 });
+        }
+        if let Some(held) = self.thumb_held {
+            if response.dragged() {
+                self.view.drag_thumb((pos.y - bar.top()) / bar.height() - held, span);
+            }
+        } else if touch && response.dragged() && !self.lines.alternate() {
+            self.view.wheel(response.drag_delta().y, row_h, span);
+        }
+        if !response.dragged() {
+            self.thumb_held = None;
+        }
+    }
+
+    /// Lines `rows`, a row each from the grid's top.
+    fn paint(&self, painter: egui::Painter, grid: Grid, rows: std::ops::Range<u64>, font: &egui::FontId, typing: bool, theme: &Theme) {
+        let (rect, row_h, char_w) = (grid.rect, grid.row_h, self.char_w);
         let selection = self.selection.map(|(a, b)| if a <= b { (a, b) } else { (b, a) });
-        for (i, line) in range.map(|l| l as u64).enumerate() {
-            let top = rect.top() + i as f32 * row_h;
+        let (cursor_line, cursor_col, cursor_shows) = self.lines.cursor();
+        for line in rows {
+            let top = rect.top() + (line - grid.first) as f32 * row_h;
             if self.cursor == Some(line) {
                 painter.rect_filled(Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), row_h)), 0.0, theme.selection);
             }
@@ -157,16 +187,15 @@ impl TerminalBuffer {
                 let to = if line == l1 { f32::from(c1) + 1.0 } else { rect.width() / char_w };
                 painter.rect_filled(Rect::from_min_max(pos2(rect.left() + from * char_w, top), pos2(rect.left() + to * char_w, top + row_h)), 0.0, theme.widget_selection);
             }
-            if let Some(row) = self.line(line) {
-                paint_row(painter, row, pos2(rect.left(), top), char_w, row_h, font, theme);
+            if let Some(row) = self.lines.get(line) {
+                paint_row(&painter, row, pos2(rect.left(), top), char_w, row_h, font, theme);
             }
             // The screen's cursor: a block while typed in, an outline else.
-            let cursor = self.screen.cursor;
-            if cursor.visible && line == history + u64::from(cursor.row) && self.ended().is_none() {
-                let at = Rect::from_min_size(pos2(rect.left() + f32::from(cursor.col) * char_w, top), vec2(char_w, row_h));
+            if cursor_shows && line == cursor_line && self.ended().is_none() {
+                let at = Rect::from_min_size(pos2(rect.left() + f32::from(cursor_col) * char_w, top), vec2(char_w, row_h));
                 if typing {
                     painter.rect_filled(at, 0.0, theme.text);
-                    let under = self.line(line).and_then(|r| char_at(r, cursor.col)).unwrap_or(' ');
+                    let under = self.lines.get(line).and_then(|r| char_at(r, cursor_col)).unwrap_or(' ');
                     painter.text(at.left_top(), egui::Align2::LEFT_TOP, under, font.clone(), theme.bg);
                 } else {
                     painter.rect_stroke(at, 0.0, Stroke::new(crate::theme::look().line_thin, theme.text), egui::StrokeKind::Inside);
@@ -175,23 +204,33 @@ impl TerminalBuffer {
         }
     }
 
+    /// The scrollbar: where the window is in all the lines (none when they fit).
+    fn paint_bar(&self, painter: &egui::Painter, bar: Rect, span: super::view::Span, theme: &Theme) {
+        let Some((at, len)) = self.view.thumb(span) else { return };
+        let thumb = Rect::from_min_size(pos2(bar.left() + bar.width() / 4.0, bar.top() + at * bar.height()), vec2(bar.width() / 2.0, (len * bar.height()).max(self.char_w)));
+        painter.rect_filled(thumb, thumb.width() / 2.0, if self.thumb_held.is_some() { theme.text } else { theme.muted });
+    }
+
     /// The cell under `pos`, on the grid.
     fn cell_at(&self, pos: egui::Pos2, grid: Grid) -> Cell {
         let line = grid.first + ((pos.y - grid.rect.top()) / grid.row_h).floor().max(0.0) as u64;
         let col = ((pos.x - grid.rect.left()) / self.char_w).floor().max(0.0) as u16;
-        (line.min(self.total().saturating_sub(1)), col)
+        (line.min(self.lines.end().saturating_sub(1)), col)
     }
 
-    /// The pointer on the grid: dragging selects; a click puts the cursor
-    /// on a line (not typing) and lets go of a selection.
-    fn pointer(&mut self, response: &egui::Response, grid: Grid) {
+    /// The pointer on the grid: dragging selects (a finger scrolls
+    /// instead); a click lets go of a selection.
+    fn pointer(&mut self, ui: &egui::Ui, response: &egui::Response, grid: Grid, bar: Rect) {
+        let by_hand = self.thumb_held.is_some() || ui.input(|i| i.any_touches()) || response.interact_pointer_pos().is_some_and(|p| bar.contains(p));
         if response.drag_started()
+            && !by_hand
             && let Some(pos) = response.interact_pointer_pos()
         {
             let at = self.cell_at(pos, grid);
             self.selection = Some((at, at));
         }
         if response.dragged()
+            && !by_hand
             && let (Some(pos), Some((from, _))) = (response.interact_pointer_pos(), self.selection)
         {
             self.selection = Some((from, self.cell_at(pos, grid)));
@@ -222,10 +261,11 @@ impl TerminalBuffer {
         let (rect, first, row_h) = (grid.rect, grid.first, grid.row_h);
         response.request_focus();
         ui.memory_mut(|m| m.set_focus_lock_filter(id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true }));
-        let cursor = self.screen.cursor;
-        let line = u64::from(self.history()) + u64::from(cursor.row);
-        let top = rect.top() + (line.saturating_sub(first)) as f32 * row_h;
-        let cursor_rect = Rect::from_min_size(pos2(rect.left() + f32::from(cursor.col) * self.char_w, top), vec2(2.0, row_h));
+        // Where the program's cursor is, kept on the grid (scrolled back, it's
+        // below it: the browser would scroll the page to its text field).
+        let (line, col, _) = self.lines.cursor();
+        let top = (rect.top() + (line.saturating_sub(first)) as f32 * row_h).clamp(rect.top(), (rect.bottom() - row_h).max(rect.top()));
+        let cursor_rect = Rect::from_min_size(pos2(rect.left() + f32::from(col) * self.char_w, top), vec2(2.0, row_h));
         ui.ctx().output_mut(|o| o.ime = Some(egui::output::IMEOutput { rect, cursor_rect }));
         if keys == Keys::Starting {
             return;

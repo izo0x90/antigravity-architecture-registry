@@ -150,8 +150,8 @@ fn a_line_keeps_its_number_in_the_scrollback_past_whats_kept_and_through_a_clear
     let screen = sh.terminal.screen(None);
     assert!(number < screen.top && number >= screen.oldest, "it's in the scrollback: {number} of {}..{}", screen.oldest, screen.top);
     assert!(screen.top - screen.oldest >= 1000, "what's kept is kept");
-    assert!(sh.terminal.lines(0, 1).0 == screen.oldest, "older than what's kept: from the oldest kept");
-    let line = |n: u64| Some(sh.terminal.lines(n, 1)).filter(|(from, _)| *from == n).and_then(|(_, rows)| rows.first().map(|r| r.iter().map(|run| run.text.as_str()).collect::<String>()));
+    assert!(sh.terminal.scrollback(0, 1).0 == screen.oldest, "older than what's kept: from the oldest kept");
+    let line = |n: u64| Some(sh.terminal.scrollback(n, 1)).filter(|(from, _)| *from == n).and_then(|(_, rows)| rows.first().map(|r| r.iter().map(|run| run.text.as_str()).collect::<String>()));
     assert_eq!(line(number).as_deref(), Some("2950"));
     // More output: it keeps its number.
     sh.run("seq 1 100");

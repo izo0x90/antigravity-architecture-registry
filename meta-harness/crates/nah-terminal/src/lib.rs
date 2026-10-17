@@ -214,11 +214,14 @@ impl Terminal {
         state.changes.since(&state.term, &state.feed, since, &state.title)
     }
 
-    /// The lines numbered `from` on (`ScreenUpdate::top`), up to `count`,
-    /// within what's kept: where they start, and them.
-    pub fn lines(&self, from: u64, count: u32) -> (u64, Vec<Row>) {
+    /// The scrollback's lines numbered `from` on (`ScreenUpdate::top`),
+    /// up to `count`, within what's kept: where they start, and them.
+    /// They never change (the screen's rows can: they come with it).
+    pub fn scrollback(&self, from: u64, count: u32) -> (u64, Vec<Row>) {
         let state = lock(&self.state);
-        screen::lines(&state.term, &state.feed, from, count)
+        let (from, mut rows) = screen::lines(&state.term, &state.feed, from, count);
+        rows.truncate(state.feed.top().saturating_sub(from) as usize);
+        (from, rows)
     }
 
     /// Where `query` is, newest first.

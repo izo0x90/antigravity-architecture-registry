@@ -4,48 +4,25 @@
 //! server sees each panel showing it as a reader at its own size (the
 //! smallest wins). Focusing it starts typing; its field takes every key
 //! (`Field::Keys`: only the leave keys leave). Not typing, the cockpit's
-//! keys move through the lines, as in any buffer.
+//! keys move through the lines, as in any buffer. Its lines (`lines`) are
+//! numbered as the server numbers them, for their life; its view
+//! (`view`) is a whole number of lines, never pixels.
 
 mod draw;
+mod lines;
 mod links;
+mod view;
 
 use std::collections::BTreeMap;
 
-use harness_contracts::{Cursor, FromTerminal, Row, ScreenUpdate, TermSize, Terminal, TerminalId, TerminalInput, TerminalStatus, ToTerminal};
+use harness_contracts::{FromTerminal, TermSize, Terminal, TerminalId, TerminalInput, TerminalStatus, ToTerminal};
 
 use crate::actions::{Action, ActionProvider, MINOR, PRIMARY, RunCx};
 use crate::hosted::{Hosted, Status, Tone};
 use crate::nav::{Ask, Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
 use crate::shared::{Reader, Shared};
 use crate::terminals::{TermAct, TermLink, Terminals};
-use crate::viewport::{Go, Stop, Viewport};
-
-/// The screen as last sent.
-#[derive(Default)]
-struct Screen {
-    rows: Vec<Row>,
-    size: TermSize,
-    cursor: Cursor,
-    /// Its first row's number, and the oldest line's kept.
-    top: u64,
-    oldest: u64,
-    alternate: bool,
-    title: String,
-}
-
-impl Screen {
-    fn take(&mut self, update: ScreenUpdate) {
-        if update.full || self.rows.len() != usize::from(update.size.rows) {
-            self.rows = vec![Row::new(); usize::from(update.size.rows)];
-        }
-        for (row, runs) in update.rows {
-            if let Some(r) = self.rows.get_mut(usize::from(row)) {
-                *r = runs;
-            }
-        }
-        (self.size, self.cursor, self.top, self.oldest, self.alternate, self.title) = (update.size, update.cursor, update.top, update.oldest, update.alternate, update.title);
-    }
-}
+use crate::viewport::Go;
 
 #[derive(Clone, Debug)]
 enum TermCommand {
@@ -61,7 +38,7 @@ enum TermCommand {
 /// How often it says again that its updates were seen (while some are there).
 const SEEN_EVERY: f64 = 2.0;
 
-/// A cell: its line (from the scrollback's top) and column.
+/// A cell: its line's number and its column.
 type Cell = (u64, u16);
 
 #[derive(Default)]
@@ -75,18 +52,22 @@ pub struct TerminalBuffer {
     said_seen: Option<f64>,
     /// Its socket to `id` (none while it isn't drawn).
     link: Option<TermLink>,
-    screen: Screen,
-    /// Scrollback lines as fetched, by their line from the scrollback's top.
-    back: BTreeMap<u64, Row>,
-    /// Lines asked for and not come yet (from, count).
-    asked: Option<(u64, u32)>,
+    lines: lines::Lines,
+    view: view::View,
+    /// The line at the top of what was drawn last frame, and since when
+    /// the lines the view wants haven't come (what was drawn stays a
+    /// moment, rather than blank rows).
+    drawn: Option<u64>,
+    waiting: Option<f64>,
+    /// Rows the window shows.
+    window: u64,
+    /// The scrollbar's thumb is dragged, held this far down it (a part of the track).
+    thumb_held: Option<f32>,
     /// The size last said to the server.
     size_sent: Option<TermSize>,
-    viewport: Viewport,
-    pitch: f32,
     char_w: f32,
-    /// Not typing: the line the cursor's on (from the scrollback's top),
-    /// and the column (a hint put it on a link there).
+    /// Not typing: the line the cursor's on (its number), and the column
+    /// (a hint put it on a link there).
     cursor: Option<u64>,
     cursor_col: Option<u16>,
     /// The server's matches for the search under way: each line's text.
@@ -107,8 +88,6 @@ pub struct TerminalBuffer {
     /// Popped up over everything (the quick look's own): it has a terminal
     /// of its own (sharing one would size a panel's to it).
     popped: bool,
-    /// Typing went on: the view goes back to the live screen.
-    to_live: bool,
     clock: f64,
     asks: Vec<Ask>,
     spots: Vec<Spot>,
@@ -135,23 +114,9 @@ impl TerminalBuffer {
         }
     }
 
-    /// Lines in all: the scrollback (none while a program has the whole
-    /// screen) and the screen.
-    fn total(&self) -> u64 {
-        u64::from(self.history()) + self.screen.rows.len() as u64
-    }
-
-    fn history(&self) -> u32 {
-        if self.screen.alternate { 0 } else { (self.screen.top - self.screen.oldest) as u32 }
-    }
-
-    /// Line `line`'s runs: the screen's, or the scrollback's (none until fetched).
-    fn line(&self, line: u64) -> Option<&Row> {
-        let history = u64::from(self.history());
-        match line.checked_sub(history) {
-            Some(row) => self.screen.rows.get(row as usize),
-            None => self.back.get(&line),
-        }
+    /// The lines there are and the window's rows.
+    fn span(&self) -> view::Span {
+        view::Span { first: self.lines.first(), end: self.lines.end(), window: self.window.max(1) }
     }
 
     /// Shows terminal `id` from now on (its socket opens when drawn).
@@ -159,17 +124,16 @@ impl TerminalBuffer {
         if self.id.as_ref() != Some(&id) {
             self.id = Some(id);
             self.drop_link();
-            self.screen = Screen::default();
-            self.cursor = None;
-            self.selection = None;
+            self.lines = lines::Lines::default();
+            self.view = view::View::default();
+            (self.drawn, self.cursor, self.selection) = (None, None, None);
         }
     }
 
     fn drop_link(&mut self) {
         self.link = None;
         self.size_sent = None;
-        self.back.clear();
-        self.asked = None;
+        self.lines.forget();
     }
 
     fn send(&mut self, said: &ToTerminal) {
@@ -178,8 +142,9 @@ impl TerminalBuffer {
         }
     }
 
+    /// Typed: back to the live screen, where what's typed shows.
     fn type_in(&mut self, input: TerminalInput) {
-        self.to_live = true;
+        self.view.go_live();
         self.selection = None;
         self.send(&ToTerminal::Input { input });
     }
@@ -197,51 +162,20 @@ impl TerminalBuffer {
         }
         for said in polled.said {
             match said {
-                FromTerminal::Screen { update } => {
-                    if update.oldest != self.screen.oldest {
-                        self.back.clear();
-                    }
-                    self.screen.take(update);
-                }
-                FromTerminal::Lines { from, rows } => {
-                    let oldest = self.screen.oldest;
-                    for (i, row) in rows.into_iter().enumerate() {
-                        if let Some(line) = (from + i as u64).checked_sub(oldest) {
-                            self.back.insert(line, row);
-                        }
-                    }
-                    self.asked = None;
-                }
+                FromTerminal::Screen { update } => self.lines.take(update),
+                FromTerminal::Lines { from, rows } => self.lines.arrived(from, rows),
                 FromTerminal::Found { query, found } => {
                     if self.found.as_ref().is_some_and(|(asked, _)| *asked == query) {
-                        let oldest = self.screen.oldest;
-                        let lines = found.into_iter().filter_map(|f| f.line.checked_sub(oldest).map(|l| (l, f.text))).collect();
-                        self.found = Some((query, lines));
+                        self.found = Some((query, found.into_iter().map(|f| (f.line, f.text)).collect()));
                     }
                 }
             }
         }
     }
 
-    /// The scrollback lines `range` shows and doesn't have yet, asked for.
-    fn want_lines(&mut self, range: std::ops::Range<u64>) {
-        let history = u64::from(self.history());
-        let missing = range.filter(|l| *l < history && !self.back.contains_key(l)).collect::<Vec<_>>();
-        let (Some(&first), Some(&last)) = (missing.first(), missing.last()) else { return };
-        if self.asked.is_some_and(|(from, count)| first >= from && last < from + u64::from(count)) {
-            return;
-        }
-        // A screenful either side, so scrolling finds them there.
-        let rows = self.screen.rows.len().max(10) as u64;
-        let from = first.saturating_sub(rows);
-        let count = ((last + rows).min(history) - from) as u32;
-        self.asked = Some((from, count));
-        self.send(&ToTerminal::Lines { from: self.screen.oldest + from, count });
-    }
-
     /// The text of the selection (or, with none, of the cursor's line).
     fn selected_text(&self) -> Option<String> {
-        let line_text = |line: u64| -> String { self.line(line).map(|r| r.iter().map(|run| run.text.as_str()).collect()).unwrap_or_default() };
+        let line_text = |line: u64| -> String { self.lines.text(line).unwrap_or_default() };
         let Some((a, b)) = self.selection else { return self.cursor.map(line_text) };
         let ((l0, c0), (l1, c1)) = if a <= b { (a, b) } else { (b, a) };
         let cut = |text: String, from: u16, to: Option<u16>| -> String { text.chars().skip(usize::from(from)).take(to.map_or(usize::MAX, |t| usize::from(t.saturating_sub(from)) + 1)).collect() };
@@ -262,7 +196,7 @@ impl TerminalBuffer {
     /// The link the cursor's on: at its column, else the line's first.
     fn link_here(&self) -> Option<links::Link> {
         let line = self.cursor?;
-        let text: String = self.line(line)?.iter().map(|run| run.text.as_str()).collect();
+        let text = self.lines.text(line)?;
         let folder = self.info().map(|t| t.folder).unwrap_or_default();
         let found = links::links(&text, &folder);
         match self.cursor_col {
@@ -271,18 +205,11 @@ impl TerminalBuffer {
         }
     }
 
-    /// Where the cursor can stop: every line, one row each.
-    fn stops(&self) -> Vec<Stop> {
-        (0..self.total()).map(|l| Stop::new(l as f32 * self.pitch, self.pitch)).collect()
-    }
-
     fn go(&mut self, go: Go) {
         self.cursor_col = None;
-        let stops = self.stops();
-        let cursor = self.cursor.map(|c| c as usize).or(stops.len().checked_sub(1));
-        if let Some(moved) = self.viewport.go(&stops, cursor, go) {
-            self.cursor = Some(moved.cursor as u64);
-            self.viewport.take(&moved, self.clock, true);
+        let span = self.span();
+        if let Some(line) = self.view.go(go, self.cursor, span) {
+            self.cursor = Some(line);
         }
     }
 }
@@ -467,8 +394,9 @@ impl Navigable for TerminalBuffer {
 
     /// Back to the live screen.
     fn leave(&mut self) -> Step {
-        if self.cursor.take().is_some() || self.selection.take().is_some() {
-            self.to_live = true;
+        let held = !self.view.live();
+        if self.cursor.take().is_some() | self.selection.take().is_some() | held {
+            self.view.go_live();
             Step::Done
         } else {
             Step::Nothing("It shows the live screen already.".into())
@@ -480,7 +408,7 @@ impl Navigable for TerminalBuffer {
     /// Its lines: what's fetched of the scrollback, the screen, and the
     /// lines the server found for the search under way.
     fn items(&self) -> Vec<Item> {
-        let mut lines: BTreeMap<u64, String> = (0..self.total()).filter_map(|l| self.line(l).map(|r| (l, r.iter().map(|run| run.text.as_str()).collect::<String>()))).collect();
+        let mut lines: BTreeMap<u64, String> = (self.lines.first()..self.lines.end()).filter_map(|l| self.lines.text(l).map(|text| (l, text))).collect();
         if let Some((_, found)) = &self.found {
             for (line, text) in found {
                 lines.entry(*line).or_insert_with(|| text.clone());
@@ -514,8 +442,8 @@ impl Navigable for TerminalBuffer {
     /// A line ("12"), or a place on one ("12:7", a hint's link).
     fn move_to(&mut self, key: &str) {
         let (line, col) = key.split_once(':').map_or((key, None), |(l, c)| (l, c.parse::<u16>().ok()));
-        if let Ok(line) = line.parse::<usize>() {
-            self.go(Go::To(line, crate::viewport::Show::Middle));
+        if let Some(at) = line.parse::<u64>().ok().and_then(|n| n.checked_sub(self.lines.first())) {
+            self.go(Go::To(at as usize, crate::viewport::Show::Middle));
             self.cursor_col = col;
         }
     }
@@ -534,7 +462,7 @@ impl ActionProvider for TerminalBuffer {
             (None, true, false) => crate::nav::Move::Enter.offer_if(!self.typing, "Type into it"),
             (None, false, _) => crate::nav::Move::Enter.offer("Open a terminal"),
         });
-        out.push(crate::nav::Move::Leave.offer_if(self.cursor.is_some() || self.selection.is_some(), "Back to the live screen"));
+        out.push(crate::nav::Move::Leave.offer_if(self.cursor.is_some() || self.selection.is_some() || !self.view.live(), "Back to the live screen"));
         out.push(Action::new("terminal.type", "Type into the terminal", C::Type).focused().importance(PRIMARY).when(if has && !ended && !self.typing { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
         out.push(Action::new("terminal.copy", if self.selection.is_some() { "Copy the selection" } else { "Copy the line" }, C::Copy).focused().importance(MINOR));
         let many = self.terminals.get().list().count() > 1;
@@ -575,7 +503,7 @@ impl ActionProvider for TerminalBuffer {
             TermCommand::Close => {
                 if let Some(id) = self.id.take() {
                     self.drop_link();
-                    self.screen = Screen::default();
+                    self.lines = lines::Lines::default();
                     self.opened = true;
                     self.asks.push(Ask::Terminals { id: Some(id), act: TermAct::Close });
                 }
@@ -606,7 +534,7 @@ impl Hosted for TerminalBuffer {
         if let Some(code) = self.ended() {
             out.push(Status::new(code.map_or_else(|| "ended".to_owned(), |c| format!("ended ({c})")), Tone::Warn));
         }
-        if self.cursor.is_some() {
+        if !self.view.live() {
             out.push(Status::new("scrolled back", Tone::Muted));
         }
         out
@@ -643,7 +571,7 @@ impl Hosted for TerminalBuffer {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use harness_contracts::{Run, Style};
+    use harness_contracts::{Cursor, Run, ScreenUpdate, Style};
 
     use super::*;
 
@@ -652,6 +580,20 @@ pub(crate) mod tests {
         let FromTerminal::Screen { mut update } = screen(lines) else { unreachable!() };
         update.top = u64::from(history);
         FromTerminal::Screen { update }
+    }
+
+    /// A whole 24-row screen from line `top` (each row says its line's
+    /// number: "line 120"), the scrollback from `oldest`.
+    pub(crate) fn numbered(top: u64, oldest: u64) -> FromTerminal {
+        let texts: Vec<String> = (top..top + 24).map(|n| format!("line {n}")).collect();
+        let FromTerminal::Screen { mut update } = screen(&texts.iter().map(String::as_str).collect::<Vec<_>>()) else { unreachable!() };
+        (update.top, update.oldest) = (top, oldest);
+        FromTerminal::Screen { update }
+    }
+
+    /// The server's answer to lines asked for, from `from` (each says its number).
+    pub(crate) fn numbered_lines(from: u64, count: u32) -> FromTerminal {
+        FromTerminal::Lines { from, rows: (from..from + u64::from(count)).map(|n| vec![Run { text: format!("line {n}"), style: Style::default(), wide: false }]).collect() }
     }
 
     /// A whole screen showing `lines`, 80 wide.

@@ -88,6 +88,7 @@ async fn serve(socket: WebSocket, terminals: Arc<Terminals>, open: Arc<Open>) {
     let first = open.screen(None);
     let mut seen = first.seq;
     let mut title = first.title.clone();
+    let mut top = first.top;
     if send(&mut sink, &FromTerminal::Screen { update: first }).await.is_err() {
         return;
     }
@@ -104,6 +105,12 @@ async fn serve(socket: WebSocket, terminals: Arc<Terminals>, open: Arc<Open>) {
                 let update = open.screen(if restarted { None } else { Some(seen) });
                 if update.full || update.seq != seen || update.title != title {
                     (seen, title) = (update.seq, update.title.clone());
+                    // What scrolled off first: it's there when the screen moves.
+                    if let Some(gone) = scrolled_off(&open, &update, std::mem::replace(&mut top, update.top))
+                        && send(&mut sink, &gone).await.is_err()
+                    {
+                        break;
+                    }
                     if send(&mut sink, &FromTerminal::Screen { update }).await.is_err() {
                         break;
                     }
@@ -130,6 +137,18 @@ async fn serve(socket: WebSocket, terminals: Arc<Terminals>, open: Arc<Open>) {
     terminals.shown(&open, viewer, None);
 }
 
+/// The lines that scrolled off the screen since the reader's last update
+/// (the screen's height of them at most), sent before the update that
+/// moves the screen: the reader has them as they went.
+fn scrolled_off(open: &Open, update: &harness_contracts::ScreenUpdate, before: u64) -> Option<FromTerminal> {
+    if update.full || update.alternate || update.top <= before {
+        return None;
+    }
+    let from = before.max(update.top.saturating_sub(u64::from(update.size.rows))).max(update.oldest);
+    let (from, rows) = open.scrollback(from, (update.top - from) as u32);
+    (!rows.is_empty()).then_some(FromTerminal::Lines { from, rows })
+}
+
 /// Does what a reader sent; what it answers, if anything.
 async fn said_to(terminals: &Arc<Terminals>, open: &Arc<Open>, viewer: u64, said: ToTerminal) -> Option<FromTerminal> {
     match said {
@@ -147,7 +166,7 @@ async fn said_to(terminals: &Arc<Terminals>, open: &Arc<Open>, viewer: u64, said
             None
         }
         ToTerminal::Lines { from, count } => {
-            let (from, rows) = open.lines(from, count.min(1000));
+            let (from, rows) = open.scrollback(from, count.min(1000));
             Some(FromTerminal::Lines { from, rows })
         }
         ToTerminal::Search { query } => {

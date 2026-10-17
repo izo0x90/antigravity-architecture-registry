@@ -219,7 +219,8 @@ pub enum ToTerminal {
     Input { input: TerminalInput },
     /// The size this reader shows it at (the smallest of all readers wins).
     Size { size: TermSize },
-    /// Lines from the one numbered `from` (`ScreenUpdate::top`), `count` of them.
+    /// Lines of the scrollback from the one numbered `from`
+    /// (`ScreenUpdate::top`), `count` of them.
     Lines { from: u64, count: u32 },
     /// Where `query` is, newest first.
     Search { query: String },
@@ -230,8 +231,10 @@ pub enum ToTerminal {
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum FromTerminal {
     Screen { update: ScreenUpdate },
-    /// Lines from the one numbered `from` (the first kept, when an older
-    /// one was asked for), up to the screen's last.
+    /// Lines of the scrollback (they never change), from the one numbered
+    /// `from` (the oldest kept, when an older one was asked for): when
+    /// asked for, and as they scroll off the screen (before the update
+    /// that moves it).
     Lines { from: u64, rows: Vec<Row> },
     Found { query: String, found: Vec<Found> },
 }

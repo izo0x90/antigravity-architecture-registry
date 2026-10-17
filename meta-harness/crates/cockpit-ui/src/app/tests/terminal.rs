@@ -6,6 +6,7 @@
 use harness_contracts::{Mods, TermKey, TerminalInput, ToTerminal};
 
 use super::*;
+use crate::hosted::Hosted;
 use crate::terminal::TerminalBuffer;
 
 fn inputs(app: &CockpitApp) -> Vec<TerminalInput> {
@@ -196,4 +197,116 @@ fn a_file_on_a_terminal_line_is_gone_to_in_the_code() {
     frame(&ctx, &mut app, vec![]);
     let calls = sent(&app);
     assert!(calls.iter().any(|c| c.contains("src/b.rs") || c.contains("src%2Fb.rs")), "the code view opens the file: {calls:?} {:?} {:?}", app.note, app.desk.view(app.focused_kind()).target());
+}
+
+/// The lines the terminal asked its server for, answered.
+fn answer_lines(app: &mut CockpitApp) {
+    let asked: Vec<(u64, u32)> = app.desk.terminal().sent().into_iter().filter_map(|s| if let ToTerminal::Lines { from, count } = s { Some((from, count)) } else { None }).collect();
+    let answers = asked.into_iter().map(|(from, count)| crate::terminal::tests::numbered_lines(from, count)).collect();
+    app.desk.terminal_mut().arrive(answers);
+}
+
+/// The terminal's lines drawn this frame, by number.
+fn drawn_lines(output: &egui::FullOutput) -> Vec<u64> {
+    texts(output).lines().filter_map(|l| l.strip_prefix("line ")?.parse().ok()).collect()
+}
+
+#[test]
+fn every_frame_draws_whole_rows_and_the_live_screen_follows_the_output() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Terminal);
+    // Output as fast as it comes: a line more each frame (Enter held down).
+    for top in 1000..1060 {
+        app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(top, 0)]);
+        let drawn = drawn_lines(&frame(&ctx, &mut app, vec![]));
+        answer_lines(&mut app);
+        assert!(drawn.contains(&(top + 23)), "the live screen's last line shows, every frame: {drawn:?}");
+        assert!(drawn.windows(2).all(|w| w[1] == w[0] + 1), "whole rows, none missing: {drawn:?}");
+    }
+}
+
+#[test]
+fn scrolled_back_it_stays_on_what_is_read_while_output_arrives_and_typing_goes_back_to_it() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1000, 0)]);
+    not_typing(&ctx, &mut app);
+    answer_lines(&mut app);
+    for _ in 0..100 {
+        frame(&ctx, &mut app, key("k"));
+        answer_lines(&mut app);
+    }
+    let read = drawn_lines(&frame(&ctx, &mut app, vec![]));
+    assert!(!read.contains(&1023), "scrolled back off the live screen: {read:?}");
+    for top in 1001..1200 {
+        app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(top, top.saturating_sub(1000))]);
+        frame(&ctx, &mut app, vec![]);
+        answer_lines(&mut app);
+    }
+    assert_eq!(drawn_lines(&frame(&ctx, &mut app, vec![])), read, "output arrived: what's read stays put");
+    // Past what's kept: its lines gone, it shows the oldest there is.
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(2000, 1500)]);
+    frame(&ctx, &mut app, vec![]);
+    answer_lines(&mut app);
+    let drawn = drawn_lines(&frame(&ctx, &mut app, vec![]));
+    assert_eq!(drawn.first(), Some(&1500), "{drawn:?}");
+    // Typing: back to the live screen.
+    frame(&ctx, &mut app, key("i"));
+    frame(&ctx, &mut app, key("x"));
+    frame(&ctx, &mut app, vec![]);
+    answer_lines(&mut app);
+    let drawn = drawn_lines(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains(&2023), "{drawn:?}");
+}
+
+#[test]
+fn going_far_back_keeps_what_showed_until_the_lines_come() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(5000, 0)]);
+    not_typing(&ctx, &mut app);
+    answer_lines(&mut app);
+    let before = drawn_lines(&frame(&ctx, &mut app, vec![]));
+    frame(&ctx, &mut app, key("g"));
+    let waiting = drawn_lines(&frame(&ctx, &mut app, key("g")));
+    assert_eq!(waiting, before, "the top's lines haven't come: what showed stays, no blank rows");
+    answer_lines(&mut app);
+    let drawn = drawn_lines(&frame(&ctx, &mut app, vec![]));
+    assert_eq!(drawn.first(), Some(&0), "they came: the top shows");
+}
+
+#[test]
+fn drawing_with_ten_thousand_lines_of_scrollback_costs_what_a_screenful_does() {
+    let (ctx, mut app) = full_app();
+    not_typing(&ctx, &mut app);
+    // The time a frame takes, at most, over many (scrolling up a line each).
+    let slowest = |app: &mut CockpitApp| {
+        (0..30)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                frame(&ctx, app, key("k"));
+                start.elapsed()
+            })
+            .max()
+            .unwrap()
+    };
+    let screenful = slowest(&mut app);
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(10_000, 0), crate::terminal::tests::numbered_lines(0, 10_000)]);
+    frame(&ctx, &mut app, key("G"));
+    let ten_thousand = slowest(&mut app);
+    eprintln!("slowest frame: {screenful:?} with a screenful, {ten_thousand:?} with 10,000 lines");
+    assert!(ten_thousand < screenful * 3 + std::time::Duration::from_millis(10), "{ten_thousand:?} against {screenful:?}");
+}
+
+#[test]
+fn scrolled_back_while_typing_the_programs_cursor_stays_on_the_grid_for_the_browser() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1000, 0)]);
+    focus(&ctx, &mut app, BufferKind::Terminal);
+    let grid = app.desk.terminal().typing_rect().expect("drawn");
+    let wheel = vec![egui::Event::PointerMoved(grid.center()), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 5000.0), modifiers: egui::Modifiers::NONE }];
+    frame(&ctx, &mut app, wheel);
+    let ime = frame(&ctx, &mut app, vec![]).platform_output.ime.expect("typing: where its cursor is");
+    assert!(matches!(app.input_mode, InputMode::Insert { .. }), "still typing");
+    assert!(!app.desk.terminal().status().is_empty(), "scrolled back");
+    // Off the grid, the browser scrolls the page to its hidden text field.
+    assert!(grid.contains(ime.cursor_rect.center()), "{:?} on {grid:?}", ime.cursor_rect);
 }
