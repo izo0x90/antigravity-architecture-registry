@@ -310,3 +310,47 @@ fn scrolled_back_while_typing_the_programs_cursor_stays_on_the_grid_for_the_brow
     // Off the grid, the browser scrolls the page to its hidden text field.
     assert!(grid.contains(ime.cursor_rect.center()), "{:?} on {grid:?}", ime.cursor_rect);
 }
+
+#[test]
+fn following_the_live_screen_it_never_holds_back_however_fast_the_output() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Terminal);
+    // Its window is taller than the screen (a smaller reader sets the size):
+    // forty lines a frame scroll past what it has above the screen.
+    for top in (1000..2000).step_by(40) {
+        app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(top, 0)]);
+        let drawn = drawn_lines(&frame(&ctx, &mut app, vec![]));
+        answer_lines(&mut app);
+        assert_eq!(drawn.last(), Some(&(top + 23)), "the live screen's last line, at once");
+    }
+}
+
+#[test]
+fn a_new_width_or_a_new_start_of_the_shell_keeps_the_view_sensible() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1000, 0)]);
+    not_typing(&ctx, &mut app);
+    answer_lines(&mut app);
+    for _ in 0..100 {
+        frame(&ctx, &mut app, key("k"));
+        answer_lines(&mut app);
+    }
+    let read = drawn_lines(&frame(&ctx, &mut app, vec![]));
+    let back = 1024 - read.last().unwrap();
+    // Narrower: every line laid out anew, numbered past the old ones.
+    let harness_contracts::FromTerminal::Screen { mut update } = crate::terminal::tests::numbered(5000, 4000) else { unreachable!() };
+    update.size.cols = 60;
+    app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Screen { update }]);
+    frame(&ctx, &mut app, vec![]);
+    answer_lines(&mut app);
+    let drawn = drawn_lines(&frame(&ctx, &mut app, vec![]));
+    assert_eq!(5024 - drawn.last().unwrap(), back, "as far from the live screen as before: {drawn:?}");
+    // A new start of its shell: the live screen.
+    let harness_contracts::FromTerminal::Screen { mut update } = crate::terminal::tests::numbered(30, 0) else { unreachable!() };
+    (update.size.cols, update.shell) = (60, 2);
+    app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Screen { update }]);
+    frame(&ctx, &mut app, vec![]);
+    answer_lines(&mut app);
+    let drawn = drawn_lines(&frame(&ctx, &mut app, vec![]));
+    assert_eq!(drawn.last(), Some(&53), "{drawn:?}");
+}

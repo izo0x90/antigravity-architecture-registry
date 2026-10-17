@@ -65,6 +65,9 @@ pub struct Open {
     /// Which start of its shell is the current one: what an earlier one
     /// says (its end, after a restart) is old news.
     generation: AtomicU64,
+    /// The current start's own number, told to readers (unlike the
+    /// generation, not the same again after the server restarts).
+    start: AtomicU64,
 }
 
 impl Terminals {
@@ -126,6 +129,8 @@ impl Terminals {
         let info = open.info();
         let options = Options { shell: info.shell.clone(), folder: PathBuf::from(&info.folder), size: info.size, hooks: self.hooks.clone(), history: HISTORY };
         let generation = open.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(generation, |d| d.as_nanos() as u64);
+        open.start.store(now.max(open.start.load(Ordering::SeqCst) + 1), Ordering::SeqCst);
         let (terminals, weak) = (Arc::downgrade(self), Arc::downgrade(open));
         let shell = nah_terminal::Terminal::open(options, move |happening| {
             if let (Some(terminals), Some(open)) = (terminals.upgrade(), weak.upgrade())
@@ -217,7 +222,7 @@ impl Terminals {
 
 impl Open {
     fn new(info: Terminal) -> Self {
-        Self { info: Mutex::new(info), shell: Mutex::default(), changed: watch::channel(0).0, viewers: Mutex::default(), next_viewer: AtomicU64::new(1), generation: AtomicU64::new(0) }
+        Self { info: Mutex::new(info), shell: Mutex::default(), changed: watch::channel(0).0, viewers: Mutex::default(), next_viewer: AtomicU64::new(1), generation: AtomicU64::new(0), start: AtomicU64::new(0) }
     }
 
     pub fn info(&self) -> Terminal {
@@ -231,7 +236,7 @@ impl Open {
     /// Which start of its shell is the current one (a reader of an
     /// earlier one needs the whole screen).
     pub fn started(&self) -> u64 {
-        self.generation.load(Ordering::SeqCst)
+        self.start.load(Ordering::SeqCst)
     }
 
     /// A number for a new reader of it.
@@ -247,13 +252,15 @@ impl Open {
     /// What changed after `since` (the whole screen given none); an ended
     /// one with no shell left shows nothing.
     pub fn screen(&self, since: Option<u64>) -> ScreenUpdate {
-        match lock(&self.shell).as_ref() {
+        let mut update = match lock(&self.shell).as_ref() {
             Some(shell) => shell.screen(since),
             None => {
                 let info = self.info();
-                ScreenUpdate { seq: 0, size: info.size, full: since.is_none(), rows: Vec::new(), cursor: Default::default(), top: 0, oldest: 0, alternate: false, title: info.title }
+                ScreenUpdate { seq: 0, size: info.size, full: since.is_none(), rows: Vec::new(), cursor: Default::default(), top: 0, oldest: 0, alternate: false, title: info.title, shell: 0 }
             }
-        }
+        };
+        update.shell = self.started();
+        update
     }
 
     /// The scrollback's lines from `from` (`nah_terminal::Terminal::scrollback`).

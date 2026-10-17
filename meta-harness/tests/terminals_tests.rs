@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use common::{COCKPIT_TOKEN, Mcp, http, spawn_app};
 use futures::{SinkExt, StreamExt};
-use harness_contracts::{FromTerminal, Mods, ScreenUpdate, TermKey, TermSize, Terminal, TerminalInput, ToTerminal};
+use harness_contracts::{FromTerminal, Mods, ReaderScreen, ScreenUpdate, TermKey, TermSize, Terminal, TerminalInput, ToTerminal};
 use serde_json::json;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -30,15 +30,23 @@ async fn connect(addr: SocketAddr, path: &str) -> Socket {
 /// A reader of a terminal: its screen as it has it, kept from what it's sent.
 struct Reader {
     socket: Socket,
+    screen: ReaderScreen,
+    /// Its screen's rows' text.
     rows: Vec<String>,
     last: Option<ScreenUpdate>,
-    /// Lines of the scrollback it was sent, by number.
+    /// Lines of the scrollback it has, by number: those that scrolled off
+    /// its screen (as it had them, or as sent again when they'd changed),
+    /// and those asked for.
     lines: std::collections::BTreeMap<u64, String>,
+}
+
+fn text(row: &harness_contracts::Row) -> String {
+    row.iter().map(|run| run.text.as_str()).collect()
 }
 
 impl Reader {
     async fn at(addr: SocketAddr, path: &str) -> Self {
-        Self { socket: connect(addr, path).await, rows: Vec::new(), last: None, lines: Default::default() }
+        Self { socket: connect(addr, path).await, screen: ReaderScreen::default(), rows: Vec::new(), last: None, lines: Default::default() }
     }
 
     async fn say(&mut self, said: ToTerminal) {
@@ -54,21 +62,20 @@ impl Reader {
     async fn next(&mut self) -> FromTerminal {
         loop {
             let message = tokio::time::timeout(Duration::from_secs(10), self.socket.next()).await.expect("sent something within 10 s").unwrap().unwrap();
-            let Message::Text(text) = message else { continue };
-            let said: FromTerminal = serde_json::from_str(&text).unwrap();
-            if let FromTerminal::Screen { update } = &said {
-                if update.full {
-                    self.rows = vec![String::new(); update.size.rows as usize];
-                }
-                for (row, runs) in &update.rows {
-                    if let Some(r) = self.rows.get_mut(*row as usize) {
-                        *r = runs.iter().map(|run| run.text.as_str()).collect();
+            let Message::Text(json) = message else { continue };
+            let said: FromTerminal = serde_json::from_str(&json).unwrap();
+            match &said {
+                FromTerminal::Screen { update } => {
+                    let (from, gone) = self.screen.take(update);
+                    for (n, row) in (from..).zip(&gone) {
+                        self.lines.entry(n).or_insert_with(|| text(row));
                     }
+                    self.rows = self.screen.rows().iter().map(text).collect();
+                    self.last = Some(update.clone());
                 }
-                self.last = Some(update.clone());
-            }
-            if let FromTerminal::Lines { from, rows } = &said {
-                self.lines.extend((*from..).zip(rows.iter().map(|r| r.iter().map(|run| run.text.as_str()).collect())));
+                FromTerminal::Lines { from, rows } => self.lines.extend((*from..).zip(rows.iter().map(text))),
+                FromTerminal::ScrolledOff { lines } => self.lines.extend(lines.iter().map(|(n, row)| (*n, text(row)))),
+                FromTerminal::Found { .. } => {}
             }
             return said;
         }
@@ -157,10 +164,13 @@ async fn a_reader_is_sent_lines_as_they_scroll_off_and_asks_for_scrollback_and_s
     reader.say(ToTerminal::Size { size: TermSize { cols: 80, rows: 10 } }).await;
     reader.run("seq 1 300").await;
     reader.until_shows("300").await;
-    // The line above the screen came as it scrolled off, unasked.
-    let screen = reader.last.clone().unwrap();
-    let first: u64 = reader.rows[0].parse().expect("the screen's first row is a number");
-    assert_eq!(reader.lines.get(&(screen.top - 1)), Some(&(first - 1).to_string()), "{:?}", reader.lines);
+    // What scrolled off its screen it has, unasked, as the server has it.
+    let had = reader.lines.clone();
+    assert!(!had.is_empty());
+    let (first, last) = (*had.keys().next().unwrap(), *had.keys().last().unwrap());
+    reader.say(ToTerminal::Lines { from: first, count: (last - first + 1) as u32 }).await;
+    while !matches!(reader.next().await, FromTerminal::Lines { .. }) {}
+    assert!(had.iter().all(|(n, line)| reader.lines.get(n) == Some(line)), "{had:?}\n{:?}", reader.lines);
     reader.say(ToTerminal::Search { query: "150".into() }).await;
     let found = loop {
         if let FromTerminal::Found { found, .. } = reader.next().await {
@@ -178,6 +188,12 @@ async fn a_reader_is_sent_lines_as_they_scroll_off_and_asks_for_scrollback_and_s
     };
     let text: Vec<String> = rows.iter().map(|r| r.iter().map(|run| run.text.as_str()).collect()).collect();
     assert_eq!(text, ["150", "151"]);
+    // A line it saw half printed, finished and scrolled off in one frame:
+    // it has the whole of it.
+    reader.run("printf 'half'; sleep 0.5; printf ' and whole\\n'; seq 400 430").await;
+    reader.until_shows("430").await;
+    let halves: Vec<&String> = reader.lines.values().filter(|l| l.starts_with("half")).collect();
+    assert_eq!(halves, ["half and whole"], "{:?}", reader.lines);
 }
 
 #[tokio::test]

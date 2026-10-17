@@ -54,6 +54,12 @@ impl View {
         (self.held, self.pixels) = (None, 0.0);
     }
 
+    /// The lines were laid out anew, their end `by` lines on: held, it
+    /// keeps its distance from the live screen.
+    pub(super) fn shift(&mut self, by: i64) {
+        self.held = self.held.map(|at| at.saturating_add_signed(by));
+    }
+
     /// The window's top on `top` (on the live screen's, or past it: live).
     fn hold(&mut self, top: i64, span: Span) {
         let live = span.live() as i64;

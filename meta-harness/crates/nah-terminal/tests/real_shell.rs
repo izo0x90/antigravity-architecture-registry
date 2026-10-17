@@ -227,3 +227,17 @@ fn it_depends_on_no_workspace_crate_but_the_shared_types() {
     let local: Vec<&str> = manifest.lines().filter(|l| l.contains("path = ")).map(|l| l.split('=').next().unwrap().trim()).collect();
     assert_eq!(local, ["harness-contracts"]);
 }
+
+#[test]
+fn a_synchronized_update_never_ended_shows_and_its_answers_reach_the_program() {
+    let sh = open("/bin/bash", 80, 24);
+    // Asks where the cursor is inside an update it never ends, and waits for the answer.
+    sh.run(r"printf '\e[?2026h\e[6n'; read -rs -d R pos; echo; echo answered ${pos:2}");
+    // "answered 24;1": the row and column it said.
+    let said = |l: &str| l.strip_prefix("answered ").and_then(|p| p.split_once(';')).is_some_and(|(r, c)| r.parse::<u16>().is_ok() && c.parse::<u16>().is_ok());
+    sh.until("the answer, once the update was let go", |t| t.lines().any(said));
+    // A program that ends inside one: what it drew shows.
+    sh.run(r"printf '\e[?2026hbye\x20inside'; exit");
+    sh.happened("the end", |h| matches!(h, Happening::Ended(_)));
+    sh.until("what it drew (not the command typed)", |t| t.contains("bye inside"));
+}

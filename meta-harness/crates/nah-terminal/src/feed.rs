@@ -25,14 +25,19 @@ use alacritty_terminal::vte::ansi::{Processor, Timeout};
 use crate::scan::{Scan, Seen};
 
 /// How far past what's kept the emulator's scrollback may grow before
-/// it's cut back (cutting is cheapest done in batches).
-const SLACK: usize = 4096;
+/// it's cut back: under the emulator's spare rows (1000), so the rows a
+/// cut frees are used again rather than freed and made anew.
+const SLACK: usize = 512;
 /// The emulator's room past what's kept: output fed between two cuts
-/// can't fill it (it's fed in pieces of `PIECE`, a line at most a byte),
-/// so it never drops a line itself. If it ever did (a flood of scrolls),
-/// every line is numbered anew.
+/// can't fill it (it's fed in pieces short enough), so it never drops a
+/// line itself. If it ever did, every line is numbered anew.
 const ROOM: usize = 65_536;
-const PIECE: usize = 4096;
+/// The longest piece fed at once: a byte scrolls a quarter of the
+/// screen's rows at most (`CSI n S` takes four bytes or more for `n`
+/// rows), so a piece can't scroll past `ROOM`.
+fn piece_len(rows: usize) -> usize {
+    (4 * ROOM / rows.max(1)).clamp(64, 4096)
+}
 /// How long a synchronized update is held at most, and how much of it.
 pub const SYNC_WAIT: Duration = Duration::from_millis(150);
 const MOST_HELD: usize = 2 * 1024 * 1024;
@@ -63,15 +68,15 @@ pub struct Feed {
     /// screen shows, it can't be read, and nothing goes into it).
     history: usize,
     /// A synchronized update not yet fed: its output, where in it each
-    /// clear of the scrollback ends, and when it started.
+    /// thing seen ends (it's cut there when fed), and when it started.
     held: Vec<u8>,
-    clears: Vec<(usize, Seen)>,
+    cuts: Vec<(usize, Seen)>,
     since: Option<Instant>,
 }
 
 impl Feed {
     pub fn new(kept: usize) -> Self {
-        Self { processor: Processor::new(), scan: Scan::default(), kept, dropped: 0, history: 0, held: Vec::new(), clears: Vec::new(), since: None }
+        Self { processor: Processor::new(), scan: Scan::default(), kept, dropped: 0, history: 0, held: Vec::new(), cuts: Vec::new(), since: None }
     }
 
     /// The emulator's scrollback for `kept` lines kept here.
@@ -89,8 +94,8 @@ impl Feed {
         self.dropped
     }
 
-    /// Reads `bytes` of output: fed to `term` (or held, in a synchronized
-    /// update); the shell's command marks in them.
+    /// Reads `bytes` of output: fed to `term`, or held while a program
+    /// draws a synchronized update; the shell's command marks fed with it.
     pub fn output<T: EventListener>(&mut self, term: &mut Term<T>, bytes: &[u8]) -> Vec<Seen> {
         let mut marks = Vec::new();
         let mut rest = bytes;
@@ -101,25 +106,22 @@ impl Feed {
             if self.since.is_some() {
                 self.held.extend_from_slice(piece);
                 match seen {
-                    Some(clear @ (Seen::ClearedHistory | Seen::Reset)) => self.clears.push((self.held.len(), clear)),
-                    Some(Seen::SyncEnd) => self.release(term),
-                    _ => {}
+                    Some(Seen::SyncEnd) => marks.extend(self.release(term)),
+                    Some(seen) => self.cuts.push((self.held.len(), seen)),
+                    None => {}
                 }
                 if self.held.len() > MOST_HELD {
-                    self.release(term);
+                    marks.extend(self.release(term));
                 }
             } else {
                 match seen {
-                    Some(clear @ (Seen::ClearedHistory | Seen::Reset)) => self.feed_clear(term, piece, clear),
                     Some(Seen::SyncStart) => {
-                        self.feed(term, piece);
+                        self.feed_to(term, piece, Seen::SyncStart);
                         self.since = Some(Instant::now());
                     }
-                    _ => self.feed(term, piece),
+                    Some(seen) => marks.extend(self.feed_to(term, piece, seen)),
+                    None => self.feed(term, piece),
                 }
-            }
-            if let Some(mark @ (Seen::Started | Seen::Finished(_))) = seen {
-                marks.push(mark);
             }
         }
         marks
@@ -130,58 +132,73 @@ impl Feed {
         self.since.map(|at| SYNC_WAIT.saturating_sub(at.elapsed()))
     }
 
-    /// Feeds a held update that's waited long enough; whether it did.
-    pub fn overdue<T: EventListener>(&mut self, term: &mut Term<T>) -> bool {
-        if self.due_in().is_some_and(|d| d.is_zero()) {
-            self.release(term);
-            return true;
+    /// Feeds a held update that's waited long enough (or, `now`, any held
+    /// update: the shell ended): the marks in it.
+    pub fn overdue<T: EventListener>(&mut self, term: &mut Term<T>, now: bool) -> Vec<Seen> {
+        match self.due_in() {
+            Some(wait) if now || wait.is_zero() => self.release(term),
+            _ => Vec::new(),
         }
-        false
     }
 
-    /// After the emulator was resized (it may have moved lines between
-    /// the screen and the scrollback).
-    pub fn resized<T: EventListener>(&mut self, term: &mut Term<T>) {
+    /// After the emulator was resized: lines may have moved between the
+    /// screen and the scrollback (counted as ever). A new width lays every
+    /// line out again: from then on lines are numbered past every number
+    /// given (`before`: the end of the lines before), none given twice.
+    pub fn resized<T: EventListener>(&mut self, term: &mut Term<T>, before: u64, relaid: bool) {
         self.settle(term);
+        if relaid {
+            self.dropped = self.dropped.max(before);
+        }
     }
 
-    /// Feeds the held update, cut before each clear in it.
-    fn release<T: EventListener>(&mut self, term: &mut Term<T>) {
+    /// Feeds the held update, cut where something was seen in it.
+    fn release<T: EventListener>(&mut self, term: &mut Term<T>) -> Vec<Seen> {
         self.since = None;
         let held = std::mem::take(&mut self.held);
+        let mut marks = Vec::new();
         let mut from = 0;
-        for (end, clear) in std::mem::take(&mut self.clears) {
-            self.feed_clear(term, &held[from..end], clear);
+        for (end, seen) in std::mem::take(&mut self.cuts) {
+            marks.extend(self.feed_to(term, &held[from..end], seen));
             from = end;
         }
         self.feed(term, &held[from..]);
-        self.held = held;
-        self.held.clear();
+        // Its room kept for the next, unless it was a big one.
+        if held.capacity() <= 64 * 1024 {
+            self.held = held;
+            self.held.clear();
+        }
+        marks
     }
 
     fn feed<T: EventListener>(&mut self, term: &mut Term<T>, bytes: &[u8]) {
-        for piece in bytes.chunks(PIECE) {
+        for piece in bytes.chunks(piece_len(term.screen_lines())) {
             self.processor.advance(term, piece);
             self.settle(term);
         }
     }
 
-    /// Feeds `bytes`, which end with `clear`'s last byte: what's in the
-    /// scrollback just before it is counted as gone.
-    fn feed_clear<T: EventListener>(&mut self, term: &mut Term<T>, bytes: &[u8], clear: Seen) {
+    /// Feeds `bytes`, which end with what was `seen`: a clear of the
+    /// scrollback or a reset count what they take (looked at just before
+    /// their last byte), the alternate screen is entered with the main
+    /// screen's scrollback counted. A command mark is given back.
+    fn feed_to<T: EventListener>(&mut self, term: &mut Term<T>, bytes: &[u8], seen: Seen) -> Option<Seen> {
         let (before, last) = bytes.split_at(bytes.len().saturating_sub(1));
         self.feed(term, before);
         let alternate = term.mode().contains(TermMode::ALT_SCREEN);
-        // The alternate screen has no scrollback of its own to clear; a
-        // reset clears the main screen's from either.
-        let gone = match clear {
+        let gone = match seen {
+            // The alternate screen has no scrollback of its own to clear.
             Seen::ClearedHistory if alternate => 0,
-            _ => self.history,
+            Seen::ClearedHistory => self.history,
+            // A reset clears the main screen and its scrollback, from either.
+            Seen::Reset => self.history + term.screen_lines(),
+            _ => 0,
         };
         self.processor.advance(term, last);
         self.dropped += gone as u64;
-        self.history -= gone;
+        self.history = self.history.saturating_sub(gone);
         self.settle(term);
+        matches!(seen, Seen::Started | Seen::Finished(_)).then_some(seen)
     }
 
     /// Cuts the scrollback back to what's kept, counting what goes.
@@ -307,10 +324,48 @@ mod tests {
     fn a_synchronized_update_that_never_ends_is_fed_once_its_wait_is_over() {
         let (mut term, mut feed) = term(100);
         feed.output(&mut term, b"\x1b[?2026hhalf a frame");
-        assert!(!feed.overdue(&mut term));
+        feed.overdue(&mut term, false);
+        assert!(feed.due_in().is_some(), "not yet");
         std::thread::sleep(SYNC_WAIT);
-        assert!(feed.overdue(&mut term));
+        feed.overdue(&mut term, false);
+        assert!(feed.due_in().is_none());
         assert_eq!(line(&term, &feed, 0).as_deref(), Some("half a frame"));
+    }
+
+    #[test]
+    fn a_new_width_lays_lines_out_again_numbered_past_every_number_given() {
+        let (mut term, mut feed) = term(100);
+        feed.output(&mut term, format!("{}\r\n", "x".repeat(50)).as_bytes());
+        print(&mut feed, &mut term, 0, 30);
+        for cols in [10, 40, 20] {
+            let end = feed.top() + term.screen_lines() as u64;
+            term.resize(Size(cols, 5));
+            feed.resized(&mut term, end, true);
+            assert!(feed.oldest() >= end, "{cols} wide: none of the numbers before given again");
+            assert_eq!(line(&term, &feed, feed.top() - 1).as_deref(), Some("line 25"), "the lines are there, laid out again (the screen: 26 to 29 and the cursor's row)");
+        }
+        // Only taller: lines move between the screen and the scrollback, each keeping its number.
+        let numbered = |feed: &Feed, term: &Term<VoidListener>| (feed.oldest()..feed.top() + term.screen_lines() as u64).filter_map(|n| line(term, feed, n).map(|l| (n, l))).filter(|(_, l)| l.starts_with("line")).collect::<Vec<_>>();
+        let before = numbered(&feed, &term);
+        let end = feed.top() + term.screen_lines() as u64;
+        term.resize(Size(20, 9));
+        feed.resized(&mut term, end, false);
+        assert_eq!(numbered(&feed, &term), before);
+    }
+
+    #[test]
+    fn a_reset_numbers_the_new_screen_past_the_old_one() {
+        let (mut term, mut feed) = term(100);
+        print(&mut feed, &mut term, 0, 20);
+        let end = feed.top() + 5;
+        feed.output(&mut term, b"\x1bcprompt");
+        assert_eq!((feed.oldest(), feed.top()), (end, end), "the old screen's numbers aren't the new one's");
+        assert_eq!(line(&term, &feed, end).as_deref(), Some("prompt"));
+        // Entered the alternate screen in the same read as more lines: they're counted before it.
+        print(&mut feed, &mut term, 0, 10);
+        let lines: String = (0..10).map(|i| format!("more {i}\r\n")).collect();
+        feed.output(&mut term, format!("{lines}\x1b[?1049h\x1bc").as_bytes());
+        assert!(feed.oldest() >= end + 20, "every line printed before the reset is past: {}", feed.oldest());
     }
 
     #[test]

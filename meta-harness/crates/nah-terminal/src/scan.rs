@@ -22,28 +22,29 @@ pub enum Seen {
     /// A synchronized update starts (`CSI ? 2026 h`) or ends (`CSI ? 2026 l`).
     SyncStart,
     SyncEnd,
+    /// The alternate screen is entered (`CSI ? 1049 h`, `1047`, `47`).
+    AltScreen,
 }
 
 /// Reads a terminal's output for what's `Seen` in it.
 #[derive(Default)]
-pub struct Scan {
-    parser: Parser,
-}
+pub struct Scan(Parser);
 
 impl Scan {
     /// Reads `bytes` up to the end of the first thing seen in them: how
     /// many bytes were read, and what was seen (none: all of them read).
     pub fn next(&mut self, bytes: &[u8]) -> (usize, Option<Seen>) {
         let mut performer = Performer(None);
-        let read = self.parser.advance_until_terminated(&mut performer, bytes);
+        let read = self.0.advance_until_terminated(&mut performer, bytes);
         (read, performer.0)
     }
 }
 
 struct Performer(Option<Seen>);
 
-/// The sync update mode's number.
+/// The sync update mode's number, and the alternate screen's.
 const SYNC: u16 = 2026;
+const ALT: [u16; 3] = [1049, 1047, 47];
 
 impl Perform for Performer {
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
@@ -64,11 +65,13 @@ impl Perform for Performer {
             return;
         }
         let first = || params.iter().next().and_then(|p| p.first().copied()).unwrap_or(0);
-        let sync = || params.iter().any(|p| p.first() == Some(&SYNC));
+        let has = |modes: &[u16]| params.iter().any(|p| p.first().is_some_and(|m| modes.contains(m)));
         self.0 = match (action, intermediates) {
             ('J', []) if first() == 3 => Some(Seen::ClearedHistory),
-            ('h', [b'?']) if sync() => Some(Seen::SyncStart),
-            ('l', [b'?']) if sync() => Some(Seen::SyncEnd),
+            // Both in one: the sync's start (cut the same way).
+            ('h', [b'?']) if has(&[SYNC]) => Some(Seen::SyncStart),
+            ('h', [b'?']) if has(&ALT) => Some(Seen::AltScreen),
+            ('l', [b'?']) if has(&[SYNC]) => Some(Seen::SyncEnd),
             _ => None,
         };
     }
@@ -108,8 +111,8 @@ mod tests {
 
     #[test]
     fn what_matters_is_seen_where_it_ends_even_split_across_reads() {
-        let out: &[u8] = b"$ make\x1b]133;C\x07building\r\n\x1b]0;title\x07done\x1b]133;D;2\x1b\\$ \x1b[31mred\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[?2026hframe\x1b[?2026l\x1bc";
-        let want = [Seen::Started, Seen::Finished(Some(2)), Seen::ClearedHistory, Seen::SyncStart, Seen::SyncEnd, Seen::Reset];
+        let out: &[u8] = b"$ make\x1b]133;C\x07building\r\n\x1b]0;title\x07done\x1b]133;D;2\x1b\\$ \x1b[31mred\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[?2026hframe\x1b[?2026l\x1b[?1049h\x1bc";
+        let want = [Seen::Started, Seen::Finished(Some(2)), Seen::ClearedHistory, Seen::SyncStart, Seen::SyncEnd, Seen::AltScreen, Seen::Reset];
         let whole = seen(&[out]);
         assert_eq!(whole.iter().map(|(_, s)| *s).collect::<Vec<_>>(), want, "another OSC, colours, 2J aren't");
         for (end, s) in &whole {

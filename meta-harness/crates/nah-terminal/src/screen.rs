@@ -72,6 +72,8 @@ impl Changes {
             oldest: feed.oldest(),
             alternate: term.mode().contains(TermMode::ALT_SCREEN),
             title: title.to_owned(),
+            // Which start of the shell it is: the server's to say.
+            shell: 0,
         }
     }
 }

@@ -16,7 +16,7 @@ mod shell;
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::Term;
@@ -159,21 +159,20 @@ impl Terminal {
         }));
         let killer = child.clone_killer();
         let pid = child.process_id();
-        let on: Arc<dyn Fn(Happening) + Send + Sync> = Arc::new(on);
+        let reading = Arc::new(Reading { state: state.clone(), listener, writer: writer.clone(), on: Arc::new(on) });
         let waker = {
-            let (state, on) = (Arc::downgrade(&state), on.clone());
-            std::thread::Builder::new().name("terminal-sync".into()).spawn(move || release_held(&state, &*on))?
+            let reading = reading.clone();
+            std::thread::Builder::new().name("terminal-sync".into()).spawn(move || reading.release_held())?
         };
-        {
-            let (state, writer) = (state.clone(), writer.clone());
-            std::thread::Builder::new().name("terminal".into()).spawn(move || {
-                read(reader, &state, &listener, &writer, &*on, waker.thread());
-                let code = child.wait().ok().map(|s| s.exit_code() as i32);
-                lock(&state).ended = Some(code);
-                waker.thread().unpark();
-                on(Happening::Ended(code));
-            })?;
-        }
+        std::thread::Builder::new().name("terminal".into()).spawn(move || {
+            reading.read(reader, waker.thread());
+            // What a program left held as it ended shows.
+            reading.feed(&[], true);
+            let code = child.wait().ok().map(|s| s.exit_code() as i32);
+            lock(&reading.state).ended = Some(code);
+            waker.thread().unpark();
+            (reading.on)(Happening::Ended(code));
+        })?;
         Ok(Self { state, writer, master: Mutex::new(pair.master), killer: Mutex::new(killer), pid })
     }
 
@@ -194,8 +193,9 @@ impl Terminal {
         }
         lock(&self.master).resize(pty_size(size)).map_err(io_error)?;
         let State { term, feed, changes, .. } = &mut *state;
+        let (end, cols) = (feed.top() + term.screen_lines() as u64, term.columns());
         term.resize(Size(size));
-        feed.resized(term);
+        feed.resized(term, end, term.columns() != cols);
         changes.take(term);
         Ok(())
     }
@@ -267,24 +267,47 @@ impl Drop for Terminal {
     }
 }
 
-/// Reads the shell's output until it ends: feeds the emulator, reads the
-/// marks, answers the program, and tells `on` what happened.
-fn read(mut reader: Box<dyn Read + Send>, state: &Mutex<State>, listener: &Listener, writer: &Mutex<Box<dyn Write + Send>>, on: &(dyn Fn(Happening) + Send + Sync), waker: &std::thread::Thread) {
-    let mut buf = vec![0u8; 64 * 1024];
-    loop {
-        let n = match reader.read(&mut buf) {
-            Ok(0) | Err(_) => return,
-            Ok(n) => n,
-        };
-        let bytes = &buf[..n];
+/// What the thread reading a shell's output and the one releasing its
+/// held updates share: they feed the emulator the same way.
+struct Reading {
+    state: Arc<Mutex<State>>,
+    listener: Listener,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    on: Arc<dyn Fn(Happening) + Send + Sync>,
+}
+
+impl Reading {
+    /// Reads the shell's output until it ends; the thread releasing held
+    /// updates is woken when one starts being held.
+    fn read(&self, mut reader: Box<dyn Read + Send>, waker: &std::thread::Thread) {
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut holding = false;
+        loop {
+            let n = match reader.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => n,
+            };
+            let held = self.feed(&buf[..n], false);
+            if held && !holding {
+                waker.unpark();
+            }
+            holding = held;
+        }
+    }
+
+    /// Feeds `bytes` of output (and a held update that's due; `all`: any
+    /// held update): reads the marks, answers the program, and tells what
+    /// happened. Whether an update is held after.
+    fn feed(&self, bytes: &[u8], all: bool) -> bool {
         let mut happened = Vec::new();
         let mut answers = Vec::new();
-        {
-            let mut guard = lock(state);
+        let holding = {
+            let mut guard = lock(&self.state);
             let State { term, feed, changes, title, named, started, .. } = &mut *guard;
             let before = changes.seq();
-            feed.overdue(term);
-            for mark in feed.output(term, bytes) {
+            let mut marks = feed.overdue(term, all);
+            marks.extend(feed.output(term, bytes));
+            for mark in marks {
                 match mark {
                     Seen::Started => *started = Some(Instant::now()),
                     Seen::Finished(code) => {
@@ -295,11 +318,8 @@ fn read(mut reader: Box<dyn Read + Send>, state: &Mutex<State>, listener: &Liste
                     _ => {}
                 }
             }
-            if feed.due_in().is_some() {
-                waker.unpark();
-            }
             changes.take(term);
-            for said in std::mem::take(&mut *lock(&listener.0)) {
+            for said in std::mem::take(&mut *lock(&self.listener.0)) {
                 match said {
                     Said::Title(t) => {
                         *title = t.clone();
@@ -316,48 +336,40 @@ fn read(mut reader: Box<dyn Read + Send>, state: &Mutex<State>, listener: &Liste
             if changes.seq() != before {
                 happened.insert(0, Happening::Changed);
             }
-        }
+            feed.due_in().is_some()
+        };
         if !answers.is_empty() {
-            let mut writer = lock(writer);
+            let mut writer = lock(&self.writer);
             for text in answers {
                 let _ = writer.write_all(text.as_bytes());
             }
             let _ = writer.flush();
         }
         for happening in happened {
-            on(happening);
+            (self.on)(happening);
         }
+        holding
     }
-}
 
-/// Feeds each synchronized update that's waited long enough (its
-/// program never said it ended), on its own thread: woken when one is
-/// held, done when the shell ends.
-fn release_held(state: &Weak<Mutex<State>>, on: &(dyn Fn(Happening) + Send + Sync)) {
-    loop {
-        std::thread::park();
+    /// Feeds each synchronized update that's waited long enough (its
+    /// program never said it ended), on its own thread: woken when one is
+    /// held, done when the shell ends.
+    fn release_held(&self) {
         loop {
-            let Some(state) = state.upgrade() else { return };
-            let due = {
-                let mut guard = lock(&state);
-                let State { term, feed, changes, ended, .. } = &mut *guard;
-                if ended.is_some() {
-                    return;
-                }
-                if feed.overdue(term) {
-                    let before = changes.seq();
-                    changes.take(term);
-                    if changes.seq() != before {
-                        drop(guard);
-                        on(Happening::Changed);
+            std::thread::park();
+            loop {
+                let (ended, due) = {
+                    let state = lock(&self.state);
+                    (state.ended.is_some(), state.feed.due_in())
+                };
+                match due {
+                    _ if ended => return,
+                    None => break,
+                    Some(wait) if !wait.is_zero() => std::thread::park_timeout(wait),
+                    Some(_) => {
+                        self.feed(&[], false);
                     }
-                    break;
                 }
-                feed.due_in()
-            };
-            match due {
-                Some(wait) => std::thread::park_timeout(wait),
-                None => break,
             }
         }
     }

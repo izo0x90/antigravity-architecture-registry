@@ -14,7 +14,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use futures::{SinkExt, StreamExt};
-use harness_contracts::{FromTerminal, Terminal, TerminalId, ToTerminal};
+use harness_contracts::{FromTerminal, ReaderScreen, Row, Terminal, TerminalId, ToTerminal};
 
 use crate::cockpit::{Needs, Ticketed, can};
 use crate::modules::TerminalsState;
@@ -79,16 +79,19 @@ async fn terminal_socket(_: Ticketed, ws: WebSocketUpgrade, State(state): State<
 }
 
 /// One reader: the whole screen first, then what changed (at most every
-/// frame); what it sends is done in the order sent.
+/// frame); what it sends is done in the order sent. Reading the terminal
+/// takes its lock (while its output is fed): off the async threads.
 async fn serve(socket: WebSocket, terminals: Arc<Terminals>, open: Arc<Open>) {
     let (mut sink, mut incoming) = socket.split();
     let viewer = open.viewer();
     let mut changed = open.watch();
     let mut started = open.started();
-    let first = open.screen(None);
-    let mut seen = first.seq;
-    let mut title = first.title.clone();
-    let mut top = first.top;
+    let Ok(first) = read(&open, |o| o.screen(None)).await else { return };
+    let (mut seen, mut title) = (first.seq, first.title.clone());
+    // What the reader has of the screen: rows that scroll off are sent
+    // again only when they changed after it was sent them.
+    let mut has = ReaderScreen::default();
+    has.take(&first);
     if send(&mut sink, &FromTerminal::Screen { update: first }).await.is_err() {
         return;
     }
@@ -102,12 +105,13 @@ async fn serve(socket: WebSocket, terminals: Arc<Terminals>, open: Arc<Open>) {
                 changed.borrow_and_update();
                 // A new start of its shell: its screen whole, numbered anew.
                 let restarted = std::mem::replace(&mut started, open.started()) != started;
-                let update = open.screen(if restarted { None } else { Some(seen) });
+                let since = (!restarted).then_some(seen);
+                let Ok(update) = read(&open, move |o| o.screen(since)).await else { break };
                 if update.full || update.seq != seen || update.title != title {
                     (seen, title) = (update.seq, update.title.clone());
-                    // What scrolled off first: it's there when the screen moves.
-                    if let Some(gone) = scrolled_off(&open, &update, std::mem::replace(&mut top, update.top))
-                        && send(&mut sink, &gone).await.is_err()
+                    let (from, gone) = has.take(&update);
+                    if let Some(changed) = changed_since(&open, from, gone).await
+                        && send(&mut sink, &changed).await.is_err()
                     {
                         break;
                     }
@@ -137,40 +141,46 @@ async fn serve(socket: WebSocket, terminals: Arc<Terminals>, open: Arc<Open>) {
     terminals.shown(&open, viewer, None);
 }
 
-/// The lines that scrolled off the screen since the reader's last update
-/// (the screen's height of them at most), sent before the update that
-/// moves the screen: the reader has them as they went.
-fn scrolled_off(open: &Open, update: &harness_contracts::ScreenUpdate, before: u64) -> Option<FromTerminal> {
-    if update.full || update.alternate || update.top <= before {
+/// `f` on the terminal, on a thread that may block.
+async fn read<T: Send + 'static>(open: &Arc<Open>, f: impl FnOnce(&Arc<Open>) -> T + Send + 'static) -> Result<T, tokio::task::JoinError> {
+    let open = open.clone();
+    tokio::task::spawn_blocking(move || f(&open)).await
+}
+
+/// Of the rows that scrolled off the reader's screen (`gone`, from line
+/// `from`, as it had them), those that changed before they went.
+async fn changed_since(open: &Arc<Open>, from: u64, gone: Vec<Row>) -> Option<FromTerminal> {
+    if gone.is_empty() {
         return None;
     }
-    let from = before.max(update.top.saturating_sub(u64::from(update.size.rows))).max(update.oldest);
-    let (from, rows) = open.scrollback(from, (update.top - from) as u32);
-    (!rows.is_empty()).then_some(FromTerminal::Lines { from, rows })
+    let count = gone.len() as u32;
+    let (start, now) = read(open, move |o| o.scrollback(from, count)).await.ok()?;
+    let lines: Vec<(u64, Row)> = (start..).zip(now).filter(|(n, row)| n.checked_sub(from).and_then(|i| gone.get(i as usize)) != Some(row)).collect();
+    (!lines.is_empty()).then_some(FromTerminal::ScrolledOff { lines })
 }
 
 /// Does what a reader sent; what it answers, if anything.
 async fn said_to(terminals: &Arc<Terminals>, open: &Arc<Open>, viewer: u64, said: ToTerminal) -> Option<FromTerminal> {
     match said {
         ToTerminal::Input { input } => {
-            let open = open.clone();
             // Awaited before the next is read: typed in the order sent.
-            if let Ok(Err(e)) = tokio::task::spawn_blocking(move || open.input(&input)).await {
+            if let Ok(Err(e)) = read(open, move |o| o.input(&input)).await {
                 tracing::debug!("Typing into a terminal: {e}");
             }
             None
         }
         ToTerminal::Size { size } => {
-            let (terminals, open) = (terminals.clone(), open.clone());
-            let _ = tokio::task::spawn_blocking(move || terminals.shown(&open, viewer, Some(size))).await;
+            let terminals = terminals.clone();
+            let _ = read(open, move |o| terminals.shown(o, viewer, Some(size))).await;
             None
         }
         ToTerminal::Lines { from, count } => {
-            let (from, rows) = open.scrollback(from, count.min(1000));
+            let (from, rows) = read(open, move |o| o.scrollback(from, count.min(1000))).await.ok()?;
             Some(FromTerminal::Lines { from, rows })
         }
         ToTerminal::Search { query } => {
-            let found = open.search(&query);
+            let asked = query.clone();
+            let found = read(open, move |o| o.search(&asked)).await.ok()?;
             Some(FromTerminal::Found { query, found })
         }
     }

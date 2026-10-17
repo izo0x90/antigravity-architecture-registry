@@ -130,10 +130,12 @@ impl TerminalBuffer {
         }
     }
 
+    /// Its socket let go: what it has stays (a new socket's first update
+    /// says if the lines are still the same), what it asked for won't come.
     fn drop_link(&mut self) {
         self.link = None;
         self.size_sent = None;
-        self.lines.forget();
+        self.lines.unasked();
     }
 
     fn send(&mut self, said: &ToTerminal) {
@@ -162,8 +164,23 @@ impl TerminalBuffer {
         }
         for said in polled.said {
             match said {
-                FromTerminal::Screen { update } => self.lines.take(update),
+                FromTerminal::Screen { update } => match self.lines.take(&update) {
+                    lines::Took::Same => {}
+                    // Laid out anew: the view and the cursor keep their
+                    // distance from the live screen; a selection and the
+                    // search's lines were of the old lines.
+                    lines::Took::Relaid { by } => {
+                        self.view.shift(by);
+                        self.cursor = self.cursor.map(|c| c.saturating_add_signed(by));
+                        (self.selection, self.found) = (None, None);
+                    }
+                    lines::Took::Restarted => {
+                        self.view.go_live();
+                        (self.cursor, self.selection, self.found, self.drawn) = (None, None, None, None);
+                    }
+                },
                 FromTerminal::Lines { from, rows } => self.lines.arrived(from, rows),
+                FromTerminal::ScrolledOff { lines } => self.lines.scrolled_off(lines),
                 FromTerminal::Found { query, found } => {
                     if self.found.as_ref().is_some_and(|(asked, _)| *asked == query) {
                         self.found = Some((query, found.into_iter().map(|f| (f.line, f.text)).collect()));
@@ -405,10 +422,10 @@ impl Navigable for TerminalBuffer {
 
     fn fold(&mut self, _fold: Fold) {}
 
-    /// Its lines: what's fetched of the scrollback, the screen, and the
-    /// lines the server found for the search under way.
+    /// Its lines: the screen's, and those the server found (through the
+    /// whole scrollback) for the search under way.
     fn items(&self) -> Vec<Item> {
-        let mut lines: BTreeMap<u64, String> = (self.lines.first()..self.lines.end()).filter_map(|l| self.lines.text(l).map(|text| (l, text))).collect();
+        let mut lines: BTreeMap<u64, String> = self.lines.screen_texts().collect();
         if let Some((_, found)) = &self.found {
             for (line, text) in found {
                 lines.entry(*line).or_insert_with(|| text.clone());
@@ -587,7 +604,7 @@ pub(crate) mod tests {
     pub(crate) fn numbered(top: u64, oldest: u64) -> FromTerminal {
         let texts: Vec<String> = (top..top + 24).map(|n| format!("line {n}")).collect();
         let FromTerminal::Screen { mut update } = screen(&texts.iter().map(String::as_str).collect::<Vec<_>>()) else { unreachable!() };
-        (update.top, update.oldest) = (top, oldest);
+        (update.top, update.oldest, update.full) = (top, oldest, false);
         FromTerminal::Screen { update }
     }
 
@@ -600,7 +617,7 @@ pub(crate) mod tests {
     pub(crate) fn screen(lines: &[&str]) -> FromTerminal {
         let rows = (0..24u16).map(|r| (r, lines.get(usize::from(r)).map(|l| vec![Run { text: (*l).to_owned(), style: Style::default(), wide: false }]).unwrap_or_default())).collect();
         let cursor = Cursor { row: lines.len().saturating_sub(1) as u16, col: 2, visible: true };
-        FromTerminal::Screen { update: ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 24 }, full: true, rows, cursor, top: 0, oldest: 0, alternate: false, title: "bash".into() } }
+        FromTerminal::Screen { update: ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 24 }, full: true, rows, cursor, top: 0, oldest: 0, alternate: false, title: "bash".into(), shell: 1 } }
     }
 
     impl TerminalBuffer {

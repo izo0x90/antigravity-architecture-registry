@@ -140,6 +140,60 @@ pub struct ScreenUpdate {
     /// numbered lines (they're gone when it's done).
     pub alternate: bool,
     pub title: String,
+    /// Which start of its shell this is: a new start numbers its lines
+    /// from the beginning again (they're other lines).
+    #[serde(default)]
+    pub shell: u64,
+}
+
+/// A screen as a reader has it, from the updates it was sent: the one
+/// way updates are applied, by the cockpit and by the server's own copy
+/// of what each reader has.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReaderScreen {
+    rows: Vec<Row>,
+    size: TermSize,
+    top: u64,
+    alternate: bool,
+}
+
+impl ReaderScreen {
+    /// `update` applied. What scrolled off the top as the reader had it:
+    /// the first one's number, and the rows (none when the screen was
+    /// laid out anew or a program has the whole screen).
+    pub fn take(&mut self, update: &ScreenUpdate) -> (u64, Vec<Row>) {
+        let rows = usize::from(update.size.rows);
+        let mut gone = Vec::new();
+        let from = self.top;
+        if update.full || update.size != self.size || update.top < self.top || self.alternate || update.alternate {
+            self.rows = vec![Row::new(); rows];
+        } else {
+            let moved = ((update.top - self.top) as usize).min(self.rows.len());
+            gone = self.rows.drain(..moved).collect();
+            self.rows.resize(rows, Row::new());
+        }
+        for (row, runs) in &update.rows {
+            if let Some(r) = self.rows.get_mut(usize::from(*row)) {
+                r.clone_from(runs);
+            }
+        }
+        (self.size, self.top, self.alternate) = (update.size, update.top, update.alternate);
+        (from, gone)
+    }
+
+    /// The screen's rows, the first numbered `top`.
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    pub fn top(&self) -> u64 {
+        self.top
+    }
+
+    /// Line `number`, when it's on the screen.
+    pub fn get(&self, number: u64) -> Option<&Row> {
+        number.checked_sub(self.top).and_then(|i| self.rows.get(usize::try_from(i).ok()?))
+    }
 }
 
 /// A key that isn't text.
@@ -231,10 +285,40 @@ pub enum ToTerminal {
 #[serde(tag = "type", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum FromTerminal {
     Screen { update: ScreenUpdate },
-    /// Lines of the scrollback (they never change), from the one numbered
-    /// `from` (the oldest kept, when an older one was asked for): when
-    /// asked for, and as they scroll off the screen (before the update
-    /// that moves it).
+    /// Lines of the scrollback asked for (they never change), from the one
+    /// numbered `from` (the oldest kept, when an older one was asked for).
+    /// Every `Lines` asked for is answered by one, maybe short.
     Lines { from: u64, rows: Vec<Row> },
+    /// Rows that scrolled off the reader's screen and changed after it was
+    /// last sent them, sent before the update that moves the screen: the
+    /// rest are as the reader had them (`ReaderScreen::take`).
+    ScrolledOff { lines: Vec<(u64, Row)> },
     Found { query: String, found: Vec<Found> },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn update(top: u64, rows: &[(u16, &str)], full: bool) -> ScreenUpdate {
+        let rows = rows.iter().map(|(r, t)| (*r, vec![Run { text: (*t).into(), style: Style::default(), wide: false }])).collect();
+        ScreenUpdate { seq: 1, size: TermSize { cols: 80, rows: 3 }, full, rows, cursor: Cursor::default(), top, oldest: 0, alternate: false, title: String::new(), shell: 1 }
+    }
+
+    fn text(row: &Row) -> String {
+        row.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    #[test]
+    fn a_reader_screen_moves_with_its_top_and_gives_back_what_scrolled_off() {
+        let mut screen = ReaderScreen::default();
+        assert_eq!(screen.take(&update(10, &[(0, "a"), (1, "b"), (2, "c")], true)).1, Vec::<Row>::new());
+        // Two lines on: the first two went, as they were; the rest moved up.
+        let (from, gone) = screen.take(&update(12, &[(1, "d"), (2, "e")], false));
+        assert_eq!((from, gone.iter().map(text).collect::<Vec<_>>()), (10, vec!["a".to_owned(), "b".to_owned()]));
+        assert_eq!(screen.rows().iter().map(text).collect::<Vec<_>>(), ["c", "d", "e"]);
+        assert_eq!(screen.get(12).map(text).as_deref(), Some("c"));
+        // Laid out anew: nothing scrolled off.
+        assert!(screen.take(&update(20, &[(0, "x")], true)).1.is_empty());
+    }
 }

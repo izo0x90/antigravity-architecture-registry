@@ -93,16 +93,17 @@ impl TerminalBuffer {
         let rows = |top: u64| top..(top + span.window).min(span.end);
         let missing = !self.lines.has(rows(wanted));
         self.waiting = if missing { Some(self.waiting.unwrap_or(self.clock)) } else { None };
+        // (Following the live screen, what's new shows at once.)
         let top = match self.drawn {
-            Some(before) if missing && before >= span.first && self.lines.has(rows(before)) && self.waiting.is_some_and(|since| self.clock - since < WAIT_S) => before,
+            Some(before) if missing && !self.view.live() && (span.first..span.end).contains(&before) && self.lines.has(rows(before)) && self.waiting.is_some_and(|since| self.clock - since < WAIT_S) => {
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(WAIT_S));
+                before
+            }
             _ => wanted,
         };
         self.drawn = Some(top);
         if let Some((from, count)) = self.lines.wanted(wanted.saturating_sub(span.window)..(wanted + 2 * span.window).min(span.end)) {
             self.send(&ToTerminal::Lines { from, count });
-        }
-        if missing {
-            ui.ctx().request_repaint();
         }
         let grid = Grid { rect: grid_rect, first: top, row_h };
         self.paint(ui.painter_at(rect), grid, rows(top), &font, typing, &theme);
