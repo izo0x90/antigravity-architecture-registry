@@ -24,7 +24,7 @@ fn the_layout_comes_back_as_it_was_saved() {
     assert_eq!(code.map(|c| c.line), Some(6));
     // A cockpit that has loaded nothing loads the saved file, even one
     // named like the file it starts on.
-    let mut opened = CockpitApp::new("http://127.0.0.1:9");
+    let mut opened = new_app();
     let mut only_code = saved.clone();
     only_code.views = vec![(BufferId::new(BufferKind::Code, 0), Place::of(&crate::code::CodePlace { file: opened.desk.code().current_file.clone(), line: 3 }))];
     opened.restore_saved(only_code);

@@ -394,12 +394,7 @@ impl NetClient {
                             events.push(parsed);
                         }
                     }
-                    Err(err) => {
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::warn_1(&format!("Unreadable server event: {err} | {text}").into());
-                        #[cfg(not(target_arch = "wasm32"))]
-                        eprintln!("Unreadable server event: {err} | {text}");
-                    }
+                    Err(err) => log::warn!("Unreadable server event: {err} | {text}"),
                 }
             }
             WsEvent::Opened => {

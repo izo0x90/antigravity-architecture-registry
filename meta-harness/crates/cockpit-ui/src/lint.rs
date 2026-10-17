@@ -24,6 +24,11 @@
 //!   doesn't offer through it. A buffer names neither the shell nor
 //!   another buffer: what it needs from the rest it reads from what's
 //!   shared and asks for.
+//! - **Platforms**: what differs by platform is handed in by its start-up,
+//!   never checked for. The browser's start-up and its own code are
+//!   `web/` (gated once, in `lib.rs`); nothing else asks which platform
+//!   it runs on. (The browser's crates are its target's dependencies, so
+//!   code elsewhere that used them wouldn't build where the tests run.)
 //! - **Controls**: views draw content; hosts draw every control. Outside
 //!   the hosts (the top bar, panels, the quick look, the key bar and
 //!   menus: `app/draw/`), the one control (`actions.rs`, `hosted.rs`) and
@@ -278,6 +283,22 @@ fn the_tree_buffer_knows_rows_not_code() {
     let tree = code().into_iter().find(|(name, _)| name == "tree/mod.rs").map(|(_, code)| code).unwrap();
     let found: Vec<String> = lines(&tree).filter(|(_, l)| ["TreeRequest", "Card", "ViewKind", "Source::", "arch_graph::Source", "crate::graph", "arch_graph::tree"].iter().any(|w| l.contains(w))).map(|(n, l)| format!("tree/mod.rs:{n}: {}", l.trim())).collect();
     assert!(found.is_empty(), "the tree buffer names the code outline's terms (they're its source's):\n{}", found.join("\n"));
+}
+
+#[test]
+fn only_the_browsers_start_up_knows_it_runs_in_a_browser() {
+    // Whole files, their tests too.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found = Vec::new();
+    for (name, _) in code().iter().filter(|(name, _)| !name.starts_with("web/")) {
+        let text = std::fs::read_to_string(root.join(name)).unwrap();
+        for (_, line) in lines(&text) {
+            if line.contains("target_arch") || line.contains("target_os") || line.contains("target_family") {
+                found.push(format!("{name}: {}", line.trim()));
+            }
+        }
+    }
+    assert_eq!(found, ["lib.rs: #[cfg(target_arch = \"wasm32\")]"], "a platform asked for outside web/ (only the gate on `mod web`; hand in what differs instead)");
 }
 
 #[test]

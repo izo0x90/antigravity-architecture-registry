@@ -57,7 +57,7 @@ impl CockpitApp {
                             incoming.push(*event);
                         }
                     }
-                    None => tracing_note(&format!("an event for {server}, which has no desk")),
+                    None => log::warn!("an event for {server}, which has no desk"),
                 },
             }
         }
@@ -173,7 +173,7 @@ impl CockpitApp {
                 // Home doesn't answer (the SRV light says so): asked again
                 // in a while; nothing is saved over it till it's read.
                 Err(e) => {
-                    tracing_note(&format!("the cockpit's own state couldn't be read from home: {}", e.message));
+                    log::warn!("the cockpit's own state couldn't be read from home: {}", e.message);
                     self.shell.asked = false;
                     self.shell.retry_at = now + SHELL_RETRY_S;
                 }
@@ -289,9 +289,3 @@ impl CockpitApp {
 
 }
 
-fn tracing_note(text: &str) {
-    #[cfg(target_arch = "wasm32")]
-    web_sys::console::warn_1(&text.into());
-    #[cfg(not(target_arch = "wasm32"))]
-    eprintln!("{text}");
-}

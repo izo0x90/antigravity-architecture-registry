@@ -5,9 +5,9 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use web_sys::{Notification as WebNotification, NotificationOptions, NotificationPermission, VisibilityState};
 
-use super::{Backend, Clicked, Permission};
+use crate::alerts::{Backend, Clicked, Permission};
 
-pub struct Web;
+pub(super) struct Web;
 
 impl Backend for Web {
     fn permission(&self) -> Permission {

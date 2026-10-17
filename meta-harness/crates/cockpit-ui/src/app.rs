@@ -253,12 +253,14 @@ pub struct CockpitApp {
 
 
 impl CockpitApp {
-    pub fn new(host_origin: &str) -> Self {
+    /// The cockpit over home at `host_origin`; how the platform shows
+    /// alerts is handed in by its start-up.
+    pub fn new(host_origin: &str, alerts: std::sync::Arc<dyn crate::alerts::Backend>) -> Self {
         let (config, config_error) = match UiConfig::with_overrides("") {
             Ok(config) => (config, None),
             Err(err) => (UiConfig::default(), Some(format!("built-in defaults: {err}"))),
         };
-        let alerts = crate::alerts::Alerts::default();
+        let alerts = crate::alerts::Alerts::with(alerts);
         let mut home = NetClient::new(host_origin);
         home.on_arrival(alerts.arrival());
         Self {

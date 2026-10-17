@@ -86,7 +86,7 @@ fn the_jump_list_crosses_views_and_slots() {
     ctrl(&ctx, &mut app, egui::Key::I);
     assert_eq!((app.focused_kind(), app.desk.code().target_line), (BufferKind::Code, Some(10)));
     // Nothing left to go back to: says so.
-    let mut fresh = CockpitApp::new("http://127.0.0.1:9");
+    let mut fresh = new_app();
     fresh.initialized = true;
     ctrl(&ctx, &mut fresh, egui::Key::O);
     assert!(fresh.note.as_deref().unwrap_or_default().contains("Nothing to go back to"));

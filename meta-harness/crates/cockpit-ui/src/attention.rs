@@ -52,10 +52,7 @@ pub fn detail(n: &Notification, store: &Store, now_ms: u64) -> String {
 }
 
 pub fn now_ms() -> u64 {
-    #[cfg(target_arch = "wasm32")]
-    return js_sys::Date::now() as u64;
-    #[cfg(not(target_arch = "wasm32"))]
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// When each slot's chat was last said to be seen: said again only after

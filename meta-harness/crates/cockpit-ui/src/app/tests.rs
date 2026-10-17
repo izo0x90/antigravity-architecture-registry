@@ -104,10 +104,15 @@ fn panels_of(kinds: &[BufferKind], focused: usize) -> crate::panels::Panels {
     crate::panels::Panels::new(kinds.iter().map(|k| BufferId::new(*k, 0)).collect(), focused)
 }
 
+/// A new app as tests make it: alerts recorded, not shown.
+fn new_app() -> CockpitApp {
+    CockpitApp::new("http://127.0.0.1:9", std::sync::Arc::new(crate::alerts::tests::Recorded::default()))
+}
+
 /// An app with the graph in panel 2 (focused) showing the sample view.
 fn app_with_graph() -> (egui::Context, CockpitApp) {
     let ctx = egui::Context::default();
-    let mut app = CockpitApp::new("http://127.0.0.1:9");
+    let mut app = new_app();
     app.initialized = true; // skip network bootstrapping
     *app.desk.graph_mut() = showing(sample_tree());
     app.desk.panels.focus(1);

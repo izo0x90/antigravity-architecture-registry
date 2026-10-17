@@ -3,18 +3,14 @@
 //! One of the ways notifications reach the user: the cockpit's own counters
 //! and quick look read them in place, and the server's adapters take them
 //! off the device. They're raised as home's events arrive (a hidden tab
-//! draws no frames), through whichever backend the build has; clicking one
+//! draws no frames), through the backend the start-up hands in (the
+//! browser's notifications in a browser); clicking one
 //! brings the cockpit back and opens the item.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use harness_contracts::{ClientEvent, HomeEvent, Level, Notification, NotificationId, NotificationState};
-
-#[cfg(not(target_arch = "wasm32"))]
-mod native;
-#[cfg(target_arch = "wasm32")]
-mod web;
 
 /// Whether the platform lets alerts be shown.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,7 +37,7 @@ pub enum AlertState {
 }
 
 /// What clicking an alert opens: its server, and it.
-type Clicked = Arc<Mutex<Option<(String, NotificationId)>>>;
+pub type Clicked = Arc<Mutex<Option<(String, NotificationId)>>>;
 
 /// A way to raise alerts: the browser's, the OS's.
 pub trait Backend: Send + Sync {
@@ -59,17 +55,6 @@ pub struct Alerts {
     on: Arc<AtomicBool>,
     clicked: Clicked,
     backend: Arc<dyn Backend>,
-}
-
-impl Default for Alerts {
-    /// The build's own backend.
-    fn default() -> Self {
-        #[cfg(target_arch = "wasm32")]
-        let backend: Arc<dyn Backend> = Arc::new(web::Web);
-        #[cfg(not(target_arch = "wasm32"))]
-        let backend: Arc<dyn Backend> = Arc::new(native::Native);
-        Self::with(backend)
-    }
 }
 
 impl Alerts {
