@@ -298,9 +298,13 @@ impl crate::buffer::Buffer for TerminalBuffer {
         self.was_focused = drawing.focused && (self.was_focused || runs);
         // The frame typing starts in, its keys were the cockpit's (the key
         // that started it): the program gets keys from the next.
-        let started = drawing.typing && !self.typing;
+        let keys = match (drawing.typing, self.typing) {
+            (false, _) => draw::Keys::Not,
+            (true, false) => draw::Keys::Starting,
+            (true, true) => draw::Keys::Typing,
+        };
         self.typing = drawing.typing;
-        self.draw(ui, cx, drawing.typing, started);
+        self.draw(ui, cx, keys);
     }
 
     /// While it's drawn: its socket's news taken (opened if it has none),

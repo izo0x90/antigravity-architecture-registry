@@ -17,11 +17,10 @@ pub enum Typing {
     Leaves,
 }
 
-/// A sequence's first key, held from the field, and since when.
+/// A sequence's first key, held from the field (its events, the chord it
+/// is, and since when).
 #[derive(Default)]
-pub struct Leaving {
-    held: Option<(Vec<egui::Event>, Chord, f64)>,
-}
+pub struct Leaving(Option<(Vec<egui::Event>, Chord, f64)>);
 
 impl Chord {
     /// Whether a key press (with the modifiers it was pressed with) is this chord.
@@ -42,11 +41,11 @@ impl Leaving {
         let now = input.time;
         let wait = keys.leave_wait_ms as f64 / 1000.0;
         let mut out = Vec::new();
-        if let Some((events, _, since)) = &self.held
+        if let Some((events, _, since)) = &self.0
             && now - since > wait
         {
             out.extend(events.iter().cloned());
-            self.held = None;
+            self.0 = None;
         }
         let events = std::mem::take(&mut input.events);
         let mut events = events.into_iter().peekable();
@@ -55,7 +54,7 @@ impl Leaving {
             let egui::Event::Key { key, pressed: true, modifiers, .. } = event else {
                 // A held key's release goes with it.
                 if let egui::Event::Key { key, pressed: false, .. } = &event
-                    && self.held.as_ref().is_some_and(|(held, ..)| matches!(held.first(), Some(egui::Event::Key { key: k, .. }) if k == key))
+                    && self.0.as_ref().is_some_and(|(held, ..)| matches!(held.first(), Some(egui::Event::Key { key: k, .. }) if k == key))
                 {
                     continue;
                 }
@@ -72,7 +71,7 @@ impl Leaving {
             if leaves {
                 continue;
             }
-            if let Some((held, first, _)) = self.held.take() {
+            if let Some((held, first, _)) = self.0.take() {
                 if keys.leave.iter().any(|s| s.0.len() == 2 && s.0[0] == first && s.0[1].is_press(key, modifiers)) {
                     leaves = true;
                     continue;
@@ -80,7 +79,7 @@ impl Leaving {
                 out.extend(held);
             }
             if let Some(first) = keys.leave.iter().find(|s| s.0.len() > 1 && s.0[0].is_press(key, modifiers)).map(|s| s.0[0].clone()) {
-                self.held = Some((press, first, now));
+                self.0 = Some((press, first, now));
                 continue;
             }
             if keys.leave.iter().any(|s| s.0.len() == 1 && s.0[0].is_press(key, modifiers)) {
@@ -91,7 +90,7 @@ impl Leaving {
         }
         input.events = out;
         if leaves {
-            self.held = None;
+            self.0 = None;
             Typing::Leaves
         } else {
             Typing::Stays
@@ -100,7 +99,7 @@ impl Leaving {
 
     /// A key is held, waiting for the next (draw again by then).
     pub fn waiting(&self, keys: &InputKeys, now: f64) -> Option<f64> {
-        self.held.as_ref().map(|(_, _, since)| (since + keys.leave_wait_ms as f64 / 1000.0 - now).max(0.0))
+        self.0.as_ref().map(|(_, _, since)| (since + keys.leave_wait_ms as f64 / 1000.0 - now).max(0.0))
     }
 }
 

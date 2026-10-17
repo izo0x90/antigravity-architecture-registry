@@ -48,9 +48,9 @@ pub struct TermLink {
     state: LinkState,
     /// Sent before it opened, to go once it does.
     waiting: Vec<String>,
-    /// Tests: what it sent, and what's to arrive.
+    /// Tests: what it sent.
     #[cfg(test)]
-    pub sent: Vec<ToTerminal>,
+    pub(crate) sent: Vec<ToTerminal>,
 }
 
 /// What a poll brought.

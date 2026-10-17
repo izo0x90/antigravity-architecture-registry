@@ -27,8 +27,14 @@ pub enum TerminalError {
     NotFound(TerminalId),
     #[error("terminal {0}'s shell has ended: start it again first")]
     Ended(TerminalId),
-    #[error("{0}")]
-    Failed(String),
+    #[error("{shell} doesn't start: {source}")]
+    Start { shell: String, source: std::io::Error },
+    #[error("the terminal doesn't answer: {0}")]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Store(#[from] nah_state::StateError),
+    #[error("the work was dropped: {0}")]
+    Dropped(#[from] tokio::task::JoinError),
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -110,7 +116,7 @@ impl Terminals {
     pub fn close(&self, id: &TerminalId) -> Result<(), TerminalError> {
         let open = lock(&self.open).remove(id).ok_or_else(|| TerminalError::NotFound(id.clone()))?;
         lock(&open.shell).take();
-        self.state.forget_terminal(id).map_err(|e| TerminalError::Failed(e.to_string()))?;
+        self.state.forget_terminal(id)?;
         self.hub.publish(ClientEvent::TerminalClosed { terminal_id: id.clone() });
         Ok(())
     }
@@ -128,7 +134,7 @@ impl Terminals {
                 terminals.happened(&open, &happening);
             }
         })
-        .map_err(|e| TerminalError::Failed(format!("{}: {e}", info.shell)))?;
+        .map_err(|source| TerminalError::Start { shell: info.shell.clone(), source })?;
         {
             let mut info = lock(&open.info);
             info.status = TerminalStatus::Running;
@@ -261,6 +267,6 @@ impl Open {
     pub fn input(&self, input: &TerminalInput) -> Result<(), TerminalError> {
         let shell = lock(&self.shell);
         let shell = shell.as_ref().filter(|s| s.ended().is_none()).ok_or_else(|| TerminalError::Ended(self.info().id))?;
-        shell.input(input).map_err(|e| TerminalError::Failed(e.to_string()))
+        Ok(shell.input(input)?)
     }
 }

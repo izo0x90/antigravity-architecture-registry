@@ -37,7 +37,7 @@ impl IntoResponse for TerminalError {
         let status = match self {
             TerminalError::NotFound(_) => StatusCode::NOT_FOUND,
             TerminalError::Ended(_) => StatusCode::CONFLICT,
-            TerminalError::Failed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            TerminalError::Start { .. } | TerminalError::Io(_) | TerminalError::Store(_) | TerminalError::Dropped(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, Json(serde_json::json!({ "error": self.to_string() }))).into_response()
     }
@@ -65,7 +65,7 @@ async fn close(_: Needs<can::ShellDrive>, State(state): State<TerminalsState>, P
 /// Starting and ending shells, and writing to them, can block: off the
 /// async threads.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, TerminalError> + Send + 'static) -> Result<T, TerminalError> {
-    tokio::task::spawn_blocking(f).await.map_err(|e| TerminalError::Failed(e.to_string()))?
+    tokio::task::spawn_blocking(f).await?
 }
 
 async fn terminal_socket(_: Ticketed, ws: WebSocketUpgrade, State(state): State<TerminalsState>, Path(id): Path<String>) -> Response {
@@ -154,7 +154,7 @@ async fn said_to(terminals: &Arc<Terminals>, open: &Arc<Open>, viewer: u64, said
     }
 }
 
-async fn send(sink: &mut futures::stream::SplitSink<WebSocket, Message>, message: &FromTerminal) -> Result<(), ()> {
-    let text = serde_json::to_string(message).map_err(|_| ())?;
-    sink.send(Message::Text(text.into())).await.map_err(|_| ())
+async fn send(sink: &mut futures::stream::SplitSink<WebSocket, Message>, message: &FromTerminal) -> Result<(), axum::Error> {
+    let text = serde_json::to_string(message).map_err(axum::Error::new)?;
+    sink.send(Message::Text(text.into())).await
 }

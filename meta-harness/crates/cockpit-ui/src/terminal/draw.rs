@@ -7,6 +7,23 @@ use egui::{Color32, Rect, RichText, Sense, Stroke, Vec2, pos2, vec2};
 use harness_contracts::{Colour, Mods, Row, Style, TermKey, TermSize, TerminalInput, ToTerminal};
 
 use super::{Cell, TerminalBuffer};
+
+/// Whether it's typed in this frame.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Keys {
+    Not,
+    /// Typing starts this frame: its keys were the cockpit's.
+    Starting,
+    Typing,
+}
+
+/// The grid as drawn this frame: where, from which line, how tall a row.
+#[derive(Clone, Copy)]
+struct Grid {
+    rect: Rect,
+    first: u64,
+    row_h: f32,
+}
 use crate::actions::RunCx;
 use crate::keymap::Typed;
 use crate::theme::{Theme, colors};
@@ -32,7 +49,8 @@ fn run_colours(style: &Style, theme: &Theme) -> (Color32, Option<Color32>) {
 }
 
 impl TerminalBuffer {
-    pub(super) fn draw(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, typing: bool, started: bool) {
+    pub(super) fn draw(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, keys: Keys) {
+        let typing = keys != Keys::Not;
         let look = crate::theme::look();
         let theme = colors();
         let font = egui::FontId::monospace(look.text_body);
@@ -91,6 +109,7 @@ impl TerminalBuffer {
         self.grid = Some(output.inner_rect);
         self.want_lines(shown.start as u64..shown.end as u64);
         let (rect, response) = grid;
+        let grid = Grid { rect, first: shown.start as u64, row_h };
         // What hints label: the files and web links on screen.
         let clip = output.inner_rect;
         let folder = self.info().map(|t| t.folder).unwrap_or_default();
@@ -111,12 +130,12 @@ impl TerminalBuffer {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }
         let Some(response) = response else { return };
-        self.pointer(&response, rect, shown.start as u64, row_h);
+        self.pointer(&response, grid);
         if self.screen.alternate {
             self.wheel_as_keys(ui, &response, row_h);
         }
         if typing {
-            self.typing(ui, &response, id, rect, shown.start as u64, row_h, started, cx);
+            self.typing(ui, &response, id, grid, keys, cx);
         }
     }
 
@@ -156,26 +175,26 @@ impl TerminalBuffer {
         }
     }
 
-    /// The cell under `pos`, on the grid drawn from line `first`.
-    fn cell_at(&self, pos: egui::Pos2, rect: Rect, first: u64, row_h: f32) -> Cell {
-        let line = first + ((pos.y - rect.top()) / row_h).floor().max(0.0) as u64;
-        let col = ((pos.x - rect.left()) / self.char_w).floor().max(0.0) as u16;
+    /// The cell under `pos`, on the grid.
+    fn cell_at(&self, pos: egui::Pos2, grid: Grid) -> Cell {
+        let line = grid.first + ((pos.y - grid.rect.top()) / grid.row_h).floor().max(0.0) as u64;
+        let col = ((pos.x - grid.rect.left()) / self.char_w).floor().max(0.0) as u16;
         (line.min(self.total().saturating_sub(1)), col)
     }
 
     /// The pointer on the grid: dragging selects; a click puts the cursor
     /// on a line (not typing) and lets go of a selection.
-    fn pointer(&mut self, response: &egui::Response, rect: Rect, first: u64, row_h: f32) {
+    fn pointer(&mut self, response: &egui::Response, grid: Grid) {
         if response.drag_started()
             && let Some(pos) = response.interact_pointer_pos()
         {
-            let at = self.cell_at(pos, rect, first, row_h);
+            let at = self.cell_at(pos, grid);
             self.selection = Some((at, at));
         }
         if response.dragged()
             && let (Some(pos), Some((from, _))) = (response.interact_pointer_pos(), self.selection)
         {
-            self.selection = Some((from, self.cell_at(pos, rect, first, row_h)));
+            self.selection = Some((from, self.cell_at(pos, grid)));
         }
         if response.clicked() {
             self.selection = None;
@@ -199,8 +218,8 @@ impl TerminalBuffer {
     /// Typed in: it has the keyboard (Tab, the arrows and Escape are its),
     /// a phone shows its keyboard, and what's typed goes to the program. A
     /// copy with something selected copies it instead.
-    #[allow(clippy::too_many_arguments)]
-    fn typing(&mut self, ui: &egui::Ui, response: &egui::Response, id: egui::Id, rect: Rect, first: u64, row_h: f32, started: bool, cx: &mut RunCx<'_>) {
+    fn typing(&mut self, ui: &egui::Ui, response: &egui::Response, id: egui::Id, grid: Grid, keys: Keys, cx: &mut RunCx<'_>) {
+        let (rect, first, row_h) = (grid.rect, grid.first, grid.row_h);
         response.request_focus();
         ui.memory_mut(|m| m.set_focus_lock_filter(id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true }));
         let cursor = self.screen.cursor;
@@ -208,7 +227,7 @@ impl TerminalBuffer {
         let top = rect.top() + (line.saturating_sub(first)) as f32 * row_h;
         let cursor_rect = Rect::from_min_size(pos2(rect.left() + f32::from(cursor.col) * self.char_w, top), vec2(2.0, row_h));
         ui.ctx().output_mut(|o| o.ime = Some(egui::output::IMEOutput { rect, cursor_rect }));
-        if started {
+        if keys == Keys::Starting {
             return;
         }
         let typed = ui.input(|i| crate::keymap::terminal_input(&i.events));
