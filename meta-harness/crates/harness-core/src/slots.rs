@@ -182,7 +182,13 @@ pub struct SlotManager {
     /// How long a harness may take to open a session: a slot isn't held
     /// forever by one that never answers.
     open_within: Duration,
+    /// What a prompt hands an agent besides itself, set at start-up (the
+    /// tags it names: `#name`); every prompt a slot is sent goes through it.
+    expand: std::sync::OnceLock<Expand>,
 }
+
+/// A prompt as an agent is handed it (its text with what it names).
+pub type Expand = Arc<dyn Fn(&str) -> String + Send + Sync>;
 
 fn store_error(reason: String) -> HarnessError {
     HarnessError::Store { reason }
@@ -244,6 +250,7 @@ impl SlotManager {
             inner: Mutex::new(Inner { slots, ..Inner::default() }),
             ops: Mutex::default(),
             open_within,
+            expand: std::sync::OnceLock::new(),
         });
         let all: Vec<SlotId> = manager.lock().slots.keys().cloned().collect();
         for id in all {
@@ -310,6 +317,10 @@ impl SlotManager {
         }
         let id = SlotId::new(format!("{role}-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]));
         let name = match name.filter(|n| !n.trim().is_empty()) {
+            // What the user does is signed "user": no agent passes for them.
+            Some(name) if ["user", "you"].iter().any(|u| name.trim().eq_ignore_ascii_case(u)) => {
+                return Err(HarnessError::InvalidConfig { reason: format!("a slot can't be named {name:?}: that's the user") });
+            }
             Some(name) => name,
             None => self.next_name(settings.instance.as_ref().map_or(role, |i| i.as_str())),
         };
@@ -518,11 +529,25 @@ impl SlotManager {
         Ok(self.open_session(id, open).await?.thread)
     }
 
+    /// What every prompt is handed through from now on (`Expand`).
+    pub fn expand_prompts_with(&self, expand: Expand) {
+        let _ = self.expand.set(expand);
+    }
+
+    /// `text` as an agent is handed it (off the async threads: what it
+    /// names is read where it's kept).
+    pub async fn expanded(&self, text: String) -> String {
+        let Some(expand) = self.expand.get().cloned() else { return text };
+        let written = text.clone();
+        tokio::task::spawn_blocking(move || expand(&text)).await.unwrap_or(written)
+    }
+
     /// Sends a message to a slot (as its user, or as the lead). With `wait`,
     /// waits that long for the turn's answer.
     pub async fn send(&self, to: &SlotId, text: String, delivery: Delivery, from: Origin, wait: Option<Duration>) -> Result<Sent> {
         let thread = self.running_thread(to).await?;
         let session = self.sessions.get(&thread)?;
+        let text = self.expanded(text).await;
         let text = match &from {
             Origin::User => text,
             Origin::Lead => format!("From the lead ({}):\n\n{text}", self.slot(&self.lead()).map(|s| s.name).unwrap_or_else(|_| LEAD.into())),
@@ -564,10 +589,10 @@ impl SlotManager {
     pub async fn report(&self, from: &SlotId, text: String) -> Result<Reported> {
         let sender = self.slot(from)?;
         let lead = self.slot(&self.lead())?;
-        let prompt = format!("From {} (sub-slot):\n\n{text}", sender.name);
         self.store.note(&sender.name, "reported", LEAD, None);
         match lead.current_thread().and_then(|t| self.sessions.get(t).ok()) {
             Some(session) => {
+                let prompt = format!("From {} (sub-slot):\n\n{}", sender.name, self.expanded(text).await);
                 session.start_turn(TurnInput { text: prompt, attachments: Vec::new() }).await?;
                 Ok(Reported::Delivered)
             }
@@ -589,7 +614,11 @@ impl SlotManager {
         if reports.is_empty() {
             return 0;
         }
-        let text = reports.iter().map(|r| format!("From {} (sub-slot):\n\n{}", r.from, r.text)).collect::<Vec<_>>().join("\n\n---\n\n");
+        let mut each = Vec::new();
+        for r in &reports {
+            each.push(format!("From {} (sub-slot):\n\n{}", r.from, self.expanded(r.text.clone()).await));
+        }
+        let text = each.join("\n\n---\n\n");
         let sent = match self.sessions.get(thread) {
             Ok(session) => session.start_turn(TurnInput { text, attachments: Vec::new() }).await.map(|_| ()),
             Err(e) => Err(e),

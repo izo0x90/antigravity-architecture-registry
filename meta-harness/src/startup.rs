@@ -238,12 +238,13 @@ pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hu
     let hooks = arch_service::state_dir(arch.root())?.join("terminal-hooks");
     let terminals = crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), std::time::Duration::from_secs(settings.long_command_secs))?;
     tags.register(terminals.clone());
-    // Tagged lines kept where they are now when they move (off the
-    // terminal's own threads: tags are kept in the state database).
+    // Tagged lines kept where they are now when they move, before they can
+    // move again (a terminal tells it on the blocking thread that moved
+    // them; tags are kept in the state database).
     let weak = Arc::downgrade(tags);
     terminals.when_moved(move || {
         if let Some(tags) = weak.upgrade() {
-            std::thread::spawn(move || tags.refresh());
+            tags.refresh();
         }
     });
     Ok(terminals)

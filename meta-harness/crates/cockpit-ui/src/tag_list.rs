@@ -58,6 +58,8 @@ pub struct TagList {
     /// The tags' version its rows are of.
     synced: Option<u64>,
     rows: Vec<Row>,
+    /// Each row's key (made when the rows are: a thing's is long).
+    keys: Vec<String>,
     cursor: usize,
     /// The tag the cursor came to, and when (what its things say now is
     /// read once it rests there).
@@ -81,6 +83,7 @@ impl TagList {
         self.synced = Some(version);
         let at = self.rows.get(self.cursor).cloned();
         self.rows = self.tags.get().list().iter().flat_map(|t| std::iter::once(Row::Tag(t.id.clone())).chain(t.on.iter().map(|on| Row::On(t.id.clone(), on.subject.clone())))).collect();
+        self.keys = self.rows.iter().map(Row::key).collect();
         self.cursor = at.and_then(|r| self.rows.iter().position(|x| *x == r)).unwrap_or(self.cursor).min(self.rows.len().saturating_sub(1));
     }
 
@@ -108,9 +111,10 @@ impl TagList {
         }
     }
 
-    fn tag_here(&self) -> Option<Tag> {
+    /// What `f` makes of the cursor's tag.
+    fn tag_here<R>(&self, f: impl FnOnce(&Tag) -> R) -> Option<R> {
         let tags = self.tags.get();
-        self.rows.get(self.cursor).and_then(|r| tags.get(r.tag()).cloned())
+        self.rows.get(self.cursor).and_then(|r| tags.get(r.tag())).map(f)
     }
 
     /// The thing the cursor's on, when it's on one (still tagged).
@@ -195,7 +199,7 @@ impl TagList {
                 if i == self.cursor {
                     ui.painter().rect_stroke(rect.expand(2.0), look.radius_m, egui::Stroke::new(look.line_thin, theme.focus), egui::StrokeKind::Outside);
                 }
-                drawn.push(Spot { key: row.key(), rect });
+                drawn.push(Spot { key: self.keys[i].clone(), rect });
             }
         });
         if drawn.len() == self.rows.len() {
@@ -254,7 +258,7 @@ impl Navigable for TagList {
 
     /// A thing's row: the thing (another tag can be put on it here too).
     fn subject(&self, key: &str) -> Option<Subject> {
-        match self.rows.iter().find(|r| r.key() == key)? {
+        match self.rows.iter().zip(&self.keys).find(|(_, k)| *k == key)?.0 {
             Row::On(_, subject) => Some(subject.clone()),
             Row::Tag(_) => None,
         }
@@ -288,7 +292,7 @@ impl Navigable for TagList {
 
     /// On a thing: goes to it; on a tag: to the first thing it's on.
     fn enter(&mut self) -> Step {
-        match self.thing_here().map(|(_, s)| s).or_else(|| self.tag_here()?.on.first().map(|o| o.subject.clone())) {
+        match self.thing_here().map(|(_, s)| s).or_else(|| self.tag_here(|t| t.on.first().map(|o| o.subject.clone())).flatten()) {
             Some(subject) => self.go_to(&subject),
             None => Step::Nothing("It's on nothing.".into()),
         }
@@ -304,13 +308,14 @@ impl Navigable for TagList {
         let tags = self.tags.get();
         self.rows
             .iter()
-            .filter_map(|row| {
+            .zip(&self.keys)
+            .filter_map(|(row, key)| {
                 let tag = tags.get(row.tag())?;
                 Some(match row {
-                    Row::Tag(_) => Item::new(row.key(), tag.name.clone(), tag.note.clone()),
+                    Row::Tag(_) => Item::new(key.clone(), tag.name.clone(), tag.note.clone()),
                     Row::On(_, subject) => {
                         let on = tag.on.iter().find(|on| on.subject == *subject)?;
-                        Item::new(row.key(), "", format!("{} {}", on.what, on.said))
+                        Item::new(key.clone(), "", format!("{} {}", on.what, on.said))
                     }
                 })
             })
@@ -322,11 +327,11 @@ impl Navigable for TagList {
     }
 
     fn cursor_key(&self) -> Option<String> {
-        self.rows.get(self.cursor).map(Row::key)
+        self.keys.get(self.cursor).cloned()
     }
 
     fn move_to(&mut self, key: &str) {
-        if let Some(at) = self.rows.iter().position(|r| r.key() == key) {
+        if let Some(at) = self.keys.iter().position(|k| k == key) {
             self.cursor = at;
             self.scrolling.show(at, Show::Middle);
         }
@@ -341,23 +346,23 @@ impl ActionProvider for TagList {
         out.push(Move::Enter.offer_if(!self.rows.is_empty(), "Go to it"));
         out.push(Move::Motion(Motion::NextSibling).offer_if(self.rows.len() > 1, "Next tag"));
         out.push(Move::Motion(Motion::PrevSibling).offer_if(self.rows.len() > 1, "Previous tag"));
-        let tag = self.tag_here();
+        let tag = self.tag_here(|t| (t.name.clone(), t.colour, !t.note.is_empty()));
         let on_tag = tag.is_some();
         out.push(act("tags.rename", "Rename the tag", Command::Rename).param(Param::Text { hint: "a new name (letters, digits, - and _)".into() }).when(when(on_tag)).importance(SECONDARY));
         let theme = colors();
-        let colours = (0..TAG_COLOURS).map(|i| Choice::new(i.to_string(), theme.tag_name(i)).current(tag.as_ref().is_some_and(|t| t.colour == i))).collect();
+        let colours = (0..TAG_COLOURS).map(|i| Choice::new(i.to_string(), theme.tag_name(i)).current(tag.as_ref().is_some_and(|t| t.1 == i))).collect();
         out.push(act("tags.recolour", "Give the tag another colour", Command::Recolour).param(Param::Choice(colours)).when(when(on_tag)));
         out.push(act("tags.note", "Write the tag's note", Command::Note).param(Param::Text { hint: "its note".into() }).when(when(on_tag)));
-        out.push(act("tags.note_clear", "Clear the tag's note", Command::ClearNote).when(when(tag.as_ref().is_some_and(|t| !t.note.is_empty()))));
+        out.push(act("tags.note_clear", "Clear the tag's note", Command::ClearNote).when(when(tag.as_ref().is_some_and(|t| t.2))));
         out.push(act("tags.untag", "Take the tag off this", Command::Untag).when(when(self.thing_here().is_some())));
-        let sure = tag.as_ref().map(|t| vec![Choice::new("yes", format!("Delete {} (from everything it's on)", t.name)), Choice::new("no", "Keep it")]).unwrap_or_default();
+        let sure = tag.as_ref().map(|t| vec![Choice::new("yes", format!("Delete {} (from everything it's on)", t.0)), Choice::new("no", "Keep it")]).unwrap_or_default();
         out.push(act("tags.delete", "Delete the tag", Command::Delete).param(Param::Choice(sure)).when(when(on_tag)).icon(icon::TRASH));
         out
     }
 
     fn run(&mut self, action: &Action, value: Option<String>, cx: &mut RunCx<'_>) {
         let Some(command) = action.command::<Command>().cloned() else { return };
-        let Some(tag) = self.tag_here().map(|t| t.id) else {
+        let Some(tag) = self.tag_here(|t| t.id.clone()) else {
             *cx.note = Some("The cursor isn't on a tag.".into());
             return;
         };

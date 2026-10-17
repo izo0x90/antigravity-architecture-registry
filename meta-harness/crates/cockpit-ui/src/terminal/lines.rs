@@ -38,6 +38,10 @@ pub(super) struct Lines {
     shell: u64,
     /// Lines of the scrollback, by number.
     back: BTreeMap<u64, Row>,
+    /// Laid out anew: the scrollback as it showed before, numbered as its
+    /// place is now (moved as far as the end moved), drawn until the new
+    /// lines come (what showed stays, never a blank row).
+    stand_in: BTreeMap<u64, Row>,
     /// Lines asked for whose answer hasn't come.
     asked: Option<Range<u64>>,
     /// Lines asked for that the answer didn't have: not asked again until
@@ -58,14 +62,23 @@ impl Lines {
         } else {
             Took::Same
         };
-        if took != Took::Same {
-            self.forget();
+        match took {
+            Took::Relaid { by } => {
+                self.stand_in = std::mem::take(&mut self.back).into_iter().filter_map(|(n, row)| Some((n.checked_add_signed(by)?, row))).collect();
+                self.forget();
+            }
+            Took::Restarted => {
+                self.stand_in.clear();
+                self.forget();
+            }
+            Took::Same => {}
         }
         let (from, gone) = self.screen.take(update);
         for (number, row) in (from..).zip(gone) {
             self.back.entry(number).or_insert(row);
         }
         self.back = self.back.split_off(&update.oldest);
+        self.stand_in = self.stand_in.split_off(&update.oldest);
         self.refused = None;
         for command in &update.commands {
             match self.commands.binary_search_by_key(&command.id, |c| c.id) {
@@ -81,13 +94,19 @@ impl Lines {
     }
 
     /// The lines asked for, from the one numbered `from` (a short answer:
-    /// the rest aren't there).
+    /// the rest aren't there). An answer to an ask that was let go (the
+    /// lines laid out anew since: other numbers) is dropped.
     pub(super) fn arrived(&mut self, from: u64, rows: Vec<Row>) {
+        // (It may start later than asked: the oldest went meanwhile. Lines
+        // laid out anew are numbered past the old: an old answer is before.)
+        let Some(asked) = self.asked.take_if(|asked| (asked.start..=asked.end).contains(&from)) else { return };
         let end = from + rows.len() as u64;
         for (number, row) in (from..).zip(rows).filter(|(n, _)| *n >= self.oldest) {
             self.back.insert(number, row);
         }
-        self.refused = self.asked.take().filter(|asked| asked.start < from || end < asked.end);
+        // What stood in for them is done with.
+        self.stand_in.retain(|n, _| !(from..end).contains(n));
+        self.refused = (end < asked.end).then_some(asked);
     }
 
     /// Rows that scrolled off and changed before they went: as they are.
@@ -125,6 +144,12 @@ impl Lines {
             None if self.alternate || number >= self.screen.top() => None,
             None => self.back.get(&number),
         }
+    }
+
+    /// Line `number` as it's drawn: the line, or what stands in for it
+    /// until it comes (laid out anew).
+    pub(super) fn shown(&self, number: u64) -> Option<&Row> {
+        self.get(number).or_else(|| self.stand_in.get(&number).filter(|_| !self.alternate && number < self.screen.top()))
     }
 
     /// Line `number`'s text.
@@ -176,10 +201,23 @@ impl Lines {
     }
 
     /// The command waiting at an empty prompt (nothing running, nothing
-    /// typed yet): where a command can be typed in whole.
+    /// typed yet, before the cursor or after it): where a command can be
+    /// typed in whole.
     pub(super) fn at_empty_prompt(&self) -> Option<&TerminalCommand> {
         let (line, col, _) = self.cursor();
-        self.commands.last().filter(|c| !self.alternate && c.output.is_none() && (c.input, c.input_col) == (line, col))
+        let blank_after = |c: &TerminalCommand| {
+            // What's on the screen from where typing starts: nothing.
+            let rest = self.get(c.input).map(|row| {
+                let mut at = 0u16;
+                row.iter().flat_map(|run| run.text.chars().map(move |ch| (ch, if run.wide { 2 } else { 1 }))).filter(|(_, w)| {
+                    let here = at;
+                    at += w;
+                    here >= c.input_col
+                }).map(|(ch, _)| ch).collect::<String>()
+            });
+            rest.is_some_and(|r| r.trim().is_empty()) && (c.input + 1..self.end()).all(|l| self.text(l).is_some_and(|t| t.trim().is_empty()))
+        };
+        self.commands.last().filter(|c| !self.alternate && c.output.is_none() && (c.input, c.input_col) == (line, col) && blank_after(c))
     }
 
     /// The screen's cursor: its line's number, its column, whether it shows.
@@ -243,6 +281,13 @@ mod tests {
         wider.size.cols = 100;
         assert_eq!(lines.take(&wider), Took::Relaid { by: 8 });
         assert_eq!(lines.text(91), None);
+        // An answer to what was asked before (other numbers then): dropped,
+        // and what's asked now is still waited for.
+        assert_eq!(lines.wanted(136..138), Some((135, 5)));
+        lines.arrived(91, vec![row("old 91")]);
+        assert_eq!((lines.text(91), lines.wanted(136..138)), (None, None), "still waiting for its own");
+        lines.arrived(135, (135..140).map(|n| row(&n.to_string())).collect());
+        assert_eq!(lines.text(136).as_deref(), Some("136"));
     }
 
     #[test]
@@ -284,7 +329,9 @@ mod tests {
     fn a_new_start_of_the_shell_is_other_lines() {
         let mut lines = Lines::default();
         lines.take(&update(["a", "b", "c"], 100, 0));
-        lines.arrived(50, vec![row("old")]);
+        lines.wanted(50..51);
+        lines.arrived(40, (40..51).map(|_| row("old")).collect());
+        assert_eq!(lines.text(50).as_deref(), Some("old"));
         let mut again = update(["$", "", ""], 120, 0);
         again.shell = 8;
         assert_eq!(lines.take(&again), Took::Restarted);

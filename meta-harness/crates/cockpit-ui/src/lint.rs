@@ -173,6 +173,23 @@ const CONTROLS_ALLOWED: &[(&str, &str, &str)] = &[
     ("request_card/draw.rs", "selectable_label(", "a form's fields are inputs, like a text box"),
 ];
 
+/// Tagging is the shell's (plan rule 5): a buffer only says what its items
+/// are and where they're drawn. The tags are read and changed by the
+/// shell, the desk's service, and the Tags buffer that manages them.
+#[test]
+fn no_buffer_tags_or_draws_tags_but_the_tags_own() {
+    let tags_own = |name: &str| name.starts_with("app/") || name == "tags.rs" || name == "tag_list.rs" || name == "shared.rs" || name == "nav.rs" || name == "lib.rs";
+    let mut found = Vec::new();
+    for (name, code) in code().iter().filter(|(name, _)| !tags_own(name)) {
+        for (n, line) in lines(code) {
+            for token in ["crate::tags::", "shared.tags", "Ask::Tags", "theme.tag(", ".tag_name("].iter().filter(|t| line.contains(*t)) {
+                found.push(format!("{name}:{n}: {token}"));
+            }
+        }
+    }
+    assert!(found.is_empty(), "tagging outside the shell (a buffer says what an item is, `Navigable::subject`, and where, `drawn_at`):\n{}", found.join("\n"));
+}
+
 #[test]
 fn views_draw_no_controls_the_hosts_draw_them() {
     let mut found = Vec::new();

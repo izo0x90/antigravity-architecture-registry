@@ -148,6 +148,18 @@ fn io_error(e: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::other(e.to_string())
 }
 
+/// A shell start's own mark (its command marks carry it): not to be
+/// guessed by what a program prints.
+fn new_mark() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+    hasher.write_u32(std::process::id());
+    let mut again = std::collections::hash_map::RandomState::new().build_hasher();
+    again.write_u64(hasher.finish());
+    format!("{:016x}{:016x}", hasher.finish(), again.finish())
+}
+
 fn pty_size(size: TermSize) -> PtySize {
     PtySize { rows: size.rows.max(1), cols: size.cols.max(1), pixel_width: 0, pixel_height: 0 }
 }
@@ -156,7 +168,8 @@ impl Terminal {
     /// Starts `options.shell`; what happens in it is told to `on`.
     pub fn open(options: Options, on: impl Fn(Happening) + Send + Sync + 'static) -> std::io::Result<Self> {
         let pair = portable_pty::native_pty_system().openpty(pty_size(options.size)).map_err(io_error)?;
-        let command = shell::command(&options.shell, &options.folder, &options.hooks)?;
+        let mark = new_mark();
+        let command = shell::command(&options.shell, &options.folder, &options.hooks, &mark)?;
         let mut child = pair.slave.spawn_command(command).map_err(io_error)?;
         drop(pair.slave);
         let reader = pair.master.try_clone_reader().map_err(io_error)?;
@@ -166,7 +179,7 @@ impl Terminal {
         let named = std::path::Path::new(&options.shell).file_name().map_or_else(|| options.shell.clone(), |n| n.to_string_lossy().into_owned());
         let state = Arc::new(Mutex::new(State {
             term: Term::new(config, &Size(options.size), listener.clone()),
-            feed: Feed::new(options.history),
+            feed: Feed::new(options.history, &mark),
             changes: screen::Changes::default(),
             title: named.clone(),
             named,
@@ -272,9 +285,13 @@ impl Terminal {
 
     /// The output of command `id` as text (lines that wrap joined), and
     /// how many of its lines were left out at its start (it had more than
-    /// `most`); none when there's no such command.
+    /// `most`); none when there's no such command, or while a program has
+    /// the whole screen (its lines can't be read then: the program's are).
     pub fn command_output(&self, id: u64, most: u64) -> Option<(String, u64)> {
         let state = lock(&self.state);
+        if state.term.mode().contains(TermMode::ALT_SCREEN) {
+            return None;
+        }
         let command = state.commands.get(id)?;
         let Some(from) = command.output else { return Some((String::new(), 0)) };
         let end = command.end.unwrap_or_else(|| state.feed.top() + state.term.screen_lines() as u64);
@@ -382,20 +399,18 @@ struct Reading {
 
 impl Reading {
     /// Reads the shell's output until it ends; the thread releasing held
-    /// updates is woken when one starts being held.
+    /// updates is woken whenever one is held (it may have let one go since
+    /// it was last woken, and be waiting for the next).
     fn read(&self, mut reader: Box<dyn Read + Send>, waker: &std::thread::Thread) {
         let mut buf = vec![0u8; 64 * 1024];
-        let mut holding = false;
         loop {
             let n = match reader.read(&mut buf) {
                 Ok(0) | Err(_) => return,
                 Ok(n) => n,
             };
-            let held = self.feed(&buf[..n], false);
-            if held && !holding {
+            if self.feed(&buf[..n], false) {
                 waker.unpark();
             }
-            holding = held;
         }
     }
 

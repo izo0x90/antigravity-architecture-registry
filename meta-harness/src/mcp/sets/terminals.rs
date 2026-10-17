@@ -115,23 +115,8 @@ impl ToolSet for Terminals {
             }
             "terminal_read" => {
                 let open = terminals.get(&id()?).map_err(missing)?;
-                let commands = open.commands();
-                if let Some(number) = args["command"].as_u64() {
-                    let no_such = || ServiceError::InvalidOp(format!("there's no command {number} (kept while its lines are: terminal_read lists them)"));
-                    let command = commands.iter().find(|c| c.id == number).ok_or_else(no_such)?;
-                    let (output, left_out) = open.command_output(number, MOST_BACK).ok_or_else(no_such)?;
-                    let cut = if left_out > 0 { format!("({left_out} lines before these left out)\n") } else { String::new() };
-                    return Ok(format!("{}\n{cut}{output}", crate::terminals::in_words(command)));
-                }
-                let back = args["back"].as_u64().unwrap_or(0).min(MOST_BACK) as u32;
-                let text = if args["numbered"].as_bool().unwrap_or(false) { open.numbered(back).into_iter().map(|(n, row)| format!("{n}\t{row}")).collect::<Vec<_>>().join("\n") } else { open.text(back) };
-                let mut out = if text.is_empty() { "(nothing on its screen)".to_owned() } else { text };
-                let ran: Vec<String> = commands.iter().rev().filter(|c| c.output.is_some()).take(LAST_COMMANDS).map(crate::terminals::in_words).collect();
-                if !ran.is_empty() {
-                    out.push_str(&format!("\n\nIts last commands (newest first; `command` reads one's output; tag one as `terminal {} command <number>`):\n", open.info().id));
-                    out.push_str(&ran.join("\n"));
-                }
-                Ok(out)
+                // Reading takes the terminal's lock (while its output is fed): off the async threads.
+                tokio::task::spawn_blocking(move || read(&open, &args)).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))?
             }
             "terminal_type" => {
                 let open = terminals.get(&id()?).map_err(missing)?;
@@ -154,6 +139,28 @@ impl ToolSet for Terminals {
             _ => Err(ServiceError::NotFound(format!("tool '{name}'"))),
         }
     }
+}
+
+/// `terminal_read` of `open`: its screen (with scrollback), or one
+/// command's output; its last commands.
+fn read(open: &crate::terminals::Open, args: &Value) -> Result<String, ServiceError> {
+    let commands = open.commands();
+    if let Some(number) = args["command"].as_u64() {
+        let no_such = || ServiceError::InvalidOp(format!("there's no command {number} (kept while its lines are: terminal_read lists them)"));
+        let command = commands.iter().find(|c| c.id == number).ok_or_else(no_such)?;
+        let (output, left_out) = open.command_output(number, MOST_BACK).ok_or_else(|| ServiceError::InvalidOp(format!("command {number}'s output can't be read while a program has the whole screen")))?;
+        let cut = if left_out > 0 { format!("({left_out} lines before these left out)\n") } else { String::new() };
+        return Ok(format!("{}\n{cut}{output}", crate::terminals::in_words(command)));
+    }
+    let back = args["back"].as_u64().unwrap_or(0).min(MOST_BACK) as u32;
+    let text = if args["numbered"].as_bool().unwrap_or(false) { open.numbered(back).into_iter().map(|(n, row)| format!("{n}\t{row}")).collect::<Vec<_>>().join("\n") } else { open.text(back) };
+    let mut out = if text.is_empty() { "(nothing on its screen)".to_owned() } else { text };
+    let ran: Vec<String> = commands.iter().rev().filter(|c| c.output.is_some()).take(LAST_COMMANDS).map(crate::terminals::in_words).collect();
+    if !ran.is_empty() {
+        out.push_str(&format!("\n\nIts last commands (newest first; `command` reads one's output; tag one as `terminal {} command <number>`):\n", open.info().id));
+        out.push_str(&ran.join("\n"));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

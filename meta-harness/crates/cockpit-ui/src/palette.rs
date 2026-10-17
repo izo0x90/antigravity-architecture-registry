@@ -37,6 +37,9 @@ pub struct Palette {
     scroll: bool,
     /// A search query to hand to its view (taken by the app each frame).
     ask: Option<SearchAsk>,
+    /// Enter came in the frame the search changed: its results are of what
+    /// was typed before, so it's taken the next frame, on the new ones.
+    enter_waiting: bool,
 }
 
 impl Palette {
@@ -49,7 +52,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false }
     }
 }
 
@@ -125,6 +128,7 @@ impl Palette {
 
         let step = ctx.input_mut(|i| keymap.list.step(i));
         let (enter, escape) = ctx.input(|i| (keymap.list.picked(i), keymap.back.pressed(i)));
+        let enter = enter || std::mem::take(&mut self.enter_waiting);
         let (up, down) = (step < 0, step > 0);
         if escape {
             self.back();
@@ -166,10 +170,14 @@ impl Palette {
                         };
                         let edit = ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(hint).desired_width(f32::INFINITY));
                         edit.request_focus();
+                        let mut enter = enter;
                         if edit.changed() {
                             self.selected = 0;
                             if let Stage::Search { action, .. } = &stage {
                                 self.ask = Some(SearchAsk { origin: action.origin, action: action.action.id.clone(), query: self.filter.clone() });
+                                // Results of what was typed before: Enter waits for these.
+                                (self.enter_waiting, enter) = (enter, false);
+                                ctx.request_repaint();
                             }
                         }
                         ui.add_space(crate::theme::look().space_s);

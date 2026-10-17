@@ -6,7 +6,7 @@
 use egui::{Color32, Rect, RichText, Sense, Stroke, pos2, vec2};
 use harness_contracts::{Colour, Mods, Row, Style, TermKey, TermSize, TerminalInput, ToTerminal};
 
-use super::{Cell, TerminalBuffer};
+use super::{Cell, SIZE_STILL_S, TerminalBuffer};
 
 /// Whether it's typed in this frame.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -78,8 +78,30 @@ impl TerminalBuffer {
         let response = ui.interact(rect, id, Sense::click_and_drag());
         let grid_rect = Rect::from_min_max(rect.min, pos2((rect.right() - bar_w).max(rect.left()), rect.bottom()));
         let size = TermSize { cols: (grid_rect.width() / self.char_w).floor().clamp(10.0, 1000.0) as u16, rows: (grid_rect.height() / row_h).floor().clamp(3.0, 500.0) as u16 };
-        if self.link.is_some() && self.size_sent != Some(size) {
-            self.size_sent = Some(size);
+        // Its size, said at once the first time; a new one once it's held
+        // still a moment (a panel's edge dragged makes one each frame, and
+        // a new width lays every line out anew).
+        let said = match self.size_sent {
+            _ if self.link.is_none() => false,
+            None => true,
+            Some(sent) if sent == size => {
+                self.size_seen = None;
+                false
+            }
+            Some(_) => {
+                if self.size_seen.is_none_or(|(seen, _)| seen != size) {
+                    self.size_seen = Some((size, self.clock));
+                }
+                let since = self.size_seen.map_or(self.clock, |(_, since)| since);
+                let still = self.clock - since >= SIZE_STILL_S;
+                if !still {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(SIZE_STILL_S));
+                }
+                still
+            }
+        };
+        if said {
+            (self.size_sent, self.size_seen) = (Some(size), None);
             self.send(&ToTerminal::Size { size });
         }
         (self.window, self.row_h) = (u64::from(size.rows), row_h);
@@ -150,7 +172,7 @@ impl TerminalBuffer {
                 self.view.wheel(delta, row_h, span);
             }
         }
-        let touch = ui.input(|i| i.any_touches());
+        let touch = self.fingers;
         let Some(pos) = response.interact_pointer_pos() else {
             self.thumb_held = None;
             return;
@@ -191,7 +213,7 @@ impl TerminalBuffer {
                 let to = if line == l1 { f32::from(c1) + 1.0 } else { rect.width() / char_w };
                 painter.rect_filled(Rect::from_min_max(pos2(rect.left() + from * char_w, top), pos2(rect.left() + to * char_w, top + row_h)), 0.0, theme.widget_selection);
             }
-            if let Some(row) = self.lines.get(line) {
+            if let Some(row) = self.lines.shown(line) {
                 paint_row(&painter, row, pos2(rect.left(), top), char_w, row_h, font, theme);
             }
             // The screen's cursor: a block while typed in, an outline else.
@@ -226,7 +248,7 @@ impl TerminalBuffer {
     /// instead), the cursor where it ends; a click puts the cursor on the
     /// line clicked and lets go of a selection.
     fn pointer(&mut self, ui: &egui::Ui, response: &egui::Response, grid: Grid, bar: Rect) {
-        let by_hand = self.thumb_held.is_some() || ui.input(|i| i.any_touches()) || response.interact_pointer_pos().is_some_and(|p| bar.contains(p));
+        let by_hand = self.thumb_held.is_some() || self.fingers || response.interact_pointer_pos().is_some_and(|p| bar.contains(p));
         // From where it was pressed (it's a drag only once it's moved a little).
         if response.drag_started()
             && !by_hand
@@ -251,9 +273,9 @@ impl TerminalBuffer {
         }
     }
 
-    /// The cursor on `line`, where the pointer is (not while typing: there's
-    /// none then).
-    fn put_cursor(&mut self, line: u64) {
+    /// The cursor on `line`, where the pointer is (not while typing:
+    /// there's none then).
+    pub(super) fn put_cursor(&mut self, line: u64) {
         if !self.typing {
             (self.cursor, self.cursor_col) = (Some(line), None);
         }

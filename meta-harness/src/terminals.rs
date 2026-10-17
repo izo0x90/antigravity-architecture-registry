@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use harness_contracts::{ClientEvent, Found, Row, ScreenUpdate, Subject, TermSize, Terminal, TerminalId, TerminalInput, TerminalNews, TerminalStatus};
+use harness_contracts::{ClientEvent, Found, Row, ScreenUpdate, Subject, TAGGED_LINES, TermSize, Terminal, TerminalId, TerminalInput, TerminalNews, TerminalStatus};
 use harness_core::EventHub;
 use nah_terminal::{Happening, Options};
 use tokio::sync::watch;
@@ -66,7 +66,7 @@ pub struct Terminals {
     long: std::time::Duration,
     /// Told when tagged lines may have moved, or their names changed (a
     /// new width, a shell started again or closed): the tags keep them
-    /// where they are now.
+    /// where they are now. Told where they moved, off the async threads.
     moved: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
@@ -405,9 +405,6 @@ impl nah_tags::Resolve for Terminals {
                 None => (number(lines)?, number(lines)?),
             };
             let (first, last) = (first.min(last), first.max(last));
-            if last - first >= TAGGED_LINES {
-                return Err(format!("at most {TAGGED_LINES} lines"));
-            }
             Ok(Subject::TerminalLines { terminal, shell, first, last })
         })())
     }
@@ -429,8 +426,5 @@ impl Terminals {
     }
 }
 
-/// How much of a tagged command's output it says (its last lines), and
-/// how many lines can be tagged at once (agents name at most these; of
-/// more, what they say is their first these).
+/// How much of a tagged command's output it says (its last lines).
 const TAGGED_OUTPUT: u64 = 20;
-const TAGGED_LINES: u64 = 200;

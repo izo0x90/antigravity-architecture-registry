@@ -72,7 +72,20 @@ pub enum Subject {
     TerminalCommand { terminal: TerminalId, shell: u64, command: u64 },
 }
 
+/// How many of a terminal's lines a tag is on at most, at once.
+pub const TAGGED_LINES: u64 = 200;
+
 impl Subject {
+    /// Why it can't be tagged as it is (lines the wrong way round, too
+    /// many of them): none when it can.
+    pub fn unfit(&self) -> Option<String> {
+        match self {
+            Self::TerminalLines { first, last, .. } if last < first => Some("its last line is before its first".into()),
+            Self::TerminalLines { first, last, .. } if last - first >= TAGGED_LINES => Some(format!("at most {TAGGED_LINES} lines at once")),
+            _ => None,
+        }
+    }
+
     /// Whether it is `other`, or has it in it (lines of a terminal have
     /// each of their lines in them).
     pub fn contains(&self, other: &Subject) -> bool {
@@ -84,12 +97,14 @@ impl Subject {
 }
 
 /// Whether `name` can be a tag's: letters, digits, `-` and `_` (40 at
-/// most), so `#name` finds it in a prompt (punctuation after it isn't
-/// part of it) and it goes in a link as it is; and never shaped like a
-/// tag's id (a uuid), so it's never mistaken for one.
+/// most, ending in a letter or digit), so `#name` finds it in a prompt
+/// (punctuation after it isn't part of it) and it goes in a link as it
+/// is; and never shaped like a tag's id (a uuid), so it's never mistaken
+/// for one.
 pub fn tag_name_ok(name: &str) -> bool {
     let uuid = name.len() == 36 && name.char_indices().all(|(at, c)| if [8, 13, 18, 23].contains(&at) { c == '-' } else { c.is_ascii_hexdigit() });
-    !name.is_empty() && name.len() <= 40 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') && !uuid
+    let ends = name.ends_with(|c: char| c.is_ascii_alphanumeric());
+    ends && name.len() <= 40 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') && !uuid
 }
 
 /// What a tag is on, and each as it is now.
@@ -122,10 +137,11 @@ mod tests {
         assert!(!lines(10, 12).contains(&Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 2, first: 11, last: 11 }), "another start's");
         let command = Subject::TerminalCommand { terminal: TerminalId::new("t1"), shell: 1, command: 3 };
         assert!(command.contains(&command.clone()) && !lines(0, 99).contains(&command));
+        assert_eq!((lines(1, 200).unfit(), lines(1, 201).unfit().is_some(), lines(5, 4).unfit().is_some()), (None, true, true), "200 lines at most, the right way round");
         for ok in ["flaky-build", "a_1", "X"] {
             assert!(tag_name_ok(ok), "{ok}");
         }
-        for bad in ["", "two words", "dots.too", "a/b", "café", "0b8f8a9e-3c1d-4f6e-9a2b-7c5d4e3f2a1b", &"x".repeat(41)] {
+        for bad in ["", "two words", "dots.too", "a/b", "café", "wip_", "build-", "0b8f8a9e-3c1d-4f6e-9a2b-7c5d4e3f2a1b", &"x".repeat(41)] {
             assert!(!tag_name_ok(bad), "{bad}");
         }
     }

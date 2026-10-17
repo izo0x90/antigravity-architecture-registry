@@ -309,6 +309,8 @@ async fn the_lead_runs_sub_slots_and_a_sub_slot_reports_back() {
     let mut lead = Mcp::lead(addr).await;
     let (err, text) = lead.tool("slot_list", json!({})).await;
     assert!(!err && text.starts_with("No sub-slots."), "{text}");
+    let (err, text) = lead.tool("slot_start", json!({ "harness": "fake", "name": "User" })).await;
+    assert!(err && text.contains("that's the user"), "no agent passes for the user: {text}");
     let (err, text) = lead.tool("slot_start", json!({ "harness": "fake", "name": "helper", "mode": "full-access" })).await;
     assert!(!err && text.starts_with("Started helper (id sub-"), "{text}");
     let sub = state.harness.slots.list().into_iter().find(|s| s.name == "helper").unwrap();

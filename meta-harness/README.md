@@ -452,8 +452,8 @@ all of them:
   what was read). Commands: bash and zsh mark each one (a start-up hook
   the server adds after your own files: where its prompt is, the command
   line as typed, its output, how it ended, how long it ran); `]]`/`[[` go
-  from command to command (to its prompt's line), `Space , 8` copies its
-  output and `Space , 9` runs it again (typed in, at an empty prompt). `` ctrl+` `` (or `Space T`)
+  from command to command (to its prompt's line), and its actions copy
+  its output or run it again (typed in, at an empty prompt). `` ctrl+` `` (or `Space T`)
   pops a terminal of its own over everything, in the quick look; the key
   again hides it. Each panel showing a terminal is a reader at its own
   size: the smallest wins. A shell outlives the cockpit (reload, open it

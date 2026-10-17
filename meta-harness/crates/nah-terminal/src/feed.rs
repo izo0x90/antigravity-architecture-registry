@@ -83,8 +83,10 @@ pub struct Feed {
 }
 
 impl Feed {
-    pub fn new(kept: usize) -> Self {
-        Self { processor: Processor::new(), scan: Scan::default(), kept, dropped: 0, history: 0, held: Vec::new(), cuts: Vec::new(), since: None }
+    /// Keeping `kept` lines; the shell's command marks are those with
+    /// `mark` (`Scan`).
+    pub fn new(kept: usize, mark: &str) -> Self {
+        Self { processor: Processor::new(), scan: Scan::new(mark), kept, dropped: 0, history: 0, held: Vec::new(), cuts: Vec::new(), since: None }
     }
 
     /// The emulator's scrollback for `kept` lines kept here.
@@ -263,7 +265,7 @@ mod tests {
 
     fn term(kept: usize) -> (Term<VoidListener>, Feed) {
         let config = Config { scrolling_history: Feed::room(kept), ..Config::default() };
-        (Term::new(config, &Size(20, 5), VoidListener), Feed::new(kept))
+        (Term::new(config, &Size(20, 5), VoidListener), Feed::new(kept, "m"))
     }
 
     /// What line `number` says now (none: not kept).

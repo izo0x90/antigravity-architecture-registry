@@ -173,8 +173,6 @@ pub struct HarnessState {
     pub tool_servers: Arc<crate::tool_servers::ToolServerState>,
     /// The project's folder (where harness packs are looked up).
     pub root: PathBuf,
-    /// The tags a prompt names (`#name`) hand the agent what they're on.
-    pub tags: Arc<nah_tags::Tags>,
 }
 
 impl Module for HarnessState {
@@ -290,11 +288,15 @@ impl AppState {
         let gate = Gate { cockpit: p.cockpit, access: p.access, tickets: Arc::default() };
         let home = crate::home::Home::start(p.state.clone(), p.hub.clone(), p.notify.clone(), true)?;
         let stopping = Shutdown::default();
+        // Every prompt a slot is sent hands the agent what the tags it
+        // names (`#name`) are on.
+        let tags = p.tags.clone();
+        p.slots.expand_prompts_with(Arc::new(move |text: &str| tags.expand(text)));
         Ok(Self {
             server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },
             home: HomeState { gate: gate.clone(), stopping: stopping.clone(), home },
             cockpit: CockpitState { gate: gate.clone(), stopping: stopping.clone(), state: p.state, remote: p.remote },
-            harness: HarnessState { gate: gate.clone(), stopping: stopping.clone(), registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf(), tags: p.tags.clone() },
+            harness: HarnessState { gate: gate.clone(), stopping: stopping.clone(), registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
             terminals: p.terminals.map(|terminals| TerminalsState { gate: gate.clone(), stopping: stopping.clone(), terminals }),
             tags: TagsState { gate: gate.clone(), tags: p.tags },

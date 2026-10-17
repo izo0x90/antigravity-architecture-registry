@@ -12,13 +12,17 @@ pub fn users_shell() -> String {
 }
 
 /// The command that starts `shell` in `folder`, its marks set up with
-/// files kept in `hooks` (written there as needed).
-pub fn command(shell: &str, folder: &Path, hooks: &Path) -> std::io::Result<CommandBuilder> {
+/// files kept in `hooks` (written there as needed). Each mark carries
+/// `mark`, this start's own: what a program prints can't pass for one (the
+/// shell takes it from its environment and drops it there at once, so the
+/// programs it runs don't have it).
+pub fn command(shell: &str, folder: &Path, hooks: &Path, mark: &str) -> std::io::Result<CommandBuilder> {
     let mut cmd = CommandBuilder::new(shell);
     cmd.cwd(folder);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "nah");
+    cmd.env("NAH_MARK", mark);
     match Path::new(shell).file_name().and_then(|n| n.to_str()) {
         Some("bash") => {
             let rc = write(hooks, "bashrc", BASH)?;
@@ -62,10 +66,11 @@ fn write(dir: &Path, name: &str, text: &str) -> std::io::Result<PathBuf> {
 /// leading space isn't said). bash 5.1 takes `PROMPT_COMMAND` as a list:
 /// the user's stay as they are; older ones get one line (the user's last
 /// `;` taken off).
-const BASH: &str = r#"[ -f ~/.bashrc ] && . ~/.bashrc
+const BASH: &str = r#"__nah_mark=$NAH_MARK; unset NAH_MARK
+[ -f ~/.bashrc ] && . ~/.bashrc
 __nah_done() {
   local code=$?
-  printf '\e]133;D;%s\a' "$code"
+  printf '\e]133;D;%s;%s\a' "$code" "$__nah_mark"
   if [[ -n ${__nah_dups-} ]]; then
     local two
     two=$(HISTTIMEFORMAT= builtin history 2)
@@ -80,7 +85,7 @@ __nah_done() {
 }
 __nah_prompt() {
   local code=$?
-  [[ $PS1 == *'133;A'* ]] || PS1=$'\[\e]133;A\a\]'"$PS1"$'\[\e]133;B\a\]'
+  [[ $PS1 == *'133;A'* ]] || PS1=$'\[\e]133;A;'"$__nah_mark"$'\a\]'"$PS1"$'\[\e]133;B;'"$__nah_mark"$'\a\]'
   case :$HISTCONTROL: in
     *:ignoredups:*|*:ignoreboth:*)
       __nah_dups=$HISTCONTROL
@@ -95,7 +100,7 @@ __nah_escape() { local s=${1//\\/\\\\}; s=${s//;/\\x3b}; s=${s//$'\n'/\\x0a}; s=
 __nah_typed() {
   local newest
   newest=$(HISTTIMEFORMAT= builtin history 1)
-  [[ $newest != "$__nah_newest" && $newest =~ ^[[:space:]]*[0-9]+[*[:space:]][[:space:]]*(.*)$ ]] && printf '\e]633;E;%s\a' "$(__nah_escape "${BASH_REMATCH[1]}")"
+  [[ $newest != "$__nah_newest" && $newest =~ ^[[:space:]]*[0-9]+[*[:space:]][[:space:]]*(.*)$ ]] && printf '\e]633;E;%s;%s\a' "$(__nah_escape "${BASH_REMATCH[1]}")" "$__nah_mark"
 }
 if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
   PROMPT_COMMAND=(__nah_done "${PROMPT_COMMAND[@]}" __nah_prompt)
@@ -103,13 +108,14 @@ else
   __nah_theirs=${PROMPT_COMMAND%"${PROMPT_COMMAND##*[![:space:];]}"}
   PROMPT_COMMAND="__nah_done${__nah_theirs:+;$__nah_theirs};__nah_prompt"
 fi
-PS0='$(__nah_typed)'$'\e]133;C\a'"${PS0}"
+PS0='$(__nah_typed)'$'\e]133;C;'"$__nah_mark"$'\a'"${PS0}"
 "#;
 
 /// zsh reads `.zshenv` then `.zshrc` from `ZDOTDIR`: each reads the user's
 /// own (where their `.zshenv` says, if it moves `ZDOTDIR`), then `.zshrc`
 /// adds the marks and leaves `ZDOTDIR` the user's.
-const ZSHENV: &str = r#"__nah_hooks="$ZDOTDIR"
+const ZSHENV: &str = r#"__nah_mark=$NAH_MARK; unset NAH_MARK
+__nah_hooks="$ZDOTDIR"
 ZDOTDIR="$NAH_USER_ZDOTDIR"
 [ -f "$ZDOTDIR/.zshenv" ] && . "$ZDOTDIR/.zshenv"
 NAH_USER_ZDOTDIR="$ZDOTDIR"
@@ -119,10 +125,14 @@ unset __nah_hooks
 
 const ZSHRC: &str = r#"ZDOTDIR="$NAH_USER_ZDOTDIR"
 [ -f "$ZDOTDIR/.zshrc" ] && . "$ZDOTDIR/.zshrc"
-__nah_precmd() { local code=$?; printf '\e]133;D;%s\a' "$code"; }
-__nah_prompt() { [[ $PS1 == *'133;A'* ]] || PS1=$'%{\e]133;A\a%}'"$PS1"$'%{\e]133;B\a%}'; }
+__nah_precmd() { local code=$?; printf '\e]133;D;%s;%s\a' "$code" "$__nah_mark"; }
+__nah_prompt() { [[ $PS1 == *'133;A'* ]] || PS1=$'%{\e]133;A;'"$__nah_mark"$'\a%}'"$PS1"$'%{\e]133;B;'"$__nah_mark"$'\a%}'; }
 __nah_escape() { local s=${1//\\/\\\\}; s=${s//;/\\x3b}; s=${s//$'\n'/\\x0a}; s=${s//$'\r'/\\x0d}; s=${s//$'\e'/\\x1b}; s=${s//$'\a'/\\x07}; printf '%s' "$s"; }
-__nah_preexec() { printf '\e]633;E;%s\a\e]133;C\a' "$(__nah_escape "$1")"; }
+__nah_preexec() {
+  # A line kept out of the history for its leading space isn't said.
+  [[ -o histignorespace && $1 == [[:space:]]* ]] || printf '\e]633;E;%s;%s\a' "$(__nah_escape "$1")" "$__nah_mark"
+  printf '\e]133;C;%s\a' "$__nah_mark"
+}
 precmd_functions=(__nah_precmd $precmd_functions __nah_prompt)
 preexec_functions+=(__nah_preexec)
 "#;

@@ -71,8 +71,19 @@ fn it_shows_the_screen_it_was_sent_and_says_its_size() {
     focus(&ctx, &mut app, BufferKind::Terminal);
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
     assert!(drawn.contains("Cargo.toml  src"), "{drawn}");
-    let sizes: Vec<_> = app.desk.terminal().sent().into_iter().filter(|s| matches!(s, ToTerminal::Size { .. })).collect();
-    assert_eq!(sizes.len(), 1, "its size, said once: {sizes:?}");
+    let sizes = |app: &CockpitApp| app.desk.terminal().sent().into_iter().filter(|s| matches!(s, ToTerminal::Size { .. })).count();
+    assert_eq!(sizes(&app), 1, "its size, said once");
+    // Its panel narrowed bit by bit (an edge dragged): the size it ends at,
+    // said once it's held still.
+    let mut t = 100.0;
+    for count in [4, 5, 6] {
+        app.desk.panels.set_count(count, 12);
+        t += 0.03;
+        frame_at(&ctx, &mut app, vec![], t);
+    }
+    assert_eq!(sizes(&app), 1, "not while it changes");
+    frame_at(&ctx, &mut app, vec![], t + 0.3);
+    assert_eq!(sizes(&app), 2, "the one it ended at");
 }
 
 #[test]
@@ -199,11 +210,13 @@ fn a_file_on_a_terminal_line_is_gone_to_in_the_code() {
     assert!(calls.iter().any(|c| c.contains("src/b.rs") || c.contains("src%2Fb.rs")), "the code view opens the file: {calls:?} {:?} {:?}", app.note, app.desk.view(app.focused_kind()).target());
 }
 
-/// The lines the terminal asked its server for, answered.
+/// The lines the terminal asked its server for last, answered (it asks
+/// one at a time; an answer it has already is let go).
 fn answer_lines(app: &mut CockpitApp) {
-    let asked: Vec<(u64, u32)> = app.desk.terminal().sent().into_iter().filter_map(|s| if let ToTerminal::Lines { from, count } = s { Some((from, count)) } else { None }).collect();
-    let answers = asked.into_iter().map(|(from, count)| crate::terminal::tests::numbered_lines(from, count)).collect();
-    app.desk.terminal_mut().arrive(answers);
+    let asked = app.desk.terminal().sent().into_iter().filter_map(|s| if let ToTerminal::Lines { from, count } = s { Some((from, count)) } else { None }).next_back();
+    if let Some((from, count)) = asked {
+        app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered_lines(from, count)]);
+    }
 }
 
 /// The terminal's lines drawn this frame, by number.
@@ -341,7 +354,8 @@ fn a_new_width_or_a_new_start_of_the_shell_keeps_the_view_sensible() {
     let harness_contracts::FromTerminal::Screen { mut update } = crate::terminal::tests::numbered(5000, 4000) else { unreachable!() };
     update.size.cols = 60;
     app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Screen { update }]);
-    frame(&ctx, &mut app, vec![]);
+    let meanwhile = drawn_lines(&frame(&ctx, &mut app, vec![]));
+    assert_eq!(meanwhile.len(), read.len(), "until its lines come, what showed stands in: no blank rows");
     answer_lines(&mut app);
     let drawn = drawn_lines(&frame(&ctx, &mut app, vec![]));
     assert_eq!(5024 - drawn.last().unwrap(), back, "as far from the live screen as before: {drawn:?}");
@@ -366,6 +380,9 @@ fn the_cursor_is_there_only_while_not_typing_from_the_programs_line_and_never_on
     assert_eq!(cursor(&app).as_deref(), Some("1023"), "on the program's line");
     keys(&ctx, &mut app, "kk");
     assert_eq!(cursor(&app).as_deref(), Some("1021"));
+    // Going to a line: by its number (as tags and agents name lines).
+    app.run_move(BufferKind::Terminal, Move::Motion(Motion::Line(1010)), None, &ctx);
+    assert_eq!(cursor(&app).as_deref(), Some("1010"));
     frame(&ctx, &mut app, key("i"));
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app), None, "typing drops it");
@@ -376,12 +393,11 @@ fn the_cursor_is_there_only_while_not_typing_from_the_programs_line_and_never_on
     app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1100, 1100)]);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("1100"));
-    // Where the terminal is keeps it (in that start of its shell).
+    // Where the terminal is doesn't keep it (it came back after a reload).
     let place = app.desk.view(BufferKind::Terminal).place();
-    app.desk.view_mut(BufferKind::Terminal).motion(crate::nav::Motion::Last, 1);
-    assert_ne!(cursor(&app).as_deref(), Some("1100"));
+    app.desk.view_mut(BufferKind::Terminal).leave();
     app.desk.view_mut(BufferKind::Terminal).restore(&place);
-    assert_eq!(cursor(&app).as_deref(), Some("1100"));
+    assert_eq!(cursor(&app), None);
 }
 
 /// A screen from line `top` with the shell's `commands` on it.
@@ -401,7 +417,12 @@ fn not_typing_it_moves_by_command_and_copies_one_s_output_or_runs_it_again() {
     // The third waits at an empty prompt on the screen's last line (where the program's cursor is).
     let mut waiting = command(3, 1023, None, "");
     waiting.output = None;
-    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![command(1, 1003, Some(1008), "make"), command(2, 1008, Some(1012), "make test"), waiting])]);
+    let at_prompt = |typed: &str, commands| {
+        let harness_contracts::FromTerminal::Screen { mut update } = with_commands(1000, commands) else { unreachable!() };
+        update.rows[23].1 = vec![harness_contracts::Run { text: format!("$ {typed}"), style: Default::default(), wide: false }];
+        harness_contracts::FromTerminal::Screen { update }
+    };
+    app.desk.terminal_mut().arrive(vec![at_prompt("", vec![command(1, 1003, Some(1008), "make"), command(2, 1008, Some(1012), "make test"), waiting.clone()])]);
     not_typing(&ctx, &mut app);
     keys(&ctx, &mut app, "[[");
     assert_eq!(cursor(&app).as_deref(), Some("1008"), "from the program's line (in the third, running), the one before");
@@ -425,17 +446,20 @@ fn not_typing_it_moves_by_command_and_copies_one_s_output_or_runs_it_again() {
     keys(&ctx, &mut app, "run the command again");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!(inputs(&app)[inputs(&app).len() - 2..], [text("make test"), named(TermKey::Enter, false)]);
-    // Something typed at the prompt (its cursor moved on): not run over it.
+    // Something typed at the prompt, the cursor after it, or back at its
+    // start (Home): not run over it, nor into it.
     let mut typed = command(3, 1023, None, "");
     (typed.output, typed.input_col) = (None, 0);
-    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![typed])]);
-    frame(&ctx, &mut app, vec![]);
-    let before = inputs(&app).len();
-    keys(&ctx, &mut app, ":");
-    keys(&ctx, &mut app, "run the command again");
-    frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert_eq!(inputs(&app).len(), before);
-    assert!(app.note.as_deref().is_some_and(|n| n.starts_with("Not at an empty prompt")), "{:?}", app.note);
+    for (screen, how) in [(at_prompt("rm -rf out", vec![typed]), "the cursor moved on"), (at_prompt("rm -rf out", vec![waiting.clone()]), "the cursor at its start")] {
+        app.desk.terminal_mut().arrive(vec![screen]);
+        frame(&ctx, &mut app, vec![]);
+        let before = inputs(&app).len();
+        keys(&ctx, &mut app, ":");
+        keys(&ctx, &mut app, "run the command again");
+        frame(&ctx, &mut app, press(egui::Key::Enter, false));
+        assert_eq!(inputs(&app).len(), before, "{how}");
+        assert!(app.note.as_deref().is_some_and(|n| n.starts_with("Not at an empty prompt")), "{how}: {:?}", app.note);
+    }
 }
 
 fn lines(terminal: &str, shell: u64, first: u64, last: u64) -> harness_contracts::Subject {
@@ -494,7 +518,7 @@ fn what_the_cursor_is_on_is_tagged_from_the_shell_and_its_tags_show_where_it_is_
 }
 
 #[test]
-fn lines_selected_with_the_mouse_are_what_is_tagged_and_a_click_puts_the_cursor_on_a_line() {
+fn lines_selected_with_the_mouse_are_what_is_tagged_and_a_click_or_a_long_press_is_on_a_line() {
     let (ctx, mut app) = full_app();
     app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![])]);
     not_typing(&ctx, &mut app);
@@ -521,6 +545,14 @@ fn lines_selected_with_the_mouse_are_what_is_tagged_and_a_click_puts_the_cursor_
     }
     assert_eq!(cursor(&app).as_deref(), Some("1005"));
     assert_eq!(app.input_mode, InputMode::Normal);
+    // A long press on a line (a phone): the cursor there.
+    let at = drawn_rects(&frame_at(&ctx, &mut app, vec![], 61.0), "line 1008")[0].center();
+    let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
+    frame_at(&ctx, &mut app, vec![touch(egui::TouchPhase::Start)], 61.1);
+    frame_at(&ctx, &mut app, vec![], 61.8);
+    frame_at(&ctx, &mut app, vec![touch(egui::TouchPhase::End)], 61.9);
+    frame_at(&ctx, &mut app, vec![], 62.0);
+    assert_eq!(cursor(&app).as_deref(), Some("1008"));
 }
 
 #[test]
@@ -540,13 +572,6 @@ fn next_and_previous_go_through_the_tag_stepped_last_and_a_tag_on_lines_is_on_ea
         frame(&ctx, &mut app, vec![]);
         assert_eq!(cursor(&app).as_deref(), Some(at), "{keys_}");
     }
-    // Each a jump: ctrl+o goes back through them.
-    ctrl(&ctx, &mut app, egui::Key::O);
-    frame(&ctx, &mut app, vec![]);
-    assert_eq!(cursor(&app).as_deref(), Some("1010"));
-    ctrl(&ctx, &mut app, egui::Key::I);
-    frame(&ctx, &mut app, vec![]);
-    assert_eq!(cursor(&app).as_deref(), Some("1019"));
     // On a line with both tags: the one stepped last (not the first by name).
     keys(&ctx, &mut app, "jj");
     assert_eq!(cursor(&app).as_deref(), Some("1021"));
@@ -601,6 +626,15 @@ fn the_tag_picker_finds_tags_as_search_does_and_offers_a_new_one_first_when_none
     bodies(&app, "");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!(bodies(&app, "POST /api/tags").first().map(|b| b["tag"].clone()), Some(serde_json::json!("x1")));
+    // Its whole name typed and Enter in one go (a paste, fast typing): the
+    // rows for the whole name, not for what came before it.
+    keys(&ctx, &mut app, "M");
+    keys(&ctx, &mut app, "ci-flak");
+    let mut last = key("y");
+    last.extend(press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, last);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(bodies(&app, "POST /api/tags").first().map(|b| b["tag"].clone()), Some(serde_json::json!("x1")), "not a new tag \u{201c}ci-flak\u{201d}");
 }
 
 #[test]
@@ -637,14 +671,10 @@ fn a_go_to_a_tag_picks_the_tag_then_the_thing_lands_in_another_terminal_and_come
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("410"));
     assert_eq!(app.input_mode, InputMode::Normal, "landing on lines to look at them doesn't start typing");
-    // ctrl+o: back where it was (its line, once its lines come again).
+    // ctrl+o: back in the terminal it was in.
     ctrl(&ctx, &mut app, egui::Key::O);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.desk.terminal().target(), Some(Target::Terminal(harness_contracts::TerminalId::new("t1"))));
-    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![])]);
-    frame(&ctx, &mut app, vec![]);
-    frame(&ctx, &mut app, vec![]);
-    assert_eq!(cursor(&app).as_deref(), Some("1023"));
     // A tag on a closed terminal's command: said, and nothing moves.
     keys(&ctx, &mut app, "gT");
     keys(&ctx, &mut app, "old");

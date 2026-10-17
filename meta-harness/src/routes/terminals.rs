@@ -85,9 +85,8 @@ async fn serve(socket: WebSocket, terminals: Arc<Terminals>, open: Arc<Open>) {
     let (mut sink, mut incoming) = socket.split();
     let viewer = open.viewer();
     let mut changed = open.watch();
-    let mut started = open.started();
     let Ok(first) = read(&open, |o| o.screen(None)).await else { return };
-    let (mut seen, mut title) = (first.seq, first.title.clone());
+    let (mut seen, mut title, mut started) = (first.seq, first.title.clone(), first.shell);
     // What the reader has of the screen: rows that scroll off are sent
     // again only when they changed after it was sent them.
     let mut has = ReaderScreen::default();
@@ -103,10 +102,18 @@ async fn serve(socket: WebSocket, terminals: Arc<Terminals>, open: Arc<Open>) {
                 }
                 tokio::time::sleep(FRAME).await;
                 changed.borrow_and_update();
-                // A new start of its shell: its screen whole, numbered anew.
-                let restarted = std::mem::replace(&mut started, open.started()) != started;
-                let since = (!restarted).then_some(seen);
-                let Ok(update) = read(&open, move |o| o.screen(since)).await else { break };
+                // A new start of its shell: its screen whole, numbered anew
+                // (seen by what's read: the start it says is the one read).
+                let known = started;
+                let Ok(update) = read(&open, move |o| {
+                    let update = o.screen(Some(seen));
+                    if update.shell == known { update } else { o.screen(None) }
+                })
+                .await
+                else {
+                    break;
+                };
+                started = update.shell;
                 if update.full || update.seq != seen || update.title != title {
                     (seen, title) = (update.seq, update.title.clone());
                     let (from, gone) = has.take(&update);

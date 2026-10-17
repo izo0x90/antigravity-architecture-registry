@@ -24,8 +24,6 @@ use crate::shared::{Reader, Shared};
 use crate::terminals::{TermAct, TermLink, Terminals};
 use crate::viewport::Go;
 
-/// How many lines can be tagged at once (as many as agents can name).
-const TAGGED_LINES: u64 = 200;
 
 #[derive(Clone, Debug)]
 enum TermCommand {
@@ -42,6 +40,9 @@ enum TermCommand {
 
 /// How often it says again that its updates were seen (while some are there).
 const SEEN_EVERY: f64 = 2.0;
+
+/// How long a new size holds still before it's said (seconds).
+const SIZE_STILL_S: f64 = 0.15;
 
 /// A cell: its line's number and its column.
 type Cell = (u64, u16);
@@ -70,6 +71,9 @@ pub struct TerminalBuffer {
     thumb_held: Option<f32>,
     /// The size last said to the server.
     size_sent: Option<TermSize>,
+    /// Another size, and since when it's been the size (said once it's
+    /// held still `SIZE_STILL_S`).
+    size_seen: Option<(TermSize, f64)>,
     char_w: f32,
     /// Not typing: the line the cursor's on (its number), and the column
     /// (a hint put it on a link there).
@@ -98,6 +102,9 @@ pub struct TerminalBuffer {
     landing: bool,
     /// It was typed in last frame.
     typing: bool,
+    /// The pointer is a finger (the host says): a drag moves the lines
+    /// rather than select them.
+    fingers: bool,
     /// Asked for a new terminal: shows it once the desk has made more than this.
     awaiting: Option<u64>,
     /// Asked once for a terminal, having none to show.
@@ -111,14 +118,12 @@ pub struct TerminalBuffer {
     grid: Option<egui::Rect>,
 }
 
-/// Where it is: the terminal, and the line its cursor's on while it isn't
-/// typed in (with the start of its shell it's in: a line's number is only
-/// that start's).
+/// Where it is: the terminal. (Not its cursor: a line's number is only
+/// the shell's it was given in, and the cursor is there only while not
+/// typing; kept, it came back after a reload.)
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TermPlace {
     id: Option<TerminalId>,
-    #[serde(default)]
-    at: Option<(u64, u64)>,
 }
 
 impl TerminalBuffer {
@@ -331,7 +336,7 @@ impl crate::buffer::Buffer for TerminalBuffer {
             (false, true) => (self.cursor, self.cursor_col) = (Some(self.lines.cursor().0), None),
             _ => {}
         }
-        self.typing = drawing.typing;
+        (self.typing, self.fingers) = (drawing.typing, drawing.fingers);
         self.keep_cursor_on_a_line();
         self.draw(ui, cx, keys);
     }
@@ -420,25 +425,16 @@ impl Navigable for TerminalBuffer {
     }
 
     fn place(&self) -> Place {
-        Place::of(&TermPlace { id: self.id.clone(), at: self.cursor.filter(|_| self.lines.shell() != 0).map(|line| (self.lines.shell(), line)) })
+        Place::of(&TermPlace { id: self.id.clone() })
     }
 
     fn place_in_words(&self, place: &Place) -> String {
-        match place.read::<TermPlace>() {
-            Some(TermPlace { id: Some(id), at: Some((_, line)) }) => format!("terminal {id} line {line}"),
-            Some(TermPlace { id: Some(id), at: None }) => format!("terminal {id}"),
-            _ => String::new(),
-        }
+        place.read::<TermPlace>().and_then(|p| p.id).map(|id| format!("terminal {id}")).unwrap_or_default()
     }
 
-    /// The terminal; its line, when it had one (as a go-to lands there).
     fn restore(&mut self, place: &Place) {
-        let Some(TermPlace { id: Some(id), at }) = place.read::<TermPlace>() else { return };
-        match at {
-            Some((shell, line)) => {
-                let _ = self.show_target(&Target::TerminalLines { terminal: id, shell, first: line, last: line });
-            }
-            None => self.show(id),
+        if let Some(id) = place.read::<TermPlace>().and_then(|p| p.id) {
+            self.show(id);
         }
     }
 
@@ -471,7 +467,7 @@ impl Navigable for TerminalBuffer {
     }
 
     /// The command on its prompt's line, or the line (the selection's
-    /// lines, when it's in it; at most `TAGGED_LINES` of them): what a tag
+    /// lines, when it's in it): what a tag
     /// is put on. Nothing while a program has the whole screen (its lines
     /// aren't the terminal's to keep).
     fn subject(&self, key: &str) -> Option<Subject> {
@@ -487,7 +483,7 @@ impl Navigable for TerminalBuffer {
             Some((a, b)) if (a.0.min(b.0)..=a.0.max(b.0)).contains(&line) => (a.0.min(b.0), a.0.max(b.0)),
             _ => (line, line),
         };
-        Some(Subject::TerminalLines { terminal, shell, first, last: last.min(first + TAGGED_LINES - 1) })
+        Some(Subject::TerminalLines { terminal, shell, first, last })
     }
 
     /// Lines (their first), or a command (its prompt's line), while they
@@ -523,7 +519,13 @@ impl Navigable for TerminalBuffer {
             Motion::HalfUp => self.go(Go::HalfUp(count)),
             Motion::First => self.go(Go::First),
             Motion::Last => self.go(Go::Last),
-            Motion::Line(n) => self.go(Go::To(n.saturating_sub(1), crate::viewport::Show::Middle)),
+            // Line number `n`, as lines are numbered for their life (the
+            // nearest there is).
+            Motion::Line(n) => {
+                let (first, end) = (self.lines.first(), self.lines.end());
+                let at = (n as u64).clamp(first, end.saturating_sub(1).max(first)) - first;
+                self.go(Go::To(at as usize, crate::viewport::Show::Middle));
+            }
             // By command (the shell's marks): to the next one's prompt.
             Motion::NextSibling | Motion::PrevSibling => {
                 let from = self.cursor.unwrap_or(self.lines.cursor().0);
@@ -607,6 +609,17 @@ impl Navigable for TerminalBuffer {
 
     fn cursor_key(&self) -> Option<String> {
         self.cursor.map(|c| c.to_string())
+    }
+
+    /// A long press on a line (a finger's click): the cursor there, so what
+    /// can be done with it is offered.
+    fn gesture(&mut self, gesture: crate::touch::Gesture) {
+        let crate::touch::Gesture::LongPress(pos) = gesture else { return };
+        let (Some(grid), Some(top)) = (self.grid, self.drawn) else { return };
+        if grid.contains(pos) && self.row_h > 0.0 {
+            let line = top + ((pos.y - grid.top()) / self.row_h) as u64;
+            self.put_cursor(line.min(self.lines.end().saturating_sub(1)));
+        }
     }
 
     /// A line ("12"), or a place on one ("12:7", a hint's link).
@@ -806,16 +819,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_tag_goes_on_two_hundred_lines_at_most_and_on_nothing_while_a_program_has_the_whole_screen() {
+    fn a_tag_goes_on_the_selected_lines_and_on_nothing_while_a_program_has_the_whole_screen() {
         let mut t = TerminalBuffer { id: Some(TerminalId::new("t1")), ..TerminalBuffer::default() };
         let FromTerminal::Screen { update } = numbered(1000, 0) else { unreachable!() };
         t.lines.take(&update);
         let lines = |first, last| Some(Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last });
         t.selection = Some(((1023, 3), (100, 0)));
-        assert_eq!(t.subject("500"), lines(100, 299), "the selection's, from its first");
+        assert_eq!(t.subject("500"), lines(100, 1023), "the selection's (the server says if it's too many)");
         assert_eq!(t.subject("50"), lines(50, 50), "outside it: the line");
         (t.grid, t.drawn, t.window, t.row_h) = (Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 240.0))), Some(1000), 24, 10.0);
-        assert_eq!(t.drawn_at(&lines(1005, 1007).unwrap()).map(|r| r.top()), Some(50.0));
         let FromTerminal::Screen { mut update } = numbered(1000, 0) else { unreachable!() };
         update.alternate = true;
         t.lines.take(&update);

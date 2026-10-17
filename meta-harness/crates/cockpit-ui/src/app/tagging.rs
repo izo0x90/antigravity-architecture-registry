@@ -94,9 +94,7 @@ impl CockpitApp {
                     }
                     _ => {
                         self.desk.tag_picking = Some(tag);
-                        if let Some(pick) = self.bound_actions().into_iter().find(|b| b.action.id == "tag.goto.pick") {
-                            self.open_palette(Some(&pick));
-                        }
+                        self.run_by_id("tag.goto.pick", None, ctx);
                     }
                 }
             }

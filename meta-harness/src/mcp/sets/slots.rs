@@ -21,8 +21,6 @@ use crate::mcp::text::parse;
 pub(crate) struct Slots {
     pub(crate) slots: Arc<SlotManager>,
     pub(crate) notify: Arc<nah_notify::NotifyHub>,
-    /// The tags a message names (`#name`) hand the slot what they're on.
-    pub(crate) tags: Arc<nah_tags::Tags>,
 }
 
 #[derive(Deserialize)]
@@ -208,9 +206,7 @@ impl ToolSet for Slots {
                 let slot = self.sub(&a.slot)?;
                 let delivery = if a.add_to_running { Delivery::AddToRunning } else { Delivery::Queue };
                 let wait = a.wait_secs.map(|s| Duration::from_secs(s.min(MAX_WAIT_SECS)));
-                let tags = self.tags.clone();
-                let text = tokio::task::spawn_blocking(move || tags.expand(&a.text)).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))?;
-                Ok(match self.slots.send(&slot.id, text, delivery, Origin::Lead, wait).await.map_err(failed)? {
+                Ok(match self.slots.send(&slot.id, a.text, delivery, Origin::Lead, wait).await.map_err(failed)? {
                     Sent::Started { .. } => format!("Sent to {}.\n\nNext: slot_read it later for its answer.", slot.name),
                     Sent::Replied { text, .. } => format!("{} answered:\n\n{text}", slot.name),
                     Sent::StillWorking { .. } => format!("{} is still working on it.\n\nNext: slot_read it later for its answer.", slot.name),
