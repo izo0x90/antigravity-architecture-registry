@@ -327,7 +327,8 @@ command = "git-mcp"
 The screen is split into panels, side by side, and each panel shows a
 buffer, as vim's windows show buffers (a panel is vim's window). A buffer
 is one open thing with its own state (this chat, that code file), of one
-of eight kinds: chat, code, graph, tree, spec, queue, inbox and changes.
+of ten kinds: chat, code, graph, tree, spec, queue, inbox, changes,
+terminal and tags.
 An agent slot is something else: an agent the server runs (the lead, or a
 sub-slot); a chat buffer shows one.
 Each panel has its own buffer: two graphs side by side (calls beside data
@@ -438,25 +439,56 @@ all of them:
   (Escape is vim's, Tab completes, Ctrl+C interrupts); `Escape Escape` or
   `ctrl+\ n` stops typing (`[keymap.input] leave`: a sequence's first key
   waits `leave_wait_ms`, then reaches the program). Not typing, the keys
-  are the cockpit's: `j`/`k`, `gg`/`G` and the wheel go through the
-  scrollback (fetched from the server as it shows), `/` searches all of it
-  on the server, `f` labels the files (`src/a.rs:12`) and links on screen,
+  are the cockpit's, and a cursor is on a line (it starts on the
+  program's): `j`/`k`, `gg`/`G`, `ctrl+d`/`ctrl+u`, the wheel and the
+  scrollbar go through the scrollback (fetched from the server as it
+  shows; whole lines, never part of one), `/` searches all of it on the
+  server, `f` labels the files (`src/a.rs:12`) and links on screen,
   `g d` on a file opens it in the code at that line, Enter on a link opens
-  it, `c` copies the selection (drag to select) or the line, `J`/`K` show
-  the next or previous terminal, `i` types again. `` ctrl+` `` (or `Space T`)
+  it, a click puts the cursor on a line, `c` copies the selection (drag to
+  select) or the line, `J`/`K` show the next or previous terminal, `i`
+  types again. Each line has a number for its life (scrolled off the top,
+  cleared, laid out anew at another width: the view and cursor stay on
+  what was read). Commands: bash and zsh mark each one (a start-up hook
+  the server adds after your own files: where its prompt is, the command
+  line as typed, its output, how it ended, how long it ran); `]]`/`[[` go
+  from command to command (to its prompt's line), `Space , 8` copies its
+  output and `Space , 9` runs it again (typed in, at an empty prompt). `` ctrl+` `` (or `Space T`)
   pops a terminal of its own over everything, in the quick look; the key
   again hides it. Each panel showing a terminal is a reader at its own
   size: the smallest wins. A shell outlives the cockpit (reload, open it
   elsewhere: the same screen), not the server: after a restart a terminal
   says its shell ended, and Enter starts it again in the same folder. A
   bell, the shell's end, and a command that ran `long_command_secs` or
-  longer finishing (bash and zsh mark their commands, through a start-up
-  hook the server adds after your own files) are notifications about it,
+  longer finishing are notifications about it,
   put away once you look at the terminal. Its screen and keys go on its own
   socket (`/ws/terminals/{id}`, through home for another server), never on
   the event stream. Typing into a terminal is yours; an agent reads one
   (`terminal_read`) and types (`terminal_type`) only if its role is given
   `shell.drive` in `.nah/access.toml`.
+
+- **Tags:** names you give things, to find them again and to point agents
+  at them. `M` tags what the cursor is on (in a terminal: a command, on
+  its prompt's line; else the line, or the lines selected, 200 at most):
+  pick a tag (found as search finds, by name then by note) or type a new
+  name (letters, digits, `-` and `_`); the next of the theme's tag
+  colours (`tag_0`…`tag_7`) is its colour. Each tag shows as a chip on
+  what it's on, wherever that's drawn. `g T` goes to something tagged:
+  the tag, then (on several things) which one, through the jump list;
+  `] t`/`[ t` step through the rest of a tag's things from one of them.
+  The Tags buffer (`Space b T`) lists every tag, its note and what it's
+  on (each thing's name, what it said when tagged, what it says now when
+  that changed or it's gone, who tagged it); there you rename, recolour,
+  note, take a tag off a thing and delete one, and Enter goes to a thing.
+  In a prompt, `#name` hands the agent what that tag is on, as it is
+  now, after your message (the chat shows what it got). Tags are a
+  project server's, kept in its state database with what each thing said
+  when tagged; lines keep their tags when they're laid out anew, a shell
+  started again keeps what its earlier lines said. Agents read tags with
+  `view.read`; tagging, taking off and editing need `tags.edit` (the
+  lead's, sub-slots' and workers' by default). Who changed what is kept
+  in the activity record. A terminal's lines and commands are the first
+  things that can be tagged.
 
 - **Talk to the agent:** `t` shows the lead's chat in the quick look,
   typing, over whatever is on screen; Enter sends to the lead's session
@@ -735,7 +767,8 @@ away and rebuilt when the reader changes.
 | Review | `review_comments`, `answer_comment`, `reply_comment` |
 | Cockpit | `cockpit_read`, `cockpit_actions`, `cockpit_run`, `cockpit_click`, `cockpit_type`, `cockpit_keys` (only while you let agents drive it) |
 | Slots | the lead's: `slot_list`, `slot_read`, `slot_start`, `slot_close`, `slot_send` (optionally waiting for the answer); a sub-slot's: `tell_lead` (the user sees it too); any slot's: `tell_user` |
-| Terminals | `terminals`, `terminal_read` (a screen, with scrollback); `terminal_type` (text and keys) only for a role given `shell.drive`, which none has by default |
+| Terminals | `terminals`, `terminal_read` (a screen, with scrollback, and the last ten commands; `numbered`: each row with its line's number; `command`: one command's whole output); `terminal_type` (text and keys) only for a role given `shell.drive`, which none has by default |
+| Tags | `tags` (each tag, how many things, its note), `tag_read` (what a tag is on: each thing's name, what it says now and said when tagged, who tagged it); `tag`, `untag` (a thing by its name: `terminal t1 command 3`, `terminal t1 lines 120-124`) and `tag_edit` (rename, recolour, note, delete) for a role given `tags.edit` |
 
 Every result ends with next steps, given in dependency order.
 
@@ -801,7 +834,7 @@ is approved, verified or built. It's saved in `.nah/plans/` like any plan.
 | `nah-changes` | the project's changes, from git: what a comparison (two of the last commit, the staged files, the files, any commit, a snapshot) changes, one file's changes, where they are on the files now; snapshots of the files kept as commits of their own (`refs/nah/snapshots/`). Reads the repository and never changes it |
 | `nah-timeline` | the timeline: a snapshot whenever a session's turn starts or ends (from the event stream), the windows between them and who was working, each turn's changes; kept in the state database, let go by policy |
 | `nah-terminal` | terminals: a shell in a pseudo-terminal (`portable-pty`) with its screen kept by an emulator (`alacritty_terminal`): what changed since a reader last looked, the scrollback and searching it, keys as the bytes a program expects, its title, bell, finished commands (bash and zsh marked by a start-up hook) and end. Knows nothing of the server or the cockpit |
-| `nah-tags` | tags: names given to things in the project (a terminal's lines or commands so far), each kept with what it said when tagged; kept in the state database, told on the event stream; what a subject says now is its owner's to tell (`Resolve`, registered at start-up) |
+| `nah-tags` | tags: names given to things in the project (a terminal's lines or commands so far), each kept with its owner's name for it and what it said when tagged; kept in the state database (each change with who made it), told on the event stream; what a subject is called and says now, and where it moved, is its owner's to tell (`Resolve`, registered as it's made); `#name` in a prompt expanded |
 | `nah-state` | the project's state database (`.nah/state/state.sqlite`): what the server keeps across restarts that isn't the analysis. One server per project (a lock), explicit layouts, never thrown away |
 | `arch-store` | where the analysis is kept between runs (SQLite) |
 | `arch-search` | one way of matching what's typed: names with neo_frizbee; files and lines with fff-search |
