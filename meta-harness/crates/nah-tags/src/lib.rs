@@ -109,6 +109,32 @@ fn found(tags: &BTreeMap<TagId, Tag>, name: &str) -> Result<Tag, TagError> {
     tags.get(&TagId::new(name)).or_else(|| tags.values().find(|t| t.name == name)).cloned().ok_or_else(|| TagError::NotFound(name.to_owned()))
 }
 
+/// How much a prompt's tags add to it at most (roughly).
+const EXPANDED_MOST: usize = 16_000;
+
+/// The `#name`s in `text`: a `#` at a word's start, then a tag name's
+/// letters (what follows them, a full stop say, isn't part of it).
+fn hash_names(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut prev: Option<char> = None;
+    for (at, c) in text.char_indices() {
+        if c == '#' && prev.is_none_or(|p| p.is_whitespace() || "([{\"'".contains(p)) {
+            let name: String = text[at + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+            let name = name.trim_end_matches(['-', '_']).to_owned();
+            if !name.is_empty() {
+                out.push(name);
+            }
+        }
+        prev = Some(c);
+    }
+    out
+}
+
+/// `text` indented under a list item.
+fn indent(text: &str) -> String {
+    text.lines().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n")
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
@@ -248,6 +274,45 @@ impl Tags {
         Ok(())
     }
 
+    /// `text` with what the tags it names (`#name`) are on, as they are now,
+    /// after it: what a prompt hands an agent. A `#word` no tag has is left
+    /// as it is.
+    pub fn expand(&self, text: &str) -> String {
+        let mut named: Vec<String> = Vec::new();
+        for name in hash_names(text) {
+            if !named.contains(&name) && self.find(&name).is_ok_and(|t| t.name == name) {
+                named.push(name);
+            }
+        }
+        if named.is_empty() {
+            return text.to_owned();
+        }
+        let mut out = format!("{text}\n\n---\nWhat the tags named above are on, as they are now:");
+        for name in named {
+            let Ok(read) = self.read(&name) else { continue };
+            out.push_str(&format!("\n\n#{}", read.tag.name));
+            if !read.tag.note.is_empty() {
+                out.push_str(&format!(" ({})", read.tag.note));
+            }
+            if read.on.is_empty() {
+                out.push_str("\n(on nothing now)");
+            }
+            for on in read.on {
+                let (what, text) = match on.now {
+                    Some(SubjectNow { what, now: Some(now) }) => (what, now),
+                    Some(SubjectNow { what, now: None }) => (format!("{what} (gone; as it was when tagged)"), on.tagged.said),
+                    None => ("something nothing here can show".to_owned(), String::new()),
+                };
+                out.push_str(&format!("\n- {what}:\n{}", indent(&text)));
+                if out.len() > EXPANDED_MOST {
+                    out.push_str("\n(the rest left out: tag_read gives all of it)");
+                    return out;
+                }
+            }
+        }
+        out
+    }
+
     /// Keeps `tag` (stored, then held, then told).
     fn keep(&self, tags: &mut BTreeMap<TagId, Tag>, tag: Tag) -> Result<Tag, TagError> {
         self.store.put(&tag).map_err(TagError::Store)?;
@@ -335,6 +400,20 @@ mod tests {
         assert_eq!(read.on[0].now, Some(SubjectNow { what: "lines 1 to 2".into(), now: Some("lines 1 to 2".into()) }));
         tags.untag("t", &lines(100, 101)).unwrap();
         assert_eq!(tags.find("t").unwrap().on.len(), 1, "taken off by where it was, too");
+    }
+
+    #[test]
+    fn a_prompt_naming_tags_hands_on_what_they_are_on_as_they_are_now() {
+        let (tags, _) = tags(Arc::new(MemoryStore::default()));
+        tags.tag("flaky-build", lines(10, 12), "you").unwrap();
+        tags.edit("flaky-build", Edit { note: Some("fails on Mondays".into()), ..Edit::default() }, "you").unwrap();
+        let text = "Look at #flaky-build. Is it #1 or #nothing?";
+        assert_eq!(hash_names(text), ["flaky-build", "1", "nothing"]);
+        let expanded = tags.expand(text);
+        assert!(expanded.starts_with(text), "the prompt as it was, first");
+        assert!(expanded.contains("#flaky-build (fails on Mondays)\n- lines 10 to 12:\n  lines 10 to 12"), "{expanded}");
+        assert!(!expanded.contains("#nothing ("), "a #word no tag has is left alone");
+        assert_eq!(tags.expand("no tags here, not even mid#word"), "no tags here, not even mid#word");
     }
 
     #[test]

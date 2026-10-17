@@ -385,6 +385,12 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     }
     let (error, said) = lead.tool("tag_edit", json!({ "tag": "seen-it", "name": "checked", "note": "the echo works" })).await;
     assert!(!error && said.contains("checked") && said.contains("the echo works"), "{said}");
+    // A prompt naming the tag hands the agent what it's on, as it is now.
+    let (status, body) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "look at #checked." }).to_string())).await;
+    assert_eq!(status, 200, "{body}");
+    let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("What the tags named above"))).await;
+    let echoed = format!("{echoed:?}");
+    assert!(echoed.contains("#checked (the echo works)") && echoed.contains("tagged-line"), "{echoed}");
     // One that may only read can't.
     let mut external = Mcp::connect(addr).await;
     let (_, listed) = external.tool("tags", json!({})).await;

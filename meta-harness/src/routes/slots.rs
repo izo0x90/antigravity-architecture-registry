@@ -178,10 +178,13 @@ struct Prompted {
 }
 
 /// The user's prompt to a slot: its current session is resumed (or a new
-/// one opened) first if it isn't running.
+/// one opened) first if it isn't running. The tags it names (`#name`) hand
+/// the agent what they're on.
 async fn prompt(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(slot): Path<String>, Json(body): Json<Prompt>) -> ApiResult<Json<Prompted>> {
     let delivery = if body.add_to_running { Delivery::AddToRunning } else { Delivery::Queue };
-    let turn_id = match state.slots.send(&SlotId::new(slot), body.text, delivery, Origin::User, None).await? {
+    let tags = state.tags.clone();
+    let text = tokio::task::spawn_blocking(move || tags.expand(&body.text)).await.map_err(|e| harness_core::HarnessError::Store { reason: e.to_string() })?;
+    let turn_id = match state.slots.send(&SlotId::new(slot), text, delivery, Origin::User, None).await? {
         Sent::Started { turn } | Sent::Replied { turn, .. } | Sent::StillWorking { turn } => turn,
     };
     Ok(Json(Prompted { turn_id }))

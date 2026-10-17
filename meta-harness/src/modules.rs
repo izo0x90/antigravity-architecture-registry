@@ -173,6 +173,8 @@ pub struct HarnessState {
     pub tool_servers: Arc<crate::tool_servers::ToolServerState>,
     /// The project's folder (where harness packs are looked up).
     pub root: PathBuf,
+    /// The tags a prompt names (`#name`) hand the agent what they're on.
+    pub tags: Arc<nah_tags::Tags>,
 }
 
 impl Module for HarnessState {
@@ -292,7 +294,7 @@ impl AppState {
             server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },
             home: HomeState { gate: gate.clone(), stopping: stopping.clone(), home },
             cockpit: CockpitState { gate: gate.clone(), stopping: stopping.clone(), state: p.state, remote: p.remote },
-            harness: HarnessState { gate: gate.clone(), stopping: stopping.clone(), registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf() },
+            harness: HarnessState { gate: gate.clone(), stopping: stopping.clone(), registry: p.registry, sessions: p.sessions.clone(), slots: p.slots.clone(), hub: p.hub, tool_servers: p.tool_servers, root: p.arch.root().to_path_buf(), tags: p.tags.clone() },
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
             terminals: p.terminals.map(|terminals| TerminalsState { gate: gate.clone(), stopping: stopping.clone(), terminals }),
             tags: TagsState { gate: gate.clone(), tags: p.tags },

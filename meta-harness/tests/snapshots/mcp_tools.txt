@@ -1193,7 +1193,7 @@ Close a sub-slot and its sessions.
 }
 
 ## slot_send
-Send a sub-slot a message: it's queued after what it's doing (or added to its running turn), marked as from you. With wait_secs, waits that long for its answer.
+Send a sub-slot a message: it's queued after what it's doing (or added to its running turn), marked as from you. Tags it names (`#name`) hand it what they're on. With wait_secs, waits that long for its answer.
 {
   "type": "object",
   "properties": {
