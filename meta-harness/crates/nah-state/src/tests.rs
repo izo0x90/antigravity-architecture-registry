@@ -144,7 +144,7 @@ mod notifications {
     use nah_notify::NotificationStore;
 
     fn note(id: &str, kind: NotificationKind, at_ms: u64) -> Notification {
-        Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: Some(SlotId::new("sub-1")), thread: None, request: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
+        Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: Some(SlotId::new("sub-1")), thread: None, request: None, terminal: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
     }
 
     #[test]

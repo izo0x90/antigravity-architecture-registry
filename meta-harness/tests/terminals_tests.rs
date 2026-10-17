@@ -238,3 +238,35 @@ async fn agents_read_terminals_and_type_only_with_shell_drive() {
     let (error, said) = lead.tool("terminal_type", json!({ "terminal": terminal.id, "text": "echo nope", "keys": "enter" })).await;
     assert!(error, "refused: {said}");
 }
+
+#[tokio::test]
+async fn a_bell_and_a_shells_end_are_notifications_put_away_once_the_terminal_is_seen() {
+    let (addr, _) = spawn_app().await;
+    let terminal = open(addr).await;
+    let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
+    reader.next().await;
+    reader.run(r"printf 'ding\a\n'").await;
+    reader.until_shows("ding").await;
+    let open_ones = |addr| async move {
+        let (_, body) = http(addr, "GET", "/api/notifications", None).await;
+        serde_json::from_str::<Vec<harness_contracts::Notification>>(&body).unwrap()
+    };
+    let start = std::time::Instant::now();
+    let bell = loop {
+        if let Some(n) = open_ones(addr).await.into_iter().find(|n| n.kind == harness_contracts::NotificationKind::TerminalBell) {
+            break n;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "the bell became a notification");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(bell.terminal.as_ref(), Some(&terminal.id), "about its terminal");
+    let (status, body) = http(addr, "POST", "/api/notifications/seen", Some(&json!({ "terminal": terminal.id }).to_string())).await;
+    assert!(status == 200 && body.contains(r#""dismissed":1"#), "{body}");
+    assert!(open_ones(addr).await.iter().all(|n| n.terminal.is_none()), "seen: put away");
+    reader.run("exit 3").await;
+    let start = std::time::Instant::now();
+    while !open_ones(addr).await.iter().any(|n| n.kind == harness_contracts::NotificationKind::ShellEnded && n.detail.as_deref() == Some("exit code 3")) {
+        assert!(start.elapsed() < Duration::from_secs(10), "its end is told, with its code");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}

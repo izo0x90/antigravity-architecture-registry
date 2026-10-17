@@ -51,8 +51,9 @@ impl CockpitApp {
                 self.choose(op, refs, from, origin, ctx);
                 return;
             }
-            // A link to a file, or a change: the file, at that line.
-            if matches!(target, Target::Message { .. } | Target::Change { .. }) && target.code().is_some() {
+            // A link to a file, a change, or lines of a file (a terminal's
+            // file:line): the file, at that line.
+            if matches!(target, Target::Message { .. } | Target::Change { .. } | Target::Span { .. }) && target.code().is_some() {
                 return self.show_target_in(BufferKind::Code, &target, from);
             }
         }

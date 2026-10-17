@@ -54,6 +54,8 @@ impl Cache {
                 self.entries.remove(&Key::Terminal(terminal_id.clone()));
                 return;
             }
+            // News, not state: a late client needs the notifications made of it.
+            ClientEvent::TerminalNews { .. } => return,
             // Open ones only: a late client needs what's still open.
             ClientEvent::NotificationUpdated { notification } => {
                 let key = Key::Notification(notification.id.clone());
@@ -198,7 +200,7 @@ mod tests {
     fn a_late_client_gets_the_open_notifications_only() {
         let note = |id: &str, state| {
             let kind = harness_contracts::NotificationKind::Approval;
-            let notification = harness_contracts::Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, title: id.into(), detail: None, at_ms: 0, state };
+            let notification = harness_contracts::Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, title: id.into(), detail: None, at_ms: 0, state };
             ClientEvent::NotificationUpdated { notification }
         };
         let hub = EventHub::default();

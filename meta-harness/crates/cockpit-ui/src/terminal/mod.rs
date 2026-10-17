@@ -7,6 +7,7 @@
 //! keys move through the lines, as in any buffer.
 
 mod draw;
+mod links;
 
 use std::collections::BTreeMap;
 
@@ -56,6 +57,9 @@ enum TermCommand {
     Copy,
 }
 
+/// How often it says again that its updates were seen (while some are there).
+const SEEN_EVERY: f64 = 2.0;
+
 /// A cell: its line (from the scrollback's top) and column.
 type Cell = (u64, u16);
 
@@ -64,6 +68,10 @@ pub struct TerminalBuffer {
     /// The terminal it shows (none yet: it shows the first, or opens one).
     id: Option<TerminalId>,
     terminals: Reader<Terminals>,
+    /// The desk's agents (what waits on the user: its updates, seen while drawn).
+    agents: Reader<crate::agents::Agents>,
+    /// When it last said its updates were seen.
+    said_seen: Option<f64>,
     /// Its socket to `id` (none while it isn't drawn).
     link: Option<TermLink>,
     screen: Screen,
@@ -76,8 +84,14 @@ pub struct TerminalBuffer {
     viewport: Viewport,
     pitch: f32,
     char_w: f32,
-    /// Not typing: the line the cursor's on (from the scrollback's top).
+    /// Not typing: the line the cursor's on (from the scrollback's top),
+    /// and the column (a hint put it on a link there).
     cursor: Option<u64>,
+    cursor_col: Option<u16>,
+    /// The server's matches for the search under way: each line's text.
+    found: Option<(String, BTreeMap<u64, String>)>,
+    /// A web link to open (Enter on it), opened when it's next drawn.
+    open_url: Option<String>,
     /// Cells selected (from, to: in order as dragged).
     selection: Option<(Cell, Cell)>,
     /// Its panel had focus last frame, with a shell running (gaining it
@@ -198,7 +212,13 @@ impl TerminalBuffer {
                     }
                     self.asked = None;
                 }
-                FromTerminal::Found { .. } => {}
+                FromTerminal::Found { query, found } => {
+                    if self.found.as_ref().is_some_and(|(asked, _)| *asked == query) {
+                        let history = i64::from(self.screen.history);
+                        let lines = found.into_iter().filter_map(|f| u64::try_from(history + f.line).ok().map(|l| (l, f.text))).collect();
+                        self.found = Some((query, lines));
+                    }
+                }
             }
         }
     }
@@ -239,12 +259,25 @@ impl TerminalBuffer {
         Some(lines.join("\n").trim_end().to_owned())
     }
 
+    /// The link the cursor's on: at its column, else the line's first.
+    fn link_here(&self) -> Option<links::Link> {
+        let line = self.cursor?;
+        let text: String = self.line(line)?.iter().map(|run| run.text.as_str()).collect();
+        let folder = self.info().map(|t| t.folder).unwrap_or_default();
+        let found = links::links(&text, &folder);
+        match self.cursor_col {
+            Some(col) => found.into_iter().find(|l| col >= l.col && col < l.col + l.len),
+            None => found.into_iter().next(),
+        }
+    }
+
     /// Where the cursor can stop: every line, one row each.
     fn stops(&self) -> Vec<Stop> {
         (0..self.total()).map(|l| Stop::new(l as f32 * self.pitch, self.pitch)).collect()
     }
 
     fn go(&mut self, go: Go) {
+        self.cursor_col = None;
         let stops = self.stops();
         let cursor = self.cursor.map(|c| c as usize).or(stops.len().checked_sub(1));
         if let Some(moved) = self.viewport.go(&stops, cursor, go) {
@@ -270,9 +303,16 @@ impl crate::buffer::Buffer for TerminalBuffer {
         self.draw(ui, cx, drawing.typing, started);
     }
 
-    /// While it's drawn: its socket's news taken (opened if it has none).
+    /// While it's drawn: its socket's news taken (opened if it has none),
+    /// and what it said that waited on the user seen.
     fn tick(&mut self, net: &crate::net::NetClient, ctx: &egui::Context) {
         self.take_link(net, ctx);
+        let now = ctx.input(|i| i.time);
+        let unseen = self.id.as_ref().is_some_and(|id| self.agents.get().store().notifications.values().any(|n| n.level == harness_contracts::Level::Update && n.terminal.as_ref() == Some(id)));
+        if unseen && self.said_seen.is_none_or(|at| now - at > SEEN_EVERY) {
+            self.said_seen = Some(now);
+            self.asks.push(Ask::Terminals { id: self.id.clone(), act: TermAct::Seen });
+        }
     }
 
     /// Not drawn any more: its socket closes (it opens again when it is),
@@ -313,6 +353,7 @@ impl Navigable for TerminalBuffer {
     /// The desk's terminals; a terminal asked for, once made.
     fn share(&mut self, shared: &Shared) {
         self.terminals.follow(&shared.terminals);
+        self.agents.follow(&shared.agents);
         let (made, id) = {
             let terminals = self.terminals.get();
             let (count, id) = terminals.made();
@@ -372,7 +413,12 @@ impl Navigable for TerminalBuffer {
         Ok(())
     }
 
+    /// The file the cursor's on (a go-to takes it to the code), else the terminal.
     fn target(&self) -> Option<Target> {
+        if let Some(links::Link { to: links::To::File { path, line }, .. }) = self.link_here() {
+            let line = line.unwrap_or(1) as usize;
+            return Some(Target::Span { file: path, start: line, end: line });
+        }
         self.id.clone().map(Target::Terminal)
     }
 
@@ -389,8 +435,21 @@ impl Navigable for TerminalBuffer {
         }
     }
 
-    /// Typing (an ended shell: started again; none: a new one).
+    /// On a link: opens it (a file in the code, a web link in the
+    /// browser). Else typing (an ended shell: started again; none: a new one).
     fn enter(&mut self) -> Step {
+        match self.link_here().map(|l| l.to) {
+            Some(links::To::File { path, line }) => {
+                let line = line.unwrap_or(1) as usize;
+                self.asks.push(Ask::Show { target: Target::Span { file: path, start: line, end: line }, in_: crate::kind::BufferKind::Code });
+                return Step::Done;
+            }
+            Some(links::To::Url(url)) => {
+                self.open_url = Some(url);
+                return Step::Done;
+            }
+            None => {}
+        }
         match (self.id.is_some(), self.ended()) {
             (true, Some(_)) => self.asks.push(Ask::Terminals { id: self.id.clone(), act: TermAct::Restart }),
             (true, None) => self.asks.push(Ask::Type),
@@ -414,9 +473,30 @@ impl Navigable for TerminalBuffer {
 
     fn fold(&mut self, _fold: Fold) {}
 
-    /// Its lines (what's fetched of the scrollback, and the screen).
+    /// Its lines: what's fetched of the scrollback, the screen, and the
+    /// lines the server found for the search under way.
     fn items(&self) -> Vec<Item> {
-        (0..self.total()).filter_map(|l| self.line(l).map(|r| Item::new(l.to_string(), "", r.iter().map(|run| run.text.as_str()).collect::<String>()))).collect()
+        let mut lines: BTreeMap<u64, String> = (0..self.total()).filter_map(|l| self.line(l).map(|r| (l, r.iter().map(|run| run.text.as_str()).collect::<String>()))).collect();
+        if let Some((_, found)) = &self.found {
+            for (line, text) in found {
+                lines.entry(*line).or_insert_with(|| text.clone());
+            }
+        }
+        lines.into_iter().map(|(l, text)| Item::new(l.to_string(), "", text)).collect()
+    }
+
+    /// The server searches the whole scrollback as it's typed.
+    fn on_search(&mut self, event: crate::nav::SearchEvent<'_>) {
+        match event {
+            crate::nav::SearchEvent::Typing(query) if !query.is_empty() => {
+                if self.found.as_ref().is_none_or(|(asked, _)| asked != query) {
+                    self.found = Some((query.to_owned(), BTreeMap::new()));
+                    self.send(&ToTerminal::Search { query: query.to_owned() });
+                }
+            }
+            crate::nav::SearchEvent::Typing(_) | crate::nav::SearchEvent::Cancelled => self.found = None,
+            crate::nav::SearchEvent::Confirmed => {}
+        }
     }
 
     fn spots(&self) -> Vec<Spot> {
@@ -427,9 +507,12 @@ impl Navigable for TerminalBuffer {
         self.cursor.map(|c| c.to_string())
     }
 
+    /// A line ("12"), or a place on one ("12:7", a hint's link).
     fn move_to(&mut self, key: &str) {
-        if let Ok(line) = key.parse::<usize>() {
+        let (line, col) = key.split_once(':').map_or((key, None), |(l, c)| (l, c.parse::<u16>().ok()));
+        if let Ok(line) = line.parse::<usize>() {
             self.go(Go::To(line, crate::viewport::Show::Middle));
+            self.cursor_col = col;
         }
     }
 }
@@ -440,10 +523,12 @@ impl ActionProvider for TerminalBuffer {
         let mut out = crate::nav::list_moves();
         let has = self.id.is_some();
         let ended = self.ended().is_some();
-        out.push(match (has, ended) {
-            (true, true) => crate::nav::Move::Enter.offer("Start its shell again"),
-            (true, false) => crate::nav::Move::Enter.offer_if(!self.typing, "Type into it"),
-            (false, _) => crate::nav::Move::Enter.offer("Open a terminal"),
+        out.push(match (self.link_here().map(|l| l.to), has, ended) {
+            (Some(links::To::File { path, .. }), _, _) => crate::nav::Move::Enter.offer(format!("Open {path}")),
+            (Some(links::To::Url(url)), _, _) => crate::nav::Move::Enter.offer(format!("Open {url}")),
+            (None, true, true) => crate::nav::Move::Enter.offer("Start its shell again"),
+            (None, true, false) => crate::nav::Move::Enter.offer_if(!self.typing, "Type into it"),
+            (None, false, _) => crate::nav::Move::Enter.offer("Open a terminal"),
         });
         out.push(crate::nav::Move::Leave.offer_if(self.cursor.is_some() || self.selection.is_some(), "Back to the live screen"));
         out.push(Action::new("terminal.type", "Type into the terminal", C::Type).focused().importance(PRIMARY).when(if has && !ended && !self.typing { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
@@ -557,6 +642,13 @@ pub(crate) mod tests {
     use harness_contracts::{Run, Style};
 
     use super::*;
+
+    /// A whole screen showing `lines`, 80 wide, with `history` lines above it.
+    pub(crate) fn screen_under(lines: &[&str], history: u32) -> FromTerminal {
+        let FromTerminal::Screen { mut update } = screen(lines) else { unreachable!() };
+        update.history = history;
+        FromTerminal::Screen { update }
+    }
 
     /// A whole screen showing `lines`, 80 wide.
     pub(crate) fn screen(lines: &[&str]) -> FromTerminal {

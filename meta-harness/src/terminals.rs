@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use harness_contracts::{ClientEvent, Found, Row, ScreenUpdate, TermSize, Terminal, TerminalId, TerminalInput, TerminalStatus};
+use harness_contracts::{ClientEvent, Found, Row, ScreenUpdate, TermSize, Terminal, TerminalId, TerminalInput, TerminalNews, TerminalStatus};
 use harness_core::EventHub;
 use nah_terminal::{Happening, Options};
 use tokio::sync::watch;
@@ -35,10 +35,6 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// What a terminal's shell did that someone may want to hear about
-/// (notifications take it from here).
-pub type Tell = Arc<dyn Fn(&Terminal, &Happening) + Send + Sync>;
-
 pub struct Terminals {
     /// Where shells start (the project's folder), and where their start-up
     /// hooks are kept.
@@ -47,7 +43,8 @@ pub struct Terminals {
     hub: Arc<EventHub>,
     state: Arc<nah_state::StateDb>,
     open: Mutex<BTreeMap<TerminalId, Arc<Open>>>,
-    tell: Tell,
+    /// A command that ran at least this long is news when it finishes.
+    long: std::time::Duration,
 }
 
 /// One terminal: how it is, its shell (none once the server restarted
@@ -65,11 +62,12 @@ pub struct Open {
 }
 
 impl Terminals {
-    /// The terminals kept from the last run (ended), told on `hub`.
-    pub fn load(folder: PathBuf, hooks: PathBuf, hub: Arc<EventHub>, state: Arc<nah_state::StateDb>, tell: Tell) -> Result<Arc<Self>, nah_state::StateError> {
+    /// The terminals kept from the last run (ended), told on `hub`; a
+    /// command that ran `long` or longer is news when it finishes.
+    pub fn load(folder: PathBuf, hooks: PathBuf, hub: Arc<EventHub>, state: Arc<nah_state::StateDb>, long: std::time::Duration) -> Result<Arc<Self>, nah_state::StateError> {
         let kept = state.terminals()?;
         let open = kept.into_iter().map(|t| (t.id.clone(), Arc::new(Open::new(t)))).collect();
-        let terminals = Arc::new(Self { folder, hooks, hub, state, open: Mutex::new(open), tell });
+        let terminals = Arc::new(Self { folder, hooks, hub, state, open: Mutex::new(open), long });
         for t in terminals.list() {
             terminals.hub.publish(ClientEvent::TerminalUpdated { terminal: t });
         }
@@ -157,7 +155,22 @@ impl Terminals {
             }
             Happening::Bell | Happening::CommandFinished { .. } => {}
         }
-        (self.tell)(&open.info(), happening);
+        self.news(open, happening);
+    }
+
+    /// What's news in what happened (a bell, the shell's end, a long
+    /// command finishing): told on the event stream, while it's open.
+    fn news(&self, open: &Arc<Open>, happening: &Happening) {
+        let news = match happening {
+            Happening::Bell => TerminalNews::Bell,
+            Happening::Ended(code) => TerminalNews::Ended { code: *code },
+            Happening::CommandFinished { code, ran } if *ran >= self.long => TerminalNews::Finished { code: *code, ran_ms: ran.as_millis() as u64 },
+            _ => return,
+        };
+        let terminal = open.info();
+        if lock(&self.open).contains_key(&terminal.id) {
+            self.hub.publish(ClientEvent::TerminalNews { terminal, news });
+        }
     }
 
     /// How `open` is now, told and kept (unless it was closed meanwhile).

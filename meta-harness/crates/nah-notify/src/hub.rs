@@ -304,6 +304,18 @@ impl NotifyHub {
         Ok(self.keep(seen)?.len())
     }
 
+    /// The user saw terminal `terminal`: its updates are dismissed. Returns how many.
+    pub fn seen_terminal(&self, terminal: &harness_contracts::TerminalId) -> Result<usize, NotifyError> {
+        let seen: Vec<Notification> = self
+            .lock()
+            .open
+            .values()
+            .filter(|n| n.level == Level::Update && n.terminal.as_ref() == Some(terminal))
+            .map(|n| n.moved(NotificationState::Dismissed))
+            .collect::<Result<_, _>>()?;
+        Ok(self.keep(seen)?.len())
+    }
+
     /// A server home links to stopped answering: said once until it's back
     /// (each time is a new one, numbered).
     pub fn server_lost(&self, server: &str, reason: &str) -> Result<(), NotifyError> {

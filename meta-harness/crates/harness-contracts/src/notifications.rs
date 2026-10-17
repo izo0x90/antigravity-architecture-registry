@@ -21,6 +21,9 @@ pub struct Notification {
     pub slot: Option<SlotId>,
     pub thread: Option<ThreadId>,
     pub request: Option<RequestId>,
+    /// The terminal it's about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<crate::ids::TerminalId>,
     pub title: String,
     pub detail: Option<String>,
     pub at_ms: u64,
@@ -53,19 +56,26 @@ pub enum NotificationKind {
     Message,
     /// A server the home server links to stopped answering.
     ServerLost,
+    /// A terminal's program rang its bell.
+    TerminalBell,
+    /// A terminal's shell ended.
+    ShellEnded,
+    /// A long command in a terminal finished: well, or not.
+    CommandFinished,
+    CommandFailed,
 }
 
 impl NotificationKind {
     pub fn level(self) -> Level {
         match self {
             Self::Approval | Self::Question | Self::Link | Self::SignIn => Level::Waiting,
-            Self::SessionCrashed | Self::TurnFailed | Self::TurnFinished | Self::Message | Self::ServerLost => Level::Update,
+            Self::SessionCrashed | Self::TurnFailed | Self::TurnFinished | Self::Message | Self::ServerLost | Self::TerminalBell | Self::ShellEnded | Self::CommandFinished | Self::CommandFailed => Level::Update,
         }
     }
 
     /// Something went wrong (shown before the other updates).
     pub fn is_failure(self) -> bool {
-        matches!(self, Self::SessionCrashed | Self::TurnFailed)
+        matches!(self, Self::SessionCrashed | Self::TurnFailed | Self::CommandFailed)
     }
 }
 
@@ -140,6 +150,12 @@ impl NotificationId {
     pub fn lost(server: &str, time: u32) -> Self {
         Self::new(format!("lost:{server}:{time}"))
     }
+
+    /// Something a terminal's program or shell did, at `at_ms` (each time
+    /// is a new one).
+    pub fn terminal(terminal: &crate::ids::TerminalId, what: &str, at_ms: u64) -> Self {
+        Self::new(format!("term:{terminal}:{what}:{at_ms}"))
+    }
 }
 
 /// The order they're listed and gone through: waiting first; then updates,
@@ -154,7 +170,7 @@ mod tests {
     use super::*;
 
     fn note(id: &str, kind: NotificationKind, at_ms: u64) -> Notification {
-        Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
+        Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
     }
 
     #[test]

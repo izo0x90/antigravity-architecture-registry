@@ -181,6 +181,19 @@ pub enum TerminalInput {
     Paste { text: String },
 }
 
+/// What a terminal's program or shell did that the user may want to hear
+/// of (the event stream carries it; notifications are made of it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "what", rename_all = "snake_case", rename_all_fields = "camelCase")]
+pub enum TerminalNews {
+    Bell,
+    /// The shell ended (its code when it had one).
+    Ended { code: Option<i32> },
+    /// A command ran this long and finished (with its code, when the shell
+    /// said it).
+    Finished { code: Option<i32>, ran_ms: u64 },
+}
+
 /// A match of a search through a terminal's lines.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Found {
@@ -188,6 +201,8 @@ pub struct Found {
     pub line: i64,
     pub col: u16,
     pub len: u16,
+    /// The line's text.
+    pub text: String,
 }
 
 /// What a reader sends on a terminal's socket.

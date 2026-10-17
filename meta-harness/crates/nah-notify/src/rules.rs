@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use harness_contracts::{
-    AdapterEvent, AuthStatus, ClientEvent, InstanceId, Notification, NotificationId, NotificationKind, NotificationState, RequestKind, RequestStatus, SlotId, ThreadId, ThreadStatus,
-    TurnId, TurnStatus,
+    AdapterEvent, AuthStatus, ClientEvent, InstanceId, Notification, NotificationId, NotificationKind, NotificationState, RequestKind, RequestStatus, SlotId, Terminal, TerminalNews, ThreadId,
+    ThreadStatus, TurnId, TurnStatus,
 };
 
 /// A slot as notifications name it.
@@ -67,6 +67,7 @@ fn new(id: NotificationId, kind: NotificationKind, slot: Option<&SlotRef>, threa
         slot: slot.map(|s| s.id.clone()),
         thread: thread.cloned(),
         request: None,
+        terminal: None,
         title,
         detail,
         at_ms: world.now_ms(),
@@ -130,7 +131,40 @@ pub fn derive(event: &ClientEvent, world: &dyn World, open: &BTreeMap<Notificati
                 _ => Vec::new(),
             }
         }
+        // A bell rung while one is open is the same news.
+        ClientEvent::TerminalNews { news: TerminalNews::Bell, terminal } if open.values().any(|n| n.kind == NotificationKind::TerminalBell && n.terminal.as_ref() == Some(&terminal.id)) => Vec::new(),
+        ClientEvent::TerminalNews { terminal, news } => vec![Change::Open(terminal_news(terminal, *news, world))],
         _ => Vec::new(),
+    }
+}
+
+/// What a terminal's program or shell did, as a notification about it
+/// (seen once the user looks at the terminal).
+fn terminal_news(terminal: &Terminal, news: TerminalNews, world: &dyn World) -> Notification {
+    let name = if terminal.title.is_empty() { terminal.id.to_string() } else { terminal.title.clone() };
+    let (what, kind, title, detail) = match news {
+        TerminalNews::Bell => ("bell", NotificationKind::TerminalBell, format!("{name} rang its bell"), None),
+        TerminalNews::Ended { code } => ("end", NotificationKind::ShellEnded, format!("{name}: its shell ended"), code.map(|c| format!("exit code {c}"))),
+        TerminalNews::Finished { code, ran_ms } => {
+            let took = took(ran_ms);
+            match code {
+                Some(0) | None => ("done", NotificationKind::CommandFinished, format!("{name}: a command finished"), Some(format!("after {took}"))),
+                Some(c) => ("done", NotificationKind::CommandFailed, format!("{name}: a command failed"), Some(format!("exit code {c}, after {took}"))),
+            }
+        }
+    };
+    let mut n = new(NotificationId::terminal(&terminal.id, what, world.now_ms()), kind, None, None, title, detail, world);
+    n.terminal = Some(terminal.id.clone());
+    n
+}
+
+/// How long something took, in words ("12 s", "3 min 4 s").
+fn took(ms: u64) -> String {
+    let secs = ms / 1000;
+    match secs {
+        0..60 => format!("{secs} s"),
+        60..3600 => format!("{} min {} s", secs / 60, secs % 60),
+        _ => format!("{} h {} min", secs / 3600, secs % 3600 / 60),
     }
 }
 
@@ -150,6 +184,7 @@ pub fn server_lost(server: &str, reason: &str, time: u32, now_ms: u64) -> Notifi
         slot: None,
         thread: None,
         request: None,
+        terminal: None,
         title: format!("{server} stopped answering"),
         detail: Some(format!("{reason}; home keeps trying")),
         at_ms: now_ms,

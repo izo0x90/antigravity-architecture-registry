@@ -191,7 +191,7 @@ fn f_labels_what_is_on_screen_in_every_view() {
     app.desk.graph_mut().set_tree(sample_tree());
     // Something in the inbox, to label.
     let kind = harness_contracts::NotificationKind::TurnFinished;
-    let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new("turn:1"), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, title: "done".into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
+    let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new("turn:1"), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, title: "done".into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
     app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::NotificationUpdated { notification });
     // A changed file, to label.
     use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, FileStatus, Group};

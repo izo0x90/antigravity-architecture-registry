@@ -218,10 +218,24 @@ pub fn notifications(hub: &Arc<EventHub>, state: &Arc<nah_state::StateDb>, slots
 
 /// The terminals: the user's shells, started in the project's folder (their
 /// start-up hooks kept in the state folder); those kept from the last run
-/// come back ended.
+/// come back ended. How long a command runs before its end is news:
+/// `.nah/terminals.toml`'s `long_command_secs` (10 by default).
 pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>) -> Result<Arc<crate::terminals::Terminals>, StartError> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Settings {
+        #[serde(default = "ten")]
+        long_command_secs: u64,
+    }
+    fn ten() -> u64 {
+        10
+    }
+    let settings: Settings = match std::fs::read_to_string(arch.root().join(".nah/terminals.toml")) {
+        Ok(text) => toml::from_str(&text).map_err(|e| format!(".nah/terminals.toml: {e}"))?,
+        Err(_) => Settings { long_command_secs: ten() },
+    };
     let hooks = arch_service::state_dir(arch.root())?.join("terminal-hooks");
-    Ok(crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), Arc::new(|_, _| {}))?)
+    Ok(crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), std::time::Duration::from_secs(settings.long_command_secs))?)
 }
 
 /// What each agent role may do: the shipped roles, with the project's

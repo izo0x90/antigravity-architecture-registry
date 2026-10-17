@@ -25,6 +25,8 @@ pub enum TermAct {
     Restart,
     /// Its shell ended, and it's forgotten.
     Close,
+    /// The user saw it (it's drawn): its updates are put away.
+    Seen,
 }
 
 enum Reply {
@@ -126,6 +128,7 @@ impl Terminals {
             }
             (TermAct::Restart, Some(id)) => net.restart_terminal(&id.clone(), ctx.clone(), move |r| post(Reply::Restarted(id, r))),
             (TermAct::Close, Some(id)) => net.close_terminal(&id.clone(), ctx.clone(), move |r| post(Reply::Closed(id, r))),
+            (TermAct::Seen, Some(id)) => net.terminal_seen(&id, ctx.clone(), |_| {}),
             (_, None) => {}
         }
     }

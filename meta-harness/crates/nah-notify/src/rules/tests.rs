@@ -172,3 +172,32 @@ fn a_message_names_who_said_it_and_keeps_all_of_it() {
     assert_eq!((n.kind, n.title.as_str(), n.detail.as_ref().map(String::len)), (NotificationKind::Message, "From reviewer", Some(2000)));
     assert!(n.id.as_str().starts_with("msg:"));
 }
+
+#[test]
+fn a_terminals_bell_end_and_long_commands_are_updates_about_it() {
+    let terminal = harness_contracts::Terminal {
+        id: harness_contracts::TerminalId::new("t1"),
+        title: "make".into(),
+        status: harness_contracts::TerminalStatus::Running,
+        size: harness_contracts::TermSize { cols: 80, rows: 24 },
+        shell: "/bin/bash".into(),
+        folder: "/p".into(),
+    };
+    let news = |news| derive(&ClientEvent::TerminalNews { terminal: terminal.clone(), news }, &world(), &BTreeMap::new());
+    let one = |changes: Vec<Change>| match changes.as_slice() {
+        [Change::Open(n)] => n.clone(),
+        other => panic!("one opened: {other:?}"),
+    };
+    let bell = one(news(TerminalNews::Bell));
+    assert_eq!((bell.kind, bell.level, bell.terminal.as_ref().map(|t| t.as_str()), bell.title.as_str()), (NotificationKind::TerminalBell, harness_contracts::Level::Update, Some("t1"), "make rang its bell"));
+    let failed = one(news(TerminalNews::Finished { code: Some(2), ran_ms: 75_000 }));
+    assert_eq!((failed.kind, failed.detail.as_deref()), (NotificationKind::CommandFailed, Some("exit code 2, after 1 min 15 s")));
+    assert!(failed.kind.is_failure());
+    let done = one(news(TerminalNews::Finished { code: Some(0), ran_ms: 12_000 }));
+    assert_eq!((done.kind, done.detail.as_deref()), (NotificationKind::CommandFinished, Some("after 12 s")));
+    let ended = one(news(TerminalNews::Ended { code: Some(1) }));
+    assert_eq!((ended.kind, ended.title.as_str()), (NotificationKind::ShellEnded, "make: its shell ended"));
+    assert_ne!(bell.id, done.id, "each its own");
+    let open = BTreeMap::from([(bell.id.clone(), bell.clone())]);
+    assert!(derive(&ClientEvent::TerminalNews { terminal: terminal.clone(), news: TerminalNews::Bell }, &world(), &open).is_empty(), "a bell while one is open: nothing new");
+}

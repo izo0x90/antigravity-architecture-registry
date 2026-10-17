@@ -91,13 +91,25 @@ impl TerminalBuffer {
         self.grid = Some(output.inner_rect);
         self.want_lines(shown.start as u64..shown.end as u64);
         let (rect, response) = grid;
-        // What hints label: each line with something on it, as it shows.
+        // What hints label: the files and web links on screen.
         let clip = output.inner_rect;
-        self.spots = (shown.start as u64..shown.end as u64)
-            .filter(|l| self.line(*l).is_some_and(|r| r.iter().any(|run| !run.text.trim().is_empty())))
-            .map(|l| crate::nav::Spot { key: l.to_string(), rect: Rect::from_min_size(pos2(rect.left(), rect.top() + (l - shown.start as u64) as f32 * row_h), vec2(rect.width(), row_h)) })
-            .filter(|s| s.rect.intersects(clip))
-            .collect();
+        let folder = self.info().map(|t| t.folder).unwrap_or_default();
+        let char_w = self.char_w;
+        let mut spots = Vec::new();
+        for l in shown.start as u64..shown.end as u64 {
+            let text: String = self.line(l).map(|r| r.iter().map(|run| run.text.as_str()).collect()).unwrap_or_default();
+            let top = rect.top() + (l - shown.start as u64) as f32 * row_h;
+            for link in super::links::links(&text, &folder) {
+                let at = Rect::from_min_size(pos2(rect.left() + f32::from(link.col) * char_w, top), vec2(f32::from(link.len) * char_w, row_h));
+                if at.intersects(clip) {
+                    spots.push(crate::nav::Spot { key: format!("{l}:{}", link.col), rect: at });
+                }
+            }
+        }
+        self.spots = spots;
+        if let Some(url) = self.open_url.take() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+        }
         let Some(response) = response else { return };
         self.pointer(&response, rect, shown.start as u64, row_h);
         if self.screen.alternate {

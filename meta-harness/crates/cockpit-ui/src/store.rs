@@ -86,7 +86,7 @@ impl Store {
             // Architecture events go to the graph views, not the session store.
             ClientEvent::Architecture { .. } => {}
             // The desk's terminals keep these.
-            ClientEvent::TerminalUpdated { .. } | ClientEvent::TerminalClosed { .. } => {}
+            ClientEvent::TerminalUpdated { .. } | ClientEvent::TerminalClosed { .. } | ClientEvent::TerminalNews { .. } => {}
         }
     }
 

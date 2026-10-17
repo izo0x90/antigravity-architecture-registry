@@ -137,15 +137,16 @@ impl InboxView {
         Step::Done
     }
 
+    /// Opens what it's about: its agent's chat, or its terminal.
     fn open_chat(&mut self) -> Step {
-        match self.shown.as_ref().and_then(|s| s.notification.slot.clone()) {
-            Some(slot) => {
-                let thread = self.shown.as_ref().and_then(|s| s.notification.thread.clone());
-                self.asks.push(Ask::Show { target: Target::Agent { slot: Some(slot), thread }, in_: BufferKind::Chat });
-                Step::Done
-            }
-            None => Step::Nothing("It's from no agent's chat.".into()),
-        }
+        let Some(n) = self.shown.as_ref().map(|s| &s.notification) else { return Step::Nothing("Nothing needs you.".into()) };
+        let (target, in_) = match (&n.slot, &n.terminal) {
+            (Some(slot), _) => (Target::Agent { slot: Some(slot.clone()), thread: n.thread.clone() }, BufferKind::Chat),
+            (None, Some(terminal)) => (Target::Terminal(terminal.clone()), BufferKind::Terminal),
+            (None, None) => return Step::Nothing("It's from no agent's chat or terminal.".into()),
+        };
+        self.asks.push(Ask::Show { target, in_ });
+        Step::Done
     }
 
     fn draw(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
@@ -362,6 +363,8 @@ impl ActionProvider for InboxView {
         }
         if shown.notification.slot.is_some() {
             out.push(act("inbox.open_chat", "Open its chat", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its chat", Some(icon::CHAT_TEARDROP_TEXT)));
+        } else if shown.notification.terminal.is_some() {
+            out.push(act("inbox.open_chat", "Open its terminal", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its terminal", Some(icon::TERMINAL_WINDOW)));
         }
         out.push(act("inbox.dismiss", "Put it away", Command::Dismiss).importance(MINOR).header(Style::Button, "Put away", Some(icon::ARCHIVE)));
         out

@@ -460,6 +460,11 @@ impl NetClient {
 
     // ---- notifications ----
 
+    /// The user saw terminal `terminal`: its updates are put away.
+    pub fn terminal_seen(&self, terminal: &harness_contracts::TerminalId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call::<serde_json::Value>("POST", "/api/notifications/seen", Some(serde_json::json!({ "terminal": terminal })), ctx, move |r| on_done(r.map(|_| ())));
+    }
+
     /// The user saw `slot`'s chat: its updates are put away.
     pub fn notifications_seen(&self, slot: &SlotId, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
         self.call::<serde_json::Value>("POST", "/api/notifications/seen", Some(serde_json::json!({ "slot": slot })), ctx, move |r| on_done(r.map(|_| ())));

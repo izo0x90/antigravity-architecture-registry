@@ -154,3 +154,46 @@ fn the_pop_up_terminal_is_its_own_over_everything_and_its_key_hides_it() {
     let kept = app.saved_ui().kept;
     assert!(kept.iter().any(|(b, v)| *b == pop && v == "t9"), "its terminal is kept: {kept:?}");
 }
+
+/// Out of typing, in the terminal, its cursor on the live screen's last line.
+fn not_typing(ctx: &egui::Context, app: &mut CockpitApp) {
+    focus(ctx, app, BufferKind::Terminal);
+    frame_at(ctx, app, press(egui::Key::Escape, false), 40.0);
+    frame_at(ctx, app, press(egui::Key::Escape, false), 40.1);
+    assert_eq!(app.input_mode, InputMode::Normal);
+}
+
+#[test]
+fn search_goes_through_the_whole_scrollback_on_the_server() {
+    let (ctx, mut app) = full_app();
+    // 600 lines of scrollback above the screen, none of it fetched.
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::screen_under(&["$ ls", "Cargo.toml  src", "$ "], 600)]);
+    not_typing(&ctx, &mut app);
+    keys(&ctx, &mut app, "/make");
+    let asked: Vec<String> = app.desk.terminal().sent().into_iter().filter_map(|s| if let ToTerminal::Search { query } = s { Some(query) } else { None }).collect();
+    assert_eq!(asked.last().map(String::as_str), Some("make"), "the server is asked as it's typed: {asked:?}");
+    // The server found it 500 lines up: line 100 from the scrollback's top.
+    let found = harness_contracts::Found { line: -500, col: 2, len: 4, text: "$ make all".into() };
+    app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Found { query: "make".into(), found: vec![found] }]);
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, key("n"));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(cursor(&app).as_deref(), Some("100"), "n goes to the line found, far up");
+}
+
+#[test]
+fn a_file_on_a_terminal_line_is_gone_to_in_the_code() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::screen(&["$ cargo build", "error: src/b.rs:9:5: expected `;`", "$ "])]);
+    not_typing(&ctx, &mut app);
+    let spots = app.desk.terminal().spots();
+    let link = spots.iter().find(|s| s.key.ends_with(":7")).expect("the file's hint, at its column");
+    app.desk.view_mut(BufferKind::Terminal).move_to(&link.key.clone());
+    assert_eq!(app.desk.terminal().target(), Some(Target::Span { file: "src/b.rs".into(), start: 9, end: 9 }), "on the file, the target is its line");
+    frame(&ctx, &mut app, key("g"));
+    frame(&ctx, &mut app, key("d"));
+    frame(&ctx, &mut app, vec![]);
+    let calls = sent(&app);
+    assert!(calls.iter().any(|c| c.contains("src/b.rs") || c.contains("src%2Fb.rs")), "the code view opens the file: {calls:?} {:?} {:?}", app.note, app.desk.view(app.focused_kind()).target());
+}

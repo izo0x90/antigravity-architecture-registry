@@ -110,12 +110,13 @@ pub fn search<T: EventListener>(term: &Term<T>, query: &str, most: usize) -> Vec
             }
         }
         let mut at = 0;
+        let shown = || row(term, Line(line as i32)).iter().map(|r| r.text.as_str()).collect::<String>();
         while let Some(i) = text[at..].find(&wanted) {
             let start = at + i;
             let first = text[..start].chars().count();
             let last = first + wanted.chars().count() - 1;
             if let (Some(&c0), Some(&c1)) = (cols.get(first), cols.get(last)) {
-                found.push(Found { line, col: c0 as u16, len: (c1 - c0 + 1) as u16 });
+                found.push(Found { line, col: c0 as u16, len: (c1 - c0 + 1) as u16, text: shown() });
             }
             at = start + wanted.len().max(1);
         }

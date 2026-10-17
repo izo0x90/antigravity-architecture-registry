@@ -48,10 +48,12 @@ async fn list(_: Needs<can::SessionsControl>, State(state): State<NotifyState>, 
     }))
 }
 
+/// What the user saw: a slot's chat, or a terminal.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Seen {
-    slot: SlotId,
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+enum Seen {
+    Slot(SlotId),
+    Terminal(harness_contracts::TerminalId),
 }
 
 #[derive(Serialize)]
@@ -59,9 +61,13 @@ struct Dismissed {
     dismissed: usize,
 }
 
-/// The user saw the slot's chat: its updates are put away.
+/// The user saw the slot's chat (or the terminal): its updates are put away.
 async fn seen(_: Needs<can::SessionsControl>, State(state): State<NotifyState>, Json(body): Json<Seen>) -> ApiResult<Json<Dismissed>> {
-    let dismissed = blocking(move || state.notify.seen(&body.slot)).await?;
+    let dismissed = blocking(move || match body {
+        Seen::Slot(slot) => state.notify.seen(&slot),
+        Seen::Terminal(terminal) => state.notify.seen_terminal(&terminal),
+    })
+    .await?;
     Ok(Json(Dismissed { dismissed }))
 }
 

@@ -18,7 +18,7 @@ fn event(server: &str, event: ClientEvent) -> HomeEvent {
 }
 
 fn note(id: &str, kind: NotificationKind, at_ms: u64) -> ClientEvent {
-    let notification = Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: Some(SlotId::new("lead")), thread: None, request: None, title: format!("{id} title"), detail: None, at_ms, state: NotificationState::Open };
+    let notification = Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: Some(SlotId::new("lead")), thread: None, request: None, terminal: None, title: format!("{id} title"), detail: None, at_ms, state: NotificationState::Open };
     ClientEvent::NotificationUpdated { notification }
 }
 

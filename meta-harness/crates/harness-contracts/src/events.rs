@@ -57,6 +57,9 @@ pub enum ClientEvent {
     /// its screen goes on its own socket.
     TerminalUpdated { terminal: crate::terminals::Terminal },
     TerminalClosed { terminal_id: TerminalId },
+    /// Something a terminal's program or shell did (a bell, its end, a long
+    /// command finishing): news, not kept.
+    TerminalNews { terminal: crate::terminals::Terminal, news: crate::terminals::TerminalNews },
     /// The stream fell behind: drop what you hold; the whole state follows.
     Resync,
 }
