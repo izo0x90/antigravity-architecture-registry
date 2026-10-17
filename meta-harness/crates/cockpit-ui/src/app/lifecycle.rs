@@ -55,10 +55,9 @@ impl CockpitApp {
         }
         self.take_events(ctx);
         self.tick_away(ctx);
-        self.sync_inbox();
         self.link_views(ctx);
         self.take_asks(ctx);
-        self.desk.share();
+        self.share_with_buffers();
         self.goto_tick(ctx);
         // The focused target's relations, so the bar and popup offer only
         // the go-tos that lead somewhere.
@@ -104,7 +103,7 @@ impl CockpitApp {
     /// The desk's events and replies since last frame (every desk's, every
     /// frame: the ones not shown take theirs as the one shown, in turn).
     pub(super) fn take_events(&mut self, ctx: &egui::Context) {
-        self.desk.chat.tick(&self.desk.net, ctx);
+        self.desk.shared.agents.get_mut().tick(&self.desk.net, ctx);
         let events = self.desk.net.incoming.lock().map(|mut lock| lock.drain(..).collect::<Vec<_>>()).unwrap_or_default();
         for event in events {
             if let harness_contracts::ClientEvent::Architecture { event: arch_graph::ArchEvent::Index { status } } = &event {
@@ -138,7 +137,7 @@ impl CockpitApp {
                     self.desk.details.clear();
                 }
             }
-            self.desk.chat.process_event(event);
+            self.desk.shared.agents.get_mut().apply(event);
         }
         for reply in std::mem::take(&mut *self.desk.index_inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
             match reply {

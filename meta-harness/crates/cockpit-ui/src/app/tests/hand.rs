@@ -201,7 +201,7 @@ fn what_comes_and_goes_on_the_top_and_bottom_lines_never_moves_a_button() {
     // Something waits on you: the bell counts it, and the tray an update.
     for (id, kind) in [("q:1", harness_contracts::NotificationKind::Question), ("turn:1", harness_contracts::NotificationKind::TurnFinished)] {
         let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, title: id.into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
-        app.desk.chat.process_event(harness_contracts::ClientEvent::NotificationUpdated { notification });
+        app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::NotificationUpdated { notification });
     }
     // Busy (reading the view again), saying more, and a note at the bottom.
     app.desk.graph.navigate(crate::graph::NavChange::Depth { delta: 1, base: 3 });

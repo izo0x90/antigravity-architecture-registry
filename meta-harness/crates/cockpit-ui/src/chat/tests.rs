@@ -1,5 +1,40 @@
 use super::*;
-use harness_contracts::{AdapterEvent, FileLocation, InstanceId, ItemId, RuntimePolicy, Thread, ThreadStatus, Turn, TurnId, TurnStatus};
+use crate::net::NetClient;
+use crate::shared::Shared;
+use harness_contracts::{AdapterEvent, ClientEvent, FileLocation, InstanceId, ItemId, RuntimePolicy, Thread, ThreadStatus, Turn, TurnId, TurnStatus};
+
+/// A chat over agents of its own: the server's events applied to them,
+/// the chat reading them as it does each frame.
+#[derive(Default)]
+pub(crate) struct Fed {
+    pub chat: ChatStreamState,
+    pub shared: Shared,
+}
+
+impl Fed {
+    pub(crate) fn apply(&mut self, event: ClientEvent) {
+        self.shared.agents.get_mut().apply(event);
+        self.read();
+    }
+
+    /// The chat reads the agents (as each frame).
+    pub(crate) fn read(&mut self) {
+        self.chat.share(&self.shared);
+    }
+}
+
+impl std::ops::Deref for Fed {
+    type Target = ChatStreamState;
+    fn deref(&self) -> &ChatStreamState {
+        &self.chat
+    }
+}
+
+impl std::ops::DerefMut for Fed {
+    fn deref_mut(&mut self) -> &mut ChatStreamState {
+        &mut self.chat
+    }
+}
 
 fn session(event: AdapterEvent) -> ClientEvent {
     ClientEvent::Session { event }
@@ -38,45 +73,29 @@ pub(crate) fn lead(thread: Option<&str>) -> harness_contracts::Slot {
     }
 }
 
-/// A thread with a prompt, an answer, a tool call reading two files and a file change.
-pub(crate) fn conversation() -> ChatStreamState {
-    let mut chat = ChatStreamState::default();
+/// A thread with a prompt, an answer, a tool call reading two files and a
+/// file change: the server's events.
+pub(crate) fn conversation_events() -> Vec<ClientEvent> {
+    let mut chat = Vec::new();
     let thread = Thread { id: ThreadId::new("t"), instance_id: InstanceId::new("i"), native_id: None, title: None, status: ThreadStatus::Idle, policy: RuntimePolicy::default(), model: None, controls: Default::default(), mcp_servers: Vec::new() };
-    chat.process_event(session(AdapterEvent::ThreadUpdated { thread }));
-    chat.process_event(ClientEvent::SlotUpdated { slot: lead(Some("t")) });
-    chat.process_event(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Completed, failure: None, usage: None } }));
-    chat.process_event(item(0, ItemBody::UserMessage { text: "fix the parser".into() }));
-    chat.process_event(item(1, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Looking at it.".into() }], streaming: false }));
+    chat.push(session(AdapterEvent::ThreadUpdated { thread }));
+    chat.push(ClientEvent::SlotUpdated { slot: lead(Some("t")) });
+    chat.push(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Completed, failure: None, usage: None } }));
+    chat.push(item(0, ItemBody::UserMessage { text: "fix the parser".into() }));
+    chat.push(item(1, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Looking at it.".into() }], streaming: false }));
     let locations = vec![FileLocation { path: "src/parse.rs".into(), line: Some(12) }, FileLocation { path: "src/lex.rs".into(), line: None }];
-    chat.process_event(item(2, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations }));
-    chat.process_event(item(3, ItemBody::FileChange { path: "src/parse.rs".into(), diff: None }));
+    chat.push(item(2, ItemBody::ToolCall { kind: ToolKind::Read, name: "read".into(), input: None, output: vec![], locations }));
+    chat.push(item(3, ItemBody::FileChange { path: "src/parse.rs".into(), diff: None }));
     chat
 }
 
-#[test]
-fn a_harness_that_cant_start_says_why_and_the_fix() {
-    let mut chat = ChatStreamState::default();
-    assert_eq!(chat.harness_problem(), None);
-    let snapshot = |status: ProviderStatus| ProviderSnapshot {
-        instance_id: InstanceId::new("antigravity"),
-        driver: harness_contracts::DriverKind::new("antigravity"),
-        display_name: "Antigravity".into(),
-        status,
-        auth: harness_contracts::AuthState { status: harness_contracts::AuthStatus::Unknown, account: None, methods: Vec::new() },
-        capabilities: Default::default(),
-        models: Vec::new(),
-        commands: Vec::new(),
-        skills: Vec::new(),
-        runtime_modes: Vec::new(),
-        supports_plan_mode: false,
-        tool_servers: Vec::new(),
-        problems: Vec::new(),
-    };
-    let reason = "antigravity-acp isn't installed (fix: meta-harness pack install antigravity-acp)";
-    chat.process_event(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Unavailable { reason: reason.into() }) });
-    assert_eq!(chat.harness_problem().as_deref(), Some(format!("Antigravity: {reason}").as_str()), "the AGENT light's hint");
-    chat.process_event(ClientEvent::InstanceUpdated { snapshot: snapshot(ProviderStatus::Ready) });
-    assert_eq!(chat.harness_problem(), None);
+/// That conversation, in a chat of its own.
+pub(crate) fn conversation() -> Fed {
+    let mut fed = Fed::default();
+    for event in conversation_events() {
+        fed.apply(event);
+    }
+    fed
 }
 
 #[test]
@@ -128,7 +147,7 @@ fn messages_take_a_cursor_and_their_links_open() {
 #[test]
 fn its_skills_tool_servers_and_adding_to_the_running_turn_are_actions() {
     let mut chat = conversation();
-    let ids = |chat: &ChatStreamState| chat.actions().into_iter().map(|a| a.id).collect::<Vec<_>>();
+    let ids = |chat: &Fed| chat.actions().into_iter().map(|a| a.id).collect::<Vec<_>>();
     assert!(!ids(&chat).iter().any(|a| a == "mcp.add" || a == "harness.skills" || a == "chat.inject"), "nothing known yet");
     let mut snapshot = ProviderSnapshot {
         instance_id: InstanceId::new("i"),
@@ -146,9 +165,10 @@ fn its_skills_tool_servers_and_adding_to_the_running_turn_are_actions() {
         problems: Vec::new(),
     };
     snapshot.capabilities.turns.active_steering = true;
-    chat.process_event(ClientEvent::InstanceUpdated { snapshot });
-    chat.tools = Some(ToolServers::default());
-    chat.process_event(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Running, failure: None, usage: None } }));
+    chat.apply(ClientEvent::InstanceUpdated { snapshot });
+    chat.shared.agents.get_mut().take_tools_for_test(harness_contracts::ToolServers::default());
+    chat.read();
+    chat.apply(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Running, failure: None, usage: None } }));
     chat.ui.input_buffer = "also".into();
     let ids = ids(&chat);
     for id in ["mcp.add", "harness.skills", "chat.inject"] {
@@ -161,7 +181,7 @@ fn a_view_shows_the_slot_picked_and_the_lead_when_its_slot_closes() {
     let mut chat = conversation();
     let mut sub = lead(None);
     (sub.id, sub.role) = (SlotId::new("sub-1"), "sub".into());
-    chat.process_event(ClientEvent::SlotUpdated { slot: sub });
+    chat.apply(ClientEvent::SlotUpdated { slot: sub });
     let pick = chat.actions().into_iter().find(|a| a.id == "agent.pick").expect("two slots: a pick");
     let ctx = egui::Context::default();
     let net = NetClient::new("http://127.0.0.1:9");
@@ -171,7 +191,7 @@ fn a_view_shows_the_slot_picked_and_the_lead_when_its_slot_closes() {
     assert_eq!((chat.ui.slot.as_str(), chat.active_thread()), ("sub-1", None));
     chat.run(&pick, Some("gone".into()), &mut cx);
     assert_eq!(chat.ui.slot.as_str(), "sub-1", "a slot that isn't there isn't shown");
-    chat.process_event(ClientEvent::SlotClosed { slot_id: SlotId::new("sub-1") });
+    chat.apply(ClientEvent::SlotClosed { slot_id: SlotId::new("sub-1") });
     assert_eq!((chat.ui.slot.as_str(), chat.active_thread().map(|t| t.to_string())), (LEAD, Some("t".into())));
 }
 
@@ -181,7 +201,7 @@ fn next_and_previous_go_through_the_slots_in_order_and_say_the_ends() {
     for (id, role, name) in [("w-1", "worker", "a"), ("sub-2", "sub", "z"), ("sub-1", "sub", "b")] {
         let mut slot = lead(None);
         (slot.id, slot.role, slot.name) = (SlotId::new(id), role.into(), name.into());
-        chat.process_event(ClientEvent::SlotUpdated { slot });
+        chat.apply(ClientEvent::SlotUpdated { slot });
     }
     let action = |id: &str| chat.actions().into_iter().find(|a| a.id == id).expect(id);
     let (next, prev) = (action("chat.next_slot"), action("chat.prev_slot"));
@@ -203,24 +223,16 @@ fn next_and_previous_go_through_the_slots_in_order_and_say_the_ends() {
 }
 
 #[test]
-fn a_prompt_with_no_harness_anywhere_says_so() {
-    let mut chat = ChatStreamState::default();
-    let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
-    chat.say(&net, &ctx, "hello".into());
-    assert!(matches!(chat.session_status(), SessionStatus::Failed(e) if e.contains("No harness instance")));
-}
-
-#[test]
 fn a_long_chat_moves_by_the_shared_rules() {
     let mut chat = conversation();
     for n in 4..40 {
-        chat.process_event(item(n, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: format!("answer {n}") }], streaming: false }));
+        chat.apply(item(n, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: format!("answer {n}") }], streaming: false }));
     }
     let ctx = egui::Context::default();
     let net = NetClient::new("http://127.0.0.1:9");
     let mut feedback = FeedbackInspectorState::default();
     let mut now = 0.0;
-    let mut draw = |chat: &mut ChatStreamState, frames: usize| {
+    let mut draw = |chat: &mut Fed, frames: usize| {
         for _ in 0..frames {
             now += 0.05;
             let _ = ctx.run(egui::RawInput { time: Some(now), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0))), ..Default::default() }, |ctx| {
@@ -254,6 +266,6 @@ fn a_long_chat_moves_by_the_shared_rules() {
     // Backspace: to the latest, and following it again.
     chat.leave();
     assert_eq!(draw(&mut chat, 5), bottom, "Backspace: at the latest");
-    chat.process_event(item(40, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "a new answer".into() }], streaming: false }));
+    chat.apply(item(40, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "a new answer".into() }], streaming: false }));
     assert!(draw(&mut chat, 3) > bottom, "and following it: a new message shows");
 }

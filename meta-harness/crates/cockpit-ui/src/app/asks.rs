@@ -40,6 +40,7 @@ impl CockpitApp {
             Ask::Compare(comparison) => self.desk.shared.changes.compare(comparison),
             Ask::Source(source) => self.desk.shared.source.set(source),
             Ask::Waiting(waiting) => self.do_waiting(waiting, ctx),
+            Ask::Agents { slot, act } => self.desk.shared.agents.get_mut().act(slot, act, &self.desk.net, ctx),
         }
     }
 

@@ -82,11 +82,11 @@ impl CockpitApp {
         let end = |caption: String, icon: Option<&'static str>| Control::new(At::Header, Style::Button, caption, icon).at_end();
         let mut left = vec![("index.changed".to_owned(), button(String::new(), Some(icon::ARROW_CLOCKWISE)))];
         if self.servers.len() > 1 {
-            let elsewhere = self.away.values().any(|d| d.chat.store.notifications.values().any(|n| n.level == harness_contracts::Level::Waiting));
+            let elsewhere = self.away.values().any(|d| crate::attention::counts(d.shared.agents.get().store()).0 > 0);
             let shown = button(format!("{}{}", self.desk.server, if elsewhere { " •" } else { "" }), Some(icon::HARD_DRIVES));
             left.push(("server.switch".to_owned(), if elsewhere { shown.tone(Tone::Warn).hover("Something waits on you on another server") } else { shown }));
         }
-        let (waiting, updates) = self.desks().map(|d| crate::attention::counts(&d.chat.store)).fold((0, 0), |(w, u), (dw, du)| (w + dw, u + du));
+        let (waiting, updates) = self.desks().map(|d| crate::attention::counts(d.shared.agents.get().store())).fold((0, 0), |(w, u), (dw, du)| (w + dw, u + du));
         let state = self.alerts.state();
         let glyph = if state == A::On { icon::BELL_RINGING } else { icon::BELL };
         let count = if waiting > 0 { format!("{waiting}") } else { String::new() };
@@ -170,8 +170,9 @@ impl CockpitApp {
                 self.feedback.register_inspectable(ui, "top_bar:connection_status", srv_res.rect);
 
                 ui.add_space(crate::theme::look().space_sm);
-                let (agent_color, agent_hint) = match &self.desk.chat.session_status() {
-                    SessionStatus::Idle => match self.desk.chat.harness_problem() {
+                let agents = self.desk.shared.agents.get();
+                let (agent_color, agent_hint) = match &agents.lead_status() {
+                    SessionStatus::Idle => match agents.harness_problem() {
                         Some(problem) => (colors().error, format!("Agent: unavailable — {problem}")),
                         None => (colors().faint, "Agent: not connected".to_string()),
                     },
@@ -179,7 +180,9 @@ impl CockpitApp {
                     SessionStatus::Connected(tid) => (colors().ok, format!("Agent: connected [{}]", tid)),
                     SessionStatus::Failed(err) => (colors().error, format!("Agent: failed — {}", err)),
                 };
-                let agent_res = self.agent_led.show(ui, "AGENT", agent_color, self.desk.chat.agent_activity(), &agent_hint);
+                let activity = agents.lead_activity();
+                drop(agents);
+                let agent_res = self.agent_led.show(ui, "AGENT", agent_color, activity, &agent_hint);
                 self.feedback.register_inspectable(ui, "top_bar:agent_status", agent_res.rect);
 
                 ui.add_space(crate::theme::look().space_sm);

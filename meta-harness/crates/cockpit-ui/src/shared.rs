@@ -78,6 +78,12 @@ pub struct Shared {
     pub settings: Kept<Settings>,
     /// The desk's comparison and what it changes (files, components, when).
     pub changes: crate::changes::Comparing,
+    /// The server's agents: slots, sessions, harnesses, what waits on the user.
+    pub agents: crate::agents::AgentsCell,
+    /// The desk's server (`here`: home's own).
+    pub server: String,
+    /// Every server's open notifications, in the order they're gone through.
+    pub open: Kept<Vec<(String, harness_contracts::NotificationId)>>,
 }
 
 impl Shared {

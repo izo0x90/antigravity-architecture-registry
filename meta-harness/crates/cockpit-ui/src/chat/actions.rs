@@ -1,6 +1,7 @@
 //! What the chat offers as actions, and running them.
 
 use super::*;
+use crate::store::Store;
 
 /// Snake/kebab name of a contract enum as serialized, for keymap names.
 pub(crate) fn wire_name(value: &impl serde::Serialize) -> String {
@@ -53,9 +54,12 @@ impl ActionProvider for ChatStreamState {
         use ChatCommand as C;
         use Style::{Button, Setting};
         let mut out = self.moves();
-        let snapshot = self.instance();
+        let agents = self.agents.clone();
+        let agents = agents.get();
+        let store = agents.store();
+        let snapshot = agents.instance_in(&self.ui.slot);
         let caps = snapshot.map(|s| s.capabilities.clone()).unwrap_or_default();
-        let view = self.thread();
+        let view = agents.thread_in(&self.ui.slot);
         let idle = self.active_thread().is_none() && !self.opening();
 
         // Prompt (this view only)
@@ -81,7 +85,7 @@ impl ActionProvider for ChatStreamState {
                 out.push(Action::new("session.delete", "Delete a saved session", C::DeleteSaved).param(param));
             }
         }
-        if let Some(slot) = self.slot().filter(|s| s.sessions.len() > 1) {
+        if let Some(slot) = agents.slot(&self.ui.slot).filter(|s| s.sessions.len() > 1) {
             let choices = slot
                 .sessions
                 .iter()
@@ -92,9 +96,8 @@ impl ActionProvider for ChatStreamState {
                 .collect();
             out.push(Action::new("session.switch", "Switch session", C::SwitchSession).param(Param::Choice(choices)));
         }
-        if self.store.instances.len() > 1 && self.active_thread().is_none() {
-            let choices = self
-                .store
+        if store.instances.len() > 1 && self.active_thread().is_none() {
+            let choices = store
                 .instances
                 .values()
                 .map(|i| {
@@ -116,20 +119,20 @@ impl ActionProvider for ChatStreamState {
         out.push(Action::new("instance.refresh", "Re-probe the harness", C::RefreshInstance));
 
         // Agent slots: which one this view shows; starting and closing sub-slots
-        if self.store.slots.len() > 1 {
-            let choices = super::slots::ordered(&self.store)
+        if store.slots.len() > 1 {
+            let choices = super::slots::ordered(store)
                 .into_iter()
-                .map(|s| Choice::new(s.id.to_string(), slot_label(s, &self.store)).detail(slot_detail(s)).current(s.id == self.ui.slot))
+                .map(|s| Choice::new(s.id.to_string(), slot_label(s, store)).detail(slot_detail(s)).current(s.id == self.ui.slot))
                 .collect();
             out.push(Action::new("agent.pick", "Show an agent slot", C::PickSlot).param(Param::Choice(choices)));
             out.push(Action::new("chat.next_slot", "Show the next agent slot", C::StepSlot(1)).focused());
             out.push(Action::new("chat.prev_slot", "Show the previous agent slot", C::StepSlot(-1)).focused());
         }
-        if !self.store.instances.is_empty() {
-            let choices = self.store.instances.values().map(|i| Choice::new(i.instance_id.to_string(), &i.display_name)).collect();
+        if !store.instances.is_empty() {
+            let choices = store.instances.values().map(|i| Choice::new(i.instance_id.to_string(), &i.display_name)).collect();
             out.push(Action::new("agent.new", "Start an agent sub-slot", C::NewSlot).param(Param::Choice(choices)));
         }
-        if self.slot().is_some_and(|s| !s.is_lead()) {
+        if agents.slot(&self.ui.slot).is_some_and(|s| !s.is_lead()) {
             out.push(Action::new("agent.close", "Close this agent sub-slot", C::CloseSlot));
         }
 
@@ -188,7 +191,7 @@ impl ActionProvider for ChatStreamState {
         // Tool servers and skills
         let mut servers: Vec<Choice> = match view {
             Some(v) => v.thread.mcp_servers.iter().map(|m| Choice::new(&m.name, mcp_label(m))).collect(),
-            None => self.tools.iter().flat_map(|t| t.ours.iter().chain(&t.project)).map(|m| Choice::new(&m.name, mcp_label(m))).collect(),
+            None => agents.tools().iter().flat_map(|t| t.ours.iter().chain(&t.project)).map(|m| Choice::new(&m.name, mcp_label(m))).collect(),
         };
         if let Some(s) = snapshot {
             servers.extend(s.tool_servers.iter().map(|t| Choice::new(&t.name, format!("{} — {} (its own, {:?})", t.name, t.transport, t.scope).to_lowercase()).detail(Some(t.file.clone()))));
@@ -196,7 +199,7 @@ impl ActionProvider for ChatStreamState {
         if !servers.is_empty() {
             out.push(Action::new("mcp.list", "Tool servers its sessions get", C::ListMcp).param(Param::Choice(servers)));
         }
-        if let Some(tools) = &self.tools {
+        if let Some(tools) = agents.tools() {
             out.push(Action::new("mcp.add", "Add a tool server to the project", C::AddMcp).param(Param::Text { hint: "name https://host/mcp (then sse for the older kind)".into() }));
             if !tools.project.is_empty() {
                 let choices = tools.project.iter().map(|m| Choice::new(&m.name, mcp_label(m))).collect();
@@ -237,10 +240,10 @@ impl ActionProvider for ChatStreamState {
         if let Some(s) = snapshot.filter(|s| !s.auth.methods.is_empty()) {
             let choices = s.auth.methods.iter().map(|m| Choice::new(&m.id, &m.name).detail(m.description.clone())).collect();
             let login = Action::new("auth.login", "Sign in", C::Login).param(Param::Choice(choices));
-            out.push(if self.needs_login() && self.login.is_none() { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
-            let hint = self.login.as_ref().and_then(|l| l.expects.clone()).unwrap_or_else(|| "what the sign-in page gave you".into());
+            out.push(if self.needs_login() && agents.login().is_none() { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
+            let hint = agents.login().and_then(|l| l.expects.clone()).unwrap_or_else(|| "what the sign-in page gave you".into());
             let complete = Action::new("auth.complete", "Finish signing in", C::CompleteLogin).param(Param::Text { hint });
-            out.push(if self.login.as_ref().is_some_and(|l| l.expects.is_some()) { complete.header(Button, "Finish signing in", Some(icon::KEY)) } else { complete });
+            out.push(if agents.login().is_some_and(|l| l.expects.is_some()) { complete.header(Button, "Finish signing in", Some(icon::KEY)) } else { complete });
             out.push(Action::new("auth.logout", "Sign out", C::Logout));
         }
 
@@ -261,13 +264,13 @@ impl ActionProvider for ChatStreamState {
         // Typed in: sending it.
         out.push(Action::new("chat.send", "Send the prompt", C::Send).focused().importance(crate::actions::PRIMARY).on_typing(Button, "Send", Some(icon::PAPER_PLANE_RIGHT)));
         // What the chat says on its own line, and its ways out.
-        if self.login.is_some() {
+        if agents.login().is_some() {
             out.push(Action::new("auth.cancel", "Stop signing in", C::CancelLogin).focused().importance(MINOR).header(Button, "Cancel sign-in", None));
-            if self.login.as_ref().is_some_and(|l| l.url.is_some()) {
+            if agents.login().is_some_and(|l| l.url.is_some()) {
                 out.push(Action::new("auth.page", "Open the sign-in page", C::OpenLoginPage).focused().importance(crate::actions::PRIMARY).header(Button, "Open the sign-in page", Some(icon::ARROW_SQUARE_OUT)));
             }
         }
-        if self.notice.is_some() {
+        if agents.notice().is_some() {
             out.push(Action::new("chat.dismiss", "Put the notice away", C::DismissNotice).focused().importance(MINOR).header(Button, "Dismiss", None));
         }
         if self.error().is_some() {
@@ -281,44 +284,37 @@ impl ActionProvider for ChatStreamState {
 
     fn run(&mut self, action: &Action, value: Option<String>, cx: &mut RunCx<'_>) {
         let Some(command) = action.command::<ChatCommand>() else { return };
-        let (net, ctx) = (cx.net, cx.ctx);
-        let thread = self.active_thread();
-        let slot = self.ui.slot.clone();
-        let mailbox = self.mailbox.clone();
-        let done = move |r: NetResult<()>| post(&mailbox, Reply::Done(r));
+        let ctx = cx.ctx;
         match command {
             ChatCommand::Insert => *cx.input_mode = crate::keymap::InputMode::Insert { panel: cx.panel },
             ChatCommand::ClearPrompt => self.ui.input_buffer.clear(),
-            ChatCommand::NewSession => self.open_thread(net, ctx, None),
+            ChatCommand::NewSession | ChatCommand::Retry => self.open_thread(None),
             ChatCommand::ResumeSession => match value {
-                Some(native) => self.open_thread(net, ctx, Some(NativeId::new(native))),
-                None => self.load_saved(net, ctx, &action.id),
+                Some(native) => self.open_thread(Some(NativeId::new(native))),
+                None => self.load_saved(&action.id),
             },
             ChatCommand::DeleteSaved => match (value, self.active_instance()) {
-                (Some(native), Some(instance)) => {
-                    net.delete_saved_session(&instance, &NativeId::new(native), ctx.clone(), done);
-                    self.saved_sessions = None;
-                }
-                (None, _) => self.load_saved(net, ctx, &action.id),
+                (Some(native), Some(instance)) => self.act(Act::DeleteSaved { instance, native: NativeId::new(native) }),
+                (None, _) => self.load_saved(&action.id),
                 _ => {}
             },
             ChatCommand::SwitchSession => {
                 if let Some(key) = value {
-                    net.switch_slot_session(&slot, &SessionKey::new(key), ctx.clone(), done);
+                    self.act(Act::SwitchSession { key: SessionKey::new(key) });
                 }
             }
             ChatCommand::SelectInstance => {
                 if let Some(i) = value {
-                    net.set_slot_harness(&slot, &InstanceId::new(i), ctx.clone(), done);
+                    self.act(Act::SetHarness { instance: InstanceId::new(i) });
                 }
             }
             ChatCommand::PickSlot => {
-                if let Some(picked) = value.map(SlotId::new).filter(|s| self.store.slots.contains_key(s)) {
+                if let Some(picked) = value.map(SlotId::new).filter(|s| self.agents().slot(s).is_some()) {
                     self.ui.slot = picked;
                     self.ui.cursor = None;
                 }
             }
-            ChatCommand::StepSlot(by) => match super::slots::beside(&self.store, &self.ui.slot, *by) {
+            ChatCommand::StepSlot(by) => match self.beside(*by) {
                 Some(next) => {
                     self.ui.slot = next;
                     self.ui.cursor = None;
@@ -327,74 +323,75 @@ impl ActionProvider for ChatStreamState {
             },
             ChatCommand::NewSlot => {
                 if let Some(i) = value {
-                    let mailbox = self.mailbox.clone();
-                    net.new_slot(&InstanceId::new(i), ctx.clone(), move |r| post(&mailbox, Reply::SlotMade(r)));
+                    self.act(Act::NewSlot { instance: InstanceId::new(i) });
                 }
             }
-            ChatCommand::CloseSlot => net.close_slot(&slot, ctx.clone(), done),
+            ChatCommand::CloseSlot => self.act(Act::CloseSlot),
             ChatCommand::CloseSession => {
-                if let Some(key) = self.slot().and_then(|s| s.current.clone()) {
-                    net.close_slot_session(&slot, &key, ctx.clone(), done);
+                let key = self.slot().and_then(|s| s.current.clone());
+                if let Some(key) = key {
+                    self.act(Act::CloseSession { key });
                 }
             }
             ChatCommand::StopTurn => {
-                if let Some(t) = &thread {
-                    net.interrupt(t, ctx.clone());
+                if let Some(thread) = self.active_thread() {
+                    self.act(Act::Stop { thread });
                 }
             }
             ChatCommand::RefreshInstance => {
-                if let Some(instance) = &self.active_instance() {
-                    net.refresh_instance(instance, ctx.clone(), done);
+                if let Some(instance) = self.active_instance() {
+                    self.act(Act::Reprobe { instance });
                 }
             }
             ChatCommand::SetConfig { option, boolean } => {
                 if let Some(v) = value {
                     let json = if *boolean { serde_json::Value::Bool(v == "true") } else { serde_json::Value::String(v) };
-                    self.steer(net, ctx, SteerInput { config: vec![OptionValue { id: option.clone(), value: json }], ..Default::default() });
+                    self.steer(SteerInput { config: vec![OptionValue { id: option.clone(), value: json }], ..Default::default() });
                 }
             }
             ChatCommand::NextModel => {
                 let model = value.filter(|v| !v.is_empty()).zip(self.active_instance()).map(|(model, instance_id)| ModelSelection { instance_id, model, options: Vec::new() });
-                net.set_slot_settings(&slot, &self.policy(), model.as_ref(), ctx.clone(), done);
+                self.act(Act::Settings { policy: self.policy(), model });
             }
             ChatCommand::NativeMode => {
                 if let Some(mode) = value {
-                    self.steer(net, ctx, SteerInput { mode: Some(mode), ..Default::default() });
+                    self.steer(SteerInput { mode: Some(mode), ..Default::default() });
                 }
             }
             ChatCommand::RuntimeMode => {
                 if let Some(mode) = value.and_then(|v| serde_json::from_value::<RuntimeMode>(serde_json::Value::String(v)).ok()) {
                     let policy = RuntimePolicy { runtime_mode: mode, ..self.policy() };
-                    net.set_slot_settings(&slot, &policy, self.model_selection().as_ref(), ctx.clone(), done);
+                    self.act(Act::Settings { policy, model: self.model_selection() });
                 }
             }
             ChatCommand::ListMcp | ChatCommand::ListSkills => {}
             ChatCommand::AddToTurn => {
                 let text = std::mem::take(&mut self.ui.input_buffer).trim().to_owned();
                 if !text.is_empty() {
-                    self.add_to_turn(net, ctx, text);
+                    self.add_to_turn(text);
                 }
             }
             ChatCommand::AddMcp => {
                 let text = value.unwrap_or_default();
                 let mut parts = text.split_whitespace();
-                match (parts.next(), parts.next(), parts.next(), &self.tools) {
-                    (Some(name), Some(url), kind @ (None | Some("sse")), Some(tools)) => {
-                        let mut project: Vec<McpServer> = tools.project.iter().filter(|m| m.name != name).cloned().collect();
+                let project = self.agents().tools().map(|t| t.project.clone());
+                match (parts.next(), parts.next(), parts.next(), project) {
+                    (Some(name), Some(url), kind @ (None | Some("sse")), Some(project)) => {
+                        let mut project: Vec<McpServer> = project.into_iter().filter(|m| m.name != name).collect();
                         let transport = match kind {
                             Some(_) => McpTransport::Sse { url: url.into(), headers: Vec::new() },
                             None => McpTransport::Http { url: url.into(), headers: Vec::new() },
                         };
                         project.push(McpServer { name: name.into(), transport });
-                        self.save_tools(net, ctx, &project);
+                        self.act(Act::ToolServers(project));
                     }
-                    _ => self.set_error(slot, "A tool server needs a name and a URL, e.g. `docs https://host/mcp` (`… sse` for the older kind)".into()),
+                    _ => *cx.note = Some("A tool server needs a name and a URL, e.g. `docs https://host/mcp` (`… sse` for the older kind)".into()),
                 }
             }
             ChatCommand::RemoveMcp => {
-                if let (Some(name), Some(tools)) = (value, &self.tools) {
-                    let project: Vec<McpServer> = tools.project.iter().filter(|m| m.name != name).cloned().collect();
-                    self.save_tools(net, ctx, &project);
+                let project = self.agents().tools().map(|t| t.project.clone());
+                if let (Some(name), Some(project)) = (value, project) {
+                    self.act(Act::ToolServers(project.into_iter().filter(|m| m.name != name).collect()));
                 }
             }
             ChatCommand::HarnessCommand { name } => {
@@ -406,44 +403,44 @@ impl ActionProvider for ChatStreamState {
                     Some(args) if !args.is_empty() => format!("/{name} {args}"),
                     _ => format!("/{name}"),
                 };
-                self.send_prompt(net, ctx, text);
+                self.send_prompt(text);
             }
             ChatCommand::Login => {
                 if let (Some(method), Some(instance)) = (value, self.active_instance()) {
-                    let mailbox = self.mailbox.clone();
-                    net.begin_auth(&instance, &method, ctx.clone(), move |r| post(&mailbox, Reply::AuthStarted(r)));
+                    self.act(Act::SignIn { instance, method });
                 }
             }
             ChatCommand::CompleteLogin => {
-                if let (Some(url), Some(instance)) = (value, self.active_instance()) {
-                    net.complete_auth(&instance, &url, ctx.clone(), done);
-                    self.login = None;
+                if let (Some(answer), Some(instance)) = (value, self.active_instance()) {
+                    self.act(Act::FinishSignIn { instance, answer });
                 }
             }
             ChatCommand::Logout => {
-                if let Some(instance) = &self.active_instance() {
-                    net.logout(instance, ctx.clone(), done);
+                if let Some(instance) = self.active_instance() {
+                    self.act(Act::SignOut { instance });
                 }
             }
-            ChatCommand::CancelLogin => self.login = None,
+            ChatCommand::CancelLogin => self.act(Act::StopSigningIn),
             ChatCommand::OpenPage(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             ChatCommand::OpenLoginPage => {
-                if let Some(url) = self.login.as_ref().and_then(|l| l.url.clone()) {
+                let url = self.agents().login().and_then(|l| l.url.clone());
+                if let Some(url) = url {
                     ctx.open_url(egui::OpenUrl::new_tab(url));
                 }
             }
             ChatCommand::Send => {
                 let text = std::mem::take(&mut self.ui.input_buffer).trim().to_owned();
                 if !text.is_empty() {
-                    self.send_prompt(net, ctx, text);
+                    self.send_prompt(text);
                 }
             }
-            ChatCommand::DismissNotice => self.notice = None,
-            ChatCommand::Retry => self.open_thread(net, ctx, None),
-            ChatCommand::DismissError => {
-                self.errors.remove(&slot);
+            ChatCommand::DismissNotice => self.act(Act::PutNoticeAway),
+            ChatCommand::DismissError => self.act(Act::PutErrorAway),
+            ChatCommand::Answer { thread, request, option } => {
+                if let Err(why) = self.answer(thread, request, option) {
+                    *cx.note = Some(why);
+                }
             }
-            ChatCommand::Answer { thread, request, option } => self.answer(net, ctx, thread, request, option),
         }
     }
 

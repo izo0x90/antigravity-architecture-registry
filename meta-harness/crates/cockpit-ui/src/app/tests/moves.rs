@@ -99,7 +99,7 @@ fn the_same_moves_work_in_every_view() {
     app.desk.code.set_content((1..=300).map(|i| format!("line {i}\n")).collect());
     app.desk.code.target_line = Some(1);
     for _ in 0..3 {
-        app.desk.chat.process_event(harness_contracts::ClientEvent::ThreadClosed { thread_id: harness_contracts::ThreadId::new("none") });
+        app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::ThreadClosed { thread_id: harness_contracts::ThreadId::new("none") });
     }
     for kind in [BufferKind::Tree, BufferKind::Code, BufferKind::Spec, BufferKind::Queue, BufferKind::Chat] {
         focus(&ctx, &mut app, kind);
@@ -192,7 +192,7 @@ fn f_labels_what_is_on_screen_in_every_view() {
     // Something in the inbox, to label.
     let kind = harness_contracts::NotificationKind::TurnFinished;
     let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new("turn:1"), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, title: "done".into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
-    app.desk.chat.process_event(harness_contracts::ClientEvent::NotificationUpdated { notification });
+    app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::NotificationUpdated { notification });
     // A changed file, to label.
     use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, FileStatus, Group};
     let changed = ChangedFile { path: "src/a.rs".into(), old_path: None, status: FileStatus::Modified, group: Group::Unstaged, added: 1, removed: 0, binary: false };
@@ -384,7 +384,7 @@ fn go_to_keys_work_from_every_view() {
     // The queue's own keys: o shows the slot running the job's session.
     let mut worker = crate::chat::tests::lead(Some("t1"));
     (worker.id, worker.role) = (harness_contracts::SlotId::new("worker-1"), "worker".into());
-    app.desk.chat.process_event(harness_contracts::ClientEvent::SlotUpdated { slot: worker });
+    app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::SlotUpdated { slot: worker });
     focus(&ctx, &mut app, BufferKind::Queue);
     app.desk.queue.on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(crate::queue::tests::snapshot(arch_graph::QueueStatus::Running)) });
     keys(&ctx, &mut app, "gg");

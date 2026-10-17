@@ -1,15 +1,12 @@
 //! What needs the user, in the shell: the bell (what's waiting, and
 //! whether system notifications are on) and the tray (updates), their
 //! lists, the quick look on the inbox, what the inbox asks about them (the
-//! next item on whichever server, putting it away, an answer), chats seen.
+//! next item on whichever server, putting it away).
 
-use harness_contracts::{Level, Notification, NotificationId, SlotId};
+use harness_contracts::{Level, Notification, NotificationId};
 
 use super::*;
 use crate::nav::Waiting;
-
-/// How often a chat on screen says its slot was seen (seconds).
-const SEEN_EVERY: f64 = 2.0;
 
 /// The bell's list's first row: the system notifications switch.
 const SWITCH: &str = "alerts";
@@ -45,7 +42,7 @@ impl CockpitApp {
     /// Every server's open ones of `level` (both, given none), in the order
     /// they're gone through, each with its server.
     pub(super) fn all_open(&self, level: Option<Level>) -> Vec<(String, Notification)> {
-        let mut all: Vec<(String, Notification)> = self.desks().flat_map(|d| crate::attention::list(&d.chat.store, level).into_iter().map(|n| (d.server.clone(), n.clone()))).collect();
+        let mut all: Vec<(String, Notification)> = self.desks().flat_map(|d| crate::attention::list(d.shared.agents.get().store(), level).into_iter().map(|n| (d.server.clone(), n.clone())).collect::<Vec<_>>()).collect();
         all.sort_by(|a, b| harness_contracts::order(&a.1, &b.1));
         all
     }
@@ -91,8 +88,8 @@ impl CockpitApp {
             self.all_open(Some(level))
                 .iter()
                 .map(|(server, n)| {
-                    let store = &self.desks().find(|d| &d.server == server).expect("a desk per server listed").chat.store;
-                    let detail = crate::attention::detail(n, store, now);
+                    let agents = self.desks().find(|d| &d.server == server).expect("a desk per server listed").shared.agents.get();
+                    let detail = crate::attention::detail(n, agents.store(), now);
                     Choice::new(format!("{server}/{}", n.id), &n.title).detail(Some(if many { format!("{server} · {detail}") } else { detail }))
                 })
                 .collect()
@@ -148,11 +145,12 @@ impl CockpitApp {
         }
     }
 
-    pub(super) fn sync_inbox(&mut self) {
-        let all: Vec<(String, NotificationId)> = self.all_open(None).into_iter().map(|(s, n)| (s, n.id)).collect();
-        let server = self.desk.server.clone();
-        let at = |id: &NotificationId| all.iter().position(|(s, n)| *s == server && n == id).map(|i| (i + 1, all.len()));
-        self.desk.inbox.sync(&self.desk.chat, at, crate::attention::now_ms());
+    /// Every buffer reads what they share, every server's open items (the
+    /// inbox's place among them) with it.
+    pub(super) fn share_with_buffers(&mut self) {
+        let open = self.all_open(None).into_iter().map(|(s, n)| (s, n.id)).collect();
+        self.desk.shared.open.set(open);
+        self.desk.share();
     }
 
     /// Does what the inbox asked about what waits on the user.
@@ -175,22 +173,12 @@ impl CockpitApp {
                     None => self.close_quick_look(),
                 }
             }
-            Waiting::Answer { thread, request, option } => self.desk.chat.answer(&self.desk.net, ctx, &thread, &request, &option),
         }
     }
 
-    /// Chats on screen say their slots were seen (now and then, and only
-    /// with updates open for them); a system notification clicked opens
-    /// its item.
+    /// A system notification clicked opens its item; notes that came
+    /// later are said.
     pub(super) fn say_seen(&mut self, ctx: &egui::Context) {
-        let now = ctx.input(|i| i.time);
-        let drawn: Vec<SlotId> = self.desk.chat.drawn.iter().cloned().collect();
-        for slot in drawn {
-            let has_updates = self.desk.chat.store.notifications.values().any(|n| n.level == Level::Update && n.slot.as_ref() == Some(&slot));
-            if has_updates && self.seen.due(&slot, now, SEEN_EVERY) {
-                self.desk.net.notifications_seen(&slot, ctx.clone(), |_| {});
-            }
-        }
         if let Some((server, id)) = self.alerts.take_clicked() {
             self.open_attention_at(&server, id, ctx);
         }

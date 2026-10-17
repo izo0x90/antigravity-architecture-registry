@@ -243,7 +243,7 @@ fn z_d_flips_the_deleted_lines_in_the_code_by_the_key_alone() {
 fn g_x_on_a_message_compares_its_turns_changes() {
     use harness_contracts::changes::{Comparison, Point, Timeline, TurnChanges};
     let (ctx, mut app) = full_app();
-    app.desk.chat = crate::chat::tests::conversation();
+    crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"space b c"}"#).unwrap();
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g g"}"#).unwrap();
     from_outside(&ctx, &mut app, r#"{"op":"keys","keys":"g x"}"#).unwrap();

@@ -67,11 +67,6 @@ impl CockpitApp {
         Some(ops.into_iter().filter(|op| !candidates(*op, detail).is_empty()).collect())
     }
 
-    /// The queue view runs with the chat's harness.
-    pub(super) fn link_queue(&mut self, ctx: &egui::Context) {
-        self.desk.queue.instance = self.desk.chat.active_instance();
-        self.desk.queue.tick(&self.desk.net, ctx);
-    }
 
     /// What the views show in common: the desk's comparison and what it
     /// changed, the source, the review, the queue's plan.
@@ -93,6 +88,6 @@ impl CockpitApp {
         {
             self.desk.graph.invalidate();
         }
-        self.link_queue(ctx);
+        self.desk.queue.tick(&self.desk.net, ctx);
     }
 }

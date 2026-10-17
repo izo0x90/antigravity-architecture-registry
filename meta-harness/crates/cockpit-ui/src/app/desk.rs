@@ -78,7 +78,7 @@ impl Desk {
             active: BTreeMap::new(),
             last_used: BTreeMap::new(),
             fresh: Vec::new(),
-            shared: Default::default(),
+            shared: crate::shared::Shared { server: name.to_owned(), ..Default::default() },
             keeper: Default::default(),
             remote: crate::remote::Remote::new(host_origin, name),
             jumps: JumpList::default(),

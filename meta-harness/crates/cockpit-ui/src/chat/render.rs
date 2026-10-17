@@ -21,7 +21,7 @@ pub(super) fn render_steps(ui: &mut egui::Ui, steps: &[PlanStep]) {
     }
 }
 
-pub(super) fn block_summary(block: &ContentBlock) -> String {
+pub(crate) fn block_summary(block: &ContentBlock) -> String {
     match block {
         ContentBlock::Text { text } => text.clone(),
         ContentBlock::Image { mime_type, .. } => format!("[image {mime_type}]"),
@@ -47,10 +47,9 @@ pub(super) fn block_detail(block: &ContentBlock) -> String {
 
 impl ChatStreamState {
     pub fn render(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
-        let (net, panel) = (cx.net, cx.panel);
+        let panel = cx.panel;
         let ctx = ui.ctx().clone();
-        self.drain_replies(net, &ctx);
-        self.drawn.insert(self.ui.slot.clone());
+        self.seen_now(ctx.input(|i| i.time));
 
         ui.vertical(|ui| {
             self.render_banners(ui);
@@ -88,23 +87,25 @@ impl ChatStreamState {
     pub(super) fn render_banners(&mut self, ui: &mut egui::Ui) {
         // What it says; its ways out (Dismiss, Retry, signing in) are its
         // actions, on its top line.
-        if let Some(notice) = self.notice.clone() {
+        let (notice, login) = (self.agents().notice().cloned(), self.agents().login().cloned());
+        if let Some(notice) = notice {
             banner(ui, colors().info_bg, colors().focus, |ui| {
                 ui.label(RichText::new(icon::INFO).size(crate::theme::look().text_label).color(colors().info));
                 ui.label(RichText::new(&notice).size(crate::theme::look().text_label).color(colors().text));
             });
         }
-        if let Some(err) = self.error().cloned() {
+        if let Some(err) = self.error() {
             banner(ui, colors().error_bg, colors().error, |ui| {
                 ui.label(RichText::new(icon::X_CIRCLE).size(crate::theme::look().text_label).color(colors().error));
                 ui.label(RichText::new(&err).size(crate::theme::look().text_label).color(colors().text));
             });
         }
-        if (self.needs_login() || self.login.is_some())
-            && let Some(snapshot) = self.instance().cloned()
+        let instance = self.instance().map(|s| s.clone());
+        if (self.needs_login() || login.is_some())
+            && let Some(snapshot) = instance
         {
             let look = crate::theme::look();
-            banner(ui, colors().info_bg, colors().focus, |ui| match self.login.clone() {
+            banner(ui, colors().info_bg, colors().focus, |ui| match login {
                 None => {
                     ui.label(RichText::new(format!("{} Sign in to {}", icon::KEY, snapshot.display_name)).strong().size(look.text_label));
                 }
@@ -130,7 +131,8 @@ impl ChatStreamState {
     }
 
     pub(super) fn render_plan(&mut self, ui: &mut egui::Ui) {
-        let Some(PlanBody::TodoList { steps }) = self.thread().and_then(|t| t.plan.clone()).map(|p| p.body) else {
+        let plan = self.thread().and_then(|t| t.plan.clone());
+        let Some(PlanBody::TodoList { steps }) = plan.map(|p| p.body) else {
             return;
         };
         let done = steps.iter().filter(|s| s.status == StepStatus::Completed).count();
@@ -140,12 +142,14 @@ impl ChatStreamState {
     }
 
     pub(super) fn render_stream(&mut self, ui: &mut egui::Ui) {
-        let Some(view) = self.thread().cloned() else {
+        let view = self.thread().map(|t| t.clone());
+        let Some(view) = view else {
+            let named = self.instance().map(|s| s.display_name.clone());
             ui.add_space(crate::theme::look().space_xxl);
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new("No session yet").strong().size(crate::theme::look().text_heading).color(colors().accent));
-                let hint = match self.instance() {
-                    Some(s) => format!("{} • type below or Connect to start a session", s.display_name),
+                let hint = match named {
+                    Some(name) => format!("{name} • type below or Connect to start a session"),
                     None => "Waiting for the server…".into(),
                 };
                 ui.label(RichText::new(hint).size(crate::theme::look().text_label).color(colors().muted));
@@ -302,14 +306,13 @@ impl ChatStreamState {
     }
 
     pub(super) fn render_input(&mut self, ui: &mut egui::Ui, feedback: &FeedbackInspectorState, is_focused: bool, cx: &mut RunCx<'_>) {
-        let (net, panel) = (cx.net, cx.panel);
+        let panel = cx.panel;
         let input_mode = &mut *cx.input_mode;
-        let ctx = ui.ctx().clone();
 
         ui.horizontal(|ui| {
             let text_w = ui.available_width();
             let inserting = *input_mode == crate::keymap::InputMode::Insert { panel };
-            let steerable = self.instance().is_some_and(|s| s.capabilities.turns.active_steering) && self.thread().and_then(|t| t.running_turn()).is_some();
+            let steerable = self.steerable();
             let keys = crate::keymap::local();
             let hint = if inserting && steerable {
                 "While it works: sending queues it next; adding puts it into what it's doing".to_owned()
@@ -339,9 +342,9 @@ impl ChatStreamState {
                 let text = self.ui.input_buffer.trim().to_string();
                 self.ui.input_buffer.clear();
                 if add {
-                    self.add_to_turn(net, &ctx, text);
+                    self.add_to_turn(text);
                 } else {
-                    self.send_prompt(net, &ctx, text);
+                    self.send_prompt(text);
                 }
             }
         });
@@ -386,11 +389,9 @@ impl crate::hosted::Hosted for ChatStreamState {
         if let Some(thread) = &self.active_thread() {
             out.push(Status::new(format!("[{}]", thread.as_str().chars().take(8).collect::<String>()), Tone::Info));
         }
-        if let Some(thread) = self.thread().map(|v| &v.thread)
-            && !thread.mcp_servers.is_empty()
-        {
-            let names: Vec<String> = thread.mcp_servers.iter().map(mcp_label).collect();
-            out.push(Status::new(format!("{} MCP {}", icon::PLUGS_CONNECTED, thread.mcp_servers.len()), Tone::Muted).detail(names.join("\n")));
+        if let Some(servers) = self.thread().map(|v| v.thread.mcp_servers.clone()).filter(|s| !s.is_empty()) {
+            let names: Vec<String> = servers.iter().map(mcp_label).collect();
+            out.push(Status::new(format!("{} MCP {}", icon::PLUGS_CONNECTED, servers.len()), Tone::Muted).detail(names.join("\n")));
         }
         if let Some(usage) = self.thread().and_then(|t| t.usage.clone())
             && let (Some(used), Some(window)) = (usage.context_used_tokens, usage.context_window_tokens)

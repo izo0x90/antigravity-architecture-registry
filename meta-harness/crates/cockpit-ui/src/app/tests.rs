@@ -182,9 +182,9 @@ fn full_app() -> (egui::Context, CockpitApp) {
         snapshot.jobs.push(arch_graph::Job { component: ComponentId::new(format!("rust:q{i}")), kind: arch_graph::JobKind::Implement, state: arch_graph::JobState::Queued, attempts: 0, findings: vec![] });
     }
     app.desk.queue.on_event(&arch_graph::ArchEvent::QueueUpdated { snapshot: Box::new(snapshot) });
-    app.desk.chat = crate::chat::tests::conversation();
+    crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
     for n in 4..40 {
-        app.desk.chat.process_event(crate::chat::tests::item(n, harness_contracts::ItemBody::UserMessage { text: format!("message {n}") }));
+        app.desk.shared.agents.get_mut().apply(crate::chat::tests::item(n, harness_contracts::ItemBody::UserMessage { text: format!("message {n}") }));
     }
     app.desk.panels.set_count(3, 12);
     (ctx, app)

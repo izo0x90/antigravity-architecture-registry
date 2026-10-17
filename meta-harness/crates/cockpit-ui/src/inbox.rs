@@ -11,9 +11,11 @@ use egui_phosphor::regular as icon;
 use harness_contracts::{Level, Notification, NotificationId, RuntimeRequest};
 
 use crate::actions::{Action, ActionProvider, Group, MINOR, PRIMARY, RunCx, SECONDARY, Style};
-use crate::chat::ChatStreamState;
+use crate::agents::Act;
+use crate::request_card::{Drafts, render_request};
 use crate::app::BufferKind;
 use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target, Waiting};
+use crate::shared::Shared;
 use crate::hosted::{Status, Tone};
 use crate::theme::colors;
 use crate::viewport::{Go, Measured, Show};
@@ -51,6 +53,8 @@ pub struct InboxView {
     scrolling: Measured,
     spots: Vec<Spot>,
     asks: Vec<Ask>,
+    /// Answers being given to its request's questions.
+    drafts: Drafts,
 }
 
 #[derive(Clone, Debug)]
@@ -72,10 +76,12 @@ impl InboxView {
         self.item = Some(id);
     }
 
-    /// Reads what it shows from the store (each frame: it's a view of it).
-    /// `at` places an item among every server's open ones.
-    pub fn sync(&mut self, chat: &ChatStreamState, at: impl Fn(&NotificationId) -> Option<(usize, usize)>, now_ms: u64) {
-        let store = &chat.store;
+    /// Reads what it shows from the desk's agents (each frame: it's a view
+    /// of them), and where it is among every server's open ones.
+    fn sync(&mut self, shared: &Shared) {
+        let agents = shared.agents.get();
+        let store = agents.store();
+        let now_ms = crate::attention::now_ms();
         if self.item.is_none() {
             self.item = crate::attention::list(store, None).first().map(|n| n.id.clone());
             self.cursor = usize::MAX;
@@ -84,10 +90,11 @@ impl InboxView {
             let harness = n.slot.as_ref().and_then(|s| store.slots.get(s)).and_then(|s| s.instance_id.as_ref()).and_then(|i| store.instances.get(i)).map(|i| i.display_name.clone());
             let from = [Some(crate::attention::detail(n, store, now_ms)), harness].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let request = n.thread.as_ref().zip(n.request.as_ref()).and_then(|(t, r)| store.threads.get(t)?.request(r).cloned());
-            let said = n.thread.as_ref().and_then(|t| chat.last_said(t)).filter(|s| n.detail.as_deref() != Some(s.as_str()));
+            let said = n.thread.as_ref().and_then(|t| agents.last_said(t)).filter(|s| n.detail.as_deref() != Some(s.as_str()));
             Shown { notification: n.clone(), from, request, said }
         });
-        self.at = self.item.as_ref().and_then(at);
+        let open = shared.open.get();
+        self.at = self.item.as_ref().and_then(|id| open.iter().position(|(s, n)| *s == shared.server && n == id).map(|i| (i + 1, open.len())));
         let parts = self.parts();
         if self.cursor == usize::MAX {
             self.cursor = parts.iter().position(|p| *p == Part::Request).unwrap_or(0);
@@ -115,9 +122,18 @@ impl InboxView {
         }
     }
 
+    /// Answers its request with `option` (and what was picked and typed for
+    /// its questions).
     fn answer(&mut self, option: String) -> Step {
-        let Some(request) = self.shown.as_ref().and_then(|s| s.request.as_ref()) else { return Step::Nothing("Nothing to answer: it was answered already.".into()) };
-        self.asks.push(Ask::Waiting(Waiting::Answer { thread: request.thread_id.clone(), request: request.id.clone(), option }));
+        let Some(shown) = &self.shown else { return Step::Nothing("Nothing to answer: it was answered already.".into()) };
+        let Some(request) = &shown.request else { return Step::Nothing("Nothing to answer: it was answered already.".into()) };
+        let says_yes = request.options.iter().find(|o| o.id == option).is_some_and(|o| matches!(o.decision, harness_contracts::ApprovalDecision::Accept | harness_contracts::ApprovalDecision::AcceptForSession | harness_contracts::ApprovalDecision::AcceptAlways));
+        if says_yes && !self.drafts.complete(request) {
+            return Step::Nothing("Answer the questions it needs first.".into());
+        }
+        let act = Act::Answer { thread: request.thread_id.clone(), request: request.id.clone(), response: self.drafts.response(request, &option) };
+        let slot = shown.notification.slot.clone().unwrap_or_else(|| harness_contracts::SlotId::new(harness_contracts::LEAD));
+        self.asks.push(Ask::Agents { slot, act });
         Step::Done
     }
 
@@ -132,7 +148,7 @@ impl InboxView {
         }
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, chat: &mut ChatStreamState) {
+    pub fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         let theme = crate::theme::look();
         let Some(shown) = self.shown.clone() else {
             if self.item.is_some() {
@@ -163,10 +179,11 @@ impl InboxView {
                 .response
                 .rect;
             mark(ui, says, 0, &mut drawn);
-            if let (Some(thread), Some(request)) = (&shown.notification.thread, &shown.notification.request) {
+            if shown.notification.thread.is_some() && shown.notification.request.is_some() {
                 ui.add_space(theme.space_sm);
-                match chat.render_request_of(ui, thread, request) {
-                    Some(card) => {
+                match &shown.request {
+                    Some(request) => {
+                        let card = render_request(ui, request, &mut self.drafts);
                         if let Some(index) = parts.iter().position(|p| *p == Part::Request) {
                             mark(ui, card, index, &mut drawn);
                         }
@@ -207,6 +224,10 @@ impl InboxView {
 impl Navigable for InboxView {
     fn take_asks(&mut self) -> Vec<Ask> {
         std::mem::take(&mut self.asks)
+    }
+
+    fn share(&mut self, shared: &Shared) {
+        self.sync(shared);
     }
 
     fn place(&self) -> Place {

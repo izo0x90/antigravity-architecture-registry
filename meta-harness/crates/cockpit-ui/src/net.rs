@@ -905,9 +905,10 @@ mod tests {
         let cloud = NetClient::for_server("http://127.0.0.1:9", "cloud");
         cloud.notifications_seen(&SlotId::new("lead"), egui::Context::default(), |_| {});
         assert_eq!(*cloud.sent.lock().unwrap(), ["POST /s/cloud/api/notifications/seen"]);
-        let mut chat = crate::chat::tests::conversation();
-        assert!(!chat.store.threads.is_empty());
-        chat.store.apply(ClientEvent::Resync);
-        assert!(chat.store.instances.is_empty() && chat.store.threads.is_empty(), "start from nothing; the whole state follows");
+        let mut agents = crate::agents::Agents::default();
+        crate::chat::tests::conversation_events().into_iter().for_each(|e| agents.apply(e));
+        assert!(!agents.store().threads.is_empty());
+        agents.apply(ClientEvent::Resync);
+        assert!(agents.store().instances.is_empty() && agents.store().threads.is_empty(), "start from nothing; the whole state follows");
     }
 }

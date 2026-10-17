@@ -35,16 +35,16 @@ fn two_desks() -> (egui::Context, CockpitApp) {
 fn each_server_gets_a_desk_fed_its_own_events_and_whats_waiting_is_counted_across_them() {
     let (ctx, mut app) = two_desks();
     assert_eq!((app.desk.server.as_str(), app.away.keys().cloned().collect::<Vec<_>>()), ("here", vec!["cloud".to_owned()]));
-    assert_eq!(app.away["cloud"].chat.store.notifications.len(), 1, "taken while not shown");
-    assert!(app.desk.chat.store.notifications.contains_key(&NotificationId::new("turn:h1")));
+    assert_eq!(app.away["cloud"].shared.agents.get().store().notifications.len(), 1, "taken while not shown");
+    assert!(app.desk.shared.agents.get().store().notifications.contains_key(&NotificationId::new("turn:h1")));
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains(&format!("{} 1", egui_phosphor::regular::BELL)) && text.contains(&format!("{} 1", egui_phosphor::regular::TRAY)), "{text}");
     assert!(text.contains("here •"), "the chip says something waits elsewhere: {text}");
     // A Resync for one server drops only its desk's state.
     from_home(&app, vec![event("cloud", ClientEvent::Resync)]);
     frame(&ctx, &mut app, vec![]);
-    assert!(app.away["cloud"].chat.store.notifications.is_empty() && app.away["cloud"].net.reconnected, "dropped; it refetches when shown");
-    assert_eq!(app.desk.chat.store.notifications.len(), 1, "here's untouched");
+    assert!(app.away["cloud"].shared.agents.get().store().notifications.is_empty() && app.away["cloud"].net.reconnected, "dropped; it refetches when shown");
+    assert_eq!(app.desk.shared.agents.get().store().notifications.len(), 1, "here's untouched");
 }
 
 #[test]

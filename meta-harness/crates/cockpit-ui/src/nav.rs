@@ -5,7 +5,7 @@
 //! `Navigable`; the shell owns the keys, the history, marks, search and hints.
 
 use arch_graph::{CommentId, ComponentId, RelationKind};
-use harness_contracts::{NotificationId, RequestId, SlotId, ThreadId};
+use harness_contracts::{NotificationId, SlotId, ThreadId};
 
 use crate::app::BufferKind;
 use crate::graph::Nav;
@@ -62,6 +62,9 @@ pub enum Ask {
     Waiting(Waiting),
     /// The source the user picked (the graph's): every buffer reads from it.
     Source(arch_graph::Source),
+    /// Something for the agents to do, for agent slot `slot` (where it
+    /// shows; its errors show there).
+    Agents { slot: SlotId, act: crate::agents::Act },
 }
 
 /// What's read again on a buffer's word.
@@ -80,8 +83,7 @@ pub enum Waiting {
     Step(i32),
     /// Put it away.
     Dismiss(NotificationId),
-    /// Answer an agent's request.
-    Answer { thread: ThreadId, request: RequestId, option: String },
+
 }
 
 /// One navigable item in the spec view.

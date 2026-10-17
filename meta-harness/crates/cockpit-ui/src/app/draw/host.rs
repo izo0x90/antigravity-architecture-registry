@@ -56,7 +56,7 @@ impl CockpitApp {
                 self.desk.spec.render(ui, &mut cx);
             }
             BufferKind::Queue => self.desk.queue.render(ui, &mut cx),
-            BufferKind::Inbox => self.desk.inbox.render(ui, &mut cx, &mut self.desk.chat),
+            BufferKind::Inbox => self.desk.inbox.render(ui, &mut cx),
             BufferKind::Changes => self.desk.changes.render(ui, &mut cx),
         });
         if content != whole {

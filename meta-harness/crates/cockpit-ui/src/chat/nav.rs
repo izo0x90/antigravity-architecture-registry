@@ -47,8 +47,17 @@ impl ChatStreamState {
 }
 
 impl Navigable for ChatStreamState {
-    /// How many files each turn changed (the desk's timeline).
+    fn take_asks(&mut self) -> Vec<Ask> {
+        std::mem::take(&mut self.asks)
+    }
+
+    /// The desk's agents (read from now on), and how many files each turn
+    /// changed (the desk's timeline).
     fn share(&mut self, shared: &crate::shared::Shared) {
+        if !self.agents.reads(&shared.agents) {
+            self.agents = shared.agents.view();
+        }
+        self.took();
         let (timeline, read) = shared.changes.timeline();
         if read != self.turn_files_read {
             self.turn_files = timeline.map(|t| t.turns.iter().map(|x| (x.turn.clone(), x.files)).collect()).unwrap_or_default();
@@ -67,8 +76,11 @@ impl Navigable for ChatStreamState {
 
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
         let Target::Agent { slot, thread } = target else { return Err("Not an agent's chat.".into()) };
-        let running = |t: &ThreadId| self.store.slots.values().find(|s| s.current_thread() == Some(t)).map(|s| s.id.clone());
-        let found = slot.clone().filter(|s| self.store.slots.contains_key(s)).or_else(|| thread.as_ref().and_then(running));
+        let found = {
+            let agents = self.agents();
+            let running = |t: &ThreadId| agents.store().slots.values().find(|s| s.current_thread() == Some(t)).map(|s| s.id.clone());
+            slot.clone().filter(|s| agents.slot(s).is_some()).or_else(|| thread.as_ref().and_then(running))
+        };
         let Some(slot) = found else {
             return Err(match (slot, thread) {
                 (_, Some(thread)) => format!("No agent slot runs session {thread} now."),

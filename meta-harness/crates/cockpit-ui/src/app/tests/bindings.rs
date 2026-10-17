@@ -386,10 +386,10 @@ fn swipe(ctx: &egui::Context, app: &mut CockpitApp, from: egui::Pos2, dx: f32, a
 #[test]
 fn a_swipe_runs_what_the_keymap_binds_to_it_in_the_view_it_started_on() {
     let (ctx, mut app) = full_app();
-    app.desk.chat = crate::chat::tests::conversation();
+    crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
     let mut sub = crate::chat::tests::lead(None);
     (sub.id, sub.role, sub.name) = (harness_contracts::SlotId::new("sub-1"), "sub".into(), "reviewer".into());
-    app.desk.chat.process_event(harness_contracts::ClientEvent::SlotUpdated { slot: sub });
+    app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::SlotUpdated { slot: sub });
     focus(&ctx, &mut app, BufferKind::Chat);
     let middle = app.panel_rects[app.desk.panels.focused()].center();
     swipe(&ctx, &mut app, middle, -150.0, 1.0);

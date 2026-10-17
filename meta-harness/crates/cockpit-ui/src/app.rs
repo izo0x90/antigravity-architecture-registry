@@ -8,7 +8,8 @@ use arch_graph::ComponentId;
 
 use crate::actions::{Action, ActionProvider, Bound, Choice, Group, Invocation, LeaderEntry, MINOR, Origin, PRIMARY, Param, RunCx, SECONDARY, Scope, Situation, When, is_primary, leader_entries};
 use crate::actions::Layer;
-use crate::chat::{ChatStreamState, SessionStatus};
+use crate::agents::SessionStatus;
+use crate::chat::ChatStreamState;
 use crate::code::CodeViewerState;
 use crate::panels::{Panels, Buffer};
 use crate::parked::{Parked, swap_view};
@@ -273,8 +274,6 @@ pub struct CockpitApp {
     touch: crate::touch::Gestures,
     /// The quick look, while it's open.
     pub quick_look: Option<QuickLook>,
-    /// Which chats were said to be seen, and when.
-    seen: crate::attention::Seen,
     /// The browser's notifications.
     pub alerts: crate::alerts::Alerts,
     /// What a call that finished later has to say (shown as the note).
@@ -353,7 +352,6 @@ impl CockpitApp {
             asked: None,
             touch: Default::default(),
             quick_look: None,
-            seen: Default::default(),
             alerts,
             notes_later: Arc::default(),
             talk: None,
@@ -539,7 +537,6 @@ impl CockpitApp {
         });
         self.render_key_bar(ctx);
 
-        self.desk.chat.drawn.clear();
         egui::CentralPanel::default().show(ctx, |ui| {
             self.panel_rects.resize(self.desk.panels.len(), egui::Rect::NOTHING);
             ui.columns(self.desk.panels.len(), |cols| {
@@ -570,6 +567,9 @@ impl CockpitApp {
         self.render_item_controls(ctx);
         self.touch_tick(ctx);
         self.run_asked(ctx);
+        // What the buffers asked while drawn (a click, a chat on screen):
+        // done in the frame they asked.
+        self.take_asks(ctx);
         self.render_talk(ctx);
         self.render_hints(ctx);
         self.render_prefix_popup(ctx);

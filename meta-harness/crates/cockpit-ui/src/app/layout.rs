@@ -156,7 +156,8 @@ impl CockpitApp {
             }
             Some(Place::Tree { cursor }) => cursor.as_ref().map_or_else(|| "the outline".to_owned(), |id| format!("at {}", name(id))),
             Some(Place::Chat { slot, .. }) => {
-                let slot = slot.as_ref().and_then(|s| self.desk.chat.store.slots.get(s));
+                let agents = self.desk.shared.agents.get();
+                let slot = slot.as_ref().and_then(|s| agents.store().slots.get(s));
                 slot.map_or_else(|| "the agent's session".to_owned(), |s| format!("agent slot {}", s.name))
             }
             Some(Place::Queue { .. }) => "the plan's jobs".to_owned(),

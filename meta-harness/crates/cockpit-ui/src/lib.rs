@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod agents;
 pub mod alerts;
 pub mod app;
 pub mod attention;

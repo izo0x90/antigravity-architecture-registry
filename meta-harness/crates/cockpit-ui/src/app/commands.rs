@@ -293,7 +293,7 @@ impl CockpitApp {
         self.run_counted(invocation, count, ctx);
         // What the buffers asked for, done now (the inbox's next item, a chat…).
         self.take_asks(ctx);
-        self.sync_inbox();
+        self.share_with_buffers();
         self.in_frame.set(drawing);
         self.frame_actions.borrow_mut().take();
     }

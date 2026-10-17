@@ -157,10 +157,10 @@ fn a_count_before_a_go_to_names_the_panel_it_opens_in() {
 #[test]
 fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     let (ctx, mut app) = full_app();
-    app.desk.chat = crate::chat::tests::conversation();
+    crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
     let mut sub = crate::chat::tests::lead(None);
     (sub.id, sub.role, sub.name) = (harness_contracts::SlotId::new("sub-1"), "sub".into(), "reviewer".into());
-    app.desk.chat.process_event(harness_contracts::ClientEvent::SlotUpdated { slot: sub });
+    app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::SlotUpdated { slot: sub });
     let (first, second) = (Buffer::new(BufferKind::Chat, 0), Buffer::new(BufferKind::Chat, 1));
     app.desk.panels = crate::panels::Panels::new(vec![first, second], 0);
     app.use_buffer(first);
@@ -207,7 +207,7 @@ fn the_agent_is_talked_to_from_anywhere_without_moving_anything() {
     assert_eq!(app.talk.as_ref().unwrap().text, "what calls step?", "typing goes into it, not to the keys");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert!(app.talk.as_ref().unwrap().text.is_empty(), "sent");
-    assert!(matches!(app.desk.chat.session_status(), SessionStatus::Failed(e) if e.contains("No harness instance")), "it went to the chat (no harness here)");
+    assert!(matches!(app.desk.shared.agents.get().lead_status(), SessionStatus::Failed(e) if e.contains("No harness instance")), "it went to the lead (no harness here)");
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert!(app.talk.is_none() && app.input_mode == InputMode::Normal);
     assert_eq!((app.desk.panels.clone(), app.desk.graph.place()), before, "nothing on screen moved");

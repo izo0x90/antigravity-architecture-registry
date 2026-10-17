@@ -110,7 +110,7 @@ impl CockpitApp {
     /// The box for talking to the agent: it has the keyboard while open.
     pub(super) fn render_talk(&mut self, ctx: &egui::Context) {
         let Some(talk) = &mut self.talk else { return };
-        if talk.render(ctx, &mut self.desk.chat, &self.desk.net) == crate::talk::Outcome::Close {
+        if talk.render(ctx, &mut self.desk.shared.agents.get_mut(), &self.desk.net) == crate::talk::Outcome::Close {
             self.talk = None;
             self.input_mode = InputMode::Normal;
             release_keyboard(ctx);

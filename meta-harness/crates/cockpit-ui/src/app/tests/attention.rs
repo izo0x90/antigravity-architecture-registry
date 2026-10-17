@@ -25,10 +25,10 @@ fn note(id: &str, kind: NotificationKind, slot: &str, request: Option<&str>, at_
 /// approval and a question, and the reviewer's finished turn.
 fn waiting_app() -> (egui::Context, CockpitApp) {
     let (ctx, mut app) = full_app();
-    app.desk.chat = crate::chat::tests::conversation();
+    crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
     let mut sub = crate::chat::tests::lead(None);
     (sub.id, sub.role, sub.name) = (SlotId::new("sub-1"), "sub".into(), "reviewer".into());
-    app.desk.chat.process_event(ClientEvent::SlotUpdated { slot: sub });
+    app.desk.shared.agents.get_mut().apply(ClientEvent::SlotUpdated { slot: sub });
     let option = |id: &str, decision, label: &str| ApprovalOption { id: id.into(), decision, label: label.into(), warning: None };
     let request = RuntimeRequest {
         id: RequestId::new("r1"),
@@ -43,9 +43,9 @@ fn waiting_app() -> (egui::Context, CockpitApp) {
         questions: Vec::new(),
         response: None,
     };
-    app.desk.chat.process_event(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request } });
+    app.desk.shared.agents.get_mut().apply(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request } });
     for event in [note("req:r1", NotificationKind::Approval, "lead", Some("r1"), 1), note("req:r2", NotificationKind::Question, "lead", Some("r2"), 2), note("turn:u1", NotificationKind::TurnFinished, "sub-1", None, 3)] {
-        app.desk.chat.process_event(event);
+        app.desk.shared.agents.get_mut().apply(event);
     }
     focus(&ctx, &mut app, BufferKind::Graph);
     (ctx, app)
@@ -92,10 +92,11 @@ fn in_the_quick_look_shift_j_and_k_go_through_them_and_y_answers_its_request() {
     keys(&ctx, &mut app, "y");
     assert_eq!(sent(&app), ["POST /api/threads/t/requests/r1"], "y answers its request, as in the chat");
     // Answered (the server says so): the look says it's handled.
-    let mut answered = app.desk.chat.store.threads[&ThreadId::new("t")].request(&RequestId::new("r1")).unwrap().clone();
+    let mut answered = app.desk.shared.agents.get().store().threads[&ThreadId::new("t")].request(&RequestId::new("r1")).unwrap().clone();
     answered.status = RequestStatus::Resolved;
-    app.desk.chat.process_event(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request: answered } });
-    app.desk.chat.process_event(ClientEvent::NotificationUpdated { notification: Notification { state: NotificationState::Done, ..app.desk.chat.store.notifications[&NotificationId::new("req:r1")].clone() } });
+    app.desk.shared.agents.get_mut().apply(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request: answered } });
+    let done = Notification { state: NotificationState::Done, ..app.desk.shared.agents.get().store().notifications[&NotificationId::new("req:r1")].clone() };
+    app.desk.shared.agents.get_mut().apply(ClientEvent::NotificationUpdated { notification: done });
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("Already handled"), "{text}");
     keys(&ctx, &mut app, "y");
@@ -130,7 +131,8 @@ fn a_chat_on_screen_says_its_updates_were_seen_now_and_then() {
     assert_eq!(seen, ["POST /api/notifications/seen"], "once, not every frame");
     frame_at(&ctx, &mut app, vec![], 23.0);
     assert_eq!(sent(&app).iter().filter(|s| s.contains("seen")).count(), 1, "again after a while, while it has updates");
-    app.desk.chat.process_event(ClientEvent::NotificationUpdated { notification: Notification { state: NotificationState::Dismissed, ..app.desk.chat.store.notifications[&NotificationId::new("turn:u1")].clone() } });
+    let dismissed = Notification { state: NotificationState::Dismissed, ..app.desk.shared.agents.get().store().notifications[&NotificationId::new("turn:u1")].clone() };
+    app.desk.shared.agents.get_mut().apply(ClientEvent::NotificationUpdated { notification: dismissed });
     frame_at(&ctx, &mut app, vec![], 30.0);
     assert!(!sent(&app).iter().any(|s| s.contains("seen")), "none left: nothing said");
 }
@@ -166,9 +168,9 @@ fn the_look_has_the_keyboard_its_keys_move_and_label_its_parts_and_nothing_reach
 fn several_answers_of_one_kind_are_numbered_not_all_y() {
     let (ctx, mut app) = waiting_app();
     let option = |id: &str, label: &str| ApprovalOption { id: id.into(), decision: ApprovalDecision::Accept, label: label.into(), warning: None };
-    let mut asked = app.desk.chat.store.threads[&ThreadId::new("t")].request(&RequestId::new("r1")).unwrap().clone();
+    let mut asked = app.desk.shared.agents.get().store().threads[&ThreadId::new("t")].request(&RequestId::new("r1")).unwrap().clone();
     asked.options = vec![option("yes", "Yes, it worked"), option("no", "Still nothing")];
-    app.desk.chat.process_event(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request: asked } });
+    app.desk.shared.agents.get_mut().apply(ClientEvent::Session { event: AdapterEvent::RequestUpdated { request: asked } });
     from_outside(&ctx, &mut app, r#"{"op":"run","id":"attention.next_waiting"}"#).unwrap();
     frame(&ctx, &mut app, vec![]);
     let bound = app.bound_actions();

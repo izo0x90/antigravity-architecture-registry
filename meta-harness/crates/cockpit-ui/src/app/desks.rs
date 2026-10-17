@@ -144,7 +144,7 @@ impl CockpitApp {
 
     /// How many wait on the user at each server.
     fn waiting_at(&self, server: &str) -> usize {
-        self.desks().find(|d| d.server == server).map_or(0, |d| crate::attention::counts(&d.chat.store).0)
+        self.desks().find(|d| d.server == server).map_or(0, |d| crate::attention::counts(d.shared.agents.get().store()).0)
     }
 
     /// The shell's state: loaded once from home (the server it showed is
