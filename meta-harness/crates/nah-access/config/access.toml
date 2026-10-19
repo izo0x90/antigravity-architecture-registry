@@ -21,6 +21,8 @@ can = ["view.read", "slots.report", "user.notify", "tags.edit"]
 [roles.worker]
 can = ["view.read", "plan.edit", "code.check", "user.notify", "tags.edit"]
 
-# An agent NAH didn't start (no key): reads only.
+# An agent NAH didn't start (no key): nothing, until a project grants it
+# something here (`view.read` lets it read the project, terminals and tags
+# included).
 [roles.external]
-can = ["view.read"]
+can = []

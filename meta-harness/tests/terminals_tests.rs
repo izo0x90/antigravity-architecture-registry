@@ -419,10 +419,10 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     assert!(!err, "{text}");
     let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("fixed #checked"))).await;
     assert!(format!("{echoed:?}").contains("What the tags named above"), "{echoed:?}");
-    // One that may only read can't.
+    // An agent with no key reads nothing, and changes nothing.
     let mut external = Mcp::connect(addr).await;
-    let (_, listed) = external.tool("tags", json!({})).await;
-    assert!(listed.starts_with("checked ("), "{listed}");
+    let (error, said) = external.tool("tag_read", json!({ "tag": "checked" })).await;
+    assert!(error && said.contains("view.read"), "refused: {said}");
     let (error, said) = external.tool("tag_edit", json!({ "tag": "checked", "delete": true })).await;
     assert!(error && said.contains("tags.edit"), "refused: {said}");
     // Its shell started again: what it's on is an earlier start's, named so

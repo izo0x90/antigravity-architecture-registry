@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(access.role("lead"), Some(set(&["view.read", "view.drive", "plan.edit", "code.check", "slots.observe", "slots.manage", "slots.message", "user.notify", "tags.edit"])));
         assert_eq!(access.role("sub"), Some(set(&["view.read", "slots.report", "user.notify", "tags.edit"])));
         assert_eq!(access.role("worker"), Some(set(&["view.read", "plan.edit", "code.check", "user.notify", "tags.edit"])));
-        assert_eq!(access.role("external"), Some(set(&["view.read"])));
+        assert_eq!(access.role("external"), Some(set(&[])), "an agent with no key gets nothing unless a project grants it");
     }
 
     #[test]

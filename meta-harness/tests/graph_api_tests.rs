@@ -85,7 +85,7 @@ async fn the_agent_sees_the_same_tree_as_text() {
     let (addr, _) = spawn_app().await;
     let (_, body) = http(addr, "GET", "/api/graph/tree?view=calls&root=rust:sample::run&depth=2", None).await;
     let tree = parse(&body);
-    let mut mcp = Mcp::connect(addr).await;
+    let mut mcp = Mcp::lead(addr).await;
     mcp.rpc("initialize", json!({})).await;
     let (err, text) = mcp.tool("view", json!({ "view": "calls", "root": "rust:sample::run", "depth": 2 })).await;
     assert!(!err, "{text}");

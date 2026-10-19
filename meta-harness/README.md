@@ -777,7 +777,8 @@ address, with a key that says which slot is calling. What a slot's agent
 may use comes from its role (`.nah/access.toml`): the lead drives the IDE,
 plans, builds and runs its sub-slots; a sub-slot reads and reports to the
 lead; a work-queue job plans and builds its component; an agent NAH didn't
-start (no key) only reads. Tools a role may not use aren't listed to it,
+start (no key) gets nothing unless the project grants its role (`external`)
+something. Tools a role may not use aren't listed to it,
 and a call to one is refused saying which capability it needs.
 
 Whatever an agent waits on the user for (an approval, a question, a

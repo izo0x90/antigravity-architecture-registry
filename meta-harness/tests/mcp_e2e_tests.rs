@@ -280,7 +280,7 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     let as_role = |role: &str| McpCaller { principal: Principal::agent(role), slot: None, label: role.into() };
     let names = |who: &Principal| service.tools_for(who).iter().map(|t| t.name.clone()).collect::<Vec<_>>();
     let reads = ["ingest", "list_types", "search", "inspect", "view", "changes", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions", "terminals", "terminal_read", "tags", "tag_read"];
-    assert_eq!(names(&Principal::agent("external")), reads, "read-only, in the list's order");
+    assert!(names(&Principal::agent("external")).is_empty(), "an agent with no key: nothing, unless a project grants it");
     // The slots' tools come before the terminals', the tags' after them.
     let mut sub = reads.map(String::from).to_vec();
     sub.splice(11..11, ["tell_lead".into(), "tell_user".into()]);
