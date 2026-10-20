@@ -11,6 +11,7 @@ use harness_contracts::{Held, TAG_COLOURS};
 use nah_access::Capability;
 use serde_json::{Value, json};
 
+use super::reach::{NOT_YOURS, Reach};
 use super::schema::tool;
 use super::{ToolDef, ToolSet};
 
@@ -20,35 +21,9 @@ pub(crate) struct Tags {
     /// `slot_read` lets it: its own; a sub-slot's with `slots.observe`).
     pub(crate) slots: Arc<harness_core::SlotManager>,
     pub(crate) access: Arc<nah_access::Access>,
+    /// A discussion is read as what it's on is.
+    pub(crate) discussions: Arc<nah_discussions::Discussions>,
 }
-
-/// What a caller may tag or read, carried into the work done off the async
-/// threads.
-struct Reach {
-    slots: Arc<harness_core::SlotManager>,
-    access: Arc<nah_access::Access>,
-    principal: nah_access::Principal,
-    slot: Option<harness_contracts::SlotId>,
-}
-
-impl Reach {
-    /// Anything but a chat; a chat its own slot's, or (with
-    /// `slots.observe`) a sub-slot's or a closed slot's; the user, any.
-    fn reaches(&self, subject: &harness_contracts::Subject) -> bool {
-        use harness_contracts::Subject;
-        let (Subject::ChatTurn { session, .. } | Subject::ChatMessage { session, .. }) = subject else { return true };
-        if matches!(self.principal, nah_access::Principal::User | nah_access::Principal::Home) {
-            return true;
-        }
-        let observes = self.access.allows(&self.principal, Capability::SlotsObserve);
-        // A session no slot holds now (its slot closed): what was kept, to one that observes.
-        let Some(slot) = self.slots.list().into_iter().find(|s| s.sessions.iter().any(|x| x.native_id.as_ref() == Some(session))) else { return observes };
-        self.slot.as_ref() == Some(&slot.id) || (slot.role == "sub" && observes)
-    }
-}
-
-/// Said of a chat a caller may not read.
-const NOT_YOURS: &str = "a chat this session can't read (its own slot's, or with slots.observe a sub-slot's or a closed slot's)";
 
 impl Tags {
     pub(crate) fn schemas(trees: &TreeConfig) -> Vec<ToolDef> {
@@ -149,7 +124,7 @@ impl ToolSet for Tags {
         let tags = self.tags.clone();
         // Who an agent's change is by: its slot's name.
         let by = caller.label.clone();
-        let reach = Arc::new(Reach { slots: self.slots.clone(), access: self.access.clone(), principal: caller.principal.clone(), slot: caller.slot.clone() });
+        let reach = Reach::of(&self.slots, &self.access, &self.discussions, caller);
         // Owners say what subjects say (a terminal's lines), and tags are
         // kept in the state database: off the async threads.
         let blocking = |f: Box<dyn FnOnce(&nah_tags::Tags) -> Result<String, ServiceError> + Send>| async move { tokio::task::spawn_blocking(move || f(&tags)).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))? };

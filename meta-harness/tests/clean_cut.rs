@@ -125,6 +125,10 @@ fn the_old_mcp_surface_is_gone_from_code_docs_and_agent_files() {
         "update_component",
         "check_compatibility",
         "visualize_architecture",
+        // A plan's own comments, before discussions held them.
+        "review_comments",
+        "answer_comment",
+        "reply_comment",
     ];
     let mut scanned = rust_sources();
     scanned.extend(files(&meta_harness(), &[".md"]));
@@ -220,4 +224,18 @@ fn the_cockpits_texts_name_no_keys() {
         }
     }
     assert!(found.is_empty(), "{found:#?}");
+}
+
+/// Every note is on a thing (no other kind of anchor); one engine keeps
+/// discussions, no plan its own (the plan's rules 1 and 3).
+#[test]
+fn discussions_have_one_engine_and_notes_one_kind_of_anchor() {
+    let found = hits(&rust_sources(), &["CommentAnchor", "CommentStatus", "CommentKind", "CommentId", "NewComment", "approval_blocker"], &["plan.comments", "pub comments:"]);
+    assert!(found.is_empty(), "the plans' own comments are still in the code:\n{}", found.join("\n"));
+    let keepers: Vec<String> = rust_sources()
+        .into_iter()
+        .filter(|f| std::fs::read_to_string(f).is_ok_and(|t| t.contains("trait DiscussionStore")))
+        .map(|f| f.display().to_string())
+        .collect();
+    assert!(keepers.len() == 1 && keepers[0].ends_with("nah-discussions/src/lib.rs"), "one discussion engine: {keepers:?}");
 }

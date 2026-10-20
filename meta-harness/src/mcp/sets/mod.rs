@@ -14,8 +14,10 @@ use crate::mcp::protocol::McpTool;
 mod build;
 mod changes;
 mod cockpit;
+mod discussions;
 mod explore;
 mod plans;
+mod reach;
 mod review;
 mod schema;
 mod slots;
@@ -52,6 +54,7 @@ pub(crate) fn tool_defs(trees: &TreeConfig) -> Vec<ToolDef> {
         slots::Slots::schemas(trees),
         terminals::Terminals::schemas(trees),
         tags::Tags::schemas(trees),
+        discussions::Discussions::schemas(trees),
     ]
     .into_iter()
     .flatten()
@@ -70,6 +73,8 @@ pub struct Services {
     pub notify: Arc<nah_notify::NotifyHub>,
     pub terminals: Option<Arc<crate::terminals::Terminals>>,
     pub tags: Arc<nah_tags::Tags>,
+    pub discussions: Arc<nah_discussions::Discussions>,
+    pub things: Arc<nah_things::Things>,
 }
 
 /// The sets, in the same order as `list_tools`.
@@ -83,6 +88,7 @@ pub(crate) fn all(s: &Services, access: &Arc<nah_access::Access>) -> Vec<Box<dyn
         Box::new(cockpit::Cockpit { remote: s.remote.clone() }),
         Box::new(slots::Slots { slots: s.slots.clone(), notify: s.notify.clone() }),
         Box::new(terminals::Terminals { terminals: s.terminals.clone() }),
-        Box::new(tags::Tags { tags: s.tags.clone(), slots: s.slots.clone(), access: access.clone() }),
+        Box::new(tags::Tags { tags: s.tags.clone(), slots: s.slots.clone(), access: access.clone(), discussions: s.discussions.clone() }),
+        Box::new(discussions::Discussions { discussions: s.discussions.clone(), things: s.things.clone(), slots: s.slots.clone(), access: access.clone() }),
     ]
 }

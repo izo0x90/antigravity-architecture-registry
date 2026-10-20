@@ -348,8 +348,8 @@ fn enter_and_backspace_are_only_offered_where_they_act() {
     // Spec: on a comment, reply leads the bar.
     focus(&ctx, &mut app, BufferKind::Spec);
     let step = ComponentId::new("rust:a::step");
-    app.desk.spec_mut().comments = vec![crate::review::tests::discussion(1, crate::review::tests::on(&step, Some("logic")), harness_contracts::DiscussionStatus::Open)];
-    app.desk.spec_mut().move_to("logic#Comment(DiscussionId(\"d1\"))");
+    app.desk.spec_mut().discussions = vec![crate::review::tests::discussion(1, crate::review::tests::on(&step, Some("logic")), harness_contracts::DiscussionStatus::Open)];
+    app.desk.spec_mut().move_to(&crate::spec::Entry { section: crate::card::Section::Logic, item: crate::spec::SpecItem::Comment(harness_contracts::DiscussionId::new("d1")) }.key());
     let bound = app.bound_actions();
     let bar: Vec<String> = app.bar_keys(&bound).into_iter().map(|b| b.action.id.clone()).collect();
     assert_eq!(bar.first().map(String::as_str), Some("spec.reply"), "{bar:?}");

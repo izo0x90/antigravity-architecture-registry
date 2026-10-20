@@ -24,6 +24,10 @@ pub struct Chats {
     /// a turn ran), or a slot closed: the notes keep their turns where
     /// they are now, named as they are now.
     moved: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// Each turn's number now, and its thread (kept from the event stream
+    /// by `when_moved`: a noted turn is found where it is without reading
+    /// its session again).
+    numbers: Arc<Mutex<HashMap<TurnId, (ThreadId, u32)>>>,
 }
 
 /// A noted turn (or a message's): its session, number, and own id (empty:
@@ -39,7 +43,7 @@ fn turn_at(subject: &Subject) -> Option<TurnAt<'_>> {
 
 impl Chats {
     pub fn new(slots: Arc<SlotManager>, hub: Arc<EventHub>) -> Arc<Self> {
-        Arc::new(Self { slots, hub, named: Mutex::default(), moved: OnceLock::new() })
+        Arc::new(Self { slots, hub, named: Mutex::default(), moved: OnceLock::new(), numbers: Arc::default() })
     }
 
     /// Tells `moved` when turns are numbered anew, or a slot closes (its
@@ -49,25 +53,42 @@ impl Chats {
         if self.moved.set(Box::new(moved)).is_err() {
             return;
         }
-        let (_, mut events) = self.hub.subscribe();
-        let chats = Arc::downgrade(self);
+        let (replay, mut events) = self.hub.subscribe();
+        let numbers = self.numbers.clone();
+        // Each turn's number as it is now, then as it changes.
+        let number = |numbers: &Mutex<HashMap<TurnId, (ThreadId, u32)>>, events: &[ClientEvent]| {
+            let mut numbers = numbers.lock().unwrap_or_else(PoisonError::into_inner);
+            for event in events {
+                if let ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } } = event {
+                    numbers.insert(turn.id.clone(), (turn.thread_id.clone(), turn.ordinal));
+                }
+            }
+        };
+        number(&numbers, &replay);
+        let (chats, hub) = (Arc::downgrade(self), self.hub.clone());
+        let tell = move || {
+            let Some(chats) = chats.upgrade() else { return false };
+            if let Some(moved) = chats.moved.get() {
+                moved();
+            }
+            true
+        };
         std::thread::spawn(move || {
-            let mut numbers: HashMap<TurnId, u32> = HashMap::new();
             loop {
                 match events.blocking_recv() {
                     Ok(ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn } }) => {
-                        let was = numbers.insert(turn.id.clone(), turn.ordinal);
-                        if was.is_some_and(|n| n != turn.ordinal) {
-                            let Some(chats) = chats.upgrade() else { return };
-                            if let Some(moved) = chats.moved.get() {
-                                moved();
-                            }
+                        let was = numbers.lock().unwrap_or_else(PoisonError::into_inner).insert(turn.id.clone(), (turn.thread_id.clone(), turn.ordinal));
+                        if was.is_some_and(|(_, n)| n != turn.ordinal) && !tell() {
+                            return;
                         }
                     }
-                    Ok(ClientEvent::SlotClosed { .. }) => {
-                        let Some(chats) = chats.upgrade() else { return };
-                        if let Some(moved) = chats.moved.get() {
-                            moved();
+                    Ok(ClientEvent::ThreadClosed { thread_id }) => numbers.lock().unwrap_or_else(PoisonError::into_inner).retain(|_, (thread, _)| *thread != thread_id),
+                    Ok(ClientEvent::SlotClosed { .. }) if !tell() => return,
+                    // Missed some: the numbers as they are now, and every note kept where its turn is.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        number(&numbers, &hub.subscribe().0);
+                        if !tell() {
+                            return;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
@@ -129,14 +150,9 @@ fn plain(text: &str) -> String {
     text.split('\n').map(|l| if l.starts_with(DETAIL) { l.replacen(mark, " ", 1) } else { l.to_owned() }).collect::<Vec<_>>().join("\n")
 }
 
-/// What a message says.
+/// What a message says (`ItemBody::said`), with nothing in it read as detail.
 fn message_text(body: &ItemBody) -> Option<String> {
-    let text = match body {
-        ItemBody::UserMessage { text } => text.clone(),
-        ItemBody::AssistantMessage { content, .. } => content.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n"),
-        _ => return None,
-    };
-    Some(plain(&text))
+    body.said().map(|text| plain(&text))
 }
 
 /// `text` as detail under a line (a tool call's output): reads leave it
@@ -269,14 +285,14 @@ impl nah_things::Resolve for Chats {
     /// Turns numbered anew (a message the agent took while a turn ran):
     /// a noted one where its turn is now.
     fn moved(&self, subject: &Subject) -> Option<Subject> {
-        let at @ (_, n, id) = turn_at(subject)?;
+        let (_, n, id) = turn_at(subject)?;
         if id.is_empty() {
             return None;
         }
-        let (turn, _) = self.turn(at)?;
-        (turn.ordinal != n).then(|| match subject.clone() {
-            Subject::ChatTurn { session, turn_id, .. } => Subject::ChatTurn { session, turn: turn.ordinal, turn_id },
-            Subject::ChatMessage { session, message, turn_id, .. } => Subject::ChatMessage { session, turn: turn.ordinal, message, turn_id },
+        let (_, now) = self.numbers.lock().unwrap_or_else(PoisonError::into_inner).get(&TurnId::new(id)).cloned()?;
+        (now != n).then(|| match subject.clone() {
+            Subject::ChatTurn { session, turn_id, .. } => Subject::ChatTurn { session, turn: now, turn_id },
+            Subject::ChatMessage { session, message, turn_id, .. } => Subject::ChatMessage { session, turn: now, message, turn_id },
             other => other,
         })
     }
@@ -288,8 +304,14 @@ impl nah_things::Resolve for Chats {
     fn follow(&self, subject: &Subject, mut more: nah_things::More) -> bool {
         let Some(at @ (native, ..)) = turn_at(subject) else { return false };
         let Some(thread) = self.thread_of(native) else { return false };
+        let running = |chats: &Self| chats.turn(at).filter(|(t, _)| !t.status.is_terminal());
+        // Ended (the most noted are): nothing to watch.
+        if running(self).is_none() {
+            return false;
+        }
+        // Watched from before it's looked at again: an end in between is seen.
         let (_, mut events) = self.hub.subscribe();
-        let Some((running, _)) = self.turn(at).filter(|(t, _)| !t.status.is_terminal()) else { return false };
+        let Some((running, _)) = running(self) else { return false };
         let so_far = self.now(subject).unwrap_or_default();
         if !more(&so_far) {
             return false;
@@ -300,7 +322,7 @@ impl nah_things::Resolve for Chats {
             Subject::ChatMessage { session, turn, message, .. } => Subject::ChatMessage { session, turn, message, turn_id: running.id.to_string() },
             other => other,
         };
-        let chats = Chats { slots: self.slots.clone(), hub: self.hub.clone(), named: Mutex::default(), moved: OnceLock::new() };
+        let chats = Chats { slots: self.slots.clone(), hub: self.hub.clone(), named: Mutex::default(), moved: OnceLock::new(), numbers: self.numbers.clone() };
         std::thread::spawn(move || {
             loop {
                 match events.blocking_recv() {

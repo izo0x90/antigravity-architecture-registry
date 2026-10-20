@@ -128,7 +128,13 @@ pub(crate) async fn steps(arch: &Arc<ArchitectureService>, plan: PlanId, only: O
     blocking(arch, move |s| {
         let current = s.plan(&plan)?;
         let graph = s.graph(&Source::Plan(plan.clone()))?;
-        Ok(next_steps(&current, &graph, s.types(), only.as_ref()))
+        let mut out = next_steps(&current, &graph, s.types(), only.as_ref());
+        // What the user asked of its components, not settled yet.
+        let held: Vec<String> = current.components.iter().filter(|c| only.as_ref().is_none_or(|o| *o == c.id)).filter_map(|c| s.discussed(&plan, &c.id)).collect();
+        if !held.is_empty() {
+            out.push_str(&format!("\n- discussions: {}. Read them (discussions with plan {plan}), answer each open one asked of you (discussion_answer); approvals wait on them", held.join("; ")));
+        }
+        Ok(out)
     })
     .await
 }

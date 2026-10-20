@@ -217,6 +217,8 @@ impl Module for TagsState {
 pub struct DiscussionsState {
     pub gate: Gate,
     pub discussions: Arc<nah_discussions::Discussions>,
+    /// Who can be asked.
+    pub slots: Arc<SlotManager>,
 }
 
 impl Module for DiscussionsState {
@@ -316,7 +318,7 @@ impl AppState {
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
             terminals: p.terminals.map(|terminals| TerminalsState { gate: gate.clone(), stopping: stopping.clone(), terminals }),
             tags: TagsState { gate: gate.clone(), tags: p.tags },
-            discussions: DiscussionsState { gate: gate.clone(), discussions: p.discussions },
+            discussions: DiscussionsState { gate: gate.clone(), discussions: p.discussions, slots: p.slots.clone() },
             project: ProjectState { gate, arch: p.arch, queue: p.queue, sessions: p.sessions, slots: p.slots, mcp_state: p.mcp_state, changes: p.changes, timeline: p.timeline },
         })
     }

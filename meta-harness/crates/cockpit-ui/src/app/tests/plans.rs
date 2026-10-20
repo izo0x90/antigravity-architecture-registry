@@ -21,7 +21,9 @@ fn a_plans_items_show_nested_in_the_plan_tree_open_as_cards_and_take_their_state
         frame(&ctx, &mut app, vec![]);
     }
     let rows = |app: &CockpitApp| app.desk.view(BufferKind::Plan).items().into_iter().map(|i| i.key).collect::<Vec<_>>();
-    assert_eq!(rows(&app), ["item:i1", "item:i2", "item:i3"], "nested, in order");
+    assert_eq!(rows(&app), ["item:i1", "item:i2", "item:i3"], "in order");
+    let depths = |app: &CockpitApp| app.desk.all_of::<crate::tree::TreeBuffer>(BufferKind::Plan)[0].rows().into_iter().map(|r| (r.id, r.depth)).collect::<Vec<_>>();
+    assert_eq!(depths(&app), [("item:i1".to_owned(), 0), ("item:i2".to_owned(), 1), ("item:i3".to_owned(), 0)], "nested: FFF skipped under Decide");
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
     for words in ["Decide", "FFF skipped", "decided", "Open", "open"] {
         assert!(drawn.contains(words), "{words}: {drawn}");

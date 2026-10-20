@@ -371,9 +371,9 @@ pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHu
     meta_harness::startup::code_tags(&arch, &changes, &things);
     meta_harness::startup::plan_parts(&arch, &things);
     let terminals = Some(meta_harness::startup::terminals(&arch, &db, &hub, &things, terminal_settings.terminals).unwrap());
-    let discussions = meta_harness::startup::discussions(&arch, &db, &hub, &things).unwrap();
+    let discussions = meta_harness::startup::discussions(&arch, &db, &hub, &things, &slots).unwrap();
     things.forget_unused();
-    let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone(), tags: tags.clone() };
+    let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone(), tags: tags.clone(), discussions: discussions.clone(), things: things.clone() };
     let mcp = McpServerState::new(Arc::new(McpService::new(services, access.clone())), meta_harness::startup::mcp_callers(&slots));
     let state = AppState::new(meta_harness::modules::Parts { registry, sessions, slots, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state: db, tool_servers, remote, access, notify, changes, timeline, terminals, tags, discussions }).unwrap();
     let app = create_router(&state.modules());

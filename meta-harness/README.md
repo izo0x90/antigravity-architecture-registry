@@ -517,6 +517,17 @@ all of them:
     to search what tagged things say); tagging, taking off and editing
     need `tags.edit` (the lead's, sub-slots' and workers' by default). Who
     changed what is kept in the activity record.
+- **Discuss anything:** a question, or a change asked for, on any thing
+  you can tag (a plan's part or item, code lines, a terminal's command, a
+  chat's message, another discussion). It asks the lead unless another
+  agent slot is named; that slot is told (in its running session, else
+  when one opens), and answers through its tools (a change request's
+  answer names what changed). Only you settle or reopen one; a plan's
+  component isn't approved while one on it isn't settled. Kept in the
+  state database, the messages' text in `.nah/state/discussions/`.
+  Agents read them with `view.read` (`discussions`, what's waiting on
+  them first; `discussion_read`); starting, replying and answering need
+  `discuss` (the lead's, sub-slots' and workers' by default).
 
 - **Talk to the agent:** `t` shows the lead's chat in the quick look,
   typing, over whatever is on screen; Enter sends to the lead's session
@@ -796,6 +807,7 @@ away and rebuilt when the reader changes.
 | Cockpit | `cockpit_read`, `cockpit_actions`, `cockpit_run`, `cockpit_click`, `cockpit_type`, `cockpit_keys` (only while you let agents drive it) |
 | Slots | the lead's: `slot_list`, `slot_read`, `slot_start`, `slot_close`, `slot_send` (optionally waiting for the answer); a sub-slot's: `tell_lead` (the user sees it too); any slot's: `tell_user` |
 | Terminals | `terminals`, `terminal_read` (a screen, with scrollback, and the last ten commands; `numbered`: each row with its line's number; `command`: one command's whole output); `terminal_type` (text and keys) only for a role given `shell.drive`, which none has by default |
+| Discussions | `discussions` (what's waiting on you first; on a plan, or on a thing), `discussion_read` (one whole: what it's on now and as it was, everything said); `discuss` (a question or a change request on a thing by its name, asking the lead, another slot, or the user), `discussion_reply`, `discussion_answer` (a change request's names what changed) for a role given `discuss` |
 | Tags | `tags` (each tag, how many things, its note), `tag_read` (what a tag is on: each thing's name, who tagged it, where it is and the start of what it says; one thing whole, by `lines`, or `full` with a chat turn's tool output), `tag_find` (search what tagged things say); `tag`, `untag` (a thing by its name: `terminal t1 command 3`, `terminal t1 lines 120-124`, `chat lead turn 3 message 2`, `src/a.rs lines 10-12`, `component <id>`) and `tag_edit` (rename, recolour, note, delete) for a role given `tags.edit` |
 
 Every result ends with next steps, given in dependency order.

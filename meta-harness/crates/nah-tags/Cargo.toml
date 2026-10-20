@@ -9,7 +9,6 @@ description = "Tags: names given to things in the project, kept, told on the eve
 testing = []
 
 [dependencies]
-httpdate = "1"
 harness-contracts = { path = "../harness-contracts" }
 harness-core = { path = "../harness-core" }
 nah-things = { path = "../nah-things" }

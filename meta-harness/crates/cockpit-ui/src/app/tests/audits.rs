@@ -62,14 +62,14 @@ fn what_the_final_audit_found_stays_fixed() {
     // The review point belongs to its component: moving on forgets it.
     focus(&ctx, &mut app, BufferKind::Spec);
     let step = ComponentId::new("rust:a::step");
-    app.desk.spec_mut().comments = vec![crate::review::tests::discussion(1, crate::review::tests::on(&step, Some("logic")), harness_contracts::DiscussionStatus::Open)];
+    app.desk.spec_mut().discussions = vec![crate::review::tests::discussion(1, crate::review::tests::on(&step, Some("logic")), harness_contracts::DiscussionStatus::Open)];
     app.desk.spec_mut().step_point(true);
     assert!(app.desk.spec().actions().iter().any(|a| a.id == "spec.reply"));
     app.desk.spec_mut().show(ComponentId::new("rust:a::save"));
     assert!(app.desk.spec().point.is_none() && !app.desk.spec().actions().iter().any(|a| a.id == "spec.reply"), "no replying to another component's point");
     // Back to a relation item.
     app.desk.spec_mut().show(step.clone());
-    let relation = crate::spec::Entry { section: crate::spec::Section::Relations, item: crate::spec::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true } }.key();
+    let relation = crate::spec::Entry { section: crate::card::Section::Relations, item: crate::spec::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true } }.key();
     app.desk.spec_mut().detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
     app.desk.spec_mut().restore(&Place::of(&crate::spec::SpecPlace { component: Some(step.clone()), item: Some(relation.clone()), plan_item: None }));
     assert_eq!(app.desk.spec().cursor_key().as_deref(), Some(relation.as_str()));

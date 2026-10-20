@@ -118,7 +118,7 @@ fn what_buffers_share_reaches_each_one_shown_or_parked() {
         assert_eq!((graph.marks[&save].open, graph.ui.readable_zoom), (1, 0.37), "every graph: the badges, the settings");
     }
     for spec in app.desk.all_of::<crate::spec::SpecState>(BufferKind::Spec) {
-        assert!(spec.types.is_some() && spec.comments.len() == 1 && spec.author == "ada", "every card: types, discussions, the user");
+        assert!(spec.types.is_some() && spec.discussions.len() == 1 && spec.author == "ada", "every card: types, discussions, the user");
     }
     app.desk.code_mut().current_file = "src/a.rs".into();
     frame(&ctx, &mut app, vec![]);

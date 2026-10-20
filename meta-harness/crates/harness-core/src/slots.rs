@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use harness_contracts::{
-    AdapterEvent, ClientEvent, ContentBlock, InstanceId, ItemBody, McpServer, ModelSelection, NativeId, ProviderStatus, RuntimePolicy, SessionKey, Slot, SlotId,
+    AdapterEvent, ClientEvent, InstanceId, ItemBody, McpServer, ModelSelection, NativeId, ProviderStatus, RuntimePolicy, SessionKey, Slot, SlotId,
     SlotSession, SlotStatus, Starter, ThreadId, ThreadStatus, TurnId, TurnInput, TurnItem, LEAD,
 };
 
@@ -31,16 +31,21 @@ pub trait SlotStore: Send + Sync {
     /// Writes a slot (and its sessions) as it is now.
     fn save(&self, slot: &Slot) -> std::result::Result<(), String>;
     fn remove(&self, id: &SlotId) -> std::result::Result<(), String>;
-    /// Keeps a report for the lead until a lead session runs.
+    /// Keeps what a slot is told until one of its sessions runs.
     fn hold_report(&self, report: &HeldReport) -> std::result::Result<(), String>;
-    /// The held reports, oldest first, removing them.
-    fn take_reports(&self) -> std::result::Result<Vec<HeldReport>, String>;
+    /// What's held for slot `to`, oldest first, removing it.
+    fn take_reports(&self, to: &SlotId) -> std::result::Result<Vec<HeldReport>, String>;
     /// Notes what happened, for looking back (never fails an operation).
     fn note(&self, actor: &str, action: &str, subject: &str, detail: Option<&str>);
 }
 
+/// What a slot is told (a sub-slot's report to the lead, a discussion's
+/// news to the slot asked), held until one of its sessions runs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeldReport {
+    /// The slot told.
+    pub to: SlotId,
+    /// Who it's from, as the slot reads it (`sub 1 (sub-slot)`).
     pub from: String,
     pub text: String,
     pub at_ms: u64,
@@ -373,7 +378,7 @@ impl SlotManager {
         let held = self.hold(id).await;
         let opened = self.open_held(id, open).await?;
         drop(held);
-        let delivered_reports = if id.as_str() == LEAD { self.deliver_held_reports(&opened.thread).await } else { 0 };
+        let delivered_reports = self.deliver_held_reports(id, &opened.thread).await;
         Ok(Opened { delivered_reports, ..opened })
     }
 
@@ -583,31 +588,37 @@ impl SlotManager {
         })
     }
 
-    /// A sub-slot reports to the lead: queued in the lead's running session
-    /// (never added to its running turn: that would cut off its work), else
-    /// held until a lead session runs.
+    /// A sub-slot reports to the lead (`tell`).
     pub async fn report(&self, from: &SlotId, text: String) -> Result<Reported> {
         let sender = self.slot(from)?;
-        let lead = self.slot(&self.lead())?;
         self.store.note(&sender.name, "reported", LEAD, None);
-        match lead.current_thread().and_then(|t| self.sessions.get(t).ok()) {
+        self.tell(&self.lead(), &format!("{} (sub-slot)", sender.name), text).await
+    }
+
+    /// Slot `to` is told `text` (from `from`, as it reads it): queued in
+    /// its running session (never added to its running turn: that would
+    /// cut off its work), else held until one of its sessions runs.
+    pub async fn tell(&self, to: &SlotId, from: &str, text: String) -> Result<Reported> {
+        let slot = self.slot(to)?;
+        match slot.current_thread().and_then(|t| self.sessions.get(t).ok()) {
             Some(session) => {
-                let prompt = format!("From {} (sub-slot):\n\n{}", sender.name, self.expanded(text).await);
+                let prompt = format!("From {from}:\n\n{}", self.expanded(text).await);
                 session.start_turn(TurnInput { text: prompt, attachments: Vec::new() }).await?;
                 Ok(Reported::Delivered)
             }
             None => {
-                self.store.hold_report(&HeldReport { from: sender.name, text, at_ms: now_ms() }).map_err(store_error)?;
+                self.store.hold_report(&HeldReport { to: to.clone(), from: from.to_owned(), text, at_ms: now_ms() }).map_err(store_error)?;
                 Ok(Reported::Held)
             }
         }
     }
 
-    async fn deliver_held_reports(&self, thread: &ThreadId) -> usize {
-        let reports = match self.store.take_reports() {
+    /// What's held for slot `id`, to its session (opened now).
+    async fn deliver_held_reports(&self, id: &SlotId, thread: &ThreadId) -> usize {
+        let reports = match self.store.take_reports(id) {
             Ok(reports) => reports,
             Err(e) => {
-                tracing::warn!("held reports couldn't be read: {e}");
+                tracing::warn!("what's held for {id} couldn't be read: {e}");
                 return 0;
             }
         };
@@ -616,7 +627,7 @@ impl SlotManager {
         }
         let mut each = Vec::new();
         for r in &reports {
-            each.push(format!("From {} (sub-slot):\n\n{}", r.from, self.expanded(r.text.clone()).await));
+            each.push(format!("From {}:\n\n{}", r.from, self.expanded(r.text.clone()).await));
         }
         let text = each.join("\n\n---\n\n");
         let sent = match self.sessions.get(thread) {
@@ -624,7 +635,7 @@ impl SlotManager {
             Err(e) => Err(e),
         };
         if let Err(e) = sent {
-            tracing::warn!("held reports couldn't be delivered ({e}); kept for the next lead session");
+            tracing::warn!("what's held for {id} couldn't be delivered ({e}); kept for its next session");
             for r in &reports {
                 let _ = self.store.hold_report(r);
             }
@@ -652,8 +663,8 @@ impl SlotManager {
         let mut messages: Vec<(String, String)> = items
             .iter()
             .filter_map(|i| match &i.body {
-                ItemBody::UserMessage { text } => Some(("prompt".to_owned(), text.clone())),
-                ItemBody::AssistantMessage { content, .. } => Some((slot.name.clone(), text_of(content))),
+                ItemBody::UserMessage { .. } => Some(("prompt".to_owned(), i.body.said()?)),
+                ItemBody::AssistantMessage { .. } => Some((slot.name.clone(), i.body.said()?)),
                 _ => None,
             })
             .collect();
@@ -779,21 +790,17 @@ fn upsert(items: &mut Vec<TurnItem>, item: TurnItem) {
     }
 }
 
-fn text_of(content: &[ContentBlock]) -> String {
-    content.iter().filter_map(|c| if let ContentBlock::Text { text } = c { Some(text.as_str()) } else { None }).collect()
-}
-
 /// What a turn answered: its assistant messages, in order.
 pub fn turn_reply(items: &[TurnItem], turn: &TurnId) -> String {
     let mut mine: Vec<&TurnItem> = items.iter().filter(|i| &i.turn_id == turn).collect();
     mine.sort_by_key(|i| i.ordinal);
-    mine.iter().filter_map(|i| if let ItemBody::AssistantMessage { content, .. } = &i.body { Some(text_of(content)) } else { None }).collect::<Vec<_>>().join("\n\n")
+    mine.iter().filter(|i| matches!(i.body, ItemBody::AssistantMessage { .. })).filter_map(|i| i.body.said()).collect::<Vec<_>>().join("\n\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_contracts::{ItemId, ItemStatus};
+    use harness_contracts::{ContentBlock, ItemId, ItemStatus};
 
     fn item(turn: &str, ordinal: u32, body: ItemBody) -> TurnItem {
         TurnItem { id: ItemId::new(format!("{turn}-{ordinal}")), thread_id: ThreadId::new("t"), turn_id: TurnId::new(turn), native_id: None, parent_id: None, ordinal, status: ItemStatus::Completed, title: None, body }

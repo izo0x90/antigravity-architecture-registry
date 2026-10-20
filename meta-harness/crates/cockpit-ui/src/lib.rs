@@ -4,6 +4,7 @@ pub mod alerts;
 pub mod app;
 pub mod attention;
 pub mod buffer;
+pub mod card;
 pub mod chat;
 pub mod code;
 pub mod panels;

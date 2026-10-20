@@ -179,7 +179,8 @@ impl nah_things::Resolve for PlanParts {
     }
 
     /// Whether it changed since the user last reviewed its plan (the
-    /// review's diff): an item can't say (items aren't in the diff).
+    /// review's diff): the plan, its own fields (a part's changes are its
+    /// part's); an item can't say (items aren't in the diff).
     fn changed(&self, subject: &Subject) -> Option<bool> {
         let plan = self.plan(match subject {
             Subject::Plan { plan } | Subject::PlanComponent { plan, .. } | Subject::PlanSection { plan, .. } | Subject::PlanRelation { plan, .. } => plan,
@@ -187,7 +188,7 @@ impl nah_things::Resolve for PlanParts {
         })?;
         let diff = arch_graph::review::diff(plan.last_review.as_ref(), &plan);
         Some(match subject {
-            Subject::Plan { .. } => !diff.is_empty(),
+            Subject::Plan { .. } => diff.changes.iter().any(|c| c.components().is_empty()),
             Subject::PlanComponent { id, .. } | Subject::PlanSection { id, .. } => diff.for_component(id).next().is_some(),
             Subject::PlanRelation { relation, source, target, .. } => diff.changes.iter().any(|c| {
                 matches!(c, arch_graph::review::Change::RelationAdded { kind, source: s, target: t } | arch_graph::review::Change::RelationRemoved { kind, source: s, target: t } | arch_graph::review::Change::RelationChanged { kind, source: s, target: t, .. } if kind == relation && s == source && t == target)

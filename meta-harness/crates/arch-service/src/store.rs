@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use arch_graph::{Plan, PlanId};
 
@@ -24,11 +24,14 @@ pub trait PlanRepository: Send + Sync {
     /// Reads the plans among `paths` again (someone else changed their
     /// files); returns the plans that changed.
     fn changed(&self, paths: &[PathBuf]) -> Result<Vec<PlanId>, ServiceError>;
-    /// Comments a plan's file still holds (from before discussions held
-    /// them) go to `mover`, each plan's once, now and as plans are read;
-    /// its file is then written without them. Until they've gone, a plan
-    /// saved keeps them in its file.
+    /// Comments plans' files hold (from before discussions held them) go
+    /// to `mover`, once (as the server starts); each file is then written
+    /// without them. Until they've gone (a file that comes with some
+    /// later: at the next start), a plan saved keeps them in its file.
     fn move_comments(&self, mover: Mover) -> Result<(), ServiceError>;
+    /// Whether plan `id`'s file holds comments not moved yet (they hold
+    /// its approvals).
+    fn comments_waiting(&self, id: &PlanId) -> bool;
 }
 
 /// Takes a plan's comments, as its file held them (all of them, or none:
@@ -65,6 +68,9 @@ impl PlanRepository for MemoryPlans {
     /// No file, so no comments from before.
     fn move_comments(&self, _mover: Mover) -> Result<(), ServiceError> {
         Ok(())
+    }
+    fn comments_waiting(&self, _id: &PlanId) -> bool {
+        false
     }
 }
 
@@ -152,8 +158,8 @@ pub struct FsPlans {
     /// One writer at a time within this process (the server is the writer).
     write: Mutex<()>,
     held: Mutex<Held>,
-    /// Where comments a plan's file still holds go (`move_comments`).
-    mover: OnceLock<Mover>,
+    /// The comments plans' files held were moved (`move_comments`: once).
+    moved: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
@@ -172,7 +178,7 @@ impl FsPlans {
         let dir = nah.join("plans");
         std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
         ensure_nah_gitignore(&nah)?;
-        let plans = Self { dir, write: Mutex::new(()), held: Mutex::new(Held::default()), mover: OnceLock::new() };
+        let plans = Self { dir, write: Mutex::new(()), held: Mutex::new(Held::default()), moved: Default::default() };
         let files: Vec<PathBuf> = std::fs::read_dir(&plans.dir).map_err(|e| io(&plans.dir, e))?.map(|e| e.map(|e| e.path()).map_err(|e| io(&plans.dir, e))).collect::<Result<_, _>>()?;
         plans.changed(&files)?;
         Ok(plans)
@@ -196,22 +202,25 @@ impl FsPlans {
         Some((plan, comments))
     }
 
-    /// The comments plans' files still hold, to the mover (once it's here):
-    /// each plan's file written without them once they've gone.
-    fn move_waiting(&self) -> Result<(), ServiceError> {
-        let Some(mover) = self.mover.get() else { return Ok(()) };
+    /// The comments plans' files hold, to `mover`: each plan's file
+    /// written without them once they've gone (one that isn't a plan, as
+    /// it is: they wait in it). One that fails stays as it is.
+    fn move_waiting(&self, mover: &Mover) -> Result<(), ServiceError> {
         let waiting: Vec<(PlanId, Vec<serde_json::Value>)> = self.held.lock().map_err(ServiceError::poisoned)?.waiting.iter().map(|(id, c)| (id.clone(), c.clone())).collect();
         for (id, comments) in waiting {
             if let Err(e) = mover(&id, &comments) {
-                tracing::warn!("Plan {id}'s comments couldn't be moved to discussions (they stay in its file): {e}");
+                tracing::warn!("Plan {id}'s comments couldn't be moved to discussions (they stay in its file, and hold its approvals): {e}");
                 continue;
             }
             let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
             let mut held = self.held.lock().map_err(ServiceError::poisoned)?;
-            held.waiting.remove(&id);
-            if let Some(Ok(plan)) = held.plans.get(&id) {
-                let text = plan.to_json().map_err(|e| ServiceError::Corrupt(e.to_string()))?;
-                write_atomic(&self.path(&id), &text)?;
+            let Some(Ok(plan)) = held.plans.get(&id).cloned() else { continue };
+            let written = plan.to_json().map_err(|e| ServiceError::Corrupt(e.to_string())).and_then(|text| write_atomic(&self.path(&id), &text));
+            match written {
+                Ok(()) => {
+                    held.waiting.remove(&id);
+                }
+                Err(e) => tracing::warn!("Plan {id}'s file couldn't be written without its comments (they're discussions now; they're left out when it's read again): {e}"),
             }
         }
         Ok(())
@@ -310,15 +319,18 @@ impl PlanRepository for FsPlans {
             };
             changed.push(id);
         }
-        self.move_waiting()?;
         Ok(changed)
     }
 
     fn move_comments(&self, mover: Mover) -> Result<(), ServiceError> {
-        if self.mover.set(mover).is_err() {
-            return Err(ServiceError::InvalidOp("plans' comments already go somewhere".into()));
+        if self.moved.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Err(ServiceError::InvalidOp("plans' comments were moved already".into()));
         }
-        self.move_waiting()
+        self.move_waiting(&mover)
+    }
+
+    fn comments_waiting(&self, id: &PlanId) -> bool {
+        self.held.lock().is_ok_and(|held| held.waiting.contains_key(id))
     }
 }
 

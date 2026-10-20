@@ -435,9 +435,9 @@ impl TreeBuffer {
         out.push(Move::Motion(Motion::NextSibling).offer("Next sibling row"));
         out.push(Move::Motion(Motion::PrevSibling).offer("Previous sibling row"));
         let id = self.cursor.as_ref();
-        let item = id.is_some_and(|id| matches!(self.source.target(id), Some(Target::Plan { part: crate::nav::PlanPart::Item(_), .. })));
         out.push(match id {
-            Some(id) if item => Move::Enter.offer(format!("Open {}'s card", self.name(id))),
+            Some(id) if self.source.opens(id) == Some(crate::nav::GoTo::Spec) => Move::Enter.offer(format!("Open {}'s card", self.name(id))),
+            Some(id) if self.source.opens(id).is_some() => Move::Enter.offer(format!("Open {}", self.name(id))),
             Some(id) if self.folded(id) => Move::Enter.offer(format!("Unfold {}", self.name(id))),
             Some(id) => match self.children.get(id).and_then(|k| k.first()) {
                 Some(first) => Move::Enter.offer(format!("Into {}", self.name(first))),
@@ -571,19 +571,11 @@ impl Navigable for TreeBuffer {
         }
     }
 
-    /// A component's row: the component.
-    /// The thing a row is, then what holds it (a section: its card; a
-    /// plan's part: the plan).
+    /// The thing a row is, then what holds it, as its source says.
     fn things(&self, key: &str) -> crate::nav::Things {
-        use harness_contracts::Subject;
         let Some(subject) = self.source.target(key).and_then(|t| t.subject()) else { return crate::nav::Things::default() };
-        let mut at = vec![subject.clone()];
-        if let Subject::PlanSection { plan, id, .. } = &subject {
-            at.push(Subject::PlanComponent { plan: plan.clone(), id: id.clone() });
-        }
-        if let Subject::PlanComponent { plan, .. } | Subject::PlanSection { plan, .. } | Subject::PlanItem { plan, .. } = &subject {
-            at.push(Subject::Plan { plan: plan.clone() });
-        }
+        let mut at = vec![subject];
+        at.extend(self.source.holders(key));
         let known = harness_contracts::Known::default();
         crate::nav::Things { at: at.into_iter().map(|s| crate::nav::Thing::named(s, &known)).collect(), unit: 0 }
     }
@@ -660,10 +652,10 @@ impl Navigable for TreeBuffer {
 
     /// In: a folded row unfolds; an open one, into its first part.
     fn enter(&mut self) -> Step {
-        let Some(id) = self.cursor.clone() else { return Step::Nothing("The outline is empty.".into()) };
-        // A plan's item: its card.
-        if matches!(self.source.target(&id), Some(Target::Plan { part: crate::nav::PlanPart::Item(_), .. })) {
-            return Step::GoTo(crate::nav::GoTo::Spec);
+        let Some(id) = self.cursor.clone() else { return Step::Nothing(format!("The {} is empty.", self.source.title().to_lowercase())) };
+        // What its source opens there (a plan's item: its card).
+        if let Some(to) = self.source.opens(&id) {
+            return Step::GoTo(to);
         }
         if self.unfold(&id) || self.go_in(&id) {
             return Step::Done;
@@ -673,7 +665,7 @@ impl Navigable for TreeBuffer {
 
     /// Out: to what holds the row.
     fn leave(&mut self) -> Step {
-        let Some(id) = self.cursor.clone() else { return Step::Nothing("The outline is empty.".into()) };
+        let Some(id) = self.cursor.clone() else { return Step::Nothing(format!("The {} is empty.", self.source.title().to_lowercase())) };
         if self.go_out(&id) {
             return Step::Done;
         }

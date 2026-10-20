@@ -127,12 +127,15 @@ mod slots {
     fn held_reports_come_out_once_in_order() {
         let dir = tempfile::tempdir().unwrap();
         let db = StateDb::open(dir.path(), &settings()).unwrap();
+        let (lead, sub) = (SlotId::new("lead"), SlotId::new("s2"));
         for (n, text) in ["one", "two"].iter().enumerate() {
-            db.hold_report(&HeldReport { from: "sub 1".into(), text: (*text).into(), at_ms: n as u64 }).unwrap();
+            db.hold_report(&HeldReport { to: lead.clone(), from: "sub 1 (sub-slot)".into(), text: (*text).into(), at_ms: n as u64 }).unwrap();
         }
-        let taken = db.take_reports().unwrap();
+        db.hold_report(&HeldReport { to: sub.clone(), from: "the user".into(), text: "d3".into(), at_ms: 3 }).unwrap();
+        let taken = db.take_reports(&lead).unwrap();
         assert_eq!(taken.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["one", "two"]);
-        assert!(db.take_reports().unwrap().is_empty(), "taken: gone");
+        assert!(db.take_reports(&lead).unwrap().is_empty(), "taken: gone");
+        assert_eq!(db.take_reports(&sub).unwrap().iter().map(|r| (r.from.as_str(), r.text.as_str())).collect::<Vec<_>>(), [("the user", "d3")], "each slot's own");
         db.note("lead", "sent", "sub 1", None);
         assert_eq!(db.activity(1).unwrap()[0].action, "sent");
     }
@@ -279,7 +282,7 @@ mod terminals {
         let dir = tempfile::tempdir().unwrap();
         let on = Named { subject: Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 3, last: 4, command: None }, what: "terminal t1 lines 3-4".into() };
         let kept = |file: &str| Kept { file: file.into(), start: 10, len: None, lines: None };
-        let discussion = |n: u64, status| Stored { id: DiscussionId::new(format!("d{n}")), on: on.clone(), kept: Some(kept(&format!("tagged-{n}.log"))), kind: DiscussionKind::Question, by: "user".into(), asked: "lead".into(), status, said: Vec::new() };
+        let discussion = |n: u64, status| Stored { id: DiscussionId::new(format!("d{n}")), on: on.clone(), kept: Some(kept(&format!("tagged-{n}.log"))), kind: DiscussionKind::Question, by: "user".into(), asked: "lead".into(), status, said: Vec::new(), from: None };
         let change = |action| Change { by: "user".into(), action, detail: "d on it".into() };
         {
             let db = StateDb::open(dir.path(), &settings()).unwrap();

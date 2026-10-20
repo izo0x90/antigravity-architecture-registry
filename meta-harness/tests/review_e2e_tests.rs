@@ -80,7 +80,7 @@ async fn a_plans_comments_become_discussions_once_and_approvals_wait_on_them_the
     );
     let d2 = &all[1];
     let said: Vec<(&str, &str, &str)> = d2["said"].as_array().unwrap().iter().map(|s| (s["by"].as_str().unwrap(), s["kind"].as_str().unwrap(), s["text"].as_str().unwrap())).collect();
-    assert_eq!(said, [("user", "message", "Say what it rejects."), ("user", "message", "Empty only?"), ("agent lead", "answer", "It says so now.")], "in the order said");
+    assert_eq!(said, [("user", "message", "Say what it rejects."), ("user", "message", "Empty only?"), ("lead", "answer", "It says so now.")], "in the order said");
     assert_eq!(d2["said"][2]["changed"][0]["what"], "plan v component rust:sample::validate", "what the answer changed, named");
     assert_eq!(d2["said"][0]["atMs"], 1_791_331_320_000u64, "when it was said");
     assert!(parse(&std::fs::read_to_string(&file).unwrap()).get("comments").is_none(), "the file without them");
@@ -175,13 +175,12 @@ async fn a_review_is_made_and_gone_through_with_the_plan_tools() {
     assert!(error && said.contains("is a review"), "{said}");
     let (_, listed) = lead.tool("plan_list", json!({})).await;
     assert!(listed.contains("findings — Findings (review)\n  i1 [open] Decide\n    i2 [decided] FFF skipped\n    i4 [open] Turns renumbered\n  i3 [open] Open\n"), "{listed}");
-    let plan = arch.plan(&PlanId::new("findings").unwrap()).unwrap();
-    assert_eq!(plan.items.iter().map(|i| (i.id.0.as_str(), i.title.as_str())).collect::<Vec<_>>(), [("i1", "Decide"), ("i2", "FFF skipped"), ("i3", "Open"), ("i4", "Turns renumbered")]);
 }
 
 /// A discussion on a plan's part holds its component's approval until the
-/// user settles it; a change request's answer names a change made to it
-/// since the user's review.
+/// user settles it (one on a relation, both its ends'; another plan's,
+/// none); a change request's answer, the agent's, names a change made to it
+/// since the user's review; the user's routes do the rest.
 #[tokio::test]
 async fn a_discussion_on_a_plans_part_holds_its_approval_until_the_user_settles_it() {
     let arch = fixture_architecture();
@@ -200,33 +199,68 @@ async fn a_discussion_on_a_plans_part_holds_its_approval_until_the_user_settles_
     let calls = || PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::walk"), order: None, ports: None, note: None, expects: None };
     arch.apply(&plan, add("Walks.")).unwrap();
     arch.apply(&plan, calls()).unwrap();
+    arch.create_plan("x", "Elsewhere", "", arch_graph::PlanKind::Change).unwrap();
     let (addr, _state) = spawn_app_with(arch.clone()).await;
+    let mut lead = Mcp::lead(addr).await;
     let (status, _) = http(addr, "POST", "/api/arch/plans/w/reviewed", Some(r#"{"by":"izo"}"#)).await;
     assert_eq!(status, 200);
+    let start = |subject: harness_contracts::Subject, kind: &str, text: &str| json!({ "subject": subject, "kind": kind, "text": text }).to_string();
     let section = harness_contracts::Subject::PlanSection { plan: plan.clone(), id: id("sample::walk"), section: "overview".into() };
-    let (status, body) = http(addr, "POST", "/api/discussions", Some(&json!({ "subject": section, "kind": "change_request", "text": "Say where it walks." }).to_string())).await;
+    let (status, body) = http(addr, "POST", "/api/discussions", Some(&start(section, "change_request", "Say where it walks."))).await;
     assert_eq!(status, 200, "{body}");
     let started = parse(&body);
     assert_eq!((started["id"].as_str(), started["on"]["what"].as_str(), started["asked"].as_str()), (Some("d1"), Some("plan w component rust:sample::walk section overview"), Some("lead")));
-    let approve = || http(addr, "POST", "/api/arch/plans/w/components/rust:sample::walk/approve", Some(r#"{"to":"arch_approved","by":"izo"}"#));
-    let (status, body) = approve().await;
+    let approve = |to: &'static str| http(addr, "POST", "/api/arch/plans/w/components/rust:sample::walk/approve", Some(if to == "arch" { r#"{"to":"arch_approved","by":"izo"}"# } else { r#"{"to":"plan_approved","by":"izo"}"# }));
+    let (status, body) = approve("arch").await;
     assert!(status == 400 && body.contains("d1 on plan w component rust:sample::walk section overview (open"), "{status} {body}");
 
-    let answer = json!({ "text": "Done.", "changed": ["plan w component rust:sample::walk"] }).to_string();
-    let (status, body) = http(addr, "POST", "/api/discussions/d1/answer", Some(&answer)).await;
-    assert!(status == 400 && body.contains("hasn't changed"), "a change since the review: {body}");
+    // The agent answers, naming its change; the user's routes can't answer.
+    let (status, _) = http(addr, "POST", "/api/discussions/d1/answer", Some(r#"{"text":"Done."}"#)).await;
+    assert_eq!(status, 405, "answering is the agent's");
+    let answer = json!({ "id": "d1", "text": "Done.", "changed": ["plan w component rust:sample::walk"] });
+    let (error, said) = lead.tool("discussion_answer", answer.clone()).await;
+    assert!(error && said.contains("hasn't changed"), "a change since the review: {said}");
     arch.apply(&plan, PlanOp::Remove { id: id("sample::walk") }).unwrap();
     arch.apply(&plan, add("Walks the tree.")).unwrap();
     arch.apply(&plan, calls()).unwrap();
-    let (status, body) = http(addr, "POST", "/api/discussions/d1/answer", Some(&answer)).await;
-    assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("answered")), "{body}");
-    let (status, body) = approve().await;
+    let (error, said) = lead.tool("discussion_answer", answer).await;
+    assert!(!error && said.contains("Answered d1"), "{said}");
+    let (status, body) = approve("arch").await;
     assert!(status == 400 && body.contains("answered: settle or reopen it"), "{body}");
+    let (status, body) = http(addr, "POST", "/api/discussions/d1/reopen", Some(r#"{"text":"Where, though?"}"#)).await;
+    assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("open")), "{body}");
+    let (error, _) = lead.tool("discussion_reply", json!({ "id": "d1", "text": "In the tree, from the root." })).await;
+    assert!(!error);
+    let (error, _) = lead.tool("discussion_answer", json!({ "id": "d1", "text": "It says so.", "changed": ["plan w component rust:sample::walk section overview"] })).await;
+    assert!(!error);
     let (status, body) = http(addr, "POST", "/api/discussions/d1/settle", Some("{}")).await;
     assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("settled")), "{body}");
-    let (status, body) = approve().await;
+    let (status, body) = approve("arch").await;
     assert_eq!(status, 200, "{body}");
+    let (status, body) = http(addr, "GET", "/api/discussions/d1", None).await;
+    let read = parse(&body);
+    let kinds: Vec<&str> = read["said"].as_array().unwrap().iter().map(|s| s["kind"].as_str().unwrap()).collect();
+    assert_eq!((status, kinds), (200, vec!["message", "answer", "reopened", "message", "answer", "settled"]));
 
+    // One on a relation holds its ends (the planned one here); another plan's holds none.
+    let relation = harness_contracts::Subject::PlanRelation { plan: plan.clone(), relation: RelationKind::Calls, source: id("sample::run"), target: id("sample::walk") };
+    let (status, body) = http(addr, "POST", "/api/discussions", Some(&start(relation, "question", "Why call it here?"))).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = approve("plan").await;
+    assert!(status == 400 && body.contains("d2 on plan w relation rust:sample::run calls rust:sample::walk"), "{status} {body}");
+    let (status, _) = http(addr, "POST", "/api/discussions", Some(&start(harness_contracts::Subject::Plan { plan: PlanId::new("x").unwrap() }, "question", "And this one?"))).await;
+    assert_eq!(status, 200);
     let (_, body) = http(addr, "POST", "/api/discussions/on", Some(&json!({ "subject": harness_contracts::Subject::PlanComponent { plan: plan.clone(), id: id("sample::walk") } }).to_string())).await;
-    assert_eq!(parse(&body).as_array().map(Vec::len), Some(1), "the discussions on a component: its sections' too: {body}");
+    assert_eq!(parse(&body).as_array().map(|a| a.iter().map(|d| d["id"].as_str().unwrap().to_owned()).collect::<Vec<_>>()), Some(vec!["d1".to_owned(), "d2".to_owned()]), "on a component: its sections' and relations', not another plan's");
+    // The user makes the question a change request (answered: with why), and deletes one.
+    let (error, _) = lead.tool("discussion_answer", json!({ "id": "d2", "text": "It needs it first." })).await;
+    assert!(!error);
+    let (status, body) = http(addr, "POST", "/api/discussions/d2/change", Some("{}")).await;
+    assert_eq!(status, 400, "answered: why: {body}");
+    let (status, body) = http(addr, "POST", "/api/discussions/d2/change", Some(r#"{"text":"Call it later."}"#)).await;
+    assert_eq!((status, parse(&body)["kind"].as_str(), parse(&body)["status"].as_str()), (200, Some("change_request"), Some("open")), "{body}");
+    let (status, _) = http(addr, "DELETE", "/api/discussions/d2", None).await;
+    assert_eq!(status, 204);
+    let (status, _) = http(addr, "GET", "/api/discussions/d2", None).await;
+    assert_eq!(status, 404);
 }

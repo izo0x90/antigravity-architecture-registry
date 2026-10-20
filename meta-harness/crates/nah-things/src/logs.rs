@@ -148,7 +148,7 @@ impl Logs {
         };
         let heading = format!("== {}\n", header.replace(['\n', '\r'], " "));
         file.write_all(heading.as_bytes())?;
-        self.lock().touched.insert(path.clone());
+        self.touch(path.clone());
         Ok((Kept { file: name_of(&path), start: heading.len() as u64, len: None, lines: None }, file))
     }
 
@@ -259,7 +259,16 @@ impl Logs {
             let mut state = self.lock();
             state.counted.retain(|(f, _), _| f != file);
             state.growing.remove(file);
-            state.touched.insert(path);
+            drop(state);
+            self.touch(path);
+        }
+    }
+
+    /// The search told `path` was written or removed, once it's listed the
+    /// files (before, its first listing finds them as they are).
+    fn touch(&self, path: PathBuf) {
+        if self.search.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some() {
+            self.lock().touched.insert(path);
         }
     }
 
@@ -321,8 +330,9 @@ impl Logs {
         if let Err(e) = listed.changed(&changed) {
             tracing::warn!("The logs couldn't be listed again to search: {e}");
         }
-        // One more a file: its heading, never a piece's.
-        let limits = arch_search::TextLimits { per_file: per_file.saturating_add(1), budget_ms: SEARCH_BUDGET_MS, max_file_bytes: u64::MAX };
+        // Every line with the word: each must then have every word (and
+        // isn't a heading) before a file's lines are counted.
+        let limits = arch_search::TextLimits { per_file: usize::MAX >> 1, budget_ms: SEARCH_BUDGET_MS, max_file_bytes: u64::MAX };
         let searched = listed.lines(limits).containing(word, usize::MAX >> 1);
         let mut each: BTreeMap<String, usize> = BTreeMap::new();
         let found = searched
@@ -421,5 +431,10 @@ mod tests {
         both.insert(b.file.clone());
         assert_eq!(logs.search("flaky too", &both, 10).0.len(), 1);
         assert!(matches("  flaky build  ", " build   flaky "), "spaces don't count");
+        // More lines with the longest word than asked for, the one with
+        // every word last: still found.
+        let c = logs.write("many", "second\nsecond\nsecond\nline second\n").unwrap();
+        let (found, _) = logs.search("line second", &BTreeSet::from([c.file]), 1);
+        assert_eq!(found.iter().map(|(_, n, t)| (*n, t.as_str())).collect::<Vec<_>>(), [(5, "line second")], "every word first, then how many");
     }
 }

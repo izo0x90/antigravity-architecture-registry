@@ -526,7 +526,7 @@ word = "placeholders"
 icon = "hourglass"
 color = "warn"
 
-[status.open_comments]
+[status.open_discussions]
 word = "open discussions"
 icon = "chat-circle-dots"
 color = "warn"

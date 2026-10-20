@@ -18,7 +18,8 @@ pub mod testing;
 
 pub use logs::{FoundLine, Logs, matches};
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -126,6 +127,11 @@ pub struct Found {
     pub text: String,
 }
 
+thread_local! {
+    /// Where things are now, as worked out in this thread's pass (`pass`).
+    static PASS: RefCell<Option<HashMap<Subject, Subject>>> = const { RefCell::new(None) };
+}
+
 pub struct Things {
     owners: RwLock<Vec<Arc<dyn Resolve>>>,
     notes: RwLock<Vec<Weak<dyn Notes>>>,
@@ -193,9 +199,11 @@ impl Things {
     /// again, files changed): every note keeps them where they are now
     /// (and owners let go of what they kept for where they were).
     pub fn moved(&self) {
-        for notes in self.notes() {
-            notes.refresh();
-        }
+        self.pass(|| {
+            for notes in self.notes() {
+                notes.refresh();
+            }
+        });
         self.tell_noted();
     }
 
@@ -272,9 +280,38 @@ impl Things {
         self.owner(subject).and_then(|o| o.changed(subject))
     }
 
-    /// Where `subject` is now (where it was, when its owner didn't move it).
+    /// Where `subject` is now (where it was, when its owner didn't move it):
+    /// asked of its owner once in a pass (`pass`).
     pub fn current(&self, subject: &Subject) -> Subject {
-        self.owner(subject).and_then(|o| o.moved(subject)).unwrap_or_else(|| subject.clone())
+        if let Some(now) = PASS.with(|p| p.borrow().as_ref().and_then(|seen| seen.get(subject).cloned())) {
+            return now;
+        }
+        let now = self.owner(subject).and_then(|o| o.moved(subject)).unwrap_or_else(|| subject.clone());
+        PASS.with(|p| {
+            if let Some(seen) = p.borrow_mut().as_mut() {
+                seen.insert(subject.clone(), now.clone());
+            }
+        });
+        now
+    }
+
+    /// `f`, where each thing is found where it is now only once (a pass
+    /// over every note, or over a tag's things: owners work out where
+    /// lines moved by diffing files). On this thread; passes nest.
+    pub fn pass<T>(&self, f: impl FnOnce() -> T) -> T {
+        let outer = PASS.with(|p| {
+            let mut p = p.borrow_mut();
+            let outer = p.is_some();
+            if !outer {
+                *p = Some(HashMap::new());
+            }
+            outer
+        });
+        let out = f();
+        if !outer {
+            PASS.with(|p| *p.borrow_mut() = None);
+        }
+        out
     }
 
     /// A noted thing (`subject`, named `what`) where its owner says it is
@@ -283,7 +320,7 @@ impl Things {
     /// changed.
     pub fn renamed(&self, subject: &Subject, what: &str) -> Option<(Subject, String)> {
         let owner = self.owner(subject);
-        let moved = owner.as_ref().and_then(|o| o.moved(subject)).unwrap_or_else(|| subject.clone());
+        let moved = self.current(subject);
         let now = owner.as_ref().and_then(|o| o.settle(&moved).ok()).unwrap_or(moved);
         let named = owner.map_or_else(|| what.to_owned(), |o| o.name(&now));
         (now != *subject || named != what).then_some((now, named))

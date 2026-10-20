@@ -313,7 +313,7 @@ fn enter_goes_in_and_backspace_comes_out_in_every_view() {
     focus(&ctx, &mut app, BufferKind::Spec);
     keys(&ctx, &mut app, "gg");
     enter(&ctx, &mut app);
-    assert!(app.desk.spec().folded.contains(&crate::spec::Section::Overview));
+    assert!(app.desk.spec().folded.contains(&crate::card::Section::Overview));
     // Queue: Enter shows a failed job's findings.
     focus(&ctx, &mut app, BufferKind::Queue);
     app.desk.queue_mut().move_to("2");
@@ -352,9 +352,9 @@ fn z_keys_fold_in_every_view_that_folds() {
     assert_eq!(app.desk.tree().rows().len(), 6);
     focus(&ctx, &mut app, BufferKind::Spec);
     keys(&ctx, &mut app, "zM");
-    assert_eq!(app.desk.spec().folded.len(), crate::spec::Section::ALL.len());
+    assert_eq!(app.desk.spec().folded.len(), crate::card::Section::ALL.len());
     keys(&ctx, &mut app, "za");
-    assert_eq!(app.desk.spec().folded.len(), crate::spec::Section::ALL.len() - 1);
+    assert_eq!(app.desk.spec().folded.len(), crate::card::Section::ALL.len() - 1);
 }
 
 #[test]
@@ -443,7 +443,7 @@ fn go_to_keys_work_from_every_view() {
     app.desk.spec_mut().show(step.clone());
     app.desk.spec_mut().detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
     focus(&ctx, &mut app, BufferKind::Spec);
-    app.desk.spec_mut().move_to(&crate::spec::Entry { section: crate::spec::Section::Relations, item: crate::spec::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true } }.key());
+    app.desk.spec_mut().move_to(&crate::spec::Entry { section: crate::card::Section::Relations, item: crate::spec::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true } }.key());
     keys(&ctx, &mut app, "gs");
     assert_eq!(app.desk.spec().target.as_ref().map(|c| c.as_str()), Some("rust:a::save"));
     // Nothing under the cursor: says so.
@@ -458,9 +458,9 @@ fn spec_keys_walk_items_and_review_them() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Spec);
     keys(&ctx, &mut app, "J");
-    assert_eq!(app.desk.spec().current, crate::spec::Section::Signature);
+    assert_eq!(app.desk.spec().current, crate::card::Section::Signature);
     keys(&ctx, &mut app, "]]");
-    assert_eq!(app.desk.spec().current, crate::spec::Section::Logic);
+    assert_eq!(app.desk.spec().current, crate::card::Section::Logic);
     keys(&ctx, &mut app, "j");
     assert_eq!(app.desk.spec().entry().unwrap().item, crate::spec::SpecItem::Step(0));
     frame(&ctx, &mut app, key("c"));
@@ -509,11 +509,11 @@ fn searches_and_restores_put_things_back_exactly() {
     focus(&ctx, &mut app, BufferKind::Spec);
     app.desk.spec_mut().move_to("logic#Step(1)");
     let place = app.desk.spec_mut().place();
-    app.desk.spec_mut().folded.insert(crate::spec::Section::Overview);
+    app.desk.spec_mut().folded.insert(crate::card::Section::Overview);
     app.desk.spec_mut().motion(Motion::First, 1);
     app.desk.spec_mut().restore(&place);
     assert_eq!(app.desk.spec().entry().unwrap().item, crate::spec::SpecItem::Step(1));
-    assert_eq!(app.desk.spec().current, crate::spec::Section::Logic);
+    assert_eq!(app.desk.spec().current, crate::card::Section::Logic);
     // One panel and back: the panels as they were.
     app.desk.panels = panels_of(&[BufferKind::Code, BufferKind::Graph, BufferKind::Queue], 2);
     app.run_shell(ShellCommand::SetLayout(1), None, None, &ctx);

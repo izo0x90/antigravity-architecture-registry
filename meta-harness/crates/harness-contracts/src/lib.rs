@@ -22,6 +22,7 @@ pub mod snapshot;
 pub mod tags;
 pub mod terminals;
 
+pub use arch_graph::when;
 pub use capabilities::*;
 pub use discussions::*;
 pub use events::*;

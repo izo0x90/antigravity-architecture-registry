@@ -160,9 +160,9 @@ fn the_selection_survives_a_view_without_it() {
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert!(app.note.as_deref().unwrap_or_default().contains("Select a card first"), "{:?}", app.note);
     focus(&ctx, &mut app, BufferKind::Spec);
-    app.desk.spec_mut().comments.clear();
+    app.desk.spec_mut().discussions.clear();
     keys(&ctx, &mut app, "]c");
-    assert!(app.note.as_deref().unwrap_or_default().contains("No open review points"), "{:?}", app.note);
+    assert!(app.note.as_deref().unwrap_or_default().contains("No discussions not settled"), "{:?}", app.note);
 }
 
 #[test]

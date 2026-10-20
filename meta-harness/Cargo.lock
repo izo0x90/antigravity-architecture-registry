@@ -3564,7 +3564,6 @@ dependencies = [
  "arch-graph",
  "harness-contracts",
  "harness-core",
- "httpdate",
  "nah-discussions",
  "nah-things",
  "serde",
@@ -3655,7 +3654,6 @@ version = "0.1.0"
 dependencies = [
  "harness-contracts",
  "harness-core",
- "httpdate",
  "nah-tags",
  "nah-things",
  "serde_json",

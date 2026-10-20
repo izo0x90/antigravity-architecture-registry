@@ -23,10 +23,9 @@ pub struct PlanTree {
     inbox: Arc<Mutex<Vec<Answer>>>,
 }
 
-/// A card's section's title, from its name (`invariants`: Invariants).
+/// A card's section's title, as the card says it (`logic`: Logic steps).
 fn titled(section: &str) -> String {
-    let mut chars = section.chars();
-    chars.next().map(|c| c.to_uppercase().chain(chars).collect::<String>().replace('_', " ")).unwrap_or_default()
+    crate::card::Section::from_key(section).map_or_else(|| section.to_owned(), |s| s.title().to_owned())
 }
 
 /// The rows of `plan`: items, nested, then components and their sections.
@@ -95,6 +94,23 @@ impl TreeSource for PlanTree {
             PlanPart::Section(arch_graph::ComponentId::new(id), section.to_owned())
         };
         Some(Target::Plan { plan, part })
+    }
+
+    /// An item: its card.
+    fn opens(&self, key: &str) -> Option<crate::nav::GoTo> {
+        key.starts_with("item:").then_some(crate::nav::GoTo::Spec)
+    }
+
+    /// A section: its card, then the plan; a card or an item: the plan.
+    fn holders(&self, key: &str) -> Vec<harness_contracts::Subject> {
+        use harness_contracts::Subject;
+        let Some(plan) = self.plan.clone() else { return Vec::new() };
+        let mut out = Vec::new();
+        if let Some((id, _)) = key.strip_prefix("section:").and_then(|rest| rest.rsplit_once(':')) {
+            out.push(Subject::PlanComponent { plan: plan.clone(), id: arch_graph::ComponentId::new(id) });
+        }
+        out.push(Subject::Plan { plan });
+        out
     }
 
     fn key_of(&self, target: &Target) -> Option<String> {

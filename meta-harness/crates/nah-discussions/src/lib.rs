@@ -77,6 +77,10 @@ pub struct Stored {
     #[serde(default)]
     pub status: DiscussionStatus,
     pub said: Vec<StoredSaid>,
+    /// Where it was brought in from (`Discussions::bring`: a plan's
+    /// comment), so it's never brought in twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 /// A line found in what's said (`Discussions::find`): in which discussion,
@@ -93,6 +97,9 @@ pub struct Found {
 /// it stood, its messages (when each was said, as it was).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Brought {
+    /// Where it was kept before, as it's known there (`plan p comment c1`):
+    /// one brought in from there already isn't brought in again.
+    pub from: String,
     pub on: Subject,
     pub kind: DiscussionKind,
     pub by: String,
@@ -152,12 +159,12 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+    harness_contracts::when::now_ms()
 }
 
-/// Now, as a reader of the files reads a date.
+/// Now, as every time a person reads is written (`arch_graph::when`).
 fn now_words() -> String {
-    httpdate::fmt_http_date(std::time::SystemTime::now())
+    harness_contracts::when::now()
 }
 
 fn text(raw: &str, what: &str) -> Result<String, DiscussionError> {
@@ -165,9 +172,26 @@ fn text(raw: &str, what: &str) -> Result<String, DiscussionError> {
     if t.is_empty() { Err(DiscussionError::Invalid(format!("{what} needs some text"))) } else { Ok(t.to_owned()) }
 }
 
+/// Whether question `d` can be made a change request while it's `at`.
+fn asks_change(id: &DiscussionId, d: &Discussion, at: DiscussionStatus) -> Result<(), DiscussionError> {
+    if d.kind == DiscussionKind::ChangeRequest {
+        return Err(DiscussionError::Invalid(format!("{id} asks for a change already")));
+    }
+    match d.status {
+        DiscussionStatus::Settled => Err(DiscussionError::Invalid(format!("{id} is settled: reopen it first"))),
+        now if now != at => Err(DiscussionError::Invalid(format!("{id} changed meanwhile: try again"))),
+        _ => Ok(()),
+    }
+}
+
 /// A message to add (when: as it's added).
 fn said(by: &str, kind: SaidKind, text: String, changed: Vec<Named>) -> Said {
     Said { by: by.to_owned(), at_ms: 0, kind, text, changed }
+}
+
+/// A discussion's number (`d12`: 12), to order those started at once.
+fn number(id: &DiscussionId) -> u64 {
+    id.as_str().strip_prefix('d').and_then(|n| n.parse().ok()).unwrap_or(u64::MAX)
 }
 
 fn user_only(by: &str, what: &str) -> Result<(), DiscussionError> {
@@ -202,7 +226,7 @@ impl Notes for Discussions {
                 continue;
             }
             *h = Held { discussion: discussion.clone(), stored };
-            drop(held);
+            // Told while held: a change made meanwhile is told after it.
             self.hub.publish(ClientEvent::DiscussionUpdated { discussion });
         }
     }
@@ -255,7 +279,7 @@ impl Discussions {
     /// Every discussion, oldest first.
     pub fn list(&self) -> Vec<Discussion> {
         let mut out: Vec<Discussion> = lock(&self.held).values().map(|h| h.discussion.clone()).collect();
-        out.sort_by_key(|d| d.said.first().map_or(0, |s| s.at_ms));
+        out.sort_by_key(|d| (d.said.first().map_or(0, |s| s.at_ms), number(&d.id)));
         out
     }
 
@@ -266,7 +290,9 @@ impl Discussions {
     /// The discussions on `subject`, on something in it or something it's
     /// in (a component's: its sections' and relations' too; `touches`).
     pub fn on(&self, subject: &Subject) -> Vec<Discussion> {
-        lock(&self.held).values().filter(|h| h.discussion.on.subject.touches(subject)).map(|h| h.discussion.clone()).collect()
+        let mut out: Vec<Discussion> = lock(&self.held).values().filter(|h| h.discussion.on.subject.touches(subject)).map(|h| h.discussion.clone()).collect();
+        out.sort_by_key(|d| (d.said.first().map_or(0, |s| s.at_ms), number(&d.id)));
+        out
     }
 
     /// The lines of the messages that have every word of `text` in them
@@ -281,12 +307,6 @@ impl Discussions {
         let order: BTreeMap<DiscussionId, u64> = self.list().into_iter().enumerate().map(|(i, d)| (d.id, i as u64)).collect();
         found.sort_by_key(|f| (order.get(&f.discussion).copied(), f.said, f.line));
         (found, partial)
-    }
-
-    /// The things these discussions are on (to read what they say: the
-    /// things layer gives it, from the logs once it's gone).
-    pub fn things(&self) -> &Things {
-        &self.things
     }
 
     /// A message written to the files: where it is.
@@ -339,7 +359,7 @@ impl Discussions {
         };
         let at_ms = now_ms();
         let discussion = Discussion { id: id.clone(), on: on.clone(), kept: noted.kept.clone(), kind, by: by.to_owned(), asked: asked.clone(), status: DiscussionStatus::Open, said: vec![Said { by: by.to_owned(), at_ms, kind: SaidKind::Message, text: body, changed: Vec::new() }] };
-        let stored = Stored { id: id.clone(), on, kept: noted.kept.clone(), kind, by: by.to_owned(), asked, status: DiscussionStatus::Open, said: vec![StoredSaid { by: by.to_owned(), at_ms, kind: SaidKind::Message, text: written.clone(), changed: Vec::new() }] };
+        let stored = Stored { id: id.clone(), on, kept: noted.kept.clone(), kind, by: by.to_owned(), asked, status: DiscussionStatus::Open, said: vec![StoredSaid { by: by.to_owned(), at_ms, kind: SaidKind::Message, text: written.clone(), changed: Vec::new() }], from: None };
         let mut held = lock(&self.held);
         let done = self.keep(&mut held, discussion, stored, &Change { by: by.to_owned(), action: "started", detail: format!("{} on {}", kind.words(), noted.what) });
         drop(held);
@@ -406,7 +426,7 @@ impl Discussions {
         for words in changed {
             let subject = self.things.named(words).map_err(DiscussionError::Invalid)?;
             if self.things.changed(&subject) == Some(false) {
-                return Err(DiscussionError::Invalid(format!("{words} hasn't changed since it was last reviewed: change it first, then name it")));
+                return Err(DiscussionError::Invalid(format!("{words} hasn't changed (as its owner sees it): change it first, then name it")));
             }
             let what = self.things.name(&subject).unwrap_or_else(|| words.clone());
             named.push(Named { subject, what });
@@ -423,13 +443,14 @@ impl Discussions {
         })
     }
 
-    /// The user settles discussion `id` (a change request once it's
-    /// answered with what changed), saying why if they like.
+    /// The user settles discussion `id` once it's answered (a change
+    /// request's answer named what changed), saying something if they like.
     pub fn settle(&self, id: &DiscussionId, body: &str, by: &str) -> Result<Discussion, DiscussionError> {
         user_only(by, "settles a discussion: answer it instead")?;
         self.add(id, said(by, SaidKind::Settled, body.trim().to_owned(), Vec::new()), Some(DiscussionStatus::Settled), "settled", &|d| match (d.kind, d.status) {
             (_, DiscussionStatus::Settled) => Err(DiscussionError::Invalid(format!("{id} is settled already"))),
             (DiscussionKind::ChangeRequest, DiscussionStatus::Open) => Err(DiscussionError::Invalid(format!("{id} asks for a change: it's settled once it's answered with what changed"))),
+            (DiscussionKind::Question, DiscussionStatus::Open) => Err(DiscussionError::Invalid(format!("{id} isn't answered yet: it's settled once it is"))),
             _ => Ok(()),
         })
     }
@@ -443,28 +464,36 @@ impl Discussions {
         })
     }
 
-    /// The user makes discussion `id` a change request (it's open again:
-    /// its answer has to name what changed).
-    pub fn ask_for_change(&self, id: &DiscussionId, by: &str) -> Result<Discussion, DiscussionError> {
+    /// The user makes discussion `id` a change request. One answered is
+    /// open again, with why (its answer named no change); one settled is
+    /// reopened first.
+    pub fn ask_for_change(&self, id: &DiscussionId, why: &str, by: &str) -> Result<Discussion, DiscussionError> {
         user_only(by, "makes a discussion a change request")?;
+        let status = self.get(id)?.status;
+        if status == DiscussionStatus::Answered {
+            let why = text(why, "making an answered discussion a change request (why)")?;
+            return self.add(id, said(by, SaidKind::Reopened, why, Vec::new()), Some(DiscussionStatus::Open), "made a change request", &|d| asks_change(id, d, DiscussionStatus::Answered)).and_then(|_| self.kind_to_change(id, by));
+        }
+        self.kind_to_change(id, by)
+    }
+
+    /// Discussion `id`, open, made a change request.
+    fn kind_to_change(&self, id: &DiscussionId, by: &str) -> Result<Discussion, DiscussionError> {
         let mut held = lock(&self.held);
         let h = held.get(id).ok_or_else(|| DiscussionError::NotFound(id.to_string()))?;
-        if h.discussion.kind == DiscussionKind::ChangeRequest {
-            return Err(DiscussionError::Invalid(format!("{id} asks for a change already")));
-        }
+        asks_change(id, &h.discussion, DiscussionStatus::Open)?;
         let (mut discussion, mut stored) = (h.discussion.clone(), h.stored.clone());
         discussion.kind = DiscussionKind::ChangeRequest;
         stored.kind = DiscussionKind::ChangeRequest;
-        discussion.status = DiscussionStatus::Open;
-        stored.status = DiscussionStatus::Open;
         let what = discussion.on.what.clone();
         self.keep(&mut held, discussion, stored, &Change { by: by.to_owned(), action: "made a change request", detail: format!("{id} on {what}") })
     }
 
     /// Discussions brought in whole, as they stood where they were kept
-    /// before (a plan's comments): all of them, or none (an error). Their
-    /// things are taken as they're named, there now or not (things kept
-    /// for good: nothing is logged); `from` says where they were.
+    /// before (a plan's comments): all of them, or none (an error); one
+    /// brought in from the same place before is left out. Their things are
+    /// taken as they're named, there now or not (things kept for good:
+    /// nothing is logged); `from` says where they were.
     pub fn bring(&self, brought: Vec<Brought>, from: &str) -> Result<Vec<Discussion>, DiscussionError> {
         let mut made: Vec<(Discussion, Stored)> = Vec::new();
         let undo = |made: &[(Discussion, Stored)]| {
@@ -474,7 +503,8 @@ impl Discussions {
                 }
             }
         };
-        for b in brought {
+        let already: BTreeSet<String> = lock(&self.held).values().filter_map(|h| h.stored.from.clone()).collect();
+        for b in brought.into_iter().filter(|b| !already.contains(&b.from)) {
             if b.said.is_empty() {
                 undo(&made);
                 return Err(DiscussionError::Invalid("a discussion brought in says something".into()));
@@ -488,9 +518,9 @@ impl Discussions {
             };
             let what = self.things.name(&b.on).unwrap_or_else(|| b.on.name(&harness_contracts::Known::default()));
             let on = Named { subject: b.on, what };
-            let mut stored = Stored { id: id.clone(), on: on.clone(), kept: None, kind: b.kind, by: b.by.clone(), asked: b.asked.clone(), status: b.status, said: Vec::new() };
+            let mut stored = Stored { id: id.clone(), on: on.clone(), kept: None, kind: b.kind, by: b.by.clone(), asked: b.asked.clone(), status: b.status, said: Vec::new(), from: Some(b.from.clone()) };
             for said in &b.said {
-                let when = httpdate::fmt_http_date(std::time::UNIX_EPOCH + std::time::Duration::from_millis(said.at_ms));
+                let when = harness_contracts::when::written(said.at_ms);
                 match self.write_at(&id, &on.what, &said.by, said.kind, &said.text, &when) {
                     Ok(text) => stored.said.push(StoredSaid { by: said.by.clone(), at_ms: said.at_ms, kind: said.kind, text, changed: said.changed.clone() }),
                     Err(e) => {
@@ -506,6 +536,12 @@ impl Discussions {
             made.push((discussion, stored));
         }
         let mut held = lock(&self.held);
+        // Brought in meanwhile by another: none of these, then.
+        if made.iter().any(|(_, stored)| held.values().any(|h| h.stored.from == stored.from)) {
+            drop(held);
+            undo(&made);
+            return Err(DiscussionError::Invalid(format!("{from} were being brought in at the same moment: try again")));
+        }
         for (at, (discussion, stored)) in made.iter().enumerate() {
             let change = Change { by: stored.by.clone(), action: "brought in", detail: format!("{} on {}, from {from}", stored.id, stored.on.what) };
             if let Err(e) = self.store.put(stored, Some(&change)) {
@@ -544,21 +580,11 @@ impl Discussions {
         Ok(())
     }
 
-    /// Why a plan's component can't be approved yet (discussions on it,
-    /// its sections, its relations or the whole plan that aren't settled):
-    /// none when it can.
-    pub fn blocker(&self, plan: &arch_graph::PlanId, id: &arch_graph::ComponentId) -> Option<String> {
-        let component = Subject::PlanComponent { plan: plan.clone(), id: id.clone() };
-        let open: Vec<String> = lock(&self.held)
-            .values()
-            .map(|h| &h.discussion)
-            .filter(|d| d.status != DiscussionStatus::Settled && d.on.subject.touches(&component))
-            .map(|d| match d.status {
-                DiscussionStatus::Answered => format!("{} on {} (answered: settle or reopen it)", d.id, d.on.what),
-                _ => format!("{} on {} (open: \"{}\")", d.id, d.on.what, d.asking().chars().take(60).collect::<String>()),
-            })
-            .collect();
-        if open.is_empty() { None } else { Some(format!("{id} has discussions not settled: {}", open.join("; "))) }
+    /// The discussions on `subject`, on something in it or something it's
+    /// in, that aren't settled (what holds it: a plan's component's
+    /// approval), oldest first.
+    pub fn unsettled(&self, subject: &Subject) -> Vec<Discussion> {
+        self.on(subject).into_iter().filter(|d| d.status != DiscussionStatus::Settled).collect()
     }
 }
 
@@ -630,7 +656,7 @@ mod tests {
 
     impl Resolve for Parts {
         fn owns(&self, subject: &Subject) -> bool {
-            matches!(subject, Subject::PlanComponent { .. } | Subject::PlanSection { .. } | Subject::Plan { .. })
+            matches!(subject, Subject::PlanComponent { .. } | Subject::PlanSection { .. } | Subject::PlanRelation { .. } | Subject::Plan { .. })
         }
         fn name(&self, subject: &Subject) -> String {
             subject.name(&harness_contracts::Known::default())
@@ -724,18 +750,22 @@ mod tests {
         let store = Arc::new(MemoryStore::default());
         let Fixture { discussions: d, parts, dir: _dir, .. } = engine(store);
         let q = d.start(&component("a"), DiscussionKind::Question, "is this right?", USER, None).unwrap();
+        assert!(d.settle(&q.id, "", USER).unwrap_err().to_string().contains("isn't answered yet"), "settled once it's answered, as before");
         d.answer(&q.id, "yes", &[], "lead").unwrap();
-        for refused in [d.settle(&q.id, "", "lead"), d.reopen(&q.id, "no", "lead"), d.ask_for_change(&q.id, "lead")] {
+        for refused in [d.settle(&q.id, "", "lead"), d.reopen(&q.id, "no", "lead"), d.ask_for_change(&q.id, "why", "lead")] {
             assert!(matches!(refused, Err(DiscussionError::Forbidden(_))), "{refused:?}");
         }
         assert!(matches!(d.delete(&q.id, "lead"), Err(DiscussionError::Forbidden(_))));
-        let asked = d.ask_for_change(&q.id, USER).unwrap();
+        assert!(d.ask_for_change(&q.id, " ", USER).is_err(), "answered: open again, so why");
+        let asked = d.ask_for_change(&q.id, "say what it rejects", USER).unwrap();
         assert_eq!((asked.kind, asked.status), (DiscussionKind::ChangeRequest, DiscussionStatus::Open), "a change request, open again");
+        assert_eq!(asked.said.last().map(|s| (s.kind, s.text.as_str())), Some((SaidKind::Reopened, "say what it rejects")), "with why");
         assert!(d.settle(&q.id, "", USER).is_err(), "a change request is settled once it's answered");
         let unnamed = d.answer(&q.id, "done", &[], "lead").unwrap_err().to_string();
         assert!(unnamed.contains("name what you changed"), "{unnamed}");
-        let elsewhere = d.answer(&q.id, "done", &["plan p component b".into()], "lead");
-        assert!(elsewhere.is_err(), "what changed is what it's on (or in it)");
+        parts.changed.lock().unwrap().push("b".into());
+        let elsewhere = d.answer(&q.id, "done", &["plan p component b".into()], "lead").unwrap_err().to_string();
+        assert!(elsewhere.contains("name what you changed"), "a change elsewhere doesn't answer it: {elsewhere}");
         let unchanged = d.answer(&q.id, "done", &["plan p component a section logic".into()], "lead").unwrap_err().to_string();
         assert!(unchanged.contains("hasn't changed"), "{unchanged}");
         parts.changed.lock().unwrap().push("a".into());
@@ -746,28 +776,37 @@ mod tests {
         assert!(matches!(d.get(&q.id), Err(DiscussionError::NotFound(_))));
         let next = d.start(&component("a"), DiscussionKind::Question, "again", USER, None).unwrap();
         assert_eq!(next.id.as_str(), "d2", "a deleted discussion's number isn't given again");
+        d.answer(&next.id, "yes", &[], "lead").unwrap();
+        d.settle(&next.id, "", USER).unwrap();
+        assert!(d.ask_for_change(&next.id, "more", USER).unwrap_err().to_string().contains("reopen it first"), "settled: reopened first");
     }
 
     #[test]
-    fn a_component_isnt_approved_while_a_discussion_on_it_its_sections_its_relations_or_the_plan_isnt_settled() {
-        let Fixture { discussions: d, parts, dir: _dir, .. } = engine(Arc::new(MemoryStore::default()));
+    fn what_isnt_settled_on_a_component_is_on_it_its_sections_its_relations_or_the_whole_plan() {
+        let Fixture { discussions: d, parts, hub, dir: _dir, .. } = engine(Arc::new(MemoryStore::default()));
         let (p, a) = (plan(), ComponentId::new("a"));
-        assert_eq!(d.blocker(&p, &a), None);
+        let unsettled = |of: &str| d.unsettled(&component(of)).into_iter().map(|d| d.id.to_string()).collect::<Vec<_>>();
+        assert!(unsettled("a").is_empty());
         let section = d.start(&Subject::PlanSection { plan: p.clone(), id: a.clone(), section: "logic".into() }, DiscussionKind::ChangeRequest, "split step 2", USER, None).unwrap();
-        let blocked = d.blocker(&p, &a).unwrap();
-        assert!(blocked.contains("d1 on plan p component a section logic (open: \"split step 2\")"), "{blocked}");
-        assert_eq!(d.blocker(&p, &ComponentId::new("b")), None, "another component's discussions don't");
+        assert_eq!(unsettled("a"), ["d1"]);
+        assert!(unsettled("b").is_empty(), "another component's don't");
         parts.changed.lock().unwrap().push("a".into());
         d.answer(&section.id, "split", &["plan p component a".into()], "lead").unwrap();
-        assert!(d.blocker(&p, &a).unwrap().contains("answered: settle or reopen it"), "answered isn't settled");
+        assert_eq!(unsettled("a"), ["d1"], "answered isn't settled");
         d.settle(&section.id, "", USER).unwrap();
-        assert_eq!(d.blocker(&p, &a), None);
-        let whole = d.start(&Subject::Plan { plan: p.clone() }, DiscussionKind::Question, "why this order?", USER, None).unwrap();
-        assert!(d.blocker(&p, &ComponentId::new("b")).is_some(), "one on the whole plan holds every component");
-        d.delete(&whole.id, USER).unwrap();
+        assert!(unsettled("a").is_empty());
         let relation = Subject::PlanRelation { plan: p.clone(), relation: arch_graph::RelationKind::Calls, source: ComponentId::new("b"), target: a.clone() };
-        // A relation's discussion, kept as started (no owner of relations here).
-        assert!(Subject::touches(&relation, &component("a")), "a relation touches both its ends");
+        let on_relation = d.start(&relation, DiscussionKind::Question, "why call it?", USER, None).unwrap();
+        assert_eq!((unsettled("a"), unsettled("b")), (vec!["d2".to_owned()], vec!["d2".to_owned()]), "a relation's holds both its ends");
+        assert!(unsettled("c").is_empty());
+        let whole = d.start(&Subject::Plan { plan: p.clone() }, DiscussionKind::Question, "why this order?", USER, None).unwrap();
+        assert_eq!(unsettled("c"), ["d3"], "one on the whole plan holds every component");
+        let other = Subject::PlanComponent { plan: PlanId::new("q").unwrap(), id: a.clone() };
+        assert!(d.unsettled(&other).is_empty(), "another plan's don't");
+        let (_, mut events) = hub.subscribe();
+        d.delete(&whole.id, USER).unwrap();
+        assert!(matches!(events.try_recv(), Ok(ClientEvent::DiscussionRemoved { discussion_id }) if discussion_id == whole.id), "a deleted one is told");
+        d.delete(&on_relation.id, USER).unwrap();
     }
 
     #[test]
@@ -818,6 +857,28 @@ mod tests {
         let (found, partial) = d.find("line second", 5);
         assert_eq!((found, partial), (vec![Found { discussion: first.id.clone(), said: 0, line: 2, text: "second line".into() }], false), "what's said, searched: every word, any order");
         assert_eq!(d.find("discussion", 5).0, [], "headings aren't found");
+    }
+
+    #[test]
+    fn discussions_brought_in_come_as_they_stood_and_never_twice() {
+        let store = Arc::new(MemoryStore::default());
+        let Fixture { discussions: d, dir: _dir, .. } = engine(store.clone());
+        let said = |by: &str, at_ms, kind, text: &str| Said { by: by.into(), at_ms, kind, text: text.into(), changed: Vec::new() };
+        let brought = |n: u32| Brought {
+            from: format!("plan p comment c{n}"),
+            on: component("a"),
+            kind: DiscussionKind::Question,
+            by: USER.into(),
+            asked: LEAD.into(),
+            status: DiscussionStatus::Answered,
+            said: vec![said(USER, 5, SaidKind::Message, "pure?"), said("lead", 6, SaidKind::Answer, "yes")],
+        };
+        let first = d.bring(vec![brought(1), brought(2)], "plan p's comments").unwrap();
+        assert_eq!(first.iter().map(|x| (x.id.as_str(), x.status, x.said.len())).collect::<Vec<_>>(), [("d1", DiscussionStatus::Answered, 2), ("d2", DiscussionStatus::Answered, 2)], "as they stood");
+        assert_eq!(d.list().iter().map(|x| x.id.to_string()).collect::<Vec<_>>(), ["d1", "d2"], "started at once: in their numbers' order");
+        assert!(d.bring(vec![brought(1), brought(2)], "plan p's comments").unwrap().is_empty(), "never twice");
+        assert_eq!(d.bring(vec![brought(2), brought(3)], "plan p's comments").unwrap().len(), 1, "only what's new");
+        assert_eq!(store.changes.lock().unwrap().iter().filter(|(_, action)| action == "brought in").count(), 3);
     }
 
     fn things_dir(d: &Discussions) -> std::path::PathBuf {

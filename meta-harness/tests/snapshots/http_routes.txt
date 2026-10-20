@@ -32,7 +32,6 @@
 /api/discussions/on POST
 /api/discussions/d1 DELETE,GET,HEAD
 /api/discussions/d1/reply POST
-/api/discussions/d1/answer POST
 /api/discussions/d1/settle POST
 /api/discussions/d1/reopen POST
 /api/discussions/d1/change POST

@@ -12,6 +12,7 @@ use harness_contracts::changes::{Comparison, FileChanges, Hunk};
 use harness_contracts::{Discussion, DiscussionId, DiscussionKind, DiscussionStatus, SaidKind, Subject};
 
 use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style, When};
+use crate::card::Section;
 use crate::hosted::{Status, Tone};
 use crate::nav::{Ask, Fold, GoTo, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
 use crate::net::{NetClient, NetResult};
@@ -41,89 +42,16 @@ pub enum SpecItem {
     Reply(DiscussionId, usize),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Section {
-    Overview,
-    Signature,
-    Logic,
-    Invariants,
-    Relations,
-    Code,
-    Changes,
-    Placeholders,
-    Findings,
-}
-
-impl Section {
-    pub const ALL: [Section; 9] =
-        [Section::Overview, Section::Signature, Section::Logic, Section::Invariants, Section::Relations, Section::Code, Section::Changes, Section::Placeholders, Section::Findings];
-
-    /// The stable name notes use for it (`harness_contracts::CARD_SECTIONS`).
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Overview => "overview",
-            Self::Signature => "signature",
-            Self::Logic => "logic",
-            Self::Invariants => "invariants",
-            Self::Relations => "relations",
-            Self::Code => "code",
-            Self::Changes => "changes",
-            Self::Placeholders => "placeholders",
-            Self::Findings => "findings",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Section> {
-        Self::ALL.into_iter().find(|s| s.key() == key)
-    }
-
-    /// Where a required detail is written.
-    pub fn of_required(field: arch_graph::RequiredField) -> Section {
-        use arch_graph::RequiredField as F;
-        match field {
-            F::Description => Self::Overview,
-            F::Signature | F::Inputs | F::Outputs | F::Properties | F::SideEffects => Self::Signature,
-            F::Spec | F::Pattern | F::LogicSteps | F::Validation => Self::Logic,
-            F::Invariants => Self::Invariants,
-        }
-    }
-
-    /// Where a field changed since the last review shows (diff field paths).
-    pub fn of_field(field: &str) -> Section {
-        match field {
-            "signature" => Self::Signature,
-            f if f.starts_with("schemas") => Self::Signature,
-            f if f.starts_with("spec.logic_steps") || f.starts_with("spec.tasks") => Self::Logic,
-            f if f.starts_with("spec.invariants") => Self::Invariants,
-            "relations" => Self::Relations,
-            "placeholders" => Self::Placeholders,
-            _ => Self::Overview,
-        }
-    }
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Overview => "Overview",
-            Self::Signature => "Signature",
-            Self::Logic => "Logic steps",
-            Self::Invariants => "Invariants",
-            Self::Relations => "Relations",
-            Self::Code => "Code",
-            Self::Changes => "Changes",
-            Self::Placeholders => "Placeholders",
-            Self::Findings => "Findings",
-        }
-    }
-}
-
 /// The section a discussion shows in, when it's on `id`'s card: one on the
-/// component in the overview, on a relation in relations, on a section in
-/// its own.
+/// component (or the whole plan) in the overview, on a relation in
+/// relations, on a section in its own.
 pub fn section_of(on: &Subject, id: &ComponentId) -> Option<Section> {
     match on {
         Subject::PlanComponent { id: on, .. } if on == id => Some(Section::Overview),
         Subject::PlanSection { id: on, section, .. } if on == id => Some(Section::from_key(section).unwrap_or(Section::Overview)),
         Subject::PlanRelation { source, target, .. } if source == id || target == id => Some(Section::Relations),
+        // The whole plan's: on every card (it holds every approval).
+        Subject::Plan { .. } => Some(Section::Overview),
         _ => None,
     }
 }
@@ -215,7 +143,7 @@ pub struct SpecState {
     pub author: String,
     /// The discussions on the plan's parts (all of them) and its diff since
     /// the last review.
-    pub comments: Vec<Discussion>,
+    pub discussions: Vec<Discussion>,
     pub diff: PlanDiff,
     pub composer: Option<Composer>,
     /// The review point `] c` is on.
@@ -262,7 +190,7 @@ impl Default for SpecState {
             followed: None,
             seen: Default::default(),
             author: String::new(),
-            comments: Vec::new(),
+            discussions: Vec::new(),
             diff: PlanDiff::default(),
             composer: None,
             point: None,
@@ -505,7 +433,7 @@ impl SpecState {
     /// The discussions on the target, in a section (or all of them), oldest first.
     pub fn comments_in(&self, section: Option<Section>) -> Vec<&Discussion> {
         let Some(target) = &self.target else { return Vec::new() };
-        let mut out: Vec<&Discussion> = self.comments.iter().filter(|c| section_of(&c.on.subject, target).is_some_and(|s| section.is_none_or(|want| want == s))).collect();
+        let mut out: Vec<&Discussion> = self.discussions.iter().filter(|c| section_of(&c.on.subject, target).is_some_and(|s| section.is_none_or(|want| want == s))).collect();
         out.sort_by_key(|c| c.said.first().map_or(0, |s| s.at_ms));
         out
     }
@@ -581,7 +509,7 @@ impl SpecState {
                 crate::status::chip(ui, crate::status::alignment(detail.alignment), None);
                 let open = self.open_points().len();
                 if open > 0 {
-                    crate::status::chip(ui, "open_comments", Some(&open.to_string()));
+                    crate::status::chip(ui, "open_discussions", Some(&open.to_string()));
                 }
                 if !self.changed_sections().is_empty() {
                     crate::status::chip(ui, "changed", None);
@@ -637,7 +565,7 @@ impl SpecState {
             SpecItem::Comment(id) | SpecItem::Reply(id, _) => id,
             _ => return None,
         };
-        self.comments.iter().find(|c| c.id == id)
+        self.discussions.iter().find(|c| c.id == id)
     }
 
     fn start_composing(&mut self, purpose: Compose) {
@@ -963,11 +891,11 @@ impl SpecState {
         let what = match (&composer.purpose, &composer.anchor) {
             (Compose::New(kind), Some(Subject::PlanRelation { relation, source, target, .. })) => {
                 let name = |id: &ComponentId| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned();
-                let what = if *kind == DiscussionKind::ChangeRequest { "Change request" } else { "Comment" };
+                let what = if *kind == DiscussionKind::ChangeRequest { "Change request" } else { "Question" };
                 format!("{what} on {} {} {}", name(source), relation.name(), name(target))
             }
             (Compose::New(DiscussionKind::ChangeRequest), _) => format!("Change request on {}", composer.section.title()),
-            (Compose::New(_), _) => format!("Comment on {}", composer.section.title()),
+            (Compose::New(_), _) => format!("Question on {}", composer.section.title()),
             (Compose::Reply(id), _) => format!("Reply to {id}"),
             (Compose::Reopen(id), _) => format!("Why reopen {id}?"),
         };
@@ -985,7 +913,16 @@ impl SpecState {
         if inserting && output.has_focus() && ui.input(|i| crate::keymap::local().input.sent(i).is_some()) {
             self.send_composer(cx.net, cx.ctx);
             *cx.input_mode = crate::keymap::InputMode::Normal;
+            output.surrender_focus();
         }
+    }
+
+    /// The composer gone: the keyboard isn't its any more (the next key is
+    /// a command's, not lost to a box no longer drawn).
+    fn close_composer(&mut self, cx: &mut RunCx<'_>) {
+        self.composer = None;
+        *cx.input_mode = crate::keymap::InputMode::Normal;
+        cx.ctx.memory_mut(|m| m.surrender_focus(egui::Id::new(("spec_composer", cx.at))));
     }
 }
 
@@ -1138,8 +1075,8 @@ impl ActionProvider for SpecState {
             );
             // Always there: with no open points it says so.
             let points = if self.open_points().is_empty() { When::Unavailable } else { When::Always };
-            out.push(f("spec.next_point", "Next open review point", "The next change asked for that isn't settled", S::Point { forward: true }).group(Group::Navigate).importance(if on_comment { SECONDARY } else { PRIMARY }).when(points).jump());
-            out.push(f("spec.prev_point", "Previous open review point", "The unsettled point before", S::Point { forward: false }).group(Group::Navigate).importance(MINOR).when(points).jump());
+            out.push(f("spec.next_point", "Next discussion not settled", "The next question or change asked for on this card that isn't settled", S::Point { forward: true }).group(Group::Navigate).importance(if on_comment { SECONDARY } else { PRIMARY }).when(points).jump());
+            out.push(f("spec.prev_point", "Previous discussion not settled", "The one before that isn't settled", S::Point { forward: false }).group(Group::Navigate).importance(MINOR).when(points).jump());
             // On an open point, its controls are under it.
             let on_open = self.comment_here().is_some_and(|c| c.status != DiscussionStatus::Settled);
             let under = |a: Action, caption: &str| if on_open { a.on_item(Style::Button, caption, None) } else { a };
@@ -1175,7 +1112,7 @@ impl ActionProvider for SpecState {
                     cx.net.arch_mark_reviewed(&plan, &self.author, cx.ctx.clone(), self.posted());
                 }
             }
-            Some(SpecCommand::Point { .. }) if self.open_points().is_empty() => *cx.note = Some("No open review points on this component.".into()),
+            Some(SpecCommand::Point { .. }) if self.open_points().is_empty() => *cx.note = Some("No discussions not settled on this component.".into()),
             Some(SpecCommand::Point { forward }) => self.step_point(*forward),
             Some(SpecCommand::Reply) => match self.reply_point() {
                 Some(id) => {
@@ -1195,13 +1132,10 @@ impl ActionProvider for SpecState {
                 }
                 None => *cx.note = Some("Only an answered point can be reopened.".into()),
             },
-            Some(SpecCommand::CancelCompose) => {
-                self.composer = None;
-                *cx.input_mode = crate::keymap::InputMode::Normal;
-            }
+            Some(SpecCommand::CancelCompose) => self.close_composer(cx),
             Some(SpecCommand::Send) => {
                 self.send_composer(cx.net, cx.ctx);
-                *cx.input_mode = crate::keymap::InputMode::Normal;
+                self.close_composer(cx);
             }
             Some(SpecCommand::Reread) => self.asks.extend(self.code_location().map(|(file, _, _)| Ask::Reread(file))),
             Some(SpecCommand::NextSection) => self.step_section(1),
@@ -1296,7 +1230,7 @@ impl Navigable for SpecState {
             self.author.clone_from(user);
         }
         if let Some(review) = shared.review_since(&mut self.seen.review) {
-            self.comments.clone_from(&review.discussions);
+            self.discussions.clone_from(&review.discussions);
             self.diff.clone_from(&review.diff);
         }
         self.follow_source(shared.source.get());
@@ -1463,8 +1397,8 @@ impl Navigable for SpecState {
                     // Deleted lines too: what was there.
                     SpecItem::Hunk(i) => (String::new(), self.changes.get(*i).map(|h| h.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default()),
                     SpecItem::Finding(i) => (String::new(), self.findings.get(*i).map(|f| f.message.clone()).unwrap_or_default()),
-                    SpecItem::Comment(id) => (String::new(), self.comments.iter().find(|c| &c.id == id).map(|c| c.asking().to_owned()).unwrap_or_default()),
-                    SpecItem::Reply(id, i) => (String::new(), self.comments.iter().find(|c| &c.id == id).and_then(|c| c.said.get(*i + 1)).map(|r| r.text.clone()).unwrap_or_default()),
+                    SpecItem::Comment(id) => (String::new(), self.discussions.iter().find(|c| &c.id == id).map(|c| c.asking().to_owned()).unwrap_or_default()),
+                    SpecItem::Reply(id, i) => (String::new(), self.discussions.iter().find(|c| &c.id == id).and_then(|c| c.said.get(*i + 1)).map(|r| r.text.clone()).unwrap_or_default()),
                 };
                 Item::new(e.key(), name, text)
             })
@@ -1690,10 +1624,13 @@ impl crate::buffer::Buffer for SpecState {
         self.follow_changes(net, ctx);
     }
 
-    /// Changed code or plans: its component read again.
+    /// Changed code or plans: its component read again (an item's card:
+    /// when its plan changed).
     fn on_event(&mut self, event: &arch_graph::ArchEvent) {
-        if matches!(event, arch_graph::ArchEvent::Changed { .. }) {
-            crate::buffer::Buffer::invalidate(self);
+        let arch_graph::ArchEvent::Changed { plans, .. } = event else { return };
+        match self.item.as_mut() {
+            Some(card) => card.asked &= !plans.contains(&card.plan),
+            None => crate::buffer::Buffer::invalidate(self),
         }
     }
 
@@ -1896,7 +1833,7 @@ pub(crate) mod tests {
         s.loaded = Some((id.clone(), s.source.clone()));
         let mut answered = discussion(1, on(&id, Some("logic")), DiscussionStatus::Answered);
         answered.said.push(harness_contracts::Said { by: "user".into(), at_ms: 2, kind: SaidKind::Message, text: "and?".into(), changed: Vec::new() });
-        s.comments = vec![answered];
+        s.discussions = vec![answered];
         let keys: Vec<String> = s.entries().iter().map(Entry::key).collect();
         let at = |k: &str| keys.iter().position(|x| x == k).unwrap_or_else(|| panic!("{k} in {keys:?}"));
         // j walks titles, steps, comments and replies in order.
@@ -1990,7 +1927,7 @@ pub(crate) mod tests {
         assert_eq!(s.changed_sections(), [Section::Overview, Section::Signature, Section::Logic, Section::Relations].into_iter().collect());
         // Threads land where their anchor points.
         let relation = Subject::PlanRelation { plan: PlanId::new("p").unwrap(), relation: RelationKind::Calls, source: other.clone(), target: id.clone() };
-        s.comments = vec![
+        s.discussions = vec![
             discussion(1, on(&id, None), DiscussionStatus::Open),
             discussion(2, on(&id, Some("invariants")), DiscussionStatus::Answered),
             discussion(3, relation, DiscussionStatus::Settled),
@@ -2093,7 +2030,7 @@ pub(crate) mod tests {
         // The type wants a description and a signature; this one has neither.
         s.types = Some(arch_graph::TypeSystem::from_toml("[types.function]\nrequired_fields = [\"description\", \"signature\", \"logic_steps\"]").unwrap());
         assert_eq!(s.missing_required(), [arch_graph::RequiredField::Description, arch_graph::RequiredField::Signature]);
-        s.comments = vec![discussion(1, on(&id, None), DiscussionStatus::Open)];
+        s.discussions = vec![discussion(1, on(&id, None), DiscussionStatus::Open)];
         // The second step and the call changed; the first step didn't.
         s.diff = PlanDiff {
             since: Some("2026-10-03T09:00:00Z".into()),
@@ -2110,7 +2047,7 @@ pub(crate) mod tests {
         let text = drawn(&mut s, &ctx).max(text);
 
         // V.2: the header names it, links its place, shows how far along it is and what needs looking at.
-        for expected in ["step", "function", "rust:a::step", "src/a.rs (planned)", &word("planned"), &format!("1 {}", word("open_comments")), &word("changed")] {
+        for expected in ["step", "function", "rust:a::step", "src/a.rs (planned)", &word("planned"), &format!("1 {}", word("open_discussions")), &word("changed")] {
             assert!(text.contains(expected), "header shows {expected}: {text}");
         }
         for stage in arch_graph::Stage::ALL {

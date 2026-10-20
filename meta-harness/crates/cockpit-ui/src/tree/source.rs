@@ -62,4 +62,16 @@ pub trait TreeSource {
 
     /// The row a target is, if it has one.
     fn key_of(&self, target: &Target) -> Option<String>;
+
+    /// Where going into row `key` goes instead of unfolding it (a plan's
+    /// item: its card); none: it unfolds.
+    fn opens(&self, _key: &str) -> Option<crate::nav::GoTo> {
+        None
+    }
+
+    /// What holds the thing row `key` is (a section: its card, then its
+    /// plan), nearest first.
+    fn holders(&self, _key: &str) -> Vec<harness_contracts::Subject> {
+        Vec::new()
+    }
 }

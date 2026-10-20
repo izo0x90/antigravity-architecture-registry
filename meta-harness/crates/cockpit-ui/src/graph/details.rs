@@ -92,7 +92,7 @@ impl GraphState {
                 out.push(Status::new("changed since review", Tone::Info));
             }
             if mark.open > 0 {
-                out.push(Status::new(format!("{} open review points", mark.open), Tone::Warn));
+                out.push(Status::new(format!("{} discussions not settled", mark.open), Tone::Warn));
             }
         }
         // What's on its lines (its pills, listed).

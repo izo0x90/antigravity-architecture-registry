@@ -19,6 +19,7 @@ pub mod index;
 pub mod review;
 pub mod schema;
 pub mod tree;
+pub mod when;
 mod types;
 mod wire;
 

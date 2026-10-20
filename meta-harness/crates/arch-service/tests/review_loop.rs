@@ -1,14 +1,14 @@
 //! The review on a temp copy of the Rust fixture: the user marks the plan
-//! reviewed and later changes are diffed; approval asks the discussions;
-//! comments a plan's file still holds (from before discussions) go to them
-//! once, and the file is written without them.
+//! reviewed and later changes are diffed; comments a plan's file holds
+//! (from before discussions) go to them once, as the server starts, and
+//! the file is written without them.
 
 use std::path::Path;
 
 use std::sync::{Arc, Mutex};
 
 use arch_graph::{Change, ComponentId, Param, PlanId, RelationKind, Signature, Stage, TypeSystem};
-use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, PlanRepository, ServiceError};
+use arch_service::{Actor, ArchitectureService, FsPlans, PlanOp, ServiceError};
 use serde_json::{Value, json};
 
 mod common;
@@ -112,7 +112,7 @@ fn held(root: &Path) -> Option<Value> {
 }
 
 #[test]
-fn comments_a_plans_file_still_holds_go_to_the_discussions_once_and_its_file_is_written_without_them() {
+fn comments_a_plans_file_holds_go_to_the_discussions_once_as_the_server_starts_and_hold_approvals_till_then() {
     let (_dir, root, s) = setup();
     let old = json!([
         { "id": "c1", "anchor": { "on": "component", "id": "rust:sample::validate" }, "author": { "kind": "user", "name": "izo" }, "text": "Pure?", "at": "2026-10-07T00:51:37Z" },
@@ -120,43 +120,34 @@ fn comments_a_plans_file_still_holds_go_to_the_discussions_once_and_its_file_is_
     ]);
     with_comments(&root, old.clone());
     drop(s);
-    // Read before anything takes them: they wait in the file, a save keeps them.
+    // Read before they're moved: they wait in the file, a save keeps them,
+    // and they hold the plan's approvals.
     let s = open(&root);
     s.apply(&pid(), PlanOp::Modify { id: id("sample::run"), description: Some("Validates first.".into()), signature: None, schemas: None, spec: None }).unwrap();
     assert_eq!(held(&root), Some(old.clone()), "saved with them still in it");
-    // A mover that fails leaves them in the file.
+    let waiting = s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap_err().to_string();
+    assert!(waiting.contains("holds comments from before discussions"), "{waiting}");
+    assert!(matches!(s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &agent()), Err(ServiceError::Forbidden(_))));
+    // A mover that fails leaves them in the file, holding approvals.
     let (moved, refuse) = (Moved::default(), Arc::new(Mutex::new(true)));
     s.move_comments_to(mover(&moved, &refuse)).unwrap();
     assert_eq!(held(&root), Some(old.clone()));
-    assert!(s.move_comments_to(mover(&moved, &refuse)).is_err(), "they go one way");
-    // Read again (the file changed, say) once it takes them: moved once, the file without them.
+    assert!(s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user()).is_err());
+    assert!(s.move_comments_to(mover(&moved, &refuse)).is_err(), "once, as the server starts");
+    drop(s);
+    // The next start moves them: the file without them, the rest as it was.
     *refuse.lock().unwrap() = false;
-    s.refresh(&[file(&root)]).unwrap();
+    let s = open(&root);
+    s.move_comments_to(mover(&moved, &refuse)).unwrap();
     assert_eq!(*moved.lock().unwrap(), [("r".to_owned(), vec!["c1".to_owned(), "c2".to_owned()])]);
     assert_eq!(held(&root), None, "the file is written without them");
     assert_eq!(s.plan(&pid()).unwrap().components.iter().filter(|c| c.name == "validate").count(), 1, "the rest of the plan as it was");
-    s.refresh(&[file(&root)]).unwrap();
-    assert_eq!(moved.lock().unwrap().len(), 1, "once");
-    // A file that comes with comments later (checked out, say): moved as it's read.
+    // A file that comes with comments later (checked out, say): read, not
+    // moved (only a start moves them); they hold approvals till then.
     with_comments(&root, json!([{ "id": "c9", "anchor": { "on": "plan" }, "author": { "kind": "user", "name": "izo" }, "text": "Later.", "at": "2026-10-08T00:00:00Z" }]));
     s.refresh(&[file(&root)]).unwrap();
-    assert_eq!(moved.lock().unwrap().last().map(|(_, ids)| ids.clone()), Some(vec!["c9".to_owned()]));
-    assert_eq!(held(&root), None);
-    // A fresh read has nothing to move.
-    assert!(FsPlans::new(&root).unwrap().get(&pid()).unwrap().is_some());
-}
-
-#[test]
-fn approval_asks_the_discussions_and_waits_while_they_say_why_not() {
-    let (_dir, _root, s) = setup();
-    let open = Arc::new(Mutex::new(true));
-    let held = open.clone();
-    s.approvals_ask(Box::new(move |plan, id| (*held.lock().unwrap() && id.as_str() == "rust:sample::validate").then(|| format!("{id} in {plan} has discussions not settled: d1"))));
-    let err = s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap_err().to_string();
-    assert!(err.contains("rust:sample::validate in r has discussions not settled: d1"), "{err}");
-    assert!(matches!(s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &agent()), Err(ServiceError::Forbidden(_))));
-    *open.lock().unwrap() = false;
-    assert_eq!(s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap().to, Stage::ArchApproved);
+    assert_eq!(moved.lock().unwrap().len(), 1, "not moved as it's read");
+    assert!(s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap_err().to_string().contains("holds comments"));
 }
 
 #[test]

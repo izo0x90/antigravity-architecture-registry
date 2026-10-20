@@ -1,7 +1,8 @@
 //! Discussions, for the cockpit: list them (or those on a thing), read
-//! one, start one on a thing, reply, answer, settle, reopen, make one a
-//! change request, delete one. Reading needs `view.read`; the rest
-//! `discuss` (agents discuss through their tools, as their role allows).
+//! one, start one on a thing (asking the lead, another agent slot, or no
+//! one but you), reply; settle, reopen, make one a change request, delete
+//! one (the user's alone: `plans.approve`). Reading needs `view.read`,
+//! starting and replying `discuss`. Agents answer through their tools.
 //! What the user does is theirs: `by` is "user".
 
 use std::sync::Arc;
@@ -26,7 +27,6 @@ pub(crate) fn routes() -> Router<DiscussionsState> {
         .route("/api/discussions/on", post(on))
         .route("/api/discussions/{id}", get(read).delete(delete))
         .route("/api/discussions/{id}/reply", post(reply))
-        .route("/api/discussions/{id}/answer", post(answer))
         .route("/api/discussions/{id}/settle", post(settle))
         .route("/api/discussions/{id}/reopen", post(reopen))
         .route("/api/discussions/{id}/change", post(change))
@@ -54,8 +54,8 @@ async fn blocking<T: Send + 'static>(discussions: &Arc<Discussions>, f: impl FnO
     tokio::task::spawn_blocking(move || f(&discussions)).await.map_err(|e| Refused(DiscussionError::Store(e.to_string())))?.map_err(Refused)
 }
 
-async fn list(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>) -> Json<Vec<Discussion>> {
-    Json(state.discussions.list())
+async fn list(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>) -> Result<Json<Vec<Discussion>>, Refused> {
+    blocking(&state.discussions, |d| Ok(d.list())).await.map(Json)
 }
 
 #[derive(Deserialize)]
@@ -65,12 +65,12 @@ struct On {
 }
 
 /// The discussions on a thing (or on something it's in).
-async fn on(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>, Json(body): Json<On>) -> Json<Vec<Discussion>> {
-    Json(state.discussions.on(&body.subject))
+async fn on(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>, Json(body): Json<On>) -> Result<Json<Vec<Discussion>>, Refused> {
+    blocking(&state.discussions, move |d| Ok(d.on(&body.subject))).await.map(Json)
 }
 
 async fn read(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>, Path(id): Path<String>) -> Result<Json<Discussion>, Refused> {
-    state.discussions.get(&DiscussionId::new(id)).map(Json).map_err(Refused)
+    blocking(&state.discussions, move |d| d.get(&DiscussionId::new(id))).await.map(Json)
 }
 
 #[derive(Deserialize)]
@@ -80,13 +80,14 @@ struct Starting {
     #[serde(default)]
     kind: DiscussionKind,
     text: String,
-    /// The agent slot asked (none: the lead).
+    /// The agent slot asked, by its id or name (none: the lead).
     #[serde(default)]
     asked: Option<String>,
 }
 
 async fn start(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Json(body): Json<Starting>) -> Result<Json<Discussion>, Refused> {
-    blocking(&state.discussions, move |d| d.start(&body.subject, body.kind, &body.text, USER, body.asked.as_deref())).await.map(Json)
+    let asked = crate::discussing::asked(&state.slots, body.asked.as_deref(), USER).map_err(|e| Refused(DiscussionError::Invalid(e)))?;
+    blocking(&state.discussions, move |d| d.start(&body.subject, body.kind, &body.text, USER, Some(&asked))).await.map(Json)
 }
 
 #[derive(Deserialize)]
@@ -100,31 +101,19 @@ async fn reply(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Pa
     blocking(&state.discussions, move |d| d.reply(&DiscussionId::new(id), &body.text, USER)).await.map(Json)
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Answering {
-    text: String,
-    /// What it changed, by name.
-    #[serde(default)]
-    changed: Vec<String>,
-}
-
-async fn answer(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Answering>) -> Result<Json<Discussion>, Refused> {
-    blocking(&state.discussions, move |d| d.answer(&DiscussionId::new(id), &body.text, &body.changed, USER)).await.map(Json)
-}
-
-async fn settle(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
+async fn settle(_: Needs<can::PlansApprove>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
     blocking(&state.discussions, move |d| d.settle(&DiscussionId::new(id), &body.text, USER)).await.map(Json)
 }
 
-async fn reopen(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
+async fn reopen(_: Needs<can::PlansApprove>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
     blocking(&state.discussions, move |d| d.reopen(&DiscussionId::new(id), &body.text, USER)).await.map(Json)
 }
 
-async fn change(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>) -> Result<Json<Discussion>, Refused> {
-    blocking(&state.discussions, move |d| d.ask_for_change(&DiscussionId::new(id), USER)).await.map(Json)
+/// Made a change request (one answered: open again, `text` saying why).
+async fn change(_: Needs<can::PlansApprove>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
+    blocking(&state.discussions, move |d| d.ask_for_change(&DiscussionId::new(id), &body.text, USER)).await.map(Json)
 }
 
-async fn delete(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>) -> Result<StatusCode, Refused> {
+async fn delete(_: Needs<can::PlansApprove>, State(state): State<DiscussionsState>, Path(id): Path<String>) -> Result<StatusCode, Refused> {
     blocking(&state.discussions, move |d| d.delete(&DiscussionId::new(id), USER)).await.map(|()| StatusCode::NO_CONTENT)
 }

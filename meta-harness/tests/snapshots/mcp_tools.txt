@@ -1404,3 +1404,114 @@ Rename a tag, give it another colour or a note, or delete it.
   ]
 }
 
+## discussions
+Discussions: a question or a change asked for, on a thing, and what's said in it. What's waiting on you comes first (open, asked of you), then the rest not settled; settled ones with `all`.
+{
+  "type": "object",
+  "properties": {
+    "plan": {
+      "type": "string",
+      "description": "Only those on this plan's parts"
+    },
+    "on": {
+      "type": "string",
+      "description": "Only those on this thing (or in it, or it's in). A thing, named as its owner names it: a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124`; a chat's `chat lead turn 3`, `chat lead turn 3 message 2`; code's `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` (overview, signature, logic, invariants, relations, code, changes, placeholders, findings), `plan <id> relation <source> <kind> <target>`, `plan <id> item <id>`; another discussion's `discussion d3`"
+    },
+    "all": {
+      "type": "boolean",
+      "description": "Settled ones too"
+    }
+  }
+}
+
+## discussion_read
+One discussion whole: what it's on as it is now (and as it was when it started, when that was kept), whose move it is, everything said in it.
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "The discussion, e.g. d3"
+    }
+  },
+  "required": [
+    "id"
+  ]
+}
+
+## discuss
+Start a discussion on a thing: a question, or a change asked for. It asks the lead unless you name another agent slot, or `user` to ask the user.
+{
+  "type": "object",
+  "properties": {
+    "on": {
+      "type": "string",
+      "description": "A thing, named as its owner names it: a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124`; a chat's `chat lead turn 3`, `chat lead turn 3 message 2`; code's `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` (overview, signature, logic, invariants, relations, code, changes, placeholders, findings), `plan <id> relation <source> <kind> <target>`, `plan <id> item <id>`; another discussion's `discussion d3`"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "question",
+        "change_request"
+      ],
+      "description": "question (the default), or change_request (its answer names what changed)"
+    },
+    "text": {
+      "type": "string"
+    },
+    "ask": {
+      "type": "string",
+      "description": "An agent slot (id or name), or `user`; none: the lead"
+    }
+  },
+  "required": [
+    "on",
+    "text"
+  ]
+}
+
+## discussion_reply
+Say something in a discussion without answering it (to ask back, say where you are).
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "The discussion, e.g. d3"
+    },
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "text"
+  ]
+}
+
+## discussion_answer
+Answer a discussion asked of you. A change request's answer names what you changed (by name: what it's on, or a part of it), changed first; the user then settles it or reopens it.
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "The discussion, e.g. d3"
+    },
+    "text": {
+      "type": "string"
+    },
+    "changed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "What you changed, by name"
+    }
+  },
+  "required": [
+    "id",
+    "text"
+  ]
+}
+

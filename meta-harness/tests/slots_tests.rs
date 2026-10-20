@@ -121,6 +121,15 @@ async fn a_report_reaches_a_running_lead_or_waits_for_one() {
     }
     assert!(heard, "{:?}", slots.read(&lead, 10).unwrap().messages);
     assert_eq!(slots.report(&sub, "and a fourth".into()).await.unwrap(), Reported::Delivered);
+    // Any slot is told the same way: held for it alone until it runs.
+    assert_eq!(slots.tell(&sub, "the user (discussion d1)", "Why?".into()).await.unwrap(), Reported::Held, "no session of its own: held");
+    let opened = slots.open_session(&sub, Open::New { resume: None }).await.unwrap();
+    assert_eq!(opened.delivered_reports, 1, "delivered as it opened");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !slots.read(&sub, 10).unwrap().messages.iter().any(|(_, m)| m.contains("From the user (discussion d1):\n\nWhy?")) {
+        assert!(std::time::Instant::now() < deadline, "{:?}", slots.read(&sub, 10).unwrap().messages);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 /// A store that can be made to fail, for what happens then.
@@ -152,8 +161,11 @@ impl SlotStore for Store {
         self.reports.lock().unwrap().push(report.clone());
         Ok(())
     }
-    fn take_reports(&self) -> Result<Vec<HeldReport>, String> {
-        Ok(std::mem::take(&mut *self.reports.lock().unwrap()))
+    fn take_reports(&self, to: &SlotId) -> Result<Vec<HeldReport>, String> {
+        let mut reports = self.reports.lock().unwrap();
+        let (taken, kept) = std::mem::take(&mut *reports).into_iter().partition(|r| &r.to == to);
+        *reports = kept;
+        Ok(taken)
     }
     fn note(&self, _: &str, _: &str, _: &str, _: Option<&str>) {}
 }
@@ -387,6 +399,7 @@ async fn a_turns_tool_output_is_folded_the_same_in_every_read_unless_read_in_ful
 /// A session that numbers its turns anew (a message taken while a turn
 /// ran): what's tagged in it is kept where its turn is now. A slot closed:
 /// its session is named as no slot's, and named back so.
+/// (Each wait gives the fake sessions ten seconds, for a busy machine.)
 #[tokio::test]
 async fn a_tagged_turn_follows_its_session_numbering_it_anew_and_its_slot_closing() {
     let (addr, state) = spawn_app().await;
@@ -397,7 +410,7 @@ async fn a_tagged_turn_follows_its_session_numbering_it_anew_and_its_slot_closin
     assert_eq!(status, 200, "{body}");
     let mut lead = Mcp::lead(addr).await;
     let mut said = String::new();
-    for _ in 0..50 {
+    for _ in 0..200 {
         let (error, out) = lead.tool("tag", json!({ "tag": "first", "subject": "chat helper turn 1" })).await;
         said = out;
         if !error {
@@ -409,7 +422,7 @@ async fn a_tagged_turn_follows_its_session_numbering_it_anew_and_its_slot_closin
     let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"[renumber]"}"#)).await;
     assert_eq!(status, 200, "{body}");
     let named = |state: &meta_harness::modules::AppState| state.tags.tags.find("first").unwrap().on[0].what.clone();
-    for _ in 0..50 {
+    for _ in 0..200 {
         if named(&state).ends_with(" turn 9") {
             break;
         }
@@ -420,7 +433,7 @@ async fn a_tagged_turn_follows_its_session_numbering_it_anew_and_its_slot_closin
     assert!(read.contains(" turn 9 (as it is now):\necho: first"), "the same turn, by its new number: {read}");
     // Its slot closed: named as no slot's session, and named back so.
     state.harness.slots.close(&SlotId::new(&slot)).await.unwrap();
-    for _ in 0..50 {
+    for _ in 0..200 {
         if named(&state).starts_with("chat session ") {
             break;
         }

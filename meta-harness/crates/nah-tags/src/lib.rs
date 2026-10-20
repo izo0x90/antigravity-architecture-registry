@@ -116,9 +116,9 @@ fn check_name(name: &str) -> Result<String, TagError> {
     if harness_contracts::tag_name_ok(name) { Ok(name.to_owned()) } else { Err(TagError::BadName(name.to_owned())) }
 }
 
-/// Now, as a reader of the logs reads a date ("Tue, 20 Oct 2026 21:13:57 GMT").
+/// Now, as every time a person reads is written (`arch_graph::when`).
 fn now_words() -> String {
-    httpdate::fmt_http_date(std::time::SystemTime::now())
+    harness_contracts::when::now()
 }
 
 /// The tag with id `name`, or named `name` (in capitals or not: `Flaky`
@@ -154,7 +154,7 @@ fn indent(text: &str) -> String {
 }
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+    harness_contracts::when::now_ms()
 }
 
 impl Notes for Tags {
@@ -310,8 +310,12 @@ impl Tags {
     /// colour least used, when there's none of that name), with who tagged
     /// it (`by`). One its owner doesn't keep for good is written to the
     /// logs (before the tag is kept: nothing waits on that); already on
-    /// it: as it was.
+    /// it: as it was. (Where its things are now is worked out once.)
     pub fn tag(&self, tag: &str, subject: Subject, by: &str) -> Result<Tag, TagError> {
+        self.things.pass(|| self.tagging(tag, subject, by))
+    }
+
+    fn tagging(&self, tag: &str, subject: Subject, by: &str) -> Result<Tag, TagError> {
         let name = match found(&lock(&self.tags), tag) {
             Ok(existing) if existing.on.iter().any(|t| self.same_now(&t.subject, &subject)) => return Ok(existing),
             Ok(existing) if existing.on.len() >= MOST_ON => return Err(TagError::TooMany),
@@ -352,6 +356,10 @@ impl Tags {
 
     /// Takes `tag` off `subject` (`by` took it off).
     pub fn untag(&self, tag: &str, subject: &Subject, by: &str) -> Result<Tag, TagError> {
+        self.things.pass(|| self.untagging(tag, subject, by))
+    }
+
+    fn untagging(&self, tag: &str, subject: &Subject, by: &str) -> Result<Tag, TagError> {
         let mut tags = lock(&self.tags);
         let mut kept = found(&tags, tag)?;
         let Some(at) = kept.on.iter().position(|t| self.same_now(&t.subject, subject)) else { return Err(TagError::NotOn(kept.name)) };

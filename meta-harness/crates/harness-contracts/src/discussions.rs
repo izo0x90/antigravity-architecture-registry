@@ -96,7 +96,8 @@ pub struct Discussion {
     pub kind: DiscussionKind,
     /// Who started it (`user`, or an agent's slot).
     pub by: String,
-    /// The agent slot asked to answer it (`lead` unless another was named).
+    /// Who's asked to answer it: an agent slot (the lead unless another
+    /// was named), or `user` (an agent's question to the user).
     pub asked: String,
     #[serde(default)]
     pub status: DiscussionStatus,
@@ -109,17 +110,19 @@ pub struct Discussion {
 pub enum Move {
     /// The agent slot asked (it's open).
     Agent(String),
-    /// The user (it's answered: settle or reopen it).
+    /// The user (it's answered: settle or reopen it; or it's open, asked
+    /// of the user).
     User,
     /// No one's (settled).
     Nobody,
 }
 
 impl Discussion {
-    /// Whose move it is: the agent asked while it's open, the user once it's
-    /// answered, no one's once settled.
+    /// Whose move it is: whoever's asked while it's open (an agent slot, or
+    /// the user), the user once it's answered, no one's once settled.
     pub fn whose_move(&self) -> Move {
         match self.status {
+            DiscussionStatus::Open if self.asked == "user" => Move::User,
             DiscussionStatus::Open => Move::Agent(self.asked.clone()),
             DiscussionStatus::Answered => Move::User,
             DiscussionStatus::Settled => Move::Nobody,

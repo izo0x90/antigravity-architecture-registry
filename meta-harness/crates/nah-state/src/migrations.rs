@@ -48,6 +48,13 @@ const MIGRATIONS: &[(i64, &str)] = &[
         "CREATE TABLE discussions (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, json TEXT NOT NULL);
      CREATE TABLE discussion_numbers (n INTEGER PRIMARY KEY AUTOINCREMENT);",
     ),
+    // What's held is for any slot (a discussion's news to the slot asked),
+    // and says who it's from as the slot reads it.
+    (
+        12,
+        "ALTER TABLE held_reports ADD COLUMN to_slot TEXT NOT NULL DEFAULT 'lead';
+     UPDATE held_reports SET from_slot = from_slot || ' (sub-slot)';",
+    ),
 ];
 
 /// The newest layout this NAH knows.

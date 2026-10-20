@@ -119,21 +119,21 @@ impl SlotStore for StateDb {
 
     fn hold_report(&self, report: &HeldReport) -> Result<(), String> {
         self.transaction(|tx| {
-            tx.execute("INSERT INTO held_reports (from_slot, text, at_ms) VALUES (?1, ?2, ?3)", params![report.from, report.text, report.at_ms as i64]).map_err(failed)?;
+            tx.execute("INSERT INTO held_reports (to_slot, from_slot, text, at_ms) VALUES (?1, ?2, ?3, ?4)", params![report.to.as_str(), report.from, report.text, report.at_ms as i64]).map_err(failed)?;
             Ok(())
         })
         .map_err(|e| e.to_string())
     }
 
-    fn take_reports(&self) -> Result<Vec<HeldReport>, String> {
+    fn take_reports(&self, to: &SlotId) -> Result<Vec<HeldReport>, String> {
         self.transaction(|tx| {
-            let mut stmt = tx.prepare("SELECT from_slot, text, at_ms FROM held_reports ORDER BY seq").map_err(failed)?;
+            let mut stmt = tx.prepare("SELECT from_slot, text, at_ms FROM held_reports WHERE to_slot = ?1 ORDER BY seq").map_err(failed)?;
             let reports = stmt
-                .query_map([], |r| Ok(HeldReport { from: r.get(0)?, text: r.get(1)?, at_ms: r.get::<_, i64>(2)? as u64 }))
+                .query_map(params![to.as_str()], |r| Ok(HeldReport { to: to.clone(), from: r.get(0)?, text: r.get(1)?, at_ms: r.get::<_, i64>(2)? as u64 }))
                 .map_err(failed)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(failed)?;
-            tx.execute("DELETE FROM held_reports", []).map_err(failed)?;
+            tx.execute("DELETE FROM held_reports WHERE to_slot = ?1", params![to.as_str()]).map_err(failed)?;
             Ok(reports)
         })
         .map_err(|e| e.to_string())

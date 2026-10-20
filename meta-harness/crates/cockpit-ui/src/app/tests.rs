@@ -3,6 +3,7 @@
 mod asks;
 mod attention;
 mod desks;
+mod discussing;
 mod audits;
 mod hand;
 mod bindings;

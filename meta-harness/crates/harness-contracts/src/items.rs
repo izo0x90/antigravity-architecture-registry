@@ -60,6 +60,19 @@ pub enum ItemBody {
     Unsupported,
 }
 
+impl ItemBody {
+    /// What a message says, put together one way for every reader (the
+    /// chat, `slot_read`, what's tagged and discussed): your text, or an
+    /// answer's text parts a line apart. None: it isn't a message.
+    pub fn said(&self) -> Option<String> {
+        match self {
+            Self::UserMessage { text } => Some(text.clone()),
+            Self::AssistantMessage { content, .. } => Some(content.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n")),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolKind {

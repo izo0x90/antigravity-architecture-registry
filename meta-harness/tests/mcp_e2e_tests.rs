@@ -273,13 +273,14 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     let names = |who: &Principal| service.tools_for(who).iter().map(|t| t.name.clone()).collect::<Vec<_>>();
     let reads = ["ingest", "list_types", "search", "inspect", "view", "changes", "plan_list", "contract", "cockpit_read", "cockpit_actions", "terminals", "terminal_read", "tags", "tag_read", "tag_find"];
     assert!(names(&Principal::agent("external")).is_empty(), "an agent with no key: nothing, unless a project grants it");
-    // The slots' tools come before the terminals', the tags' after them.
+    // The slots' tools come before the terminals', the tags' after them,
+    // then the discussions'.
     let mut sub = reads.map(String::from).to_vec();
     sub.splice(10..10, ["tell_lead".into(), "tell_user".into()]);
-    sub.extend(["tag", "untag", "tag_edit"].map(String::from));
-    assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, reports to the lead and the user, and tags");
+    sub.extend(["tag", "untag", "tag_edit", "discussions", "discussion_read", "discuss", "discussion_reply", "discussion_answer"].map(String::from));
+    assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, reports to the lead and the user, tags and discusses");
     let lead = names(&Principal::agent("lead"));
-    assert!(lead.len() == 36 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself and typing into terminals: {lead:?}");
+    assert!(lead.len() == 41 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself and typing into terminals: {lead:?}");
     assert!(!lead.contains(&"terminal_type".to_owned()), "typing into the user's terminals is no role's unless granted");
     assert!(names(&Principal::Anonymous).is_empty());
 
