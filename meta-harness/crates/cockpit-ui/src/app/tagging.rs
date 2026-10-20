@@ -1,36 +1,74 @@
 //! Tagging: one action of the shell for every buffer. A buffer only says
-//! what the item under its cursor is (`Navigable::subject`); the shell tags
-//! it (picking a tag, or naming a new one), takes a tag off it, goes to
-//! what a tag is on (a go-to, as any other: the thing becomes a `Target`),
-//! and steps through the rest of a tag's things.
+//! what things are at the item under its cursor (`Navigable::things`: a
+//! line, the command it's in); the shell tags one of them (the unit, or
+//! the one `Tab` picks in the tag picker, picking a tag or naming a new
+//! one), takes a tag off any of them, goes to what a tag is on (a go-to,
+//! as any other: the thing becomes a `Target`), and steps through the rest
+//! of a tag's things.
 
 use harness_contracts::{Subject, TagId, on_things};
 
 use super::*;
 use crate::actions::{Choice, Group, When};
-use crate::nav::{Item, Target};
+use crate::nav::{Item, Target, Things};
 use crate::tags::{TagAct, first_line, thing_name};
 
 impl CockpitApp {
-    /// What the cursor's on where you are, as something a tag can be on.
-    fn subject_here(&self, here: Here) -> Option<Subject> {
+    /// The things at the cursor where you are that a tag can be on.
+    fn things_here(&self, here: Here) -> Things {
         let view = self.desk.view(here.kind);
-        view.subject(&view.cursor_key()?)
+        view.cursor_key().map(|key| view.things(&key)).unwrap_or_default()
+    }
+
+    /// The thing tagging is on: the unit, or the one picked in the picker.
+    fn subject_here(&self, here: Here) -> Option<Subject> {
+        self.things_here(here).picked(self.desk.tag_level).map(|t| t.subject.clone())
+    }
+
+    /// The tags on any of the things at the cursor, each with the thing
+    /// (the narrowest it's on).
+    fn tagged_here(&self, here: Here) -> Vec<(harness_contracts::Tag, Subject)> {
+        let tags = self.desk.shared.tags.get();
+        let mut out: Vec<(harness_contracts::Tag, Subject)> = Vec::new();
+        for thing in self.things_here(here).at {
+            for (tag, on) in tags.on(&thing.subject) {
+                if !out.iter().any(|(t, _)| t.id == tag.id) {
+                    out.push((tag.clone(), on.clone()));
+                }
+            }
+        }
+        out
     }
 
     /// The tag actions, where you are. The tag picker's rows are made only
     /// while the palette is open (it's what shows them, afresh each frame).
     pub(super) fn tag_actions(&self, here: Here) -> Vec<Action> {
         use ShellCommand as S;
-        let subject = self.subject_here(here);
+        let things = self.things_here(here);
         let tags = self.desk.shared.tags.get();
         let when = |ok: bool| if ok { When::Always } else { When::Unavailable };
         let picking = self.palette.is_open();
-        let on_it = subject.as_ref().map(|s| tags.on(s)).unwrap_or_default();
+        let on_it = self.tagged_here(here);
         let tagged = !on_it.is_empty();
+        // What's tagged (the picker's top line), and the next of the things
+        // there (its cycle key).
+        let level = self.desk.tag_level.unwrap_or(things.unit);
+        let chosen = things.picked(Some(level));
+        let next = (things.at.len() > 1).then(|| &things.at[(level + 1) % things.at.len()]);
         let mut out = vec![
-            Action::new("tag.add", "Tag what you're on", "Pick a tag, or type a new one's name", S::Tag).param(Param::Search { hint: "a tag's name (a new one is made)".into(), found: if picking { self.tag_found() } else { Vec::new() }, waiting: false }).group(Group::Act).importance(MINOR).when(when(subject.is_some())).icon(egui_phosphor::regular::TAG),
-            Action::new("tag.remove", "Take a tag off what you're on", "Pick which of its tags", S::Untag).param(Param::Choice(on_it.iter().map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone())).collect())).group(Group::Act).importance(MINOR).when(when(tagged)),
+            Action::new("tag.add", "Tag what you're on", "Pick a tag, or type a new one's name (what's tagged is said at the top)", S::Tag)
+                .param(Param::Search { hint: "a tag's name (a new one is made)".into(), found: if picking { self.tag_found() } else { Vec::new() }, waiting: false })
+                .about(chosen.map(|t| format!("Tag {}", t.words)))
+                .cycle(next.map(|_| "tag.level"))
+                .group(Group::Act)
+                .importance(MINOR)
+                .when(when(chosen.is_some()))
+                .icon(egui_phosphor::regular::TAG),
+            Action::new("tag.level", next.map_or_else(|| "Tag something around it".to_owned(), |t| format!("Tag {} instead", t.words)), "While tagging: what's tagged becomes the next of the things at the cursor (a line, the command it's in)", S::TagLevel)
+                .group(Group::Act)
+                .importance(MINOR)
+                .when(when(picking && next.is_some())),
+            Action::new("tag.remove", "Take a tag off what you're on", "Pick which of its tags (on any of the things at the cursor)", S::Untag).param(Param::Choice(on_it.iter().map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone())).collect())).group(Group::Act).importance(MINOR).when(when(tagged)),
             Action::new("tag.goto", "Go to something tagged", "Pick the tag, then which thing it's on", S::TagGoTo).param(Param::Choice(tags.list().iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).detail(Some(described(t)))).collect())).group(Group::GoTo).importance(MINOR),
             Action::new("tag.next", "Next with its tag", "The next thing the tag on this is on (the one stepped through last)", S::TagStep { forward: true }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
             Action::new("tag.prev", "Previous with its tag", "The thing before, of those the tag on this is on", S::TagStep { forward: false }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
@@ -70,15 +108,20 @@ impl CockpitApp {
         let here = self.here();
         let subject = self.subject_here(here);
         match (command, subject, value) {
+            (ShellCommand::TagLevel, _, _) => {
+                let things = self.things_here(here);
+                if !things.at.is_empty() {
+                    self.desk.tag_level = Some((self.desk.tag_level.unwrap_or(things.unit) + 1) % things.at.len());
+                }
+            }
             (ShellCommand::Tag, Some(subject), Some(tag)) => {
                 self.desk.shell_searches.remove("tag.add");
                 self.ask_tags(TagAct::Tag { tag, subject }, ctx);
             }
-            (ShellCommand::Untag, Some(subject), Some(tag)) => {
+            (ShellCommand::Untag, Some(_), Some(tag)) => {
                 let tag = TagId::new(tag);
-                // What the tag is on: the thing, or lines it's among.
-                let on = self.desk.shared.tags.get().on(&subject).into_iter().find(|(t, _)| t.id == tag).map(|(_, on)| on.clone());
-                if let Some(subject) = on {
+                // What the tag is on: one of the things there, or lines it's among.
+                if let Some((_, subject)) = self.tagged_here(here).into_iter().find(|(t, _)| t.id == tag) {
                     self.ask_tags(TagAct::Untag { tag, subject }, ctx);
                 }
             }
@@ -109,14 +152,13 @@ impl CockpitApp {
                     None => self.note = Some("The tag isn't on that any more.".into()),
                 }
             }
-            (ShellCommand::TagStep { forward }, Some(subject), _) => {
+            (ShellCommand::TagStep { forward }, Some(_), _) => {
                 let next = {
-                    let tags = self.desk.shared.tags.get();
-                    let on = tags.on(&subject);
+                    let on = self.tagged_here(here);
                     // The tag stepped through last, when it's one of them.
                     let stepping = self.desk.tag_stepping.clone();
                     on.iter().find(|(t, _)| Some(&t.id) == stepping.as_ref()).or(on.first()).and_then(|(tag, here)| {
-                        let at = tag.on.iter().position(|on| on.subject == **here)?;
+                        let at = tag.on.iter().position(|on| on.subject == *here)?;
                         let n = tag.on.len();
                         let next = if *forward { (at + 1) % n } else { (at + n - 1) % n };
                         (next != at).then(|| (tag.id.clone(), tag.on[next].subject.clone()))

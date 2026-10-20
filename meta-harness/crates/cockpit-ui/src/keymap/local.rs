@@ -27,11 +27,14 @@ pub struct ListKeys {
     pub next: Vec<Chord>,
     pub prev: Vec<Chord>,
     pub pick: Vec<Chord>,
+    /// While a value is picked: what it's for, the next of its kinds (what
+    /// a tag goes on: a line, its command).
+    pub cycle: Vec<Chord>,
 }
 
 impl Default for ListKeys {
     fn default() -> Self {
-        Self { next: chords(&["ArrowDown"]), prev: chords(&["ArrowUp"]), pick: chords(&["Enter"]) }
+        Self { next: chords(&["ArrowDown"]), prev: chords(&["ArrowUp"]), pick: chords(&["Enter"]), cycle: chords(&["Tab"]) }
     }
 }
 
@@ -46,6 +49,15 @@ impl ListKeys {
 
     pub fn picked(&self, input: &egui::InputState) -> bool {
         any(&self.pick, input)
+    }
+
+    /// The cycle key, taken (a text box would move focus on Tab).
+    pub fn cycled(&self, input: &mut egui::InputState) -> bool {
+        self.cycle.iter().fold(false, |took, c| c.consume(input) || took)
+    }
+
+    pub fn cycle_label(&self) -> String {
+        self.cycle.first().map(Chord::label).unwrap_or_default()
     }
 
     pub fn pick_label(&self) -> String {
@@ -243,7 +255,7 @@ mod tests {
     #[test]
     fn lists_and_boxes_take_their_keys_from_config() {
         let ctrl = egui::Modifiers { ctrl: true, ..Default::default() };
-        let list = ListKeys { next: chords(&["ctrl+j", "ArrowDown"]), prev: chords(&["ctrl+k"]), pick: chords(&["Enter"]) };
+        let list = ListKeys { next: chords(&["ctrl+j", "ArrowDown"]), prev: chords(&["ctrl+k"]), pick: chords(&["Enter"]), cycle: chords(&["Tab"]) };
         assert_eq!(list.step(&mut pressed(egui::Key::J, ctrl)), 1);
         assert_eq!(list.step(&mut pressed(egui::Key::K, ctrl)), -1);
         assert_eq!(list.step(&mut pressed(egui::Key::J, egui::Modifiers::default())), 0, "a plain j is typed, not a move");

@@ -10,7 +10,7 @@ use harness_contracts::{Subject, TAG_COLOURS, Tag, TagId, on_things};
 
 use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, Param, RunCx, SECONDARY, When};
 use crate::hosted::{Hosted, Status, Tone};
-use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target};
+use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target, Things};
 use crate::shared::{Reader, Shared};
 use crate::tags::{TagAct, Tags, first_line, thing_name};
 use crate::theme::colors;
@@ -263,10 +263,14 @@ impl Navigable for TagList {
     }
 
     /// A thing's row: the thing (another tag can be put on it here too).
-    fn subject(&self, key: &str) -> Option<Subject> {
-        match self.rows.iter().zip(&self.keys).find(|(_, k)| *k == key)?.0 {
-            Row::On(_, subject) => Some(subject.clone()),
-            Row::Tag(_) => None,
+    fn things(&self, key: &str) -> Things {
+        let tags = self.tags.get();
+        match self.rows.iter().zip(&self.keys).find(|(_, k)| *k == key).map(|(row, _)| row) {
+            Some(Row::On(tag, subject)) => {
+                let what = tags.get(tag).and_then(|t| t.on.iter().find(|on| on.subject == *subject)).map(|on| thing_name(&on.what)).unwrap_or_default();
+                Things::one(subject.clone(), what)
+            }
+            _ => Things::default(),
         }
     }
 

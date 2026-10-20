@@ -19,7 +19,7 @@ use harness_contracts::{FromTerminal, Subject, TermSize, Terminal, TerminalId, T
 
 use crate::actions::{Action, ActionProvider, MINOR, PRIMARY, RunCx};
 use crate::hosted::{Hosted, Status, Tone};
-use crate::nav::{Ask, Fold, Item, Motion, Navigable, Place, Spot, Step, Target};
+use crate::nav::{Ask, Fold, Item, Motion, Navigable, Place, Spot, Step, Target, Thing, Things};
 use crate::shared::{Reader, Shared};
 use crate::terminals::{TermAct, TermLink, Terminals};
 use crate::viewport::Go;
@@ -521,24 +521,28 @@ impl Navigable for TerminalBuffer {
         Ok(())
     }
 
-    /// The command on its prompt's line, or the line (the selection's
-    /// lines, when it's in it): what a tag
-    /// is put on. Nothing while a program has the whole screen (its lines
-    /// aren't the terminal's to keep).
-    fn subject(&self, key: &str) -> Option<Subject> {
-        let line: u64 = key.split(':').next()?.parse().ok()?;
-        if self.lines.alternate() {
-            return None;
+    /// What a tag can be on at a line: the selection's lines, when it's
+    /// in it (exactly those); else the line, then the command it's in (the
+    /// unit: its line and all its output). Nothing while a program has the
+    /// whole screen (its lines aren't the terminal's to keep).
+    fn things(&self, key: &str) -> Things {
+        let Some(line) = key.split(':').next().and_then(|l| l.parse::<u64>().ok()) else { return Things::default() };
+        let Some(terminal) = self.id.clone().filter(|_| !self.lines.alternate()) else { return Things::default() };
+        let shell = self.lines.shell();
+        if let Some((a, b)) = self.selection.filter(|(a, b)| (a.0.min(b.0)..=a.0.max(b.0)).contains(&line)) {
+            let (first, last) = (a.0.min(b.0), a.0.max(b.0));
+            let words = if first == last { format!("line {first}") } else { format!("lines {first}\u{2013}{last}") };
+            return Things::one(Subject::TerminalLines { terminal, shell, first, last }, words);
         }
-        let (terminal, shell) = (self.id.clone()?, self.lines.shell());
-        if let Some(command) = self.lines.command_at(line).filter(|c| c.prompt == line && c.output.is_some()) {
-            return Some(Subject::TerminalCommand { terminal, shell, command: command.id });
+        let command = self.lines.command_at(line).filter(|c| c.output.is_some());
+        let of = command.map(|c| format!(" (of command {})", c.id)).unwrap_or_default();
+        let mut things = Things::one(Subject::TerminalLines { terminal: terminal.clone(), shell, first: line, last: line }, format!("line {line}{of}"));
+        if let Some(c) = command {
+            let typed = if c.text.is_empty() { String::new() } else { format!(": {}", c.text) };
+            things.at.push(Thing { subject: Subject::TerminalCommand { terminal, shell, command: c.id }, words: format!("command {} and its output{typed}", c.id) });
+            things.unit = 1;
         }
-        let (first, last) = match self.selection {
-            Some((a, b)) if (a.0.min(b.0)..=a.0.max(b.0)).contains(&line) => (a.0.min(b.0), a.0.max(b.0)),
-            _ => (line, line),
-        };
-        Some(Subject::TerminalLines { terminal, shell, first, last })
+        things
     }
 
     /// Lines (their first), or a command (its prompt's line), while they
@@ -874,19 +878,25 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_tag_goes_on_the_selected_lines_and_on_nothing_while_a_program_has_the_whole_screen() {
+    fn a_tag_goes_on_a_command_or_its_line_on_the_selected_lines_and_on_nothing_while_a_program_has_the_whole_screen() {
         let mut t = TerminalBuffer { id: Some(TerminalId::new("t1")), ..TerminalBuffer::default() };
-        let FromTerminal::Screen { update } = numbered(1000, 0) else { unreachable!() };
+        let FromTerminal::Screen { mut update } = numbered(1000, 0) else { unreachable!() };
+        update.commands = vec![harness_contracts::TerminalCommand { id: 3, prompt: 40, input: 40, input_col: 2, output: Some(41), end: Some(60), text: "make".into(), code: Some(0), ran_ms: Some(5) }];
         t.lines.take(&update);
-        let lines = |first, last| Some(Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last });
+        let lines = |first, last| Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last };
+        let said = |things: Things| things.at.iter().map(|t| (t.subject.clone(), t.words.clone())).collect::<Vec<_>>();
+        // In a command's output: the line, then the command (the unit).
+        let in_output = t.things("50");
+        assert_eq!(in_output.unit, 1);
+        assert_eq!(said(in_output), [(lines(50, 50), "line 50 (of command 3)".to_owned()), (Subject::TerminalCommand { terminal: TerminalId::new("t1"), shell: 1, command: 3 }, "command 3 and its output: make".to_owned())]);
+        assert_eq!(said(t.things("70")), [(lines(70, 70), "line 70".to_owned())], "in no command: the line");
         t.selection = Some(((1023, 3), (100, 0)));
-        assert_eq!(t.subject("500"), lines(100, 1023), "the selection's (the server says if it's too many)");
-        assert_eq!(t.subject("50"), lines(50, 50), "outside it: the line");
+        assert_eq!(said(t.things("500")), [(lines(100, 1023), "lines 100\u{2013}1023".to_owned())], "the selection's, alone (the server says if it's too many)");
         (t.grid, t.drawn, t.window, t.row_h) = (Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 240.0))), Some(1000), 24, 10.0);
         let FromTerminal::Screen { mut update } = numbered(1000, 0) else { unreachable!() };
         update.alternate = true;
         t.lines.take(&update);
-        assert_eq!((t.subject("1010"), t.drawn_at(&lines(1005, 1007).unwrap())), (None, None));
+        assert_eq!((t.things("1010"), t.drawn_at(&lines(1005, 1007))), (Things::default(), None));
     }
 
     impl TerminalBuffer {

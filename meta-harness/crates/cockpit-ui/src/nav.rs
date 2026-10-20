@@ -674,6 +674,33 @@ pub enum SearchEvent<'a> {
     Cancelled,
 }
 
+/// Something a tag can be on, in words ("command 3 and its output: make").
+#[derive(Clone, Debug, PartialEq)]
+pub struct Thing {
+    pub subject: harness_contracts::Subject,
+    pub words: String,
+}
+
+/// The things at an item, narrowest first, and the one tagged unless
+/// another is picked (`unit`: a command, rather than its line).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Things {
+    pub at: Vec<Thing>,
+    pub unit: usize,
+}
+
+impl Things {
+    /// One thing, alone.
+    pub fn one(subject: harness_contracts::Subject, words: impl Into<String>) -> Self {
+        Self { at: vec![Thing { subject, words: words.into() }], unit: 0 }
+    }
+
+    /// The thing picked (`picked`: an index; none, the unit).
+    pub fn picked(&self, picked: Option<usize>) -> Option<&Thing> {
+        self.at.get(picked.unwrap_or(self.unit))
+    }
+}
+
 /// A view the universal keys drive.
 pub trait Navigable {
     /// Where the view is now.
@@ -721,10 +748,12 @@ pub trait Navigable {
     /// Moves the cursor to an item and brings it into view.
     fn move_to(&mut self, key: &str);
 
-    /// What item `key` is, as something a tag can be on (none: it can't
-    /// be tagged). The shell tags it; a buffer has no tagging of its own.
-    fn subject(&self, _key: &str) -> Option<harness_contracts::Subject> {
-        None
+    /// The things at item `key` a tag can be on, narrowest first (a line,
+    /// then the command it's in), and which is tagged unless another is
+    /// picked (none: nothing there can be tagged). The shell tags; a
+    /// buffer has no tagging of its own.
+    fn things(&self, _key: &str) -> Things {
+        Things::default()
     }
 
     /// Where `subject` is drawn now, when it's drawn (the shell draws its

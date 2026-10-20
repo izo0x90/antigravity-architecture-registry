@@ -287,6 +287,11 @@ pub struct Action {
     /// While typing, it's what this typing key does (Enter sends): the key
     /// it's said with.
     pub typed: Option<crate::keymap::Sent>,
+    /// What it acts on, said as its picker's top line ("Tag line 12").
+    pub about: Option<String>,
+    /// While its value is picked, the list's cycle key runs this action
+    /// (its id) and the picker stays (what it acts on changes).
+    pub cycle: Option<String>,
     command: Rc<dyn Any>,
 }
 
@@ -316,6 +321,8 @@ impl Action {
             when: When::Always,
             jump: false,
             typed: None,
+            about: None,
+            cycle: None,
             command: Rc::new(command),
         }
     }
@@ -342,6 +349,18 @@ impl Action {
 
     pub fn param(mut self, param: Param) -> Self {
         self.param = param;
+        self
+    }
+
+    /// What it acts on, said as its picker's top line.
+    pub fn about(mut self, about: Option<String>) -> Self {
+        self.about = about;
+        self
+    }
+
+    /// The action the cycle key runs while its value is picked.
+    pub fn cycle(mut self, id: Option<&str>) -> Self {
+        self.cycle = id.map(str::to_owned);
         self
     }
 

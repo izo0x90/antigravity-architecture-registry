@@ -130,6 +130,7 @@ impl Palette {
         let list_height = (screen.max.y - pos.y - 110.0).clamp(120.0, 360.0);
 
         let step = ctx.input_mut(|i| keymap.list.step(i));
+        let cycled = ctx.input_mut(|i| keymap.list.cycled(i));
         let (enter, escape) = ctx.input(|i| (keymap.list.picked(i), keymap.back.pressed(i)));
         let enter = enter || std::mem::take(&mut self.enter_waiting);
         let (up, down) = (step < 0, step > 0);
@@ -140,6 +141,7 @@ impl Palette {
 
         let mut picked: Option<Invocation> = None;
         let mut next_stage: Option<(Bound, bool)> = None;
+
         // A search's results arrive after it's asked: read the action afresh.
         if let Stage::Search { action, .. } = &mut self.stage
             && let Some(fresh) = actions.iter().find(|b| b.origin == action.origin && b.action.id == action.action.id)
@@ -147,6 +149,16 @@ impl Palette {
             **action = fresh.clone();
         }
         let stage = self.stage.clone();
+        // While a value is picked: what the cycle key changes it to act on.
+        let cycle = match &stage {
+            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Search { action, .. } => action.action.cycle.as_ref().and_then(|id| actions.iter().find(|b| b.action.id == *id)),
+            Stage::Actions => None,
+        };
+        // Cycled: it runs, and the picker stays (its top line says the new).
+        let cycling = cycled && cycle.is_some();
+        if let Some(bound) = cycle.filter(|_| cycled) {
+            picked = Some(invocation(bound, None));
+        }
 
         egui::Area::new(egui::Id::new("command_palette"))
             .fixed_pos(pos)
@@ -161,9 +173,12 @@ impl Palette {
                         ui.set_width(width - 20.0);
                         let title = match &stage {
                             Stage::Actions => "Run an action".to_owned(),
-                            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Search { action, .. } => action.action.label.clone(),
+                            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Search { action, .. } => action.action.about.clone().unwrap_or_else(|| action.action.label.clone()),
                         };
                         ui.add(egui::Label::new(RichText::new(title).strong().size(crate::theme::look().text_label).color(colors().info)).truncate());
+                        if let Some(bound) = cycle {
+                            ui.add(egui::Label::new(RichText::new(format!("{}: {}", keymap.list.cycle_label(), bound.action.label)).size(crate::theme::look().text_small).color(colors().muted)).truncate());
+                        }
                         let hint = match &stage {
                             Stage::Text { action, .. } | Stage::Search { action, .. } => match &action.action.param {
                                 Param::Text { hint } | Param::Search { hint, .. } => hint.clone(),
@@ -295,7 +310,7 @@ impl Palette {
         if let Some((action, from_list)) = next_stage {
             self.enter(action, from_list);
         }
-        if picked.is_some() {
+        if picked.is_some() && !cycling {
             self.close();
         }
         picked

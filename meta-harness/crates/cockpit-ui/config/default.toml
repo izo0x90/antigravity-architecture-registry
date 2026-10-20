@@ -45,6 +45,9 @@ swipe_max_ms = 450.0
 next = ["ctrl+j", "ctrl+n", "ArrowDown"]
 prev = ["ctrl+k", "ctrl+p", "ArrowUp"]
 pick = ["Enter"]
+# While a value is picked: what it's for, the next of its kinds (tagging:
+# the line, or the command it's in).
+cycle = ["Tab"]
 
 # Every typing box: send, (in the chat) add to what it's doing, and a new line.
 [keymap.input]

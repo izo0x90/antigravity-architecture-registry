@@ -52,6 +52,9 @@ pub struct Desk {
     /// The tag stepped through last (`] t`): stepped through again, when
     /// the thing you're on has several.
     pub tag_stepping: Option<harness_contracts::TagId>,
+    /// Which of the things at the cursor tagging is on, while its picker
+    /// is open (none: the unit).
+    pub tag_level: Option<usize>,
     pub at_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
     /// Code indexing's status, as asked for.
     pub index_inbox: Arc<Mutex<Vec<NetResult<arch_graph::IndexStatus>>>>,
@@ -86,6 +89,7 @@ impl Desk {
             shell_searches: BTreeMap::new(),
             tag_picking: None,
             tag_stepping: None,
+            tag_level: None,
             at_inbox: Arc::default(),
             index_inbox: Arc::default(),
             types_inbox: Arc::default(),

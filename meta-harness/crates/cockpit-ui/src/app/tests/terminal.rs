@@ -576,6 +576,40 @@ fn what_the_cursor_is_on_is_tagged_from_the_shell_and_its_tags_show_where_it_is_
 }
 
 #[test]
+fn on_a_line_of_output_the_command_is_tagged_and_tab_in_the_picker_tags_the_line_instead() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![command(1, 1003, Some(1008), "make")])]);
+    not_typing(&ctx, &mut app);
+    app.run_move(BufferKind::Terminal, Move::Motion(Motion::Line(1005)), None, &ctx);
+    // M: its top line says what's tagged (the command, with all its output);
+    // the next of the things there, by its key.
+    keys(&ctx, &mut app, "M");
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("Tag command 1 and its output: make") && drawn.contains("Tab: Tag line 1005 (of command 1) instead"), "{drawn}");
+    frame(&ctx, &mut app, press(egui::Key::Tab, false));
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("Tag line 1005 (of command 1)") && drawn.contains("Tab: Tag command 1 and its output: make instead"), "round again: {drawn}");
+    keys(&ctx, &mut app, "seen");
+    bodies(&app, "");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": lines("t1", 1, 1005, 1005) })], "what the top line said");
+    // Opened again: the unit again.
+    keys(&ctx, &mut app, "M");
+    keys(&ctx, &mut app, "seen");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": ran("t1", 1, 1) })]);
+    // A thing tagged at a line (here, its command): its tag is taken off
+    // from any line of it.
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x1", "seen", &[ran("t1", 1, 1)]) });
+    frame(&ctx, &mut app, vec![]);
+    keys(&ctx, &mut app, ":");
+    keys(&ctx, &mut app, "take a tag off");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(bodies(&app, "POST /api/tags/x1/untag"), [serde_json::json!({ "subject": ran("t1", 1, 1) })]);
+}
+
+#[test]
 fn lines_selected_with_the_mouse_are_what_is_tagged_and_a_click_or_a_long_press_is_on_a_line() {
     let (ctx, mut app) = full_app();
     app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![])]);

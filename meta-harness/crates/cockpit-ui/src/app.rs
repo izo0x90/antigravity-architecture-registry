@@ -96,6 +96,8 @@ enum ShellCommand {
     TagGoToPick,
     /// The next (or previous) thing the tag on what the cursor's on is on.
     TagStep { forward: bool },
+    /// Tagging: the next of the things at the cursor (the line, its command).
+    TagLevel,
     Back,
     Forward,
     Keys,
