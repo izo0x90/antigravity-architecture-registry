@@ -13,6 +13,7 @@ mod offers;
 mod moves;
 mod outside;
 mod split;
+mod tags;
 mod terminal;
 mod views;
 
@@ -56,6 +57,23 @@ fn drawn_rects(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
     for clipped in &output.shapes {
         collect(&clipped.shape, label, &mut out);
     }
+    out
+}
+
+/// The bars painted in `colour` (the tag gutter's), top to bottom.
+fn bars(output: &egui::FullOutput, colour: egui::Color32) -> Vec<egui::Rect> {
+    fn collect(shape: &egui::Shape, colour: egui::Color32, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Rect(r) if r.fill == colour => out.push(r.rect),
+            egui::Shape::Vec(list) => list.iter().for_each(|s| collect(s, colour, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        collect(&clipped.shape, colour, &mut out);
+    }
+    out.sort_by(|a, b| a.top().total_cmp(&b.top()));
     out
 }
 

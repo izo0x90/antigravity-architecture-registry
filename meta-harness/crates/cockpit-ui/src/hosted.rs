@@ -104,8 +104,9 @@ pub trait Hosted {
 
 /// The panel's top line: its bound actions' header buttons (`bound`: the
 /// panel's layer of where you are), the place for its busy mark, its title
-/// and status; its settings on a row under.
-pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], cx: &mut RunCx<'_>) {
+/// and status, the tags on what the cursor's on (each a solid tag in its
+/// colour, and its name); its settings on a row under.
+pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], tags: &[(String, egui::Color32)], cx: &mut RunCx<'_>) {
     let look = crate::theme::look();
     let at_header = |style: Style| bound.iter().filter(move |b| b.action.control.as_ref().is_some_and(|c| c.at == At::Header && c.style == style));
     // One line that wraps (a narrow panel, a phone): nothing overlaps.
@@ -123,6 +124,10 @@ pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], cx: &mut R
         said(ui, &panel.title(), look.text_label, true);
         for status in panel.status() {
             said(ui, &status, look.text_small, false);
+        }
+        for (name, colour) in tags {
+            ui.label(crate::theme::tag_mark(ui, *colour, look.text_small));
+            ui.add(egui::Label::new(RichText::new(name).size(look.text_small).color(*colour)).truncate());
         }
     });
     if at_header(Style::Setting).next().is_some() {

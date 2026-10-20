@@ -344,14 +344,33 @@ mod tests {
 }
 
 /// The cockpit's fonts: egui's defaults plus the phosphor icon font (also in
-/// monospace, after the first face, so icons show in code text too).
+/// monospace, after the first face, so icons show in code text too), and
+/// its filled style as a family of its own (`solid`).
 pub fn font_definitions() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
     if let Some(font_keys) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
         font_keys.insert(1, "phosphor".into());
     }
+    fonts.font_data.insert("phosphor-fill".into(), egui_phosphor::Variant::Fill.font_data().into());
+    fonts.families.insert(egui::FontFamily::Name(SOLID.into()), vec!["phosphor-fill".into()]);
     fonts
+}
+
+/// The filled icons' family.
+const SOLID: &str = "icons-solid";
+
+/// A filled icon (`egui_phosphor::fill::…`) at `size`.
+pub fn solid(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(SOLID.into()))
+}
+
+/// A tag's mark where it's named: a solid tag in its colour (the outline
+/// one until the fonts are in, the first frame).
+pub fn tag_mark(ui: &egui::Ui, colour: Color32, size: f32) -> egui::RichText {
+    let solid_in = ui.fonts(|f| f.definitions().families.contains_key(&egui::FontFamily::Name(SOLID.into())));
+    let mark = if solid_in { egui::RichText::new(egui_phosphor::fill::TAG).font(solid(size)) } else { egui::RichText::new(egui_phosphor::regular::TAG).size(size) };
+    mark.color(colour)
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ arch-search = { path = "../arch-search", default-features = false }
 petgraph = "0.6"
 egui_graphs = "0.29.0"
 getrandom = { version = "0.3", features = ["wasm_js"] }
-egui-phosphor = "0.11.0"
+egui-phosphor = { version = "0.11.0", features = ["regular", "fill"] }
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 
 # The browser's own (only `web/` uses them: anything else that did wouldn't

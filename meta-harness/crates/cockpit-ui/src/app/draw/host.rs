@@ -17,6 +17,13 @@ use crate::keymap::Host;
 use crate::actions::At;
 use crate::hosted::ItemButtons;
 
+/// The tag gutter: a bar per tag this wide, this far apart, side by side
+/// (as many as fit; the panel's top line names every tag on the cursor's).
+const BAR_W: f32 = 3.0;
+const BAR_GAP: f32 = 2.0;
+const GUTTER_BARS: usize = 3;
+const GUTTER_W: f32 = BAR_GAP + GUTTER_BARS as f32 * (BAR_W + BAR_GAP);
+
 impl CockpitApp {
     /// Draws the view where `here` is (the one in use): its top line, then
     /// its content.
@@ -28,12 +35,19 @@ impl CockpitApp {
         let says = if here.at == Host::Look { self.others_say(kind) } else { Vec::new() };
         let mine: Vec<Bound> = self.shown_at(here).into_iter().filter(|b| b.layer == Layer::Panel).collect();
         let buttons = self.item_buttons_now();
+        let tagged = self.tags_here_named(here);
         let mut cx = RunCx { net: &self.desk.net, ctx: &ctx, input_mode: &mut self.input_mode, at: here.at, note: &mut self.note, asked: &mut self.asked };
-        crate::hosted::header(ui, self.desk.view(kind), &mine, &mut cx);
+        crate::hosted::header(ui, self.desk.view(kind), &mine, &tagged, &mut cx);
         ui.separator();
         // The buttons of what you're on in a bar: their row kept along the
         // bottom (drawn there once everything is laid out), the buffer above.
-        let whole = ui.available_rect_before_wrap();
+        let mut whole = ui.available_rect_before_wrap();
+        // The tag gutter, down the left of a view that draws taggable things.
+        let gutter = self.desk.view(kind).tag_gutter().then(|| {
+            let gutter = egui::Rect::from_min_max(whole.min, egui::pos2(whole.left() + GUTTER_W, whole.bottom()));
+            whole.min.x = gutter.right();
+            gutter
+        });
         let content = match buttons {
             ItemButtons::Floating => whole,
             ItemButtons::Bar => {
@@ -63,39 +77,53 @@ impl CockpitApp {
             ui.painter().hline(whole.x_range(), content.bottom(), egui::Stroke::new(crate::theme::look().line_thin, colors().border));
             ui.allocate_rect(whole, egui::Sense::hover());
         }
-        self.draw_tags(kind, ui, content);
+        if let Some(gutter) = gutter {
+            self.draw_tag_gutter(kind, ui, gutter.intersect(egui::Rect::everything_above(content.bottom())), content);
+        }
         self.pointer_on_content(kind, ui, content);
     }
 
-    /// The tags on what the buffer draws, where it draws it (it says
-    /// where; it draws no tags itself): a chip each, from the right.
-    fn draw_tags(&self, kind: BufferKind, ui: &egui::Ui, content: egui::Rect) {
-        let tags = self.desk.shared.tags.get();
-        let view = self.desk.view(kind);
-        let mut at: Vec<(egui::Rect, Vec<(String, u8)>)> = Vec::new();
-        for tag in tags.list() {
-            for on in &tag.on {
-                let Some(rect) = view.drawn_at(&on.subject).filter(|r| content.intersects(*r)) else { continue };
-                match at.iter_mut().find(|(r, _)| *r == rect) {
-                    Some((_, names)) => names.push((tag.name.clone(), tag.colour)),
-                    None => at.push((rect, vec![(tag.name.clone(), tag.colour)])),
+    /// The tag gutter down `gutter` (beside the content): each tagged
+    /// thing the buffer draws (it says where; it draws no tags itself), a
+    /// bar in its tag's colour beside its rows, a column per tag. Its name
+    /// on hover, or (a finger) said on a long press.
+    fn draw_tag_gutter(&mut self, kind: BufferKind, ui: &egui::Ui, gutter: egui::Rect, content: egui::Rect) {
+        let bars: Vec<(egui::Rect, String)> = {
+            let tags = self.desk.shared.tags.get();
+            let view = self.desk.view(kind);
+            let theme = colors();
+            let painter = ui.painter().with_clip_rect(gutter);
+            let mut columns = 0;
+            let mut bars = Vec::new();
+            for tag in tags.list() {
+                let rows: Vec<egui::Rect> = tag.on.iter().filter_map(|on| view.drawn_at(&on.subject)).filter(|r| content.intersects(*r)).collect();
+                if rows.is_empty() || columns == GUTTER_BARS {
+                    continue;
+                }
+                let left = gutter.left() + BAR_GAP + columns as f32 * (BAR_W + BAR_GAP);
+                columns += 1;
+                for row in rows {
+                    let bar = egui::Rect::from_x_y_ranges(left..=left + BAR_W, row.top() + 1.0..=row.bottom() - 1.0);
+                    painter.rect_filled(bar, BAR_W / 2.0, theme.tag(tag.colour));
+                    let said = if tag.note.is_empty() { tag.name.clone() } else { format!("{}: {}", tag.name, tag.note) };
+                    bars.push((bar.expand2(egui::vec2(BAR_GAP / 2.0, 0.0)), said));
                 }
             }
-        }
-        let (look, theme) = (crate::theme::look(), colors());
-        let painter = ui.painter().with_clip_rect(content);
-        let font = egui::FontId::proportional(look.text_small);
-        for (rect, names) in at {
-            let mut right = rect.right().min(content.right()) - look.space_s;
-            for (name, colour) in names {
-                let galley = painter.layout_no_wrap(name, font.clone(), theme.on_bright);
-                let size = galley.size() + egui::vec2(look.space_s * 2.0, 0.0);
-                let chip = egui::Rect::from_min_size(egui::pos2(right - size.x, rect.center().y - size.y / 2.0), size);
-                painter.rect_filled(chip, size.y / 2.0, theme.tag(colour));
-                painter.galley(chip.min + egui::vec2(look.space_s, 0.0), galley, theme.on_bright);
-                right = chip.left() - look.space_s / 2.0;
+            bars
+        };
+        for (n, (bar, said)) in bars.into_iter().enumerate() {
+            let response = ui.interact(bar, ui.id().with(("tag_bar", kind, n)), egui::Sense::click());
+            if response.long_touched() {
+                self.note = Some(said.clone());
             }
+            response.on_hover_text(said);
         }
+    }
+
+    /// The tags on what the cursor's on where `here` is: each name in its
+    /// colour (the panel's top line says them).
+    fn tags_here_named(&self, here: Here) -> Vec<(String, egui::Color32)> {
+        self.tagged_here(here).into_iter().map(|(tag, _)| (tag.name, colors().tag(tag.colour))).collect()
     }
 
     /// What the buffers in use, but the one of `kind`, say about what it

@@ -756,10 +756,16 @@ pub trait Navigable {
         Things::default()
     }
 
-    /// Where `subject` is drawn now, when it's drawn (the shell draws its
-    /// tags there).
+    /// Where `subject` is drawn now, when it's drawn: all of it that
+    /// shows (the host marks its tags beside it, in the tag gutter).
     fn drawn_at(&self, _subject: &harness_contracts::Subject) -> Option<egui::Rect> {
         None
+    }
+
+    /// It draws things a tag can be on: its host keeps a tag gutter down
+    /// its left (always, so its content doesn't move as tags come and go).
+    fn tag_gutter(&self) -> bool {
+        false
     }
 
     /// As a go-to's destination: whether it can show `target`, and isn't

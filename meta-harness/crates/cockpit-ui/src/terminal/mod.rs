@@ -545,20 +545,29 @@ impl Navigable for TerminalBuffer {
         things
     }
 
-    /// Lines (their first), or a command (its prompt's line), while they
-    /// show (not while a program has the whole screen).
+    /// Lines, or a command (its prompt to its last line; running, to the
+    /// shell's line), as much of them as shows (not while a program has
+    /// the whole screen).
     fn drawn_at(&self, subject: &Subject) -> Option<egui::Rect> {
         let (grid, top) = (self.grid?, self.drawn?);
         if self.lines.alternate() {
             return None;
         }
-        let line = match subject {
-            Subject::TerminalLines { terminal, shell, first, .. } if Some(terminal) == self.id.as_ref() && *shell == self.lines.shell() => *first,
-            Subject::TerminalCommand { terminal, shell, command } if Some(terminal) == self.id.as_ref() && *shell == self.lines.shell() => self.lines.command(*command)?.prompt,
+        let ours = |terminal: &TerminalId, shell: u64| Some(terminal) == self.id.as_ref() && shell == self.lines.shell();
+        let (first, last) = match subject {
+            Subject::TerminalLines { terminal, shell, first, last } if ours(terminal, *shell) => (*first, *last),
+            Subject::TerminalCommand { terminal, shell, command } if ours(terminal, *shell) => {
+                let c = self.lines.command(*command)?;
+                (c.prompt, c.end.map_or_else(|| self.lines.cursor().0, |end| end.saturating_sub(1)).max(c.prompt))
+            }
             _ => return None,
         };
-        let row = line.checked_sub(top)?;
-        (row < self.window).then(|| egui::Rect::from_min_size(grid.min + egui::vec2(0.0, row as f32 * self.row_h), egui::vec2(grid.width(), self.row_h)))
+        let (from, to) = (first.max(top), last.min(top + self.window.saturating_sub(1)));
+        (from <= to).then(|| egui::Rect::from_min_max(grid.min + egui::vec2(0.0, (from - top) as f32 * self.row_h), egui::pos2(grid.max.x, grid.min.y + (to - top + 1) as f32 * self.row_h)))
+    }
+
+    fn tag_gutter(&self) -> bool {
+        true
     }
 
     /// The file the cursor's on (a go-to takes it to the code), else the terminal.
