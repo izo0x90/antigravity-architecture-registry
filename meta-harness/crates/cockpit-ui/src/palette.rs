@@ -209,7 +209,7 @@ impl Palette {
                                     for (row, bound) in ranked.iter().enumerate() {
                                         let row = row + first;
                                         let selected = row == self.selected;
-                                        let clicked = palette_row(ui, selected, self.scroll, &bound.action.label, bound.action.detail.as_deref(), &bound.key_hint());
+                                        let clicked = palette_row(ui, selected, self.scroll, &bound.action.label, Some(&bound.action.detail), &bound.key_hint());
                                         if clicked || (selected && enter) {
                                             match bound.action.param {
                                                 Param::None => picked = Some(invocation(bound, None)),
@@ -220,6 +220,9 @@ impl Palette {
                                     if ranked.is_empty() && line.is_none() {
                                         ui.label(RichText::new("No matching actions").size(crate::theme::look().text_body).color(colors().muted));
                                     }
+                                    // The same height however many rows (after them: set first,
+                                    // it would put them below it): it doesn't jump as they change.
+                                    ui.set_min_height(list_height);
                                 });
                             }
                             Stage::Choose { action, .. } => {
@@ -239,6 +242,9 @@ impl Palette {
                                     if ranked.is_empty() {
                                         ui.label(RichText::new("Nothing to choose").size(crate::theme::look().text_body).color(colors().muted));
                                     }
+                                    // The same height however many rows (after them: set first,
+                                    // it would put them below it): it doesn't jump as they change.
+                                    ui.set_min_height(list_height);
                                 });
                             }
                             Stage::Search { action, .. } => {
@@ -263,6 +269,9 @@ impl Palette {
                                         };
                                         ui.label(RichText::new(note).size(crate::theme::look().text_body).color(colors().muted));
                                     }
+                                    // The same height however many rows (after them: set first,
+                                    // it would put them below it): it doesn't jump as they change.
+                                    ui.set_min_height(list_height);
                                 });
                             }
                             Stage::Text { action, .. } => {
@@ -304,26 +313,38 @@ fn invocation(bound: &Bound, value: Option<String>) -> Invocation {
     Invocation { action: bound.action.clone(), origin: bound.origin, value }
 }
 
-/// One tappable row; returns true when clicked.
+/// One tappable row; returns true when clicked. Its label and keys on its
+/// first line (a long label cut short), its description under it (two
+/// lines at most): nothing in it is wider than the palette, so the palette
+/// never grows to fit a row.
 fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, detail: Option<&str>, keys: &str) -> bool {
-    let fill = if selected { colors().selection } else { Color32::TRANSPARENT };
+    let (look, theme) = (crate::theme::look(), colors());
+    let fill = if selected { theme.selection } else { Color32::TRANSPARENT };
     let response = Frame::NONE
         .fill(fill)
-        .corner_radius(crate::theme::look().radius_m)
-        .inner_margin(crate::theme::margin2(crate::theme::look().space_m, crate::theme::look().space_sm))
+        .corner_radius(look.radius_m)
+        .inner_margin(crate::theme::margin2(look.space_m, look.space_sm))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(label).size(crate::theme::look().text_label).color(colors().text_strong));
-                if let Some(detail) = detail {
-                    ui.label(RichText::new(detail).size(crate::theme::look().text_small).color(colors().muted));
-                }
+                // The label gets what the keys leave it, cut short to fit.
+                let keys_w = if keys.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(keys.to_owned(), egui::FontId::monospace(look.text_small), theme.key).size().x + look.space_m };
+                let label_w = (ui.available_width() - keys_w).max(0.0);
+                ui.allocate_ui_with_layout(egui::vec2(label_w, 0.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_max_width(label_w);
+                    ui.add(egui::Label::new(RichText::new(label).size(look.text_label).color(theme.text_strong)).truncate());
+                });
                 if !keys.is_empty() {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(keys).monospace().size(crate::theme::look().text_small).color(colors().key));
+                        ui.label(RichText::new(keys).monospace().size(look.text_small).color(theme.key));
                     });
                 }
             });
+            if let Some(detail) = detail.filter(|d| !d.is_empty()) {
+                let mut job = egui::text::LayoutJob::simple(detail.to_owned(), egui::FontId::proportional(look.text_small), theme.muted, ui.available_width());
+                job.wrap.max_rows = 2;
+                ui.add(egui::Label::new(job));
+            }
         })
         .response;
     if selected && scroll {

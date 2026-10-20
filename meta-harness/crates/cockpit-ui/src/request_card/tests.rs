@@ -101,8 +101,8 @@ fn a_question_reads_as_one_its_answers_a_list_under_it_and_an_approval_as_what_i
     let shown: Vec<(String, Style, Tone)> = answers(&question).into_iter().map(|a| (a.caption, a.style, a.tone)).collect();
     assert_eq!(shown, [("Redis".to_owned(), Style::Choice, Tone::Plain), ("Postgres".to_owned(), Style::Choice, Tone::Plain)], "a list to pick from");
     let answer = answers(&question).remove(0);
-    assert_eq!(answer.place(Action::new(answer.id.clone(), answer.label.clone(), ()), false).at(), None, "away from it: keys and the palette only");
-    assert_eq!(answer.place(Action::new(answer.id.clone(), answer.label.clone(), ()), true).at(), Some(At::Item), "on it: under it");
+    assert_eq!(answer.place(Action::new(answer.id.clone(), answer.label.clone(), "", ()), false).at(), None, "away from it: keys and the palette only");
+    assert_eq!(answer.place(Action::new(answer.id.clone(), answer.label.clone(), "", ()), true).at(), Some(At::Item), "on it: under it");
     let command = asked(RequestKind::Approval { action: harness_contracts::ToolAction::Command }, &[("allow", ApprovalDecision::Accept, "Allow"), ("deny", ApprovalDecision::Decline, "Deny")]);
     assert!(texts(&command).contains("Wants to run a command"));
     let shown: Vec<(String, Style, Tone)> = answers(&command).into_iter().map(|a| (a.caption, a.style, a.tone)).collect();

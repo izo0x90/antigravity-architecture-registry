@@ -11,35 +11,34 @@ impl CockpitApp {
     pub(crate) fn shell_actions(&self) -> Vec<Action> {
         use ShellCommand as S;
         let mut actions = Vec::new();
-        let admin = |id: String, label: String, c: ShellCommand| Action::new(id, label, c).group(Group::View).importance(MINOR);
+        let admin = |id: String, label: String, detail: String, c: ShellCommand| Action::new(id, label, detail, c).group(Group::View).importance(MINOR);
         let max = self.config.panels.max;
         for panel in 0..max {
-            actions.push(admin(format!("panel.focus.{}", panel + 1), format!("Focus panel {}", panel + 1), S::FocusPanel(panel)));
+            actions.push(admin(format!("panel.focus.{}", panel + 1), format!("Focus panel {}", panel + 1), format!("The keys go to the buffer in panel {} (counted from the left)", panel + 1), S::FocusPanel(panel)));
         }
-        actions.push(admin("panel.next".into(), "Next panel".into(), S::CyclePanel(1)));
-        actions.push(admin("panel.prev".into(), "Previous panel".into(), S::CyclePanel(-1)));
+        actions.push(admin("panel.next".into(), "Next panel".into(), "The keys go to the panel to the right (from the last, the first)".into(), S::CyclePanel(1)));
+        actions.push(admin("panel.prev".into(), "Previous panel".into(), "The keys go to the panel to the left (from the first, the last)".into(), S::CyclePanel(-1)));
         for cols in 1..=max {
-            actions.push(admin(format!("layout.{cols}"), format!("{cols}-panel layout"), S::SetLayout(cols)));
+            actions.push(admin(format!("layout.{cols}"), format!("{cols}-panel layout"), format!("{cols} panels side by side: buffers that don't fit are hidden, not lost"), S::SetLayout(cols)));
         }
-        actions.push(admin("panel.add".into(), "Add a panel".into(), S::SetLayout(self.desk.panels.len() + 1)));
-        actions.push(admin("panel.fewer".into(), "One panel fewer (its buffer is hidden, not lost)".into(), S::SetLayout(self.desk.panels.len().saturating_sub(1).max(1))));
+        actions.push(admin("panel.add".into(), "Add a panel".into(), "One more panel, on the right: a hidden buffer comes back in it".into(), S::SetLayout(self.desk.panels.len() + 1)));
+        actions.push(admin("panel.fewer".into(), "One panel fewer (its buffer is hidden, not lost)".into(), "The rightmost panel goes; its buffer stays open, hidden".into(), S::SetLayout(self.desk.panels.len().saturating_sub(1).max(1))));
         let bar = self.item_buttons_now() == ItemButtons::Bar;
-        actions.push(Action::new("panel.item_buttons", "Show the buttons of what you're on in a bar along each panel's bottom (else floating under it)", S::ItemButtons).param(Param::Toggle { on: bar }).group(Group::View).importance(MINOR));
-        actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), S::ToggleInspector));
-        actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), S::ToggleIssues));
+        actions.push(Action::new("panel.item_buttons", "Show the buttons of what you're on in a bar along each panel's bottom (else floating under it)", "Where the buttons for the item under the cursor show, in every panel", S::ItemButtons).param(Param::Toggle { on: bar }).group(Group::View).importance(MINOR));
+        actions.push(admin("inspector.toggle".into(), "Toggle element inspector".into(), "For reporting the cockpit itself: point at anything drawn to file feedback on it".into(), S::ToggleInspector));
+        actions.push(admin("issues.toggle".into(), "Toggle issues window".into(), "The feedback filed on the cockpit, and what came of it".into(), S::ToggleIssues));
         actions.extend(self.attention_actions());
         actions.extend(self.server_actions());
         actions.push(
-            Action::new("cockpit.agents", "Let agents drive the cockpit", S::Agents)
-                .detail("Agents read the screen and run actions through the server's cockpit tools, as you would")
+            Action::new("cockpit.agents", "Let agents drive the cockpit", "Agents read the screen and run actions through the server's cockpit tools, as you would", S::Agents)
                 .param(Param::Toggle { on: self.desk.remote.agents })
                 .group(Group::Act)
                 .importance(MINOR),
         );
-        actions.push(admin("palette.open".into(), "Command palette".into(), S::OpenPalette));
-        let index = |id: &str, label: &str, op: IndexOp| Action::new(id, label, S::Index(op)).group(Group::Act).importance(MINOR);
-        actions.push(index("index.changed", "Re-read the code that changed", IndexOp::Changed));
-        actions.push(index("index.rebuild", "Rebuild the index from scratch", IndexOp::Rebuild));
+        actions.push(admin("palette.open".into(), "Command palette".into(), "Every action there is here, found by typing".into(), S::OpenPalette));
+        let index = |id: &str, label: &str, detail: &str, op: IndexOp| Action::new(id, label, detail, S::Index(op)).group(Group::Act).importance(MINOR);
+        actions.push(index("index.changed", "Re-read the code that changed", "The index takes in the files changed since it last read them", IndexOp::Changed));
+        actions.push(index("index.rebuild", "Rebuild the index from scratch", "Reads every file again (slow on a big project): when the index seems wrong", IndexOp::Rebuild));
         actions
     }
 
@@ -48,13 +47,16 @@ impl CockpitApp {
     pub(crate) fn host_actions(&self, here: Here) -> Vec<Action> {
         use ShellCommand as S;
         if here.at == Host::Look && self.quick_look.is_some() {
-            let look = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::View);
-            return vec![look("quicklook.toggle", "Close the quick look", S::QuickLook).importance(PRIMARY), look("quicklook.to_panel", "Open it in a panel", S::QuickLookToPanel).importance(PRIMARY)];
+            let look = |id: &str, label: &str, detail: &str, c: ShellCommand| Action::new(id, label, detail, c).group(Group::View);
+            return vec![
+                look("quicklook.toggle", "Close the quick look", "Back to the panel it floats over", S::QuickLook).importance(PRIMARY),
+                look("quicklook.to_panel", "Open it in a panel", "What the quick look shows, in a panel of its own", S::QuickLookToPanel).importance(PRIMARY),
+            ];
         }
-        let admin = |id: String, label: String, c: ShellCommand| Action::new(id, label, c).group(Group::View).importance(MINOR);
-        let mut actions = vec![Action::new("panel.close", "Close this panel (its buffer is hidden, not lost)", S::ClosePanel).group(Group::View).importance(MINOR)];
+        let admin = |id: String, label: String, detail: String, c: ShellCommand| Action::new(id, label, detail, c).group(Group::View).importance(MINOR);
+        let mut actions = vec![Action::new("panel.close", "Close this panel (its buffer is hidden, not lost)", "The panel goes; its buffer stays open, hidden, and comes back with more panels", S::ClosePanel).group(Group::View).importance(MINOR)];
         for kind in BufferKind::ALL {
-            actions.push(admin(format!("buffer.{}", kind.name()), format!("Show {} in this panel", kind.name()), S::ShowBuffer(kind)));
+            actions.push(admin(format!("buffer.{}", kind.name()), format!("Show {} in this panel", kind.name()), format!("The {} buffer you used last, here (or a new one beside it)", kind.name()), S::ShowBuffer(kind)));
         }
         // Every open view, to show here: on screen (and where) or hidden.
         let views: Vec<Choice> = self
@@ -66,10 +68,10 @@ impl CockpitApp {
             .chain(self.desk.panels.put_away().map(|p| (p, "hidden".to_owned())))
             .map(|(p, where_)| Choice::new(format!("{}:{}", p.kind.name(), p.id), self.describe(p)).detail(Some(where_)).current(p == self.desk.panels.focused_buffer()))
             .collect();
-        actions.push(Action::new("buffer.list", "Open buffers: show one here", S::PickView).param(Param::Choice(views)).group(Group::View).importance(SECONDARY));
-        actions.push(admin("buffer.delete".into(), "Delete this panel's buffer (for good)".into(), S::DeleteView));
+        actions.push(Action::new("buffer.list", "Open buffers: show one here", "Every open buffer, on screen or hidden: pick one to show it in this panel", S::PickView).param(Param::Choice(views)).group(Group::View).importance(SECONDARY));
+        actions.push(admin("buffer.delete".into(), "Delete this panel's buffer (for good)".into(), "The buffer and its state go; the panel shows another".into(), S::DeleteView));
         for kind in BufferKind::ALL.into_iter().filter(|k| !k.one_only()) {
-            actions.push(admin(format!("buffer.new.{}", kind.name()), format!("New {} buffer here", kind.name()), S::NewView(kind)));
+            actions.push(admin(format!("buffer.new.{}", kind.name()), format!("New {} buffer here", kind.name()), format!("Another {} buffer, beside the ones open, starting where the last was", kind.name()), S::NewView(kind)));
         }
         actions
     }
@@ -80,21 +82,28 @@ impl CockpitApp {
     /// talking to the agent from here.
     pub(crate) fn panel_actions(&self, here: Here) -> Vec<Action> {
         use ShellCommand as S;
-        let nav = |id: &str, label: &str, c: ShellCommand| Action::new(id, label, c).group(Group::Navigate);
+        let nav = |id: &str, label: &str, detail: &str, c: ShellCommand| Action::new(id, label, detail, c).group(Group::Navigate);
         let mut out = vec![
-            nav("nav.hint", "Jump to something on screen", S::Hint { open: false }).importance(PRIMARY),
-            nav("nav.hint_open", "Open something on screen", S::Hint { open: true }).importance(SECONDARY).icon(egui_phosphor::regular::CURSOR_CLICK),
-            nav("nav.search", "Search this buffer", S::Search).importance(PRIMARY).icon(egui_phosphor::regular::MAGNIFYING_GLASS),
-            nav("nav.search_next", "Next match", S::SearchStep { forward: true }).importance(SECONDARY).when(When::Searched),
-            nav("nav.search_prev", "Previous match", S::SearchStep { forward: false }).importance(MINOR).when(When::Searched),
-            nav("nav.mark_set", "Set a mark here", S::MarkSet).importance(MINOR).icon(egui_phosphor::regular::BOOKMARK_SIMPLE),
-            nav("nav.mark_jump", "Jump to a mark", S::MarkJump).importance(MINOR).when(When::Marked),
-            nav("nav.back", "Back (jump list)", S::Back).importance(SECONDARY).when(When::Back).icon(egui_phosphor::regular::ARROW_LEFT),
-            nav("nav.forward", "Forward (jump list)", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT),
-            Action::new("nav.keys", "Keys for this buffer", S::Keys).group(Group::View).importance(MINOR),
-            Action::new("talk.open", "Talk to the agent from here", S::Talk).group(Group::Act).importance(SECONDARY),
-            Action::new("terminal.popup", if self.popped_terminal() { "Hide the pop-up terminal" } else { "Pop up a terminal over everything" }, S::PopTerminal).group(Group::Act).importance(SECONDARY),
-            nav("nav.line", "Go to line or row", S::Line).param(Param::Text { hint: "line or row number".into() }).importance(MINOR),
+            nav("nav.hint", "Jump to something on screen", "Labels what's drawn: type a label to put the cursor there", S::Hint { open: false }).importance(PRIMARY),
+            nav("nav.hint_open", "Open something on screen", "Labels what's drawn: type a label to open it, as going into it would", S::Hint { open: true }).importance(SECONDARY).icon(egui_phosphor::regular::CURSOR_CLICK),
+            nav("nav.search", "Search this buffer", "Finds as you type, names first (letters in order), then text", S::Search).importance(PRIMARY).icon(egui_phosphor::regular::MAGNIFYING_GLASS),
+            nav("nav.search_next", "Next match", "The next thing the last search found", S::SearchStep { forward: true }).importance(SECONDARY).when(When::Searched),
+            nav("nav.search_prev", "Previous match", "The thing before, of what the last search found", S::SearchStep { forward: false }).importance(MINOR).when(When::Searched),
+            nav("nav.mark_set", "Set a mark here", "A letter to come back here with (' and the letter)", S::MarkSet).importance(MINOR).icon(egui_phosphor::regular::BOOKMARK_SIMPLE),
+            nav("nav.mark_jump", "Jump to a mark", "Back to where a letter was set, in whichever buffer", S::MarkJump).importance(MINOR).when(When::Marked),
+            nav("nav.back", "Back (jump list)", "Where you were before the last jump, in any buffer or panel", S::Back).importance(SECONDARY).when(When::Back).icon(egui_phosphor::regular::ARROW_LEFT),
+            nav("nav.forward", "Forward (jump list)", "Where you went back from", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT),
+            Action::new("nav.keys", "Keys for this buffer", "Every key here and what it does, on one sheet", S::Keys).group(Group::View).importance(MINOR),
+            Action::new("talk.open", "Talk to the agent from here", "The lead's chat over what's on screen, ready to type and send", S::Talk).group(Group::Act).importance(SECONDARY),
+            Action::new(
+                "terminal.popup",
+                if self.popped_terminal() { "Hide the pop-up terminal" } else { "Pop up a terminal over everything" },
+                "A terminal of its own over whatever's on screen; the same key hides it",
+                S::PopTerminal,
+            )
+            .group(Group::Act)
+            .importance(SECONDARY),
+            nav("nav.line", "Go to line or row", "By its number (a terminal's lines by the numbers they keep for life)", S::Line).param(Param::Text { hint: "line or row number".into() }).importance(MINOR),
         ];
         out.extend(self.tag_actions(here));
         // Each go-to's destination says whether it can show what the
@@ -107,16 +116,16 @@ impl CockpitApp {
                 Some(_) => When::Unavailable,
                 None => When::Reaches(op),
             };
-            out.push(Action::new(op.id(), op.label(), S::GoTo(op)).group(Group::GoTo).when(when).importance(op.importance()));
+            out.push(Action::new(op.id(), op.label(), op.detail(), S::GoTo(op)).group(Group::GoTo).when(when).importance(op.importance()));
         }
         // On what you're on: its full card (open, it's the quick look's).
         if self.quick_look.is_none() {
-            out.push(Action::new("quicklook.toggle", "Quick look: the full card (hold to peek)", S::QuickLook).group(Group::View).importance(PRIMARY).when(When::Component));
+            out.push(Action::new("quicklook.toggle", "Quick look: the full card (hold to peek)", "The full card of what you're on, floating over the panel: hold the key to peek", S::QuickLook).group(Group::View).importance(PRIMARY).when(When::Component));
         }
         if let Some(choosing) = &self.desk.choosing {
             let name = |id: &ComponentId| self.component_name(id);
             let choices = choosing.candidates.iter().map(|c| Choice::new(c.id.as_str(), name(&c.id)).detail(Some(c.id.to_string()))).collect();
-            out.push(Action::new("goto.pick", format!("Go to which {}?", choosing.op.one()), S::GotoPick).param(Param::Choice(choices)).group(Group::GoTo));
+            out.push(Action::new("goto.pick", format!("Go to which {}?", choosing.op.one()), "It leads to several: pick one", S::GotoPick).param(Param::Choice(choices)).group(Group::GoTo));
         }
         out
     }

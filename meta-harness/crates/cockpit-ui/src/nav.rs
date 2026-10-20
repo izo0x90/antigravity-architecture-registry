@@ -346,11 +346,40 @@ impl Move {
         }
     }
 
+    /// What it does, the same in every view (a view says more with
+    /// `Action::detail` where it means something of its own).
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Motion(Motion::Down) => "One down (a count first: that many)",
+            Self::Motion(Motion::Up) => "One up (a count first: that many)",
+            Self::Motion(Motion::Left) => "Left: in a tree, fold, or up to what holds it",
+            Self::Motion(Motion::Right) => "Right: in a tree, unfold, or into its first child",
+            Self::Motion(Motion::HalfDown) => "Half a page down",
+            Self::Motion(Motion::HalfUp) => "Half a page up",
+            Self::Motion(Motion::HalfLeft) => "Half a screen left",
+            Self::Motion(Motion::HalfRight) => "Half a screen right",
+            Self::Motion(Motion::FewLeft) => "A few columns left",
+            Self::Motion(Motion::FewRight) => "A few columns right",
+            Self::Motion(Motion::First) => "To the first",
+            Self::Motion(Motion::Last) => "To the last",
+            Self::Motion(Motion::NextSibling) => "The next thing at this level: a section, a definition, a change, a command, a tag",
+            Self::Motion(Motion::PrevSibling) => "The thing before at this level: a section, a definition, a change, a command, a tag",
+            Self::Motion(Motion::Line(_)) => "By its number",
+            Self::Enter => "Into what you're on, or opens it",
+            Self::Leave => "Out of it, back, or up",
+            Self::Fold(Fold::Open) => "Opens what the cursor's in",
+            Self::Fold(Fold::Close) => "Folds what the cursor's in to one line",
+            Self::Fold(Fold::Toggle) => "Folds what the cursor's in, or opens it",
+            Self::Fold(Fold::OpenAll) => "Opens everything folded",
+            Self::Fold(Fold::CloseAll) => "Folds everything to one line each",
+        }
+    }
+
     /// The move as an action of the view offering it, in its words.
     pub fn offer(self, label: impl Into<String>) -> crate::actions::Action {
         use crate::actions::{Action, Group};
         let group = if matches!(self, Self::Fold(_)) { Group::View } else { Group::Navigate };
-        Action::new(self.id(), label, self).group(group).importance(self.importance()).focused()
+        Action::new(self.id(), label, self.detail(), self).group(group).importance(self.importance()).focused()
     }
 
     /// Offered whether or not it applies where the cursor is: when it
@@ -449,6 +478,25 @@ impl GoTo {
             Self::Members => "Go to a member",
             Self::Implements => "Go to what it implements",
             Self::Flows => "Follow its data flow",
+        }
+    }
+
+    /// What it does, in a line.
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::Code => "Opens the file at it (on a call, at what it calls; a count picks the panel)",
+            Self::Spec => "Its card in the spec: what it is, what it holds, what's planned",
+            Self::Graph => "Selects it in the graph",
+            Self::Tree => "Puts the outline's cursor on it",
+            Self::Queue => "The work queue's job for it",
+            Self::Changes => "What the comparison changed in it, in the Changes view",
+            Self::Uses => "Every place the code names it: pick one",
+            Self::Callers => "What calls it: pick one",
+            Self::Callees => "What it calls: pick one",
+            Self::Parent => "The module, type or block it's in",
+            Self::Members => "What it holds: pick one",
+            Self::Implements => "The trait or interface it implements: pick one",
+            Self::Flows => "Where its data comes from and goes: pick one",
         }
     }
 

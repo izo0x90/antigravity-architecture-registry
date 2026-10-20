@@ -60,26 +60,26 @@ impl ActionProvider for ChatStreamState {
         let idle = self.active_thread().is_none() && !self.opening();
 
         // Prompt (this view only)
-        out.push(Action::new("chat.insert", "Type a prompt", C::Insert).focused().importance(crate::actions::PRIMARY));
+        out.push(Action::new("chat.insert", "Type a prompt", "The keys go to the prompt box until you stop typing", C::Insert).focused().importance(crate::actions::PRIMARY));
         if !self.ui.input_buffer.is_empty() {
-            out.push(Action::new("chat.clear", "Clear the prompt", C::ClearPrompt).focused().importance(MINOR));
+            out.push(Action::new("chat.clear", "Clear the prompt", "Empties what's typed, unsent", C::ClearPrompt).focused().importance(MINOR));
         }
 
         // Session
-        let mut new = Action::new("session.new", "New session", C::NewSession);
+        let mut new = Action::new("session.new", "New session", "A fresh conversation in this agent slot (the last one is saved)", C::NewSession);
         if idle {
             new = new.header(Button, "Connect", Some(icon::LIGHTNING));
         }
         out.push(new);
         if caps.sessions.list_saved {
             let param = self.saved_choices().map(Param::Choice).unwrap_or(Param::None);
-            let mut resume = Action::new("session.resume", "Resume a saved session", C::ResumeSession).param(param.clone());
+            let mut resume = Action::new("session.resume", "Resume a saved session", "Picks up an earlier conversation where it was left", C::ResumeSession).param(param.clone());
             if idle {
                 resume = resume.header(Button, "Resume…", Some(icon::ARROW_COUNTER_CLOCKWISE));
             }
             out.push(resume);
             if caps.sessions.delete_saved {
-                out.push(Action::new("session.delete", "Delete a saved session", C::DeleteSaved).param(param));
+                out.push(Action::new("session.delete", "Delete a saved session", "Forgets it, for good", C::DeleteSaved).param(param));
             }
         }
         if let Some(slot) = agents.slot(&self.ui.slot).filter(|s| s.sessions.len() > 1) {
@@ -91,7 +91,7 @@ impl ActionProvider for ChatStreamState {
                     Choice::new(s.key.to_string(), label).detail(s.thread.is_none().then(|| "not running".to_owned())).current(slot.current.as_ref() == Some(&s.key))
                 })
                 .collect();
-            out.push(Action::new("session.switch", "Switch session", C::SwitchSession).param(Param::Choice(choices)));
+            out.push(Action::new("session.switch", "Switch session", "Shows another of this slot's open sessions", C::SwitchSession).param(Param::Choice(choices)));
         }
         if store.instances.len() > 1 && self.active_thread().is_none() {
             let choices = store
@@ -105,15 +105,15 @@ impl ActionProvider for ChatStreamState {
                     Choice::new(i.instance_id.to_string(), label).current(Some(&i.instance_id) == self.active_instance().as_ref())
                 })
                 .collect();
-            out.push(Action::new("instance.select", "Choose harness", C::SelectInstance).param(Param::Choice(choices)).header(Setting, "Harness", None));
+            out.push(Action::new("instance.select", "Choose harness", "Which agent harness this slot's next session runs on", C::SelectInstance).param(Param::Choice(choices)).header(Setting, "Harness", None));
         }
         if let Some(view) = view {
-            out.push(Action::new("session.close", "Close session", C::CloseSession).header(Button, "", Some(icon::X)));
+            out.push(Action::new("session.close", "Close session", "Ends it; it stays saved to resume", C::CloseSession).header(Button, "", Some(icon::X)));
             if view.running_turn().is_some() && caps.turns.interrupt {
-                out.push(Action::new("session.stop", "Stop the running turn", C::StopTurn).header(Button, "Stop", Some(icon::STOP)));
+                out.push(Action::new("session.stop", "Stop the running turn", "The agent stops what it's doing; what it did stays", C::StopTurn).header(Button, "Stop", Some(icon::STOP)));
             }
         }
-        out.push(Action::new("instance.refresh", "Re-probe the harness", C::RefreshInstance));
+        out.push(Action::new("instance.refresh", "Re-probe the harness", "Asks the harness again what it can do and whether you're signed in", C::RefreshInstance));
 
         // Agent slots: which one this view shows; starting and closing sub-slots
         if store.slots.len() > 1 {
@@ -121,16 +121,16 @@ impl ActionProvider for ChatStreamState {
                 .into_iter()
                 .map(|s| Choice::new(s.id.to_string(), slot_label(s, store)).detail(slot_detail(s)).current(s.id == self.ui.slot))
                 .collect();
-            out.push(Action::new("agent.pick", "Show an agent slot", C::PickSlot).param(Param::Choice(choices)));
-            out.push(Action::new("chat.next_slot", "Show the next agent slot", C::StepSlot(1)).focused());
-            out.push(Action::new("chat.prev_slot", "Show the previous agent slot", C::StepSlot(-1)).focused());
+            out.push(Action::new("agent.pick", "Show an agent slot", "Pick one of the agents the server runs, for this chat", C::PickSlot).param(Param::Choice(choices)));
+            out.push(Action::new("chat.next_slot", "Show the next agent slot", "This chat shows the next agent the server runs", C::StepSlot(1)).focused());
+            out.push(Action::new("chat.prev_slot", "Show the previous agent slot", "This chat shows the agent before", C::StepSlot(-1)).focused());
         }
         if !store.instances.is_empty() {
             let choices = store.instances.values().map(|i| Choice::new(i.instance_id.to_string(), &i.display_name)).collect();
-            out.push(Action::new("agent.new", "Start an agent sub-slot", C::NewSlot).param(Param::Choice(choices)));
+            out.push(Action::new("agent.new", "Start an agent sub-slot", "Another agent beside the lead, on a harness you pick", C::NewSlot).param(Param::Choice(choices)));
         }
         if agents.slot(&self.ui.slot).is_some_and(|s| !s.is_lead()) {
-            out.push(Action::new("agent.close", "Close this agent sub-slot", C::CloseSlot));
+            out.push(Action::new("agent.close", "Close this agent sub-slot", "Its sessions end and the slot goes", C::CloseSlot));
         }
 
         // Model, config and mode: exactly what the harness reports for the session;
@@ -145,7 +145,7 @@ impl ActionProvider for ChatStreamState {
                         .iter()
                         .map(|m| Choice::new(&m.id, &m.name).detail(m.description.clone()).current(current.as_ref() == Some(&m.id)))
                         .collect();
-                    out.push(Action::new("mode.native", "Set session mode", C::NativeMode).param(Param::Choice(choices)).header(Setting, "Mode", None));
+                    out.push(Action::new("mode.native", "Set session mode", "The harness's own modes (what it may do without asking)", C::NativeMode).param(Param::Choice(choices)).header(Setting, "Mode", None));
                 }
                 for control in &controls.config {
                     let (param, boolean) = match &control.kind {
@@ -160,13 +160,11 @@ impl ActionProvider for ChatStreamState {
                         ),
                         ConfigKind::Boolean { current } => (Param::Toggle { on: *current }, true),
                     };
-                    let mut action = Action::new(format!("config.{}", control.id), format!("Set {}", control.name), C::SetConfig { option: control.id.clone(), boolean })
+                    let description = control.description.clone().unwrap_or_else(|| format!("The harness's {} setting", control.name));
+                    let action = Action::new(format!("config.{}", control.id), format!("Set {}", control.name), description, C::SetConfig { option: control.id.clone(), boolean })
                         .alias(format!("config.category.{}", wire_name(&control.category)))
                         .param(param)
                         .header(Setting, &control.name, None);
-                    if let Some(d) = &control.description {
-                        action = action.detail(d.clone());
-                    }
                     out.push(action);
                 }
             }
@@ -175,12 +173,12 @@ impl ActionProvider for ChatStreamState {
                     let model = self.model();
                     let default = Choice::new("", "default").current(model.is_none());
                     let choices = std::iter::once(default).chain(s.models.iter().map(|m| Choice::new(&m.id, &m.name).current(model.as_ref() == Some(&m.id)))).collect();
-                    out.push(Action::new("model.next", "Model for the next session", C::NextModel).param(Param::Choice(choices)).header(Setting, "Model", None));
+                    out.push(Action::new("model.next", "Model for the next session", "Which model the next session in this slot starts with", C::NextModel).param(Param::Choice(choices)).header(Setting, "Model", None));
                 }
                 if let Some(s) = snapshot.filter(|s| !s.runtime_modes.is_empty()) {
                     let current = self.policy().runtime_mode;
                     let choices = s.runtime_modes.iter().map(|m| Choice::new(wire_name(m), mode_label(*m)).current(*m == current)).collect();
-                    out.push(Action::new("mode.runtime", "Runtime mode", C::RuntimeMode).param(Param::Choice(choices)).header(Setting, "Mode", None));
+                    out.push(Action::new("mode.runtime", "Runtime mode", "What the agent may do without asking you (files, commands)", C::RuntimeMode).param(Param::Choice(choices)).header(Setting, "Mode", None));
                 }
             }
         }
@@ -194,13 +192,13 @@ impl ActionProvider for ChatStreamState {
             servers.extend(s.tool_servers.iter().map(|t| Choice::new(&t.name, format!("{} — {} (its own, {:?})", t.name, t.transport, t.scope).to_lowercase()).detail(Some(t.file.clone()))));
         }
         if !servers.is_empty() {
-            out.push(Action::new("mcp.list", "Tool servers its sessions get", C::ListMcp).param(Param::Choice(servers)));
+            out.push(Action::new("mcp.list", "Tool servers its sessions get", "The MCP servers this slot's sessions are given", C::ListMcp).param(Param::Choice(servers)));
         }
         if let Some(tools) = agents.tools() {
-            out.push(Action::new("mcp.add", "Add a tool server to the project", C::AddMcp).param(Param::Text { hint: "name https://host/mcp (then sse for the older kind)".into() }));
+            out.push(Action::new("mcp.add", "Add a tool server to the project", "Every session in the project gets it from the next one on", C::AddMcp).param(Param::Text { hint: "name https://host/mcp (then sse for the older kind)".into() }));
             if !tools.project.is_empty() {
                 let choices = tools.project.iter().map(|m| Choice::new(&m.name, mcp_label(m))).collect();
-                out.push(Action::new("mcp.remove", "Remove a tool server from the project", C::RemoveMcp).param(Param::Choice(choices)));
+                out.push(Action::new("mcp.remove", "Remove a tool server from the project", "Sessions from the next one on don't get it", C::RemoveMcp).param(Param::Choice(choices)));
             }
         }
         if let Some(s) = snapshot.filter(|s| !s.skills.is_empty()) {
@@ -209,14 +207,14 @@ impl ActionProvider for ChatStreamState {
                 .iter()
                 .map(|k| Choice::new(&k.name, format!("{} ({})", k.name, wire_name(&k.scope))).detail(k.description.clone().or(k.path.clone())))
                 .collect();
-            out.push(Action::new("harness.skills", format!("{}'s skills", s.display_name), C::ListSkills).param(Param::Choice(choices)));
+            out.push(Action::new("harness.skills", format!("{}'s skills", s.display_name), "What the harness can be told to do by name", C::ListSkills).param(Param::Choice(choices)));
         }
         if let Some(view) = view
             && view.running_turn().is_some()
             && caps.turns.active_steering
             && !self.ui.input_buffer.trim().is_empty()
         {
-            out.push(Action::new("chat.inject", "Add the prompt to what it's doing", C::AddToTurn).focused().typed(crate::keymap::Sent::Add).on_typing(Button, "Add to what it's doing", None));
+            out.push(Action::new("chat.inject", "Add the prompt to what it's doing", "Into the running turn, rather than after it", C::AddToTurn).focused().typed(crate::keymap::Sent::Add).on_typing(Button, "Add to what it's doing", None));
         }
 
         // Harness commands; typing `/` and its start, those it matches show
@@ -228,7 +226,7 @@ impl ActionProvider for ChatStreamState {
                     Some(hint) => Param::Text { hint: hint.clone() },
                     None => Param::None,
                 };
-                let action = Action::new(format!("command.{}", command.name), format!("/{}", command.name), C::HarnessCommand { name: command.name.clone() }).param(param).detail(command.description.clone());
+                let action = Action::new(format!("command.{}", command.name), format!("/{}", command.name), command.description.clone(), C::HarnessCommand { name: command.name.clone() }).param(param);
                 out.push(if typed.is_some_and(|p| command.name.starts_with(p)) { action.on_typing(Button, format!("/{}", command.name), None) } else { action });
             }
         }
@@ -236,12 +234,12 @@ impl ActionProvider for ChatStreamState {
         // Account
         if let Some(s) = snapshot.filter(|s| !s.auth.methods.is_empty()) {
             let choices = s.auth.methods.iter().map(|m| Choice::new(&m.id, &m.name).detail(m.description.clone())).collect();
-            let login = Action::new("auth.login", "Sign in", C::Login).param(Param::Choice(choices));
+            let login = Action::new("auth.login", "Sign in", "Sign the harness in, the way it offers", C::Login).param(Param::Choice(choices));
             out.push(if self.needs_login() && agents.login().is_none() { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
             let hint = agents.login().and_then(|l| l.expects.clone()).unwrap_or_else(|| "what the sign-in page gave you".into());
-            let complete = Action::new("auth.complete", "Finish signing in", C::CompleteLogin).param(Param::Text { hint });
+            let complete = Action::new("auth.complete", "Finish signing in", "The code the sign-in page gave you", C::CompleteLogin).param(Param::Text { hint });
             out.push(if agents.login().is_some_and(|l| l.expects.is_some()) { complete.header(Button, "Finish signing in", Some(icon::KEY)) } else { complete });
-            out.push(Action::new("auth.logout", "Sign out", C::Logout));
+            out.push(Action::new("auth.logout", "Sign out", "The harness forgets your sign-in on this machine", C::Logout));
         }
 
         // The pending request's answers (here: the inbox offers them too, with the same keys)
@@ -251,30 +249,30 @@ impl ActionProvider for ChatStreamState {
             // Under the request while you're on it.
             let here = crate::hosted::Hosted::here(self).or_else(|| self.ui.cursor.map(|c| c.to_string())) == self.pending_item().map(|i| i.to_string());
             if let Some(url) = crate::request_card::page(request) {
-                out.push(crate::request_card::place_page(Action::new(format!("request.{}.page", request.id), format!("Open the page: {}", request.title), C::OpenPage(url)).focused(), here));
+                out.push(crate::request_card::place_page(Action::new(format!("request.{}.page", request.id), format!("Open the page: {}", request.title), "The page the agent asks you to open, in a new tab", C::OpenPage(url)).focused(), here));
             }
             for answer in crate::request_card::answers(request) {
                 let command = C::Answer { thread: view.thread.id.clone(), request: request.id.clone(), option: answer.option.clone() };
-                out.push(answer.place(Action::new(answer.id.clone(), answer.label.clone(), command).focused(), here));
+                out.push(answer.place(Action::new(answer.id.clone(), answer.label.clone(), "Answers the agent's request this way", command).focused(), here));
             }
         }
         // Typed in: sending it.
-        out.push(Action::new("chat.send", "Send the prompt", C::Send).focused().importance(crate::actions::PRIMARY).typed(crate::keymap::Sent::Send).on_typing(Button, "Send", Some(icon::PAPER_PLANE_RIGHT)));
+        out.push(Action::new("chat.send", "Send the prompt", "To this slot's session (one opens if there's none); #name hands it what a tag is on", C::Send).focused().importance(crate::actions::PRIMARY).typed(crate::keymap::Sent::Send).on_typing(Button, "Send", Some(icon::PAPER_PLANE_RIGHT)));
         // What the chat says on its own line, and its ways out.
         if agents.login().is_some() {
-            out.push(Action::new("auth.cancel", "Stop signing in", C::CancelLogin).focused().importance(MINOR).header(Button, "Cancel sign-in", None));
+            out.push(Action::new("auth.cancel", "Stop signing in", "Nothing changes", C::CancelLogin).focused().importance(MINOR).header(Button, "Cancel sign-in", None));
             if agents.login().is_some_and(|l| l.url.is_some()) {
-                out.push(Action::new("auth.page", "Open the sign-in page", C::OpenLoginPage).focused().importance(crate::actions::PRIMARY).header(Button, "Open the sign-in page", Some(icon::ARROW_SQUARE_OUT)));
+                out.push(Action::new("auth.page", "Open the sign-in page", "In a new tab", C::OpenLoginPage).focused().importance(crate::actions::PRIMARY).header(Button, "Open the sign-in page", Some(icon::ARROW_SQUARE_OUT)));
             }
         }
         if agents.notice().is_some() {
-            out.push(Action::new("chat.dismiss", "Put the notice away", C::DismissNotice).focused().importance(MINOR).header(Button, "Dismiss", None));
+            out.push(Action::new("chat.dismiss", "Put the notice away", "Off the chat", C::DismissNotice).focused().importance(MINOR).header(Button, "Dismiss", None));
         }
         if self.error().is_some() {
             if self.active_thread().is_none() {
-                out.push(Action::new("chat.retry", "Try connecting again", C::Retry).focused().header(Button, "Retry", Some(icon::ARROW_COUNTER_CLOCKWISE)));
+                out.push(Action::new("chat.retry", "Try connecting again", "To the harness, now", C::Retry).focused().header(Button, "Retry", Some(icon::ARROW_COUNTER_CLOCKWISE)));
             }
-            out.push(Action::new("chat.dismiss_error", "Put the error away", C::DismissError).focused().importance(MINOR).header(Button, "Dismiss", None));
+            out.push(Action::new("chat.dismiss_error", "Put the error away", "Off the chat", C::DismissError).focused().importance(MINOR).header(Button, "Dismiss", None));
         }
         out
     }

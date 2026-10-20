@@ -107,14 +107,14 @@ impl CockpitApp {
         let (switch, why) = self.alerts_words();
         let mut waiting = vec![Choice::new(SWITCH, &switch).detail(why.clone())];
         waiting.extend(rows(Level::Waiting));
-        let pick = |id: &str, label: &str, choices: Vec<Choice>| Action::new(id, label, S::AttentionPick).param(Param::Choice(choices)).group(Group::Act).importance(SECONDARY);
-        let mut out = vec![pick("attention.waiting", "What's waiting on you", waiting)];
+        let pick = |id: &str, label: &str, detail: &str, choices: Vec<Choice>| Action::new(id, label, detail, S::AttentionPick).param(Param::Choice(choices)).group(Group::Act).importance(SECONDARY);
+        let mut out = vec![pick("attention.waiting", "What's waiting on you", "Approvals, questions and sign-ins the agents wait on, on every server: pick one to answer it", waiting)];
         let updates = rows(Level::Update);
         if !updates.is_empty() {
-            out.push(pick("attention.updates", "Updates", updates));
+            out.push(pick("attention.updates", "Updates", "What happened that you'd want to know (a turn done, a report, a long command finished): pick one to see it", updates));
         }
-        out.push(Action::new("attention.next_waiting", "Go to what's waiting next", S::AttentionNextWaiting).group(Group::Act).importance(SECONDARY));
-        out.push(Action::new("alerts.toggle", switch, S::Alerts).detail(why.unwrap_or_default()).group(Group::Act).importance(MINOR));
+        out.push(Action::new("attention.next_waiting", "Go to what's waiting next", "Opens the next thing an agent waits on you for, on whichever server it is", S::AttentionNextWaiting).group(Group::Act).importance(SECONDARY));
+        out.push(Action::new("alerts.toggle", switch, why.unwrap_or_else(|| "Whether the browser tells you, outside the cockpit, when something new waits on you".into()), S::Alerts).group(Group::Act).importance(MINOR));
         out
     }
 

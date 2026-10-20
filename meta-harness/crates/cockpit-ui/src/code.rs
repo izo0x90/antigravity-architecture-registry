@@ -911,14 +911,14 @@ impl ActionProvider for CodeViewerState {
     fn actions(&self) -> Vec<Action> {
         let mut out = self.moves();
         if !self.defs.is_empty() {
-            out.push(Action::new("code.next_def", "Next definition", CodeCommand::Def { forward: true }).focused().group(Group::Navigate));
-            out.push(Action::new("code.prev_def", "Previous definition", CodeCommand::Def { forward: false }).focused().group(Group::Navigate));
+            out.push(Action::new("code.next_def", "Next definition", "The next function, type or module in this file", CodeCommand::Def { forward: true }).focused().group(Group::Navigate));
+            out.push(Action::new("code.prev_def", "Previous definition", "The function, type or module before, in this file", CodeCommand::Def { forward: false }).focused().group(Group::Navigate));
         }
-        out.push(Action::new("code.deleted", "Show deleted lines in place", CodeCommand::Deleted).focused().param(Param::Toggle { on: self.show_deleted }).header(Style::Setting, "Deleted lines", None).group(Group::View).importance(MINOR));
-        out.push(Action::new("code.reload", "Load the file again", CodeCommand::Reload).focused().group(Group::View).importance(MINOR).header(Style::Button, "", Some(egui_phosphor::regular::ARROW_CLOCKWISE)));
-        out.push(Action::new("code.copy", "Copy the file", CodeCommand::Copy).focused().importance(MINOR).header(Style::Button, "", Some(egui_phosphor::regular::COPY)));
+        out.push(Action::new("code.deleted", "Show deleted lines in place", "Lines the comparison removed, struck through where they were", CodeCommand::Deleted).focused().param(Param::Toggle { on: self.show_deleted }).header(Style::Setting, "Deleted lines", None).group(Group::View).importance(MINOR));
+        out.push(Action::new("code.reload", "Load the file again", "Reads the file from disk again (it changed outside)", CodeCommand::Reload).focused().group(Group::View).importance(MINOR).header(Style::Button, "", Some(egui_phosphor::regular::ARROW_CLOCKWISE)));
+        out.push(Action::new("code.copy", "Copy the file", "The whole file, to the clipboard", CodeCommand::Copy).focused().importance(MINOR).header(Style::Button, "", Some(egui_phosphor::regular::COPY)));
         // Its file, read into the index again (from anywhere).
-        out.push(Action::new("index.file", format!("Re-read {}", self.current_file), CodeCommand::Reread).group(Group::Act).importance(MINOR));
+        out.push(Action::new("index.file", format!("Re-read {}", self.current_file), "The index reads this file again (what it says of it is out of date)", CodeCommand::Reread).group(Group::Act).importance(MINOR));
         out
     }
 

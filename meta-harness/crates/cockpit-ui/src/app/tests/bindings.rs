@@ -447,3 +447,18 @@ fn shift_h_and_l_go_to_the_column_left_and_right() {
     frame(&ctx, &mut app, key("H"));
     assert_eq!(app.desk.panels.focused(), at, "H: back");
 }
+
+/// Every action says what it does in a line (the palette shows it under
+/// its label): in every view, in the states the full cockpit has.
+#[test]
+fn every_action_says_what_it_does() {
+    let (ctx, mut app) = full_app();
+    let mut empty = std::collections::BTreeSet::new();
+    for kind in BufferKind::ALL {
+        focus(&ctx, &mut app, kind);
+        frame(&ctx, &mut app, press(egui::Key::Escape, false));
+        frame(&ctx, &mut app, press(egui::Key::Escape, false));
+        empty.extend(app.bound_actions().into_iter().filter(|b| b.action.detail.trim().is_empty()).map(|b| b.action.id));
+    }
+    assert!(empty.is_empty(), "no description: {empty:?}");
+}

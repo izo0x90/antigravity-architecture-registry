@@ -986,19 +986,19 @@ enum SpecCommand {
 impl ActionProvider for SpecState {
     fn actions(&self) -> Vec<Action> {
         use SpecCommand as S;
-        let f = |id: &str, label: &str, c: SpecCommand| Action::new(id, label, c).focused();
+        let f = |id: &str, label: &str, detail: &str, c: SpecCommand| Action::new(id, label, detail, c).focused();
         let mut out = self.moves();
         if self.composer.is_some() {
-            out.push(f("spec.send", "Send what's written", S::Send).importance(PRIMARY).typed(crate::keymap::Sent::Send).on_typing(Style::Button, "Send", Some(egui_phosphor::regular::PAPER_PLANE_RIGHT)));
-            out.push(f("spec.cancel", "Throw away what's being written", S::CancelCompose).importance(PRIMARY).on_typing(Style::Button, "Cancel", None));
+            out.push(f("spec.send", "Send what's written", "Posts the comment or answer to the plan's review", S::Send).importance(PRIMARY).typed(crate::keymap::Sent::Send).on_typing(Style::Button, "Send", Some(egui_phosphor::regular::PAPER_PLANE_RIGHT)));
+            out.push(f("spec.cancel", "Throw away what's being written", "Nothing is posted", S::CancelCompose).importance(PRIMARY).on_typing(Style::Button, "Cancel", None));
         }
         out.extend([
-            f("spec.next_section", "Next section", S::NextSection).group(Group::Navigate),
-            f("spec.prev_section", "Previous section", S::PrevSection).group(Group::Navigate).importance(MINOR),
+            f("spec.next_section", "Next section", "The card's next part: what it is, what it holds, its relations, its code", S::NextSection).group(Group::Navigate),
+            f("spec.prev_section", "Previous section", "The card's part before", S::PrevSection).group(Group::Navigate).importance(MINOR),
         ]);
         if !self.floating {
             out.push(
-                f("spec.pin", if self.pinned { "Unpin (follow what you're on)" } else { "Pin this component" }, S::Pin)
+                f("spec.pin", if self.pinned { "Unpin (follow what you're on)" } else { "Pin this component" }, "Pinned, it stays on this card while you move elsewhere", S::Pin)
                     .header(Style::Button, if self.pinned { "Pinned" } else { "Pin" }, Some(egui_phosphor::regular::PUSH_PIN))
                     .group(Group::View)
                     .importance(MINOR),
@@ -1008,39 +1008,39 @@ impl ActionProvider for SpecState {
         let on_comment = self.comment_here().is_some();
         let comment_rank = if self.source.plan().is_none() { MINOR } else if on_comment { SECONDARY } else { PRIMARY };
         if self.detail.is_some() {
-            out.push(f("spec.comment", "Comment on this item", S::Comment).importance(comment_rank));
-            out.push(f("spec.request_change", "Ask for a change to this item", S::RequestChange).importance(comment_rank));
+            out.push(f("spec.comment", "Comment on this item", "A note on it in the plan's review, for the agents and you", S::Comment).importance(comment_rank));
+            out.push(f("spec.request_change", "Ask for a change to this item", "An open point in the plan's review, for the agent to answer", S::RequestChange).importance(comment_rank));
         }
         if self.source.plan().is_some() {
             out.push(
-                f("spec.mark_reviewed", "Mark the plan reviewed (later changes are highlighted)", S::MarkReviewed)
+                f("spec.mark_reviewed", "Mark the plan reviewed (later changes are highlighted)", "From now on, what changes in the plan is marked as new", S::MarkReviewed)
                     .header(Style::Button, "Reviewed", Some(egui_phosphor::regular::CHECK_SQUARE))
                     .importance(MINOR),
             );
             // Always there: with no open points it says so.
             let points = if self.open_points().is_empty() { When::Unavailable } else { When::Always };
-            out.push(f("spec.next_point", "Next open review point", S::Point { forward: true }).group(Group::Navigate).importance(if on_comment { SECONDARY } else { PRIMARY }).when(points).jump());
-            out.push(f("spec.prev_point", "Previous open review point", S::Point { forward: false }).group(Group::Navigate).importance(MINOR).when(points).jump());
+            out.push(f("spec.next_point", "Next open review point", "The next change asked for that isn't settled", S::Point { forward: true }).group(Group::Navigate).importance(if on_comment { SECONDARY } else { PRIMARY }).when(points).jump());
+            out.push(f("spec.prev_point", "Previous open review point", "The unsettled point before", S::Point { forward: false }).group(Group::Navigate).importance(MINOR).when(points).jump());
             // On an open point, its controls are under it.
             let on_open = self.comment_here().is_some_and(|c| !c.is_addressed());
             let under = |a: Action, caption: &str| if on_open { a.on_item(Style::Button, caption, None) } else { a };
             if self.reply_point().is_some() {
-                out.push(under(f("spec.reply", "Reply to this point", S::Reply).importance(if on_comment { PRIMARY } else { SECONDARY }), "Reply"));
+                out.push(under(f("spec.reply", "Reply to this point", "Adds to its thread", S::Reply).importance(if on_comment { PRIMARY } else { SECONDARY }), "Reply"));
             }
             if self.answered_point().is_some() {
-                out.push(under(f("spec.accept", "Accept the answer to this point", S::Accept).importance(PRIMARY), "Accept"));
-                out.push(under(f("spec.reopen", "Reopen this point (say why)", S::Reopen).importance(SECONDARY), "Reopen"));
+                out.push(under(f("spec.accept", "Accept the answer to this point", "Settles it", S::Accept).importance(PRIMARY), "Accept"));
+                out.push(under(f("spec.reopen", "Reopen this point (say why)", "The answer didn't settle it: it's open again", S::Reopen).importance(SECONDARY), "Reopen"));
             }
         }
         out.push(
-            f("spec.section", "Go to a section", S::Section)
+            f("spec.section", "Go to a section", "Pick one of the card's parts", S::Section)
                 .param(Param::Choice(Section::ALL.iter().enumerate().map(|(i, s)| Choice::new(i.to_string(), s.title()).current(*s == self.current)).collect()))
                 .header(Style::Setting, "Section", None)
                 .group(Group::Navigate)
                 .importance(MINOR),
         );
         if self.out_of_date && self.detail.as_ref().is_some_and(|d| d.code.is_some()) {
-            out.push(f("spec.reread", "Read this code again (it changed since)", S::Reread).header(Style::Button, "Re-read", None).importance(MINOR));
+            out.push(f("spec.reread", "Read this code again (it changed since)", "The index reads its file again, so the card is up to date", S::Reread).header(Style::Button, "Re-read", None).importance(MINOR));
         }
         out
     }

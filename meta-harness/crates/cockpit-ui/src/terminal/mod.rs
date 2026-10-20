@@ -646,27 +646,27 @@ impl ActionProvider for TerminalBuffer {
             (None, false, _) => crate::nav::Move::Enter.offer("Open a terminal"),
         });
         out.push(crate::nav::Move::Leave.offer_if(self.cursor.is_some() || self.selection.is_some() || !self.view.live(), "Back to the live screen"));
-        out.push(Action::new("terminal.type", "Type into the terminal", C::Type).focused().importance(PRIMARY).when(if has && !ended && !self.typing { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
-        out.push(Action::new("terminal.copy", if self.selection.is_some() { "Copy the selection" } else { "Copy the line" }, C::Copy).focused().importance(MINOR));
+        out.push(Action::new("terminal.type", "Type into the terminal", "Every key goes to its program until you stop typing", C::Type).focused().importance(PRIMARY).when(if has && !ended && !self.typing { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
+        out.push(Action::new("terminal.copy", if self.selection.is_some() { "Copy the selection" } else { "Copy the line" }, "To the clipboard, as text (drag to select)", C::Copy).focused().importance(MINOR));
         let many = self.terminals.get().list().count() > 1;
-        out.push(Action::new("terminal.next", "Next terminal", C::Step(1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
-        out.push(Action::new("terminal.prev", "Previous terminal", C::Step(-1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
+        out.push(Action::new("terminal.next", "Next terminal", "This panel shows the next of the server's terminals", C::Step(1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
+        out.push(Action::new("terminal.prev", "Previous terminal", "This panel shows the terminal before", C::Step(-1)).focused().importance(MINOR).when(if many { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
         let choices = self.terminals.get().list().map(|t| crate::actions::Choice::new(t.id.as_str(), if t.title.is_empty() { t.shell.clone() } else { t.title.clone() }).detail(Some(t.id.to_string())).current(Some(&t.id) == self.id.as_ref())).collect();
-        out.push(Action::new("terminal.pick", "Show another terminal here", C::Pick).param(crate::actions::Param::Choice(choices)).focused().importance(MINOR));
-        out.push(Action::new("terminal.new", "Open a new terminal here", C::New).focused().importance(MINOR));
+        out.push(Action::new("terminal.pick", "Show another terminal here", "Every terminal the server runs: pick one for this panel", C::Pick).param(crate::actions::Param::Choice(choices)).focused().importance(MINOR));
+        out.push(Action::new("terminal.new", "Open a new terminal here", "Your shell, in the project's folder, shown in this panel", C::New).focused().importance(MINOR));
         if ended {
-            out.push(Action::new("terminal.restart", "Start its shell again", C::Restart).focused().importance(PRIMARY).header(crate::actions::Style::Button, "Start again", Some(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)));
+            out.push(Action::new("terminal.restart", "Start its shell again", "A new start of your shell, in the same folder (what the last one showed goes)", C::Restart).focused().importance(PRIMARY).header(crate::actions::Style::Button, "Start again", Some(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)));
         }
         if has {
-            out.push(Action::new("terminal.close", "Close the terminal (its shell ends)", C::Close).focused().importance(MINOR));
+            out.push(Action::new("terminal.close", "Close the terminal (its shell ends)", "Its shell and what runs in it end; the terminal is forgotten", C::Close).focused().importance(MINOR));
         }
         // The command the cursor's on (the shell's marks say where).
         let commands = !self.lines.alternate() && self.lines.command_beside(self.lines.first().saturating_sub(1), false).is_some();
         out.push(crate::nav::Move::Motion(Motion::NextSibling).offer_if(commands, "Next command"));
         out.push(crate::nav::Move::Motion(Motion::PrevSibling).offer_if(commands, "Previous command"));
         let when = |ok: bool| if ok { crate::actions::When::Always } else { crate::actions::When::Unavailable };
-        out.push(Action::new("terminal.copy_output", "Copy the command's output", C::CopyOutput).focused().importance(MINOR).when(when(self.run_on().is_ok())));
-        out.push(Action::new("terminal.run_again", "Run the command again", C::RunAgain).focused().importance(MINOR).when(when(self.run_on().is_ok_and(|c| !c.text.is_empty()) && self.lines.at_empty_prompt().is_some() && !ended)));
+        out.push(Action::new("terminal.copy_output", "Copy the command's output", "All of what the command the cursor's on printed, to the clipboard", C::CopyOutput).focused().importance(MINOR).when(when(self.run_on().is_ok())));
+        out.push(Action::new("terminal.run_again", "Run the command again", "Types the command the cursor's on at the empty prompt and runs it", C::RunAgain).focused().importance(MINOR).when(when(self.run_on().is_ok_and(|c| !c.text.is_empty()) && self.lines.at_empty_prompt().is_some() && !ended)));
         out
     }
 

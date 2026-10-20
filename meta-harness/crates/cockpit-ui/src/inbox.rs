@@ -346,27 +346,27 @@ impl InboxView {
 
 impl ActionProvider for InboxView {
     fn actions(&self) -> Vec<Action> {
-        let act = |id: &str, label: &str, c: Command| Action::new(id, label, c).focused().group(Group::Act);
+        let act = |id: &str, label: &str, detail: &str, c: Command| Action::new(id, label, detail, c).focused().group(Group::Act);
         let mut out = self.moves();
         if self.at.is_some_and(|(_, of)| of > 1) || self.shown.is_none() && self.item.is_some() {
-            out.push(act("inbox.prev", "Previous", Command::Step(-1)).importance(SECONDARY).header(Style::Button, "", Some(icon::CARET_LEFT)));
-            out.push(act("inbox.next", "Next", Command::Step(1)).importance(PRIMARY).header(Style::Button, "", Some(icon::CARET_RIGHT)));
+            out.push(act("inbox.prev", "Previous", "The item before, in what waits on you", Command::Step(-1)).importance(SECONDARY).header(Style::Button, "", Some(icon::CARET_LEFT)));
+            out.push(act("inbox.next", "Next", "The next item, in what waits on you", Command::Step(1)).importance(PRIMARY).header(Style::Button, "", Some(icon::CARET_RIGHT)));
         }
         let Some(shown) = &self.shown else { return out };
         // Under its request while you're on it.
         let here = self.parts().get(self.cursor) == Some(&Part::Request);
         if let Some((request, url)) = shown.request.as_ref().and_then(|r| crate::request_card::page(r).map(|u| (r, u))) {
-            out.push(crate::request_card::place_page(act(&format!("request.{}.page", request.id), &format!("Open the page: {}", request.title), Command::OpenPage(url)), here));
+            out.push(crate::request_card::place_page(act(&format!("request.{}.page", request.id), &format!("Open the page: {}", request.title), "The page the agent asks you to open, in a new tab", Command::OpenPage(url)), here));
         }
         for answer in shown.request.iter().flat_map(crate::request_card::answers) {
-            out.push(answer.place(act(&answer.id, &answer.label, Command::Answer(answer.option.clone())).importance(PRIMARY), here));
+            out.push(answer.place(act(&answer.id, &answer.label, "Answers the agent's request this way", Command::Answer(answer.option.clone())).importance(PRIMARY), here));
         }
         if shown.notification.slot.is_some() {
-            out.push(act("inbox.open_chat", "Open its chat", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its chat", Some(icon::CHAT_TEARDROP_TEXT)));
+            out.push(act("inbox.open_chat", "Open its chat", "The agent's chat this came from", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its chat", Some(icon::CHAT_TEARDROP_TEXT)));
         } else if shown.notification.terminal.is_some() {
-            out.push(act("inbox.open_chat", "Open its terminal", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its terminal", Some(icon::TERMINAL_WINDOW)));
+            out.push(act("inbox.open_chat", "Open its terminal", "The terminal this came from", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its terminal", Some(icon::TERMINAL_WINDOW)));
         }
-        out.push(act("inbox.dismiss", "Put it away", Command::Dismiss).importance(MINOR).header(Style::Button, "Put away", Some(icon::ARCHIVE)));
+        out.push(act("inbox.dismiss", "Put it away", "Off the list of what waits on you", Command::Dismiss).importance(MINOR).header(Style::Button, "Put away", Some(icon::ARCHIVE)));
         out
     }
 

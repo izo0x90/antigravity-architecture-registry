@@ -223,23 +223,23 @@ impl QueueState {
 impl ActionProvider for QueueState {
     fn actions(&self) -> Vec<Action> {
         use QueueCommand as Q;
-        let f = |id: &str, label: &str, c: QueueCommand| Action::new(id, label, c).focused();
+        let f = |id: &str, label: &str, detail: &str, c: QueueCommand| Action::new(id, label, detail, c).focused();
         if self.plan.is_none() {
             return Vec::new();
         }
         let mut out = self.moves();
         let running = matches!(self.status(), Some(QueueStatus::Running | QueueStatus::WaitingForUser | QueueStatus::Stopping));
         if running {
-            out.push(f("queue.stop", "Stop the queue (after the running job)", Q::Stop).header(Style::Button, "Stop", Some(egui_phosphor::regular::STOP)).importance(MINOR));
+            out.push(f("queue.stop", "Stop the queue (after the running job)", "The job running finishes; no other starts", Q::Stop).header(Style::Button, "Stop", Some(egui_phosphor::regular::STOP)).importance(MINOR));
         } else if self.status() != Some(QueueStatus::Done) {
-            out.push(f("queue.start", "Start working through the plan", Q::Start).header(Style::Button, "Start", Some(egui_phosphor::regular::PLAY)));
+            out.push(f("queue.start", "Start working through the plan", "Agents take the plan's components one job at a time, in order", Q::Start).header(Style::Button, "Start", Some(egui_phosphor::regular::PLAY)));
         }
         if let Some(job) = self.job() {
             // Always listed (the key sheet shows them); they apply to some jobs.
             let applies = |yes: bool| if yes { When::Always } else { When::Unavailable };
-            out.push(f("queue.approve", "Approve this component's design", Q::Approve).importance(PRIMARY).when(applies(job.state == JobState::AwaitingApproval)).on_item(Style::Button, format!("Approve {:?}", job.kind.goal()), Some(egui_phosphor::regular::CHECK)));
-            out.push(f("queue.retry", "Give this job another round", Q::Retry).importance(PRIMARY).when(applies(job.state == JobState::Failed)).on_item(Style::Button, "Retry", Some(egui_phosphor::regular::ARROW_CLOCKWISE)));
-            out.push(f("queue.open_session", "Open the session working on it", Q::OpenSession).group(Group::GoTo).importance(PRIMARY).when(applies(matches!(job.state, JobState::Running { thread: Some(_) }))).on_item(Style::Button, "Session", None));
+            out.push(f("queue.approve", "Approve this component's design", "Its job goes on from the design to building it", Q::Approve).importance(PRIMARY).when(applies(job.state == JobState::AwaitingApproval)).on_item(Style::Button, format!("Approve {:?}", job.kind.goal()), Some(egui_phosphor::regular::CHECK)));
+            out.push(f("queue.retry", "Give this job another round", "It runs again, with what it found the last time", Q::Retry).importance(PRIMARY).when(applies(job.state == JobState::Failed)).on_item(Style::Button, "Retry", Some(egui_phosphor::regular::ARROW_CLOCKWISE)));
+            out.push(f("queue.open_session", "Open the session working on it", "The agent's chat for this job, in the chat", Q::OpenSession).group(Group::GoTo).importance(PRIMARY).when(applies(matches!(job.state, JobState::Running { thread: Some(_) }))).on_item(Style::Button, "Session", None));
         }
         out
     }

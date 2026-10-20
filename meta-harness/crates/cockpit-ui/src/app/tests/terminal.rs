@@ -756,3 +756,30 @@ fn the_tags_buffer_lists_tags_and_what_they_are_on_reads_what_they_say_now_and_m
     assert_eq!(app.focused_kind(), BufferKind::Terminal);
     assert_eq!(cursor(&app).as_deref(), Some("1003"));
 }
+
+#[test]
+fn the_palette_keeps_its_place_and_size_while_typing_and_whatever_its_rows_say() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![])]);
+    let mut long = tag_on("x1", "flaky", &[lines("t1", 1, 1010, 1010), lines("t1", 1, 1011, 1011)]);
+    long.note = "fails on Mondays when the build cache is cold and the network to the registry is slow, which is most Mondays".into();
+    long.on[0].said = "error: could not compile `meta-harness` (test \"terminals_tests\") due to 1 previous error; 3 warnings emitted while linking the whole thing".repeat(3);
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: long });
+    frame(&ctx, &mut app, vec![]);
+    let rect = |ctx: &egui::Context| ctx.memory(|m| m.area_rect(egui::Id::new("command_palette"))).expect("the palette is drawn");
+    // Every picker: all actions, a search (tags), a choice whose rows say a lot.
+    for (open, typed) in [(":", "tagwhat"), ("M", "fl"), ("gT", "fl\n")] {
+        for _ in 0..2 {
+            frame(&ctx, &mut app, press(egui::Key::Escape, false));
+        }
+        keys(&ctx, &mut app, open);
+        frame(&ctx, &mut app, vec![]);
+        let first = rect(&ctx);
+        for c in typed.chars() {
+            frame(&ctx, &mut app, if c == '\n' { press(egui::Key::Enter, false) } else { key(&c.to_string()) });
+            frame(&ctx, &mut app, vec![]);
+            assert_eq!(rect(&ctx), first, "{open} then {typed:?}: the same place and size");
+        }
+        assert!((first.center().x - SCREEN.x / 2.0).abs() < 2.0, "centred: {first:?}");
+    }
+}

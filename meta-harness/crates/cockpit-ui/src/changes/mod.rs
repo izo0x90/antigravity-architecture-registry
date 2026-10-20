@@ -917,7 +917,7 @@ impl ChangesView {
 
 impl ActionProvider for ChangesView {
     fn actions(&self) -> Vec<Action> {
-        let f = |id: &str, label: &str, c: Command| Action::new(id, label, c).focused();
+        let f = |id: &str, label: &str, detail: &str, c: Command| Action::new(id, label, detail, c).focused();
         let mut choices: Vec<Choice> = offered().into_iter().map(|(c, label)| Choice::new(c.range(), label).current(c == self.comparison)).collect();
         if !offered().iter().any(|(c, _)| *c == self.comparison) {
             choices.push(Choice::new(self.comparison.range(), self.comparison.to_string()).current(true));
@@ -925,22 +925,22 @@ impl ActionProvider for ChangesView {
         let layouts = DiffLayout::ALL.iter().map(|(l, label)| Choice::new(l.name(), *label).current(*l == self.layout)).collect();
         let mut out = self.moves();
         out.extend([
-            f("changes.compare", "Compare what with what", Command::Compare).param(Param::Choice(choices)).header(Style::Setting, "Compare", None).group(ActionGroup::View).importance(SECONDARY),
-            f("changes.layout", "Lay changes out", Command::Layout).param(Param::Choice(layouts)).header(Style::Setting, "Layout", None).group(ActionGroup::View).importance(MINOR),
-            f("changes.refresh", "Read the changes again", Command::Refresh).header(Style::Button, "", Some(egui_phosphor::regular::ARROW_CLOCKWISE)).group(ActionGroup::View).importance(MINOR),
+            f("changes.compare", "Compare what with what", "Uncommitted, the last commit, staged, any commit or branch: what against what", Command::Compare).param(Param::Choice(choices)).header(Style::Setting, "Compare", None).group(ActionGroup::View).importance(SECONDARY),
+            f("changes.layout", "Lay changes out", "One column or side by side (auto: side by side when there's room)", Command::Layout).param(Param::Choice(layouts)).header(Style::Setting, "Layout", None).group(ActionGroup::View).importance(MINOR),
+            f("changes.refresh", "Read the changes again", "Asks git again what changed", Command::Refresh).header(Style::Button, "", Some(egui_phosphor::regular::ARROW_CLOCKWISE)).group(ActionGroup::View).importance(MINOR),
         ]);
-        out.push(f("changes.timeline", "Show when the files changed and who was working", Command::Timeline).param(Param::Toggle { on: self.on_timeline }).header(Style::Setting, "Timeline", None).group(ActionGroup::View).importance(SECONDARY));
+        out.push(f("changes.timeline", "Show when the files changed and who was working", "The windows between snapshots, newest first, with the sessions at work", Command::Timeline).param(Param::Toggle { on: self.on_timeline }).header(Style::Setting, "Timeline", None).group(ActionGroup::View).importance(SECONDARY));
         // Staging: the user's own act, on the uncommitted changes.
         if let Some(row) = self.cursor_row().filter(|_| self.comparison.is_uncommitted())
             && let Some(stage) = self.file_of(&row).and_then(|f| f.group.staging())
         {
             let (id, label, caption) = if stage { ("changes.stage", "Stage it", "Stage") } else { ("changes.unstage", "Unstage it", "Unstage") };
-            out.push(f(id, label, Command::Stage(stage)).on_item(Style::Button, caption, None).group(ActionGroup::Act).importance(SECONDARY));
+            out.push(f(id, label, "Writes the index only: your files and branch stay as they are", Command::Stage(stage)).on_item(Style::Button, caption, None).group(ActionGroup::Act).importance(SECONDARY));
         }
         if let Some(Row::Window(_)) = self.cursor_row() {
-            out.push(f("changes.since", "Compare from here to the files now", Command::Since).on_item(Style::Button, "Since here", None).group(ActionGroup::View).importance(MINOR));
+            out.push(f("changes.since", "Compare from here to the files now", "Everything changed since this snapshot", Command::Since).on_item(Style::Button, "Since here", None).group(ActionGroup::View).importance(MINOR));
         } else if self.more_context_here().is_some() {
-            out.push(f("changes.more_context", &format!("Show {} more lines around its changes", self.ui.more_context), Command::MoreContext).on_item(Style::Button, "More context", None).group(ActionGroup::View).importance(MINOR));
+            out.push(f("changes.more_context", &format!("Show {} more lines around its changes", self.ui.more_context), "More of the unchanged lines on each side", Command::MoreContext).on_item(Style::Button, "More context", None).group(ActionGroup::View).importance(MINOR));
         }
         out
     }

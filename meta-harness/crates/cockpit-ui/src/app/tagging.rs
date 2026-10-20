@@ -29,16 +29,16 @@ impl CockpitApp {
         let on_it = subject.as_ref().map(|s| tags.on(s)).unwrap_or_default();
         let tagged = !on_it.is_empty();
         let mut out = vec![
-            Action::new("tag.add", "Tag what you're on", S::Tag).param(Param::Search { hint: "a tag's name (a new one is made)".into(), found: if picking { self.tag_found() } else { Vec::new() }, waiting: false }).group(Group::Act).importance(MINOR).when(when(subject.is_some())).icon(egui_phosphor::regular::TAG),
-            Action::new("tag.remove", "Take a tag off what you're on", S::Untag).param(Param::Choice(on_it.iter().map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone())).collect())).group(Group::Act).importance(MINOR).when(when(tagged)),
-            Action::new("tag.goto", "Go to something tagged", S::TagGoTo).param(Param::Choice(tags.list().iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).detail(Some(described(t)))).collect())).group(Group::GoTo).importance(MINOR),
-            Action::new("tag.next", "Next with its tag", S::TagStep { forward: true }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
-            Action::new("tag.prev", "Previous with its tag", S::TagStep { forward: false }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
+            Action::new("tag.add", "Tag what you're on", "Pick a tag, or type a new one's name", S::Tag).param(Param::Search { hint: "a tag's name (a new one is made)".into(), found: if picking { self.tag_found() } else { Vec::new() }, waiting: false }).group(Group::Act).importance(MINOR).when(when(subject.is_some())).icon(egui_phosphor::regular::TAG),
+            Action::new("tag.remove", "Take a tag off what you're on", "Pick which of its tags", S::Untag).param(Param::Choice(on_it.iter().map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone())).collect())).group(Group::Act).importance(MINOR).when(when(tagged)),
+            Action::new("tag.goto", "Go to something tagged", "Pick the tag, then which thing it's on", S::TagGoTo).param(Param::Choice(tags.list().iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).detail(Some(described(t)))).collect())).group(Group::GoTo).importance(MINOR),
+            Action::new("tag.next", "Next with its tag", "The next thing the tag on this is on (the one stepped through last)", S::TagStep { forward: true }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
+            Action::new("tag.prev", "Previous with its tag", "The thing before, of those the tag on this is on", S::TagStep { forward: false }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
         ];
         // `g T` picked a tag on several things: which.
         if let Some(tag) = self.desk.tag_picking.as_ref().and_then(|id| tags.get(id)) {
             let choices = tag.on.iter().map(|on| Choice::new(serde_json::to_string(&on.subject).unwrap_or_default(), thing_name(&on.what)).detail(Some(first_line(&on.said)))).collect();
-            out.push(Action::new("tag.goto.pick", format!("Go to which thing {} is on?", tag.name), S::TagGoToPick).param(Param::Choice(choices)).group(Group::GoTo));
+            out.push(Action::new("tag.goto.pick", format!("Go to which thing {} is on?", tag.name), "It's on several: pick one", S::TagGoToPick).param(Param::Choice(choices)).group(Group::GoTo));
         }
         out
     }

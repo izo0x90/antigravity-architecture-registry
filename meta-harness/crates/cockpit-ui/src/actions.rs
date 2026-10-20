@@ -269,7 +269,8 @@ pub struct Action {
     /// Stable name the keymap binds to.
     pub id: String,
     pub label: String,
-    pub detail: Option<String>,
+    /// What it does, in a line (the palette shows it under the label).
+    pub detail: String,
     pub param: Param,
     pub scope: Scope,
     /// Other keymap names for this action, most specific first.
@@ -296,11 +297,13 @@ impl std::fmt::Debug for Action {
 }
 
 impl Action {
-    pub fn new<C: 'static>(id: impl Into<String>, label: impl Into<String>, command: C) -> Self {
+    /// An action: its id, its label, what it does in a line (every action
+    /// says), and its command.
+    pub fn new<C: 'static>(id: impl Into<String>, label: impl Into<String>, detail: impl Into<String>, command: C) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
-            detail: None,
+            detail: detail.into(),
             param: Param::None,
             scope: Scope::Global,
             aliases: Vec::new(),
@@ -340,8 +343,9 @@ impl Action {
         self
     }
 
+    /// What it does, said otherwise where it's offered.
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
+        self.detail = detail.into();
         self
     }
 
@@ -670,7 +674,7 @@ mod tests {
 
     fn bound(id: &str, leader: &str) -> Bound {
         Bound {
-            action: Action::new(id, id, ()),
+            action: Action::new(id, id, "", ()),
             origin: Origin::Shell,
             leader: (!leader.is_empty()).then(|| leader.chars().collect()),
             keys: Vec::new(),
@@ -706,7 +710,7 @@ mod tests {
         enum Mine {
             Go,
         }
-        let action = Action::new("x", "X", Mine::Go);
+        let action = Action::new("x", "X", "", Mine::Go);
         assert_eq!(action.command::<Mine>(), Some(&Mine::Go));
         assert_eq!(action.command::<u8>(), None);
     }

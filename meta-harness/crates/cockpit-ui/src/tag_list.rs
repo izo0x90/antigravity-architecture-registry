@@ -340,7 +340,7 @@ impl Navigable for TagList {
 
 impl ActionProvider for TagList {
     fn actions(&self) -> Vec<Action> {
-        let act = |id: &str, label: &str, c: Command| Action::new(id, label, c).focused().group(Group::Act).importance(MINOR);
+        let act = |id: &str, label: &str, detail: &str, c: Command| Action::new(id, label, detail, c).focused().group(Group::Act).importance(MINOR);
         let when = |ok: bool| if ok { When::Always } else { When::Unavailable };
         let mut out = crate::nav::list_moves();
         out.push(Move::Enter.offer_if(!self.rows.is_empty(), "Go to it"));
@@ -348,15 +348,15 @@ impl ActionProvider for TagList {
         out.push(Move::Motion(Motion::PrevSibling).offer_if(self.rows.len() > 1, "Previous tag"));
         let tag = self.tag_here(|t| (t.name.clone(), t.colour, !t.note.is_empty()));
         let on_tag = tag.is_some();
-        out.push(act("tags.rename", "Rename the tag", Command::Rename).param(Param::Text { hint: "a new name (letters, digits, - and _)".into() }).when(when(on_tag)).importance(SECONDARY));
+        out.push(act("tags.rename", "Rename the tag", "A new name for it (what it's on stays)", Command::Rename).param(Param::Text { hint: "a new name (letters, digits, - and _)".into() }).when(when(on_tag)).importance(SECONDARY));
         let theme = colors();
         let colours = (0..TAG_COLOURS).map(|i| Choice::new(i.to_string(), theme.tag_name(i)).current(tag.as_ref().is_some_and(|t| t.1 == i))).collect();
-        out.push(act("tags.recolour", "Give the tag another colour", Command::Recolour).param(Param::Choice(colours)).when(when(on_tag)));
-        out.push(act("tags.note", "Write the tag's note", Command::Note).param(Param::Text { hint: "its note".into() }).when(when(on_tag)));
-        out.push(act("tags.note_clear", "Clear the tag's note", Command::ClearNote).when(when(tag.as_ref().is_some_and(|t| t.2))));
-        out.push(act("tags.untag", "Take the tag off this", Command::Untag).when(when(self.thing_here().is_some())));
+        out.push(act("tags.recolour", "Give the tag another colour", "One of the theme's tag colours", Command::Recolour).param(Param::Choice(colours)).when(when(on_tag)));
+        out.push(act("tags.note", "Write the tag's note", "What it's for, said wherever the tag is (agents read it too)", Command::Note).param(Param::Text { hint: "its note".into() }).when(when(on_tag)));
+        out.push(act("tags.note_clear", "Clear the tag's note", "It has no note from now on", Command::ClearNote).when(when(tag.as_ref().is_some_and(|t| t.2))));
+        out.push(act("tags.untag", "Take the tag off this", "The tag stays on everything else", Command::Untag).when(when(self.thing_here().is_some())));
         let sure = tag.as_ref().map(|t| vec![Choice::new("yes", format!("Delete {} (from everything it's on)", t.0)), Choice::new("no", "Keep it")]).unwrap_or_default();
-        out.push(act("tags.delete", "Delete the tag", Command::Delete).param(Param::Choice(sure)).when(when(on_tag)).icon(icon::TRASH));
+        out.push(act("tags.delete", "Delete the tag", "Off everything it's on, for good", Command::Delete).param(Param::Choice(sure)).when(when(on_tag)).icon(icon::TRASH));
         out
     }
 
