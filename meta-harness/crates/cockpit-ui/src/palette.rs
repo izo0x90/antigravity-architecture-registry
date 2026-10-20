@@ -210,7 +210,7 @@ impl Palette {
                             },
                             _ => "Type to filter…".to_owned(),
                         };
-                        let edit = ui.add(egui::TextEdit::singleline(&mut self.filter).id(egui::Id::new("palette_field")).hint_text(hint).desired_width(f32::INFINITY));
+                        let edit = ui.add(egui::TextEdit::singleline(&mut self.filter).id(egui::Id::new("palette_field")).lock_focus(true).hint_text(hint).desired_width(f32::INFINITY));
                         edit.request_focus();
                         if std::mem::take(&mut self.caret_to_end) {
                             crate::theme::caret_to_end(ui.ctx(), edit.id, &self.filter);

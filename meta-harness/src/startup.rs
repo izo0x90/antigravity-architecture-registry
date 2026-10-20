@@ -257,6 +257,20 @@ pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hu
     Ok(terminals)
 }
 
+/// The code owns its components and lines as subjects of tags; as the
+/// files change, tagged lines are kept where they are now.
+pub fn code_tags(arch: &Arc<ArchitectureService>, changes: &Option<Arc<nah_changes::Changes>>, tags: &Arc<nah_tags::Tags>) {
+    tags.register(crate::code_tags::Code::new(arch.clone(), changes.clone()));
+    let weak = Arc::downgrade(tags);
+    arch.subscribe(move |event| {
+        if matches!(event, arch_graph::ArchEvent::Changed { .. })
+            && let Some(tags) = weak.upgrade()
+        {
+            tags.refresh();
+        }
+    });
+}
+
 /// The chats own their turns and messages as subjects of tags.
 pub fn chats(slots: &Arc<harness_core::SlotManager>, hub: &Arc<EventHub>, tags: &Arc<nah_tags::Tags>) {
     tags.register(crate::chats::Chats::new(slots.clone(), hub.clone()));

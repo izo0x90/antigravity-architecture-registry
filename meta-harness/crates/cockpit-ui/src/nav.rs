@@ -129,6 +129,8 @@ impl Target {
             Subject::TerminalLines { terminal, shell, first, last } => Self::TerminalLines { terminal, shell, first, last },
             Subject::TerminalCommand { terminal, shell, command } => Self::TerminalCommand { terminal, shell, command },
             Subject::ChatTurn { session, turn } => Self::Chat { session, turn, message: None },
+            Subject::Component { id } => Self::Component(id),
+            Subject::CodeLines { path, first, last, .. } => Self::Span { file: path, start: first as usize, end: last as usize },
             Subject::ChatMessage { session, turn, message } => Self::Chat { session, turn, message: Some(message) },
             _ => return None,
         })

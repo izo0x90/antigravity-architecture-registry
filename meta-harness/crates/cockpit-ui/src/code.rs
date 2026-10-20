@@ -1066,6 +1066,37 @@ impl Navigable for CodeViewerState {
         }
     }
 
+    /// At a line: the line, then the definitions it's in, innermost
+    /// first (the unit: the innermost; outside every one, the line).
+    fn things(&self, key: &str) -> crate::nav::Things {
+        use crate::nav::{Thing, Things};
+        let Some(line) = key.split(':').next().and_then(|l| l.parse::<u32>().ok()) else { return Things::default() };
+        if self.current_file.is_empty() {
+            return Things::default();
+        }
+        let mut at = vec![Thing { subject: harness_contracts::Subject::CodeLines { path: self.current_file.clone(), first: line, last: line, snapshot: String::new() }, words: format!("line {line} of {}", self.current_file) }];
+        let mut around: Vec<&Def> = self.defs.iter().filter(|d| d.start <= line as usize && line as usize <= d.end).collect();
+        around.sort_by_key(|d| d.end - d.start);
+        at.extend(around.iter().map(|d| Thing { subject: harness_contracts::Subject::Component { id: d.id.clone() }, words: d.name.clone() }));
+        let unit = usize::from(at.len() > 1);
+        Things { at, unit }
+    }
+
+    /// Lines of this file, or a definition in it, as much as is drawn.
+    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<Rect> {
+        let (first, last) = match subject {
+            harness_contracts::Subject::CodeLines { path, first, last, .. } if *path == self.current_file => (*first as usize, *last as usize),
+            harness_contracts::Subject::Component { id } => self.defs.iter().find(|d| d.id == *id).map(|d| (d.start, d.end))?,
+            _ => return None,
+        };
+        let pitch = if self.row_h > 0.0 { self.row_h } else { 16.0 };
+        self.drawn.iter().filter(|(line, _)| (first..=last).contains(line)).map(|(_, at)| Rect::from_min_size(*at, Vec2::new(1.0, pitch))).reduce(|a, b| a.union(b))
+    }
+
+    fn tag_gutter(&self) -> bool {
+        true
+    }
+
     fn target(&self) -> Option<Target> {
         let line = self.target_line?;
         Some(Target::Line { file: self.current_file.clone(), line, within: self.def_at(line).map(|d| d.id.clone()), refs: self.refs_at(line) })

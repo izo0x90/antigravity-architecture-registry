@@ -558,6 +558,25 @@ impl Navigable for TreeBuffer {
         }
     }
 
+    /// A component's row: the component.
+    fn things(&self, key: &str) -> crate::nav::Things {
+        match self.source.target(key) {
+            Some(Target::Component(id)) => crate::nav::Things::one(harness_contracts::Subject::Component { id: id.clone() }, crate::nav::short_name(&id)),
+            _ => crate::nav::Things::default(),
+        }
+    }
+
+    /// A component's row, while it shows.
+    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect> {
+        let harness_contracts::Subject::Component { id } = subject else { return None };
+        let key = self.source.key_of(&Target::Component(id.clone()))?;
+        self.spots.iter().find(|s| s.key == key).map(|s| s.rect)
+    }
+
+    fn tag_gutter(&self) -> bool {
+        true
+    }
+
     /// What its cursor's row stands for, as its source says.
     fn target(&self) -> Option<Target> {
         self.cursor.as_ref().and_then(|key| self.source.target(key))

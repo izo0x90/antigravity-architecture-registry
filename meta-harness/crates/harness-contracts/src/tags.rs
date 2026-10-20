@@ -94,6 +94,13 @@ pub enum Subject {
     /// A message of a chat's turn (what you said, or an answer: numbered
     /// from 1 in its turn, `message_number`).
     ChatMessage { session: NativeId, turn: u32, message: u32 },
+    /// A component of the code (a symbol: a function, a type...): the
+    /// index follows it through edits.
+    Component { id: arch_graph::ComponentId },
+    /// Lines of a file (`first` to `last`, from 1) as the files were at a
+    /// snapshot (the changes' timeline; none yet: the files now, kept as
+    /// one when it's tagged); kept where they are as the files change.
+    CodeLines { path: String, first: u32, last: u32, #[serde(default)] snapshot: String },
 }
 
 /// A line of detail in what a thing says (a tool call's output, under
@@ -124,6 +131,7 @@ impl Subject {
         match self {
             Self::TerminalLines { first, last, .. } if last < first => Some("its last line is before its first".into()),
             Self::TerminalLines { first, last, .. } if last - first >= TAGGED_LINES => Some(format!("at most {TAGGED_LINES} lines at once")),
+            Self::CodeLines { first, last, .. } if *first == 0 || last < first => Some("its lines are from 1, its last not before its first".into()),
             _ => None,
         }
     }
@@ -133,6 +141,9 @@ impl Subject {
     pub fn contains(&self, other: &Subject) -> bool {
         match (self, other) {
             (Self::TerminalLines { terminal, shell, first, last }, Self::TerminalLines { terminal: t, shell: s, first: f, last: l }) => terminal == t && shell == s && first <= f && l <= last,
+            // Lines of a file: where they are now (one side's snapshot not
+            // taken yet: the files now, as the other's are kept).
+            (Self::CodeLines { path, first, last, snapshot }, Self::CodeLines { path: p, first: f, last: l, snapshot: s }) => path == p && first <= f && l <= last && (snapshot == s || snapshot.is_empty() || s.is_empty()),
             _ => self == other,
         }
     }

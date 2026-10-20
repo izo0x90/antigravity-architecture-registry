@@ -599,3 +599,39 @@ fn in_a_chat_a_message_or_its_turn_is_tagged_shown_in_the_gutter_and_gone_to() {
     frame(&ctx, &mut app, vec![]);
     assert_eq!((app.focused_kind(), cursor(&app)), (BufferKind::Chat, Some(answer)));
 }
+
+#[test]
+fn in_the_code_the_innermost_definition_is_tagged_tab_its_line_and_in_the_outline_its_component() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Code);
+    app.desk.code_mut().move_to("3");
+    let file = app.desk.code().current_file.clone();
+    let within = app.desk.code().defs.iter().filter(|d| d.start <= 3 && 3 <= d.end).min_by_key(|d| d.end - d.start).cloned().expect("line 3 is in a definition");
+    keys(&ctx, &mut app, "M");
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains(&format!("Tag {}", within.name)) && drawn.contains(&format!("Tab: Tag line 3 of {file}")), "{drawn}");
+    keys(&ctx, &mut app, "seen");
+    bodies(&app, "");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": harness_contracts::Subject::Component { id: within.id.clone() } })]);
+    keys(&ctx, &mut app, "M");
+    frame(&ctx, &mut app, press(egui::Key::Tab, false));
+    frame(&ctx, &mut app, vec![]);
+    keys(&ctx, &mut app, "seen");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": harness_contracts::Subject::CodeLines { path: file.clone(), first: 3, last: 3, snapshot: String::new() } })], "the files as they are (the server keeps them at a snapshot)");
+    // Told: a bar beside the definition's lines.
+    let mut tag = tag_on("x1", "seen", &[]);
+    tag.on.push(harness_contracts::Tagged { subject: harness_contracts::Subject::Component { id: within.id.clone() }, what: within.name.clone(), at_ms: 0, by: "user".into(), kept: None });
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag });
+    frame(&ctx, &mut app, vec![]);
+    let theme = crate::theme::colors();
+    assert!(!bars(&frame(&ctx, &mut app, vec![]), theme.tag(2)).is_empty(), "in the code's gutter");
+    // The outline: the component on its row.
+    focus(&ctx, &mut app, BufferKind::Tree);
+    app.desk.tree_mut().move_to("rust:a::run");
+    keys(&ctx, &mut app, "M");
+    keys(&ctx, &mut app, "seen");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "x1", "subject": harness_contracts::Subject::Component { id: arch_graph::ComponentId::new("rust:a::run") } })], "the tag there is, by its id");
+}

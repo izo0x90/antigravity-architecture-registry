@@ -93,6 +93,11 @@ pub trait Resolve: Send + Sync {
     fn moved(&self, _subject: &Subject) -> Option<Subject> {
         None
     }
+    /// `subject` as it's kept once tagged (lines of a file: with the
+    /// snapshot of the files they're in); an error says why it can't be.
+    fn settle(&self, subject: &Subject) -> Result<Subject, String> {
+        Ok(subject.clone())
+    }
     /// Whether it keeps `subject` for good (code does); one it doesn't (a
     /// terminal's output) is written to the tags' logs when it's tagged.
     fn lasts(&self, _subject: &Subject) -> bool {
@@ -391,6 +396,7 @@ impl Tags {
         let mut tags = lock(&self.tags);
         let subject = self.current(&subject);
         let owner = self.owner(&subject).ok_or_else(|| TagError::Subject("nothing here knows what it is".into()))?;
+        let subject = owner.settle(&subject).map_err(TagError::Subject)?;
         let what = owner.name(&subject).unwrap_or_default();
         let mut kept = match found(&tags, tag) {
             Ok(existing) => existing,

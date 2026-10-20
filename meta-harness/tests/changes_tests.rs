@@ -171,3 +171,38 @@ async fn the_user_stages_and_unstages_and_agents_read_changes_but_cannot_stage()
     let (err, text) = mcp.tool("changes", serde_json::json!({ "timeline": true })).await;
     assert!(!err && text.contains("Windows"), "{text}");
 }
+
+/// Code as tags see it: a component (followed by the index) and lines of
+/// a file, kept where they are as the file changes before them, said as
+/// changed when it changes among them; nothing of it in the tags' logs.
+#[tokio::test]
+async fn tagged_code_lines_follow_the_file_and_a_tagged_component_is_its_code() {
+    let arch = committed();
+    let root = arch.root().to_path_buf();
+    let util = root.join("src/util.rs");
+    let before = std::fs::read_to_string(&util).unwrap();
+    let component = arch.graph(&arch_graph::Source::Code).unwrap().components().find(|c| c.anchor.as_ref().is_some_and(|a| a.file.as_str() == "src/util.rs")).map(|c| c.id.clone()).expect("a component in util.rs");
+    let (addr, state) = spawn_app_with(arch).await;
+    let mut lead = Mcp::lead(addr).await;
+    let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "here", "subject": "src/util.rs lines 2-3" })).await;
+    assert!(!error, "{said}");
+    let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "here", "subject": format!("component {component}") })).await;
+    assert!(!error, "{said}");
+    let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
+    let lines: Vec<&str> = before.lines().collect();
+    assert!(read.contains(&format!("1. src/util.rs lines 2-3 (tagged by lead; as it is now):\n{}\n{}", lines[1], lines[2])), "{read}");
+    assert!(read.contains("(src/util.rs:"), "the component, named with where it is: {read}");
+    // Two lines added before them: they're where they went.
+    std::fs::write(&util, format!("// one\n// two\n{before}")).unwrap();
+    state.tags.tags.refresh();
+    let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
+    assert!(read.contains(&format!("1. src/util.rs lines 4-5 (tagged by lead; as it is now):\n{}\n{}", lines[1], lines[2])), "{read}");
+    // A change among them: said so, where they were.
+    let now = std::fs::read_to_string(&util).unwrap().replacen(lines[1], "// edited", 1);
+    std::fs::write(&util, now).unwrap();
+    state.tags.tags.refresh();
+    let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
+    assert!(read.contains("src/util.rs lines 4-5 (changed since tagged)"), "{read}");
+    // Code lasts: nothing of it was logged.
+    assert!(state.tags.tags.find("here").unwrap().on.iter().all(|t| t.kept.is_none()));
+}

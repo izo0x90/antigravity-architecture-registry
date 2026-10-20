@@ -1,5 +1,6 @@
 pub mod arch;
 pub mod chats;
+pub mod code_tags;
 pub mod cockpit;
 pub mod graph;
 pub mod home;

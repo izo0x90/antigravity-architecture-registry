@@ -354,6 +354,7 @@ pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHu
     let timeline = meta_harness::startup::timeline(&arch, &changes, &db, &hub).unwrap();
     let tags = meta_harness::startup::tags(&arch, &db, &hub).unwrap();
     meta_harness::startup::chats(&slots, &hub, &tags);
+    meta_harness::startup::code_tags(&arch, &changes, &tags);
     let terminals = Some(meta_harness::startup::terminals(&arch, &db, &hub, &tags).unwrap());
     let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone(), tags: tags.clone() };
     let mcp = McpServerState::new(Arc::new(McpService::new(services, access.clone())), meta_harness::startup::mcp_callers(&slots));

@@ -430,6 +430,14 @@ impl Navigable for GraphState {
         }
     }
 
+    /// The card under the cursor: its component.
+    fn things(&self, key: &str) -> crate::nav::Things {
+        match self.target().filter(|_| self.cursor_key().as_deref() == Some(key)) {
+            Some(Target::Component(id)) => crate::nav::Things::one(harness_contracts::Subject::Component { id: id.clone() }, crate::nav::short_name(&id)),
+            _ => crate::nav::Things::default(),
+        }
+    }
+
     fn target(&self) -> Option<Target> {
         self.selected_card().and_then(|c| c.component.clone()).map(Target::Component)
     }
