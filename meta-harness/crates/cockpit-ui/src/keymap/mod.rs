@@ -559,7 +559,7 @@ mod tests {
     }
 
     fn act(id: &str) -> (Origin, Action) {
-        (Origin::Shell, Action::new(id, id, "", ()))
+        (Origin::Shell, Action::new(id, id, "A test's action", ()))
     }
 
     #[test]

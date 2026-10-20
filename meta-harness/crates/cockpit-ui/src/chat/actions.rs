@@ -160,9 +160,9 @@ impl ActionProvider for ChatStreamState {
                         ),
                         ConfigKind::Boolean { current } => (Param::Toggle { on: *current }, true),
                     };
-                    let description = match &control.description {
-                        Some(description) => description.clone(),
-                        None => format!("The harness's {} setting", control.name),
+                    let description = match control.description.as_deref().map(str::trim) {
+                        Some(description) if !description.is_empty() => description.to_owned(),
+                        _ => format!("The harness's {} setting", control.name),
                     };
                     let action = Action::new(format!("config.{}", control.id), format!("Set {}", control.name), description, C::SetConfig { option: control.id.clone(), boolean })
                         .alias(format!("config.category.{}", wire_name(&control.category)))
@@ -229,7 +229,8 @@ impl ActionProvider for ChatStreamState {
                     Some(hint) => Param::Text { hint: hint.clone() },
                     None => Param::None,
                 };
-                let action = Action::new(format!("command.{}", command.name), format!("/{}", command.name), command.description.clone(), C::HarnessCommand { name: command.name.clone() }).param(param);
+                let description = if command.description.trim().is_empty() { format!("The harness's /{} command", command.name) } else { command.description.clone() };
+                let action = Action::new(format!("command.{}", command.name), format!("/{}", command.name), description, C::HarnessCommand { name: command.name.clone() }).param(param);
                 out.push(if typed.is_some_and(|p| command.name.starts_with(p)) { action.on_typing(Button, format!("/{}", command.name), None) } else { action });
             }
         }

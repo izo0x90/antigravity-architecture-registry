@@ -70,13 +70,13 @@ impl CockpitApp {
                     ui.horizontal(|ui| {
                         for entry in row {
                             let primary = heading.is_some();
-                            let (key, label) = match entry {
+                            let (key, label, detail) = match entry {
                                 LeaderEntry::Group { key } => {
                                     let mut path = self.leader_path.clone();
                                     path.push(*key);
-                                    (*key, format!("{}…", self.group_label(&path).unwrap_or_else(|| "more".to_owned())))
+                                    (*key, format!("{}…", self.group_label(&path).unwrap_or_else(|| "more".to_owned())), None)
                                 }
-                                LeaderEntry::Action { key, index } => (*key, bound[*index].action.label.clone()),
+                                LeaderEntry::Action { key, index } => (*key, bound[*index].action.label.clone(), Some(bound[*index].action.detail.as_str())),
                             };
                             ui.allocate_ui(egui::vec2(200.0, 22.0), |ui| {
                                 ui.horizontal(|ui| {
@@ -88,7 +88,10 @@ impl CockpitApp {
                                         tapped = Some(key);
                                     }
                                     let color = if primary { colors().text_strong } else { colors().text };
-                                    ui.add(egui::Label::new(RichText::new(label).size(crate::theme::look().text_body).color(color)).truncate());
+                                    let label = ui.add(egui::Label::new(RichText::new(label).size(crate::theme::look().text_body).color(color)).truncate());
+                                    if let Some(detail) = detail {
+                                        label.on_hover_text(detail);
+                                    }
                                 });
                             });
                         }

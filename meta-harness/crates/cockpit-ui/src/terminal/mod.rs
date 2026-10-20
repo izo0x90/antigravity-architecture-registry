@@ -127,6 +127,9 @@ struct TermPlace {
     id: Option<TerminalId>,
     #[serde(default)]
     at: Option<(u64, u64)>,
+    /// How many new layouts its shell had had then (a line moves with each).
+    #[serde(default)]
+    layouts: usize,
 }
 
 impl TerminalBuffer {
@@ -160,6 +163,10 @@ impl TerminalBuffer {
         // No lines yet: they'll come; unless its shell didn't outlive the
         // server (none will).
         if self.lines.shell() == 0 && self.ended() != Some(None) {
+            return;
+        }
+        // A program has the whole screen: its lines show once it leaves.
+        if self.lines.alternate() {
             return;
         }
         self.going_to = None;
@@ -433,28 +440,54 @@ impl Navigable for TerminalBuffer {
         }
     }
 
+    /// The terminal, and the cursor's line (or the line a go-to under way
+    /// is going to).
     fn place(&self) -> Place {
-        Place::of(&TermPlace { id: self.id.clone(), at: self.cursor.filter(|_| self.lines.shell() != 0).map(|line| (self.lines.shell(), line)) })
+        let shell = self.lines.shell();
+        let at = match (&self.going_to, self.cursor) {
+            (Some(Target::TerminalLines { shell, first, .. }), _) => Some((*shell, *first)),
+            (_, Some(line)) if shell != 0 => Some((shell, line)),
+            _ => None,
+        };
+        Place::of(&TermPlace { id: self.id.clone(), at, layouts: self.lines.layouts() })
     }
 
     fn kept_place(&self) -> Place {
-        Place::of(&TermPlace { id: self.id.clone(), at: None })
+        Place::of(&TermPlace { id: self.id.clone(), at: None, layouts: 0 })
     }
 
     fn place_in_words(&self, place: &Place) -> String {
         match place.read::<TermPlace>() {
-            Some(TermPlace { id: Some(id), at: Some((_, line)) }) => format!("terminal {id} line {line}"),
-            Some(TermPlace { id: Some(id), at: None }) => format!("terminal {id}"),
+            Some(TermPlace { id: Some(id), at: Some((_, line)), .. }) => format!("terminal {id} line {line}"),
+            Some(TermPlace { id: Some(id), at: None, .. }) => format!("terminal {id}"),
             _ => String::new(),
         }
     }
 
-    /// The terminal; its line, when it had one (as a go-to lands there).
+    /// The terminal; its line, when it had one (as a go-to lands there,
+    /// moved as far as the layouts since moved it); without one, its live
+    /// screen. A terminal closed since: said.
     fn restore(&mut self, place: &Place) {
-        let Some(TermPlace { id: Some(id), at }) = place.read::<TermPlace>() else { return };
+        let Some(TermPlace { id: Some(id), at, layouts }) = place.read::<TermPlace>() else { return };
+        let closed = {
+            let terminals = self.terminals.get();
+            terminals.known() && terminals.get(&id).is_none()
+        };
+        if closed {
+            self.said = Some(format!("Terminal {id} is closed."));
+            return;
+        }
         match at {
             Some((shell, line)) => {
-                let _ = self.show_target(&Target::TerminalLines { terminal: id, shell, first: line, last: line });
+                let here = self.id.as_ref() == Some(&id) && shell == self.lines.shell();
+                let line = if here { self.lines.line_now(line, layouts) } else { line };
+                if let Err(why) = self.show_target(&Target::TerminalLines { terminal: id, shell, first: line, last: line }) {
+                    self.said = Some(why);
+                }
+            }
+            None if self.id.as_ref() == Some(&id) => {
+                (self.cursor, self.selection) = (None, None);
+                self.view.go_live();
             }
             None => self.show(id),
         }
@@ -661,13 +694,13 @@ impl ActionProvider for TerminalBuffer {
         let has = self.id.is_some();
         let ended = self.ended().is_some();
         out.push(match (self.link_here().map(|l| l.to), has, ended) {
-            (Some(links::To::File { path, .. }), _, _) => crate::nav::Move::Enter.offer(format!("Open {path}")),
-            (Some(links::To::Url(url)), _, _) => crate::nav::Move::Enter.offer(format!("Open {url}")),
-            (None, true, true) => crate::nav::Move::Enter.offer("Start its shell again"),
-            (None, true, false) => crate::nav::Move::Enter.offer_if(!self.typing, "Type into it"),
-            (None, false, _) => crate::nav::Move::Enter.offer("Open a terminal"),
+            (Some(links::To::File { path, .. }), _, _) => crate::nav::Move::Enter.offer(format!("Open {path}")).detail("The file the cursor's on, in the code"),
+            (Some(links::To::Url(url)), _, _) => crate::nav::Move::Enter.offer(format!("Open {url}")).detail("The web link the cursor's on, in the browser"),
+            (None, true, true) => crate::nav::Move::Enter.offer("Start its shell again").detail("A new start of your shell, in the same folder"),
+            (None, true, false) => crate::nav::Move::Enter.offer_if(!self.typing, "Type into it").detail("Every key goes to its program until you stop typing"),
+            (None, false, _) => crate::nav::Move::Enter.offer("Open a terminal").detail("Your shell, in the project's folder"),
         });
-        out.push(crate::nav::Move::Leave.offer_if(self.cursor.is_some() || self.selection.is_some() || !self.view.live(), "Back to the live screen"));
+        out.push(crate::nav::Move::Leave.offer_if(self.cursor.is_some() || self.selection.is_some() || !self.view.live(), "Back to the live screen").detail("Drops the cursor and the selection; the view follows the output again"));
         out.push(Action::new("terminal.type", "Type into the terminal", "Every key goes to its program until you stop typing", C::Type).focused().importance(PRIMARY).when(if has && !ended && !self.typing { crate::actions::When::Always } else { crate::actions::When::Unavailable }));
         out.push(Action::new("terminal.copy", if self.selection.is_some() { "Copy the selection" } else { "Copy the line" }, "To the clipboard, as text (drag to select)", C::Copy).focused().importance(MINOR));
         let many = self.terminals.get().list().count() > 1;

@@ -428,8 +428,8 @@ impl TreeBuffer {
     fn moves(&self) -> Vec<Action> {
         use crate::actions::SECONDARY;
         let mut out = crate::nav::list_moves();
-        out.push(Move::Motion(Motion::Left).offer("Fold, or up to what holds it").importance(SECONDARY));
-        out.push(Move::Motion(Motion::Right).offer("Unfold, or into its first child").importance(SECONDARY));
+        out.push(Move::Motion(Motion::Left).offer("Fold, or up to what holds it").detail("Folds what the cursor's on; folded, out to what holds it").importance(SECONDARY));
+        out.push(Move::Motion(Motion::Right).offer("Unfold, or into its first child").detail("Unfolds what the cursor's on; unfolded, into its first part").importance(SECONDARY));
         out.push(Move::Motion(Motion::NextSibling).offer("Next sibling row"));
         out.push(Move::Motion(Motion::PrevSibling).offer("Previous sibling row"));
         let id = self.cursor.as_ref();

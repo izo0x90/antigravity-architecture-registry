@@ -352,8 +352,8 @@ impl Move {
         match self {
             Self::Motion(Motion::Down) => "One down (a count first: that many)",
             Self::Motion(Motion::Up) => "One up (a count first: that many)",
-            Self::Motion(Motion::Left) => "Left: in a tree, fold, or up to what holds it",
-            Self::Motion(Motion::Right) => "Right: in a tree, unfold, or into its first child",
+            Self::Motion(Motion::Left) => "A step left (in an outline: folds, or out to what holds it)",
+            Self::Motion(Motion::Right) => "A step right (in an outline: unfolds, or into its first part)",
             Self::Motion(Motion::HalfDown) => "Half a page down",
             Self::Motion(Motion::HalfUp) => "Half a page up",
             Self::Motion(Motion::HalfLeft) => "Half a screen left",

@@ -300,10 +300,12 @@ impl Action {
     /// An action: its id, its label, what it does in a line (every action
     /// says), and its command.
     pub fn new<C: 'static>(id: impl Into<String>, label: impl Into<String>, detail: impl Into<String>, command: C) -> Self {
+        let (id, detail) = (id.into(), detail.into());
+        debug_assert!(!detail.trim().is_empty(), "{id} says what it does");
         Self {
-            id: id.into(),
+            id,
             label: label.into(),
-            detail: detail.into(),
+            detail,
             param: Param::None,
             scope: Scope::Global,
             aliases: Vec::new(),
@@ -346,6 +348,7 @@ impl Action {
     /// What it does, said otherwise where it's offered.
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = detail.into();
+        debug_assert!(!self.detail.trim().is_empty(), "{} says what it does", self.id);
         self
     }
 
@@ -592,6 +595,7 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
     let toolbar = action.control.as_ref()?;
     let key = bound.key_hint();
     let mut tip = if key.is_empty() { action.label.clone() } else { format!("{} ({key})", action.label) };
+    tip = format!("{tip}\n{}", action.detail);
     if let Some(more) = &toolbar.hover {
         tip = format!("{tip}\n{more}");
     }
@@ -674,7 +678,7 @@ mod tests {
 
     fn bound(id: &str, leader: &str) -> Bound {
         Bound {
-            action: Action::new(id, id, "", ()),
+            action: Action::new(id, id, "A test's action", ()),
             origin: Origin::Shell,
             leader: (!leader.is_empty()).then(|| leader.chars().collect()),
             keys: Vec::new(),
@@ -710,7 +714,7 @@ mod tests {
         enum Mine {
             Go,
         }
-        let action = Action::new("x", "X", "", Mine::Go);
+        let action = Action::new("x", "X", "Goes", Mine::Go);
         assert_eq!(action.command::<Mine>(), Some(&Mine::Go));
         assert_eq!(action.command::<u8>(), None);
     }

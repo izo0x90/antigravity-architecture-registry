@@ -89,7 +89,7 @@ impl CockpitApp {
             nav("nav.search", "Search this buffer", "Finds as you type, names first (letters in order), then text", S::Search).importance(PRIMARY).icon(egui_phosphor::regular::MAGNIFYING_GLASS),
             nav("nav.search_next", "Next match", "The next thing the last search found", S::SearchStep { forward: true }).importance(SECONDARY).when(When::Searched),
             nav("nav.search_prev", "Previous match", "The thing before, of what the last search found", S::SearchStep { forward: false }).importance(MINOR).when(When::Searched),
-            nav("nav.mark_set", "Set a mark here", "A letter to come back here with (' and the letter)", S::MarkSet).importance(MINOR).icon(egui_phosphor::regular::BOOKMARK_SIMPLE),
+            nav("nav.mark_set", "Set a mark here", "A letter to come back here with (going to the mark brings you back)", S::MarkSet).importance(MINOR).icon(egui_phosphor::regular::BOOKMARK_SIMPLE),
             nav("nav.mark_jump", "Jump to a mark", "Back to where a letter was set, in whichever buffer", S::MarkJump).importance(MINOR).when(When::Marked),
             nav("nav.back", "Back (jump list)", "Where you were before the last jump, in any buffer or panel", S::Back).importance(SECONDARY).when(When::Back).icon(egui_phosphor::regular::ARROW_LEFT),
             nav("nav.forward", "Forward (jump list)", "Where you went back from", S::Forward).importance(MINOR).when(When::Forward).icon(egui_phosphor::regular::ARROW_RIGHT),

@@ -40,6 +40,9 @@ pub struct Palette {
     /// Enter came in the frame the search changed: its results are of what
     /// was typed before, so it's taken the next frame, on the new ones.
     enter_waiting: bool,
+    /// The tallest it's been while open: it never gets shorter (going
+    /// from a list to a text field, say), so nothing under it jumps.
+    tallest: f32,
 }
 
 impl Palette {
@@ -52,7 +55,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0 }
     }
 }
 
@@ -160,7 +163,7 @@ impl Palette {
                             Stage::Actions => "Run an action".to_owned(),
                             Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Search { action, .. } => action.action.label.clone(),
                         };
-                        ui.label(RichText::new(title).strong().size(crate::theme::look().text_label).color(colors().info));
+                        ui.add(egui::Label::new(RichText::new(title).strong().size(crate::theme::look().text_label).color(colors().info)).truncate());
                         let hint = match &stage {
                             Stage::Text { action, .. } | Stage::Search { action, .. } => match &action.action.param {
                                 Param::Text { hint } | Param::Search { hint, .. } => hint.clone(),
@@ -193,7 +196,7 @@ impl Palette {
                                     .iter()
                                     .map(|b| {
                                         let group = b.leader.as_ref().filter(|l| l.len() > 1).and_then(|l| keymap.group_label(&l[..1])).unwrap_or("");
-                                        format!("{} {} {group}", b.action.label, b.action.id)
+                                        format!("{} {} {group} {}", b.action.label, b.action.id, b.action.detail)
                                     })
                                     .collect();
                                 let ranked: Vec<&Bound> = arch_search::rank(&self.filter, &haystacks, arch_search::Matching::shared()).into_iter().map(|r| listed[r.index]).collect();
@@ -281,6 +284,11 @@ impl Palette {
                                 ui.label(RichText::new(format!("{} submits · {} goes back", keymap.list.pick_label(), keymap.back.label())).size(crate::theme::look().text_small).color(colors().muted));
                             }
                         }
+                        let used = ui.min_rect().height();
+                        self.tallest = self.tallest.max(used);
+                        if self.tallest > used {
+                            ui.allocate_space(egui::vec2(0.0, self.tallest - used - ui.spacing().item_spacing.y));
+                        }
                     });
             });
 
@@ -326,20 +334,12 @@ fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, det
         .inner_margin(crate::theme::margin2(look.space_m, look.space_sm))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                // The label gets what the keys leave it, cut short to fit.
-                let keys_w = if keys.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(keys.to_owned(), egui::FontId::monospace(look.text_small), theme.key).size().x + look.space_m };
-                let label_w = (ui.available_width() - keys_w).max(0.0);
-                ui.allocate_ui_with_layout(egui::vec2(label_w, 0.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.set_max_width(label_w);
-                    ui.add(egui::Label::new(RichText::new(label).size(look.text_label).color(theme.text_strong)).truncate());
-                });
-                if !keys.is_empty() {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(keys).monospace().size(look.text_small).color(theme.key));
-                    });
-                }
-            });
+            // The label gets what the keys leave it, cut short to fit.
+            egui::Sides::new().shrink_left().truncate().show(
+                ui,
+                |ui| ui.label(RichText::new(label).size(look.text_label).color(theme.text_strong)),
+                |ui| ui.label(RichText::new(keys).monospace().size(look.text_small).color(theme.key)),
+            );
             if let Some(detail) = detail.filter(|d| !d.is_empty()) {
                 let mut job = egui::text::LayoutJob::simple(detail.to_owned(), egui::FontId::proportional(look.text_small), theme.muted, ui.available_width());
                 job.wrap.max_rows = 2;

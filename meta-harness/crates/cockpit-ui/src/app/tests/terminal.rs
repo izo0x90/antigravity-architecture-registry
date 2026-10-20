@@ -411,6 +411,53 @@ fn the_cursor_is_there_only_while_not_typing_from_the_programs_line_and_never_on
     assert!(app.note.as_deref().is_some_and(|n| n.contains("the nearest line")), "{:?}", app.note);
 }
 
+#[test]
+fn a_place_in_a_terminal_follows_new_layouts_a_go_to_under_way_and_says_when_it_cannot_be_gone_back_to() {
+    let (ctx, mut app) = full_app();
+    frame(&ctx, &mut app, vec![]);
+    assert!(app.desk.net.answer("GET /api/terminals", 200, &serde_json::json!([crate::terminals::tests::terminal("t1"), crate::terminals::tests::terminal("t2")])));
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1000, 0)]);
+    not_typing(&ctx, &mut app);
+    app.run_move(BufferKind::Terminal, Move::Motion(Motion::Line(1010)), None, &ctx);
+    let place = app.desk.view(BufferKind::Terminal).place();
+    // Narrower: the lines are numbered anew (8 further on): the place's
+    // line is where its line is now.
+    let harness_contracts::FromTerminal::Screen { mut update } = crate::terminal::tests::numbered(1008, 0) else { unreachable!() };
+    update.size.cols = 60;
+    app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Screen { update }]);
+    frame(&ctx, &mut app, vec![]);
+    app.desk.view_mut(BufferKind::Terminal).motion(crate::nav::Motion::Last, 1);
+    app.desk.view_mut(BufferKind::Terminal).restore(&place);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(cursor(&app).as_deref(), Some("1018"));
+    // A place without a line, in the same terminal: its live screen.
+    let live = app.desk.view(BufferKind::Terminal).kept_place();
+    app.desk.view_mut(BufferKind::Terminal).restore(&live);
+    assert_eq!(cursor(&app), None);
+    assert!(app.desk.terminal().status().is_empty(), "following the output");
+    // A go-to under way (its lines not here yet): its place is where it's going.
+    let target = crate::nav::Target::TerminalLines { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, first: 1012, last: 1012 };
+    let harness_contracts::FromTerminal::Screen { mut update } = crate::terminal::tests::numbered(1008, 0) else { unreachable!() };
+    (update.size.cols, update.alternate) = (60, true);
+    app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Screen { update }]);
+    frame(&ctx, &mut app, vec![]);
+    app.desk.view_mut(BufferKind::Terminal).show_target(&target).unwrap();
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.desk.view(BufferKind::Terminal).place_in_words(&app.desk.view(BufferKind::Terminal).place()), "terminal t1 line 1012", "kept while a program has the whole screen");
+    let harness_contracts::FromTerminal::Screen { mut update } = crate::terminal::tests::numbered(1008, 0) else { unreachable!() };
+    update.size.cols = 60;
+    app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Screen { update }]);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(cursor(&app).as_deref(), Some("1012"), "there once it leaves");
+    // Its terminal closed since: said.
+    let gone = app.desk.view(BufferKind::Terminal).place();
+    told(&app, harness_contracts::ClientEvent::TerminalClosed { terminal_id: harness_contracts::TerminalId::new("t1") });
+    frame(&ctx, &mut app, vec![]);
+    app.desk.view_mut(BufferKind::Terminal).restore(&gone);
+    frame(&ctx, &mut app, vec![]);
+    assert!(app.note.as_deref().is_some_and(|n| n.contains("is closed")), "{:?}", app.note);
+}
+
 /// A screen from line `top` with the shell's `commands` on it.
 fn with_commands(top: u64, commands: Vec<harness_contracts::TerminalCommand>) -> harness_contracts::FromTerminal {
     let harness_contracts::FromTerminal::Screen { mut update } = crate::terminal::tests::numbered(top, 0) else { unreachable!() };
@@ -797,7 +844,8 @@ fn the_palette_keeps_its_place_and_size_while_typing_and_whatever_its_rows_say()
     frame(&ctx, &mut app, vec![]);
     let rect = |ctx: &egui::Context| ctx.memory(|m| m.area_rect(egui::Id::new("command_palette"))).expect("the palette is drawn");
     // Every picker: all actions, a search (tags), a choice whose rows say a lot.
-    for (open, typed) in [(":", "tagwhat"), ("M", "fl"), ("gT", "fl\n")] {
+    // From a list to a text field (go to line), it stays as tall.
+    for (open, typed) in [(":", "tagwhat"), ("M", "fl"), ("gT", "fl\n"), (":", "go to line or\n")] {
         for _ in 0..2 {
             frame(&ctx, &mut app, press(egui::Key::Escape, false));
         }
@@ -807,8 +855,9 @@ fn the_palette_keeps_its_place_and_size_while_typing_and_whatever_its_rows_say()
         for c in typed.chars() {
             frame(&ctx, &mut app, if c == '\n' { press(egui::Key::Enter, false) } else { key(&c.to_string()) });
             frame(&ctx, &mut app, vec![]);
-            assert_eq!(rect(&ctx), first, "{open} then {typed:?}: the same place and size");
+            assert_eq!(rect(&ctx), first, "{open} then {typed:?} ({c:?}, palette open: {}): the same place and size", app.palette.is_open());
         }
         assert!((first.center().x - SCREEN.x / 2.0).abs() < 2.0, "centred: {first:?}");
     }
 }
+
