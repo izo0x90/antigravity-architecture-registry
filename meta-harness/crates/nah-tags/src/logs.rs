@@ -44,6 +44,14 @@ fn number(file: &str) -> Option<u64> {
 impl Logs {
     /// The logs in `dir` (made when first written to).
     pub fn open(dir: &Path) -> Self {
+        // A folder made before they were the server user's only, made so.
+        #[cfg(unix)]
+        if dir.exists() {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)) {
+                tracing::warn!("The tags' logs ({}) couldn't be made the server user's only: {e}", dir.display());
+            }
+        }
         let last = std::fs::read_dir(dir).into_iter().flatten().filter_map(|e| number(&e.ok()?.file_name().to_string_lossy())).max();
         Self { dir: dir.to_owned(), files: Mutex::new(Files { shared: None, next: last.map_or(1, |n| n + 1) }) }
     }
