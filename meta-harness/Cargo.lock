@@ -3385,6 +3385,7 @@ name = "meta-harness"
 version = "0.1.0"
 dependencies = [
  "arch-graph",
+ "arch-search",
  "arch-service",
  "ast-grep-config",
  "ast-grep-core",

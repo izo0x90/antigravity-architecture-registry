@@ -177,6 +177,21 @@ impl Logs {
         Ok(found)
     }
 
+    /// Lines `from..=to` (from 1) of the text `kept` points at, and how
+    /// many it has in all; read through, only those held.
+    pub fn lines(&self, kept: &Kept, from: u64, to: u64) -> std::io::Result<(Vec<String>, u64)> {
+        let mut reader = BufReader::new(self.opened(kept)?);
+        let (mut out, mut line, mut n) = (Vec::new(), Vec::new(), 0u64);
+        while reader.read_until(b'\n', &mut line)? > 0 {
+            n += 1;
+            if (from..=to).contains(&n) {
+                out.push(String::from_utf8_lossy(&line).trim_end_matches(['\n', '\r']).to_owned());
+            }
+            line.clear();
+        }
+        Ok((out, n))
+    }
+
     /// Removes a growing thing's file never pointed into (it didn't grow).
     pub fn discard(&self, kept: &Kept) {
         let _ = std::fs::remove_file(self.dir.join(&kept.file));

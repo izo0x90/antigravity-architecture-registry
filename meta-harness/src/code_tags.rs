@@ -99,6 +99,13 @@ impl Code {
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
+    /// Lines `first..=last` of `path` as snapshot `snapshot` has them.
+    fn as_tagged(&self, path: &str, first: u32, last: u32, snapshot: &str) -> Option<String> {
+        let text = self.changes.as_ref()?.text_at(snapshot, path).ok()??;
+        let lines: Vec<&str> = text.lines().skip(first.saturating_sub(1) as usize).take((last + 1).saturating_sub(first) as usize).collect();
+        (!lines.is_empty()).then(|| lines.join("\n"))
+    }
+
     /// A component: its kind, name and file's line, its lines.
     fn component(&self, id: &ComponentId) -> Option<(String, String, u32, u32)> {
         let graph = self.arch.graph(&Source::Code).ok()?;
@@ -111,8 +118,9 @@ impl Code {
 impl nah_tags::Resolve for Code {
     fn name(&self, subject: &Subject) -> Option<String> {
         match subject {
+            // Its id first: named back by it.
             Subject::Component { id } => Some(match self.component(id) {
-                Some((what, file, start, _)) => format!("{what} ({file}:{start})"),
+                Some((what, file, start, _)) => format!("component {id} ({what}, {file}:{start})"),
                 None => format!("component {id} (gone from the code)"),
             }),
             Subject::CodeLines { path, first, last, snapshot } => {
@@ -133,9 +141,10 @@ impl nah_tags::Resolve for Code {
                 let (_, file, start, end) = self.component(id)?;
                 self.lines_text(&file, start, end)
             }
+            // Where they are now; changed or gone since, as they were.
             Subject::CodeLines { path, first, last, snapshot } => match self.now_at(path, *first, *last, snapshot) {
-                Now::Gone => None,
-                _ => self.lines_text(path, *first, *last),
+                Now::At(f, l) => self.lines_text(path, f, l),
+                Now::Changed | Now::Gone => self.as_tagged(path, *first, *last, snapshot),
             },
             _ => None,
         }

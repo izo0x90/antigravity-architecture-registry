@@ -168,7 +168,7 @@ impl TagList {
     fn draw(&mut self, ui: &mut egui::Ui, cx: &RunCx<'_>) {
         let (look, theme) = (crate::theme::look(), colors());
         if self.rows.is_empty() {
-            ui.label(RichText::new("No tags yet: on something that can be tagged (a terminal's lines, a command it ran), \u{201c}Tag what you're on\u{201d} tags it, and it shows here.").size(look.text_body).color(theme.muted));
+            ui.label(RichText::new("No tags yet: on something that can be tagged (a terminal's lines or a command it ran, a chat's message or turn, a line of code or a definition), \u{201c}Tag what you're on\u{201d} (M) tags it, and it shows here.").size(look.text_body).color(theme.muted));
             self.spots.clear();
             return;
         }

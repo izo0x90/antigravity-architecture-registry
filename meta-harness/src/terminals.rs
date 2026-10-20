@@ -55,6 +55,11 @@ pub fn in_words(command: &harness_contracts::TerminalCommand) -> String {
     format!("{}. $ {typed} ({ended}{ran})", command.id)
 }
 
+/// Lines that went before they could be kept, said where they were.
+fn lost_words(lost: u64) -> String {
+    if lost > 0 { format!("({lost} lines went before they could be kept)\n") } else { String::new() }
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -235,8 +240,7 @@ impl Terminals {
             let command = open.command(f.command).filter(|_| f.shell == started);
             let Some(command) = command else { return false };
             if let Some(written) = open.written(f.next, command.end) {
-                let lost = if written.lost > 0 { format!("({} lines went before they could be kept)\n", written.lost) } else { String::new() };
-                let text = format!("{lost}{}", written.text);
+                let text = format!("{}{}", lost_words(written.lost), written.text);
                 if !text.is_empty() && !(f.more)(&text) {
                     return false;
                 }
@@ -465,8 +469,9 @@ impl nah_tags::Resolve for Terminals {
             Subject::TerminalCommand { terminal, shell, command } => {
                 let open = started(terminal, *shell)?;
                 let ran = open.command(*command).filter(|c| c.output.is_some())?;
-                let output = open.command_output(ran.id, u64::MAX).map(|(text, _)| text).unwrap_or_default();
-                Some(if output.is_empty() { in_words(&ran) } else { format!("{}\n{output}", in_words(&ran)) })
+                // Its output as it's kept (what scrolled away, said).
+                let written = open.written(ran.output?, ran.end)?;
+                Some(format!("{}\n{}{}", in_words(&ran), lost_words(written.lost), written.text).trim_end().to_owned())
             }
             _ => None,
         }
@@ -513,8 +518,7 @@ impl nah_tags::Resolve for Terminals {
         let Some(ran) = open.command(*command).filter(|c| c.end.is_none()) else { return false };
         let Some(output) = ran.output else { return false };
         let Some(written) = open.written(output, None) else { return false };
-        let lost = if written.lost > 0 { format!("({} lines went before they could be kept)\n", written.lost) } else { String::new() };
-        if !more(&format!("{}\n{lost}{}", in_words(&ran), written.text)) {
+        if !more(&format!("{}\n{}{}", in_words(&ran), lost_words(written.lost), written.text)) {
             return false;
         }
         lock(&self.followed).push(Followed { terminal: terminal.clone(), shell: *shell, command: *command, next: written.next, more });

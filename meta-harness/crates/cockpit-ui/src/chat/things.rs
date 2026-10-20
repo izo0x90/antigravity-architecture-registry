@@ -19,17 +19,37 @@ fn first_words(text: &str) -> String {
     }
 }
 
+/// Where an item is as a tag names it: its session (the harness's id for
+/// it), its turn's number, its number among the turn's messages (none: it
+/// isn't a message).
+pub(super) type Place = (NativeId, u32, Option<u32>);
+
+/// The stream's places, for the thread (its id) at a change of it (its
+/// activity count).
+pub(crate) type Places = (harness_contracts::ThreadId, u64, std::rc::Rc<Vec<Option<Place>>>);
+
 impl ChatStreamState {
-    /// Where stream item `index` is, as a tag names it: its session, its
-    /// turn's number, its number among the turn's messages (none: it isn't
-    /// a message). None when the harness hasn't said the session's id.
-    fn tag_place(&self, index: usize) -> Option<(NativeId, u32, Option<u32>)> {
-        let item = self.stream().into_iter().nth(index)?;
-        let view = self.thread()?;
-        let session = view.thread.native_id.clone()?;
-        let turn = view.turns.iter().find(|t| t.id == item.turn_id)?;
-        let of: Vec<&TurnItem> = view.items_of(&turn.id).collect();
-        Some((session, turn.ordinal, message_number(&of, &item.id)))
+    /// Where each item of the stream is (in the stream's order), as a tag
+    /// names it; none for every item when the harness hasn't said the
+    /// session's id. Worked out once per change of the thread.
+    fn tag_places(&self) -> std::rc::Rc<Vec<Option<Place>>> {
+        let Some(view) = self.thread() else { return std::rc::Rc::default() };
+        let key = (view.thread.id.clone(), view.activity);
+        if let Some((id, activity, places)) = self.tag_places.borrow().as_ref()
+            && (id, *activity) == (&key.0, key.1)
+        {
+            return places.clone();
+        }
+        let mut places = Vec::new();
+        for turn in &view.turns {
+            let of: Vec<&TurnItem> = view.items_of(&turn.id).collect();
+            for item in &of {
+                places.push(view.thread.native_id.clone().map(|session| (session, turn.ordinal, message_number(&of, &item.id))));
+            }
+        }
+        let places = std::rc::Rc::new(places);
+        *self.tag_places.borrow_mut() = Some((key.0, key.1, places.clone()));
+        places
     }
 
     /// The stream's items a subject is (a turn: all of its), when it's of
@@ -40,29 +60,24 @@ impl ChatStreamState {
             Subject::ChatMessage { session, turn, message } => (session, *turn, Some(*message)),
             _ => return Vec::new(),
         };
-        let n = self.stream().len();
-        (0..n).filter(|i| self.tag_place(*i).is_some_and(|(s, t, m)| s == *session && t == turn && (message.is_none() || m == message))).collect()
+        let places = self.tag_places();
+        places.iter().enumerate().filter(|(_, p)| p.as_ref().is_some_and(|(s, t, m)| s == session && *t == turn && (message.is_none() || *m == message))).map(|(i, _)| i).collect()
     }
 
     /// At a message: it, then its turn (the unit: the message); at another
     /// item (a tool call): its turn.
     pub(super) fn tag_things(&self, key: &str) -> Things {
         let Some(index) = key.split(':').next().and_then(|i| i.parse::<usize>().ok()) else { return Things::default() };
-        let Some((session, turn, message)) = self.tag_place(index) else { return Things::default() };
+        let places = self.tag_places();
+        let Some(Some((session, turn, message))) = places.get(index).cloned() else { return Things::default() };
         let stream = self.stream();
         let said = |i: usize| stream.get(i).map(|item| first_words(&item_text(item))).unwrap_or_default();
-        let opening = stream.iter().position(|i| self.tag_place_of(i).is_some_and(|(_, t, m)| t == turn && m == Some(1))).map(said).unwrap_or_default();
+        let opening = places.iter().position(|p| p.as_ref().is_some_and(|(_, t, m)| *t == turn && *m == Some(1))).map(said).unwrap_or_default();
         let turn_thing = Thing { subject: Subject::ChatTurn { session: session.clone(), turn }, words: format!("turn {turn}: {opening}") };
         match message {
             Some(m) => Things { at: vec![Thing { subject: Subject::ChatMessage { session, turn, message: m }, words: format!("message {m} of turn {turn}: {}", said(index)) }, turn_thing], unit: 0 },
             None => Things { at: vec![turn_thing], unit: 0 },
         }
-    }
-
-    /// `tag_place` of an item of the stream.
-    fn tag_place_of(&self, item: &TurnItem) -> Option<(NativeId, u32, Option<u32>)> {
-        let index = self.stream().iter().position(|i| i.id == item.id)?;
-        self.tag_place(index)
     }
 
     /// The agent slot whose open session is `session` (the harness's id).

@@ -354,6 +354,9 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let screen = reader.last.clone().unwrap();
     let line = screen.top + reader.rows.iter().position(|r| r.trim_start_matches(['#', '$', ' ']) == "tagged-line").unwrap() as u64;
 
+    // Commands ran, nothing tagged: nothing logged.
+    let tagged_dir = state.project.arch.root().join(".nah/state/tagged");
+    assert!(std::fs::read_dir(&tagged_dir).map_or(true, |d| d.count() == 0), "nothing logged untagged");
     // The user tags the line: a new tag, told to everyone.
     let subject = json!({ "kind": "terminal_lines", "terminal": terminal.id, "shell": screen.shell, "first": line, "last": line });
     let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "tag": "seen-it", "subject": subject }).to_string())).await;
@@ -453,7 +456,7 @@ async fn a_command_tagged_while_it_runs_comes_back_whole_past_the_scrollback_and
     let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
     reader.next().await;
     // 50,000 lines, five times what the terminal keeps; tagged early on.
-    reader.run("seq 1 5000; sleep 2; seq 5001 50000").await;
+    reader.run("seq 1 5000; sleep 6; seq 5001 50000").await;
     reader.until_shows("5000").await;
     while !reader.commands.values().any(|c| c.text.starts_with("seq 1 5000") && c.output.is_some()) {
         reader.next().await;
@@ -500,7 +503,7 @@ async fn a_project_says_how_much_scrollback_its_terminals_keep() {
 
 #[tokio::test]
 async fn a_running_command_tagged_again_after_its_tag_came_off_is_kept_once() {
-    let (addr, _state) = spawn_app().await;
+    let (addr, state) = spawn_app().await;
     let terminal = open(addr).await;
     let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
     reader.next().await;
@@ -518,12 +521,16 @@ async fn a_running_command_tagged_again_after_its_tag_came_off_is_kept_once() {
         let (error, said) = lead.tool(tool, json!({ "tag": "ticks", "subject": command })).await;
         assert!(!error, "{said}");
     }
-    while !reader.commands.values().any(|c| c.id == number && c.end.is_some()) {
-        reader.next().await;
+    let followed = state.tags.tags.find("ticks").unwrap().on[0].kept.clone().unwrap();
+    assert_eq!(followed.len, None, "tagged again while it ran: followed (its file of its own, read to its end)");
+    let mut said = String::new();
+    for _ in 0..100 {
+        said = lead.tool("tag_read", json!({ "tag": "ticks", "thing": 1 })).await.1;
+        if said.contains("exit code 0") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let (error, said) = lead.tool("tag_read", json!({ "tag": "ticks", "thing": 1 })).await;
-    assert!(!error, "{said}");
     for tick in 1..=4 {
         assert_eq!(said.matches(&format!("tick-{tick}\n")).count(), 1, "tick-{tick} once: {said}");
     }

@@ -61,6 +61,16 @@ impl Changes {
         Ok((Snapshot { id, at_ms }, true))
     }
 
+    /// File `path` (from the project's folder) as snapshot `id` has it
+    /// (none: it had no such file).
+    pub fn text_at(&self, id: &str, path: &str) -> Result<Option<String>> {
+        let repo = self.repo()?;
+        let tree = tree_of(&repo, id)?;
+        let Ok(entry) = tree.get_path(std::path::Path::new(&format!("{}{path}", self.prefix))) else { return Ok(None) };
+        let blob = repo.find_blob(entry.id())?;
+        Ok(Some(String::from_utf8_lossy(blob.content()).into_owned()))
+    }
+
     /// Every snapshot kept, oldest first.
     pub fn snapshots(&self) -> Result<Vec<Snapshot>> {
         let repo = self.repo()?;

@@ -312,13 +312,62 @@ async fn a_chats_message_and_turn_are_tagged_named_by_the_slot_and_kept() {
     let (error, said) = lead.tool("tag", json!({ "tag": "greeting", "subject": "chat helper turn 1" })).await;
     assert!(!error, "{said}");
     let (_, read) = lead.tool("tag_read", json!({ "tag": "greeting" })).await;
-    assert!(read.contains("1. chat helper turn 1 message 1 (tagged by lead; as it is now):\necho: hello there"), "{read}");
-    assert!(read.contains("2. chat helper turn 1 (tagged by lead; as it is now):\necho: hello there"), "{read}");
+    // Named with its session (the start of its id: a slot has several).
+    assert!(read.contains("1. chat helper@native-") && read.contains(" turn 1 message 1 (tagged by lead; as it is now):\necho: hello there"), "{read}");
+    assert!(read.contains(" turn 1 (tagged by lead; as it is now):\necho: hello there"), "{read}");
     // Kept in the logs: the tag holds where, never the text.
     let tag = state.tags.tags.find("greeting").unwrap();
     assert!(tag.on.iter().all(|t| t.kept.is_some()) && !serde_json::to_string(&tag).unwrap().contains("hello there"));
+    // Another sub-slot can't read the helper's chat (no role but the lead's
+    // observes slots), nor tag it.
+    let (status, body) = common::http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"fake","name":"other"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let other = serde_json::from_str::<serde_json::Value>(&body).unwrap()["slotId"].as_str().unwrap().to_owned();
+    let (status, body) = common::http(addr, "POST", &format!("/api/slots/{other}/prompt"), Some(r#"{"text":"hi"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let thread = state.harness.slots.get(&SlotId::new(&other)).unwrap().current_thread().cloned().unwrap();
+    let mut peer = Mcp::as_session(addr, &thread).await;
+    let (error, said) = peer.tool("tag_read", json!({ "tag": "greeting", "thing": 1 })).await;
+    assert!(error && said.contains("can't read"), "{said}");
+    let (_, listed) = peer.tool("tag_read", json!({ "tag": "greeting" })).await;
+    assert!(!listed.contains("hello there"), "{listed}");
+    let (error, said) = peer.tool("tag", json!({ "tag": "peek", "subject": "chat helper turn 1" })).await;
+    assert!(error && said.contains("can't read"), "{said}");
     // Its slot closed (the session gone from here): as it was, from the logs.
     state.harness.slots.close(&SlotId::new(&slot)).await.unwrap();
     let (_, read) = lead.tool("tag_read", json!({ "tag": "greeting", "thing": 1 })).await;
     assert!(read.contains("(gone from where it was: as it was when tagged):\necho: hello there"), "{read}");
+}
+
+/// A turn tagged while it runs is kept whole: what it said then, and the
+/// rest once it ends.
+#[tokio::test]
+async fn a_chat_turn_tagged_while_it_runs_is_kept_whole_once_it_ends() {
+    let (addr, state) = spawn_app().await;
+    let (status, body) = common::http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"fake","name":"asker"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let slot = serde_json::from_str::<serde_json::Value>(&body).unwrap()["slotId"].as_str().unwrap().to_owned();
+    // A turn that waits on a question (the fake harness answers once it's answered).
+    let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"[ask] go on"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let mut lead = Mcp::lead(addr).await;
+    let (error, said) = lead.tool("tag", json!({ "tag": "pending", "subject": "chat asker turn 1" })).await;
+    assert!(!error, "{said}");
+    // Answered: the turn ends with its answer.
+    let thread = state.harness.slots.get(&SlotId::new(&slot)).unwrap().current_thread().cloned().unwrap();
+    let request = state.harness.hub.thread_state(&thread).into_iter().find_map(|e| match e {
+        harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::RequestUpdated { request } } => Some(request.id),
+        _ => None,
+    }).expect("its question");
+    let session = state.harness.sessions.get(&thread).unwrap();
+    session.respond(&request, harness_contracts::RequestResponse { option_id: Some("allow".into()), answers: Default::default() }).await.unwrap();
+    let mut read = String::new();
+    for _ in 0..40 {
+        read = lead.tool("tag_read", json!({ "tag": "pending", "thing": 1 })).await.1;
+        if read.contains("done, as allowed") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(read.contains("done, as allowed"), "the rest, once it ended: {read}");
 }

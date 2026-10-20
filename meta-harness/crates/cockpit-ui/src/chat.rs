@@ -29,7 +29,7 @@ pub(crate) mod actions;
 mod nav;
 mod render;
 mod session;
-mod things;
+pub(crate) mod things;
 pub(crate) mod slots;
 
 use crate::agents::block_summary;
@@ -58,6 +58,9 @@ pub struct ChatStreamState {
     /// which read of it that is.
     pub turn_files: std::collections::BTreeMap<String, u32>,
     pub turn_files_read: u64,
+    /// Where each item of the stream is as a tag names it, worked out once
+    /// per change of the thread (its id, its activity count).
+    tag_places: std::cell::RefCell<Option<things::Places>>,
 }
 
 /// A chat view's own state: what's typed, where the cursor is, what was

@@ -77,8 +77,9 @@ impl Navigable for ChatStreamState {
         true
     }
 
-    /// After what's typed (a tag's name after its `#`).
+    /// After what's typed (a `#` just typed isn't doubled).
     fn typed_in(&mut self, text: &str) {
+        let text = if self.ui.input_buffer.ends_with('#') { text.strip_prefix('#').unwrap_or(text) } else { text };
         self.ui.input_buffer.push_str(text);
         self.ui.caret_to_end = true;
     }

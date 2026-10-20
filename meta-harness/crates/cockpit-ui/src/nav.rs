@@ -776,8 +776,8 @@ pub trait Navigable {
         false
     }
 
-    /// Text put where it's typed in (a tag's name after a `#`), after
-    /// what's typed, the caret after it.
+    /// Text put where it's typed in (a tag's name, `#name `), after what's
+    /// typed (a `#` just typed not doubled), the caret after it.
     fn typed_in(&mut self, _text: &str) {}
 
     /// The tag item `key` is a row of (a view of tags): the tag edits are

@@ -34,6 +34,8 @@ use crate::logs::Logs;
 const NOTE_MOST: usize = 4000;
 pub const SHOWN_MOST: usize = 4000;
 pub const MOST_ON: usize = 500;
+/// The most of a growing thing (a command running) its log keeps.
+const GROWN_MOST: u64 = 64 << 20;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TagError {
@@ -121,6 +123,9 @@ pub trait Resolve: Send + Sync {
 /// when it's no longer wanted.
 pub type More = Box<dyn FnMut(&str) -> bool + Send>;
 
+/// Some lines of what a thing says, and how many it has in all.
+pub type Window = (Vec<String>, u64);
+
 /// A line found in what a tagged thing says (`Tags::find_text`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FoundText {
@@ -166,6 +171,17 @@ fn some_of(text: String, most: usize) -> String {
     match text.char_indices().nth(most) {
         Some((at, _)) => format!("{}…", &text[..at]),
         None => text,
+    }
+}
+
+/// Where a thing is, as said beside what it says: nothing of it given,
+/// gone; given though it's gone from where it was (its owner keeps what it
+/// was: code at a snapshot), as it was.
+fn given(held: Held, text: bool) -> Held {
+    match (held, text) {
+        (_, false) => Held::Gone,
+        (Held::Gone, true) => Held::Kept,
+        (held, true) => held,
     }
 }
 
@@ -265,7 +281,7 @@ impl Tags {
             Some(kept) => self.logs.read(kept).map_err(|e| tracing::warn!("A tagged thing's log couldn't be read: {e}")).ok(),
             None => self.owners().iter().find_map(|o| o.now(&tagged.subject)),
         };
-        (if text.is_none() { Held::Gone } else { held }, text)
+        (given(held, text.is_some()), text)
     }
 
     /// The start of what a tagged thing says (`most` characters, roughly),
@@ -279,7 +295,7 @@ impl Tags {
                 (t, lines)
             }),
         };
-        (if text.is_none() { Held::Gone } else { held }, text.map(|(t, lines)| (some_of(t, most), lines)))
+        (given(held, text.is_some()), text.map(|(t, lines)| (some_of(t, most), lines)))
     }
 
     /// A tagged thing as a read gives it: where it is, some of what it
@@ -318,8 +334,16 @@ impl Tags {
     }
 
     /// The subject `words` name, as its owner names it.
+    /// (An owner that names it rightly over one that only took the words
+    /// for its own and says why they don't fit.)
     pub fn named(&self, words: &str) -> Result<Subject, TagError> {
-        self.owners().iter().find_map(|o| o.named(words)).unwrap_or_else(|| Err(format!("nothing here names {words:?}"))).map_err(TagError::Subject)
+        let tries: Vec<Result<Subject, String>> = self.owners().iter().filter_map(|o| o.named(words)).collect();
+        let first_err = tries.iter().find_map(|t| t.as_ref().err().cloned());
+        let why = match first_err {
+            Some(why) => why,
+            None => format!("nothing here names {words:?}"),
+        };
+        tries.into_iter().find_map(Result::ok).ok_or(TagError::Subject(why))
     }
 
     /// Where `subject` is now (where it was, when its owner didn't move it).
@@ -349,33 +373,52 @@ impl Tags {
 
     /// The `n`th thing tag `name` is on, and what it says, whole.
     pub fn thing(&self, name: &str, n: usize) -> Result<(Tagged, Held, Option<String>), TagError> {
-        let tag = self.find(name)?;
-        let tagged = tag.on.get(n).cloned().ok_or_else(|| TagError::NotOn(format!("{} (it's on {})", tag.name, harness_contracts::on_things(tag.on.len()))))?;
+        let tagged = self.nth(name, n)?;
         let (held, text) = self.said(&tagged);
         Ok((tagged, held, text))
+    }
+
+    /// The `n`th thing tag `name` is on.
+    fn nth(&self, name: &str, n: usize) -> Result<Tagged, TagError> {
+        let tag = self.find(name)?;
+        tag.on.get(n).cloned().ok_or_else(|| TagError::NotOn(format!("{} (it's on {})", tag.name, harness_contracts::on_things(tag.on.len()))))
+    }
+
+    /// Lines `from..=to` (from 1) of what the `n`th thing tag `name` is on
+    /// says, and how many it has in all (none: nothing of it's here); only
+    /// those read into memory.
+    pub fn thing_lines(&self, name: &str, n: usize, from: u64, to: u64) -> Result<(Tagged, Held, Option<Window>), TagError> {
+        let tagged = self.nth(name, n)?;
+        let held = self.held(&tagged);
+        let lines = match &tagged.kept {
+            Some(kept) => self.logs.lines(kept, from, to).map_err(|e| tracing::warn!("A tagged thing's log couldn't be read: {e}")).ok(),
+            None => self.owners().iter().find_map(|o| o.now(&tagged.subject)).map(|text| {
+                let all: Vec<&str> = text.lines().collect();
+                let shown = all.iter().skip(from.saturating_sub(1) as usize).take((to + 1).saturating_sub(from) as usize).map(|l| (*l).to_owned()).collect();
+                (shown, all.len() as u64)
+            }),
+        };
+        Ok((tagged, given(held, lines.is_some()), lines))
     }
 
     /// The lines of what tagged things say (all tags', or `tag`'s) that
     /// have `query` in them (its capitals heeded only when it has some),
     /// the first `most`: each with its tag, which of its things (1-based,
     /// as `thing` takes it), and which of its lines.
-    pub fn find_text(&self, query: &str, tag: Option<&str>, most: usize) -> Result<Vec<FoundText>, TagError> {
+    pub fn find_text(&self, matches: &dyn Fn(&str) -> bool, tag: Option<&str>, most: usize, reaches: &dyn Fn(&Subject) -> bool) -> Result<Vec<FoundText>, TagError> {
         let tags = match tag {
             Some(tag) => vec![self.find(tag)?],
             None => self.list(),
         };
-        let heed = query.chars().any(char::is_uppercase);
-        let lower = query.to_lowercase();
-        let matches = |line: &str| if heed { line.contains(query) } else { line.to_lowercase().contains(&lower) };
         let mut out = Vec::new();
         for tag in tags {
-            for (n, tagged) in tag.on.iter().enumerate() {
+            for (n, tagged) in tag.on.iter().enumerate().filter(|(_, t)| reaches(&t.subject)) {
                 let room = most.saturating_sub(out.len());
                 if room == 0 {
                     return Ok(out);
                 }
                 let lines = match &tagged.kept {
-                    Some(kept) => self.logs.find(kept, &matches, room).unwrap_or_default(),
+                    Some(kept) => self.logs.find(kept, matches, room).unwrap_or_default(),
                     None => self.owners().iter().find_map(|o| o.now(&tagged.subject)).map(|t| t.lines().zip(1..).filter(|(l, _)| matches(l)).take(room).map(|(l, n)| (n, l.to_owned())).collect()).unwrap_or_default(),
                 };
                 out.extend(lines.into_iter().map(|(line, text)| FoundText { tag: tag.name.clone(), thing: n + 1, what: tagged.what.clone(), line, text }));
@@ -407,7 +450,7 @@ impl Tags {
                 Tag { id: TagId::new(uuid::Uuid::new_v4().to_string()), name, colour, note: String::new(), noted_by: String::new(), on: Vec::new() }
             }
         };
-        if kept.on.iter().any(|t| self.current(&t.subject) == subject) {
+        if kept.on.iter().any(|t| self.current(&t.subject).same_thing(&subject)) {
             return Ok(kept);
         }
         if kept.on.len() >= MOST_ON {
@@ -432,7 +475,19 @@ impl Tags {
         let (kept, mut file) = self.logs.grow(header).map_err(failed)?;
         let on = Arc::new(AtomicBool::new(true));
         let still = on.clone();
-        let more: More = Box::new(move |more| still.load(Ordering::Relaxed) && file.write_all(more.as_bytes()).is_ok());
+        let mut written = 0u64;
+        let more: More = Box::new(move |more| {
+            if !still.load(Ordering::Relaxed) {
+                return false;
+            }
+            // Past the most a growing thing keeps: said, and no longer followed.
+            if written + more.len() as u64 > GROWN_MOST {
+                let _ = file.write_all(format!("\n(the rest isn't kept: past {} MB)\n", GROWN_MOST >> 20).as_bytes());
+                return false;
+            }
+            written += more.len() as u64;
+            file.write_all(more.as_bytes()).is_ok()
+        });
         if owner.follow(subject, more) {
             lock(&self.growing).insert(kept.file.clone(), on);
             return Ok(kept);
@@ -463,7 +518,7 @@ impl Tags {
         let subject = self.current(subject);
         let mut tags = lock(&self.tags);
         let mut kept = found(&tags, tag)?;
-        let Some(at) = kept.on.iter().position(|t| t.subject == subject || self.current(&t.subject) == subject) else { return Err(TagError::NotOn(kept.name)) };
+        let Some(at) = kept.on.iter().position(|t| t.subject.same_thing(&subject) || self.current(&t.subject).same_thing(&subject)) else { return Err(TagError::NotOn(kept.name)) };
         let gone = kept.on.remove(at);
         let done = self.keep(&mut tags, kept, Some(&Change { by: by.to_owned(), action: "untagged", detail: gone.what }))?;
         self.forget_unused(&tags);
@@ -679,11 +734,29 @@ mod tests {
         owner.grow("more 4\n");
         assert_eq!(owner.followers(), 1);
         assert!(tags.thing("build", 1).is_err(), "it's on one thing");
-        // What it says is searched where it's kept.
-        let found = tags.find_text("MORE 4", None, 10).unwrap();
-        assert!(found.is_empty(), "capitals heeded when the query has some");
-        let found = tags.find_text("more 4", Some("build"), 10).unwrap();
+        // What it says is searched where it's kept (by the matcher given).
+        let all = |_: &Subject| true;
+        assert!(tags.find_text(&|l: &str| l.contains("MORE 4"), None, 10, &all).unwrap().is_empty());
+        assert!(tags.find_text(&|l: &str| l.contains("more 4"), None, 10, &|_: &Subject| false).unwrap().is_empty(), "only what the caller reaches");
+        let found = tags.find_text(&|l: &str| l.contains("more 4"), Some("build"), 10, &all).unwrap();
         assert_eq!(found, [FoundText { tag: "build".into(), thing: 1, what: "lines 500 to 501".into(), line: 1, text: "more 4".into() }], "(its lines gone when tagged again: only what it added)");
+    }
+
+    #[test]
+    fn what_the_logs_kept_comes_back_after_a_restart_and_nothing_untagged_is_logged() {
+        let store = Arc::new(MemoryStore::default());
+        let Fixture { tags, owner, logs, .. } = tags(store.clone());
+        assert!(std::fs::read_dir(logs.path()).map_or(true, |d| d.count() == 0), "nothing tagged, nothing logged");
+        tags.tag("kept", lines(10, 12), "you").unwrap();
+        tags.tag("kept", lines(500, 501), "you").unwrap();
+        owner.grow("more\n");
+        drop(tags);
+        // The server started again (the same store and folder), the source gone.
+        let again = self::open(store, logs);
+        again.owner.scroll_away();
+        let said = |n| again.tags.thing("kept", n).unwrap();
+        assert_eq!((said(0).1, said(0).2.as_deref()), (Held::Kept, Some("text of lines 10 to 12\n")));
+        assert_eq!((said(1).1, said(1).2.as_deref()), (Held::Kept, Some("text of lines 500 to 501\nmore\n")));
     }
 
     #[test]

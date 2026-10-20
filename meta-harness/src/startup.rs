@@ -241,7 +241,10 @@ pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hu
         Ok(text) => toml::from_str(&text).map_err(|e| format!(".nah/terminals.toml: {e}"))?,
         Err(_) => Settings { long_command_secs: ten(), scrollback_lines: ten_thousand() },
     };
-    let settings = crate::terminals::Settings { long: std::time::Duration::from_secs(settings.long_command_secs), scrollback: settings.scrollback_lines.max(100) };
+    if settings.scrollback_lines < 100 {
+        return Err(format!(".nah/terminals.toml: scrollback_lines is {}: at least 100", settings.scrollback_lines).into());
+    }
+    let settings = crate::terminals::Settings { long: std::time::Duration::from_secs(settings.long_command_secs), scrollback: settings.scrollback_lines };
     let hooks = arch_service::state_dir(arch.root())?.join("terminal-hooks");
     let terminals = crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), settings)?;
     tags.register(terminals.clone());
@@ -263,7 +266,7 @@ pub fn code_tags(arch: &Arc<ArchitectureService>, changes: &Option<Arc<nah_chang
     tags.register(crate::code_tags::Code::new(arch.clone(), changes.clone()));
     let weak = Arc::downgrade(tags);
     arch.subscribe(move |event| {
-        if matches!(event, arch_graph::ArchEvent::Changed { .. })
+        if matches!(event, arch_graph::ArchEvent::Changed { reason: arch_graph::ChangeReason::Ingested, .. })
             && let Some(tags) = weak.upgrade()
         {
             tags.refresh();

@@ -105,7 +105,7 @@ pub enum Subject {
 
 /// A line of detail in what a thing says (a tool call's output, under
 /// its line): reads leave runs of them out unless asked for in full.
-pub const DETAIL: &str = "  \u{2502} ";
+pub const DETAIL: &str = "\u{2007}\u{2502} ";
 
 /// Whether an item is a message (what you said, or an answer): what a tag
 /// on a message can be on.
@@ -133,6 +133,16 @@ impl Subject {
             Self::TerminalLines { first, last, .. } if last - first >= TAGGED_LINES => Some(format!("at most {TAGGED_LINES} lines at once")),
             Self::CodeLines { first, last, .. } if *first == 0 || last < first => Some("its lines are from 1, its last not before its first".into()),
             _ => None,
+        }
+    }
+
+    /// Whether it's the same thing as `other`: equal, or the same lines of
+    /// a file (kept at different snapshots, or one not kept yet: lines are
+    /// kept where they are now).
+    pub fn same_thing(&self, other: &Subject) -> bool {
+        match (self, other) {
+            (Self::CodeLines { path, first, last, .. }, Self::CodeLines { path: p, first: f, last: l, .. }) => path == p && first == f && last == l,
+            _ => self == other,
         }
     }
 

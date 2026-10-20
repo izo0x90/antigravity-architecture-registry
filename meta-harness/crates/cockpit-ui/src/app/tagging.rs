@@ -224,7 +224,7 @@ impl CockpitApp {
                     return;
                 };
                 self.desk.shell_searches.remove("tag.insert");
-                self.desk.view_mut(here.kind).typed_in(&format!("{name} "));
+                self.desk.view_mut(here.kind).typed_in(&format!("#{name} "));
                 // Back to typing where it was.
                 self.input_mode = InputMode::Insert { at: here.at };
             }

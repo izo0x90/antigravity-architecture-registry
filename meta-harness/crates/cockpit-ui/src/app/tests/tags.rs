@@ -368,7 +368,15 @@ fn the_tags_buffer_lists_tags_folded_reads_what_they_say_now_and_the_shells_tag_
     assert!(texts(&frame(&ctx, &mut app, vec![])).contains("terminal t1 lines 1001-1001"), "every tag unfolded");
     keys(&ctx, &mut app, "zM");
     assert!(!texts(&frame(&ctx, &mut app, vec![])).contains("terminal t1 lines 1001-1001"));
-    assert!(rows(&app) > 2, "search still finds the folded things");
+    // Search finds a thing under a folded tag, and going there unfolds it.
+    keys(&ctx, &mut app, "/");
+    keys(&ctx, &mut app, "command 1");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert!(cursor(&app).is_some_and(|c| c.starts_with("x1 ")), "{:?}", cursor(&app));
+    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("terminal t1 command 1"));
+    assert!(rows(&app) > 2);
+    keys(&ctx, &mut app, "zM");
     // Enter on a folded tag unfolds it; again, to its first thing; on that,
     // the terminal, its cursor on the command.
     frame(&ctx, &mut app, press(egui::Key::Enter, false));

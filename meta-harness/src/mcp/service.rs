@@ -42,7 +42,7 @@ pub struct McpService {
 
 impl McpService {
     pub fn new(services: crate::mcp::sets::Services, access: Arc<Access>) -> Self {
-        let sets = all(&services);
+        let sets = all(&services, &access);
         let arch = &services.arch;
         let mut index = HashMap::new();
         let mut names = Vec::new();

@@ -191,7 +191,7 @@ async fn tagged_code_lines_follow_the_file_and_a_tagged_component_is_its_code() 
     let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
     let lines: Vec<&str> = before.lines().collect();
     assert!(read.contains(&format!("1. src/util.rs lines 2-3 (tagged by lead; as it is now):\n{}\n{}", lines[1], lines[2])), "{read}");
-    assert!(read.contains("(src/util.rs:"), "the component, named with where it is: {read}");
+    assert!(read.contains(&format!("component {component} (")) && read.contains(", src/util.rs:"), "the component, by its id and where it is: {read}");
     // Two lines added before them: they're where they went.
     std::fs::write(&util, format!("// one\n// two\n{before}")).unwrap();
     state.tags.tags.refresh();

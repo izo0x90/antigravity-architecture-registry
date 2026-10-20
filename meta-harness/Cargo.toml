@@ -59,6 +59,7 @@ code-analyzer = { path = "crates/code-analyzer" }
 arch-service = { path = "crates/arch-service" }
 nah-packs = { path = "crates/nah-packs" }
 nah-access = { path = "crates/nah-access" }
+arch-search = { path = "crates/arch-search" }
 nah-state = { path = "crates/nah-state" }
 nah-notify = { path = "crates/nah-notify" }
 nah-changes = { path = "crates/nah-changes" }

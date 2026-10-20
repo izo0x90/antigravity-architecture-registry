@@ -1329,7 +1329,7 @@ Tag something.
     },
     "subject": {
       "type": "string",
-      "description": "What to tag, named as its owner names it: `tag_read` shows each thing's name; a terminal's are `terminal t1 command 3` and `terminal t1 lines 120-124` (`terminal_read` gives the numbers)"
+      "description": "What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `src/a.rs lines 10-12`, `component <id>`"
     }
   },
   "required": [
@@ -1349,7 +1349,7 @@ Take a tag off something it's on.
     },
     "subject": {
       "type": "string",
-      "description": "What to tag, named as its owner names it: `tag_read` shows each thing's name; a terminal's are `terminal t1 command 3` and `terminal t1 lines 120-124` (`terminal_read` gives the numbers)"
+      "description": "What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `src/a.rs lines 10-12`, `component <id>`"
     }
   },
   "required": [

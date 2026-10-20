@@ -16,14 +16,46 @@ use super::{ToolDef, ToolSet};
 
 pub(crate) struct Tags {
     pub(crate) tags: Arc<nah_tags::Tags>,
+    /// Whose a chat is, and what a caller may read of the slots' chats (as
+    /// `slot_read` lets it: its own; a sub-slot's with `slots.observe`).
+    pub(crate) slots: Arc<harness_core::SlotManager>,
+    pub(crate) access: Arc<nah_access::Access>,
 }
+
+/// What a caller may tag or read, carried into the work done off the async
+/// threads.
+struct Reach {
+    slots: Arc<harness_core::SlotManager>,
+    access: Arc<nah_access::Access>,
+    principal: nah_access::Principal,
+    slot: Option<harness_contracts::SlotId>,
+}
+
+impl Reach {
+    /// Anything but a chat; a chat its own slot's, or (with
+    /// `slots.observe`) a sub-slot's or a closed slot's; the user, any.
+    fn reaches(&self, subject: &harness_contracts::Subject) -> bool {
+        use harness_contracts::Subject;
+        let (Subject::ChatTurn { session, .. } | Subject::ChatMessage { session, .. }) = subject else { return true };
+        if matches!(self.principal, nah_access::Principal::User | nah_access::Principal::Home) {
+            return true;
+        }
+        let observes = self.access.allows(&self.principal, Capability::SlotsObserve);
+        // A session no slot holds now (its slot closed): what was kept, to one that observes.
+        let Some(slot) = self.slots.list().into_iter().find(|s| s.sessions.iter().any(|x| x.native_id.as_ref() == Some(session))) else { return observes };
+        self.slot.as_ref() == Some(&slot.id) || (slot.role == "sub" && observes)
+    }
+}
+
+/// Said of a chat a caller may not read.
+const NOT_YOURS: &str = "a chat this session can't read (its own slot's, or with slots.observe a sub-slot's or a closed slot's)";
 
 impl Tags {
     pub(crate) fn schemas(trees: &TreeConfig) -> Vec<ToolDef> {
         let _ = trees;
         let on = json!({ "type": "object", "properties": {
             "tag": { "type": "string", "description": "Its name (a new tag when there's none of that name: letters, digits, - and _)" },
-            "subject": { "type": "string", "description": "What to tag, named as its owner names it: `tag_read` shows each thing's name; a terminal's are `terminal t1 command 3` and `terminal t1 lines 120-124` (`terminal_read` gives the numbers)" }
+            "subject": { "type": "string", "description": "What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `src/a.rs lines 10-12`, `component <id>`" }
         }, "required": ["tag", "subject"] });
         let edit = json!({ "type": "object", "properties": {
             "tag": { "type": "string" },
@@ -137,6 +169,7 @@ impl ToolSet for Tags {
         let tags = self.tags.clone();
         // Who an agent's change is by: its slot's name.
         let by = caller.label.clone();
+        let reach = Arc::new(Reach { slots: self.slots.clone(), access: self.access.clone(), principal: caller.principal.clone(), slot: caller.slot.clone() });
         // Owners say what subjects say (a terminal's lines), and tags are
         // kept in the state database: off the async threads.
         let blocking = |f: Box<dyn FnOnce(&nah_tags::Tags) -> Result<String, ServiceError> + Send>| async move { tokio::task::spawn_blocking(move || f(&tags)).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))? };
@@ -151,19 +184,26 @@ impl ToolSet for Tags {
                 let lines = text("lines");
                 let full = args["full"].as_bool().unwrap_or(false);
                 blocking(Box::new(move |t| match thing {
-                    // One thing, whole (or the lines asked for).
+                    // One thing: its lines asked for (as numbered, as tag_find
+                    // numbers them), else its start, a turn's tool output folded
+                    // unless in full.
                     Some(n) => {
-                        let (tagged, held, text) = t.thing(&tag, n.saturating_sub(1) as usize).map_err(refused)?;
-                        let text = text.ok_or_else(|| ServiceError::NotFound(format!("{} is gone, and nothing was kept of it", tagged.what)))?;
-                        let text = if full { text } else { folded(&text) };
-                        let all: Vec<&str> = text.lines().collect();
                         let (from, to) = match lines.as_deref().map(line_range).transpose()? {
-                            Some((from, _)) if from > all.len() => return Err(ServiceError::InvalidOp(format!("{} has {} lines", tagged.what, all.len()))),
-                            Some((from, to)) => (from, to.min(all.len())),
-                            None => (1, all.len().min(READ_MOST)),
+                            Some(range) => range,
+                            None => (1, READ_MOST),
                         };
-                        let shown = all.get(from.saturating_sub(1)..to).unwrap_or_default().join("\n");
-                        let more = if to < all.len() { format!("\n(lines {from}-{to} of {}: `lines` gives others)", all.len()) } else { String::new() };
+                        let (tagged, held, read) = t.thing_lines(&tag, n.saturating_sub(1) as usize, from as u64, to as u64).map_err(refused)?;
+                        if !reach.reaches(&tagged.subject) {
+                            return Err(ServiceError::Forbidden(format!("{} is {NOT_YOURS}", tagged.what)));
+                        }
+                        let (shown, all) = read.ok_or_else(|| ServiceError::NotFound(format!("{} is gone, and nothing was kept of it", tagged.what)))?;
+                        if from as u64 > all {
+                            return Err(ServiceError::InvalidOp(format!("{} has {all} lines", tagged.what)));
+                        }
+                        let to = (to as u64).min(all);
+                        let shown = shown.join("\n");
+                        let shown = if full || lines.is_some() { shown } else { folded(&shown) };
+                        let more = if to < all { format!("\n(lines {from}-{to} of {all}: `lines` gives others)") } else { String::new() };
                         Ok(format!("{} ({}):\n{shown}{more}", tagged.what, held.words()))
                     }
                     None => {
@@ -173,11 +213,12 @@ impl ToolSet for Tags {
                             let when = format!("tagged by {}", who(&on.tagged.by));
                             let what = &on.tagged.what;
                             out.push(match &on.text {
+                                _ if !reach.reaches(&on.tagged.subject) => format!("{}. {NOT_YOURS} ({when})", n + 1),
                                 // Its owner isn't here (no shells run here), and nothing was kept.
                                 _ if what.is_empty() && on.held != Held::Kept => format!("{}. something nothing here can show ({when})", n + 1),
                                 None => format!("{}. {what} ({when}): gone, nothing kept of it", n + 1),
                                 Some(text) => {
-                                    let text = folded(text);
+                                    let text = if full { text.clone() } else { folded(text) };
                                     let head: Vec<&str> = text.lines().take(SHOWN_LINES).collect();
                                     let more = if on.lines > head.len() as u64 { format!("\n  ({} lines in all: tag_read with `thing` {} for all of it)", on.lines, n + 1) } else { String::new() };
                                     format!("{}. {what} ({when}; {}):\n{}{more}", n + 1, on.held.words(), head.join("\n"))
@@ -193,7 +234,9 @@ impl ToolSet for Tags {
                 let query = text("query").filter(|q| !q.trim().is_empty()).ok_or_else(|| ServiceError::InvalidOp("`query` (what to find) is needed".into()))?;
                 let only = text("tag");
                 blocking(Box::new(move |t| {
-                    let found = t.find_text(&query, only.as_deref(), FOUND_MOST).map_err(refused)?;
+                    // Matched as every search here matches text (`arch_search::rank_text`).
+                    let matches = |line: &str| !arch_search::rank_text(&query, &[line]).is_empty();
+                    let found = t.find_text(&matches, only.as_deref(), FOUND_MOST, &|s| reach.reaches(s)).map_err(refused)?;
                     if found.is_empty() {
                         return Ok(format!("Nothing tagged says {query:?}."));
                     }
@@ -207,6 +250,9 @@ impl ToolSet for Tags {
                 let tagging = name == "tag";
                 blocking(Box::new(move |t| {
                     let subject = t.named(&words).map_err(refused)?;
+                    if !reach.reaches(&subject) {
+                        return Err(ServiceError::Forbidden(format!("that's {NOT_YOURS}")));
+                    }
                     let done = if tagging { t.tag(&tag, subject, &by) } else { t.untag(&tag, &subject, &by) }.map_err(refused)?;
                     Ok(format!("{}. tag_read shows what it's on.", said(&done)))
                 }))

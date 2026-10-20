@@ -73,7 +73,7 @@ pub struct Services {
 }
 
 /// The sets, in the same order as `list_tools`.
-pub(crate) fn all(s: &Services) -> Vec<Box<dyn ToolSet>> {
+pub(crate) fn all(s: &Services, access: &Arc<nah_access::Access>) -> Vec<Box<dyn ToolSet>> {
     vec![
         Box::new(explore::Explore { arch: s.arch.clone(), changes: s.changes.clone() }),
         Box::new(changes::Changes { arch: s.arch.clone(), changes: s.changes.clone(), timeline: s.timeline.clone() }),
@@ -83,6 +83,6 @@ pub(crate) fn all(s: &Services) -> Vec<Box<dyn ToolSet>> {
         Box::new(cockpit::Cockpit { remote: s.remote.clone() }),
         Box::new(slots::Slots { slots: s.slots.clone(), notify: s.notify.clone() }),
         Box::new(terminals::Terminals { terminals: s.terminals.clone() }),
-        Box::new(tags::Tags { tags: s.tags.clone() }),
+        Box::new(tags::Tags { tags: s.tags.clone(), slots: s.slots.clone(), access: access.clone() }),
     ]
 }

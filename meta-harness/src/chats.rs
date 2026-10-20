@@ -55,12 +55,11 @@ impl Chats {
         Some(of)
     }
 
-    /// A session in words: its slot's chat (with the start of its id when
-    /// it isn't the slot's current session), else the session.
+    /// A session in words: its slot's chat and the start of its id (a
+    /// slot has several sessions over time), else the session.
     fn words(&self, native: &NativeId) -> String {
         let short: String = native.as_str().chars().take(ID_SHOWN).collect();
         match self.slot_of(native) {
-            Some(slot) if slot.current_session().and_then(|s| s.native_id.as_ref()) == Some(native) => format!("chat {}", slot.name),
             Some(slot) => format!("chat {}@{short}", slot.name),
             None => format!("chat session {short}"),
         }
@@ -82,25 +81,47 @@ fn detail(text: &str) -> String {
     text.lines().map(|l| format!("{DETAIL}{l}\n")).collect()
 }
 
-/// A turn in words: your message, the answer, a line per tool call (what
-/// it gave, as detail under it).
+/// A turn in words: your message, the answer, a line per tool call, what
+/// was thought, planned, changed (what each gave, and what a tool was
+/// asked, as detail under its line).
 fn turn_text(items: &[TurnItem]) -> String {
     let mut out = String::new();
     for item in items {
         match &item.body {
             ItemBody::UserMessage { text } => out.push_str(&format!("you: {text}\n")),
             ItemBody::AssistantMessage { .. } => out.push_str(&format!("{}\n", message_text(&item.body).unwrap_or_default())),
-            ItemBody::ToolCall { name, output, .. } => {
+            ItemBody::ToolCall { name, input, output, .. } => {
                 out.push_str(&format!("• {name}\n"));
+                if let Some(input) = input {
+                    out.push_str(&detail(&input.to_string()));
+                }
                 let text: Vec<&str> = output.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect();
                 out.push_str(&detail(&text.join("\n")));
             }
+            ItemBody::Reasoning { text, .. } => {
+                out.push_str("• thought\n");
+                out.push_str(&detail(text));
+            }
+            ItemBody::ProposedPlan { markdown, .. } => {
+                out.push_str("• a plan\n");
+                out.push_str(&detail(markdown));
+            }
+            ItemBody::TodoList { steps, .. } => {
+                out.push_str("• to do\n");
+                out.push_str(&detail(&steps.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("\n")));
+            }
+            ItemBody::Unknown { display, .. } => out.push_str(&detail(display)),
             ItemBody::CommandExecution { command, output, exit_code } => {
                 let ended = exit_code.map(|c| format!(" (exit code {c})")).unwrap_or_default();
                 out.push_str(&format!("• $ {command}{ended}\n"));
                 out.push_str(&detail(output.as_deref().unwrap_or_default()));
             }
-            ItemBody::FileChange { path, .. } => out.push_str(&format!("• changed {path}\n")),
+            ItemBody::FileChange { path, diff } => {
+                out.push_str(&format!("• changed {path}\n"));
+                if let Some(diff) = diff {
+                    out.push_str(&detail(&diff.new_text));
+                }
+            }
             ItemBody::Notice { text, .. } => out.push_str(&format!("! {text}\n")),
             ItemBody::Error { message } => out.push_str(&format!("! {message}\n")),
             _ => {}
@@ -131,27 +152,74 @@ impl nah_tags::Resolve for Chats {
         }
     }
 
-    /// `chat <slot>[@<id's start>] turn <n>[ message <m>]`.
+    /// `chat <slot>[@<id's start>] turn <n>[ message <m>]` (no id: the
+    /// slot's session open now), or `chat session <id's start> turn …`.
     fn named(&self, words: &str) -> Option<Result<Subject, String>> {
         let rest = words.trim().strip_prefix("chat ")?;
         let (who, what) = rest.split_once(" turn ")?;
         Some((|| {
-            let (slot_name, start) = match who.split_once('@') {
-                Some((slot, start)) => (slot, Some(start)),
-                None => (who, None),
+            let sessions = |slots: Vec<Slot>| slots.into_iter().flat_map(|s| s.sessions.into_iter().filter_map(|x| x.native_id)).collect::<Vec<_>>();
+            let session = if let Some(start) = who.strip_prefix("session ") {
+                sessions(self.slots.list()).into_iter().find(|n| n.as_str().starts_with(start.trim())).ok_or_else(|| format!("no session's id starts {start}"))?
+            } else {
+                let (slot_name, start) = match who.split_once('@') {
+                    Some((slot, start)) => (slot, Some(start)),
+                    None => (who, None),
+                };
+                let slot = self.slots.list().into_iter().find(|s| s.name == slot_name).ok_or_else(|| format!("no agent slot is named {slot_name:?}"))?;
+                match start {
+                    Some(start) if !start.is_empty() => slot.sessions.iter().filter_map(|s| s.native_id.clone()).find(|n| n.as_str().starts_with(start)),
+                    Some(_) => None,
+                    None => slot.current_session().and_then(|s| s.native_id.clone()),
+                }
+                .ok_or_else(|| format!("{slot_name} has no session {}", start.unwrap_or("open now")))?
             };
-            let slot = self.slots.list().into_iter().find(|s| s.name == slot_name).ok_or_else(|| format!("no agent slot is named {slot_name:?}"))?;
-            let session = match start {
-                Some(start) => slot.sessions.iter().filter_map(|s| s.native_id.clone()).find(|n| n.as_str().starts_with(start)),
-                None => slot.current_session().and_then(|s| s.native_id.clone()),
-            }
-            .ok_or_else(|| format!("{slot_name} has no session {}", start.unwrap_or("open now")))?;
             let number = |n: &str| n.trim().parse::<u32>().map_err(|_| format!("{n:?} isn't a number"));
             Ok(match what.split_once(" message ") {
                 Some((turn, message)) => Subject::ChatMessage { session, turn: number(turn)?, message: number(message)? },
                 None => Subject::ChatTurn { session, turn: number(what)? },
             })
         })())
+    }
+
+    /// The turn's still in the session (its text isn't built to say so).
+    fn there(&self, subject: &Subject) -> bool {
+        let (Subject::ChatTurn { session, turn } | Subject::ChatMessage { session, turn, .. }) = subject else { return false };
+        self.running(session).is_some_and(|(turns, _)| turns.iter().any(|t| t.ordinal == *turn))
+    }
+
+    /// A turn still running (or a message of one): what it says so far,
+    /// then, once the turn ends, the rest of what it says then (all of it
+    /// again, said so, when it changed rather than grew).
+    fn follow(&self, subject: &Subject, mut more: nah_tags::More) -> bool {
+        let (Subject::ChatTurn { session, turn } | Subject::ChatMessage { session, turn, .. }) = subject else { return false };
+        let Some((turns, _)) = self.running(session) else { return false };
+        let Some(running) = turns.into_iter().find(|t| t.ordinal == *turn && !t.status.is_terminal()) else { return false };
+        let so_far = self.now(subject).unwrap_or_default();
+        if !more(&so_far) {
+            return false;
+        }
+        let (_, mut events) = self.hub.subscribe();
+        let (chats, subject, thread, turn) = (Chats { slots: self.slots.clone(), hub: self.hub.clone() }, subject.clone(), running.thread_id, *turn);
+        std::thread::spawn(move || {
+            loop {
+                match events.blocking_recv() {
+                    Ok(ClientEvent::Session { event: AdapterEvent::TurnUpdated { turn: t } }) if t.thread_id == thread && t.ordinal == turn && t.status.is_terminal() => {
+                        let end = chats.now(&subject).unwrap_or_default();
+                        let rest = match end.strip_prefix(&so_far) {
+                            Some(rest) => rest.to_owned(),
+                            None => format!("\n(as it ended)\n{end}"),
+                        };
+                        more(&rest);
+                        return;
+                    }
+                    Ok(ClientEvent::ThreadClosed { thread_id }) if thread_id == thread => return,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                    _ => {}
+                }
+            }
+        });
+        true
     }
 
     /// A session is the harness's: what's tagged in it is kept in the logs.
