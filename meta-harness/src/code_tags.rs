@@ -69,9 +69,18 @@ impl Code {
         Ok(snapshot.id)
     }
 
+    /// `path` as a file of the project: inside it however it's named or
+    /// linked, and not one it leaves out (`.nah/ignore`, generated output);
+    /// none otherwise.
+    fn file(&self, path: &str) -> Option<std::path::PathBuf> {
+        let root = self.arch.root().canonicalize().ok()?;
+        let real = root.join(arch_graph::RepoPath::new(path).ok()?.as_str()).canonicalize().ok()?;
+        (real.starts_with(&root) && real.is_file() && !self.arch.ignores().is_ignored_as(&real, false)).then_some(real)
+    }
+
     /// Where lines kept at `snapshot` are now.
     fn now_at(&self, path: &str, first: u32, last: u32, snapshot: &str) -> Now {
-        if !self.arch.root().join(path).is_file() {
+        if self.file(path).is_none() {
             return Now::Gone;
         }
         let Some(changes) = &self.changes else { return Now::At(first, last) };
@@ -85,7 +94,7 @@ impl Code {
 
     /// The text of lines `first..=last` of `path` now.
     fn lines_text(&self, path: &str, first: u32, last: u32) -> Option<String> {
-        let text = std::fs::read_to_string(self.arch.root().join(path)).ok()?;
+        let text = std::fs::read_to_string(self.file(path)?).ok()?;
         let lines: Vec<&str> = text.lines().skip(first.saturating_sub(1) as usize).take((last + 1).saturating_sub(first) as usize).collect();
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
@@ -148,8 +157,8 @@ impl nah_tags::Resolve for Code {
                 Some((a, b)) => (number(a)?, number(b)?),
                 None => (number(lines)?, number(lines)?),
             };
-            if !self.arch.root().join(path).is_file() {
-                return Err(format!("there's no file {path}"));
+            if self.file(path).is_none() {
+                return Err(format!("{path} isn't a file of the project"));
             }
             Ok(Subject::CodeLines { path: path.to_owned(), first: first.min(last), last: first.max(last), snapshot: String::new() })
         })())

@@ -203,6 +203,12 @@ async fn tagged_code_lines_follow_the_file_and_a_tagged_component_is_its_code() 
     state.tags.tags.refresh();
     let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
     assert!(read.contains("src/util.rs lines 4-5 (changed since tagged)"), "{read}");
+    // Only the project's own files: not one outside it, however named.
+    std::fs::write(root.parent().unwrap().join("outside.txt"), "secret\n").unwrap();
+    for outside in ["/etc/passwd line 1", "../outside.txt line 1", "src/../../outside.txt line 1"] {
+        let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "peek", "subject": outside })).await;
+        assert!(error && said.contains("isn't a file of the project"), "{outside}: {said}");
+    }
     // Code lasts: nothing of it was logged.
     assert!(state.tags.tags.find("here").unwrap().on.iter().all(|t| t.kept.is_none()));
 }
