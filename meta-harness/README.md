@@ -468,27 +468,53 @@ all of them:
   `shell.drive` in `.nah/access.toml`.
 
 - **Tags:** names you give things, to find them again and to point agents
-  at them. `M` tags what the cursor is on (in a terminal: a command, on
-  its prompt's line; else the line, or the lines selected, 200 at most):
-  pick a tag (found as search finds, by name then by note) or type a new
-  name (letters, digits, `-` and `_`); the next of the theme's tag
-  colours (`tag_0`…`tag_7`) is its colour. Each tag shows as a chip on
-  what it's on, wherever that's drawn. `g T` goes to something tagged:
-  the tag, then (on several things) which one, through the jump list;
-  `] t`/`[ t` step through the rest of a tag's things from one of them.
-  The Tags buffer (`Space b T`) lists every tag, its note and what it's
-  on (each thing's name, what it said when tagged, what it says now when
-  that changed or it's gone, who tagged it); there you rename, recolour,
-  note, take a tag off a thing and delete one, and Enter goes to a thing.
-  In a prompt, `#name` hands the agent what that tag is on, as it is
-  now, after your message (the chat shows what it got). Tags are a
-  project server's, kept in its state database with what each thing said
-  when tagged; lines keep their tags when they're laid out anew, a shell
-  started again keeps what its earlier lines said. Agents read tags with
-  `view.read`; tagging, taking off and editing need `tags.edit` (the
-  lead's, sub-slots' and workers' by default). Who changed what is kept
-  in the activity record. A terminal's lines and commands are the first
-  things that can be tagged.
+  at them. A tag only points: what it's on is its owner's (the terminals,
+  the chats, the code), which says what it is and gives it back.
+  - **What can be tagged**, narrowest first, the usual one marked: in a
+    terminal, a line, then the command it's in (a command with all its
+    output, the usual), or exactly the lines selected; in a chat, a
+    message (the usual), then its turn (your message, the answer, a line
+    per tool call); in the code, the line, then the definitions it's in
+    (the innermost, the usual); in the outline and the graph, the
+    component. `M` opens the tag picker: its top line says what's tagged,
+    `Tab` picks the next of the things there; pick a tag (found as search
+    finds, by name then by note) or type a new name (letters, digits, `-`
+    and `_`; its colour the theme's least used, `tag_0`…`tag_7`).
+  - **Where tags show:** a gutter down the left of a view's content (a bar
+    in the tag's colour beside each tagged thing's rows, a column per tag,
+    more tags than columns sharing the last one, muted; never drawn over
+    the content), its tags named on hover or a long press; the panel's
+    top line names the tags on what the cursor's on, each with a solid
+    tag in its colour.
+  - **Going to them:** `g T` goes to something tagged (the tag, then which
+    of its things), through the jump list; `] t`/`[ t` step through the
+    rest of a tag's things from one of them.
+  - **Editing them**, from any view, the tags on what the cursor's on
+    (several: which first): rename (`Space k r`), colour (`Space k c`),
+    note (`Space k n`, the field starting with the note there is), clear
+    the note (`Space k x`), take off (`Space k o`). The Tags buffer
+    (`Space b T`) lists every tag folded to a line (a solid tag, its name,
+    how many things, its note; `z` keys unfold, Enter too); unfolded, its
+    things (each one's name, the start of what it says, where it went,
+    who tagged it and when). Its rows carry the same edits as buttons,
+    and delete (`Space k d`); Enter on a thing goes to it. Search finds
+    things under folded tags.
+  - **In a prompt**, `#name` hands the agent what that tag is on, as it is
+    now, after your message (the chat shows what it got); typing `#` where
+    a word starts opens the tag picker and puts the name in.
+  - **What's kept:** a thing that doesn't last (a terminal's output, a
+    chat's message or turn) is written to the tags' own logs when it's
+    tagged (`.nah/state/tagged/`, the server's user's only; a command
+    still running, all it prints until it ends), and read back from there
+    once it's gone from where it was; the state database keeps where, never
+    the text. Code lasts: tagged lines are kept at a snapshot of the files
+    and kept where they are as lines before them come and go (said as
+    changed when they change); a tagged definition is followed by the
+    index. Lines keep their tags when a terminal lays them out anew.
+  - **Agents** read tags with `view.read` (`tags`, `tag_read`, `tag_find`
+    to search what tagged things say); tagging, taking off and editing
+    need `tags.edit` (the lead's, sub-slots' and workers' by default). Who
+    changed what is kept in the activity record.
 
 - **Talk to the agent:** `t` shows the lead's chat in the quick look,
   typing, over whatever is on screen; Enter sends to the lead's session
@@ -768,7 +794,7 @@ away and rebuilt when the reader changes.
 | Cockpit | `cockpit_read`, `cockpit_actions`, `cockpit_run`, `cockpit_click`, `cockpit_type`, `cockpit_keys` (only while you let agents drive it) |
 | Slots | the lead's: `slot_list`, `slot_read`, `slot_start`, `slot_close`, `slot_send` (optionally waiting for the answer); a sub-slot's: `tell_lead` (the user sees it too); any slot's: `tell_user` |
 | Terminals | `terminals`, `terminal_read` (a screen, with scrollback, and the last ten commands; `numbered`: each row with its line's number; `command`: one command's whole output); `terminal_type` (text and keys) only for a role given `shell.drive`, which none has by default |
-| Tags | `tags` (each tag, how many things, its note), `tag_read` (what a tag is on: each thing's name, what it says now and said when tagged, who tagged it); `tag`, `untag` (a thing by its name: `terminal t1 command 3`, `terminal t1 lines 120-124`) and `tag_edit` (rename, recolour, note, delete) for a role given `tags.edit` |
+| Tags | `tags` (each tag, how many things, its note), `tag_read` (what a tag is on: each thing's name, who tagged it, where it is and the start of what it says; one thing whole, by `lines`, or `full` with a chat turn's tool output), `tag_find` (search what tagged things say); `tag`, `untag` (a thing by its name: `terminal t1 command 3`, `terminal t1 lines 120-124`, `chat lead turn 3 message 2`, `src/a.rs lines 10-12`, `component <id>`) and `tag_edit` (rename, recolour, note, delete) for a role given `tags.edit` |
 
 Every result ends with next steps, given in dependency order.
 
@@ -835,7 +861,7 @@ is approved, verified or built. It's saved in `.nah/plans/` like any plan.
 | `nah-changes` | the project's changes, from git: what a comparison (two of the last commit, the staged files, the files, any commit, a snapshot) changes, one file's changes, where they are on the files now; snapshots of the files kept as commits of their own (`refs/nah/snapshots/`). Reads the repository and never changes it |
 | `nah-timeline` | the timeline: a snapshot whenever a session's turn starts or ends (from the event stream), the windows between them and who was working, each turn's changes; kept in the state database, let go by policy |
 | `nah-terminal` | terminals: a shell in a pseudo-terminal (`portable-pty`) with its screen kept by an emulator (`alacritty_terminal`): what changed since a reader last looked, the scrollback and searching it, keys as the bytes a program expects, its title, bell, finished commands (bash and zsh marked by a start-up hook) and end. Knows nothing of the server or the cockpit |
-| `nah-tags` | tags: names given to things in the project (a terminal's lines or commands so far), each kept with its owner's name for it and what it said when tagged; kept in the state database (each change with who made it), told on the event stream; what a subject is called and says now, and where it moved, is its owner's to tell (`Resolve`, registered as it's made); `#name` in a prompt expanded |
+| `nah-tags` | tags: names given to things in the project (a terminal's lines and commands, a chat's messages and turns, code lines and components), each kept with its owner's name for it; kept in the state database (each change with who made it, never a thing's text), told on the event stream; what a subject is called and says, where it is and whether it lasts is its owner's to tell (`Resolve`, registered as it's made); what doesn't last is written to the tags' own logs when tagged; `#name` in a prompt expanded |
 | `nah-state` | the project's state database (`.nah/state/state.sqlite`): what the server keeps across restarts that isn't the analysis. One server per project (a lock), explicit layouts, never thrown away |
 | `arch-store` | where the analysis is kept between runs (SQLite) |
 | `arch-search` | one way of matching what's typed: names with neo_frizbee; files and lines with fff-search |
