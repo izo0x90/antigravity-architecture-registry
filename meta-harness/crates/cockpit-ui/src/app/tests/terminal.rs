@@ -393,11 +393,22 @@ fn the_cursor_is_there_only_while_not_typing_from_the_programs_line_and_never_on
     app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1100, 1100)]);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("1100"));
-    // Where the terminal is doesn't keep it (it came back after a reload).
-    let place = app.desk.view(BufferKind::Terminal).place();
-    app.desk.view_mut(BufferKind::Terminal).leave();
+    // Its place keeps the line (a jump, a mark go back to it); what's kept
+    // across a reload doesn't (the cursor doesn't come back by itself).
+    let (place, kept) = (app.desk.view(BufferKind::Terminal).place(), app.desk.view(BufferKind::Terminal).kept_place());
+    app.desk.view_mut(BufferKind::Terminal).motion(crate::nav::Motion::Last, 1);
     app.desk.view_mut(BufferKind::Terminal).restore(&place);
+    assert_eq!(cursor(&app).as_deref(), Some("1100"));
+    app.desk.view_mut(BufferKind::Terminal).leave();
+    app.desk.view_mut(BufferKind::Terminal).restore(&kept);
     assert_eq!(cursor(&app), None);
+    // A place whose line went since: the nearest there is, said.
+    app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1200, 1150)]);
+    frame(&ctx, &mut app, vec![]);
+    app.desk.view_mut(BufferKind::Terminal).restore(&place);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(cursor(&app).as_deref(), Some("1150"));
+    assert!(app.note.as_deref().is_some_and(|n| n.contains("the nearest line")), "{:?}", app.note);
 }
 
 /// A screen from line `top` with the shell's `commands` on it.
@@ -572,6 +583,17 @@ fn next_and_previous_go_through_the_tag_stepped_last_and_a_tag_on_lines_is_on_ea
         frame(&ctx, &mut app, vec![]);
         assert_eq!(cursor(&app).as_deref(), Some(at), "{keys_}");
     }
+    // Each a jump: ctrl+o goes back through them, line by line; ctrl+i forward.
+    for (key, at) in [(egui::Key::O, "1010"), (egui::Key::O, "1019"), (egui::Key::O, "1010"), (egui::Key::I, "1019")] {
+        ctrl(&ctx, &mut app, key);
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(cursor(&app).as_deref(), Some(at), "{key:?}");
+    }
+    for _ in 0..2 {
+        ctrl(&ctx, &mut app, egui::Key::I);
+    }
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(cursor(&app).as_deref(), Some("1019"));
     // On a line with both tags: the one stepped last (not the first by name).
     keys(&ctx, &mut app, "jj");
     assert_eq!(cursor(&app).as_deref(), Some("1021"));
@@ -671,10 +693,14 @@ fn a_go_to_a_tag_picks_the_tag_then_the_thing_lands_in_another_terminal_and_come
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("410"));
     assert_eq!(app.input_mode, InputMode::Normal, "landing on lines to look at them doesn't start typing");
-    // ctrl+o: back in the terminal it was in.
+    // ctrl+o: back where it was (its line, once its lines come again).
     ctrl(&ctx, &mut app, egui::Key::O);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.desk.terminal().target(), Some(Target::Terminal(harness_contracts::TerminalId::new("t1"))));
+    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![])]);
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(cursor(&app).as_deref(), Some("1023"));
     // A tag on a closed terminal's command: said, and nothing moves.
     keys(&ctx, &mut app, "gT");
     keys(&ctx, &mut app, "old");

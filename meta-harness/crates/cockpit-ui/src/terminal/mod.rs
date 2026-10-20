@@ -118,12 +118,15 @@ pub struct TerminalBuffer {
     grid: Option<egui::Rect>,
 }
 
-/// Where it is: the terminal. (Not its cursor: a line's number is only
-/// the shell's it was given in, and the cursor is there only while not
-/// typing; kept, it came back after a reload.)
+/// Where it is: the terminal, and the line its cursor's on while it isn't
+/// typed in (with the start of its shell it's in: a line's number is only
+/// that start's). Kept across a reload without the line: the cursor comes
+/// back only when it's gone back to (a jump, a mark).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TermPlace {
     id: Option<TerminalId>,
+    #[serde(default)]
+    at: Option<(u64, u64)>,
 }
 
 impl TerminalBuffer {
@@ -160,12 +163,18 @@ impl TerminalBuffer {
             return;
         }
         self.going_to = None;
-        match line.filter(|_| shell == self.lines.shell()).and_then(|l| l.checked_sub(self.lines.first())) {
+        let (first, end) = (self.lines.first(), self.lines.end());
+        match line.filter(|_| shell == self.lines.shell() && end > first) {
             // The cursor there (a move to where it already is moves nothing),
-            // in view.
-            Some(at) => {
-                self.cursor = Some(self.lines.first() + at);
-                self.go(Go::To(at as usize, crate::viewport::Show::Middle));
+            // in view; its line gone (cleared, past what's kept), the
+            // nearest there is, said.
+            Some(line) => {
+                let near = line.clamp(first, end - 1);
+                if near != line {
+                    self.said = Some("It's gone from the terminal (its lines went): the nearest line there is.".into());
+                }
+                self.cursor = Some(near);
+                self.go(Go::To((near - first) as usize, crate::viewport::Show::Middle));
             }
             None => self.said = Some("It's gone from the terminal (an earlier start of its shell, or its lines went).".into()),
         }
@@ -425,16 +434,29 @@ impl Navigable for TerminalBuffer {
     }
 
     fn place(&self) -> Place {
-        Place::of(&TermPlace { id: self.id.clone() })
+        Place::of(&TermPlace { id: self.id.clone(), at: self.cursor.filter(|_| self.lines.shell() != 0).map(|line| (self.lines.shell(), line)) })
+    }
+
+    fn kept_place(&self) -> Place {
+        Place::of(&TermPlace { id: self.id.clone(), at: None })
     }
 
     fn place_in_words(&self, place: &Place) -> String {
-        place.read::<TermPlace>().and_then(|p| p.id).map(|id| format!("terminal {id}")).unwrap_or_default()
+        match place.read::<TermPlace>() {
+            Some(TermPlace { id: Some(id), at: Some((_, line)) }) => format!("terminal {id} line {line}"),
+            Some(TermPlace { id: Some(id), at: None }) => format!("terminal {id}"),
+            _ => String::new(),
+        }
     }
 
+    /// The terminal; its line, when it had one (as a go-to lands there).
     fn restore(&mut self, place: &Place) {
-        if let Some(id) = place.read::<TermPlace>().and_then(|p| p.id) {
-            self.show(id);
+        let Some(TermPlace { id: Some(id), at }) = place.read::<TermPlace>() else { return };
+        match at {
+            Some((shell, line)) => {
+                let _ = self.show_target(&Target::TerminalLines { terminal: id, shell, first: line, last: line });
+            }
+            None => self.show(id),
         }
     }
 

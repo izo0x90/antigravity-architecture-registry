@@ -679,6 +679,13 @@ pub trait Navigable {
     /// Where the view is now.
     fn place(&self) -> Place;
 
+    /// Where it is as kept across a reload (the saved layout; a new buffer
+    /// of its kind starts there): its place, unless some of it shouldn't
+    /// come back then (a terminal's cursor).
+    fn kept_place(&self) -> Place {
+        self.place()
+    }
+
     /// Goes back to a place it reported (a jump, a mark).
     fn restore(&mut self, place: &Place);
 

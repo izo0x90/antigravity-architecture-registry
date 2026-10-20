@@ -20,7 +20,7 @@ impl CockpitApp {
         if self.desk.ensure(buffer) {
             self.desk.share();
             if buffer.id != crate::quick_look::PANE {
-                let place = self.desk.view(buffer.kind).place();
+                let place = self.desk.view(buffer.kind).kept_place();
                 self.desk.fresh.push((buffer, place));
             }
         }
@@ -129,7 +129,7 @@ impl CockpitApp {
 
     /// Where `buffer` is.
     pub(super) fn place_of(&self, buffer: BufferId) -> Option<Place> {
-        self.desk.buffer(buffer).map(|b| b.place())
+        self.desk.buffer(buffer).map(|b| b.kept_place())
     }
 
     /// The view the keys go to: the quick look's, while it's open (its
