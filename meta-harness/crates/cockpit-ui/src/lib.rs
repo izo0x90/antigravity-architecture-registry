@@ -9,6 +9,7 @@ pub mod code;
 pub mod panels;
 pub mod config;
 pub mod diff;
+pub mod discussions;
 pub mod feedback;
 pub mod graph;
 pub mod inbox;

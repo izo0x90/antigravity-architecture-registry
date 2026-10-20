@@ -14,7 +14,7 @@ async fn every_tool_works_through_the_mcp_endpoint() {
     assert_eq!(init["result"]["serverInfo"]["name"], "nah-architecture");
     let tools = mcp.rpc("tools/list", json!({})).await;
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for expected in ["ingest", "list_types", "search", "inspect", "view", "changes", "navigate", "plan_list", "plan_create", "plan_import", "plan_edit", "plan_validate", "contract", "verify", "run_tools", "review", "review_comments", "answer_comment", "reply_comment"] {
+    for expected in ["ingest", "list_types", "search", "inspect", "view", "changes", "navigate", "plan_list", "plan_create", "plan_import", "plan_edit", "plan_validate", "contract", "verify", "run_tools", "review"] {
         assert!(names.contains(&expected), "{expected} in {names:?}");
     }
     assert!(!names.iter().any(|n| n.contains("approve")), "agents can't approve");
@@ -146,22 +146,14 @@ async fn tools_report_failures_as_errors_the_agent_can_act_on() {
     for (tool, args, expected) in [
         ("run_tools", json!({ "plan": "nope" }), "not found"),
         ("review", json!({ "plan": "nope", "id": "rust:sample::run" }), "not found"),
-        ("review_comments", json!({ "plan": "nope" }), "not found"),
-        ("answer_comment", json!({ "plan": "nope", "comment": "c1", "answer": "x" }), "not found"),
-        ("reply_comment", json!({ "plan": "nope", "comment": "c1", "text": "x" }), "not found"),
         ("plan_edit", json!({ "plan": "../x", "ops": [] }), "invalid"),
         ("inspect", json!({ "id": "rust:nothing::here" }), "not found"),
     ] {
         let (err, text) = mcp.tool(tool, args).await;
         assert!(err && text.to_lowercase().contains(expected), "{tool}: {text}");
     }
-    // A real plan, but a comment that doesn't exist.
     let (err, _) = mcp.tool("plan_create", json!({ "id": "p", "title": "P" })).await;
     assert!(!err);
-    let (err, text) = mcp.tool("answer_comment", json!({ "plan": "p", "comment": "c9", "answer": "x" })).await;
-    assert!(err && text.contains("c9"), "{text}");
-    let (err, text) = mcp.tool("reply_comment", json!({ "plan": "p", "comment": "c9", "text": "x" })).await;
-    assert!(err && text.contains("c9"), "{text}");
     // Ready work over REST, in dependency order.
     let (status, body) = common::http(addr, "GET", "/api/arch/plans/p/next?action=build", None).await;
     assert_eq!((status, body.as_str()), (200, "[]"));
@@ -279,15 +271,15 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     let service = &state.project.mcp_state.service;
     let as_role = |role: &str| McpCaller { principal: Principal::agent(role), slot: None, label: role.into() };
     let names = |who: &Principal| service.tools_for(who).iter().map(|t| t.name.clone()).collect::<Vec<_>>();
-    let reads = ["ingest", "list_types", "search", "inspect", "view", "changes", "plan_list", "contract", "review_comments", "cockpit_read", "cockpit_actions", "terminals", "terminal_read", "tags", "tag_read", "tag_find"];
+    let reads = ["ingest", "list_types", "search", "inspect", "view", "changes", "plan_list", "contract", "cockpit_read", "cockpit_actions", "terminals", "terminal_read", "tags", "tag_read", "tag_find"];
     assert!(names(&Principal::agent("external")).is_empty(), "an agent with no key: nothing, unless a project grants it");
     // The slots' tools come before the terminals', the tags' after them.
     let mut sub = reads.map(String::from).to_vec();
-    sub.splice(11..11, ["tell_lead".into(), "tell_user".into()]);
+    sub.splice(10..10, ["tell_lead".into(), "tell_user".into()]);
     sub.extend(["tag", "untag", "tag_edit"].map(String::from));
     assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, reports to the lead and the user, and tags");
     let lead = names(&Principal::agent("lead"));
-    assert!(lead.len() == 39 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself and typing into terminals: {lead:?}");
+    assert!(lead.len() == 36 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself and typing into terminals: {lead:?}");
     assert!(!lead.contains(&"terminal_type".to_owned()), "typing into the user's terminals is no role's unless granted");
     assert!(names(&Principal::Anonymous).is_empty());
 

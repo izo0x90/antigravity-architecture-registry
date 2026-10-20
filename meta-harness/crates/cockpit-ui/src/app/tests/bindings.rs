@@ -191,7 +191,7 @@ fn question_mark_lists_this_views_keys_grouped_and_searchable() {
     assert!(app.key_sheet.is_some());
     let text = texts(&frame(&ctx, &mut app, vec![]));
     // A section per layer of where you are: this panel first.
-    for expected in ["Keys", "Spec", "Navigate", "Go to", "Act", "g d", "Go to its code", "Comment on this item", "J", "Next section"] {
+    for expected in ["Keys", "Spec", "Navigate", "Go to", "Act", "g d", "Go to its code", "Ask about this item", "J", "Next section"] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
     // Its panel's own and everywhere's follow (found by filtering).
@@ -348,8 +348,8 @@ fn enter_and_backspace_are_only_offered_where_they_act() {
     // Spec: on a comment, reply leads the bar.
     focus(&ctx, &mut app, BufferKind::Spec);
     let step = ComponentId::new("rust:a::step");
-    app.desk.spec_mut().comments = vec![crate::review::tests::comment(1, arch_graph::CommentAnchor::Section { id: step, section: "logic".into() }, arch_graph::CommentStatus::Open)];
-    app.desk.spec_mut().move_to("logic#Comment(CommentId(\"c1\"))");
+    app.desk.spec_mut().comments = vec![crate::review::tests::discussion(1, crate::review::tests::on(&step, Some("logic")), harness_contracts::DiscussionStatus::Open)];
+    app.desk.spec_mut().move_to("logic#Comment(DiscussionId(\"d1\"))");
     let bound = app.bound_actions();
     let bar: Vec<String> = app.bar_keys(&bound).into_iter().map(|b| b.action.id.clone()).collect();
     assert_eq!(bar.first().map(String::as_str), Some("spec.reply"), "{bar:?}");

@@ -89,11 +89,23 @@ pub struct Found {
     pub text: String,
 }
 
+/// A discussion brought in whole (`Discussions::bring`): what it's on, as
+/// it stood, its messages (when each was said, as it was).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Brought {
+    pub on: Subject,
+    pub kind: DiscussionKind,
+    pub by: String,
+    pub asked: String,
+    pub status: DiscussionStatus,
+    pub said: Vec<Said>,
+}
+
 /// Who changed a discussion, and how (kept with the change).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
     pub by: String,
-    /// `started`, `said`, `answered`, `settled`, `reopened`, `made a change request`, `deleted`.
+    /// `started`, `said`, `answered`, `settled`, `reopened`, `made a change request`, `deleted`, `brought in`.
     pub action: &'static str,
     /// What it's on, and what was done.
     pub detail: String,
@@ -279,12 +291,17 @@ impl Discussions {
 
     /// A message written to the files: where it is.
     fn write(&self, id: &DiscussionId, what: &str, by: &str, kind: SaidKind, body: &str) -> Result<Kept, DiscussionError> {
+        self.write_at(id, what, by, kind, body, &now_words())
+    }
+
+    /// A message written to the files, said `when`: where it is.
+    fn write_at(&self, id: &DiscussionId, what: &str, by: &str, kind: SaidKind, body: &str, when: &str) -> Result<Kept, DiscussionError> {
         let header = format!("discussion {id} · {what} · {} by {by} · {}", match kind {
             SaidKind::Message => "said",
             SaidKind::Answer => "answered",
             SaidKind::Settled => "settled",
             SaidKind::Reopened => "reopened",
-        }, now_words());
+        }, when);
         self.said.write(&header, body).map_err(|e| DiscussionError::Store(e.to_string()))
     }
 
@@ -442,6 +459,72 @@ impl Discussions {
         stored.status = DiscussionStatus::Open;
         let what = discussion.on.what.clone();
         self.keep(&mut held, discussion, stored, &Change { by: by.to_owned(), action: "made a change request", detail: format!("{id} on {what}") })
+    }
+
+    /// Discussions brought in whole, as they stood where they were kept
+    /// before (a plan's comments): all of them, or none (an error). Their
+    /// things are taken as they're named, there now or not (things kept
+    /// for good: nothing is logged); `from` says where they were.
+    pub fn bring(&self, brought: Vec<Brought>, from: &str) -> Result<Vec<Discussion>, DiscussionError> {
+        let mut made: Vec<(Discussion, Stored)> = Vec::new();
+        let undo = |made: &[(Discussion, Stored)]| {
+            for (_, stored) in made {
+                for said in &stored.said {
+                    self.said.remove(&said.text.file);
+                }
+            }
+        };
+        for b in brought {
+            if b.said.is_empty() {
+                undo(&made);
+                return Err(DiscussionError::Invalid("a discussion brought in says something".into()));
+            }
+            let id = match self.store.number() {
+                Ok(n) => DiscussionId::new(format!("d{n}")),
+                Err(e) => {
+                    undo(&made);
+                    return Err(DiscussionError::Store(e));
+                }
+            };
+            let what = self.things.name(&b.on).unwrap_or_else(|| b.on.name(&harness_contracts::Known::default()));
+            let on = Named { subject: b.on, what };
+            let mut stored = Stored { id: id.clone(), on: on.clone(), kept: None, kind: b.kind, by: b.by.clone(), asked: b.asked.clone(), status: b.status, said: Vec::new() };
+            for said in &b.said {
+                let when = httpdate::fmt_http_date(std::time::UNIX_EPOCH + std::time::Duration::from_millis(said.at_ms));
+                match self.write_at(&id, &on.what, &said.by, said.kind, &said.text, &when) {
+                    Ok(text) => stored.said.push(StoredSaid { by: said.by.clone(), at_ms: said.at_ms, kind: said.kind, text, changed: said.changed.clone() }),
+                    Err(e) => {
+                        undo(&made);
+                        for s in &stored.said {
+                            self.said.remove(&s.text.file);
+                        }
+                        return Err(e);
+                    }
+                }
+            }
+            let discussion = Discussion { id, on, kept: None, kind: b.kind, by: b.by, asked: b.asked, status: b.status, said: b.said };
+            made.push((discussion, stored));
+        }
+        let mut held = lock(&self.held);
+        for (at, (discussion, stored)) in made.iter().enumerate() {
+            let change = Change { by: stored.by.clone(), action: "brought in", detail: format!("{} on {}, from {from}", stored.id, stored.on.what) };
+            if let Err(e) = self.store.put(stored, Some(&change)) {
+                // None of them, then.
+                for (_, kept) in &made[..at] {
+                    let _ = self.store.remove(kept, &Change { by: kept.by.clone(), action: "not brought in", detail: e.clone() });
+                    held.remove(&kept.id);
+                }
+                drop(held);
+                undo(&made);
+                return Err(DiscussionError::Store(e));
+            }
+            held.insert(stored.id.clone(), Held { discussion: discussion.clone(), stored: stored.clone() });
+        }
+        drop(held);
+        for (discussion, _) in &made {
+            self.hub.publish(ClientEvent::DiscussionUpdated { discussion: discussion.clone() });
+        }
+        Ok(made.into_iter().map(|(d, _)| d).collect())
     }
 
     /// The user deletes discussion `id`: its messages' text and what the

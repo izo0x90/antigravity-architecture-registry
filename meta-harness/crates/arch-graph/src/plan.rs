@@ -213,9 +213,6 @@ pub struct Plan {
     /// to-dos): a review plan's whole content; any plan may have some.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<Item>,
-    /// Review comments and change requests, with their answers.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub comments: Vec<crate::Comment>,
     /// The plan as the user last reviewed it (what the review diff is against).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_review: Option<crate::ReviewSnapshot>,
@@ -236,7 +233,6 @@ impl Plan {
             approvals: Vec::new(),
             workflows: Vec::new(),
             items: Vec::new(),
-            comments: Vec::new(),
             last_review: None,
         }
     }

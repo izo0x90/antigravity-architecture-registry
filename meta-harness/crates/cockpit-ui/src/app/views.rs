@@ -67,6 +67,6 @@ impl CockpitApp {
         let shown = self.desk.panels.kinds().contains(&BufferKind::Changes) || self.quick_look.as_ref().is_some_and(|q| q.kind() == BufferKind::Changes);
         self.desk.shared.changes.tick(&self.desk.net, ctx, shown, self.config.changes.refresh_s);
         let plan = self.desk.shared.source.get().plan().cloned();
-        self.desk.shared.review.tick(&self.desk.net, ctx, plan.as_ref());
+        self.desk.shared.review.tick(&self.desk.net, ctx, plan.as_ref(), &self.desk.shared.discussions.get());
     }
 }

@@ -4,8 +4,8 @@
 use crate::cockpit::{Needs, can};
 use std::sync::Arc;
 
-use arch_graph::{Comment, CommentId, ComponentId, PlanId, Requester, Source, Stage, ViewRequest};
-use arch_service::{Actor, ArchitectureService, NewComment, PlanOp, ServiceError};
+use arch_graph::{ComponentId, PlanId, Requester, Source, Stage, ViewRequest};
+use arch_service::{Actor, ArchitectureService, PlanOp, ServiceError};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -74,10 +74,6 @@ pub fn routes() -> Router<ProjectState> {
         .route("/api/arch/plans/{plan}/components/{id}/approve", post(approve))
         .route("/api/arch/plans/{plan}/tools", post(run_tools))
         .route("/api/arch/plans/{plan}/components/{id}/review", post(review))
-        .route("/api/arch/plans/{plan}/comments", get(list_comments).post(add_comment))
-        .route("/api/arch/plans/{plan}/comments/{comment}/replies", post(reply_comment))
-        .route("/api/arch/plans/{plan}/comments/{comment}/accept", post(accept_comment))
-        .route("/api/arch/plans/{plan}/comments/{comment}/reopen", post(reopen_comment))
         .route("/api/arch/plans/{plan}/reviewed", post(mark_reviewed))
         .route("/api/arch/plans/{plan}/diff", get(review_diff))
 }
@@ -410,7 +406,7 @@ async fn review(_: Needs<can::CodeCheck>, State(state): State<ProjectState>, Pat
     Ok(Json(blocking(&state.arch, move |a| a.review(&plan, &ComponentId::new(id))).await?))
 }
 
-/// The cockpit's user, as named in the request (comments and approvals are theirs).
+/// The cockpit's user, as named in the request (reviews and approvals are theirs).
 fn user(by: &str) -> Result<Actor, ArchError> {
     let name = by.trim();
     if name.is_empty() {
@@ -420,59 +416,8 @@ fn user(by: &str) -> Result<Actor, ArchError> {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CommentsQuery {
-    /// Include resolved comments too.
-    #[serde(default)]
-    all: bool,
-}
-
-async fn list_comments(_: Needs<can::ViewRead>, State(state): State<ProjectState>, Path(plan): Path<String>, Query(q): Query<CommentsQuery>) -> ArchResult<Vec<Comment>> {
-    let plan = plan_id(&plan)?;
-    Ok(Json(blocking(&state.arch, move |a| a.comments(&plan, q.all)).await?))
-}
-
-#[derive(Deserialize)]
-struct NewCommentBody {
-    #[serde(flatten)]
-    comment: NewComment,
-    by: String,
-}
-
-async fn add_comment(_: Needs<can::PlansApprove>, State(state): State<ProjectState>, Path(plan): Path<String>, Json(body): Json<NewCommentBody>) -> ArchResult<Comment> {
-    let plan = plan_id(&plan)?;
-    let actor = user(&body.by)?;
-    Ok(Json(blocking(&state.arch, move |a| a.add_comment(&plan, body.comment, &actor)).await?))
-}
-
-#[derive(Deserialize)]
-struct TextBody {
-    #[serde(default)]
-    text: String,
-    by: String,
-}
-
-async fn reply_comment(_: Needs<can::PlansApprove>, State(state): State<ProjectState>, Path((plan, comment)): Path<(String, String)>, Json(body): Json<TextBody>) -> ArchResult<Comment> {
-    let plan = plan_id(&plan)?;
-    let actor = user(&body.by)?;
-    Ok(Json(blocking(&state.arch, move |a| a.reply(&plan, &CommentId(comment), &body.text, &actor)).await?))
-}
-
-#[derive(Deserialize)]
 struct ByBody {
     by: String,
-}
-
-async fn accept_comment(_: Needs<can::PlansApprove>, State(state): State<ProjectState>, Path((plan, comment)): Path<(String, String)>, Json(body): Json<ByBody>) -> ArchResult<Comment> {
-    let plan = plan_id(&plan)?;
-    let actor = user(&body.by)?;
-    Ok(Json(blocking(&state.arch, move |a| a.accept_comment(&plan, &CommentId(comment), &actor)).await?))
-}
-
-async fn reopen_comment(_: Needs<can::PlansApprove>, State(state): State<ProjectState>, Path((plan, comment)): Path<(String, String)>, Json(body): Json<TextBody>) -> ArchResult<Comment> {
-    let plan = plan_id(&plan)?;
-    let actor = user(&body.by)?;
-    Ok(Json(blocking(&state.arch, move |a| a.reopen_comment(&plan, &CommentId(comment), &body.text, &actor)).await?))
 }
 
 async fn mark_reviewed(_: Needs<can::PlansApprove>, State(state): State<ProjectState>, Path(plan): Path<String>, Json(body): Json<ByBody>) -> ArchResult<arch_graph::ReviewSnapshot> {

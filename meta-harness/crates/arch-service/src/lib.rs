@@ -29,9 +29,9 @@ pub use queue::{BriefContext, Outcome, Queue, QueueConfig, QueueSettings, job_fo
 pub use progress::{Action, Downgrade, cascade, next_actionable, topological};
 pub use arch_graph::ComponentDetail;
 pub use review::{ReviewNote, ReviewProvider, ReviewRequest, ReviewRun, ReviewerCatalog, ReviewerDef, ReviewerKind, ReviewsReport, Rule};
-pub use service::{Actor, ArchitectureService, Blocker, IngestReport, NewComment, Refresh, Reverified, Verification, affected, approval_blocker, only_changes};
+pub use service::{Actor, ArchitectureService, Blocker, IngestReport, Refresh, Reverified, Verification, affected, only_changes};
 pub use tools::{Invocation, LogicChecks, ProcessRunner, ToolCatalog, ToolDef, ToolOutput, ToolRun, ToolRunner, ToolsReport};
-pub use store::{FsPlans, MemoryPlans, PlanRepository, cache_dir, open_facts, state_dir, store_settings, temporary_facts};
+pub use store::{FsPlans, MemoryPlans, Mover, PlanRepository, cache_dir, open_facts, state_dir, store_settings, temporary_facts};
 pub use arch_store::SqliteStore;
 pub use chain::chain;
 pub use checks::{CheckCx, blocking_for, check_plan, is_data_type, missing_details, schema_set, stage_gate};

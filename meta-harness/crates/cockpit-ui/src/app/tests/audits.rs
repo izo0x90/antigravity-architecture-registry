@@ -26,7 +26,7 @@ fn what_the_audit_found_stays_fixed() {
     focus(&ctx, &mut app, BufferKind::Spec);
     app.desk.spec_mut().source = Source::Code;
     frame(&ctx, &mut app, key("c"));
-    assert!(app.note.as_deref().unwrap_or_default().contains("pick one in the graph"), "{:?}", app.note);
+    assert!(app.note.as_deref().unwrap_or_default().contains("pick a plan in the graph"), "{:?}", app.note);
     assert_eq!(app.input_mode, InputMode::Normal);
     // z o on a card with nothing more under it says why too.
     focus(&ctx, &mut app, BufferKind::Graph);
@@ -62,7 +62,7 @@ fn what_the_final_audit_found_stays_fixed() {
     // The review point belongs to its component: moving on forgets it.
     focus(&ctx, &mut app, BufferKind::Spec);
     let step = ComponentId::new("rust:a::step");
-    app.desk.spec_mut().comments = vec![crate::review::tests::comment(1, arch_graph::CommentAnchor::Section { id: step.clone(), section: "logic".into() }, arch_graph::CommentStatus::Open)];
+    app.desk.spec_mut().comments = vec![crate::review::tests::discussion(1, crate::review::tests::on(&step, Some("logic")), harness_contracts::DiscussionStatus::Open)];
     app.desk.spec_mut().step_point(true);
     assert!(app.desk.spec().actions().iter().any(|a| a.id == "spec.reply"));
     app.desk.spec_mut().show(ComponentId::new("rust:a::save"));

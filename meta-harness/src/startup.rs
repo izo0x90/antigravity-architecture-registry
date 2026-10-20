@@ -326,12 +326,18 @@ pub fn things(arch: &ArchitectureService, running_log: u64) -> Result<Arc<nah_th
 /// Discussions: kept in the state database (their messages' text in
 /// `.nah/state/discussions/`), told on the event stream, on things; a
 /// discussion is a thing too. A plan's component isn't approved while one
-/// on it isn't settled.
+/// on it isn't settled. Comments plans' files held before move in.
 pub fn discussions(arch: &Arc<ArchitectureService>, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>) -> Result<Arc<nah_discussions::Discussions>, StartError> {
     let discussions = nah_discussions::Discussions::open(state.clone(), hub.clone(), things.clone(), &arch_service::state_dir(arch.root())?.join("discussions")).map_err(|e| e.to_string())?;
     things.register(discussions.clone());
     let weak = Arc::downgrade(&discussions);
     arch.approvals_ask(Box::new(move |plan, id| weak.upgrade().and_then(|d| d.blocker(plan, id))));
+    // Comments plans' files still hold (from before discussions) move in.
+    let weak = Arc::downgrade(&discussions);
+    arch.move_comments_to(Box::new(move |plan, comments| match weak.upgrade() {
+        Some(discussions) => crate::plan_comments::move_into(&discussions, plan, comments),
+        None => Err("the discussions are closed".into()),
+    }))?;
     Ok(discussions)
 }
 

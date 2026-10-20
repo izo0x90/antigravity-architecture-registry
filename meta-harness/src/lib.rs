@@ -7,6 +7,7 @@ pub mod home;
 pub mod mcp;
 pub mod modules;
 pub mod packs;
+pub mod plan_comments;
 pub mod plan_things;
 pub mod project;
 pub mod queue;

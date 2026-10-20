@@ -7,7 +7,7 @@ name = "NAH"
 tagline = "not a harness"
 
 [user]
-# Your name on review comments, reviews and approvals.
+# Your name on reviews and approvals.
 name = "user"
 
 [keymap]
@@ -321,8 +321,9 @@ k = "Tags"
 "graph.fit_card" = { leader = "g Z", keys = ["z f"] }
 
 # Spec view (when focused). j/k walk every item; J/K (and ]] / [[) jump
-# between sections. Review: comment on (or ask for a change to) the item
-# under the cursor; on a review point, reply, accept or reopen it.
+# between sections. Review: ask about (or ask for a change to) the item
+# under the cursor, a discussion on it; on a discussion, reply, settle it
+# (accept its answer) or reopen it.
 "spec.next_section" = { keys = ["J"] }
 "spec.prev_section" = { keys = ["K"] }
 "spec.pin" = { keys = ["p"] }
@@ -526,7 +527,7 @@ icon = "hourglass"
 color = "warn"
 
 [status.open_comments]
-word = "open comments"
+word = "open discussions"
 icon = "chat-circle-dots"
 color = "warn"
 

@@ -870,28 +870,15 @@ impl NetClient {
         self.call("POST", &path, Some(serde_json::json!({ "to": to, "by": by })), ctx, on_done);
     }
 
-    /// A plan's review comments (unaddressed only, unless `all`).
-    pub fn arch_comments(&self, plan: &arch_graph::PlanId, all: bool, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<arch_graph::Comment>>) + Send + 'static) {
-        self.call("GET", &format!("/api/arch/plans/{}/comments?all={all}", urlencoding::encode(&plan.0)), None, ctx, on_done);
+    /// Starts a discussion on `on`: a question or a change request.
+    pub fn discussion_start(&self, on: &harness_contracts::Subject, kind: harness_contracts::DiscussionKind, text: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Discussion>) + Send + 'static) {
+        self.call("POST", "/api/discussions", Some(serde_json::json!({ "subject": on, "kind": kind, "text": text })), ctx, on_done);
     }
 
-    /// Raises a comment or change request: `body` is `{anchor, kind, text, by}`.
-    pub fn arch_add_comment(&self, plan: &arch_graph::PlanId, body: serde_json::Value, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::Comment>) + Send + 'static) {
-        self.call("POST", &format!("/api/arch/plans/{}/comments", urlencoding::encode(&plan.0)), Some(body), ctx, on_done);
-    }
-
-    /// `action` is `replies`, `accept` or `reopen`; `body` is `{text?, by}`.
-    pub fn arch_comment_action(
-        &self,
-        plan: &arch_graph::PlanId,
-        comment: &arch_graph::CommentId,
-        action: &str,
-        body: serde_json::Value,
-        ctx: egui::Context,
-        on_done: impl FnOnce(NetResult<arch_graph::Comment>) + Send + 'static,
-    ) {
-        let path = format!("/api/arch/plans/{}/comments/{}/{action}", urlencoding::encode(&plan.0), urlencoding::encode(&comment.0));
-        self.call("POST", &path, Some(body), ctx, on_done);
+    /// Acts on a discussion: `action` is `reply`, `answer`, `settle`,
+    /// `reopen` or `change`; `body` is `{text?}`.
+    pub fn discussion_act(&self, id: &harness_contracts::DiscussionId, action: &str, body: serde_json::Value, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Discussion>) + Send + 'static) {
+        self.call("POST", &format!("/api/discussions/{}/{action}", urlencoding::encode(id.as_str())), Some(body), ctx, on_done);
     }
 
     pub fn arch_mark_reviewed(&self, plan: &arch_graph::PlanId, by: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::ReviewSnapshot>) + Send + 'static) {

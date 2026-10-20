@@ -1,5 +1,5 @@
 //! What the buffers show in common, kept once on the desk: the source in
-//! use, the plan's review, the component types, the index, the user and
+//! use, the plan's review (its discussions, what changed), the component types, the index, the user and
 //! the UI settings buffers read. The shell keeps it up to date; every
 //! buffer, shown or parked, reads what it needs from it each frame
 //! (`Navigable::share`), skipping what it has (each part counts its
@@ -130,13 +130,13 @@ pub struct Seen {
 pub struct Shared {
     /// The code alone, or with one plan (what the graph used last shows).
     pub source: Kept<Source>,
-    /// The plan's comments and what changed since it was reviewed.
+    /// The plan's discussions and what changed since it was reviewed.
     pub review: ReviewState,
     /// The component types (each kind's look and its sections).
     pub types: Kept<Option<TypeSystem>>,
     /// Reading the code into the index: running, done, the files changed since.
     pub index: Kept<IndexStatus>,
-    /// The cockpit's user (who comments, approves, reviews).
+    /// The cockpit's user (who approves and reviews).
     pub user: Kept<String>,
     pub settings: Kept<Settings>,
     /// The desk's comparison and what it changes (files, components, when).
@@ -147,6 +147,8 @@ pub struct Shared {
     pub terminals: Held<crate::terminals::Terminals>,
     /// The server's tags: each one and what it's on.
     pub tags: Held<crate::tags::Tags>,
+    /// The server's discussions, each whole.
+    pub discussions: Held<crate::discussions::Discussions>,
     /// The desk's server (`here`: home's own).
     pub server: String,
     /// Every server's open notifications, in the order they're gone through.

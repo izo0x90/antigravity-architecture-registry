@@ -135,6 +135,7 @@ impl CockpitApp {
             }
             self.desk.shared.terminals.get_mut().apply(&event);
             self.desk.shared.tags.get_mut().apply(&event);
+            self.desk.shared.discussions.get_mut().apply(&event);
             self.desk.shared.agents.get_mut().apply(event);
         }
         for reply in std::mem::take(&mut *self.desk.index_inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {

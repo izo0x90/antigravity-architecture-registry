@@ -1,6 +1,6 @@
-//! The review loop through the server: the user comments and marks the plan
-//! reviewed over REST (the cockpit's side), the agent reads the points and
-//! answers them over MCP, and approval waits for the user to accept.
+//! The review through the server: a plan's parts as things, discussions on
+//! them holding approvals, a plan's old comments moved into discussions,
+//! review items.
 
 mod common;
 
@@ -17,8 +17,12 @@ fn id(s: &str) -> ComponentId {
     ComponentId::new(format!("rust:{s}"))
 }
 
+/// Comments a plan's file held before discussions did move in once, as
+/// the plan is read: each anchor its part of the plan, each comment a
+/// discussion as it stood (its replies, its answer and what that changed);
+/// the file is written without them; approvals wait on them the same.
 #[tokio::test]
-async fn comments_reach_the_agent_and_answers_come_back_for_the_user() {
+async fn a_plans_comments_become_discussions_once_and_approvals_wait_on_them_the_same() {
     let arch = fixture_architecture();
     let plan = PlanId::new("v").unwrap();
     arch.create_plan("v", "Validate", "", arch_graph::PlanKind::Change).unwrap();
@@ -37,90 +41,60 @@ async fn comments_reach_the_agent_and_answers_come_back_for_the_user() {
     )
     .unwrap();
     arch.apply(&plan, PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::validate"), order: None, ports: None, note: None, expects: None }).unwrap();
+    // The file as an earlier build wrote it: a comment of every anchor and status.
+    let file = arch.root().join(".nah/plans/v.json");
+    let mut held: Value = parse(&std::fs::read_to_string(&file).unwrap());
+    let user = json!({ "kind": "user", "name": "izo" });
+    let agent = json!({ "kind": "agent", "session": "lead" });
+    held["comments"] = json!([
+        { "id": "c1", "anchor": { "on": "component", "id": "rust:sample::validate" }, "author": user, "text": "Is it pure?", "at": "2026-10-07T00:00:00Z", "status": "open",
+          "replies": [{ "author": agent, "text": "Pure, yes.", "at": "2026-10-07T00:01:00Z" }] },
+        { "id": "c2", "anchor": { "on": "section", "id": "rust:sample::validate", "section": "overview" }, "kind": "change_request", "author": user, "text": "Say what it rejects.", "at": "2026-10-07T00:02:00Z", "status": "answered",
+          "answer": { "author": agent, "text": "It says so now.", "changes": [{ "change": "component_changed", "id": "rust:sample::validate", "fields": ["description"] }], "at": "2026-10-07T00:04:00Z" },
+          "replies": [{ "author": user, "text": "Empty only?", "at": "2026-10-07T00:03:00Z" }] },
+        { "id": "c3", "anchor": { "on": "relation", "kind": "calls", "source": "rust:sample::run", "target": "rust:sample::validate" }, "author": user, "text": "Call it first.", "at": "2026-10-07T00:05:00Z", "status": "resolved" },
+        { "id": "c4", "anchor": { "on": "plan" }, "author": user, "text": "Hold everything.", "at": "2026-10-07T00:06:00Z" }
+    ]);
+    std::fs::write(&file, serde_json::to_string_pretty(&held).unwrap()).unwrap();
+    arch.refresh(std::slice::from_ref(&file)).unwrap();
     let (addr, _state) = spawn_app_with(arch.clone()).await;
 
-    // The user reviews, then raises a change request on a spec section.
-    let (status, body) = http(addr, "POST", "/api/arch/plans/v/reviewed", Some(r#"{"by":"izo"}"#)).await;
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(parse(&body)["by"], "izo");
-    let (status, body) = http(
-        addr,
-        "POST",
-        "/api/arch/plans/v/comments",
-        Some(r#"{"anchor":{"on":"section","id":"rust:sample::validate","section":"overview"},"kind":"change_request","text":"Say what it rejects.","by":"izo"}"#),
-    )
-    .await;
-    assert_eq!(status, 200, "{body}");
-    assert_eq!((parse(&body)["id"].as_str(), parse(&body)["status"].as_str()), (Some("c1"), Some("open")));
-    let (status, _) = http(addr, "POST", "/api/arch/plans/v/comments", Some(r#"{"anchor":{"on":"plan"},"text":"x","by":" "}"#)).await;
-    assert_eq!(status, 400, "who's commenting is required");
-    let (status, body) = http(addr, "GET", "/api/arch/plans/v/comments", None).await;
-    assert_eq!((status, parse(&body).as_array().map(Vec::len)), (200, Some(1)));
+    let (_, body) = http(addr, "GET", "/api/discussions", None).await;
+    let all = parse(&body);
+    let brief: Vec<(String, String, String, String, usize)> = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| (d["id"].as_str().unwrap().to_owned(), d["on"]["what"].as_str().unwrap().to_owned(), d["kind"].as_str().unwrap().to_owned(), d["status"].as_str().unwrap().to_owned(), d["said"].as_array().unwrap().len()))
+        .collect();
+    let row = |id: &str, what: &str, kind: &str, status: &str, said| (id.to_owned(), what.to_owned(), kind.to_owned(), status.to_owned(), said);
+    assert_eq!(
+        brief,
+        [
+            row("d1", "plan v component rust:sample::validate", "question", "open", 2),
+            row("d2", "plan v component rust:sample::validate section overview", "change_request", "answered", 3),
+            row("d3", "plan v relation rust:sample::run calls rust:sample::validate", "question", "settled", 1),
+            row("d4", "plan v", "question", "open", 1),
+        ],
+        "{body}"
+    );
+    let d2 = &all[1];
+    let said: Vec<(&str, &str, &str)> = d2["said"].as_array().unwrap().iter().map(|s| (s["by"].as_str().unwrap(), s["kind"].as_str().unwrap(), s["text"].as_str().unwrap())).collect();
+    assert_eq!(said, [("user", "message", "Say what it rejects."), ("user", "message", "Empty only?"), ("agent lead", "answer", "It says so now.")], "in the order said");
+    assert_eq!(d2["said"][2]["changed"][0]["what"], "plan v component rust:sample::validate", "what the answer changed, named");
+    assert_eq!(d2["said"][0]["atMs"], 1_791_331_320_000u64, "when it was said");
+    assert!(parse(&std::fs::read_to_string(&file).unwrap()).get("comments").is_none(), "the file without them");
 
-    // Approval waits on it.
+    // Approval waits on them as it did: everything not settled on it, and the plan's.
     let (status, body) = http(addr, "POST", "/api/arch/plans/v/components/rust:sample::validate/approve", Some(r#"{"to":"arch_approved","by":"izo"}"#)).await;
     assert_eq!(status, 400);
-    assert!(body.contains("unaddressed review comments") && body.contains("c1"), "{body}");
+    assert!(body.contains("d1 on plan v component rust:sample::validate (open") && body.contains("d2 on plan v component rust:sample::validate section overview (answered") && body.contains("d4 on plan v (open"), "{body}");
+    assert!(!body.contains("d3"), "a settled one doesn't: {body}");
 
-    // The agent sees the point as structured feedback, and next steps point at it.
-    let mut mcp = Mcp::lead(addr).await;
-    let (err, text) = mcp.tool("plan_validate", json!({ "plan": "v" })).await;
-    assert!(!err && text.contains("1 open point(s) from the user (c1)"), "{text}");
-    let (err, text) = mcp.tool("review_comments", json!({ "plan": "v" })).await;
-    assert!(!err, "{text}");
-    assert!(text.contains("[c1] CHANGE REQUEST on rust:sample::validate § overview (open) by izo: Say what it rejects."), "{text}");
-    assert!(text.contains("No plan changes since the user's review"), "{text}");
-
-    // It changes the plan, sees the diff, and answers linking the change.
-    let (err, text) = mcp.tool("answer_comment", json!({ "plan": "v", "comment": "c1", "answer": "Done.", "changes": ["rust:sample::validate"] })).await;
-    assert!(err && text.contains("hasn't changed"), "answers need real changes: {text}");
-    arch.apply(&plan, PlanOp::Remove { id: id("sample::validate") }).unwrap();
-    arch.apply(
-        &plan,
-        PlanOp::AddComponent {
-            name: "validate".into(),
-            type_name: "function".into(),
-            description: "Rejects empty input.".into(),
-            parent: Some(id("sample")),
-            file: None,
-            signature: Some(arch_graph::Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] }),
-            schemas: None,
-            spec: None,
-        },
-    )
-    .unwrap();
-    arch.apply(&plan, PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::validate"), order: None, ports: None, note: None, expects: None }).unwrap();
-    let (status, body) = http(addr, "GET", "/api/arch/plans/v/diff", None).await;
-    assert_eq!(status, 200);
-    assert_eq!(parse(&body)["changes"], json!([{ "change": "component_changed", "id": "rust:sample::validate", "fields": ["description"] }]));
-    let (err, text) = mcp.tool("review_comments", json!({ "plan": "v" })).await;
-    assert!(!err && text.contains("- changed rust:sample::validate: description"), "{text}");
-    let (err, text) = mcp.tool("reply_comment", json!({ "plan": "v", "comment": "c1", "text": "Empty only, or whitespace too?" })).await;
-    assert!(!err && text.contains("1 replies"), "{text}");
-    let (err, text) = mcp.tool("answer_comment", json!({ "plan": "v", "comment": "c1", "answer": "It now says it rejects empty input.", "changes": ["rust:sample::validate"] })).await;
-    assert!(!err && text.contains("Answered c1") && text.contains("linked: changed rust:sample::validate: description"), "{text}");
-
-    // The user sees the answer, reopens once, then accepts; approval goes through.
-    let (_, body) = http(addr, "GET", "/api/arch/plans/v/comments", None).await;
-    let c1 = &parse(&body)[0];
-    assert_eq!((c1["status"].as_str(), c1["answer"]["changes"][0]["fields"][0].as_str()), (Some("answered"), Some("description")));
-    let (status, body) = http(addr, "POST", "/api/arch/plans/v/comments/c1/reopen", Some(r#"{"text":"And whitespace?","by":"izo"}"#)).await;
-    assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("open")));
-    let (err, _) = mcp.tool("answer_comment", json!({ "plan": "v", "comment": "c1", "answer": "Whitespace counts as empty.", "changes": ["rust:sample::validate"] })).await;
-    assert!(!err);
-    let (status, body) = http(addr, "POST", "/api/arch/plans/v/comments/c1/accept", Some(r#"{"by":"izo"}"#)).await;
-    assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("resolved")), "{body}");
-    let (status, body) = http(addr, "POST", "/api/arch/plans/v/comments/c1/replies", Some(r#"{"text":"Thanks.","by":"izo"}"#)).await;
-    assert_eq!(status, 200, "{body}");
-    let (status, body) = http(addr, "POST", "/api/arch/plans/v/components/rust:sample::validate/approve", Some(r#"{"to":"arch_approved","by":"izo"}"#)).await;
-    assert_eq!(status, 200, "{body}");
-    let (_, body) = http(addr, "GET", "/api/arch/plans/v/comments", None).await;
-    assert_eq!(parse(&body), json!([]), "resolved points drop out of the open list");
-    let (_, body) = http(addr, "GET", "/api/arch/plans/v/comments?all=true", None).await;
-    assert_eq!(parse(&body).as_array().map(Vec::len), Some(1));
-    // There is no agent tool to accept or approve.
-    let (err, _) = mcp.tool("accept_comment", json!({ "plan": "v", "comment": "c1" })).await;
-    assert!(err);
+    // Read again: nothing comes in twice.
+    arch.refresh(std::slice::from_ref(&file)).unwrap();
+    let (_, body) = http(addr, "GET", "/api/discussions", None).await;
+    assert_eq!(parse(&body).as_array().map(Vec::len), Some(4));
 }
 
 /// A plan's parts are things notes are on: tagged by their names, read as

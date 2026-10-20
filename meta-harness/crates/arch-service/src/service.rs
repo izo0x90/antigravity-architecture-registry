@@ -29,9 +29,8 @@ use crate::store::PlanRepository;
 use crate::tools::{ProcessRunner, ToolCatalog, ToolRunner, ToolsReport};
 use crate::{ServiceError, chain, checks, review, tools, verify};
 
-mod comments;
+mod reviewed;
 mod search;
-pub use comments::{NewComment, approval_blocker};
 
 /// Who is asking. Approvals are for users only.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +283,13 @@ impl ArchitectureService {
             held: Mutex::default(),
             discussed: std::sync::OnceLock::new(),
         })
+    }
+
+    /// Comments plans' files still hold (from before discussions) go to
+    /// `mover` (the discussion engine), now and as plans are read; each
+    /// plan's file is written without them once they've gone. Set once.
+    pub fn move_comments_to(&self, mover: crate::Mover) -> Result<(), ServiceError> {
+        self.plans.move_comments(mover)
     }
 
     /// Approvals ask `blocker` (the discussion engine) whether a
@@ -893,7 +899,7 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             if !can_transition(from, to) {
                 return Err(ServiceError::InvalidOp(format!("can't go from {from:?} to {to:?}")));
             }
-            if let Some(blocked) = approval_blocker(plan, id).or_else(|| self.discussed.get().and_then(|b| b(plan_id, id))) {
+            if let Some(blocked) = self.discussed.get().and_then(|b| b(plan_id, id)) {
                 return Err(ServiceError::InvalidOp(blocked));
             }
             // Check as if approved (location rules depend on the stage).

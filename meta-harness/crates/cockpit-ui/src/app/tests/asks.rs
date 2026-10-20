@@ -107,8 +107,8 @@ fn what_buffers_share_reaches_each_one_shown_or_parked() {
     // settings, the source.
     frame(&ctx, &mut app, vec![]);
     let save = ComponentId::new("rust:a::save");
-    app.desk.shared.review.comments = vec![crate::review::tests::comment(1, arch_graph::CommentAnchor::Component { id: save.clone() }, arch_graph::CommentStatus::Open)];
-    app.desk.shared.review.generation += 1;
+    let on_save = crate::review::tests::on(&save, None);
+    app.desk.shared.discussions.get_mut().apply(&harness_contracts::ClientEvent::DiscussionUpdated { discussion: crate::review::tests::discussion(1, on_save, harness_contracts::DiscussionStatus::Open) });
     app.desk.shared.types.set(Some(arch_graph::TypeSystem::defaults().unwrap()));
     app.desk.shared.index.set(arch_graph::IndexStatus { stale: vec!["src/a.rs".into()], ..Default::default() });
     app.config.graph.readable_zoom = 0.37;
@@ -118,7 +118,7 @@ fn what_buffers_share_reaches_each_one_shown_or_parked() {
         assert_eq!((graph.marks[&save].open, graph.ui.readable_zoom), (1, 0.37), "every graph: the badges, the settings");
     }
     for spec in app.desk.all_of::<crate::spec::SpecState>(BufferKind::Spec) {
-        assert!(spec.types.is_some() && spec.comments.len() == 1 && spec.author == "ada", "every card: types, comments, the user");
+        assert!(spec.types.is_some() && spec.comments.len() == 1 && spec.author == "ada", "every card: types, discussions, the user");
     }
     app.desk.code_mut().current_file = "src/a.rs".into();
     frame(&ctx, &mut app, vec![]);

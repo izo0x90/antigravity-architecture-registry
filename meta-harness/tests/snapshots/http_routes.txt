@@ -28,6 +28,14 @@
 /api/tags/x DELETE,GET,HEAD
 /api/tags/x/edit POST
 /api/tags/x/untag POST
+/api/discussions GET,HEAD,POST
+/api/discussions/on POST
+/api/discussions/d1 DELETE,GET,HEAD
+/api/discussions/d1/reply POST
+/api/discussions/d1/answer POST
+/api/discussions/d1/settle POST
+/api/discussions/d1/reopen POST
+/api/discussions/d1/change POST
 /api/notifications GET,HEAD
 /api/ui/shell GET,HEAD,PUT
 /api/server/shutdown POST
@@ -78,10 +86,6 @@
 /api/arch/plans/p1/components/c1/approve POST
 /api/arch/plans/p1/tools POST
 /api/arch/plans/p1/components/c1/review POST
-/api/arch/plans/p1/comments GET,HEAD,POST
-/api/arch/plans/p1/comments/k1/replies POST
-/api/arch/plans/p1/comments/k1/accept POST
-/api/arch/plans/p1/comments/k1/reopen POST
 /api/arch/plans/p1/reviewed POST
 /api/arch/plans/p1/diff GET,HEAD
 /api/arch/plans/p1/queue GET,HEAD

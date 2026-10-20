@@ -111,9 +111,9 @@ installed; the browser one runs when `NAH_FRAME_CHECK_URL` names a cockpit.
    - proposed locations;
    - logic-step check scripts and project code rules.
 4. **Approve.** Only you approve, in the cockpit: the architecture first, then
-   the detailed plan. Agents have no approval path. Comments and change
-   requests go to the agent as review points, and approval waits until you
-   accept each answer.
+   the detailed plan. Agents have no approval path. Questions and change
+   requests are discussions on the plan's parts, and approval waits until
+   you settle each one on the component.
 5. **Build.** The work queue takes each component's next job in dependency
    order: design, plan, skeleton, then implement. Each job runs in its own
    session with a brief built from templates. Design work waits for your
@@ -725,7 +725,8 @@ Views also have their own keys:
 - **Spec:**
   - `J`/`K` move between sections;
   - `c`/`C` comment on or ask for a change to the item under the cursor;
-  - `r`/`a`/`x` reply to, accept or reopen a review point.
+  - `r`/`a`/`x` reply to a discussion, settle it (accept its answer) or
+    reopen it.
 - **Queue:** `a` approve, `r` retry, `o` open the job's session.
 
 All keys are configurable in `crates/cockpit-ui/config/default.toml`,
@@ -792,7 +793,6 @@ away and rebuilt when the reader changes.
 | Explore | `ingest`, `list_types`, `search`, `inspect`, `view`, `navigate` (moves your graph: the one in the `panel` it names, else the one you used last); `search` and `view` take `changed` (`HEAD..files`, `rev:main..files`) to keep to what changed |
 | Plan | `plan_list`, `plan_create` (a change, or a walkthrough), `plan_import` (old `system_architecture.json`), `plan_edit`, `plan_validate`, `contract` |
 | Build | `verify`, `run_tools`, `review` |
-| Review | `review_comments`, `answer_comment`, `reply_comment` |
 | Cockpit | `cockpit_read`, `cockpit_actions`, `cockpit_run`, `cockpit_click`, `cockpit_type`, `cockpit_keys` (only while you let agents drive it) |
 | Slots | the lead's: `slot_list`, `slot_read`, `slot_start`, `slot_close`, `slot_send` (optionally waiting for the answer); a sub-slot's: `tell_lead` (the user sees it too); any slot's: `tell_user` |
 | Terminals | `terminals`, `terminal_read` (a screen, with scrollback, and the last ten commands; `numbered`: each row with its line's number; `command`: one command's whole output); `terminal_type` (text and keys) only for a role given `shell.drive`, which none has by default |

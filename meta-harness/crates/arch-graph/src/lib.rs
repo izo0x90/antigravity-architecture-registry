@@ -34,7 +34,7 @@ pub use queue::{Job, JobKind, JobState, QueueSnapshot, QueueStatus};
 pub use plan::{Approval, ApprovalKind, Item, ItemId, ItemState, Plan, PlanId, PlanKind, REVOKED_BY, Reference, SCHEMA_VERSION, Workflow, check_schema_version};
 pub use relation::{Provenance, Relation, RelationId, RelationKind};
 pub use schema::{Dsl, RefError, SchemaSet};
-pub use review::{Answer, Author, Change, Comment, CommentAnchor, CommentId, CommentKind, CommentStatus, PlanDiff, Reply, ReviewSnapshot};
+pub use review::{Change, PlanDiff, ReviewSnapshot};
 pub use source::Source;
 pub use report::{CodeRef, Finding, FindingCode, Report, Severity, Target};
 pub use types::{RequiredField, ResolvedType, TypeDef, TypeSystem};

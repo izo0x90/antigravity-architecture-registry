@@ -107,7 +107,7 @@ async fn rest_api_covers_views_plans_checks_contracts_verification_and_approval(
     for (method, path) in [
         ("DELETE", "/api/arch/plans/val"),
         ("POST", "/api/arch/plans/val/reviewed"),
-        ("POST", "/api/arch/plans/val/comments/c1/replies"),
+        ("POST", "/api/discussions/d1/reply"),
         ("POST", "/api/threads/t1/requests/r1"),
     ] {
         let (status, _) = http_anonymous(addr, method, path, Some(r#"{"by":"izo"}"#)).await;

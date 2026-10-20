@@ -1,11 +1,6 @@
-//! The review loop's data: comments and change requests on a plan (on a
-//! component, one of its spec sections, a relation, or the plan as a whole),
-//! the snapshot taken when the user last reviewed the plan, and the
-//! structured diff of what changed since.
-//!
-//! A comment is *addressed* only once the user resolves it: an agent's answer
-//! moves it to `answered`, and the user either accepts (`resolved`) or
-//! reopens it. Unaddressed comments on a component block its approval.
+//! The review's data: the snapshot taken when the user last reviewed a
+//! plan, and the structured diff of what changed since. (What's said about
+//! a plan's parts is in discussions, `nah-discussions`.)
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,129 +9,7 @@ use serde_json::Value;
 
 use crate::{Component, ComponentId, Plan, Reference, Relation, RelationKind, Workflow};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct CommentId(pub String);
-
-impl std::fmt::Display for CommentId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-/// What a comment is about.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "on", rename_all = "snake_case")]
-pub enum CommentAnchor {
-    /// The plan as a whole (blocks every approval in it until resolved).
-    Plan,
-    Component { id: ComponentId },
-    /// One section of a component's spec (`overview`, `signature`, `logic`, `invariants`, ...).
-    Section { id: ComponentId, section: String },
-    Relation { kind: RelationKind, source: ComponentId, target: ComponentId },
-}
-
-impl CommentAnchor {
-    /// The component it's on, if any (relations count for both ends).
-    pub fn touches(&self, id: &ComponentId) -> bool {
-        match self {
-            Self::Plan => true,
-            Self::Component { id: on } | Self::Section { id: on, .. } => on == id,
-            Self::Relation { source, target, .. } => source == id || target == id,
-        }
-    }
-
-    pub fn describe(&self) -> String {
-        match self {
-            Self::Plan => "the plan".to_owned(),
-            Self::Component { id } => id.to_string(),
-            Self::Section { id, section } => format!("{id} § {section}"),
-            Self::Relation { kind, source, target } => format!("{source} -{}-> {target}", kind.name()),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Author {
-    User { name: String },
-    Agent { session: String },
-}
-
-impl std::fmt::Display for Author {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::User { name } => f.write_str(name),
-            Self::Agent { session } if session.is_empty() => f.write_str("agent"),
-            Self::Agent { session } => write!(f, "agent ({session})"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommentKind {
-    /// A question or remark: may be answered without changing the plan.
-    #[default]
-    Comment,
-    /// The plan must change: the answer has to link the changes made.
-    ChangeRequest,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommentStatus {
-    /// Waiting for the agent.
-    #[default]
-    Open,
-    /// The agent answered; waiting for the user to accept or reopen.
-    Answered,
-    /// The user accepted the answer.
-    Resolved,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Reply {
-    pub author: Author,
-    pub text: String,
-    /// RFC 3339.
-    pub at: String,
-}
-
-/// The agent's answer to a comment, with the plan changes that address it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Answer {
-    pub author: Author,
-    pub text: String,
-    #[serde(default)]
-    pub changes: Vec<Change>,
-    pub at: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Comment {
-    pub id: CommentId,
-    pub anchor: CommentAnchor,
-    #[serde(default)]
-    pub kind: CommentKind,
-    pub author: Author,
-    pub text: String,
-    pub at: String,
-    #[serde(default)]
-    pub status: CommentStatus,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub replies: Vec<Reply>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub answer: Option<Answer>,
-}
-
-impl Comment {
-    pub fn is_addressed(&self) -> bool {
-        self.status == CommentStatus::Resolved
-    }
-}
-
-/// The plan as the user last reviewed it (approvals and comments aside).
+/// The plan as the user last reviewed it (approvals aside).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReviewSnapshot {
     pub at: String,
@@ -475,15 +348,5 @@ mod tests {
         // Round-trips as data (it goes over REST and MCP).
         let json = serde_json::to_string(&d).unwrap();
         assert_eq!(serde_json::from_str::<PlanDiff>(&json).unwrap(), d);
-    }
-
-    #[test]
-    fn anchors_touch_their_components() {
-        let section = CommentAnchor::Section { id: id("a"), section: "logic".into() };
-        assert!(section.touches(&id("a")) && !section.touches(&id("b")));
-        let rel = CommentAnchor::Relation { kind: RelationKind::Calls, source: id("a"), target: id("b") };
-        assert!(rel.touches(&id("b")));
-        assert!(CommentAnchor::Plan.touches(&id("z")));
-        assert_eq!(serde_json::to_value(&section).unwrap(), serde_json::json!({"on": "section", "id": "rust:a", "section": "logic"}));
     }
 }

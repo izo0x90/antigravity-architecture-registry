@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use arch_graph::{Plan, PlanId};
 
@@ -24,7 +24,16 @@ pub trait PlanRepository: Send + Sync {
     /// Reads the plans among `paths` again (someone else changed their
     /// files); returns the plans that changed.
     fn changed(&self, paths: &[PathBuf]) -> Result<Vec<PlanId>, ServiceError>;
+    /// Comments a plan's file still holds (from before discussions held
+    /// them) go to `mover`, each plan's once, now and as plans are read;
+    /// its file is then written without them. Until they've gone, a plan
+    /// saved keeps them in its file.
+    fn move_comments(&self, mover: Mover) -> Result<(), ServiceError>;
 }
+
+/// Takes a plan's comments, as its file held them (all of them, or none:
+/// an error leaves them in the file).
+pub type Mover = Box<dyn Fn(&PlanId, &[serde_json::Value]) -> Result<(), String> + Send + Sync>;
 
 /// In-memory plans (embedding and tests).
 #[derive(Default)]
@@ -52,6 +61,10 @@ impl PlanRepository for MemoryPlans {
     }
     fn changed(&self, _paths: &[PathBuf]) -> Result<Vec<PlanId>, ServiceError> {
         Ok(Vec::new())
+    }
+    /// No file, so no comments from before.
+    fn move_comments(&self, _mover: Mover) -> Result<(), ServiceError> {
+        Ok(())
     }
 }
 
@@ -139,6 +152,8 @@ pub struct FsPlans {
     /// One writer at a time within this process (the server is the writer).
     write: Mutex<()>,
     held: Mutex<Held>,
+    /// Where comments a plan's file still holds go (`move_comments`).
+    mover: OnceLock<Mover>,
 }
 
 #[derive(Default)]
@@ -147,6 +162,8 @@ struct Held {
     plans: BTreeMap<PlanId, Result<Arc<Plan>, ServiceError>>,
     /// Files in the folder whose names can't be plan ids (put there by hand).
     misnamed: BTreeSet<String>,
+    /// Comments a plan's file still holds, not moved yet.
+    waiting: BTreeMap<PlanId, Vec<serde_json::Value>>,
 }
 
 impl FsPlans {
@@ -155,7 +172,7 @@ impl FsPlans {
         let dir = nah.join("plans");
         std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
         ensure_nah_gitignore(&nah)?;
-        let plans = Self { dir, write: Mutex::new(()), held: Mutex::new(Held::default()) };
+        let plans = Self { dir, write: Mutex::new(()), held: Mutex::new(Held::default()), mover: OnceLock::new() };
         let files: Vec<PathBuf> = std::fs::read_dir(&plans.dir).map_err(|e| io(&plans.dir, e))?.map(|e| e.map(|e| e.path()).map_err(|e| io(&plans.dir, e))).collect::<Result<_, _>>()?;
         plans.changed(&files)?;
         Ok(plans)
@@ -165,16 +182,39 @@ impl FsPlans {
         self.dir.join(format!("{id}.json"))
     }
 
-    /// The plan file at `path` as it is now: none if it's gone.
-    fn read(&self, path: &Path, id: &PlanId) -> Option<Result<Plan, ServiceError>> {
+    /// The plan file at `path` as it is now (none if it's gone), and the
+    /// comments it still holds.
+    fn read(&self, path: &Path, id: &PlanId) -> Option<(Result<Plan, ServiceError>, Vec<serde_json::Value>)> {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
-            Err(e) => return Some(Err(io(path, e))),
+            Err(e) => return Some((Err(io(path, e)), Vec::new())),
         };
-        Some(Plan::from_json(&text).map_err(|e| ServiceError::Corrupt(format!("{}: {e}", path.display()))).and_then(|plan| {
-            if &plan.id == id { Ok(plan) } else { Err(ServiceError::Corrupt(format!("{}: holds plan '{}', not '{id}'", path.display(), plan.id))) }
-        }))
+        let corrupt = |e: &dyn std::fmt::Display| ServiceError::Corrupt(format!("{}: {e}", path.display()));
+        let comments = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|mut v| v.get_mut("comments").map(serde_json::Value::take)).and_then(|c| c.as_array().cloned()).unwrap_or_default();
+        let plan = Plan::from_json(&text).map_err(|e| corrupt(&e)).and_then(|plan| if &plan.id == id { Ok(plan) } else { Err(corrupt(&format!("holds plan '{}', not '{id}'", plan.id))) });
+        Some((plan, comments))
+    }
+
+    /// The comments plans' files still hold, to the mover (once it's here):
+    /// each plan's file written without them once they've gone.
+    fn move_waiting(&self) -> Result<(), ServiceError> {
+        let Some(mover) = self.mover.get() else { return Ok(()) };
+        let waiting: Vec<(PlanId, Vec<serde_json::Value>)> = self.held.lock().map_err(ServiceError::poisoned)?.waiting.iter().map(|(id, c)| (id.clone(), c.clone())).collect();
+        for (id, comments) in waiting {
+            if let Err(e) = mover(&id, &comments) {
+                tracing::warn!("Plan {id}'s comments couldn't be moved to discussions (they stay in its file): {e}");
+                continue;
+            }
+            let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
+            let mut held = self.held.lock().map_err(ServiceError::poisoned)?;
+            held.waiting.remove(&id);
+            if let Some(Ok(plan)) = held.plans.get(&id) {
+                let text = plan.to_json().map_err(|e| ServiceError::Corrupt(e.to_string()))?;
+                write_atomic(&self.path(&id), &text)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -198,9 +238,16 @@ impl PlanRepository for FsPlans {
 
     fn save(&self, plan: &Plan) -> Result<(), ServiceError> {
         let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
-        let text = plan.to_json().map_err(|e| ServiceError::Corrupt(e.to_string()))?;
+        let mut text = plan.to_json().map_err(|e| ServiceError::Corrupt(e.to_string()))?;
+        let mut held = self.held.lock().map_err(ServiceError::poisoned)?;
+        // Comments not moved yet stay in its file.
+        if let Some(comments) = held.waiting.get(&plan.id) {
+            let mut json: serde_json::Value = serde_json::from_str(&text).map_err(|e| ServiceError::Corrupt(e.to_string()))?;
+            json["comments"] = serde_json::Value::Array(comments.clone());
+            text = serde_json::to_string_pretty(&json).map_err(|e| ServiceError::Corrupt(e.to_string()))?;
+        }
         write_atomic(&self.path(&plan.id), &text)?;
-        self.held.lock().map_err(ServiceError::poisoned)?.plans.insert(plan.id.clone(), Ok(Arc::new(plan.clone())));
+        held.plans.insert(plan.id.clone(), Ok(Arc::new(plan.clone())));
         Ok(())
     }
 
@@ -208,7 +255,10 @@ impl PlanRepository for FsPlans {
         let _guard = self.write.lock().map_err(ServiceError::poisoned)?;
         match std::fs::remove_file(self.path(id)) {
             Ok(()) => {
-                self.held.lock().map_err(ServiceError::poisoned)?.plans.remove(id);
+                let mut held = self.held.lock().map_err(ServiceError::poisoned)?;
+                held.plans.remove(id);
+                held.waiting.remove(id);
+                drop(held);
                 sync_dir(&self.dir)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(ServiceError::NotFound(format!("plan {id}"))),
@@ -234,8 +284,16 @@ impl PlanRepository for FsPlans {
                 }
                 continue;
             };
-            let now = self.read(path, &id);
+            let (now, comments) = match self.read(path, &id) {
+                Some((plan, comments)) => (Some(plan), comments),
+                None => (None, Vec::new()),
+            };
             let mut held = self.held.lock().map_err(ServiceError::poisoned)?;
+            if comments.is_empty() {
+                held.waiting.remove(&id);
+            } else {
+                held.waiting.insert(id.clone(), comments);
+            }
             let before = held.plans.get(&id);
             let same = match (before, &now) {
                 (None, None) => true,
@@ -252,7 +310,15 @@ impl PlanRepository for FsPlans {
             };
             changed.push(id);
         }
+        self.move_waiting()?;
         Ok(changed)
+    }
+
+    fn move_comments(&self, mover: Mover) -> Result<(), ServiceError> {
+        if self.mover.set(mover).is_err() {
+            return Err(ServiceError::InvalidOp("plans' comments already go somewhere".into()));
+        }
+        self.move_waiting()
     }
 }
 

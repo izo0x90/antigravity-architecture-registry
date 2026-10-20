@@ -4,8 +4,8 @@
 use std::fmt::Write;
 use std::sync::Arc;
 
-use arch_graph::{Comment, CommentKind, CommentStatus, ComponentId, Graph, Plan, PlanId, Severity, Source, Stage, TypeSystem};
-use arch_service::{Actor, ArchitectureService, ServiceError};
+use arch_graph::{ComponentId, Graph, Plan, PlanId, Severity, Source, Stage, TypeSystem};
+use arch_service::{ArchitectureService, ServiceError};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -73,11 +73,6 @@ pub fn next_steps(plan: &Plan, graph: &Graph, types: &TypeSystem, only: Option<&
     if !any {
         out.push_str(" nothing pending in this plan.");
     }
-    let open: Vec<&Comment> = plan.comments.iter().filter(|c| c.status == CommentStatus::Open && only.is_none_or(|id| c.anchor.touches(id))).collect();
-    if !open.is_empty() {
-        let ids: Vec<&str> = open.iter().map(|c| c.id.0.as_str()).collect();
-        let _ = write!(out, "\n- review: {} open point(s) from the user ({}): read them (review_comments) and answer each (answer_comment); approval waits on them", open.len(), ids.join(", "));
-    }
     out
 }
 
@@ -104,45 +99,6 @@ pub(crate) fn walkthrough_steps(plan: &Plan, only: Option<&ComponentId>) -> Stri
     out
 }
 
-/// Review points as the agent reads them: one block per point, with its thread.
-pub fn comments_text(comments: &[Comment], diff: &arch_graph::PlanDiff) -> String {
-    let mut out = String::new();
-    if comments.is_empty() {
-        out.push_str("No review points.\n");
-    }
-    for c in comments {
-        let kind = match c.kind {
-            CommentKind::Comment => "comment",
-            CommentKind::ChangeRequest => "CHANGE REQUEST",
-        };
-        let status = match c.status {
-            CommentStatus::Open => "open",
-            CommentStatus::Answered => "answered, waiting for the user",
-            CommentStatus::Resolved => "resolved",
-        };
-        let _ = writeln!(out, "[{}] {kind} on {} ({status}) by {}: {}", c.id, c.anchor.describe(), c.author, c.text);
-        for r in &c.replies {
-            let _ = writeln!(out, "    {}: {}", r.author, r.text);
-        }
-        if let Some(a) = &c.answer {
-            let _ = writeln!(out, "    answer ({}): {}", a.author, a.text);
-            for ch in &a.changes {
-                let _ = writeln!(out, "      - {}", ch.describe());
-            }
-        }
-    }
-    let since = diff.since.as_deref().map_or_else(|| "since the plan was started".to_owned(), |at| format!("since the user's review at {at}"));
-    if diff.is_empty() {
-        let _ = writeln!(out, "\nNo plan changes {since}.");
-    } else {
-        let _ = writeln!(out, "\nPlan changes {since}:");
-        for ch in &diff.changes {
-            let _ = writeln!(out, "- {}", ch.describe());
-        }
-    }
-    out
-}
-
 pub(crate) fn findings_text(report: &arch_graph::Report) -> String {
     let mut out = String::new();
     for f in &report.findings {
@@ -155,11 +111,6 @@ pub(crate) fn findings_text(report: &arch_graph::Report) -> String {
         let _ = writeln!(out, "{sev}{at} {}{}", f.message, f.suggestion.as_ref().map(|s| format!(" — {s}")).unwrap_or_default());
     }
     out
-}
-
-/// The agent behind a call, as its writing is signed: its slot's name.
-pub(crate) fn agent(caller: &crate::mcp::McpCaller) -> Actor {
-    Actor::Agent { session: caller.label.clone() }
 }
 
 #[derive(Deserialize)]

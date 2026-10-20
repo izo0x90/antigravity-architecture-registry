@@ -1,12 +1,14 @@
-//! The plan's review state in the cockpit: its comments and what changed
-//! since the user last reviewed it. Fetched per plan, refreshed on
-//! architecture events; the graph badges changed and commented nodes, the
-//! spec view marks changed sections and shows the threads.
+//! The plan's review state in the cockpit: the discussions on its parts
+//! (the desk's, from the event stream) and what changed since the user
+//! last reviewed it (fetched per plan, again on architecture events); the
+//! graph badges changed and discussed nodes, the spec view marks changed
+//! sections and shows the discussions.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use arch_graph::{Comment, CommentAnchor, ComponentId, PlanDiff, PlanId};
+use arch_graph::{ComponentId, PlanDiff, PlanId};
+use harness_contracts::{Discussion, DiscussionStatus, Subject};
 
 use crate::net::{NetClient, NetResult};
 
@@ -15,25 +17,26 @@ use crate::net::{NetClient, NetResult};
 pub struct NodeMark {
     /// Changed since the last review.
     pub changed: bool,
-    /// Unaddressed comments on it (plan-wide ones excluded).
+    /// Discussions on it not settled (plan-wide ones excluded).
     pub open: usize,
 }
 
 enum Reply {
-    Comments(PlanId, NetResult<Vec<Comment>>),
     Diff(PlanId, NetResult<PlanDiff>),
 }
 
 #[derive(Default)]
 pub struct ReviewState {
     pub plan: Option<PlanId>,
-    /// Every comment on the plan, resolved ones included.
-    pub comments: Vec<Comment>,
+    /// Every discussion on the plan's parts, settled ones included.
+    pub discussions: Vec<Discussion>,
     pub diff: PlanDiff,
     /// Bumped whenever the data above changes.
     pub generation: u64,
     pub error: Option<String>,
     loaded: Option<Option<PlanId>>,
+    /// The desk's discussions' version they were taken at.
+    discussed: Option<(Option<PlanId>, u64)>,
     inbox: Arc<Mutex<Vec<Reply>>>,
 }
 
@@ -43,20 +46,23 @@ impl ReviewState {
         self.loaded = None;
     }
 
-    /// Applies replies; fetches when the plan changes or after `invalidate`.
-    pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context, plan: Option<&PlanId>) {
+    /// Applies replies; fetches when the plan changes or after `invalidate`;
+    /// takes the plan's discussions from the desk's when they changed.
+    pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context, plan: Option<&PlanId>, discussions: &crate::discussions::Discussions) {
+        let now = (plan.cloned(), discussions.version());
+        if self.discussed.as_ref() != Some(&now) {
+            self.discussions = plan.map(|p| discussions.on(&Subject::Plan { plan: p.clone() }).into_iter().cloned().collect()).unwrap_or_default();
+            self.discussed = Some(now);
+            self.generation += 1;
+        }
         let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for reply in replies {
             match reply {
-                Reply::Comments(p, Ok(comments)) if Some(&p) == self.plan.as_ref() => {
-                    self.comments = comments;
-                    self.generation += 1;
-                }
                 Reply::Diff(p, Ok(diff)) if Some(&p) == self.plan.as_ref() => {
                     self.diff = diff;
                     self.generation += 1;
                 }
-                Reply::Comments(_, Err(e)) | Reply::Diff(_, Err(e)) => self.error = Some(e.into()),
+                Reply::Diff(_, Err(e)) => self.error = Some(e.into()),
                 _ => {}
             }
         }
@@ -66,7 +72,6 @@ impl ReviewState {
         }
         self.loaded = Some(wanted.clone());
         if self.plan != wanted {
-            self.comments.clear();
             self.diff = PlanDiff::default();
             self.generation += 1;
         }
@@ -74,23 +79,20 @@ impl ReviewState {
         let Some(plan) = wanted else { return };
         let inbox = self.inbox.clone();
         let p = plan.clone();
-        net.arch_comments(&plan, true, ctx.clone(), move |r| push(&inbox, Reply::Comments(p, r)));
-        let inbox = self.inbox.clone();
-        let p = plan.clone();
         net.arch_review_diff(&plan, ctx.clone(), move |r| push(&inbox, Reply::Diff(p, r)));
     }
 
-    /// Badges for the graph: changed nodes and unaddressed comments per node.
+    /// Badges for the graph: changed nodes and discussions not settled per node.
     pub fn marks(&self) -> BTreeMap<ComponentId, NodeMark> {
         let mut out: BTreeMap<ComponentId, NodeMark> = BTreeMap::new();
         for id in self.diff.components() {
             out.entry(id).or_default().changed = true;
         }
-        for c in self.comments.iter().filter(|c| !c.is_addressed()) {
-            let on: Vec<&ComponentId> = match &c.anchor {
-                CommentAnchor::Plan => Vec::new(),
-                CommentAnchor::Component { id } | CommentAnchor::Section { id, .. } => vec![id],
-                CommentAnchor::Relation { source, target, .. } => vec![source, target],
+        for d in self.discussions.iter().filter(|d| d.status != DiscussionStatus::Settled) {
+            let on: Vec<&ComponentId> = match &d.on.subject {
+                Subject::PlanComponent { id, .. } | Subject::PlanSection { id, .. } => vec![id],
+                Subject::PlanRelation { source, target, .. } => vec![source, target],
+                _ => Vec::new(),
             };
             for id in on {
                 out.entry(id.clone()).or_default().open += 1;
@@ -109,24 +111,23 @@ fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use arch_graph::{Author, Change, CommentId, CommentKind, CommentStatus, RelationKind};
+    use arch_graph::{Change, RelationKind};
+    pub(crate) use crate::discussions::tests::discussion;
 
-    pub(crate) fn comment(n: u32, anchor: CommentAnchor, status: CommentStatus) -> Comment {
-        Comment {
-            id: CommentId(format!("c{n}")),
-            anchor,
-            kind: CommentKind::Comment,
-            author: Author::User { name: "izo".into() },
-            text: format!("point {n}"),
-            at: "2026-10-03T10:00:00Z".into(),
-            status,
-            replies: vec![],
-            answer: None,
+    fn plan() -> PlanId {
+        PlanId::new("p").unwrap()
+    }
+
+    /// A component of plan p, or one of its sections.
+    pub(crate) fn on(id: &ComponentId, section: Option<&str>) -> Subject {
+        match section {
+            Some(s) => Subject::PlanSection { plan: plan(), id: id.clone(), section: s.into() },
+            None => Subject::PlanComponent { plan: plan(), id: id.clone() },
         }
     }
 
     #[test]
-    fn graph_marks_changed_and_commented_nodes() {
+    fn graph_marks_changed_and_discussed_nodes() {
         let id = |s: &str| ComponentId::new(format!("rust:{s}"));
         let r = ReviewState {
             diff: PlanDiff {
@@ -136,18 +137,18 @@ pub(crate) mod tests {
                     Change::RelationAdded { kind: RelationKind::Calls, source: id("a"), target: id("b") },
                 ],
             },
-            comments: vec![
-                comment(1, CommentAnchor::Section { id: id("a"), section: "logic".into() }, CommentStatus::Open),
-                comment(2, CommentAnchor::Component { id: id("c") }, CommentStatus::Answered),
-                comment(3, CommentAnchor::Component { id: id("c") }, CommentStatus::Resolved),
-                comment(4, CommentAnchor::Plan, CommentStatus::Open),
+            discussions: vec![
+                discussion(1, on(&id("a"), Some("logic")), DiscussionStatus::Open),
+                discussion(2, on(&id("c"), None), DiscussionStatus::Answered),
+                discussion(3, on(&id("c"), None), DiscussionStatus::Settled),
+                discussion(4, Subject::Plan { plan: plan() }, DiscussionStatus::Open),
             ],
             ..ReviewState::default()
         };
         let marks = r.marks();
         assert_eq!(marks[&id("a")], NodeMark { changed: true, open: 1 });
         assert_eq!(marks[&id("b")], NodeMark { changed: true, open: 0 }, "relation ends are changed too");
-        assert_eq!(marks[&id("c")], NodeMark { changed: false, open: 1 }, "answered still counts; resolved doesn't");
+        assert_eq!(marks[&id("c")], NodeMark { changed: false, open: 1 }, "answered still counts; settled doesn't");
         assert_eq!(marks.len(), 3);
     }
 }
