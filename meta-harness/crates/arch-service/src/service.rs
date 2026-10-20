@@ -208,11 +208,12 @@ fn asked(request: &TreeRequest, card: Option<&str>) -> String {
 }
 
 /// Approving, verifying and building are for plans that change the code; a
-/// walkthrough only explains it.
+/// walkthrough only explains it, and a review is a list of items.
 pub fn only_changes(plan: &Plan, what: &str) -> Result<(), ServiceError> {
     match plan.kind {
         PlanKind::Change => Ok(()),
         PlanKind::Walkthrough => Err(ServiceError::InvalidOp(format!("{} is a walkthrough: it explains the code, so nothing in it is {what}", plan.id))),
+        PlanKind::Review => Err(ServiceError::InvalidOp(format!("{} is a review: a list of items, with nothing in it to be {what}", plan.id))),
     }
 }
 

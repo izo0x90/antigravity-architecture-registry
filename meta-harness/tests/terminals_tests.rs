@@ -656,5 +656,5 @@ async fn a_project_says_how_much_of_a_running_command_is_kept() {
     let lines = read.on[0].lines;
     assert!((90_000..100_000).contains(&lines), "about 1 MB of 11-byte lines, not 2.2 MB: {lines}");
     let (_, end) = lead.tool("tag_read", json!({ "tag": "capped", "thing": 1, "lines": format!("{}-{}", lines - 1, lines) })).await;
-    assert!(end.contains("(the rest isn't kept: past the 1 MB a running command's log keeps here)") && !end.lines().skip(1).any(|l| l == "done-here"), "{end}");
+    assert!(end.contains("(the rest isn't kept: past the 1 MB a growing thing's log keeps here)") && !end.lines().skip(1).any(|l| l == "done-here"), "{end}");
 }

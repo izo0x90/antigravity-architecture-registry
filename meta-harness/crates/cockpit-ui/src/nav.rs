@@ -133,11 +133,19 @@ impl Target {
             Self::TerminalCommand { terminal, command, .. } => format!("terminal {terminal} command {command}"),
             Self::Chat { turn, message: Some(message), .. } => format!("turn {turn} message {message}"),
             Self::Chat { turn, .. } => format!("turn {turn}"),
-            Self::Plan { plan, part: PlanPart::Whole } => format!("plan {plan}"),
-            Self::Plan { plan, part: PlanPart::Component(id) } => format!("{} in plan {plan}", short_name(id)),
-            Self::Plan { plan, part: PlanPart::Section(id, section) } => format!("{}'s {section} in plan {plan}", short_name(id)),
-            Self::Plan { plan, part: PlanPart::Relation { kind, source, target } } => format!("{} {} {} in plan {plan}", short_name(source), kind.name(), short_name(target)),
-            Self::Plan { plan, part: PlanPart::Item(item) } => format!("item {item} of plan {plan}"),
+            // A plan's part: its one name (`Subject::name`).
+            Self::Plan { plan, part } => {
+                use harness_contracts::Subject;
+                let plan = plan.clone();
+                let subject = match part.clone() {
+                    PlanPart::Whole => Subject::Plan { plan },
+                    PlanPart::Component(id) => Subject::PlanComponent { plan, id },
+                    PlanPart::Section(id, section) => Subject::PlanSection { plan, id, section },
+                    PlanPart::Relation { kind, source, target } => Subject::PlanRelation { plan, relation: kind, source, target },
+                    PlanPart::Item(item) => Subject::PlanItem { plan, item },
+                };
+                subject.name(&harness_contracts::Known::default())
+            }
         }
     }
 
@@ -147,10 +155,10 @@ impl Target {
         Some(match subject.clone() {
             Subject::TerminalLines { terminal, shell, first, last, .. } => Self::TerminalLines { terminal, shell, first, last },
             Subject::TerminalCommand { terminal, shell, command, .. } => Self::TerminalCommand { terminal, shell, command },
-            Subject::ChatTurn { session, turn } => Self::Chat { session, turn, message: None },
+            Subject::ChatTurn { session, turn, .. } => Self::Chat { session, turn, message: None },
             Subject::Component { id, .. } => Self::Component(id),
             Subject::CodeLines { path, first, last, .. } => Self::Span { file: path, start: first as usize, end: last as usize },
-            Subject::ChatMessage { session, turn, message } => Self::Chat { session, turn, message: Some(message) },
+            Subject::ChatMessage { session, turn, message, .. } => Self::Chat { session, turn, message: Some(message) },
             Subject::Plan { plan } => Self::Plan { plan, part: PlanPart::Whole },
             Subject::PlanComponent { plan, id } => Self::Plan { plan, part: PlanPart::Component(id) },
             Subject::PlanSection { plan, id, section } => Self::Plan { plan, part: PlanPart::Section(id, section) },

@@ -55,7 +55,7 @@ impl Tags {
         let _ = trees;
         let on = json!({ "type": "object", "properties": {
             "tag": { "type": "string", "description": "Its name (a new tag when there's none of that name: letters, digits, - and _)" },
-            "subject": { "type": "string", "description": "What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` (overview, signature, logic, invariants, relations, code, changes, placeholders, findings), `plan <id> relation <source> <kind> <target>`" }
+            "subject": { "type": "string", "description": format!("What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` ({}), `plan <id> relation <source> <kind> <target>`, `plan <id> item <id>`", harness_contracts::CARD_SECTIONS.join(", ")) }
         }, "required": ["tag", "subject"] });
         let edit = json!({ "type": "object", "properties": {
             "tag": { "type": "string" },
@@ -82,7 +82,7 @@ impl Tags {
                 "tag_find",
                 "Search what tagged things say (all of it, kept or where it is): each line found, with its tag, its thing (numbered as `tag_read` numbers them) and which of its lines.",
                 json!({ "type": "object", "properties": {
-                    "query": { "type": "string", "description": "Text a line has in it (capitals heeded only when it has some)" },
+                    "query": { "type": "string", "description": "Words a line has in it, in any order (capitals heeded only when it has some)" },
                     "tag": { "type": "string", "description": "Only this tag's things" }
                 }, "required": ["query"] }),
             ),
@@ -182,7 +182,7 @@ impl ToolSet for Tags {
                         }
                         let to = (to as u64).min(all);
                         let shown = shown.join("\n");
-                        let shown = if full || lines.is_some() { shown } else { t.things().fold(&tagged.subject, &shown) };
+                        let shown = if full || lines.is_some() { shown } else { t.fold(&tagged.subject, &shown) };
                         let more = if to < all { format!("\n(lines {from}-{to} of {all}: `lines` gives others)") } else { String::new() };
                         Ok(format!("{} ({}):\n{shown}{more}", tagged.what, held.words()))
                     }
@@ -198,7 +198,7 @@ impl ToolSet for Tags {
                                 _ if what.is_empty() && on.held != Held::Kept => format!("{}. something nothing here can show ({when})", n + 1),
                                 None => format!("{}. {what} ({when}): gone, nothing kept of it", n + 1),
                                 Some(text) => {
-                                    let text = if full { text.clone() } else { t.things().fold(&on.tagged.subject, text) };
+                                    let text = if full { text.clone() } else { t.fold(&on.tagged.subject, text) };
                                     let head: Vec<&str> = text.lines().take(SHOWN_LINES).collect();
                                     let more = if on.lines > head.len() as u64 { format!("\n  ({} lines in all: tag_read with `thing` {} for all of it)", on.lines, n + 1) } else { String::new() };
                                     format!("{}. {what} ({when}; {}):\n{}{more}", n + 1, on.held.words(), head.join("\n"))
@@ -214,11 +214,12 @@ impl ToolSet for Tags {
                 let query = text("query").filter(|q| !q.trim().is_empty()).ok_or_else(|| ServiceError::InvalidOp("`query` (what to find) is needed".into()))?;
                 let only = text("tag");
                 blocking(Box::new(move |t| {
-                    let found = t.find_text(&query, only.as_deref(), FOUND_MOST, &|s| reach.reaches(s)).map_err(refused)?;
+                    let (found, partial) = t.find_text(&query, only.as_deref(), FOUND_MOST, &|s| reach.reaches(s)).map_err(refused)?;
+                    let cut = if partial { "\n(the search ran out of time: some may be missing)" } else { "" };
                     if found.is_empty() {
-                        return Ok(format!("Nothing tagged says {query:?}."));
+                        return Ok(format!("Nothing tagged says {query:?}.{cut}"));
                     }
-                    let more = if found.len() == FOUND_MOST { format!("\n(the first {FOUND_MOST}: `tag` narrows it)") } else { String::new() };
+                    let more = if found.len() == FOUND_MOST { format!("\n(the first {FOUND_MOST}: `tag` narrows it){cut}") } else { cut.to_owned() };
                     Ok(found.iter().map(|f| format!("{} · {}. {} · line {}: {}", f.tag, f.thing, f.what, f.line, f.text)).collect::<Vec<_>>().join("\n") + &more)
                 }))
                 .await

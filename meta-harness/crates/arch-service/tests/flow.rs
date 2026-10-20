@@ -983,3 +983,38 @@ fn a_walkthrough_explains_existing_code_and_changes_none_of_it() {
     let walked: Vec<&str> = tree.cards.iter().filter(|c| !c.outside_plan).map(|c| c.key.as_str()).collect();
     assert_eq!(walked, vec![id("sample::run").0.as_str(), id("sample::store::Store::save").0.as_str()], "only the walkthrough's own components are walked");
 }
+
+/// A review is a plan of items only: added, nested, moved, edited and set,
+/// kept in the plan's file in order (read back as they were), and nothing
+/// that isn't an item; any plan can have items.
+#[test]
+fn a_review_plan_holds_nested_items_with_their_states_and_nothing_else() {
+    use arch_graph::{ItemId, ItemState, PlanKind};
+    let r = repo();
+    let plan = pid("findings");
+    r.service.create_plan("findings", "Tags findings", "", PlanKind::Review).unwrap();
+    let add = |title: &str, under: Option<&str>| r.service.apply(&plan, PlanOp::AddItem { title: title.into(), text: format!("about {title}"), under: under.map(|u| ItemId(u.into())) }).unwrap();
+    add("Decide", None);
+    add("FFF skipped", Some("i1"));
+    add("Open", None);
+    add("Turns renumbered", Some("i3"));
+    let after = r.service.apply(&plan, PlanOp::SetItem { id: ItemId("i2".into()), state: ItemState::Decided }).unwrap();
+    assert_eq!(after.items.iter().map(|i| (i.id.0.as_str(), i.parent.as_ref().map(|p| p.0.as_str()), i.state)).collect::<Vec<_>>(), [("i1", None, ItemState::Open), ("i2", Some("i1"), ItemState::Decided), ("i3", None, ItemState::Open), ("i4", Some("i3"), ItemState::Open)]);
+    r.service.apply(&plan, PlanOp::EditItem { id: ItemId("i4".into()), title: Some("Chat turns renumbered".into()), text: None }).unwrap();
+    let moved = r.service.apply(&plan, PlanOp::MoveItem { id: ItemId("i4".into()), under: Some(ItemId("i1".into())) }).unwrap();
+    assert_eq!((moved.item(&ItemId("i4".into())).unwrap().title.as_str(), moved.items.last().unwrap().parent.as_ref().map(|p| p.0.as_str())), ("Chat turns renumbered", Some("i1")), "moved, last under its new parent");
+    // Never under itself, nor under what's under it; an item there is.
+    let refused = |op: PlanOp| r.service.apply(&plan, op).unwrap_err().to_string();
+    assert!(refused(PlanOp::MoveItem { id: ItemId("i1".into()), under: Some(ItemId("i4".into())) }).contains("under i1"));
+    assert!(refused(PlanOp::SetItem { id: ItemId("i9".into()), state: ItemState::Done }).contains("no item i9"));
+    assert!(refused(PlanOp::AddItem { title: " ".into(), text: String::new(), under: None }).contains("title"));
+    // A review takes nothing but items.
+    assert!(refused(PlanOp::AddComponent { name: "x".into(), type_name: "function".into(), description: String::new(), parent: Some(id("sample")), file: None, signature: None, schemas: None, spec: None }).contains("is a review"));
+    // Kept in the plan's file: read again, the same.
+    let text = std::fs::read_to_string(r.root.join(".nah/plans/findings.json")).unwrap();
+    let read = arch_graph::Plan::from_json(&text).unwrap();
+    assert_eq!((read.kind, read.items), (PlanKind::Review, moved.items.clone()));
+    // A change plan's to-dos.
+    r.service.create_plan("v", "Validation", "", PlanKind::Change).unwrap();
+    assert_eq!(r.service.apply(&pid("v"), PlanOp::AddItem { title: "Write the tests".into(), text: String::new(), under: None }).unwrap().items.len(), 1);
+}

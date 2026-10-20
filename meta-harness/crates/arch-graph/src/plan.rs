@@ -90,10 +90,13 @@ pub enum PlanKind {
     /// the code, described and specified from it. Nothing is added, changed,
     /// approved or built.
     Walkthrough,
+    /// A list to go through: items only (findings, decisions, questions to
+    /// settle), each with its state; no components.
+    Review,
 }
 
 impl PlanKind {
-    pub const ALL: [PlanKind; 2] = [PlanKind::Change, PlanKind::Walkthrough];
+    pub const ALL: [PlanKind; 3] = [PlanKind::Change, PlanKind::Walkthrough, PlanKind::Review];
 
     pub fn is_change(&self) -> bool {
         *self == PlanKind::Change
@@ -104,6 +107,7 @@ impl PlanKind {
         match self {
             PlanKind::Change => "change",
             PlanKind::Walkthrough => "walkthrough",
+            PlanKind::Review => "review",
         }
     }
 }
@@ -112,8 +116,62 @@ impl std::str::FromStr for PlanKind {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        Self::ALL.into_iter().find(|k| k.name() == text).ok_or_else(|| format!("plan kind '{text}': use \"change\" or \"walkthrough\""))
+        Self::ALL.into_iter().find(|k| k.name() == text).ok_or_else(|| format!("plan kind '{text}': use \"change\", \"walkthrough\" or \"review\""))
     }
+}
+
+/// An item's id in its plan (`i1`, `i2`...).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ItemId(pub String);
+
+impl std::fmt::Display for ItemId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Where an item stands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemState {
+    /// Still to go through.
+    #[default]
+    Open,
+    /// Gone through: what's to be done about it is decided.
+    Decided,
+    /// Done.
+    Done,
+    /// Not to be done.
+    Dropped,
+}
+
+impl ItemState {
+    pub const ALL: [ItemState; 4] = [ItemState::Open, ItemState::Decided, ItemState::Done, ItemState::Dropped];
+
+    /// The word for it, as written in JSON and arguments.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ItemState::Open => "open",
+            ItemState::Decided => "decided",
+            ItemState::Done => "done",
+            ItemState::Dropped => "dropped",
+        }
+    }
+}
+
+/// An item of a plan: a finding, a decision, a to-do, a question to
+/// settle; under another item, or at the top.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Item {
+    pub id: ItemId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<ItemId>,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    #[serde(default)]
+    pub state: ItemState,
 }
 
 /// A named end-to-end behavior: the call chain from `entry`, derived from
@@ -151,6 +209,10 @@ pub struct Plan {
     pub approvals: Vec<Approval>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<Workflow>,
+    /// Its items, nested by `parent`, in order (findings, decisions,
+    /// to-dos): a review plan's whole content; any plan may have some.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<Item>,
     /// Review comments and change requests, with their answers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<crate::Comment>,
@@ -173,6 +235,7 @@ impl Plan {
             relations: Vec::new(),
             approvals: Vec::new(),
             workflows: Vec::new(),
+            items: Vec::new(),
             comments: Vec::new(),
             last_review: None,
         }
@@ -191,6 +254,11 @@ impl Plan {
 
     pub fn to_json(&self) -> Result<String, ModelError> {
         serde_json::to_string_pretty(self).map_err(|e| ModelError::Format(e.to_string()))
+    }
+
+    /// Item `id`.
+    pub fn item(&self, id: &ItemId) -> Option<&Item> {
+        self.items.iter().find(|i| i.id == *id)
     }
 
     /// Records that `id` was taken back from `from` to `to`.

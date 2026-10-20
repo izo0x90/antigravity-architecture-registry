@@ -222,7 +222,7 @@ All plans, with their components and stages.
 }
 
 ## plan_create
-Start a plan. kind "change" (the default) plans one change (a feature, a fix): it holds only what's new or changing, and existing code is referenced, never re-described. kind "walkthrough" explains existing code to the user: modify brings in each component the behavior goes through as it is, with a description and spec written from the code; nothing is added, related, approved or built, and navigate with source plan:<id> shows the user only those components.
+Start a plan. kind "change" (the default) plans one change (a feature, a fix): it holds only what's new or changing, and existing code is referenced, never re-described. kind "walkthrough" explains existing code to the user: modify brings in each component the behavior goes through as it is, with a description and spec written from the code; nothing is added, related, approved or built, and navigate with source plan:<id> shows the user only those components. kind "review" is a list to go through (findings, decisions, questions to settle): items only, each with its state, added and nested with plan_edit add_item.
 {
   "type": "object",
   "properties": {
@@ -240,9 +240,10 @@ Start a plan. kind "change" (the default) plans one change (a feature, a fix): i
       "type": "string",
       "enum": [
         "change",
-        "walkthrough"
+        "walkthrough",
+        "review"
       ],
-      "description": "change (the default) or walkthrough"
+      "description": "change (the default), walkthrough, or review"
     }
   },
   "required": [
@@ -1306,7 +1307,7 @@ Search what tagged things say (all of it, kept or where it is): each line found,
   "properties": {
     "query": {
       "type": "string",
-      "description": "Text a line has in it (capitals heeded only when it has some)"
+      "description": "Words a line has in it, in any order (capitals heeded only when it has some)"
     },
     "tag": {
       "type": "string",
@@ -1329,7 +1330,7 @@ Tag something.
     },
     "subject": {
       "type": "string",
-      "description": "What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` (overview, signature, logic, invariants, relations, code, changes, placeholders, findings), `plan <id> relation <source> <kind> <target>`"
+      "description": "What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` (overview, signature, logic, invariants, relations, code, changes, placeholders, findings), `plan <id> relation <source> <kind> <target>`, `plan <id> item <id>`"
     }
   },
   "required": [
@@ -1349,7 +1350,7 @@ Take a tag off something it's on.
     },
     "subject": {
       "type": "string",
-      "description": "What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` (overview, signature, logic, invariants, relations, code, changes, placeholders, findings), `plan <id> relation <source> <kind> <target>`"
+      "description": "What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` (overview, signature, logic, invariants, relations, code, changes, placeholders, findings), `plan <id> relation <source> <kind> <target>`, `plan <id> item <id>`"
     }
   },
   "required": [

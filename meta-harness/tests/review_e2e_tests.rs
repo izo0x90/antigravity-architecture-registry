@@ -162,9 +162,14 @@ async fn a_plans_parts_are_tagged_by_name_and_read_as_the_plan_has_them() {
         assert!(read.contains(&format!("{n}. {what} (tagged by lead; as it is now):\n{says}")), "{n}: {read}");
     }
     assert!(state.tags.tags.find("review").unwrap().on.iter().all(|t| t.kept.is_none()), "plans last: nothing logged");
-    for wrong in ["plan nope", "plan v component rust:sample::nope", "plan v component rust:sample::validate section nope", "plan v relation rust:sample::run calls rust:sample::nope"] {
+    for wrong in ["plan nope", "plan v component rust:sample::nope", "plan v component rust:sample::validate section nope", "plan v relation rust:sample::run calls rust:sample::nope", "plan v item i9"] {
         let (error, said) = lead.tool("tag", json!({ "tag": "review", "subject": wrong })).await;
         assert!(error, "{wrong}: {said}");
+    }
+    // Nor sent as what it is, by the cockpit: a part that isn't there is refused.
+    for wrong in [json!({ "kind": "plan", "plan": "nope" }), json!({ "kind": "plan_section", "plan": "v", "id": "rust:sample::validate", "section": "nope" }), json!({ "kind": "plan_item", "plan": "v", "item": "i9" })] {
+        let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "tag": "review", "subject": wrong }).to_string())).await;
+        assert_eq!(status, 400, "{wrong}: {body}");
     }
     // Taken out of the plan: gone.
     arch.apply(&plan, PlanOp::Unrelate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::validate") }).unwrap();

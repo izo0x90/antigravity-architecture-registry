@@ -9,7 +9,7 @@ use crate::actions::Choice;
 
 impl GraphState {
     /// The sources to pick from: the code alone, then each plan, then each
-    /// walkthrough (named as one).
+    /// walkthrough and review (named as one).
     pub(crate) fn source_choices(&self) -> Vec<Choice> {
         let choice = |s: Source, label: &str| {
             let current = s == self.nav.source;
@@ -20,7 +20,7 @@ impl GraphState {
             for (plan, _) in self.plans.iter().filter(|(_, k)| *k == kind) {
                 let label = match kind {
                     PlanKind::Change => plan.0.clone(),
-                    PlanKind::Walkthrough => format!("{} {plan}", kind.name()),
+                    PlanKind::Walkthrough | PlanKind::Review => format!("{} {plan}", kind.name()),
                 };
                 out.push(choice(Source::Plan(plan.clone()), &label));
             }
@@ -74,6 +74,6 @@ impl GraphState {
 fn word(kind: PlanKind) -> &'static str {
     match kind {
         PlanKind::Change => "plan",
-        PlanKind::Walkthrough => kind.name(),
+        PlanKind::Walkthrough | PlanKind::Review => kind.name(),
     }
 }

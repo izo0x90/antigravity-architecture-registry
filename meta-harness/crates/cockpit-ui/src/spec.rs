@@ -55,7 +55,7 @@ impl Section {
     pub const ALL: [Section; 9] =
         [Section::Overview, Section::Signature, Section::Logic, Section::Invariants, Section::Relations, Section::Code, Section::Changes, Section::Placeholders, Section::Findings];
 
-    /// The stable name comments use for it.
+    /// The stable name notes use for it (`harness_contracts::CARD_SECTIONS`).
     pub fn key(self) -> &'static str {
         match self {
             Self::Overview => "overview",
@@ -1656,6 +1656,13 @@ pub(crate) mod tests {
                 s.draw(ui, &mut RunCx { net: &net, ctx, input_mode: mode, at: crate::keymap::Host::Panel(slot), note: &mut note, asked: &mut None }, typing);
             });
         });
+    }
+
+    /// A card's sections are named as the server names a plan's card's
+    /// (one list): a note on a section names one the server knows.
+    #[test]
+    fn a_cards_sections_are_named_as_the_server_names_them() {
+        assert_eq!(Section::ALL.map(Section::key), harness_contracts::CARD_SECTIONS);
     }
 
     #[test]

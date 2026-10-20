@@ -57,6 +57,7 @@ impl Palette {
     }
 
     /// Where it was last drawn (none: it hasn't been).
+    #[cfg(test)]
     pub fn drawn(ctx: &egui::Context) -> Option<egui::Rect> {
         ctx.memory(|m| m.area_rect(Self::area()))
     }

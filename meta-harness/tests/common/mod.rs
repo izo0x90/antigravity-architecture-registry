@@ -129,6 +129,11 @@ impl SessionRuntime for FakeSession {
         if input.text.contains("[die]") {
             let _ = self.dead.send(true);
         }
+        // "[renumber]": the session numbers its first turn anew, 9 (as one
+        // does when a message is taken while a turn runs).
+        if input.text.contains("[renumber]") {
+            self.emit(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn-1"), ordinal: 9, status: TurnStatus::Completed, failure: None, usage: None, thread_id: self.thread.id.clone() } });
+        }
         Ok(turn.id)
     }
 

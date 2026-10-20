@@ -66,6 +66,8 @@ pub trait TagStore: Send + Sync {
     /// The logs' files the tags kept point into: those this build can't
     /// read too.
     fn kept_files(&self) -> Result<BTreeSet<String>, String>;
+    /// How many tags kept this build can't read (a newer kind of subject).
+    fn unreadable(&self) -> Result<usize, String>;
     /// Keeps `tag` as it is now, and the change that made it so (none:
     /// its owners moved its subjects).
     fn put(&self, tag: &Tag, change: Option<&Change>) -> Result<(), String>;
@@ -97,7 +99,13 @@ pub struct Tags {
     hub: Arc<EventHub>,
     tags: Mutex<BTreeMap<TagId, Tag>>,
     things: Arc<Things>,
+    /// Some tags kept can't be read by this build: what they're on can't
+    /// all be said.
+    unreadable: bool,
 }
+
+/// How a read gets all of a thing's detail (folded otherwise).
+const WHOLE: &str = "tag_read's `full`";
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -154,8 +162,8 @@ impl Notes for Tags {
         self.store.kept_files()
     }
 
-    fn subjects(&self) -> Vec<Subject> {
-        lock(&self.tags).values().flat_map(|t| t.on.iter().map(|on| on.subject.clone())).collect()
+    fn subjects(&self) -> Option<Vec<Subject>> {
+        (!self.unreadable).then(|| lock(&self.tags).values().flat_map(|t| t.on.iter().map(|on| on.subject.clone())).collect())
     }
 
     fn refresh(&self) {
@@ -168,10 +176,11 @@ impl Tags {
     /// things `things` names and keeps.
     pub fn open(store: Arc<dyn TagStore>, hub: Arc<EventHub>, things: Arc<Things>) -> Result<Arc<Self>, TagError> {
         let kept = store.tags().map_err(TagError::Store)?;
+        let unreadable = store.unreadable().map_err(TagError::Store)? > 0;
         for tag in &kept {
             hub.publish(ClientEvent::TagUpdated { tag: tag.clone() });
         }
-        let tags = Arc::new(Self { store, hub, tags: Mutex::new(kept.into_iter().map(|t| (t.id.clone(), t)).collect()), things: things.clone() });
+        let tags = Arc::new(Self { store, hub, tags: Mutex::new(kept.into_iter().map(|t| (t.id.clone(), t)).collect()), things: things.clone(), unreadable });
         let notes: Weak<dyn Notes> = Arc::downgrade(&tags) as Weak<dyn Notes>;
         things.noting(notes);
         tags.refresh();
@@ -181,6 +190,12 @@ impl Tags {
     /// The things tags are on.
     pub fn things(&self) -> &Things {
         &self.things
+    }
+
+    /// What a tagged thing says, its detail (a chat turn's tool output)
+    /// folded as every read of tags folds it.
+    pub fn fold(&self, subject: &Subject, text: &str) -> String {
+        self.things.fold(subject, text, WHOLE)
     }
 
     /// A tagged thing as a read gives it: where it is, some of what it
@@ -261,26 +276,34 @@ impl Tags {
     }
 
     /// The lines of what tagged things say (all tags', or `tag`'s; only
-    /// those `reaches` lets the caller read) that have `text` in them
-    /// (capitals heeded only when it has some), the first `most`: each with
-    /// its tag, which of its things (1-based, as `thing` takes it), and
-    /// which of its lines.
-    pub fn find_text(&self, text: &str, tag: Option<&str>, most: usize, reaches: &dyn Fn(&Subject) -> bool) -> Result<Vec<FoundText>, TagError> {
+    /// those `reaches` lets the caller read) that have every word of `text`
+    /// in them (capitals heeded only when it has some), the first `most`:
+    /// each with its tag, which of its things (1-based, as `thing` takes
+    /// it), and which of its lines; and whether the search ran out of time
+    /// (some may be missing).
+    pub fn find_text(&self, text: &str, tag: Option<&str>, most: usize, reaches: &dyn Fn(&Subject) -> bool) -> Result<(Vec<FoundText>, bool), TagError> {
         let tags = match tag {
             Some(tag) => vec![self.find(tag)?],
             None => self.list(),
         };
         let searched: Vec<(&Tag, usize, &Tagged)> = tags.iter().flat_map(|tag| tag.on.iter().enumerate().filter(|(_, t)| reaches(&t.subject)).map(move |(n, t)| (tag, n, t))).collect();
         let among: Vec<(&Subject, Option<&harness_contracts::Kept>)> = searched.iter().map(|(_, _, t)| (&t.subject, t.kept.as_ref())).collect();
-        Ok(self
-            .things
-            .find(text, &among, most)
+        let (found, partial) = self.things.find(text, &among, most);
+        let found = found
             .into_iter()
             .map(|f| {
                 let (tag, n, tagged) = searched[f.which];
                 FoundText { tag: tag.name.clone(), thing: n + 1, what: tagged.what.clone(), line: f.line, text: f.text }
             })
-            .collect())
+            .collect();
+        Ok((found, partial))
+    }
+
+    /// Whether `stored` (a thing a tag is on) is `subject`, where its owner
+    /// says it is now (lines that moved since the tag was last kept where
+    /// they are).
+    fn same_now(&self, stored: &Subject, subject: &Subject) -> bool {
+        stored.same_thing(subject) || (stored.may_be(subject) && self.things.current(stored).same_thing(subject))
     }
 
     /// Tags `subject` with `tag` (by its name or id; a new tag, in the
@@ -290,7 +313,7 @@ impl Tags {
     /// it: as it was.
     pub fn tag(&self, tag: &str, subject: Subject, by: &str) -> Result<Tag, TagError> {
         let name = match found(&lock(&self.tags), tag) {
-            Ok(existing) if existing.on.iter().any(|t| t.subject.same_thing(&subject)) => return Ok(existing),
+            Ok(existing) if existing.on.iter().any(|t| self.same_now(&t.subject, &subject)) => return Ok(existing),
             Ok(existing) if existing.on.len() >= MOST_ON => return Err(TagError::TooMany),
             Ok(existing) => existing.name,
             Err(_) => check_name(tag)?,
@@ -299,7 +322,7 @@ impl Tags {
         let mut tags = lock(&self.tags);
         // As it is now (changed meanwhile, it's checked again).
         let checked = match found(&tags, tag) {
-            Ok(existing) if existing.on.iter().any(|t| t.subject.same_thing(&noted.subject)) => Err(Ok(existing)),
+            Ok(existing) if existing.on.iter().any(|t| self.same_now(&t.subject, &noted.subject)) => Err(Ok(existing)),
             Ok(existing) if existing.on.len() >= MOST_ON => Err(Err(TagError::TooMany)),
             Ok(existing) => Ok(existing),
             Err(_) => {
@@ -312,7 +335,7 @@ impl Tags {
             Ok(kept) => kept,
             Err(done) => {
                 drop(tags);
-                self.things.let_go(noted.kept.as_ref());
+                self.things.let_go(&noted.kept.iter().collect::<Vec<_>>());
                 return done;
             }
         };
@@ -322,7 +345,7 @@ impl Tags {
         drop(tags);
         if done.is_err() {
             // Not kept: nothing points into what was written.
-            self.things.let_go(noted.kept.as_ref());
+            self.things.let_go(&noted.kept.iter().collect::<Vec<_>>());
         }
         done
     }
@@ -331,11 +354,11 @@ impl Tags {
     pub fn untag(&self, tag: &str, subject: &Subject, by: &str) -> Result<Tag, TagError> {
         let mut tags = lock(&self.tags);
         let mut kept = found(&tags, tag)?;
-        let Some(at) = kept.on.iter().position(|t| t.subject.same_thing(subject)) else { return Err(TagError::NotOn(kept.name)) };
+        let Some(at) = kept.on.iter().position(|t| self.same_now(&t.subject, subject)) else { return Err(TagError::NotOn(kept.name)) };
         let gone = kept.on.remove(at);
         let done = self.keep(&mut tags, kept, Some(&Change { by: by.to_owned(), action: "untagged", detail: gone.what }))?;
         drop(tags);
-        self.things.let_go(gone.kept.as_ref());
+        self.things.let_go(&gone.kept.iter().collect::<Vec<_>>());
         Ok(done)
     }
 
@@ -380,9 +403,7 @@ impl Tags {
         tags.remove(&kept.id);
         drop(tags);
         self.hub.publish(ClientEvent::TagRemoved { tag_id: kept.id });
-        for on in &kept.on {
-            self.things.let_go(on.kept.as_ref());
-        }
+        self.things.let_go(&kept.on.iter().filter_map(|on| on.kept.as_ref()).collect::<Vec<_>>());
         Ok(())
     }
 
@@ -424,7 +445,7 @@ impl Tags {
                     (what, Held::Source) => what.to_owned(),
                     (what, held) => format!("{what} ({})", held.words()),
                 };
-                let text = glimpse.map(|(t, _)| self.things.fold(&tagged.subject, &t)).unwrap_or_default();
+                let text = glimpse.map(|(t, _)| self.things.fold(&tagged.subject, &t, WHOLE)).unwrap_or_default();
                 let cut = text.ends_with('…');
                 out.push_str(&format!("\n- {what}:\n{}", indent(&text)));
                 if cut || out.len() > EXPANDED_MOST {
@@ -557,9 +578,9 @@ mod tests {
         assert!(tags.thing("build", 1).is_err(), "it's on one thing");
         // What it says is searched where it's kept (by the matcher given).
         let all = |_: &Subject| true;
-        assert!(tags.find_text("MORE 4", None, 10, &all).unwrap().is_empty());
-        assert!(tags.find_text("more 4", None, 10, &|_: &Subject| false).unwrap().is_empty(), "only what the caller reaches");
-        let found = tags.find_text("more 4", Some("build"), 10, &all).unwrap();
+        assert!(tags.find_text("MORE 4", None, 10, &all).unwrap().0.is_empty());
+        assert!(tags.find_text("more 4", None, 10, &|_: &Subject| false).unwrap().0.is_empty(), "only what the caller reaches");
+        let found = tags.find_text("more 4", Some("build"), 10, &all).unwrap().0;
         assert_eq!(found, [FoundText { tag: "build".into(), thing: 1, what: "lines 500 to 501".into(), line: 1, text: "more 4".into() }], "(its lines gone when tagged again: only what it added)");
     }
 
@@ -631,6 +652,18 @@ mod tests {
         assert_eq!(read.on.iter().map(|t| t.text.as_deref()).collect::<Vec<_>>(), [Some("text of lines 1 to 2\n"), Some("text of lines 100 to 101\n")], "what they said, kept when tagged");
         tags.untag("t", &lines(1100, 1101), "you").unwrap();
         assert_eq!(tags.find("t").unwrap().on.len(), 1);
+    }
+
+    /// A tag kept before its thing's owner kept as much with what's noted
+    /// gains it at the next refresh (a line, the command it's in).
+    #[test]
+    fn a_thing_tagged_before_its_owner_kept_more_with_it_gains_it_when_refreshed() {
+        let store = Arc::new(MemoryStore::default());
+        let old = Tag { id: TagId::new("x"), name: "old".into(), colour: 0, note: String::new(), noted_by: String::new(), on: vec![Tagged { subject: lines(650, 650), what: "lines 650 to 650".into(), at_ms: 0, by: "you".into(), kept: None }] };
+        store.put(&old, None).unwrap();
+        let Fixture { tags, .. } = tags(store);
+        let on = &tags.find("old").unwrap().on[0];
+        assert_eq!(on.subject, Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 650, last: 650, command: Some(6) });
     }
 
     #[test]

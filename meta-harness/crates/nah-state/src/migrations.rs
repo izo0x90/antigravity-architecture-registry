@@ -38,6 +38,9 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (8, "CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT NOT NULL, json TEXT NOT NULL, seq INTEGER NOT NULL);"),
     // A tag only points: what a thing said is no longer kept with it.
     (9, "UPDATE tags SET json = json_set(json, '$.on', (SELECT json_group_array(json(json_remove(value, '$.said'))) FROM json_each(tags.json, '$.on')));"),
+    // Was a conversion of logs only this branch's first builds wrote; it
+    // converts nothing now. A database already at 10 still opens.
+    (10, ""),
 ];
 
 /// The newest layout this NAH knows.

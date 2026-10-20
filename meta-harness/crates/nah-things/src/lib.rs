@@ -16,15 +16,15 @@ mod logs;
 #[cfg(feature = "testing")]
 pub mod testing;
 
+pub use logs::{FoundLine, Logs, matches};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, Weak};
 
 use harness_contracts::{DETAIL, Held, Kept, Subject};
-
-use crate::logs::Logs;
 
 /// The most of a growing thing (a command running) its log keeps, unless
 /// the project says otherwise.
@@ -93,8 +93,10 @@ pub trait Notes: Send + Sync {
     /// The logs' files its notes point into: all of them, those of notes
     /// this build can't read too (an error: none may be removed).
     fn kept_files(&self) -> Result<BTreeSet<String>, String>;
-    /// The things its notes are on.
-    fn subjects(&self) -> Vec<Subject>;
+    /// The things its notes are on, all of them (none: it can't say them
+    /// all, notes this build can't read among them: then nothing kept for
+    /// things is let go).
+    fn subjects(&self) -> Option<Vec<Subject>>;
     /// Owners moved their things (or their names changed): its notes keep
     /// them where they are now, named as they are now.
     fn refresh(&self);
@@ -118,10 +120,6 @@ pub struct Found {
     pub text: String,
 }
 
-/// What a search through the logs is told: each line's text is searched
-/// in, as written.
-const SEARCH_BUDGET_MS: u64 = 2000;
-
 pub struct Things {
     owners: RwLock<Vec<Arc<dyn Resolve>>>,
     notes: RwLock<Vec<Weak<dyn Notes>>>,
@@ -130,8 +128,9 @@ pub struct Things {
     /// (off once nothing points into it).
     growing: Mutex<BTreeMap<String, Arc<AtomicBool>>>,
     grown_most: u64,
-    /// The logs as FFF lists them (once there are some).
-    search: Mutex<Option<arch_search::RepoFiles>>,
+    /// Every kind of note is here (start-up is through): owners are told
+    /// what's noted from now on.
+    ready: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -157,17 +156,11 @@ pub fn some_of(text: String, most: usize) -> String {
     }
 }
 
-/// Whether `line` has `text` in it, as a search here matches (capitals
-/// heeded only when `text` has some), as FFF matches the logs.
-fn has(line: &str, text: &str) -> bool {
-    if text.chars().any(char::is_uppercase) { line.contains(text) } else { line.to_lowercase().contains(&text.to_lowercase()) }
-}
-
 impl Things {
     /// The things' logs in `logs`; a growing thing's kept up to
     /// `grown_most` bytes.
     pub fn open(logs: &Path, grown_most: u64) -> Arc<Self> {
-        Arc::new(Self { owners: RwLock::default(), notes: RwLock::default(), logs: Logs::open(logs), growing: Mutex::default(), grown_most, search: Mutex::default() })
+        Arc::new(Self { owners: RwLock::default(), notes: RwLock::default(), logs: Logs::open(logs, "tagged"), growing: Mutex::default(), grown_most, ready: AtomicBool::new(false) })
     }
 
     /// An owner of things, from now on (the things noted named as it
@@ -200,18 +193,30 @@ impl Things {
         self.tell_noted();
     }
 
-    /// Every owner told what's noted now.
+    /// Every owner told what's noted now: once every kind of note is here,
+    /// and each can say all it's on (else owners keep what they keep).
     fn tell_noted(&self) {
-        let all: Vec<Subject> = self.notes().iter().flat_map(|n| n.subjects()).collect();
+        if !self.ready.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut all = Vec::new();
+        for notes in self.notes() {
+            match notes.subjects() {
+                Some(subjects) => all.extend(subjects),
+                None => return,
+            }
+        }
         for owner in self.owners().iter() {
             owner.noted(&all);
         }
     }
 
-    /// The logs no note points into, removed (what a crash left behind:
-    /// written, never kept). Once every kind of note is here; none when a
-    /// kind of note can't say which it points into.
+    /// Start-up is through (every kind of note and owner is here): the
+    /// logs no note points into are removed (what a crash left behind:
+    /// written, never kept; none when a kind of note can't say which it
+    /// points into), and owners are told what's noted from now on.
     pub fn forget_unused(&self) {
+        self.ready.store(true, Ordering::SeqCst);
         let mut used = BTreeSet::new();
         for notes in self.notes() {
             match notes.kept_files() {
@@ -261,10 +266,14 @@ impl Things {
     }
 
     /// A noted thing (`subject`, named `what`) where its owner says it is
-    /// now, named as it's named there: none when neither changed.
+    /// now, kept as its owner keeps one noted now (one noted before it kept
+    /// so much gains it), named as it's named there: none when nothing
+    /// changed.
     pub fn renamed(&self, subject: &Subject, what: &str) -> Option<(Subject, String)> {
-        let now = self.current(subject);
-        let named = self.name(&now).unwrap_or_else(|| what.to_owned());
+        let owner = self.owner(subject);
+        let moved = owner.as_ref().and_then(|o| o.moved(subject)).unwrap_or_else(|| subject.clone());
+        let now = owner.as_ref().and_then(|o| o.settle(&moved).ok()).unwrap_or(moved);
+        let named = owner.map_or_else(|| what.to_owned(), |o| o.name(&now));
         (now != *subject || named != what).then_some((now, named))
     }
 
@@ -322,10 +331,11 @@ impl Things {
     }
 
     /// `text` (what `subject` says) with each run of its detail lines (a
-    /// chat turn's tool output) said in one line: how many there are. Only
-    /// a thing its owner says has detail is folded; every read folds the
-    /// same.
-    pub fn fold(&self, subject: &Subject, text: &str) -> String {
+    /// chat turn's tool output) said in one line: how many there are, and
+    /// how to read them (`whole`: the reader's way, `tag_read`'s `full`).
+    /// Only a thing its owner says has detail is folded; every read folds
+    /// the same.
+    pub fn fold(&self, subject: &Subject, text: &str, whole: &str) -> String {
         if !self.owner(subject).is_some_and(|o| o.detailed(subject)) {
             return text.to_owned();
         }
@@ -337,7 +347,7 @@ impl Things {
                 continue;
             }
             if run > 0 {
-                out.push(format!("{DETAIL}({run} lines left out: tag_read's `full` gives them)"));
+                out.push(format!("{DETAIL}({run} lines left out: {whole} gives them)"));
                 run = 0;
             }
             out.push(line.to_owned());
@@ -351,7 +361,8 @@ impl Things {
     /// it is (`header`, given its name): growing, to a file its owner adds
     /// to until it ends or nothing points into it; else what it says now.
     /// Done before the note is kept (nothing else waits on it); a note not
-    /// kept after all lets go of it (`let_go`).
+    /// kept after all lets go of it (`let_go`). One its owner keeps for
+    /// good has to be there.
     pub fn note(&self, subject: &Subject, header: &dyn Fn(&str) -> String) -> Result<Noting, String> {
         if let Some(why) = subject.unfit() {
             return Err(why);
@@ -359,6 +370,9 @@ impl Things {
         let subject = self.current(subject);
         let owner = self.owner(&subject).ok_or("nothing here knows what it is")?;
         let subject = owner.settle(&subject)?;
+        if owner.lasts(&subject) && !owner.there(&subject) {
+            return Err("it isn't there".into());
+        }
         let what = owner.name(&subject);
         let kept = if owner.lasts(&subject) { None } else { Some(self.log(&*owner, &subject, &header(&what))?) };
         Ok(Noting { subject, what, kept })
@@ -367,16 +381,21 @@ impl Things {
     fn log(&self, owner: &dyn Resolve, subject: &Subject, header: &str) -> Result<Kept, String> {
         let (kept, mut file) = self.logs.grow(header).map_err(|e| e.to_string())?;
         let on = Arc::new(AtomicBool::new(true));
-        let still = on.clone();
+        let (still, cut) = (on.clone(), Arc::new(AtomicBool::new(false)));
+        let was_cut = cut.clone();
         let (most, mut written) = (self.grown_most, 0u64);
         let more: More = Box::new(move |more| {
             if !still.load(Ordering::Relaxed) {
                 return false;
             }
-            // Past the most a growing thing keeps: said, and no longer followed.
+            // Past the most a growing thing keeps: what fits, said, and no
+            // longer followed.
             if written + more.len() as u64 > most {
+                let room = (most - written) as usize;
+                let fits = (0..=room.min(more.len())).rev().find(|at| more.is_char_boundary(*at)).unwrap_or(0);
                 let size = if most % (1 << 20) == 0 { format!("{} MB", most >> 20) } else { format!("{most} bytes") };
-                let _ = file.write_all(format!("\n(the rest isn't kept: past the {size} a running command's log keeps here)\n").as_bytes());
+                let _ = file.write_all(format!("{}\n(the rest isn't kept: past the {size} a growing thing's log keeps here)\n", &more[..fits]).as_bytes());
+                cut.store(true, Ordering::Relaxed);
                 return false;
             }
             written += more.len() as u64;
@@ -386,96 +405,64 @@ impl Things {
             lock(&self.growing).insert(kept.file.clone(), on);
             return Ok(kept);
         }
+        // Past the most already: what fit, kept.
+        if was_cut.load(Ordering::Relaxed) {
+            return Ok(kept);
+        }
         // Not growing: what it says now, in a file of its own.
-        self.logs.remove(&kept);
+        self.logs.remove(&kept.file);
         let said = owner.now(subject).ok_or("it's gone")?;
         self.logs.write(header, &said).map_err(|e| e.to_string())
     }
 
-    /// A note let go of a thing (it's gone, or wasn't kept): what the
-    /// logs kept of it removed, and a growing thing no longer followed,
-    /// once no note points into it; its owner told what's noted now.
-    pub fn let_go(&self, kept: Option<&Kept>) {
-        if let Some(kept) = kept {
+    /// A note let go of things (they're gone, or weren't kept): what the
+    /// logs kept of them removed, and a growing one no longer followed,
+    /// once no note points into it; owners told what's noted now.
+    pub fn let_go(&self, kept: &[&Kept]) {
+        if !kept.is_empty() {
             let used = self.notes().iter().map(|n| n.kept_files()).collect::<Result<Vec<_>, _>>();
             match used {
-                Ok(used) if !used.iter().any(|files| files.contains(&kept.file)) => {
-                    if let Some(on) = lock(&self.growing).remove(&kept.file) {
-                        on.store(false, Ordering::Relaxed);
+                Ok(used) => {
+                    for kept in kept.iter().filter(|k| !used.iter().any(|files| files.contains(&k.file))) {
+                        if let Some(on) = lock(&self.growing).remove(&kept.file) {
+                            on.store(false, Ordering::Relaxed);
+                        }
+                        self.logs.remove(&kept.file);
                     }
-                    self.logs.remove(kept);
                 }
-                Ok(_) => {}
-                Err(e) => tracing::warn!("A log was left: which are used couldn't be read: {e}"),
+                Err(e) => tracing::warn!("Logs were left: which are used couldn't be read: {e}"),
             }
         }
         self.tell_noted();
     }
 
-    /// The lines of what `among` say that have `text` in them (capitals
-    /// heeded only when it has some), the first `most`, in `among`'s
-    /// order: what the logs keep searched with FFF, the rest where it is.
-    pub fn find(&self, text: &str, among: &[(&Subject, Option<&Kept>)], most: usize) -> Vec<Found> {
-        let mut found = self.find_kept(text, among, most);
+    /// The lines of what `among` say that have every word of `text` in
+    /// them (`matches`), the first `most`, in `among`'s order: what the logs
+    /// keep searched with FFF, the rest where it is; and whether the search
+    /// ran out of time before it was through (some may be missing).
+    pub fn find(&self, text: &str, among: &[(&Subject, Option<&Kept>)], most: usize) -> (Vec<Found>, bool) {
+        let files: BTreeSet<String> = among.iter().filter_map(|(_, k)| k.map(|k| k.file.clone())).collect();
+        let (lines, partial) = self.logs.search(text, &files, most);
+        let mut found = Vec::new();
+        for (file, line, said) in lines {
+            for (which, (_, kept)) in among.iter().enumerate() {
+                let Some(kept) = kept.filter(|k| k.file == file) else { continue };
+                let Ok((first, count)) = self.logs.span(kept) else { continue };
+                if (first..first + count).contains(&line) {
+                    found.push(Found { which, line: line + 1 - first, text: said.clone() });
+                }
+            }
+        }
         for (which, (subject, kept)) in among.iter().enumerate() {
             if kept.is_some() {
                 continue;
             }
             let Some(said) = self.owner(subject).and_then(|o| o.now(subject)) else { continue };
-            found.extend(said.lines().zip(1..).filter(|(l, _)| has(l, text)).take(most).map(|(l, line)| Found { which, line, text: l.to_owned() }));
+            found.extend(said.lines().zip(1..).filter(|(l, _)| matches(l, text)).take(most).map(|(l, line)| Found { which, line, text: l.to_owned() }));
         }
         found.sort_by_key(|f| (f.which, f.line));
         found.truncate(most);
-        found
-    }
-
-    /// The lines of the logs `among` point into that have `text` in them,
-    /// found with FFF (told first which files were written, removed or
-    /// grew since).
-    fn find_kept(&self, text: &str, among: &[(&Subject, Option<&Kept>)], most: usize) -> Vec<Found> {
-        let mut files: BTreeMap<&str, Vec<(usize, &Kept)>> = BTreeMap::new();
-        for (which, (_, kept)) in among.iter().enumerate() {
-            if let Some(kept) = kept {
-                files.entry(kept.file.as_str()).or_default().push((which, kept));
-            }
-        }
-        if files.is_empty() || !self.logs.dir().is_dir() {
-            return Vec::new();
-        }
-        let mut search = lock(&self.search);
-        let mut changed: Vec<PathBuf> = self.logs.touched();
-        changed.extend(lock(&self.growing).keys().map(|f| self.logs.dir().join(f)));
-        if search.is_none() {
-            match arch_search::RepoFiles::scan(self.logs.dir(), Box::new(|_| false)) {
-                Ok(listed) => *search = Some(listed),
-                Err(e) => {
-                    tracing::warn!("The logs couldn't be listed to search: {e}");
-                    return Vec::new();
-                }
-            }
-        }
-        let Some(listed) = search.as_mut() else { return Vec::new() };
-        // Every file of ours listed, whatever ignores it (a global ignore of `*.log`).
-        let ours: Vec<PathBuf> = std::fs::read_dir(self.logs.dir()).into_iter().flatten().flatten().filter(|e| logs::is_log(&e.file_name().to_string_lossy())).map(|e| e.path()).collect();
-        if listed.len() != ours.len() {
-            changed.extend(ours);
-        }
-        if let Err(e) = listed.changed(&changed) {
-            tracing::warn!("The logs couldn't be listed again to search: {e}");
-        }
-        let limits = arch_search::TextLimits { per_file: most, budget_ms: SEARCH_BUDGET_MS, max_file_bytes: u64::MAX };
-        let mut found = Vec::new();
-        for line in listed.lines(limits).containing(text, usize::MAX >> 1).found {
-            let Some(of) = files.get(line.path.as_str()) else { continue };
-            for (which, kept) in of {
-                let Ok((first, count)) = self.logs.span(kept) else { continue };
-                let n = u64::from(line.line);
-                if (first..first + count).contains(&n) {
-                    found.push(Found { which: *which, line: n + 1 - first, text: line.text.clone() });
-                }
-            }
-        }
-        found
+        (found, partial)
     }
 }
 
@@ -491,7 +478,7 @@ mod tests {
     }
 
     /// Notes kept in memory: the files they point into, and how often
-    /// they were told of moves.
+    /// they were told of moves; on one thing.
     #[derive(Default)]
     struct Pointing(Mutex<BTreeSet<String>>, std::sync::atomic::AtomicUsize);
 
@@ -499,8 +486,8 @@ mod tests {
         fn kept_files(&self) -> Result<BTreeSet<String>, String> {
             Ok(lock(&self.0).clone())
         }
-        fn subjects(&self) -> Vec<Subject> {
-            Vec::new()
+        fn subjects(&self) -> Option<Vec<Subject>> {
+            Some(vec![lines(1, 1)])
         }
         fn refresh(&self) {
             self.1.fetch_add(1, Ordering::SeqCst);
@@ -555,14 +542,49 @@ mod tests {
         assert_eq!(things.said(&noted.subject, Some(&kept)).1.as_deref(), Some("text of lines 500 to 501\nmore\n"));
         owner.grow("past the cap\n");
         assert_eq!(owner.followers(), 0, "no longer followed");
-        assert!(things.said(&noted.subject, Some(&kept)).1.unwrap().ends_with("more\n\n(the rest isn't kept: past the 40 bytes a running command's log keeps here)\n"), "said so");
+        assert_eq!(things.said(&noted.subject, Some(&kept)).1.unwrap(), "text of lines 500 to 501\nmore\npast the c\n(the rest isn't kept: past the 40 bytes a growing thing's log keeps here)\n", "what fits, then said so");
         // Another note points into it: kept; none does: removed.
         let path = dir.path().join("tagged").join(&kept.file);
-        things.let_go(Some(&kept));
+        things.let_go(&[&kept]);
         assert!(path.exists());
         lock(&notes.0).clear();
-        things.let_go(Some(&kept));
+        things.let_go(&[&kept]);
         assert!(!path.exists());
+        // Already past the cap when noted: what fits, said so; not followed.
+        let small = self::things(10);
+        let noted = small.things.note(&lines(500, 501), &header).unwrap();
+        assert_eq!((small.things.said(&noted.subject, noted.kept.as_ref()).1.unwrap(), small.owner.followers()), ("text of li\n(the rest isn't kept: past the 10 bytes a growing thing's log keeps here)\n".to_owned(), 0));
+    }
+
+    #[test]
+    fn owners_are_told_whats_noted_once_start_up_is_through_and_never_when_a_kind_of_note_cant_say() {
+        let Fixture { things, owner, notes: _notes, .. } = things(GROWN_MOST);
+        things.moved();
+        assert!(owner.told.lock().unwrap().is_empty(), "start-up isn't through: every kind of note may not be here");
+        things.forget_unused();
+        assert_eq!(*owner.told.lock().unwrap(), [1]);
+        struct Unread;
+        impl Notes for Unread {
+            fn kept_files(&self) -> Result<BTreeSet<String>, String> {
+                Ok(BTreeSet::new())
+            }
+            fn subjects(&self) -> Option<Vec<Subject>> {
+                None
+            }
+            fn refresh(&self) {}
+        }
+        let unread: Arc<dyn Notes> = Arc::new(Unread);
+        things.noting(Arc::downgrade(&unread));
+        things.moved();
+        assert_eq!(*owner.told.lock().unwrap(), [1], "one can't say all it's on: nothing let go");
+    }
+
+    #[test]
+    fn a_thing_its_owner_keeps_is_noted_only_when_its_there() {
+        let Fixture { things, .. } = things(GROWN_MOST);
+        let kept = |first, last| Subject::TerminalLines { terminal: TerminalId::new("t2"), shell: 1, first, last, command: None };
+        assert!(things.note(&kept(1, 2), &header).is_ok_and(|n| n.kept.is_none()));
+        assert!(things.note(&kept(0, 0), &header).is_err());
     }
 
     #[test]
@@ -575,15 +597,15 @@ mod tests {
         }
         owner.grow("error: 1\nok\nerror: 2\n");
         let among = [(&a.subject, a.kept.as_ref()), (&b.subject, b.kept.as_ref())];
-        let found = things.find("error", &among, 10);
-        assert_eq!(found, [Found { which: 1, line: 2, text: "error: 1".into() }, Found { which: 1, line: 4, text: "error: 2".into() }], "lines of the thing, not of its file");
-        assert!(things.find("ERROR", &among, 10).is_empty(), "capitals heeded");
-        assert_eq!(things.find("text of", &among, 1).len(), 1, "the first `most`");
+        let (found, partial) = things.find("error", &among, 10);
+        assert_eq!((found, partial), (vec![Found { which: 1, line: 2, text: "error: 1".into() }, Found { which: 1, line: 4, text: "error: 2".into() }], false), "lines of the thing, not of its file");
+        assert!(things.find("ERROR", &among, 10).0.is_empty(), "capitals heeded");
+        assert_eq!(things.find("text of", &among, 1).0.len(), 1, "the first `most`");
         owner.grow("error: 3\n");
-        assert_eq!(things.find("error: 3", &among, 10).len(), 1, "what it grew by since");
-        // A thing its owner keeps: searched where it is.
+        assert_eq!(things.find("3 error", &among, 10).0.len(), 1, "what it grew by since; every word, in any order");
+        // A thing its owner keeps: searched where it is, the same way.
         let lasting = Subject::TerminalLines { terminal: TerminalId::new("t2"), shell: 1, first: 1, last: 2, command: None };
-        assert_eq!(things.find("lines 1 to", &[(&lasting, None)], 10), [Found { which: 0, line: 1, text: "text of lines 1 to 2".into() }]);
+        assert_eq!(things.find("to lines", &[(&lasting, None)], 10).0, [Found { which: 0, line: 1, text: "text of lines 1 to 2".into() }]);
     }
 
     #[test]
@@ -601,8 +623,8 @@ mod tests {
             fn kept_files(&self) -> Result<BTreeSet<String>, String> {
                 Err("a newer build's".into())
             }
-            fn subjects(&self) -> Vec<Subject> {
-                Vec::new()
+            fn subjects(&self) -> Option<Vec<Subject>> {
+                None
             }
             fn refresh(&self) {}
         }
@@ -617,9 +639,9 @@ mod tests {
     fn only_a_thing_its_owner_says_has_detail_is_folded() {
         let Fixture { things, .. } = things(GROWN_MOST);
         let text = format!("you: hi\n• Bash\n{DETAIL}a\n{DETAIL}b\ndone");
-        assert_eq!(things.fold(&lines(1, 1), &text), text, "a terminal's lines never");
+        assert_eq!(things.fold(&lines(1, 1), &text, "`full`"), text, "a terminal's lines never");
         let detailed = Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 7, last: 7, command: None };
-        assert_eq!(things.fold(&detailed, &text), format!("you: hi\n• Bash\n{DETAIL}(2 lines left out: tag_read's `full` gives them)\ndone"));
+        assert_eq!(things.fold(&detailed, &text, "`full`"), format!("you: hi\n• Bash\n{DETAIL}(2 lines left out: `full` gives them)\ndone"));
     }
 
     #[test]

@@ -70,6 +70,10 @@ pub struct Kept {
     pub start: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub len: Option<u64>,
+    /// How many lines it has, for a thing whole when it was written (a
+    /// growing one's are counted as it's read).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<u64>,
 }
 
 /// One thing in the project, durably: what a tag is on. Each kind is its
@@ -104,11 +108,24 @@ pub enum Subject {
     },
     /// A turn of a chat (by its number in the session: the harness's
     /// session id, which outlives our threads): your message, the answer,
-    /// its tool calls.
-    ChatTurn { session: NativeId, turn: u32 },
+    /// its tool calls; and the turn's own id (kept when it's noted: the
+    /// turn is found by it when turns are numbered anew).
+    ChatTurn {
+        session: NativeId,
+        turn: u32,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        turn_id: String,
+    },
     /// A message of a chat's turn (what you said, or an answer: numbered
-    /// from 1 in its turn, `message_number`).
-    ChatMessage { session: NativeId, turn: u32, message: u32 },
+    /// from 1 in its turn, `message_number`), and its turn's id (as a
+    /// turn's).
+    ChatMessage {
+        session: NativeId,
+        turn: u32,
+        message: u32,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        turn_id: String,
+    },
     /// A component of the code (a symbol: a function, a type...): the
     /// index follows it through edits; where it was when it was noted is
     /// kept (`was`: its lines at a snapshot), to read it once it's gone.
@@ -125,9 +142,7 @@ pub enum Subject {
     Plan { plan: arch_graph::PlanId },
     /// A component of a plan (its card).
     PlanComponent { plan: arch_graph::PlanId, id: arch_graph::ComponentId },
-    /// One section of a plan's component's card (`overview`, `signature`,
-    /// `logic`, `invariants`, `relations`, `code`, `changes`,
-    /// `placeholders`, `findings`).
+    /// One section of a plan's component's card (`CARD_SECTIONS`).
     PlanSection { plan: arch_graph::PlanId, id: arch_graph::ComponentId, section: String },
     /// A relation of a plan (`relation`: its kind).
     PlanRelation { plan: arch_graph::PlanId, relation: arch_graph::RelationKind, source: arch_graph::ComponentId, target: arch_graph::ComponentId },
@@ -144,6 +159,10 @@ pub struct CodeAt {
     pub last: u32,
     pub snapshot: String,
 }
+
+/// The sections of a plan's component's card (`Subject::PlanSection`), in
+/// the order a card shows them.
+pub const CARD_SECTIONS: [&str; 9] = ["overview", "signature", "logic", "invariants", "relations", "code", "changes", "placeholders", "findings"];
 
 /// What names a thing beyond the thing itself: what its owner (or a view
 /// showing it) knows of it now.
@@ -246,12 +265,24 @@ impl Subject {
         self.bare() == other.bare()
     }
 
+    /// Whether it may be `other` moved (lines of the same file, of the same
+    /// start of a terminal): whether it's worth asking where it is now.
+    pub fn may_be(&self, other: &Subject) -> bool {
+        match (self, other) {
+            (Self::CodeLines { path, .. }, Self::CodeLines { path: p, .. }) => path == p,
+            (Self::TerminalLines { terminal, shell, .. }, Self::TerminalLines { terminal: t, shell: s, .. }) => terminal == t && shell == s,
+            _ => false,
+        }
+    }
+
     /// It without what's kept of it when it's noted.
     fn bare(&self) -> Subject {
         match self.clone() {
             Self::CodeLines { path, first, last, .. } => Self::CodeLines { path, first, last, snapshot: String::new() },
             Self::TerminalLines { terminal, shell, first, last, .. } => Self::TerminalLines { terminal, shell, first, last, command: None },
             Self::TerminalCommand { terminal, shell, command, .. } => Self::TerminalCommand { terminal, shell, command, typed: String::new() },
+            Self::ChatTurn { session, turn, .. } => Self::ChatTurn { session, turn, turn_id: String::new() },
+            Self::ChatMessage { session, turn, message, .. } => Self::ChatMessage { session, turn, message, turn_id: String::new() },
             Self::Component { id, .. } => Self::Component { id, was: None },
             other => other,
         }
@@ -362,7 +393,7 @@ mod tests {
         assert_eq!(Subject::PlanRelation { plan: plan.clone(), relation: arch_graph::RelationKind::Calls, source: a.clone(), target: b }.name(&Known::default()), "plan quick-look relation rust:app::open calls rust:app::show");
         assert!(Subject::Plan { plan: plan.clone() }.contains(&section) && Subject::PlanComponent { plan: plan.clone(), id: a.clone() }.contains(&section), "a plan has its parts in it");
         assert!(!Subject::PlanComponent { plan: arch_graph::PlanId::new("other").unwrap(), id: a }.contains(&section));
-        let message = Subject::ChatMessage { session: NativeId::new("4f2a91c0aa"), turn: 3, message: 2 };
+        let message = Subject::ChatMessage { session: NativeId::new("4f2a91c0aa"), turn: 3, message: 2, turn_id: "u7".into() };
         assert_eq!(message.name(&known(None)), "chat lead@4f2a91c0 turn 3 message 2");
         assert_eq!(chat_who(Some("lead"), &NativeId::new("4f2a91c0aa")), "lead@4f2a91c0");
         for ok in ["flaky-build", "a_1", "X"] {

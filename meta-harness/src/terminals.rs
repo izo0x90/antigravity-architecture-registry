@@ -504,15 +504,15 @@ impl nah_things::Resolve for Terminals {
     }
 
     /// Lines: with the command they're in; a command: with what was typed
-    /// (named so once the shell's gone).
+    /// (named so once the shell's gone). What one was kept with stays.
     fn settle(&self, subject: &Subject) -> Result<Subject, String> {
         let open = |terminal: &TerminalId, shell: u64| self.get(terminal).ok().filter(|o| o.started() == shell);
         Ok(match subject.clone() {
-            Subject::TerminalLines { terminal, shell, first, last, .. } => {
+            Subject::TerminalLines { terminal, shell, first, last, command: None } => {
                 let command = open(&terminal, shell).and_then(|o| o.command_around(first, last)).filter(|c| c.output.is_some()).map(|c| c.id);
                 Subject::TerminalLines { terminal, shell, first, last, command }
             }
-            Subject::TerminalCommand { terminal, shell, command, .. } => {
+            Subject::TerminalCommand { terminal, shell, command, typed } if typed.is_empty() => {
                 let typed = open(&terminal, shell).and_then(|o| o.command(command)).map(|c| harness_contracts::typed_line(&c.text)).unwrap_or_default();
                 Subject::TerminalCommand { terminal, shell, command, typed }
             }
@@ -525,25 +525,22 @@ impl nah_things::Resolve for Terminals {
     }
 
     /// A command still running: what it printed so far (its line first),
-    /// then each line it writes whole, then how it ended. (Looked at and
-    /// taken in under the lock what's followed is told under: one that ends
-    /// meanwhile isn't growing, or is told its end.)
+    /// then each line it writes whole, then how it ended. What it printed
+    /// so far is built and told before it's taken in with what's followed
+    /// (nothing else waits on that); one that ended or printed more
+    /// meanwhile is told so once it's in.
     fn follow(&self, subject: &Subject, mut more: nah_things::More) -> bool {
         let Subject::TerminalCommand { terminal, shell, command, .. } = subject else { return false };
         let Some(open) = self.get(terminal).ok().filter(|o| o.started() == *shell) else { return false };
-        let mut followed = lock(&self.followed);
         let Some(ran) = open.command(*command).filter(|c| c.end.is_none()) else { return false };
         let Some(output) = ran.output else { return false };
         let Some(written) = open.written(output, None) else { return false };
         if !more(&format!("{}\n{}{}", in_words(&ran), lost_words(written.lost), written.text)) {
             return false;
         }
-        followed.push(Followed { terminal: terminal.clone(), shell: *shell, command: *command, next: written.next, more });
-        drop(followed);
-        // Ended between being looked at and being followed: told now.
-        if open.command(*command).is_some_and(|c| c.end.is_some()) {
-            self.tell_followed(&open);
-        }
+        lock(&self.followed).push(Followed { terminal: terminal.clone(), shell: *shell, command: *command, next: written.next, more });
+        // What it printed, or how it ended, since it was looked at.
+        self.tell_followed(&open);
         true
     }
 

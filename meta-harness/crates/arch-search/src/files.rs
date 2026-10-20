@@ -141,21 +141,22 @@ impl crate::Search for Lines<'_> {
     /// capitals; `*.rs` and `src/` narrow the files), the first `limit`;
     /// partial when the time limit cut it short.
     fn search(&self, query: &str, limit: usize) -> crate::Searched<FoundLine> {
-        self.grep(&QueryParser::new(AiGrepConfig).parse(query), limit)
+        self.grep(&QueryParser::new(AiGrepConfig).parse(query), limit, true)
     }
 }
 
 impl Lines<'_> {
     /// Lines containing `text`, all of it as it's written (nothing in it
-    /// narrows the files; case ignored unless it has capitals), the first
-    /// `limit`; partial when the time limit cut it short.
+    /// narrows the files; case ignored unless it has capitals), each as it
+    /// is (not trimmed), the first `limit`; partial when the time limit cut
+    /// it short.
     pub fn containing(&self, text: &str, limit: usize) -> crate::Searched<FoundLine> {
         let text = text.trim();
         let query = FFFQuery { raw_query: text, constraints: ConstraintVec::new(), fuzzy_query: if text.is_empty() { FuzzyQuery::Empty } else { FuzzyQuery::Text(text) }, location: None };
-        self.grep(&query, limit)
+        self.grep(&query, limit, false)
     }
 
-    fn grep(&self, query: &FFFQuery<'_>, limit: usize) -> crate::Searched<FoundLine> {
+    fn grep(&self, query: &FFFQuery<'_>, limit: usize, trim: bool) -> crate::Searched<FoundLine> {
         let picker = &self.files.picker;
         let options = GrepSearchOptions {
             max_file_size: self.limits.max_file_bytes,
@@ -164,7 +165,7 @@ impl Lines<'_> {
             mode: GrepMode::PlainText,
             time_budget_ms: self.limits.budget_ms,
             enforce_time_budget: true,
-            trim_whitespace: true,
+            trim_whitespace: trim,
             ..GrepSearchOptions::default()
         };
         let found = picker.grep(query, &options);

@@ -133,8 +133,8 @@ impl Navigable for ChatStreamState {
             let slot = self.slot_with(session).ok_or("No agent slot has that session open now (resume it to see it).")?;
             self.ui.slot = slot;
             let subject = match message {
-                Some(message) => harness_contracts::Subject::ChatMessage { session: session.clone(), turn: *turn, message: *message },
-                None => harness_contracts::Subject::ChatTurn { session: session.clone(), turn: *turn },
+                Some(message) => harness_contracts::Subject::ChatMessage { session: session.clone(), turn: *turn, message: *message, turn_id: String::new() },
+                None => harness_contracts::Subject::ChatTurn { session: session.clone(), turn: *turn, turn_id: String::new() },
             };
             let at = self.tagged_indexes(&subject).first().copied().ok_or_else(|| format!("Turn {turn} isn't in the chat (its session holds it no more)."))?;
             self.put_cursor(at, crate::viewport::Show::Middle);

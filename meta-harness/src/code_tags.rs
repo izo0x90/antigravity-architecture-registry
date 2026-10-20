@@ -46,6 +46,23 @@ enum Now {
     Gone,
 }
 
+/// `path` as a file of the project: inside it however it's named or
+/// linked, and not one it leaves out (`.nah/ignore`, generated output);
+/// none otherwise. What's read of the project's files is read through it.
+pub fn project_file(arch: &ArchitectureService, path: &str) -> Option<std::path::PathBuf> {
+    let root = arch.root().canonicalize().ok()?;
+    let real = root.join(arch_graph::RepoPath::new(path).ok()?.as_str()).canonicalize().ok()?;
+    (real.starts_with(&root) && real.is_file() && !arch.ignores().is_ignored_as(&real, false)).then_some(real)
+}
+
+/// Lines `first..=last` (from 1) of the project's file `path` now (none:
+/// not a file of the project, or not that many lines).
+pub fn project_lines(arch: &ArchitectureService, path: &str, first: u32, last: u32) -> Option<String> {
+    let text = std::fs::read_to_string(project_file(arch, path)?).ok()?;
+    let lines: Vec<&str> = text.lines().skip(first.saturating_sub(1) as usize).take((last + 1).saturating_sub(first) as usize).collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
 /// Where lines `first..=last` are after `hunks` (the changes from where
 /// they were to the files now, in order).
 fn map_lines(hunks: &[Hunk], first: u32, last: u32) -> Now {
@@ -83,13 +100,8 @@ impl Code {
         Ok(snapshot.id)
     }
 
-    /// `path` as a file of the project: inside it however it's named or
-    /// linked, and not one it leaves out (`.nah/ignore`, generated output);
-    /// none otherwise.
     fn file(&self, path: &str) -> Option<std::path::PathBuf> {
-        let root = self.arch.root().canonicalize().ok()?;
-        let real = root.join(arch_graph::RepoPath::new(path).ok()?.as_str()).canonicalize().ok()?;
-        (real.starts_with(&root) && real.is_file() && !self.arch.ignores().is_ignored_as(&real, false)).then_some(real)
+        project_file(&self.arch, path)
     }
 
     /// Where lines kept at `snapshot` are now.
@@ -108,9 +120,7 @@ impl Code {
 
     /// The text of lines `first..=last` of `path` now.
     fn lines_text(&self, path: &str, first: u32, last: u32) -> Option<String> {
-        let text = std::fs::read_to_string(self.file(path)?).ok()?;
-        let lines: Vec<&str> = text.lines().skip(first.saturating_sub(1) as usize).take((last + 1).saturating_sub(first) as usize).collect();
-        (!lines.is_empty()).then(|| lines.join("\n"))
+        project_lines(&self.arch, path, first, last)
     }
 
     /// Lines `first..=last` of `path` as snapshot `snapshot` has them.
@@ -170,7 +180,8 @@ impl nah_things::Resolve for Code {
             let id = ComponentId::new(id.split(" (").next().unwrap_or(id).trim());
             return Some(if self.component(&id).is_some() { Ok(Subject::Component { id, was: None }) } else { Err(format!("there's no component {id} in the code")) });
         }
-        let (path, lines) = words.split_once(" lines ").or_else(|| words.split_once(" line "))?;
+        // The last ` lines `/` line ` (a path may have the words in it).
+        let (path, lines) = words.rsplit_once(" lines ").or_else(|| words.rsplit_once(" line "))?;
         let lines = lines.split(" (").next().unwrap_or(lines);
         Some((|| {
             let number = |n: &str| n.trim().parse::<u32>().map_err(|_| format!("{n:?} isn't a line number"));
@@ -188,7 +199,11 @@ impl nah_things::Resolve for Code {
     fn there(&self, subject: &Subject) -> bool {
         match subject {
             Subject::Component { id, .. } => self.component(id).is_some(),
-            Subject::CodeLines { path, first, last, snapshot } => matches!(self.now_at(path, *first, *last, snapshot), Now::At(..)),
+            // Where they are now, all of them in the file.
+            Subject::CodeLines { path, first, last, snapshot } => match self.now_at(path, *first, *last, snapshot) {
+                Now::At(f, l) => self.lines_text(path, l, l).is_some() && f <= l,
+                Now::Changed | Now::Gone => false,
+            },
             _ => false,
         }
     }

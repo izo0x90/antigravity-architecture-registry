@@ -384,6 +384,54 @@ async fn a_turns_tool_output_is_folded_the_same_in_every_read_unless_read_in_ful
     assert!(given.contains(folded) && !given.contains("tool line one"), "{given}");
 }
 
+/// A session that numbers its turns anew (a message taken while a turn
+/// ran): what's tagged in it is kept where its turn is now. A slot closed:
+/// its session is named as no slot's, and named back so.
+#[tokio::test]
+async fn a_tagged_turn_follows_its_session_numbering_it_anew_and_its_slot_closing() {
+    let (addr, state) = spawn_app().await;
+    let (status, body) = common::http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"fake","name":"helper"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let slot = serde_json::from_str::<serde_json::Value>(&body).unwrap()["slotId"].as_str().unwrap().to_owned();
+    let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"first"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let mut lead = Mcp::lead(addr).await;
+    let mut said = String::new();
+    for _ in 0..50 {
+        let (error, out) = lead.tool("tag", json!({ "tag": "first", "subject": "chat helper turn 1" })).await;
+        said = out;
+        if !error {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(said.starts_with("first (on 1 thing)"), "{said}");
+    let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"[renumber]"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let named = |state: &meta_harness::modules::AppState| state.tags.tags.find("first").unwrap().on[0].what.clone();
+    for _ in 0..50 {
+        if named(&state).ends_with(" turn 9") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(named(&state).starts_with("chat helper@native-") && named(&state).ends_with(" turn 9"), "{}", named(&state));
+    let (_, read) = lead.tool("tag_read", json!({ "tag": "first", "thing": 1 })).await;
+    assert!(read.contains(" turn 9 (as it is now):\necho: first"), "the same turn, by its new number: {read}");
+    // Its slot closed: named as no slot's session, and named back so.
+    state.harness.slots.close(&SlotId::new(&slot)).await.unwrap();
+    for _ in 0..50 {
+        if named(&state).starts_with("chat session ") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let name = named(&state);
+    assert!(name.starts_with("chat session ") && name.ends_with(" turn 9"), "{name}");
+    let (error, said) = lead.tool("untag", json!({ "tag": "first", "subject": name })).await;
+    assert!(!error && said.starts_with("first (on 0 things)"), "{said}");
+}
+
 /// A turn tagged while it runs is kept whole: what it said then, and the
 /// rest once it ends.
 #[tokio::test]

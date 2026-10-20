@@ -48,6 +48,15 @@ impl TagStore for StateDb {
         .map_err(|e| e.to_string())
     }
 
+    fn unreadable(&self) -> Result<usize, String> {
+        self.transaction(|tx| {
+            let mut stmt = tx.prepare("SELECT json FROM tags").map_err(failed)?;
+            let rows: Vec<String> = stmt.query_map([], |r| r.get(0)).map_err(failed)?.collect::<Result<_, _>>().map_err(failed)?;
+            Ok(rows.iter().filter(|json| serde_json::from_str::<Tag>(json).is_err()).count())
+        })
+        .map_err(|e| e.to_string())
+    }
+
     fn put(&self, tag: &Tag, change: Option<&Change>) -> Result<(), String> {
         self.transaction(|tx| {
             tx.execute(

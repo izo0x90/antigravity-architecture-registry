@@ -2,8 +2,8 @@
 //! against the code and the plan, and rejects what can't be right.
 
 use arch_graph::{
-    Component, ComponentId, Graph, ImplementationSpec, Plan, PlanKind, Provenance, ProposedLocation, Reference, Relation, RelationKind, RepoPath,
-    Schemas, Signature, Stage, Status, TypeSystem,
+    Component, ComponentId, Graph, ImplementationSpec, Item, ItemId, ItemState, Plan, PlanKind, Provenance, ProposedLocation, Reference, Relation, RelationKind,
+    RepoPath, Schemas, Signature, Stage, Status, TypeSystem,
     schema::Dsl,
 };
 use code_analyzer::{PackSet, module_symbol};
@@ -80,6 +80,31 @@ pub enum PlanOp {
         #[serde(default)]
         description: Option<String>,
     },
+    /// A new item (a finding, a decision, a to-do), under item `under` or
+    /// at the top; open.
+    AddItem {
+        title: String,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        under: Option<ItemId>,
+    },
+    /// An item's title or text, rewritten.
+    EditItem {
+        id: ItemId,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// An item moved under item `under` (none: to the top), last there.
+    MoveItem {
+        id: ItemId,
+        #[serde(default)]
+        under: Option<ItemId>,
+    },
+    /// Where an item stands now.
+    SetItem { id: ItemId, state: ItemState },
 }
 
 impl PlanOp {
@@ -92,8 +117,14 @@ impl PlanOp {
                 RelationKind::Calls | RelationKind::Implements => Some(source),
                 RelationKind::DataFlow | RelationKind::Contains => Some(target),
             },
-            PlanOp::AddComponent { .. } | PlanOp::Reference { .. } | PlanOp::SetGreenfield { .. } | PlanOp::Describe { .. } => None,
+            PlanOp::AddComponent { .. } | PlanOp::Reference { .. } | PlanOp::SetGreenfield { .. } | PlanOp::Describe { .. } | PlanOp::AddItem { .. } | PlanOp::EditItem { .. } | PlanOp::MoveItem { .. } | PlanOp::SetItem { .. } => None,
         }
+    }
+
+    /// Whether it's about the plan's items or its words (all a review plan
+    /// takes).
+    fn on_items(&self) -> bool {
+        matches!(self, PlanOp::AddItem { .. } | PlanOp::EditItem { .. } | PlanOp::MoveItem { .. } | PlanOp::SetItem { .. } | PlanOp::Describe { .. })
     }
 }
 
@@ -106,7 +137,7 @@ impl PlanOp {
             PlanOp::Modify { signature: Some(_), .. } => Some("change a signature"),
             PlanOp::Relate { .. } | PlanOp::Unrelate { .. } => Some("plan relations"),
             PlanOp::SetGreenfield { .. } => Some("be greenfield"),
-            PlanOp::Modify { .. } | PlanOp::Reference { .. } | PlanOp::Remove { .. } | PlanOp::Describe { .. } => None,
+            PlanOp::Modify { .. } | PlanOp::Reference { .. } | PlanOp::Remove { .. } | PlanOp::Describe { .. } | PlanOp::AddItem { .. } | PlanOp::EditItem { .. } | PlanOp::MoveItem { .. } | PlanOp::SetItem { .. } => None,
         }
     }
 }
@@ -128,6 +159,9 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
         && let Some(what) = op.code_change()
     {
         return Err(invalid(format!("{} is a walkthrough: it explains the code as it is, so it can't {what}", plan.id)));
+    }
+    if plan.kind == PlanKind::Review && !op.on_items() {
+        return Err(invalid(format!("{} is a review: a list of items, with no components (add_item, edit_item, move_item, set_item)", plan.id)));
     }
     match op {
         PlanOp::AddComponent { name, type_name, description, parent, file, signature, schemas, spec } => {
@@ -311,5 +345,55 @@ pub fn apply(plan: &mut Plan, op: PlanOp, graph: &Graph, root: &std::path::Path,
             }
             Ok(Vec::new())
         }
+        PlanOp::AddItem { title, text, under } => {
+            let title = item_title(&title)?;
+            if let Some(under) = &under {
+                plan.item(under).ok_or_else(|| invalid(format!("{} has no item {under}", plan.id)))?;
+            }
+            let next = plan.items.iter().filter_map(|i| i.id.0.strip_prefix('i')?.parse::<u64>().ok()).max().unwrap_or(0) + 1;
+            plan.items.push(Item { id: ItemId(format!("i{next}")), parent: under, title, text, state: ItemState::Open });
+            Ok(Vec::new())
+        }
+        PlanOp::EditItem { id, title, text } => {
+            let title = title.as_deref().map(item_title).transpose()?;
+            let plan_id = plan.id.clone();
+            let item = plan.items.iter_mut().find(|i| i.id == id).ok_or_else(|| invalid(format!("{plan_id} has no item {id}")))?;
+            if let Some(title) = title {
+                item.title = title;
+            }
+            if let Some(text) = text {
+                item.text = text;
+            }
+            Ok(Vec::new())
+        }
+        PlanOp::MoveItem { id, under } => {
+            let at = plan.items.iter().position(|i| i.id == id).ok_or_else(|| invalid(format!("{} has no item {id}", plan.id)))?;
+            // Not under itself, nor under what's under it.
+            let mut above = under.clone();
+            while let Some(a) = above {
+                if a == id {
+                    return Err(invalid(format!("{id} can't go under {}: it's under {id}", under.as_ref().map_or_else(String::new, ToString::to_string))));
+                }
+                above = plan.item(&a).ok_or_else(|| invalid(format!("{} has no item {a}", plan.id)))?.parent.clone();
+            }
+            let mut item = plan.items.remove(at);
+            item.parent = under;
+            plan.items.push(item);
+            Ok(Vec::new())
+        }
+        PlanOp::SetItem { id, state } => {
+            let plan_id = plan.id.clone();
+            plan.items.iter_mut().find(|i| i.id == id).ok_or_else(|| invalid(format!("{plan_id} has no item {id}")))?.state = state;
+            Ok(Vec::new())
+        }
     }
+}
+
+/// An item's title: one line, not empty.
+fn item_title(title: &str) -> Result<String, ServiceError> {
+    let title = title.trim();
+    if title.is_empty() || title.contains('\n') {
+        return Err(invalid("an item's title is one line, not empty (what it says goes in its text)"));
+    }
+    Ok(title.to_owned())
 }

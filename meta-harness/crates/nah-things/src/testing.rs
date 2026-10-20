@@ -11,7 +11,8 @@ use crate::{More, Resolve};
 /// `a` to `b` are named "lines a to b" and say "text of lines a to b";
 /// those from line 0 are gone; those from 100 to 999 were laid out anew
 /// (once `relay` is called) and are `relaid` thousand lines on now; line 7
-/// says lines of detail. It doesn't keep t1's for good: once
+/// says lines of detail; lines 600 to 699 are kept with the command they're
+/// in (command 6). It doesn't keep t1's for good: once
 /// `scroll_away` is called, none is there. Lines from 500 on are still
 /// growing: `grow` adds to them.
 #[derive(Default)]
@@ -19,6 +20,8 @@ pub struct Lines {
     pub relaid: AtomicU64,
     gone: std::sync::atomic::AtomicBool,
     growing: Mutex<Vec<More>>,
+    /// How many things it was told are noted, each time it was told.
+    pub told: Mutex<Vec<usize>>,
 }
 
 impl Lines {
@@ -77,18 +80,31 @@ impl Resolve for Lines {
         kept_for_good(subject)
     }
 
+    fn settle(&self, subject: &Subject) -> Result<Subject, String> {
+        Ok(match subject.clone() {
+            Subject::TerminalLines { terminal, shell, first, last, command: None } if (600..700).contains(&first) => Subject::TerminalLines { terminal, shell, first, last, command: Some(6) },
+            other => other,
+        })
+    }
+
     fn follow(&self, subject: &Subject, more: More) -> bool {
         let Subject::TerminalLines { first, .. } = subject else { return false };
         if *first < 500 {
             return false;
         }
         let mut more = more;
-        more(&self.now(subject).unwrap_or_default());
+        if !more(&self.now(subject).unwrap_or_default()) {
+            return false;
+        }
         self.growing.lock().unwrap().push(more);
         true
     }
 
     fn detailed(&self, subject: &Subject) -> bool {
         matches!(subject, Subject::TerminalLines { first: 7, .. })
+    }
+
+    fn noted(&self, all: &[Subject]) {
+        self.told.lock().unwrap().push(all.len());
     }
 }

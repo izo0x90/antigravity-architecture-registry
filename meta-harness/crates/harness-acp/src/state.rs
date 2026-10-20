@@ -167,10 +167,12 @@ impl SessionState {
     }
 
     /// The agent took message `item` added to a running turn: it starts the
-    /// next turn, with all that came after it, as the session's history
-    /// has it once replayed (a turn is a message of yours and what follows
-    /// it), so turns keep their numbers after a reload. The prompt goes on
-    /// in that turn (its end ends it). The turn it's in now.
+    /// next turn, as the session's history has it once replayed (a turn is
+    /// a message of yours and what follows it), so turns keep their numbers
+    /// after a reload. The agent says it took it as it's queued, before it
+    /// reads it: what came before that is the turn's that ran, so the
+    /// message moves to now (the end) and the new turn starts there. The
+    /// prompt goes on in it (its end ends it). The turn it's in now.
     pub fn steered(&mut self, item: &ItemId) -> Option<TurnId> {
         let &at = self.item_index.get(item)?;
         let was = self.items[at].turn_id.clone();
@@ -185,17 +187,16 @@ impl SessionState {
             let turn = self.turns[n].clone();
             self.emit(AdapterEvent::TurnUpdated { turn });
         }
-        let moved: Vec<ItemId> = self.items[at..].iter().filter(|i| i.turn_id == was).map(|i| i.id.clone()).collect();
-        for moving in moved {
-            self.update_item(&moving, |i| i.turn_id = id.clone());
-            // A request asked there is the new turn's too.
-            let asked = self.item_index.get(&moving).and_then(|&n| if let ItemBody::Request { request_id } = &self.items[n].body { Some(request_id.clone()) } else { None });
-            if let Some(request) = asked.and_then(|r| self.requests.iter_mut().find(|q| q.id == r)) {
-                request.turn_id = Some(id.clone());
-                let request = request.clone();
-                self.emit(AdapterEvent::RequestUpdated { request });
-            }
+        // The message, now: last, the new turn's.
+        let mut message = self.items.remove(at);
+        for (n, i) in self.items.iter().enumerate().skip(at) {
+            self.item_index.insert(i.id.clone(), n);
         }
+        message.turn_id = id.clone();
+        message.ordinal = self.items.iter().map(|i| i.ordinal).max().map_or(0, |o| o + 1);
+        self.item_index.insert(message.id.clone(), self.items.len());
+        self.items.push(message.clone());
+        self.emit(AdapterEvent::ItemUpdated { item: message });
         if let Some(running) = self.running.iter_mut().find(|t| **t == was) {
             *running = id.clone();
             self.continues.insert(was.clone(), id.clone());
@@ -728,23 +729,25 @@ mod tests {
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("working")));
         let queued = s.begin_turn("later");
         let (_, item) = s.inject("also this").unwrap();
+        // Before the agent says it took it: still the turn that runs.
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("still on the first")));
         let ask = s.open_request(None, RequestKind::Approval { action: harness_contracts::ToolAction::Tool }, "ok?".into(), None, Vec::new(), Vec::new());
         let went_on = s.steered(&item).unwrap();
         assert_eq!(s.active_turn(), Some(&went_on), "what the agent says now is the new turn's");
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("done both")));
-        assert_eq!(s.request(&ask).and_then(|r| r.turn_id.clone()), Some(went_on.clone()), "asked after the message: the new turn's");
+        assert_eq!(s.request(&ask).and_then(|r| r.turn_id.clone()), Some(first.clone()), "asked before it took the message: the first turn's");
         assert_eq!(s.end_turn(&first, TurnStatus::Completed, None), vec![ask], "the prompt's end ends the turn it went on in, and what it asked");
         s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("and later")));
         s.end_turn(&queued, TurnStatus::Completed, None);
         let live = turns(&s);
         assert_eq!(
             live.iter().map(|(n, status, said)| (*n, *status, said.join(" | "))).collect::<Vec<_>>(),
-            [(1, TurnStatus::Completed, "you: start | working".to_owned()), (2, TurnStatus::Completed, "you: also this |  | done both".into()), (3, TurnStatus::Completed, "you: later | and later".into())],
+            [(1, TurnStatus::Completed, "you: start | working | still on the first | ".to_owned()), (2, TurnStatus::Completed, "you: also this | done both".into()), (3, TurnStatus::Completed, "you: later | and later".into())],
             "(the request asked is an item of the turn it was asked in)"
         );
         // The same session replayed: the same turns, by the same numbers.
         let mut replayed = state();
-        for (user, said) in [("start", "working"), ("also this", "done both"), ("later", "and later")] {
+        for (user, said) in [("start", "working still on the first"), ("also this", "done both"), ("later", "and later")] {
             replayed.apply(&acp::SessionUpdate::UserMessageChunk(chunk(user)));
             replayed.apply(&acp::SessionUpdate::AgentMessageChunk(chunk(said)));
         }

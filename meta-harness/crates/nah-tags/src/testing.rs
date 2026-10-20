@@ -19,6 +19,10 @@ impl TagStore for MemoryStore {
         Ok(self.tags.lock().unwrap().clone())
     }
 
+    fn unreadable(&self) -> Result<usize, String> {
+        Ok(0)
+    }
+
     fn kept_files(&self) -> Result<BTreeSet<String>, String> {
         Ok(self.tags.lock().unwrap().iter().flat_map(|t| &t.on).filter_map(|t| t.kept.as_ref().map(|k| k.file.clone())).collect())
     }

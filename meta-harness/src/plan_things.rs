@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use arch_graph::{Component, ComponentId, Plan, PlanId, RelationKind, Source};
+use arch_graph::{Component, ComponentId, ItemId, Plan, PlanId, RelationKind, Source};
 use arch_service::ArchitectureService;
 use harness_contracts::{Known, Subject};
 
@@ -24,28 +24,22 @@ impl PlanParts {
         self.arch.plan(id).ok()
     }
 
-    /// The component's code, where the code has it now.
+    /// The component's code, where the code has it now (read as the
+    /// project's files are, `code_tags::project_lines`).
     fn code(&self, id: &ComponentId) -> Option<String> {
         let graph = self.arch.graph(&Source::Code).ok()?;
         let anchor = graph.component(id)?.anchor.clone()?;
-        let text = std::fs::read_to_string(self.arch.root().join(anchor.file.as_str())).ok()?;
-        let (first, last) = (anchor.span.start_line as usize, anchor.span.end_line as usize);
-        Some(text.lines().skip(first.saturating_sub(1)).take((last + 1).saturating_sub(first)).collect::<Vec<_>>().join("\n"))
+        crate::code_tags::project_lines(&self.arch, anchor.file.as_str(), anchor.span.start_line, anchor.span.end_line)
     }
 
     /// Section `section` of `c`'s card in `plan`, in words (none: there's
     /// no such section).
     fn section(&self, plan: &Plan, c: &Component, section: &str) -> Option<String> {
-        let spec = c.spec.as_ref();
         Some(match section {
             "overview" => overview(c),
             "signature" => signature(c),
-            "logic" => {
-                let mut out: Vec<String> = spec.and_then(|s| s.pattern.clone()).map(|p| format!("pattern: {p}")).into_iter().collect();
-                out.extend(spec.into_iter().flat_map(|s| &s.logic_steps).map(|s| if s.description.is_empty() { format!("{}. {}", s.sequence, s.name) } else { format!("{}. {}: {}", s.sequence, s.name, s.description) }));
-                out.join("\n")
-            }
-            "invariants" => spec.into_iter().flat_map(|s| &s.invariants).map(|i| if i.description.is_empty() { format!("- {}", i.name) } else { format!("- {}: {}", i.name, i.description) }).collect::<Vec<_>>().join("\n"),
+            "logic" => logic(c),
+            "invariants" => invariants(c),
             "relations" => plan.relations.iter().filter(|r| r.source == c.id || r.target == c.id).map(|r| format!("{} {} {}", r.source, r.kind.name(), r.target)).collect::<Vec<_>>().join("\n"),
             "code" => self.code(&c.id).unwrap_or_default(),
             "changes" => arch_graph::review::diff(plan.last_review.as_ref(), plan).fields(&c.id).into_iter().collect::<Vec<_>>().join("\n"),
@@ -82,28 +76,32 @@ fn signature(c: &Component) -> String {
     out.join("\n")
 }
 
+/// Its logic: the pattern, then each step.
+fn logic(c: &Component) -> String {
+    let spec = c.spec.as_ref();
+    let mut out: Vec<String> = spec.and_then(|s| s.pattern.clone()).map(|p| format!("pattern: {p}")).into_iter().collect();
+    out.extend(spec.into_iter().flat_map(|s| &s.logic_steps).map(|s| if s.description.is_empty() { format!("{}. {}", s.sequence, s.name) } else { format!("{}. {}: {}", s.sequence, s.name, s.description) }));
+    out.join("\n")
+}
+
+/// Its invariants, each.
+fn invariants(c: &Component) -> String {
+    c.spec.iter().flat_map(|s| &s.invariants).map(|i| if i.description.is_empty() { format!("- {}", i.name) } else { format!("- {}: {}", i.name, i.description) }).collect::<Vec<_>>().join("\n")
+}
+
 /// The card: what the component is, how it's called, its logic and
-/// invariants.
+/// invariants (each as its section says it).
 fn card(c: &Component) -> String {
     let mut out = vec![overview(c)];
-    for (title, text) in [("signature", signature(c))] {
+    for (title, text) in [("signature", signature(c)), ("logic", logic(c)), ("invariants", invariants(c))] {
         if !text.is_empty() {
             out.push(format!("{title}:\n{text}"));
-        }
-    }
-    if let Some(spec) = &c.spec {
-        if !spec.logic_steps.is_empty() {
-            out.push(format!("logic:\n{}", spec.logic_steps.iter().map(|s| format!("{}. {}", s.sequence, s.name)).collect::<Vec<_>>().join("\n")));
-        }
-        if !spec.invariants.is_empty() {
-            out.push(format!("invariants:\n{}", spec.invariants.iter().map(|i| format!("- {}", i.name)).collect::<Vec<_>>().join("\n")));
         }
     }
     out.join("\n")
 }
 
-/// The sections a card has, as `PlanSection` names them.
-pub const SECTIONS: [&str; 9] = ["overview", "signature", "logic", "invariants", "relations", "code", "changes", "placeholders", "findings"];
+use harness_contracts::CARD_SECTIONS as SECTIONS;
 
 impl nah_things::Resolve for PlanParts {
     fn owns(&self, subject: &Subject) -> bool {
@@ -129,6 +127,11 @@ impl nah_things::Resolve for PlanParts {
             Subject::PlanRelation { plan, relation, source, target } => {
                 let p = self.plan(plan)?;
                 p.relations.iter().any(|r| r.kind == *relation && r.source == *source && r.target == *target).then(|| format!("{source} {} {target}", relation.name()))
+            }
+            Subject::PlanItem { plan, item } => {
+                let p = self.plan(plan)?;
+                let item = p.item(&ItemId(item.clone()))?;
+                Some(format!("{} ({})\n{}", item.title, item.state.name(), item.text).trim_end().to_owned())
             }
             _ => None,
         }
@@ -156,6 +159,12 @@ impl nah_things::Resolve for PlanParts {
                     }
                     Subject::PlanSection { id: component(id)?, plan, section: (*section).to_owned() }
                 }
+                ["item", item] => {
+                    if p.item(&ItemId((*item).to_owned())).is_none() {
+                        return Err(format!("plan {plan} has no item {item}"));
+                    }
+                    Subject::PlanItem { plan, item: (*item).to_owned() }
+                }
                 ["relation", source, kind, target] => {
                     let relation = RelationKind::ALL.into_iter().find(|k| k.name() == *kind).ok_or_else(|| format!("{kind:?} isn't a relation's kind"))?;
                     let (source, target) = (ComponentId::new(*source), ComponentId::new(*target));
@@ -164,7 +173,7 @@ impl nah_things::Resolve for PlanParts {
                     }
                     Subject::PlanRelation { plan, relation, source, target }
                 }
-                _ => return Err(format!("a plan's `component <id>`, `component <id> section <name>` or `relation <source> <kind> <target>`, not {rest:?}")),
+                _ => return Err(format!("a plan's `component <id>`, `component <id> section <name>`, `relation <source> <kind> <target>` or `item <id>`, not {rest:?}")),
             })
         })())
     }
@@ -177,6 +186,7 @@ impl nah_things::Resolve for PlanParts {
             Subject::PlanComponent { plan, id } => has(plan, id),
             Subject::PlanSection { plan, id, section } => has(plan, id) && SECTIONS.contains(&section.as_str()),
             Subject::PlanRelation { .. } => self.now(subject).is_some(),
+            Subject::PlanItem { plan, item } => self.plan(plan).is_some_and(|p| p.item(&ItemId(item.clone())).is_some()),
             _ => false,
         }
     }

@@ -194,8 +194,13 @@ async fn tagged_code_follows_the_saved_file_and_reads_as_it_was_once_changed_or_
     let lines: Vec<&str> = before.lines().collect();
     assert!(read.contains(&format!("1. src/util.rs lines 2-3 (tagged by lead; as it is now):\n{}\n{}", lines[1], lines[2])), "{read}");
     assert!(read.contains(&format!("2. component {shout} (tagged by lead; as it is now):\n{}", lines[0])), "the component, by its id: {read}");
-    // Saved with two lines added before them, the index told (as the
-    // watcher tells it): they're where they went, and so is the definition.
+    // Saved with two lines added before them: tagged where they are now
+    // before the index has caught up, they're the same lines (not twice).
+    std::fs::write(&util, format!("// one\n// two\n{before}")).unwrap();
+    let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "here", "subject": "src/util.rs lines 4-5" })).await;
+    assert!(!error && said.starts_with("here (on 2 things)"), "{said}");
+    // The index told (as the watcher tells it): they're where they went,
+    // and so is the definition.
     let saved = |text: String| {
         std::fs::write(&util, text).unwrap();
         arch.refresh(std::slice::from_ref(&util)).unwrap();
@@ -212,6 +217,9 @@ async fn tagged_code_follows_the_saved_file_and_reads_as_it_was_once_changed_or_
     saved("// one\n// two\npub fn helper() {}\n".into());
     let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
     assert!(read.contains(&format!("2. component {shout} (tagged by lead; as it was when tagged: changed or gone since):\n{}\n{}\n{}", lines[0], lines[1], lines[2])), "{read}");
+    // Lines a file doesn't have can't be tagged.
+    let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "peek", "subject": "src/util.rs lines 900-901" })).await;
+    assert!(error && said.contains("isn't there"), "{said}");
     // Only the project's own files: not one outside it, however named.
     std::fs::write(root.parent().unwrap().join("outside.txt"), "secret\n").unwrap();
     for outside in ["/etc/passwd line 1", "../outside.txt line 1", "src/../../outside.txt line 1"] {

@@ -10,7 +10,9 @@
 //! - `[hold]`: waits until [`MockAgent::release`];
 //! - anything else: answers `echo: <prompt>`.
 //!
-//! A message steered in while a prompt runs is answered `steered: <text>`.
+//! A message steered in while a prompt runs is taken at once (as a real
+//! agent queues it), and answered `steered: <text>` when the prompt goes
+//! on.
 //!
 //! What was said in its session (prompts, messages steered in, its
 //! answers) is kept, each message with an id: loading the session again
@@ -147,6 +149,8 @@ pub struct MockAgent {
     one_at_a_time: Arc<tokio::sync::Mutex<()>>,
     /// What was said in its session, in order: whether by the user, and what.
     said: Arc<Mutex<Vec<(bool, String)>>>,
+    /// Messages steered in, not answered yet.
+    steered: Arc<Mutex<Vec<String>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -155,7 +159,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl MockAgent {
     pub fn new(setup: MockSetup) -> Self {
-        Self { setup, seen: Arc::default(), hold: Arc::default(), in_flight: Arc::default(), running: Arc::default(), one_at_a_time: Arc::default(), said: Arc::default() }
+        Self { setup, seen: Arc::default(), hold: Arc::default(), in_flight: Arc::default(), running: Arc::default(), one_at_a_time: Arc::default(), said: Arc::default(), steered: Arc::default() }
     }
 
     pub fn seen(&self) -> Seen {
@@ -272,6 +276,10 @@ impl MockAgent {
         if text.contains("[hold]") {
             self.hold.notified().await;
         }
+        let steered = std::mem::take(&mut *lock(&self.steered));
+        for message in steered {
+            self.answer(cx, &format!("steered: {message}"))?;
+        }
         self.answer(cx, &format!("echo: {text}"))
     }
 
@@ -296,14 +304,14 @@ impl MockAgent {
         Ok(())
     }
 
-    fn steer(&self, cx: &ConnectionTo<Client>, params: &serde_json::Value) -> serde_json::Value {
+    fn steer(&self, params: &serde_json::Value) -> serde_json::Value {
         let text = params.pointer("/prompt/0/text").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
         if *lock(&self.running) == 0 {
             return serde_json::json!({ "outcome": "promptRequired", "reason": "noRunningTurn" });
         }
         lock(&self.seen).steered.push(text.clone());
         lock(&self.said).push((true, text.clone()));
-        let _ = self.answer(cx, &format!("steered: {text}"));
+        lock(&self.steered).push(text);
         serde_json::json!({ "outcome": "injected" })
     }
 }
@@ -444,8 +452,8 @@ impl AcpLauncher for MockAgent {
                     agent_client_protocol::on_receive_request!(),
                 )
                 .on_receive_request(
-                    async move |req: UntypedMessage, responder, cx: ConnectionTo<Client>| match req.method.as_str() {
-                        "_session/steering" => responder.respond(on_steer.steer(&cx, &req.params)),
+                    async move |req: UntypedMessage, responder, _cx: ConnectionTo<Client>| match req.method.as_str() {
+                        "_session/steering" => responder.respond(on_steer.steer(&req.params)),
                         _ => responder.respond_with_error(agent_client_protocol::Error::method_not_found()),
                     },
                     agent_client_protocol::on_receive_request!(),

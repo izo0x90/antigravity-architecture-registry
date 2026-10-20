@@ -63,8 +63,8 @@ impl Plans {
             tool(
                 Capability::PlanEdit,
                 "plan_create",
-                "Start a plan. kind \"change\" (the default) plans one change (a feature, a fix): it holds only what's new or changing, and existing code is referenced, never re-described. kind \"walkthrough\" explains existing code to the user: modify brings in each component the behavior goes through as it is, with a description and spec written from the code; nothing is added, related, approved or built, and navigate with source plan:<id> shows the user only those components.",
-                json!({ "type": "object", "properties": { "id": { "type": "string", "description": "letters, digits, - and _" }, "title": { "type": "string" }, "description": { "type": "string" }, "kind": { "type": "string", "enum": ["change", "walkthrough"], "description": "change (the default) or walkthrough" } }, "required": ["id", "title"] }),
+                "Start a plan. kind \"change\" (the default) plans one change (a feature, a fix): it holds only what's new or changing, and existing code is referenced, never re-described. kind \"walkthrough\" explains existing code to the user: modify brings in each component the behavior goes through as it is, with a description and spec written from the code; nothing is added, related, approved or built, and navigate with source plan:<id> shows the user only those components. kind \"review\" is a list to go through (findings, decisions, questions to settle): items only, each with its state, added and nested with plan_edit add_item.",
+                json!({ "type": "object", "properties": { "id": { "type": "string", "description": "letters, digits, - and _" }, "title": { "type": "string" }, "description": { "type": "string" }, "kind": { "type": "string", "enum": ["change", "walkthrough", "review"], "description": "change (the default), walkthrough, or review" } }, "required": ["id", "title"] }),
             ),
             tool(
                 Capability::PlanEdit,
@@ -142,6 +142,7 @@ impl ToolSet for Plans {
                     "Created walkthrough {}.\n\nNext: plan_edit modify each component the behavior goes through (functions, and the data types it passes), writing its description and spec (logic steps, invariants) from what the code does; then navigate with source plan:{} to show the user only those components, from the entry point.",
                     plan.id, plan.id
                 ),
+                arch_graph::PlanKind::Review => format!("Created review {}.\n\nNext: plan_edit add_item each finding, decision or question to settle (nested with `under`), with what it is in its text; the user goes through them in the cockpit.", plan.id),
             })
         }
         "plan_import" => {

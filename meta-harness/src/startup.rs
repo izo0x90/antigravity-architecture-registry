@@ -267,8 +267,6 @@ pub fn terminal_settings(arch: &ArchitectureService) -> Result<TerminalSettings,
 /// commands are things notes can be on.
 pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>, settings: crate::terminals::Settings) -> Result<Arc<crate::terminals::Terminals>, StartError> {
     let hooks = arch_service::cache_dir(arch.root())?.join("terminal-hooks");
-    // Where they were kept before (`.nah/state/`): gone, once.
-    let _ = std::fs::remove_dir_all(arch_service::state_dir(arch.root())?.join("terminal-hooks"));
     let terminals = crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), settings)?;
     things.register(terminals.clone());
     // Noted lines kept where they are now when they move, before they can
@@ -303,9 +301,18 @@ pub fn plan_parts(arch: &Arc<ArchitectureService>, things: &Arc<nah_things::Thin
     things.register(crate::plan_things::PlanParts::new(arch.clone()));
 }
 
-/// The chats own their turns and messages as things notes can be on.
+/// The chats own their turns and messages as things notes can be on;
+/// when a session numbers its turns anew, noted ones are kept where they
+/// are now.
 pub fn chats(slots: &Arc<harness_core::SlotManager>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>) {
-    things.register(crate::chats::Chats::new(slots.clone(), hub.clone()));
+    let chats = crate::chats::Chats::new(slots.clone(), hub.clone());
+    things.register(chats.clone());
+    let weak = Arc::downgrade(things);
+    chats.when_moved(move || {
+        if let Some(things) = weak.upgrade() {
+            things.moved();
+        }
+    });
 }
 
 /// The things notes are on: what each says is its owner's to tell (each
