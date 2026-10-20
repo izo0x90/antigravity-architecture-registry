@@ -336,7 +336,52 @@ async fn a_chats_message_and_turn_are_tagged_named_by_the_slot_and_kept() {
     // Its slot closed (the session gone from here): as it was, from the logs.
     state.harness.slots.close(&SlotId::new(&slot)).await.unwrap();
     let (_, read) = lead.tool("tag_read", json!({ "tag": "greeting", "thing": 1 })).await;
-    assert!(read.contains("(gone from where it was: as it was when tagged):\necho: hello there"), "{read}");
+    assert!(read.contains("(as it was when tagged: changed or gone since):\necho: hello there"), "{read}");
+}
+
+/// What a turn's tools gave is left out of a read, one line said in its
+/// place, unless it's read in full; a prompt naming the tag leaves it out
+/// the same way (one way of folding, for every read).
+#[tokio::test]
+async fn a_turns_tool_output_is_folded_the_same_in_every_read_unless_read_in_full() {
+    let (addr, _state) = spawn_app().await;
+    let (status, body) = common::http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"fake","name":"helper"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let slot = serde_json::from_str::<serde_json::Value>(&body).unwrap()["slotId"].as_str().unwrap().to_owned();
+    let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"[tool] look"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let mut lead = Mcp::lead(addr).await;
+    let mut said = String::new();
+    for _ in 0..50 {
+        let (error, out) = lead.tool("tag", json!({ "tag": "turns", "subject": "chat helper turn 1" })).await;
+        said = out;
+        if !error {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(said.starts_with("turns (on 1 thing)"), "{said}");
+    let folded = "(2 lines left out: tag_read's `full` gives them)";
+    let (_, read) = lead.tool("tag_read", json!({ "tag": "turns" })).await;
+    assert!(read.contains("• Bash") && read.contains(folded) && !read.contains("tool line one"), "{read}");
+    let (_, read) = lead.tool("tag_read", json!({ "tag": "turns", "thing": 1 })).await;
+    assert!(read.contains(folded) && !read.contains("tool line one"), "one thing: {read}");
+    let (_, read) = lead.tool("tag_read", json!({ "tag": "turns", "full": true })).await;
+    assert!(read.contains("tool line one") && read.contains("tool line two") && !read.contains(folded), "in full: {read}");
+    // A prompt naming the tag: what it hands the agent is folded the same
+    // (the fake agent says back what it was given).
+    let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"and #turns"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let mut given = String::new();
+    for _ in 0..50 {
+        let (_, out) = lead.tool("slot_read", json!({ "slot": "helper" })).await;
+        given = out;
+        if given.contains("echo: and #turns") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(given.contains(folded) && !given.contains("tool line one"), "{given}");
 }
 
 /// A turn tagged while it runs is kept whole: what it said then, and the

@@ -401,7 +401,7 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (error, said) = lead.tool("tag", json!({ "tag": "seen-it", "subject": command })).await;
     assert!(!error && said.starts_with("seen-it (on 2 things)"), "{said}");
     let (_, read) = lead.tool("tag_read", json!({ "tag": "seen-it" })).await;
-    assert!(read.contains(&format!("2. {command} (tagged by lead; as it is now):")) && read.contains("$ echo tagged-line (exit code 0"), "{read}");
+    assert!(read.contains(&format!("2. {command} (echo tagged-line) (tagged by lead; as it is now):")) && read.contains("$ echo tagged-line (exit code 0"), "named with what was typed: {read}");
     assert!(read.contains("(tagged by the user; as it is now)"), "the user's, to an agent: {read}");
     // Taken off by the name tag_read gives; again: it isn't on it, and says so.
     let (error, said) = lead.tool("untag", json!({ "tag": "seen-it", "subject": command })).await;
@@ -438,7 +438,7 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     assert_eq!(status, 200, "{body}");
     let renamed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id && t.on[0].what.contains('@'))).await;
     let (_, read) = lead.tool("tag_read", json!({ "tag": "checked" })).await;
-    assert!(read.contains(&format!("1. terminal {}@", terminal.id)) && read.contains("gone from where it was: as it was when tagged):\ntagged-line"), "{read}");
+    assert!(read.contains(&format!("1. terminal {}@", terminal.id)) && read.contains("as it was when tagged: changed or gone since):\ntagged-line"), "{read}");
     let harness_contracts::ClientEvent::TagUpdated { tag: renamed } = renamed else { unreachable!() };
     let (error, said) = lead.tool("untag", json!({ "tag": "checked", "subject": renamed.on[0].what })).await;
     assert!(!error && said.starts_with("checked (on 0 things)"), "taken off by that name: {said}");
@@ -537,5 +537,124 @@ async fn a_running_command_tagged_again_after_its_tag_came_off_is_kept_once() {
     assert!(said.contains("exit code 0"), "{said}");
     // Searched: each line found, with its tag, thing and line.
     let (error, found) = lead.tool("tag_find", json!({ "query": "tick-3" })).await;
-    assert!(!error && found.contains(&format!("ticks · 1. {command} · line ")) && found.ends_with(": tick-3"), "{found}");
+    assert!(!error && found.contains(&format!("ticks · 1. {command} (for i in 1 2 3 4; do echo tick-$i; sleep 0.5; done) · line ")) && found.ends_with(": tick-3"), "{found}");
+}
+
+/// The server itself, as the user starts it: on a project folder, with
+/// the test's cockpit token. Killed when dropped.
+struct Started {
+    child: std::process::Child,
+    addr: SocketAddr,
+}
+
+impl Started {
+    fn on(place: &std::path::Path, home: &std::path::Path) -> Self {
+        let page = home.join("static");
+        let build = page.join(meta_harness::server::COCKPIT_BUILD);
+        std::fs::create_dir_all(build.parent().unwrap()).unwrap();
+        std::fs::write(&build, b"").unwrap();
+        std::fs::write(page.join("index.html"), "<title>NAH</title>").unwrap();
+        let addr: SocketAddr = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        let child = std::process::Command::new(env!("CARGO_BIN_EXE_meta-harness"))
+            .args(["serve", "--listen", &addr.to_string()])
+            .current_dir(place)
+            .env("HOME", home)
+            .env("XDG_DATA_HOME", home.join("data"))
+            .env("XDG_CONFIG_HOME", home.join("config"))
+            .env("NAH_REPO_ROOT", place)
+            .env("NAH_COCKPIT_TOKEN", COCKPIT_TOKEN)
+            .env("STATIC_DIR", &page)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut started = Self { child, addr };
+        let since = std::time::Instant::now();
+        while std::net::TcpStream::connect(addr).is_err() {
+            assert!(started.child.try_wait().unwrap().is_none(), "the server exited on start");
+            assert!(since.elapsed() < Duration::from_secs(60), "the server didn't listen");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        started
+    }
+}
+
+impl Drop for Started {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// A command and a line of its output, tagged, and the server killed and
+/// started again on the project: the command comes back whole from the
+/// logs, and the line still says the command it was in (its shell gone
+/// with the server).
+#[tokio::test]
+async fn what_was_tagged_comes_back_whole_after_the_server_is_started_again() {
+    let home = tempfile::tempdir().unwrap();
+    let place = home.path().join("place");
+    std::fs::create_dir_all(place.join("src")).unwrap();
+    std::fs::write(place.join("Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+    std::fs::write(place.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    let first = Started::on(&place, home.path());
+    let terminal = open(first.addr).await;
+    let mut reader = Reader::at(first.addr, &format!("/ws/terminals/{}", terminal.id)).await;
+    reader.next().await;
+    reader.run("printf 'kept-1\\nkept-2\\n'").await;
+    while !reader.commands.values().any(|c| c.text.starts_with("printf") && c.end.is_some()) {
+        reader.next().await;
+    }
+    let ran = reader.commands.values().find(|c| c.text.starts_with("printf")).unwrap().clone();
+    let shell = reader.last.as_ref().unwrap().shell;
+    let command = json!({ "kind": "terminal_command", "terminal": terminal.id, "shell": shell, "command": ran.id });
+    let line = json!({ "kind": "terminal_lines", "terminal": terminal.id, "shell": shell, "first": ran.output.unwrap(), "last": ran.output.unwrap() });
+    for subject in [command, line] {
+        let (status, body) = http(first.addr, "POST", "/api/tags", Some(&json!({ "tag": "kept", "subject": subject }).to_string())).await;
+        assert_eq!(status, 200, "{body}");
+    }
+    drop(reader);
+    drop(first);
+    let again = Started::on(&place, home.path());
+    let (status, read) = http(again.addr, "GET", "/api/tags/kept", None).await;
+    assert_eq!(status, 200, "{read}");
+    let read: harness_contracts::TagRead = serde_json::from_str(&read).unwrap();
+    let said: Vec<(&str, harness_contracts::Held, &str)> = read.on.iter().map(|t| (t.tagged.what.as_str(), t.held, t.text.as_deref().unwrap_or_default())).collect();
+    let output = ran.output.unwrap();
+    assert_eq!(said.len(), 2);
+    assert_eq!((said[0].0, said[0].1), (format!("terminal {}@{shell} command {} (printf 'kept-1\\nkept-2\\n')", terminal.id, ran.id).as_str(), harness_contracts::Held::Kept), "{said:?}");
+    assert!(said[0].2.contains("kept-1\nkept-2") && said[0].2.contains("exit code 0"), "whole, with how it ended: {said:?}");
+    assert_eq!((said[1].0, said[1].1, said[1].2), (format!("terminal {}@{shell} line {output} (of command {})", terminal.id, ran.id).as_str(), harness_contracts::Held::Kept, "kept-1"), "the command it was in, still named: {said:?}");
+}
+
+/// A project says how much of a running command a note keeps
+/// (`running_log_mb`): past it, the log says so and stops.
+#[tokio::test]
+async fn a_project_says_how_much_of_a_running_command_is_kept() {
+    let arch = common::fixture_architecture_with(|a| {
+        std::fs::create_dir_all(a.root().join(".nah")).unwrap();
+        std::fs::write(a.root().join(".nah/terminals.toml"), "running_log_mb = 1\n").unwrap();
+        a
+    });
+    let (addr, _state) = common::spawn_app_with(arch).await;
+    let terminal = open(addr).await;
+    let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
+    reader.next().await;
+    reader.run("sleep 2; yes 0123456789 | head -n 200000; echo done-here").await;
+    while !reader.commands.values().any(|c| c.text.starts_with("sleep 2") && c.output.is_some()) {
+        reader.next().await;
+    }
+    let number = reader.commands.values().find(|c| c.text.starts_with("sleep 2")).unwrap().id;
+    let mut lead = Mcp::lead(addr).await;
+    let (error, said) = lead.tool("tag", json!({ "tag": "capped", "subject": format!("terminal {} command {number}", terminal.id) })).await;
+    assert!(!error, "{said}");
+    while !reader.commands.values().any(|c| c.id == number && c.end.is_some()) {
+        reader.next().await;
+    }
+    let (_, read) = http(addr, "GET", "/api/tags/capped", None).await;
+    let read: harness_contracts::TagRead = serde_json::from_str(&read).unwrap();
+    let lines = read.on[0].lines;
+    assert!((90_000..100_000).contains(&lines), "about 1 MB of 11-byte lines, not 2.2 MB: {lines}");
+    let (_, end) = lead.tool("tag_read", json!({ "tag": "capped", "thing": 1, "lines": format!("{}-{}", lines - 1, lines) })).await;
+    assert!(end.contains("(the rest isn't kept: past the 1 MB a running command's log keeps here)") && !end.lines().skip(1).any(|l| l == "done-here"), "{end}");
 }

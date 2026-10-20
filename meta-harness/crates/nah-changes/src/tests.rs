@@ -146,6 +146,8 @@ fn a_snapshot_keeps_the_files_as_they_are_and_leaves_the_repository_as_it_was() 
     let between = Comparison { from: Point::Snapshot(start.id.clone()), to: Point::Snapshot(end.id.clone()) };
     assert_eq!(listed(&changes, &between), [(Group::Changes, "c.txt".into(), FileStatus::Modified, 1, 0)]);
     assert_eq!(changes.snapshots().unwrap().iter().map(|s| s.id.clone()).collect::<Vec<_>>(), [start.id.clone(), end.id.clone()]);
+    assert_eq!(changes.snapshots_for("turn ended").unwrap(), std::slice::from_ref(&end), "each told apart by what it was taken for");
+    assert!(changes.snapshots_for("some other reason").unwrap().is_empty());
     changes.drop_snapshot(&start.id).unwrap();
     assert!(matches!(changes.list(&between, 0, PAGE), Err(ChangesError::BadPoint(_))), "pruned: gone");
 }

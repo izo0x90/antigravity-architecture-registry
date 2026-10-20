@@ -264,7 +264,9 @@ mod terminals {
         }
         let db = StateDb::open(dir.path(), &settings()).unwrap();
         // One a later build kept, of a kind of subject this one doesn't know: left alone.
-        db.transaction(|tx| tx.execute("INSERT INTO tags (id, name, json, seq) VALUES ('z', 'newer', '{\"id\":\"z\",\"name\":\"newer\",\"colour\":0,\"on\":[{\"subject\":{\"kind\":\"chat_message\"},\"said\":\"x\",\"atMs\":0}]}', 99)", []).map(|_| ()).map_err(crate::failed)).unwrap();
+        db.transaction(|tx| tx.execute("INSERT INTO tags (id, name, json, seq) VALUES ('z', 'newer', '{\"id\":\"z\",\"name\":\"newer\",\"colour\":0,\"on\":[{\"subject\":{\"kind\":\"chat_message\"},\"said\":\"x\",\"atMs\":0,\"kept\":{\"file\":\"tagged-7.log\",\"start\":0}}]}', 99)", []).map(|_| ()).map_err(crate::failed)).unwrap();
         assert_eq!(db.tags().unwrap().iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["renamed", "second"]);
+        // Its logs stay its own: they're said to be used.
+        assert_eq!(db.kept_files().unwrap(), std::collections::BTreeSet::from(["tagged-7.log".to_owned()]));
     }
 }

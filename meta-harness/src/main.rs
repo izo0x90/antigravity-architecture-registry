@@ -212,10 +212,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notify = meta_harness::startup::notifications(&hub, &state, &slots)?;
     let changes = meta_harness::startup::changes(&arch);
     let timeline = meta_harness::startup::timeline(&arch, &changes, &state, &hub)?;
-    let tags = meta_harness::startup::tags(&arch, &state, &hub)?;
-    meta_harness::startup::chats(&slots, &hub, &tags);
-    meta_harness::startup::code_tags(&arch, &changes, &tags);
-    let terminals = if serve.no_shells { None } else { Some(meta_harness::startup::terminals(&arch, &state, &hub, &tags)?) };
+    let terminal_settings = meta_harness::startup::terminal_settings(&arch)?;
+    let things = meta_harness::startup::things(&arch, terminal_settings.running_log)?;
+    let tags = meta_harness::startup::tags(&state, &hub, &things)?;
+    meta_harness::startup::chats(&slots, &hub, &things);
+    meta_harness::startup::code_tags(&arch, &changes, &things);
+    let terminals = if serve.no_shells { None } else { Some(meta_harness::startup::terminals(&arch, &state, &hub, &things, terminal_settings.terminals)?) };
+    // Every kind of note and every owner here: what a crash left in the logs goes.
+    things.forget_unused();
     let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone(), tags: tags.clone() };
     let mcp_state = McpServerState::new(Arc::new(McpService::new(services, access.clone())), meta_harness::startup::mcp_callers(&slots));
 

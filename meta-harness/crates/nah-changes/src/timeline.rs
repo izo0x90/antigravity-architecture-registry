@@ -87,6 +87,13 @@ impl Changes {
         Ok(out)
     }
 
+    /// The snapshots taken for `why` (as `snapshot` was told), oldest first.
+    pub fn snapshots_for(&self, why: &str) -> Result<Vec<Snapshot>> {
+        let repo = self.repo()?;
+        let said = format!("NAH snapshot: {why}");
+        Ok(self.snapshots()?.into_iter().filter(|s| repo.find_reference(&format!("{SNAPSHOT_REFS}{}", s.id)).ok().and_then(|r| r.peel_to_commit().ok()).is_some_and(|c| c.message().ok() == Some(said.as_str()))).collect())
+    }
+
     /// Lets snapshot `id` go (git's cleanup takes what nothing else keeps).
     pub fn drop_snapshot(&self, id: &str) -> Result<()> {
         let repo = self.repo()?;

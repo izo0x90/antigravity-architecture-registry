@@ -11,6 +11,11 @@
 //! - anything else: answers `echo: <prompt>`.
 //!
 //! A message steered in while a prompt runs is answered `steered: <text>`.
+//!
+//! What was said in its session (prompts, messages steered in, its
+//! answers) is kept, each message with an id: loading the session again
+//! replays it, as a real agent replays a session's history (a session it
+//! has none of: an earlier question and its answer).
 
 use std::sync::{Arc, Mutex};
 
@@ -140,6 +145,8 @@ pub struct MockAgent {
     in_flight: Arc<Mutex<usize>>,
     running: Arc<Mutex<usize>>,
     one_at_a_time: Arc<tokio::sync::Mutex<()>>,
+    /// What was said in its session, in order: whether by the user, and what.
+    said: Arc<Mutex<Vec<(bool, String)>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -148,7 +155,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl MockAgent {
     pub fn new(setup: MockSetup) -> Self {
-        Self { setup, seen: Arc::default(), hold: Arc::default(), in_flight: Arc::default(), running: Arc::default(), one_at_a_time: Arc::default() }
+        Self { setup, seen: Arc::default(), hold: Arc::default(), in_flight: Arc::default(), running: Arc::default(), one_at_a_time: Arc::default(), said: Arc::default() }
     }
 
     pub fn seen(&self) -> Seen {
@@ -197,6 +204,7 @@ impl MockAgent {
         let result = {
             let _turn = self.one_at_a_time.lock().await;
             lock(&self.seen).prompts.push(text.clone());
+            lock(&self.said).push((true, text.clone()));
             *lock(&self.running) += 1;
             let result = self.run(&cx, &text).await;
             *lock(&self.running) -= 1;
@@ -264,7 +272,28 @@ impl MockAgent {
         if text.contains("[hold]") {
             self.hold.notified().await;
         }
-        say(cx, &format!("echo: {text}"))
+        self.answer(cx, &format!("echo: {text}"))
+    }
+
+    /// Says `words` as its answer, kept with what was said.
+    fn answer(&self, cx: &ConnectionTo<Client>, words: &str) -> agent_client_protocol::Result<()> {
+        lock(&self.said).push((false, words.to_owned()));
+        say(cx, words)
+    }
+
+    /// Its session's history, replayed as it was said: each message with
+    /// an id of its own.
+    fn replay(&self, cx: &ConnectionTo<Client>) -> agent_client_protocol::Result<()> {
+        let said = lock(&self.said).clone();
+        if said.is_empty() {
+            notify(cx, acp::SessionUpdate::UserMessageChunk(text("earlier question")))?;
+            return say(cx, "earlier answer");
+        }
+        for (n, (user, words)) in said.into_iter().enumerate() {
+            let chunk = text(&words).message_id(acp::MessageId::new(format!("m{n}")));
+            notify(cx, if user { acp::SessionUpdate::UserMessageChunk(chunk) } else { acp::SessionUpdate::AgentMessageChunk(chunk) })?;
+        }
+        Ok(())
     }
 
     fn steer(&self, cx: &ConnectionTo<Client>, params: &serde_json::Value) -> serde_json::Value {
@@ -273,7 +302,8 @@ impl MockAgent {
             return serde_json::json!({ "outcome": "promptRequired", "reason": "noRunningTurn" });
         }
         lock(&self.seen).steered.push(text.clone());
-        let _ = say(cx, &format!("steered: {text}"));
+        lock(&self.said).push((true, text.clone()));
+        let _ = self.answer(cx, &format!("steered: {text}"));
         serde_json::json!({ "outcome": "injected" })
     }
 }
@@ -376,8 +406,7 @@ impl AcpLauncher for MockAgent {
                 .on_receive_request(
                     async move |req: acp::LoadSessionRequest, responder, cx: ConnectionTo<Client>| {
                         lock(&on_load.seen).cwd = Some(req.cwd.clone());
-                        notify(&cx, acp::SessionUpdate::UserMessageChunk(text("earlier question")))?;
-                        say(&cx, "earlier answer")?;
+                        on_load.replay(&cx)?;
                         responder.respond(acp::LoadSessionResponse::new().modes(on_load.session_modes()))
                     },
                     agent_client_protocol::on_receive_request!(),

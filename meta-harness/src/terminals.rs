@@ -89,7 +89,7 @@ struct Followed {
     shell: u64,
     command: u64,
     next: u64,
-    more: nah_tags::More,
+    more: nah_things::More,
 }
 
 /// One terminal: how it is, its shell (none once the server restarted
@@ -436,37 +436,34 @@ impl Open {
     }
 }
 
-/// The terminals own their lines and commands as subjects of tags: their
-/// names (`terminal t1 lines 120-124`, `terminal t1 command 3`; another
-/// start's: `terminal t1@<start> …`), what they say now (in the start of
-/// the shell they were tagged in: a command, its line and all its output;
-/// lines, at most `TAGGED_LINES`), and where lines are after a new width.
-/// They don't keep them for good (the scrollback goes): the tags keep what
-/// they said, and what a command still running prints until it ends.
-impl nah_tags::Resolve for Terminals {
-    fn name(&self, subject: &Subject) -> Option<String> {
-        match subject {
-            // With the command they're in, while it's known.
-            Subject::TerminalLines { terminal, shell, first, last } => {
-                let of = self.get(terminal).ok().filter(|o| o.started() == *shell).and_then(|o| o.command_around(*first, *last));
-                let of = of.map(|c| format!(" (of command {})", c.id)).unwrap_or_default();
-                let lines = if first == last { format!("line {first}") } else { format!("lines {first}-{last}") };
-                Some(self.words(terminal, *shell, &format!("{lines}{of}")))
-            }
-            Subject::TerminalCommand { terminal, shell, command } => Some(self.words(terminal, *shell, &format!("command {command}"))),
-            _ => None,
-        }
+/// The terminals own their lines and commands as things notes are on:
+/// their names (`terminal t1 lines 120-124 (of command 3)`, `terminal t1
+/// command 3 (make)`; another start's: `terminal t1@<start> …`), what they
+/// say now (in the start of the shell they were noted in: a command, its
+/// line and all its output; lines, at most `TAGGED_LINES`), and where lines
+/// are after a new width. They don't keep them for good (the scrollback
+/// goes): the logs keep what they said, and what a command still running
+/// prints until it ends.
+impl nah_things::Resolve for Terminals {
+    fn owns(&self, subject: &Subject) -> bool {
+        matches!(subject, Subject::TerminalLines { .. } | Subject::TerminalCommand { .. })
+    }
+
+    fn name(&self, subject: &Subject) -> String {
+        let (Subject::TerminalLines { terminal, shell, .. } | Subject::TerminalCommand { terminal, shell, .. }) = subject else { return String::new() };
+        let current = self.get(terminal).is_ok_and(|o| o.started() == *shell);
+        subject.name(&harness_contracts::Known { start: (!current).then_some(*shell), ..harness_contracts::Known::default() })
     }
 
     fn now(&self, subject: &Subject) -> Option<String> {
         let started = |terminal: &TerminalId, shell: u64| self.get(terminal).ok().filter(|o| o.started() == shell);
         match subject {
-            Subject::TerminalLines { terminal, shell, first, last } => {
+            Subject::TerminalLines { terminal, shell, first, last, .. } => {
                 let end = last.checked_add(1)?.min(first.saturating_add(TAGGED_LINES));
                 let text = started(terminal, *shell)?.lines_text(*first, end)?;
                 Some(if end <= *last { format!("{text}\n(and {} lines more)", last + 1 - end) } else { text })
             }
-            Subject::TerminalCommand { terminal, shell, command } => {
+            Subject::TerminalCommand { terminal, shell, command, .. } => {
                 let open = started(terminal, *shell)?;
                 let ran = open.command(*command).filter(|c| c.output.is_some())?;
                 // Its output as it's kept (what scrolled away, said).
@@ -477,11 +474,11 @@ impl nah_tags::Resolve for Terminals {
         }
     }
 
+    /// As `name` names them (what's in brackets isn't needed).
     fn named(&self, words: &str) -> Option<Result<Subject, String>> {
         let rest = words.trim().strip_prefix("terminal ")?;
         let (who, what) = rest.split_once(' ')?;
-        // As named here, with the command lines are in (said, not needed).
-        let what = what.split_once(" (of command ").map_or(what, |(what, _)| what);
+        let what = what.split_once(" (").map_or(what, |(what, _)| what);
         let (id, start) = match who.split_once('@') {
             Some((id, start)) => (id, Some(start)),
             None => (who, None),
@@ -494,7 +491,7 @@ impl nah_tags::Resolve for Terminals {
             };
             let number = |n: &str| n.trim().parse::<u64>().map_err(|_| format!("{n:?} isn't a number"));
             if let Some(command) = what.strip_prefix("command ") {
-                return Ok(Subject::TerminalCommand { terminal, shell, command: number(command)? });
+                return Ok(Subject::TerminalCommand { terminal, shell, command: number(command)?, typed: String::new() });
             }
             let lines = what.strip_prefix("lines ").or_else(|| what.strip_prefix("line ")).ok_or("a terminal's `command <n>`, `line <n>` or `lines <a>-<b>`")?;
             let (first, last) = match lines.split_once('-') {
@@ -502,8 +499,25 @@ impl nah_tags::Resolve for Terminals {
                 None => (number(lines)?, number(lines)?),
             };
             let (first, last) = (first.min(last), first.max(last));
-            Ok(Subject::TerminalLines { terminal, shell, first, last })
+            Ok(Subject::TerminalLines { terminal, shell, first, last, command: None })
         })())
+    }
+
+    /// Lines: with the command they're in; a command: with what was typed
+    /// (named so once the shell's gone).
+    fn settle(&self, subject: &Subject) -> Result<Subject, String> {
+        let open = |terminal: &TerminalId, shell: u64| self.get(terminal).ok().filter(|o| o.started() == shell);
+        Ok(match subject.clone() {
+            Subject::TerminalLines { terminal, shell, first, last, .. } => {
+                let command = open(&terminal, shell).and_then(|o| o.command_around(first, last)).filter(|c| c.output.is_some()).map(|c| c.id);
+                Subject::TerminalLines { terminal, shell, first, last, command }
+            }
+            Subject::TerminalCommand { terminal, shell, command, .. } => {
+                let typed = open(&terminal, shell).and_then(|o| o.command(command)).map(|c| harness_contracts::typed_line(&c.text)).unwrap_or_default();
+                Subject::TerminalCommand { terminal, shell, command, typed }
+            }
+            other => other,
+        })
     }
 
     fn lasts(&self, subject: &Subject) -> bool {
@@ -511,45 +525,45 @@ impl nah_tags::Resolve for Terminals {
     }
 
     /// A command still running: what it printed so far (its line first),
-    /// then each line it writes whole, then how it ended.
-    fn follow(&self, subject: &Subject, mut more: nah_tags::More) -> bool {
-        let Subject::TerminalCommand { terminal, shell, command } = subject else { return false };
+    /// then each line it writes whole, then how it ended. (Looked at and
+    /// taken in under the lock what's followed is told under: one that ends
+    /// meanwhile isn't growing, or is told its end.)
+    fn follow(&self, subject: &Subject, mut more: nah_things::More) -> bool {
+        let Subject::TerminalCommand { terminal, shell, command, .. } = subject else { return false };
         let Some(open) = self.get(terminal).ok().filter(|o| o.started() == *shell) else { return false };
+        let mut followed = lock(&self.followed);
         let Some(ran) = open.command(*command).filter(|c| c.end.is_none()) else { return false };
         let Some(output) = ran.output else { return false };
         let Some(written) = open.written(output, None) else { return false };
         if !more(&format!("{}\n{}{}", in_words(&ran), lost_words(written.lost), written.text)) {
             return false;
         }
-        lock(&self.followed).push(Followed { terminal: terminal.clone(), shell: *shell, command: *command, next: written.next, more });
+        followed.push(Followed { terminal: terminal.clone(), shell: *shell, command: *command, next: written.next, more });
+        drop(followed);
+        // Ended between being looked at and being followed: told now.
+        if open.command(*command).is_some_and(|c| c.end.is_some()) {
+            self.tell_followed(&open);
+        }
         true
     }
 
     /// Lines all still kept; a command whose prompt's line still is (in
-    /// the start of the shell they were tagged in).
+    /// the start of the shell they were noted in).
     fn there(&self, subject: &Subject) -> bool {
         let open = |terminal: &TerminalId, shell: u64| self.get(terminal).ok().filter(|o| o.started() == shell);
         match subject {
-            Subject::TerminalLines { terminal, shell, first, last } => open(terminal, *shell).is_some_and(|o| o.lines_text(*first, last + 1).is_some()),
-            Subject::TerminalCommand { terminal, shell, command } => open(terminal, *shell).is_some_and(|o| o.command(*command).is_some_and(|c| o.lines_text(c.prompt, c.prompt + 1).is_some())),
+            Subject::TerminalLines { terminal, shell, first, last, .. } => open(terminal, *shell).is_some_and(|o| o.lines_text(*first, last + 1).is_some()),
+            Subject::TerminalCommand { terminal, shell, command, .. } => open(terminal, *shell).is_some_and(|o| o.command(*command).is_some_and(|c| o.lines_text(c.prompt, c.prompt + 1).is_some())),
             _ => false,
         }
     }
 
     /// Lines laid out anew (a new width) since they were numbered: where they are now.
     fn moved(&self, subject: &Subject) -> Option<Subject> {
-        let Subject::TerminalLines { terminal, shell, first, last } = subject else { return None };
+        let Subject::TerminalLines { terminal, shell, first, last, command } = subject else { return None };
         let open = self.get(terminal).ok().filter(|o| o.started() == *shell)?;
         let (now_first, now_last) = open.lines_now(*first, *last)?;
-        ((now_first, now_last) != (*first, *last)).then(|| Subject::TerminalLines { terminal: terminal.clone(), shell: *shell, first: now_first, last: now_last })
-    }
-}
-
-impl Terminals {
-    /// A subject's name: in the shell's current start as it is, in another
-    /// with which start.
-    fn words(&self, terminal: &TerminalId, shell: u64, what: &str) -> String {
-        if self.get(terminal).is_ok_and(|o| o.started() == shell) { format!("terminal {terminal} {what}") } else { format!("terminal {terminal}@{shell} {what}") }
+        ((now_first, now_last) != (*first, *last)).then(|| Subject::TerminalLines { terminal: terminal.clone(), shell: *shell, first: now_first, last: now_last, command: *command })
     }
 }
 

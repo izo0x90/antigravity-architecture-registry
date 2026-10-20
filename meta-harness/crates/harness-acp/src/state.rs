@@ -38,6 +38,12 @@ pub struct SessionState {
     running: VecDeque<TurnId>,
     /// Turn that replayed history (no prompt running) attaches to.
     replay_turn: Option<TurnId>,
+    /// The id the agent gave the last message of yours it replayed: a
+    /// chunk with another is another message.
+    replayed_message: Option<String>,
+    /// A prompt's turn split by a message added to it: the turn it goes on
+    /// in (its end ends that one).
+    continues: HashMap<TurnId, TurnId>,
     events: broadcast::Sender<AdapterEvent>,
 }
 
@@ -58,6 +64,8 @@ impl SessionState {
             catalog: CatalogUpdate::default(),
             running: VecDeque::new(),
             replay_turn: None,
+            replayed_message: None,
+            continues: HashMap::new(),
             events,
         }
     }
@@ -150,12 +158,50 @@ impl SessionState {
     }
 
     /// A message added to the running turn (steering), and its item; none
-    /// running: None.
+    /// running: None. It's in that turn until the agent takes it (`steered`).
     pub fn inject(&mut self, text: &str) -> Option<(TurnId, ItemId)> {
         let turn_id = self.running.front()?.clone();
         self.close_streams();
         let item = self.push_item_in(turn_id.clone(), ItemBody::UserMessage { text: text.to_owned() }, ItemStatus::Completed, None, None);
         Some((turn_id, item))
+    }
+
+    /// The agent took message `item` added to a running turn: it starts the
+    /// next turn, with all that came after it, as the session's history
+    /// has it once replayed (a turn is a message of yours and what follows
+    /// it), so turns keep their numbers after a reload. The prompt goes on
+    /// in that turn (its end ends it). The turn it's in now.
+    pub fn steered(&mut self, item: &ItemId) -> Option<TurnId> {
+        let &at = self.item_index.get(item)?;
+        let was = self.items[at].turn_id.clone();
+        let place = self.turns.iter().position(|t| t.id == was)?;
+        let status = self.turns[place].status;
+        let turn = Turn { id: TurnId::new(new_id()), thread_id: self.thread.id.clone(), ordinal: 0, status, failure: None, usage: None };
+        let id = turn.id.clone();
+        self.turns.insert(place + 1, turn);
+        // It and the turns after it numbered anew, in order.
+        for n in place + 1..self.turns.len() {
+            self.turns[n].ordinal = n as u32 + 1;
+            let turn = self.turns[n].clone();
+            self.emit(AdapterEvent::TurnUpdated { turn });
+        }
+        let moved: Vec<ItemId> = self.items[at..].iter().filter(|i| i.turn_id == was).map(|i| i.id.clone()).collect();
+        for moving in moved {
+            self.update_item(&moving, |i| i.turn_id = id.clone());
+            // A request asked there is the new turn's too.
+            let asked = self.item_index.get(&moving).and_then(|&n| if let ItemBody::Request { request_id } = &self.items[n].body { Some(request_id.clone()) } else { None });
+            if let Some(request) = asked.and_then(|r| self.requests.iter_mut().find(|q| q.id == r)) {
+                request.turn_id = Some(id.clone());
+                let request = request.clone();
+                self.emit(AdapterEvent::RequestUpdated { request });
+            }
+        }
+        if let Some(running) = self.running.iter_mut().find(|t| **t == was) {
+            *running = id.clone();
+            self.continues.insert(was.clone(), id.clone());
+            self.set_turn(&was, |t| t.status = TurnStatus::Completed);
+        }
+        Some(id)
     }
 
     /// A message the agent didn't take after all.
@@ -166,12 +212,19 @@ impl SessionState {
     /// Ends `turn_id`. The running one ending closes its streams and
     /// cancels what it was still asking (returned); the next starts.
     pub fn end_turn(&mut self, turn_id: &TurnId, status: TurnStatus, failure: Option<Failure>) -> Vec<RequestId> {
+        // A prompt's turn split by a message added to it: the turns it went on in.
+        let mut chain = vec![turn_id.clone()];
+        while let Some(next) = self.continues.remove(chain.last().unwrap_or(turn_id)) {
+            chain.push(next);
+        }
+        let turn_id = chain.last().unwrap_or(turn_id).clone();
+        let turn_id = &turn_id;
         let Some(at) = self.running.iter().position(|t| t == turn_id) else { return Vec::new() };
         self.running.remove(at);
         let mut cancelled = Vec::new();
         if at == 0 {
             self.close_streams();
-            cancelled = self.requests.iter().filter(|r| r.status == RequestStatus::Pending && r.turn_id.as_ref() == Some(turn_id)).map(|r| r.id.clone()).collect();
+            cancelled = self.requests.iter().filter(|r| r.status == RequestStatus::Pending && r.turn_id.as_ref().is_some_and(|t| chain.contains(t))).map(|r| r.id.clone()).collect();
             for id in &cancelled {
                 self.set_request_status(id, RequestStatus::Cancelled);
             }
@@ -305,7 +358,7 @@ impl SessionState {
 
     pub fn apply(&mut self, update: &acp::SessionUpdate) {
         match update {
-            acp::SessionUpdate::UserMessageChunk(chunk) => self.user_chunk(&chunk.content),
+            acp::SessionUpdate::UserMessageChunk(chunk) => self.user_chunk(chunk),
             acp::SessionUpdate::AgentMessageChunk(chunk) => self.message_chunk(&chunk.content),
             acp::SessionUpdate::AgentThoughtChunk(chunk) => self.thought_chunk(&chunk.content),
             acp::SessionUpdate::ToolCall(call) => self.tool_call(call),
@@ -343,16 +396,24 @@ impl SessionState {
     }
 
     /// Only seen during history replay: a new user message starts a new replayed turn;
-    /// consecutive chunks extend the same message.
-    fn user_chunk(&mut self, content: &acp::ContentBlock) {
+    /// consecutive chunks extend the same message (one with another id
+    /// than the last, when the agent gives them, is another message).
+    fn user_chunk(&mut self, chunk: &acp::ContentChunk) {
         if self.turn_running() {
             return; // the live prompt is already recorded by begin_turn
         }
-        let text = match convert::content_block(content) {
+        let text = match convert::content_block(&chunk.content) {
             ContentBlock::Text { text } => text,
             other => format!("{other:?}"),
         };
+        let id = chunk.message_id.as_ref().map(|m| m.0.to_string());
+        let same = match (&id, &self.replayed_message) {
+            (Some(id), Some(last)) => id == last,
+            _ => true,
+        };
+        self.replayed_message = id;
         if let Some(last) = self.items.last().map(|i| i.id.clone())
+            && same
             && self.open_message.is_none()
             && self.open_reasoning.is_none()
             && matches!(self.items.last().map(|i| &i.body), Some(ItemBody::UserMessage { .. }))
@@ -643,5 +704,65 @@ mod tests {
         assert_eq!(s.inject("also this").map(|(t, _)| t), Some(turn));
         assert!(matches!(&s.items[1].body, ItemBody::AssistantMessage { streaming: false, .. }), "what streamed before it is done");
         assert!(matches!(&s.items[2].body, ItemBody::UserMessage { text } if text == "also this"));
+    }
+
+    /// The bodies of each turn, in the turns' order, as their numbers have them.
+    fn turns(s: &SessionState) -> Vec<(u32, TurnStatus, Vec<String>)> {
+        let mut turns = s.turns.clone();
+        turns.sort_by_key(|t| t.ordinal);
+        let text = |b: &ItemBody| match b {
+            ItemBody::UserMessage { text } => format!("you: {text}"),
+            ItemBody::AssistantMessage { content, .. } => content.iter().map(|c| if let ContentBlock::Text { text } = c { text.clone() } else { String::new() }).collect(),
+            _ => String::new(),
+        };
+        turns.iter().map(|t| (t.ordinal, t.status, s.items.iter().filter(|i| i.turn_id == t.id).map(|i| text(&i.body)).collect())).collect()
+    }
+
+    /// A message added to a running turn, once the agent takes it, starts
+    /// the next turn, as replaying the session's history numbers it: a
+    /// tag on a turn names the same turn before and after a reload.
+    #[test]
+    fn a_message_the_agent_took_while_it_ran_starts_the_next_turn_as_a_replay_numbers_it() {
+        let mut s = state();
+        let first = s.begin_turn("start");
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("working")));
+        let queued = s.begin_turn("later");
+        let (_, item) = s.inject("also this").unwrap();
+        let ask = s.open_request(None, RequestKind::Approval { action: harness_contracts::ToolAction::Tool }, "ok?".into(), None, Vec::new(), Vec::new());
+        let went_on = s.steered(&item).unwrap();
+        assert_eq!(s.active_turn(), Some(&went_on), "what the agent says now is the new turn's");
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("done both")));
+        assert_eq!(s.request(&ask).and_then(|r| r.turn_id.clone()), Some(went_on.clone()), "asked after the message: the new turn's");
+        assert_eq!(s.end_turn(&first, TurnStatus::Completed, None), vec![ask], "the prompt's end ends the turn it went on in, and what it asked");
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("and later")));
+        s.end_turn(&queued, TurnStatus::Completed, None);
+        let live = turns(&s);
+        assert_eq!(
+            live.iter().map(|(n, status, said)| (*n, *status, said.join(" | "))).collect::<Vec<_>>(),
+            [(1, TurnStatus::Completed, "you: start | working".to_owned()), (2, TurnStatus::Completed, "you: also this |  | done both".into()), (3, TurnStatus::Completed, "you: later | and later".into())],
+            "(the request asked is an item of the turn it was asked in)"
+        );
+        // The same session replayed: the same turns, by the same numbers.
+        let mut replayed = state();
+        for (user, said) in [("start", "working"), ("also this", "done both"), ("later", "and later")] {
+            replayed.apply(&acp::SessionUpdate::UserMessageChunk(chunk(user)));
+            replayed.apply(&acp::SessionUpdate::AgentMessageChunk(chunk(said)));
+        }
+        let numbered = |t: &[(u32, TurnStatus, Vec<String>)]| t.iter().map(|(n, _, said)| (*n, said.first().cloned())).collect::<Vec<_>>();
+        assert_eq!(numbered(&turns(&replayed)), numbered(&live));
+    }
+
+    /// Two messages of yours one after the other (a prompt stopped before
+    /// any answer, then the next) are two turns when replayed, as they
+    /// were live, when the agent says which message each chunk is of.
+    #[test]
+    fn messages_replayed_one_after_the_other_are_told_apart_by_their_ids() {
+        let mut s = state();
+        let of = |text: &str, id: &str| acp::ContentChunk::new(acp::ContentBlock::Text(acp::TextContent::new(text))).message_id(acp::MessageId::new(id));
+        s.apply(&acp::SessionUpdate::UserMessageChunk(of("stopped", "m1")));
+        s.apply(&acp::SessionUpdate::UserMessageChunk(of("next ", "m2")));
+        s.apply(&acp::SessionUpdate::UserMessageChunk(of("one", "m2")));
+        s.apply(&acp::SessionUpdate::AgentMessageChunk(chunk("answer")));
+        assert_eq!(turns(&s).into_iter().map(|(_, _, said)| said).collect::<Vec<_>>(), [vec!["you: stopped".to_owned()], vec!["you: next one".into(), "answer".into()]]);
     }
 }

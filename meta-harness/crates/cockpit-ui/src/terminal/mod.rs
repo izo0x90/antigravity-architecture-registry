@@ -399,6 +399,29 @@ impl crate::buffer::Buffer for TerminalBuffer {
     }
 }
 
+impl crate::nav::DrawsThings for TerminalBuffer {
+    /// Lines, or a command (its prompt to its last line; running, to the
+    /// shell's line), as much of them as shows (not while a program has
+    /// the whole screen).
+    fn drawn_at(&self, subject: &Subject) -> Option<egui::Rect> {
+        let (grid, top) = (self.grid?, self.drawn?);
+        if self.lines.alternate() || self.window == 0 {
+            return None;
+        }
+        let ours = |terminal: &TerminalId, shell: u64| Some(terminal) == self.id.as_ref() && shell == self.lines.shell();
+        let (first, last) = match subject {
+            Subject::TerminalLines { terminal, shell, first, last, .. } if ours(terminal, *shell) => (*first, *last),
+            Subject::TerminalCommand { terminal, shell, command, .. } if ours(terminal, *shell) => {
+                let c = self.lines.command(*command)?;
+                (c.prompt, c.end.map_or_else(|| self.lines.cursor().0, |end| end.saturating_sub(1)).max(c.prompt))
+            }
+            _ => return None,
+        };
+        let (from, to) = (first.max(top), last.min(top + self.window.saturating_sub(1)));
+        (from <= to).then(|| egui::Rect::from_min_max(grid.min + egui::vec2(0.0, (from - top) as f32 * self.row_h), egui::pos2(grid.max.x, grid.min.y + (to - top + 1) as f32 * self.row_h)))
+    }
+}
+
 impl Navigable for TerminalBuffer {
     fn take_asks(&mut self) -> Vec<Ask> {
         std::mem::take(&mut self.asks)
@@ -529,45 +552,24 @@ impl Navigable for TerminalBuffer {
         let Some(line) = key.split(':').next().and_then(|l| l.parse::<u64>().ok()) else { return Things::default() };
         let Some(terminal) = self.id.clone().filter(|_| !self.lines.alternate()) else { return Things::default() };
         let shell = self.lines.shell();
+        let known = harness_contracts::Known::default();
+        // The command lines are all in (named with them, as they're kept).
+        let of = |first: u64, last: u64| self.lines.command_at(first).filter(|c| c.output.is_some() && self.lines.command_at(last).is_some_and(|l| l.id == c.id));
         if let Some((a, b)) = self.selection.filter(|(a, b)| (a.0.min(b.0)..=a.0.max(b.0)).contains(&line)) {
             let (first, last) = (a.0.min(b.0), a.0.max(b.0));
-            let words = if first == last { format!("line {first}") } else { format!("lines {first}\u{2013}{last}") };
-            return Things::one(Subject::TerminalLines { terminal, shell, first, last }, words);
+            return Things::one(Subject::TerminalLines { terminal, shell, first, last, command: of(first, last).map(|c| c.id) }, &known);
         }
-        let command = self.lines.command_at(line).filter(|c| c.output.is_some());
-        let of = command.map(|c| format!(" (of command {})", c.id)).unwrap_or_default();
-        let mut things = Things::one(Subject::TerminalLines { terminal: terminal.clone(), shell, first: line, last: line }, format!("line {line}{of}"));
+        let command = of(line, line);
+        let mut things = Things::one(Subject::TerminalLines { terminal: terminal.clone(), shell, first: line, last: line, command: command.map(|c| c.id) }, &known);
         if let Some(c) = command {
-            let typed = if c.text.is_empty() { String::new() } else { format!(": {}", c.text) };
-            things.at.push(Thing { subject: Subject::TerminalCommand { terminal, shell, command: c.id }, words: format!("command {} and its output{typed}", c.id) });
+            things.at.push(Thing::named(Subject::TerminalCommand { terminal, shell, command: c.id, typed: harness_contracts::typed_line(&c.text) }, &known));
             things.unit = 1;
         }
         things
     }
 
-    /// Lines, or a command (its prompt to its last line; running, to the
-    /// shell's line), as much of them as shows (not while a program has
-    /// the whole screen).
-    fn drawn_at(&self, subject: &Subject) -> Option<egui::Rect> {
-        let (grid, top) = (self.grid?, self.drawn?);
-        if self.lines.alternate() || self.window == 0 {
-            return None;
-        }
-        let ours = |terminal: &TerminalId, shell: u64| Some(terminal) == self.id.as_ref() && shell == self.lines.shell();
-        let (first, last) = match subject {
-            Subject::TerminalLines { terminal, shell, first, last } if ours(terminal, *shell) => (*first, *last),
-            Subject::TerminalCommand { terminal, shell, command } if ours(terminal, *shell) => {
-                let c = self.lines.command(*command)?;
-                (c.prompt, c.end.map_or_else(|| self.lines.cursor().0, |end| end.saturating_sub(1)).max(c.prompt))
-            }
-            _ => return None,
-        };
-        let (from, to) = (first.max(top), last.min(top + self.window.saturating_sub(1)));
-        (from <= to).then(|| egui::Rect::from_min_max(grid.min + egui::vec2(0.0, (from - top) as f32 * self.row_h), egui::pos2(grid.max.x, grid.min.y + (to - top + 1) as f32 * self.row_h)))
-    }
-
-    fn tag_gutter(&self) -> bool {
-        true
+    fn draws_things(&self) -> Option<&dyn crate::nav::DrawsThings> {
+        Some(self)
     }
 
     /// The file the cursor's on (a go-to takes it to the code), else the terminal.
@@ -892,20 +894,21 @@ pub(crate) mod tests {
         let FromTerminal::Screen { mut update } = numbered(1000, 0) else { unreachable!() };
         update.commands = vec![harness_contracts::TerminalCommand { id: 3, prompt: 40, input: 40, input_col: 2, output: Some(41), end: Some(60), text: "make".into(), code: Some(0), ran_ms: Some(5) }];
         t.lines.take(&update);
-        let lines = |first, last| Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last };
+        let lines = |first, last, command| Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last, command };
         let said = |things: Things| things.at.iter().map(|t| (t.subject.clone(), t.words.clone())).collect::<Vec<_>>();
-        // In a command's output: the line, then the command (the unit).
+        // In a command's output: the line, then the command (the unit),
+        // each by its one name (what's kept says it too).
         let in_output = t.things("50");
         assert_eq!(in_output.unit, 1);
-        assert_eq!(said(in_output), [(lines(50, 50), "line 50 (of command 3)".to_owned()), (Subject::TerminalCommand { terminal: TerminalId::new("t1"), shell: 1, command: 3 }, "command 3 and its output: make".to_owned())]);
-        assert_eq!(said(t.things("70")), [(lines(70, 70), "line 70".to_owned())], "in no command: the line");
+        assert_eq!(said(in_output), [(lines(50, 50, Some(3)), "terminal t1 line 50 (of command 3)".to_owned()), (Subject::TerminalCommand { terminal: TerminalId::new("t1"), shell: 1, command: 3, typed: "make".into() }, "terminal t1 command 3 (make)".to_owned())]);
+        assert_eq!(said(t.things("70")), [(lines(70, 70, None), "terminal t1 line 70".to_owned())], "in no command: the line");
         t.selection = Some(((1023, 3), (100, 0)));
-        assert_eq!(said(t.things("500")), [(lines(100, 1023), "lines 100\u{2013}1023".to_owned())], "the selection's, alone (the server says if it's too many)");
+        assert_eq!(said(t.things("500")), [(lines(100, 1023, None), "terminal t1 lines 100-1023".to_owned())], "the selection's, alone (the server says if it's too many)");
         (t.grid, t.drawn, t.window, t.row_h) = (Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 240.0))), Some(1000), 24, 10.0);
         let FromTerminal::Screen { mut update } = numbered(1000, 0) else { unreachable!() };
         update.alternate = true;
         t.lines.take(&update);
-        assert_eq!((t.things("1010"), t.drawn_at(&lines(1005, 1007))), (Things::default(), None));
+        assert_eq!((t.things("1010"), crate::nav::DrawsThings::drawn_at(&t, &lines(1005, 1007, None))), (Things::default(), None));
     }
 
     impl TerminalBuffer {

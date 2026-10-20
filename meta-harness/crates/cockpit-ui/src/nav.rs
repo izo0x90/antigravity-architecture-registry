@@ -126,10 +126,10 @@ impl Target {
     pub fn of_subject(subject: &harness_contracts::Subject) -> Option<Target> {
         use harness_contracts::Subject;
         Some(match subject.clone() {
-            Subject::TerminalLines { terminal, shell, first, last } => Self::TerminalLines { terminal, shell, first, last },
-            Subject::TerminalCommand { terminal, shell, command } => Self::TerminalCommand { terminal, shell, command },
+            Subject::TerminalLines { terminal, shell, first, last, .. } => Self::TerminalLines { terminal, shell, first, last },
+            Subject::TerminalCommand { terminal, shell, command, .. } => Self::TerminalCommand { terminal, shell, command },
             Subject::ChatTurn { session, turn } => Self::Chat { session, turn, message: None },
-            Subject::Component { id } => Self::Component(id),
+            Subject::Component { id, .. } => Self::Component(id),
             Subject::CodeLines { path, first, last, .. } => Self::Span { file: path, start: first as usize, end: last as usize },
             Subject::ChatMessage { session, turn, message } => Self::Chat { session, turn, message: Some(message) },
             _ => return None,
@@ -683,11 +683,20 @@ pub enum SearchEvent<'a> {
     Cancelled,
 }
 
-/// Something a tag can be on, in words ("command 3 and its output: make").
+/// Something a note can be on, and its name (`Subject::name`: the one
+/// name it has, wherever it's shown).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Thing {
     pub subject: harness_contracts::Subject,
     pub words: String,
+}
+
+impl Thing {
+    /// `subject`, named with what the view showing it knows of it.
+    pub fn named(subject: harness_contracts::Subject, known: &harness_contracts::Known) -> Self {
+        let words = subject.name(known);
+        Self { subject, words }
+    }
 }
 
 /// The things at an item, narrowest first, and the one tagged unless
@@ -698,10 +707,17 @@ pub struct Things {
     pub unit: usize,
 }
 
+/// A view that draws things notes can be on: where it draws each.
+pub trait DrawsThings {
+    /// Where `subject` is drawn now, when it's drawn: all of it that
+    /// shows (the host marks its notes beside it, in the gutter).
+    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect>;
+}
+
 impl Things {
-    /// One thing, alone.
-    pub fn one(subject: harness_contracts::Subject, words: impl Into<String>) -> Self {
-        Self { at: vec![Thing { subject, words: words.into() }], unit: 0 }
+    /// One thing, alone (named as `Thing::named` names it).
+    pub fn one(subject: harness_contracts::Subject, known: &harness_contracts::Known) -> Self {
+        Self { at: vec![Thing::named(subject, known)], unit: 0 }
     }
 
     /// The thing picked (`picked`: an index; none, the unit).
@@ -765,9 +781,10 @@ pub trait Navigable {
         Things::default()
     }
 
-    /// Where `subject` is drawn now, when it's drawn: all of it that
-    /// shows (the host marks its tags beside it, in the tag gutter).
-    fn drawn_at(&self, _subject: &harness_contracts::Subject) -> Option<egui::Rect> {
+    /// Where it draws things notes can be on (none: it draws none). Its
+    /// host keeps a gutter of notes down its left when it does (always, so
+    /// its content doesn't move as notes come and go).
+    fn draws_things(&self) -> Option<&dyn DrawsThings> {
         None
     }
 
@@ -784,12 +801,6 @@ pub trait Navigable {
     /// its buttons.
     fn tag_at(&self, _key: &str) -> Option<harness_contracts::TagId> {
         None
-    }
-
-    /// It draws things a tag can be on: its host keeps a tag gutter down
-    /// its left (always, so its content doesn't move as tags come and go).
-    fn tag_gutter(&self) -> bool {
-        false
     }
 
     /// As a go-to's destination: whether it can show `target`, and isn't

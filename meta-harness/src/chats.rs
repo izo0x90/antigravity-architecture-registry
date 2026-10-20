@@ -1,20 +1,17 @@
-//! The chats as owners of tags' subjects: a turn of a session, a message of
-//! a turn (`Subject::ChatTurn`, `Subject::ChatMessage`), by the harness's
-//! id for the session (it outlives our threads) and the turn's number.
-//! Named by the agent slot whose session it is (`chat lead turn 3
+//! The chats as owners of things notes are on: a turn of a session, a
+//! message of a turn (`Subject::ChatTurn`, `Subject::ChatMessage`), by the
+//! harness's id for the session (it outlives our threads) and the turn's
+//! number. Named by the agent slot whose session it is (`chat lead turn 3
 //! message 2`; a session that isn't its slot's current one, with the start
 //! of its id: `chat lead@4f2a91c0 turn 3`). What one says is read from the
 //! session while it runs (its turns and items, as the event hub keeps
-//! them); a session is the harness's, not ours to keep, so a tagged one is
-//! written to the tags' logs when it's tagged.
+//! them); a session is the harness's, not ours to keep, so a noted one is
+//! written to the logs when it's noted.
 
 use std::sync::Arc;
 
 use harness_contracts::{AdapterEvent, ClientEvent, ContentBlock, DETAIL, ItemBody, NativeId, Slot, Subject, Turn, TurnItem, message_number};
 use harness_core::{EventHub, SlotManager};
-
-/// How much of a session's id names it (beside its slot's name).
-const ID_SHOWN: usize = 8;
 
 pub struct Chats {
     slots: Arc<SlotManager>,
@@ -55,24 +52,22 @@ impl Chats {
         Some(of)
     }
 
-    /// A session in words: its slot's chat and the start of its id (a
-    /// slot has several sessions over time), else the session.
-    fn words(&self, native: &NativeId) -> String {
-        let short: String = native.as_str().chars().take(ID_SHOWN).collect();
-        match self.slot_of(native) {
-            Some(slot) => format!("chat {}@{short}", slot.name),
-            None => format!("chat session {short}"),
-        }
+    /// Whose chat session `native` is, in a name (`chat_who`).
+    fn who(&self, native: &NativeId) -> String {
+        harness_contracts::chat_who(self.slot_of(native).as_ref().map(|s| s.name.as_str()), native)
     }
 }
 
-/// What a message says.
+/// What a message says (a line of it that starts as a line of detail
+/// does, `DETAIL`, made not to: only detail is folded).
 fn message_text(body: &ItemBody) -> Option<String> {
-    match body {
-        ItemBody::UserMessage { text } => Some(text.clone()),
-        ItemBody::AssistantMessage { content, .. } => Some(content.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n")),
-        _ => None,
-    }
+    let text = match body {
+        ItemBody::UserMessage { text } => text.clone(),
+        ItemBody::AssistantMessage { content, .. } => content.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect::<Vec<_>>().join("\n"),
+        _ => return None,
+    };
+    let mark = DETAIL.chars().next().unwrap_or(' ');
+    Some(text.split('\n').map(|l| if l.starts_with(DETAIL) { l.replacen(mark, " ", 1) } else { l.to_owned() }).collect::<Vec<_>>().join("\n"))
 }
 
 /// `text` as detail under a line (a tool call's output): reads leave it
@@ -88,7 +83,7 @@ fn turn_text(items: &[TurnItem]) -> String {
     let mut out = String::new();
     for item in items {
         match &item.body {
-            ItemBody::UserMessage { text } => out.push_str(&format!("you: {text}\n")),
+            ItemBody::UserMessage { .. } => out.push_str(&format!("you: {}\n", message_text(&item.body).unwrap_or_default())),
             ItemBody::AssistantMessage { .. } => out.push_str(&format!("{}\n", message_text(&item.body).unwrap_or_default())),
             ItemBody::ToolCall { name, input, output, .. } => {
                 out.push_str(&format!("• {name}\n"));
@@ -130,13 +125,14 @@ fn turn_text(items: &[TurnItem]) -> String {
     out
 }
 
-impl nah_tags::Resolve for Chats {
-    fn name(&self, subject: &Subject) -> Option<String> {
-        match subject {
-            Subject::ChatTurn { session, turn } => Some(format!("{} turn {turn}", self.words(session))),
-            Subject::ChatMessage { session, turn, message } => Some(format!("{} turn {turn} message {message}", self.words(session))),
-            _ => None,
-        }
+impl nah_things::Resolve for Chats {
+    fn owns(&self, subject: &Subject) -> bool {
+        matches!(subject, Subject::ChatTurn { .. } | Subject::ChatMessage { .. })
+    }
+
+    fn name(&self, subject: &Subject) -> String {
+        let (Subject::ChatTurn { session, .. } | Subject::ChatMessage { session, .. }) = subject else { return String::new() };
+        subject.name(&harness_contracts::Known { chat: self.who(session), ..harness_contracts::Known::default() })
     }
 
     fn now(&self, subject: &Subject) -> Option<String> {
@@ -191,7 +187,7 @@ impl nah_tags::Resolve for Chats {
     /// A turn still running (or a message of one): what it says so far,
     /// then, once the turn ends, the rest of what it says then (all of it
     /// again, said so, when it changed rather than grew).
-    fn follow(&self, subject: &Subject, mut more: nah_tags::More) -> bool {
+    fn follow(&self, subject: &Subject, mut more: nah_things::More) -> bool {
         let (Subject::ChatTurn { session, turn } | Subject::ChatMessage { session, turn, .. }) = subject else { return false };
         let Some((turns, _)) = self.running(session) else { return false };
         let Some(running) = turns.into_iter().find(|t| t.ordinal == *turn && !t.status.is_terminal()) else { return false };
@@ -222,9 +218,14 @@ impl nah_tags::Resolve for Chats {
         true
     }
 
-    /// A session is the harness's: what's tagged in it is kept in the logs.
+    /// A session is the harness's: what's noted in it is kept in the logs.
     fn lasts(&self, subject: &Subject) -> bool {
         !matches!(subject, Subject::ChatTurn { .. } | Subject::ChatMessage { .. })
+    }
+
+    /// A turn's tool calls say what they gave as detail.
+    fn detailed(&self, subject: &Subject) -> bool {
+        matches!(subject, Subject::ChatTurn { .. })
     }
 }
 
@@ -245,6 +246,9 @@ mod tests {
             item(2, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "Fixed.".into() }], streaming: false }),
         ];
         assert_eq!(turn_text(&items), format!("you: fix the build\n• Bash\n{DETAIL}error: 1\n{DETAIL}warning: 2\nFixed.\n"));
+        // What a message says never passes for detail (only detail is folded).
+        let says = [item(0, ItemBody::UserMessage { text: format!("see:\n{DETAIL}not detail") })];
+        assert!(!turn_text(&says).lines().any(|l| l.starts_with(DETAIL)), "{}", turn_text(&says));
         let refs: Vec<&TurnItem> = items.iter().collect();
         assert_eq!([0, 1, 2].map(|n| message_number(&refs, &items[n].id)), [Some(1), None, Some(2)], "messages numbered in their turn");
     }

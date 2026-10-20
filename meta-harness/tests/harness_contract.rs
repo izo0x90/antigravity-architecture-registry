@@ -157,9 +157,10 @@ async fn what_it_declares_works() {
             let mut events = session.events();
             let turn = session.start_turn(say("[hold] one")).await.unwrap();
             h.agent.prompted(1).await;
-            assert_eq!(session.inject(say("also")).await.unwrap(), turn, "{}", h.name);
+            // Taken: it starts the next turn, which the prompt goes on in.
+            assert_ne!(session.inject(say("also")).await.unwrap(), turn, "{}", h.name);
             h.agent.release();
-            until(&mut events, "the turn's end", ended(1)).await;
+            until(&mut events, "the turn's end", ended(2)).await;
             assert_eq!(h.agent.seen().steered, ["also"], "{}", h.name);
         }
         // Questions, if it asks them in forms.

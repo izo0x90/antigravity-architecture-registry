@@ -63,7 +63,7 @@ pub struct Tagged {
 /// Where a thing's text is in the tags' logs: `len` bytes of a file from
 /// byte `start`; to the file's end for a thing that was growing when tagged
 /// (a command running: its file is its own).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Kept {
     pub file: String,
@@ -82,11 +82,26 @@ pub struct Kept {
 pub enum Subject {
     /// Lines of a terminal (`first` to `last`, by their numbers), in one
     /// start of its shell (`ScreenUpdate::shell`: a new start's lines are
-    /// other lines).
-    TerminalLines { terminal: TerminalId, shell: u64, first: u64, last: u64 },
+    /// other lines), and the command they're in (kept when they're noted:
+    /// it's named with them after its shell is gone).
+    TerminalLines {
+        terminal: TerminalId,
+        shell: u64,
+        first: u64,
+        last: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<u64>,
+    },
     /// A command a terminal's shell ran (`TerminalCommand::id`), in one
-    /// start of its shell.
-    TerminalCommand { terminal: TerminalId, shell: u64, command: u64 },
+    /// start of its shell, and what was typed (its first line: kept when
+    /// it's noted, to name it after its shell is gone).
+    TerminalCommand {
+        terminal: TerminalId,
+        shell: u64,
+        command: u64,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        typed: String,
+    },
     /// A turn of a chat (by its number in the session: the harness's
     /// session id, which outlives our threads): your message, the answer,
     /// its tool calls.
@@ -95,12 +110,60 @@ pub enum Subject {
     /// from 1 in its turn, `message_number`).
     ChatMessage { session: NativeId, turn: u32, message: u32 },
     /// A component of the code (a symbol: a function, a type...): the
-    /// index follows it through edits.
-    Component { id: arch_graph::ComponentId },
+    /// index follows it through edits; where it was when it was noted is
+    /// kept (`was`: its lines at a snapshot), to read it once it's gone.
+    Component {
+        id: arch_graph::ComponentId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        was: Option<CodeAt>,
+    },
     /// Lines of a file (`first` to `last`, from 1) as the files were at a
     /// snapshot (the changes' timeline; none yet: the files now, kept as
     /// one when it's tagged); kept where they are as the files change.
     CodeLines { path: String, first: u32, last: u32, #[serde(default)] snapshot: String },
+}
+
+/// Lines of a file as the files were at a snapshot (the changes' timeline).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeAt {
+    pub path: String,
+    pub first: u32,
+    pub last: u32,
+    pub snapshot: String,
+}
+
+/// What names a thing beyond the thing itself: what its owner (or a view
+/// showing it) knows of it now.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Known {
+    /// A terminal's thing: the start of its shell that isn't the current
+    /// one (named with it).
+    pub start: Option<u64>,
+    /// A chat's thing: whose chat (`chat_who`).
+    pub chat: String,
+}
+
+/// Whose chat a session is, in a name: its agent slot's with the start of
+/// its id (a slot has several sessions over time: the name stays the
+/// session's), or the session's own.
+pub fn chat_who(slot: Option<&str>, session: &NativeId) -> String {
+    let short: String = session.as_str().chars().take(8).collect();
+    match slot {
+        Some(slot) => format!("{slot}@{short}"),
+        None => format!("session {short}"),
+    }
+}
+
+/// What was typed for a command, as a noted command keeps it: its first
+/// line, at most 80 characters.
+pub fn typed_line(text: &str) -> String {
+    text.lines().next().unwrap_or_default().chars().take(80).collect()
+}
+
+/// Lines `first` to `last` in a name (`line 4`, `lines 4-9`).
+fn lines_words<N: std::fmt::Display + PartialEq>(first: N, last: N) -> String {
+    if first == last { format!("line {first}") } else { format!("lines {first}-{last}") }
 }
 
 /// A line of detail in what a thing says (a tool call's output, under
@@ -125,6 +188,27 @@ pub fn message_number(items: &[&crate::TurnItem], item: &crate::ItemId) -> Optio
 pub const TAGGED_LINES: u64 = 200;
 
 impl Subject {
+    /// Its name: the one name a thing has, wherever it's shown (the
+    /// cockpit's picker, a tag, an agent's tools) and named back by
+    /// (`terminal t1 lines 4-9 (of command 3)`, `src/a.rs line 12`, `chat
+    /// lead@4f2a91c0 turn 3 message 2`, `component rust:app::save`). What's in
+    /// brackets says more; naming it back doesn't need it.
+    pub fn name(&self, known: &Known) -> String {
+        let terminal = |terminal: &TerminalId| match known.start {
+            Some(start) => format!("terminal {terminal}@{start}"),
+            None => format!("terminal {terminal}"),
+        };
+        let more = |text: &str| if text.is_empty() { String::new() } else { format!(" ({text})") };
+        match self {
+            Self::TerminalLines { terminal: t, first, last, command, .. } => format!("{} {}{}", terminal(t), lines_words(first, last), command.map(|c| format!(" (of command {c})")).unwrap_or_default()),
+            Self::TerminalCommand { terminal: t, command, typed, .. } => format!("{} command {command}{}", terminal(t), more(typed.lines().next().unwrap_or_default())),
+            Self::ChatTurn { turn, .. } => format!("chat {} turn {turn}", known.chat),
+            Self::ChatMessage { turn, message, .. } => format!("chat {} turn {turn} message {message}", known.chat),
+            Self::Component { id, .. } => format!("component {id}"),
+            Self::CodeLines { path, first, last, .. } => format!("{path} {}", lines_words(first, last)),
+        }
+    }
+
     /// Why it can't be tagged as it is (lines the wrong way round, too
     /// many of them): none when it can.
     pub fn unfit(&self) -> Option<String> {
@@ -136,13 +220,23 @@ impl Subject {
         }
     }
 
-    /// Whether it's the same thing as `other`: equal, or the same lines of
-    /// a file (kept at different snapshots, or one not kept yet: lines are
-    /// kept where they are now).
+    /// Whether it's the same thing as `other`: equal, but for what's kept
+    /// of it when it's noted (lines of a file: the snapshot they're kept
+    /// at, or none yet, as they're kept where they are now; a terminal's
+    /// lines: the command they're in; a command: what was typed; a
+    /// component: where it was).
     pub fn same_thing(&self, other: &Subject) -> bool {
-        match (self, other) {
-            (Self::CodeLines { path, first, last, .. }, Self::CodeLines { path: p, first: f, last: l, .. }) => path == p && first == f && last == l,
-            _ => self == other,
+        self.bare() == other.bare()
+    }
+
+    /// It without what's kept of it when it's noted.
+    fn bare(&self) -> Subject {
+        match self.clone() {
+            Self::CodeLines { path, first, last, .. } => Self::CodeLines { path, first, last, snapshot: String::new() },
+            Self::TerminalLines { terminal, shell, first, last, .. } => Self::TerminalLines { terminal, shell, first, last, command: None },
+            Self::TerminalCommand { terminal, shell, command, .. } => Self::TerminalCommand { terminal, shell, command, typed: String::new() },
+            Self::Component { id, .. } => Self::Component { id, was: None },
+            other => other,
         }
     }
 
@@ -150,11 +244,11 @@ impl Subject {
     /// each of their lines in them).
     pub fn contains(&self, other: &Subject) -> bool {
         match (self, other) {
-            (Self::TerminalLines { terminal, shell, first, last }, Self::TerminalLines { terminal: t, shell: s, first: f, last: l }) => terminal == t && shell == s && first <= f && l <= last,
+            (Self::TerminalLines { terminal, shell, first, last, .. }, Self::TerminalLines { terminal: t, shell: s, first: f, last: l, .. }) => terminal == t && shell == s && first <= f && l <= last,
             // Lines of a file: where they are now (one side's snapshot not
             // taken yet: the files now, as the other's are kept).
             (Self::CodeLines { path, first, last, snapshot }, Self::CodeLines { path: p, first: f, last: l, snapshot: s }) => path == p && first <= f && l <= last && (snapshot == s || snapshot.is_empty() || s.is_empty()),
-            _ => self == other,
+            _ => self.same_thing(other),
         }
     }
 }
@@ -199,8 +293,9 @@ pub struct TaggedNow {
 pub enum Held {
     /// Its source: it's still there.
     Source,
-    /// The tags' logs: its source is gone (scrolled away, a shell ended),
-    /// what it said when tagged is kept.
+    /// As it was when noted: its source is gone (scrolled away, a shell
+    /// ended) or changed it (lines of code edited), and what it said then
+    /// is kept (the logs, a snapshot of the code).
     Kept,
     /// Nowhere: it's gone, and nothing was kept (or no owner here).
     Gone,
@@ -211,7 +306,7 @@ impl Held {
     pub fn words(self) -> &'static str {
         match self {
             Held::Source => "as it is now",
-            Held::Kept => "gone from where it was: as it was when tagged",
+            Held::Kept => "as it was when tagged: changed or gone since",
             Held::Gone => "gone",
         }
     }
@@ -223,13 +318,26 @@ mod tests {
 
     #[test]
     fn lines_contain_their_lines_and_names_are_checked() {
-        let lines = |first, last| Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last };
+        let lines = |first, last| Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last, command: None };
         assert!(lines(10, 12).contains(&lines(11, 11)) && lines(10, 12).contains(&lines(10, 12)));
         assert!(!lines(10, 12).contains(&lines(12, 13)) && !lines(11, 11).contains(&lines(10, 12)));
-        assert!(!lines(10, 12).contains(&Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 2, first: 11, last: 11 }), "another start's");
-        let command = Subject::TerminalCommand { terminal: TerminalId::new("t1"), shell: 1, command: 3 };
+        assert!(!lines(10, 12).contains(&Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 2, first: 11, last: 11, command: None }), "another start's");
+        assert!(lines(10, 12).contains(&Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 11, last: 11, command: Some(3) }), "what's kept when noted isn't what it is");
+        let command = Subject::TerminalCommand { terminal: TerminalId::new("t1"), shell: 1, command: 3, typed: String::new() };
         assert!(command.contains(&command.clone()) && !lines(0, 99).contains(&command));
         assert_eq!((lines(1, 200).unfit(), lines(1, 201).unfit().is_some(), lines(5, 4).unfit().is_some()), (None, true, true), "200 lines at most, the right way round");
+        // One name for a thing: what the picker shows is what's kept.
+        let known = |start| Known { start, chat: "lead@4f2a91c0".into() };
+        let of_command = Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 4, last: 9, command: Some(3) };
+        assert_eq!(of_command.name(&known(None)), "terminal t1 lines 4-9 (of command 3)");
+        let typed = Subject::TerminalCommand { terminal: TerminalId::new("t1"), shell: 1, command: 3, typed: "make\nmore".into() };
+        assert_eq!(typed.name(&known(Some(1))), "terminal t1@1 command 3 (make)", "another start's; the first line of what was typed");
+        assert!(typed.same_thing(&command), "what's kept when noted isn't what it is");
+        let code = Subject::CodeLines { path: "src/a.rs".into(), first: 12, last: 12, snapshot: "s1".into() };
+        assert_eq!(code.name(&Known::default()), "src/a.rs line 12");
+        let message = Subject::ChatMessage { session: NativeId::new("4f2a91c0aa"), turn: 3, message: 2 };
+        assert_eq!(message.name(&known(None)), "chat lead@4f2a91c0 turn 3 message 2");
+        assert_eq!(chat_who(Some("lead"), &NativeId::new("4f2a91c0aa")), "lead@4f2a91c0");
         for ok in ["flaky-build", "a_1", "X"] {
             assert!(tag_name_ok(ok), "{ok}");
         }

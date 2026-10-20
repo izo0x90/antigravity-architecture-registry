@@ -1,23 +1,13 @@
-//! What a tag can be on in a chat: a message (what you said, or an
+//! What a note can be on in a chat: a message (what you said, or an
 //! answer) and the turn it's in, named as the server names them: the
 //! harness's id for the session, the turn's number in it, the message's
 //! number in its turn (`harness_contracts::message_number`). The chat says
-//! what's at an item and where each is drawn; the shell does the tagging.
+//! what's at an item and where each is drawn; the shell does the noting.
 
 use harness_contracts::{NativeId, Subject, TurnItem, message_number};
 
 use super::ChatStreamState;
-use super::nav::item_text;
 use crate::nav::{Thing, Things};
-
-/// The start of a text, on a line (for a thing's words).
-fn first_words(text: &str) -> String {
-    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().trim();
-    match line.char_indices().nth(60) {
-        Some((at, _)) => format!("{}…", &line[..at]),
-        None => line.to_owned(),
-    }
-}
 
 /// Where an item is as a tag names it: its session (the harness's id for
 /// it), its turn's number, its number among the turn's messages (none: it
@@ -70,14 +60,19 @@ impl ChatStreamState {
         let Some(index) = key.split(':').next().and_then(|i| i.parse::<usize>().ok()) else { return Things::default() };
         let places = self.tag_places();
         let Some(Some((session, turn, message))) = places.get(index).cloned() else { return Things::default() };
-        let stream = self.stream();
-        let said = |i: usize| stream.get(i).map(|item| first_words(&item_text(item))).unwrap_or_default();
-        let opening = places.iter().position(|p| p.as_ref().is_some_and(|(_, t, m)| *t == turn && *m == Some(1))).map(said).unwrap_or_default();
-        let turn_thing = Thing { subject: Subject::ChatTurn { session: session.clone(), turn }, words: format!("turn {turn}: {opening}") };
+        let known = harness_contracts::Known { chat: self.who(&session), ..harness_contracts::Known::default() };
+        let turn_thing = Thing::named(Subject::ChatTurn { session: session.clone(), turn }, &known);
         match message {
-            Some(m) => Things { at: vec![Thing { subject: Subject::ChatMessage { session, turn, message: m }, words: format!("message {m} of turn {turn}: {}", said(index)) }, turn_thing], unit: 0 },
+            Some(m) => Things { at: vec![Thing::named(Subject::ChatMessage { session, turn, message: m }, &known), turn_thing], unit: 0 },
             None => Things { at: vec![turn_thing], unit: 0 },
         }
+    }
+
+    /// Whose chat session `session` is, in a name (`chat_who`).
+    fn who(&self, session: &NativeId) -> String {
+        let agents = self.agents();
+        let slot = agents.store().slots.values().find(|s| s.sessions.iter().any(|x| x.native_id.as_ref() == Some(session)));
+        harness_contracts::chat_who(slot.map(|s| s.name.as_str()), session)
     }
 
     /// The agent slot whose open session is `session` (the harness's id).

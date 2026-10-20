@@ -34,6 +34,7 @@ mod keys;
 mod layout;
 mod lifecycle;
 mod look;
+pub(crate) mod notes;
 mod outside;
 mod tagging;
 mod views;
@@ -286,8 +287,9 @@ pub struct CockpitApp {
     /// (the quick look, or a panel by its number) while they're in a bar.
     pub(crate) item_buttons: Option<crate::hosted::ItemButtons>,
     item_bars: Vec<(crate::keymap::Host, egui::Rect)>,
-    /// The tag gutter's bars as drawn (each host's), with what they say.
-    tag_bars: Vec<(crate::keymap::Host, egui::Rect, String)>,
+    /// The marks in the gutter of notes as drawn (each host's), with what
+    /// they say.
+    note_marks: Vec<(crate::keymap::Host, egui::Rect, String)>,
     palette: crate::palette::Palette,
 
     // Top-bar status LEDs
@@ -354,7 +356,7 @@ impl CockpitApp {
             panel_rects: Vec::new(),
             item_buttons: None,
             item_bars: Vec::new(),
-            tag_bars: Vec::new(),
+            note_marks: Vec::new(),
             palette: crate::palette::Palette::default(),
 
             srv_led: ActivityLed::default(),

@@ -3409,6 +3409,7 @@ dependencies = [
  "nah-state",
  "nah-tags",
  "nah-terminal",
+ "nah-things",
  "nah-timeline",
  "notify-debouncer-full",
  "regex",
@@ -3637,6 +3638,7 @@ dependencies = [
  "harness-core",
  "httpdate",
  "nah-tags",
+ "nah-things",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
@@ -3654,6 +3656,17 @@ dependencies = [
  "portable-pty",
  "proptest",
  "tempfile",
+]
+
+[[package]]
+name = "nah-things"
+version = "0.1.0"
+dependencies = [
+ "arch-search",
+ "harness-contracts",
+ "nah-things",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

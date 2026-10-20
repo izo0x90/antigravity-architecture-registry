@@ -212,7 +212,8 @@ impl SessionRuntime for AcpSession {
         let answer = self.link.cx.send_request(request).block_task().await;
         let injected = answer.as_ref().is_ok_and(|a| a.get("outcome").and_then(serde_json::Value::as_str) == Some(INJECTED));
         if injected {
-            return Ok(turn);
+            // It starts the next turn (as the session's history has it).
+            return Ok(lock(&self.shared().state).steered(&item).unwrap_or(turn));
         }
         lock(&self.shared().state).withdraw(&item);
         answer.map_err(acp_error)?;

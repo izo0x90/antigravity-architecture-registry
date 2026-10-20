@@ -267,22 +267,66 @@ async fn an_agent_that_queues_gets_them_at_once() {
 }
 
 #[tokio::test]
-async fn a_message_goes_into_the_running_turn_when_the_agent_takes_steering() {
+async fn a_message_the_agent_takes_while_it_runs_starts_the_next_turn_which_the_prompt_goes_on_in() {
     let agent = agent(MockSetup { declares: serde_json::json!({ "_meta": { "steering": { "supported": true } } }), ..MockSetup::default() });
     let session = open_with(&agent, profile(&format!("steering = \"/_meta/steering/supported\"\n{MODES}")), config(RuntimeMode::ApprovalRequired)).await;
     let mut events = session.events();
     let mut seen = Vec::new();
     let first = session.start_turn(say("[hold] first")).await.unwrap();
     agent.prompted(1).await;
-    assert_eq!(session.inject(say("and this")).await.unwrap(), first);
+    let went_on = session.inject(say("and this")).await.unwrap();
+    assert_ne!(went_on, first, "a turn of its own, as a replay of the session numbers it");
     agent.release();
-    collect_until(&mut events, &mut seen, turn_ended(1)).await;
+    collect_until(&mut events, &mut seen, turn_ended(2)).await;
     assert_eq!(agent.seen().steered, ["and this"]);
-    assert_eq!(said(&seen, &first), ["> [hold] first", "> and this", "steered: and thisecho: [hold] first"], "one reply, streamed");
+    assert_eq!(said(&seen, &first), ["> [hold] first"]);
+    assert_eq!(said(&seen, &went_on), ["> and this", "steered: and thisecho: [hold] first"], "one reply, streamed, in the turn the prompt went on in");
     // Nothing running: it's a turn of its own.
     let next = session.inject(say("later")).await.unwrap();
-    collect_until(&mut events, &mut seen, turn_ended(2)).await;
+    collect_until(&mut events, &mut seen, turn_ended(3)).await;
     assert_eq!(said(&seen, &next), ["> later", "echo: later"]);
+}
+
+/// Each turn's messages, by its number: what a tag on a turn or a message
+/// points at.
+fn numbered(seen: &[AdapterEvent]) -> Vec<(u32, Vec<String>)> {
+    let mut turns: Vec<Turn> = Vec::new();
+    for e in seen {
+        if let AdapterEvent::TurnUpdated { turn } = e {
+            turns.retain(|t| t.id != turn.id);
+            turns.push(turn.clone());
+        }
+    }
+    turns.sort_by_key(|t| t.ordinal);
+    turns.into_iter().map(|t| (t.ordinal, said(seen, &t.id))).collect()
+}
+
+/// A session loaded again replays its history: its turns and their
+/// messages have the numbers they had live, a message the agent took
+/// while it ran and a prompt answered after it included, so what's tagged
+/// in it is what was tagged.
+#[tokio::test]
+async fn a_session_loaded_again_numbers_its_turns_and_messages_as_they_were_live() {
+    let agent = agent(MockSetup { declares: serde_json::json!({ "_meta": { "steering": { "supported": true } } }), load_session: true, ..MockSetup::default() });
+    let profile = profile(&format!("steering = \"/_meta/steering/supported\"\n{MODES}"));
+    let session = open_with(&agent, profile.clone(), config(RuntimeMode::ApprovalRequired)).await;
+    let mut events = session.events();
+    let mut live = Vec::new();
+    session.start_turn(say("[hold] first")).await.unwrap();
+    agent.prompted(1).await;
+    session.inject(say("and this")).await.unwrap();
+    agent.release();
+    collect_until(&mut events, &mut live, turn_ended(2)).await;
+    session.start_turn(say("second")).await.unwrap();
+    collect_until(&mut events, &mut live, turn_ended(3)).await;
+    let live = numbered(&live);
+    assert_eq!(live.len(), 3, "{live:?}");
+    // Loaded again (the server started again, say): replayed.
+    let again = open_with(&agent, profile, SessionConfig { resume: Some(NativeId::new("s1")), ..config(RuntimeMode::ApprovalRequired) }).await;
+    let mut replayed = Vec::new();
+    let mut events = again.events();
+    collect_until(&mut events, &mut replayed, |e| matches!(e, AdapterEvent::ItemUpdated { item } if matches!(&item.body, ItemBody::AssistantMessage { content, .. } if content.iter().any(|c| matches!(c, ContentBlock::Text { text } if text == "echo: second"))))).await;
+    assert_eq!(numbered(&replayed), live);
 }
 
 #[tokio::test]

@@ -1010,6 +1010,19 @@ impl crate::hosted::Hosted for CodeViewerState {
     }
 }
 
+impl crate::nav::DrawsThings for CodeViewerState {
+    /// Lines of this file, or a definition in it, as much as is drawn.
+    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<Rect> {
+        let (first, last) = match subject {
+            harness_contracts::Subject::CodeLines { path, first, last, .. } if *path == self.current_file => (*first as usize, *last as usize),
+            harness_contracts::Subject::Component { id, .. } => self.defs.iter().find(|d| d.id == *id).map(|d| (d.start, d.end))?,
+            _ => return None,
+        };
+        let pitch = if self.row_h > 0.0 { self.row_h } else { 16.0 };
+        self.drawn.iter().filter(|(line, _)| (first..=last).contains(line)).map(|(_, at)| Rect::from_min_size(*at, Vec2::new(1.0, pitch))).reduce(|a, b| a.union(b))
+    }
+}
+
 impl Navigable for CodeViewerState {
     /// A place in a file (a line, lines, a change, a message's file link),
     /// or a component: the go-to finds where its code is (what the index
@@ -1074,27 +1087,17 @@ impl Navigable for CodeViewerState {
         if self.current_file.is_empty() {
             return Things::default();
         }
-        let mut at = vec![Thing { subject: harness_contracts::Subject::CodeLines { path: self.current_file.clone(), first: line, last: line, snapshot: String::new() }, words: format!("line {line} of {}", self.current_file) }];
+        let known = harness_contracts::Known::default();
+        let mut at = vec![Thing::named(harness_contracts::Subject::CodeLines { path: self.current_file.clone(), first: line, last: line, snapshot: String::new() }, &known)];
         let mut around: Vec<&Def> = self.defs.iter().filter(|d| d.start <= line as usize && line as usize <= d.end).collect();
         around.sort_by_key(|d| d.end - d.start);
-        at.extend(around.iter().map(|d| Thing { subject: harness_contracts::Subject::Component { id: d.id.clone() }, words: d.name.clone() }));
+        at.extend(around.iter().map(|d| Thing::named(harness_contracts::Subject::Component { id: d.id.clone(), was: None }, &known)));
         let unit = usize::from(at.len() > 1);
         Things { at, unit }
     }
 
-    /// Lines of this file, or a definition in it, as much as is drawn.
-    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<Rect> {
-        let (first, last) = match subject {
-            harness_contracts::Subject::CodeLines { path, first, last, .. } if *path == self.current_file => (*first as usize, *last as usize),
-            harness_contracts::Subject::Component { id } => self.defs.iter().find(|d| d.id == *id).map(|d| (d.start, d.end))?,
-            _ => return None,
-        };
-        let pitch = if self.row_h > 0.0 { self.row_h } else { 16.0 };
-        self.drawn.iter().filter(|(line, _)| (first..=last).contains(line)).map(|(_, at)| Rect::from_min_size(*at, Vec2::new(1.0, pitch))).reduce(|a, b| a.union(b))
-    }
-
-    fn tag_gutter(&self) -> bool {
-        true
+    fn draws_things(&self) -> Option<&dyn crate::nav::DrawsThings> {
+        Some(self)
     }
 
     fn target(&self) -> Option<Target> {

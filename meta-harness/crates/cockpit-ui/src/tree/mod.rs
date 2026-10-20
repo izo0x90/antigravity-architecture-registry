@@ -533,6 +533,15 @@ impl crate::hosted::Hosted for TreeBuffer {
     }
 }
 
+impl crate::nav::DrawsThings for TreeBuffer {
+    /// A component's row, while it shows.
+    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect> {
+        let harness_contracts::Subject::Component { id, .. } = subject else { return None };
+        let key = self.source.key_of(&Target::Component(id.clone()))?;
+        self.spots.iter().find(|s| s.key == key).map(|s| s.rect)
+    }
+}
+
 impl Navigable for TreeBuffer {
     /// What the buffers share, as its source reads it: its rows from
     /// scratch when that changed them (another source in use).
@@ -561,20 +570,13 @@ impl Navigable for TreeBuffer {
     /// A component's row: the component.
     fn things(&self, key: &str) -> crate::nav::Things {
         match self.source.target(key) {
-            Some(Target::Component(id)) => crate::nav::Things::one(harness_contracts::Subject::Component { id: id.clone() }, crate::nav::short_name(&id)),
+            Some(Target::Component(id)) => crate::nav::Things::one(harness_contracts::Subject::Component { id: id.clone(), was: None }, &harness_contracts::Known::default()),
             _ => crate::nav::Things::default(),
         }
     }
 
-    /// A component's row, while it shows.
-    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect> {
-        let harness_contracts::Subject::Component { id } = subject else { return None };
-        let key = self.source.key_of(&Target::Component(id.clone()))?;
-        self.spots.iter().find(|s| s.key == key).map(|s| s.rect)
-    }
-
-    fn tag_gutter(&self) -> bool {
-        true
+    fn draws_things(&self) -> Option<&dyn crate::nav::DrawsThings> {
+        Some(self)
     }
 
     /// What its cursor's row stands for, as its source says.

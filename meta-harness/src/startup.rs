@@ -216,13 +216,16 @@ pub fn notifications(hub: &Arc<EventHub>, state: &Arc<nah_state::StateDb>, slots
     Ok(nah_notify::NotifyHub::start(hub.clone(), state.clone(), slots.clone(), Vec::new())?)
 }
 
-/// The terminals: the user's shells, started in the project's folder (their
-/// start-up hooks kept in the state folder); those kept from the last run
-/// come back ended. How long a command runs before its end is news:
-/// `.nah/terminals.toml`'s `long_command_secs` (10 by default); how many
-/// lines of scrollback each keeps, its `scrollback_lines` (10,000). Their
-/// lines and commands can be tagged.
-pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, tags: &Arc<nah_tags::Tags>) -> Result<Arc<crate::terminals::Terminals>, StartError> {
+/// `.nah/terminals.toml`: how long a command runs before its end is news
+/// (`long_command_secs`, 10 by default), how many lines of scrollback each
+/// terminal keeps (`scrollback_lines`, 10,000), and how much of a running
+/// command a note keeps (`running_log_mb`, 64).
+pub struct TerminalSettings {
+    pub terminals: crate::terminals::Settings,
+    pub running_log: u64,
+}
+
+pub fn terminal_settings(arch: &ArchitectureService) -> Result<TerminalSettings, StartError> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Settings {
@@ -230,6 +233,8 @@ pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hu
         long_command_secs: u64,
         #[serde(default = "ten_thousand")]
         scrollback_lines: usize,
+        #[serde(default = "sixty_four")]
+        running_log_mb: u64,
     }
     fn ten() -> u64 {
         10
@@ -237,55 +242,77 @@ pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hu
     fn ten_thousand() -> usize {
         10_000
     }
+    fn sixty_four() -> u64 {
+        nah_things::GROWN_MOST >> 20
+    }
     let settings: Settings = match std::fs::read_to_string(arch.root().join(".nah/terminals.toml")) {
         Ok(text) => toml::from_str(&text).map_err(|e| format!(".nah/terminals.toml: {e}"))?,
-        Err(_) => Settings { long_command_secs: ten(), scrollback_lines: ten_thousand() },
+        Err(_) => Settings { long_command_secs: ten(), scrollback_lines: ten_thousand(), running_log_mb: sixty_four() },
     };
     if settings.scrollback_lines < 100 {
         return Err(format!(".nah/terminals.toml: scrollback_lines is {}: at least 100", settings.scrollback_lines).into());
     }
-    let settings = crate::terminals::Settings { long: std::time::Duration::from_secs(settings.long_command_secs), scrollback: settings.scrollback_lines };
-    let hooks = arch_service::state_dir(arch.root())?.join("terminal-hooks");
+    if settings.running_log_mb == 0 {
+        return Err(".nah/terminals.toml: running_log_mb is 0: at least 1".into());
+    }
+    Ok(TerminalSettings {
+        terminals: crate::terminals::Settings { long: std::time::Duration::from_secs(settings.long_command_secs), scrollback: settings.scrollback_lines },
+        running_log: settings.running_log_mb.saturating_mul(1 << 20),
+    })
+}
+
+/// The terminals: the user's shells, started in the project's folder (their
+/// start-up hooks kept in the cache folder: they're written again at each
+/// start); those kept from the last run come back ended. Their lines and
+/// commands are things notes can be on.
+pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>, settings: crate::terminals::Settings) -> Result<Arc<crate::terminals::Terminals>, StartError> {
+    let hooks = arch_service::cache_dir(arch.root())?.join("terminal-hooks");
+    // Where they were kept before (`.nah/state/`): gone, once.
+    let _ = std::fs::remove_dir_all(arch_service::state_dir(arch.root())?.join("terminal-hooks"));
     let terminals = crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), settings)?;
-    tags.register(terminals.clone());
-    // Tagged lines kept where they are now when they move, before they can
+    things.register(terminals.clone());
+    // Noted lines kept where they are now when they move, before they can
     // move again (a terminal tells it on the blocking thread that moved
-    // them; tags are kept in the state database).
-    let weak = Arc::downgrade(tags);
+    // them; notes are kept in the state database).
+    let weak = Arc::downgrade(things);
     terminals.when_moved(move || {
-        if let Some(tags) = weak.upgrade() {
-            tags.refresh();
+        if let Some(things) = weak.upgrade() {
+            things.moved();
         }
     });
     Ok(terminals)
 }
 
-/// The code owns its components and lines as subjects of tags; as the
-/// files change, tagged lines are kept where they are now.
-pub fn code_tags(arch: &Arc<ArchitectureService>, changes: &Option<Arc<nah_changes::Changes>>, tags: &Arc<nah_tags::Tags>) {
-    tags.register(crate::code_tags::Code::new(arch.clone(), changes.clone()));
-    let weak = Arc::downgrade(tags);
+/// The code owns its components and lines as things notes can be on; as
+/// the files change, noted lines are kept where they are now.
+pub fn code_tags(arch: &Arc<ArchitectureService>, changes: &Option<Arc<nah_changes::Changes>>, things: &Arc<nah_things::Things>) {
+    things.register(crate::code_tags::Code::new(arch.clone(), changes.clone()));
+    let weak = Arc::downgrade(things);
     arch.subscribe(move |event| {
         if matches!(event, arch_graph::ArchEvent::Changed { reason: arch_graph::ChangeReason::Ingested, .. })
-            && let Some(tags) = weak.upgrade()
+            && let Some(things) = weak.upgrade()
         {
-            tags.refresh();
+            things.moved();
         }
     });
 }
 
-/// The chats own their turns and messages as subjects of tags.
-pub fn chats(slots: &Arc<harness_core::SlotManager>, hub: &Arc<EventHub>, tags: &Arc<nah_tags::Tags>) {
-    tags.register(crate::chats::Chats::new(slots.clone(), hub.clone()));
+/// The chats own their turns and messages as things notes can be on.
+pub fn chats(slots: &Arc<harness_core::SlotManager>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>) {
+    things.register(crate::chats::Chats::new(slots.clone(), hub.clone()));
 }
 
-/// Tags: kept in the state database, told on the event stream; what a
-/// tagged subject says is its owner's to tell (each owner registers itself
-/// as it's made), kept in the tags' logs (in the project's state folder)
-/// for one its owner doesn't keep.
-pub fn tags(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>) -> Result<Arc<nah_tags::Tags>, StartError> {
-    let logs = arch_service::state_dir(arch.root())?.join("tagged");
-    nah_tags::Tags::open(state.clone(), hub.clone(), &logs).map_err(|e| e.to_string().into())
+/// The things notes are on: what each says is its owner's to tell (each
+/// owner registers itself as it's made), kept in the logs (in the
+/// project's state folder) for one its owner doesn't keep; a running
+/// command's, up to `running_log` bytes.
+pub fn things(arch: &ArchitectureService, running_log: u64) -> Result<Arc<nah_things::Things>, StartError> {
+    Ok(nah_things::Things::open(&arch_service::state_dir(arch.root())?.join("tagged"), running_log))
+}
+
+/// Tags: kept in the state database, told on the event stream, on things.
+pub fn tags(state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>) -> Result<Arc<nah_tags::Tags>, StartError> {
+    nah_tags::Tags::open(state.clone(), hub.clone(), things.clone()).map_err(|e| e.to_string().into())
 }
 
 /// What each agent role may do: the shipped roles, with the project's

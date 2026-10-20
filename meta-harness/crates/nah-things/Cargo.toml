@@ -1,0 +1,18 @@
+[package]
+name = "nah-things"
+version = "0.1.0"
+edition = "2024"
+description = "Things in the project, one layer for every note on them (tags, discussions): their owners (Resolve), names, where they are now, and the logs that keep what doesn't last, read and searched (with FFF)."
+
+[features]
+# An owner of made-up terminal lines, for tests.
+testing = []
+
+[dependencies]
+arch-search = { path = "../arch-search", features = ["files"] }
+harness-contracts = { path = "../harness-contracts" }
+tracing = "0.1.44"
+
+[dev-dependencies]
+nah-things = { path = ".", features = ["testing"] }
+tempfile = "3"

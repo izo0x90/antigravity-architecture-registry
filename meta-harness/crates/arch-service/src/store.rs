@@ -263,6 +263,14 @@ pub fn state_dir(repo_root: &Path) -> Result<PathBuf, ServiceError> {
     Ok(nah.join(STATE_DIR))
 }
 
+/// Where the server keeps what it can build again (the analysis, the
+/// terminals' start-up hooks): `<repo>/.nah/cache/`.
+pub fn cache_dir(repo_root: &Path) -> Result<PathBuf, ServiceError> {
+    let nah = repo_root.join(".nah");
+    ensure_nah_gitignore(&nah)?;
+    Ok(nah.join(CACHE_DIR))
+}
+
 /// The analysis, kept in `<repo>/.nah/cache/index.sqlite`.
 pub fn open_facts(repo_root: &Path, limits: &crate::Limits) -> Result<arch_store::SqliteStore, ServiceError> {
     let nah = repo_root.join(".nah");

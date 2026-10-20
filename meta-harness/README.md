@@ -504,13 +504,15 @@ all of them:
     a word starts opens the tag picker and puts the name in.
   - **What's kept:** a thing that doesn't last (a terminal's output, a
     chat's message or turn) is written to the tags' own logs when it's
-    tagged (`.nah/state/tagged/`, the server's user's only; a command
-    still running, all it prints until it ends), and read back from there
-    once it's gone from where it was; the state database keeps where, never
-    the text. Code lasts: tagged lines are kept at a snapshot of the files
-    and kept where they are as lines before them come and go (said as
-    changed when they change); a tagged definition is followed by the
-    index. Lines keep their tags when a terminal lays them out anew.
+    tagged (`.nah/state/tagged/`, a file per thing, the server's user's
+    only; a command still running, what it prints until it ends, up to
+    `running_log_mb`), and read back from there once it's gone from where
+    it was; the state database keeps where, never the text. Code lasts:
+    tagged lines are kept at a snapshot of the files and kept where they
+    are as lines before them come and go (read as they were once they
+    change); a tagged definition is followed by the index, and read as it
+    was once it's gone. Lines keep their tags when a terminal lays them out
+    anew, and the command they're in.
   - **Agents** read tags with `view.read` (`tags`, `tag_read`, `tag_find`
     to search what tagged things say); tagging, taking off and editing
     need `tags.edit` (the lead's, sub-slots' and workers' by default). Who
@@ -753,7 +755,7 @@ overrides them in its own `.nah/` folder:
 | `.nah/schema_dsl.toml` | extra shorthand type names for schemas |
 | `.nah/mcp.toml` | the project's tool servers, given to every harness's sessions |
 | `.nah/changes.toml` | `[timeline]`: how long snapshots and turns are kept (`keep_days`, 14) and a closed session's turns after it closed (`closed_session_days`, 1) |
-| `.nah/terminals.toml` | `long_command_secs` (10): a command that ran this long is a notification when it finishes; `scrollback_lines` (10,000): lines each terminal keeps above its screen |
+| `.nah/terminals.toml` | `long_command_secs` (10): a command that ran this long is a notification when it finishes; `scrollback_lines` (10,000): lines each terminal keeps above its screen; `running_log_mb` (64): how much of a command a note keeps while it runs |
 | `.nah/access.toml` | what each agent role (lead, sub, worker, external) may do with NAH's tools. A role named here replaces the shipped one. It covers NAH's tools only; a slot's own harness tools follow its mode and your approvals |
 
 How long things take is visible: every answer is timed stage by stage
@@ -861,7 +863,8 @@ is approved, verified or built. It's saved in `.nah/plans/` like any plan.
 | `nah-changes` | the project's changes, from git: what a comparison (two of the last commit, the staged files, the files, any commit, a snapshot) changes, one file's changes, where they are on the files now; snapshots of the files kept as commits of their own (`refs/nah/snapshots/`). Reads the repository and never changes it |
 | `nah-timeline` | the timeline: a snapshot whenever a session's turn starts or ends (from the event stream), the windows between them and who was working, each turn's changes; kept in the state database, let go by policy |
 | `nah-terminal` | terminals: a shell in a pseudo-terminal (`portable-pty`) with its screen kept by an emulator (`alacritty_terminal`): what changed since a reader last looked, the scrollback and searching it, keys as the bytes a program expects, its title, bell, finished commands (bash and zsh marked by a start-up hook) and end. Knows nothing of the server or the cockpit |
-| `nah-tags` | tags: names given to things in the project (a terminal's lines and commands, a chat's messages and turns, code lines and components), each kept with its owner's name for it; kept in the state database (each change with who made it, never a thing's text), told on the event stream; what a subject is called and says, where it is and whether it lasts is its owner's to tell (`Resolve`, registered as it's made); what doesn't last is written to the tags' own logs when tagged; `#name` in a prompt expanded |
+| `nah-tags` | tags: names given to things in the project (a terminal's lines and commands, a chat's messages and turns, code lines and components); kept in the state database (each change with who made it, never a thing's text), told on the event stream; `#name` in a prompt expanded; the things themselves are `nah-things`' |
+| `nah-things` | things in the project, one layer for every kind of note on them: their owners (`Resolve`, registered as each is made) name them (one name each, wherever it's shown), say what they say and where they are now; what doesn't last is written to the logs (`.nah/state/tagged/`, a file per thing; a running command followed up to `running_log_mb` in `.nah/terminals.toml`), read back in parts and searched with FFF |
 | `nah-state` | the project's state database (`.nah/state/state.sqlite`): what the server keeps across restarts that isn't the analysis. One server per project (a lock), explicit layouts, never thrown away |
 | `arch-store` | where the analysis is kept between runs (SQLite) |
 | `arch-search` | one way of matching what's typed: names with neo_frizbee; files and lines with fff-search |

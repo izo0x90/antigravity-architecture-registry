@@ -2,6 +2,8 @@
 //! written (its name too, as a column, to look at by hand); each change
 //! with who made it, in the activity kept (in the same transaction).
 
+use std::collections::BTreeSet;
+
 use harness_contracts::Tag;
 use nah_tags::{Change, TagStore};
 use rusqlite::{Transaction, params};
@@ -16,6 +18,26 @@ fn logged(tx: &Transaction<'_>, tag: &Tag, change: &Change) -> Result<(), StateE
 }
 
 impl TagStore for StateDb {
+    /// Read from every tag as written, those this build can't read too
+    /// (their logs stay theirs).
+    fn kept_files(&self) -> Result<BTreeSet<String>, String> {
+        self.transaction(|tx| {
+            let mut stmt = tx.prepare("SELECT json FROM tags").map_err(failed)?;
+            let rows: Vec<String> = stmt.query_map([], |r| r.get(0)).map_err(failed)?.collect::<Result<_, _>>().map_err(failed)?;
+            let mut files = BTreeSet::new();
+            for json in rows {
+                let tag: serde_json::Value = serde_json::from_str(&json).map_err(failed)?;
+                for on in tag["on"].as_array().into_iter().flatten() {
+                    if let Some(file) = on["kept"]["file"].as_str() {
+                        files.insert(file.to_owned());
+                    }
+                }
+            }
+            Ok(files)
+        })
+        .map_err(|e| e.to_string())
+    }
+
     fn tags(&self) -> Result<Vec<Tag>, String> {
         self.transaction(|tx| {
             let mut stmt = tx.prepare("SELECT json FROM tags ORDER BY seq").map_err(failed)?;

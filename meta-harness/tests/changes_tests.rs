@@ -172,37 +172,46 @@ async fn the_user_stages_and_unstages_and_agents_read_changes_but_cannot_stage()
     assert!(!err && text.contains("Windows"), "{text}");
 }
 
-/// Code as tags see it: a component (followed by the index) and lines of
-/// a file, kept where they are as the file changes before them, said as
-/// changed when it changes among them; nothing of it in the tags' logs.
+/// Code as notes see it: a component (followed by the index) and lines of
+/// a file, kept where they are as the file is saved with lines added
+/// before them (the index tells, as the watcher has it do), read as they
+/// were once a change is among them or a definition is gone; nothing of
+/// it in the logs; the snapshots no note points to any more let go.
 #[tokio::test]
-async fn tagged_code_lines_follow_the_file_and_a_tagged_component_is_its_code() {
+async fn tagged_code_follows_the_saved_file_and_reads_as_it_was_once_changed_or_gone() {
     let arch = committed();
     let root = arch.root().to_path_buf();
     let util = root.join("src/util.rs");
     let before = std::fs::read_to_string(&util).unwrap();
-    let component = arch.graph(&arch_graph::Source::Code).unwrap().components().find(|c| c.anchor.as_ref().is_some_and(|a| a.file.as_str() == "src/util.rs")).map(|c| c.id.clone()).expect("a component in util.rs");
-    let (addr, state) = spawn_app_with(arch).await;
+    let shout = arch.graph(&arch_graph::Source::Code).unwrap().components().find(|c| c.name == "shout" && c.anchor.as_ref().is_some_and(|a| a.file.as_str() == "src/util.rs")).map(|c| c.id.clone()).expect("shout in util.rs");
+    let (addr, state) = spawn_app_with(arch.clone()).await;
     let mut lead = Mcp::lead(addr).await;
     let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "here", "subject": "src/util.rs lines 2-3" })).await;
     assert!(!error, "{said}");
-    let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "here", "subject": format!("component {component}") })).await;
+    let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "here", "subject": format!("component {shout}") })).await;
     assert!(!error, "{said}");
     let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
     let lines: Vec<&str> = before.lines().collect();
     assert!(read.contains(&format!("1. src/util.rs lines 2-3 (tagged by lead; as it is now):\n{}\n{}", lines[1], lines[2])), "{read}");
-    assert!(read.contains(&format!("component {component} (")) && read.contains(", src/util.rs:"), "the component, by its id and where it is: {read}");
-    // Two lines added before them: they're where they went.
-    std::fs::write(&util, format!("// one\n// two\n{before}")).unwrap();
-    state.tags.tags.refresh();
+    assert!(read.contains(&format!("2. component {shout} (tagged by lead; as it is now):\n{}", lines[0])), "the component, by its id: {read}");
+    // Saved with two lines added before them, the index told (as the
+    // watcher tells it): they're where they went, and so is the definition.
+    let saved = |text: String| {
+        std::fs::write(&util, text).unwrap();
+        arch.refresh(std::slice::from_ref(&util)).unwrap();
+    };
+    saved(format!("// one\n// two\n{before}"));
     let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
     assert!(read.contains(&format!("1. src/util.rs lines 4-5 (tagged by lead; as it is now):\n{}\n{}", lines[1], lines[2])), "{read}");
-    // A change among them: said so, where they were.
-    let now = std::fs::read_to_string(&util).unwrap().replacen(lines[1], "// edited", 1);
-    std::fs::write(&util, now).unwrap();
-    state.tags.tags.refresh();
+    assert!(read.contains(&format!("2. component {shout} (tagged by lead; as it is now):\n{}", lines[0])), "{read}");
+    // A change among them: as they were, said so.
+    saved(std::fs::read_to_string(&util).unwrap().replacen(lines[1], "    s.trim().to_uppercase()", 1));
     let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
-    assert!(read.contains("src/util.rs lines 4-5 (changed since tagged)"), "{read}");
+    assert!(read.contains(&format!("1. src/util.rs lines 4-5 (tagged by lead; as it was when tagged: changed or gone since):\n{}\n{}", lines[1], lines[2])), "{read}");
+    // The definition deleted: what it was, from where it was when tagged.
+    saved("// one\n// two\npub fn helper() {}\n".into());
+    let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
+    assert!(read.contains(&format!("2. component {shout} (tagged by lead; as it was when tagged: changed or gone since):\n{}\n{}\n{}", lines[0], lines[1], lines[2])), "{read}");
     // Only the project's own files: not one outside it, however named.
     std::fs::write(root.parent().unwrap().join("outside.txt"), "secret\n").unwrap();
     for outside in ["/etc/passwd line 1", "../outside.txt line 1", "src/../../outside.txt line 1"] {
@@ -211,4 +220,11 @@ async fn tagged_code_lines_follow_the_file_and_a_tagged_component_is_its_code() 
     }
     // Code lasts: nothing of it was logged.
     assert!(state.tags.tags.find("here").unwrap().on.iter().all(|t| t.kept.is_none()));
+    // Taken off everything: the snapshots kept for them go (but the last,
+    // used again for the next).
+    let changes = nah_changes::Changes::open(&root).unwrap();
+    assert!(changes.snapshots_for("tagged lines").unwrap().len() >= 2, "one when tagged, another where they moved");
+    let (error, said) = lead.tool("tag_edit", serde_json::json!({ "tag": "here", "delete": true })).await;
+    assert!(!error, "{said}");
+    assert_eq!(changes.snapshots_for("tagged lines").unwrap().len(), 1);
 }

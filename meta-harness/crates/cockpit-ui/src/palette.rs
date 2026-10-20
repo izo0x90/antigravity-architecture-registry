@@ -51,6 +51,16 @@ pub struct Palette {
 }
 
 impl Palette {
+    /// The area it's drawn in.
+    fn area() -> egui::Id {
+        egui::Id::new("command_palette")
+    }
+
+    /// Where it was last drawn (none: it hasn't been).
+    pub fn drawn(ctx: &egui::Context) -> Option<egui::Rect> {
+        ctx.memory(|m| m.area_rect(Self::area()))
+    }
+
     /// The row the keys are on.
     #[cfg(test)]
     pub fn selected(&self) -> usize {
@@ -184,7 +194,7 @@ impl Palette {
             picked = Some(invocation(bound, None));
         }
 
-        egui::Area::new(egui::Id::new("command_palette"))
+        egui::Area::new(Self::area())
             .fixed_pos(pos)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {

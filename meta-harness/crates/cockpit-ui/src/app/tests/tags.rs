@@ -7,11 +7,11 @@ use super::*;
 use super::terminal::{answer_lines, command, not_typing, with_commands};
 
 fn lines(terminal: &str, shell: u64, first: u64, last: u64) -> harness_contracts::Subject {
-    harness_contracts::Subject::TerminalLines { terminal: harness_contracts::TerminalId::new(terminal), shell, first, last }
+    harness_contracts::Subject::TerminalLines { terminal: harness_contracts::TerminalId::new(terminal), shell, first, last, command: None }
 }
 
 fn ran(terminal: &str, shell: u64, command: u64) -> harness_contracts::Subject {
-    harness_contracts::Subject::TerminalCommand { terminal: harness_contracts::TerminalId::new(terminal), shell, command }
+    harness_contracts::Subject::TerminalCommand { terminal: harness_contracts::TerminalId::new(terminal), shell, command, typed: String::new() }
 }
 
 /// A tag (id `id`) on `on`, each named as the server names it.
@@ -81,19 +81,22 @@ fn on_a_line_of_output_the_command_is_tagged_and_tab_in_the_picker_tags_the_line
     // the next of the things there, by its key.
     keys(&ctx, &mut app, "M");
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(drawn.contains("Tag command 1 and its output: make") && drawn.contains("Tab: Tag line 1005 (of command 1) instead"), "{drawn}");
+    // Each by its one name: the name it's kept by (`Subject::name`'s words are its own test's).
+    let line = harness_contracts::Subject::TerminalLines { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, first: 1005, last: 1005, command: Some(1) };
+    let command = harness_contracts::Subject::TerminalCommand { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, command: 1, typed: "make".into() };
+    let name = |s: &harness_contracts::Subject| s.name(&harness_contracts::Known::default());
+    assert!(drawn.contains(&name(&command)) && drawn.contains(&name(&line)), "what's tagged, and what Tab tags instead: {drawn}");
     frame(&ctx, &mut app, press(egui::Key::Tab, false));
-    let drawn = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(drawn.contains("Tag line 1005 (of command 1)") && drawn.contains("Tab: Tag command 1 and its output: make instead"), "round again: {drawn}");
+    frame(&ctx, &mut app, vec![]);
     keys(&ctx, &mut app, "seen");
     bodies(&app, "");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": lines("t1", 1, 1005, 1005) })], "what the top line said");
+    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": line })], "Tab: the line");
     // Opened again: the unit again.
     keys(&ctx, &mut app, "M");
     keys(&ctx, &mut app, "seen");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": ran("t1", 1, 1) })]);
+    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": command })]);
 }
 
 #[test]
@@ -141,9 +144,7 @@ fn next_and_previous_go_through_the_tag_stepped_last_and_a_tag_on_lines_is_on_ea
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x1", "flaky", &[lines("t1", 1, 1021, 1021), ran("t1", 1, 1)]) });
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x2", "slow", &[lines("t1", 1, 1019, 1021), lines("t1", 1, 1010, 1010)]) });
     not_typing(&ctx, &mut app);
-    let output = frame(&ctx, &mut app, vec![]);
-    let slow = bars(&output, crate::theme::colors().tag(2));
-    assert!(slow.iter().any(|bar| bar.top() < drawn_rects(&output, "line 1019")[0].center().y && drawn_rects(&output, "line 1021")[0].center().y < bar.bottom()), "lines' bar: beside all of them");
+    frame(&ctx, &mut app, vec![]);
     // On a line among the tagged lines: their tag's.
     keys(&ctx, &mut app, "kkk");
     assert_eq!(cursor(&app).as_deref(), Some("1020"));
@@ -323,7 +324,7 @@ fn the_tags_buffer_lists_tags_folded_reads_what_they_say_now_and_the_shells_tag_
     // Enter unfolds it: its things, where they went, who tagged them and when.
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
-    for words in ["terminal t1 command 1", "make: 3 failed", "gone from where it was: as it was when tagged", "tagged by you", " d ago"] {
+    for words in ["terminal t1 command 1", "make: 3 failed", "as it was when tagged: changed or gone since", "tagged by you", " d ago"] {
         assert!(drawn.contains(words), "{words}: {drawn}");
     }
     // Edited with the shell's tag actions (what's there now, to edit).
@@ -396,7 +397,7 @@ fn the_palette_keeps_its_place_and_size_while_typing_and_whatever_its_rows_say()
     long.on[0].by = "a-lead-agent-slot-whose-name-goes-on-and-on-past-any-sensible-length-for-a-name".repeat(3);
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: long });
     frame(&ctx, &mut app, vec![]);
-    let rect = |ctx: &egui::Context| ctx.memory(|m| m.area_rect(egui::Id::new("command_palette"))).expect("the palette is drawn");
+    let rect = |ctx: &egui::Context| crate::palette::Palette::drawn(ctx).expect("the palette is drawn");
     // Every picker: all actions, a search (tags), a choice whose rows say a lot.
     // From a list to a text field (go to line), it stays as tall.
     for (open, typed) in [(":", "tagwhat"), ("M", "fl"), ("gT", "fl\n"), (":", "go to line or\n")] {
@@ -474,7 +475,7 @@ fn a_hash_typed_in_a_prompt_opens_the_tag_picker_and_puts_the_name_after_it() {
     assert!(matches!(app.input_mode, InputMode::Insert { .. }), "typing on");
     // The caret after the name: what's typed next follows it.
     typed(&ctx, &mut app, ")");
-    assert_eq!(app.desk.chat().ui.input_buffer, "fix #1 look at (#flaky )");
+    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("fix #1 look at (#flaky )"), "in the box, as typed");
     // Escape out of the picker: the # stays, and typing goes on.
     typed(&ctx, &mut app, " #");
     assert!(app.palette.is_open());
@@ -483,7 +484,7 @@ fn a_hash_typed_in_a_prompt_opens_the_tag_picker_and_puts_the_name_after_it() {
     assert!(!app.palette.is_open() && matches!(app.input_mode, InputMode::Insert { .. }), "back to typing");
     typed(&ctx, &mut app, "x");
     assert!(!app.palette.is_open(), "only a # just typed opens it");
-    assert_eq!(app.desk.chat().ui.input_buffer, "fix #1 look at (#flaky ) #x");
+    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("fix #1 look at (#flaky ) #x"));
     // Mid-word, a # is just a #.
     typed(&ctx, &mut app, " issue#");
     assert!(!app.palette.is_open());
@@ -582,11 +583,13 @@ fn in_a_chat_a_message_or_its_turn_is_tagged_shown_in_the_gutter_and_gone_to() {
     // M: the message (the unit), Tab: its turn.
     keys(&ctx, &mut app, "M");
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(drawn.contains("Tag message 2 of turn 1: Looking at it.") && drawn.contains("Tab: Tag turn 1: fix the parser instead"), "{drawn}");
+    let message = harness_contracts::Subject::ChatMessage { session: harness_contracts::NativeId::new("n1"), turn: 1, message: 2 };
+    let known = harness_contracts::Known { chat: harness_contracts::chat_who(Some("lead"), &harness_contracts::NativeId::new("n1")), ..harness_contracts::Known::default() };
+    let turn = harness_contracts::Subject::ChatTurn { session: harness_contracts::NativeId::new("n1"), turn: 1 };
+    assert!(drawn.contains(&message.name(&known)) && drawn.contains(&turn.name(&known)), "by the one name each has (its slot's chat): {drawn}");
     keys(&ctx, &mut app, "answer");
     bodies(&app, "");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    let message = harness_contracts::Subject::ChatMessage { session: harness_contracts::NativeId::new("n1"), turn: 1, message: 2 };
     assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "answer", "subject": message })]);
     // Told: a bar beside the message, in the chat's gutter.
     let mut tag = tag_on("x1", "answer", &[]);
@@ -617,11 +620,13 @@ fn in_the_code_the_innermost_definition_is_tagged_tab_its_line_and_in_the_outlin
     let within = app.desk.code().defs.iter().filter(|d| d.start <= 3 && 3 <= d.end).min_by_key(|d| d.end - d.start).cloned().expect("line 3 is in a definition");
     keys(&ctx, &mut app, "M");
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(drawn.contains(&format!("Tag {}", within.name)) && drawn.contains(&format!("Tab: Tag line 3 of {file}")), "{drawn}");
+    let name = |s: harness_contracts::Subject| s.name(&harness_contracts::Known::default());
+    let (component, line) = (harness_contracts::Subject::Component { id: within.id.clone(), was: None }, harness_contracts::Subject::CodeLines { path: file.clone(), first: 3, last: 3, snapshot: String::new() });
+    assert!(drawn.contains(&name(component)) && drawn.contains(&name(line)), "{drawn}");
     keys(&ctx, &mut app, "seen");
     bodies(&app, "");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": harness_contracts::Subject::Component { id: within.id.clone() } })]);
+    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": harness_contracts::Subject::Component { id: within.id.clone(), was: None } })]);
     keys(&ctx, &mut app, "M");
     frame(&ctx, &mut app, press(egui::Key::Tab, false));
     frame(&ctx, &mut app, vec![]);
@@ -630,7 +635,7 @@ fn in_the_code_the_innermost_definition_is_tagged_tab_its_line_and_in_the_outlin
     assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": harness_contracts::Subject::CodeLines { path: file.clone(), first: 3, last: 3, snapshot: String::new() } })], "the files as they are (the server keeps them at a snapshot)");
     // Told: a bar beside the definition's lines.
     let mut tag = tag_on("x1", "seen", &[]);
-    tag.on.push(harness_contracts::Tagged { subject: harness_contracts::Subject::Component { id: within.id.clone() }, what: within.name.clone(), at_ms: 0, by: "user".into(), kept: None });
+    tag.on.push(harness_contracts::Tagged { subject: harness_contracts::Subject::Component { id: within.id.clone(), was: None }, what: within.name.clone(), at_ms: 0, by: "user".into(), kept: None });
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag });
     frame(&ctx, &mut app, vec![]);
     let theme = crate::theme::colors();
@@ -641,5 +646,5 @@ fn in_the_code_the_innermost_definition_is_tagged_tab_its_line_and_in_the_outlin
     keys(&ctx, &mut app, "M");
     keys(&ctx, &mut app, "seen");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "x1", "subject": harness_contracts::Subject::Component { id: arch_graph::ComponentId::new("rust:a::run") } })], "the tag there is, by its id");
+    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "x1", "subject": harness_contracts::Subject::Component { id: arch_graph::ComponentId::new("rust:a::run"), was: None } })], "the tag there is, by its id");
 }

@@ -72,6 +72,12 @@ impl crate::buffer::Buffer for ChatStreamState {
     }
 }
 
+impl crate::nav::DrawsThings for ChatStreamState {
+    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect> {
+        self.tag_drawn_at(subject)
+    }
+}
+
 impl Navigable for ChatStreamState {
     fn takes_typed(&self) -> bool {
         true
@@ -118,12 +124,8 @@ impl Navigable for ChatStreamState {
         self.tag_things(key)
     }
 
-    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect> {
-        self.tag_drawn_at(subject)
-    }
-
-    fn tag_gutter(&self) -> bool {
-        true
+    fn draws_things(&self) -> Option<&dyn crate::nav::DrawsThings> {
+        Some(self)
     }
 
     fn show_target(&mut self, target: &Target) -> Result<(), String> {

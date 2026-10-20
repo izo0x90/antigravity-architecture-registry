@@ -4,12 +4,13 @@
 //! output); the list is kept up to date from the changes the server's
 //! watcher sees, and listed again whenever fff says it's time to (it holds a
 //! bounded number of files added since its walk). Nothing outside the repo
-//! is searched.
+//! is searched. A folder of the server's own (its logs, which git ignores)
+//! is listed the same way, its walk started in it.
 
 use std::path::{Path, PathBuf};
 
 use fff_search::file_picker::FilePicker;
-use fff_search::{AiGrepConfig, FilePickerOptions, FileSearchConfig, FuzzySearchOptions, GitRecencyConfig, GrepMode, GrepSearchOptions, PaginationArgs, QueryParser};
+use fff_search::{AiGrepConfig, ConstraintVec, FFFQuery, FilePickerOptions, FileSearchConfig, FuzzyQuery, FuzzySearchOptions, GitRecencyConfig, GrepMode, GrepSearchOptions, PaginationArgs, QueryParser};
 
 /// Limits on a search through file contents.
 #[derive(Clone, Debug, PartialEq)]
@@ -140,8 +141,22 @@ impl crate::Search for Lines<'_> {
     /// capitals; `*.rs` and `src/` narrow the files), the first `limit`;
     /// partial when the time limit cut it short.
     fn search(&self, query: &str, limit: usize) -> crate::Searched<FoundLine> {
+        self.grep(&QueryParser::new(AiGrepConfig).parse(query), limit)
+    }
+}
+
+impl Lines<'_> {
+    /// Lines containing `text`, all of it as it's written (nothing in it
+    /// narrows the files; case ignored unless it has capitals), the first
+    /// `limit`; partial when the time limit cut it short.
+    pub fn containing(&self, text: &str, limit: usize) -> crate::Searched<FoundLine> {
+        let text = text.trim();
+        let query = FFFQuery { raw_query: text, constraints: ConstraintVec::new(), fuzzy_query: if text.is_empty() { FuzzyQuery::Empty } else { FuzzyQuery::Text(text) }, location: None };
+        self.grep(&query, limit)
+    }
+
+    fn grep(&self, query: &FFFQuery<'_>, limit: usize) -> crate::Searched<FoundLine> {
         let picker = &self.files.picker;
-        let parsed = QueryParser::new(AiGrepConfig).parse(query);
         let options = GrepSearchOptions {
             max_file_size: self.limits.max_file_bytes,
             max_matches_per_file: self.limits.per_file,
@@ -152,7 +167,7 @@ impl crate::Search for Lines<'_> {
             trim_whitespace: true,
             ..GrepSearchOptions::default()
         };
-        let found = picker.grep(&parsed, &options);
+        let found = picker.grep(query, &options);
         let lines: Vec<FoundLine> = found
             .matches
             .iter()
@@ -207,6 +222,33 @@ mod tests {
         let lines = files.lines(limits()).search("rebuild_observed", 10).found;
         assert_eq!(lines.iter().map(|l| l.path.as_str()).collect::<Vec<_>>(), ["src/view.rs"]);
         assert!(!files.search("store", 10).found.iter().any(|f| f.path == "src/store.rs"), "removed");
+    }
+
+    /// The server's own folder that git ignores (its logs): listed and
+    /// searched all the same, with what's searched as written (`src/`
+    /// narrows nothing), and a file that grew is searched to its end once
+    /// it's said to have changed.
+    #[test]
+    fn a_folder_git_ignores_is_searched_for_text_as_written_as_it_grows() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(root).status().is_ok_and(|s| s.success()));
+        std::fs::create_dir_all(root.join(".nah/state/tagged")).unwrap();
+        std::fs::write(root.join(".nah/.gitignore"), "cache/\nstate/\n").unwrap();
+        let logs = root.join(".nah/state/tagged");
+        std::fs::write(logs.join("a.log"), "== a\nsee src/ for it\n").unwrap();
+        let mut files = RepoFiles::scan(&logs, Box::new(|_| false)).unwrap();
+        assert_eq!(files.lines(limits()).containing("see src/", 10).found, [FoundLine { path: "a.log".into(), line: 2, text: "see src/ for it".into() }]);
+        let mut grown = std::fs::OpenOptions::new().append(true).open(logs.join("a.log")).unwrap();
+        std::io::Write::write_all(&mut grown, b"later: error 3\n").unwrap();
+        std::fs::write(logs.join("b.log"), "== b\nerror 4\n").unwrap();
+        files.changed(&[logs.join("a.log"), logs.join("b.log")]).unwrap();
+        let mut found: Vec<String> = files.lines(limits()).containing("ERROR", 10).found.into_iter().map(|l| format!("{}:{}", l.path, l.line)).collect();
+        found.sort();
+        assert!(found.is_empty(), "capitals heeded when there are some: {found:?}");
+        let mut found: Vec<String> = files.lines(limits()).containing("error", 10).found.into_iter().map(|l| format!("{}:{}", l.path, l.line)).collect();
+        found.sort();
+        assert_eq!(found, ["a.log:3", "b.log:2"]);
     }
 
     /// How many any kind of search finds: the one trait over all three.

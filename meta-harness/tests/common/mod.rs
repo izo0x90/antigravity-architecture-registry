@@ -117,6 +117,13 @@ impl SessionRuntime for FakeSession {
         }
         // As a harness does: the turn runs, then ends.
         self.emit(AdapterEvent::TurnUpdated { turn: Turn { status: TurnStatus::Running, failure: None, ..turn.clone() } });
+        // "[tool]": it runs a tool first (what the tool gave, two lines).
+        if input.text.contains("[tool]") {
+            let output = vec![ContentBlock::Text { text: "tool line one\ntool line two".into() }];
+            self.emit(AdapterEvent::ItemUpdated {
+                item: TurnItem { id: ItemId::new(format!("tool-{}", turn.id)), thread_id: self.thread.id.clone(), turn_id: turn.id.clone(), native_id: None, parent_id: None, ordinal: 0, status: ItemStatus::Completed, title: None, body: ItemBody::ToolCall { kind: harness_contracts::ToolKind::Execute, name: "Bash".into(), input: None, output, locations: Vec::new() } },
+            });
+        }
         self.reply(&turn, format!("echo: {}", input.text));
         self.emit(AdapterEvent::TurnUpdated { turn: turn.clone() });
         if input.text.contains("[die]") {
@@ -352,10 +359,13 @@ pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHu
     let notify = meta_harness::startup::notifications(&hub, &db, &slots).unwrap();
     let changes = meta_harness::startup::changes(&arch);
     let timeline = meta_harness::startup::timeline(&arch, &changes, &db, &hub).unwrap();
-    let tags = meta_harness::startup::tags(&arch, &db, &hub).unwrap();
-    meta_harness::startup::chats(&slots, &hub, &tags);
-    meta_harness::startup::code_tags(&arch, &changes, &tags);
-    let terminals = Some(meta_harness::startup::terminals(&arch, &db, &hub, &tags).unwrap());
+    let terminal_settings = meta_harness::startup::terminal_settings(&arch).unwrap();
+    let things = meta_harness::startup::things(&arch, terminal_settings.running_log).unwrap();
+    let tags = meta_harness::startup::tags(&db, &hub, &things).unwrap();
+    meta_harness::startup::chats(&slots, &hub, &things);
+    meta_harness::startup::code_tags(&arch, &changes, &things);
+    let terminals = Some(meta_harness::startup::terminals(&arch, &db, &hub, &things, terminal_settings.terminals).unwrap());
+    things.forget_unused();
     let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone(), tags: tags.clone() };
     let mcp = McpServerState::new(Arc::new(McpService::new(services, access.clone())), meta_harness::startup::mcp_callers(&slots));
     let state = AppState::new(meta_harness::modules::Parts { registry, sessions, slots, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state: db, tool_servers, remote, access, notify, changes, timeline, terminals, tags }).unwrap();

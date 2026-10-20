@@ -285,8 +285,9 @@ impl Navigable for TagList {
         let tags = self.tags.get();
         match self.row(key) {
             Some(Row::On(tag, subject)) => {
-                let what = tags.get(tag).and_then(|t| t.on.iter().find(|on| on.subject == *subject)).map(|on| thing_name(&on.what)).unwrap_or_default();
-                Things::one(subject.clone(), what)
+                // Named as it was named when tagged (named so since, as it moved).
+                let words = tags.get(tag).and_then(|t| t.on.iter().find(|on| on.subject == *subject)).map(|on| thing_name(&on.what)).unwrap_or_default();
+                Things { at: vec![crate::nav::Thing { subject: subject.clone(), words }], unit: 0 }
             }
             _ => Things::default(),
         }

@@ -13,6 +13,7 @@ use harness_contracts::{Subject, TagId, on_things};
 
 use super::*;
 use crate::app::TagEditing;
+use crate::app::notes::{NotesHere, TagHere};
 use crate::actions::{Choice, Group, When};
 use crate::nav::{Item, Target, Things};
 use crate::tags::{TagAct, first_line, thing_name};
@@ -28,7 +29,7 @@ impl CockpitApp {
     /// the tag picker open now, else the unit.
     fn level(&self, things: &Things) -> usize {
         let picked = self.desk.tag_level.as_ref().filter(|(opening, _)| *opening == self.palette.opening());
-        picked.and_then(|(_, subject)| things.at.iter().position(|t| t.subject == *subject)).unwrap_or(things.unit)
+        picked.and_then(|(_, subject)| things.at.iter().position(|t| t.subject.same_thing(subject))).unwrap_or(things.unit)
     }
 
     /// The thing tagging is on.
@@ -37,35 +38,9 @@ impl CockpitApp {
         things.picked(Some(self.level(&things))).map(|t| t.subject.clone())
     }
 
-    /// What's at the cursor where you are, for the tags: the things, the
-    /// tags on them (each with what it's on there: in a view of tags, the
-    /// row's thing exactly), and in a view of tags, the row's tag.
-    pub(super) fn at_cursor(&self, here: Here) -> AtCursor {
-        let view = self.desk.view(here.kind);
-        let key = view.cursor_key();
-        let things = key.as_ref().map(|k| view.things(k)).unwrap_or_default();
-        let tags = self.desk.shared.tags.get();
-        let row = key.as_ref().and_then(|k| view.tag_at(k)).and_then(|id| tags.get(&id).cloned());
-        let mut on: Vec<(harness_contracts::Tag, Subject)> = Vec::new();
-        for thing in &things.at {
-            for (tag, subject) in tags.on(&thing.subject) {
-                if !on.iter().any(|(t, _)| t.id == tag.id) {
-                    on.push((tag.clone(), subject.clone()));
-                }
-            }
-        }
-        if let (Some(row), Some(thing)) = (&row, things.at.first())
-            && row.on.iter().any(|o| o.subject == thing.subject)
-        {
-            on.retain(|(t, _)| t.id != row.id);
-            on.insert(0, (row.clone(), thing.subject.clone()));
-        }
-        AtCursor { things, on, row }
-    }
-
     /// An edit of `tag`: its value asked for (a field starts with what's
     /// there), the tag it's of carried with it.
-    fn edit_action(edit: TagEditing, tag: &harness_contracts::Tag) -> Action {
+    fn edit_action(edit: TagEditing, tag: &TagHere) -> Action {
         use ShellCommand as S;
         use TagEditing as E;
         let theme = crate::theme::colors();
@@ -74,7 +49,7 @@ impl CockpitApp {
             E::Recolour => (format!("Give {} another colour", tag.name), Param::Choice((0..harness_contracts::TAG_COLOURS).map(|i| Choice::new(i.to_string(), theme.tag_name(i)).swatch(theme.tag(i)).current(tag.colour == i)).collect())),
             E::Note => (format!("Write {}'s note", tag.name), Param::Text { hint: "its note".into(), start: tag.note.clone() }),
             E::ClearNote => (format!("Clear {}'s note", tag.name), Param::None),
-            E::Delete => (format!("Delete the tag {}", tag.name), Param::Choice(vec![Choice::new("yes", format!("Delete {} (from {})", tag.name, on_things(tag.on.len()))), Choice::new("no", "Keep it")])),
+            E::Delete => (format!("Delete the tag {}", tag.name), Param::Choice(vec![Choice::new("yes", format!("Delete {} (from {})", tag.name, on_things(tag.count))), Choice::new("no", "Keep it")])),
         };
         Action::new(edit.id(), label, edit.detail(), S::TagEdit(edit, tag.id.clone())).param(param).group(Group::Act).importance(MINOR)
     }
@@ -82,21 +57,20 @@ impl CockpitApp {
     /// The edits of the tags at the cursor: of the one there (that an edit
     /// fits: a note to clear), its value asked for; of several, which first.
     /// Deleting a tag is the Tags view's (on its row).
-    fn tag_edits(at: &AtCursor) -> Vec<Action> {
+    fn tag_edits(at: &NotesHere) -> Vec<Action> {
         use ShellCommand as S;
         use TagEditing as E;
         let theme = crate::theme::colors();
-        let tags = at.tags();
         let mut out = Vec::new();
         for edit in [E::Rename, E::Recolour, E::Note, E::ClearNote, E::Delete] {
             if edit == E::Delete && at.row.is_none() {
                 continue;
             }
-            let fitting: Vec<&harness_contracts::Tag> = tags.iter().copied().filter(|t| edit != E::ClearNote || !t.note.is_empty()).collect();
+            let fitting: Vec<&TagHere> = at.tags.iter().filter(|t| edit != E::ClearNote || !t.note.is_empty()).collect();
             out.push(match fitting.as_slice() {
                 [one] => Self::edit_action(edit, one),
                 some => {
-                    let choices = some.iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).colour(theme.tag(t.colour)).detail(Some(described(t)))).collect();
+                    let choices = some.iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).colour(theme.tag(t.colour)).detail(Some(described(t.count, &t.note)))).collect();
                     let available = if some.is_empty() { When::Unavailable } else { When::Always };
                     Action::new(edit.id(), edit.which(), edit.detail(), S::TagEditWhich(edit)).param(Param::Choice(choices)).group(Group::Act).importance(MINOR).when(available)
                 }
@@ -107,30 +81,31 @@ impl CockpitApp {
 
     /// Taking a tag off what you're on: the one there (in a view of tags,
     /// the row's), else which.
-    fn untag_action(at: &AtCursor) -> Action {
+    fn untag_action(at: &NotesHere) -> Action {
         use ShellCommand as S;
         let theme = crate::theme::colors();
-        let one = match (&at.row, at.on.as_slice()) {
+        let on: Vec<(&TagHere, &Subject)> = at.tags.iter().filter_map(|t| Some((t, t.on.as_ref()?))).collect();
+        let one = match (&at.row, on.as_slice()) {
             (Some(_), [first, ..]) | (None, [first]) => Some(first),
             _ => None,
         };
         let action = match one {
-            Some((tag, subject)) => Action::new("tag.remove", format!("Take {} off this", tag.name), "The tag stays on everything else", S::Untag(Some((tag.id.clone(), subject.clone())))),
-            None => Action::new("tag.remove", "Take a tag off what you're on", "Pick which of its tags (on any of the things at the cursor)", S::Untag(None)).param(Param::Choice(at.on.iter().map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone()).colour(theme.tag(t.colour))).collect())),
+            Some((tag, subject)) => Action::new("tag.remove", format!("Take {} off this", tag.name), "The tag stays on everything else", S::Untag(Some((tag.id.clone(), (*subject).clone())))),
+            None => Action::new("tag.remove", "Take a tag off what you're on", "Pick which of its tags (on any of the things at the cursor)", S::Untag(None)).param(Param::Choice(on.iter().map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone()).colour(theme.tag(t.colour))).collect())),
         };
-        action.group(Group::Act).importance(MINOR).when(if at.on.is_empty() { When::Unavailable } else { When::Always })
+        action.group(Group::Act).importance(MINOR).when(if on.is_empty() { When::Unavailable } else { When::Always })
     }
 
     /// The tag actions, where you are. The tag pickers' rows are made only
     /// while theirs is open (it's what shows them, afresh each frame).
     pub(super) fn tag_actions(&self, here: Here) -> Vec<Action> {
         use ShellCommand as S;
-        let at = self.at_cursor(here);
+        let at = self.notes_here(here);
         let things = &at.things;
         let tags = self.desk.shared.tags.get();
         let when = |ok: bool| if ok { When::Always } else { When::Unavailable };
         let picking = self.palette.picking();
-        let tagged = !at.on.is_empty();
+        let tagged = at.tags.iter().any(|t| t.on.is_some());
         // What's tagged (the picker's top line), and the next of the things
         // there (its cycle key).
         let level = self.level(things);
@@ -150,7 +125,7 @@ impl CockpitApp {
                 .importance(MINOR)
                 .when(when(picking == Some("tag.add") && next.is_some())),
             Self::untag_action(&at),
-            Action::new("tag.goto", "Go to something tagged", "Pick the tag, then which thing it's on", S::TagGoTo).param(Param::Choice(tags.list().iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).colour(crate::theme::colors().tag(t.colour)).detail(Some(described(t)))).collect())).group(Group::GoTo).importance(MINOR),
+            Action::new("tag.goto", "Go to something tagged", "Pick the tag, then which thing it's on", S::TagGoTo).param(Param::Choice(tags.list().iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).colour(crate::theme::colors().tag(t.colour)).detail(Some(described(t.on.len(), &t.note)))).collect())).group(Group::GoTo).importance(MINOR),
             Action::new("tag.next", "Next with its tag", "The next thing the tag on this is on (the one stepped through last)", S::TagStep { forward: true }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
             Action::new("tag.prev", "Previous with its tag", "The thing before, of those the tag on this is on", S::TagStep { forward: false }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
         ];
@@ -179,7 +154,7 @@ impl CockpitApp {
         let tags = self.desk.shared.tags.get();
         let list = tags.list();
         let query = self.desk.shell_searches.get(search).map_or("", |q| q.trim());
-        let choice = |t: &harness_contracts::Tag| Choice::new(t.id.as_str(), t.name.clone()).colour(crate::theme::colors().tag(t.colour)).detail(Some(described(t)));
+        let choice = |t: &harness_contracts::Tag| Choice::new(t.id.as_str(), t.name.clone()).colour(crate::theme::colors().tag(t.colour)).detail(Some(described(t.on.len(), &t.note)));
         if query.is_empty() {
             return list.into_iter().map(choice).collect();
         }
@@ -212,7 +187,7 @@ impl CockpitApp {
             }
             (ShellCommand::Untag(one), _, value) => {
                 // The one it named, or the one picked of those there.
-                let which = one.clone().or_else(|| value.and_then(|id| self.at_cursor(here).on.into_iter().find(|(t, _)| t.id.as_str() == id).map(|(t, s)| (t.id, s))));
+                let which = one.clone().or_else(|| value.and_then(|id| self.notes_here(here).tags.into_iter().find(|t| t.id.as_str() == id).and_then(|t| Some((t.id, t.on?)))));
                 match which {
                     Some((tag, subject)) => self.ask_tags(TagAct::Untag { tag, subject }, ctx),
                     None => self.note = Some("That tag isn't on what you're on any more.".into()),
@@ -230,8 +205,8 @@ impl CockpitApp {
             }
             (ShellCommand::TagEditWhich(edit), _, Some(tag)) => {
                 // The tag picked: its value asked for next (a note to clear: done).
-                let Some(tag) = self.desk.shared.tags.get().get(&TagId::new(&tag)).cloned() else {
-                    self.note = Some("That tag is gone.".into());
+                let Some(tag) = self.notes_here(here).tags.into_iter().find(|t| t.id.as_str() == tag) else {
+                    self.note = Some("That tag is gone, or isn't here any more.".into());
                     return;
                 };
                 let action = Self::edit_action(*edit, &tag);
@@ -279,7 +254,7 @@ impl CockpitApp {
             }
             (ShellCommand::TagGoToPick, _, Some(which)) => {
                 let Some(tag) = self.desk.tag_picking.take() else { return };
-                let still = serde_json::from_str::<Subject>(&which).ok().filter(|s| self.desk.shared.tags.get().get(&tag).is_some_and(|t| t.on.iter().any(|on| on.subject == *s)));
+                let still = serde_json::from_str::<Subject>(&which).ok().filter(|s| self.desk.shared.tags.get().get(&tag).is_some_and(|t| t.on.iter().any(|on| on.subject.same_thing(s))));
                 match still {
                     Some(subject) => {
                         self.desk.tag_stepping = Some(tag);
@@ -290,11 +265,14 @@ impl CockpitApp {
             }
             (ShellCommand::TagStep { forward }, Some(_), _) => {
                 let next = {
-                    let on = self.at_cursor(here).on;
+                    let here_tags = self.notes_here(here).tags;
+                    let tags = self.desk.shared.tags.get();
                     // The tag stepped through last, when it's one of them.
                     let stepping = self.desk.tag_stepping.clone();
-                    on.iter().find(|(t, _)| Some(&t.id) == stepping.as_ref()).or(on.first()).and_then(|(tag, here)| {
-                        let at = tag.on.iter().position(|on| on.subject == *here)?;
+                    let on: Vec<(&TagId, &Subject)> = here_tags.iter().filter_map(|t| Some((&t.id, t.on.as_ref()?))).collect();
+                    on.iter().find(|(id, _)| Some(*id) == stepping.as_ref()).or(on.first()).and_then(|(id, here)| {
+                        let tag = tags.get(id)?;
+                        let at = tag.on.iter().position(|on| on.subject.same_thing(here))?;
                         let n = tag.on.len();
                         let next = if *forward { (at + 1) % n } else { (at + n - 1) % n };
                         (next != at).then(|| (tag.id.clone(), tag.on[next].subject.clone()))
@@ -327,28 +305,8 @@ impl CockpitApp {
 }
 
 /// A tag in a picker's detail: how many things it's on, and its note.
-fn described(tag: &harness_contracts::Tag) -> String {
-    if tag.note.is_empty() { on_things(tag.on.len()) } else { format!("{} · {}", on_things(tag.on.len()), first_line(&tag.note)) }
-}
-
-/// What's at the cursor, for the tags (`CockpitApp::at_cursor`).
-pub(super) struct AtCursor {
-    things: Things,
-    pub(super) on: Vec<(harness_contracts::Tag, Subject)>,
-    row: Option<harness_contracts::Tag>,
-}
-
-impl AtCursor {
-    /// The tags there: the row's first.
-    fn tags(&self) -> Vec<&harness_contracts::Tag> {
-        let mut out: Vec<&harness_contracts::Tag> = self.row.iter().collect();
-        for (tag, _) in &self.on {
-            if !out.iter().any(|t| t.id == tag.id) {
-                out.push(tag);
-            }
-        }
-        out
-    }
+fn described(on: usize, note: &str) -> String {
+    if note.is_empty() { on_things(on) } else { format!("{} · {}", on_things(on), first_line(note)) }
 }
 
 impl TagEditing {

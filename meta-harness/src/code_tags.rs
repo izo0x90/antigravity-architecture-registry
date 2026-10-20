@@ -1,28 +1,38 @@
-//! The code as owner of tags' subjects: a component (a symbol: the index
-//! follows it through edits) and lines of a file. Code lasts (git, the
-//! changes' snapshots): nothing of it is written to the tags' logs.
+//! The code as owner of things notes are on: a component (a symbol: the
+//! index follows it through edits) and lines of a file. Code lasts (git,
+//! the changes' snapshots): nothing of it is written to the logs.
 //!
 //! Lines are kept as they were at a snapshot of the files (taken when
-//! they're tagged; one taken just before is used again when nothing
-//! changed since). When the files change, where the lines are now is
+//! they're noted; one taken just before is used again when nothing
+//! changed since), and so is where a component was (to read it once it's
+//! gone from the code). When the files change, where lines are now is
 //! worked out from what changed since that snapshot: lines before them
 //! added or taken away move them (a new snapshot is kept for where they
-//! are); a change among them leaves them where they were, said as
-//! changed; their file gone, they're gone.
+//! are); a change among them leaves them where they were (read as they
+//! were); their file gone, they're gone. A snapshot no note points to any
+//! more is let go.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arch_graph::{ComponentId, Source};
 use arch_service::ArchitectureService;
-use harness_contracts::Subject;
 use harness_contracts::changes::{Comparison, Group, Hunk, Point};
+use harness_contracts::{CodeAt, Known, Subject};
 use nah_changes::{Changes, Snapshot};
+
+/// What the snapshots taken for notes are taken for (`Changes::snapshots_for`).
+const WHY: &str = "tagged lines";
 
 pub struct Code {
     arch: Arc<ArchitectureService>,
     changes: Option<Arc<Changes>>,
-    /// The snapshot taken last (used again while the files are as it has them).
+    /// The snapshot taken last (used again while the files are as it has
+    /// them), the snapshots taken for notes (listed once, then kept up to
+    /// date), and those handed to a note not seen kept yet.
     last: Mutex<Option<Snapshot>>,
+    taken: Mutex<Option<Vec<Snapshot>>>,
+    handed: Mutex<BTreeSet<String>>,
 }
 
 /// Where lines kept at a snapshot are in the files now.
@@ -57,15 +67,19 @@ fn map_lines(hunks: &[Hunk], first: u32, last: u32) -> Now {
 
 impl Code {
     pub fn new(arch: Arc<ArchitectureService>, changes: Option<Arc<Changes>>) -> Arc<Self> {
-        Arc::new(Self { arch, changes, last: Mutex::default() })
+        Arc::new(Self { arch, changes, last: Mutex::default(), taken: Mutex::default(), handed: Mutex::default() })
     }
 
     /// The files now, as a snapshot (the last one again when they're as it has them).
     fn snapshot(&self) -> Result<String, String> {
         let changes = self.changes.as_ref().ok_or("the project isn't a git repository: its lines can't be kept where they are")?;
         let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-        let (snapshot, _) = changes.snapshot("tagged lines", last.as_ref()).map_err(|e| e.to_string())?;
+        let (snapshot, new) = changes.snapshot(WHY, last.as_ref()).map_err(|e| e.to_string())?;
+        if new && let Some(taken) = self.taken.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
+            taken.push(snapshot.clone());
+        }
         *last = Some(snapshot.clone());
+        self.handed.lock().unwrap_or_else(PoisonError::into_inner).insert(snapshot.id.clone());
         Ok(snapshot.id)
     }
 
@@ -106,41 +120,39 @@ impl Code {
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
-    /// A component: its kind, name and file's line, its lines.
-    fn component(&self, id: &ComponentId) -> Option<(String, String, u32, u32)> {
+    /// A component's file and lines.
+    fn component(&self, id: &ComponentId) -> Option<(String, u32, u32)> {
         let graph = self.arch.graph(&Source::Code).ok()?;
-        let c = graph.component(id)?;
-        let anchor = c.anchor.as_ref()?;
-        Some((format!("{} {}", c.type_name, c.name), anchor.file.as_str().to_owned(), anchor.span.start_line, anchor.span.end_line))
+        let anchor = graph.component(id)?.anchor.clone()?;
+        Some((anchor.file.as_str().to_owned(), anchor.span.start_line, anchor.span.end_line))
     }
 }
 
-impl nah_tags::Resolve for Code {
-    fn name(&self, subject: &Subject) -> Option<String> {
-        match subject {
-            // Its id first: named back by it.
-            Subject::Component { id } => Some(match self.component(id) {
-                Some((what, file, start, _)) => format!("component {id} ({what}, {file}:{start})"),
-                None => format!("component {id} (gone from the code)"),
-            }),
-            Subject::CodeLines { path, first, last, snapshot } => {
-                let lines = if first == last { format!("{path} line {first}") } else { format!("{path} lines {first}-{last}") };
-                Some(match self.now_at(path, *first, *last, snapshot) {
-                    Now::At(..) => lines,
-                    Now::Changed => format!("{lines} (changed since tagged)"),
-                    Now::Gone => format!("{lines} (its file's gone)"),
-                })
-            }
-            _ => None,
-        }
+/// The snapshot a noted thing is kept at.
+fn snapshot_of(subject: &Subject) -> Option<&str> {
+    match subject {
+        Subject::CodeLines { snapshot, .. } => Some(snapshot),
+        Subject::Component { was: Some(was), .. } => Some(&was.snapshot),
+        _ => None,
+    }
+}
+
+impl nah_things::Resolve for Code {
+    fn owns(&self, subject: &Subject) -> bool {
+        matches!(subject, Subject::Component { .. } | Subject::CodeLines { .. })
+    }
+
+    fn name(&self, subject: &Subject) -> String {
+        subject.name(&Known::default())
     }
 
     fn now(&self, subject: &Subject) -> Option<String> {
         match subject {
-            Subject::Component { id } => {
-                let (_, file, start, end) = self.component(id)?;
-                self.lines_text(&file, start, end)
-            }
+            // Gone from the code: as it was when noted.
+            Subject::Component { id, was } => match self.component(id) {
+                Some((file, start, end)) => self.lines_text(&file, start, end),
+                None => was.as_ref().and_then(|w| self.as_tagged(&w.path, w.first, w.last, &w.snapshot)),
+            },
             // Where they are now; changed or gone since, as they were.
             Subject::CodeLines { path, first, last, snapshot } => match self.now_at(path, *first, *last, snapshot) {
                 Now::At(f, l) => self.lines_text(path, f, l),
@@ -156,7 +168,7 @@ impl nah_tags::Resolve for Code {
         let words = words.trim();
         if let Some(id) = words.strip_prefix("component ") {
             let id = ComponentId::new(id.split(" (").next().unwrap_or(id).trim());
-            return Some(if self.component(&id).is_some() { Ok(Subject::Component { id }) } else { Err(format!("there's no component {id} in the code")) });
+            return Some(if self.component(&id).is_some() { Ok(Subject::Component { id, was: None }) } else { Err(format!("there's no component {id} in the code")) });
         }
         let (path, lines) = words.split_once(" lines ").or_else(|| words.split_once(" line "))?;
         let lines = lines.split(" (").next().unwrap_or(lines);
@@ -175,16 +187,24 @@ impl nah_tags::Resolve for Code {
 
     fn there(&self, subject: &Subject) -> bool {
         match subject {
-            Subject::Component { id } => self.component(id).is_some(),
+            Subject::Component { id, .. } => self.component(id).is_some(),
             Subject::CodeLines { path, first, last, snapshot } => matches!(self.now_at(path, *first, *last, snapshot), Now::At(..)),
             _ => false,
         }
     }
 
-    /// Lines tagged: kept with the snapshot of the files they're in.
+    /// Lines noted: kept with the snapshot of the files they're in; a
+    /// component, with where it is in them.
     fn settle(&self, subject: &Subject) -> Result<Subject, String> {
         match subject {
             Subject::CodeLines { path, first, last, snapshot } if snapshot.is_empty() => Ok(Subject::CodeLines { path: path.clone(), first: *first, last: *last, snapshot: self.snapshot()? }),
+            Subject::Component { id, was: None } => {
+                let was = match self.component(id) {
+                    Some((path, first, last)) => Some(CodeAt { path, first, last, snapshot: self.snapshot()? }),
+                    None => return Err(format!("there's no component {id} in the code")),
+                };
+                Ok(Subject::Component { id: id.clone(), was })
+            }
             other => Ok(other.clone()),
         }
     }
@@ -197,6 +217,30 @@ impl nah_tags::Resolve for Code {
             Now::At(f, l) if (f, l) != (*first, *last) => Some(Subject::CodeLines { path: path.clone(), first: f, last: l, snapshot: self.snapshot().ok()? }),
             _ => None,
         }
+    }
+
+    /// The snapshots taken for notes that no note points to now go (not
+    /// the last one, used again, nor one handed to a note still being
+    /// kept).
+    fn noted(&self, all: &[Subject]) {
+        let Some(changes) = &self.changes else { return };
+        let used: BTreeSet<&str> = all.iter().filter_map(snapshot_of).collect();
+        let last = self.last.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|s| s.id.clone());
+        let mut handed = self.handed.lock().unwrap_or_else(PoisonError::into_inner);
+        handed.retain(|id| !used.contains(id.as_str()));
+        let mut taken = self.taken.lock().unwrap_or_else(PoisonError::into_inner);
+        if taken.is_none() {
+            *taken = Some(changes.snapshots_for(WHY).unwrap_or_default());
+        }
+        let Some(taken) = taken.as_mut() else { return };
+        taken.retain(|s| {
+            let keep = used.contains(s.id.as_str()) || last.as_deref() == Some(s.id.as_str()) || handed.contains(&s.id);
+            if !keep && let Err(e) = changes.drop_snapshot(&s.id) {
+                tracing::warn!("A snapshot no note points to couldn't be let go: {e}");
+                return true;
+            }
+            keep
+        });
     }
 }
 
