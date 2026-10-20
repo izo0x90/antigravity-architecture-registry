@@ -297,6 +297,12 @@ pub fn code_tags(arch: &Arc<ArchitectureService>, changes: &Option<Arc<nah_chang
     });
 }
 
+/// The plans own their parts (a plan, a component's card and its
+/// sections, a relation, an item) as things notes can be on.
+pub fn plan_parts(arch: &Arc<ArchitectureService>, things: &Arc<nah_things::Things>) {
+    things.register(crate::plan_things::PlanParts::new(arch.clone()));
+}
+
 /// The chats own their turns and messages as things notes can be on.
 pub fn chats(slots: &Arc<harness_core::SlotManager>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>) {
     things.register(crate::chats::Chats::new(slots.clone(), hub.clone()));

@@ -55,7 +55,7 @@ impl Tags {
         let _ = trees;
         let on = json!({ "type": "object", "properties": {
             "tag": { "type": "string", "description": "Its name (a new tag when there's none of that name: letters, digits, - and _)" },
-            "subject": { "type": "string", "description": "What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `src/a.rs lines 10-12`, `component <id>`" }
+            "subject": { "type": "string", "description": "What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` (overview, signature, logic, invariants, relations, code, changes, placeholders, findings), `plan <id> relation <source> <kind> <target>`" }
         }, "required": ["tag", "subject"] });
         let edit = json!({ "type": "object", "properties": {
             "tag": { "type": "string" },

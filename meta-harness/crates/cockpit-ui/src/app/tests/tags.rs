@@ -648,3 +648,52 @@ fn in_the_code_the_innermost_definition_is_tagged_tab_its_line_and_in_the_outlin
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "x1", "subject": harness_contracts::Subject::Component { id: arch_graph::ComponentId::new("rust:a::run"), was: None } })], "the tag there is, by its id");
 }
+
+/// On a plan's card: the section at the cursor is tagged (Tab: the card,
+/// then the plan), its bar beside the section's rows; gone to from
+/// elsewhere, the card's cursor lands on the section.
+#[test]
+fn on_a_plans_card_its_section_is_tagged_shown_in_the_gutter_and_gone_to() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Spec);
+    frame(&ctx, &mut app, vec![]);
+    app.desk.spec_mut().move_to("logic#Header");
+    let plan = arch_graph::PlanId::new("p").unwrap();
+    let step = arch_graph::ComponentId::new("rust:a::step");
+    let section = harness_contracts::Subject::PlanSection { plan: plan.clone(), id: step.clone(), section: "logic".into() };
+    let card = harness_contracts::Subject::PlanComponent { plan: plan.clone(), id: step.clone() };
+    keys(&ctx, &mut app, "M");
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    let name = |s: &harness_contracts::Subject| s.name(&harness_contracts::Known::default());
+    assert!(drawn.contains(&name(&section)) && drawn.contains(&name(&card)), "the section, Tab the card: {drawn}");
+    keys(&ctx, &mut app, "review");
+    bodies(&app, "");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "review", "subject": section })]);
+    // Told: a bar beside the section's rows, left of them.
+    let mut tag = tag_on("x1", "review", &[]);
+    tag.on.push(harness_contracts::Tagged { subject: section.clone(), what: name(&section), at_ms: 0, by: "user".into(), kept: None });
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag });
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    let at = drawn_rects(&output, "Read the input.")[0];
+    let marks = bars(&output, crate::theme::colors().tag(2));
+    assert!(marks.iter().any(|b| b.y_range().contains(at.center().y) && b.right() < at.left()), "{marks:?} beside {at:?}");
+    // From elsewhere, the desk reading the code: the card, on the section,
+    // read from the plan (the desk too; each graph keeps its own).
+    app.desk.spec_mut().move_to("overview#Header");
+    app.desk.spec_mut().pinned = false;
+    app.desk.graph_mut().navigate(crate::graph::NavChange::Source(arch_graph::Source::Code));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.desk.shared.source.get(), &arch_graph::Source::Code);
+    focus(&ctx, &mut app, BufferKind::Terminal);
+    not_typing(&ctx, &mut app);
+    keys(&ctx, &mut app, "gT");
+    keys(&ctx, &mut app, "review");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!((app.focused_kind(), cursor(&app).as_deref()), (BufferKind::Spec, Some("logic#Header")));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!((app.desk.shared.source.get(), &app.desk.spec().source), (&arch_graph::Source::Plan(plan.clone()), &arch_graph::Source::Plan(plan.clone())));
+    assert_eq!(app.desk.graph().nav.source, arch_graph::Source::Code);
+}

@@ -364,6 +364,7 @@ pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHu
     let tags = meta_harness::startup::tags(&db, &hub, &things).unwrap();
     meta_harness::startup::chats(&slots, &hub, &things);
     meta_harness::startup::code_tags(&arch, &changes, &things);
+    meta_harness::startup::plan_parts(&arch, &things);
     let terminals = Some(meta_harness::startup::terminals(&arch, &db, &hub, &things, terminal_settings.terminals).unwrap());
     things.forget_unused();
     let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone(), tags: tags.clone() };

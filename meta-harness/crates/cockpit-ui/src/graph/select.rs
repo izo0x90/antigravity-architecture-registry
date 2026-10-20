@@ -443,11 +443,17 @@ impl Navigable for GraphState {
     }
 
     /// Any component (a line too: it's in one), not the one selected.
+    /// A component (not the one selected), or a whole plan (shown as the
+    /// graph's source).
     fn can_show(&self, target: &Target) -> bool {
-        target.in_component() && target.elsewhere(self.target().as_ref())
+        matches!(target, Target::Plan { part: crate::nav::PlanPart::Whole, .. }) || (target.in_component() && target.elsewhere(self.target().as_ref()))
     }
 
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        if let Target::Plan { plan, part: crate::nav::PlanPart::Whole } = target {
+            self.navigate(NavChange::Source(arch_graph::Source::Plan(plan.clone())));
+            return Ok(());
+        }
         let id = target.component().ok_or("Not a component.")?;
         self.reveal(id.clone());
         Ok(())

@@ -121,6 +121,18 @@ pub enum Subject {
     /// snapshot (the changes' timeline; none yet: the files now, kept as
     /// one when it's tagged); kept where they are as the files change.
     CodeLines { path: String, first: u32, last: u32, #[serde(default)] snapshot: String },
+    /// A plan, as a whole.
+    Plan { plan: arch_graph::PlanId },
+    /// A component of a plan (its card).
+    PlanComponent { plan: arch_graph::PlanId, id: arch_graph::ComponentId },
+    /// One section of a plan's component's card (`overview`, `signature`,
+    /// `logic`, `invariants`, `relations`, `code`, `changes`,
+    /// `placeholders`, `findings`).
+    PlanSection { plan: arch_graph::PlanId, id: arch_graph::ComponentId, section: String },
+    /// A relation of a plan (`relation`: its kind).
+    PlanRelation { plan: arch_graph::PlanId, relation: arch_graph::RelationKind, source: arch_graph::ComponentId, target: arch_graph::ComponentId },
+    /// An item of a plan (a finding, a decision, a to-do), by its id.
+    PlanItem { plan: arch_graph::PlanId, item: String },
 }
 
 /// Lines of a file as the files were at a snapshot (the changes' timeline).
@@ -206,6 +218,11 @@ impl Subject {
             Self::ChatMessage { turn, message, .. } => format!("chat {} turn {turn} message {message}", known.chat),
             Self::Component { id, .. } => format!("component {id}"),
             Self::CodeLines { path, first, last, .. } => format!("{path} {}", lines_words(first, last)),
+            Self::Plan { plan } => format!("plan {plan}"),
+            Self::PlanComponent { plan, id } => format!("plan {plan} component {id}"),
+            Self::PlanSection { plan, id, section } => format!("plan {plan} component {id} section {section}"),
+            Self::PlanRelation { plan, relation, source, target } => format!("plan {plan} relation {source} {} {target}", relation.name()),
+            Self::PlanItem { plan, item } => format!("plan {plan} item {item}"),
         }
     }
 
@@ -248,6 +265,9 @@ impl Subject {
             // Lines of a file: where they are now (one side's snapshot not
             // taken yet: the files now, as the other's are kept).
             (Self::CodeLines { path, first, last, snapshot }, Self::CodeLines { path: p, first: f, last: l, snapshot: s }) => path == p && first <= f && l <= last && (snapshot == s || snapshot.is_empty() || s.is_empty()),
+            // A plan has its parts in it; a component, its sections.
+            (Self::Plan { plan }, Self::PlanComponent { plan: p, .. } | Self::PlanSection { plan: p, .. } | Self::PlanRelation { plan: p, .. } | Self::PlanItem { plan: p, .. }) => plan == p,
+            (Self::PlanComponent { plan, id }, Self::PlanSection { plan: p, id: i, .. }) => plan == p && id == i,
             _ => self.same_thing(other),
         }
     }
@@ -335,6 +355,13 @@ mod tests {
         assert!(typed.same_thing(&command), "what's kept when noted isn't what it is");
         let code = Subject::CodeLines { path: "src/a.rs".into(), first: 12, last: 12, snapshot: "s1".into() };
         assert_eq!(code.name(&Known::default()), "src/a.rs line 12");
+        let plan = arch_graph::PlanId::new("quick-look").unwrap();
+        let (a, b) = (arch_graph::ComponentId::new("rust:app::open"), arch_graph::ComponentId::new("rust:app::show"));
+        let section = Subject::PlanSection { plan: plan.clone(), id: a.clone(), section: "logic".into() };
+        assert_eq!(section.name(&Known::default()), "plan quick-look component rust:app::open section logic");
+        assert_eq!(Subject::PlanRelation { plan: plan.clone(), relation: arch_graph::RelationKind::Calls, source: a.clone(), target: b }.name(&Known::default()), "plan quick-look relation rust:app::open calls rust:app::show");
+        assert!(Subject::Plan { plan: plan.clone() }.contains(&section) && Subject::PlanComponent { plan: plan.clone(), id: a.clone() }.contains(&section), "a plan has its parts in it");
+        assert!(!Subject::PlanComponent { plan: arch_graph::PlanId::new("other").unwrap(), id: a }.contains(&section));
         let message = Subject::ChatMessage { session: NativeId::new("4f2a91c0aa"), turn: 3, message: 2 };
         assert_eq!(message.name(&known(None)), "chat lead@4f2a91c0 turn 3 message 2");
         assert_eq!(chat_who(Some("lead"), &NativeId::new("4f2a91c0aa")), "lead@4f2a91c0");

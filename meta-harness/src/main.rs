@@ -217,6 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tags = meta_harness::startup::tags(&state, &hub, &things)?;
     meta_harness::startup::chats(&slots, &hub, &things);
     meta_harness::startup::code_tags(&arch, &changes, &things);
+    meta_harness::startup::plan_parts(&arch, &things);
     let terminals = if serve.no_shells { None } else { Some(meta_harness::startup::terminals(&arch, &state, &hub, &things, terminal_settings.terminals)?) };
     // Every kind of note and every owner here: what a crash left in the logs goes.
     things.forget_unused();

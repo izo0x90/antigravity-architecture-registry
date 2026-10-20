@@ -46,6 +46,20 @@ pub enum Target {
     /// A turn of a chat's session (the harness's id for it), or one of its
     /// messages.
     Chat { session: harness_contracts::NativeId, turn: u32, message: Option<u32> },
+    /// A plan, or a part of it: shown where the plan is (its graph, a
+    /// component's card).
+    Plan { plan: arch_graph::PlanId, part: PlanPart },
+}
+
+/// Which of a plan's parts (`Target::Plan`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum PlanPart {
+    Whole,
+    Component(ComponentId),
+    /// A section of a component's card (`overview`, `logic`, ...).
+    Section(ComponentId, String),
+    Relation { kind: arch_graph::RelationKind, source: ComponentId, target: ComponentId },
+    Item(String),
 }
 
 /// What a buffer asks of the rest of the cockpit: the one way it reaches
@@ -119,6 +133,11 @@ impl Target {
             Self::TerminalCommand { terminal, command, .. } => format!("terminal {terminal} command {command}"),
             Self::Chat { turn, message: Some(message), .. } => format!("turn {turn} message {message}"),
             Self::Chat { turn, .. } => format!("turn {turn}"),
+            Self::Plan { plan, part: PlanPart::Whole } => format!("plan {plan}"),
+            Self::Plan { plan, part: PlanPart::Component(id) } => format!("{} in plan {plan}", short_name(id)),
+            Self::Plan { plan, part: PlanPart::Section(id, section) } => format!("{}'s {section} in plan {plan}", short_name(id)),
+            Self::Plan { plan, part: PlanPart::Relation { kind, source, target } } => format!("{} {} {} in plan {plan}", short_name(source), kind.name(), short_name(target)),
+            Self::Plan { plan, part: PlanPart::Item(item) } => format!("item {item} of plan {plan}"),
         }
     }
 
@@ -132,6 +151,11 @@ impl Target {
             Subject::Component { id, .. } => Self::Component(id),
             Subject::CodeLines { path, first, last, .. } => Self::Span { file: path, start: first as usize, end: last as usize },
             Subject::ChatMessage { session, turn, message } => Self::Chat { session, turn, message: Some(message) },
+            Subject::Plan { plan } => Self::Plan { plan, part: PlanPart::Whole },
+            Subject::PlanComponent { plan, id } => Self::Plan { plan, part: PlanPart::Component(id) },
+            Subject::PlanSection { plan, id, section } => Self::Plan { plan, part: PlanPart::Section(id, section) },
+            Subject::PlanRelation { plan, relation, source, target } => Self::Plan { plan, part: PlanPart::Relation { kind: relation, source, target } },
+            Subject::PlanItem { plan, item } => Self::Plan { plan, part: PlanPart::Item(item) },
             _ => return None,
         })
     }
@@ -141,7 +165,7 @@ impl Target {
         match self {
             Self::Component(id) | Self::Job { component: id } => Some(id),
             Self::Line { within, .. } => within.as_ref(),
-            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } => None,
+            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } | Self::Plan { .. } => None,
         }
     }
 

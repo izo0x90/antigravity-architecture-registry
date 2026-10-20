@@ -122,3 +122,52 @@ async fn comments_reach_the_agent_and_answers_come_back_for_the_user() {
     let (err, _) = mcp.tool("accept_comment", json!({ "plan": "v", "comment": "c1" })).await;
     assert!(err);
 }
+
+/// A plan's parts are things notes are on: tagged by their names, read as
+/// the plan has them now, nothing of them logged; a part taken out of the
+/// plan is gone.
+#[tokio::test]
+async fn a_plans_parts_are_tagged_by_name_and_read_as_the_plan_has_them() {
+    let arch = fixture_architecture();
+    let plan = PlanId::new("v").unwrap();
+    arch.create_plan("v", "Validate", "Checks what comes in.", arch_graph::PlanKind::Change).unwrap();
+    arch.apply(
+        &plan,
+        PlanOp::AddComponent {
+            name: "validate".into(),
+            type_name: "function".into(),
+            description: "Checks input.".into(),
+            parent: Some(id("sample")),
+            file: None,
+            signature: Some(arch_graph::Signature { params: vec![arch_graph::Param { name: "input".into(), ty: Some("&str".into()), optional: false, variadic: false }], returns: Some("bool".into()), qualifiers: vec![] }),
+            schemas: None,
+            spec: None,
+        },
+    )
+    .unwrap();
+    arch.apply(&plan, PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::validate"), order: None, ports: None, note: None, expects: None }).unwrap();
+    let (addr, state) = spawn_app_with(arch.clone()).await;
+    let mut lead = Mcp::lead(addr).await;
+    for subject in ["plan v", "plan v component rust:sample::validate", "plan v component rust:sample::validate section signature", "plan v relation rust:sample::run calls rust:sample::validate"] {
+        let (error, said) = lead.tool("tag", json!({ "tag": "review", "subject": subject })).await;
+        assert!(!error, "{subject}: {said}");
+    }
+    let (_, read) = lead.tool("tag_read", json!({ "tag": "review" })).await;
+    for (n, what, says) in [
+        (1, "plan v", "Validate (1 components)\nChecks what comes in."),
+        (2, "plan v component rust:sample::validate", "function validate (New, Declared"),
+        (3, "plan v component rust:sample::validate section signature", "validate(input: &str) -> bool"),
+        (4, "plan v relation rust:sample::run calls rust:sample::validate", "rust:sample::run calls rust:sample::validate"),
+    ] {
+        assert!(read.contains(&format!("{n}. {what} (tagged by lead; as it is now):\n{says}")), "{n}: {read}");
+    }
+    assert!(state.tags.tags.find("review").unwrap().on.iter().all(|t| t.kept.is_none()), "plans last: nothing logged");
+    for wrong in ["plan nope", "plan v component rust:sample::nope", "plan v component rust:sample::validate section nope", "plan v relation rust:sample::run calls rust:sample::nope"] {
+        let (error, said) = lead.tool("tag", json!({ "tag": "review", "subject": wrong })).await;
+        assert!(error, "{wrong}: {said}");
+    }
+    // Taken out of the plan: gone.
+    arch.apply(&plan, PlanOp::Unrelate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::validate") }).unwrap();
+    let (_, read) = lead.tool("tag_read", json!({ "tag": "review" })).await;
+    assert!(read.contains("4. plan v relation rust:sample::run calls rust:sample::validate (tagged by lead): gone, nothing kept of it"), "{read}");
+}

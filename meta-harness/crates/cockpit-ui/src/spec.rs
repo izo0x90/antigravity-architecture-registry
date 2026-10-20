@@ -1129,17 +1129,38 @@ impl SpecState {
     }
 }
 
+impl crate::nav::DrawsThings for SpecState {
+    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect> {
+        self.drawn_rect(subject)
+    }
+}
+
 impl Navigable for SpecState {
     /// Any component, but the one whose card it shows (a relation's other
-    /// end is another).
+    /// end is another); a part of a plan's card.
     fn can_show(&self, target: &Target) -> bool {
-        target.in_component() && target.component() != self.target.as_ref()
+        use crate::nav::PlanPart;
+        match target {
+            Target::Plan { part, .. } => matches!(part, PlanPart::Component(_) | PlanPart::Section(..) | PlanPart::Relation { .. }),
+            _ => target.in_component() && target.component() != self.target.as_ref(),
+        }
     }
 
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        if let Target::Plan { plan, part } = target {
+            return self.show_plan_part(plan, part);
+        }
         let id = target.component().ok_or("Not a component.")?;
         self.land_on(id.clone());
         Ok(())
+    }
+
+    fn things(&self, key: &str) -> crate::nav::Things {
+        self.things_at(key)
+    }
+
+    fn draws_things(&self) -> Option<&dyn crate::nav::DrawsThings> {
+        Some(self)
     }
 
     fn take_asks(&mut self) -> Vec<Ask> {
@@ -1339,6 +1360,98 @@ impl Navigable for SpecState {
 }
 
 impl SpecState {
+    /// The plan the card is read from, when its component is one of the
+    /// plan's (anything but only observed in the code).
+    fn plan_of_card(&self) -> Option<(&arch_graph::PlanId, &ComponentId)> {
+        let detail = self.detail.as_ref()?;
+        let id = self.target.as_ref().filter(|id| detail.component.id == **id)?;
+        (detail.alignment != arch_graph::Alignment::Observed).then_some(())?;
+        Some((self.source.plan()?, id))
+    }
+
+    /// The plan's relation an entry is (none: it isn't one, or the plan
+    /// doesn't have it: the code does).
+    fn plan_relation(&self, item: &SpecItem) -> Option<(RelationKind, ComponentId, ComponentId)> {
+        let SpecItem::Relation { kind, other, outgoing } = item else { return None };
+        let (id, detail) = (self.target.as_ref()?, self.detail.as_ref()?);
+        let (source, target) = if *outgoing { (id.clone(), other.clone()) } else { (other.clone(), id.clone()) };
+        let planned = detail.outgoing.iter().chain(&detail.incoming).any(|r| r.kind == *kind && r.source == source && r.target == target && r.provenance.planned);
+        planned.then_some((*kind, source, target))
+    }
+
+    /// The things at entry `key`, narrowest first: from a plan, a relation
+    /// (when the plan has it), the section it's in, the card, the plan; a
+    /// component the plan doesn't change, the component.
+    fn things_at(&self, key: &str) -> crate::nav::Things {
+        use harness_contracts::Subject;
+        let Some(entry) = self.all_entries().into_iter().find(|e| e.key() == key) else { return crate::nav::Things::default() };
+        let known = harness_contracts::Known::default();
+        let Some((plan, id)) = self.plan_of_card() else {
+            return match &self.target {
+                Some(id) => crate::nav::Things::one(Subject::Component { id: id.clone(), was: None }, &known),
+                None => crate::nav::Things::default(),
+            };
+        };
+        let mut at = Vec::new();
+        if let Some((relation, source, target)) = self.plan_relation(&entry.item) {
+            at.push(Subject::PlanRelation { plan: plan.clone(), relation, source, target });
+        }
+        at.push(Subject::PlanSection { plan: plan.clone(), id: id.clone(), section: entry.section.key().to_owned() });
+        at.push(Subject::PlanComponent { plan: plan.clone(), id: id.clone() });
+        at.push(Subject::Plan { plan: plan.clone() });
+        crate::nav::Things { at: at.into_iter().map(|s| crate::nav::Thing::named(s, &known)).collect(), unit: 0 }
+    }
+
+    /// Goes to a plan's part: reads the card from that plan, lands on its
+    /// component, the cursor on the section (or the relation) once it's in.
+    fn show_plan_part(&mut self, plan: &arch_graph::PlanId, part: &crate::nav::PlanPart) -> Result<(), String> {
+        use crate::nav::PlanPart;
+        let (id, entry) = match part {
+            PlanPart::Component(id) => (id.clone(), None),
+            PlanPart::Section(id, section) => (id.clone(), Some(Entry { section: Section::from_key(section).ok_or_else(|| format!("A card has no {section} section."))?, item: SpecItem::Header })),
+            PlanPart::Relation { kind, source, target } => (source.clone(), Some(Entry { section: Section::Relations, item: SpecItem::Relation { kind: *kind, other: target.clone(), outgoing: true } })),
+            PlanPart::Whole | PlanPart::Item(_) => return Err("Not a part of a card.".into()),
+        };
+        if self.pinned && self.source.plan() != Some(plan) {
+            return Err("This card is pinned to another source: unpin it first.".into());
+        }
+        let source = Source::Plan(plan.clone());
+        if self.source != source {
+            self.asks.push(Ask::Source(source.clone()));
+            self.follow_source(&source);
+        }
+        let loaded = self.detail.as_ref().is_some_and(|d| d.component.id == id) && self.target.as_ref() == Some(&id);
+        self.land_on(id);
+        match entry.map(|e| e.key()) {
+            Some(key) if loaded => self.move_to(&key),
+            key => self.restore_item = key,
+        }
+        Ok(())
+    }
+
+    /// Where a thing is drawn on the card: a section's rows, a relation's
+    /// row, the whole card (its component, the plan's or the code's).
+    fn drawn_rect(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect> {
+        use harness_contracts::Subject;
+        let id = self.target.as_ref()?;
+        let ours = |plan: &arch_graph::PlanId, of: &ComponentId| self.plan_of_card() == Some((plan, id)) && of == id;
+        let keep: Box<dyn Fn(&Entry) -> bool> = match subject {
+            Subject::PlanSection { plan, id: of, section } if ours(plan, of) => {
+                let section = section.clone();
+                Box::new(move |e: &Entry| e.section.key() == section)
+            }
+            Subject::PlanComponent { plan, id: of } if ours(plan, of) => Box::new(|_| true),
+            Subject::Component { id: of, .. } if of == id && self.plan_of_card().is_none() => Box::new(|_| true),
+            Subject::PlanRelation { plan, relation, source, target } if self.plan_of_card().is_some_and(|(p, _)| p == plan) => {
+                let wanted = (*relation, source.clone(), target.clone());
+                return self.all_entries().into_iter().filter(|e| self.plan_relation(&e.item).as_ref() == Some(&wanted)).filter_map(|e| self.spots.iter().find(|s| s.key == e.key()).map(|s| s.rect)).reduce(|a, b| a.union(b));
+            }
+            _ => return None,
+        };
+        let keys: Vec<String> = self.all_entries().into_iter().filter(|e| keep(e)).map(|e| e.key()).collect();
+        self.spots.iter().filter(|s| keys.contains(&s.key)).map(|s| s.rect).reduce(|a, b| a.union(b))
+    }
+
     /// The cursor onto a folded section's title (without unfolding it).
     fn put_on_header_keeping_fold(&mut self, section: Section) {
         if let Some(i) = self.entries().iter().position(|e| e.section == section && e.item == SpecItem::Header) {
