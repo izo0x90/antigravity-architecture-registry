@@ -550,7 +550,7 @@ impl Navigable for TerminalBuffer {
     /// the whole screen).
     fn drawn_at(&self, subject: &Subject) -> Option<egui::Rect> {
         let (grid, top) = (self.grid?, self.drawn?);
-        if self.lines.alternate() {
+        if self.lines.alternate() || self.window == 0 {
             return None;
         }
         let ours = |terminal: &TerminalId, shell: u64| Some(terminal) == self.id.as_ref() && shell == self.lines.shell();

@@ -73,9 +73,14 @@ impl crate::buffer::Buffer for ChatStreamState {
 }
 
 impl Navigable for ChatStreamState {
+    fn takes_typed(&self) -> bool {
+        true
+    }
+
     /// After what's typed (a tag's name after its `#`).
     fn typed_in(&mut self, text: &str) {
         self.ui.input_buffer.push_str(text);
+        self.ui.caret_to_end = true;
     }
 
     fn take_asks(&mut self) -> Vec<Ask> {

@@ -57,8 +57,13 @@ fn what_the_cursor_is_on_is_tagged_from_the_shell_and_its_tags_show_where_it_is_
     for mark in &marks {
         assert!(mark.right() < row(1003).left(), "in the gutter, never over the text: {mark:?}");
     }
-    // The panel's top line names the tag on the cursor's line.
-    assert!(texts(&output).contains("flaky"));
+    // The panel's top line names the tag on the cursor's line (and only
+    // then: not on another).
+    app.note = None;
+    let header = |output: &egui::FullOutput| drawn_rects(output, "flaky").into_iter().filter(|r| r.bottom() < row(1003).top()).count();
+    assert_eq!(header(&frame(&ctx, &mut app, vec![])), 1);
+    keys(&ctx, &mut app, "k");
+    assert_eq!(header(&frame(&ctx, &mut app, vec![])), 0, "line 1020 has no tag");
     // Its lines scrolled out of view: no bars.
     keys(&ctx, &mut app, "gg");
     answer_lines(&mut app);
@@ -89,15 +94,6 @@ fn on_a_line_of_output_the_command_is_tagged_and_tab_in_the_picker_tags_the_line
     keys(&ctx, &mut app, "seen");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "seen", "subject": ran("t1", 1, 1) })]);
-    // A thing tagged at a line (here, its command): its tag is taken off
-    // from any line of it.
-    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x1", "seen", &[ran("t1", 1, 1)]) });
-    frame(&ctx, &mut app, vec![]);
-    keys(&ctx, &mut app, ":");
-    keys(&ctx, &mut app, "take a tag off");
-    frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert_eq!(bodies(&app, "POST /api/tags/x1/untag"), [serde_json::json!({ "subject": ran("t1", 1, 1) })]);
 }
 
 #[test]
@@ -361,12 +357,22 @@ fn the_tags_buffer_lists_tags_folded_reads_what_they_say_now_and_the_shells_tag_
     assert!(!sent(&app).iter().any(|s| s.starts_with("DELETE")));
     run(&ctx, &mut app, "delete the tag flaky", Some("delete"));
     assert!(sent(&app).contains(&"DELETE /api/tags/x1".to_owned()));
-    // Backspace: up to its tag; z c folds it.
-    keys(&ctx, &mut app, "zc");
+    // Backspace: up to its tag; z c folds it; z R unfolds them all, z M folds them.
+    frame(&ctx, &mut app, press(egui::Key::Backspace, false));
     assert_eq!(cursor(&app).as_deref(), Some("x1"));
-    // Enter on a thing: the terminal, its cursor on the command.
-    keys(&ctx, &mut app, "zo");
-    keys(&ctx, &mut app, "j");
+    keys(&ctx, &mut app, "zc");
+    let rows = |app: &CockpitApp| app.desk.view(BufferKind::Tags).items().len();
+    let folded = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(!folded.contains("terminal t1 command 1"), "{folded}");
+    keys(&ctx, &mut app, "zR");
+    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("terminal t1 lines 1001-1001"), "every tag unfolded");
+    keys(&ctx, &mut app, "zM");
+    assert!(!texts(&frame(&ctx, &mut app, vec![])).contains("terminal t1 lines 1001-1001"));
+    assert!(rows(&app) > 2, "search still finds the folded things");
+    // Enter on a folded tag unfolds it; again, to its first thing; on that,
+    // the terminal, its cursor on the command.
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.focused_kind(), BufferKind::Terminal);
@@ -437,22 +443,101 @@ fn a_tag_on_what_you_are_on_is_edited_from_any_view_picking_which_when_there_are
 #[test]
 fn a_hash_typed_in_a_prompt_opens_the_tag_picker_and_puts_the_name_after_it() {
     let (ctx, mut app) = full_app();
-    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x1", "flaky", &[ran("t1", 1, 1)]) });
-    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x2", "deploy", &[ran("t1", 1, 2)]) });
     focus(&ctx, &mut app, BufferKind::Chat);
     frame(&ctx, &mut app, key("i"));
-    frame(&ctx, &mut app, vec![egui::Event::Text("look at #".into())]);
-    frame(&ctx, &mut app, vec![]);
+    let typed = |ctx: &egui::Context, app: &mut CockpitApp, text: &str| {
+        for c in text.chars() {
+            frame(ctx, app, vec![egui::Event::Text(c.to_string())]);
+        }
+        frame(ctx, app, vec![]);
+    };
+    // No tags yet: a # is a #.
+    typed(&ctx, &mut app, "fix #");
+    assert!(!app.palette.is_open());
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x1", "flaky", &[ran("t1", 1, 1)]) });
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x2", "deploy", &[ran("t1", 1, 2)]) });
+    typed(&ctx, &mut app, "1 look at (#");
     assert!(app.palette.is_open(), "the tag picker");
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
     assert!(drawn.contains("flaky") && drawn.contains("deploy"), "{drawn}");
     keys(&ctx, &mut app, "fla");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     frame(&ctx, &mut app, vec![]);
-    assert_eq!(app.desk.chat().ui.input_buffer, "look at #flaky ");
     assert!(matches!(app.input_mode, InputMode::Insert { .. }), "typing on");
-    // Mid-word, a # is just a #.
-    frame(&ctx, &mut app, vec![egui::Event::Text("issue#".into())]);
+    // The caret after the name: what's typed next follows it.
+    typed(&ctx, &mut app, ")");
+    assert_eq!(app.desk.chat().ui.input_buffer, "fix #1 look at (#flaky )");
+    // Escape out of the picker: the # stays, and typing goes on.
+    typed(&ctx, &mut app, " #");
+    assert!(app.palette.is_open());
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
     frame(&ctx, &mut app, vec![]);
+    assert!(!app.palette.is_open() && matches!(app.input_mode, InputMode::Insert { .. }), "back to typing");
+    typed(&ctx, &mut app, "x");
+    assert!(!app.palette.is_open(), "only a # just typed opens it");
+    assert_eq!(app.desk.chat().ui.input_buffer, "fix #1 look at (#flaky ) #x");
+    // Mid-word, a # is just a #.
+    typed(&ctx, &mut app, " issue#");
     assert!(!app.palette.is_open());
+}
+
+#[test]
+fn each_tag_has_a_column_of_its_colour_in_the_gutter_and_more_than_fit_share_a_muted_one() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![command(1, 1003, Some(1008), "make")])]);
+    for (n, name) in ["a", "b", "c", "d", "e"].into_iter().enumerate() {
+        let mut tag = tag_on(&format!("x{n}"), name, &[lines("t1", 1, 1010 + n as u64, 1010 + n as u64), lines("t1", 1, 1020, 1020)]);
+        tag.colour = n as u8;
+        told(&app, harness_contracts::ClientEvent::TagUpdated { tag });
+    }
+    not_typing(&ctx, &mut app);
+    // (The theme's colours, as the cockpit set them.)
+    let theme = crate::theme::colors();
+    let output = frame(&ctx, &mut app, vec![]);
+    // Five tags on screen, four columns: three their own, two sharing the last, muted.
+    let column = |colour| bars(&output, colour).first().map(|b| b.left());
+    let own: Vec<f32> = (0..3).map(|n| column(theme.tag(n)).expect("a bar in its colour")).collect();
+    assert!(own[0] < own[1] && own[1] < own[2], "side by side: {own:?}");
+    let muted = bars(&output, theme.muted);
+    assert!(muted.len() >= 2 && muted.iter().all(|b| b.left() > own[2]), "the rest, together: {muted:?}");
+    assert!(column(theme.tag(3)).is_none() && column(theme.tag(4)).is_none());
+    // A long press on a bar says its tags (a line two share: both).
+    let shared = bars(&output, theme.tag(0)).into_iter().find(|b| b.y_range().contains(drawn_rects(&output, "line 1020")[0].center().y)).expect("line 1020's bar");
+    let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: shared.center(), force: None };
+    frame_at(&ctx, &mut app, vec![touch(egui::TouchPhase::Start)], 70.0);
+    frame_at(&ctx, &mut app, vec![], 70.8);
+    frame_at(&ctx, &mut app, vec![touch(egui::TouchPhase::End)], 70.9);
+    frame_at(&ctx, &mut app, vec![], 71.0);
+    assert_eq!(app.note.as_deref(), Some("a"), "{:?}", app.note);
+}
+
+#[test]
+fn an_edit_is_of_the_tag_it_was_asked_for_and_a_thing_is_taken_off_exactly() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![])]);
+    // Two ranges of one tag, one inside the other.
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x1", "wide", &[lines("t1", 1, 1005, 1020), lines("t1", 1, 1010, 1012)]) });
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x2", "other", &[lines("t1", 1, 1001, 1001)]) });
+    focus(&ctx, &mut app, BufferKind::Tags);
+    // Delete asked of the first tag; it's deleted elsewhere meanwhile: the
+    // answer deletes nothing else.
+    keys(&ctx, &mut app, ":");
+    keys(&ctx, &mut app, "delete the tag other");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    told(&app, harness_contracts::ClientEvent::TagRemoved { tag_id: harness_contracts::TagId::new("x2") });
+    frame(&ctx, &mut app, vec![]);
+    sent(&app);
+    keys(&ctx, &mut app, "delete");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert!(!sent(&app).iter().any(|s| s.starts_with("DELETE")), "nothing deleted");
+    assert!(app.note.as_deref().is_some_and(|n| n.contains("gone")), "{:?}", app.note);
+    // The inner range's row: taken off that range, not the one around it.
+    keys(&ctx, &mut app, "gg");
+    keys(&ctx, &mut app, "zo");
+    keys(&ctx, &mut app, "jj");
+    bodies(&app, "");
+    keys(&ctx, &mut app, ":");
+    keys(&ctx, &mut app, "take wide off this");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(bodies(&app, "POST /api/tags/x1/untag"), [serde_json::json!({ "subject": lines("t1", 1, 1010, 1012) })]);
 }

@@ -365,6 +365,14 @@ pub fn solid(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Name(SOLID.into()))
 }
 
+/// Puts a text field's caret after its text (text put in it, not typed).
+pub fn caret_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
+    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+    let end = egui::text::CCursor::new(text.chars().count());
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
+    state.store(ctx, id);
+}
+
 /// A tag's mark where it's named: a solid tag in its colour (the outline
 /// one until the fonts are in, the first frame).
 pub fn tag_mark(ui: &egui::Ui, colour: Color32, size: f32) -> egui::RichText {

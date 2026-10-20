@@ -78,6 +78,8 @@ pub struct ChatView {
     pub(crate) drawing: Vec<Spot>,
     /// Where its typing box is, while it's typed in.
     pub(crate) typing: Option<Rect>,
+    /// Text was put in its box (not typed): the caret goes after it.
+    pub(crate) caret_to_end: bool,
 }
 
 impl Default for ChatView {
@@ -92,6 +94,7 @@ impl Default for ChatView {
             spots: Vec::new(),
             drawing: Vec::new(),
             typing: None,
+            caret_to_end: false,
         }
     }
 }

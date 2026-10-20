@@ -59,7 +59,7 @@ enum TagEditing {
 
 /// What the shell itself can do: panels, layout, overlays, and the keys every
 /// view shares (moves, hints, search, folds, marks, the jump list, go-tos).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ShellCommand {
     FocusPanel(usize),
     CyclePanel(i32),
@@ -96,8 +96,9 @@ enum ShellCommand {
     MarkJump,
     /// Tags what the cursor's on (its value: a tag's id, or a new one's name).
     Tag,
-    /// Takes a tag (its value) off what the cursor's on.
-    Untag,
+    /// Takes a tag off what the cursor's on: the one it names (and what
+    /// it's on there), or the one picked (its value: its id).
+    Untag(Option<(harness_contracts::TagId, harness_contracts::Subject)>),
     /// Goes to what a tag (its value: its id) is on: on one thing, there;
     /// on several, the palette asks which (`TagGoToPick`).
     TagGoTo,
@@ -110,8 +111,8 @@ enum ShellCommand {
     TagLevel,
     /// A tag's name (its value: its id) put where you're typing.
     TagInsert,
-    /// An edit of the tag at the cursor (or picked): its value.
-    TagEdit(TagEditing),
+    /// An edit of a tag (the one it was asked for): its value.
+    TagEdit(TagEditing, harness_contracts::TagId),
     /// Which of the tags at the cursor an edit is of (its value: its id).
     TagEditWhich(TagEditing),
     Back,
@@ -257,6 +258,9 @@ pub struct CockpitApp {
     /// The config changed and its theme still needs applying.
     theme_dirty: bool,
     pub input_mode: InputMode,
+    /// The mode the palette was opened from: closed without a pick, it
+    /// goes back to typing when that's where it came from.
+    palette_from: InputMode,
     leader_tap: TapTracker,
     /// Typing in a field that takes every key: a leave sequence's first key, held.
     leaving: crate::keymap::Leaving,
@@ -282,6 +286,8 @@ pub struct CockpitApp {
     /// (the quick look, or a panel by its number) while they're in a bar.
     pub(crate) item_buttons: Option<crate::hosted::ItemButtons>,
     item_bars: Vec<(crate::keymap::Host, egui::Rect)>,
+    /// The tag gutter's bars as drawn (each host's), with what they say.
+    tag_bars: Vec<(crate::keymap::Host, egui::Rect, String)>,
     palette: crate::palette::Palette,
 
     // Top-bar status LEDs
@@ -334,6 +340,7 @@ impl CockpitApp {
             config_reply: Arc::default(),
             theme_dirty: true,
             input_mode: InputMode::Normal,
+            palette_from: InputMode::Normal,
             leader_tap: TapTracker::default(),
             leaving: Default::default(),
             leader_path: Vec::new(),
@@ -347,6 +354,7 @@ impl CockpitApp {
             panel_rects: Vec::new(),
             item_buttons: None,
             item_bars: Vec::new(),
+            tag_bars: Vec::new(),
             palette: crate::palette::Palette::default(),
 
             srv_led: ActivityLed::default(),

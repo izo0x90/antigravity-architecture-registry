@@ -94,6 +94,7 @@ g = "Graph"
 e = "Links"
 I = "Index"
 D = "Developer"
+k = "Tags"
 
 # Bindings, by action id. Keys:
 #   leader: keys after the leader, space separated; "#" is the next free key in
@@ -201,6 +202,14 @@ D = "Developer"
 "tag.goto" = { keys = ["g T"] }
 "tag.next" = { keys = ["] t"] }
 "tag.prev" = { keys = ["[ t"] }
+# The tags at the cursor (in any view; in the Tags view, its row's): rename,
+# colour, note, clear the note, delete (the Tags view only), take off.
+"tag.rename" = { leader = "k r" }
+"tag.recolour" = { leader = "k c" }
+"tag.note" = { leader = "k n" }
+"tag.note_clear" = { leader = "k x" }
+"tag.delete" = { leader = "k d" }
+"tag.remove" = { leader = "k o" }
 # The jump list: back to where a jump left from, and forward again.
 "nav.back" = { keys = ["ctrl+o"], gestures = ["swipe_right"] }
 "nav.forward" = { keys = ["ctrl+i"], gestures = ["swipe_left"] }

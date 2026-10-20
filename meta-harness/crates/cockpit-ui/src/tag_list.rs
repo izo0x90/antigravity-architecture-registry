@@ -14,7 +14,7 @@ use egui::RichText;
 use egui_phosphor::regular as icon;
 use harness_contracts::{Subject, Tag, TagId, on_things};
 
-use crate::actions::{Action, ActionProvider, RunCx, Style};
+use crate::actions::{Action, ActionProvider, At, Control, RunCx, Style};
 use crate::hosted::{Hosted, Status, Tone};
 use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target, Things};
 use crate::shared::{Reader, Shared};
@@ -80,6 +80,9 @@ impl TagList {
         }
         self.synced = Some(version);
         let at = self.rows.get(self.cursor).cloned();
+        // A tag gone is no longer unfolded.
+        let ids: BTreeSet<TagId> = self.tags.get().list().iter().map(|t| t.id.clone()).collect();
+        self.open.retain(|id| ids.contains(id));
         let open = &self.open;
         self.rows = self.tags.get().list().iter().flat_map(|t| std::iter::once(Row::Tag(t.id.clone())).chain(t.on.iter().filter(|_| open.contains(&t.id)).map(|on| Row::On(t.id.clone(), on.subject.clone())))).collect();
         self.keys = self.rows.iter().map(Row::key).collect();
@@ -120,6 +123,14 @@ impl TagList {
     fn thing_here(&self) -> Option<(TagId, Subject)> {
         let Some(Row::On(id, subject)) = self.rows.get(self.cursor) else { return None };
         self.tags.get().get(id)?.on.iter().any(|on| on.subject == *subject).then(|| (id.clone(), subject.clone()))
+    }
+
+    /// The row of `key` (the cursor's first: it's the one asked about).
+    fn row(&self, key: &str) -> Option<&Row> {
+        if self.keys.get(self.cursor).is_some_and(|k| k == key) {
+            return self.rows.get(self.cursor);
+        }
+        self.rows.iter().zip(&self.keys).find(|(_, k)| *k == key).map(|(row, _)| row)
     }
 
     /// Unfolds (or folds) tag `id`: its things show (or go, the cursor on
@@ -272,7 +283,7 @@ impl Navigable for TagList {
     /// A thing's row: the thing (another tag can be put on it here too).
     fn things(&self, key: &str) -> Things {
         let tags = self.tags.get();
-        match self.rows.iter().zip(&self.keys).find(|(_, k)| *k == key).map(|(row, _)| row) {
+        match self.row(key) {
             Some(Row::On(tag, subject)) => {
                 let what = tags.get(tag).and_then(|t| t.on.iter().find(|on| on.subject == *subject)).map(|on| thing_name(&on.what)).unwrap_or_default();
                 Things::one(subject.clone(), what)
@@ -363,26 +374,22 @@ impl Navigable for TagList {
 
     /// A row's tag (a thing's row too: its tag's).
     fn tag_at(&self, key: &str) -> Option<TagId> {
-        self.rows.iter().zip(&self.keys).find(|(_, k)| *k == key).map(|(row, _)| row.tag().clone())
+        self.row(key).map(|row| row.tag().clone())
     }
 
+    /// Every tag and every thing it's on, folded or not (search finds a
+    /// thing under a folded tag; going to it unfolds the tag).
     fn items(&self) -> Vec<Item> {
         let tags = self.tags.get();
-        self.rows
-            .iter()
-            .zip(&self.keys)
-            .filter_map(|(row, key)| {
-                let tag = tags.get(row.tag())?;
-                Some(match row {
-                    Row::Tag(_) => Item::new(key.clone(), tag.name.clone(), tag.note.clone()),
-                    Row::On(_, subject) => {
-                        let on = tag.on.iter().find(|on| on.subject == *subject)?;
-                        let said = tags.now(row.tag()).and_then(|n| n.get(subject)).and_then(|(_, t)| t.clone()).unwrap_or_default();
-                        Item::new(key.clone(), "", format!("{} {said}", on.what))
-                    }
-                })
-            })
-            .collect()
+        let mut out = Vec::new();
+        for tag in tags.list() {
+            out.push(Item::new(Row::Tag(tag.id.clone()).key(), tag.name.clone(), tag.note.clone()));
+            for on in &tag.on {
+                let said = tags.now(&tag.id).and_then(|n| n.get(&on.subject)).and_then(|(_, t)| t.clone()).unwrap_or_default();
+                out.push(Item::new(Row::On(tag.id.clone(), on.subject.clone()).key(), "", format!("{} {said}", on.what)));
+            }
+        }
+        out
     }
 
     fn spots(&self) -> Vec<Spot> {
@@ -436,6 +443,17 @@ impl ActionProvider for TagList {
 impl Hosted for TagList {
     fn title(&self) -> Status {
         Status::new(format!("{} Tags", icon::TAG), Tone::Muted)
+    }
+
+    /// Its rows' buttons are the shell's tag actions: a tag's edits on its
+    /// row, taking the tag off on a thing's.
+    fn placed(&self) -> Vec<(String, Control)> {
+        let button = |id: &str, caption: &str, icon: &'static str| (id.to_owned(), Control::new(At::Item, Style::Button, caption, Some(icon)));
+        match self.rows.get(self.cursor) {
+            Some(Row::Tag(_)) => vec![button("tag.rename", "Rename", icon::PENCIL_SIMPLE), button("tag.recolour", "Colour", icon::PALETTE), button("tag.note", "Note", icon::NOTE_PENCIL), button("tag.delete", "Delete", icon::TRASH)],
+            Some(Row::On(..)) => vec![button("tag.remove", "Take off", icon::X)],
+            None => Vec::new(),
+        }
     }
 
     fn status(&self) -> Vec<Status> {

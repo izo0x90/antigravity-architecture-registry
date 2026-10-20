@@ -12,7 +12,8 @@
 use harness_contracts::{Subject, TagId, on_things};
 
 use super::*;
-use crate::actions::{Choice, Group, Style, When};
+use crate::app::TagEditing;
+use crate::actions::{Choice, Group, When};
 use crate::nav::{Item, Target, Things};
 use crate::tags::{TagAct, first_line, thing_name};
 
@@ -36,149 +37,108 @@ impl CockpitApp {
         things.picked(Some(self.level(&things))).map(|t| t.subject.clone())
     }
 
-    /// The tags on any of the things at the cursor, each with the thing
-    /// (the narrowest it's on).
-    pub(super) fn tagged_here(&self, here: Here) -> Vec<(harness_contracts::Tag, Subject)> {
-        let tags = self.desk.shared.tags.get();
-        let mut out: Vec<(harness_contracts::Tag, Subject)> = Vec::new();
-        for thing in self.things_here(here).at {
-            for (tag, on) in tags.on(&thing.subject) {
-                if !out.iter().any(|(t, _)| t.id == tag.id) {
-                    out.push((tag.clone(), on.clone()));
-                }
-            }
-        }
-        out
-    }
-
-    /// The tags at the cursor: the row's own (a view of tags), then those
-    /// on the things there.
-    fn tags_here(&self, here: Here) -> Vec<harness_contracts::Tag> {
-        let view = self.desk.view(here.kind);
-        let row = view.cursor_key().and_then(|key| view.tag_at(&key)).and_then(|id| self.desk.shared.tags.get().get(&id).cloned());
-        let mut out: Vec<harness_contracts::Tag> = row.into_iter().collect();
-        for (tag, _) in self.tagged_here(here) {
-            if !out.iter().any(|t| t.id == tag.id) {
-                out.push(tag);
-            }
-        }
-        out
-    }
-
-    /// The tag an edit is of: the one picked for it (in the picker open
-    /// now), else the one tag at the cursor (none: one is picked first).
-    fn tag_to_edit(&self, here: Here) -> Option<harness_contracts::Tag> {
-        let here_tags = self.tags_here(here);
-        // Picked for this opening, or for the next (its value's picker,
-        // asked for as the pick runs), and still here.
-        let opening = self.palette.opening();
-        let picked = self.desk.tag_editing.as_ref().filter(|(o, _)| *o == opening || *o == opening + 1).and_then(|(_, id)| here_tags.iter().find(|t| t.id == *id).cloned());
-        picked.or_else(|| match here_tags.as_slice() {
-            [one] => Some(one.clone()),
-            _ => None,
-        })
-    }
-
-    /// The edits of the tags at the cursor: of the one there (or picked),
-    /// its value asked for; else which tag first.
-    fn tag_edits(&self, here: Here) -> Vec<Action> {
-        use ShellCommand as S;
-        use crate::app::TagEditing as E;
-        let theme = crate::theme::colors();
-        let here_tags = self.tags_here(here);
-        let target = self.tag_to_edit(here);
-        // A view of tags: these are its rows' buttons (a tag's; a thing's
-        // is taking the tag off).
+    /// What's at the cursor where you are, for the tags: the things, the
+    /// tags on them (each with what it's on there: in a view of tags, the
+    /// row's thing exactly), and in a view of tags, the row's tag.
+    pub(super) fn at_cursor(&self, here: Here) -> AtCursor {
         let view = self.desk.view(here.kind);
         let key = view.cursor_key();
-        let row = key.as_ref().and_then(|k| view.tag_at(k));
-        let tag_row = row.is_some() && key.as_ref().is_some_and(|k| view.things(k).at.is_empty());
-        let mut out = Vec::new();
-        let edits: [(E, &str, &str, &str, Option<&'static str>); 4] = [
-            (E::Rename, "tag.rename", "Rename", "A new name for it (what it's on stays)", Some(egui_phosphor::regular::PENCIL_SIMPLE)),
-            (E::Recolour, "tag.recolour", "Colour", "One of the theme's tag colours", Some(egui_phosphor::regular::PALETTE)),
-            (E::Note, "tag.note", "Note", "What it's for, said wherever the tag is (agents read it too)", Some(egui_phosphor::regular::NOTE_PENCIL)),
-            (E::Delete, "tag.delete", "Delete", "Off everything it's on, for good", Some(egui_phosphor::regular::TRASH)),
-        ];
-        for (edit, id, caption, detail, icon) in edits {
-            let (label, command, param) = match &target {
-                Some(t) => {
-                    let label = match edit {
-                        E::Rename => format!("Rename the tag {}", t.name),
-                        E::Recolour => format!("Give {} another colour", t.name),
-                        E::Note => format!("Write {}'s note", t.name),
-                        E::Delete => format!("Delete the tag {}", t.name),
-                        E::ClearNote => format!("Clear {}'s note", t.name),
-                    };
-                    let param = match edit {
-                        E::Rename => Param::Text { hint: "a new name (letters, digits, - and _)".into(), start: t.name.clone() },
-                        E::Recolour => Param::Choice((0..harness_contracts::TAG_COLOURS).map(|i| Choice::new(i.to_string(), theme.tag_name(i)).colour(theme.tag(i)).current(t.colour == i)).collect()),
-                        E::Note => Param::Text { hint: "its note".into(), start: t.note.clone() },
-                        E::Delete => Param::Choice(vec![Choice::new("yes", format!("Delete {} (from {})", t.name, harness_contracts::on_things(t.on.len()))), Choice::new("no", "Keep it")]),
-                        E::ClearNote => Param::None,
-                    };
-                    (label, S::TagEdit(edit), param)
+        let things = key.as_ref().map(|k| view.things(k)).unwrap_or_default();
+        let tags = self.desk.shared.tags.get();
+        let row = key.as_ref().and_then(|k| view.tag_at(k)).and_then(|id| tags.get(&id).cloned());
+        let mut on: Vec<(harness_contracts::Tag, Subject)> = Vec::new();
+        for thing in &things.at {
+            for (tag, subject) in tags.on(&thing.subject) {
+                if !on.iter().any(|(t, _)| t.id == tag.id) {
+                    on.push((tag.clone(), subject.clone()));
                 }
-                None => {
-                    let label = match edit {
-                        E::Rename => "Rename a tag here",
-                        E::Recolour => "Give a tag here another colour",
-                        E::Note => "Write a tag's note here",
-                        E::Delete => "Delete a tag here",
-                        E::ClearNote => "Clear a tag's note here",
-                    };
-                    let choices = here_tags.iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).colour(theme.tag(t.colour)).detail(Some(described(t)))).collect();
-                    (label.to_owned(), S::TagEditWhich(edit), Param::Choice(choices))
-                }
-            };
-            let mut action = Action::new(id, label, detail, command).param(param).group(Group::Act).importance(MINOR).when(if here_tags.is_empty() { When::Unavailable } else { When::Always });
-            if tag_row {
-                action = action.on_item(Style::Button, caption, icon);
             }
-            out.push(action);
         }
-        let clear = target.as_ref().is_some_and(|t| !t.note.is_empty());
-        out.push(Action::new("tag.note_clear", target.as_ref().map_or_else(|| "Clear the tag's note".to_owned(), |t| format!("Clear {}'s note", t.name)), "It has no note from now on", S::TagEdit(E::ClearNote)).group(Group::Act).importance(MINOR).when(if clear { When::Always } else { When::Unavailable }));
+        if let (Some(row), Some(thing)) = (&row, things.at.first())
+            && row.on.iter().any(|o| o.subject == thing.subject)
+        {
+            on.retain(|(t, _)| t.id != row.id);
+            on.insert(0, (row.clone(), thing.subject.clone()));
+        }
+        AtCursor { things, on, row }
+    }
+
+    /// An edit of `tag`: its value asked for (a field starts with what's
+    /// there), the tag it's of carried with it.
+    fn edit_action(edit: TagEditing, tag: &harness_contracts::Tag) -> Action {
+        use ShellCommand as S;
+        use TagEditing as E;
+        let theme = crate::theme::colors();
+        let (label, param) = match edit {
+            E::Rename => (format!("Rename the tag {}", tag.name), Param::Text { hint: "a new name (letters, digits, - and _)".into(), start: tag.name.clone() }),
+            E::Recolour => (format!("Give {} another colour", tag.name), Param::Choice((0..harness_contracts::TAG_COLOURS).map(|i| Choice::new(i.to_string(), theme.tag_name(i)).swatch(theme.tag(i)).current(tag.colour == i)).collect())),
+            E::Note => (format!("Write {}'s note", tag.name), Param::Text { hint: "its note".into(), start: tag.note.clone() }),
+            E::ClearNote => (format!("Clear {}'s note", tag.name), Param::None),
+            E::Delete => (format!("Delete the tag {}", tag.name), Param::Choice(vec![Choice::new("yes", format!("Delete {} (from {})", tag.name, on_things(tag.on.len()))), Choice::new("no", "Keep it")])),
+        };
+        Action::new(edit.id(), label, edit.detail(), S::TagEdit(edit, tag.id.clone())).param(param).group(Group::Act).importance(MINOR)
+    }
+
+    /// The edits of the tags at the cursor: of the one there (that an edit
+    /// fits: a note to clear), its value asked for; of several, which first.
+    /// Deleting a tag is the Tags view's (on its row).
+    fn tag_edits(at: &AtCursor) -> Vec<Action> {
+        use ShellCommand as S;
+        use TagEditing as E;
+        let theme = crate::theme::colors();
+        let tags = at.tags();
+        let mut out = Vec::new();
+        for edit in [E::Rename, E::Recolour, E::Note, E::ClearNote, E::Delete] {
+            if edit == E::Delete && at.row.is_none() {
+                continue;
+            }
+            let fitting: Vec<&harness_contracts::Tag> = tags.iter().copied().filter(|t| edit != E::ClearNote || !t.note.is_empty()).collect();
+            out.push(match fitting.as_slice() {
+                [one] => Self::edit_action(edit, one),
+                some => {
+                    let choices = some.iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).colour(theme.tag(t.colour)).detail(Some(described(t)))).collect();
+                    let available = if some.is_empty() { When::Unavailable } else { When::Always };
+                    Action::new(edit.id(), edit.which(), edit.detail(), S::TagEditWhich(edit)).param(Param::Choice(choices)).group(Group::Act).importance(MINOR).when(available)
+                }
+            });
+        }
         out
     }
 
-    /// Taking a tag off what you're on: the one there (a view of tags: the
-    /// row's), else which.
-    fn untag_action(&self, here: Here, on_it: &[(harness_contracts::Tag, Subject)]) -> Action {
+    /// Taking a tag off what you're on: the one there (in a view of tags,
+    /// the row's), else which.
+    fn untag_action(at: &AtCursor) -> Action {
         use ShellCommand as S;
-        let view = self.desk.view(here.kind);
-        let row = view.cursor_key().and_then(|k| view.tag_at(&k)).filter(|_| !on_it.is_empty());
-        let one = row.clone().or_else(|| match on_it {
-            [(tag, _)] => Some(tag.id.clone()),
-            _ => None,
-        });
         let theme = crate::theme::colors();
-        let action = match one.and_then(|id| on_it.iter().find(|(t, _)| t.id == id)) {
-            Some((tag, _)) => Action::new("tag.remove", format!("Take {} off this", tag.name), "The tag stays on everything else", S::Untag),
-            None => Action::new("tag.remove", "Take a tag off what you're on", "Pick which of its tags (on any of the things at the cursor)", S::Untag).param(Param::Choice(on_it.iter().map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone()).colour(theme.tag(t.colour))).collect())),
+        let one = match (&at.row, at.on.as_slice()) {
+            (Some(_), [first, ..]) | (None, [first]) => Some(first),
+            _ => None,
         };
-        let action = action.group(Group::Act).importance(MINOR).when(if on_it.is_empty() { When::Unavailable } else { When::Always });
-        if row.is_some() { action.on_item(Style::Button, "Take off", Some(egui_phosphor::regular::X)) } else { action }
+        let action = match one {
+            Some((tag, subject)) => Action::new("tag.remove", format!("Take {} off this", tag.name), "The tag stays on everything else", S::Untag(Some((tag.id.clone(), subject.clone())))),
+            None => Action::new("tag.remove", "Take a tag off what you're on", "Pick which of its tags (on any of the things at the cursor)", S::Untag(None)).param(Param::Choice(at.on.iter().map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone()).colour(theme.tag(t.colour))).collect())),
+        };
+        action.group(Group::Act).importance(MINOR).when(if at.on.is_empty() { When::Unavailable } else { When::Always })
     }
 
-    /// The tag actions, where you are. The tag picker's rows are made only
-    /// while the palette is open (it's what shows them, afresh each frame).
+    /// The tag actions, where you are. The tag pickers' rows are made only
+    /// while theirs is open (it's what shows them, afresh each frame).
     pub(super) fn tag_actions(&self, here: Here) -> Vec<Action> {
         use ShellCommand as S;
-        let things = self.things_here(here);
+        let at = self.at_cursor(here);
+        let things = &at.things;
         let tags = self.desk.shared.tags.get();
         let when = |ok: bool| if ok { When::Always } else { When::Unavailable };
-        let picking = self.palette.is_open();
-        let on_it = self.tagged_here(here);
-        let tagged = !on_it.is_empty();
+        let picking = self.palette.picking();
+        let tagged = !at.on.is_empty();
         // What's tagged (the picker's top line), and the next of the things
         // there (its cycle key).
-        let level = self.level(&things);
+        let level = self.level(things);
         let chosen = things.picked(Some(level));
         let next = (things.at.len() > 1).then(|| &things.at[(level + 1) % things.at.len()]);
         let mut out = vec![
             Action::new("tag.add", "Tag what you're on", "Pick a tag, or type a new one's name (what's tagged is said at the top)", S::Tag)
-                .param(Param::Search { hint: "a tag's name (a new one is made)".into(), found: if picking { self.tag_found("tag.add") } else { Vec::new() }, waiting: false })
+                .param(Param::Search { hint: "a tag's name (a new one is made)".into(), found: if picking == Some("tag.add") { self.tag_found("tag.add") } else { Vec::new() }, waiting: false })
                 .about(chosen.map(|t| format!("Tag {}", t.words)))
                 .cycle(next.map(|_| "tag.level"))
                 .group(Group::Act)
@@ -188,22 +148,21 @@ impl CockpitApp {
             Action::new("tag.level", next.map_or_else(|| "Tag something around it".to_owned(), |t| format!("Tag {} instead", t.words)), "While tagging: what's tagged becomes the next of the things at the cursor (a line, the command it's in)", S::TagLevel)
                 .group(Group::Act)
                 .importance(MINOR)
-                .when(when(picking && next.is_some())),
-            self.untag_action(here, &on_it),
+                .when(when(picking == Some("tag.add") && next.is_some())),
+            Self::untag_action(&at),
             Action::new("tag.goto", "Go to something tagged", "Pick the tag, then which thing it's on", S::TagGoTo).param(Param::Choice(tags.list().iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).colour(crate::theme::colors().tag(t.colour)).detail(Some(described(t)))).collect())).group(Group::GoTo).importance(MINOR),
             Action::new("tag.next", "Next with its tag", "The next thing the tag on this is on (the one stepped through last)", S::TagStep { forward: true }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
             Action::new("tag.prev", "Previous with its tag", "The thing before, of those the tag on this is on", S::TagStep { forward: false }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
         ];
-        out.extend(self.tag_edits(here));
-        // Typing a prompt, a `#`: which tag's name follows it.
-        let typing = matches!(self.input_mode, InputMode::Insert { .. }) || self.palette.is_open();
-        let named: Vec<Choice> = if picking { self.tag_found("tag.insert").into_iter().filter(|c| tags.get(&TagId::new(&c.value)).is_some()).collect() } else { Vec::new() };
+        out.extend(Self::tag_edits(&at));
+        // Where text is typed (a prompt): a tag's name, picked.
+        let named: Vec<Choice> = if picking == Some("tag.insert") { self.tag_found("tag.insert").into_iter().filter(|c| tags.get(&TagId::new(&c.value)).is_some()).collect() } else { Vec::new() };
         out.push(
             Action::new("tag.insert", "Name a tag", "Its name where you're typing (after a #, a prompt hands the agent what the tag is on)", S::TagInsert)
                 .param(Param::Search { hint: "a tag's name".into(), found: named, waiting: false })
                 .group(Group::Act)
                 .importance(MINOR)
-                .when(when(typing && !tags.list().is_empty())),
+                .when(when(self.desk.view(here.kind).takes_typed() && !tags.list().is_empty())),
         );
         // `g T` picked a tag on several things: which.
         if let Some(tag) = self.desk.tag_picking.as_ref().and_then(|id| tags.get(id)) {
@@ -251,43 +210,44 @@ impl CockpitApp {
                 self.desk.shell_searches.remove("tag.add");
                 self.ask_tags(TagAct::Tag { tag, subject }, ctx);
             }
-            (ShellCommand::Untag, Some(_), tag) => {
-                // Which tag: the one asked for, the row's, or the one there.
-                let on_it = self.tagged_here(here);
-                let view = self.desk.view(here.kind);
-                let row = view.cursor_key().and_then(|k| view.tag_at(&k));
-                let tag = tag.map(TagId::new).or(row).or_else(|| match on_it.as_slice() {
-                    [(tag, _)] => Some(tag.id.clone()),
-                    _ => None,
-                });
-                // What the tag is on: one of the things there, or lines it's among.
-                if let Some((tag, subject)) = tag.and_then(|tag| on_it.into_iter().find(|(t, _)| t.id == tag)) {
-                    self.ask_tags(TagAct::Untag { tag: tag.id, subject }, ctx);
+            (ShellCommand::Untag(one), _, value) => {
+                // The one it named, or the one picked of those there.
+                let which = one.clone().or_else(|| value.and_then(|id| self.at_cursor(here).on.into_iter().find(|(t, _)| t.id.as_str() == id).map(|(t, s)| (t.id, s))));
+                match which {
+                    Some((tag, subject)) => self.ask_tags(TagAct::Untag { tag, subject }, ctx),
+                    None => self.note = Some("That tag isn't on what you're on any more.".into()),
                 }
             }
             (ShellCommand::TagInsert, _, Some(tag)) => {
-                let Some(name) = self.desk.shared.tags.get().get(&TagId::new(&tag)).map(|t| t.name.clone()) else { return };
+                let Some(name) = self.desk.shared.tags.get().get(&TagId::new(&tag)).map(|t| t.name.clone()) else {
+                    self.note = Some("That tag is gone.".into());
+                    return;
+                };
                 self.desk.shell_searches.remove("tag.insert");
                 self.desk.view_mut(here.kind).typed_in(&format!("{name} "));
                 // Back to typing where it was.
                 self.input_mode = InputMode::Insert { at: here.at };
             }
             (ShellCommand::TagEditWhich(edit), _, Some(tag)) => {
-                // The tag picked: its value asked for next (the palette's next opening).
-                self.desk.tag_editing = Some((self.palette.opening() + 1, TagId::new(tag)));
-                let id = match edit {
-                    crate::app::TagEditing::Rename => "tag.rename",
-                    crate::app::TagEditing::Recolour => "tag.recolour",
-                    crate::app::TagEditing::Note => "tag.note",
-                    crate::app::TagEditing::Delete => "tag.delete",
-                    crate::app::TagEditing::ClearNote => "tag.note_clear",
+                // The tag picked: its value asked for next (a note to clear: done).
+                let Some(tag) = self.desk.shared.tags.get().get(&TagId::new(&tag)).cloned() else {
+                    self.note = Some("That tag is gone.".into());
+                    return;
                 };
-                self.run_by_id(id, None, ctx);
+                let action = Self::edit_action(*edit, &tag);
+                if action.param == Param::None {
+                    self.run_tag(&ShellCommand::TagEdit(*edit, tag.id), None, ctx);
+                } else {
+                    self.open_palette(Some(&crate::actions::Bound { action, origin: crate::actions::Origin::Shell, leader: None, keys: Vec::new(), gestures: Vec::new(), layer: crate::actions::Layer::On }));
+                }
             }
-            (ShellCommand::TagEdit(edit), _, value) => {
-                use crate::app::TagEditing as E;
-                let Some(tag) = self.tag_to_edit(here).map(|t| t.id) else { return };
-                self.desk.tag_editing = None;
+            (ShellCommand::TagEdit(edit, tag), _, value) => {
+                use TagEditing as E;
+                if self.desk.shared.tags.get().get(tag).is_none() {
+                    self.note = Some("That tag is gone (deleted since).".into());
+                    return;
+                }
+                let tag = tag.clone();
                 let act = match (edit, value) {
                     (E::Rename, Some(name)) => TagAct::Rename { tag, name: name.trim().to_owned() },
                     (E::Recolour, Some(colour)) => match colour.parse() {
@@ -301,7 +261,7 @@ impl CockpitApp {
                 };
                 self.ask_tags(act, ctx);
             }
-            (ShellCommand::Tag | ShellCommand::Untag, None, _) => self.note = Some("Nothing here to tag: the cursor isn't on something that can be.".into()),
+            (ShellCommand::Tag, None, _) => self.note = Some("Nothing here to tag: the cursor isn't on something that can be.".into()),
             (ShellCommand::TagGoTo, _, Some(tag)) => {
                 let tag = TagId::new(tag);
                 let on: Vec<Subject> = self.desk.shared.tags.get().get(&tag).map(|t| t.on.iter().map(|on| on.subject.clone()).collect()).unwrap_or_default();
@@ -330,7 +290,7 @@ impl CockpitApp {
             }
             (ShellCommand::TagStep { forward }, Some(_), _) => {
                 let next = {
-                    let on = self.tagged_here(here);
+                    let on = self.at_cursor(here).on;
                     // The tag stepped through last, when it's one of them.
                     let stepping = self.desk.tag_stepping.clone();
                     on.iter().find(|(t, _)| Some(&t.id) == stepping.as_ref()).or(on.first()).and_then(|(tag, here)| {
@@ -369,4 +329,57 @@ impl CockpitApp {
 /// A tag in a picker's detail: how many things it's on, and its note.
 fn described(tag: &harness_contracts::Tag) -> String {
     if tag.note.is_empty() { on_things(tag.on.len()) } else { format!("{} · {}", on_things(tag.on.len()), first_line(&tag.note)) }
+}
+
+/// What's at the cursor, for the tags (`CockpitApp::at_cursor`).
+pub(super) struct AtCursor {
+    things: Things,
+    pub(super) on: Vec<(harness_contracts::Tag, Subject)>,
+    row: Option<harness_contracts::Tag>,
+}
+
+impl AtCursor {
+    /// The tags there: the row's first.
+    fn tags(&self) -> Vec<&harness_contracts::Tag> {
+        let mut out: Vec<&harness_contracts::Tag> = self.row.iter().collect();
+        for (tag, _) in &self.on {
+            if !out.iter().any(|t| t.id == tag.id) {
+                out.push(tag);
+            }
+        }
+        out
+    }
+}
+
+impl TagEditing {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Rename => "tag.rename",
+            Self::Recolour => "tag.recolour",
+            Self::Note => "tag.note",
+            Self::ClearNote => "tag.note_clear",
+            Self::Delete => "tag.delete",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Rename => "A new name for it (what it's on stays)",
+            Self::Recolour => "One of the theme's tag colours",
+            Self::Note => "What it's for, said wherever the tag is (agents read it too)",
+            Self::ClearNote => "It has no note from now on",
+            Self::Delete => "Off everything it's on, for good",
+        }
+    }
+
+    /// Its label while which tag is still to be picked.
+    fn which(self) -> &'static str {
+        match self {
+            Self::Rename => "Rename a tag here",
+            Self::Recolour => "Give a tag here another colour",
+            Self::Note => "Write a tag's note here",
+            Self::ClearNote => "Clear a tag's note here",
+            Self::Delete => "Delete a tag here",
+        }
+    }
 }

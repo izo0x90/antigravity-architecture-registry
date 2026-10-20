@@ -55,8 +55,9 @@ impl CockpitApp {
         let bound = self.palette_actions();
         // A view asked for an action's picker (e.g. Resume once sessions loaded).
         for kind in BufferKind::ALL {
+            // (Only one that's offered there now: none of them, nothing opens.)
             if let Some(id) = self.desk.view_mut(kind).take_palette_request()
-                && let Some(action) = bound.iter().find(|b| b.action.id == id)
+                && let Some(action) = bound.iter().find(|b| b.action.id == id && b.action.when != crate::actions::When::Unavailable)
             {
                 self.open_palette(Some(action));
             }
@@ -78,9 +79,15 @@ impl CockpitApp {
             }
             self.invoke(invocation, ctx);
         }
+        // Closed without a pick: back to typing, when that's where it was.
         if self.input_mode == InputMode::Palette && !self.palette.is_open() {
-            self.input_mode = InputMode::Normal;
-            release_keyboard(ctx);
+            self.input_mode = match self.palette_from {
+                typing @ InputMode::Insert { .. } => typing,
+                _ => {
+                    release_keyboard(ctx);
+                    InputMode::Normal
+                }
+            };
         }
     }
 }

@@ -44,9 +44,10 @@ fn number(file: &str) -> Option<u64> {
 impl Logs {
     /// The logs in `dir` (made when first written to).
     pub fn open(dir: &Path) -> Self {
-        // A folder made before they were the server user's only, made so.
+        // A folder made before they were the server user's only, made so
+        // (a link is never followed: nothing is written through one).
         #[cfg(unix)]
-        if dir.exists() {
+        if std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
             use std::os::unix::fs::PermissionsExt;
             if let Err(e) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)) {
                 tracing::warn!("The tags' logs ({}) couldn't be made the server user's only: {e}", dir.display());
@@ -60,8 +61,17 @@ impl Logs {
         self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Whether the folder is a link (made to point elsewhere): the logs are
+    /// neither written nor removed through it.
+    fn linked(&self) -> bool {
+        std::fs::symlink_metadata(&self.dir).is_ok_and(|m| m.file_type().is_symlink())
+    }
+
     /// A file of the logs, opened to add to (made, the server's user's only).
     fn append(&self, n: u64) -> std::io::Result<File> {
+        if self.linked() {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("{} is a link, not a folder: nothing is written through it", self.dir.display())));
+        }
         let mut folder = std::fs::DirBuilder::new();
         folder.recursive(true);
         let mut file = std::fs::OpenOptions::new();
@@ -177,6 +187,9 @@ impl Logs {
     pub fn forget_all_but(&self, used: &BTreeSet<String>) -> Vec<String> {
         let mut files = self.lock();
         let mut gone = Vec::new();
+        if self.linked() {
+            return gone;
+        }
         for entry in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
             let file = entry.file_name().to_string_lossy().into_owned();
             let Some(n) = number(&file) else { continue };
@@ -230,6 +243,23 @@ mod tests {
         assert_eq!(gone, std::slice::from_ref(&a.file));
         let d = logs.write("x", "z").unwrap();
         assert!(d.file != a.file && d.file != growing.file);
+        // A folder made before, readable by others: made the server user's only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+            Logs::open(dir.path());
+            assert_eq!(std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777, 0o700);
+            // A link: never written through, nor removed from.
+            let elsewhere = tempfile::tempdir().unwrap();
+            let link = dir.path().join("link");
+            std::os::unix::fs::symlink(elsewhere.path(), &link).unwrap();
+            let linked = Logs::open(&link);
+            assert!(linked.write("x", "y").is_err());
+            std::fs::write(elsewhere.path().join("tagged-1.log"), "kept").unwrap();
+            assert!(linked.forget_all_but(&BTreeSet::new()).is_empty() && elsewhere.path().join("tagged-1.log").exists());
+            std::fs::remove_file(&link).unwrap();
+        }
         // Opened again: a file from before is never written to again.
         assert!(![d.file.clone(), growing.file.clone()].contains(&Logs::open(dir.path()).write("x", "z").unwrap().file));
     }

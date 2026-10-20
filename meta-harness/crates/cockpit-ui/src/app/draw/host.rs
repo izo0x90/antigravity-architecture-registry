@@ -16,12 +16,13 @@ use super::super::*;
 use crate::keymap::Host;
 use crate::actions::At;
 use crate::hosted::ItemButtons;
+use crate::tags::first_line;
 
 /// The tag gutter: a bar per tag this wide, this far apart, side by side
 /// (as many as fit; the panel's top line names every tag on the cursor's).
-const BAR_W: f32 = 3.0;
-const BAR_GAP: f32 = 2.0;
-const GUTTER_BARS: usize = 3;
+const BAR_W: f32 = 2.5;
+const BAR_GAP: f32 = 1.5;
+const GUTTER_BARS: usize = 4;
 const GUTTER_W: f32 = BAR_GAP + GUTTER_BARS as f32 * (BAR_W + BAR_GAP);
 
 impl CockpitApp {
@@ -78,52 +79,61 @@ impl CockpitApp {
             ui.allocate_rect(whole, egui::Sense::hover());
         }
         if let Some(gutter) = gutter {
-            self.draw_tag_gutter(kind, ui, gutter.intersect(egui::Rect::everything_above(content.bottom())), content);
+            self.draw_tag_gutter(here, ui, gutter.intersect(egui::Rect::everything_above(content.bottom())), content);
         }
         self.pointer_on_content(kind, ui, content);
     }
 
     /// The tag gutter down `gutter` (beside the content): each tagged
     /// thing the buffer draws (it says where; it draws no tags itself), a
-    /// bar in its tag's colour beside its rows, a column per tag. Its name
-    /// on hover, or (a finger) said on a long press.
-    fn draw_tag_gutter(&mut self, kind: BufferKind, ui: &egui::Ui, gutter: egui::Rect, content: egui::Rect) {
+    /// bar in its tag's colour beside its rows, a column per tag; more tags
+    /// than columns, the rest share the last, muted. A bar's tags are named
+    /// on hover, or (a finger) said on a long press (`on_gesture`).
+    fn draw_tag_gutter(&mut self, here: Here, ui: &egui::Ui, gutter: egui::Rect, content: egui::Rect) {
         let bars: Vec<(egui::Rect, String)> = {
             let tags = self.desk.shared.tags.get();
-            let view = self.desk.view(kind);
+            let view = self.desk.view(here.kind);
             let theme = colors();
             let painter = ui.painter().with_clip_rect(gutter);
-            let mut columns = 0;
+            let shown: Vec<(&harness_contracts::Tag, Vec<egui::Rect>)> = tags
+                .list()
+                .into_iter()
+                .map(|tag| (tag, tag.on.iter().filter_map(|on| view.drawn_at(&on.subject)).filter(|r| content.intersects(*r)).collect::<Vec<_>>()))
+                .filter(|(_, rows)| !rows.is_empty())
+                .collect();
+            let crowded = shown.len() > GUTTER_BARS;
             let mut bars = Vec::new();
-            for tag in tags.list() {
-                let rows: Vec<egui::Rect> = tag.on.iter().filter_map(|on| view.drawn_at(&on.subject)).filter(|r| content.intersects(*r)).collect();
-                if rows.is_empty() || columns == GUTTER_BARS {
-                    continue;
-                }
-                let left = gutter.left() + BAR_GAP + columns as f32 * (BAR_W + BAR_GAP);
-                columns += 1;
+            for (n, (tag, rows)) in shown.iter().enumerate() {
+                let column = n.min(GUTTER_BARS - 1);
+                let left = gutter.left() + BAR_GAP + column as f32 * (BAR_W + BAR_GAP);
+                let colour = if crowded && column == GUTTER_BARS - 1 { theme.muted } else { theme.tag(tag.colour) };
+                let said = if tag.note.is_empty() { tag.name.clone() } else { format!("{}: {}", tag.name, first_line(&tag.note)) };
                 for row in rows {
                     let bar = egui::Rect::from_x_y_ranges(left..=left + BAR_W, row.top() + 1.0..=row.bottom() - 1.0);
-                    painter.rect_filled(bar, BAR_W / 2.0, theme.tag(tag.colour));
-                    let said = if tag.note.is_empty() { tag.name.clone() } else { format!("{}: {}", tag.name, tag.note) };
-                    bars.push((bar.expand2(egui::vec2(BAR_GAP / 2.0, 0.0)), said));
+                    painter.rect_filled(bar, BAR_W / 2.0, colour);
+                    let hit = bar.expand2(egui::vec2(BAR_GAP / 2.0, 0.0));
+                    match bars.iter_mut().find(|(r, _): &&mut (egui::Rect, String)| *r == hit) {
+                        Some((_, names)) => *names = format!("{names}\n{said}"),
+                        None => bars.push((hit, said.clone())),
+                    }
                 }
             }
             bars
         };
+        self.tag_bars.retain(|(at, _, _)| *at != here.at);
         for (n, (bar, said)) in bars.into_iter().enumerate() {
-            let response = ui.interact(bar, ui.id().with(("tag_bar", kind, n)), egui::Sense::click());
-            if response.long_touched() {
-                self.note = Some(said.clone());
+            let response = ui.interact(bar, ui.id().with(("tag_bar", here.kind, n)), egui::Sense::hover());
+            if response.hovered() {
+                response.on_hover_text(said.clone());
             }
-            response.on_hover_text(said);
+            self.tag_bars.push((here.at, bar, said));
         }
     }
 
     /// The tags on what the cursor's on where `here` is: each name in its
     /// colour (the panel's top line says them).
     fn tags_here_named(&self, here: Here) -> Vec<(String, egui::Color32)> {
-        self.tagged_here(here).into_iter().map(|(tag, _)| (tag.name, colors().tag(tag.colour))).collect()
+        self.at_cursor(here).on.into_iter().map(|(tag, _)| (tag.name, colors().tag(tag.colour))).collect()
     }
 
     /// What the buffers in use, but the one of `kind`, say about what it
@@ -307,6 +317,10 @@ impl CockpitApp {
                 if let Some(b) = found {
                     self.asked = Some((b.action.id.clone(), None));
                 }
+            }
+            // On a tag's bar in the gutter: its tags, said.
+            Gesture::LongPress(p) if self.tag_bars.iter().any(|(_, bar, _)| bar.contains(p)) => {
+                self.note = self.tag_bars.iter().find(|(_, bar, _)| bar.contains(p)).map(|(_, _, said)| said.clone());
             }
             Gesture::LongPress(p) if !own => {
                 if let Some(key) = self.desk.view(kind).spots().into_iter().find(|s| s.rect.contains(p)).map(|s| s.key) {

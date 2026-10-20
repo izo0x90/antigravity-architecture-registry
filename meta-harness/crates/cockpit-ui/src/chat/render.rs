@@ -310,6 +310,7 @@ impl ChatStreamState {
             } else {
                 "Type a prompt…".to_owned()
             };
+            let before = self.ui.input_buffer.chars().count();
             let output = ui.add(
                 keys.text_box(&mut self.ui.input_buffer)
                     .id(egui::Id::new(("chat_persistent_input_text_edit", at)))
@@ -323,8 +324,14 @@ impl ChatStreamState {
             if output.clicked() || output.gained_focus() {
                 *input_mode = crate::keymap::InputMode::Insert { at };
             }
-            // `#` starting a word: the tag picker, for the name to follow it.
-            if output.changed() && self.ui.input_buffer.ends_with('#') && self.ui.input_buffer.trim_end_matches('#').chars().last().is_none_or(char::is_whitespace) {
+            if std::mem::take(&mut self.ui.caret_to_end) {
+                crate::theme::caret_to_end(ui.ctx(), output.id, &self.ui.input_buffer);
+            }
+            // A `#` just typed where a word starts (as a prompt reads a tag's
+            // name): the tag picker, for the name to follow it.
+            let typed_hash = self.ui.input_buffer.chars().count() == before + 1 && self.ui.input_buffer.ends_with('#');
+            let starts_word = self.ui.input_buffer.chars().rev().nth(1).is_none_or(|c| c.is_whitespace() || "([{\"'".contains(c));
+            if output.changed() && typed_hash && starts_word {
                 self.pending_palette = Some("tag.insert".to_owned());
             }
             // Its Send (and Add) are actions, under it while it's typed in.

@@ -46,6 +46,8 @@ pub struct Palette {
     /// How many times it's been opened: what's picked while it's open
     /// (what a tag goes on) is for this opening only.
     opened: u64,
+    /// Its field was given text to edit: the caret goes after it.
+    caret_to_end: bool,
 }
 
 impl Palette {
@@ -58,7 +60,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0 }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false }
     }
 }
 
@@ -75,6 +77,15 @@ impl Palette {
     /// is run just after it closes.
     pub fn opening(&self) -> u64 {
         self.opened
+    }
+
+    /// The action whose value it's picking now (none: it's closed, or
+    /// listing actions).
+    pub fn picking(&self) -> Option<&str> {
+        match &self.stage {
+            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Search { action, .. } if self.open => Some(&action.action.id),
+            _ => None,
+        }
     }
 
     /// Opens with the list already filtered (e.g. "index." for the index actions).
@@ -100,6 +111,7 @@ impl Palette {
         self.stage = match &action.action.param {
             Param::Text { start, .. } => {
                 self.filter = start.clone();
+                self.caret_to_end = true;
                 Stage::Text { action, from_list }
             }
             Param::Search { .. } => {
@@ -198,8 +210,11 @@ impl Palette {
                             },
                             _ => "Type to filter…".to_owned(),
                         };
-                        let edit = ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text(hint).desired_width(f32::INFINITY));
+                        let edit = ui.add(egui::TextEdit::singleline(&mut self.filter).id(egui::Id::new("palette_field")).hint_text(hint).desired_width(f32::INFINITY));
                         edit.request_focus();
+                        if std::mem::take(&mut self.caret_to_end) {
+                            crate::theme::caret_to_end(ui.ctx(), edit.id, &self.filter);
+                        }
                         let mut enter = enter;
                         if edit.changed() {
                             self.selected = 0;
@@ -352,7 +367,7 @@ fn invocation(bound: &Bound, value: Option<String>) -> Invocation {
 /// first line (a long label cut short), its description under it (two
 /// lines at most): nothing in it is wider than the palette, so the palette
 /// never grows to fit a row.
-fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, colour: Option<Color32>, detail: Option<&str>, keys: &str) -> bool {
+fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, colour: Option<(Color32, crate::actions::Mark)>, detail: Option<&str>, keys: &str) -> bool {
     let (look, theme) = (crate::theme::look(), colors());
     let fill = if selected { theme.selection } else { Color32::TRANSPARENT };
     let response = Frame::NONE
@@ -365,8 +380,15 @@ fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, col
             egui::Sides::new().shrink_left().truncate().show(
                 ui,
                 |ui| {
-                    if let Some(colour) = colour {
-                        ui.label(crate::theme::tag_mark(ui, colour, look.text_label));
+                    match colour {
+                        Some((colour, crate::actions::Mark::Tag)) => {
+                            ui.label(crate::theme::tag_mark(ui, colour, look.text_label));
+                        }
+                        Some((colour, crate::actions::Mark::Swatch)) => {
+                            let (swatch, _) = ui.allocate_exact_size(egui::vec2(look.text_label, look.text_label), egui::Sense::hover());
+                            ui.painter().rect_filled(swatch.shrink(look.text_label / 6.0), look.radius_m, colour);
+                        }
+                        None => {}
                     }
                     ui.label(RichText::new(label).size(look.text_label).color(theme.text_strong))
                 },

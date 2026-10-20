@@ -311,7 +311,7 @@ impl CockpitApp {
         match origin {
             Origin::Shell => {
                 if let Some(command) = action.command::<ShellCommand>() {
-                    self.run_shell(*command, value, count.map(|c| c as usize), ctx);
+                    self.run_shell(command.clone(), value, count.map(|c| c as usize), ctx);
                 }
             }
             // A shared move a view offered: run the same way for every view.
@@ -347,6 +347,9 @@ impl CockpitApp {
 
     /// Opens the palette (at an action's parameter, if given) and gives it the keyboard.
     pub(super) fn open_palette(&mut self, action: Option<&Bound>) {
+        if self.input_mode != InputMode::Palette {
+            self.palette_from = self.input_mode;
+        }
         match action {
             Some(action) => self.palette.open_for(action),
             None => self.palette.open(),
@@ -435,7 +438,7 @@ impl CockpitApp {
             }
             ShellCommand::SearchStep { forward } => self.search_step(forward, count),
             ShellCommand::MarkSet => self.start_capture(Capture::MarkSet),
-            ShellCommand::Tag | ShellCommand::Untag | ShellCommand::TagGoTo | ShellCommand::TagGoToPick | ShellCommand::TagStep { .. } | ShellCommand::TagLevel | ShellCommand::TagEdit(_) | ShellCommand::TagEditWhich(_) | ShellCommand::TagInsert => self.run_tag(&command, value, ctx),
+            ShellCommand::Tag | ShellCommand::Untag(_) | ShellCommand::TagGoTo | ShellCommand::TagGoToPick | ShellCommand::TagStep { .. } | ShellCommand::TagLevel | ShellCommand::TagEdit(..) | ShellCommand::TagEditWhich(_) | ShellCommand::TagInsert => self.run_tag(&command, value, ctx),
             ShellCommand::MarkJump => self.start_capture(Capture::MarkJump),
             ShellCommand::Back | ShellCommand::Forward => {
                 let here = self.jump_here();
