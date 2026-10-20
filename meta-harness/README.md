@@ -727,7 +727,7 @@ overrides them in its own `.nah/` folder:
 | `.nah/schema_dsl.toml` | extra shorthand type names for schemas |
 | `.nah/mcp.toml` | the project's tool servers, given to every harness's sessions |
 | `.nah/changes.toml` | `[timeline]`: how long snapshots and turns are kept (`keep_days`, 14) and a closed session's turns after it closed (`closed_session_days`, 1) |
-| `.nah/terminals.toml` | `long_command_secs` (10): a command that ran this long is a notification when it finishes |
+| `.nah/terminals.toml` | `long_command_secs` (10): a command that ran this long is a notification when it finishes; `scrollback_lines` (10,000): lines each terminal keeps above its screen |
 | `.nah/access.toml` | what each agent role (lead, sub, worker, external) may do with NAH's tools. A role named here replaces the shipped one. It covers NAH's tools only; a slot's own harness tools follow its mode and your approvals |
 
 How long things take is visible: every answer is timed stage by stage

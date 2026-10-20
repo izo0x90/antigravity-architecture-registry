@@ -15,8 +15,13 @@ use harness_core::EventHub;
 use nah_terminal::{Happening, Options};
 use tokio::sync::watch;
 
-/// Lines of scrollback each keeps.
-const HISTORY: usize = 10_000;
+/// How the terminals run (`.nah/terminals.toml`).
+pub struct Settings {
+    /// A command that ran this long or longer is news when it finishes.
+    pub long: std::time::Duration,
+    /// Lines of scrollback each keeps.
+    pub scrollback: usize,
+}
 
 /// A new terminal's size until it's shown.
 const FIRST_SIZE: TermSize = TermSize { cols: 100, rows: 30 };
@@ -62,8 +67,7 @@ pub struct Terminals {
     hub: Arc<EventHub>,
     state: Arc<nah_state::StateDb>,
     open: Mutex<BTreeMap<TerminalId, Arc<Open>>>,
-    /// A command that ran at least this long is news when it finishes.
-    long: std::time::Duration,
+    settings: Settings,
     /// Told when tagged lines may have moved, or their names changed (a
     /// new width, a shell started again or closed): the tags keep them
     /// where they are now. Told where they moved, off the async threads.
@@ -103,10 +107,10 @@ pub struct Open {
 impl Terminals {
     /// The terminals kept from the last run (ended), told on `hub`; a
     /// command that ran `long` or longer is news when it finishes.
-    pub fn load(folder: PathBuf, hooks: PathBuf, hub: Arc<EventHub>, state: Arc<nah_state::StateDb>, long: std::time::Duration) -> Result<Arc<Self>, nah_state::StateError> {
+    pub fn load(folder: PathBuf, hooks: PathBuf, hub: Arc<EventHub>, state: Arc<nah_state::StateDb>, settings: Settings) -> Result<Arc<Self>, nah_state::StateError> {
         let kept = state.terminals()?;
         let open = kept.into_iter().map(|t| (t.id.clone(), Arc::new(Open::new(t)))).collect();
-        let terminals = Arc::new(Self { folder, hooks, hub, state, open: Mutex::new(open), long, moved: std::sync::OnceLock::new(), followed: Mutex::default() });
+        let terminals = Arc::new(Self { folder, hooks, hub, state, open: Mutex::new(open), settings, moved: std::sync::OnceLock::new(), followed: Mutex::default() });
         for t in terminals.list() {
             terminals.hub.publish(ClientEvent::TerminalUpdated { terminal: t });
         }
@@ -169,7 +173,7 @@ impl Terminals {
     /// Starts `open`'s shell, at its size, in its folder.
     fn start(self: &Arc<Self>, open: &Arc<Open>) -> Result<(), TerminalError> {
         let info = open.info();
-        let options = Options { shell: info.shell.clone(), folder: PathBuf::from(&info.folder), size: info.size, hooks: self.hooks.clone(), history: HISTORY };
+        let options = Options { shell: info.shell.clone(), folder: PathBuf::from(&info.folder), size: info.size, hooks: self.hooks.clone(), history: self.settings.scrollback };
         let generation = open.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(generation, |d| d.as_nanos() as u64);
         open.start.store(now.max(open.start.load(Ordering::SeqCst) + 1), Ordering::SeqCst);
@@ -253,7 +257,7 @@ impl Terminals {
         let news = match happening {
             Happening::Bell => TerminalNews::Bell,
             Happening::Ended(code) => TerminalNews::Ended { code: *code },
-            Happening::CommandFinished { code, ran } if *ran >= self.long => TerminalNews::Finished { code: *code, ran_ms: ran.as_millis() as u64 },
+            Happening::CommandFinished { code, ran } if *ran >= self.settings.long => TerminalNews::Finished { code: *code, ran_ms: ran.as_millis() as u64 },
             _ => return,
         };
         let terminal = open.info();
@@ -425,7 +429,12 @@ impl Open {
 impl nah_tags::Resolve for Terminals {
     fn name(&self, subject: &Subject) -> Option<String> {
         match subject {
-            Subject::TerminalLines { terminal, shell, first, last } => Some(self.words(terminal, *shell, &format!("lines {first}-{last}"))),
+            // With the command they're in, while it's known.
+            Subject::TerminalLines { terminal, shell, first, last } => {
+                let of = self.get(terminal).ok().filter(|o| o.started() == *shell).and_then(|o| o.commands().into_iter().rev().find(|c| c.prompt <= *first && c.end.is_none_or(|end| *last < end)));
+                let of = of.map(|c| format!(" (of command {})", c.id)).unwrap_or_default();
+                Some(self.words(terminal, *shell, &format!("lines {first}-{last}{of}")))
+            }
             Subject::TerminalCommand { terminal, shell, command } => Some(self.words(terminal, *shell, &format!("command {command}"))),
             _ => None,
         }
@@ -452,6 +461,8 @@ impl nah_tags::Resolve for Terminals {
     fn named(&self, words: &str) -> Option<Result<Subject, String>> {
         let rest = words.trim().strip_prefix("terminal ")?;
         let (who, what) = rest.split_once(' ')?;
+        // As named here, with the command lines are in (said, not needed).
+        let what = what.split_once(" (of command ").map_or(what, |(what, _)| what);
         let (id, start) = match who.split_once('@') {
             Some((id, start)) => (id, Some(start)),
             None => (who, None),

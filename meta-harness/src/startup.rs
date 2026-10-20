@@ -219,24 +219,31 @@ pub fn notifications(hub: &Arc<EventHub>, state: &Arc<nah_state::StateDb>, slots
 /// The terminals: the user's shells, started in the project's folder (their
 /// start-up hooks kept in the state folder); those kept from the last run
 /// come back ended. How long a command runs before its end is news:
-/// `.nah/terminals.toml`'s `long_command_secs` (10 by default). Their lines
-/// and commands can be tagged.
+/// `.nah/terminals.toml`'s `long_command_secs` (10 by default); how many
+/// lines of scrollback each keeps, its `scrollback_lines` (10,000). Their
+/// lines and commands can be tagged.
 pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, tags: &Arc<nah_tags::Tags>) -> Result<Arc<crate::terminals::Terminals>, StartError> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Settings {
         #[serde(default = "ten")]
         long_command_secs: u64,
+        #[serde(default = "ten_thousand")]
+        scrollback_lines: usize,
     }
     fn ten() -> u64 {
         10
     }
+    fn ten_thousand() -> usize {
+        10_000
+    }
     let settings: Settings = match std::fs::read_to_string(arch.root().join(".nah/terminals.toml")) {
         Ok(text) => toml::from_str(&text).map_err(|e| format!(".nah/terminals.toml: {e}"))?,
-        Err(_) => Settings { long_command_secs: ten() },
+        Err(_) => Settings { long_command_secs: ten(), scrollback_lines: ten_thousand() },
     };
+    let settings = crate::terminals::Settings { long: std::time::Duration::from_secs(settings.long_command_secs), scrollback: settings.scrollback_lines.max(100) };
     let hooks = arch_service::state_dir(arch.root())?.join("terminal-hooks");
-    let terminals = crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), std::time::Duration::from_secs(settings.long_command_secs))?;
+    let terminals = crate::terminals::Terminals::load(arch.root().to_path_buf(), hooks, hub.clone(), state.clone(), settings)?;
     tags.register(terminals.clone());
     // Tagged lines kept where they are now when they move, before they can
     // move again (a terminal tells it on the blocking thread that moved

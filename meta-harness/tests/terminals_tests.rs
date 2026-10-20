@@ -368,7 +368,7 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "tag": "two words", "subject": subject }).to_string())).await;
     assert!(status == 400 && body.contains("can't be a tag's name"), "{status} {body}");
     let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
-    assert!(read.contains(&format!("\"what\":\"terminal {} lines {line}-{line}\"", terminal.id)) && read.contains("\"held\":\"source\"") && read.contains("\"text\":\"tagged-line"), "what it says now, named: {read}");
+    assert!(read.contains(&format!("\"what\":\"terminal {} lines {line}-{line} (of command ", terminal.id)) && read.contains("\"held\":\"source\"") && read.contains("\"text\":\"tagged-line"), "what it says now, named: {read}");
     // A narrower reader lays the lines out anew: the tag follows its line,
     // told to everyone as it moves (not only when it's next read).
     reader.say(ToTerminal::Size { size: TermSize { cols: 40, rows: 20 } }).await;
@@ -376,7 +376,7 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let moved = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id && t.on[0].subject != tag.on[0].subject)).await;
     let harness_contracts::ClientEvent::TagUpdated { tag: moved } = moved else { unreachable!() };
     let harness_contracts::Subject::TerminalLines { first, .. } = moved.on[0].subject else { panic!("{moved:?}") };
-    assert_eq!(moved.on[0].what, format!("terminal {} lines {first}-{first}", terminal.id), "named where it is now");
+    assert!(moved.on[0].what.starts_with(&format!("terminal {} lines {first}-{first} (of command ", terminal.id)), "named where it is now, with its command: {}", moved.on[0].what);
     let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
     assert!(read.contains("\"held\":\"source\"") && read.contains("\"text\":\"tagged-line"), "still found, numbered anew: {read}");
     // Many new widths in a row (more than the terminal remembers): still followed.
@@ -452,8 +452,8 @@ async fn a_command_tagged_while_it_runs_comes_back_whole_past_the_scrollback_and
     let terminal = open(addr).await;
     let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
     reader.next().await;
-    // 30,000 lines, three times what the terminal keeps; tagged early on.
-    reader.run("seq 1 5000; sleep 2; seq 5001 30000").await;
+    // 50,000 lines, five times what the terminal keeps; tagged early on.
+    reader.run("seq 1 5000; sleep 2; seq 5001 50000").await;
     reader.until_shows("5000").await;
     while !reader.commands.values().any(|c| c.text.starts_with("seq 1 5000") && c.output.is_some()) {
         reader.next().await;
@@ -470,9 +470,27 @@ async fn a_command_tagged_while_it_runs_comes_back_whole_past_the_scrollback_and
     let (status, body) = http(addr, "POST", &format!("/api/terminals/{}/restart", terminal.id), None).await;
     assert_eq!(status, 200, "{body}");
     let (_, read) = http(addr, "GET", "/api/tags/big", None).await;
-    assert!(read.contains("\"held\":\"kept\"") && read.contains("\"lines\":30002"), "its line, 30,000 lines, how it ended: {read}");
+    assert!(read.contains("\"held\":\"kept\"") && read.contains("\"lines\":50002"), "its line, 50,000 lines, how it ended: {read}");
     let (error, first) = lead.tool("tag_read", json!({ "tag": "big", "thing": 1, "lines": "1-2" })).await;
-    assert!(!error && first.contains("$ seq 1 5000") && first.ends_with("\n1\n(lines 1-2 of 30002: `lines` gives others)"), "{first}");
-    let (error, last) = lead.tool("tag_read", json!({ "tag": "big", "thing": 1, "lines": "30001-30002" })).await;
-    assert!(!error && last.contains("\n30000\n(") && last.contains("exit code 0"), "{last}");
+    assert!(!error && first.contains("$ seq 1 5000") && first.ends_with("\n1\n(lines 1-2 of 50002: `lines` gives others)"), "{first}");
+    let (error, last) = lead.tool("tag_read", json!({ "tag": "big", "thing": 1, "lines": "50001-50002" })).await;
+    assert!(!error && last.contains("\n50000\n(") && last.contains("exit code 0"), "{last}");
+}
+
+#[tokio::test]
+async fn a_project_says_how_much_scrollback_its_terminals_keep() {
+    let arch = common::fixture_architecture_with(|a| {
+        std::fs::create_dir_all(a.root().join(".nah")).unwrap();
+        std::fs::write(a.root().join(".nah/terminals.toml"), "scrollback_lines = 300\n").unwrap();
+        a
+    });
+    let (addr, _state) = common::spawn_app_with(arch).await;
+    let terminal = open(addr).await;
+    let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
+    reader.next().await;
+    reader.run("seq 1 3000").await;
+    reader.until_shows("3000").await;
+    let screen = reader.last.clone().unwrap();
+    // (Trimmed once 512 more have come.)
+    assert!(screen.top - screen.oldest <= 300 + 512 && screen.top > 2500, "300 kept above the screen, give or take (10,000 would keep them all): {} to {}", screen.oldest, screen.top);
 }
