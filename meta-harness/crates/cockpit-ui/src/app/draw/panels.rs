@@ -78,10 +78,6 @@ impl CockpitApp {
             }
             self.invoke(invocation, ctx);
         }
-        // What tagging is on is picked afresh each time its picker opens.
-        if !self.palette.is_open() {
-            self.desk.tag_level = None;
-        }
         if self.input_mode == InputMode::Palette && !self.palette.is_open() {
             self.input_mode = InputMode::Normal;
             release_keyboard(ctx);

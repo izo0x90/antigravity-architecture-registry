@@ -220,7 +220,8 @@ impl Terminals {
     }
 
     /// What the commands followed in `open` printed since, told; those
-    /// that ended (or went), their end told and let go.
+    /// that ended (or went), their end told and let go; one no longer
+    /// wanted (the tag's off it), let go.
     fn tell_followed(&self, open: &Arc<Open>) {
         let mut followed = lock(&self.followed);
         if followed.is_empty() {
@@ -233,12 +234,13 @@ impl Terminals {
             }
             let command = open.command(f.command).filter(|_| f.shell == started);
             let Some(command) = command else { return false };
-            let end = command.end.unwrap_or_else(|| open.cursor_line());
-            if end > f.next
-                && let Some(text) = open.lines_text(f.next, end)
-            {
-                (f.more)(&format!("{text}\n"));
-                f.next = end;
+            if let Some(written) = open.written(f.next, command.end) {
+                let lost = if written.lost > 0 { format!("({} lines went before they could be kept)\n", written.lost) } else { String::new() };
+                let text = format!("{lost}{}", written.text);
+                if !text.is_empty() && !(f.more)(&text) {
+                    return false;
+                }
+                f.next = written.next;
             }
             match (command.end, ended) {
                 (Some(_), _) => {
@@ -375,6 +377,11 @@ impl Open {
         lock(&self.shell).as_ref().and_then(|s| s.command(id))
     }
 
+    /// The command lines `first` to `last` are in.
+    pub fn command_around(&self, first: u64, last: u64) -> Option<harness_contracts::TerminalCommand> {
+        lock(&self.shell).as_ref().and_then(|s| s.command_around(first, last))
+    }
+
     /// The line its program's cursor is on (those before are written whole).
     pub fn cursor_line(&self) -> u64 {
         lock(&self.shell).as_ref().map_or(0, |s| s.cursor_line())
@@ -399,6 +406,12 @@ impl Open {
     /// Where lines numbered `first` to `last` are now (after a new width).
     pub fn lines_now(&self, first: u64, last: u64) -> Option<(u64, u64)> {
         lock(&self.shell).as_ref().and_then(|s| s.lines_now(first, last))
+    }
+
+    /// What its program wrote from line `from` (to `to`, else to the
+    /// cursor's line), as it's followed.
+    pub fn written(&self, from: u64, to: Option<u64>) -> Option<nah_terminal::Written> {
+        lock(&self.shell).as_ref().and_then(|s| s.written(from, to))
     }
 
     /// Lines `from..to` as text, when they're kept.
@@ -431,9 +444,10 @@ impl nah_tags::Resolve for Terminals {
         match subject {
             // With the command they're in, while it's known.
             Subject::TerminalLines { terminal, shell, first, last } => {
-                let of = self.get(terminal).ok().filter(|o| o.started() == *shell).and_then(|o| o.commands().into_iter().rev().find(|c| c.prompt <= *first && c.end.is_none_or(|end| *last < end)));
+                let of = self.get(terminal).ok().filter(|o| o.started() == *shell).and_then(|o| o.command_around(*first, *last));
                 let of = of.map(|c| format!(" (of command {})", c.id)).unwrap_or_default();
-                Some(self.words(terminal, *shell, &format!("lines {first}-{last}{of}")))
+                let lines = if first == last { format!("line {first}") } else { format!("lines {first}-{last}") };
+                Some(self.words(terminal, *shell, &format!("{lines}{of}")))
             }
             Subject::TerminalCommand { terminal, shell, command } => Some(self.words(terminal, *shell, &format!("command {command}"))),
             _ => None,
@@ -498,11 +512,24 @@ impl nah_tags::Resolve for Terminals {
         let Some(open) = self.get(terminal).ok().filter(|o| o.started() == *shell) else { return false };
         let Some(ran) = open.command(*command).filter(|c| c.end.is_none()) else { return false };
         let Some(output) = ran.output else { return false };
-        let next = open.cursor_line();
-        let so_far = open.lines_text(output, next).filter(|t| !t.is_empty()).map(|t| format!("{t}\n")).unwrap_or_default();
-        more(&format!("{}\n{so_far}", in_words(&ran)));
-        lock(&self.followed).push(Followed { terminal: terminal.clone(), shell: *shell, command: *command, next, more });
+        let Some(written) = open.written(output, None) else { return false };
+        let lost = if written.lost > 0 { format!("({} lines went before they could be kept)\n", written.lost) } else { String::new() };
+        if !more(&format!("{}\n{lost}{}", in_words(&ran), written.text)) {
+            return false;
+        }
+        lock(&self.followed).push(Followed { terminal: terminal.clone(), shell: *shell, command: *command, next: written.next, more });
         true
+    }
+
+    /// Lines all still kept; a command whose prompt's line still is (in
+    /// the start of the shell they were tagged in).
+    fn there(&self, subject: &Subject) -> bool {
+        let open = |terminal: &TerminalId, shell: u64| self.get(terminal).ok().filter(|o| o.started() == shell);
+        match subject {
+            Subject::TerminalLines { terminal, shell, first, last } => open(terminal, *shell).is_some_and(|o| o.lines_text(*first, last + 1).is_some()),
+            Subject::TerminalCommand { terminal, shell, command } => open(terminal, *shell).is_some_and(|o| o.command(*command).is_some_and(|c| o.lines_text(c.prompt, c.prompt + 1).is_some())),
+            _ => false,
+        }
     }
 
     /// Lines laid out anew (a new width) since they were numbered: where they are now.

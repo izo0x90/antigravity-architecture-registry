@@ -38,6 +38,11 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (8, "CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT NOT NULL, json TEXT NOT NULL, seq INTEGER NOT NULL);"),
     // A tag only points: what a thing said is no longer kept with it.
     (9, "UPDATE tags SET json = json_set(json, '$.on', (SELECT json_group_array(json(json_remove(value, '$.said'))) FROM json_each(tags.json, '$.on')));"),
+    // Where a thing is in the tags' logs: one extent (its first piece), not pieces.
+    (
+        10,
+        "UPDATE tags SET json = json_set(json, '$.on', (SELECT json_group_array(CASE WHEN json_type(value, '$.kept.pieces[0]') IS NULL THEN json(json_remove(value, '$.kept')) ELSE json_set(value, '$.kept', json_object('file', json_extract(value, '$.kept.pieces[0].file'), 'start', json_extract(value, '$.kept.pieces[0].start'), 'len', json_extract(value, '$.kept.pieces[0].len'))) END) FROM json_each(tags.json, '$.on')));",
+    ),
 ];
 
 /// The newest layout this NAH knows.
@@ -61,6 +66,23 @@ pub(crate) fn run(conn: &mut Connection, shown: &str) -> Result<(), StateError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_10_keeps_where_a_thing_is_as_one_extent() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for (_, sql) in MIGRATIONS.iter().filter(|(v, _)| *v <= 9) {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 9).unwrap();
+        let subject = r#"{"kind":"terminal_lines","terminal":"t1","shell":1,"first":3,"last":3}"#;
+        let old = format!(r#"{{"id":"x","name":"seen","colour":1,"note":"","notedBy":"","on":[{{"subject":{subject},"what":"a","atMs":5,"by":"user","kept":{{"pieces":[{{"file":"tagged-1.log","start":10,"len":4}},{{"file":"tagged-1.log","start":40,"len":2}}]}}}},{{"subject":{subject},"what":"b","atMs":6,"by":"user"}}]}}"#);
+        conn.execute("INSERT INTO tags (id, name, json, seq) VALUES ('x', 'seen', ?1, 1)", [old]).unwrap();
+        run(&mut conn, "test").unwrap();
+        let json: String = conn.query_row("SELECT json FROM tags", [], |r| r.get(0)).unwrap();
+        let tag: harness_contracts::Tag = serde_json::from_str(&json).unwrap();
+        assert_eq!(tag.on[0].kept, Some(harness_contracts::Kept { file: "tagged-1.log".into(), start: 10, len: Some(4) }), "{json}");
+        assert_eq!(tag.on[1].kept, None);
+    }
 
     #[test]
     fn layout_9_drops_what_tagged_things_said() {

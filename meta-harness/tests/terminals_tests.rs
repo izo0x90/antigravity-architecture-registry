@@ -368,7 +368,7 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "tag": "two words", "subject": subject }).to_string())).await;
     assert!(status == 400 && body.contains("can't be a tag's name"), "{status} {body}");
     let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
-    assert!(read.contains(&format!("\"what\":\"terminal {} lines {line}-{line} (of command ", terminal.id)) && read.contains("\"held\":\"source\"") && read.contains("\"text\":\"tagged-line"), "what it says now, named: {read}");
+    assert!(read.contains(&format!("\"what\":\"terminal {} line {line} (of command ", terminal.id)) && read.contains("\"held\":\"source\"") && read.contains("\"text\":\"tagged-line"), "what it says now, named: {read}");
     // A narrower reader lays the lines out anew: the tag follows its line,
     // told to everyone as it moves (not only when it's next read).
     reader.say(ToTerminal::Size { size: TermSize { cols: 40, rows: 20 } }).await;
@@ -376,7 +376,7 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let moved = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id && t.on[0].subject != tag.on[0].subject)).await;
     let harness_contracts::ClientEvent::TagUpdated { tag: moved } = moved else { unreachable!() };
     let harness_contracts::Subject::TerminalLines { first, .. } = moved.on[0].subject else { panic!("{moved:?}") };
-    assert!(moved.on[0].what.starts_with(&format!("terminal {} lines {first}-{first} (of command ", terminal.id)), "named where it is now, with its command: {}", moved.on[0].what);
+    assert!(moved.on[0].what.starts_with(&format!("terminal {} line {first} (of command ", terminal.id)), "named where it is now, with its command: {}", moved.on[0].what);
     let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
     assert!(read.contains("\"held\":\"source\"") && read.contains("\"text\":\"tagged-line"), "still found, numbered anew: {read}");
     // Many new widths in a row (more than the terminal remembers): still followed.
@@ -466,6 +466,9 @@ async fn a_command_tagged_while_it_runs_comes_back_whole_past_the_scrollback_and
     while !reader.commands.values().any(|c| c.id == number && c.end.is_some()) {
         reader.next().await;
     }
+    // Ended, its start long gone from the scrollback: all of it, from the logs.
+    let (_, read) = http(addr, "GET", "/api/tags/big", None).await;
+    assert!(read.contains("\"lines\":50002"), "{read}");
     // Its shell started again: the command is gone from there, whole in the logs.
     let (status, body) = http(addr, "POST", &format!("/api/terminals/{}/restart", terminal.id), None).await;
     assert_eq!(status, 200, "{body}");
@@ -493,4 +496,39 @@ async fn a_project_says_how_much_scrollback_its_terminals_keep() {
     let screen = reader.last.clone().unwrap();
     // (Trimmed once 512 more have come.)
     assert!(screen.top - screen.oldest <= 300 + 512 && screen.top > 2500, "300 kept above the screen, give or take (10,000 would keep them all): {} to {}", screen.oldest, screen.top);
+}
+
+#[tokio::test]
+async fn a_running_command_tagged_again_after_its_tag_came_off_is_kept_once() {
+    let (addr, _state) = spawn_app().await;
+    let terminal = open(addr).await;
+    let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
+    reader.next().await;
+    reader.run("for i in 1 2 3 4; do echo tick-$i; sleep 0.5; done").await;
+    reader.until_shows("tick-1").await;
+    let number = loop {
+        if let Some(c) = reader.commands.values().find(|c| c.text.starts_with("for i in") && c.output.is_some()) {
+            break c.id;
+        }
+        reader.next().await;
+    };
+    let command = format!("terminal {} command {number}", terminal.id);
+    let mut lead = Mcp::lead(addr).await;
+    for tool in ["tag", "untag", "tag"] {
+        let (error, said) = lead.tool(tool, json!({ "tag": "ticks", "subject": command })).await;
+        assert!(!error, "{said}");
+    }
+    while !reader.commands.values().any(|c| c.id == number && c.end.is_some()) {
+        reader.next().await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (error, said) = lead.tool("tag_read", json!({ "tag": "ticks", "thing": 1 })).await;
+    assert!(!error, "{said}");
+    for tick in 1..=4 {
+        assert_eq!(said.matches(&format!("tick-{tick}\n")).count(), 1, "tick-{tick} once: {said}");
+    }
+    assert!(said.contains("exit code 0"), "{said}");
+    // Searched: each line found, with its tag, thing and line.
+    let (error, found) = lead.tool("tag_find", json!({ "query": "tick-3" })).await;
+    assert!(!error && found.contains(&format!("ticks · 1. {command} · line ")) && found.ends_with(": tick-3"), "{found}");
 }

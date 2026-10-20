@@ -184,14 +184,8 @@ impl TagList {
                                 if let Some(said) = said {
                                     ui.label(RichText::new(said).monospace().size(look.text_small).color(theme.muted));
                                 }
-                                match held {
-                                    Some(harness_contracts::Held::Kept) => {
-                                        ui.label(RichText::new("gone from where it was: as it was when tagged").size(look.text_small).color(theme.warn));
-                                    }
-                                    Some(harness_contracts::Held::Gone) => {
-                                        ui.label(RichText::new("gone").size(look.text_small).color(theme.warn));
-                                    }
-                                    _ => {}
+                                if let Some(held) = held.filter(|h| *h != harness_contracts::Held::Source) {
+                                    ui.label(RichText::new(held.words()).size(look.text_small).color(theme.warn));
                                 }
                                 if !on.by.is_empty() {
                                     ui.label(RichText::new(format!("tagged by {}", who(&on.by))).size(look.text_small).color(theme.faint));

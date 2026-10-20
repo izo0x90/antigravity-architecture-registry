@@ -44,6 +44,15 @@ impl Tags {
                     "lines": { "type": "string", "description": "With `thing`: which of its lines, `a-b`" }
                 }, "required": ["tag"] }),
             ),
+            tool(
+                Capability::ViewRead,
+                "tag_find",
+                "Search what tagged things say (all of it, kept or where it is): each line found, with its tag, its thing (numbered as `tag_read` numbers them) and which of its lines.",
+                json!({ "type": "object", "properties": {
+                    "query": { "type": "string", "description": "Text a line has in it (capitals heeded only when it has some)" },
+                    "tag": { "type": "string", "description": "Only this tag's things" }
+                }, "required": ["query"] }),
+            ),
             tool(Capability::TagsEdit, "tag", "Tag something.", on.clone()),
             tool(Capability::TagsEdit, "untag", "Take a tag off something it's on.", on),
             tool(Capability::TagsEdit, "tag_edit", "Rename a tag, give it another colour or a note, or delete it.", edit),
@@ -71,15 +80,8 @@ fn who(by: &str) -> &str {
 /// asked for at most.
 const SHOWN_LINES: usize = 20;
 const READ_MOST: usize = 2000;
-
-/// Where what a thing says came from, to an agent.
-fn held_words(held: Held) -> &'static str {
-    match held {
-        Held::Source => "as it is now",
-        Held::Kept => "gone from where it was: as it was when tagged",
-        Held::Gone => "gone",
-    }
-}
+/// How many lines `tag_find` gives at most.
+const FOUND_MOST: usize = 50;
 
 /// `a-b` (1-based, both in), or `a`.
 fn line_range(words: &str) -> Result<(usize, usize), ServiceError> {
@@ -88,7 +90,8 @@ fn line_range(words: &str) -> Result<(usize, usize), ServiceError> {
         Some((a, b)) => (number(a)?, number(b)?),
         None => (number(words)?, number(words)?),
     };
-    Ok((from.max(1), to.max(from).min(from + READ_MOST - 1)))
+    let from = from.max(1);
+    Ok((from, to.max(from).min(from.saturating_add(READ_MOST - 1))))
 }
 
 /// A tag in a line.
@@ -132,12 +135,13 @@ impl ToolSet for Tags {
                         let text = text.ok_or_else(|| ServiceError::NotFound(format!("{} is gone, and nothing was kept of it", tagged.what)))?;
                         let all: Vec<&str> = text.lines().collect();
                         let (from, to) = match lines.as_deref().map(line_range).transpose()? {
+                            Some((from, _)) if from > all.len() => return Err(ServiceError::InvalidOp(format!("{} has {} lines", tagged.what, all.len()))),
                             Some((from, to)) => (from, to.min(all.len())),
                             None => (1, all.len().min(READ_MOST)),
                         };
                         let shown = all.get(from.saturating_sub(1)..to).unwrap_or_default().join("\n");
                         let more = if to < all.len() { format!("\n(lines {from}-{to} of {}: `lines` gives others)", all.len()) } else { String::new() };
-                        Ok(format!("{} ({}):\n{shown}{more}", tagged.what, held_words(held)))
+                        Ok(format!("{} ({}):\n{shown}{more}", tagged.what, held.words()))
                     }
                     None => {
                         let read = t.read(&tag).map_err(refused)?;
@@ -152,12 +156,25 @@ impl ToolSet for Tags {
                                 Some(text) => {
                                     let head: Vec<&str> = text.lines().take(SHOWN_LINES).collect();
                                     let more = if on.lines > head.len() as u64 { format!("\n  ({} lines in all: tag_read with `thing` {} for all of it)", on.lines, n + 1) } else { String::new() };
-                                    format!("{}. {what} ({when}; {}):\n{}{more}", n + 1, held_words(on.held), head.join("\n"))
+                                    format!("{}. {what} ({when}; {}):\n{}{more}", n + 1, on.held.words(), head.join("\n"))
                                 }
                             });
                         }
                         Ok(out.join("\n"))
                     }
+                }))
+                .await
+            }
+            "tag_find" => {
+                let query = text("query").filter(|q| !q.trim().is_empty()).ok_or_else(|| ServiceError::InvalidOp("`query` (what to find) is needed".into()))?;
+                let only = text("tag");
+                blocking(Box::new(move |t| {
+                    let found = t.find_text(&query, only.as_deref(), FOUND_MOST).map_err(refused)?;
+                    if found.is_empty() {
+                        return Ok(format!("Nothing tagged says {query:?}."));
+                    }
+                    let more = if found.len() == FOUND_MOST { format!("\n(the first {FOUND_MOST}: `tag` narrows it)") } else { String::new() };
+                    Ok(found.iter().map(|f| format!("{} · {}. {} · line {}: {}", f.tag, f.thing, f.what, f.line, f.text)).collect::<Vec<_>>().join("\n") + &more)
                 }))
                 .await
             }

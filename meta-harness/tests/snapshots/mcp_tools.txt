@@ -1295,6 +1295,25 @@ What a tag is on: each thing's name, who tagged it, and what it says (from where
   ]
 }
 
+## tag_find
+Search what tagged things say (all of it, kept or where it is): each line found, with its tag, its thing (numbered as `tag_read` numbers them) and which of its lines.
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Text a line has in it (capitals heeded only when it has some)"
+    },
+    "tag": {
+      "type": "string",
+      "description": "Only this tag's things"
+    }
+  },
+  "required": [
+    "query"
+  ]
+}
+
 ## tag
 Tag something.
 {

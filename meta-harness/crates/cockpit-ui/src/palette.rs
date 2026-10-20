@@ -43,6 +43,9 @@ pub struct Palette {
     /// The tallest it's been while open: it never gets shorter (going
     /// from a list to a text field, say), so nothing under it jumps.
     tallest: f32,
+    /// How many times it's been opened: what's picked while it's open
+    /// (what a tag goes on) is for this opening only.
+    opened: u64,
 }
 
 impl Palette {
@@ -55,7 +58,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0 }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0 }
     }
 }
 
@@ -65,7 +68,13 @@ impl Palette {
     }
 
     pub fn open(&mut self) {
-        *self = Self { open: true, ..Self::default() };
+        *self = Self { open: true, opened: self.opened + 1, ..Self::default() };
+    }
+
+    /// Which opening this is, or (closed) was last: what's picked in it
+    /// is run just after it closes.
+    pub fn opening(&self) -> u64 {
+        self.opened
     }
 
     /// Opens with the list already filtered (e.g. "index." for the index actions).
@@ -151,7 +160,7 @@ impl Palette {
         let stage = self.stage.clone();
         // While a value is picked: what the cycle key changes it to act on.
         let cycle = match &stage {
-            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Search { action, .. } => action.action.cycle.as_ref().and_then(|id| actions.iter().find(|b| b.action.id == *id)),
+            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Search { action, .. } => action.action.cycle.as_ref().and_then(|id| actions.iter().find(|b| b.action.id == *id && b.origin == action.origin)),
             Stage::Actions => None,
         };
         // Cycled: it runs, and the picker stays (its top line says the new).

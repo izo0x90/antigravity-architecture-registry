@@ -60,21 +60,16 @@ pub struct Tagged {
     pub kept: Option<Kept>,
 }
 
-/// Where a thing's text is in the tags' logs: pieces of files, in order
-/// (a thing still growing when tagged, a command running, adds pieces).
+/// Where a thing's text is in the tags' logs: `len` bytes of a file from
+/// byte `start`; to the file's end for a thing that was growing when tagged
+/// (a command running: its file is its own).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Kept {
-    pub pieces: Vec<Piece>,
-}
-
-/// A piece of a tags' log file: `len` bytes from byte `start`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Piece {
     pub file: String,
     pub start: u64,
-    pub len: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub len: Option<u64>,
 }
 
 /// One thing in the project, durably: what a tag is on. Each kind is its
@@ -163,6 +158,17 @@ pub enum Held {
     Kept,
     /// Nowhere: it's gone, and nothing was kept (or no owner here).
     Gone,
+}
+
+impl Held {
+    /// Where it is, in words (a read says it beside what it says).
+    pub fn words(self) -> &'static str {
+        match self {
+            Held::Source => "as it is now",
+            Held::Kept => "gone from where it was: as it was when tagged",
+            Held::Gone => "gone",
+        }
+    }
 }
 
 #[cfg(test)]

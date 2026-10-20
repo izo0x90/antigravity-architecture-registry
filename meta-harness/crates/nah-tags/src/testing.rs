@@ -58,11 +58,14 @@ impl Lines {
         self.gone.store(true, Ordering::SeqCst);
     }
 
-    /// The growing lines add `text`.
+    /// The growing lines add `text` (told to each who still wants it).
     pub fn grow(&self, text: &str) {
-        for more in self.growing.lock().unwrap().iter_mut() {
-            more(text);
-        }
+        self.growing.lock().unwrap().retain_mut(|more| more(text));
+    }
+
+    /// How many follow the growing lines.
+    pub fn followers(&self) -> usize {
+        self.growing.lock().unwrap().len()
     }
 }
 

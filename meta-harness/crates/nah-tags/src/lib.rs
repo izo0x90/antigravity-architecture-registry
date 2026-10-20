@@ -19,7 +19,9 @@ pub mod testing;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, Weak};
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard};
 
 use harness_contracts::{ClientEvent, Held, Kept, Subject, TAG_COLOURS, Tag, TagId, TagRead, Tagged, TaggedNow};
 use harness_core::EventHub;
@@ -96,16 +98,35 @@ pub trait Resolve: Send + Sync {
     fn lasts(&self, _subject: &Subject) -> bool {
         true
     }
+    /// Whether `subject` is still where it was, all of it (a command
+    /// partly scrolled away isn't).
+    fn there(&self, subject: &Subject) -> bool {
+        self.now(subject).is_some()
+    }
     /// `subject` is still growing (a command running): `more` is told what
-    /// it says so far, then what it adds, until it ends (then the owner
-    /// drops it). False: it isn't growing.
+    /// it says so far, then what it adds, until it ends or `more` says to
+    /// stop (false: the tag is off it); then the owner drops it. False: it
+    /// isn't growing.
     fn follow(&self, _subject: &Subject, _more: More) -> bool {
         false
     }
 }
 
-/// What a growing thing adds, told to the tags (`Resolve::follow`).
-pub type More = Box<dyn FnMut(&str) + Send>;
+/// What a growing thing adds, told to the tags (`Resolve::follow`): false
+/// when it's no longer wanted.
+pub type More = Box<dyn FnMut(&str) -> bool + Send>;
+
+/// A line found in what a tagged thing says (`Tags::find_text`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundText {
+    pub tag: String,
+    /// Which of the tag's things (1-based), and its name.
+    pub thing: usize,
+    pub what: String,
+    /// Which of its lines (1-based).
+    pub line: u64,
+    pub text: String,
+}
 
 /// A change to a tag.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -121,8 +142,9 @@ pub struct Tags {
     tags: Mutex<BTreeMap<TagId, Tag>>,
     owners: RwLock<Vec<Arc<dyn Resolve>>>,
     logs: Logs,
-    /// Itself, for what a growing thing adds later.
-    me: Weak<Tags>,
+    /// Each growing thing's log file, and whether it's still written to
+    /// (off once nothing points into it).
+    growing: Mutex<BTreeMap<String, Arc<AtomicBool>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -191,8 +213,10 @@ impl Tags {
         for tag in &kept {
             hub.publish(ClientEvent::TagUpdated { tag: tag.clone() });
         }
-        let tags = Mutex::new(kept.into_iter().map(|t| (t.id.clone(), t)).collect());
-        Ok(Arc::new_cyclic(|me| Self { store, hub, tags, owners: RwLock::default(), logs: Logs::open(logs), me: me.clone() }))
+        let tags = Self { store, hub, tags: Mutex::new(kept.into_iter().map(|t| (t.id.clone(), t)).collect()), owners: RwLock::default(), logs: Logs::open(logs), growing: Mutex::default() };
+        // What a crash left behind (written, never kept) goes.
+        tags.forget_unused(&lock(&tags.tags));
+        Ok(Arc::new(tags))
     }
 
     /// An owner of subjects, from now on (its subjects named as it names
@@ -216,28 +240,49 @@ impl Tags {
         self.owners().iter().find(|o| o.name(subject).is_some()).cloned()
     }
 
-    /// What a tagged thing says, whole, and where that came from: its
-    /// source while it's there, else what the logs kept of it.
-    fn said(&self, tagged: &Tagged) -> (Held, Option<String>) {
-        if let Some(now) = self.owners().iter().find_map(|o| o.now(&tagged.subject)) {
-            return (Held::Source, Some(now));
-        }
-        match tagged.kept.as_ref().map(|k| self.logs.read(k)) {
-            Some(Ok(text)) => (Held::Kept, Some(text)),
-            Some(Err(e)) => {
-                tracing::warn!("A tagged thing's log couldn't be read: {e}");
-                (Held::Gone, None)
-            }
-            None => (Held::Gone, None),
+    /// Where a tagged thing is: still there (its owner says), gone with
+    /// what it said kept in the logs, or gone.
+    fn held(&self, tagged: &Tagged) -> Held {
+        match (self.owners().iter().any(|o| o.there(&tagged.subject)), &tagged.kept) {
+            (true, _) => Held::Source,
+            (false, Some(_)) => Held::Kept,
+            (false, None) => Held::Gone,
         }
     }
 
-    /// A tagged thing as a read gives it: where what it says came from,
-    /// some of it, and how many lines it says in all.
+    /// What a tagged thing says, whole, and where it is: what the logs
+    /// kept of it when they did (written from its source when tagged, and
+    /// as it grew: all of it, where the source may since have lost some),
+    /// else its source.
+    fn said(&self, tagged: &Tagged) -> (Held, Option<String>) {
+        let held = self.held(tagged);
+        let text = match &tagged.kept {
+            Some(kept) => self.logs.read(kept).map_err(|e| tracing::warn!("A tagged thing's log couldn't be read: {e}")).ok(),
+            None => self.owners().iter().find_map(|o| o.now(&tagged.subject)),
+        };
+        (if text.is_none() { Held::Gone } else { held }, text)
+    }
+
+    /// The start of what a tagged thing says (`most` characters, roughly),
+    /// how many lines it has, and where it is; read through, never whole.
+    fn glimpse(&self, tagged: &Tagged, most: usize) -> (Held, Option<(String, u64)>) {
+        let held = self.held(tagged);
+        let text = match &tagged.kept {
+            Some(kept) => self.logs.head(kept, most.saturating_mul(4)).map_err(|e| tracing::warn!("A tagged thing's log couldn't be read: {e}")).ok(),
+            None => self.owners().iter().find_map(|o| o.now(&tagged.subject)).map(|t| {
+                let lines = t.lines().count() as u64;
+                (t, lines)
+            }),
+        };
+        (if text.is_none() { Held::Gone } else { held }, text.map(|(t, lines)| (some_of(t, most), lines)))
+    }
+
+    /// A tagged thing as a read gives it: where it is, some of what it
+    /// says, and how many lines it says in all.
     fn now(&self, tagged: &Tagged) -> TaggedNow {
-        let (held, text) = self.said(tagged);
-        let lines = text.as_deref().map_or(0, |t| t.lines().count() as u64);
-        TaggedNow { tagged: tagged.clone(), held, text: text.map(|t| some_of(t, SHOWN_MOST)), lines }
+        let (held, glimpse) = self.glimpse(tagged, SHOWN_MOST);
+        let (text, lines) = glimpse.map_or((None, 0), |(t, n)| (Some(t), n));
+        TaggedNow { tagged: tagged.clone(), held, text, lines }
     }
 
     /// `tagged` where its owner says it is now, named as it's named now
@@ -305,20 +350,49 @@ impl Tags {
         Ok((tagged, held, text))
     }
 
+    /// The lines of what tagged things say (all tags', or `tag`'s) that
+    /// have `query` in them (its capitals heeded only when it has some),
+    /// the first `most`: each with its tag, which of its things (1-based,
+    /// as `thing` takes it), and which of its lines.
+    pub fn find_text(&self, query: &str, tag: Option<&str>, most: usize) -> Result<Vec<FoundText>, TagError> {
+        let tags = match tag {
+            Some(tag) => vec![self.find(tag)?],
+            None => self.list(),
+        };
+        let heed = query.chars().any(char::is_uppercase);
+        let lower = query.to_lowercase();
+        let matches = |line: &str| if heed { line.contains(query) } else { line.to_lowercase().contains(&lower) };
+        let mut out = Vec::new();
+        for tag in tags {
+            for (n, tagged) in tag.on.iter().enumerate() {
+                let room = most.saturating_sub(out.len());
+                if room == 0 {
+                    return Ok(out);
+                }
+                let lines = match &tagged.kept {
+                    Some(kept) => self.logs.find(kept, &matches, room).unwrap_or_default(),
+                    None => self.owners().iter().find_map(|o| o.now(&tagged.subject)).map(|t| t.lines().zip(1..).filter(|(l, _)| matches(l)).take(room).map(|(l, n)| (n, l.to_owned())).collect()).unwrap_or_default(),
+                };
+                out.extend(lines.into_iter().map(|(line, text)| FoundText { tag: tag.name.clone(), thing: n + 1, what: tagged.what.clone(), line, text }));
+            }
+        }
+        Ok(out)
+    }
+
     /// Tags `subject` with `tag` (by its name or id; a new tag, in the
     /// colour least used, when there's none of that name), with who tagged
     /// it (`by`). One its owner doesn't keep for good is written to the
-    /// logs (and what it adds while it grows). Already on it: as it was.
+    /// logs: what it says, or, growing, all it says so far and then what
+    /// it adds (to a file of its own). Already on it: as it was.
     pub fn tag(&self, tag: &str, subject: Subject, by: &str) -> Result<Tag, TagError> {
         if let Some(why) = subject.unfit() {
             return Err(TagError::Subject(why));
         }
+        let mut tags = lock(&self.tags);
         let subject = self.current(&subject);
         let owner = self.owner(&subject).ok_or_else(|| TagError::Subject("nothing here knows what it is".into()))?;
         let what = owner.name(&subject).unwrap_or_default();
-        let said = owner.now(&subject).ok_or_else(|| TagError::Subject("it's gone".into()))?;
-        let tags = lock(&self.tags);
-        let kept = match found(&tags, tag) {
+        let mut kept = match found(&tags, tag) {
             Ok(existing) => existing,
             Err(_) => {
                 let name = check_name(tag)?;
@@ -333,62 +407,48 @@ impl Tags {
         if kept.on.len() >= MOST_ON {
             return Err(TagError::TooMany);
         }
+        let logged = if owner.lasts(&subject) { None } else { Some(self.log(&*owner, &subject, &format!("{} · {what} · tagged by {by} · {}", kept.name, now_words()))?) };
         let change = Change { by: by.to_owned(), action: "tagged", detail: what.clone() };
-        let id = kept.id.clone();
-        drop(tags);
-        // What its owner doesn't keep goes to the logs: all of it, as it
-        // grows when it's growing (its owner tells it from one place, so
-        // nothing's missed or twice), else what it says now. What it tells
-        // before the tag's kept is held, then written in order.
-        let mut logged = None;
-        let held: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(Some(Vec::new())));
-        if !owner.lasts(&subject) {
-            let (me, followed, tag, early) = (self.me.clone(), subject.clone(), id.clone(), held.clone());
-            let more: More = Box::new(move |more| {
-                if let Some(early) = lock(&early).as_mut() {
-                    return early.push(more.to_owned());
-                }
-                if let Some(tags) = me.upgrade() {
-                    tags.grew(&tag, &followed, more);
-                }
-            });
-            let first = if owner.follow(&subject, more) { lock(&held).as_mut().map(std::mem::take).unwrap_or_default().concat() } else { said };
-            let header = format!("{} · {what} · tagged by {by} · {}", kept.name, now_words());
-            logged = Some(Kept { pieces: vec![self.logs.write(&header, &first).map_err(|e| TagError::Store(e.to_string()))?] });
+        kept.on.push(Tagged { subject, what, at_ms: now_ms(), by: by.to_owned(), kept: logged });
+        let done = self.keep(&mut tags, kept, Some(&change));
+        if done.is_err() {
+            // Not kept: nothing points into what was written.
+            self.forget_unused(&tags);
         }
-        let mut tags = lock(&self.tags);
-        let mut kept = found(&tags, id.as_str()).unwrap_or(kept);
-        kept.on.push(Tagged { subject: subject.clone(), what, at_ms: now_ms(), by: by.to_owned(), kept: logged });
-        let done = self.keep(&mut tags, kept, Some(&change))?;
-        drop(tags);
-        for more in lock(&held).take().unwrap_or_default() {
-            self.grew(&id, &subject, &more);
-        }
-        Ok(done)
+        done
     }
 
-    /// What a growing thing tag `id` is on added: written to the logs,
-    /// one more piece of it.
-    fn grew(&self, id: &TagId, subject: &Subject, more: &str) {
-        if more.is_empty() {
-            return;
+    /// Writes what `subject` says to the logs (after `header`): growing, to
+    /// a file of its own, which its owner adds to until it ends or nothing
+    /// points into the file; else what it says now.
+    fn log(&self, owner: &dyn Resolve, subject: &Subject, header: &str) -> Result<Kept, TagError> {
+        let failed = |e: std::io::Error| TagError::Store(e.to_string());
+        let (kept, mut file) = self.logs.grow(header).map_err(failed)?;
+        let on = Arc::new(AtomicBool::new(true));
+        let still = on.clone();
+        let more: More = Box::new(move |more| still.load(Ordering::Relaxed) && file.write_all(more.as_bytes()).is_ok());
+        if owner.follow(subject, more) {
+            lock(&self.growing).insert(kept.file.clone(), on);
+            return Ok(kept);
         }
-        let mut tags = lock(&self.tags);
-        let Some(mut tag) = tags.get(id).cloned() else { return };
-        let Some(at) = tag.on.iter().position(|t| self.current(&t.subject) == self.current(subject)) else { return };
-        let header = format!("{} · {} · more · {}", tag.name, tag.on[at].what, now_words());
-        match self.logs.write(&header, more) {
-            Ok(piece) => tag.on[at].kept.get_or_insert_with(Kept::default).pieces.push(piece),
-            Err(e) => return tracing::warn!("What a tagged thing added couldn't be kept: {e}"),
-        }
-        if let Err(e) = self.keep(&mut tags, tag, None) {
-            tracing::warn!("What a tagged thing added couldn't be kept: {e}");
-        }
+        // Not growing: what it says now, with the other whole things.
+        self.logs.discard(&kept);
+        let said = owner.now(subject).ok_or_else(|| TagError::Subject("it's gone".into()))?;
+        self.logs.write(header, &said).map_err(failed)
     }
 
-    /// The logs no tag points into, removed.
+    /// The logs no tag points into, removed; a growing thing's among them
+    /// isn't written to any more (its owner stops following it).
     fn forget_unused(&self, tags: &BTreeMap<TagId, Tag>) {
-        let used: BTreeSet<String> = tags.values().flat_map(|t| &t.on).flat_map(|t| t.kept.iter().flat_map(|k| k.pieces.iter().map(|p| p.file.clone()))).collect();
+        let used: BTreeSet<String> = tags.values().flat_map(|t| &t.on).filter_map(|t| t.kept.as_ref().map(|k| k.file.clone())).collect();
+        let mut growing = lock(&self.growing);
+        growing.retain(|file, on| {
+            let kept = used.contains(file);
+            if !kept {
+                on.store(false, Ordering::Relaxed);
+            }
+            kept
+        });
         self.logs.forget_all_but(&used);
     }
 
@@ -478,17 +538,16 @@ impl Tags {
                 out.push_str("\n(on nothing now)");
             }
             for tagged in &tag.on {
-                let (held, text) = self.said(tagged);
+                let room = EXPANDED_MOST.saturating_sub(out.len());
+                let (held, glimpse) = self.glimpse(tagged, room);
                 let what = match (tagged.what.as_str(), held) {
                     ("", _) => "something nothing here can show".to_owned(),
                     (what, Held::Source) => what.to_owned(),
-                    (what, Held::Kept) => format!("{what} (gone from where it was; as it was when tagged)"),
-                    (what, Held::Gone) => format!("{what} (gone)"),
+                    (what, held) => format!("{what} ({})", held.words()),
                 };
-                let text = text.unwrap_or_default();
-                let room = EXPANDED_MOST.saturating_sub(out.len());
-                let cut = text.chars().count() > room;
-                out.push_str(&format!("\n- {what}:\n{}", indent(&some_of(text, room))));
+                let text = glimpse.map(|(t, _)| t).unwrap_or_default();
+                let cut = text.ends_with('…');
+                out.push_str(&format!("\n- {what}:\n{}", indent(&text)));
                 if cut || out.len() > EXPANDED_MOST {
                     out.push_str("\n(the rest left out: tag_read gives all of it)");
                     return out;
@@ -582,23 +641,43 @@ mod tests {
         let read = tags.read("seen").unwrap();
         assert_eq!((read.on[0].held, read.on[0].text.as_deref()), (Held::Kept, Some("text of lines 10 to 12\n")));
         // Taken off: nothing points into its log, which goes.
-        let file = tag.on[0].kept.as_ref().unwrap().pieces[0].file.clone();
+        let file = tag.on[0].kept.as_ref().unwrap().file.clone();
         assert!(logs.path().join(&file).exists());
         tags.untag("seen", &lines(10, 12), "you").unwrap();
         assert!(!logs.path().join(&file).exists());
     }
 
     #[test]
-    fn a_thing_still_growing_when_tagged_keeps_what_it_adds_until_it_ends() {
-        let Fixture { tags, owner, .. } = tags(Arc::new(MemoryStore::default()));
+    fn a_thing_still_growing_when_tagged_keeps_what_it_adds_in_a_file_of_its_own_until_the_tag_is_off_it() {
+        let store = Arc::new(MemoryStore::default());
+        let Fixture { tags, hub, owner, logs } = tags(store.clone());
         tags.tag("build", lines(500, 501), "you").unwrap();
+        // What it adds is written, never stored nor told (one change: tagged).
+        let (_, mut events) = hub.subscribe();
         owner.grow("more 1\n");
         owner.grow("more 2\n");
+        assert!(events.try_recv().is_err());
+        assert_eq!(store.changes.lock().unwrap().len(), 1);
+        let read = tags.read("build").unwrap();
+        assert_eq!((read.on[0].held, read.on[0].text.as_deref(), read.on[0].lines), (Held::Source, Some("text of lines 500 to 501\nmore 1\nmore 2\n"), 3), "all of it, from the logs");
         owner.scroll_away();
         let (tagged, held, text) = tags.thing("build", 0).unwrap();
-        assert_eq!(tagged.kept.unwrap().pieces.len(), 3);
         assert_eq!((held, text.as_deref()), (Held::Kept, Some("text of lines 500 to 501\nmore 1\nmore 2\n")));
+        let file = std::fs::read_to_string(logs.path().join(tagged.kept.unwrap().file)).unwrap();
+        assert!(file.starts_with("\n== build · lines 500 to 501 · tagged by you · ") && file.ends_with("more 2\n"), "its own: {file}");
+        // Taken off: no longer followed, and tagged again, followed once.
+        tags.untag("build", &lines(500, 501), "you").unwrap();
+        owner.grow("more 3\n");
+        assert_eq!(owner.followers(), 0);
+        tags.tag("build", lines(500, 501), "you").unwrap();
+        owner.grow("more 4\n");
+        assert_eq!(owner.followers(), 1);
         assert!(tags.thing("build", 1).is_err(), "it's on one thing");
+        // What it says is searched where it's kept.
+        let found = tags.find_text("MORE 4", None, 10).unwrap();
+        assert!(found.is_empty(), "capitals heeded when the query has some");
+        let found = tags.find_text("more 4", Some("build"), 10).unwrap();
+        assert_eq!(found, [FoundText { tag: "build".into(), thing: 1, what: "lines 500 to 501".into(), line: 1, text: "more 4".into() }], "(its lines gone when tagged again: only what it added)");
     }
 
     #[test]
@@ -649,7 +728,7 @@ mod tests {
         let Ok(ClientEvent::TagUpdated { tag }) = events.try_recv() else { panic!("the move is told") };
         assert_eq!(tag.on.iter().map(|t| (t.subject.clone(), t.what.as_str())).collect::<Vec<_>>(), [(lines(1, 2), "lines 1 to 2"), (lines(1100, 1101), "lines 1100 to 1101")]);
         let read = tags.read("t").unwrap();
-        assert_eq!(read.on.iter().map(|t| t.text.as_deref()).collect::<Vec<_>>(), [Some("text of lines 1 to 2\n"), Some("text of lines 1100 to 1101\n")]);
+        assert_eq!(read.on.iter().map(|t| t.text.as_deref()).collect::<Vec<_>>(), [Some("text of lines 1 to 2\n"), Some("text of lines 100 to 101\n")], "what they said, kept when tagged");
         tags.untag("t", &lines(1100, 1101), "you").unwrap();
         assert_eq!(tags.find("t").unwrap().on.len(), 1);
     }
@@ -671,7 +750,7 @@ mod tests {
         assert_eq!(tags.expand("no tags here, not even mid#word"), "no tags here, not even mid#word");
         // Gone from where it was: what it said, from the logs.
         owner.scroll_away();
-        assert!(tags.expand("#deploy").contains("lines 5 to 5 (gone from where it was; as it was when tagged):\n  text of lines 5 to 5"));
+        assert!(tags.expand("#deploy").contains("lines 5 to 5 (gone from where it was: as it was when tagged):\n  text of lines 5 to 5"));
     }
 
     #[test]

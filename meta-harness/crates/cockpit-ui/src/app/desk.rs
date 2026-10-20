@@ -52,9 +52,9 @@ pub struct Desk {
     /// The tag stepped through last (`] t`): stepped through again, when
     /// the thing you're on has several.
     pub tag_stepping: Option<harness_contracts::TagId>,
-    /// Which of the things at the cursor tagging is on, while its picker
-    /// is open (none: the unit).
-    pub tag_level: Option<usize>,
+    /// What tagging is on, picked in the palette's opening it was picked
+    /// in (otherwise, and by default, the unit at the cursor).
+    pub tag_level: Option<(u64, harness_contracts::Subject)>,
     pub at_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
     /// Code indexing's status, as asked for.
     pub index_inbox: Arc<Mutex<Vec<NetResult<arch_graph::IndexStatus>>>>,

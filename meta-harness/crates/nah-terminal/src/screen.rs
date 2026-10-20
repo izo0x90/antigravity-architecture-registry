@@ -115,6 +115,35 @@ pub fn text<T: EventListener>(term: &Term<T>, feed: &Feed, from: u64, to: u64) -
     term.bounds_to_string(start, last).trim_end().to_owned()
 }
 
+/// What a program wrote from line `from` to `to` (before it), as written
+/// down as it goes: within what's kept (how many before it went already
+/// is said), blank lines kept, each line's trailing spaces not; the lines
+/// it ends with that wrap on into `to` left for later (written whole then).
+pub fn written<T: EventListener>(term: &Term<T>, feed: &Feed, from: u64, to: u64) -> Written {
+    let (first, end) = kept(term, feed);
+    let from_kept = from.max(first);
+    let mut to = to.min(end);
+    while to > from_kept && wraps(term, grid_line(feed, to - 1)) {
+        to -= 1;
+    }
+    if from_kept >= to {
+        return Written { text: String::new(), lost: from_kept - from, next: from_kept.max(from) };
+    }
+    let start = Point::new(grid_line(feed, from_kept), Column(0));
+    let last = Point::new(grid_line(feed, to - 1), Column(term.columns() - 1));
+    let text: String = term.bounds_to_string(start, last).split('\n').map(|l| format!("{}\n", l.trim_end())).collect();
+    Written { text, lost: from_kept - from, next: to }
+}
+
+/// What `written` gives: the text, how many lines went before they could
+/// be (cleared, past what's kept), and the line to go on from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Written {
+    pub text: String,
+    pub lost: u64,
+    pub next: u64,
+}
+
 /// Whether a row goes on in the next (it wrapped at the screen's edge).
 fn wraps<T: EventListener>(term: &Term<T>, line: Line) -> bool {
     term.grid()[line][Column(term.columns() - 1)].flags.contains(Flags::WRAPLINE)

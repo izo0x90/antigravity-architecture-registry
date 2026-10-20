@@ -13,6 +13,7 @@ mod feed;
 mod input;
 mod scan;
 mod screen;
+pub use screen::Written;
 mod shell;
 
 use std::io::{Read, Write};
@@ -307,6 +308,18 @@ impl Terminal {
         state.feed.top() + state.term.grid().cursor.point.line.0.max(0) as u64
     }
 
+    /// What its program wrote from line `from` on, to `to` (none: to the
+    /// cursor's line, the lines before it are whole), as `screen::written`
+    /// says; none while a program has the whole screen.
+    pub fn written(&self, from: u64, to: Option<u64>) -> Option<screen::Written> {
+        let state = lock(&self.state);
+        if state.term.mode().contains(TermMode::ALT_SCREEN) {
+            return None;
+        }
+        let to = to.unwrap_or_else(|| state.feed.top() + state.term.grid().cursor.point.line.0.max(0) as u64);
+        Some(screen::written(&state.term, &state.feed, from, to))
+    }
+
     /// Lines `from..to` as text (lines that wrapped joined); none when
     /// they aren't all kept (gone, or a program has the whole screen).
     pub fn lines_text(&self, from: u64, to: u64) -> Option<String> {
@@ -373,6 +386,11 @@ impl Terminal {
     /// Command `id`, while it's kept.
     pub fn command(&self, id: u64) -> Option<harness_contracts::TerminalCommand> {
         lock(&self.state).commands.get(id).cloned()
+    }
+
+    /// The command lines `first` to `last` are in (its prompt to its end).
+    pub fn command_around(&self, first: u64, last: u64) -> Option<harness_contracts::TerminalCommand> {
+        lock(&self.state).commands.list().rev().find(|c| c.prompt <= first).filter(|c| c.end.is_none_or(|end| last < end)).cloned()
     }
 
     /// The shell ended (with its code when it had one).

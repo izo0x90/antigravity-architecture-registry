@@ -20,14 +20,22 @@ impl CockpitApp {
         view.cursor_key().map(|key| view.things(&key)).unwrap_or_default()
     }
 
-    /// The thing tagging is on: the unit, or the one picked in the picker.
+    /// Which of the things at the cursor tagging is on: the one picked in
+    /// the tag picker open now, else the unit.
+    fn level(&self, things: &Things) -> usize {
+        let picked = self.desk.tag_level.as_ref().filter(|(opening, _)| *opening == self.palette.opening());
+        picked.and_then(|(_, subject)| things.at.iter().position(|t| t.subject == *subject)).unwrap_or(things.unit)
+    }
+
+    /// The thing tagging is on.
     fn subject_here(&self, here: Here) -> Option<Subject> {
-        self.things_here(here).picked(self.desk.tag_level).map(|t| t.subject.clone())
+        let things = self.things_here(here);
+        things.picked(Some(self.level(&things))).map(|t| t.subject.clone())
     }
 
     /// The tags on any of the things at the cursor, each with the thing
     /// (the narrowest it's on).
-    fn tagged_here(&self, here: Here) -> Vec<(harness_contracts::Tag, Subject)> {
+    pub(super) fn tagged_here(&self, here: Here) -> Vec<(harness_contracts::Tag, Subject)> {
         let tags = self.desk.shared.tags.get();
         let mut out: Vec<(harness_contracts::Tag, Subject)> = Vec::new();
         for thing in self.things_here(here).at {
@@ -52,7 +60,7 @@ impl CockpitApp {
         let tagged = !on_it.is_empty();
         // What's tagged (the picker's top line), and the next of the things
         // there (its cycle key).
-        let level = self.desk.tag_level.unwrap_or(things.unit);
+        let level = self.level(&things);
         let chosen = things.picked(Some(level));
         let next = (things.at.len() > 1).then(|| &things.at[(level + 1) % things.at.len()]);
         let mut out = vec![
@@ -111,7 +119,8 @@ impl CockpitApp {
             (ShellCommand::TagLevel, _, _) => {
                 let things = self.things_here(here);
                 if !things.at.is_empty() {
-                    self.desk.tag_level = Some((self.desk.tag_level.unwrap_or(things.unit) + 1) % things.at.len());
+                    let next = (self.level(&things) + 1) % things.at.len();
+                    self.desk.tag_level = Some((self.palette.opening(), things.at[next].subject.clone()));
                 }
             }
             (ShellCommand::Tag, Some(subject), Some(tag)) => {
