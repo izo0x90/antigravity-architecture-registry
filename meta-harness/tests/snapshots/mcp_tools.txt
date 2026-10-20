@@ -1288,6 +1288,10 @@ What a tag is on: each thing's name, who tagged it, and what it says (from where
     "lines": {
       "type": "string",
       "description": "With `thing`: which of its lines, `a-b`"
+    },
+    "full": {
+      "type": "boolean",
+      "description": "Everything: a chat turn's tool calls with what each gave (one line each, otherwise)"
     }
   },
   "required": [

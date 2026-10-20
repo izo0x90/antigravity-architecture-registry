@@ -257,6 +257,11 @@ pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hu
     Ok(terminals)
 }
 
+/// The chats own their turns and messages as subjects of tags.
+pub fn chats(slots: &Arc<harness_core::SlotManager>, hub: &Arc<EventHub>, tags: &Arc<nah_tags::Tags>) {
+    tags.register(crate::chats::Chats::new(slots.clone(), hub.clone()));
+}
+
 /// Tags: kept in the state database, told on the event stream; what a
 /// tagged subject says is its owner's to tell (each owner registers itself
 /// as it's made), kept in the tags' logs (in the project's state folder)

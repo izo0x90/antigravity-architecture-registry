@@ -43,6 +43,9 @@ pub enum Target {
     TerminalLines { terminal: harness_contracts::TerminalId, shell: u64, first: u64, last: u64 },
     /// A command a terminal's shell ran (in one start of it).
     TerminalCommand { terminal: harness_contracts::TerminalId, shell: u64, command: u64 },
+    /// A turn of a chat's session (the harness's id for it), or one of its
+    /// messages.
+    Chat { session: harness_contracts::NativeId, turn: u32, message: Option<u32> },
 }
 
 /// What a buffer asks of the rest of the cockpit: the one way it reaches
@@ -114,6 +117,8 @@ impl Target {
             Self::TerminalLines { terminal, first, last, .. } if first == last => format!("terminal {terminal} line {first}"),
             Self::TerminalLines { terminal, first, last, .. } => format!("terminal {terminal} lines {first}-{last}"),
             Self::TerminalCommand { terminal, command, .. } => format!("terminal {terminal} command {command}"),
+            Self::Chat { turn, message: Some(message), .. } => format!("turn {turn} message {message}"),
+            Self::Chat { turn, .. } => format!("turn {turn}"),
         }
     }
 
@@ -123,6 +128,8 @@ impl Target {
         Some(match subject.clone() {
             Subject::TerminalLines { terminal, shell, first, last } => Self::TerminalLines { terminal, shell, first, last },
             Subject::TerminalCommand { terminal, shell, command } => Self::TerminalCommand { terminal, shell, command },
+            Subject::ChatTurn { session, turn } => Self::Chat { session, turn, message: None },
+            Subject::ChatMessage { session, turn, message } => Self::Chat { session, turn, message: Some(message) },
             _ => return None,
         })
     }
@@ -132,7 +139,7 @@ impl Target {
         match self {
             Self::Component(id) | Self::Job { component: id } => Some(id),
             Self::Line { within, .. } => within.as_ref(),
-            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } => None,
+            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } => None,
         }
     }
 

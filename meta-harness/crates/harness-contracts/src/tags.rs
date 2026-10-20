@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{TagId, TerminalId};
+use crate::ids::{NativeId, TagId, TerminalId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +87,31 @@ pub enum Subject {
     /// A command a terminal's shell ran (`TerminalCommand::id`), in one
     /// start of its shell.
     TerminalCommand { terminal: TerminalId, shell: u64, command: u64 },
+    /// A turn of a chat (by its number in the session: the harness's
+    /// session id, which outlives our threads): your message, the answer,
+    /// its tool calls.
+    ChatTurn { session: NativeId, turn: u32 },
+    /// A message of a chat's turn (what you said, or an answer: numbered
+    /// from 1 in its turn, `message_number`).
+    ChatMessage { session: NativeId, turn: u32, message: u32 },
+}
+
+/// A line of detail in what a thing says (a tool call's output, under
+/// its line): reads leave runs of them out unless asked for in full.
+pub const DETAIL: &str = "  \u{2502} ";
+
+/// Whether an item is a message (what you said, or an answer): what a tag
+/// on a message can be on.
+pub fn is_message(body: &crate::ItemBody) -> bool {
+    matches!(body, crate::ItemBody::UserMessage { .. } | crate::ItemBody::AssistantMessage { .. })
+}
+
+/// Item `item`'s number among the messages of its turn (`items`: the
+/// turn's, in any order), from 1; none when it isn't a message.
+pub fn message_number(items: &[&crate::TurnItem], item: &crate::ItemId) -> Option<u32> {
+    let mut messages: Vec<&&crate::TurnItem> = items.iter().filter(|i| is_message(&i.body)).collect();
+    messages.sort_by_key(|i| i.ordinal);
+    messages.iter().position(|i| i.id == *item).map(|n| n as u32 + 1)
 }
 
 /// How many of a terminal's lines a tag is on at most, at once.

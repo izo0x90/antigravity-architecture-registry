@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use arch_graph::tree::TreeConfig;
 use arch_service::ServiceError;
-use harness_contracts::{Held, TAG_COLOURS};
+use harness_contracts::{DETAIL, Held, TAG_COLOURS};
 use nah_access::Capability;
 use serde_json::{Value, json};
 
@@ -41,7 +41,8 @@ impl Tags {
                 json!({ "type": "object", "properties": {
                     "tag": { "type": "string" },
                     "thing": { "type": "integer", "minimum": 1, "description": "One of its things (as numbered), whole" },
-                    "lines": { "type": "string", "description": "With `thing`: which of its lines, `a-b`" }
+                    "lines": { "type": "string", "description": "With `thing`: which of its lines, `a-b`" },
+                    "full": { "type": "boolean", "description": "Everything: a chat turn's tool calls with what each gave (one line each, otherwise)" }
                 }, "required": ["tag"] }),
             ),
             tool(
@@ -82,6 +83,26 @@ const SHOWN_LINES: usize = 20;
 const READ_MOST: usize = 2000;
 /// How many lines `tag_find` gives at most.
 const FOUND_MOST: usize = 50;
+
+/// `text` with each run of detail lines (`DETAIL`: a tool call's output)
+/// said in one line: how many there are.
+fn folded(text: &str) -> String {
+    let mut out = Vec::new();
+    let mut run = 0;
+    for line in text.lines().chain(std::iter::once("")) {
+        if line.starts_with(DETAIL) {
+            run += 1;
+            continue;
+        }
+        if run > 0 {
+            out.push(format!("{DETAIL}({run} lines: `full` gives them)"));
+            run = 0;
+        }
+        out.push(line.to_owned());
+    }
+    out.pop();
+    out.join("\n")
+}
 
 /// `a-b` (1-based, both in), or `a`.
 fn line_range(words: &str) -> Result<(usize, usize), ServiceError> {
@@ -128,11 +149,13 @@ impl ToolSet for Tags {
                 let tag = tag?;
                 let thing = args["thing"].as_u64();
                 let lines = text("lines");
+                let full = args["full"].as_bool().unwrap_or(false);
                 blocking(Box::new(move |t| match thing {
                     // One thing, whole (or the lines asked for).
                     Some(n) => {
                         let (tagged, held, text) = t.thing(&tag, n.saturating_sub(1) as usize).map_err(refused)?;
                         let text = text.ok_or_else(|| ServiceError::NotFound(format!("{} is gone, and nothing was kept of it", tagged.what)))?;
+                        let text = if full { text } else { folded(&text) };
                         let all: Vec<&str> = text.lines().collect();
                         let (from, to) = match lines.as_deref().map(line_range).transpose()? {
                             Some((from, _)) if from > all.len() => return Err(ServiceError::InvalidOp(format!("{} has {} lines", tagged.what, all.len()))),
@@ -154,6 +177,7 @@ impl ToolSet for Tags {
                                 _ if what.is_empty() && on.held != Held::Kept => format!("{}. something nothing here can show ({when})", n + 1),
                                 None => format!("{}. {what} ({when}): gone, nothing kept of it", n + 1),
                                 Some(text) => {
+                                    let text = folded(text);
                                     let head: Vec<&str> = text.lines().take(SHOWN_LINES).collect();
                                     let more = if on.lines > head.len() as u64 { format!("\n  ({} lines in all: tag_read with `thing` {} for all of it)", on.lines, n + 1) } else { String::new() };
                                     format!("{}. {what} ({when}; {}):\n{}{more}", n + 1, on.held.words(), head.join("\n"))

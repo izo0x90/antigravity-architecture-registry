@@ -29,6 +29,7 @@ pub(crate) mod actions;
 mod nav;
 mod render;
 mod session;
+mod things;
 pub(crate) mod slots;
 
 use crate::agents::block_summary;

@@ -285,3 +285,40 @@ async fn the_cockpit_runs_slots_over_http() {
     let (status, _) = common::http(addr, "DELETE", "/api/slots/lead", None).await;
     assert_eq!(status, 400, "the lead stays");
 }
+
+/// A chat's message and turn tagged: named by the slot, read from the
+/// session, kept in the tags' logs (what a session is is the harness's);
+/// the turn's tool calls one line each unless asked in full.
+#[tokio::test]
+async fn a_chats_message_and_turn_are_tagged_named_by_the_slot_and_kept() {
+    let (addr, state) = spawn_app().await;
+    let (status, body) = common::http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"fake","name":"helper"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let slot = serde_json::from_str::<serde_json::Value>(&body).unwrap()["slotId"].as_str().unwrap().to_owned();
+    let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"hello there"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let mut lead = Mcp::lead(addr).await;
+    // Its first turn's first message: the answer the fake harness gives.
+    let mut said = String::new();
+    for _ in 0..50 {
+        let (error, out) = lead.tool("tag", json!({ "tag": "greeting", "subject": "chat helper turn 1 message 1" })).await;
+        said = out;
+        if !error {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(said.starts_with("greeting (on 1 thing)"), "{said}");
+    let (error, said) = lead.tool("tag", json!({ "tag": "greeting", "subject": "chat helper turn 1" })).await;
+    assert!(!error, "{said}");
+    let (_, read) = lead.tool("tag_read", json!({ "tag": "greeting" })).await;
+    assert!(read.contains("1. chat helper turn 1 message 1 (tagged by lead; as it is now):\necho: hello there"), "{read}");
+    assert!(read.contains("2. chat helper turn 1 (tagged by lead; as it is now):\necho: hello there"), "{read}");
+    // Kept in the logs: the tag holds where, never the text.
+    let tag = state.tags.tags.find("greeting").unwrap();
+    assert!(tag.on.iter().all(|t| t.kept.is_some()) && !serde_json::to_string(&tag).unwrap().contains("hello there"));
+    // Its slot closed (the session gone from here): as it was, from the logs.
+    state.harness.slots.close(&SlotId::new(&slot)).await.unwrap();
+    let (_, read) = lead.tool("tag_read", json!({ "tag": "greeting", "thing": 1 })).await;
+    assert!(read.contains("(gone from where it was: as it was when tagged):\necho: hello there"), "{read}");
+}

@@ -103,12 +103,40 @@ impl Navigable for ChatStreamState {
         self.ui.place()
     }
 
-    /// An agent's chat: its slot, or the one running the session.
+    /// An agent's chat: its slot, or the one running the session; a turn
+    /// or message of a session an agent slot has open.
     fn can_show(&self, target: &Target) -> bool {
-        matches!(target, Target::Agent { .. })
+        match target {
+            Target::Agent { .. } => true,
+            Target::Chat { session, .. } => self.slot_with(session).is_some(),
+            _ => false,
+        }
+    }
+
+    fn things(&self, key: &str) -> crate::nav::Things {
+        self.tag_things(key)
+    }
+
+    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect> {
+        self.tag_drawn_at(subject)
+    }
+
+    fn tag_gutter(&self) -> bool {
+        true
     }
 
     fn show_target(&mut self, target: &Target) -> Result<(), String> {
+        if let Target::Chat { session, turn, message } = target {
+            let slot = self.slot_with(session).ok_or("No agent slot has that session open now (resume it to see it).")?;
+            self.ui.slot = slot;
+            let subject = match message {
+                Some(message) => harness_contracts::Subject::ChatMessage { session: session.clone(), turn: *turn, message: *message },
+                None => harness_contracts::Subject::ChatTurn { session: session.clone(), turn: *turn },
+            };
+            let at = self.tagged_indexes(&subject).first().copied().ok_or_else(|| format!("Turn {turn} isn't in the chat (its session holds it no more)."))?;
+            self.put_cursor(at, crate::viewport::Show::Middle);
+            return Ok(());
+        }
         let Target::Agent { slot, thread } = target else { return Err("Not an agent's chat.".into()) };
         let found = {
             let agents = self.agents();

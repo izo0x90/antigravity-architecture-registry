@@ -1,4 +1,5 @@
 pub mod arch;
+pub mod chats;
 pub mod cockpit;
 pub mod graph;
 pub mod home;

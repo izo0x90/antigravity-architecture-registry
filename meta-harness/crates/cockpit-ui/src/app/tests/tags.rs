@@ -541,3 +541,61 @@ fn an_edit_is_of_the_tag_it_was_asked_for_and_a_thing_is_taken_off_exactly() {
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!(bodies(&app, "POST /api/tags/x1/untag"), [serde_json::json!({ "subject": lines("t1", 1, 1010, 1012) })]);
 }
+
+/// The test conversation, its session named by the harness ("n1").
+fn named_conversation() -> Vec<harness_contracts::ClientEvent> {
+    use harness_contracts::{AdapterEvent, ClientEvent, NativeId};
+    crate::chat::tests::conversation_events()
+        .into_iter()
+        .map(|event| match event {
+            ClientEvent::Session { event: AdapterEvent::ThreadUpdated { mut thread } } => {
+                thread.native_id = Some(NativeId::new("n1"));
+                ClientEvent::Session { event: AdapterEvent::ThreadUpdated { thread } }
+            }
+            ClientEvent::SlotUpdated { mut slot } => {
+                slot.sessions[0].native_id = Some(NativeId::new("n1"));
+                ClientEvent::SlotUpdated { slot }
+            }
+            other => other,
+        })
+        .collect()
+}
+
+#[test]
+fn in_a_chat_a_message_or_its_turn_is_tagged_shown_in_the_gutter_and_gone_to() {
+    let (ctx, mut app) = full_app();
+    for event in named_conversation() {
+        told(&app, event);
+    }
+    focus(&ctx, &mut app, BufferKind::Chat);
+    frame(&ctx, &mut app, vec![]);
+    let answer = app.desk.view(BufferKind::Chat).items().into_iter().rev().find(|i| i.text.contains("Looking at it.")).map(|i| i.key).expect("the answer");
+    app.desk.view_mut(BufferKind::Chat).move_to(&answer);
+    // M: the message (the unit), Tab: its turn.
+    keys(&ctx, &mut app, "M");
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("Tag message 2 of turn 1: Looking at it.") && drawn.contains("Tab: Tag turn 1: fix the parser instead"), "{drawn}");
+    keys(&ctx, &mut app, "answer");
+    bodies(&app, "");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    let message = harness_contracts::Subject::ChatMessage { session: harness_contracts::NativeId::new("n1"), turn: 1, message: 2 };
+    assert_eq!(bodies(&app, "POST /api/tags"), [serde_json::json!({ "tag": "answer", "subject": message })]);
+    // Told: a bar beside the message, in the chat's gutter.
+    let mut tag = tag_on("x1", "answer", &[]);
+    tag.on.push(harness_contracts::Tagged { subject: message.clone(), what: "chat lead turn 1 message 2".into(), at_ms: 0, by: "user".into(), kept: None });
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag });
+    frame(&ctx, &mut app, vec![]);
+    let theme = crate::theme::colors();
+    let output = frame(&ctx, &mut app, vec![]);
+    let at = drawn_rects(&output, "Looking at it.")[0];
+    let marks = bars(&output, theme.tag(2));
+    assert!(marks.iter().any(|b| b.y_range().contains(at.center().y) && b.right() < at.left()), "{marks:?} beside {at:?}");
+    // Gone to from elsewhere: the chat, its cursor on the message.
+    keys(&ctx, &mut app, "G");
+    frame(&ctx, &mut app, press(egui::Key::Backspace, false));
+    keys(&ctx, &mut app, "gT");
+    keys(&ctx, &mut app, "answer");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!((app.focused_kind(), cursor(&app)), (BufferKind::Chat, Some(answer)));
+}
