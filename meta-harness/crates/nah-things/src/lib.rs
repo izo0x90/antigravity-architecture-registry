@@ -79,6 +79,12 @@ pub trait Resolve: Send + Sync {
     /// The things noted now, by every kind of note (its own among them):
     /// what it keeps for things no longer noted can go (code: snapshots).
     fn noted(&self, _all: &[Subject]) {}
+    /// Whether `subject` changed since it was last looked at as a whole (a
+    /// plan's part, since the plan was last reviewed): what an answer says
+    /// it changed is checked by it. None: it can't say.
+    fn changed(&self, _subject: &Subject) -> Option<bool> {
+        None
+    }
 }
 
 /// What a growing thing adds (`Resolve::follow`): false when it's no
@@ -258,6 +264,12 @@ impl Things {
             None => format!("nothing here names {words:?}"),
         };
         tries.into_iter().find_map(Result::ok).ok_or(why)
+    }
+
+    /// Whether `subject` changed since it was last looked at as a whole, as
+    /// its owner says (none: it can't say, or no owner here).
+    pub fn changed(&self, subject: &Subject) -> Option<bool> {
+        self.owner(subject).and_then(|o| o.changed(subject))
     }
 
     /// Where `subject` is now (where it was, when its owner didn't move it).

@@ -25,6 +25,7 @@ enum Key {
     Notification(NotificationId),
     Terminal(TerminalId),
     Tag(TagId),
+    Discussion(harness_contracts::DiscussionId),
 }
 
 struct Entry {
@@ -60,6 +61,11 @@ impl Cache {
             ClientEvent::TagUpdated { tag } => (Key::Tag(tag.id.clone()), None),
             ClientEvent::TagRemoved { tag_id } => {
                 self.entries.remove(&Key::Tag(tag_id.clone()));
+                return;
+            }
+            ClientEvent::DiscussionUpdated { discussion } => (Key::Discussion(discussion.id.clone()), None),
+            ClientEvent::DiscussionRemoved { discussion_id } => {
+                self.entries.remove(&Key::Discussion(discussion_id.clone()));
                 return;
             }
             // Open ones only: a late client needs what's still open.

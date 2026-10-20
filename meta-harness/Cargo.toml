@@ -23,6 +23,7 @@ members = [
     "crates/nah-state",
     "crates/nah-notify",
     "crates/nah-changes",
+    "crates/nah-discussions",
     "crates/nah-timeline",
     "crates/nah-terminal",
     "crates/nah-tags",
@@ -64,6 +65,7 @@ arch-search = { path = "crates/arch-search" }
 nah-state = { path = "crates/nah-state" }
 nah-notify = { path = "crates/nah-notify" }
 nah-changes = { path = "crates/nah-changes" }
+nah-discussions = { path = "crates/nah-discussions" }
 nah-timeline = { path = "crates/nah-timeline" }
 nah-terminal = { path = "crates/nah-terminal" }
 nah-tags = { path = "crates/nah-tags" }

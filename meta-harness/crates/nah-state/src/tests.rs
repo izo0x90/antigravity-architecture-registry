@@ -271,4 +271,35 @@ mod terminals {
         assert_eq!(db.kept_files().unwrap(), std::collections::BTreeSet::from(["tagged-7.log".to_owned()]));
         assert_eq!(db.unreadable().unwrap(), 1);
     }
+
+    #[test]
+    fn discussions_are_kept_in_the_order_started_their_numbers_never_given_twice_with_who_changed_them() {
+        use harness_contracts::{DiscussionId, DiscussionKind, DiscussionStatus, Kept, Named, Subject, TerminalId};
+        use nah_discussions::{Change, DiscussionStore, Stored};
+        let dir = tempfile::tempdir().unwrap();
+        let on = Named { subject: Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 3, last: 4, command: None }, what: "terminal t1 lines 3-4".into() };
+        let kept = |file: &str| Kept { file: file.into(), start: 10, len: None, lines: None };
+        let discussion = |n: u64, status| Stored { id: DiscussionId::new(format!("d{n}")), on: on.clone(), kept: Some(kept(&format!("tagged-{n}.log"))), kind: DiscussionKind::Question, by: "user".into(), asked: "lead".into(), status, said: Vec::new() };
+        let change = |action| Change { by: "user".into(), action, detail: "d on it".into() };
+        {
+            let db = StateDb::open(dir.path(), &settings()).unwrap();
+            assert_eq!((db.number().unwrap(), db.number().unwrap()), (1, 2));
+            db.put(&discussion(1, DiscussionStatus::Open), Some(&change("started"))).unwrap();
+            db.put(&discussion(2, DiscussionStatus::Open), Some(&change("started"))).unwrap();
+            db.put(&discussion(1, DiscussionStatus::Settled), Some(&change("settled"))).unwrap();
+            db.put(&discussion(1, DiscussionStatus::Settled), None).unwrap();
+            db.remove(&discussion(2, DiscussionStatus::Open), &change("deleted")).unwrap();
+            let logged: Vec<_> = db.activity(10).unwrap().into_iter().map(|a| (a.action, a.subject)).collect();
+            assert_eq!(logged, [("deleted".to_owned(), "discussion d2".to_owned()), ("settled".into(), "discussion d1".into()), ("started".into(), "discussion d2".into()), ("started".into(), "discussion d1".into())], "who changed what; a move by its thing's owner isn't anyone's");
+        }
+        let db = StateDb::open(dir.path(), &settings()).unwrap();
+        assert_eq!(db.number().unwrap(), 3, "a number given (one deleted too) isn't given again, after a restart too");
+        db.put(&discussion(4, DiscussionStatus::Open), None).unwrap();
+        db.transaction(|tx| tx.execute("INSERT INTO discussions (id, json) VALUES ('d9', '{\"id\":\"d9\",\"on\":{\"subject\":{\"kind\":\"later\"}},\"kept\":{\"file\":\"tagged-9.log\",\"start\":0}}')", []).map(|_| ()).map_err(crate::failed)).unwrap();
+        let read: Vec<(String, DiscussionStatus)> = db.discussions().unwrap().into_iter().map(|d| (d.id.to_string(), d.status)).collect();
+        assert_eq!(read, [("d1".to_owned(), DiscussionStatus::Settled), ("d4".into(), DiscussionStatus::Open)], "in the order started; one a later build kept is left alone");
+        assert_eq!(db.unreadable().unwrap(), 1);
+        let files: Vec<String> = db.kept_files().unwrap().into_iter().collect();
+        assert_eq!(files, ["tagged-1.log", "tagged-4.log", "tagged-9.log"], "the logs they point into, a later build's too");
+    }
 }

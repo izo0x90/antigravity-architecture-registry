@@ -57,4 +57,6 @@ id_type!(
     TerminalId,
     /// A tag (stays when it's renamed).
     TagId,
+    /// A discussion on a thing (`d1`, `d2`...).
+    DiscussionId,
 );

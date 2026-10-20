@@ -148,6 +148,8 @@ pub enum Subject {
     PlanRelation { plan: arch_graph::PlanId, relation: arch_graph::RelationKind, source: arch_graph::ComponentId, target: arch_graph::ComponentId },
     /// An item of a plan (a finding, a decision, a to-do), by its id.
     PlanItem { plan: arch_graph::PlanId, item: String },
+    /// A discussion (it's a thing too: tagged, gone to, named from another).
+    Discussion { id: crate::ids::DiscussionId },
 }
 
 /// Lines of a file as the files were at a snapshot (the changes' timeline).
@@ -242,7 +244,25 @@ impl Subject {
             Self::PlanSection { plan, id, section } => format!("plan {plan} component {id} section {section}"),
             Self::PlanRelation { plan, relation, source, target } => format!("plan {plan} relation {source} {} {target}", relation.name()),
             Self::PlanItem { plan, item } => format!("plan {plan} item {item}"),
+            Self::Discussion { id } => format!("discussion {id}"),
         }
+    }
+
+    /// Whether it touches `other`: has it in it or is in it, or (a plan's
+    /// parts) is about the same component, or the whole plan. What a change
+    /// request's answer changed must touch what it's about.
+    pub fn touches(&self, other: &Subject) -> bool {
+        let component = |s: &Subject| match s {
+            Self::PlanComponent { plan, id } | Self::PlanSection { plan, id, .. } => Some(vec![(plan.clone(), id.clone())]),
+            Self::PlanRelation { plan, source, target, .. } => Some(vec![(plan.clone(), source.clone()), (plan.clone(), target.clone())]),
+            _ => None,
+        };
+        if let (Some(a), Some(b)) = (component(self), component(other))
+            && a.iter().any(|x| b.contains(x))
+        {
+            return true;
+        }
+        self.contains(other) || other.contains(self)
     }
 
     /// Why it can't be tagged as it is (lines the wrong way round, too

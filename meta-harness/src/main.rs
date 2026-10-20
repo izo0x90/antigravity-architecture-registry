@@ -219,6 +219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     meta_harness::startup::code_tags(&arch, &changes, &things);
     meta_harness::startup::plan_parts(&arch, &things);
     let terminals = if serve.no_shells { None } else { Some(meta_harness::startup::terminals(&arch, &state, &hub, &things, terminal_settings.terminals)?) };
+    let discussions = meta_harness::startup::discussions(&arch, &state, &hub, &things)?;
     // Every kind of note and every owner here: what a crash left in the logs goes.
     things.forget_unused();
     let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone(), tags: tags.clone() };
@@ -227,7 +228,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let queue = meta_harness::server::queue_runner(&arch, meta_harness::startup::queue_config(&arch)?, &hub);
     let cockpit_path = cockpit.launch_path();
     let streams = mcp_state.sessions.clone();
-    let app = AppState::new(Parts { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, notify, changes, timeline, terminals, tags })?;
+    let app = AppState::new(Parts { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, notify, changes, timeline, terminals, tags, discussions })?;
     let parts: Vec<&dyn meta_harness::modules::Module> = app.modules().into_iter().filter(|m| !(serve.no_cockpit && m.is_cockpit())).collect();
     let router = create_router(&parts);
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");

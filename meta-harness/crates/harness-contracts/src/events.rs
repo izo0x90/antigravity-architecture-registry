@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{SlotId, TagId, TerminalId, ThreadId, TurnId};
+use crate::ids::{DiscussionId, SlotId, TagId, TerminalId, ThreadId, TurnId};
 use crate::snapshot::ProviderSnapshot;
 use crate::items::TurnItem;
 use crate::notifications::Notification;
@@ -63,6 +63,10 @@ pub enum ClientEvent {
     /// A tag was made or changed (its name, colour, note, what it's on).
     TagUpdated { tag: crate::tags::Tag },
     TagRemoved { tag_id: TagId },
+    /// A discussion was started or changed (a message, an answer, settled,
+    /// reopened): all of it.
+    DiscussionUpdated { discussion: crate::discussions::Discussion },
+    DiscussionRemoved { discussion_id: DiscussionId },
     /// The stream fell behind: drop what you hold; the whole state follows.
     Resync,
 }

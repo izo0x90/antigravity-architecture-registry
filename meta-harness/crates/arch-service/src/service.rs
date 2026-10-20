@@ -146,7 +146,13 @@ pub struct ArchitectureService {
     /// Trees sent to clients (laid out), kept while their graph is: opening
     /// a card merges its branch into the tree the client holds.
     held: Mutex<std::collections::VecDeque<Held>>,
+    /// Why a component can't be approved yet for its discussions (the
+    /// discussion engine says; set once at start-up).
+    discussed: std::sync::OnceLock<Blocker>,
 }
+
+/// Why a plan's component can't be approved yet: none when it can.
+pub type Blocker = Box<dyn Fn(&PlanId, &ComponentId) -> Option<String> + Send + Sync>;
 
 /// A tree a client holds, by the request it answers.
 struct Held {
@@ -276,7 +282,16 @@ impl ArchitectureService {
             symbol_lists_built: std::sync::atomic::AtomicUsize::new(0),
             badges: Mutex::new(None),
             held: Mutex::default(),
+            discussed: std::sync::OnceLock::new(),
         })
+    }
+
+    /// Approvals ask `blocker` (the discussion engine) whether a
+    /// component's discussions are settled. Set once.
+    pub fn approvals_ask(&self, blocker: Blocker) {
+        if self.discussed.set(blocker).is_err() {
+            tracing::warn!("Approvals already ask the discussions: asked again");
+        }
     }
 
     /// The shared settings, to change while the service is being built
@@ -878,7 +893,7 @@ ids.extend(graph.reach(&reference.id, &reference.kinds, reference.depth));
             if !can_transition(from, to) {
                 return Err(ServiceError::InvalidOp(format!("can't go from {from:?} to {to:?}")));
             }
-            if let Some(blocked) = approval_blocker(plan, id) {
+            if let Some(blocked) = approval_blocker(plan, id).or_else(|| self.discussed.get().and_then(|b| b(plan_id, id))) {
                 return Err(ServiceError::InvalidOp(blocked));
             }
             // Check as if approved (location rules depend on the stage).

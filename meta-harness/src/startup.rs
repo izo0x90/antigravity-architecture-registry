@@ -323,6 +323,18 @@ pub fn things(arch: &ArchitectureService, running_log: u64) -> Result<Arc<nah_th
     Ok(nah_things::Things::open(&arch_service::state_dir(arch.root())?.join("tagged"), running_log))
 }
 
+/// Discussions: kept in the state database (their messages' text in
+/// `.nah/state/discussions/`), told on the event stream, on things; a
+/// discussion is a thing too. A plan's component isn't approved while one
+/// on it isn't settled.
+pub fn discussions(arch: &Arc<ArchitectureService>, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>) -> Result<Arc<nah_discussions::Discussions>, StartError> {
+    let discussions = nah_discussions::Discussions::open(state.clone(), hub.clone(), things.clone(), &arch_service::state_dir(arch.root())?.join("discussions")).map_err(|e| e.to_string())?;
+    things.register(discussions.clone());
+    let weak = Arc::downgrade(&discussions);
+    arch.approvals_ask(Box::new(move |plan, id| weak.upgrade().and_then(|d| d.blocker(plan, id))));
+    Ok(discussions)
+}
+
 /// Tags: kept in the state database, told on the event stream, on things.
 pub fn tags(state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>) -> Result<Arc<nah_tags::Tags>, StartError> {
     nah_tags::Tags::open(state.clone(), hub.clone(), things.clone()).map_err(|e| e.to_string().into())

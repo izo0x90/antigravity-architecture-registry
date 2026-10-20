@@ -41,6 +41,13 @@ const MIGRATIONS: &[(i64, &str)] = &[
     // Was a conversion of logs only this branch's first builds wrote; it
     // converts nothing now. A database already at 10 still opens.
     (10, ""),
+    // Discussions: each as kept (its messages' text is in files); numbers
+    // given out never come back (one deleted keeps its number).
+    (
+        11,
+        "CREATE TABLE discussions (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, json TEXT NOT NULL);
+     CREATE TABLE discussion_numbers (n INTEGER PRIMARY KEY AUTOINCREMENT);",
+    ),
 ];
 
 /// The newest layout this NAH knows.

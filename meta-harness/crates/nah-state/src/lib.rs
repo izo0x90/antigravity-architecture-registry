@@ -17,6 +17,7 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 
+mod discussions;
 mod migrations;
 mod notifications;
 mod servers;

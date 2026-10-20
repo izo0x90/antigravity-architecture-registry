@@ -6,6 +6,7 @@
 
 pub mod capabilities;
 pub mod changes;
+pub mod discussions;
 pub mod events;
 pub mod home;
 pub mod ids;
@@ -22,6 +23,7 @@ pub mod tags;
 pub mod terminals;
 
 pub use capabilities::*;
+pub use discussions::*;
 pub use events::*;
 pub use home::{HomeEvent, LinkState, ServerView};
 pub use ids::*;

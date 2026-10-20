@@ -8,6 +8,7 @@ description = "The project's state database: what the server keeps across restar
 arch-store = { path = "../arch-store" }
 harness-contracts = { path = "../harness-contracts" }
 harness-core = { path = "../harness-core" }
+nah-discussions = { path = "../nah-discussions" }
 nah-notify = { path = "../nah-notify" }
 nah-tags = { path = "../nah-tags" }
 nah-timeline = { path = "../nah-timeline" }

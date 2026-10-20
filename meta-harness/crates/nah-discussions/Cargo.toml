@@ -1,0 +1,25 @@
+[package]
+name = "nah-discussions"
+version = "0.1.0"
+edition = "2024"
+description = "Discussions: a question or a change asked for on any thing in the project, and the back-and-forth on it; kept in the state database (what text is where) and files (the text), told on the event stream. The one discussion engine."
+
+[features]
+# An in-memory store, for tests.
+testing = []
+
+[dependencies]
+arch-graph = { path = "../arch-graph" }
+harness-contracts = { path = "../harness-contracts" }
+harness-core = { path = "../harness-core" }
+nah-things = { path = "../nah-things" }
+httpdate = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2.0"
+tracing = "0.1.44"
+
+[dev-dependencies]
+nah-discussions = { path = ".", features = ["testing"] }
+nah-things = { path = "../nah-things", features = ["testing"] }
+tempfile = "3"

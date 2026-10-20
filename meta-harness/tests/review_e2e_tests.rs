@@ -204,3 +204,55 @@ async fn a_review_is_made_and_gone_through_with_the_plan_tools() {
     let plan = arch.plan(&PlanId::new("findings").unwrap()).unwrap();
     assert_eq!(plan.items.iter().map(|i| (i.id.0.as_str(), i.title.as_str())).collect::<Vec<_>>(), [("i1", "Decide"), ("i2", "FFF skipped"), ("i3", "Open"), ("i4", "Turns renumbered")]);
 }
+
+/// A discussion on a plan's part holds its component's approval until the
+/// user settles it; a change request's answer names a change made to it
+/// since the user's review.
+#[tokio::test]
+async fn a_discussion_on_a_plans_part_holds_its_approval_until_the_user_settles_it() {
+    let arch = fixture_architecture();
+    let plan = PlanId::new("w").unwrap();
+    arch.create_plan("w", "Walk", "", arch_graph::PlanKind::Change).unwrap();
+    let add = |description: &str| PlanOp::AddComponent {
+        name: "walk".into(),
+        type_name: "function".into(),
+        description: description.into(),
+        parent: Some(id("sample")),
+        file: None,
+        signature: Some(arch_graph::Signature { params: vec![], returns: None, qualifiers: vec![] }),
+        schemas: None,
+        spec: None,
+    };
+    let calls = || PlanOp::Relate { kind: RelationKind::Calls, source: id("sample::run"), target: id("sample::walk"), order: None, ports: None, note: None, expects: None };
+    arch.apply(&plan, add("Walks.")).unwrap();
+    arch.apply(&plan, calls()).unwrap();
+    let (addr, _state) = spawn_app_with(arch.clone()).await;
+    let (status, _) = http(addr, "POST", "/api/arch/plans/w/reviewed", Some(r#"{"by":"izo"}"#)).await;
+    assert_eq!(status, 200);
+    let section = harness_contracts::Subject::PlanSection { plan: plan.clone(), id: id("sample::walk"), section: "overview".into() };
+    let (status, body) = http(addr, "POST", "/api/discussions", Some(&json!({ "subject": section, "kind": "change_request", "text": "Say where it walks." }).to_string())).await;
+    assert_eq!(status, 200, "{body}");
+    let started = parse(&body);
+    assert_eq!((started["id"].as_str(), started["on"]["what"].as_str(), started["asked"].as_str()), (Some("d1"), Some("plan w component rust:sample::walk section overview"), Some("lead")));
+    let approve = || http(addr, "POST", "/api/arch/plans/w/components/rust:sample::walk/approve", Some(r#"{"to":"arch_approved","by":"izo"}"#));
+    let (status, body) = approve().await;
+    assert!(status == 400 && body.contains("d1 on plan w component rust:sample::walk section overview (open"), "{status} {body}");
+
+    let answer = json!({ "text": "Done.", "changed": ["plan w component rust:sample::walk"] }).to_string();
+    let (status, body) = http(addr, "POST", "/api/discussions/d1/answer", Some(&answer)).await;
+    assert!(status == 400 && body.contains("hasn't changed"), "a change since the review: {body}");
+    arch.apply(&plan, PlanOp::Remove { id: id("sample::walk") }).unwrap();
+    arch.apply(&plan, add("Walks the tree.")).unwrap();
+    arch.apply(&plan, calls()).unwrap();
+    let (status, body) = http(addr, "POST", "/api/discussions/d1/answer", Some(&answer)).await;
+    assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("answered")), "{body}");
+    let (status, body) = approve().await;
+    assert!(status == 400 && body.contains("answered: settle or reopen it"), "{body}");
+    let (status, body) = http(addr, "POST", "/api/discussions/d1/settle", Some("{}")).await;
+    assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("settled")), "{body}");
+    let (status, body) = approve().await;
+    assert_eq!(status, 200, "{body}");
+
+    let (_, body) = http(addr, "POST", "/api/discussions/on", Some(&json!({ "subject": harness_contracts::Subject::PlanComponent { plan: plan.clone(), id: id("sample::walk") } }).to_string())).await;
+    assert_eq!(parse(&body).as_array().map(Vec::len), Some(1), "the discussions on a component: its sections' too: {body}");
+}

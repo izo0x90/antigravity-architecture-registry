@@ -3,6 +3,7 @@
 
 pub(crate) mod changes;
 pub(crate) mod cockpit;
+pub(crate) mod discussions;
 pub(crate) mod events;
 pub(crate) mod feedback;
 pub(crate) mod files;

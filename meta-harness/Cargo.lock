@@ -3404,6 +3404,7 @@ dependencies = [
  "include_dir",
  "nah-access",
  "nah-changes",
+ "nah-discussions",
  "nah-notify",
  "nah-packs",
  "nah-state",
@@ -3557,6 +3558,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "nah-discussions"
+version = "0.1.0"
+dependencies = [
+ "arch-graph",
+ "harness-contracts",
+ "harness-core",
+ "httpdate",
+ "nah-discussions",
+ "nah-things",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
 name = "nah-lsp"
 version = "0.1.0"
 dependencies = [
@@ -3620,6 +3638,7 @@ dependencies = [
  "arch-store",
  "harness-contracts",
  "harness-core",
+ "nah-discussions",
  "nah-notify",
  "nah-tags",
  "nah-timeline",

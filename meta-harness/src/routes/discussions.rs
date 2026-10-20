@@ -1,0 +1,130 @@
+//! Discussions, for the cockpit: list them (or those on a thing), read
+//! one, start one on a thing, reply, answer, settle, reopen, make one a
+//! change request, delete one. Reading needs `view.read`; the rest
+//! `discuss` (agents discuss through their tools, as their role allows).
+//! What the user does is theirs: `by` is "user".
+
+use std::sync::Arc;
+
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use harness_contracts::{Discussion, DiscussionId, DiscussionKind, Subject};
+use nah_discussions::{DiscussionError, Discussions, USER};
+use serde::Deserialize;
+
+use crate::cockpit::{Needs, can};
+use crate::modules::DiscussionsState;
+
+pub(crate) fn routes() -> Router<DiscussionsState> {
+    Router::new()
+        .route("/api/discussions", get(list).post(start))
+        .route("/api/discussions/on", post(on))
+        .route("/api/discussions/{id}", get(read).delete(delete))
+        .route("/api/discussions/{id}/reply", post(reply))
+        .route("/api/discussions/{id}/answer", post(answer))
+        .route("/api/discussions/{id}/settle", post(settle))
+        .route("/api/discussions/{id}/reopen", post(reopen))
+        .route("/api/discussions/{id}/change", post(change))
+}
+
+/// A discussion's change refused, said as the rest of the API says it.
+struct Refused(DiscussionError);
+
+impl IntoResponse for Refused {
+    fn into_response(self) -> Response {
+        let status = match self.0 {
+            DiscussionError::NotFound(_) => StatusCode::NOT_FOUND,
+            DiscussionError::Forbidden(_) => StatusCode::FORBIDDEN,
+            DiscussionError::Invalid(_) | DiscussionError::Subject(_) => StatusCode::BAD_REQUEST,
+            DiscussionError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
+    }
+}
+
+/// Discussions are kept in the state database and files, and owners say
+/// where things are now: off the async threads.
+async fn blocking<T: Send + 'static>(discussions: &Arc<Discussions>, f: impl FnOnce(&Discussions) -> Result<T, DiscussionError> + Send + 'static) -> Result<T, Refused> {
+    let discussions = discussions.clone();
+    tokio::task::spawn_blocking(move || f(&discussions)).await.map_err(|e| Refused(DiscussionError::Store(e.to_string())))?.map_err(Refused)
+}
+
+async fn list(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>) -> Json<Vec<Discussion>> {
+    Json(state.discussions.list())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct On {
+    subject: Subject,
+}
+
+/// The discussions on a thing (or on something it's in).
+async fn on(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>, Json(body): Json<On>) -> Json<Vec<Discussion>> {
+    Json(state.discussions.on(&body.subject))
+}
+
+async fn read(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>, Path(id): Path<String>) -> Result<Json<Discussion>, Refused> {
+    state.discussions.get(&DiscussionId::new(id)).map(Json).map_err(Refused)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Starting {
+    subject: Subject,
+    #[serde(default)]
+    kind: DiscussionKind,
+    text: String,
+    /// The agent slot asked (none: the lead).
+    #[serde(default)]
+    asked: Option<String>,
+}
+
+async fn start(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Json(body): Json<Starting>) -> Result<Json<Discussion>, Refused> {
+    blocking(&state.discussions, move |d| d.start(&body.subject, body.kind, &body.text, USER, body.asked.as_deref())).await.map(Json)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Saying {
+    #[serde(default)]
+    text: String,
+}
+
+async fn reply(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
+    blocking(&state.discussions, move |d| d.reply(&DiscussionId::new(id), &body.text, USER)).await.map(Json)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Answering {
+    text: String,
+    /// What it changed, by name.
+    #[serde(default)]
+    changed: Vec<String>,
+}
+
+async fn answer(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Answering>) -> Result<Json<Discussion>, Refused> {
+    blocking(&state.discussions, move |d| d.answer(&DiscussionId::new(id), &body.text, &body.changed, USER)).await.map(Json)
+}
+
+async fn settle(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
+    blocking(&state.discussions, move |d| d.settle(&DiscussionId::new(id), &body.text, USER)).await.map(Json)
+}
+
+async fn reopen(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
+    blocking(&state.discussions, move |d| d.reopen(&DiscussionId::new(id), &body.text, USER)).await.map(Json)
+}
+
+async fn change(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>) -> Result<Json<Discussion>, Refused> {
+    blocking(&state.discussions, move |d| d.ask_for_change(&DiscussionId::new(id), USER)).await.map(Json)
+}
+
+async fn delete(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>) -> Result<StatusCode, Refused> {
+    blocking(&state.discussions, move |d| d.delete(&DiscussionId::new(id), USER)).await.map(|()| StatusCode::NO_CONTENT)
+}
