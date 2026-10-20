@@ -55,6 +55,9 @@ pub struct Desk {
     /// What tagging is on, picked in the palette's opening it was picked
     /// in (otherwise, and by default, the unit at the cursor).
     pub tag_level: Option<(u64, harness_contracts::Subject)>,
+    /// The tag an edit is of, picked for the palette's opening it's asked
+    /// in (otherwise, the one tag at the cursor).
+    pub tag_editing: Option<(u64, harness_contracts::TagId)>,
     pub at_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
     /// Code indexing's status, as asked for.
     pub index_inbox: Arc<Mutex<Vec<NetResult<arch_graph::IndexStatus>>>>,
@@ -90,6 +93,7 @@ impl Desk {
             tag_picking: None,
             tag_stepping: None,
             tag_level: None,
+            tag_editing: None,
             at_inbox: Arc::default(),
             index_inbox: Arc::default(),
             types_inbox: Arc::default(),

@@ -323,6 +323,10 @@ impl ChatStreamState {
             if output.clicked() || output.gained_focus() {
                 *input_mode = crate::keymap::InputMode::Insert { at };
             }
+            // `#` starting a word: the tag picker, for the name to follow it.
+            if output.changed() && self.ui.input_buffer.ends_with('#') && self.ui.input_buffer.trim_end_matches('#').chars().last().is_none_or(char::is_whitespace) {
+                self.pending_palette = Some("tag.insert".to_owned());
+            }
             // Its Send (and Add) are actions, under it while it's typed in.
             self.ui.typing = inserting.then_some(output.rect);
             let sent = if inserting { ui.input(|i| keys.input.sent(i)) } else { None };

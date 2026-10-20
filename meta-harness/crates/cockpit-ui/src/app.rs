@@ -47,6 +47,16 @@ use {capture::hint_chip, draw::top_bar::server_line, keys::text_input_focused};
 
 pub use crate::kind::BufferKind;
 
+/// What an edit of a tag changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TagEditing {
+    Rename,
+    Recolour,
+    Note,
+    ClearNote,
+    Delete,
+}
+
 /// What the shell itself can do: panels, layout, overlays, and the keys every
 /// view shares (moves, hints, search, folds, marks, the jump list, go-tos).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +108,12 @@ enum ShellCommand {
     TagStep { forward: bool },
     /// Tagging: the next of the things at the cursor (the line, its command).
     TagLevel,
+    /// A tag's name (its value: its id) put where you're typing.
+    TagInsert,
+    /// An edit of the tag at the cursor (or picked): its value.
+    TagEdit(TagEditing),
+    /// Which of the tags at the cursor an edit is of (its value: its id).
+    TagEditWhich(TagEditing),
     Back,
     Forward,
     Keys,

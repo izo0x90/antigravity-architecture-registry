@@ -232,7 +232,7 @@ impl CockpitApp {
         if known.len() > 1 {
             out.push(act("server.switch", "Show another server", "Its project, on its own desk (the others stay live)", S::ServerSwitch).param(Param::Choice(known.iter().map(|s| choice(s)).collect())).importance(SECONDARY));
         }
-        out.push(act("server.add", "Link another server", "Its name, address and token: the cockpit follows it from then on", S::ServerAdd).param(Param::Text { hint: "name http://host:port secret (`meta-harness token` there)".into() }));
+        out.push(act("server.add", "Link another server", "Its name, address and token: the cockpit follows it from then on", S::ServerAdd).param(Param::Text { hint: "name http://host:port secret (`meta-harness token` there)".into(), start: String::new() }));
         let others = |keep: fn(&LinkState) -> bool| -> Vec<Choice> { self.servers.iter().filter(|s| s.name != HERE && keep(&s.link)).map(choice).collect() };
         for (id, label, detail, command, keep) in [
             ("server.connect", "Follow a server again", "Its events and calls come through again", S::ServerConnect, (|l: &LinkState| matches!(l, LinkState::Disconnected | LinkState::Lost { .. })) as fn(&LinkState) -> bool),

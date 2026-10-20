@@ -23,8 +23,9 @@ pub enum Param {
     Choice(Vec<Choice>),
     /// On or off; runs with "true" or "false".
     Toggle { on: bool },
-    /// Free text (opens ready for typing or dictation).
-    Text { hint: String },
+    /// Free text (opens ready for typing or dictation), starting as
+    /// `start` (what's there now, to edit).
+    Text { hint: String, start: String },
     /// Typed text looked up as it's typed: the provider gets each query
     /// (`ActionProvider::search`) and lists what it found for it here.
     Search { hint: String, found: Vec<Choice>, waiting: bool },
@@ -48,11 +49,19 @@ pub struct Choice {
     pub label: String,
     pub detail: Option<String>,
     pub current: bool,
+    /// A colour it is or has (a tag's): shown before its label as a solid
+    /// tag in it.
+    pub colour: Option<egui::Color32>,
 }
 
 impl Choice {
     pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
-        Self { value: value.into(), label: label.into(), detail: None, current: false }
+        Self { value: value.into(), label: label.into(), detail: None, current: false, colour: None }
+    }
+
+    pub fn colour(mut self, colour: egui::Color32) -> Self {
+        self.colour = Some(colour);
+        self
     }
 
     pub fn detail(mut self, detail: Option<String>) -> Self {

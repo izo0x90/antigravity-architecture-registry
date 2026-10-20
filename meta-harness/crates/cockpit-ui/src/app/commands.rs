@@ -103,7 +103,7 @@ impl CockpitApp {
             )
             .group(Group::Act)
             .importance(SECONDARY),
-            nav("nav.line", "Go to line or row", "By its number (a terminal's lines by the numbers they keep for life)", S::Line).param(Param::Text { hint: "line or row number".into() }).importance(MINOR),
+            nav("nav.line", "Go to line or row", "By its number (a terminal's lines by the numbers they keep for life)", S::Line).param(Param::Text { hint: "line or row number".into(), start: String::new() }).importance(MINOR),
         ];
         out.extend(self.tag_actions(here));
         // Each go-to's destination says whether it can show what the
@@ -435,7 +435,7 @@ impl CockpitApp {
             }
             ShellCommand::SearchStep { forward } => self.search_step(forward, count),
             ShellCommand::MarkSet => self.start_capture(Capture::MarkSet),
-            ShellCommand::Tag | ShellCommand::Untag | ShellCommand::TagGoTo | ShellCommand::TagGoToPick | ShellCommand::TagStep { .. } | ShellCommand::TagLevel => self.run_tag(&command, value, ctx),
+            ShellCommand::Tag | ShellCommand::Untag | ShellCommand::TagGoTo | ShellCommand::TagGoToPick | ShellCommand::TagStep { .. } | ShellCommand::TagLevel | ShellCommand::TagEdit(_) | ShellCommand::TagEditWhich(_) | ShellCommand::TagInsert => self.run_tag(&command, value, ctx),
             ShellCommand::MarkJump => self.start_capture(Capture::MarkJump),
             ShellCommand::Back | ShellCommand::Forward => {
                 let here = self.jump_here();

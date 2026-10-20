@@ -198,7 +198,7 @@ impl ActionProvider for ChatStreamState {
             out.push(Action::new("mcp.list", "Tool servers its sessions get", "The MCP servers this slot's sessions are given", C::ListMcp).param(Param::Choice(servers)));
         }
         if let Some(tools) = agents.tools() {
-            out.push(Action::new("mcp.add", "Add a tool server to the project", "Every session in the project gets it from the next one on", C::AddMcp).param(Param::Text { hint: "name https://host/mcp (then sse for the older kind)".into() }));
+            out.push(Action::new("mcp.add", "Add a tool server to the project", "Every session in the project gets it from the next one on", C::AddMcp).param(Param::Text { hint: "name https://host/mcp (then sse for the older kind)".into(), start: String::new() }));
             if !tools.project.is_empty() {
                 let choices = tools.project.iter().map(|m| Choice::new(&m.name, mcp_label(m))).collect();
                 out.push(Action::new("mcp.remove", "Remove a tool server from the project", "Sessions from the next one on don't get it", C::RemoveMcp).param(Param::Choice(choices)));
@@ -226,7 +226,7 @@ impl ActionProvider for ChatStreamState {
         if let Some(s) = snapshot {
             for command in &s.commands {
                 let param = match &command.input_hint {
-                    Some(hint) => Param::Text { hint: hint.clone() },
+                    Some(hint) => Param::Text { hint: hint.clone(), start: String::new() },
                     None => Param::None,
                 };
                 let description = if command.description.trim().is_empty() { format!("The harness's /{} command", command.name) } else { command.description.clone() };
@@ -241,7 +241,7 @@ impl ActionProvider for ChatStreamState {
             let login = Action::new("auth.login", "Sign in", "Sign the harness in, the way it offers", C::Login).param(Param::Choice(choices));
             out.push(if self.needs_login() && agents.login().is_none() { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
             let hint = agents.login().and_then(|l| l.expects.clone()).unwrap_or_else(|| "what the sign-in page gave you".into());
-            let complete = Action::new("auth.complete", "Finish signing in", "The code the sign-in page gave you", C::CompleteLogin).param(Param::Text { hint });
+            let complete = Action::new("auth.complete", "Finish signing in", "The code the sign-in page gave you", C::CompleteLogin).param(Param::Text { hint, start: String::new() });
             out.push(if agents.login().is_some_and(|l| l.expects.is_some()) { complete.header(Button, "Finish signing in", Some(icon::KEY)) } else { complete });
             out.push(Action::new("auth.logout", "Sign out", "The harness forgets your sign-in on this machine", C::Logout));
         }

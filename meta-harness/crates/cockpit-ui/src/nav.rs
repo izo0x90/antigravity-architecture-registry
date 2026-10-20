@@ -762,6 +762,16 @@ pub trait Navigable {
         None
     }
 
+    /// Text put where it's typed in (a tag's name after a `#`), as if
+    /// typed; a view with nowhere to type has nothing to put it in.
+    fn typed_in(&mut self, _text: &str) {}
+
+    /// The tag item `key` is a row of (a view of tags): the tag edits are
+    /// its buttons.
+    fn tag_at(&self, _key: &str) -> Option<harness_contracts::TagId> {
+        None
+    }
+
     /// It draws things a tag can be on: its host keeps a tag gutter down
     /// its left (always, so its content doesn't move as tags come and go).
     fn tag_gutter(&self) -> bool {

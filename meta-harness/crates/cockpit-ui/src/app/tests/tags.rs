@@ -292,7 +292,7 @@ fn a_go_to_a_tag_picks_the_tag_then_the_thing_lands_in_another_terminal_and_come
 }
 
 #[test]
-fn the_tags_buffer_lists_tags_and_what_they_are_on_reads_what_they_say_now_and_manages_them() {
+fn the_tags_buffer_lists_tags_folded_reads_what_they_say_now_and_the_shells_tag_actions_edit_them() {
     let (ctx, mut app) = full_app();
     app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![command(1, 1003, Some(1008), "make")])]);
     let mut tag = tag_on("x1", "flaky", &[lines("t1", 1, 1010, 1010), ran("t1", 1, 1)]);
@@ -301,17 +301,16 @@ fn the_tags_buffer_lists_tags_and_what_they_are_on_reads_what_they_say_now_and_m
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag.clone() });
     focus(&ctx, &mut app, BufferKind::Tags);
     assert_eq!(cursor(&app).as_deref(), Some("x0"));
-    // What its things say now: read once the cursor rests on it, not while
-    // it moves through.
+    // Folded to start: a line per tag. What its things say now: read once
+    // the cursor rests on it, not while it moves through.
     frame_at(&ctx, &mut app, vec![], 100.0);
     sent(&app);
-    for (n, k) in ["j", "j", "k", "k"].into_iter().enumerate() {
+    for (n, k) in ["j", "k", "j", "k"].into_iter().enumerate() {
         frame_at(&ctx, &mut app, key(k), 100.05 + n as f64 * 0.05);
     }
     assert!(!sent(&app).contains(&"GET /api/tags/x1".to_owned()), "moved through");
     frame_at(&ctx, &mut app, key("j"), 101.0);
-    frame_at(&ctx, &mut app, key("j"), 101.05);
-    assert_eq!(cursor(&app).as_deref(), Some("x1"));
+    assert_eq!(cursor(&app).as_deref(), Some("x1"), "the next tag's line: the folded one's things don't show");
     frame_at(&ctx, &mut app, vec![], 101.5);
     assert!(sent(&app).contains(&"GET /api/tags/x1".to_owned()));
     let on = tag.on.iter().map(|t| {
@@ -320,10 +319,18 @@ fn the_tags_buffer_lists_tags_and_what_they_are_on_reads_what_they_say_now_and_m
     }).collect();
     assert!(app.desk.net.answer("GET /api/tags/x1", 200, &serde_json::to_value(harness_contracts::TagRead { tag: tag.clone(), on }).unwrap()));
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
-    for words in ["fails on Mondays (lead)", "terminal t1 command 1", "make: 3 failed", "gone from where it was: as it was when tagged"] {
+    assert!(drawn.contains("fails on Mondays (lead)") && !drawn.contains("make: 3 failed"), "folded: {drawn}");
+    // A tag's line has the shell's tag edits as its buttons.
+    for button in ["Rename", "Colour", "Note", "Delete"] {
+        assert!(drawn.contains(button), "{button}: {drawn}");
+    }
+    // Enter unfolds it: its things, where they went, who tagged them and when.
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    for words in ["terminal t1 command 1", "make: 3 failed", "gone from where it was: as it was when tagged", "tagged by you", " d ago"] {
         assert!(drawn.contains(words), "{words}: {drawn}");
     }
-    // Managed through its actions: each sends what it says.
+    // Edited with the shell's tag actions (what's there now, to edit).
     let run = |ctx: &egui::Context, app: &mut CockpitApp, action: &str, value: Option<&str>| {
         keys(ctx, app, ":");
         keys(ctx, app, action);
@@ -334,25 +341,32 @@ fn the_tags_buffer_lists_tags_and_what_they_are_on_reads_what_they_say_now_and_m
         }
     };
     bodies(&app, "");
-    run(&ctx, &mut app, "rename the tag", Some("flaky-ci"));
-    run(&ctx, &mut app, "write the tag's note", Some("only CI"));
-    run(&ctx, &mut app, "clear the tag's note", None);
-    run(&ctx, &mut app, "give the tag another colour", Some(crate::theme::colors().tag_name(5)));
-    assert_eq!(bodies(&app, "POST /api/tags/x1/edit"), [serde_json::json!({ "name": "flaky-ci" }), serde_json::json!({ "note": "only CI" }), serde_json::json!({ "note": "" }), serde_json::json!({ "colour": 5 })]);
+    run(&ctx, &mut app, "rename the tag flaky", Some("-ci"));
+    run(&ctx, &mut app, "write flaky's note", Some(", only CI"));
+    run(&ctx, &mut app, "clear flaky's note", None);
+    run(&ctx, &mut app, "give flaky another colour", Some(crate::theme::colors().tag_name(5)));
+    assert_eq!(bodies(&app, "POST /api/tags/x1/edit"), [serde_json::json!({ "name": "flaky-ci" }), serde_json::json!({ "note": "fails on Mondays, only CI" }), serde_json::json!({ "note": "" }), serde_json::json!({ "colour": 5 })]);
     // On its second thing; the first taken off by someone else: still on it.
     keys(&ctx, &mut app, "jj");
     let on_make = cursor(&app);
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("Go to it") && drawn.contains("Take off"), "a thing's buttons: {drawn}");
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x1", "flaky", &[ran("t1", 1, 1)]) });
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app), on_make, "rows are what they're on, not where");
-    run(&ctx, &mut app, "take the tag off this", None);
+    run(&ctx, &mut app, "take flaky off this", None);
     assert_eq!(bodies(&app, "POST /api/tags/x1/untag"), [serde_json::json!({ "subject": ran("t1", 1, 1) })]);
     // Deleting asks first: kept, nothing sent; yes, deleted.
-    run(&ctx, &mut app, "delete the tag", Some("keep"));
+    run(&ctx, &mut app, "delete the tag flaky", Some("keep"));
     assert!(!sent(&app).iter().any(|s| s.starts_with("DELETE")));
-    run(&ctx, &mut app, "delete the tag", Some("delete"));
+    run(&ctx, &mut app, "delete the tag flaky", Some("delete"));
     assert!(sent(&app).contains(&"DELETE /api/tags/x1".to_owned()));
-    // Enter on the thing: the terminal, its cursor on the command.
+    // Backspace: up to its tag; z c folds it.
+    keys(&ctx, &mut app, "zc");
+    assert_eq!(cursor(&app).as_deref(), Some("x1"));
+    // Enter on a thing: the terminal, its cursor on the command.
+    keys(&ctx, &mut app, "zo");
+    keys(&ctx, &mut app, "j");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.focused_kind(), BufferKind::Terminal);
@@ -387,3 +401,58 @@ fn the_palette_keeps_its_place_and_size_while_typing_and_whatever_its_rows_say()
     }
 }
 
+
+#[test]
+fn a_tag_on_what_you_are_on_is_edited_from_any_view_picking_which_when_there_are_several() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![command(1, 1003, Some(1008), "make")])]);
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x1", "flaky", &[ran("t1", 1, 1)]) });
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x2", "slow", &[lines("t1", 1, 1005, 1005)]) });
+    not_typing(&ctx, &mut app);
+    app.run_move(BufferKind::Terminal, Move::Motion(Motion::Line(1005)), None, &ctx);
+    // Two tags there (the line's, its command's): which first, then its name.
+    keys(&ctx, &mut app, ":");
+    keys(&ctx, &mut app, "rename a tag here");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("flaky") && drawn.contains("slow"), "{drawn}");
+    keys(&ctx, &mut app, "slow");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("Rename the tag slow"), "its name asked for next: {drawn}");
+    bodies(&app, "");
+    keys(&ctx, &mut app, "-ish");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(bodies(&app, "POST /api/tags/x2/edit"), [serde_json::json!({ "name": "slow-ish" })], "what it was, edited");
+    // On the prompt's line (only the command's tag there): no picking.
+    app.run_move(BufferKind::Terminal, Move::Motion(Motion::Line(1003)), None, &ctx);
+    keys(&ctx, &mut app, ":");
+    keys(&ctx, &mut app, "give flaky another colour");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    keys(&ctx, &mut app, crate::theme::colors().tag_name(3));
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(bodies(&app, "POST /api/tags/x1/edit"), [serde_json::json!({ "colour": 3 })]);
+}
+
+#[test]
+fn a_hash_typed_in_a_prompt_opens_the_tag_picker_and_puts_the_name_after_it() {
+    let (ctx, mut app) = full_app();
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x1", "flaky", &[ran("t1", 1, 1)]) });
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x2", "deploy", &[ran("t1", 1, 2)]) });
+    focus(&ctx, &mut app, BufferKind::Chat);
+    frame(&ctx, &mut app, key("i"));
+    frame(&ctx, &mut app, vec![egui::Event::Text("look at #".into())]);
+    frame(&ctx, &mut app, vec![]);
+    assert!(app.palette.is_open(), "the tag picker");
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("flaky") && drawn.contains("deploy"), "{drawn}");
+    keys(&ctx, &mut app, "fla");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.desk.chat().ui.input_buffer, "look at #flaky ");
+    assert!(matches!(app.input_mode, InputMode::Insert { .. }), "typing on");
+    // Mid-word, a # is just a #.
+    frame(&ctx, &mut app, vec![egui::Event::Text("issue#".into())]);
+    frame(&ctx, &mut app, vec![]);
+    assert!(!app.palette.is_open());
+}

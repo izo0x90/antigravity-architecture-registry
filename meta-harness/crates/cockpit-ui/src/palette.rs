@@ -98,7 +98,10 @@ impl Palette {
         self.selected = 0;
         let action = Box::new(action);
         self.stage = match &action.action.param {
-            Param::Text { .. } => Stage::Text { action, from_list },
+            Param::Text { start, .. } => {
+                self.filter = start.clone();
+                Stage::Text { action, from_list }
+            }
             Param::Search { .. } => {
                 self.ask = Some(SearchAsk { origin: action.origin, action: action.action.id.clone(), query: String::new() });
                 Stage::Search { action, from_list }
@@ -190,7 +193,7 @@ impl Palette {
                         }
                         let hint = match &stage {
                             Stage::Text { action, .. } | Stage::Search { action, .. } => match &action.action.param {
-                                Param::Text { hint } | Param::Search { hint, .. } => hint.clone(),
+                                Param::Text { hint, .. } | Param::Search { hint, .. } => hint.clone(),
                                 _ => String::new(),
                             },
                             _ => "Type to filter…".to_owned(),
@@ -229,14 +232,14 @@ impl Palette {
                                 egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
                                     if let Some((n, bound)) = line {
                                         let selected = self.selected == 0;
-                                        if palette_row(ui, selected, self.scroll, &format!("Go to line {n}"), None, ":N") || (selected && enter) {
+                                        if palette_row(ui, selected, self.scroll, &format!("Go to line {n}"), None, None, ":N") || (selected && enter) {
                                             picked = Some(invocation(bound, Some(n.to_string())));
                                         }
                                     }
                                     for (row, bound) in ranked.iter().enumerate() {
                                         let row = row + first;
                                         let selected = row == self.selected;
-                                        let clicked = palette_row(ui, selected, self.scroll, &bound.action.label, Some(&bound.action.detail), &bound.key_hint());
+                                        let clicked = palette_row(ui, selected, self.scroll, &bound.action.label, None, Some(&bound.action.detail), &bound.key_hint());
                                         if clicked || (selected && enter) {
                                             match bound.action.param {
                                                 Param::None => picked = Some(invocation(bound, None)),
@@ -261,7 +264,7 @@ impl Palette {
                                     for (row, choice) in ranked.iter().enumerate() {
                                         let selected = row == self.selected;
                                         let label = if choice.current { format!("{} {}", egui_phosphor::regular::CHECK, choice.label) } else { choice.label.clone() };
-                                        let clicked = palette_row(ui, selected, self.scroll, &label, choice.detail.as_deref(), "");
+                                        let clicked = palette_row(ui, selected, self.scroll, &label, choice.colour, choice.detail.as_deref(), "");
                                         if clicked || (selected && enter) {
                                             picked = Some(invocation(action, Some(choice.value.clone())));
                                         }
@@ -283,7 +286,7 @@ impl Palette {
                                 egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
                                     for (row, choice) in found.iter().enumerate() {
                                         let selected = row == self.selected;
-                                        let clicked = palette_row(ui, selected, self.scroll, &choice.label, choice.detail.as_deref(), "");
+                                        let clicked = palette_row(ui, selected, self.scroll, &choice.label, choice.colour, choice.detail.as_deref(), "");
                                         if clicked || (selected && enter) {
                                             picked = Some(invocation(action, Some(choice.value.clone())));
                                         }
@@ -349,7 +352,7 @@ fn invocation(bound: &Bound, value: Option<String>) -> Invocation {
 /// first line (a long label cut short), its description under it (two
 /// lines at most): nothing in it is wider than the palette, so the palette
 /// never grows to fit a row.
-fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, detail: Option<&str>, keys: &str) -> bool {
+fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, colour: Option<Color32>, detail: Option<&str>, keys: &str) -> bool {
     let (look, theme) = (crate::theme::look(), colors());
     let fill = if selected { theme.selection } else { Color32::TRANSPARENT };
     let response = Frame::NONE
@@ -361,7 +364,12 @@ fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, det
             // The label gets what the keys leave it, cut short to fit.
             egui::Sides::new().shrink_left().truncate().show(
                 ui,
-                |ui| ui.label(RichText::new(label).size(look.text_label).color(theme.text_strong)),
+                |ui| {
+                    if let Some(colour) = colour {
+                        ui.label(crate::theme::tag_mark(ui, colour, look.text_label));
+                    }
+                    ui.label(RichText::new(label).size(look.text_label).color(theme.text_strong))
+                },
                 |ui| ui.label(RichText::new(keys).monospace().size(look.text_small).color(theme.key)),
             );
             if let Some(detail) = detail.filter(|d| !d.is_empty()) {

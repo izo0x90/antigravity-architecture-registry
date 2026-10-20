@@ -1,14 +1,20 @@
-//! The Tags buffer: every tag, its colour and note, and what it's on (each
-//! thing: its name, what it says now or that it's gone, who tagged it).
-//! Managing them is here: rename, recolour, note, take one off a thing,
-//! delete; Enter on a thing goes to it as a go-to does. What it changes it
-//! asks the desk's tags to (`Ask::Tags`); it reads them through a reader.
+//! The Tags buffer: every tag on a line of its own (a solid tag in its
+//! colour, its name, how many things it's on, its note), folded to start;
+//! unfolded, what it's on (each thing: its name, the start of what it says
+//! or where it went, who tagged it and when). It adds no keys, buttons or
+//! pickers of its own: the shared moves, folds and search move through
+//! it, Enter on a thing goes to it as a go-to does, and the shell's tag
+//! actions (rename, colour, note, delete, take off) act on its rows (it
+//! says which tag a row is, `tag_at`). It reads the tags through a reader
+//! and asks the desk's tags for what their things say (`Ask::Tags`).
 
-use egui::{RichText, Vec2};
+use std::collections::BTreeSet;
+
+use egui::RichText;
 use egui_phosphor::regular as icon;
-use harness_contracts::{Subject, TAG_COLOURS, Tag, TagId, on_things};
+use harness_contracts::{Subject, Tag, TagId, on_things};
 
-use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, Param, RunCx, SECONDARY, When};
+use crate::actions::{Action, ActionProvider, RunCx, Style};
 use crate::hosted::{Hosted, Status, Tone};
 use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, Spot, Step, Target, Things};
 use crate::shared::{Reader, Shared};
@@ -42,21 +48,13 @@ impl Row {
     }
 }
 
-#[derive(Clone, Debug)]
-enum Command {
-    Rename,
-    Recolour,
-    Note,
-    ClearNote,
-    Untag,
-    Delete,
-}
-
 #[derive(Default)]
 pub struct TagList {
     tags: Reader<Tags>,
     /// The tags' version its rows are of.
     synced: Option<u64>,
+    /// The tags unfolded (each folds to its line to start).
+    open: BTreeSet<TagId>,
     rows: Vec<Row>,
     /// Each row's key (made when the rows are: a thing's is long).
     keys: Vec<String>,
@@ -82,7 +80,8 @@ impl TagList {
         }
         self.synced = Some(version);
         let at = self.rows.get(self.cursor).cloned();
-        self.rows = self.tags.get().list().iter().flat_map(|t| std::iter::once(Row::Tag(t.id.clone())).chain(t.on.iter().map(|on| Row::On(t.id.clone(), on.subject.clone())))).collect();
+        let open = &self.open;
+        self.rows = self.tags.get().list().iter().flat_map(|t| std::iter::once(Row::Tag(t.id.clone())).chain(t.on.iter().filter(|_| open.contains(&t.id)).map(|on| Row::On(t.id.clone(), on.subject.clone())))).collect();
         self.keys = self.rows.iter().map(Row::key).collect();
         self.cursor = at.and_then(|r| self.rows.iter().position(|x| *x == r)).unwrap_or(self.cursor).min(self.rows.len().saturating_sub(1));
     }
@@ -123,6 +122,19 @@ impl TagList {
         self.tags.get().get(id)?.on.iter().any(|on| on.subject == *subject).then(|| (id.clone(), subject.clone()))
     }
 
+    /// Unfolds (or folds) tag `id`: its things show (or go, the cursor on
+    /// it then).
+    fn set_open(&mut self, id: &TagId, open: bool) {
+        let changed = if open { self.open.insert(id.clone()) } else { self.open.remove(id) };
+        if changed {
+            if !open && matches!(self.rows.get(self.cursor), Some(Row::On(tag, _)) if tag == id) {
+                self.cursor = self.rows.iter().position(|r| *r == Row::Tag(id.clone())).unwrap_or(self.cursor);
+            }
+            self.synced = None;
+            self.sync();
+        }
+    }
+
     fn go(&mut self, go: Go) {
         let n = self.rows.len();
         let from = (self.cursor < n).then_some(self.cursor);
@@ -150,22 +162,24 @@ impl TagList {
             return;
         }
         let tags = self.tags.get();
+        let now = crate::attention::now_ms();
         let mut drawn = Vec::new();
         let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt(("tags", cx.at)).auto_shrink([false, true]), ui.input(|i| i.time));
         let output = area.show(ui, |ui| {
             for (i, row) in self.rows.iter().enumerate() {
                 let Some(tag) = tags.get(row.tag()) else { continue };
                 let rect = match row {
-                    Row::Tag(_) => {
+                    Row::Tag(id) => {
                         ui.add_space(look.space_s);
+                        let folded = !self.open.contains(id);
                         ui.horizontal(|ui| {
-                            let (dot, _) = ui.allocate_exact_size(Vec2::splat(look.text_body), egui::Sense::hover());
-                            ui.painter().circle_filled(dot.center(), look.text_body / 3.0, theme.tag(tag.colour));
+                            ui.label(RichText::new(if folded { icon::CARET_RIGHT } else { icon::CARET_DOWN }).size(look.text_small).color(theme.faint));
+                            ui.label(crate::theme::tag_mark(ui, theme.tag(tag.colour), look.text_title));
                             ui.label(RichText::new(&tag.name).strong().size(look.text_title).color(theme.text_strong));
                             ui.label(RichText::new(on_things(tag.on.len())).size(look.text_small).color(theme.muted));
                             if !tag.note.is_empty() {
                                 let by = if tag.noted_by.is_empty() { String::new() } else { format!(" ({})", who(&tag.noted_by)) };
-                                ui.label(RichText::new(format!("{}{by}", tag.note)).size(look.text_body).color(theme.text));
+                                ui.add(egui::Label::new(RichText::new(format!("{}{by}", first_line(&tag.note))).size(look.text_body).color(theme.text)).truncate());
                             }
                         })
                         .response
@@ -187,9 +201,8 @@ impl TagList {
                                 if let Some(held) = held.filter(|h| *h != harness_contracts::Held::Source) {
                                     ui.label(RichText::new(held.words()).size(look.text_small).color(theme.warn));
                                 }
-                                if !on.by.is_empty() {
-                                    ui.label(RichText::new(format!("tagged by {}", who(&on.by))).size(look.text_small).color(theme.faint));
-                                }
+                                let when = crate::attention::age(on.at_ms, now);
+                                ui.label(RichText::new(if on.by.is_empty() { format!("tagged {when}") } else { format!("tagged by {} {when}", who(&on.by)) }).size(look.text_small).color(theme.faint));
                             });
                         })
                         .response
@@ -294,19 +307,64 @@ impl Navigable for TagList {
         }
     }
 
-    /// On a thing: goes to it; on a tag: to the first thing it's on.
+    /// On a thing: goes to it; on a folded tag: unfolds it; on an
+    /// unfolded one: into its first thing.
     fn enter(&mut self) -> Step {
-        match self.thing_here().map(|(_, s)| s).or_else(|| self.tag_here(|t| t.on.first().map(|o| o.subject.clone())).flatten()) {
-            Some(subject) => self.go_to(&subject),
-            None => Step::Nothing("It's on nothing.".into()),
+        if let Some((_, subject)) = self.thing_here() {
+            return self.go_to(&subject);
+        }
+        let Some(Row::Tag(id)) = self.rows.get(self.cursor).cloned() else { return Step::Nothing("Nothing here.".into()) };
+        if self.tag_here(|t| t.on.is_empty()).unwrap_or(true) {
+            return Step::Nothing("It's on nothing.".into());
+        }
+        if self.open.contains(&id) {
+            self.go(Go::Down(1));
+        } else {
+            self.set_open(&id, true);
+        }
+        Step::Done
+    }
+
+    /// On a thing: up to its tag.
+    fn leave(&mut self) -> Step {
+        match self.rows.get(self.cursor) {
+            Some(Row::On(id, _)) => {
+                let id = id.clone();
+                self.cursor = self.rows.iter().position(|r| *r == Row::Tag(id.clone())).unwrap_or(self.cursor);
+                self.scrolling.show(self.cursor, Show::InView);
+                Step::Done
+            }
+            _ => Step::Nothing("The tags have nothing to go out of.".into()),
         }
     }
 
-    fn leave(&mut self) -> Step {
-        Step::Nothing("The tags have nothing to go out of.".into())
+    /// The cursor's tag (on a thing: its tag's), or every tag.
+    fn fold(&mut self, fold: Fold) {
+        let Some(id) = self.rows.get(self.cursor).map(|r| r.tag().clone()) else { return };
+        match fold {
+            Fold::Open => self.set_open(&id, true),
+            Fold::Close => self.set_open(&id, false),
+            Fold::Toggle => self.set_open(&id, !self.open.contains(&id)),
+            Fold::OpenAll => {
+                let at = self.rows.get(self.cursor).cloned();
+                self.open = self.tags.get().list().iter().map(|t| t.id.clone()).collect();
+                self.synced = None;
+                self.sync();
+                self.cursor = at.and_then(|r| self.rows.iter().position(|x| *x == r)).unwrap_or(self.cursor);
+            }
+            Fold::CloseAll => {
+                self.cursor = self.rows.iter().position(|r| *r == Row::Tag(id.clone())).unwrap_or(self.cursor);
+                self.open.clear();
+                self.synced = None;
+                self.sync();
+            }
+        }
     }
 
-    fn fold(&mut self, _fold: Fold) {}
+    /// A row's tag (a thing's row too: its tag's).
+    fn tag_at(&self, key: &str) -> Option<TagId> {
+        self.rows.iter().zip(&self.keys).find(|(_, k)| *k == key).map(|(row, _)| row.tag().clone())
+    }
 
     fn items(&self) -> Vec<Item> {
         let tags = self.tags.get();
@@ -335,7 +393,13 @@ impl Navigable for TagList {
         self.keys.get(self.cursor).cloned()
     }
 
+    /// To its row; a thing of a folded tag: the tag unfolded first (the
+    /// one gone to opened).
     fn move_to(&mut self, key: &str) {
+        let folded = if self.keys.iter().any(|k| k == key) { None } else { self.tags.get().list().iter().find(|t| key.starts_with(&format!("{} ", t.id))).map(|t| t.id.clone()) };
+        if let Some(id) = folded {
+            self.set_open(&id, true);
+        }
         if let Some(at) = self.keys.iter().position(|k| k == key) {
             self.cursor = at;
             self.scrolling.show(at, Show::Middle);
@@ -344,50 +408,29 @@ impl Navigable for TagList {
 }
 
 impl ActionProvider for TagList {
+    /// The shared moves, folds and its Enter: what a tag's rows are edited
+    /// with is the shell's (`tag_at`).
     fn actions(&self) -> Vec<Action> {
-        let act = |id: &str, label: &str, detail: &str, c: Command| Action::new(id, label, detail, c).focused().group(Group::Act).importance(MINOR);
-        let when = |ok: bool| if ok { When::Always } else { When::Unavailable };
         let mut out = crate::nav::list_moves();
-        out.push(Move::Enter.offer_if(!self.rows.is_empty(), "Go to it"));
-        out.push(Move::Motion(Motion::NextSibling).offer_if(self.rows.len() > 1, "Next tag"));
-        out.push(Move::Motion(Motion::PrevSibling).offer_if(self.rows.len() > 1, "Previous tag"));
-        let tag = self.tag_here(|t| (t.name.clone(), t.colour, !t.note.is_empty()));
-        let on_tag = tag.is_some();
-        out.push(act("tags.rename", "Rename the tag", "A new name for it (what it's on stays)", Command::Rename).param(Param::Text { hint: "a new name (letters, digits, - and _)".into() }).when(when(on_tag)).importance(SECONDARY));
-        let theme = colors();
-        let colours = (0..TAG_COLOURS).map(|i| Choice::new(i.to_string(), theme.tag_name(i)).current(tag.as_ref().is_some_and(|t| t.1 == i))).collect();
-        out.push(act("tags.recolour", "Give the tag another colour", "One of the theme's tag colours", Command::Recolour).param(Param::Choice(colours)).when(when(on_tag)));
-        out.push(act("tags.note", "Write the tag's note", "What it's for, said wherever the tag is (agents read it too)", Command::Note).param(Param::Text { hint: "its note".into() }).when(when(on_tag)));
-        out.push(act("tags.note_clear", "Clear the tag's note", "It has no note from now on", Command::ClearNote).when(when(tag.as_ref().is_some_and(|t| t.2))));
-        out.push(act("tags.untag", "Take the tag off this", "The tag stays on everything else", Command::Untag).when(when(self.thing_here().is_some())));
-        let sure = tag.as_ref().map(|t| vec![Choice::new("yes", format!("Delete {} (from everything it's on)", t.0)), Choice::new("no", "Keep it")]).unwrap_or_default();
-        out.push(act("tags.delete", "Delete the tag", "Off everything it's on, for good", Command::Delete).param(Param::Choice(sure)).when(when(on_tag)).icon(icon::TRASH));
+        let on_thing = self.thing_here().is_some();
+        let enter = match self.rows.get(self.cursor) {
+            Some(Row::Tag(id)) if !self.open.contains(id) => Move::Enter.offer_if(self.tag_here(|t| !t.on.is_empty()).unwrap_or(false), "Unfold the tag").detail("Its things show under it"),
+            Some(Row::Tag(_)) => Move::Enter.offer_if(self.tag_here(|t| !t.on.is_empty()).unwrap_or(false), "To its first thing").detail("The cursor on the first thing it's on"),
+            _ => Move::Enter.offer_if(on_thing, "Go to it").detail("Where it is, as a go-to goes (the jump list has where you were)").on_item(Style::Button, "Go to it", Some(icon::ARROW_SQUARE_OUT)),
+        };
+        out.push(enter);
+        out.push(Move::Leave.offer_if(on_thing, "Up to its tag").detail("The cursor on the tag the thing is under"));
+        out.push(Move::Motion(Motion::NextSibling).offer_if(self.rows.iter().filter(|r| matches!(r, Row::Tag(_))).count() > 1, "Next tag"));
+        out.push(Move::Motion(Motion::PrevSibling).offer_if(self.rows.iter().filter(|r| matches!(r, Row::Tag(_))).count() > 1, "Previous tag"));
+        let here = self.rows.get(self.cursor).map(|r| r.tag().clone());
+        let name = here.as_ref().and_then(|id| self.tags.get().get(id).map(|t| t.name.clone()));
+        out.extend(crate::nav::fold_here(here.as_ref().zip(name.as_deref()).map(|(id, name)| (name, !self.open.contains(id)))));
+        let tags = self.tags.get().list().len();
+        out.extend(crate::nav::fold_all((self.open.len() < tags, "Unfold every tag"), (!self.open.is_empty(), "Fold every tag")));
         out
     }
 
-    fn run(&mut self, action: &Action, value: Option<String>, cx: &mut RunCx<'_>) {
-        let Some(command) = action.command::<Command>().cloned() else { return };
-        let Some(tag) = self.tag_here(|t| t.id.clone()) else {
-            *cx.note = Some("The cursor isn't on a tag.".into());
-            return;
-        };
-        let act = match (command, value) {
-            (Command::Rename, Some(name)) => TagAct::Rename { tag, name: name.trim().to_owned() },
-            (Command::Recolour, Some(colour)) => match colour.parse() {
-                Ok(colour) => TagAct::Recolour { tag, colour },
-                Err(_) => return,
-            },
-            (Command::Note, Some(note)) => TagAct::Note { tag, note: note.trim().to_owned() },
-            (Command::ClearNote, _) => TagAct::Note { tag, note: String::new() },
-            (Command::Untag, _) => match self.thing_here() {
-                Some((_, subject)) => TagAct::Untag { tag, subject },
-                None => return,
-            },
-            (Command::Delete, Some(yes)) if yes == "yes" => TagAct::Delete { tag },
-            _ => return,
-        };
-        self.asks.push(Ask::Tags(act));
-    }
+    fn run(&mut self, _action: &Action, _value: Option<String>, _cx: &mut RunCx<'_>) {}
 }
 
 impl Hosted for TagList {
