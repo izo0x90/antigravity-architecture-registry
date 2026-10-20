@@ -36,6 +36,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
     ),
     (7, "CREATE TABLE terminals (id TEXT PRIMARY KEY, title TEXT NOT NULL, shell TEXT NOT NULL, folder TEXT NOT NULL, cols INTEGER NOT NULL, rows INTEGER NOT NULL, seq INTEGER NOT NULL);"),
     (8, "CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT NOT NULL, json TEXT NOT NULL, seq INTEGER NOT NULL);"),
+    // A tag only points: what a thing said is no longer kept with it.
+    (9, "UPDATE tags SET json = json_set(json, '$.on', (SELECT json_group_array(json(json_remove(value, '$.said'))) FROM json_each(tags.json, '$.on')));"),
 ];
 
 /// The newest layout this NAH knows.
@@ -54,4 +56,24 @@ pub(crate) fn run(conn: &mut Connection, shown: &str) -> Result<(), StateError> 
         tx.commit().map_err(failed)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_9_drops_what_tagged_things_said() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for (_, sql) in MIGRATIONS.iter().filter(|(v, _)| *v <= 8) {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 8).unwrap();
+        let old = r#"{"id":"x","name":"seen","colour":1,"note":"","notedBy":"","on":[{"subject":{"kind":"terminal_lines","terminal":"t1","shell":1,"first":3,"last":3},"what":"terminal t1 lines 3-3","said":"a secret","atMs":5,"by":"user"}]}"#;
+        conn.execute("INSERT INTO tags (id, name, json, seq) VALUES ('x', 'seen', ?1, 1)", [old]).unwrap();
+        run(&mut conn, "test").unwrap();
+        let json: String = conn.query_row("SELECT json FROM tags", [], |r| r.get(0)).unwrap();
+        let tag: harness_contracts::Tag = serde_json::from_str(&json).unwrap();
+        assert!(!json.contains("a secret") && tag.on[0].what == "terminal t1 lines 3-3" && tag.on[0].at_ms == 5, "{json}");
+    }
 }

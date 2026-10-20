@@ -173,19 +173,25 @@ impl TagList {
                     }
                     Row::On(id, subject) => {
                         let Some(on) = tag.on.iter().find(|on| on.subject == *subject) else { continue };
-                        let now = match tags.now(id).and_then(|n| n.get(subject)) {
-                            Some(Some(now)) if *now == on.said => None,
-                            Some(Some(now)) => Some(format!("now: {}", first_line(now))),
-                            Some(None) => Some("gone (what it said is kept)".to_owned()),
-                            None => None,
+                        let (held, said) = match tags.now(id).and_then(|n| n.get(subject)) {
+                            Some((held, text)) => (Some(*held), text.as_deref().map(first_line)),
+                            None => (None, None),
                         };
                         ui.horizontal(|ui| {
                             ui.add_space(look.space_l);
                             ui.vertical(|ui| {
                                 ui.label(RichText::new(thing_name(&on.what)).size(look.text_body).color(theme.text));
-                                ui.label(RichText::new(first_line(&on.said)).monospace().size(look.text_small).color(theme.muted));
-                                if let Some(now) = now {
-                                    ui.label(RichText::new(now).size(look.text_small).color(theme.warn));
+                                if let Some(said) = said {
+                                    ui.label(RichText::new(said).monospace().size(look.text_small).color(theme.muted));
+                                }
+                                match held {
+                                    Some(harness_contracts::Held::Kept) => {
+                                        ui.label(RichText::new("gone from where it was: as it was when tagged").size(look.text_small).color(theme.warn));
+                                    }
+                                    Some(harness_contracts::Held::Gone) => {
+                                        ui.label(RichText::new("gone").size(look.text_small).color(theme.warn));
+                                    }
+                                    _ => {}
                                 }
                                 if !on.by.is_empty() {
                                     ui.label(RichText::new(format!("tagged by {}", who(&on.by))).size(look.text_small).color(theme.faint));
@@ -315,7 +321,8 @@ impl Navigable for TagList {
                     Row::Tag(_) => Item::new(key.clone(), tag.name.clone(), tag.note.clone()),
                     Row::On(_, subject) => {
                         let on = tag.on.iter().find(|on| on.subject == *subject)?;
-                        Item::new(key.clone(), "", format!("{} {}", on.what, on.said))
+                        let said = tags.now(row.tag()).and_then(|n| n.get(subject)).and_then(|(_, t)| t.clone()).unwrap_or_default();
+                        Item::new(key.clone(), "", format!("{} {said}", on.what))
                     }
                 })
             })

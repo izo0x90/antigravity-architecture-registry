@@ -251,10 +251,12 @@ pub fn terminals(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hu
 }
 
 /// Tags: kept in the state database, told on the event stream; what a
-/// tagged subject says now is its owner's to tell (each owner registers
-/// itself as it's made).
-pub fn tags(state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>) -> Result<Arc<nah_tags::Tags>, StartError> {
-    Ok(Arc::new(nah_tags::Tags::open(state.clone(), hub.clone()).map_err(|e| e.to_string())?))
+/// tagged subject says is its owner's to tell (each owner registers itself
+/// as it's made), kept in the tags' logs (in the project's state folder)
+/// for one its owner doesn't keep.
+pub fn tags(arch: &ArchitectureService, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>) -> Result<Arc<nah_tags::Tags>, StartError> {
+    let logs = arch_service::state_dir(arch.root())?.join("tagged");
+    nah_tags::Tags::open(state.clone(), hub.clone(), &logs).map_err(|e| e.to_string().into())
 }
 
 /// What each agent role may do: the shipped roles, with the project's

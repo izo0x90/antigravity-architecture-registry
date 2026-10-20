@@ -359,12 +359,16 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "tag": "seen-it", "subject": subject }).to_string())).await;
     assert_eq!(status, 200, "{body}");
     let tag: harness_contracts::Tag = serde_json::from_str(&body).unwrap();
-    assert_eq!((tag.name.as_str(), tag.on[0].said.as_str(), tag.on[0].by.as_str()), ("seen-it", "tagged-line", "user"), "kept with what it said, and who tagged it");
+    assert_eq!((tag.name.as_str(), tag.on[0].by.as_str()), ("seen-it", "user"), "who tagged it");
+    assert!(tag.on[0].kept.is_some() && !body.contains("tagged-line"), "a tag only points (what it said is in the tag logs): {body}");
+    let logs = state.project.arch.root().join(".nah/state/tagged");
+    let logged = std::fs::read_dir(&logs).unwrap().map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap()).collect::<String>();
+    assert!(logged.contains("tagged by user") && logged.contains("tagged-line"), "{logged}");
     event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id)).await;
     let (status, body) = http(addr, "POST", "/api/tags", Some(&json!({ "tag": "two words", "subject": subject }).to_string())).await;
     assert!(status == 400 && body.contains("can't be a tag's name"), "{status} {body}");
     let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
-    assert!(read.contains(&format!("\"what\":\"terminal {} lines {line}-{line}\"", terminal.id)) && read.contains("\"now\":\"tagged-line\""), "what it says now, named: {read}");
+    assert!(read.contains(&format!("\"what\":\"terminal {} lines {line}-{line}\"", terminal.id)) && read.contains("\"held\":\"source\"") && read.contains("\"text\":\"tagged-line"), "what it says now, named: {read}");
     // A narrower reader lays the lines out anew: the tag follows its line,
     // told to everyone as it moves (not only when it's next read).
     reader.say(ToTerminal::Size { size: TermSize { cols: 40, rows: 20 } }).await;
@@ -374,14 +378,14 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let harness_contracts::Subject::TerminalLines { first, .. } = moved.on[0].subject else { panic!("{moved:?}") };
     assert_eq!(moved.on[0].what, format!("terminal {} lines {first}-{first}", terminal.id), "named where it is now");
     let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
-    assert!(read.contains("\"now\":\"tagged-line\""), "still found, numbered anew: {read}");
+    assert!(read.contains("\"held\":\"source\"") && read.contains("\"text\":\"tagged-line"), "still found, numbered anew: {read}");
     // Many new widths in a row (more than the terminal remembers): still followed.
     for cols in 41..48 {
         reader.say(ToTerminal::Size { size: TermSize { cols, rows: 20 } }).await;
     }
     while !matches!(reader.next().await, FromTerminal::Screen { update } if update.size.cols == 47) {}
     let (_, read) = http(addr, "GET", "/api/tags/seen-it", None).await;
-    assert!(read.contains("\"now\":\"tagged-line\""), "still found after seven: {read}");
+    assert!(read.contains("\"held\":\"source\"") && read.contains("\"text\":\"tagged-line"), "still found after seven: {read}");
 
     // An agent whose role may (the lead's) tags a command, by its number.
     let mut lead = Mcp::lead(addr).await;
@@ -394,8 +398,8 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (error, said) = lead.tool("tag", json!({ "tag": "seen-it", "subject": command })).await;
     assert!(!error && said.starts_with("seen-it (on 2 things)"), "{said}");
     let (_, read) = lead.tool("tag_read", json!({ "tag": "seen-it" })).await;
-    assert!(read.contains(&format!("- {command} (tagged by lead)")) && read.contains("$ echo tagged-line (exit code 0"), "{read}");
-    assert!(read.contains("(tagged by the user)"), "the user's, to an agent: {read}");
+    assert!(read.contains(&format!("2. {command} (tagged by lead; as it is now):")) && read.contains("$ echo tagged-line (exit code 0"), "{read}");
+    assert!(read.contains("(tagged by the user; as it is now)"), "the user's, to an agent: {read}");
     // Taken off by the name tag_read gives; again: it isn't on it, and says so.
     let (error, said) = lead.tool("untag", json!({ "tag": "seen-it", "subject": command })).await;
     assert!(!error && said.starts_with("seen-it (on 1 thing)"), "{said}");
@@ -426,12 +430,12 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (error, said) = external.tool("tag_edit", json!({ "tag": "checked", "delete": true })).await;
     assert!(error && said.contains("tags.edit"), "refused: {said}");
     // Its shell started again: what it's on is an earlier start's, named so
-    // (as it's taken off by), and gone (what it said is kept).
+    // (as it's taken off by), and gone from there (as it was, from the logs).
     let (status, body) = http(addr, "POST", &format!("/api/terminals/{}/restart", terminal.id), None).await;
     assert_eq!(status, 200, "{body}");
     let renamed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id && t.on[0].what.contains('@'))).await;
     let (_, read) = lead.tool("tag_read", json!({ "tag": "checked" })).await;
-    assert!(read.contains(&format!("- terminal {}@", terminal.id)) && read.contains("gone; when tagged:\ntagged-line"), "{read}");
+    assert!(read.contains(&format!("1. terminal {}@", terminal.id)) && read.contains("gone from where it was: as it was when tagged):\ntagged-line"), "{read}");
     let harness_contracts::ClientEvent::TagUpdated { tag: renamed } = renamed else { unreachable!() };
     let (error, said) = lead.tool("untag", json!({ "tag": "checked", "subject": renamed.on[0].what })).await;
     assert!(!error && said.starts_with("checked (on 0 things)"), "taken off by that name: {said}");
@@ -439,4 +443,36 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (status, _) = http(addr, "DELETE", "/api/tags/checked", None).await;
     assert_eq!(status, 204);
     event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagRemoved { tag_id } if *tag_id == tag.id)).await;
+    assert_eq!(std::fs::read_dir(&logs).unwrap().count(), 0, "nothing tagged, nothing logged");
+}
+
+#[tokio::test]
+async fn a_command_tagged_while_it_runs_comes_back_whole_past_the_scrollback_and_its_shell() {
+    let (addr, _state) = spawn_app().await;
+    let terminal = open(addr).await;
+    let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
+    reader.next().await;
+    // 30,000 lines, three times what the terminal keeps; tagged early on.
+    reader.run("seq 1 5000; sleep 2; seq 5001 30000").await;
+    reader.until_shows("5000").await;
+    while !reader.commands.values().any(|c| c.text.starts_with("seq 1 5000") && c.output.is_some()) {
+        reader.next().await;
+    }
+    let number = reader.commands.values().find(|c| c.text.starts_with("seq 1 5000")).unwrap().id;
+    let command = format!("terminal {} command {number}", terminal.id);
+    let mut lead = Mcp::lead(addr).await;
+    let (error, said) = lead.tool("tag", json!({ "tag": "big", "subject": command })).await;
+    assert!(!error, "{said}");
+    while !reader.commands.values().any(|c| c.id == number && c.end.is_some()) {
+        reader.next().await;
+    }
+    // Its shell started again: the command is gone from there, whole in the logs.
+    let (status, body) = http(addr, "POST", &format!("/api/terminals/{}/restart", terminal.id), None).await;
+    assert_eq!(status, 200, "{body}");
+    let (_, read) = http(addr, "GET", "/api/tags/big", None).await;
+    assert!(read.contains("\"held\":\"kept\"") && read.contains("\"lines\":30002"), "its line, 30,000 lines, how it ended: {read}");
+    let (error, first) = lead.tool("tag_read", json!({ "tag": "big", "thing": 1, "lines": "1-2" })).await;
+    assert!(!error && first.contains("$ seq 1 5000") && first.ends_with("\n1\n(lines 1-2 of 30002: `lines` gives others)"), "{first}");
+    let (error, last) = lead.tool("tag_read", json!({ "tag": "big", "thing": 1, "lines": "30001-30002" })).await;
+    assert!(!error && last.contains("\n30000\n(") && last.contains("exit code 0"), "{last}");
 }

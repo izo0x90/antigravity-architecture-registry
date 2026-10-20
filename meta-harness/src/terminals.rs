@@ -68,6 +68,19 @@ pub struct Terminals {
     /// new width, a shell started again or closed): the tags keep them
     /// where they are now. Told where they moved, off the async threads.
     moved: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// Tagged commands still running: what they print is told to the tags
+    /// as it's written (`Resolve::follow`), until they end.
+    followed: Mutex<Vec<Followed>>,
+}
+
+/// A command followed for the tags: what it printed is told up to line
+/// `next` (not written whole yet from there on).
+struct Followed {
+    terminal: TerminalId,
+    shell: u64,
+    command: u64,
+    next: u64,
+    more: nah_tags::More,
 }
 
 /// One terminal: how it is, its shell (none once the server restarted
@@ -93,7 +106,7 @@ impl Terminals {
     pub fn load(folder: PathBuf, hooks: PathBuf, hub: Arc<EventHub>, state: Arc<nah_state::StateDb>, long: std::time::Duration) -> Result<Arc<Self>, nah_state::StateError> {
         let kept = state.terminals()?;
         let open = kept.into_iter().map(|t| (t.id.clone(), Arc::new(Open::new(t)))).collect();
-        let terminals = Arc::new(Self { folder, hooks, hub, state, open: Mutex::new(open), long, moved: std::sync::OnceLock::new() });
+        let terminals = Arc::new(Self { folder, hooks, hub, state, open: Mutex::new(open), long, moved: std::sync::OnceLock::new(), followed: Mutex::default() });
         for t in terminals.list() {
             terminals.hub.publish(ClientEvent::TerminalUpdated { terminal: t });
         }
@@ -183,6 +196,9 @@ impl Terminals {
 
     /// Something happened in `open`'s shell (on its reading thread).
     fn happened(&self, open: &Arc<Open>, happening: &Happening) {
+        if matches!(happening, Happening::Changed | Happening::CommandFinished { .. } | Happening::Ended(_)) {
+            self.tell_followed(open);
+        }
         match happening {
             Happening::Changed => open.bump(),
             Happening::Title(title) => {
@@ -197,6 +213,38 @@ impl Terminals {
             Happening::Bell | Happening::CommandFinished { .. } => {}
         }
         self.news(open, happening);
+    }
+
+    /// What the commands followed in `open` printed since, told; those
+    /// that ended (or went), their end told and let go.
+    fn tell_followed(&self, open: &Arc<Open>) {
+        let mut followed = lock(&self.followed);
+        if followed.is_empty() {
+            return;
+        }
+        let (id, started, ended) = (open.info().id, open.started(), open.ended());
+        followed.retain_mut(|f| {
+            if f.terminal != id {
+                return true;
+            }
+            let command = open.command(f.command).filter(|_| f.shell == started);
+            let Some(command) = command else { return false };
+            let end = command.end.unwrap_or_else(|| open.cursor_line());
+            if end > f.next
+                && let Some(text) = open.lines_text(f.next, end)
+            {
+                (f.more)(&format!("{text}\n"));
+                f.next = end;
+            }
+            match (command.end, ended) {
+                (Some(_), _) => {
+                    (f.more)(&format!("({})\n", in_words(&command)));
+                    false
+                }
+                (None, Some(_)) => false,
+                (None, None) => true,
+            }
+        });
     }
 
     /// What's news in what happened (a bell, the shell's end, a long
@@ -247,8 +295,15 @@ impl Terminals {
         let new_width = std::mem::replace(&mut lock(&open.info).size, size).cols != size.cols;
         open.bump();
         self.said(open);
-        // A new width lays its lines out anew.
+        // A new width lays its lines out anew: what's followed goes on from
+        // where its line is now; tags are told.
         if new_width {
+            let id = open.info().id;
+            for f in lock(&self.followed).iter_mut().filter(|f| f.terminal == id) {
+                if let Some((now, _)) = open.lines_now(f.next, f.next) {
+                    f.next = now;
+                }
+            }
             self.tell_moved();
         }
     }
@@ -316,6 +371,16 @@ impl Open {
         lock(&self.shell).as_ref().and_then(|s| s.command(id))
     }
 
+    /// The line its program's cursor is on (those before are written whole).
+    pub fn cursor_line(&self) -> u64 {
+        lock(&self.shell).as_ref().map_or(0, |s| s.cursor_line())
+    }
+
+    /// How its shell ended (none: still running, or none started).
+    pub fn ended(&self) -> Option<Option<i32>> {
+        lock(&self.shell).as_ref().and_then(|s| s.ended())
+    }
+
     /// Command `id`'s output as text, and how many of its first lines
     /// were left out (it had more than `most`).
     pub fn command_output(&self, id: u64, most: u64) -> Option<(String, u64)> {
@@ -353,8 +418,10 @@ impl Open {
 /// The terminals own their lines and commands as subjects of tags: their
 /// names (`terminal t1 lines 120-124`, `terminal t1 command 3`; another
 /// start's: `terminal t1@<start> …`), what they say now (in the start of
-/// the shell they were tagged in; of many lines, the first
-/// `TAGGED_LINES`), and where lines are after a new width.
+/// the shell they were tagged in: a command, its line and all its output;
+/// lines, at most `TAGGED_LINES`), and where lines are after a new width.
+/// They don't keep them for good (the scrollback goes): the tags keep what
+/// they said, and what a command still running prints until it ends.
 impl nah_tags::Resolve for Terminals {
     fn name(&self, subject: &Subject) -> Option<String> {
         match subject {
@@ -375,7 +442,7 @@ impl nah_tags::Resolve for Terminals {
             Subject::TerminalCommand { terminal, shell, command } => {
                 let open = started(terminal, *shell)?;
                 let ran = open.command(*command).filter(|c| c.output.is_some())?;
-                let output = open.command_output(ran.id, TAGGED_OUTPUT).map(|(text, _)| text).unwrap_or_default();
+                let output = open.command_output(ran.id, u64::MAX).map(|(text, _)| text).unwrap_or_default();
                 Some(if output.is_empty() { in_words(&ran) } else { format!("{}\n{output}", in_words(&ran)) })
             }
             _ => None,
@@ -409,6 +476,24 @@ impl nah_tags::Resolve for Terminals {
         })())
     }
 
+    fn lasts(&self, subject: &Subject) -> bool {
+        !matches!(subject, Subject::TerminalLines { .. } | Subject::TerminalCommand { .. })
+    }
+
+    /// A command still running: what it printed so far (its line first),
+    /// then each line it writes whole, then how it ended.
+    fn follow(&self, subject: &Subject, mut more: nah_tags::More) -> bool {
+        let Subject::TerminalCommand { terminal, shell, command } = subject else { return false };
+        let Some(open) = self.get(terminal).ok().filter(|o| o.started() == *shell) else { return false };
+        let Some(ran) = open.command(*command).filter(|c| c.end.is_none()) else { return false };
+        let Some(output) = ran.output else { return false };
+        let next = open.cursor_line();
+        let so_far = open.lines_text(output, next).filter(|t| !t.is_empty()).map(|t| format!("{t}\n")).unwrap_or_default();
+        more(&format!("{}\n{so_far}", in_words(&ran)));
+        lock(&self.followed).push(Followed { terminal: terminal.clone(), shell: *shell, command: *command, next, more });
+        true
+    }
+
     /// Lines laid out anew (a new width) since they were numbered: where they are now.
     fn moved(&self, subject: &Subject) -> Option<Subject> {
         let Subject::TerminalLines { terminal, shell, first, last } = subject else { return None };
@@ -426,5 +511,3 @@ impl Terminals {
     }
 }
 
-/// How much of a tagged command's output it says (its last lines).
-const TAGGED_OUTPUT: u64 = 20;

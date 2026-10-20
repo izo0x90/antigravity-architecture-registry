@@ -9,6 +9,7 @@ description = "Tags: names given to things in the project (on subjects, each kep
 testing = []
 
 [dependencies]
+httpdate = "1"
 harness-contracts = { path = "../harness-contracts" }
 harness-core = { path = "../harness-core" }
 thiserror = "2.0"
@@ -17,3 +18,5 @@ uuid = { version = "1.26.1", features = ["v4"] }
 
 [dev-dependencies]
 nah-tags = { path = ".", features = ["testing"] }
+tempfile = "3"
+serde_json = "1"

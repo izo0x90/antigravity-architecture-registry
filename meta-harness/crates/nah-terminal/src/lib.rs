@@ -294,9 +294,17 @@ impl Terminal {
         }
         let command = state.commands.get(id)?;
         let Some(from) = command.output else { return Some((String::new(), 0)) };
-        let end = command.end.unwrap_or_else(|| state.feed.top() + state.term.screen_lines() as u64);
+        // Running: the lines it wrote whole (up to the program's cursor).
+        let end = command.end.unwrap_or_else(|| state.feed.top() + state.term.grid().cursor.point.line.0.max(0) as u64);
         let left_out = end.saturating_sub(from).saturating_sub(most);
         Some((screen::text(&state.term, &state.feed, from + left_out, end), left_out))
+    }
+
+    /// The number of the line the program's cursor is on (lines before it
+    /// are written whole).
+    pub fn cursor_line(&self) -> u64 {
+        let state = lock(&self.state);
+        state.feed.top() + state.term.grid().cursor.point.line.0.max(0) as u64
     }
 
     /// Lines `from..to` as text (lines that wrapped joined); none when

@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
-use harness_contracts::{ClientEvent, Subject, Tag, TagId, TagRead};
+use harness_contracts::{ClientEvent, Held, Subject, Tag, TagId, TagRead};
 
 use crate::net::{NetClient, NetResult};
 
@@ -36,13 +36,23 @@ pub fn thing_name(what: &str) -> String {
     if what.is_empty() { "something this server can't show".into() } else { what.to_owned() }
 }
 
+/// Who tagged a thing, in words ("tagged by you").
+pub fn tagged_by(tagged: &harness_contracts::Tagged) -> String {
+    match tagged.by.as_str() {
+        "user" => "tagged by you".into(),
+        "" => "tagged".into(),
+        agent => format!("tagged by {agent}"),
+    }
+}
+
 /// A text's first line, cut short (what a list shows of what a thing said).
 pub fn first_line(text: &str) -> String {
     text.lines().next().unwrap_or_default().chars().take(120).collect()
 }
 
-/// What each of a tag's things says now (none: it's gone), as last read.
-pub type Now = HashMap<Subject, Option<String>>;
+/// What each of a tag's things says (some of it) and where that came
+/// from, as last read.
+pub type Now = HashMap<Subject, (Held, Option<String>)>;
 
 type Read = Arc<Mutex<Vec<(TagId, NetResult<TagRead>)>>>;
 
@@ -177,7 +187,7 @@ impl Tags {
             match r {
                 Ok(read) => {
                     self.unread.remove(&tag);
-                    self.now.insert(tag, read.on.into_iter().map(|t| (t.tagged.subject, t.now)).collect());
+                    self.now.insert(tag, read.on.into_iter().map(|t| (t.tagged.subject, (t.held, t.text))).collect());
                 }
                 Err(e) => {
                     self.unread.insert(tag, e.message);

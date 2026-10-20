@@ -488,7 +488,7 @@ fn tag_on(id: &str, name: &str, on: &[harness_contracts::Subject]) -> harness_co
         harness_contracts::Subject::TerminalCommand { terminal, command, .. } => format!("terminal {terminal} command {command}"),
         _ => String::new(),
     };
-    let on = on.iter().map(|s| harness_contracts::Tagged { subject: s.clone(), what: what(s), said: format!("said by {}", what(s)), at_ms: 0, by: "user".into() }).collect();
+    let on = on.iter().map(|s| harness_contracts::Tagged { subject: s.clone(), what: what(s), at_ms: 0, by: "user".into(), kept: None }).collect();
     harness_contracts::Tag { id: harness_contracts::TagId::new(id), name: name.into(), colour: 2, note: String::new(), noted_by: String::new(), on }
 }
 
@@ -741,10 +741,13 @@ fn the_tags_buffer_lists_tags_and_what_they_are_on_reads_what_they_say_now_and_m
     assert_eq!(cursor(&app).as_deref(), Some("x1"));
     frame_at(&ctx, &mut app, vec![], 101.5);
     assert!(sent(&app).contains(&"GET /api/tags/x1".to_owned()));
-    let on = tag.on.iter().map(|t| harness_contracts::TaggedNow { tagged: t.clone(), now: (t.subject == ran("t1", 1, 1)).then(|| "make: 3 failed".to_owned()) }).collect();
+    let on = tag.on.iter().map(|t| {
+        let (held, text) = if t.subject == ran("t1", 1, 1) { (harness_contracts::Held::Source, "make: 3 failed") } else { (harness_contracts::Held::Kept, "$ ls") };
+        harness_contracts::TaggedNow { tagged: t.clone(), held, text: Some(text.to_owned()), lines: 1 }
+    }).collect();
     assert!(app.desk.net.answer("GET /api/tags/x1", 200, &serde_json::to_value(harness_contracts::TagRead { tag: tag.clone(), on }).unwrap()));
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
-    for words in ["fails on Mondays (lead)", "terminal t1 command 1", "now: make: 3 failed", "gone (what it said is kept)"] {
+    for words in ["fails on Mondays (lead)", "terminal t1 command 1", "make: 3 failed", "gone from where it was: as it was when tagged"] {
         assert!(drawn.contains(words), "{words}: {drawn}");
     }
     // Managed through its actions: each sends what it says.
@@ -789,7 +792,7 @@ fn the_palette_keeps_its_place_and_size_while_typing_and_whatever_its_rows_say()
     app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![])]);
     let mut long = tag_on("x1", "flaky", &[lines("t1", 1, 1010, 1010), lines("t1", 1, 1011, 1011)]);
     long.note = "fails on Mondays when the build cache is cold and the network to the registry is slow, which is most Mondays".into();
-    long.on[0].said = "error: could not compile `meta-harness` (test \"terminals_tests\") due to 1 previous error; 3 warnings emitted while linking the whole thing".repeat(3);
+    long.on[0].by = "a-lead-agent-slot-whose-name-goes-on-and-on-past-any-sensible-length-for-a-name".repeat(3);
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: long });
     frame(&ctx, &mut app, vec![]);
     let rect = |ctx: &egui::Context| ctx.memory(|m| m.area_rect(egui::Id::new("command_palette"))).expect("the palette is drawn");

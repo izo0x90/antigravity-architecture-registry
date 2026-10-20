@@ -160,7 +160,10 @@ impl ActionProvider for ChatStreamState {
                         ),
                         ConfigKind::Boolean { current } => (Param::Toggle { on: *current }, true),
                     };
-                    let description = control.description.clone().unwrap_or_else(|| format!("The harness's {} setting", control.name));
+                    let description = match &control.description {
+                        Some(description) => description.clone(),
+                        None => format!("The harness's {} setting", control.name),
+                    };
                     let action = Action::new(format!("config.{}", control.id), format!("Set {}", control.name), description, C::SetConfig { option: control.id.clone(), boolean })
                         .alias(format!("config.category.{}", wire_name(&control.category)))
                         .param(param)

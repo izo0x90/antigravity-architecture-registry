@@ -36,7 +36,9 @@ pub fn on_things(n: usize) -> String {
 /// The theme's tag colours: a tag's `colour` is below this.
 pub const TAG_COLOURS: u8 = 8;
 
-/// A subject a tag is on, with what it said when tagged.
+/// A subject a tag is on. A tag points: what a thing says is never kept
+/// with it, but given by its owner (from its source, or, for a thing its
+/// owner doesn't keep for good, from the tags' own logs: `kept`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Tagged {
@@ -46,13 +48,33 @@ pub struct Tagged {
     /// empty: no owner here names it.
     #[serde(default)]
     pub what: String,
-    /// What it said when tagged (some of it, when it said a lot).
-    pub said: String,
     /// When it was tagged (ms since 1970), and who tagged it (`user`, or
     /// an agent's slot).
     pub at_ms: u64,
     #[serde(default)]
     pub by: String,
+    /// Where what it says is in the tags' logs, for a thing its owner
+    /// doesn't keep (a terminal's output, a chat's message): none for one
+    /// that lasts (code).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<Kept>,
+}
+
+/// Where a thing's text is in the tags' logs: pieces of files, in order
+/// (a thing still growing when tagged, a command running, adds pieces).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Kept {
+    pub pieces: Vec<Piece>,
+}
+
+/// A piece of a tags' log file: `len` bytes from byte `start`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Piece {
+    pub file: String,
+    pub start: u64,
+    pub len: u64,
 }
 
 /// One thing in the project, durably: what a tag is on. Each kind is its
@@ -119,10 +141,28 @@ pub struct TagRead {
 #[serde(rename_all = "camelCase")]
 pub struct TaggedNow {
     pub tagged: Tagged,
-    /// What it says now (some of it, when it says a lot): none when it's
-    /// gone, or when no owner here can say (`tagged.what` is empty then).
+    /// Where what it says came from.
+    pub held: Held,
+    /// What it says (some of it, when it says a lot: `lines` says how
+    /// much there is): none when it's gone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub now: Option<String>,
+    pub text: Option<String>,
+    /// How many lines it says in all.
+    #[serde(default)]
+    pub lines: u64,
+}
+
+/// Where what a tagged thing says comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Held {
+    /// Its source: it's still there.
+    Source,
+    /// The tags' logs: its source is gone (scrolled away, a shell ended),
+    /// what it said when tagged is kept.
+    Kept,
+    /// Nowhere: it's gone, and nothing was kept (or no owner here).
+    Gone,
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use arch_graph::tree::TreeConfig;
 use arch_service::ServiceError;
-use harness_contracts::TAG_COLOURS;
+use harness_contracts::{Held, TAG_COLOURS};
 use nah_access::Capability;
 use serde_json::{Value, json};
 
@@ -37,8 +37,12 @@ impl Tags {
             tool(
                 Capability::ViewRead,
                 "tag_read",
-                "What a tag is on: each thing's name, what it says now (or that it's gone) and what it said when tagged, and who tagged it.",
-                json!({ "type": "object", "properties": { "tag": { "type": "string" } }, "required": ["tag"] }),
+                "What a tag is on: each thing's name, who tagged it, and what it says (from where it is, or as it was when tagged once it's gone from there): the start of each, or one thing (`thing`, its number) whole or by `lines`.",
+                json!({ "type": "object", "properties": {
+                    "tag": { "type": "string" },
+                    "thing": { "type": "integer", "minimum": 1, "description": "One of its things (as numbered), whole" },
+                    "lines": { "type": "string", "description": "With `thing`: which of its lines, `a-b`" }
+                }, "required": ["tag"] }),
             ),
             tool(Capability::TagsEdit, "tag", "Tag something.", on.clone()),
             tool(Capability::TagsEdit, "untag", "Take a tag off something it's on.", on),
@@ -61,6 +65,30 @@ fn who(by: &str) -> &str {
         "" => "?",
         slot => slot,
     }
+}
+
+/// How many of a thing's lines `tag_read` shows of each, and of one
+/// asked for at most.
+const SHOWN_LINES: usize = 20;
+const READ_MOST: usize = 2000;
+
+/// Where what a thing says came from, to an agent.
+fn held_words(held: Held) -> &'static str {
+    match held {
+        Held::Source => "as it is now",
+        Held::Kept => "gone from where it was: as it was when tagged",
+        Held::Gone => "gone",
+    }
+}
+
+/// `a-b` (1-based, both in), or `a`.
+fn line_range(words: &str) -> Result<(usize, usize), ServiceError> {
+    let number = |n: &str| n.trim().parse::<usize>().map_err(|_| ServiceError::InvalidOp(format!("{n:?} isn't a line number")));
+    let (from, to) = match words.split_once('-') {
+        Some((a, b)) => (number(a)?, number(b)?),
+        None => (number(words)?, number(words)?),
+    };
+    Ok((from.max(1), to.max(from).min(from + READ_MOST - 1)))
 }
 
 /// A tag in a line.
@@ -95,21 +123,41 @@ impl ToolSet for Tags {
             }
             "tag_read" => {
                 let tag = tag?;
-                blocking(Box::new(move |t| {
-                    let read = t.read(&tag).map_err(refused)?;
-                    let mut out = vec![said(&read.tag)];
-                    for on in read.on {
-                        let when = format!("tagged by {}", who(&on.tagged.by));
-                        let what = &on.tagged.what;
-                        out.push(match on.now {
-                            // Its owner isn't here (no shells run here): what it said isn't given.
-                            _ if what.is_empty() => format!("- something nothing here can show ({when})"),
-                            Some(text) if text == on.tagged.said => format!("- {what} ({when}):\n{text}"),
-                            Some(text) => format!("- {what} ({when}), now:\n{text}\n  when tagged:\n{}", on.tagged.said),
-                            None => format!("- {what} ({when}): gone; when tagged:\n{}", on.tagged.said),
-                        });
+                let thing = args["thing"].as_u64();
+                let lines = text("lines");
+                blocking(Box::new(move |t| match thing {
+                    // One thing, whole (or the lines asked for).
+                    Some(n) => {
+                        let (tagged, held, text) = t.thing(&tag, n.saturating_sub(1) as usize).map_err(refused)?;
+                        let text = text.ok_or_else(|| ServiceError::NotFound(format!("{} is gone, and nothing was kept of it", tagged.what)))?;
+                        let all: Vec<&str> = text.lines().collect();
+                        let (from, to) = match lines.as_deref().map(line_range).transpose()? {
+                            Some((from, to)) => (from, to.min(all.len())),
+                            None => (1, all.len().min(READ_MOST)),
+                        };
+                        let shown = all.get(from.saturating_sub(1)..to).unwrap_or_default().join("\n");
+                        let more = if to < all.len() { format!("\n(lines {from}-{to} of {}: `lines` gives others)", all.len()) } else { String::new() };
+                        Ok(format!("{} ({}):\n{shown}{more}", tagged.what, held_words(held)))
                     }
-                    Ok(out.join("\n"))
+                    None => {
+                        let read = t.read(&tag).map_err(refused)?;
+                        let mut out = vec![said(&read.tag)];
+                        for (n, on) in read.on.iter().enumerate() {
+                            let when = format!("tagged by {}", who(&on.tagged.by));
+                            let what = &on.tagged.what;
+                            out.push(match &on.text {
+                                // Its owner isn't here (no shells run here), and nothing was kept.
+                                _ if what.is_empty() && on.held != Held::Kept => format!("{}. something nothing here can show ({when})", n + 1),
+                                None => format!("{}. {what} ({when}): gone, nothing kept of it", n + 1),
+                                Some(text) => {
+                                    let head: Vec<&str> = text.lines().take(SHOWN_LINES).collect();
+                                    let more = if on.lines > head.len() as u64 { format!("\n  ({} lines in all: tag_read with `thing` {} for all of it)", on.lines, n + 1) } else { String::new() };
+                                    format!("{}. {what} ({when}; {}):\n{}{more}", n + 1, held_words(on.held), head.join("\n"))
+                                }
+                            });
+                        }
+                        Ok(out.join("\n"))
+                    }
                 }))
                 .await
             }

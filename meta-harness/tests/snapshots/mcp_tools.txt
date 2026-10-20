@@ -1273,12 +1273,21 @@ The project's tags (names given to things to find them again): each one's name, 
 }
 
 ## tag_read
-What a tag is on: each thing's name, what it says now (or that it's gone) and what it said when tagged, and who tagged it.
+What a tag is on: each thing's name, who tagged it, and what it says (from where it is, or as it was when tagged once it's gone from there): the start of each, or one thing (`thing`, its number) whole or by `lines`.
 {
   "type": "object",
   "properties": {
     "tag": {
       "type": "string"
+    },
+    "thing": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "One of its things (as numbered), whole"
+    },
+    "lines": {
+      "type": "string",
+      "description": "With `thing`: which of its lines, `a-b`"
     }
   },
   "required": [

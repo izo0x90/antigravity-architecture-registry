@@ -212,7 +212,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notify = meta_harness::startup::notifications(&hub, &state, &slots)?;
     let changes = meta_harness::startup::changes(&arch);
     let timeline = meta_harness::startup::timeline(&arch, &changes, &state, &hub)?;
-    let tags = meta_harness::startup::tags(&state, &hub)?;
+    let tags = meta_harness::startup::tags(&arch, &state, &hub)?;
     let terminals = if serve.no_shells { None } else { Some(meta_harness::startup::terminals(&arch, &state, &hub, &tags)?) };
     let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone(), tags: tags.clone() };
     let mcp_state = McpServerState::new(Arc::new(McpService::new(services, access.clone())), meta_harness::startup::mcp_callers(&slots));

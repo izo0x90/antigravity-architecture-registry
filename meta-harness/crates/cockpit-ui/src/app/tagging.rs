@@ -37,7 +37,7 @@ impl CockpitApp {
         ];
         // `g T` picked a tag on several things: which.
         if let Some(tag) = self.desk.tag_picking.as_ref().and_then(|id| tags.get(id)) {
-            let choices = tag.on.iter().map(|on| Choice::new(serde_json::to_string(&on.subject).unwrap_or_default(), thing_name(&on.what)).detail(Some(first_line(&on.said)))).collect();
+            let choices = tag.on.iter().map(|on| Choice::new(serde_json::to_string(&on.subject).unwrap_or_default(), thing_name(&on.what)).detail(Some(crate::tags::tagged_by(on)))).collect();
             out.push(Action::new("tag.goto.pick", format!("Go to which thing {} is on?", tag.name), "It's on several: pick one", S::TagGoToPick).param(Param::Choice(choices)).group(Group::GoTo));
         }
         out

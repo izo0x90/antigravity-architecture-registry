@@ -199,7 +199,7 @@ fn f_labels_what_is_on_screen_in_every_view() {
     app.desk.shared.changes.take_list_for_test(ChangeList { comparison: Comparison::default(), files: vec![changed], offset: 0, total: 1 });
     // A tag, to label in the tags.
     let subject = harness_contracts::Subject::TerminalLines { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, first: 1, last: 1 };
-    let tag = harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "seen".into(), colour: 0, note: String::new(), noted_by: String::new(), on: vec![harness_contracts::Tagged { subject, what: "terminal t1 lines 1-1".into(), said: "Cargo.toml  src".into(), at_ms: 0, by: "you".into() }] };
+    let tag = harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "seen".into(), colour: 0, note: String::new(), noted_by: String::new(), on: vec![harness_contracts::Tagged { subject, what: "terminal t1 lines 1-1".into(), at_ms: 0, by: "user".into(), kept: None }] };
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag });
     frame(&ctx, &mut app, vec![]);
     app.desk.share();

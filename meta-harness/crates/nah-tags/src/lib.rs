@@ -1,28 +1,36 @@
 //! Tags: names given to things in the project, to find them again and to
 //! point agents at them. A tag (`flaky-build`) has a colour and a note and
-//! is on subjects, each kept with what it said when tagged and who tagged
-//! it. A subject is its owner's: what it says now, its name in words (to
-//! tag it by), and where it is now when its owner moved it (lines laid out
-//! anew). Owners (the terminals, ...) register a `Resolve` when they're
-//! made, and say when they moved their subjects (`refresh`); this crate
-//! knows none of them.
+//! is on subjects, each with who tagged it. A tag only points: a subject
+//! is its owner's, which gives what it says (whole), its name in words (to
+//! tag it by), and where it is now when it moved it (lines laid out anew).
+//! A thing its owner doesn't keep for good (a terminal's output) is written
+//! to the tags' own logs when it's tagged, and given back from there once
+//! its source is gone. Owners (the terminals, ...) register a `Resolve`
+//! when they're made, and say when they moved their subjects (`refresh`);
+//! this crate knows none of them.
 //!
-//! Every change is kept (the store: the state database, with who made it)
-//! and told on the event stream (`TagUpdated`, `TagRemoved`), which keeps
-//! them for clients that come later.
+//! Every change is kept (the store: the state database, with who made it;
+//! never a subject's text) and told on the event stream (`TagUpdated`,
+//! `TagRemoved`), which keeps them for clients that come later.
 
+mod logs;
 #[cfg(feature = "testing")]
 pub mod testing;
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, Weak};
 
-use harness_contracts::{ClientEvent, Subject, TAG_COLOURS, Tag, TagId, TagRead, Tagged, TaggedNow};
+use harness_contracts::{ClientEvent, Held, Kept, Subject, TAG_COLOURS, Tag, TagId, TagRead, Tagged, TaggedNow};
 use harness_core::EventHub;
 
-/// How much of what a subject said (and of a note) is kept, and how many
-/// things a tag is on at most.
-const SAID_MOST: usize = 4000;
+use crate::logs::Logs;
+
+/// How much of a note is kept, how much of what a thing says a read
+/// gives (the rest whole on asking), and how many things a tag is on at
+/// most.
+const NOTE_MOST: usize = 4000;
+pub const SHOWN_MOST: usize = 4000;
 pub const MOST_ON: usize = 500;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -83,7 +91,21 @@ pub trait Resolve: Send + Sync {
     fn moved(&self, _subject: &Subject) -> Option<Subject> {
         None
     }
+    /// Whether it keeps `subject` for good (code does); one it doesn't (a
+    /// terminal's output) is written to the tags' logs when it's tagged.
+    fn lasts(&self, _subject: &Subject) -> bool {
+        true
+    }
+    /// `subject` is still growing (a command running): `more` is told what
+    /// it says so far, then what it adds, until it ends (then the owner
+    /// drops it). False: it isn't growing.
+    fn follow(&self, _subject: &Subject, _more: More) -> bool {
+        false
+    }
 }
+
+/// What a growing thing adds, told to the tags (`Resolve::follow`).
+pub type More = Box<dyn FnMut(&str) + Send>;
 
 /// A change to a tag.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -98,6 +120,9 @@ pub struct Tags {
     hub: Arc<EventHub>,
     tags: Mutex<BTreeMap<TagId, Tag>>,
     owners: RwLock<Vec<Arc<dyn Resolve>>>,
+    logs: Logs,
+    /// Itself, for what a growing thing adds later.
+    me: Weak<Tags>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -109,12 +134,17 @@ fn check_name(name: &str) -> Result<String, TagError> {
     if harness_contracts::tag_name_ok(name) { Ok(name.to_owned()) } else { Err(TagError::BadName(name.to_owned())) }
 }
 
-/// What's kept of a text: some of it, when it's long.
-fn kept_text(text: String) -> String {
-    match text.char_indices().nth(SAID_MOST) {
+/// Some of a text, when it's long (`most` characters).
+fn some_of(text: String, most: usize) -> String {
+    match text.char_indices().nth(most) {
         Some((at, _)) => format!("{}…", &text[..at]),
         None => text,
     }
+}
+
+/// Now, as a reader of the logs reads a date ("Tue, 20 Oct 2026 21:13:57 GMT").
+fn now_words() -> String {
+    httpdate::fmt_http_date(std::time::SystemTime::now())
 }
 
 /// The tag with id `name`, or named `name` (in capitals or not: `Flaky`
@@ -154,14 +184,15 @@ fn now_ms() -> u64 {
 }
 
 impl Tags {
-    /// The tags kept, told on `hub` (for clients that come later).
-    pub fn open(store: Arc<dyn TagStore>, hub: Arc<EventHub>) -> Result<Self, TagError> {
+    /// The tags kept, told on `hub` (for clients that come later); their
+    /// logs in `logs`.
+    pub fn open(store: Arc<dyn TagStore>, hub: Arc<EventHub>, logs: &Path) -> Result<Arc<Self>, TagError> {
         let kept = store.tags().map_err(TagError::Store)?;
         for tag in &kept {
             hub.publish(ClientEvent::TagUpdated { tag: tag.clone() });
         }
         let tags = Mutex::new(kept.into_iter().map(|t| (t.id.clone(), t)).collect());
-        Ok(Self { store, hub, tags, owners: RwLock::default() })
+        Ok(Arc::new_cyclic(|me| Self { store, hub, tags, owners: RwLock::default(), logs: Logs::open(logs), me: me.clone() }))
     }
 
     /// An owner of subjects, from now on (its subjects named as it names
@@ -180,10 +211,33 @@ impl Tags {
         self.owners().iter().find_map(|o| o.name(subject))
     }
 
-    /// What `subject` says now (some of it, when it says a lot; none: it's
-    /// gone, or no owner here can say).
-    fn now(&self, subject: &Subject) -> Option<String> {
-        self.owners().iter().find_map(|o| o.now(subject)).map(kept_text)
+    /// The owner of `subject` (none here).
+    fn owner(&self, subject: &Subject) -> Option<Arc<dyn Resolve>> {
+        self.owners().iter().find(|o| o.name(subject).is_some()).cloned()
+    }
+
+    /// What a tagged thing says, whole, and where that came from: its
+    /// source while it's there, else what the logs kept of it.
+    fn said(&self, tagged: &Tagged) -> (Held, Option<String>) {
+        if let Some(now) = self.owners().iter().find_map(|o| o.now(&tagged.subject)) {
+            return (Held::Source, Some(now));
+        }
+        match tagged.kept.as_ref().map(|k| self.logs.read(k)) {
+            Some(Ok(text)) => (Held::Kept, Some(text)),
+            Some(Err(e)) => {
+                tracing::warn!("A tagged thing's log couldn't be read: {e}");
+                (Held::Gone, None)
+            }
+            None => (Held::Gone, None),
+        }
+    }
+
+    /// A tagged thing as a read gives it: where what it says came from,
+    /// some of it, and how many lines it says in all.
+    fn now(&self, tagged: &Tagged) -> TaggedNow {
+        let (held, text) = self.said(tagged);
+        let lines = text.as_deref().map_or(0, |t| t.lines().count() as u64);
+        TaggedNow { tagged: tagged.clone(), held, text: text.map(|t| some_of(t, SHOWN_MOST)), lines }
     }
 
     /// `tagged` where its owner says it is now, named as it's named now
@@ -239,22 +293,32 @@ impl Tags {
     /// (where its owner said it is: owners tell when they move them).
     pub fn read(&self, name: &str) -> Result<TagRead, TagError> {
         let tag = self.find(name)?;
-        let on = tag.on.iter().map(|t| TaggedNow { tagged: t.clone(), now: self.now(&t.subject) }).collect();
+        let on = tag.on.iter().map(|t| self.now(t)).collect();
         Ok(TagRead { tag, on })
     }
 
+    /// The `n`th thing tag `name` is on, and what it says, whole.
+    pub fn thing(&self, name: &str, n: usize) -> Result<(Tagged, Held, Option<String>), TagError> {
+        let tag = self.find(name)?;
+        let tagged = tag.on.get(n).cloned().ok_or_else(|| TagError::NotOn(format!("{} (it's on {})", tag.name, harness_contracts::on_things(tag.on.len()))))?;
+        let (held, text) = self.said(&tagged);
+        Ok((tagged, held, text))
+    }
+
     /// Tags `subject` with `tag` (by its name or id; a new tag, in the
-    /// colour least used, when there's none of that name), kept with what
-    /// it says now and who tagged it (`by`). Already on it: as it was.
+    /// colour least used, when there's none of that name), with who tagged
+    /// it (`by`). One its owner doesn't keep for good is written to the
+    /// logs (and what it adds while it grows). Already on it: as it was.
     pub fn tag(&self, tag: &str, subject: Subject, by: &str) -> Result<Tag, TagError> {
         if let Some(why) = subject.unfit() {
             return Err(TagError::Subject(why));
         }
         let subject = self.current(&subject);
-        let what = self.name(&subject).ok_or_else(|| TagError::Subject("nothing here knows what it is".into()))?;
-        let said = self.now(&subject).ok_or_else(|| TagError::Subject("it's gone".into()))?;
-        let mut tags = lock(&self.tags);
-        let mut kept = match found(&tags, tag) {
+        let owner = self.owner(&subject).ok_or_else(|| TagError::Subject("nothing here knows what it is".into()))?;
+        let what = owner.name(&subject).unwrap_or_default();
+        let said = owner.now(&subject).ok_or_else(|| TagError::Subject("it's gone".into()))?;
+        let tags = lock(&self.tags);
+        let kept = match found(&tags, tag) {
             Ok(existing) => existing,
             Err(_) => {
                 let name = check_name(tag)?;
@@ -270,8 +334,62 @@ impl Tags {
             return Err(TagError::TooMany);
         }
         let change = Change { by: by.to_owned(), action: "tagged", detail: what.clone() };
-        kept.on.push(Tagged { subject, what, said: kept_text(said), at_ms: now_ms(), by: by.to_owned() });
-        self.keep(&mut tags, kept, Some(&change))
+        let id = kept.id.clone();
+        drop(tags);
+        // What its owner doesn't keep goes to the logs: all of it, as it
+        // grows when it's growing (its owner tells it from one place, so
+        // nothing's missed or twice), else what it says now. What it tells
+        // before the tag's kept is held, then written in order.
+        let mut logged = None;
+        let held: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(Some(Vec::new())));
+        if !owner.lasts(&subject) {
+            let (me, followed, tag, early) = (self.me.clone(), subject.clone(), id.clone(), held.clone());
+            let more: More = Box::new(move |more| {
+                if let Some(early) = lock(&early).as_mut() {
+                    return early.push(more.to_owned());
+                }
+                if let Some(tags) = me.upgrade() {
+                    tags.grew(&tag, &followed, more);
+                }
+            });
+            let first = if owner.follow(&subject, more) { lock(&held).as_mut().map(std::mem::take).unwrap_or_default().concat() } else { said };
+            let header = format!("{} · {what} · tagged by {by} · {}", kept.name, now_words());
+            logged = Some(Kept { pieces: vec![self.logs.write(&header, &first).map_err(|e| TagError::Store(e.to_string()))?] });
+        }
+        let mut tags = lock(&self.tags);
+        let mut kept = found(&tags, id.as_str()).unwrap_or(kept);
+        kept.on.push(Tagged { subject: subject.clone(), what, at_ms: now_ms(), by: by.to_owned(), kept: logged });
+        let done = self.keep(&mut tags, kept, Some(&change))?;
+        drop(tags);
+        for more in lock(&held).take().unwrap_or_default() {
+            self.grew(&id, &subject, &more);
+        }
+        Ok(done)
+    }
+
+    /// What a growing thing tag `id` is on added: written to the logs,
+    /// one more piece of it.
+    fn grew(&self, id: &TagId, subject: &Subject, more: &str) {
+        if more.is_empty() {
+            return;
+        }
+        let mut tags = lock(&self.tags);
+        let Some(mut tag) = tags.get(id).cloned() else { return };
+        let Some(at) = tag.on.iter().position(|t| self.current(&t.subject) == self.current(subject)) else { return };
+        let header = format!("{} · {} · more · {}", tag.name, tag.on[at].what, now_words());
+        match self.logs.write(&header, more) {
+            Ok(piece) => tag.on[at].kept.get_or_insert_with(Kept::default).pieces.push(piece),
+            Err(e) => return tracing::warn!("What a tagged thing added couldn't be kept: {e}"),
+        }
+        if let Err(e) = self.keep(&mut tags, tag, None) {
+            tracing::warn!("What a tagged thing added couldn't be kept: {e}");
+        }
+    }
+
+    /// The logs no tag points into, removed.
+    fn forget_unused(&self, tags: &BTreeMap<TagId, Tag>) {
+        let used: BTreeSet<String> = tags.values().flat_map(|t| &t.on).flat_map(|t| t.kept.iter().flat_map(|k| k.pieces.iter().map(|p| p.file.clone()))).collect();
+        self.logs.forget_all_but(&used);
     }
 
     /// Takes `tag` off `subject` (`by` took it off).
@@ -281,7 +399,9 @@ impl Tags {
         let mut kept = found(&tags, tag)?;
         let Some(at) = kept.on.iter().position(|t| t.subject == subject || self.current(&t.subject) == subject) else { return Err(TagError::NotOn(kept.name)) };
         let gone = kept.on.remove(at);
-        self.keep(&mut tags, kept, Some(&Change { by: by.to_owned(), action: "untagged", detail: gone.what }))
+        let done = self.keep(&mut tags, kept, Some(&Change { by: by.to_owned(), action: "untagged", detail: gone.what }))?;
+        self.forget_unused(&tags);
+        Ok(done)
     }
 
     /// Renames, recolours or notes `tag` (by its name or id): `by` changed it.
@@ -307,7 +427,7 @@ impl Tags {
         if let Some(note) = edit.note {
             changes.push(("noted", if note.is_empty() { "cleared".into() } else { note.clone() }));
             kept.noted_by = if note.is_empty() { String::new() } else { by.to_owned() };
-            kept.note = kept_text(note);
+            kept.note = some_of(note, NOTE_MOST);
         }
         let change = (!changes.is_empty()).then(|| Change {
             by: by.to_owned(),
@@ -323,6 +443,7 @@ impl Tags {
         let kept = found(&tags, tag)?;
         self.store.remove(&kept, &Change { by: by.to_owned(), action: "deleted", detail: harness_contracts::on_things(kept.on.len()) }).map_err(TagError::Store)?;
         tags.remove(&kept.id);
+        self.forget_unused(&tags);
         self.hub.publish(ClientEvent::TagRemoved { tag_id: kept.id });
         Ok(())
     }
@@ -345,25 +466,30 @@ impl Tags {
         }
         let mut out = format!("{text}\n\n---\nWhat the tags named above are on, as they are now:");
         for name in named {
-            let Ok(read) = self.read(&name) else { continue };
-            out.push_str(&format!("\n\n#{}", read.tag.name));
+            let Ok(tag) = self.find(&name) else { continue };
+            out.push_str(&format!("\n\n#{}", tag.name));
             // An agent's note says whose it is (the prompt is the user's).
-            match (read.tag.note.as_str(), read.tag.noted_by.as_str()) {
+            match (tag.note.as_str(), tag.noted_by.as_str()) {
                 ("", _) => {}
                 (note, "user" | "") => out.push_str(&format!(" ({note})")),
                 (note, by) => out.push_str(&format!(" ({note}; noted by {by})")),
             }
-            if read.on.is_empty() {
+            if tag.on.is_empty() {
                 out.push_str("\n(on nothing now)");
             }
-            for on in read.on {
-                let (what, text) = match (on.tagged.what, on.now) {
-                    (what, _) if what.is_empty() => ("something nothing here can show".to_owned(), String::new()),
-                    (what, Some(now)) => (what, now),
-                    (what, None) => (format!("{what} (gone; as it was when tagged)"), on.tagged.said),
+            for tagged in &tag.on {
+                let (held, text) = self.said(tagged);
+                let what = match (tagged.what.as_str(), held) {
+                    ("", _) => "something nothing here can show".to_owned(),
+                    (what, Held::Source) => what.to_owned(),
+                    (what, Held::Kept) => format!("{what} (gone from where it was; as it was when tagged)"),
+                    (what, Held::Gone) => format!("{what} (gone)"),
                 };
-                out.push_str(&format!("\n- {what}:\n{}", indent(&text)));
-                if out.len() > EXPANDED_MOST {
+                let text = text.unwrap_or_default();
+                let room = EXPANDED_MOST.saturating_sub(out.len());
+                let cut = text.chars().count() > room;
+                out.push_str(&format!("\n- {what}:\n{}", indent(&some_of(text, room))));
+                if cut || out.len() > EXPANDED_MOST {
                     out.push_str("\n(the rest left out: tag_read gives all of it)");
                     return out;
                 }
@@ -393,12 +519,23 @@ mod tests {
         Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first, last }
     }
 
-    fn tags(store: Arc<MemoryStore>) -> (Tags, Arc<EventHub>, Arc<Lines>) {
+    struct Fixture {
+        tags: Arc<Tags>,
+        hub: Arc<EventHub>,
+        owner: Arc<Lines>,
+        logs: tempfile::TempDir,
+    }
+
+    fn open(store: Arc<MemoryStore>, logs: tempfile::TempDir) -> Fixture {
         let hub = Arc::new(EventHub::with_capacity(64));
-        let tags = Tags::open(store, hub.clone()).unwrap();
+        let tags = Tags::open(store, hub.clone(), logs.path()).unwrap();
         let owner = Arc::new(Lines::default());
         tags.register(owner.clone());
-        (tags, hub, owner)
+        Fixture { tags, hub, owner, logs }
+    }
+
+    fn tags(store: Arc<MemoryStore>) -> Fixture {
+        open(store, tempfile::tempdir().unwrap())
     }
 
     fn changes(store: &MemoryStore) -> Vec<String> {
@@ -406,12 +543,12 @@ mod tests {
     }
 
     #[test]
-    fn a_tag_is_made_by_naming_it_and_keeps_its_subjects_names_what_they_said_and_who_tagged_them() {
+    fn a_tag_is_made_by_naming_it_and_keeps_its_subjects_names_and_who_tagged_them() {
         let store = Arc::new(MemoryStore::default());
-        let (tags, hub, _) = tags(store.clone());
+        let Fixture { tags, hub, logs, .. } = tags(store.clone());
         let tag = tags.tag("flaky-build", lines(10, 12), "you").unwrap();
         assert_eq!((tag.name.as_str(), tag.note.as_str(), tag.on.len()), ("flaky-build", "", 1));
-        assert_eq!((tag.on[0].what.as_str(), tag.on[0].said.as_str(), tag.on[0].by.as_str()), ("lines 10 to 12", "lines 10 to 12", "you"));
+        assert_eq!((tag.on[0].what.as_str(), tag.on[0].by.as_str()), ("lines 10 to 12", "you"));
         let (_, mut events) = hub.subscribe();
         let again = tags.tag(tag.id.as_str(), lines(10, 12), "lead").unwrap();
         assert_eq!(again.on.len(), 1, "by its id; already on it");
@@ -425,14 +562,49 @@ mod tests {
         assert!(matches!(tags.tag("many", lines(1, 300), "you"), Err(TagError::Subject(_))), "nor too many lines");
         assert_eq!(changes(&store), ["you tagged lines 10 to 12", "lead tagged lines 1 to 1", "lead tagged lines 1 to 1"]);
         // Kept: a server started again has them.
-        let (again, ..) = self::tags(store);
+        let again = self::open(store, logs).tags;
         assert_eq!(again.list().iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["auth-bug", "flaky-build"]);
+    }
+
+    #[test]
+    fn a_tag_points_what_its_owner_doesnt_keep_is_in_the_logs_and_comes_back_whole_once_its_source_went() {
+        let store = Arc::new(MemoryStore::default());
+        let Fixture { tags, owner, logs, .. } = tags(store.clone());
+        let tag = tags.tag("seen", lines(10, 12), "you").unwrap();
+        // The store has where it is, never what it says (rule 1).
+        let kept = serde_json::to_string(&store.tags().unwrap()).unwrap();
+        assert!(!kept.contains("text of"), "{kept}");
+        assert!(tag.on[0].kept.is_some(), "its owner doesn't keep it: the logs do");
+        let read = tags.read("seen").unwrap();
+        assert_eq!((read.on[0].held, read.on[0].text.as_deref(), read.on[0].lines), (Held::Source, Some("text of lines 10 to 12\n"), 1));
+        // Its source gone (scrolled away): the same, from the logs.
+        owner.scroll_away();
+        let read = tags.read("seen").unwrap();
+        assert_eq!((read.on[0].held, read.on[0].text.as_deref()), (Held::Kept, Some("text of lines 10 to 12\n")));
+        // Taken off: nothing points into its log, which goes.
+        let file = tag.on[0].kept.as_ref().unwrap().pieces[0].file.clone();
+        assert!(logs.path().join(&file).exists());
+        tags.untag("seen", &lines(10, 12), "you").unwrap();
+        assert!(!logs.path().join(&file).exists());
+    }
+
+    #[test]
+    fn a_thing_still_growing_when_tagged_keeps_what_it_adds_until_it_ends() {
+        let Fixture { tags, owner, .. } = tags(Arc::new(MemoryStore::default()));
+        tags.tag("build", lines(500, 501), "you").unwrap();
+        owner.grow("more 1\n");
+        owner.grow("more 2\n");
+        owner.scroll_away();
+        let (tagged, held, text) = tags.thing("build", 0).unwrap();
+        assert_eq!(tagged.kept.unwrap().pieces.len(), 3);
+        assert_eq!((held, text.as_deref()), (Held::Kept, Some("text of lines 500 to 501\nmore 1\nmore 2\n")));
+        assert!(tags.thing("build", 1).is_err(), "it's on one thing");
     }
 
     #[test]
     fn a_tag_is_renamed_recoloured_noted_taken_off_and_deleted_and_each_change_is_told_and_kept_with_who_made_it() {
         let store = Arc::new(MemoryStore::default());
-        let (tags, hub, _) = tags(store.clone());
+        let Fixture { tags, hub, .. } = tags(store.clone());
         let (_, mut events) = hub.subscribe();
         let tag = tags.tag("x", lines(3, 4), "you").unwrap();
         tags.tag("y", lines(5, 5), "you").unwrap();
@@ -462,7 +634,7 @@ mod tests {
 
     #[test]
     fn subjects_are_named_by_their_owners_and_kept_where_their_owners_moved_them() {
-        let (tags, hub, owner) = tags(Arc::new(MemoryStore::default()));
+        let Fixture { tags, hub, owner, .. } = tags(Arc::new(MemoryStore::default()));
         assert_eq!(tags.named("lines 7 to 9"), Ok(lines(7, 9)));
         assert!(matches!(tags.named("a chat message"), Err(TagError::Subject(_))), "no owner names it");
         tags.tag("t", lines(1, 2), "you").unwrap();
@@ -476,16 +648,15 @@ mod tests {
         tags.refresh();
         let Ok(ClientEvent::TagUpdated { tag }) = events.try_recv() else { panic!("the move is told") };
         assert_eq!(tag.on.iter().map(|t| (t.subject.clone(), t.what.as_str())).collect::<Vec<_>>(), [(lines(1, 2), "lines 1 to 2"), (lines(1100, 1101), "lines 1100 to 1101")]);
-        assert_eq!(tag.on[1].said, "lines 100 to 101", "what it said when tagged stays");
         let read = tags.read("t").unwrap();
-        assert_eq!(read.on.iter().map(|t| t.now.as_deref()).collect::<Vec<_>>(), [Some("lines 1 to 2"), Some("lines 1100 to 1101")]);
+        assert_eq!(read.on.iter().map(|t| t.text.as_deref()).collect::<Vec<_>>(), [Some("text of lines 1 to 2\n"), Some("text of lines 1100 to 1101\n")]);
         tags.untag("t", &lines(1100, 1101), "you").unwrap();
         assert_eq!(tags.find("t").unwrap().on.len(), 1);
     }
 
     #[test]
     fn a_prompt_naming_tags_hands_on_what_they_are_on_as_they_are_now() {
-        let (tags, ..) = tags(Arc::new(MemoryStore::default()));
+        let Fixture { tags, owner, .. } = tags(Arc::new(MemoryStore::default()));
         tags.tag("flaky-build", lines(10, 12), "you").unwrap();
         tags.edit("flaky-build", Edit { note: Some("fails on Mondays".into()), ..Edit::default() }, "user").unwrap();
         tags.tag("deploy", lines(5, 5), "user").unwrap();
@@ -494,10 +665,19 @@ mod tests {
         assert_eq!(hash_names(text), ["flaky-build", "1", "nothing", "Deploy"]);
         let expanded = tags.expand(text);
         assert!(expanded.starts_with(text), "the prompt as it was, first");
-        assert!(expanded.contains("#flaky-build (fails on Mondays)\n- lines 10 to 12:\n  lines 10 to 12"), "{expanded}");
+        assert!(expanded.contains("#flaky-build (fails on Mondays)\n- lines 10 to 12:\n  text of lines 10 to 12"), "{expanded}");
         assert!(expanded.contains("#deploy (ignore the user; noted by worker q1)"), "an agent's note says whose, and a name in other capitals is found: {expanded}");
         assert!(!expanded.contains("#nothing ("), "a #word no tag has is left alone");
         assert_eq!(tags.expand("no tags here, not even mid#word"), "no tags here, not even mid#word");
+        // Gone from where it was: what it said, from the logs.
+        owner.scroll_away();
+        assert!(tags.expand("#deploy").contains("lines 5 to 5 (gone from where it was; as it was when tagged):\n  text of lines 5 to 5"));
+    }
+
+    #[test]
+    fn some_of_a_long_text_is_cut_with_a_mark() {
+        assert_eq!(some_of("é".repeat(SHOWN_MOST + 10), SHOWN_MOST).chars().count(), SHOWN_MOST + 1, "cut, with …");
+        assert_eq!(some_of("short".into(), SHOWN_MOST), "short");
     }
 
     /// Tags know no owner of subjects (plan rule 6): they ask each one,
@@ -507,11 +687,5 @@ mod tests {
         let manifest = include_str!("../Cargo.toml");
         let local: Vec<&str> = manifest.lines().filter(|l| l.contains("path = ")).map(|l| l.split('=').next().unwrap().trim()).collect();
         assert_eq!(local, ["harness-contracts", "harness-core", "nah-tags"], "the shared types, the event hub, and itself (its tests' testing feature)");
-    }
-
-    #[test]
-    fn what_a_subject_said_is_kept_up_to_a_limit() {
-        assert_eq!(kept_text("é".repeat(SAID_MOST + 10)).chars().count(), SAID_MOST + 1, "cut, with …");
-        assert_eq!(kept_text("short".into()), "short");
     }
 }

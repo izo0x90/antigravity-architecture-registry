@@ -35,18 +35,34 @@ impl TagStore for MemoryStore {
     }
 }
 
-/// Owns terminal t1's lines: lines `a` to `b` are named and say "lines a
-/// to b"; those from line 0 are gone; those from 100 to 999 were laid out
+/// Owns terminal t1's lines: lines `a` to `b` are named "lines a to b"
+/// and say "text of lines a to b"; those from line 0 are gone; those from 100 to 999 were laid out
 /// anew (once `relay` is called) and are `relaid` thousand lines on now.
+/// It doesn't keep them for good: once `scroll_away` is called, none is
+/// there. Lines from 500 on are still growing: `grow` adds to them.
 #[derive(Default)]
 pub struct Lines {
     pub relaid: AtomicU64,
+    gone: std::sync::atomic::AtomicBool,
+    growing: Mutex<Vec<crate::More>>,
 }
 
 impl Lines {
     /// Lays lines 100 to 999 out anew (once more).
     pub fn relay(&self) {
         self.relaid.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Every line goes (past what's kept).
+    pub fn scroll_away(&self) {
+        self.gone.store(true, Ordering::SeqCst);
+    }
+
+    /// The growing lines add `text`.
+    pub fn grow(&self, text: &str) {
+        for more in self.growing.lock().unwrap().iter_mut() {
+            more(text);
+        }
     }
 }
 
@@ -58,7 +74,8 @@ impl Resolve for Lines {
 
     fn now(&self, subject: &Subject) -> Option<String> {
         let Subject::TerminalLines { first, .. } = subject else { return None };
-        (*first > 0).then(|| self.name(subject)).flatten()
+        let Subject::TerminalLines { last, .. } = subject else { return None };
+        (*first > 0 && !self.gone.load(Ordering::SeqCst)).then(|| format!("text of lines {first} to {last}\n"))
     }
 
     fn named(&self, words: &str) -> Option<Result<Subject, String>> {
@@ -70,5 +87,20 @@ impl Resolve for Lines {
         let Subject::TerminalLines { terminal, shell, first, last } = subject else { return None };
         let by = 1000 * self.relaid.load(Ordering::SeqCst);
         (by > 0 && (100..1000).contains(first)).then(|| Subject::TerminalLines { terminal: terminal.clone(), shell: *shell, first: first + by, last: last + by })
+    }
+
+    fn lasts(&self, _subject: &Subject) -> bool {
+        false
+    }
+
+    fn follow(&self, subject: &Subject, more: crate::More) -> bool {
+        let Subject::TerminalLines { first, .. } = subject else { return false };
+        if *first < 500 {
+            return false;
+        }
+        let mut more = more;
+        more(&self.now(subject).unwrap_or_default());
+        self.growing.lock().unwrap().push(more);
+        true
     }
 }
