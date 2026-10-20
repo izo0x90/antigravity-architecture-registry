@@ -12,6 +12,7 @@ mod look;
 mod offers;
 mod moves;
 mod outside;
+mod plans;
 mod split;
 mod tags;
 mod terminal;

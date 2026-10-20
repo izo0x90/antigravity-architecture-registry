@@ -176,3 +176,31 @@ async fn a_plans_parts_are_tagged_by_name_and_read_as_the_plan_has_them() {
     let (_, read) = lead.tool("tag_read", json!({ "tag": "review" })).await;
     assert!(read.contains("4. plan v relation rust:sample::run calls rust:sample::validate (tagged by lead): gone, nothing kept of it"), "{read}");
 }
+
+/// A review, through the agents' tools: made, its items added, nested,
+/// moved and set, listed nested with their states; kept in the plan's
+/// file as they were made.
+#[tokio::test]
+async fn a_review_is_made_and_gone_through_with_the_plan_tools() {
+    let arch = fixture_architecture();
+    let (addr, _state) = spawn_app_with(arch.clone()).await;
+    let mut lead = Mcp::lead(addr).await;
+    let (error, said) = lead.tool("plan_create", json!({ "id": "findings", "title": "Findings", "kind": "review" })).await;
+    assert!(!error && said.contains("Created review findings"), "{said}");
+    let ops = json!([
+        { "op": "add_item", "title": "Decide", "text": "What to decide." },
+        { "op": "add_item", "title": "FFF skipped", "text": "tag_find reads each log.", "under": "i1" },
+        { "op": "add_item", "title": "Open" },
+        { "op": "add_item", "title": "Turns renumbered", "under": "i3" },
+        { "op": "move_item", "id": "i4", "under": "i1" },
+        { "op": "set_item", "id": "i2", "state": "decided" }
+    ]);
+    let (error, said) = lead.tool("plan_edit", json!({ "plan": "findings", "ops": ops })).await;
+    assert!(!error && said.contains("4 items (i1 open, i2 decided, i3 open, i4 open)"), "{said}");
+    let (error, said) = lead.tool("plan_edit", json!({ "plan": "findings", "ops": [{ "op": "add_component", "name": "x", "type": "function", "parent": "rust:sample" }] })).await;
+    assert!(error && said.contains("is a review"), "{said}");
+    let (_, listed) = lead.tool("plan_list", json!({})).await;
+    assert!(listed.contains("findings — Findings (review)\n  i1 [open] Decide\n    i2 [decided] FFF skipped\n    i4 [open] Turns renumbered\n  i3 [open] Open\n"), "{listed}");
+    let plan = arch.plan(&PlanId::new("findings").unwrap()).unwrap();
+    assert_eq!(plan.items.iter().map(|i| (i.id.0.as_str(), i.title.as_str())).collect::<Vec<_>>(), [("i1", "Decide"), ("i2", "FFF skipped"), ("i3", "Open"), ("i4", "Turns renumbered")]);
+}

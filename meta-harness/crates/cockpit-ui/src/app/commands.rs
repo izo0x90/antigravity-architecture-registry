@@ -106,6 +106,7 @@ impl CockpitApp {
             nav("nav.line", "Go to line or row", "By its number (a terminal's lines by the numbers they keep for life)", S::Line).param(Param::Text { hint: "line or row number".into(), start: String::new() }).importance(MINOR),
         ];
         out.extend(self.tag_actions(here));
+        out.extend(self.item_actions(here));
         // Each go-to's destination says whether it can show what the
         // cursor is on; the relational ones, whether its relations lead
         // anywhere.
@@ -439,6 +440,7 @@ impl CockpitApp {
             ShellCommand::SearchStep { forward } => self.search_step(forward, count),
             ShellCommand::MarkSet => self.start_capture(Capture::MarkSet),
             ShellCommand::Tag | ShellCommand::Untag(_) | ShellCommand::TagGoTo | ShellCommand::TagGoToPick | ShellCommand::TagStep { .. } | ShellCommand::TagLevel | ShellCommand::TagEdit(..) | ShellCommand::TagEditWhich(_) | ShellCommand::TagInsert => self.run_tag(&command, value, ctx),
+            ShellCommand::ItemState(plan, item) => self.set_item_state(&plan, &item, value, ctx),
             ShellCommand::MarkJump => self.start_capture(Capture::MarkJump),
             ShellCommand::Back | ShellCommand::Forward => {
                 let here = self.jump_here();

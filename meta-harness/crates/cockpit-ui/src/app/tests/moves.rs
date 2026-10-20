@@ -205,6 +205,15 @@ fn f_labels_what_is_on_screen_in_every_view() {
     app.desk.share();
     for kind in BufferKind::ALL {
         focus(&ctx, &mut app, kind);
+        // The plan tree: its plan read.
+        if kind == BufferKind::Plan {
+            let mut plan = arch_graph::Plan::new("p", "Findings");
+            plan.items = vec![arch_graph::Item { id: arch_graph::ItemId("i1".into()), parent: None, title: "Decide".into(), text: String::new(), state: arch_graph::ItemState::Open }];
+            assert!(app.desk.net.answer("GET /api/arch/plans/p", 200, &serde_json::to_value(plan).unwrap()));
+            for _ in 0..3 {
+                frame(&ctx, &mut app, vec![]);
+            }
+        }
         // A terminal: focusing it starts typing; its leave keys stop it.
         if kind == BufferKind::Terminal {
             assert!(matches!(app.input_mode, InputMode::Insert { .. }), "focusing a terminal starts typing");

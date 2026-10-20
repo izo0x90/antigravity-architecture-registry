@@ -824,6 +824,16 @@ impl NetClient {
         self.call("GET", "/api/arch/plans", None, ctx, on_done);
     }
 
+    /// One plan, as it is now.
+    pub fn arch_plan(&self, plan: &arch_graph::PlanId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::Plan>) + Send + 'static) {
+        self.call("GET", &format!("/api/arch/plans/{}", urlencoding::encode(&plan.0)), None, ctx, on_done);
+    }
+
+    /// Applies plan operations (as the user: an item's state, say).
+    pub fn arch_plan_ops(&self, plan: &arch_graph::PlanId, ops: serde_json::Value, ctx: egui::Context, on_done: impl FnOnce(NetResult<serde_json::Value>) + Send + 'static) {
+        self.call("POST", &format!("/api/arch/plans/{}/ops", urlencoding::encode(&plan.0)), Some(ops), ctx, on_done);
+    }
+
     pub fn arch_validate(&self, plan: &arch_graph::PlanId, ctx: egui::Context, on_done: impl FnOnce(NetResult<arch_graph::Report>) + Send + 'static) {
         self.call("POST", &format!("/api/arch/plans/{}/validate", urlencoding::encode(&plan.0)), Some(serde_json::json!({})), ctx, on_done);
     }

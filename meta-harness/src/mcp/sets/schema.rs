@@ -59,6 +59,7 @@ impl Fragments {
             "description": "Data shapes: properties (data types), inputs (one field per parameter), outputs, and side effects.",
             "properties": { "properties": shape, "inputs": shape, "outputs": shape, "side_effects": effects }
         });
+        let item = json!({ "type": "string", "description": "An item's id (i1, i2...)" });
         let op = json!({
             "type": "object",
             "description": "One plan operation, selected by `op`.",
@@ -70,7 +71,11 @@ impl Fragments {
                 { "properties": { "op": { "const": "unrelate" }, "kind": kind, "source": id, "target": id }, "required": ["op", "kind", "source", "target"] },
                 { "properties": { "op": { "const": "remove" }, "id": id }, "required": ["op", "id"] },
                 { "properties": { "op": { "const": "set_greenfield" }, "greenfield": { "type": "boolean" } }, "required": ["op", "greenfield"] },
-                { "properties": { "op": { "const": "describe" }, "title": { "type": "string" }, "description": { "type": "string" } }, "required": ["op"] }
+                { "properties": { "op": { "const": "describe" }, "title": { "type": "string" }, "description": { "type": "string" } }, "required": ["op"] },
+                { "description": "An item (a finding, a decision, a to-do, a question to settle), open; under item `under` or at the top. Items get ids i1, i2...", "properties": { "op": { "const": "add_item" }, "title": { "type": "string", "description": "One line" }, "text": { "type": "string" }, "under": item }, "required": ["op", "title"] },
+                { "properties": { "op": { "const": "edit_item" }, "id": item, "title": { "type": "string" }, "text": { "type": "string" } }, "required": ["op", "id"] },
+                { "description": "Under another item (none: to the top), last there", "properties": { "op": { "const": "move_item" }, "id": item, "under": item }, "required": ["op", "id"] },
+                { "properties": { "op": { "const": "set_item" }, "id": item, "state": { "type": "string", "enum": arch_graph::ItemState::ALL.map(|s| s.name()) } }, "required": ["op", "id", "state"] }
             ]
         });
         Self { tree_help, card, id, plan, source, op }

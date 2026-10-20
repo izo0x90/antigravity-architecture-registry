@@ -36,6 +36,7 @@ mod lifecycle;
 mod look;
 pub(crate) mod notes;
 mod outside;
+mod plan_items;
 mod tagging;
 mod views;
 
@@ -116,6 +117,8 @@ enum ShellCommand {
     TagEdit(TagEditing, harness_contracts::TagId),
     /// Which of the tags at the cursor an edit is of (its value: its id).
     TagEditWhich(TagEditing),
+    /// A plan's item's state (its value: open, decided, done, dropped).
+    ItemState(arch_graph::PlanId, arch_graph::ItemId),
     Back,
     Forward,
     Keys,

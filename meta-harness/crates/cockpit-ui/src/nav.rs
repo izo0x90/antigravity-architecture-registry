@@ -134,18 +134,7 @@ impl Target {
             Self::Chat { turn, message: Some(message), .. } => format!("turn {turn} message {message}"),
             Self::Chat { turn, .. } => format!("turn {turn}"),
             // A plan's part: its one name (`Subject::name`).
-            Self::Plan { plan, part } => {
-                use harness_contracts::Subject;
-                let plan = plan.clone();
-                let subject = match part.clone() {
-                    PlanPart::Whole => Subject::Plan { plan },
-                    PlanPart::Component(id) => Subject::PlanComponent { plan, id },
-                    PlanPart::Section(id, section) => Subject::PlanSection { plan, id, section },
-                    PlanPart::Relation { kind, source, target } => Subject::PlanRelation { plan, relation: kind, source, target },
-                    PlanPart::Item(item) => Subject::PlanItem { plan, item },
-                };
-                subject.name(&harness_contracts::Known::default())
-            }
+            Self::Plan { .. } => self.subject().map(|s| s.name(&harness_contracts::Known::default())).unwrap_or_default(),
         }
     }
 
@@ -166,6 +155,23 @@ impl Target {
             Subject::PlanItem { plan, item } => Self::Plan { plan, part: PlanPart::Item(item) },
             _ => return None,
         })
+    }
+
+    /// The thing it is, when it's one notes can be on (a component, a
+    /// plan's part).
+    pub fn subject(&self) -> Option<harness_contracts::Subject> {
+        use harness_contracts::Subject;
+        match self.clone() {
+            Self::Component(id) => Some(Subject::Component { id, was: None }),
+            Self::Plan { plan, part } => Some(match part {
+                PlanPart::Whole => Subject::Plan { plan },
+                PlanPart::Component(id) => Subject::PlanComponent { plan, id },
+                PlanPart::Section(id, section) => Subject::PlanSection { plan, id, section },
+                PlanPart::Relation { kind, source, target } => Subject::PlanRelation { plan, relation: kind, source, target },
+                PlanPart::Item(item) => Subject::PlanItem { plan, item },
+            }),
+            _ => None,
+        }
     }
 
     /// The component the target is about.

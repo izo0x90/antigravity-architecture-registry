@@ -117,5 +117,6 @@ pub fn new(kind: BufferKind) -> Box<dyn Buffer> {
         BufferKind::Changes => Box::<crate::changes::ChangesView>::default(),
         BufferKind::Terminal => Box::<crate::terminal::TerminalBuffer>::default(),
         BufferKind::Tags => Box::<crate::tag_list::TagList>::default(),
+        BufferKind::Plan => Box::new(crate::tree::TreeBuffer::new(Box::<crate::tree::PlanTree>::default())),
     }
 }

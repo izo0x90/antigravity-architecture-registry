@@ -13,10 +13,11 @@ pub enum BufferKind {
     Changes,
     Terminal,
     Tags,
+    Plan,
 }
 
 impl BufferKind {
-    pub const ALL: [Self; 10] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec, Self::Queue, Self::Inbox, Self::Changes, Self::Terminal, Self::Tags];
+    pub const ALL: [Self; 11] = [Self::Chat, Self::Code, Self::Graph, Self::Tree, Self::Spec, Self::Queue, Self::Inbox, Self::Changes, Self::Terminal, Self::Tags, Self::Plan];
 
     pub fn title(&self) -> &'static str {
         match self {
@@ -30,13 +31,15 @@ impl BufferKind {
             Self::Changes => "CHANGES",
             Self::Terminal => "TERMINAL",
             Self::Tags => "TAGS",
+            Self::Plan => "PLAN",
         }
     }
 
     /// There is one of these (the queue, the inbox, the changes: the
-    /// desk's comparison, the tags); of the others, each panel can have its own.
+    /// desk's comparison, the tags, the plan the desk reads); of the others,
+    /// each panel can have its own.
     pub fn one_only(&self) -> bool {
-        matches!(self, Self::Queue | Self::Inbox | Self::Changes | Self::Tags)
+        matches!(self, Self::Queue | Self::Inbox | Self::Changes | Self::Tags | Self::Plan)
     }
 
     /// Lowercase name used in action ids ("buffer.chat").
@@ -52,6 +55,7 @@ impl BufferKind {
             Self::Changes => "changes",
             Self::Terminal => "terminal",
             Self::Tags => "tags",
+            Self::Plan => "plan",
         }
     }
 
@@ -67,6 +71,7 @@ impl BufferKind {
             Self::Changes => egui_phosphor::regular::GIT_DIFF,
             Self::Terminal => egui_phosphor::regular::TERMINAL_WINDOW,
             Self::Tags => egui_phosphor::regular::TAG,
+            Self::Plan => egui_phosphor::regular::LIST_CHECKS,
         }
     }
 }

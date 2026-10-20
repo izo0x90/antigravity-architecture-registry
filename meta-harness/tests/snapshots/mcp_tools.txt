@@ -279,7 +279,7 @@ Create a plan from the old registry document (system_architecture.json): compone
 }
 
 ## plan_edit
-Apply operations to a plan, in order (stops at the first that fails). Add new components under a real parent (they get a proposed location), modify planned or existing ones, reference existing code you build on, and relate components (calls with expectations, data flow, implements). New work must connect to existing code. Changing an approved component's design sends it, and what depends on it, back for approval.
+Apply operations to a plan, in order (stops at the first that fails). Add new components under a real parent (they get a proposed location), modify planned or existing ones, reference existing code you build on, and relate components (calls with expectations, data flow, implements). New work must connect to existing code. Changing an approved component's design sends it, and what depends on it, back for approval. Any plan can have items (to-dos, findings, decisions), nested, each open, decided, done or dropped; a review plan has only items.
 {
   "type": "object",
   "properties": {
@@ -856,6 +856,95 @@ Apply operations to a plan, in order (stops at the first that fails). Add new co
             },
             "required": [
               "op"
+            ]
+          },
+          {
+            "description": "An item (a finding, a decision, a to-do, a question to settle), open; under item `under` or at the top. Items get ids i1, i2...",
+            "properties": {
+              "op": {
+                "const": "add_item"
+              },
+              "title": {
+                "type": "string",
+                "description": "One line"
+              },
+              "text": {
+                "type": "string"
+              },
+              "under": {
+                "type": "string",
+                "description": "An item's id (i1, i2...)"
+              }
+            },
+            "required": [
+              "op",
+              "title"
+            ]
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "edit_item"
+              },
+              "id": {
+                "type": "string",
+                "description": "An item's id (i1, i2...)"
+              },
+              "title": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "id"
+            ]
+          },
+          {
+            "description": "Under another item (none: to the top), last there",
+            "properties": {
+              "op": {
+                "const": "move_item"
+              },
+              "id": {
+                "type": "string",
+                "description": "An item's id (i1, i2...)"
+              },
+              "under": {
+                "type": "string",
+                "description": "An item's id (i1, i2...)"
+              }
+            },
+            "required": [
+              "op",
+              "id"
+            ]
+          },
+          {
+            "properties": {
+              "op": {
+                "const": "set_item"
+              },
+              "id": {
+                "type": "string",
+                "description": "An item's id (i1, i2...)"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "decided",
+                  "done",
+                  "dropped"
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "id",
+              "state"
             ]
           }
         ]

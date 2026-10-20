@@ -71,7 +71,7 @@ fn what_the_final_audit_found_stays_fixed() {
     app.desk.spec_mut().show(step.clone());
     let relation = crate::spec::Entry { section: crate::spec::Section::Relations, item: crate::spec::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true } }.key();
     app.desk.spec_mut().detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
-    app.desk.spec_mut().restore(&Place::of(&crate::spec::SpecPlace { component: Some(step.clone()), item: Some(relation.clone()) }));
+    app.desk.spec_mut().restore(&Place::of(&crate::spec::SpecPlace { component: Some(step.clone()), item: Some(relation.clone()), plan_item: None }));
     assert_eq!(app.desk.spec().cursor_key().as_deref(), Some(relation.as_str()));
     // A second Escape throws a draft away.
     app.desk.spec_mut().source = Source::Plan(PlanId::new("p").unwrap());

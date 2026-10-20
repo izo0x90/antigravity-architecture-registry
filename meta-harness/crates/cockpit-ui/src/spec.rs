@@ -143,6 +143,8 @@ pub struct Composer {
 
 enum Reply {
     Detail(ComponentId, Box<NetResult<ComponentDetail>>),
+    /// The plan an item card is of.
+    Plan(arch_graph::PlanId, Box<NetResult<arch_graph::Plan>>),
     Report(ComponentId, NetResult<Report>),
     /// A review write finished.
     Posted(Result<(), String>),
@@ -162,9 +164,26 @@ impl Entry {
     }
 }
 
+/// A plan's item shown as a card (instead of a component's): the plan as
+/// last read, asked for again when the plan changes.
+pub struct ItemCard {
+    pub plan: arch_graph::PlanId,
+    pub id: arch_graph::ItemId,
+    read: Option<Result<arch_graph::Plan, String>>,
+    asked: bool,
+}
+
+impl ItemCard {
+    fn key(&self) -> String {
+        format!("item#{}", self.id)
+    }
+}
+
 pub struct SpecState {
     /// What it shows: the graph selection unless pinned.
     pub target: Option<ComponentId>,
+    /// Or a plan's item (then there's no component).
+    pub item: Option<ItemCard>,
     /// What it's read from: the code, or the code with a plan (where its
     /// comments and checks live).
     pub source: Source,
@@ -250,6 +269,7 @@ impl Default for SpecState {
             comparing: Default::default(),
             changes_inbox: Arc::default(),
             restore_item: None,
+            item: None,
             spots: Vec::new(),
             typing: None,
             inbox: Arc::default(),
@@ -329,7 +349,70 @@ impl SpecState {
         if self.target.as_ref() != Some(&id) {
             self.leave_component();
         }
+        self.item = None;
         self.target = Some(id);
+    }
+
+    /// Shows a plan's item's card (no component's).
+    fn show_item(&mut self, plan: &arch_graph::PlanId, id: &arch_graph::ItemId) {
+        if self.item.as_ref().is_some_and(|c| c.plan == *plan && c.id == *id) {
+            return;
+        }
+        self.leave_component();
+        self.target = None;
+        self.detail = None;
+        self.item = Some(ItemCard { plan: plan.clone(), id: id.clone(), read: None, asked: false });
+    }
+
+    /// Draws a plan's item's card: its title and state, its text, the item
+    /// it's under and those under it.
+    fn draw_item(&mut self, ui: &mut egui::Ui) {
+        let Some(card) = &self.item else { return };
+        let look = crate::theme::look();
+        let key = card.key();
+        let plan = match &card.read {
+            None => {
+                ui.label(RichText::new("Loading…").color(colors().muted));
+                return;
+            }
+            Some(Err(e)) => {
+                ui.label(RichText::new(format!("Couldn't read plan {}: {e}", card.plan)).color(colors().muted));
+                return;
+            }
+            Some(Ok(plan)) => plan,
+        };
+        let Some(item) = plan.item(&card.id) else {
+            ui.label(RichText::new(format!("Plan {} has no item {} any more.", card.plan, card.id)).color(colors().muted));
+            self.spots.clear();
+            return;
+        };
+        let response = ui
+            .vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(&item.title).size(look.text_title).strong());
+                    ui.label(RichText::new(item.state.name()).color(colors().focus));
+                });
+                ui.label(RichText::new(format!("{} · plan {}", item.id, plan.id)).size(look.text_small).color(colors().muted));
+                if let Some(parent) = item.parent.as_ref().and_then(|p| plan.item(p)) {
+                    ui.label(RichText::new(format!("Under {} {}", parent.id, parent.title)).color(colors().muted));
+                }
+                ui.add_space(look.space_s);
+                if item.text.is_empty() {
+                    ui.label(RichText::new("No text.").color(colors().muted));
+                } else {
+                    ui.label(&item.text);
+                }
+                let under: Vec<&arch_graph::Item> = plan.items.iter().filter(|i| i.parent.as_ref() == Some(&item.id)).collect();
+                if !under.is_empty() {
+                    ui.add_space(look.space_s);
+                    ui.label(RichText::new("Under it").strong());
+                    for i in under {
+                        ui.label(format!("{} {} ({})", i.id, i.title, i.state.name()));
+                    }
+                }
+            })
+            .response;
+        self.spots = vec![Spot { key, rect: response.rect }];
     }
 
     /// The relations shown, in order: by kind, outgoing then incoming.
@@ -621,6 +704,10 @@ impl SpecState {
 
     /// Draws it; its composer has the keyboard while `typing`.
     pub(crate) fn draw(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, typing: bool) {
+        if self.item.is_some() {
+            self.draw_item(ui);
+            return;
+        }
         self.render_composer(ui, cx, typing);
         let Some(detail) = self.detail.clone() else {
             let msg = match (&self.target, &self.error) {
@@ -987,6 +1074,20 @@ impl ActionProvider for SpecState {
     fn actions(&self) -> Vec<Action> {
         use SpecCommand as S;
         let f = |id: &str, label: &str, detail: &str, c: SpecCommand| Action::new(id, label, detail, c).focused();
+        // An item's card: one stop, nothing of a component's card (its
+        // state is the shell's, on the item).
+        if self.item.is_some() {
+            let mut out = crate::nav::list_moves();
+            if !self.floating {
+                out.push(
+                    f("spec.pin", if self.pinned { "Unpin (follow what you're on)" } else { "Pin this card" }, "Pinned, it stays on this card while you move elsewhere", S::Pin)
+                        .header(Style::Button, if self.pinned { "Pinned" } else { "Pin" }, Some(egui_phosphor::regular::PUSH_PIN))
+                        .group(Group::View)
+                        .importance(MINOR),
+                );
+            }
+            return out;
+        }
         let mut out = self.moves();
         if self.composer.is_some() {
             out.push(f("spec.send", "Send what's written", "Posts the comment or answer to the plan's review", S::Send).importance(PRIMARY).typed(crate::keymap::Sent::Send).on_typing(Style::Button, "Send", Some(egui_phosphor::regular::PAPER_PLANE_RIGHT)));
@@ -1141,7 +1242,7 @@ impl Navigable for SpecState {
     fn can_show(&self, target: &Target) -> bool {
         use crate::nav::PlanPart;
         match target {
-            Target::Plan { part, .. } => matches!(part, PlanPart::Component(_) | PlanPart::Section(..) | PlanPart::Relation { .. }),
+            Target::Plan { part, .. } => matches!(part, PlanPart::Component(_) | PlanPart::Section(..) | PlanPart::Relation { .. } | PlanPart::Item(_)),
             _ => target.in_component() && target.component() != self.target.as_ref(),
         }
     }
@@ -1199,7 +1300,8 @@ impl Navigable for SpecState {
     }
 
     fn place(&self) -> Place {
-        Place::of(&SpecPlace { component: self.target.clone(), item: self.entry().map(|e| e.key()) })
+        let plan_item = self.item.as_ref().map(|c| (c.plan.clone(), c.id.clone()));
+        Place::of(&SpecPlace { component: self.target.clone(), item: self.entry().map(|e| e.key()), plan_item })
     }
 
     fn place_in_words(&self, place: &Place) -> String {
@@ -1208,7 +1310,11 @@ impl Navigable for SpecState {
 
     /// Back to the component and the item.
     fn restore(&mut self, place: &Place) {
-        if let Some(SpecPlace { component, item }) = place.read() {
+        if let Some(SpecPlace { plan_item: Some((plan, id)), .. }) = place.read() {
+            self.show_item(&plan, &id);
+            return;
+        }
+        if let Some(SpecPlace { component, item, .. }) = place.read() {
             if let Some(id) = component {
                 self.land_on(id);
             }
@@ -1226,6 +1332,9 @@ impl Navigable for SpecState {
     }
 
     fn target(&self) -> Option<Target> {
+        if let Some(card) = &self.item {
+            return Some(Target::Plan { plan: card.plan.clone(), part: crate::nav::PlanPart::Item(card.id.0.clone()) });
+        }
         let component = self.target.clone()?;
         let entry = self.entry().unwrap_or(Entry { section: self.current, item: SpecItem::Header });
         // A change: its place in the file.
@@ -1349,6 +1458,9 @@ impl Navigable for SpecState {
     }
 
     fn cursor_key(&self) -> Option<String> {
+        if let Some(card) = &self.item {
+            return Some(card.key());
+        }
         self.entry().map(|e| e.key())
     }
 
@@ -1384,8 +1496,12 @@ impl SpecState {
     /// component the plan doesn't change, the component.
     fn things_at(&self, key: &str) -> crate::nav::Things {
         use harness_contracts::Subject;
-        let Some(entry) = self.all_entries().into_iter().find(|e| e.key() == key) else { return crate::nav::Things::default() };
         let known = harness_contracts::Known::default();
+        if let Some(card) = self.item.as_ref().filter(|c| c.key() == key) {
+            let at = [Subject::PlanItem { plan: card.plan.clone(), item: card.id.0.clone() }, Subject::Plan { plan: card.plan.clone() }];
+            return crate::nav::Things { at: at.into_iter().map(|s| crate::nav::Thing::named(s, &known)).collect(), unit: 0 };
+        }
+        let Some(entry) = self.all_entries().into_iter().find(|e| e.key() == key) else { return crate::nav::Things::default() };
         let Some((plan, id)) = self.plan_of_card() else {
             return match &self.target {
                 Some(id) => crate::nav::Things::one(Subject::Component { id: id.clone(), was: None }, &known),
@@ -1402,16 +1518,8 @@ impl SpecState {
         crate::nav::Things { at: at.into_iter().map(|s| crate::nav::Thing::named(s, &known)).collect(), unit: 0 }
     }
 
-    /// Goes to a plan's part: reads the card from that plan, lands on its
-    /// component, the cursor on the section (or the relation) once it's in.
-    fn show_plan_part(&mut self, plan: &arch_graph::PlanId, part: &crate::nav::PlanPart) -> Result<(), String> {
-        use crate::nav::PlanPart;
-        let (id, entry) = match part {
-            PlanPart::Component(id) => (id.clone(), None),
-            PlanPart::Section(id, section) => (id.clone(), Some(Entry { section: Section::from_key(section).ok_or_else(|| format!("A card has no {section} section."))?, item: SpecItem::Header })),
-            PlanPart::Relation { kind, source, target } => (source.clone(), Some(Entry { section: Section::Relations, item: SpecItem::Relation { kind: *kind, other: target.clone(), outgoing: true } })),
-            PlanPart::Whole | PlanPart::Item(_) => return Err("Not a part of a card.".into()),
-        };
+    /// Reads from `plan` (the desk too).
+    fn read_plan(&mut self, plan: &arch_graph::PlanId) -> Result<(), String> {
         if self.pinned && self.source.plan() != Some(plan) {
             return Err("This card is pinned to another source: unpin it first.".into());
         }
@@ -1420,6 +1528,25 @@ impl SpecState {
             self.asks.push(Ask::Source(source.clone()));
             self.follow_source(&source);
         }
+        Ok(())
+    }
+
+    /// Goes to a plan's part: reads the card from that plan, lands on its
+    /// component, the cursor on the section (or the relation) once it's in.
+    fn show_plan_part(&mut self, plan: &arch_graph::PlanId, part: &crate::nav::PlanPart) -> Result<(), String> {
+        use crate::nav::PlanPart;
+        let (id, entry) = match part {
+            PlanPart::Component(id) => (id.clone(), None),
+            PlanPart::Section(id, section) => (id.clone(), Some(Entry { section: Section::from_key(section).ok_or_else(|| format!("A card has no {section} section."))?, item: SpecItem::Header })),
+            PlanPart::Relation { kind, source, target } => (source.clone(), Some(Entry { section: Section::Relations, item: SpecItem::Relation { kind: *kind, other: target.clone(), outgoing: true } })),
+            PlanPart::Item(item) => {
+                self.read_plan(plan)?;
+                self.show_item(plan, &arch_graph::ItemId(item.clone()));
+                return Ok(());
+            }
+            PlanPart::Whole => return Err("Not a part of a card.".into()),
+        };
+        self.read_plan(plan)?;
         let loaded = self.detail.as_ref().is_some_and(|d| d.component.id == id) && self.target.as_ref() == Some(&id);
         self.land_on(id);
         match entry.map(|e| e.key()) {
@@ -1433,6 +1560,12 @@ impl SpecState {
     /// row, the whole card (its component, the plan's or the code's).
     fn drawn_rect(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect> {
         use harness_contracts::Subject;
+        if let (Some(card), Subject::PlanItem { plan, item }) = (&self.item, subject)
+            && card.plan == *plan
+            && card.id.0 == *item
+        {
+            return self.spots.iter().find(|s| s.key == card.key()).map(|s| s.rect);
+        }
         let id = self.target.as_ref()?;
         let ours = |plan: &arch_graph::PlanId, of: &ComponentId| self.plan_of_card() == Some((plan, id)) && of == id;
         let keep: Box<dyn Fn(&Entry) -> bool> = match subject {
@@ -1466,6 +1599,9 @@ impl SpecState {
 pub(crate) struct SpecPlace {
     pub component: Option<ComponentId>,
     pub item: Option<String>,
+    /// A plan's item's card, shown instead of a component's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_item: Option<(arch_graph::PlanId, arch_graph::ItemId)>,
 }
 
 impl crate::buffer::Buffer for SpecState {
@@ -1499,8 +1635,18 @@ impl crate::buffer::Buffer for SpecState {
                     self.asks.push(Ask::Refresh(crate::nav::Refresh::Review));
                 }
                 Reply::Posted(Err(e)) => self.note = Some(e),
+                Reply::Plan(plan, read) => {
+                    if let Some(card) = self.item.as_mut().filter(|c| c.plan == plan) {
+                        card.read = Some((*read).map_err(|e| e.message));
+                    }
+                }
                 _ => {}
             }
+        }
+        if let Some(card) = self.item.as_mut().filter(|c| !c.asked) {
+            card.asked = true;
+            let (inbox, plan) = (self.inbox.clone(), card.plan.clone());
+            net.arch_plan(&card.plan, ctx.clone(), move |r| push(&inbox, Reply::Plan(plan, Box::new(r))));
         }
         let Some(target) = self.target.clone() else {
             self.detail = None;
@@ -1536,6 +1682,9 @@ impl crate::buffer::Buffer for SpecState {
     /// The architecture changed: load again.
     fn invalidate(&mut self) {
         self.loaded = None;
+        if let Some(card) = self.item.as_mut() {
+            card.asked = false;
+        }
     }
 
 
@@ -1561,6 +1710,10 @@ impl crate::buffer::Buffer for SpecState {
     }
 
     fn describe(&self) -> String {
+        if let Some(card) = &self.item {
+            let title = card.read.as_ref().and_then(|r| r.as_ref().ok()).and_then(|p| p.item(&card.id)).map_or_else(|| card.id.to_string(), |i| format!("{} {}", card.id, i.title));
+            return if self.pinned { format!("{title} (pinned)") } else { title };
+        }
         let card = self.target.as_ref().map_or_else(|| "following what you're on".to_owned(), |id| match &self.detail {
             Some(d) if d.component.id == *id => d.component.name.clone(),
             _ => crate::nav::short_name(id),
@@ -1570,8 +1723,12 @@ impl crate::buffer::Buffer for SpecState {
 }
 
 impl crate::hosted::Hosted for SpecState {
-    /// The component it shows.
+    /// The component it shows (an item: its title).
     fn title(&self) -> Status {
+        if let Some(card) = &self.item {
+            let title = card.read.as_ref().and_then(|r| r.as_ref().ok()).and_then(|p| p.item(&card.id)).map_or_else(|| card.id.to_string(), |i| i.title.clone());
+            return Status::new(title, Tone::Plain).detail(format!("{} of plan {}", card.id, card.plan));
+        }
         match &self.detail {
             Some(d) => Status::new(d.component.name.clone(), Tone::Plain).detail(d.component.id.as_str()),
             None => Status::new("Spec", Tone::Muted),
@@ -1784,7 +1941,7 @@ pub(crate) mod tests {
         let mut s = SpecState { pinned: true, ..Default::default() };
         s.show(save.clone());
         let relation = Entry { section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: save.clone(), outgoing: true } }.key();
-        s.restore(&Place::of(&SpecPlace { component: Some(step.clone()), item: Some(relation.clone()) }));
+        s.restore(&Place::of(&SpecPlace { component: Some(step.clone()), item: Some(relation.clone()), plan_item: None }));
         assert_eq!(s.cursor, 0, "not loaded yet");
         s.loaded = Some((step.clone(), Source::Code));
         push(&s.inbox, Reply::Detail(step.clone(), Box::new(Ok(detail(&step, &save)))));

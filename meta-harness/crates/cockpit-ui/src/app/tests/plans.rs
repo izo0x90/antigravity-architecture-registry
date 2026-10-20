@@ -1,0 +1,51 @@
+//! A plan in the cockpit: its items in the plan tree (nested, each with its
+//! state), an item's card, and its state set on it.
+
+use super::*;
+
+/// Plan `p` as a review: Decide (with FFF skipped under it, decided), then Open.
+fn review() -> serde_json::Value {
+    let mut plan = arch_graph::Plan::new("p", "Findings");
+    plan.kind = arch_graph::PlanKind::Review;
+    let item = |id: &str, parent: Option<&str>, title: &str, state| arch_graph::Item { id: arch_graph::ItemId(id.into()), parent: parent.map(|p| arch_graph::ItemId(p.into())), title: title.into(), text: format!("What {title} is about."), state };
+    plan.items = vec![item("i1", None, "Decide", arch_graph::ItemState::Open), item("i2", Some("i1"), "FFF skipped", arch_graph::ItemState::Decided), item("i3", None, "Open", arch_graph::ItemState::Open)];
+    serde_json::to_value(plan).unwrap()
+}
+
+#[test]
+fn a_plans_items_show_nested_in_the_plan_tree_open_as_cards_and_take_their_state_there() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Plan);
+    assert!(app.desk.net.answer("GET /api/arch/plans/p", 200, &review()), "it reads the plan the desk reads: {:?}", sent(&app));
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    let rows = |app: &CockpitApp| app.desk.view(BufferKind::Plan).items().into_iter().map(|i| i.key).collect::<Vec<_>>();
+    assert_eq!(rows(&app), ["item:i1", "item:i2", "item:i3"], "nested, in order");
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    for words in ["Decide", "FFF skipped", "decided", "Open", "open"] {
+        assert!(drawn.contains(words), "{words}: {drawn}");
+    }
+    // Enter on an item: its card (the spec view), its text.
+    app.desk.view_mut(BufferKind::Plan).move_to("item:i2");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.focused_kind(), BufferKind::Spec);
+    assert!(app.desk.net.answer("GET /api/arch/plans/p", 200, &review()));
+    frame(&ctx, &mut app, vec![]);
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("What FFF skipped is about.") && drawn.contains("Under i1 Decide"), "{drawn}");
+    // A component's card's controls don't come with it.
+    let offered: Vec<String> = app.bound_actions().into_iter().filter(|b| b.action.when.holds(&app.situation())).map(|b| b.action.id).collect();
+    assert!(!offered.iter().any(|id| id.starts_with("spec.") && id != "spec.pin"), "{offered:?}");
+    assert_eq!(crate::buffer::Buffer::describe(app.desk.view(BufferKind::Spec)), "i2 FFF skipped (pinned)", "(the fixture pins the card)");
+    // Kept as the card's place: after a reload, the item's card again.
+    let place = app.desk.view(BufferKind::Spec).kept_place();
+    app.desk.view_mut(BufferKind::Spec).restore(&crate::nav::Place::of(&serde_json::json!({ "component": null, "item": null })));
+    app.desk.view_mut(BufferKind::Spec).restore(&place);
+    assert_eq!(cursor(&app).as_deref(), Some("item#i2"));
+    // Its state, set there (the thing at the cursor is the item).
+    bodies(&app, "");
+    app.run_by_id("plan.item_state", Some("done".into()), &ctx);
+    assert_eq!(bodies(&app, "POST /api/arch/plans/p/ops"), [serde_json::json!({ "ops": [{ "op": "set_item", "id": "i2", "state": "done" }] })]);
+}

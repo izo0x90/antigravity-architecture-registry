@@ -80,7 +80,7 @@ impl Plans {
             tool(
                 Capability::PlanEdit,
                 "plan_edit",
-                "Apply operations to a plan, in order (stops at the first that fails). Add new components under a real parent (they get a proposed location), modify planned or existing ones, reference existing code you build on, and relate components (calls with expectations, data flow, implements). New work must connect to existing code. Changing an approved component's design sends it, and what depends on it, back for approval.",
+                "Apply operations to a plan, in order (stops at the first that fails). Add new components under a real parent (they get a proposed location), modify planned or existing ones, reference existing code you build on, and relate components (calls with expectations, data flow, implements). New work must connect to existing code. Changing an approved component's design sends it, and what depends on it, back for approval. Any plan can have items (to-dos, findings, decisions), nested, each open, decided, done or dropped; a review plan has only items.",
                 json!({ "type": "object", "properties": { "plan": plan, "ops": { "type": "array", "items": op } }, "required": ["plan", "ops"] }),
             ),
             tool(
@@ -104,6 +104,20 @@ impl Plans {
     }
 }
 
+/// A plan's items, nested under the item each is in, each with its id
+/// and state.
+fn items(plan: &arch_graph::Plan) -> String {
+    fn under(plan: &arch_graph::Plan, parent: Option<&arch_graph::ItemId>, depth: usize, out: &mut String) {
+        for item in plan.items.iter().filter(|i| i.parent.as_ref() == parent) {
+            let _ = writeln!(out, "  {}{} [{}] {}", "  ".repeat(depth), item.id, item.state.name(), item.title);
+            under(plan, Some(&item.id), depth + 1, out);
+        }
+    }
+    let mut out = String::new();
+    under(plan, None, 0, &mut out);
+    out
+}
+
 #[async_trait::async_trait]
 impl ToolSet for Plans {
     fn tools(&self, trees: &TreeConfig) -> Vec<ToolDef> {
@@ -120,6 +134,7 @@ impl ToolSet for Plans {
                 for c in &p.components {
                     let _ = writeln!(out, "  {} [{} {:?}/{:?}]", c.id, c.type_name, c.status, c.stage);
                 }
+                out.push_str(&items(p));
             }
             if plans.is_empty() {
                 out.push_str("No plans yet.\n\nNext: plan_create starts one (or plan_import brings in system_architecture.json).");
@@ -188,7 +203,8 @@ impl ToolSet for Plans {
             })
             .await?;
             let steps = self.steps(plan.id.clone(), None).await?;
-            Ok(format!("Plan {} now has {} components, {} relations.{steps}", plan.id, plan.components.len(), plan.relations.len()))
+            let items = if plan.items.is_empty() { String::new() } else { format!(", {} items ({})", plan.items.len(), plan.items.iter().map(|i| format!("{} {}", i.id, i.state.name())).collect::<Vec<_>>().join(", ")) };
+            Ok(format!("Plan {} now has {} components, {} relations{items}.{steps}", plan.id, plan.components.len(), plan.relations.len()))
         }
         "plan_validate" => {
             let a: PlanArgs = parse(args)?;
