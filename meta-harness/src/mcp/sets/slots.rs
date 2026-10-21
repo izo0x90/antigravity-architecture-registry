@@ -118,16 +118,7 @@ impl Slots {
 
     /// A sub-slot by id or name.
     fn find(&self, which: &str) -> Result<Slot, ServiceError> {
-        let all = self.slots.list();
-        if let Some(slot) = all.iter().find(|s| s.id.as_str() == which) {
-            return Ok(slot.clone());
-        }
-        let named: Vec<&Slot> = all.iter().filter(|s| s.name == which).collect();
-        match named.as_slice() {
-            [one] => Ok((*one).clone()),
-            [] => Err(ServiceError::NotFound(format!("slot {which:?} (slot_list shows them)"))),
-            _ => Err(ServiceError::InvalidOp(format!("several slots are named {which:?}: use its id"))),
-        }
+        self.slots.named(which).ok_or_else(|| ServiceError::NotFound(format!("slot {which:?} (slot_list shows them)")))
     }
 
     /// A sub-slot the lead may act on: not itself, not a queue worker.

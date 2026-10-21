@@ -141,35 +141,32 @@ pub fn derive(event: &ClientEvent, world: &dyn World, open: &BTreeMap<Notificati
         ClientEvent::TerminalNews { news: TerminalNews::Bell, terminal } if open.values().any(|n| n.kind == NotificationKind::TerminalBell && n.terminal.as_ref() == Some(&terminal.id)) => Vec::new(),
         ClientEvent::TerminalNews { terminal, news } => vec![opened(terminal_news(terminal, *news, world))],
         ClientEvent::DiscussionUpdated { discussion } => discussion_news(discussion, world, open),
-        ClientEvent::DiscussionRemoved { discussion_id } => {
-            let id = NotificationId::discussion(discussion_id);
-            open.contains_key(&id).then_some(Change::End { id, to: NotificationState::Done }).into_iter().collect()
-        }
+        ClientEvent::DiscussionRemoved { discussion_id } => open.values().filter(|n| n.discussion.as_ref() == Some(discussion_id)).map(|n| Change::End { id: n.id.clone(), to: NotificationState::Done }).collect(),
         _ => Vec::new(),
     }
 }
 
 /// A discussion waiting on the user (answered: settle or reopen it; an
-/// agent asking them), as one notification while it does; done once it
-/// doesn't. The same one while nothing new is said.
+/// agent asking them), a notification each time it is anew (the one
+/// before done); done once it isn't.
 fn discussion_news(d: &harness_contracts::Discussion, world: &dyn World, open: &BTreeMap<NotificationId, Notification>) -> Vec<Change> {
-    let id = NotificationId::discussion(&d.id);
-    if d.whose_move() != harness_contracts::Move::User {
-        return open.contains_key(&id).then_some(Change::End { id, to: NotificationState::Done }).into_iter().collect();
+    let id = NotificationId::discussion(&d.id, d.said.len());
+    let now: Vec<&NotificationId> = open.values().filter(|n| n.discussion.as_ref() == Some(&d.id)).map(|n| &n.id).collect();
+    let mut changes: Vec<Change> = now.iter().filter(|n| ***n != id || d.whose_move() != harness_contracts::Move::User).map(|n| Change::End { id: (*n).clone(), to: NotificationState::Done }).collect();
+    if d.whose_move() != harness_contracts::Move::User || now.contains(&&id) {
+        return changes;
     }
     let last = d.said.last();
-    let who = |by: &str| if by == "user" { "you".to_owned() } else { by.to_owned() };
+    let who = harness_contracts::by_to_user;
     let title = match (d.status, last) {
         (harness_contracts::DiscussionStatus::Answered, Some(said)) => format!("{} answered {} on {}: settle or reopen it", who(&said.by), d.id, d.on.what),
+        (_, Some(said)) if d.said.len() > 1 => format!("{} said something back in {} on {}", who(&said.by), d.id, d.on.what),
         _ => format!("{} asks you on {} ({})", who(&d.by), d.on.what, d.id),
     };
-    let detail = last.and_then(|s| clip(&s.text));
-    if open.get(&id).is_some_and(|n| n.title == title && n.detail == detail) {
-        return Vec::new();
-    }
-    let mut n = new(id, NotificationKind::Discussion, None, None, title, detail, world);
+    let mut n = new(id, NotificationKind::Discussion, None, None, title, last.and_then(|s| clip(&s.text)), world);
     n.discussion = Some(d.id.clone());
-    vec![opened(n)]
+    changes.push(opened(n));
+    changes
 }
 
 /// What a terminal's program or shell did, as a notification about it

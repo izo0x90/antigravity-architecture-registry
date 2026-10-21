@@ -221,14 +221,20 @@ fn a_discussion_waits_on_the_user_while_its_their_move_and_is_done_once_it_isnt(
     let none = BTreeMap::new();
     assert!(derive(&d(DiscussionStatus::Open, "user", "lead", vec![said("user", SaidKind::Message, "Why?")]), &world(), &none).is_empty(), "the agent's move: nothing waits on the user");
     let answered = derive(&d(DiscussionStatus::Answered, "user", "lead", vec![said("user", SaidKind::Message, "Why?"), said("lead", SaidKind::Answer, "Because.")]), &world(), &none);
-    assert_eq!(opened(&answered), [("disc:d3".to_owned(), NotificationKind::Discussion, None, "lead answered d3 on plan p: settle or reopen it".to_owned())]);
+    assert_eq!(opened(&answered), [("disc:d3:2".to_owned(), NotificationKind::Discussion, None, "lead answered d3 on plan p: settle or reopen it".to_owned())]);
     let Change::Open(n) = &answered[0] else { unreachable!() };
     assert_eq!((n.level, n.discussion.as_ref().map(|d| d.as_str()), n.detail.as_deref()), (harness_contracts::Level::Waiting, Some("d3"), Some("Because.")));
     let open = with(&answered[0]);
     assert!(derive(&d(DiscussionStatus::Answered, "user", "lead", vec![said("user", SaidKind::Message, "Why?"), said("lead", SaidKind::Answer, "Because.")]), &world(), &open).is_empty(), "nothing new: the same one");
     let settled = derive(&d(DiscussionStatus::Settled, "user", "lead", vec![said("lead", SaidKind::Answer, "Because."), said("user", SaidKind::Settled, "")]), &world(), &open);
-    assert_eq!(settled, [Change::End { id: NotificationId::new("disc:d3"), to: NotificationState::Done }]);
+    assert_eq!(settled, [Change::End { id: NotificationId::new("disc:d3:2"), to: NotificationState::Done }]);
+    // The user's move again later (reopened, answered again): a new one, the last one done.
+    let again = derive(&d(DiscussionStatus::Answered, "user", "lead", vec![said("user", SaidKind::Message, "Why?"), said("lead", SaidKind::Answer, "Because."), said("user", SaidKind::Reopened, "No."), said("lead", SaidKind::Answer, "Now.")]), &world(), &open);
+    assert_eq!(again.iter().map(|c| match c { Change::Open(n) => format!("open {}", n.id), Change::End { id, .. } => format!("end {id}") }).collect::<Vec<_>>(), ["end disc:d3:2", "open disc:d3:4"]);
+    // An agent asking something back: the user's move.
+    let back = derive(&d(DiscussionStatus::Open, "user", "lead", vec![said("user", SaidKind::Message, "Why?"), said("lead", SaidKind::Message, "Which test?")]), &world(), &none);
+    assert_eq!(opened(&back)[0].3, "lead said something back in d3 on plan p");
     let asked = derive(&d(DiscussionStatus::Open, "lead", "user", vec![said("lead", SaidKind::Message, "Is this list complete?")]), &world(), &none);
     assert_eq!(opened(&asked)[0].3, "lead asks you on plan p (d3)", "an agent's question to the user: {asked:?}");
-    assert_eq!(derive(&ClientEvent::DiscussionRemoved { discussion_id: DiscussionId::new("d3") }, &world(), &open), [Change::End { id: NotificationId::new("disc:d3"), to: NotificationState::Done }]);
+    assert_eq!(derive(&ClientEvent::DiscussionRemoved { discussion_id: DiscussionId::new("d3") }, &world(), &open), [Change::End { id: NotificationId::new("disc:d3:2"), to: NotificationState::Done }]);
 }

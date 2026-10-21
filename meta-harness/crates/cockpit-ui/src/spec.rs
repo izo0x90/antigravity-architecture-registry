@@ -870,7 +870,7 @@ fn how_known(r: &arch_graph::Relation, name: &str) -> (String, String) {
 }
 
 /// `text` with its first letter a capital.
-fn capitalized(text: &str) -> String {
+pub(crate) fn capitalized(text: &str) -> String {
     let mut chars = text.chars();
     chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
 }
@@ -1168,7 +1168,7 @@ impl Navigable for SpecState {
                 Step::Done
             }
             SpecItem::Placeholder(_) => Step::GoTo(GoTo::Code),
-            SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_) => Step::Nothing("C asks about it, or for a change to it.".into()),
+            SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_) => Step::Nothing("Start a discussion on it to ask about it, or for a change to it.".into()),
         }
     }
 

@@ -28,7 +28,12 @@ async fn open_when(state: &AppState, done: impl Fn(&[Notification]) -> bool) -> 
 }
 
 async fn sub_with_session(state: &AppState) -> (SlotId, ThreadId) {
-    let sub = state.harness.slots.create("sub", Some("reviewer".into()), fake(), Starter::User).await.unwrap();
+    named_sub_with_session(state, "reviewer").await
+}
+
+/// A sub-slot named `name` (no two share a name), its session open.
+async fn named_sub_with_session(state: &AppState, name: &str) -> (SlotId, ThreadId) {
+    let sub = state.harness.slots.create("sub", Some(name.into()), fake(), Starter::User).await.unwrap();
     let thread = state.harness.slots.open_session(&sub, Open::New { resume: None }).await.unwrap().thread;
     (sub, thread)
 }
@@ -115,7 +120,7 @@ async fn a_session_that_dies_is_a_crash_and_one_closed_on_purpose_isnt() {
     let crash = open.iter().find(|n| n.kind == NotificationKind::SessionCrashed).expect("a crash");
     assert_eq!(crash.title, "reviewer's session stopped");
     // Closed by the user: not a crash.
-    let (other, _) = sub_with_session(&state).await;
+    let (other, _) = named_sub_with_session(&state, "other").await;
     state.harness.slots.close(&other).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(!state.notify.notify.open().iter().any(|n| n.kind == NotificationKind::SessionCrashed && n.slot.as_ref() == Some(&other)));

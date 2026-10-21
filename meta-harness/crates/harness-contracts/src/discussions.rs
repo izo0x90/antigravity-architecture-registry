@@ -132,12 +132,14 @@ pub enum Move {
 }
 
 impl Discussion {
-    /// Whose move it is: whoever's asked while it's open (an agent slot, or
-    /// the user), the user once it's answered, no one's once settled.
+    /// Whose move it is: while it's open, whoever's asked, or, once the
+    /// one asked has spoken last (asked something back), whoever started
+    /// it; the user once it's answered; no one's once settled.
     pub fn whose_move(&self) -> Move {
+        let who = |name: &str| if name == "user" { Move::User } else { Move::Agent(name.to_owned()) };
         match self.status {
-            DiscussionStatus::Open if self.asked == "user" => Move::User,
-            DiscussionStatus::Open => Move::Agent(self.asked.clone()),
+            DiscussionStatus::Open if self.said.len() > 1 && self.said.last().is_some_and(|s| s.by == self.asked) => who(&self.by),
+            DiscussionStatus::Open => who(&self.asked),
             DiscussionStatus::Answered => Move::User,
             DiscussionStatus::Settled => Move::Nobody,
         }
@@ -146,5 +148,46 @@ impl Discussion {
     /// What was asked: its first message's text.
     pub fn asking(&self) -> &str {
         self.said.first().map_or("", |s| s.text.as_str())
+    }
+}
+
+/// Who said or did something, as an agent reads it ("the user", a slot's
+/// name): one way, wherever it's written to an agent.
+pub fn by_to_agent(by: &str) -> &str {
+    match by {
+        "user" => "the user",
+        "" => "someone",
+        slot => slot,
+    }
+}
+
+/// Who said or did something, as the user reads it ("you", a slot's name).
+pub fn by_to_user(by: &str) -> &str {
+    match by {
+        "user" => "you",
+        "" => "someone",
+        slot => slot,
+    }
+}
+
+impl SaidKind {
+    /// What it was, in words ("answered").
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Message => "said",
+            Self::Answer => "answered",
+            Self::Settled => "settled it",
+            Self::Reopened => "reopened it",
+        }
+    }
+}
+
+impl DiscussionStatus {
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Answered => "answered",
+            Self::Settled => "settled",
+        }
     }
 }

@@ -34,13 +34,19 @@ fn a_discussion_is_started_on_what_youre_on_opened_and_replied_to_settled_and_re
     // The server has it: it opens over what you're on.
     let mut d = crate::review::tests::discussion(1, logic, harness_contracts::DiscussionStatus::Open);
     d.kind = harness_contracts::DiscussionKind::ChangeRequest;
+    d.said[0].text = "Split step 2.".into();
     told_discussion(&app, d.clone());
     assert!(app.desk.net.answer("POST /api/discussions", 200, &serde_json::to_value(&d).unwrap()));
     frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.quick_look.as_ref().map(|q| q.kind()), Some(BufferKind::Discussion), "opened in the quick look");
+    // What it's on, as it is now, read from the server.
+    let now = harness_contracts::OnNow { what: "plan p component rust:a::step section logic".into(), held: harness_contracts::Held::Source, text: Some("Read the input.\nSave it.".into()), lines: 2 };
+    assert!(app.desk.net.answer("GET /api/discussions/d1/on", 200, &serde_json::to_value(&now).unwrap()), "{:?}", sent(&app));
+    frame(&ctx, &mut app, vec![]);
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(drawn.contains("OPEN") && drawn.contains("point 1") && drawn.contains("plan p component rust:a::step section logic"), "{drawn}");
+    assert!(drawn.contains("OPEN") && drawn.contains("Split step 2.") && drawn.contains("plan p component rust:a::step section logic"), "the one just sent: {drawn}");
+    assert!(drawn.contains("as it is now") && drawn.contains("Read the input.\nSave it."), "{drawn}");
     // Replied to there (r, writing, Enter).
     keys(&ctx, &mut app, "r");
     keys(&ctx, &mut app, "And the third?");
@@ -58,6 +64,27 @@ fn a_discussion_is_started_on_what_youre_on_opened_and_replied_to_settled_and_re
     keys(&ctx, &mut app, "Not yet.");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!(bodies(&app, "POST /api/discussions/d1/reopen"), [serde_json::json!({ "text": "Not yet." })]);
+    // Not sent (the server refused): what was written comes back to its box.
+    assert!(app.desk.net.answer("POST /api/discussions/d1/reopen", 400, &serde_json::json!({ "error": "d1 is open already" })));
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, vec![]);
+    let view = app.desk.typed::<crate::discussion::DiscussionView>(BufferKind::Discussion);
+    assert_eq!((view.writing.text.as_str(), view.purpose), ("Not yet.", crate::discussion::Writing::Reopen), "kept to send again");
+    // A question made a change request: open, at once; answered, why first.
+    let mut question = d.clone();
+    (question.kind, question.status) = (harness_contracts::DiscussionKind::Question, harness_contracts::DiscussionStatus::Open);
+    told_discussion(&app, question.clone());
+    frame(&ctx, &mut app, vec![]);
+    app.desk.typed_mut::<crate::discussion::DiscussionView>(BufferKind::Discussion).writing = Default::default();
+    keys(&ctx, &mut app, "c");
+    assert_eq!(bodies(&app, "POST /api/discussions/d1/change"), [serde_json::json!({})], "open: at once");
+    question.status = harness_contracts::DiscussionStatus::Answered;
+    told_discussion(&app, question);
+    frame(&ctx, &mut app, vec![]);
+    keys(&ctx, &mut app, "c");
+    keys(&ctx, &mut app, "Name the step.");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    assert_eq!(bodies(&app, "POST /api/discussions/d1/change"), [serde_json::json!({ "text": "Name the step." })], "answered: why first");
     // `#` in its box: the tag picker, the name put after it.
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "flaky".into(), colour: 2, note: String::new(), noted_by: String::new(), on: Vec::new() } });
     keys(&ctx, &mut app, "r");
@@ -88,8 +115,8 @@ fn glyphs(output: &egui::FullOutput, text: &str) -> Vec<(egui::Rect, egui::Color
 
 /// A thing with discussions is marked in the gutter (G.4): one speech
 /// bubble, in the colour of whose move it is (yours first); the panel's
-/// top line says them in a few words; a long press says each; clicked, the
-/// one waiting on you opens.
+/// top line says them in a few words; a long press says each; clicked,
+/// which is asked (the one waiting on you first), and it opens.
 #[test]
 fn a_thing_with_discussions_is_marked_in_the_colour_of_whose_move_said_on_the_top_line_and_opened_by_a_click() {
     let (ctx, mut app) = full_app();
@@ -131,6 +158,10 @@ fn a_thing_with_discussions_is_marked_in_the_colour_of_whose_move_said_on_the_to
         t += 0.05;
         frame_at(&ctx, &mut app, events, t);
     }
+    // Two on it: which, first (the one waiting on you at the top).
+    assert_eq!(app.palette.picking(), Some("discuss.open"));
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
     assert_eq!(app.quick_look.as_ref().map(|q| q.kind()), Some(BufferKind::Discussion));
     assert_eq!(app.desk.typed::<crate::discussion::DiscussionView>(BufferKind::Discussion).id.as_ref().map(|d| d.as_str()), Some("d2"));
 }
@@ -145,7 +176,10 @@ fn a_cards_notes_are_on_its_corner() {
     let mut tag = harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "seen".into(), colour: 2, note: String::new(), noted_by: String::new(), on: Vec::new() };
     tag.on.push(harness_contracts::Tagged { subject: step.clone(), what: "rust:a::step".into(), at_ms: 0, by: "user".into(), kept: None });
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag });
-    told_discussion(&app, crate::discussions::tests::discussion(1, step, harness_contracts::DiscussionStatus::Open));
+    // The graph shows plan p: its cards are the plan's components (what approval waits on).
+    let planned = harness_contracts::Subject::PlanComponent { plan: PlanId::new("p").unwrap(), id: ComponentId::new("rust:a::step") };
+    told_discussion(&app, crate::discussions::tests::discussion(1, planned.clone(), harness_contracts::DiscussionStatus::Open));
+    let _ = step;
     frame(&ctx, &mut app, vec![]);
     let output = frame(&ctx, &mut app, vec![]);
     let card = app.desk.graph().to_screen(&app.desk.graph().card("rust:a::step").expect("the card").rect);
@@ -153,6 +187,10 @@ fn a_cards_notes_are_on_its_corner() {
     assert!(dots.len() == 1 && card.x_range().contains(dots[0].center().x) && (dots[0].center().y - card.top()).abs() < 1.0, "on its top edge: {dots:?} {card:?}");
     let marks = glyphs(&output, egui_phosphor::fill::CHAT_CIRCLE);
     assert!(marks.iter().any(|(r, c)| card.x_range().contains(r.center().x) && (r.center().y - card.top()).abs() < 2.0 && *c == crate::theme::colors().info), "the agent's move: {marks:?} {card:?}");
+    // What's discussed from a card is the plan's component.
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
+    let things = app.desk.view(BufferKind::Graph).things("rust:a::step");
+    assert_eq!(things.at.iter().map(|t| t.subject.clone()).collect::<Vec<_>>(), [planned]);
 }
 
 /// Started from wherever you are (G.7): a code line, a terminal command, a
@@ -176,7 +214,15 @@ fn one_is_started_from_a_code_line_a_terminal_command_and_a_chat_message() {
     focus(&ctx, &mut app, BufferKind::Code);
     app.desk.code_mut().move_to("1");
     let file = app.desk.code().current_file.clone();
-    start(&ctx, &mut app, harness_contracts::Subject::CodeLines { path: file, first: 1, last: 1, snapshot: String::new() }, Default::default());
+    start(&ctx, &mut app, harness_contracts::Subject::CodeLines { path: file.clone(), first: 1, last: 1, snapshot: String::new() }, Default::default());
+    // Tab while starting: the next of the things there (the whole file).
+    keys(&ctx, &mut app, "C");
+    frame(&ctx, &mut app, press(egui::Key::Tab, false));
+    frame(&ctx, &mut app, vec![]);
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains(&format!("Discuss file {file}")), "{drawn}");
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
+    frame(&ctx, &mut app, vec![]);
     // A terminal command (on its prompt line: the command is the unit).
     focus(&ctx, &mut app, BufferKind::Terminal);
     app.desk.terminal_mut().arrive(vec![super::terminal::with_commands(1000, vec![super::terminal::command(1, 1003, Some(1008), "make")])]);
@@ -205,11 +251,10 @@ fn one_waiting_on_you_is_in_the_inbox_and_enter_opens_it() {
     let on = harness_contracts::Subject::Component { id: ComponentId::new("rust:a::step"), was: None };
     told_discussion(&app, crate::discussions::tests::discussion(3, on, harness_contracts::DiscussionStatus::Answered));
     let kind = harness_contracts::NotificationKind::Discussion;
-    let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::discussion(&harness_contracts::DiscussionId::new("d3")), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, discussion: Some(harness_contracts::DiscussionId::new("d3")), title: "d3 answered".into(), detail: None, at_ms: 1, state: harness_contracts::NotificationState::Open };
+    let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::discussion(&harness_contracts::DiscussionId::new("d3"), 2), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, discussion: Some(harness_contracts::DiscussionId::new("d3")), title: "d3 answered".into(), detail: None, at_ms: 1, state: harness_contracts::NotificationState::Open };
     told(&app, harness_contracts::ClientEvent::NotificationUpdated { notification });
     focus(&ctx, &mut app, BufferKind::Inbox);
-    let drawn = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(drawn.contains("d3 answered"), "{drawn}");
+    frame(&ctx, &mut app, vec![]);
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     frame(&ctx, &mut app, vec![]);
     let open = app.desk.typed::<crate::discussion::DiscussionView>(BufferKind::Discussion).id.clone();
@@ -284,4 +329,54 @@ fn at_a_phones_width_a_tap_on_the_mark_opens_it_and_nothing_is_drawn_over_anythi
             assert!(ra.intersect(*rb).area() < 1.0, "{a:?} {ra:?} drawn over {b:?} {rb:?}");
         }
     }
+}
+
+/// Starting one with other agent slots than the lead: who answers is
+/// picked (the lead first); `#` in its first message names a tag there;
+/// let go of halfway (Escape), nothing of it is left to run.
+#[test]
+fn one_is_started_asking_the_slot_picked_with_a_tag_named_in_it_and_escape_leaves_nothing() {
+    let (ctx, mut app) = full_app();
+    let mut sub = crate::chat::tests::lead(None);
+    (sub.id, sub.role, sub.name) = (harness_contracts::SlotId::new("sub-1a2b"), "sub".into(), "reviewer".into());
+    for slot in [crate::chat::tests::lead(None), sub] {
+        app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::SlotUpdated { slot });
+    }
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "flaky".into(), colour: 2, note: String::new(), noted_by: String::new(), on: Vec::new() } });
+    focus(&ctx, &mut app, BufferKind::Code);
+    app.desk.code_mut().move_to("1");
+    let file = app.desk.code().current_file.clone();
+    keys(&ctx, &mut app, "C");
+    keys(&ctx, &mut app, "question");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.palette.picking(), Some("discuss.ask"), "who answers, with another slot to ask");
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.find("lead").is_some_and(|lead| drawn.find("reviewer").is_some_and(|r| lead < r)), "the lead first: {drawn}");
+    keys(&ctx, &mut app, "reviewer");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.palette.picking(), Some("discuss.write"));
+    // `#`: the tag picker; its name put in after it, back to writing.
+    keys(&ctx, &mut app, "see #");
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.palette.picking(), Some("tag.insert"), "the tag picker");
+    keys(&ctx, &mut app, "fla");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.palette.picking(), Some("discuss.write"), "back to what's written");
+    keys(&ctx, &mut app, "now");
+    bodies(&app, "");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    let line = harness_contracts::Subject::CodeLines { path: file, first: 1, last: 1, snapshot: String::new() };
+    assert_eq!(bodies(&app, "POST /api/discussions"), [serde_json::json!({ "subject": line, "kind": "question", "text": "see #flaky now", "asked": "reviewer" })]);
+    // Let go of halfway: nothing left to run.
+    keys(&ctx, &mut app, "C");
+    keys(&ctx, &mut app, "change");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
+    frame(&ctx, &mut app, vec![]);
+    assert!(!app.palette.is_open() && app.desk.discussing.is_none(), "let go of: gone");
+    assert!(!app.palette_actions().iter().any(|b| b.action.id == "discuss.write" || b.action.id == "discuss.ask"));
 }

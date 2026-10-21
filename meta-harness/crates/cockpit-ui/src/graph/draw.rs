@@ -476,7 +476,7 @@ impl GraphState {
     }
 
     /// Whether anything of `rect` (screen) is on the canvas.
-    fn visible(&self, rect: Rect) -> bool {
+    pub(crate) fn visible(&self, rect: Rect) -> bool {
         rect.intersects(self.canvas)
     }
 

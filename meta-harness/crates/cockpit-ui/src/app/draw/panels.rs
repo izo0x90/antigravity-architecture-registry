@@ -63,6 +63,12 @@ impl CockpitApp {
             }
         }
         let picked = self.palette.render(ctx, &bound, &self.config.keymap);
+        // `#` in what's written there: the tag picker, the name put after it.
+        if self.palette.take_names_tag()
+            && let Some(pick) = self.palette_actions().into_iter().find(|b| b.action.id == "tag.insert" && b.action.when != When::Unavailable)
+        {
+            self.palette.name_tag_in(&pick);
+        }
         if let Some(ask) = self.palette.take_search() {
             match ask.origin {
                 Origin::View(kind) => self.desk.view_mut(kind).search(&ask.action, &ask.query),
@@ -79,8 +85,11 @@ impl CockpitApp {
             }
             self.invoke(invocation, ctx);
         }
-        // Closed without a pick: back to typing, when that's where it was.
+        // Closed without a pick: back to typing, when that's where it was;
+        // a step-by-step start or edit left there is gone.
         if self.input_mode == InputMode::Palette && !self.palette.is_open() {
+            (self.desk.discussing, self.desk.tag_editing) = (None, None);
+            self.desk.discussions_here.clear();
             self.input_mode = match self.palette_from {
                 typing @ InputMode::Insert { .. } => typing,
                 _ => {

@@ -168,6 +168,9 @@ pub struct CodeViewerState {
     /// it is), what's noted there; and whether it's being dragged now.
     pub selection: Option<(usize, usize)>,
     selecting: bool,
+    /// Fingers are in use: a drag down the numbers moves the code (lines
+    /// are selected with a mouse).
+    fingers: bool,
     pub is_loading: bool,
     pub error_message: Option<String>,
     /// The fetched file's contents, with the path they're for.
@@ -235,6 +238,7 @@ impl Default for CodeViewerState {
             highlight: None,
             selection: None,
             selecting: false,
+            fingers: false,
             is_loading: false,
             error_message: None,
             marks: BTreeMap::new(),
@@ -786,7 +790,8 @@ impl CodeViewerState {
                             ui.set_min_width(gutter_w);
                             self.change_marks(ui, line_no, last, row_height);
                             let color = if on_cursor || highlighted { colors().warn } else { colors().faint };
-                            let number = ui.add(egui::Label::new(RichText::new(format!("{line_no:>4}")).monospace().size(crate::theme::look().text_body).color(color)).sense(egui::Sense::click_and_drag()));
+                            let sense = if self.fingers { egui::Sense::click() } else { egui::Sense::click_and_drag() };
+                            let number = ui.add(egui::Label::new(RichText::new(format!("{line_no:>4}")).monospace().size(crate::theme::look().text_body).color(color)).sense(sense));
                             if number.drag_started() {
                                 drag_from = Some(line_no);
                             }
@@ -1004,6 +1009,7 @@ impl crate::buffer::Buffer for CodeViewerState {
         if drawing.fingers {
             ui.style_mut().interaction.selectable_labels = false;
         }
+        self.fingers = drawing.fingers;
         self.draw(ui, drawing.feedback, cx);
     }
 

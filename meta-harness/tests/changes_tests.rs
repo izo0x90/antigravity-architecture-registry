@@ -212,11 +212,11 @@ async fn tagged_code_follows_the_saved_file_and_reads_as_it_was_once_changed_or_
     // A change among them: as they were, said so.
     saved(std::fs::read_to_string(&util).unwrap().replacen(lines[1], "    s.trim().to_uppercase()", 1));
     let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
-    assert!(read.contains(&format!("1. src/util.rs lines 4-5 (tagged by lead; as it was when tagged: changed or gone since):\n{}\n{}", lines[1], lines[2])), "{read}");
+    assert!(read.contains(&format!("1. src/util.rs lines 4-5 (tagged by lead; as it was when noted: changed or gone since):\n{}\n{}", lines[1], lines[2])), "{read}");
     // The definition deleted: what it was, from where it was when tagged.
     saved("// one\n// two\npub fn helper() {}\n".into());
     let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "here" })).await;
-    assert!(read.contains(&format!("2. component {shout} (tagged by lead; as it was when tagged: changed or gone since):\n{}\n{}\n{}", lines[0], lines[1], lines[2])), "{read}");
+    assert!(read.contains(&format!("2. component {shout} (tagged by lead; as it was when noted: changed or gone since):\n{}\n{}\n{}", lines[0], lines[1], lines[2])), "{read}");
     // Lines a file doesn't have can't be tagged.
     let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "peek", "subject": "src/util.rs lines 900-901" })).await;
     assert!(error && said.contains("isn't there"), "{said}");

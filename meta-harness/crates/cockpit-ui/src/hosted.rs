@@ -136,7 +136,7 @@ pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], notes: &[(
         for (mark, name, colour) in notes {
             match mark {
                 NoteMark::Tag => ui.label(crate::theme::tag_mark(ui, *colour, look.text_small)),
-                NoteMark::Discussions => ui.label(RichText::new(egui_phosphor::fill::CHAT_CIRCLE).size(look.text_small).color(*colour)),
+                NoteMark::Discussions => ui.label(RichText::new(egui_phosphor::fill::CHAT_CIRCLE).font(crate::theme::solid_font(ui, look.text_small)).color(*colour)),
             };
             ui.add(egui::Label::new(RichText::new(name).size(look.text_small).color(*colour)).truncate());
         }

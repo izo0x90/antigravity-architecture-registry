@@ -149,9 +149,10 @@ impl NotificationId {
         Self::new(format!("signin:{instance}:{time}"))
     }
 
-    /// A discussion waiting on the user (one at a time: its move comes and goes).
-    pub fn discussion(discussion: &crate::ids::DiscussionId) -> Self {
-        Self::new(format!("disc:{discussion}"))
+    /// A discussion waiting on the user: one's, from when it was `said` long (each time it's the
+    /// user's move anew is a notification of its own).
+    pub fn discussion(discussion: &crate::ids::DiscussionId, said: usize) -> Self {
+        Self::new(format!("disc:{discussion}:{said}"))
     }
 
     pub fn message(unique: &str) -> Self {

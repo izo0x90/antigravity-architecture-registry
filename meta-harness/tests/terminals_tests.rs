@@ -438,7 +438,7 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     assert_eq!(status, 200, "{body}");
     let renamed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::TagUpdated { tag: t } if t.id == tag.id && t.on[0].what.contains('@'))).await;
     let (_, read) = lead.tool("tag_read", json!({ "tag": "checked" })).await;
-    assert!(read.contains(&format!("1. terminal {}@", terminal.id)) && read.contains("as it was when tagged: changed or gone since):\ntagged-line"), "{read}");
+    assert!(read.contains(&format!("1. terminal {}@", terminal.id)) && read.contains("as it was when noted: changed or gone since):\ntagged-line"), "{read}");
     let harness_contracts::ClientEvent::TagUpdated { tag: renamed } = renamed else { unreachable!() };
     let (error, said) = lead.tool("untag", json!({ "tag": "checked", "subject": renamed.on[0].what })).await;
     assert!(!error && said.starts_with("checked (on 0 things)"), "taken off by that name: {said}");

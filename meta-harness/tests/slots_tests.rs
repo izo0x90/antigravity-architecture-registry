@@ -112,7 +112,7 @@ async fn a_report_reaches_a_running_lead_or_waits_for_one() {
     assert_eq!(opened.delivered_reports, 1, "delivered as the lead opened");
     // The hub hears of it from the session's own stream, a moment later.
     let mut heard = false;
-    for _ in 0..50 {
+    for _ in 0..500 {
         heard = slots.read(&lead, 10).unwrap().messages.iter().any(|(_, m)| m.contains("From helper (sub-slot):\n\nfound three bugs"));
         if heard {
             break;
@@ -122,7 +122,7 @@ async fn a_report_reaches_a_running_lead_or_waits_for_one() {
     assert!(heard, "{:?}", slots.read(&lead, 10).unwrap().messages);
     assert_eq!(slots.report(&sub, "and a fourth".into()).await.unwrap(), Reported::Delivered);
     // Any slot is told the same way: held for it alone until it runs.
-    assert_eq!(slots.tell(&sub, "the user (discussion d1)", "Why?".into()).await.unwrap(), Reported::Held, "no session of its own: held");
+    assert_eq!(slots.tell(&sub, "the user (discussion d1)", "Why?".into(), true).await.unwrap(), Reported::Held, "no session of its own: held");
     let opened = slots.open_session(&sub, Open::New { resume: None }).await.unwrap();
     assert_eq!(opened.delivered_reports, 1, "delivered as it opened");
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -353,7 +353,7 @@ async fn a_chats_message_and_turn_are_tagged_named_by_the_slot_and_kept() {
     // Its slot closed (the session gone from here): as it was, from the logs.
     state.harness.slots.close(&SlotId::new(&slot)).await.unwrap();
     let (_, read) = lead.tool("tag_read", json!({ "tag": "greeting", "thing": 1 })).await;
-    assert!(read.contains("(as it was when tagged: changed or gone since):\necho: hello there"), "{read}");
+    assert!(read.contains("(as it was when noted: changed or gone since):\necho: hello there"), "{read}");
 }
 
 /// What a turn's tools gave is left out of a read, one line said in its

@@ -387,7 +387,7 @@ impl Held {
     pub fn words(self) -> &'static str {
         match self {
             Held::Source => "as it is now",
-            Held::Kept => "as it was when tagged: changed or gone since",
+            Held::Kept => "as it was when noted: changed or gone since",
             Held::Gone => "gone",
         }
     }

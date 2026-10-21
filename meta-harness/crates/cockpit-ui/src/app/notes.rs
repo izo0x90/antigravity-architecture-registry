@@ -55,23 +55,47 @@ pub(super) struct NotesHere {
     pub things: Things,
     pub tags: Vec<TagHere>,
     pub row: Option<TagId>,
-    pub discussions: Vec<Discussion>,
+    pub discussions: Vec<Standing>,
 }
 
-/// Whose move it is in a discussion, as its mark's colour.
-fn whose_colour(d: &Discussion) -> egui::Color32 {
-    match d.whose_move() {
-        Move::User => colors().warn,
-        Move::Agent(_) => colors().info,
-        Move::Nobody => colors().faint,
+/// Where a discussion at the cursor stands (what's said of it there; it
+/// isn't copied whole).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Standing {
+    pub id: harness_contracts::DiscussionId,
+    pub whose: Move,
+    pub settled: bool,
+}
+
+impl Standing {
+    fn of(d: &Discussion) -> Self {
+        Self { id: d.id.clone(), whose: d.whose_move(), settled: d.status == DiscussionStatus::Settled }
+    }
+
+    /// Which goes first of those on one thing: yours, an agent's, settled.
+    fn urgency(&self) -> u8 {
+        match self.whose {
+            Move::User => 0,
+            Move::Agent(_) => 1,
+            Move::Nobody => 2,
+        }
+    }
+
+    /// Whose move it is, as a mark's colour.
+    fn colour(&self) -> egui::Color32 {
+        match self.whose {
+            Move::User => colors().warn,
+            Move::Agent(_) => colors().info,
+            Move::Nobody => colors().faint,
+        }
     }
 }
 
 /// Discussions, in a few words (`2 discussions, 1 waiting on you`).
-pub(super) fn discussions_said(on: &[&Discussion]) -> String {
+pub(super) fn discussions_said(on: &[Standing]) -> String {
     let n = on.len();
-    let yours = on.iter().filter(|d| d.whose_move() == Move::User).count();
-    let open = on.iter().filter(|d| d.status != DiscussionStatus::Settled).count();
+    let yours = on.iter().filter(|d| d.whose == Move::User).count();
+    let open = on.iter().filter(|d| !d.settled).count();
     let mut said = if n == 1 { "1 discussion".to_owned() } else { format!("{n} discussions") };
     if yours > 0 {
         said.push_str(&format!(", {yours} waiting on you"));
@@ -107,12 +131,12 @@ impl CockpitApp {
         // it), each once; not one that's itself there (a discussion's own
         // view, its row in the plan).
         let all = self.desk.shared.discussions.get();
-        let mut discussions: Vec<Discussion> = Vec::new();
+        let mut discussions: Vec<Standing> = Vec::new();
         for thing in &things.at {
             for d in all.on(&thing.subject) {
-                let own = things.at.iter().any(|t| t.subject == (Subject::Discussion { id: d.id.clone() }));
+                let own = things.at.iter().any(|t| matches!(&t.subject, Subject::Discussion { id } if *id == d.id));
                 if !own && !discussions.iter().any(|x| x.id == d.id) {
-                    discussions.push(d.clone());
+                    discussions.push(Standing::of(d));
                 }
             }
         }
@@ -125,10 +149,10 @@ impl CockpitApp {
     pub(super) fn notes_named(&self, here: Here) -> Vec<(crate::hosted::NoteMark, String, egui::Color32)> {
         let at = self.notes_here(here);
         let mut out: Vec<_> = at.tags.into_iter().filter(|t| t.on.is_some()).map(|t| (crate::hosted::NoteMark::Tag, t.name, colors().tag(t.colour))).collect();
-        let mut on: Vec<&Discussion> = at.discussions.iter().collect();
-        on.sort_by_key(|d| urgency(d));
+        let mut on = at.discussions;
+        on.sort_by_key(Standing::urgency);
         if let Some(first) = on.first() {
-            out.push((crate::hosted::NoteMark::Discussions, discussions_said(&on), whose_colour(first)));
+            out.push((crate::hosted::NoteMark::Discussions, discussions_said(&on), first.colour()));
         }
         out
     }
@@ -196,15 +220,6 @@ impl Noted {
     }
 }
 
-/// Which goes first of discussions on one thing: yours, an agent's, settled.
-fn urgency(d: &Discussion) -> u8 {
-    match d.whose_move() {
-        Move::User => 0,
-        Move::Agent(_) => 1,
-        Move::Nobody => 2,
-    }
-}
-
 impl CockpitApp {
     /// The notes on the things the view draws (it says where; it draws no
     /// notes itself), down `gutter` beside the content, or (a view whose
@@ -219,7 +234,7 @@ impl CockpitApp {
     pub(super) fn draw_notes(&mut self, here: Here, ui: &egui::Ui, gutter: Option<egui::Rect>, content: egui::Rect) {
         let look = crate::theme::look();
         let theme = colors();
-        type Bubble = (egui::Rect, String, harness_contracts::DiscussionId);
+        type Bubble = (egui::Rect, String, Vec<harness_contracts::DiscussionId>);
         let (bars, bubbles): (Vec<(egui::Rect, String)>, Vec<Bubble>) = {
             let view = self.desk.view(here.kind);
             let Some(drawn) = view.draws_things() else { return };
@@ -287,31 +302,51 @@ impl CockpitApp {
             }
             let mut bubbles = Vec::new();
             for (mark, mut on) in marks {
-                on.sort_by_key(|d| urgency(d));
-                let first = on[0];
-                painter.text(mark.center(), egui::Align2::CENTER_CENTER, egui_phosphor::fill::CHAT_CIRCLE, egui::FontId::proportional(look.gutter_mark), whose_colour(first));
+                on.sort_by_key(|d| Standing::of(d).urgency());
+                let standing: Vec<Standing> = on.iter().map(|d| Standing::of(d)).collect();
+                painter.text(mark.center(), egui::Align2::CENTER_CENTER, egui_phosphor::fill::CHAT_CIRCLE, crate::theme::solid_font(ui, look.gutter_mark), standing[0].colour());
                 let each = on.iter().map(|d| format!("{} {}: {}", d.id, d.kind.words(), first_line(d.asking()))).collect::<Vec<_>>().join("\n");
-                bubbles.push((mark, format!("{}\n{each}", discussions_said(&on)), first.id.clone()));
+                bubbles.push((mark, format!("{}\n{each}", discussions_said(&standing)), standing.into_iter().map(|d| d.id).collect()));
             }
             (bars, bubbles)
         };
         self.note_marks.retain(|(at, _, _)| *at != here.at);
+        // For a finger: a long press anywhere along a row of the gutter
+        // says every note there; a mark is tapped within a finger's reach
+        // of it (in the gutter, never over the content).
+        let reach = look.gutter_gap * 4.0;
+        let within = |r: egui::Rect| match gutter {
+            Some(g) => r.intersect(egui::Rect::from_x_y_ranges(g.x_range(), egui::Rangef::EVERYTHING)),
+            None => r,
+        };
         for (n, (bar, said)) in bars.into_iter().enumerate() {
             let response = ui.interact(bar, ui.id().with(("note_mark", here.kind, n)), egui::Sense::hover());
             if response.hovered() {
                 response.on_hover_text(said.clone());
             }
-            self.note_marks.push((here.at, bar, said));
+            let row = gutter.map_or(bar.expand(reach), |g| egui::Rect::from_x_y_ranges(g.x_range(), bar.y_range()));
+            self.note_marks.push((here.at, row, said));
         }
-        for (n, (mark, said, id)) in bubbles.into_iter().enumerate() {
-            let response = ui.interact(mark, ui.id().with(("discussion_mark", here.kind, n)), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        for (n, (mark, said, ids)) in bubbles.into_iter().enumerate() {
+            let response = ui.interact(within(mark.expand(reach)), ui.id().with(("discussion_mark", here.kind, n)), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
             if response.clicked() {
-                let jump = self.jump_here();
-                self.land(None, &Target::Discussion(id), jump, ui.ctx());
+                // One: it opens; several: which, first.
+                match ids.as_slice() {
+                    [one] => {
+                        let jump = self.jump_here();
+                        self.land(None, &Target::Discussion(one.clone()), jump, ui.ctx());
+                    }
+                    _ => {
+                        // (The actions now offered are made again: it's one of them.)
+                        self.desk.discussions_here = ids;
+                        self.frame_actions.borrow_mut().take();
+                        self.run_by_id("discuss.open", None, ui.ctx());
+                    }
+                }
             } else if response.hovered() {
                 response.on_hover_text(said.clone());
             }
-            self.note_marks.push((here.at, mark, said));
+            self.note_marks.push((here.at, within(mark.expand(reach)), said));
         }
     }
 }

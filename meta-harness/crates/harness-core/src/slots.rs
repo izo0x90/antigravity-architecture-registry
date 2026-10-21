@@ -192,8 +192,10 @@ pub struct SlotManager {
     expand: std::sync::OnceLock<Expand>,
 }
 
-/// A prompt as an agent is handed it (its text with what it names).
-pub type Expand = Arc<dyn Fn(&str) -> String + Send + Sync>;
+/// A prompt as an agent is handed it (its text with what it names): given
+/// a slot, only what that slot may read (what's passed on by an agent);
+/// none, all of it (the user's own prompt).
+pub type Expand = Arc<dyn Fn(&str, Option<&SlotId>) -> String + Send + Sync>;
 
 fn store_error(reason: String) -> HarnessError {
     HarnessError::Store { reason }
@@ -286,6 +288,12 @@ impl SlotManager {
         self.lock().slots.values().cloned().collect()
     }
 
+    /// The slot named `which`: by its id, or its name (no two share one).
+    pub fn named(&self, which: &str) -> Option<Slot> {
+        let all = self.list();
+        all.iter().find(|s| s.id.as_str() == which).or_else(|| all.iter().find(|s| s.name == which)).cloned()
+    }
+
     pub fn get(&self, id: &SlotId) -> Option<Slot> {
         self.lock().slots.get(id).cloned()
     }
@@ -325,6 +333,11 @@ impl SlotManager {
             // What the user does is signed "user": no agent passes for them.
             Some(name) if ["user", "you"].iter().any(|u| name.trim().eq_ignore_ascii_case(u)) => {
                 return Err(HarnessError::InvalidConfig { reason: format!("a slot can't be named {name:?}: that's the user") });
+            }
+            // A slot is named by its name in what's said (a discussion's
+            // asked, who said it): no two share one.
+            Some(name) if self.list().iter().any(|s| s.name.eq_ignore_ascii_case(name.trim())) => {
+                return Err(HarnessError::InvalidConfig { reason: format!("a slot is named {name:?} already") });
             }
             Some(name) => name,
             None => self.next_name(settings.instance.as_ref().map_or(role, |i| i.as_str())),
@@ -541,10 +554,10 @@ impl SlotManager {
 
     /// `text` as an agent is handed it (off the async threads: what it
     /// names is read where it's kept).
-    pub async fn expanded(&self, text: String) -> String {
+    pub async fn expanded(&self, text: String, readable_by: Option<SlotId>) -> String {
         let Some(expand) = self.expand.get().cloned() else { return text };
         let written = text.clone();
-        tokio::task::spawn_blocking(move || expand(&text)).await.unwrap_or(written)
+        tokio::task::spawn_blocking(move || expand(&text, readable_by.as_ref())).await.unwrap_or(written)
     }
 
     /// Sends a message to a slot (as its user, or as the lead). With `wait`,
@@ -552,7 +565,11 @@ impl SlotManager {
     pub async fn send(&self, to: &SlotId, text: String, delivery: Delivery, from: Origin, wait: Option<Duration>) -> Result<Sent> {
         let thread = self.running_thread(to).await?;
         let session = self.sessions.get(&thread)?;
-        let text = self.expanded(text).await;
+        let readable_by = match &from {
+            Origin::User => None,
+            Origin::Lead => Some(to.clone()),
+        };
+        let text = self.expanded(text, readable_by).await;
         let text = match &from {
             Origin::User => text,
             Origin::Lead => format!("From the lead ({}):\n\n{text}", self.slot(&self.lead()).map(|s| s.name).unwrap_or_else(|_| LEAD.into())),
@@ -592,17 +609,20 @@ impl SlotManager {
     pub async fn report(&self, from: &SlotId, text: String) -> Result<Reported> {
         let sender = self.slot(from)?;
         self.store.note(&sender.name, "reported", LEAD, None);
-        self.tell(&self.lead(), &format!("{} (sub-slot)", sender.name), text).await
+        self.tell(&self.lead(), &format!("{} (sub-slot)", sender.name), text, false).await
     }
 
-    /// Slot `to` is told `text` (from `from`, as it reads it): queued in
-    /// its running session (never added to its running turn: that would
-    /// cut off its work), else held until one of its sessions runs.
-    pub async fn tell(&self, to: &SlotId, from: &str, text: String) -> Result<Reported> {
+    /// Slot `to` is told `text` (from `from`, as it reads it; `by_user`:
+    /// the user said it, else what it names is handed only as far as `to`
+    /// may read it): queued in its running session (never added to its
+    /// running turn: that would cut off its work), else held, as it was
+    /// told, until one of its sessions runs.
+    pub async fn tell(&self, to: &SlotId, from: &str, text: String, by_user: bool) -> Result<Reported> {
         let slot = self.slot(to)?;
+        let text = self.expanded(text, (!by_user).then(|| to.clone())).await;
         match slot.current_thread().and_then(|t| self.sessions.get(t).ok()) {
             Some(session) => {
-                let prompt = format!("From {from}:\n\n{}", self.expanded(text).await);
+                let prompt = format!("From {from}:\n\n{text}");
                 session.start_turn(TurnInput { text: prompt, attachments: Vec::new() }).await?;
                 Ok(Reported::Delivered)
             }
@@ -627,7 +647,7 @@ impl SlotManager {
         }
         let mut each = Vec::new();
         for r in &reports {
-            each.push(format!("From {}:\n\n{}", r.from, self.expanded(r.text.clone()).await));
+            each.push(format!("From {}:\n\n{}", r.from, r.text));
         }
         let text = each.join("\n\n---\n\n");
         let sent = match self.sessions.get(thread) {

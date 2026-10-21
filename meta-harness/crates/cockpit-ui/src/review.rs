@@ -59,9 +59,13 @@ impl ReviewState {
     pub fn tick(&mut self, net: &NetClient, ctx: &egui::Context, plan: Option<&PlanId>, discussions: &crate::discussions::Discussions) {
         let now = (plan.cloned(), discussions.version());
         if self.discussed.as_ref() != Some(&now) {
-            self.discussions = plan.map(|p| discussions.on(&Subject::Plan { plan: p.clone() }).into_iter().cloned().collect()).unwrap_or_default();
+            // Told again only when the plan's own changed (not one on a terminal).
+            let on: Vec<Discussion> = plan.map(|p| discussions.on(&Subject::Plan { plan: p.clone() }).into_iter().cloned().collect()).unwrap_or_default();
+            if on != self.discussions {
+                self.discussions = on;
+                self.generation += 1;
+            }
             self.discussed = Some(now);
-            self.generation += 1;
         }
         let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for reply in replies {

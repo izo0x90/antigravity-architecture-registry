@@ -17,7 +17,7 @@ mod cockpit;
 mod discussions;
 mod explore;
 mod plans;
-mod reach;
+pub(crate) mod reach;
 mod review;
 mod schema;
 mod slots;
@@ -91,4 +91,12 @@ pub(crate) fn all(s: &Services, access: &Arc<nah_access::Access>) -> Vec<Box<dyn
         Box::new(tags::Tags { tags: s.tags.clone(), slots: s.slots.clone(), access: access.clone(), discussions: s.discussions.clone() }),
         Box::new(discussions::Discussions { discussions: s.discussions.clone(), things: s.things.clone(), slots: s.slots.clone(), access: access.clone() }),
     ]
+}
+
+/// How things are named, as the tools that take a thing's name say it.
+pub(crate) fn names_of_things() -> String {
+    format!(
+        "a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead` (all of it), `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `file src/a.rs`, `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` ({}), `plan <id> relation <source> <kind> <target>`, `plan <id> item <id>`; a discussion's `discussion d3`",
+        harness_contracts::CARD_SECTIONS.join(", ")
+    )
 }

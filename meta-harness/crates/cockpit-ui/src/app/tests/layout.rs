@@ -217,17 +217,21 @@ fn the_agent_is_talked_to_from_anywhere_without_moving_anything() {
 }
 
 #[test]
-fn typing_in_the_quick_look_stays_there_over_a_chat_or_a_spec() {
-    for kind in [BufferKind::Chat, BufferKind::Spec] {
+fn typing_in_the_quick_look_stays_there_over_a_chat_or_a_discussion() {
+    for kind in [BufferKind::Chat, BufferKind::Discussion] {
         let (ctx, mut app) = full_app();
         focus(&ctx, &mut app, kind);
-        // The panel's own box (a chat's) has the keyboard first.
-        if kind == BufferKind::Chat {
-            app.input_mode = InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) };
+        if kind == BufferKind::Discussion {
+            let on = harness_contracts::Subject::Plan { plan: PlanId::new("p").unwrap() };
+            told(&app, harness_contracts::ClientEvent::DiscussionUpdated { discussion: crate::discussions::tests::discussion(1, on, harness_contracts::DiscussionStatus::Open) });
             frame(&ctx, &mut app, vec![]);
-            assert_eq!(app.input_mode, InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) }, "{kind:?}: its box has the keyboard");
-            frame(&ctx, &mut app, press(egui::Key::Escape, false));
+            let _ = app.desk.view_mut(BufferKind::Discussion).show_target(&crate::nav::Target::Discussion(harness_contracts::DiscussionId::new("d1")));
         }
+        // The panel's own box has the keyboard first.
+        app.input_mode = InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) };
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.input_mode, InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) }, "{kind:?}: its box has the keyboard");
+        frame(&ctx, &mut app, press(egui::Key::Escape, false));
         frame(&ctx, &mut app, key("t"));
         frame(&ctx, &mut app, vec![]);
         frame(&ctx, &mut app, key("hello"));
@@ -236,7 +240,7 @@ fn typing_in_the_quick_look_stays_there_over_a_chat_or_a_spec() {
         app.close_quick_look();
         let in_panel = match kind {
             BufferKind::Chat => app.desk.chat().ui.input.text.clone(),
-            _ => String::new(),
+            _ => app.desk.typed::<crate::discussion::DiscussionView>(BufferKind::Discussion).writing.text.clone(),
         };
         assert_eq!((in_look.as_str(), in_panel.as_str()), ("hello", ""), "over a {kind:?}: typing goes into the quick look, not the panel under it");
     }

@@ -102,6 +102,8 @@ pub struct GraphState {
     pub tree: Option<Tree>,
     /// Card index by key.
     at: BTreeMap<String, usize>,
+    /// The cards showing each component (where its notes are marked).
+    pub(crate) showing: BTreeMap<ComponentId, Vec<usize>>,
     /// The selected card's key.
     pub selection: Option<String>,
     /// Select this once it shows up (the agent's card, a reveal).
@@ -193,6 +195,7 @@ impl Default for GraphState {
             trail: Vec::new(),
             tree: None,
             at: BTreeMap::new(),
+            showing: BTreeMap::new(),
             selection: None,
             pending_select: None,
             remembered: None,
@@ -337,6 +340,12 @@ impl GraphState {
             self.note = Some(format!("Closed {} again: opening it went over what one view holds.", names.join(", ")));
         }
         self.at = tree.cards.iter().enumerate().map(|(i, c)| (c.key.clone(), i)).collect();
+        self.showing = BTreeMap::new();
+        for (i, card) in tree.cards.iter().enumerate() {
+            if let Some(id) = &card.component {
+                self.showing.entry(id.clone()).or_default().push(i);
+            }
+        }
         if let Some(sel) = self.selection.clone()
             && !self.at.contains_key(&sel)
         {

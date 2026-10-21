@@ -437,7 +437,7 @@ impl Navigable for GraphState {
     /// The card under the cursor: its component.
     fn things(&self, key: &str) -> crate::nav::Things {
         match self.target().filter(|_| self.cursor_key().as_deref() == Some(key)) {
-            Some(Target::Component(id)) => crate::nav::Things::one(harness_contracts::Subject::Component { id: id.clone(), was: None }, &harness_contracts::Known::default()),
+            Some(Target::Component(id)) => crate::nav::Things::one(self.card_thing(&id), &harness_contracts::Known::default()),
             _ => crate::nav::Things::default(),
         }
     }
@@ -603,15 +603,33 @@ impl Navigable for GraphState {
     }
 }
 
+impl GraphState {
+    /// The thing a card is: on a plan's graph, the plan's component (what
+    /// its approval waits on); else the code's.
+    fn card_thing(&self, id: &arch_graph::ComponentId) -> harness_contracts::Subject {
+        match &self.nav.source {
+            arch_graph::Source::Plan(plan) => harness_contracts::Subject::PlanComponent { plan: plan.clone(), id: id.clone() },
+            _ => harness_contracts::Subject::Component { id: id.clone(), was: None },
+        }
+    }
+}
+
 /// Its cards: a component's notes marked on its card (the smallest
-/// showing it), where it shows.
+/// showing it), where it shows; on a plan's graph, the plan's component's.
 impl crate::nav::DrawsThings for GraphState {
     fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect> {
-        let harness_contracts::Subject::Component { id, .. } = subject else { return None };
-        self.on_screen()
-            .into_iter()
-            .filter(|c| c.component.as_ref() == Some(id))
+        let id = match (subject, &self.nav.source) {
+            (harness_contracts::Subject::PlanComponent { plan, id }, arch_graph::Source::Plan(shown)) if plan == shown => id,
+            (harness_contracts::Subject::Component { id, .. }, _) => id,
+            _ => return None,
+        };
+        let tree = self.tree.as_ref()?;
+        self.showing
+            .get(id)?
+            .iter()
+            .filter_map(|i| tree.cards.get(*i))
             .map(|c| self.to_screen(&c.rect))
+            .filter(|r| self.visible(*r))
             .min_by(|a, b| a.area().total_cmp(&b.area()))
     }
 

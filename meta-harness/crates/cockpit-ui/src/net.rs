@@ -870,9 +870,14 @@ impl NetClient {
         self.call("POST", &path, Some(serde_json::json!({ "to": to, "by": by })), ctx, on_done);
     }
 
-    /// Starts a discussion on `on`: a question or a change request.
-    pub fn discussion_start(&self, on: &harness_contracts::Subject, kind: harness_contracts::DiscussionKind, text: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Discussion>) + Send + 'static) {
-        self.call("POST", "/api/discussions", Some(serde_json::json!({ "subject": on, "kind": kind, "text": text })), ctx, on_done);
+    /// Starts a discussion on `on`: a question or a change request, asking
+    /// `asked` (an agent slot's name; none: the lead).
+    pub fn discussion_start(&self, on: &harness_contracts::Subject, kind: harness_contracts::DiscussionKind, text: &str, asked: Option<&str>, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Discussion>) + Send + 'static) {
+        let mut body = serde_json::json!({ "subject": on, "kind": kind, "text": text });
+        if let Some(asked) = asked {
+            body["asked"] = asked.into();
+        }
+        self.call("POST", "/api/discussions", Some(body), ctx, on_done);
     }
 
     /// What discussion `id` is on says, as it is now (or as it was kept).
@@ -880,8 +885,8 @@ impl NetClient {
         self.call("GET", &format!("/api/discussions/{}/on", urlencoding::encode(id.as_str())), None, ctx, on_done);
     }
 
-    /// Acts on a discussion: `action` is `reply`, `answer`, `settle`,
-    /// `reopen` or `change`; `body` is `{text?}`.
+    /// Acts on a discussion: `action` is `reply`, `settle`, `reopen` or
+    /// `change`; `body` is `{text?}`.
     pub fn discussion_act(&self, id: &harness_contracts::DiscussionId, action: &str, body: serde_json::Value, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Discussion>) + Send + 'static) {
         self.call("POST", &format!("/api/discussions/{}/{action}", urlencoding::encode(id.as_str())), Some(body), ctx, on_done);
     }

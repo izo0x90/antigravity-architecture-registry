@@ -15,6 +15,9 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use harness_contracts::{AdapterEvent, ClientEvent, ContentBlock, DETAIL, ItemBody, NativeId, Slot, Subject, ThreadId, Turn, TurnId, TurnItem, message_number};
 use harness_core::{EventHub, SlotManager};
 
+/// The most of a whole session that's read (and kept, when it's noted).
+const SESSION_MOST: usize = 4 << 20;
+
 pub struct Chats {
     slots: Arc<SlotManager>,
     hub: Arc<EventHub>,
@@ -222,21 +225,30 @@ impl nah_things::Resolve for Chats {
     }
 
     fn now(&self, subject: &Subject) -> Option<String> {
-        // A whole session: each turn, numbered.
+        // A whole session: each turn, numbered, as far as `SESSION_MOST`
+        // (what's noted of it is kept whole in the logs).
         if let Subject::ChatSession { session } = subject {
             let (mut turns, items) = self.running(session)?;
             turns.sort_by_key(|t| t.ordinal);
-            return Some(
-                turns
-                    .iter()
-                    .map(|turn| {
-                        let mut of: Vec<TurnItem> = items.iter().filter(|i| i.turn_id == turn.id).cloned().collect();
-                        of.sort_by_key(|i| i.ordinal);
-                        format!("turn {}\n{}", turn.ordinal, turn_text(&of))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            );
+            let mut of: HashMap<TurnId, Vec<TurnItem>> = HashMap::new();
+            for item in items {
+                of.entry(item.turn_id.clone()).or_default().push(item);
+            }
+            let mut out = String::new();
+            for (n, turn) in turns.iter().enumerate() {
+                let mut items = of.remove(&turn.id).unwrap_or_default();
+                items.sort_by_key(|i| i.ordinal);
+                let text = format!("turn {}\n{}", turn.ordinal, turn_text(&items));
+                if out.len() + text.len() > SESSION_MOST {
+                    out.push_str(&format!("\n(turns {} to {} left out: name a turn for each)", turn.ordinal, turns.last().map_or(turn.ordinal, |t| t.ordinal)));
+                    break;
+                }
+                if n > 0 {
+                    out.push('\n');
+                }
+                out.push_str(&text);
+            }
+            return Some(out);
         }
         let (_, items) = self.turn(turn_at(subject)?)?;
         match subject {

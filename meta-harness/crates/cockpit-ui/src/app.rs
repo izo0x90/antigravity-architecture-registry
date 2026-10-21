@@ -125,8 +125,12 @@ enum ShellCommand {
     Discuss,
     /// Discussing: the next of the things at the cursor.
     DiscussLevel,
+    /// Who the discussion picked asks (its value: an agent slot's name).
+    DiscussAsk,
     /// What the discussion picked asks (its value).
     DiscussWrite,
+    /// Which of the discussions on a mark opens (its value: its id).
+    DiscussOpen,
     Back,
     Forward,
     Keys,

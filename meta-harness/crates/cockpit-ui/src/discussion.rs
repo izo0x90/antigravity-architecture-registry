@@ -60,6 +60,9 @@ pub struct DiscussionView {
     /// when the architecture changed or what's said in it did.
     on_now: Option<(DiscussionId, Result<OnNow, String>)>,
     asked: Option<(DiscussionId, usize)>,
+    /// What was last sent (and what for), until the server has it: not
+    /// sent, it comes back to the box.
+    unsent: Option<(String, Writing)>,
     /// What's written in its box, and what for.
     pub writing: crate::conversation::TypingBox,
     pub purpose: Writing,
@@ -83,12 +86,17 @@ fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
 impl DiscussionView {
     /// The discussion shown, as the desk has it now.
     fn shown(&self) -> Option<Discussion> {
-        self.discussions.get().get(self.id.as_ref()?).cloned()
+        self.with(Discussion::clone)
+    }
+
+    /// `f` of the discussion shown, read where it's held (not copied).
+    fn with<R>(&self, f: impl FnOnce(&Discussion) -> R) -> Option<R> {
+        self.discussions.get().get(self.id.as_ref()?).map(f)
     }
 
     /// Its stops: what it's on, then each thing said.
     fn stops(&self) -> usize {
-        self.shown().map_or(0, |d| 1 + d.said.len())
+        self.with(|d| 1 + d.said.len()).unwrap_or(0)
     }
 
     fn go(&mut self, go: Go) {
@@ -119,6 +127,7 @@ impl DiscussionView {
             return;
         }
         let text = self.writing.take();
+        self.unsent = Some((text.clone(), self.purpose));
         let action = match self.purpose {
             Writing::Reply => "reply",
             Writing::Reopen => "reopen",
@@ -228,24 +237,37 @@ impl crate::buffer::Buffer for DiscussionView {
     fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
         for reply in std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
             match reply {
-                Reply::On(id, read) => self.on_now = Some((id, read.map_err(String::from))),
-                Reply::Sent(Ok(())) => self.note = None,
-                Reply::Sent(Err(e)) => self.note = Some(e),
+                // A read of one shown before (answered late): not this one's.
+                Reply::On(id, read) if self.asked.as_ref().is_some_and(|(asked, _)| *asked == id) => self.on_now = Some((id, read.map_err(String::from))),
+                Reply::On(..) => {}
+                Reply::Sent(Ok(())) => (self.note, self.unsent) = (None, None),
+                // Not sent: what was written comes back to its box.
+                Reply::Sent(Err(e)) => {
+                    self.note = Some(e);
+                    if let Some((text, purpose)) = self.unsent.take().filter(|_| self.writing.text.trim().is_empty()) {
+                        self.purpose = purpose;
+                        self.writing.put(&text);
+                    }
+                }
             }
         }
-        let Some(d) = self.shown() else { return };
-        let now = (d.id.clone(), d.said.len());
+        let Some(now) = self.with(|d| (d.id.clone(), d.said.len())) else { return };
         if self.asked.as_ref() == Some(&now) {
             return;
         }
+        let id = now.0.clone();
         self.asked = Some(now);
-        let (inbox, id) = (self.inbox.clone(), d.id.clone());
-        net.discussion_on(&d.id, ctx.clone(), move |r| push(&inbox, Reply::On(id, r)));
+        let inbox = self.inbox.clone();
+        net.discussion_on(&id.clone(), ctx.clone(), move |r| push(&inbox, Reply::On(id, r)));
     }
 
     /// The architecture changed: what it's on is read again.
     fn on_event(&mut self, event: &arch_graph::ArchEvent) {
-        if matches!(event, arch_graph::ArchEvent::Changed { .. }) {
+        use harness_contracts::Subject as S;
+        // Only what the code or a plan says changes with it (not a
+        // terminal's or a chat's).
+        let of_code = self.with(|d| matches!(d.on.subject, S::Component { .. } | S::CodeLines { .. } | S::CodeFile { .. } | S::Plan { .. } | S::PlanComponent { .. } | S::PlanSection { .. } | S::PlanRelation { .. } | S::PlanItem { .. })).unwrap_or(false);
+        if of_code && matches!(event, arch_graph::ArchEvent::Changed { .. }) {
             self.asked = None;
         }
     }
@@ -353,7 +375,7 @@ impl Navigable for DiscussionView {
     }
 
     fn takes_typed(&self) -> bool {
-        self.shown().is_some()
+        self.with(|_| ()).is_some()
     }
 
     fn typed_in(&mut self, text: &str) {
@@ -442,20 +464,18 @@ impl ActionProvider for DiscussionView {
 
 impl Hosted for DiscussionView {
     fn title(&self) -> Status {
-        match self.shown() {
-            Some(d) => Status::new(format!("{} {} · {}", icon::CHAT_CIRCLE_DOTS, d.id, d.kind.words()), Tone::Info).detail(d.on.what.clone()),
-            None => Status::new(format!("{} Discussion", icon::CHAT_CIRCLE_DOTS), Tone::Muted),
-        }
+        self.with(|d| Status::new(format!("{} {} · {}", icon::CHAT_CIRCLE_DOTS, d.id, d.kind.words()), Tone::Info).detail(d.on.what.clone())).unwrap_or_else(|| Status::new(format!("{} Discussion", icon::CHAT_CIRCLE_DOTS), Tone::Muted))
     }
 
     /// Whose move it is.
     fn status(&self) -> Vec<Status> {
-        let Some(d) = self.shown() else { return Vec::new() };
-        vec![match d.whose_move() {
+        self.with(|d| match d.whose_move() {
             Move::User => Status::new("waiting on you", Tone::Warn),
             Move::Agent(slot) => Status::new(format!("waiting on {slot}"), Tone::Info),
             Move::Nobody => Status::new("settled", Tone::Muted),
-        }]
+        })
+        .into_iter()
+        .collect()
     }
 
     fn typing_rect(&self) -> Option<egui::Rect> {

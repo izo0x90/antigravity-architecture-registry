@@ -1,7 +1,7 @@
 //! Discussions, for the cockpit: list them (or those on a thing), read
-//! one, start one on a thing (asking the lead, another agent slot, or no
-//! one but you), reply; settle, reopen, make one a change request, delete
-//! one (the user's alone: `plans.approve`). Reading needs `view.read`,
+//! one, start one on a thing (asking the lead, or another agent slot),
+//! reply; settle, reopen, make one a change request, delete one (the
+//! user's alone: `plans.approve`). Reading needs `view.read`,
 //! starting and replying `discuss`. Agents answer through their tools.
 //! What the user does is theirs: `by` is "user".
 

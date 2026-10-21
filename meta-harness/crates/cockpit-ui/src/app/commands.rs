@@ -447,7 +447,7 @@ impl CockpitApp {
             ShellCommand::MarkSet => self.start_capture(Capture::MarkSet),
             ShellCommand::Tag | ShellCommand::Untag(_) | ShellCommand::TagGoTo | ShellCommand::TagGoToPick | ShellCommand::TagStep { .. } | ShellCommand::TagLevel | ShellCommand::TagEdit(..) | ShellCommand::TagEditWhich(_) | ShellCommand::TagInsert => self.run_tag(&command, value, ctx),
             ShellCommand::ItemState(plan, item) => self.set_item_state(&plan, &item, value, ctx),
-            ShellCommand::Discuss | ShellCommand::DiscussLevel | ShellCommand::DiscussWrite => self.run_discuss(&command, value, ctx),
+            ShellCommand::Discuss | ShellCommand::DiscussLevel | ShellCommand::DiscussAsk | ShellCommand::DiscussWrite | ShellCommand::DiscussOpen => self.run_discuss(&command, value, ctx),
             ShellCommand::MarkJump => self.start_capture(Capture::MarkJump),
             ShellCommand::Back | ShellCommand::Forward => {
                 let here = self.jump_here();

@@ -63,3 +63,26 @@ fn a_plans_items_show_nested_in_the_plan_tree_open_as_cards_and_take_their_state
     app.run_by_id("plan.item_state", Some("done".into()), &ctx);
     assert_eq!(bodies(&app, "POST /api/arch/plans/p/ops"), [serde_json::json!({ "ops": [{ "op": "set_item", "id": "i2", "state": "done" }] })]);
 }
+
+/// Gone to from elsewhere, an item of a plan the desk isn't reading: the
+/// desk reads that plan, and its card shows the item (SP3 faithfulness 7).
+#[test]
+fn an_item_of_another_plan_gone_to_is_read_from_that_plan() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Spec);
+    app.desk.spec_mut().pinned = false;
+    let mut q = review();
+    q["id"] = "q".into();
+    let jump = app.jump_here();
+    app.land(None, &crate::nav::Target::Plan { plan: PlanId::new("q").unwrap(), part: crate::nav::PlanPart::Item("i2".into()) }, jump, &ctx);
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    assert_eq!(app.desk.shared.source.get(), &arch_graph::Source::Plan(PlanId::new("q").unwrap()), "the desk reads it");
+    assert!(app.desk.net.answer("GET /api/arch/plans/q", 200, &q), "asked for: {:?}", sent(&app));
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("What FFF skipped is about."), "{drawn}");
+}

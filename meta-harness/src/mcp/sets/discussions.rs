@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use arch_graph::tree::TreeConfig;
 use arch_service::ServiceError;
-use harness_contracts::{Discussion, DiscussionId, DiscussionKind, DiscussionStatus, Move, SaidKind, Subject, when};
+use harness_contracts::{Discussion, DiscussionId, DiscussionKind, DiscussionStatus, Move, Subject, when};
 use nah_access::Capability;
 use nah_discussions::{DiscussionError, USER};
 use serde_json::{Value, json};
@@ -35,11 +35,6 @@ fn refused(e: DiscussionError) -> ServiceError {
     }
 }
 
-/// Who someone is, to an agent.
-fn who(by: &str) -> &str {
-    if by == USER { "the user" } else { by }
-}
-
 /// How many of what a thing says `discussion_read` shows, now and as it
 /// was, and how many discussions `discussions` lists at most.
 const SHOWN_LINES: usize = 40;
@@ -49,31 +44,23 @@ const LISTED_MOST: usize = 100;
 fn line(d: &Discussion) -> String {
     let asked = if d.asked == USER { "asks the user".to_owned() } else { format!("asks {}", d.asked) };
     let asking: String = d.asking().lines().next().unwrap_or_default().chars().take(100).collect();
-    format!("{} · {} on {} ({}, {asked}) by {}: {asking}", d.id, d.kind.words(), d.on.what, status(d.status), who(&d.by))
+    format!("{} · {} on {} ({}, {asked}) by {}: {asking}", d.id, d.kind.words(), d.on.what, d.status.words(), harness_contracts::by_to_agent(&d.by))
 }
 
-fn status(s: DiscussionStatus) -> &'static str {
-    match s {
-        DiscussionStatus::Open => "open",
-        DiscussionStatus::Answered => "answered",
-        DiscussionStatus::Settled => "settled",
-    }
-}
+/// The most of what a discussion is on that's read, to show its start.
+const READ_MOST: usize = 16 * 1024;
 
-/// The start of a text (`SHOWN_LINES` lines), saying how much more there is.
-fn some_of(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let more = if lines.len() > SHOWN_LINES { format!("\n  ({} lines in all)", lines.len()) } else { String::new() };
-    lines.iter().take(SHOWN_LINES).map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n") + &more
+/// The start of a text (`SHOWN_LINES` lines), saying how much more there
+/// is (`lines`: how many it has in all).
+fn some_of((text, lines): (String, u64)) -> String {
+    let more = if lines > SHOWN_LINES as u64 { format!("\n  ({lines} lines in all)") } else { String::new() };
+    text.lines().take(SHOWN_LINES).map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n") + &more
 }
 
 impl Discussions {
     pub(crate) fn schemas(trees: &TreeConfig) -> Vec<ToolDef> {
         let _ = trees;
-        let thing = format!(
-            "A thing, named as its owner names it: a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124`; a chat's `chat lead` (all of it), `chat lead turn 3`, `chat lead turn 3 message 2`; code's `file src/a.rs`, `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` ({}), `plan <id> relation <source> <kind> <target>`, `plan <id> item <id>`; another discussion's `discussion d3`",
-            harness_contracts::CARD_SECTIONS.join(", ")
-        );
+        let thing = format!("A thing, named as its owner names it: {}", super::names_of_things());
         let id = json!({ "type": "string", "description": "The discussion, e.g. d3" });
         vec![
             tool(
@@ -185,28 +172,23 @@ impl ToolSet for Discussions {
                         Move::Nobody => "no one's (settled)".to_owned(),
                     };
                     let mut out = format!("{}\nWhose move: {whose}.\n", line(&d));
-                    let (held, now) = things.said(&d.on.subject, None);
+                    // Only the start of each is read (what's shown of it).
+                    let (held, now) = things.glimpse(&d.on.subject, None, READ_MOST);
                     match now {
                         Some(now) => {
-                            let _ = writeln!(out, "\n{} now ({}):\n{}", d.on.what, held.words(), some_of(&now));
+                            let _ = writeln!(out, "\n{} now ({}):\n{}", d.on.what, held.words(), some_of(now));
                         }
                         None => {
                             let _ = writeln!(out, "\n{} is gone from where it was.", d.on.what);
                         }
                     }
                     if let Some(kept) = &d.kept {
-                        let (_, was) = things.said(&d.on.subject, Some(kept));
-                        let _ = writeln!(out, "\nAs it was when the discussion started:\n{}", was.as_deref().map_or_else(|| "  (what was kept couldn't be read)".to_owned(), some_of));
+                        let (_, was) = things.glimpse(&d.on.subject, Some(kept), READ_MOST);
+                        let _ = writeln!(out, "\nAs it was when the discussion started:\n{}", was.map_or_else(|| "  (what was kept couldn't be read)".to_owned(), some_of));
                     }
                     out.push_str("\nSaid:\n");
                     for said in &d.said {
-                        let how = match said.kind {
-                            SaidKind::Message => "said",
-                            SaidKind::Answer => "answered",
-                            SaidKind::Settled => "settled it",
-                            SaidKind::Reopened => "reopened it",
-                        };
-                        let _ = writeln!(out, "- {} {how} ({}): {}", who(&said.by), when::written(said.at_ms), said.text);
+                        let _ = writeln!(out, "- {} {} ({}): {}", harness_contracts::by_to_agent(&said.by), said.kind.words(), when::written(said.at_ms), said.text);
                         for changed in &said.changed {
                             let _ = writeln!(out, "    changed {}", changed.what);
                         }
@@ -230,6 +212,13 @@ impl ToolSet for Discussions {
                         return Err(ServiceError::Forbidden(format!("that's {NOT_YOURS}")));
                     }
                     let asked = crate::discussing::asked(&slots, ask.as_deref(), &by).map_err(ServiceError::InvalidOp)?;
+                    // Asking another slot is messaging it: the lead, or the
+                    // user, any agent may ask; any other slot, only one that
+                    // may message slots.
+                    let lead = slots.get(&slots.lead()).map(|s| s.name).unwrap_or_else(|| nah_discussions::LEAD.to_owned());
+                    if asked != lead && asked != nah_discussions::USER && !reach.access.allows(&reach.principal, nah_access::Capability::SlotsMessage) {
+                        return Err(ServiceError::Forbidden(format!("asking {asked} is messaging it, which this session can't (slots.message): ask the lead")));
+                    }
                     let d = discussions.start(&subject, kind, &body, &by, Some(&asked)).map_err(refused)?;
                     Ok(format!("Started {}. discussion_read {} shows it; you're told when something's said in it.", line(&d), d.id))
                 }))
@@ -245,7 +234,7 @@ impl ToolSet for Discussions {
                         return Err(ServiceError::Forbidden(format!("{} is on {NOT_YOURS}", d.id)));
                     }
                     let d = if answering { discussions.answer(&id, &body, &changed, &by) } else { discussions.reply(&id, &body, &by) }.map_err(refused)?;
-                    Ok(if answering { format!("Answered {}: the user settles it or reopens it.", d.id) } else { format!("Said in {} (it's {} still).", d.id, status(d.status)) })
+                    Ok(if answering { format!("Answered {}: the user settles it or reopens it.", d.id) } else { format!("Said in {} (it's {} still).", d.id, d.status.words()) })
                 }))
                 .await
             }

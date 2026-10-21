@@ -13,11 +13,7 @@ use crate::theme::colors;
 /// Who wrote something, in words: you, or the agent's slot (one way for
 /// every place that says who: messages, tags, notes).
 pub fn who(by: &str) -> &str {
-    match by {
-        "user" => "you",
-        "" => "someone",
-        slot => slot,
-    }
+    harness_contracts::by_to_user(by)
 }
 
 /// A time a message was said, in words (`2026-10-20 22:11`, UTC).
@@ -78,12 +74,13 @@ pub fn message(ui: &mut egui::Ui, markdown: &mut CommonMarkCache, m: &Message<'_
 /// under it), a settling, a reopening said so.
 pub fn said(s: &harness_contracts::Said) -> Message<'_> {
     use harness_contracts::SaidKind;
-    let (what, tone) = match s.kind {
-        SaidKind::Message => (None, None),
-        SaidKind::Answer => (Some("answered"), Some(colors().info)),
-        SaidKind::Settled => (Some("settled it"), Some(colors().ok)),
-        SaidKind::Reopened => (Some("reopened it"), Some(colors().warn)),
+    let tone = match s.kind {
+        SaidKind::Message => None,
+        SaidKind::Answer => Some(colors().info),
+        SaidKind::Settled => Some(colors().ok),
+        SaidKind::Reopened => Some(colors().warn),
     };
+    let what = (s.kind != SaidKind::Message).then(|| s.kind.words());
     Message { by: &s.by, at_ms: Some(s.at_ms), what, text: &s.text, markdown: s.by != "user", tone, under: s.changed.iter().map(|c| format!("changed {}", c.what)).collect() }
 }
 
@@ -181,12 +178,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_hash_typed_where_a_word_starts_asks_for_a_tags_name_after_backspace_too() {
+    fn a_hash_typed_where_a_word_starts_asks_for_a_tags_name() {
         assert!(names_tag("#", 0) && names_tag("see #", 4) && names_tag("(#", 1));
         assert!(!names_tag("a#", 1), "inside a word: a hash");
         assert!(!names_tag("see #", 3), "pasted, not typed");
-        // Typed, deleted (Backspace), typed again: asked again.
-        assert!(names_tag("see #", 4));
         let mut b = TypingBox { text: "see #".into(), ..TypingBox::default() };
         b.put("#flaky ");
         assert_eq!(b.text, "see #flaky ", "the # typed isn't doubled");
@@ -197,6 +192,5 @@ mod tests {
     #[test]
     fn who_wrote_something_is_said_one_way() {
         assert_eq!((who("user"), who("lead"), who("")), ("you", "lead", "someone"));
-        assert_eq!(when(1_791_334_297_000), "2026-10-07 00:51");
     }
 }

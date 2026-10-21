@@ -53,6 +53,13 @@ async fn agents_read_start_reply_and_answer_discussions_and_the_slot_asked_is_to
     assert!(read.contains("Whose move: yours (lead is asked).") && read.contains("plan p item i1 now (") && read.contains("Flaky test (open)\n  It fails one run in ten.") && read.contains("- the user said ("), "{read}");
     let (status, body) = http(addr, "GET", "/api/discussions/d2", None).await;
     assert_eq!((status, parse(&body)["asked"].as_str()), (200, Some("user")), "an agent asks the user");
+    // The user says their answer: the lead, who asked, is told; the user settles it.
+    let (status, _) = http(addr, "POST", "/api/discussions/d2/reply", Some(r#"{"text":"Yes, complete."}"#)).await;
+    assert_eq!(status, 200);
+    until("the lead told the user's answer", || told().iter().any(|t| t.contains("Discussion d2 on plan p: the user said:\n\nYes, complete."))).await;
+    let (status, body) = http(addr, "POST", "/api/discussions/d2/settle", Some("{}")).await;
+    assert_eq!((status, parse(&body)["status"].as_str()), (200, Some("settled")), "{body}");
+    until("the lead told it's settled", || told().iter().any(|t| t.contains("Discussion d2 on plan p: the user settled it"))).await;
 
     // It replies (nothing told back to itself), then answers; the user settles.
     let before = told().len();
@@ -78,4 +85,69 @@ async fn agents_read_start_reply_and_answer_discussions_and_the_slot_asked_is_to
     assert!(error, "no tool settles: the user does");
     let (error, said) = lead.tool("discuss", json!({ "on": "plan p item i9", "text": "?" })).await;
     assert!(error && said.contains("no item i9"), "{said}");
+}
+
+/// A sub-slot asks the lead (any agent may), never another slot (that's
+/// messaging it); only the slot asked answers; what's said back reaches
+/// the sub-slot that asked; a tag in it hands on only what the slot told
+/// may read (another slot's chat: named, not handed).
+#[tokio::test]
+async fn a_sub_slot_asks_the_lead_only_the_lead_answers_and_the_asker_is_told() {
+    let arch = fixture_architecture();
+    arch.create_plan("p", "Plan", "", arch_graph::PlanKind::Review).unwrap();
+    let (addr, state) = spawn_app_with(arch.clone()).await;
+    let slots = state.harness.slots.clone();
+    let mut sub_ids = Vec::new();
+    for name in ["helper", "other"] {
+        let (status, body) = http(addr, "POST", "/api/slots", Some(&json!({ "instanceId": "fake", "name": name }).to_string())).await;
+        assert_eq!(status, 200, "{body}");
+        let id = parse(&body)["slotId"].as_str().unwrap().to_owned();
+        let (status, body) = http(addr, "POST", &format!("/api/slots/{id}/prompt"), Some(r#"{"text":"hello"}"#)).await;
+        assert_eq!(status, 200, "{body}");
+        sub_ids.push(SlotId::new(id));
+    }
+    let (status, body) = http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"fake","name":"Helper"}"#)).await;
+    assert!(status != 200 && body.contains("a slot is named \\\"Helper\\\" already"), "no two slots share a name: {status} {body}");
+    // Nor is one named as the user is (only the user settles: `by` "user").
+    for name in ["user", "You"] {
+        let (status, body) = http(addr, "POST", "/api/slots", Some(&json!({ "instanceId": "fake", "name": name }).to_string())).await;
+        assert!(status != 200 && body.contains("that's the user"), "{name}: {body}");
+    }
+    let thread = slots.get(&sub_ids[0]).unwrap().current_thread().cloned().unwrap();
+    let mut helper = Mcp::as_session(addr, &thread).await;
+    let (error, said) = helper.tool("discuss", json!({ "on": "plan p", "text": "Ask the other one", "ask": "other" })).await;
+    assert!(error && said.contains("slots.message"), "asking another slot is messaging it: {said}");
+    let (error, said) = helper.tool("discuss", json!({ "on": "plan p", "text": "Is p done?" })).await;
+    assert!(!error && said.contains("asks lead"), "{said}");
+    let (error, said) = helper.tool("discussion_answer", json!({ "id": "d1", "text": "Yes." })).await;
+    assert!(error && said.contains("only it answers"), "only the slot asked answers: {said}");
+    let mut lead = Mcp::lead(addr).await;
+    // The lead's own chat, tagged (the helper may not read it): the lead
+    // was told of d1 in it.
+    let mut tagged = (true, String::new());
+    for _ in 0..100 {
+        tagged = lead.tool("tag", json!({ "tag": "notes", "subject": "chat lead turn 1" })).await;
+        if !tagged.0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!tagged.0, "{}", tagged.1);
+    // Another slot's chat: the helper can't start one on it, nor read one on it.
+    let (error, said) = helper.tool("discuss", json!({ "on": "chat lead turn 1", "text": "?" })).await;
+    assert!(error && said.contains("can't read"), "{said}");
+    let (error, said) = lead.tool("discuss", json!({ "on": "chat lead turn 1", "text": "Mine?" })).await;
+    assert!(!error, "{said}");
+    for tool in ["discussion_read", "discussion_reply"] {
+        let (error, said) = helper.tool(tool, json!({ "id": "d2", "text": "x" })).await;
+        assert!(error && said.contains("can't read"), "{tool}: {said}");
+    }
+    let (_, listed) = helper.tool("discussions", json!({})).await;
+    assert!(!listed.contains("d2"), "not listed to it: {listed}");
+    let (error, said) = lead.tool("discussion_answer", json!({ "id": "d1", "text": "Yes, done: see #notes" })).await;
+    assert!(!error, "{said}");
+    let told = || slots.read(&sub_ids[0], 50).unwrap().messages.into_iter().filter_map(|(_, text)| text.strip_prefix("echo: ").map(str::to_owned)).collect::<Vec<_>>();
+    until("the helper told the answer", || told().iter().any(|t| t.contains("Discussion d1 on plan p: lead answered it:\n\nYes, done: see #notes"))).await;
+    let answer = told().into_iter().find(|t| t.contains("lead answered it")).unwrap();
+    assert!(answer.contains("(not handed on: it's a chat this slot can't read)") && !answer.contains("Is p done?\n"), "the tag names the lead's chat, not what it says: {answer}");
 }

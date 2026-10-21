@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 pub const USER: &str = "user";
 
 /// The agent slot a discussion asks unless another is named.
-pub const LEAD: &str = "lead";
+pub use harness_contracts::LEAD;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DiscussionError {
@@ -373,6 +373,12 @@ impl Discussions {
     /// Adds `said` to discussion `id` (once `check` passes, as it is
     /// then), leaving it at `status` (none: where it stands).
     fn add(&self, id: &DiscussionId, said: Said, status: Option<DiscussionStatus>, action: &'static str, check: &dyn Fn(&Discussion) -> Result<(), DiscussionError>) -> Result<Discussion, DiscussionError> {
+        self.add_as(id, said, status, None, action, check)
+    }
+
+    /// As `add`, made a `kind` too (in the same step: what's told of it
+    /// says what it is now).
+    fn add_as(&self, id: &DiscussionId, said: Said, status: Option<DiscussionStatus>, kind_now: Option<DiscussionKind>, action: &'static str, check: &dyn Fn(&Discussion) -> Result<(), DiscussionError>) -> Result<Discussion, DiscussionError> {
         let Said { by, kind, text: body, changed, .. } = said;
         let what = {
             let held = lock(&self.held);
@@ -400,6 +406,10 @@ impl Discussions {
         if let Some(status) = status {
             discussion.status = status;
             stored.status = status;
+        }
+        if let Some(kind) = kind_now {
+            discussion.kind = kind;
+            stored.kind = kind;
         }
         let done = self.keep(&mut held, discussion, stored, &Change { by, action, detail: format!("{id} on {what}") });
         if done.is_err() {
@@ -432,7 +442,11 @@ impl Discussions {
             named.push(Named { subject, what });
         }
         let names = named.clone();
+        let by_who = by.to_owned();
         self.add(id, said(by, SaidKind::Answer, body, named), Some(DiscussionStatus::Answered), "answered", &move |d| {
+            if d.asked != by_who {
+                return Err(DiscussionError::Forbidden(format!("{id} asks {}: only it answers (discussion_reply says something in it)", d.asked)));
+            }
             if d.status == DiscussionStatus::Settled {
                 return Err(DiscussionError::Invalid(format!("{id} is settled")));
             }
@@ -444,11 +458,14 @@ impl Discussions {
     }
 
     /// The user settles discussion `id` once it's answered (a change
-    /// request's answer named what changed), saying something if they like.
+    /// request's answer named what changed), or one asked of them,
+    /// saying something if they like.
     pub fn settle(&self, id: &DiscussionId, body: &str, by: &str) -> Result<Discussion, DiscussionError> {
         user_only(by, "settles a discussion: answer it instead")?;
         self.add(id, said(by, SaidKind::Settled, body.trim().to_owned(), Vec::new()), Some(DiscussionStatus::Settled), "settled", &|d| match (d.kind, d.status) {
             (_, DiscussionStatus::Settled) => Err(DiscussionError::Invalid(format!("{id} is settled already"))),
+            // Asked of the user: they settle it once they've said their answer.
+            (_, DiscussionStatus::Open) if d.asked == USER => Ok(()),
             (DiscussionKind::ChangeRequest, DiscussionStatus::Open) => Err(DiscussionError::Invalid(format!("{id} asks for a change: it's settled once it's answered with what changed"))),
             (DiscussionKind::Question, DiscussionStatus::Open) => Err(DiscussionError::Invalid(format!("{id} isn't answered yet: it's settled once it is"))),
             _ => Ok(()),
@@ -464,29 +481,21 @@ impl Discussions {
         })
     }
 
-    /// The user makes discussion `id` a change request. One answered is
-    /// open again, with why (its answer named no change); one settled is
-    /// reopened first.
+    /// The user makes discussion `id` a change request, in one step: one
+    /// answered is open again with why (its answer named no change); one
+    /// open is told so (why, or what's asked now).
     pub fn ask_for_change(&self, id: &DiscussionId, why: &str, by: &str) -> Result<Discussion, DiscussionError> {
         user_only(by, "makes a discussion a change request")?;
-        let status = self.get(id)?.status;
-        if status == DiscussionStatus::Answered {
+        let change = Some(DiscussionKind::ChangeRequest);
+        if self.get(id)?.status == DiscussionStatus::Answered {
             let why = text(why, "making an answered discussion a change request (why)")?;
-            return self.add(id, said(by, SaidKind::Reopened, why, Vec::new()), Some(DiscussionStatus::Open), "made a change request", &|d| asks_change(id, d, DiscussionStatus::Answered)).and_then(|_| self.kind_to_change(id, by));
+            return self.add_as(id, said(by, SaidKind::Reopened, why, Vec::new()), Some(DiscussionStatus::Open), change, "made a change request", &|d| asks_change(id, d, DiscussionStatus::Answered));
         }
-        self.kind_to_change(id, by)
-    }
-
-    /// Discussion `id`, open, made a change request.
-    fn kind_to_change(&self, id: &DiscussionId, by: &str) -> Result<Discussion, DiscussionError> {
-        let mut held = lock(&self.held);
-        let h = held.get(id).ok_or_else(|| DiscussionError::NotFound(id.to_string()))?;
-        asks_change(id, &h.discussion, DiscussionStatus::Open)?;
-        let (mut discussion, mut stored) = (h.discussion.clone(), h.stored.clone());
-        discussion.kind = DiscussionKind::ChangeRequest;
-        stored.kind = DiscussionKind::ChangeRequest;
-        let what = discussion.on.what.clone();
-        self.keep(&mut held, discussion, stored, &Change { by: by.to_owned(), action: "made a change request", detail: format!("{id} on {what}") })
+        let why = match why.trim() {
+            "" => "It's a change request now: answer it naming what you changed.".to_owned(),
+            why => why.to_owned(),
+        };
+        self.add_as(id, said(by, SaidKind::Message, why, Vec::new()), None, change, "made a change request", &|d| asks_change(id, d, DiscussionStatus::Open))
     }
 
     /// Discussions brought in whole, as they stood where they were kept
@@ -779,6 +788,20 @@ mod tests {
         d.answer(&next.id, "yes", &[], "lead").unwrap();
         d.settle(&next.id, "", USER).unwrap();
         assert!(d.ask_for_change(&next.id, "more", USER).unwrap_err().to_string().contains("reopen it first"), "settled: reopened first");
+        // Only the one asked answers; it asking back makes it the move of who started it.
+        let third = d.start(&component("a"), DiscussionKind::Question, "which one?", USER, None).unwrap();
+        assert!(matches!(d.answer(&third.id, "this", &[], "worker"), Err(DiscussionError::Forbidden(_))), "only lead, asked, answers");
+        let back = d.reply(&third.id, "the first or the second?", "lead").unwrap();
+        assert_eq!(back.whose_move(), harness_contracts::Move::User, "asked back: the user's move");
+        assert_eq!(d.reply(&third.id, "the first", USER).unwrap().whose_move(), harness_contracts::Move::Agent("lead".into()));
+        // Made a change request while open: in one step, what's asked now said.
+        let made = d.ask_for_change(&third.id, "", USER).unwrap();
+        assert_eq!((made.kind, made.status, made.said.last().map(|s| s.kind)), (DiscussionKind::ChangeRequest, DiscussionStatus::Open, Some(SaidKind::Message)));
+        // Asked of the user (by an agent): they settle it once they've said their answer.
+        let theirs = d.start(&component("a"), DiscussionKind::Question, "is this list complete?", "lead", Some(USER)).unwrap();
+        assert_eq!(theirs.whose_move(), harness_contracts::Move::User);
+        d.reply(&theirs.id, "yes", USER).unwrap();
+        assert_eq!(d.settle(&theirs.id, "", USER).unwrap().status, DiscussionStatus::Settled);
     }
 
     #[test]

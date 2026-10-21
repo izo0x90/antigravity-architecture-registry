@@ -137,7 +137,7 @@ impl CockpitApp {
                 .param(Param::Search { hint: "a tag's name".into(), found: named, waiting: false })
                 .group(Group::Act)
                 .importance(MINOR)
-                .when(when(self.desk.view(here.kind).takes_typed() && !tags.list().is_empty())),
+                .when(when((self.desk.view(here.kind).takes_typed() || self.palette.is_writing() || self.palette.naming_tag()) && !tags.list().is_empty())),
         );
         // `g T` picked a tag on several things: which.
         // An edit's tag picked (of several): its value asked for.
@@ -205,6 +205,12 @@ impl CockpitApp {
                     return;
                 };
                 self.desk.shell_searches.remove("tag.insert");
+                // In what the palette's writing (it comes back), or where it was typed.
+                if self.palette.naming_tag() {
+                    self.palette.put_name(Some(&format!("#{name} ")));
+                    self.input_mode = InputMode::Palette;
+                    return;
+                }
                 self.desk.view_mut(here.kind).typed_in(&format!("#{name} "));
                 // Back to typing where it was.
                 self.input_mode = InputMode::Insert { at: here.at };

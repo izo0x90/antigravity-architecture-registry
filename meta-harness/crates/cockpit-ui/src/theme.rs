@@ -381,8 +381,13 @@ pub fn caret_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
 /// A tag's mark where it's named: a solid tag in its colour (the outline
 /// one until the fonts are in, the first frame).
 pub fn tag_mark(ui: &egui::Ui, colour: Color32, size: f32) -> egui::RichText {
-    // Whether the solid icons' font is in: found once for the context
-    // (fonts are set up at start), not looked for each time.
+    egui::RichText::new(egui_phosphor::fill::TAG).font(solid_font(ui, size)).color(colour)
+}
+
+/// The solid icons' font (the icons' fill and outline share their
+/// characters: the font says which is drawn), or the outlines' where it
+/// isn't in; found once for the context (fonts are set up at start).
+pub fn solid_font(ui: &egui::Ui, size: f32) -> egui::FontId {
     let found = egui::Id::new("solid_icons_in");
     let solid_in = ui.ctx().data(|d| d.get_temp::<bool>(found)).unwrap_or(false) || {
         let now = ui.fonts(|f| f.definitions().families.contains_key(&egui::FontFamily::Name(SOLID.into())));
@@ -391,8 +396,7 @@ pub fn tag_mark(ui: &egui::Ui, colour: Color32, size: f32) -> egui::RichText {
         }
         now
     };
-    let mark = if solid_in { egui::RichText::new(egui_phosphor::fill::TAG).font(solid(size)) } else { egui::RichText::new(egui_phosphor::regular::TAG).size(size) };
-    mark.color(colour)
+    if solid_in { solid(size) } else { egui::FontId::proportional(size) }
 }
 
 #[cfg(test)]

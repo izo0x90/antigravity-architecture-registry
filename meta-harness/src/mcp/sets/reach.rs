@@ -14,6 +14,8 @@ pub(crate) struct Reach {
     pub(crate) discussions: Arc<nah_discussions::Discussions>,
     pub(crate) principal: nah_access::Principal,
     pub(crate) slot: Option<harness_contracts::SlotId>,
+    /// The slots, read once for all the things one call asks about.
+    listed: std::sync::OnceLock<Vec<harness_contracts::Slot>>,
 }
 
 /// Said of a thing a caller may not read.
@@ -21,7 +23,12 @@ pub(crate) const NOT_YOURS: &str = "a chat this session can't read (its own slot
 
 impl Reach {
     pub(crate) fn of(slots: &Arc<harness_core::SlotManager>, access: &Arc<nah_access::Access>, discussions: &Arc<nah_discussions::Discussions>, caller: &crate::mcp::McpCaller) -> Arc<Self> {
-        Arc::new(Self { slots: slots.clone(), access: access.clone(), discussions: discussions.clone(), principal: caller.principal.clone(), slot: caller.slot.clone() })
+        Arc::new(Self { slots: slots.clone(), access: access.clone(), discussions: discussions.clone(), principal: caller.principal.clone(), slot: caller.slot.clone(), listed: Default::default() })
+    }
+
+    /// What slot `slot` may read (as its sessions' tools would).
+    pub(crate) fn of_slot(slots: &Arc<harness_core::SlotManager>, access: &Arc<nah_access::Access>, discussions: &Arc<nah_discussions::Discussions>, slot: &harness_contracts::Slot) -> Self {
+        Self { slots: slots.clone(), access: access.clone(), discussions: discussions.clone(), principal: nah_access::Principal::agent(&slot.role), slot: Some(slot.id.clone()), listed: Default::default() }
     }
 
     pub(crate) fn reaches(&self, subject: &Subject) -> bool {
@@ -36,7 +43,8 @@ impl Reach {
         };
         let observes = self.access.allows(&self.principal, Capability::SlotsObserve);
         // A session no slot holds now (its slot closed): what was kept, to one that observes.
-        let Some(slot) = self.slots.list().into_iter().find(|s| s.sessions.iter().any(|x| x.native_id.as_ref() == Some(session))) else { return observes };
+        let listed = self.listed.get_or_init(|| self.slots.list());
+        let Some(slot) = listed.iter().find(|s| s.sessions.iter().any(|x| x.native_id.as_ref() == Some(session))) else { return observes };
         self.slot.as_ref() == Some(&slot.id) || (slot.role == "sub" && observes)
     }
 }

@@ -610,7 +610,14 @@ enum ControlUse {
 /// Only hosts call this (and `controls`): views draw no controls.
 pub fn control(ui: &mut egui::Ui, bound: &Bound, cx: &mut RunCx<'_>) -> bool {
     let action = &bound.action;
-    let Some(used) = draw_control(ui, bound) else { return false };
+    // One that doesn't apply where you are: shown greyed, never run.
+    let used = if action.when == When::Unavailable {
+        ui.add_enabled_ui(false, |ui| draw_control(ui, bound));
+        None
+    } else {
+        draw_control(ui, bound)
+    };
+    let Some(used) = used else { return false };
     let value = match used {
         ControlUse::Run(value) => value,
         // Asked without its value: the palette opens at it.

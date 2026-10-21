@@ -30,7 +30,7 @@ impl Tags {
         let _ = trees;
         let on = json!({ "type": "object", "properties": {
             "tag": { "type": "string", "description": "Its name (a new tag when there's none of that name: letters, digits, - and _)" },
-            "subject": { "type": "string", "description": format!("What to tag, named as its owner names it (`tag_read` shows each thing's name): a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead` (all of it), `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `file src/a.rs`, `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` ({}), `plan <id> relation <source> <kind> <target>`, `plan <id> item <id>`", harness_contracts::CARD_SECTIONS.join(", ")) }
+            "subject": { "type": "string", "description": format!("What to tag, named as its owner names it (`tag_read` shows each thing's name): {}", super::names_of_things()) }
         }, "required": ["tag", "subject"] });
         let edit = json!({ "type": "object", "properties": {
             "tag": { "type": "string" },
@@ -75,15 +75,6 @@ fn refused(e: nah_tags::TagError) -> ServiceError {
     }
 }
 
-/// Who changed something, to an agent: the user, or an agent's slot.
-fn who(by: &str) -> &str {
-    match by {
-        "user" => "the user",
-        "" => "?",
-        slot => slot,
-    }
-}
-
 /// How many of a thing's lines `tag_read` shows of each, and of one
 /// asked for at most.
 const SHOWN_LINES: usize = 20;
@@ -108,7 +99,7 @@ fn said(tag: &harness_contracts::Tag) -> String {
     match (tag.note.as_str(), tag.noted_by.as_str()) {
         ("", _) => format!("{} ({count})", tag.name),
         (note, "") => format!("{} ({count}): {note}", tag.name),
-        (note, by) => format!("{} ({count}): {note} (noted by {})", tag.name, who(by)),
+        (note, by) => format!("{} ({count}): {note} (noted by {})", tag.name, harness_contracts::by_to_agent(by)),
     }
 }
 
@@ -165,7 +156,7 @@ impl ToolSet for Tags {
                         let read = t.read(&tag).map_err(refused)?;
                         let mut out = vec![said(&read.tag)];
                         for (n, on) in read.on.iter().enumerate() {
-                            let when = format!("tagged by {}", who(&on.tagged.by));
+                            let when = format!("tagged by {}", harness_contracts::by_to_agent(&on.tagged.by));
                             let what = &on.tagged.what;
                             out.push(match &on.text {
                                 _ if !reach.reaches(&on.tagged.subject) => format!("{}. {NOT_YOURS} ({when})", n + 1),

@@ -52,6 +52,12 @@ pub struct Palette {
     caret_to_end: bool,
     /// What's written, for an action that takes writing.
     writing: crate::conversation::TypingBox,
+    /// A `#` was just typed where a word starts in what's written: a tag's
+    /// name is asked for (taken by the app).
+    names_tag: bool,
+    /// What's written, set aside while a tag's name is picked for it (the
+    /// name goes in after it, and it comes back).
+    held: Option<(Stage, crate::conversation::TypingBox)>,
 }
 
 impl Palette {
@@ -75,7 +81,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default() }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), names_tag: false, held: None }
     }
 }
 
@@ -142,12 +148,49 @@ impl Palette {
         };
     }
 
+    /// A `#` was typed in what's written (once).
+    pub fn take_names_tag(&mut self) -> bool {
+        std::mem::take(&mut self.names_tag)
+    }
+
+    /// What's written is set aside while `pick` (the tag picker) asks for
+    /// a tag's name.
+    pub fn name_tag_in(&mut self, pick: &Bound) {
+        let stage = std::mem::replace(&mut self.stage, Stage::Actions);
+        self.held = Some((stage, std::mem::take(&mut self.writing)));
+        self.open = true;
+        self.enter(pick.clone(), false);
+    }
+
+    /// It's open at an action's writing.
+    pub fn is_writing(&self) -> bool {
+        self.open && matches!(self.stage, Stage::Writing { .. })
+    }
+
+    /// A tag's name is being picked for what's written here.
+    pub fn naming_tag(&self) -> bool {
+        self.held.is_some()
+    }
+
+    /// What was set aside comes back (with `name` put in after it).
+    pub fn put_name(&mut self, name: Option<&str>) {
+        let Some((stage, writing)) = self.held.take() else { return };
+        (self.stage, self.writing, self.open) = (stage, writing, true);
+        if let Some(name) = name {
+            self.writing.put(name);
+        }
+    }
+
     /// The query a search stage wants looked up, once per change.
     pub fn take_search(&mut self) -> Option<SearchAsk> {
         self.ask.take()
     }
 
     fn back(&mut self) {
+        if self.held.is_some() {
+            self.put_name(None);
+            return;
+        }
         match &self.stage {
             Stage::Choose { from_list: true, .. } | Stage::Text { from_list: true, .. } | Stage::Writing { from_list: true, .. } | Stage::Search { from_list: true, .. } => {
                 self.stage = Stage::Actions;
@@ -189,8 +232,13 @@ impl Palette {
         let mut picked: Option<Invocation> = None;
         let mut next_stage: Option<(Bound, bool)> = None;
 
-        // A search's results arrive after it's asked: read the action afresh.
-        if let Stage::Search { action, .. } = &mut self.stage
+        // The action picked for, read afresh each frame where it's meant to
+        // change: a search's results come after it's asked; one with a cycle
+        // key acts on what that picks. (Any other stays what it was asked
+        // for: an edit of a tag deleted meanwhile is of that tag still.)
+        let search = matches!(self.stage, Stage::Search { .. });
+        if let Stage::Search { action, .. } | Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } = &mut self.stage
+            && (search || action.action.cycle.is_some())
             && let Some(fresh) = actions.iter().find(|b| b.origin == action.origin && b.action.id == action.action.id)
         {
             **action = fresh.clone();
@@ -233,9 +281,12 @@ impl Palette {
                         // Writing: the typing box every conversation has; Enter sends it.
                         if let Stage::Writing { action, .. } = &stage {
                             let typed = self.writing.draw(ui, egui::Id::new("palette_writing"), 4, &hint, true);
-                            if typed.sent.is_some() {
+                            // Sent by its key, or (a phone's keyboard may have none) its button.
+                            let send = ui.button(format!("{} Send", egui_phosphor::regular::PAPER_PLANE_RIGHT)).clicked();
+                            if typed.sent.is_some() || (send && !self.writing.text.trim().is_empty()) {
                                 picked = Some(invocation(action, Some(self.writing.take())));
                             }
+                            self.names_tag |= typed.names_tag;
                         }
                         let edit = if matches!(stage, Stage::Writing { .. }) {
                             None

@@ -1,9 +1,10 @@
 //! Starting a discussion: one action of the shell for every buffer, on
 //! the thing at the cursor, with the tag picker's way of picking it (its
 //! top line says what; `Tab` picks the next of the things there: the line,
-//! the command it's in). What it is (a question, a change asked for) is
-//! picked first, then what it says is written in the typing box every
-//! conversation has. Once the server has it, it opens.
+//! the command it's in). What it is (a question, a change request) is
+//! picked first, then who's asked (with other agent slots than the lead),
+//! then what it says is written in the typing box every conversation has.
+//! Once the server has it, it opens.
 
 use harness_contracts::DiscussionKind;
 
@@ -21,9 +22,9 @@ impl CockpitApp {
         let next = (things.at.len() > 1).then(|| &things.at[(level + 1) % things.at.len()]);
         let picking = self.palette.picking();
         let when = |ok: bool| if ok { When::Always } else { When::Unavailable };
-        let kinds = vec![Choice::new("question", "A question").detail(Some("Answered without anything changing".into())), Choice::new("change_request", "A change asked for").detail(Some("Its answer names what changed".into()))];
+        let kinds = vec![Choice::new("question", "A question").detail(Some("Answered without anything changing".into())), Choice::new("change_request", "A change request").detail(Some("Its answer names what changed".into()))];
         let mut out = vec![
-            Action::new("discuss.start", "Ask about what you're on", "A question, or a change asked for, on the thing at the cursor (what it's on is said at the top)", S::Discuss)
+            Action::new("discuss.start", "Ask about what you're on", "A question, or a change request, on the thing at the cursor (what it's on is said at the top)", S::Discuss)
                 .param(Param::Choice(kinds))
                 .about(chosen.map(|t| format!("Discuss {}", t.words)))
                 .cycle(next.map(|_| "discuss.level"))
@@ -35,10 +36,27 @@ impl CockpitApp {
                 .importance(MINOR)
                 .when(when(picking == Some("discuss.start") && next.is_some())),
         ];
-        if let Some((_, what, kind)) = &self.desk.discussing {
-            out.push(Action::new("discuss.write", format!("{} on {what}", capitalized(kind.words())), "What it asks (# names a tag)", S::DiscussWrite).param(Param::Writing { hint: "what you ask".into(), start: String::new() }).group(Group::Act).importance(MINOR));
+        if !self.desk.discussions_here.is_empty() {
+            let all = self.desk.shared.discussions.get();
+            let choices = self.desk.discussions_here.iter().filter_map(|id| all.get(id)).map(|d| Choice::new(d.id.as_str(), format!("{} {}: {}", d.id, d.kind.words(), crate::tags::first_line(d.asking()))).detail(Some(d.status.words().to_owned()))).collect();
+            out.push(Action::new("discuss.open", "Open which discussion?", "Those on the mark picked, waiting on you first", S::DiscussOpen).param(Param::Choice(choices)).group(Group::GoTo).importance(MINOR));
+        }
+        if let Some(d) = &self.desk.discussing {
+            let lead = harness_contracts::LEAD;
+            let choices = self.slots_to_ask().into_iter().map(|(name, role)| Choice::new(name.clone(), name.clone()).detail(Some(if name == lead { "the lead (asked unless another is picked)".to_owned() } else { role }))).collect();
+            out.push(Action::new("discuss.ask", format!("Who answers {} on {}?", d.kind.words(), d.words), "An agent slot: the lead, unless another is picked", S::DiscussAsk).param(Param::Choice(choices)).group(Group::Act).importance(MINOR));
+            let asked = d.asked.as_ref().map(|a| format!(", asking {a}")).unwrap_or_default();
+            out.push(Action::new("discuss.write", format!("{} on {}{asked}", crate::spec::capitalized(d.kind.words()), d.words), "What it asks (# names a tag)", S::DiscussWrite).param(Param::Writing { hint: "what you ask".into(), start: String::new() }).group(Group::Act).importance(MINOR));
         }
         out
+    }
+
+    /// The agent slots a discussion can ask, by name: the lead first.
+    fn slots_to_ask(&self) -> Vec<(String, String)> {
+        let agents = self.desk.shared.agents.get();
+        let mut slots: Vec<(String, String)> = agents.store().slots.values().map(|s| (s.name.clone(), s.role.clone())).collect();
+        slots.sort_by_key(|(name, _)| (name != harness_contracts::LEAD, name.clone()));
+        slots
     }
 
     /// Runs a step of starting a discussion.
@@ -58,18 +76,33 @@ impl CockpitApp {
                     self.note = Some("Nothing here to discuss: the cursor isn't on something that can be.".into());
                     return;
                 };
-                let kind = if kind == "change_request" { DiscussionKind::ChangeRequest } else { DiscussionKind::Question };
-                self.desk.discussing = Some((thing.subject, thing.words, kind));
+                let Ok(kind) = serde_json::from_value::<DiscussionKind>(serde_json::Value::String(kind.clone())) else {
+                    self.note = Some(format!("{kind:?} isn't a kind of discussion: a question or a change request."));
+                    return;
+                };
+                self.desk.discussing = Some(crate::app::desk::Discussing { on: thing.subject, words: thing.words, kind, asked: None });
+                // Who's asked, when there's another slot than the lead to ask.
+                let next = if self.slots_to_ask().len() > 1 { "discuss.ask" } else { "discuss.write" };
+                self.run_by_id(next, None, ctx);
+            }
+            (ShellCommand::DiscussOpen, Some(id)) => {
+                self.desk.discussions_here.clear();
+                let jump = self.jump_here();
+                self.land(None, &Target::Discussion(harness_contracts::DiscussionId::new(id)), jump, ctx);
+            }
+            (ShellCommand::DiscussAsk, Some(slot)) => {
+                let Some(d) = self.desk.discussing.as_mut() else { return };
+                d.asked = (slot != harness_contracts::LEAD).then_some(slot);
                 self.run_by_id("discuss.write", None, ctx);
             }
             (ShellCommand::DiscussWrite, Some(text)) => {
-                let Some((subject, _, kind)) = self.desk.discussing.take() else { return };
+                let Some(crate::app::desk::Discussing { on: subject, kind, asked, .. }) = self.desk.discussing.take() else { return };
                 if text.trim().is_empty() {
                     self.note = Some("A discussion asks something: nothing was started.".into());
                     return;
                 }
                 let started = self.desk.started.clone();
-                self.desk.net.discussion_start(&subject, kind, text.trim(), ctx.clone(), move |r| {
+                self.desk.net.discussion_start(&subject, kind, text.trim(), asked.as_deref(), ctx.clone(), move |r| {
                     if let Ok(mut s) = started.lock() {
                         s.push(r);
                     }
@@ -93,10 +126,4 @@ impl CockpitApp {
             }
         }
     }
-}
-
-/// `text` with its first letter a capital.
-fn capitalized(text: &str) -> String {
-    let mut chars = text.chars();
-    chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
 }

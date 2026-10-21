@@ -260,7 +260,8 @@ impl CockpitApp {
             }
             // On a mark in the gutter: its notes, said.
             Gesture::LongPress(p) if self.note_marks.iter().any(|(_, mark, _)| mark.contains(p)) => {
-                self.note = self.note_marks.iter().find(|(_, mark, _)| mark.contains(p)).map(|(_, _, said)| said.clone());
+                let said: Vec<&str> = self.note_marks.iter().filter(|(_, mark, _)| mark.contains(p)).map(|(_, _, said)| said.as_str()).collect();
+                self.note = Some(said.join("\n"));
             }
             Gesture::LongPress(p) if !own => {
                 if let Some(key) = self.desk.view(kind).spots().into_iter().find(|s| s.rect.contains(p)).map(|s| s.key) {

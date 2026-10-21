@@ -129,8 +129,11 @@ impl CockpitApp {
                 }
                 // Only real changes refetch: a check result (often the spec
                 // view's own validation) must not trigger another round.
-                if matches!(event, arch_graph::ArchEvent::Changed { .. }) {
-                    self.desk.shared.review.invalidate();
+                if let arch_graph::ArchEvent::Changed { plans, .. } = &event {
+                    // The plan the desk reads, read again only when it's what changed.
+                    if self.desk.shared.review.plan.as_ref().is_some_and(|p| plans.contains(p)) {
+                        self.desk.shared.review.invalidate();
+                    }
                     self.desk.details.clear();
                 }
             }

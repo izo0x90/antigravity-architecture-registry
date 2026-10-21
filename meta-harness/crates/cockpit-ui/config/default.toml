@@ -339,7 +339,6 @@ k = "Tags"
 "discussion.settle" = { keys = ["a"] }
 "discussion.reopen" = { keys = ["x"] }
 "discussion.change" = { keys = ["c"] }
-"discussion.cancel" = { keys = ["Escape"] }
 
 # Queue view: the plan's work, one job per component (Enter shows why a job
 # failed).

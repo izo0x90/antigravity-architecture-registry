@@ -326,7 +326,7 @@ fn the_tags_buffer_lists_tags_folded_reads_what_they_say_now_and_the_shells_tag_
     // Enter unfolds it: its things, where they went, who tagged them and when.
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
-    for words in ["terminal t1 command 1", "make: 3 failed", "as it was when tagged: changed or gone since", "tagged by you", " d ago"] {
+    for words in ["terminal t1 command 1", "make: 3 failed", "as it was when noted: changed or gone since", "tagged by you", " d ago"] {
         assert!(drawn.contains(words), "{words}: {drawn}");
     }
     // Edited with the shell's tag actions (what's there now, to edit).
@@ -537,7 +537,8 @@ fn each_tag_has_a_column_of_its_colour_in_the_gutter_and_more_than_fit_share_a_m
     frame_at(&ctx, &mut app, vec![], 70.8);
     frame_at(&ctx, &mut app, vec![touch(egui::TouchPhase::End)], 70.9);
     frame_at(&ctx, &mut app, vec![], 71.0);
-    assert_eq!(app.note.as_deref(), Some("a"), "{:?}", app.note);
+    let said: Vec<&str> = app.note.as_deref().unwrap_or_default().lines().collect();
+    assert_eq!(said, ["a", "b", "c", "d", "e"], "every tag on that row (a finger can't pick a 2-point bar)");
     // On the shared muted column: each tag there.
     let output = frame_at(&ctx, &mut app, vec![], 72.0);
     let muted = bars(&output, theme.muted).into_iter().find(|b| b.y_range().contains(drawn_rects(&output, "line 1013")[0].center().y)).expect("line 1013's muted bar");

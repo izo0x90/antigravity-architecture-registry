@@ -5,6 +5,16 @@
 
 use super::*;
 
+/// A discussion being started: on what (and its name), what it is, who's
+/// asked (none: the lead).
+#[derive(Clone, Debug)]
+pub struct Discussing {
+    pub on: harness_contracts::Subject,
+    pub words: String,
+    pub kind: harness_contracts::DiscussionKind,
+    pub asked: Option<String>,
+}
+
 pub struct Desk {
     /// Its server's name (`here`: home's own).
     pub server: String,
@@ -58,9 +68,12 @@ pub struct Desk {
     /// What tagging is on, picked in the palette's opening it was picked
     /// in (otherwise, and by default, the unit at the cursor).
     pub tag_level: Option<(u64, harness_contracts::Subject)>,
-    /// A discussion being started: on what, and what it is (its first
-    /// message is asked for next).
-    pub discussing: Option<(harness_contracts::Subject, String, harness_contracts::DiscussionKind)>,
+    /// A discussion being started, while its steps are asked for (gone
+    /// once the palette's closed without a pick).
+    pub discussing: Option<Discussing>,
+    /// The discussions on a mark tapped that has several: which opens is
+    /// asked.
+    pub discussions_here: Vec<harness_contracts::DiscussionId>,
     /// Discussions started from here, as the server answered (each opens).
     pub started: Arc<Mutex<Vec<NetResult<harness_contracts::Discussion>>>>,
     pub at_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
@@ -100,6 +113,7 @@ impl Desk {
             tag_stepping: None,
             tag_level: None,
             discussing: None,
+            discussions_here: Vec::new(),
             started: Arc::default(),
             at_inbox: Arc::default(),
             index_inbox: Arc::default(),
