@@ -182,9 +182,16 @@ impl CockpitApp {
             let wanted = filter.trim().to_lowercase();
             let matches = |text: &str| wanted.is_empty() || text.to_lowercase().contains(&wanted);
             let look = crate::theme::look();
-            let row = |ui: &mut egui::Ui, keys: &str, what: &str, applies: bool| {
+            // A row says what the keys do, as every list of actions does: the
+            // label, then its description (cut short to the width).
+            let row = |ui: &mut egui::Ui, keys: &str, what: &str, detail: &str, applies: bool| {
                 ui.label(RichText::new(keys).monospace().size(look.text_body).color(colors().key));
-                ui.label(RichText::new(what).size(look.text_body).color(if applies { colors().text } else { colors().faint }));
+                let mut job = egui::text::LayoutJob::default();
+                RichText::new(what).size(look.text_body).color(if applies { colors().text } else { colors().faint }).append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::Center);
+                if !detail.is_empty() {
+                    RichText::new(format!("  {detail}")).size(look.text_small).color(colors().muted).append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::Center);
+                }
+                ui.add(egui::Label::new(job).wrap());
                 ui.end_row();
             };
             egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
@@ -194,12 +201,12 @@ impl CockpitApp {
                     if !keys.is_empty() {
                         any = true;
                         ui.label(RichText::new(*name).strong().size(look.text_title).color(colors().accent));
-                        egui::Grid::new("key_sheet_mode").num_columns(2).spacing(egui::vec2(16.0, 2.0)).show(ui, |ui| keys.iter().for_each(|(k, w)| row(ui, k, w, true)));
+                        egui::Grid::new("key_sheet_mode").num_columns(2).spacing(egui::vec2(16.0, 2.0)).show(ui, |ui| keys.iter().for_each(|(k, w)| row(ui, k, w, "", true)));
                         ui.add_space(look.space_m);
                     }
                 }
                 for layer in [Layer::On, Layer::Panel, Layer::Host, Layer::Everywhere] {
-                    let here: Vec<&&Bound> = rows.iter().filter(|b| b.layer == layer && matches(&format!("{} {} {}", b.action.label, b.action.id, b.ways().join(" ")))).collect();
+                    let here: Vec<&&Bound> = rows.iter().filter(|b| b.layer == layer && matches(&format!("{} {} {} {}", b.action.label, b.action.id, b.action.detail, b.ways().join(" ")))).collect();
                     if here.is_empty() {
                         continue;
                     }
@@ -214,7 +221,7 @@ impl CockpitApp {
                         ui.label(RichText::new(group.title()).strong().size(look.text_label).color(colors().info));
                         egui::Grid::new(("key_sheet", layer, group as u8)).num_columns(2).spacing(egui::vec2(16.0, 2.0)).show(ui, |ui| {
                             for b in in_group {
-                                row(ui, &b.ways().join(" · "), &b.action.label, b.action.when.holds(&situation));
+                                row(ui, &b.ways().join(" · "), &b.action.label, &b.action.detail, b.action.when.holds(&situation));
                             }
                         });
                     }
@@ -227,7 +234,7 @@ impl CockpitApp {
                 if !pointer.is_empty() {
                     any = true;
                     ui.label(RichText::new("Pointer and touch").strong().size(look.text_title).color(colors().accent));
-                    egui::Grid::new("key_sheet_pointer").num_columns(2).spacing(egui::vec2(16.0, 2.0)).show(ui, |ui| pointer.iter().for_each(|(k, w)| row(ui, k, w, true)));
+                    egui::Grid::new("key_sheet_pointer").num_columns(2).spacing(egui::vec2(16.0, 2.0)).show(ui, |ui| pointer.iter().for_each(|(k, w)| row(ui, k, w, "", true)));
                 }
                 if !any {
                     ui.label(RichText::new("No keys match.").size(look.text_body).color(colors().muted));

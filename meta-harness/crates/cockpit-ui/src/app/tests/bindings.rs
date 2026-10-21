@@ -192,15 +192,29 @@ fn question_mark_lists_this_views_keys_grouped_and_searchable() {
     assert!(app.key_sheet.is_some());
     let text = texts(&frame(&ctx, &mut app, vec![]));
     // A section per layer of where you are: this panel first.
-    for expected in ["Keys", "Spec", "Navigate", "Go to", "Act", "g d", "Go to its code", "Next discussion not settled", "J", "Next section"] {
+    for expected in ["Keys", "Spec", "Navigate", "Go to", "Act", "g d", "Go to its code"] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
-    // Its panel's own and everywhere's follow (found by filtering).
-    app.key_sheet = Some("panel".into());
+    // What each does, after its label, as the palette says it, and the
+    // filter finds a key by it (#39).
+    app.key_sheet = Some("on one sheet".into());
     let text = texts(&frame(&ctx, &mut app, vec![]));
-    assert!(text.contains("Panel") && text.contains("Close this panel") && text.contains("Everywhere") && text.contains("Focus panel 1"), "{text}");
-    assert!(text.find("Close this panel") < text.find("Focus panel 1"), "what holds it before everywhere's");
+    assert!(text.contains("Keys for this buffer") && text.contains("Every key here and what it does, on one sheet"), "the description: {text}");
+    app.key_sheet = Some("next".into());
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    for expected in ["Next discussion not settled", "J", "Next section"] {
+        assert!(text.contains(expected), "{expected}: {text}");
+    }
+    app.key_sheet = Some(String::new());
+    // Its panel's own and everywhere's follow (found by filtering).
+    app.key_sheet = Some("this panel".into());
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains("Panel") && text.contains("Close this panel"), "{text}");
     assert!(!text.contains("Next view"), "only this view's keys (and the shared ones)");
+    app.key_sheet = Some("focus panel".into());
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains("Everywhere") && text.contains("Focus panel 1"), "{text}");
+    assert!(text.find("Panel").is_none_or(|p| p < text.find("Everywhere").unwrap_or(0)), "what holds it before everywhere's");
     app.key_sheet = Some("fold".into());
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(text.contains("View") && text.contains("Fold the Overview section") && text.contains("z a"), "the spec's fold, in its words: {text}");
