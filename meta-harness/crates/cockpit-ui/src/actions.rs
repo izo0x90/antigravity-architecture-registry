@@ -638,6 +638,23 @@ pub fn controls<'x>(ui: &mut egui::Ui, bound: impl IntoIterator<Item = &'x Bound
 /// Narrowest room left in a row for a control to also show its key.
 const KEY_SHOWN_ABOVE: f32 = 140.0;
 
+/// A choice as it's named wherever choices are listed (the palette's rows,
+/// a header's drop-down): its mark in its colour, then its label.
+pub fn choice_text(ui: &egui::Ui, label: &str, colour: Option<(egui::Color32, Mark)>, size: f32, color: egui::Color32) -> egui::WidgetText {
+    let style = ui.style();
+    let mut job = egui::text::LayoutJob::default();
+    let mark = match colour {
+        Some((colour, Mark::Glyph(glyph))) => Some(RichText::new(format!("{glyph} ")).font(crate::theme::solid_font(ui, size)).color(colour)),
+        Some((colour, Mark::Swatch)) => Some(RichText::new("\u{25a0} ").size(size).color(colour)),
+        None => None,
+    };
+    if let Some(mark) = mark {
+        mark.append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
+    }
+    RichText::new(label).size(size).color(color).append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
+    job.into()
+}
+
 /// Narrowest a picker gets before its text is truncated.
 const PICKER_MIN_WIDTH: f32 = 90.0;
 
@@ -698,7 +715,8 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound) -> Option<ControlUse> {
                 .selected_text(shown)
                 .show_ui(ui, |ui| {
                     for choice in choices {
-                        let item = ui.selectable_label(choice.current, &choice.label);
+                        let text = choice_text(ui, &choice.label, choice.colour, crate::theme::look().text_body, ui.visuals().text_color());
+                        let item = ui.selectable_label(choice.current, text);
                         let item = match &choice.detail {
                             Some(d) => item.on_hover_text(d),
                             None => item,

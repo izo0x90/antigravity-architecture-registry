@@ -58,6 +58,33 @@ pub struct Palette {
     /// What's written, set aside while another action picks what goes in
     /// after it (it comes back with that put in).
     held: Option<(Stage, crate::conversation::TypingBox)>,
+    /// The list ranked for what's typed, kept until the text or the list
+    /// changes (not ranked again every frame it's open).
+    ranked: Ranked,
+}
+
+/// Rows ranked for a text, remembered with what they were ranked from.
+#[derive(Default)]
+struct Ranked {
+    key: Option<u64>,
+    rows: Vec<usize>,
+}
+
+impl Ranked {
+    /// The rows (indexes into the list) for `filter`, ranked only when it
+    /// or the list (`fingerprint`: what of it the ranking reads) changed.
+    fn of(&mut self, filter: &str, fingerprint: impl std::hash::Hash, haystacks: impl FnOnce() -> Vec<String>) -> &[usize] {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        filter.hash(&mut hasher);
+        fingerprint.hash(&mut hasher);
+        let key = hasher.finish();
+        if self.key != Some(key) {
+            self.rows = arch_search::rank(filter, &haystacks(), arch_search::Matching::shared()).into_iter().map(|r| r.index).collect();
+            self.key = Some(key);
+        }
+        &self.rows
+    }
 }
 
 impl Palette {
@@ -87,7 +114,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default() }
     }
 }
 
@@ -328,14 +355,10 @@ impl Palette {
                                 let mut listed: Vec<&Bound> = actions.iter().collect();
                                 // The closest to where you are first, then by name.
                                 listed.sort_by(|a, b| (a.layer, &a.action.label).cmp(&(b.layer, &b.action.label)));
-                                let haystacks: Vec<String> = listed
-                                    .iter()
-                                    .map(|b| {
-                                        let group = b.leader.as_ref().filter(|l| l.len() > 1).and_then(|l| keymap.group_label(&l[..1])).unwrap_or("");
-                                        format!("{} {} {group} {}", b.action.label, b.action.id, b.action.detail)
-                                    })
-                                    .collect();
-                                let ranked: Vec<&Bound> = arch_search::rank(&self.filter, &haystacks, arch_search::Matching::shared()).into_iter().map(|r| listed[r.index]).collect();
+                                let group = |b: &Bound| b.leader.as_ref().filter(|l| l.len() > 1).and_then(|l| keymap.group_label(&l[..1])).unwrap_or("");
+                                let fingerprint: Vec<(&str, &str, &str, &str)> = listed.iter().map(|b| (b.action.id.as_str(), b.action.label.as_str(), b.action.detail.as_str(), group(b))).collect();
+                                let haystacks = || fingerprint.iter().map(|(id, label, detail, group)| format!("{label} {id} {group} {detail}")).collect();
+                                let ranked: Vec<&Bound> = self.ranked.of(&self.filter, &fingerprint, haystacks).iter().map(|i| listed[*i]).collect();
                                 let first = usize::from(line.is_some());
                                 self.move_selection(up, down, ranked.len() + first);
                                 egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
@@ -366,8 +389,9 @@ impl Palette {
                             }
                             Stage::Choose { action, .. } => {
                                 let choices: Vec<Choice> = action.action.param.choices();
-                                let haystacks: Vec<String> = choices.iter().map(|c| format!("{} {}", c.label, c.value)).collect();
-                                let ranked: Vec<&Choice> = arch_search::rank(&self.filter, &haystacks, arch_search::Matching::shared()).into_iter().map(|r| &choices[r.index]).collect();
+                                let fingerprint: Vec<(&str, &str)> = choices.iter().map(|c| (c.label.as_str(), c.value.as_str())).collect();
+                                let haystacks = || fingerprint.iter().map(|(label, value)| format!("{label} {value}")).collect();
+                                let ranked: Vec<&Choice> = self.ranked.of(&self.filter, &fingerprint, haystacks).iter().map(|i| &choices[*i]).collect();
                                 self.move_selection(up, down, ranked.len());
                                 egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
                                     for (row, choice) in ranked.iter().enumerate() {
@@ -488,19 +512,7 @@ fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, col
             // The label gets what the keys leave it, cut short to fit.
             egui::Sides::new().shrink_left().truncate().show(
                 ui,
-                |ui| {
-                    match colour {
-                        Some((colour, crate::actions::Mark::Glyph(glyph))) => {
-                            ui.label(crate::theme::glyph(ui, glyph, colour, look.text_label));
-                        }
-                        Some((colour, crate::actions::Mark::Swatch)) => {
-                            let (swatch, _) = ui.allocate_exact_size(egui::vec2(look.text_label, look.text_label), egui::Sense::hover());
-                            ui.painter().rect_filled(swatch.shrink(look.text_label / 6.0), look.radius_m, colour);
-                        }
-                        None => {}
-                    }
-                    ui.label(RichText::new(label).size(look.text_label).color(theme.text_strong))
-                },
+                |ui| ui.label(crate::actions::choice_text(ui, label, colour, look.text_label, theme.text_strong)),
                 |ui| ui.label(RichText::new(keys).monospace().size(look.text_small).color(theme.key)),
             );
             if let Some(detail) = detail.filter(|d| !d.is_empty()) {
