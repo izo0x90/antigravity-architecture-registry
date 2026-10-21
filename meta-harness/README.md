@@ -327,8 +327,8 @@ command = "git-mcp"
 The screen is split into panels, side by side, and each panel shows a
 buffer, as vim's windows show buffers (a panel is vim's window). A buffer
 is one open thing with its own state (this chat, that code file), of one
-of ten kinds: chat, code, graph, tree, spec, queue, inbox, changes,
-terminal and tags.
+of twelve kinds: chat, code, graph, tree, spec, queue, inbox, changes,
+terminal, tags, plan and discussion.
 An agent slot is something else: an agent the server runs (the lead, or a
 sub-slot); a chat buffer shows one.
 Each panel has its own buffer: two graphs side by side (calls beside data
@@ -474,18 +474,24 @@ all of them:
     terminal, a line, then the command it's in (a command with all its
     output, the usual), or exactly the lines selected; in a chat, a
     message (the usual), then its turn (your message, the answer, a line
-    per tool call); in the code, the line, then the definitions it's in
-    (the innermost, the usual); in the outline and the graph, the
-    component. `M` opens the tag picker: its top line says what's tagged,
+    per tool call), then the whole session; in the code, the line (or the
+    lines selected by dragging down their numbers with a mouse), then the
+    definitions it's in (the innermost, the usual), then the whole file;
+    in the outline and the graph, the component (on a plan's graph, the
+    plan's component). `M` opens the tag picker: its top line says what's tagged,
     `Tab` picks the next of the things there; pick a tag (found as search
     finds, by name then by note) or type a new name (letters, digits, `-`
     and `_`; its colour the theme's least used, `tag_0`…`tag_7`).
   - **Where tags show:** a gutter down the left of a view's content (a bar
-    in the tag's colour beside each tagged thing's rows, a column per tag,
-    more tags than columns sharing the last one, muted; never drawn over
-    the content), its tags named on hover or a long press; the panel's
-    top line names the tags on what the cursor's on, each with a solid
-    tag in its colour.
+    in the tag's colour beside each tagged thing's rows, a column per tag
+    kept while the tag's on screen, more tags than columns sharing the
+    last one, muted; a tag on a thing and on one inside it, the outer bar
+    faint and the inner solid on it; never drawn over the content), its
+    tags named on hover, or every note on a row by a long press; on the
+    graph, a dot per tag on a card's top right corner. In the code, the
+    gutter is left of the line numbers and the change bars right of them.
+    The panel's top line names the tags on what the cursor's on, each
+    with a solid tag in its colour.
   - **Going to them:** `g T` goes to something tagged (the tag, then which
     of its things), through the jump list; `] t`/`[ t` step through the
     rest of a tag's things from one of them.
@@ -517,17 +523,49 @@ all of them:
     to search what tagged things say); tagging, taking off and editing
     need `tags.edit` (the lead's, sub-slots' and workers' by default). Who
     changed what is kept in the activity record.
-- **Discuss anything:** a question, or a change asked for, on any thing
-  you can tag (a plan's part or item, code lines, a terminal's command, a
-  chat's message, another discussion). It asks the lead unless another
-  agent slot is named; that slot is told (in its running session, else
-  when one opens), and answers through its tools (a change request's
-  answer names what changed). Only you settle or reopen one; a plan's
-  component isn't approved while one on it isn't settled. Kept in the
-  state database, the messages' text in `.nah/state/discussions/`.
-  Agents read them with `view.read` (`discussions`, what's waiting on
-  them first; `discussion_read`); starting, replying and answering need
-  `discuss` (the lead's, sub-slots' and workers' by default).
+- **Discuss anything:** a question, or a change request, on any thing
+  you can tag (a plan's part or item, code lines or a file, a terminal's
+  command, a chat's message or session, another discussion).
+  - **Starting one:** `C`, in any view, with the tag picker's way of
+    picking what it's on (its top line says what, `Tab` the next of the
+    things there); then question or change request; then, with other
+    agent slots than the lead, who answers (the lead first); then its
+    first message, in the typing box every conversation has (`#` names a
+    tag). Once the server has it, it opens.
+  - **The discussion buffer** opens over what you're on (the quick look),
+    or in a panel that shows discussions: at its top, the thing it's on as
+    it is now (or as it was, said so), then everything said, then the
+    typing box. `r` replies, `a` settles it (accepts its answer), `x`
+    reopens it (saying why), `c` makes a question a change request;
+    controls that don't apply where it stands are greyed.
+  - **Where they show:** a speech bubble in the gutter beside a thing
+    with discussions (on the graph, on a card's corner), coloured by whose
+    move it is: yours, an agent's, settled. The panel's top line says them
+    ("2 discussions, 1 waiting on you"); hover or a long press says each;
+    a click or a tap opens it (several: which, first). One waiting on you
+    is in the inbox, a notification each time it's your move anew.
+  - **The agents in it:** it asks the lead unless another agent slot is
+    named. The slot asked, and an agent that started it, are told what
+    others say (in their running session, else when one opens; a `#name`
+    in it hands on only what that slot may read). Only the slot asked
+    answers (a change request's answer names what changed); once it asks
+    something back, it's the move of whoever started it. An agent may ask
+    you: say your answer, then settle it. Asking a slot other than the
+    lead needs `slots.message` (the lead's).
+  - **Only you settle or reopen one**; a plan's component isn't approved
+    while one on it isn't settled. Kept in the state database, the
+    messages' text in `.nah/state/discussions/`. Agents read them with
+    `view.read` (`discussions`, what's waiting on them first;
+    `discussion_read`); starting, replying and answering need `discuss`
+    (the lead's, sub-slots' and workers' by default).
+- **Review plans:** a plan can hold items (findings, decisions,
+  questions to settle), each with a state: open, decided, done, dropped; a
+  review plan is items only. The plan buffer (`Space b p`) shows the plan
+  the desk reads (pick it with `Space g P`) as a tree: items nested, each
+  with its state and its discussions under it (whose move each waits on);
+  a change plan's components and their sections too. Enter opens an
+  item's card, where you set its state. Agents add, nest and edit items
+  with `plan_edit`.
 
 - **Talk to the agent:** `t` shows the lead's chat in the quick look,
   typing, over whatever is on screen; Enter sends to the lead's session
@@ -735,9 +773,8 @@ Views also have their own keys:
   server cut. `g m` shows the row in the graph.
 - **Spec:**
   - `J`/`K` move between sections;
-  - `c`/`C` comment on or ask for a change to the item under the cursor;
-  - `r`/`a`/`x` reply to a discussion, settle it (accept its answer) or
-    reopen it.
+  - `C` starts a discussion on the item under the cursor, as anywhere;
+    its discussions are drawn with it, and open as any discussion does.
 - **Queue:** `a` approve, `r` retry, `o` open the job's session.
 
 All keys are configurable in `crates/cockpit-ui/config/default.toml`,
@@ -802,13 +839,13 @@ away and rebuilt when the reader changes.
 |---|---|
 | Changes | `changes`: what changed in the files (git): the files a comparison changes, one file's diff, the components touched, the timeline (when, who was working, each turn's changes). Reading only: staging is the user's |
 | Explore | `ingest`, `list_types`, `search`, `inspect`, `view`, `navigate` (moves your graph: the one in the `panel` it names, else the one you used last); `search` and `view` take `changed` (`HEAD..files`, `rev:main..files`) to keep to what changed |
-| Plan | `plan_list`, `plan_create` (a change, or a walkthrough), `plan_import` (old `system_architecture.json`), `plan_edit`, `plan_validate`, `contract` |
+| Plan | `plan_list`, `plan_create` (a change, a walkthrough, or a review: items only), `plan_import` (old `system_architecture.json`), `plan_edit` (items too: add, nest, edit, set their state), `plan_validate`, `contract` |
 | Build | `verify`, `run_tools`, `review` |
 | Cockpit | `cockpit_read`, `cockpit_actions`, `cockpit_run`, `cockpit_click`, `cockpit_type`, `cockpit_keys` (only while you let agents drive it) |
 | Slots | the lead's: `slot_list`, `slot_read`, `slot_start`, `slot_close`, `slot_send` (optionally waiting for the answer); a sub-slot's: `tell_lead` (the user sees it too); any slot's: `tell_user` |
 | Terminals | `terminals`, `terminal_read` (a screen, with scrollback, and the last ten commands; `numbered`: each row with its line's number; `command`: one command's whole output); `terminal_type` (text and keys) only for a role given `shell.drive`, which none has by default |
-| Discussions | `discussions` (what's waiting on you first; on a plan, or on a thing), `discussion_read` (one whole: what it's on now and as it was, everything said); `discuss` (a question or a change request on a thing by its name, asking the lead, another slot, or the user), `discussion_reply`, `discussion_answer` (a change request's names what changed) for a role given `discuss` |
-| Tags | `tags` (each tag, how many things, its note), `tag_read` (what a tag is on: each thing's name, who tagged it, where it is and the start of what it says; one thing whole, by `lines`, or `full` with a chat turn's tool output), `tag_find` (search what tagged things say); `tag`, `untag` (a thing by its name: `terminal t1 command 3`, `terminal t1 lines 120-124`, `chat lead turn 3 message 2`, `src/a.rs lines 10-12`, `component <id>`) and `tag_edit` (rename, recolour, note, delete) for a role given `tags.edit` |
+| Discussions | `discussions` (what's waiting on you first; on a plan, or on a thing), `discussion_read` (one whole: what it's on now and as it was, everything said); `discuss` (a question or a change request on a thing by its name, asking the lead, the user, or, with `slots.message`, another slot), `discussion_reply`, `discussion_answer` (only by the slot asked; a change request's names what changed) for a role given `discuss`; the agents in a discussion are told what others say in it |
+| Tags | `tags` (each tag, how many things, its note), `tag_read` (what a tag is on: each thing's name, who tagged it, where it is and the start of what it says; one thing whole, by `lines`, or `full` with a chat turn's tool output), `tag_find` (search what tagged things say); `tag`, `untag` (a thing by its name: `terminal t1 command 3`, `terminal t1 lines 120-124`, `chat lead turn 3 message 2`, `chat lead` (the whole session), `src/a.rs lines 10-12`, `file src/a.rs`, `component <id>`) and `tag_edit` (rename, recolour, note, delete) for a role given `tags.edit` |
 
 Every result ends with next steps, given in dependency order.
 
