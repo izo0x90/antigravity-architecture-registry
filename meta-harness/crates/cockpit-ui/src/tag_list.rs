@@ -25,6 +25,9 @@ use crate::viewport::{Go, Measured, Show};
 /// How long the cursor rests on a tag before what its things say now is
 /// read (moving through the list reads nothing).
 const READ_AFTER: f64 = 0.3;
+/// A row's height until it's drawn: a tag's line, a thing's three lines.
+const TAG_ROW: f32 = 30.0;
+const ON_ROW: f32 = 54.0;
 
 /// A row: a tag, or a thing it's on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,6 +61,11 @@ pub struct TagList {
     rows: Vec<Row>,
     /// Each row's key (made when the rows are: a thing's is long).
     keys: Vec<String>,
+    /// For each row, which of its tag's things it is (a tag's row: 0).
+    ons: Vec<usize>,
+    /// Each row's height as last drawn (a guess until then): the rows are
+    /// laid out by them, and only those in view are drawn.
+    heights: Vec<f32>,
     cursor: usize,
     /// The tag the cursor came to, and when (what its things say now is
     /// read once it rests there).
@@ -84,8 +92,16 @@ impl TagList {
         let ids: BTreeSet<TagId> = self.tags.get().list().iter().map(|t| t.id.clone()).collect();
         self.open.retain(|id| ids.contains(id));
         let open = &self.open;
-        self.rows = self.tags.get().list().iter().flat_map(|t| std::iter::once(Row::Tag(t.id.clone())).chain(t.on.iter().filter(|_| open.contains(&t.id)).map(|on| Row::On(t.id.clone(), on.subject.clone())))).collect();
-        self.keys = self.rows.iter().map(Row::key).collect();
+        let rows: Vec<(Row, usize)> = self.tags.get().list().iter().flat_map(|t| std::iter::once((Row::Tag(t.id.clone()), 0)).chain(t.on.iter().enumerate().filter(|_| open.contains(&t.id)).map(|(i, on)| (Row::On(t.id.clone(), on.subject.clone()), i)))).collect();
+        // A row's height is kept from the last time it was drawn.
+        let was: std::collections::HashMap<&str, f32> = self.keys.iter().zip(&self.heights).map(|(k, h)| (k.as_str(), *h)).collect();
+        let keys: Vec<String> = rows.iter().map(|(r, _)| r.key()).collect();
+        self.heights = rows.iter().zip(&keys).map(|((r, _), k)| was.get(k.as_str()).copied().unwrap_or(match r {
+            Row::Tag(_) => TAG_ROW,
+            Row::On(..) => ON_ROW,
+        })).collect();
+        (self.rows, self.ons) = rows.into_iter().unzip();
+        self.keys = keys;
         self.cursor = at.and_then(|r| self.rows.iter().position(|x| *x == r)).unwrap_or(self.cursor).min(self.rows.len().saturating_sub(1));
     }
 
@@ -174,11 +190,24 @@ impl TagList {
         }
         let tags = self.tags.get();
         let now = crate::attention::now_ms();
-        let mut drawn = Vec::new();
+        // The rows laid out by their heights; only those in view are drawn.
+        let tops: Vec<f32> = self.heights.iter().scan(0.0, |top, h| {
+            let at = *top;
+            *top += h;
+            Some(at)
+        }).collect();
+        let total: f32 = self.heights.iter().sum();
+        let mut drawn: Vec<(usize, f32)> = Vec::new();
         let area = self.scrolling.area(egui::ScrollArea::vertical().id_salt(("tags", cx.at)).auto_shrink([false, true]), ui.input(|i| i.time));
-        let output = area.show(ui, |ui| {
-            for (i, row) in self.rows.iter().enumerate() {
+        let output = area.show_viewport(ui, |ui, view| {
+            ui.set_height(total);
+            let (origin, width) = (ui.min_rect().min, ui.available_width());
+            let first = tops.partition_point(|t| *t <= view.min.y).saturating_sub(1);
+            for (i, row) in self.rows.iter().enumerate().skip(first).take_while(|(i, _)| tops[*i] < view.max.y) {
                 let Some(tag) = tags.get(row.tag()) else { continue };
+                let place = egui::Rect::from_min_size(origin + egui::vec2(0.0, tops[i]), egui::vec2(width, self.heights[i]));
+                let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(place));
+                let ui = &mut ui;
                 let rect = match row {
                     Row::Tag(id) => {
                         ui.add_space(look.space_s);
@@ -197,7 +226,7 @@ impl TagList {
                         .rect
                     }
                     Row::On(id, subject) => {
-                        let Some(on) = tag.on.iter().find(|on| on.subject == *subject) else { continue };
+                        let Some(on) = tag.on.get(self.ons[i]).filter(|on| on.subject == *subject) else { continue };
                         let (held, said) = match tags.now(id).and_then(|n| n.get(subject)) {
                             Some((held, text)) => (Some(*held), text.as_deref().map(first_line)),
                             None => (None, None),
@@ -223,19 +252,27 @@ impl TagList {
                 if i == self.cursor {
                     ui.painter().rect_stroke(rect.expand(2.0), look.radius_m, egui::Stroke::new(look.line_thin, theme.focus), egui::StrokeKind::Outside);
                 }
-                drawn.push(Spot { key: self.keys[i].clone(), rect });
+                drawn.push((i, rect.height() + look.space_s));
             }
         });
-        if drawn.len() == self.rows.len() {
-            for spot in &drawn {
-                self.scrolling.item(spot.rect);
+        // Rows drawn taller than laid out keep their height (none overlap
+        // next frame); every row's place is told to the scrolling.
+        let mut grew = false;
+        for (i, h) in &drawn {
+            if *h > self.heights[*i] + 0.5 {
+                self.heights[*i] = *h;
+                grew = true;
             }
         }
+        let origin = output.inner_rect.min - output.state.offset;
+        for (i, top) in tops.iter().enumerate() {
+            self.scrolling.item(egui::Rect::from_min_size(origin + egui::vec2(0.0, *top), egui::vec2(output.inner_rect.width(), self.heights[i])));
+        }
         self.scrolling.drawn(&output);
-        if self.scrolling.busy() {
+        if grew || self.scrolling.busy() {
             ui.ctx().request_repaint();
         }
-        self.spots = drawn;
+        self.spots = drawn.into_iter().map(|(i, _)| Spot { key: self.keys[i].clone(), rect: egui::Rect::from_min_size(origin + egui::vec2(0.0, tops[i]), egui::vec2(output.inner_rect.width(), self.heights[i])) }).filter(|s| s.rect.intersects(output.inner_rect)).collect();
     }
 }
 
