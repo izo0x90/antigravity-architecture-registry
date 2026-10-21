@@ -43,10 +43,11 @@ impl CockpitApp {
                 };
                 self.input_mode = InputMode::Insert { at };
             }
-            // The tag picker, where it can name one (a box that takes it, tags to name).
-            Ask::NameTag => {
-                if let Some(pick) = self.palette_actions().into_iter().find(|b| b.action.id == "tag.insert" && b.action.when != crate::actions::When::Unavailable) {
+            // The trigger's picker, where it applies (what it picks for is there).
+            Ask::Trigger(c) => {
+                if let Some(pick) = self.triggered(c) {
                     self.open_palette(Some(&pick));
+                    super::keys::typed_away(ctx);
                 }
             }
             Ask::Refresh(crate::nav::Refresh::Review) => self.desk.shared.review.invalidate(),
@@ -59,6 +60,12 @@ impl CockpitApp {
             Ask::Terminals { id, act } => self.desk.shared.terminals.get_mut().act(id, act, &self.desk.net, ctx),
             Ask::Tags(act) => self.desk.shared.tags.get_mut().act(act, &self.desk.net, ctx, &self.notes_later),
         }
+    }
+
+    /// The action trigger `c` opens, when it's offered here.
+    pub(super) fn triggered(&self, c: char) -> Option<crate::actions::Bound> {
+        let id = crate::trigger::action_for(c)?;
+        self.palette_actions().into_iter().find(|b| b.action.id == id && b.action.when != crate::actions::When::Unavailable)
     }
 
     /// Reads `file` into the index again (a failure is said with the index's).

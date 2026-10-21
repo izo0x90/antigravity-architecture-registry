@@ -217,8 +217,8 @@ impl crate::buffer::Buffer for DiscussionView {
             if typed.clicked {
                 *cx.input_mode = crate::keymap::InputMode::Insert { at: cx.at };
             }
-            if typed.names_tag {
-                self.asks.push(Ask::NameTag);
+            if let Some(c) = typed.trigger {
+                self.asks.push(Ask::Trigger(c));
             }
             self.typing = drawing.typing.then_some(typed.rect);
             if typed.sent.is_some() {

@@ -133,15 +133,19 @@ pub struct Typed {
     pub sent: Option<crate::keymap::Sent>,
     /// Clicked into: its host types in it.
     pub clicked: bool,
-    /// A `#` just typed where a word starts: a tag's name to follow it.
-    pub names_tag: bool,
+    /// A trigger character just typed where a word starts (`crate::trigger`):
+    /// its picker, for what follows it.
+    pub trigger: Option<char>,
 }
 
 impl TypingBox {
-    /// `text` put after what's written (a `#` just typed isn't doubled),
-    /// the caret after it.
+    /// `text` put after what's written (a trigger it starts with that the
+    /// box ends with isn't doubled), the caret after it.
     pub fn put(&mut self, text: &str) {
-        let text = if self.text.ends_with('#') { text.strip_prefix('#').unwrap_or(text) } else { text };
+        let text = match text.chars().next() {
+            Some(c) if crate::trigger::is_trigger(c) && self.text.ends_with(c) => &text[c.len_utf8()..],
+            _ => text,
+        };
         self.text.push_str(text);
         self.caret_to_end = true;
     }
@@ -164,26 +168,26 @@ impl TypingBox {
         }
         let output = ui.add(keys.text_box(&mut self.text).id(id).desired_rows(rows).desired_width(f32::INFINITY).hint_text(hint));
         if std::mem::take(&mut self.caret_to_end) {
-            crate::theme::caret_to_end(ui.ctx(), output.id, &self.text);
+            caret_to_end(ui.ctx(), output.id, &self.text);
         }
         let sent = if typing && output.has_focus() { ui.input(|i| keys.input.sent(i)) } else { None };
         if sent.is_some() {
             output.surrender_focus();
         }
-        // Typed at its end (the name's put there): a `#` typed amid what's
-        // written is just a `#`.
+        // Typed at its end (what's picked is put there): a trigger typed amid
+        // what's written is just a character.
         let at_end = egui::TextEdit::load_state(ui.ctx(), output.id).and_then(|s| s.cursor.char_range()).is_none_or(|r| r.primary.index == self.text.chars().count());
-        Typed { rect: output.rect, sent, clicked: output.clicked() || output.gained_focus(), names_tag: output.changed() && at_end && names_tag(&self.text, before) }
+        let trigger = (output.changed() && at_end).then(|| crate::trigger::typed(&self.text, before)).flatten();
+        Typed { rect: output.rect, sent, clicked: output.clicked() || output.gained_focus(), trigger }
     }
 }
 
-/// Whether `text` (`before` characters long a moment ago) just had a `#`
-/// typed where a word starts (as a prompt reads a tag's name): after
-/// Backspace too, a `#` typed is one typed.
-pub fn names_tag(text: &str, before: usize) -> bool {
-    let typed_hash = text.chars().count() == before + 1 && text.ends_with('#');
-    let starts_word = text.chars().rev().nth(1).is_none_or(|c| c.is_whitespace() || "([{\"'".contains(c));
-    typed_hash && starts_word
+/// Puts a text field's caret after its text (text put in it, not typed).
+pub fn caret_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
+    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+    let end = egui::text::CCursor::new(text.chars().count());
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
+    state.store(ctx, id);
 }
 
 #[cfg(test)]
@@ -191,10 +195,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_hash_typed_where_a_word_starts_asks_for_a_tags_name() {
-        assert!(names_tag("#", 0) && names_tag("see #", 4) && names_tag("(#", 1));
-        assert!(!names_tag("a#", 1), "inside a word: a hash");
-        assert!(!names_tag("see #", 3), "pasted, not typed");
+    fn what_is_put_after_a_trigger_doesnt_double_it() {
         let mut b = TypingBox { text: "see #".into(), ..TypingBox::default() };
         b.put("#flaky ");
         assert_eq!(b.text, "see #flaky ", "the # typed isn't doubled");

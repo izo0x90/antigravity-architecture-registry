@@ -70,7 +70,7 @@ impl CockpitApp {
             out.push(match fitting.as_slice() {
                 [one] => Self::edit_action(edit, one),
                 some => {
-                    let choices = some.iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).colour(theme.tag(t.colour)).detail(Some(described(t.count, &t.note)))).collect();
+                    let choices = some.iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).glyph(egui_phosphor::fill::TAG, theme.tag(t.colour)).detail(Some(described(t.count, &t.note)))).collect();
                     let available = if some.is_empty() { When::Unavailable } else { When::Always };
                     Action::new(edit.id(), edit.which(), edit.detail(), S::TagEditWhich(edit)).param(Param::Choice(choices)).group(Group::Act).importance(MINOR).when(available)
                 }
@@ -91,7 +91,7 @@ impl CockpitApp {
         };
         let action = match one {
             Some((tag, subject)) => Action::new("tag.remove", format!("Take {} off this", tag.name), "The tag stays on everything else", S::Untag(Some((tag.id.clone(), (*subject).clone())))),
-            None => Action::new("tag.remove", "Take a tag off what you're on", "Pick which of its tags (on any of the things at the cursor)", S::Untag(None)).param(Param::Choice(on.iter().map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone()).colour(theme.tag(t.colour))).collect())),
+            None => Action::new("tag.remove", "Take a tag off what you're on", "Pick which of its tags (on any of the things at the cursor)", S::Untag(None)).param(Param::Choice(on.iter().map(|(t, _)| Choice::new(t.id.as_str(), t.name.clone()).glyph(egui_phosphor::fill::TAG, theme.tag(t.colour))).collect())),
         };
         action.group(Group::Act).importance(MINOR).when(if on.is_empty() { When::Unavailable } else { When::Always })
     }
@@ -125,7 +125,7 @@ impl CockpitApp {
                 .importance(MINOR)
                 .when(when(picking == Some("tag.add") && next.is_some())),
             Self::untag_action(&at),
-            Action::new("tag.goto", "Go to something tagged", "Pick the tag, then which thing it's on", S::TagGoTo).param(Param::Choice(tags.list().iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).colour(crate::theme::colors().tag(t.colour)).detail(Some(described(t.on.len(), &t.note)))).collect())).group(Group::GoTo).importance(MINOR),
+            Action::new("tag.goto", "Go to something tagged", "Pick the tag, then which thing it's on", S::TagGoTo).param(Param::Choice(tags.list().iter().map(|t| Choice::new(t.id.as_str(), t.name.clone()).glyph(egui_phosphor::fill::TAG, crate::theme::colors().tag(t.colour)).detail(Some(described(t.on.len(), &t.note)))).collect())).group(Group::GoTo).importance(MINOR),
             Action::new("tag.next", "Next with its tag", "The next thing the tag on this is on (the one stepped through last)", S::TagStep { forward: true }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
             Action::new("tag.prev", "Previous with its tag", "The thing before, of those the tag on this is on", S::TagStep { forward: false }).group(Group::Navigate).importance(MINOR).when(when(tagged)),
         ];
@@ -137,7 +137,7 @@ impl CockpitApp {
                 .param(Param::Search { hint: "a tag's name".into(), found: named, waiting: false })
                 .group(Group::Act)
                 .importance(MINOR)
-                .when(when((self.desk.view(here.kind).takes_typed() || self.palette.is_writing() || self.palette.naming_tag()) && !tags.list().is_empty())),
+                .when(when((self.desk.view(here.kind).takes_typed() || self.palette.is_writing() || self.palette.holding()) && !tags.list().is_empty())),
         );
         // `g T` picked a tag on several things: which.
         // An edit's tag picked (of several): its value asked for.
@@ -160,7 +160,7 @@ impl CockpitApp {
         let tags = self.desk.shared.tags.get();
         let list = tags.list();
         let query = self.desk.shell_searches.get(search).map_or("", |q| q.trim());
-        let choice = |t: &harness_contracts::Tag| Choice::new(t.id.as_str(), t.name.clone()).colour(crate::theme::colors().tag(t.colour)).detail(Some(described(t.on.len(), &t.note)));
+        let choice = |t: &harness_contracts::Tag| Choice::new(t.id.as_str(), t.name.clone()).glyph(egui_phosphor::fill::TAG, crate::theme::colors().tag(t.colour)).detail(Some(described(t.on.len(), &t.note)));
         if query.is_empty() {
             return list.into_iter().map(choice).collect();
         }
@@ -206,8 +206,8 @@ impl CockpitApp {
                 };
                 self.desk.shell_searches.remove("tag.insert");
                 // In what the palette's writing (it comes back), or where it was typed.
-                if self.palette.naming_tag() {
-                    self.palette.put_name(Some(&format!("#{name} ")));
+                if self.palette.holding() {
+                    self.palette.put_back(Some(&format!("#{name} ")));
                     self.input_mode = InputMode::Palette;
                     return;
                 }

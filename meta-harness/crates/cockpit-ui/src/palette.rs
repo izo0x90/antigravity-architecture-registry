@@ -52,11 +52,11 @@ pub struct Palette {
     caret_to_end: bool,
     /// What's written, for an action that takes writing.
     writing: crate::conversation::TypingBox,
-    /// A `#` was just typed where a word starts in what's written: a tag's
-    /// name is asked for (taken by the app).
-    names_tag: bool,
-    /// What's written, set aside while a tag's name is picked for it (the
-    /// name goes in after it, and it comes back).
+    /// A trigger character was just typed where a word starts in what's
+    /// written (taken by the app: it opens the trigger's picker).
+    trigger: Option<char>,
+    /// What's written, set aside while another action picks what goes in
+    /// after it (it comes back with that put in).
     held: Option<(Stage, crate::conversation::TypingBox)>,
 }
 
@@ -77,11 +77,17 @@ impl Palette {
     pub fn selected(&self) -> usize {
         self.selected
     }
+
+    /// What's typed in its field.
+    #[cfg(test)]
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
 }
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), names_tag: false, held: None }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None }
     }
 }
 
@@ -148,14 +154,14 @@ impl Palette {
         };
     }
 
-    /// A `#` was typed in what's written (once).
-    pub fn take_names_tag(&mut self) -> bool {
-        std::mem::take(&mut self.names_tag)
+    /// A trigger typed in what's written (once).
+    pub fn take_trigger(&mut self) -> Option<char> {
+        self.trigger.take()
     }
 
-    /// What's written is set aside while `pick` (the tag picker) asks for
-    /// a tag's name.
-    pub fn name_tag_in(&mut self, pick: &Bound) {
+    /// What's written is set aside while `pick` asks for what goes in
+    /// after it.
+    pub fn hold_for(&mut self, pick: &Bound) {
         let stage = std::mem::replace(&mut self.stage, Stage::Actions);
         self.held = Some((stage, std::mem::take(&mut self.writing)));
         self.open = true;
@@ -167,17 +173,17 @@ impl Palette {
         self.open && matches!(self.stage, Stage::Writing { .. })
     }
 
-    /// A tag's name is being picked for what's written here.
-    pub fn naming_tag(&self) -> bool {
+    /// Something is being picked for what's written here (set aside).
+    pub fn holding(&self) -> bool {
         self.held.is_some()
     }
 
-    /// What was set aside comes back (with `name` put in after it).
-    pub fn put_name(&mut self, name: Option<&str>) {
+    /// What was set aside comes back (with `text` put in after it).
+    pub fn put_back(&mut self, text: Option<&str>) {
         let Some((stage, writing)) = self.held.take() else { return };
         (self.stage, self.writing, self.open) = (stage, writing, true);
-        if let Some(name) = name {
-            self.writing.put(name);
+        if let Some(text) = text {
+            self.writing.put(text);
         }
     }
 
@@ -188,7 +194,7 @@ impl Palette {
 
     fn back(&mut self) {
         if self.held.is_some() {
-            self.put_name(None);
+            self.put_back(None);
             return;
         }
         match &self.stage {
@@ -286,7 +292,7 @@ impl Palette {
                             if typed.sent.is_some() || (send && !self.writing.text.trim().is_empty()) {
                                 picked = Some(invocation(action, Some(self.writing.take())));
                             }
-                            self.names_tag |= typed.names_tag;
+                            self.trigger = typed.trigger.or(self.trigger);
                         }
                         let edit = if matches!(stage, Stage::Writing { .. }) {
                             None
@@ -299,7 +305,7 @@ impl Palette {
                             }
                             let edit = ui.add(egui::TextEdit::singleline(&mut self.filter).id(id).lock_focus(true).hint_text(hint).desired_width(f32::INFINITY));
                             if std::mem::take(&mut self.caret_to_end) {
-                                crate::theme::caret_to_end(ui.ctx(), edit.id, &self.filter);
+                                crate::conversation::caret_to_end(ui.ctx(), edit.id, &self.filter);
                             }
                             Some(edit)
                         };
@@ -484,8 +490,8 @@ fn palette_row(ui: &mut egui::Ui, selected: bool, scroll: bool, label: &str, col
                 ui,
                 |ui| {
                     match colour {
-                        Some((colour, crate::actions::Mark::Tag)) => {
-                            ui.label(crate::theme::tag_mark(ui, colour, look.text_label));
+                        Some((colour, crate::actions::Mark::Glyph(glyph))) => {
+                            ui.label(crate::theme::glyph(ui, glyph, colour, look.text_label));
                         }
                         Some((colour, crate::actions::Mark::Swatch)) => {
                             let (swatch, _) = ui.allocate_exact_size(egui::vec2(look.text_label, look.text_label), egui::Sense::hover());

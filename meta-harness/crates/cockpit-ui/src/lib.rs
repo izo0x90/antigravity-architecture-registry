@@ -46,6 +46,7 @@ pub mod terminals;
 pub mod theme;
 pub mod touch;
 pub mod tree;
+pub mod trigger;
 
 // The browser's start-up and everything that's the browser's own: the one
 // place the cockpit knows it runs in a browser.

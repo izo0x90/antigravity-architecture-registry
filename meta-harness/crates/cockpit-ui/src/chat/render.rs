@@ -305,9 +305,9 @@ impl ChatStreamState {
             if typed.clicked {
                 *input_mode = crate::keymap::InputMode::Insert { at };
             }
-            // A `#` where a word starts: the shell's tag picker, for the name.
-            if typed.names_tag {
-                self.asks.push(Ask::NameTag);
+            // A trigger where a word starts: its picker, for what follows.
+            if let Some(c) = typed.trigger {
+                self.asks.push(Ask::Trigger(c));
             }
             // Its Send (and Add) are actions, under it while it's typed in.
             self.ui.typing = inserting.then_some(typed.rect);

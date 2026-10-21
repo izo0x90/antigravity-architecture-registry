@@ -370,18 +370,15 @@ pub fn solid(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Name(SOLID.into()))
 }
 
-/// Puts a text field's caret after its text (text put in it, not typed).
-pub fn caret_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
-    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
-    let end = egui::text::CCursor::new(text.chars().count());
-    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
-    state.store(ctx, id);
+/// An icon's glyph in a colour, from the solid icons (the outline one
+/// until the fonts are in, the first frame): a choice's mark, a note's.
+pub fn glyph(ui: &egui::Ui, glyph: &str, colour: Color32, size: f32) -> egui::RichText {
+    egui::RichText::new(glyph).font(solid_font(ui, size)).color(colour)
 }
 
-/// A tag's mark where it's named: a solid tag in its colour (the outline
-/// one until the fonts are in, the first frame).
+/// A tag's mark where it's named: a solid tag in its colour.
 pub fn tag_mark(ui: &egui::Ui, colour: Color32, size: f32) -> egui::RichText {
-    egui::RichText::new(egui_phosphor::fill::TAG).font(solid_font(ui, size)).color(colour)
+    glyph(ui, egui_phosphor::fill::TAG, colour, size)
 }
 
 /// The solid icons' font (the icons' fill and outline share their

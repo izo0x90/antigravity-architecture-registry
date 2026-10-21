@@ -79,9 +79,10 @@ pub enum Ask {
     Reread(String),
     /// A typing box opened in it: the keyboard goes there.
     Type,
-    /// A `#` typed where a word starts in its typing box: the tag picker,
-    /// for the name to follow it (put back with `Navigable::typed_in`).
-    NameTag,
+    /// A trigger character typed where a word starts in its typing box
+    /// (`crate::trigger`): its picker, for what follows it (put back with
+    /// `Navigable::typed_in`).
+    Trigger(char),
     /// Something shared changed where it's kept: read it again.
     Refresh(Refresh),
     /// The desk compares this from now on (what the changes show).

@@ -63,11 +63,9 @@ impl CockpitApp {
             }
         }
         let picked = self.palette.render(ctx, &bound, &self.config.keymap);
-        // `#` in what's written there: the tag picker, the name put after it.
-        if self.palette.take_names_tag()
-            && let Some(pick) = self.palette_actions().into_iter().find(|b| b.action.id == "tag.insert" && b.action.when != When::Unavailable)
-        {
-            self.palette.name_tag_in(&pick);
+        // A trigger in what's written there: its picker, what it picks put after it.
+        if let Some(pick) = self.palette.take_trigger().and_then(|c| self.triggered(c)) {
+            self.palette.hold_for(&pick);
         }
         if let Some(ask) = self.palette.take_search() {
             match ask.origin {

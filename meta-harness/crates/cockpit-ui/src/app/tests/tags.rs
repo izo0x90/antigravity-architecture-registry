@@ -480,6 +480,7 @@ fn a_hash_typed_in_a_prompt_opens_the_tag_picker_and_puts_the_name_after_it() {
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x2", "deploy", &[ran("t1", 1, 2)]) });
     typed(&ctx, &mut app, "1 look at (#");
     assert!(app.palette.is_open(), "the tag picker");
+    assert_eq!(app.palette.filter(), "", "the # stays in the chat, not in the picker's box (#60)");
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
     assert!(drawn.contains("flaky") && drawn.contains("deploy"), "{drawn}");
     keys(&ctx, &mut app, "fla");

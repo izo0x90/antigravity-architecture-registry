@@ -52,15 +52,16 @@ pub struct Choice {
     pub label: String,
     pub detail: Option<String>,
     pub current: bool,
-    /// A colour it is or has, shown before its label: a tag's (a solid
-    /// tag in it), or a colour itself (a swatch).
+    /// A colour it has, shown before its label: an icon's glyph in it, or
+    /// (a colour itself) a swatch of it.
     pub colour: Option<(egui::Color32, Mark)>,
 }
 
 /// How a choice's colour shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mark {
-    Tag,
+    /// An icon's glyph (a solid one) in the colour.
+    Glyph(&'static str),
     Swatch,
 }
 
@@ -69,9 +70,9 @@ impl Choice {
         Self { value: value.into(), label: label.into(), detail: None, current: false, colour: None }
     }
 
-    /// A tag's colour (a solid tag in it before its label).
-    pub fn colour(mut self, colour: egui::Color32) -> Self {
-        self.colour = Some((colour, Mark::Tag));
+    /// An icon's glyph in `colour` before its label (what it is, in a look).
+    pub fn glyph(mut self, glyph: &'static str, colour: egui::Color32) -> Self {
+        self.colour = Some((colour, Mark::Glyph(glyph)));
         self
     }
 
