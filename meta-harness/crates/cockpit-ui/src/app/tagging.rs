@@ -47,7 +47,7 @@ impl CockpitApp {
         let (label, param) = match edit {
             E::Rename => (format!("Rename the tag {}", tag.name), Param::Text { hint: "a new name (letters, digits, - and _)".into(), start: tag.name.clone() }),
             E::Recolour => (format!("Give {} another colour", tag.name), Param::Choice((0..harness_contracts::TAG_COLOURS).map(|i| Choice::new(i.to_string(), theme.tag_name(i)).swatch(theme.tag(i)).current(tag.colour == i)).collect())),
-            E::Note => (format!("Write {}'s note", tag.name), Param::Text { hint: "its note".into(), start: tag.note.clone() }),
+            E::Note => (format!("Write {}'s note", tag.name), Param::Writing { hint: "its note (as many lines as it takes)".into(), start: tag.note.clone() }),
             E::ClearNote => (format!("Clear {}'s note", tag.name), Param::None),
             E::Delete => (format!("Delete the tag {}", tag.name), Param::Choice(vec![Choice::new("yes", format!("Delete {} (from {})", tag.name, on_things(tag.count))), Choice::new("no", "Keep it")])),
         };

@@ -169,7 +169,7 @@ fn its_skills_tool_servers_and_adding_to_the_running_turn_are_actions() {
     chat.shared.agents.get_mut().take_tools_for_test(harness_contracts::ToolServers::default());
     chat.read();
     chat.apply(session(AdapterEvent::TurnUpdated { turn: Turn { id: TurnId::new("turn"), thread_id: ThreadId::new("t"), ordinal: 1, status: TurnStatus::Running, failure: None, usage: None } }));
-    chat.ui.input_buffer = "also".into();
+    chat.ui.input.text = "also".into();
     let ids = ids(&chat);
     for id in ["mcp.add", "harness.skills", "chat.inject"] {
         assert!(ids.iter().any(|a| a == id), "{id} in {ids:?}");

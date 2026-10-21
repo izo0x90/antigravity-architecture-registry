@@ -488,6 +488,16 @@ fn a_hash_typed_in_a_prompt_opens_the_tag_picker_and_puts_the_name_after_it() {
     // Mid-word, a # is just a #.
     typed(&ctx, &mut app, " issue#");
     assert!(!app.palette.is_open());
+    // A # taken back (Backspace) and typed again where a word starts: typed,
+    // so the picker again (decided, #56).
+    typed(&ctx, &mut app, " #");
+    assert!(app.palette.is_open());
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
+    frame(&ctx, &mut app, press(egui::Key::Backspace, false));
+    frame(&ctx, &mut app, vec![]);
+    assert!(!app.palette.is_open());
+    typed(&ctx, &mut app, "#");
+    assert!(app.palette.is_open(), "typed again: the picker again");
 }
 
 #[test]

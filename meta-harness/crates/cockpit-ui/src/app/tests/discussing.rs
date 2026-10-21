@@ -37,4 +37,16 @@ fn a_cards_discussions_are_started_replied_to_settled_and_reopened_as_the_server
     keys(&ctx, &mut app, "Not yet.");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     assert_eq!(bodies(&app, "POST /api/discussions/d1/reopen"), [serde_json::json!({ "text": "Not yet." })]);
+
+    // `#` in its box: the tag picker, the name put after it.
+    told(&app, harness_contracts::ClientEvent::TagUpdated { tag: harness_contracts::Tag { id: harness_contracts::TagId::new("x1"), name: "flaky".into(), colour: 2, note: String::new(), noted_by: String::new(), on: Vec::new() } });
+    app.desk.spec_mut().move_to(&d1);
+    keys(&ctx, &mut app, "r");
+    keys(&ctx, &mut app, "see #");
+    frame(&ctx, &mut app, vec![]);
+    assert!(app.palette.is_open(), "the tag picker");
+    keys(&ctx, &mut app, "fla");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.desk.spec().writing.text, "see #flaky ", "the name after the #");
 }

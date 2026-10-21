@@ -43,6 +43,12 @@ impl CockpitApp {
                 };
                 self.input_mode = InputMode::Insert { at };
             }
+            // The tag picker, where it can name one (a box that takes it, tags to name).
+            Ask::NameTag => {
+                if let Some(pick) = self.palette_actions().into_iter().find(|b| b.action.id == "tag.insert" && b.action.when != crate::actions::When::Unavailable) {
+                    self.open_palette(Some(&pick));
+                }
+            }
             Ask::Refresh(crate::nav::Refresh::Review) => self.desk.shared.review.invalidate(),
             Ask::Refresh(crate::nav::Refresh::Changes) => self.desk.shared.changes.invalidate(),
             Ask::Compare(comparison) => self.desk.shared.changes.compare(comparison),

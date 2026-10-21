@@ -1,8 +1,10 @@
-//! The plan's review state in the cockpit: the discussions on its parts
-//! (the desk's, from the event stream) and what changed since the user
-//! last reviewed it (fetched per plan, again on architecture events); the
-//! graph badges changed and discussed nodes, the spec view marks changed
-//! sections and shows the discussions.
+//! The plan the desk reads, kept once for every buffer: the plan itself
+//! and what changed since the user last reviewed it (read per plan, again
+//! on architecture events, the last asked for winning), and the
+//! discussions on its parts (the desk's, from the event stream). The
+//! graph badges changed and discussed nodes; the spec view marks changed
+//! sections and shows the discussions and an item's card; the plan tree
+//! lists its items, cards and discussions.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -21,13 +23,17 @@ pub struct NodeMark {
     pub open: usize,
 }
 
+/// An answer, with the number of the read it answers.
 enum Reply {
-    Diff(PlanId, NetResult<PlanDiff>),
+    Plan(u64, Box<NetResult<arch_graph::Plan>>),
+    Diff(u64, NetResult<PlanDiff>),
 }
 
 #[derive(Default)]
 pub struct ReviewState {
     pub plan: Option<PlanId>,
+    /// The plan as last read (or why it couldn't be).
+    pub read: Option<Result<arch_graph::Plan, String>>,
     /// Every discussion on the plan's parts, settled ones included.
     pub discussions: Vec<Discussion>,
     pub diff: PlanDiff,
@@ -35,6 +41,8 @@ pub struct ReviewState {
     pub generation: u64,
     pub error: Option<String>,
     loaded: Option<Option<PlanId>>,
+    /// The last read asked for: an older one's answer is dropped.
+    asked: u64,
     /// The desk's discussions' version they were taken at.
     discussed: Option<(Option<PlanId>, u64)>,
     inbox: Arc<Mutex<Vec<Reply>>>,
@@ -58,11 +66,15 @@ impl ReviewState {
         let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for reply in replies {
             match reply {
-                Reply::Diff(p, Ok(diff)) if Some(&p) == self.plan.as_ref() => {
+                Reply::Plan(n, read) if n == self.asked => {
+                    self.read = Some((*read).map_err(String::from));
+                    self.generation += 1;
+                }
+                Reply::Diff(n, Ok(diff)) if n == self.asked => {
                     self.diff = diff;
                     self.generation += 1;
                 }
-                Reply::Diff(_, Err(e)) => self.error = Some(e.into()),
+                Reply::Diff(n, Err(e)) if n == self.asked => self.error = Some(e.into()),
                 _ => {}
             }
         }
@@ -73,13 +85,16 @@ impl ReviewState {
         self.loaded = Some(wanted.clone());
         if self.plan != wanted {
             self.diff = PlanDiff::default();
+            self.read = None;
             self.generation += 1;
         }
         self.plan = wanted.clone();
+        self.asked += 1;
         let Some(plan) = wanted else { return };
+        let (inbox, n) = (self.inbox.clone(), self.asked);
+        net.arch_plan(&plan, ctx.clone(), move |r| push(&inbox, Reply::Plan(n, Box::new(r))));
         let inbox = self.inbox.clone();
-        let p = plan.clone();
-        net.arch_review_diff(&plan, ctx.clone(), move |r| push(&inbox, Reply::Diff(p, r)));
+        net.arch_review_diff(&plan, ctx.clone(), move |r| push(&inbox, Reply::Diff(n, r)));
     }
 
     /// Badges for the graph: changed nodes and discussions not settled per node.

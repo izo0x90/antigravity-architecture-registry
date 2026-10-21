@@ -15,6 +15,8 @@ enum Stage {
     Actions,
     Choose { action: Box<Bound>, from_list: bool },
     Text { action: Box<Bound>, from_list: bool },
+    /// Written in the typing box (many lines).
+    Writing { action: Box<Bound>, from_list: bool },
     /// Looked up as it's typed: the action is read afresh each frame (its
     /// results come in after the query goes out).
     Search { action: Box<Bound>, from_list: bool },
@@ -48,6 +50,8 @@ pub struct Palette {
     opened: u64,
     /// Its field was given text to edit: the caret goes after it.
     caret_to_end: bool,
+    /// What's written, for an action that takes writing.
+    writing: crate::conversation::TypingBox,
 }
 
 impl Palette {
@@ -71,7 +75,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default() }
     }
 }
 
@@ -125,6 +129,11 @@ impl Palette {
                 self.caret_to_end = true;
                 Stage::Text { action, from_list }
             }
+            Param::Writing { start, .. } => {
+                self.writing = Default::default();
+                self.writing.put(start);
+                Stage::Writing { action, from_list }
+            }
             Param::Search { .. } => {
                 self.ask = Some(SearchAsk { origin: action.origin, action: action.action.id.clone(), query: String::new() });
                 Stage::Search { action, from_list }
@@ -140,7 +149,7 @@ impl Palette {
 
     fn back(&mut self) {
         match &self.stage {
-            Stage::Choose { from_list: true, .. } | Stage::Text { from_list: true, .. } | Stage::Search { from_list: true, .. } => {
+            Stage::Choose { from_list: true, .. } | Stage::Text { from_list: true, .. } | Stage::Writing { from_list: true, .. } | Stage::Search { from_list: true, .. } => {
                 self.stage = Stage::Actions;
                 self.filter.clear();
                 self.selected = 0;
@@ -186,7 +195,7 @@ impl Palette {
         let stage = self.stage.clone();
         // While a value is picked: what the cycle key changes it to act on.
         let cycle = match &stage {
-            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Search { action, .. } => action.action.cycle.as_ref().and_then(|id| actions.iter().find(|b| b.action.id == *id && b.origin == action.origin)),
+            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => action.action.cycle.as_ref().and_then(|id| actions.iter().find(|b| b.action.id == *id && b.origin == action.origin)),
             Stage::Actions => None,
         };
         // Cycled: it runs, and the picker stays (its top line says the new).
@@ -208,26 +217,40 @@ impl Palette {
                         ui.set_width(width - 20.0);
                         let title = match &stage {
                             Stage::Actions => "Run an action".to_owned(),
-                            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Search { action, .. } => action.action.about.clone().unwrap_or_else(|| action.action.label.clone()),
+                            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => action.action.about.clone().unwrap_or_else(|| action.action.label.clone()),
                         };
                         ui.add(egui::Label::new(RichText::new(title).strong().size(crate::theme::look().text_label).color(colors().info)).truncate());
                         if let Some(bound) = cycle {
                             ui.add(egui::Label::new(RichText::new(format!("{}: {}", keymap.list.cycle_label(), bound.action.label)).size(crate::theme::look().text_small).color(colors().muted)).truncate());
                         }
                         let hint = match &stage {
-                            Stage::Text { action, .. } | Stage::Search { action, .. } => match &action.action.param {
-                                Param::Text { hint, .. } | Param::Search { hint, .. } => hint.clone(),
+                            Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => match &action.action.param {
+                                Param::Text { hint, .. } | Param::Writing { hint, .. } | Param::Search { hint, .. } => hint.clone(),
                                 _ => String::new(),
                             },
                             _ => "Type to filter…".to_owned(),
                         };
-                        let edit = ui.add(egui::TextEdit::singleline(&mut self.filter).id(egui::Id::new("palette_field")).lock_focus(true).hint_text(hint).desired_width(f32::INFINITY));
-                        edit.request_focus();
-                        if std::mem::take(&mut self.caret_to_end) {
-                            crate::theme::caret_to_end(ui.ctx(), edit.id, &self.filter);
+                        // Writing: the typing box every conversation has; Enter sends it.
+                        if let Stage::Writing { action, .. } = &stage {
+                            let typed = self.writing.draw(ui, egui::Id::new("palette_writing"), 4, &hint, true);
+                            if typed.sent.is_some() {
+                                picked = Some(invocation(action, Some(self.writing.take())));
+                            }
+                            let keys: Vec<String> = keymap.input.keys(&keymap.back, "goes back").into_iter().map(|(key, does)| format!("{key} {does}")).collect();
+                            ui.label(RichText::new(keys.join(" · ")).size(crate::theme::look().text_small).color(colors().muted));
                         }
+                        let edit = if matches!(stage, Stage::Writing { .. }) {
+                            None
+                        } else {
+                            let edit = ui.add(egui::TextEdit::singleline(&mut self.filter).id(egui::Id::new("palette_field")).lock_focus(true).hint_text(hint).desired_width(f32::INFINITY));
+                            edit.request_focus();
+                            if std::mem::take(&mut self.caret_to_end) {
+                                crate::theme::caret_to_end(ui.ctx(), edit.id, &self.filter);
+                            }
+                            Some(edit)
+                        };
                         let mut enter = enter;
-                        if edit.changed() {
+                        if edit.as_ref().is_some_and(egui::Response::changed) {
                             self.selected = 0;
                             if let Stage::Search { action, .. } = &stage {
                                 self.ask = Some(SearchAsk { origin: action.origin, action: action.action.id.clone(), query: self.filter.clone() });
@@ -330,6 +353,8 @@ impl Palette {
                                     ui.set_min_height(list_height);
                                 });
                             }
+                            // Sent from its box (above).
+                            Stage::Writing { .. } => {}
                             Stage::Text { action, .. } => {
                                 if enter && !self.filter.trim().is_empty() {
                                     picked = Some(invocation(action, Some(self.filter.trim().to_owned())));

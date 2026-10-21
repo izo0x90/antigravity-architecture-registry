@@ -61,7 +61,7 @@ impl ActionProvider for ChatStreamState {
 
         // Prompt (this view only)
         out.push(Action::new("chat.insert", "Type a prompt", "The keys go to the prompt box until you stop typing", C::Insert).focused().importance(crate::actions::PRIMARY));
-        if !self.ui.input_buffer.is_empty() {
+        if !self.ui.input.text.is_empty() {
             out.push(Action::new("chat.clear", "Clear the prompt", "Empties what's typed, unsent", C::ClearPrompt).focused().importance(MINOR));
         }
 
@@ -215,14 +215,14 @@ impl ActionProvider for ChatStreamState {
         if let Some(view) = view
             && view.running_turn().is_some()
             && caps.turns.active_steering
-            && !self.ui.input_buffer.trim().is_empty()
+            && !self.ui.input.text.trim().is_empty()
         {
             out.push(Action::new("chat.inject", "Add the prompt to what it's doing", "Into the running turn, rather than after it", C::AddToTurn).focused().typed(crate::keymap::Sent::Add).on_typing(Button, "Add to what it's doing", None));
         }
 
         // Harness commands; typing `/` and its start, those it matches show
         // under the box.
-        let typed = self.ui.input_buffer.strip_prefix('/').filter(|p| !p.contains(' '));
+        let typed = self.ui.input.text.strip_prefix('/').filter(|p| !p.contains(' '));
         if let Some(s) = snapshot {
             for command in &s.commands {
                 let param = match &command.input_hint {
@@ -286,7 +286,7 @@ impl ActionProvider for ChatStreamState {
         let ctx = cx.ctx;
         match command {
             ChatCommand::Insert => *cx.input_mode = crate::keymap::InputMode::Insert { at: cx.at },
-            ChatCommand::ClearPrompt => self.ui.input_buffer.clear(),
+            ChatCommand::ClearPrompt => self.ui.input.text.clear(),
             ChatCommand::NewSession | ChatCommand::Retry => self.open_thread(None),
             ChatCommand::ResumeSession => match value {
                 Some(native) => self.open_thread(Some(NativeId::new(native))),
@@ -365,7 +365,7 @@ impl ActionProvider for ChatStreamState {
             }
             ChatCommand::ListMcp | ChatCommand::ListSkills => {}
             ChatCommand::AddToTurn => {
-                let text = std::mem::take(&mut self.ui.input_buffer).trim().to_owned();
+                let text = std::mem::take(&mut self.ui.input.text).trim().to_owned();
                 if !text.is_empty() {
                     self.add_to_turn(text);
                 }
@@ -395,8 +395,8 @@ impl ActionProvider for ChatStreamState {
             }
             ChatCommand::HarnessCommand { name } => {
                 // Picked while typing its start: what was typed goes.
-                if self.ui.input_buffer.strip_prefix('/').is_some_and(|p| name.starts_with(p.trim())) {
-                    self.ui.input_buffer.clear();
+                if self.ui.input.text.strip_prefix('/').is_some_and(|p| name.starts_with(p.trim())) {
+                    self.ui.input.text.clear();
                 }
                 let text = match value {
                     Some(args) if !args.is_empty() => format!("/{name} {args}"),
@@ -428,7 +428,7 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             ChatCommand::Send => {
-                let text = std::mem::take(&mut self.ui.input_buffer).trim().to_owned();
+                let text = std::mem::take(&mut self.ui.input.text).trim().to_owned();
                 if !text.is_empty() {
                     self.send_prompt(text);
                 }

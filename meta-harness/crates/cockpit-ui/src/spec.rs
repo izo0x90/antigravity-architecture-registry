@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use arch_graph::{ComponentDetail, ComponentId, Finding, PlanDiff, RelationKind, Report, Severity, Source};
 use egui::{Rect, RichText};
 use harness_contracts::changes::{Comparison, FileChanges, Hunk};
-use harness_contracts::{Discussion, DiscussionId, DiscussionKind, DiscussionStatus, SaidKind, Subject};
+use harness_contracts::{Discussion, DiscussionId, DiscussionKind, DiscussionStatus, Subject};
 
 use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style, When};
 use crate::card::Section;
@@ -70,13 +70,10 @@ pub struct Composer {
     /// What a new discussion is on.
     pub anchor: Option<Subject>,
     pub section: Section,
-    pub text: String,
 }
 
 enum Reply {
     Detail(ComponentId, Box<NetResult<ComponentDetail>>),
-    /// The plan an item card is of.
-    Plan(arch_graph::PlanId, Box<NetResult<arch_graph::Plan>>),
     Report(ComponentId, NetResult<Report>),
     /// A review write finished.
     Posted(Result<(), String>),
@@ -97,12 +94,11 @@ impl Entry {
 }
 
 /// A plan's item shown as a card (instead of a component's): the plan as
-/// last read, asked for again when the plan changes.
+/// the desk last read it (`Shared::review`; none: it reads another now).
 pub struct ItemCard {
     pub plan: arch_graph::PlanId,
     pub id: arch_graph::ItemId,
     read: Option<Result<arch_graph::Plan, String>>,
-    asked: bool,
 }
 
 impl ItemCard {
@@ -146,6 +142,10 @@ pub struct SpecState {
     pub discussions: Vec<Discussion>,
     pub diff: PlanDiff,
     pub composer: Option<Composer>,
+    /// What's written in it.
+    pub writing: crate::conversation::TypingBox,
+    /// What's said in its discussions, drawn (an agent's as markdown).
+    markdown: egui_commonmark::CommonMarkCache,
     /// The review point `] c` is on.
     pub point: Option<DiscussionId>,
     note: Option<String>,
@@ -193,6 +193,8 @@ impl Default for SpecState {
             discussions: Vec::new(),
             diff: PlanDiff::default(),
             composer: None,
+            writing: Default::default(),
+            markdown: Default::default(),
             point: None,
             note: None,
             out_of_date: false,
@@ -294,12 +296,28 @@ impl SpecState {
         self.leave_component();
         self.target = None;
         self.detail = None;
-        self.item = Some(ItemCard { plan: plan.clone(), id: id.clone(), read: None, asked: false });
+        self.item = Some(ItemCard { plan: plan.clone(), id: id.clone(), read: None });
+        // What's shared is taken again: the desk's plan, for its card.
+        self.seen.review = u64::MAX;
     }
 
     /// Draws a plan's item's card: its title and state, its text, the item
     /// it's under and those under it.
     fn draw_item(&mut self, ui: &mut egui::Ui) {
+        // Its discussions, drawn as every conversation is.
+        let mut markdown = std::mem::take(&mut self.markdown);
+        let on: Vec<Discussion> = match &self.item {
+            Some(card) => {
+                let item = Subject::PlanItem { plan: card.plan.clone(), item: card.id.0.clone() };
+                self.discussions.iter().filter(|d| d.on.subject == item).cloned().collect()
+            }
+            None => Vec::new(),
+        };
+        self.draw_item_with(ui, &on, &mut markdown);
+        self.markdown = markdown;
+    }
+
+    fn draw_item_with(&mut self, ui: &mut egui::Ui, on: &[Discussion], markdown: &mut egui_commonmark::CommonMarkCache) {
         let Some(card) = &self.item else { return };
         let look = crate::theme::look();
         let key = card.key();
@@ -342,6 +360,16 @@ impl SpecState {
                     for i in under {
                         ui.label(format!("{} {} ({})", i.id, i.title, i.state.name()));
                     }
+                }
+                for d in on {
+                    ui.add_space(look.space_s);
+                    egui::Frame::NONE.fill(colors().surface).stroke(egui::Stroke::new(look.line_thin, colors().border)).corner_radius(look.radius_m).inner_margin(crate::theme::margin(look.space_sm)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        crate::conversation::heading(ui, d);
+                        for said in &d.said {
+                            crate::conversation::message(ui, markdown, &crate::conversation::said(said));
+                        }
+                    });
                 }
             })
             .response;
@@ -581,7 +609,8 @@ impl SpecState {
             (Compose::New(_), Some(target), Some(plan), _) => Some(Subject::PlanSection { plan, id: target.clone(), section: section.key().to_owned() }),
             _ => None,
         };
-        self.composer = Some(Composer { purpose, anchor, section, text: String::new() });
+        self.composer = Some(Composer { purpose, anchor, section });
+        self.writing = Default::default();
         self.asks.push(Ask::Type);
     }
 
@@ -593,10 +622,10 @@ impl SpecState {
     /// Sends what the composer holds.
     pub fn send_composer(&mut self, net: &NetClient, ctx: &egui::Context) {
         let Some(composer) = self.composer.clone() else { return };
-        let text = composer.text.trim().to_owned();
-        if text.is_empty() {
+        if self.writing.text.trim().is_empty() {
             return;
         }
+        let text = self.writing.take();
         match composer.purpose {
             Compose::New(kind) => {
                 let Some(on) = composer.anchor else { return };
@@ -864,8 +893,10 @@ impl SpecState {
                             }
                         }
                     }
-                    for comment in self.comments_in(Some(section)) {
-                        render_thread(ui, comment, self.point.as_ref(), section, &mut item);
+                    let here: Vec<Discussion> = self.comments_in(Some(section)).into_iter().cloned().collect();
+                    let point = self.point.clone();
+                    for discussion in &here {
+                        render_thread(ui, discussion, point.as_ref(), section, &mut item, &mut self.markdown);
                     }
                 });
             }
@@ -887,7 +918,7 @@ impl SpecState {
     /// the composer when writing a comment, reply or reason to reopen.
     fn render_composer(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, typing: bool) {
         self.typing = None;
-        let Some(composer) = self.composer.as_mut() else { return };
+        let Some(composer) = self.composer.as_ref() else { return };
         let what = match (&composer.purpose, &composer.anchor) {
             (Compose::New(kind), Some(Subject::PlanRelation { relation, source, target, .. })) => {
                 let name = |id: &ComponentId| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned();
@@ -900,20 +931,17 @@ impl SpecState {
             (Compose::Reopen(id), _) => format!("Why reopen {id}?"),
         };
         ui.label(RichText::new(what).size(crate::theme::look().text_body).color(colors().muted));
-        let inserting = typing;
-        let keys = crate::keymap::local();
-        let output = ui.add(keys.text_box(&mut composer.text).id(egui::Id::new(("spec_composer", cx.at))).desired_rows(2).desired_width(f32::INFINITY).hint_text("Write it here…"));
-        if inserting {
-            output.request_focus();
-        }
-        if output.clicked() || output.gained_focus() {
+        let typed = self.writing.draw(ui, egui::Id::new(("spec_composer", cx.at)), 2, "Write it here… (# names a tag)", typing);
+        if typed.clicked {
             *cx.input_mode = crate::keymap::InputMode::Insert { at: cx.at };
         }
-        self.typing = inserting.then_some(output.rect);
-        if inserting && output.has_focus() && ui.input(|i| crate::keymap::local().input.sent(i).is_some()) {
+        if typed.names_tag {
+            self.asks.push(Ask::NameTag);
+        }
+        self.typing = typing.then_some(typed.rect);
+        if typed.sent.is_some() {
             self.send_composer(cx.net, cx.ctx);
             *cx.input_mode = crate::keymap::InputMode::Normal;
-            output.surrender_focus();
         }
     }
 
@@ -929,50 +957,19 @@ impl SpecState {
 /// Draws one cursor stop (`Entry`), its contents drawn by the closure given.
 type ItemDrawer<'a> = dyn FnMut(&mut egui::Ui, Entry, &mut dyn FnMut(&mut egui::Ui)) -> egui::Response + 'a;
 
-/// Who said something, in words ("you", or the agent's slot).
-fn said_by(by: &str) -> &str {
-    if by == "user" { "you" } else { by }
-}
-
-/// One discussion's thread: what it asks and what's said after are cursor
-/// stops; an answer says what it changed.
-fn render_thread(ui: &mut egui::Ui, c: &Discussion, point: Option<&DiscussionId>, section: Section, item: &mut ItemDrawer) {
-    let (label, color) = match c.status {
-        DiscussionStatus::Open => ("OPEN", colors().warn),
-        DiscussionStatus::Answered => ("ANSWERED", colors().info),
-        DiscussionStatus::Settled => ("SETTLED", colors().ok),
-    };
+/// One discussion's thread, as every conversation draws one: what it asks
+/// and what's said after are cursor stops.
+fn render_thread(ui: &mut egui::Ui, c: &Discussion, point: Option<&DiscussionId>, section: Section, item: &mut ItemDrawer, markdown: &mut egui_commonmark::CommonMarkCache) {
     let stroke = if point == Some(&c.id) { colors().focus } else { colors().border };
     egui::Frame::NONE.fill(colors().surface).stroke(egui::Stroke::new(crate::theme::look().line_thin, stroke)).corner_radius(crate::theme::look().radius_m).inner_margin(crate::theme::margin(crate::theme::look().space_sm)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        item(ui, Entry { section, item: SpecItem::Comment(c.id.clone()) }, &mut |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(label).size(crate::theme::look().text_small).strong().color(color));
-                if c.kind == DiscussionKind::ChangeRequest {
-                    ui.label(RichText::new("change request").size(crate::theme::look().text_small).color(colors().special));
+        for (i, said) in c.said.iter().enumerate() {
+            let stop = if i == 0 { SpecItem::Comment(c.id.clone()) } else { SpecItem::Reply(c.id.clone(), i - 1) };
+            item(ui, Entry { section, item: stop }, &mut |ui| {
+                if i == 0 {
+                    crate::conversation::heading(ui, c);
                 }
-                ui.label(RichText::new(format!("{} · {}", c.id, said_by(&c.by))).size(crate::theme::look().text_small).color(colors().muted));
-            });
-            ui.label(c.asking());
-        });
-        for (i, said) in c.said.iter().enumerate().skip(1) {
-            item(ui, Entry { section, item: SpecItem::Reply(c.id.clone(), i - 1) }, &mut |ui| match said.kind {
-                SaidKind::Answer => {
-                    ui.label(RichText::new(format!("{} {}: {}", egui_phosphor::regular::ARROW_ELBOW_DOWN_RIGHT, said_by(&said.by), said.text)).size(crate::theme::look().text_body).color(colors().info));
-                    for changed in &said.changed {
-                        ui.label(RichText::new(format!("   changed {}", changed.what)).size(crate::theme::look().text_small).monospace().color(colors().muted));
-                    }
-                }
-                SaidKind::Settled => {
-                    let with = if said.text.is_empty() { String::new() } else { format!(": {}", said.text) };
-                    ui.label(RichText::new(format!("{} settled it{with}", said_by(&said.by))).size(crate::theme::look().text_body).color(colors().ok));
-                }
-                SaidKind::Reopened => {
-                    ui.label(RichText::new(format!("{} reopened it: {}", said_by(&said.by), said.text)).size(crate::theme::look().text_body).color(colors().warn));
-                }
-                SaidKind::Message => {
-                    ui.label(RichText::new(format!("{}: {}", said_by(&said.by), said.text)).size(crate::theme::look().text_body).color(colors().text));
-                }
+                crate::conversation::message(ui, markdown, &crate::conversation::said(said));
             });
         }
     });
@@ -1220,6 +1217,15 @@ impl Navigable for SpecState {
         std::mem::take(&mut self.asks)
     }
 
+    /// Its typing box, while it's open (a tag's name put in it).
+    fn takes_typed(&self) -> bool {
+        self.composer.is_some()
+    }
+
+    fn typed_in(&mut self, text: &str) {
+        self.writing.put(text);
+    }
+
     /// The types, the user, the review, the source (unless pinned), and
     /// whether its code changed since it was read.
     fn share(&mut self, shared: &crate::shared::Shared) {
@@ -1232,6 +1238,12 @@ impl Navigable for SpecState {
         if let Some(review) = shared.review_since(&mut self.seen.review) {
             self.discussions.clone_from(&review.discussions);
             self.diff.clone_from(&review.diff);
+            if let Some(card) = self.item.as_mut() {
+                card.read = match &review.plan {
+                    Some(plan) if *plan == card.plan => review.read.clone(),
+                    _ => Some(Err("it isn't the plan shown now: show it in the graph (its source) to read its items".to_owned())),
+                };
+            }
         }
         self.follow_source(shared.source.get());
         let desk = (shared.changes.comparison(), shared.changes.read(), shared.settings.get().changes.context);
@@ -1587,18 +1599,8 @@ impl crate::buffer::Buffer for SpecState {
                     self.asks.push(Ask::Refresh(crate::nav::Refresh::Review));
                 }
                 Reply::Posted(Err(e)) => self.note = Some(e),
-                Reply::Plan(plan, read) => {
-                    if let Some(card) = self.item.as_mut().filter(|c| c.plan == plan) {
-                        card.read = Some((*read).map_err(|e| e.message));
-                    }
-                }
                 _ => {}
             }
-        }
-        if let Some(card) = self.item.as_mut().filter(|c| !c.asked) {
-            card.asked = true;
-            let (inbox, plan) = (self.inbox.clone(), card.plan.clone());
-            net.arch_plan(&card.plan, ctx.clone(), move |r| push(&inbox, Reply::Plan(plan, Box::new(r))));
         }
         let Some(target) = self.target.clone() else {
             self.detail = None;
@@ -1624,22 +1626,17 @@ impl crate::buffer::Buffer for SpecState {
         self.follow_changes(net, ctx);
     }
 
-    /// Changed code or plans: its component read again (an item's card:
-    /// when its plan changed).
+    /// Changed code or plans: its component read again (an item's card
+    /// has the desk's plan, read again).
     fn on_event(&mut self, event: &arch_graph::ArchEvent) {
-        let arch_graph::ArchEvent::Changed { plans, .. } = event else { return };
-        match self.item.as_mut() {
-            Some(card) => card.asked &= !plans.contains(&card.plan),
-            None => crate::buffer::Buffer::invalidate(self),
+        if matches!(event, arch_graph::ArchEvent::Changed { .. }) {
+            crate::buffer::Buffer::invalidate(self);
         }
     }
 
     /// The architecture changed: load again.
     fn invalidate(&mut self) {
         self.loaded = None;
-        if let Some(card) = self.item.as_mut() {
-            card.asked = false;
-        }
     }
 
 
@@ -1832,7 +1829,7 @@ pub(crate) mod tests {
         s.detail = Some(detail(&id, &other));
         s.loaded = Some((id.clone(), s.source.clone()));
         let mut answered = discussion(1, on(&id, Some("logic")), DiscussionStatus::Answered);
-        answered.said.push(harness_contracts::Said { by: "user".into(), at_ms: 2, kind: SaidKind::Message, text: "and?".into(), changed: Vec::new() });
+        answered.said.push(harness_contracts::Said { by: "user".into(), at_ms: 2, kind: harness_contracts::SaidKind::Message, text: "and?".into(), changed: Vec::new() });
         s.discussions = vec![answered];
         let keys: Vec<String> = s.entries().iter().map(Entry::key).collect();
         let at = |k: &str| keys.iter().position(|x| x == k).unwrap_or_else(|| panic!("{k} in {keys:?}"));
@@ -1972,7 +1969,7 @@ pub(crate) mod tests {
         assert_eq!(s.take_asks(), [Ask::Type]);
         assert_eq!(
             s.composer,
-            Some(Composer { purpose: Compose::New(DiscussionKind::ChangeRequest), anchor: Some(on(&id, Some("logic"))), section: Section::Logic, text: String::new() })
+            Some(Composer { purpose: Compose::New(DiscussionKind::ChangeRequest), anchor: Some(on(&id, Some("logic"))), section: Section::Logic })
         );
         // It all renders: markers, threads with their buttons, the composer.
         s.loaded = Some((id.clone(), s.source.clone()));
@@ -1981,7 +1978,7 @@ pub(crate) mod tests {
             frame(&mut s, &ctx, &mut mode, 1);
         }
         assert!(s.composer.is_some(), "an empty composer isn't sent");
-        s.composer.as_mut().unwrap().text = "Steps 2 and 3 are one step.".into();
+        s.writing.text = "Steps 2 and 3 are one step.".into();
         s.send_composer(&net, &ctx);
         assert!(s.composer.is_none(), "sent");
     }

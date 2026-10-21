@@ -8,6 +8,12 @@ pub(crate) fn text_input_focused(ctx: &egui::Context) -> bool {
     ctx.memory(|m| m.focused()).is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some())
 }
 
+/// A key ran a command: what it typed isn't typed anywhere else this pass
+/// too (a typing box the command opens has the keys from the next on).
+fn typed_away(ctx: &egui::Context) {
+    ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
+}
+
 /// The palette's field (or whatever had the keyboard) lets go of it.
 pub(super) fn release_keyboard(ctx: &egui::Context) {
     if let Some(id) = ctx.memory(|m| m.focused()) {
@@ -29,6 +35,7 @@ impl CockpitApp {
                 self.leader_path.clear();
                 self.input_mode = InputMode::Normal;
                 self.run_bound(&bound[index], None, ctx);
+                typed_away(ctx);
                 true
             }
             None => false,
@@ -182,6 +189,7 @@ impl CockpitApp {
                         let count = self.pending_count.take();
                         let b = bound[index].clone();
                         self.run_bound(&b, count, ctx);
+                        typed_away(ctx);
                     }
                     SeqMatch::Pending(chord) => {
                         if self.pending_keys.is_empty() {

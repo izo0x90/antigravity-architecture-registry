@@ -36,13 +36,9 @@ pub fn thing_name(what: &str) -> String {
     if what.is_empty() { "something this server can't show".into() } else { what.to_owned() }
 }
 
-/// Who tagged a thing, in words ("tagged by you").
+/// Who tagged a thing, in words ("tagged by you"), as every place says who.
 pub fn tagged_by(tagged: &harness_contracts::Tagged) -> String {
-    match tagged.by.as_str() {
-        "user" => "tagged by you".into(),
-        "" => "tagged".into(),
-        agent => format!("tagged by {agent}"),
-    }
+    if tagged.by.is_empty() { "tagged".into() } else { format!("tagged by {}", crate::conversation::who(&tagged.by)) }
 }
 
 /// A text's first line, cut short (what a list shows of what a thing said).

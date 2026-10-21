@@ -68,7 +68,8 @@ pub struct ChatStreamState {
 pub struct ChatView {
     /// The slot it shows: the lead, unless another was picked.
     pub slot: SlotId,
-    pub input_buffer: String,
+    /// What's typed to the agent.
+    pub input: crate::conversation::TypingBox,
     pub markdown_cache: CommonMarkCache,
     /// The message the cursor is on (normal mode); None follows the latest.
     pub cursor: Option<usize>,
@@ -82,15 +83,13 @@ pub struct ChatView {
     pub(crate) drawing: Vec<Spot>,
     /// Where its typing box is, while it's typed in.
     pub(crate) typing: Option<Rect>,
-    /// Text was put in its box (not typed): the caret goes after it.
-    pub(crate) caret_to_end: bool,
 }
 
 impl Default for ChatView {
     fn default() -> Self {
         Self {
             slot: SlotId::new(LEAD),
-            input_buffer: String::new(),
+            input: Default::default(),
             markdown_cache: CommonMarkCache::default(),
             cursor: None,
             link_pick: None,
@@ -98,7 +97,6 @@ impl Default for ChatView {
             spots: Vec::new(),
             drawing: Vec::new(),
             typing: None,
-            caret_to_end: false,
         }
     }
 }

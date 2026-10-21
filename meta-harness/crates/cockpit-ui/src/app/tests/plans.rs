@@ -24,6 +24,17 @@ fn a_plans_items_show_nested_in_the_plan_tree_open_as_cards_and_take_their_state
     assert_eq!(rows(&app), ["item:i1", "item:i2", "item:i3"], "in order");
     let depths = |app: &CockpitApp| app.desk.all_of::<crate::tree::TreeBuffer>(BufferKind::Plan)[0].rows().into_iter().map(|r| (r.id, r.depth)).collect::<Vec<_>>();
     assert_eq!(depths(&app), [("item:i1".to_owned(), 0), ("item:i2".to_owned(), 1), ("item:i3".to_owned(), 0)], "nested: FFF skipped under Decide");
+    // A discussion on an item: a row under it, and the item says whose move it is.
+    let on_i2 = harness_contracts::Subject::PlanItem { plan: PlanId::new("p").unwrap(), item: "i2".into() };
+    told(&app, harness_contracts::ClientEvent::DiscussionUpdated { discussion: crate::review::tests::discussion(1, on_i2, harness_contracts::DiscussionStatus::Open) });
+    for _ in 0..3 {
+        frame(&ctx, &mut app, vec![]);
+    }
+    assert_eq!(depths(&app)[2], ("discussion:d1".to_owned(), 2), "under FFF skipped: {:?}", depths(&app));
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("decided · 1 on lead") && drawn.contains("d1 question: point 1"), "{drawn}");
+    let things = app.desk.view(BufferKind::Plan).things("discussion:d1");
+    assert_eq!(things.at.iter().map(|t| t.words.clone()).collect::<Vec<_>>(), ["discussion d1", "plan p item i2", "plan p"], "the discussion, what it's on, the plan");
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
     for words in ["Decide", "FFF skipped", "decided", "Open", "open"] {
         assert!(drawn.contains(words), "{words}: {drawn}");
@@ -33,10 +44,11 @@ fn a_plans_items_show_nested_in_the_plan_tree_open_as_cards_and_take_their_state
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.focused_kind(), BufferKind::Spec);
-    assert!(app.desk.net.answer("GET /api/arch/plans/p", 200, &review()));
+    assert!(!app.desk.net.answer("GET /api/arch/plans/p", 200, &review()), "the card has the plan the desk read: not read again");
     frame(&ctx, &mut app, vec![]);
     let drawn = texts(&frame(&ctx, &mut app, vec![]));
     assert!(drawn.contains("What FFF skipped is about.") && drawn.contains("Under i1 Decide"), "{drawn}");
+    assert!(drawn.contains("OPEN") && drawn.contains("point 1") && drawn.contains("d1 · asks lead"), "its discussions, as every conversation draws them: {drawn}");
     // A component's card's controls don't come with it.
     let offered: Vec<String> = app.bound_actions().into_iter().filter(|b| b.action.when.holds(&app.situation())).map(|b| b.action.id).collect();
     assert!(!offered.iter().any(|id| id.starts_with("spec.") && id != "spec.pin"), "{offered:?}");

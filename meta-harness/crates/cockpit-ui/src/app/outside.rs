@@ -55,7 +55,7 @@ impl CockpitApp {
                     Param::None => ("nothing", Vec::new()),
                     Param::Choice(_) => ("a choice", b.action.param.choices()),
                     Param::Toggle { .. } => ("on or off", b.action.param.choices()),
-                    Param::Text { .. } => ("text", Vec::new()),
+                    Param::Text { .. } | Param::Writing { .. } => ("text", Vec::new()),
                     Param::Search { .. } => ("a search", Vec::new()),
                 };
                 serde_json::json!({
@@ -82,7 +82,7 @@ impl CockpitApp {
         }
         let value = match (&bound.action.param, value) {
             (Param::None, _) => None,
-            (Param::Text { .. } | Param::Search { .. }, Some(v)) => Some(v),
+            (Param::Text { .. } | Param::Writing { .. } | Param::Search { .. }, Some(v)) => Some(v),
             (param @ (Param::Choice(_) | Param::Toggle { .. }), Some(v)) => {
                 let choices = param.choices();
                 let wanted = match v.as_str() {

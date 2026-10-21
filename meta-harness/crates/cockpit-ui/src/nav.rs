@@ -77,6 +77,9 @@ pub enum Ask {
     Reread(String),
     /// A typing box opened in it: the keyboard goes there.
     Type,
+    /// A `#` typed where a word starts in its typing box: the tag picker,
+    /// for the name to follow it (put back with `Navigable::typed_in`).
+    NameTag,
     /// Something shared changed where it's kept: read it again.
     Refresh(Refresh),
     /// The desk compares this from now on (what the changes show).

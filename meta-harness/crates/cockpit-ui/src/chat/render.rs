@@ -202,20 +202,13 @@ impl ChatStreamState {
 
     pub(super) fn render_item(&mut self, ui: &mut egui::Ui, view: &ThreadView, item: &TurnItem, index: usize) {
         match &item.body {
-            ItemBody::UserMessage { text } => {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(">").monospace().size(crate::theme::look().text_heading).strong().color(colors().accent));
-                    ui.label(RichText::new(text).size(crate::theme::look().text_title).strong().color(colors().text_strong));
-                });
-            }
+            // Your messages and the agent's: as every conversation draws them.
+            ItemBody::UserMessage { text } => crate::conversation::message(ui, &mut self.ui.markdown_cache, &crate::conversation::Message::new("user", text)),
             ItemBody::AssistantMessage { content, .. } => {
-                let text: String = content.iter().filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None }).collect();
-                if !text.is_empty() {
-                    CommonMarkViewer::new().show(ui, &mut self.ui.markdown_cache, &text);
-                }
-                for block in content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })) {
-                    ui.label(RichText::new(block_summary(block)).monospace().size(crate::theme::look().text_small).color(colors().muted));
-                }
+                let text = item.body.said().unwrap_or_default();
+                let by = self.slot().map(|s| s.name.clone()).unwrap_or_else(|| "the agent".into());
+                let under = content.iter().filter(|b| !matches!(b, ContentBlock::Text { .. })).map(block_summary).collect();
+                crate::conversation::message(ui, &mut self.ui.markdown_cache, &crate::conversation::Message { markdown: true, under, ..crate::conversation::Message::new(&by, &text) });
             }
             ItemBody::Reasoning { text, streaming } => {
                 let label = if *streaming { format!("{} Thinking… ({} chars)", icon::BRAIN, text.len()) } else { format!("{} Reasoning ({} chars)", icon::BRAIN, text.len()) };
@@ -299,10 +292,8 @@ impl ChatStreamState {
         let input_mode = &mut *cx.input_mode;
 
         ui.horizontal(|ui| {
-            let text_w = ui.available_width();
             let inserting = typing;
             let steerable = self.steerable();
-            let keys = crate::keymap::local();
             let hint = if inserting && steerable {
                 "While it works: sending queues it next; adding puts it into what it's doing".to_owned()
             } else if inserting {
@@ -310,37 +301,19 @@ impl ChatStreamState {
             } else {
                 "Type a prompt…".to_owned()
             };
-            let before = self.ui.input_buffer.chars().count();
-            let output = ui.add(
-                keys.text_box(&mut self.ui.input_buffer)
-                    .id(egui::Id::new(("chat_persistent_input_text_edit", at)))
-                    .desired_rows(2)
-                    .desired_width(text_w)
-                    .hint_text(hint),
-            );
-            if inserting {
-                output.request_focus();
-            }
-            if output.clicked() || output.gained_focus() {
+            let typed = self.ui.input.draw(ui, egui::Id::new(("chat_persistent_input_text_edit", at)), 2, &hint, inserting);
+            if typed.clicked {
                 *input_mode = crate::keymap::InputMode::Insert { at };
             }
-            if std::mem::take(&mut self.ui.caret_to_end) {
-                crate::theme::caret_to_end(ui.ctx(), output.id, &self.ui.input_buffer);
-            }
-            // A `#` just typed where a word starts (as a prompt reads a tag's
-            // name): the tag picker, for the name to follow it.
-            let typed_hash = self.ui.input_buffer.chars().count() == before + 1 && self.ui.input_buffer.ends_with('#');
-            let starts_word = self.ui.input_buffer.chars().rev().nth(1).is_none_or(|c| c.is_whitespace() || "([{\"'".contains(c));
-            if output.changed() && typed_hash && starts_word {
-                self.pending_palette = Some("tag.insert".to_owned());
+            // A `#` where a word starts: the shell's tag picker, for the name.
+            if typed.names_tag {
+                self.asks.push(Ask::NameTag);
             }
             // Its Send (and Add) are actions, under it while it's typed in.
-            self.ui.typing = inserting.then_some(output.rect);
-            let sent = if inserting { ui.input(|i| keys.input.sent(i)) } else { None };
-            let (enter, add) = (sent.is_some(), sent == Some(crate::keymap::Sent::Add));
-            if enter && !self.ui.input_buffer.trim().is_empty() {
-                let text = self.ui.input_buffer.trim().to_string();
-                self.ui.input_buffer.clear();
+            self.ui.typing = inserting.then_some(typed.rect);
+            let (enter, add) = (typed.sent.is_some(), typed.sent == Some(crate::keymap::Sent::Add));
+            if enter && !self.ui.input.text.trim().is_empty() {
+                let text = self.ui.input.take();
                 if add {
                     self.add_to_turn(text);
                 } else {

@@ -436,8 +436,7 @@ impl TreeBuffer {
         out.push(Move::Motion(Motion::PrevSibling).offer("Previous sibling row"));
         let id = self.cursor.as_ref();
         out.push(match id {
-            Some(id) if self.source.opens(id) == Some(crate::nav::GoTo::Spec) => Move::Enter.offer(format!("Open {}'s card", self.name(id))),
-            Some(id) if self.source.opens(id).is_some() => Move::Enter.offer(format!("Open {}", self.name(id))),
+            Some(id) if self.source.opens(id).is_some() => Move::Enter.offer(self.source.opens(id).map(|(_, said)| said).unwrap_or_default()),
             Some(id) if self.folded(id) => Move::Enter.offer(format!("Unfold {}", self.name(id))),
             Some(id) => match self.children.get(id).and_then(|k| k.first()) {
                 Some(first) => Move::Enter.offer(format!("Into {}", self.name(first))),
@@ -573,7 +572,7 @@ impl Navigable for TreeBuffer {
 
     /// The thing a row is, then what holds it, as its source says.
     fn things(&self, key: &str) -> crate::nav::Things {
-        let Some(subject) = self.source.target(key).and_then(|t| t.subject()) else { return crate::nav::Things::default() };
+        let Some(subject) = self.source.thing(key) else { return crate::nav::Things::default() };
         let mut at = vec![subject];
         at.extend(self.source.holders(key));
         let known = harness_contracts::Known::default();
@@ -654,7 +653,7 @@ impl Navigable for TreeBuffer {
     fn enter(&mut self) -> Step {
         let Some(id) = self.cursor.clone() else { return Step::Nothing(format!("The {} is empty.", self.source.title().to_lowercase())) };
         // What its source opens there (a plan's item: its card).
-        if let Some(to) = self.source.opens(&id) {
+        if let Some((to, _)) = self.source.opens(&id) {
             return Step::GoTo(to);
         }
         if self.unfold(&id) || self.go_in(&id) {

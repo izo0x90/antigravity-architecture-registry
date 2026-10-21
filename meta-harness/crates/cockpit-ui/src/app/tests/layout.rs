@@ -10,14 +10,14 @@ fn the_layout_comes_back_as_it_was_saved() {
     keys(&ctx, &mut app, "mc");
     app.desk.panels = panels_of(&[BufferKind::Tree, BufferKind::Graph, BufferKind::Chat, BufferKind::Code], 2);
     app.desk.graph_mut().select(Some("rust:a::step".into()));
-    app.desk.chat_mut().ui.input_buffer = "half a thought".into();
+    app.desk.chat_mut().ui.input.text = "half a thought".into();
     let saved = app.saved_ui();
     // Through the server (as JSON) into a cockpit that just opened.
     let json = serde_json::to_value(&saved).unwrap();
     let (_, mut fresh) = full_app();
     fresh.restore_saved(serde_json::from_value(json).unwrap());
     assert_eq!((fresh.desk.panels.kinds(), fresh.desk.panels.focused()), (saved.panels.kinds(), 2));
-    assert_eq!((fresh.desk.marks.clone(), fresh.desk.jumps.clone(), fresh.desk.chat().ui.input_buffer.as_str()), (saved.marks.clone(), saved.jumps.clone(), "half a thought"));
+    assert_eq!((fresh.desk.marks.clone(), fresh.desk.jumps.clone(), fresh.desk.chat().ui.input.text.as_str()), (saved.marks.clone(), saved.jumps.clone(), "half a thought"));
     let graph_place = |s: &SavedUi| s.views.iter().find(|(p, _)| p.kind == BufferKind::Graph).map(|(_, p)| p.clone());
     assert_eq!(fresh.desk.graph().place(), graph_place(&saved).unwrap(), "the graph where it was, the same card selected");
     let code = fresh.saved_ui().views.into_iter().find(|(p, _)| p.kind == BufferKind::Code).and_then(|(_, place)| place.read::<crate::code::CodePlace>());
@@ -163,20 +163,20 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     let (first, second) = (BufferId::new(BufferKind::Chat, 0), BufferId::new(BufferKind::Chat, 1));
     app.desk.panels = crate::panels::Panels::new(vec![first, second], 0);
     app.use_buffer(first);
-    app.desk.chat_mut().ui.input_buffer = "to the lead".into();
+    app.desk.chat_mut().ui.input.text = "to the lead".into();
     app.desk.panels.focus(1);
     app.use_buffer(second);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(app.desk.chat().ui.slot.as_str(), "lead", "a new chat view starts where the one before it was");
-    assert!(app.desk.chat().ui.input_buffer.is_empty(), "with its own prompt");
+    assert!(app.desk.chat().ui.input.text.is_empty(), "with its own prompt");
     app.desk.chat_mut().ui.slot = harness_contracts::SlotId::new("sub-1");
-    app.desk.chat_mut().ui.input_buffer = "to the reviewer".into();
+    app.desk.chat_mut().ui.input.text = "to the reviewer".into();
     assert_eq!(app.desk.chat().active_thread(), None, "the sub-slot runs no session");
     let ids: Vec<String> = app.desk.chat_mut().actions().into_iter().map(|a| a.id).collect();
     assert!(ids.contains(&"agent.close".to_owned()) && ids.contains(&"agent.pick".to_owned()), "{ids:?}");
     app.desk.panels.focus(0);
     frame(&ctx, &mut app, vec![]);
-    assert_eq!((app.desk.chat().ui.slot.as_str(), app.desk.chat().ui.input_buffer.as_str(), app.desk.chat().active_thread().map(|t| t.to_string())), ("lead", "to the lead", Some("t".into())));
+    assert_eq!((app.desk.chat().ui.slot.as_str(), app.desk.chat().ui.input.text.as_str(), app.desk.chat().active_thread().map(|t| t.to_string())), ("lead", "to the lead", Some("t".into())));
     assert!(!app.desk.chat().actions().iter().any(|a| a.id == "agent.close"), "the lead isn't closed");
     // Saved and opened again: each view on its slot, with its draft.
     let saved = serde_json::to_value(app.saved_ui()).unwrap();
@@ -184,7 +184,7 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     fresh.restore_saved(serde_json::from_value(saved).unwrap());
     let view = |app: &mut CockpitApp, buffer| {
         app.use_buffer(buffer);
-        (app.desk.chat_mut().ui.slot.to_string(), app.desk.chat_mut().ui.input_buffer.clone())
+        (app.desk.chat_mut().ui.slot.to_string(), app.desk.chat_mut().ui.input.text.clone())
     };
     assert_eq!(view(&mut fresh, second), ("sub-1".into(), "to the reviewer".into()));
     assert_eq!(view(&mut fresh, first), ("lead".into(), "to the lead".into()));
@@ -205,9 +205,9 @@ fn the_agent_is_talked_to_from_anywhere_without_moving_anything() {
     assert_eq!((app.quick_look.as_ref().map(|q| q.buffer), app.input_mode), (Some(chat), InputMode::Insert { at: Host::Look }), "t: the lead's chat in the quick look, typing");
     assert_eq!(app.desk.chat().ui.slot.as_str(), "lead");
     frame(&ctx, &mut app, key("what calls step?"));
-    assert_eq!(app.desk.chat().ui.input_buffer, "what calls step?", "typing goes into it, not to the keys");
+    assert_eq!(app.desk.chat().ui.input.text, "what calls step?", "typing goes into it, not to the keys");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
-    assert!(app.desk.chat().ui.input_buffer.is_empty(), "sent");
+    assert!(app.desk.chat().ui.input.text.is_empty(), "sent");
     assert!(matches!(app.desk.shared.agents.get().lead_status(), SessionStatus::Failed(e) if e.contains("No harness instance")), "it went to the lead (no harness here)");
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert_eq!((app.quick_look.is_some(), app.input_mode), (true, InputMode::Normal), "Escape stops typing");
@@ -233,11 +233,11 @@ fn typing_in_the_quick_look_stays_there_over_a_chat_or_a_spec() {
         frame(&ctx, &mut app, vec![]);
         frame(&ctx, &mut app, key("hello"));
         frame(&ctx, &mut app, vec![]);
-        let in_look = app.desk.chat().ui.input_buffer.clone();
+        let in_look = app.desk.chat().ui.input.text.clone();
         app.close_quick_look();
         let in_panel = match kind {
-            BufferKind::Chat => app.desk.chat().ui.input_buffer.clone(),
-            _ => app.desk.spec().composer.as_ref().map(|c| c.text.clone()).unwrap_or_default(),
+            BufferKind::Chat => app.desk.chat().ui.input.text.clone(),
+            _ => app.desk.spec().composer.as_ref().map(|_| app.desk.spec().writing.text.clone()).unwrap_or_default(),
         };
         assert_eq!((in_look.as_str(), in_panel.as_str()), ("hello", ""), "over a {kind:?}: typing goes into the quick look, not the panel under it");
     }

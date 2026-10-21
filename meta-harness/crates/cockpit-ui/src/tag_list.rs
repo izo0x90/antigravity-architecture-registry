@@ -189,7 +189,7 @@ impl TagList {
                             ui.label(RichText::new(&tag.name).strong().size(look.text_title).color(theme.text_strong));
                             ui.label(RichText::new(on_things(tag.on.len())).size(look.text_small).color(theme.muted));
                             if !tag.note.is_empty() {
-                                let by = if tag.noted_by.is_empty() { String::new() } else { format!(" ({})", who(&tag.noted_by)) };
+                                let by = if tag.noted_by.is_empty() { String::new() } else { format!(" ({})", crate::conversation::who(&tag.noted_by)) };
                                 ui.add(egui::Label::new(RichText::new(format!("{}{by}", first_line(&tag.note))).size(look.text_body).color(theme.text)).truncate());
                             }
                         })
@@ -213,7 +213,7 @@ impl TagList {
                                     ui.label(RichText::new(held.words()).size(look.text_small).color(theme.warn));
                                 }
                                 let when = crate::attention::age(on.at_ms, now);
-                                ui.label(RichText::new(if on.by.is_empty() { format!("tagged {when}") } else { format!("tagged by {} {when}", who(&on.by)) }).size(look.text_small).color(theme.faint));
+                                ui.label(RichText::new(if on.by.is_empty() { format!("tagged {when}") } else { format!("tagged by {} {when}", crate::conversation::who(&on.by)) }).size(look.text_small).color(theme.faint));
                             });
                         })
                         .response
@@ -237,11 +237,6 @@ impl TagList {
         }
         self.spots = drawn;
     }
-}
-
-/// Who changed something, to the user: you, or an agent's slot.
-fn who(by: &str) -> &str {
-    if by == "user" { "you" } else { by }
 }
 
 impl crate::buffer::Buffer for TagList {

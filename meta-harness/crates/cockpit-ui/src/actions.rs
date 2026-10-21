@@ -26,6 +26,9 @@ pub enum Param {
     /// Free text (opens ready for typing or dictation), starting as
     /// `start` (what's there now, to edit).
     Text { hint: String, start: String },
+    /// Writing of any length, in the typing box every conversation has
+    /// (many lines: Enter sends, as the keymap says), starting as `start`.
+    Writing { hint: String, start: String },
     /// Typed text looked up as it's typed: the provider gets each query
     /// (`ActionProvider::search`) and lists what it found for it here.
     Search { hint: String, found: Vec<Choice>, waiting: bool },
@@ -38,7 +41,7 @@ impl Param {
             Self::Choice(choices) => choices.clone(),
             Self::Toggle { on } => vec![Choice::new("true", "On").current(*on), Choice::new("false", "Off").current(!*on)],
             Self::Search { found, .. } => found.clone(),
-            Self::None | Self::Text { .. } => Vec::new(),
+            Self::None | Self::Text { .. } | Self::Writing { .. } => Vec::new(),
         }
     }
 }
