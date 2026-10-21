@@ -496,14 +496,14 @@ all of them:
     of its things), through the jump list; `] t`/`[ t` step through the
     rest of a tag's things from one of them.
   - **Editing them**, from any view, the tags on what the cursor's on
-    (several: which first): rename (`Space k r`), colour (`Space k c`),
-    note (`Space k n`, the field starting with the note there is), clear
-    the note (`Space k x`), take off (`Space k o`). The Tags buffer
+    (several: which first): rename (`Space t r`), colour (`Space t c`),
+    note (`Space t n`, the field starting with the note there is), clear
+    the note (`Space t x`), take off (`Space t o`). The Tags buffer
     (`Space b T`) lists every tag folded to a line (a solid tag, its name,
     how many things, its note; `z` keys unfold, Enter too); unfolded, its
     things (each one's name, the start of what it says, where it went,
     who tagged it and when). Its rows carry the same edits as buttons,
-    and delete (`Space k d`); Enter on a thing goes to it. Search finds
+    and delete (`Space t d`); Enter on a thing goes to it. Search finds
     things under folded tags.
   - **In a prompt**, `#name` hands the agent what that tag is on, as it is
     now, after your message (the chat shows what it got); typing `#` where
