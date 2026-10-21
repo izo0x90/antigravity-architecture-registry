@@ -330,19 +330,12 @@ impl CockpitApp {
         for (n, (mark, said, ids)) in bubbles.into_iter().enumerate() {
             let response = ui.interact(within(mark.expand(reach)), ui.id().with(("discussion_mark", here.kind, n)), egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
             if response.clicked() {
-                // One: it opens; several: which, first.
-                match ids.as_slice() {
-                    [one] => {
-                        let jump = self.jump_here();
-                        self.land(None, &Target::Discussion(one.clone()), jump, ui.ctx());
-                    }
-                    _ => {
-                        // (The actions now offered are made again: it's one of them.)
-                        self.desk.discussions_here = ids;
-                        self.frame_actions.borrow_mut().take();
-                        self.run_by_id("discuss.open", None, ui.ctx());
-                    }
-                }
+                // As its action (one: it opens; several: which, first).
+                // (The actions now offered are made again: they're of the mark.)
+                let one = (ids.len() == 1).then(|| ids[0].to_string());
+                self.desk.discussions_here = ids;
+                self.frame_actions.borrow_mut().take();
+                self.run_by_id("discuss.open", one, ui.ctx());
             } else if response.hovered() {
                 response.on_hover_text(said.clone());
             }

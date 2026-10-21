@@ -87,7 +87,8 @@ impl ChatStreamState {
 
     /// Where a subject is drawn: all of its items that show.
     pub(super) fn tag_drawn_at(&self, subject: &Subject) -> Option<egui::Rect> {
+        // (In order: each spot, its item's number looked up, not written out.)
         let indexes = self.tagged_indexes(subject);
-        self.ui.spots.iter().filter(|s| indexes.iter().any(|i| s.key == i.to_string())).map(|s| s.rect).reduce(|a, b| a.union(b))
+        self.ui.spots.iter().filter(|s| s.key.parse::<usize>().is_ok_and(|i| indexes.binary_search(&i).is_ok())).map(|s| s.rect).reduce(|a, b| a.union(b))
     }
 }

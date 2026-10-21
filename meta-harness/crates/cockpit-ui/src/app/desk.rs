@@ -13,6 +13,9 @@ pub struct Discussing {
     pub words: String,
     pub kind: harness_contracts::DiscussionKind,
     pub asked: Option<String>,
+    /// What it says, once written (kept until the server has it: not
+    /// started, it's written again from there).
+    pub text: String,
 }
 
 pub struct Desk {
@@ -74,6 +77,8 @@ pub struct Desk {
     /// The discussions on a mark tapped that has several: which opens is
     /// asked.
     pub discussions_here: Vec<harness_contracts::DiscussionId>,
+    /// A discussion being started, sent: kept until the server answers.
+    pub sending: Option<Discussing>,
     /// Discussions started from here, as the server answered (each opens).
     pub started: Arc<Mutex<Vec<NetResult<harness_contracts::Discussion>>>>,
     pub at_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
@@ -113,6 +118,7 @@ impl Desk {
             tag_stepping: None,
             tag_level: None,
             discussing: None,
+            sending: None,
             discussions_here: Vec::new(),
             started: Arc::default(),
             at_inbox: Arc::default(),

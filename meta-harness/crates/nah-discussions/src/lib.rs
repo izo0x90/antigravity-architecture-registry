@@ -29,7 +29,7 @@ use nah_things::{Logs, Notes, Things};
 use serde::{Deserialize, Serialize};
 
 /// Who the user is in a discussion (the rest are agents' slots).
-pub const USER: &str = "user";
+pub use harness_contracts::USER;
 
 /// The agent slot a discussion asks unless another is named.
 pub use harness_contracts::LEAD;
@@ -77,6 +77,9 @@ pub struct Stored {
     #[serde(default)]
     pub status: DiscussionStatus,
     pub said: Vec<StoredSaid>,
+    /// The agents in it by name (`Discussion::names`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub names: BTreeMap<String, String>,
     /// Where it was brought in from (`Discussions::bring`: a plan's
     /// comment), so it's never brought in twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,7 +155,13 @@ pub struct Discussions {
     held: Mutex<BTreeMap<DiscussionId, Held>>,
     /// Some kept can't be read by this build.
     unreadable: bool,
+    /// An agent slot's name, by its id (set at start: the slots'), kept
+    /// with what it says.
+    namer: std::sync::OnceLock<Namer>,
 }
+
+/// A slot's name by its id (none: no such slot now).
+pub type Namer = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -176,6 +185,9 @@ fn text(raw: &str, what: &str) -> Result<String, DiscussionError> {
 fn asks_change(id: &DiscussionId, d: &Discussion, at: DiscussionStatus) -> Result<(), DiscussionError> {
     if d.kind == DiscussionKind::ChangeRequest {
         return Err(DiscussionError::Invalid(format!("{id} asks for a change already")));
+    }
+    if d.asked == USER {
+        return Err(DiscussionError::Invalid(format!("{id} asks you: a change request asks an agent slot")));
     }
     match d.status {
         DiscussionStatus::Settled => Err(DiscussionError::Invalid(format!("{id} is settled: reopen it first"))),
@@ -233,6 +245,22 @@ impl Notes for Discussions {
 }
 
 impl Discussions {
+    /// Agents in a discussion are named by `namer` from now on.
+    pub fn name_with(&self, namer: Namer) {
+        let _ = self.namer.set(namer);
+    }
+
+    /// `names` with the agents among `who` named as they are now.
+    fn names(&self, who: &[&str], names: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+        let mut out = names.clone();
+        for by in who.iter().filter(|b| **b != USER) {
+            if let Some(name) = self.namer.get().and_then(|n| n(by)) {
+                out.insert((*by).to_owned(), name);
+            }
+        }
+        out
+    }
+
     /// The discussions kept, told on `hub` (for clients that come later),
     /// on the things `things` names and keeps; their messages' text in
     /// `said` (a folder of its own).
@@ -245,7 +273,7 @@ impl Discussions {
             hub.publish(ClientEvent::DiscussionUpdated { discussion: discussion.clone() });
             held.insert(stored.id.clone(), Held { discussion, stored });
         }
-        let discussions = Arc::new(Self { store, hub, things: things.clone(), said, held: Mutex::new(held), unreadable });
+        let discussions = Arc::new(Self { store, hub, things: things.clone(), said, held: Mutex::new(held), unreadable, namer: std::sync::OnceLock::new() });
         let notes: Weak<dyn Notes> = Arc::downgrade(&discussions) as Weak<dyn Notes>;
         things.noting(notes);
         discussions.refresh();
@@ -273,7 +301,7 @@ impl Discussions {
                 changed: s.changed.clone(),
             })
             .collect();
-        Discussion { id: stored.id.clone(), on: stored.on.clone(), kept: stored.kept.clone(), kind: stored.kind, by: stored.by.clone(), asked: stored.asked.clone(), status: stored.status, said }
+        Discussion { id: stored.id.clone(), on: stored.on.clone(), kept: stored.kept.clone(), kind: stored.kind, by: stored.by.clone(), asked: stored.asked.clone(), status: stored.status, said, names: stored.names.clone() }
     }
 
     /// Every discussion, oldest first.
@@ -339,6 +367,10 @@ impl Discussions {
     pub fn start(&self, subject: &Subject, kind: DiscussionKind, body: &str, by: &str, asked: Option<&str>) -> Result<Discussion, DiscussionError> {
         let body = text(body, "a discussion")?;
         let asked = asked.map(str::trim).filter(|a| !a.is_empty()).unwrap_or(LEAD).to_owned();
+        // A change request's answer names what changed: an agent slot's.
+        if asked == USER && kind == DiscussionKind::ChangeRequest {
+            return Err(DiscussionError::Invalid("a change request asks an agent slot (its answer names what it changed): ask the user a question".into()));
+        }
         // Noted first: no number is given to a start that fails on its thing
         // (what the logs keep of it says it's a discussion's, not which).
         let noted = self.things.note(subject, &|what| format!("a discussion · {what} · started by {by} · {}", now_words())).map_err(DiscussionError::Subject)?;
@@ -358,8 +390,8 @@ impl Discussions {
             }
         };
         let at_ms = now_ms();
-        let discussion = Discussion { id: id.clone(), on: on.clone(), kept: noted.kept.clone(), kind, by: by.to_owned(), asked: asked.clone(), status: DiscussionStatus::Open, said: vec![Said { by: by.to_owned(), at_ms, kind: SaidKind::Message, text: body, changed: Vec::new() }] };
-        let stored = Stored { id: id.clone(), on, kept: noted.kept.clone(), kind, by: by.to_owned(), asked, status: DiscussionStatus::Open, said: vec![StoredSaid { by: by.to_owned(), at_ms, kind: SaidKind::Message, text: written.clone(), changed: Vec::new() }], from: None };
+        let discussion = Discussion { id: id.clone(), on: on.clone(), kept: noted.kept.clone(), kind, by: by.to_owned(), asked: asked.clone(), status: DiscussionStatus::Open, said: vec![Said { by: by.to_owned(), at_ms, kind: SaidKind::Message, text: body, changed: Vec::new() }], names: self.names(&[by, &asked], &BTreeMap::new()) };
+        let stored = Stored { id: id.clone(), on, kept: noted.kept.clone(), kind, by: by.to_owned(), asked, status: DiscussionStatus::Open, said: vec![StoredSaid { by: by.to_owned(), at_ms, kind: SaidKind::Message, text: written.clone(), changed: Vec::new() }], names: discussion.names.clone(), from: None };
         let mut held = lock(&self.held);
         let done = self.keep(&mut held, discussion, stored, &Change { by: by.to_owned(), action: "started", detail: format!("{} on {}", kind.words(), noted.what) });
         drop(held);
@@ -411,6 +443,8 @@ impl Discussions {
             discussion.kind = kind;
             stored.kind = kind;
         }
+        discussion.names = self.names(&[&by], &discussion.names);
+        stored.names = discussion.names.clone();
         let done = self.keep(&mut held, discussion, stored, &Change { by, action, detail: format!("{id} on {what}") });
         if done.is_err() {
             self.said.remove(&written.file);
@@ -450,7 +484,11 @@ impl Discussions {
             if d.status == DiscussionStatus::Settled {
                 return Err(DiscussionError::Invalid(format!("{id} is settled")));
             }
-            if d.kind == DiscussionKind::ChangeRequest && !names.iter().any(|n| n.subject.touches(&d.on.subject)) {
+            // What changed is what it's on, in it, or (a plan's parts) about
+            // its component; the whole plan, only for one on the plan (any
+            // edit to it would do).
+            let made = |n: &Named| n.subject.touches(&d.on.subject) && (!matches!(n.subject, Subject::Plan { .. }) || n.subject.same_thing(&d.on.subject));
+            if d.kind == DiscussionKind::ChangeRequest && !names.iter().any(made) {
                 return Err(DiscussionError::Invalid(format!("{id} asks for a change to {}: name what you changed there (`changed`)", d.on.what)));
             }
             Ok(())
@@ -527,7 +565,7 @@ impl Discussions {
             };
             let what = self.things.name(&b.on).unwrap_or_else(|| b.on.name(&harness_contracts::Known::default()));
             let on = Named { subject: b.on, what };
-            let mut stored = Stored { id: id.clone(), on: on.clone(), kept: None, kind: b.kind, by: b.by.clone(), asked: b.asked.clone(), status: b.status, said: Vec::new(), from: Some(b.from.clone()) };
+            let mut stored = Stored { id: id.clone(), on: on.clone(), kept: None, kind: b.kind, by: b.by.clone(), asked: b.asked.clone(), status: b.status, said: Vec::new(), names: BTreeMap::new(), from: Some(b.from.clone()) };
             for said in &b.said {
                 let when = harness_contracts::when::written(said.at_ms);
                 match self.write_at(&id, &on.what, &said.by, said.kind, &said.text, &when) {
@@ -541,7 +579,7 @@ impl Discussions {
                     }
                 }
             }
-            let discussion = Discussion { id, on, kept: None, kind: b.kind, by: b.by, asked: b.asked, status: b.status, said: b.said };
+            let discussion = Discussion { id, on, kept: None, kind: b.kind, by: b.by, asked: b.asked, status: b.status, said: b.said, names: BTreeMap::new() };
             made.push((discussion, stored));
         }
         let mut held = lock(&self.held);
@@ -775,6 +813,8 @@ mod tests {
         parts.changed.lock().unwrap().push("b".into());
         let elsewhere = d.answer(&q.id, "done", &["plan p component b".into()], "lead").unwrap_err().to_string();
         assert!(elsewhere.contains("name what you changed"), "a change elsewhere doesn't answer it: {elsewhere}");
+        let whole = d.answer(&q.id, "done", &["plan p".into()], "lead").unwrap_err().to_string();
+        assert!(whole.contains("name what you changed"), "the plan holding it isn't what changed: {whole}");
         let unchanged = d.answer(&q.id, "done", &["plan p component a section logic".into()], "lead").unwrap_err().to_string();
         assert!(unchanged.contains("hasn't changed"), "{unchanged}");
         parts.changed.lock().unwrap().push("a".into());

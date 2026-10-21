@@ -9,7 +9,7 @@
 use std::collections::VecDeque;
 
 use arch_graph::{Plan, PlanId};
-use harness_contracts::{Discussion, DiscussionId, DiscussionStatus, Move, Subject};
+use harness_contracts::{Discussion, DiscussionId, DiscussionStatus, Subject};
 
 use super::source::{RowData, Rows, TreeSource};
 use crate::nav::{PlanPart, Target};
@@ -36,11 +36,7 @@ fn titled(section: &str) -> String {
 
 /// Whose move it is in a discussion, in a few words.
 fn whose(d: &Discussion) -> String {
-    match d.whose_move() {
-        Move::User => "waiting on you".to_owned(),
-        Move::Agent(slot) => format!("on {slot}"),
-        Move::Nobody => "settled".to_owned(),
-    }
+    crate::conversation::whose(d).0
 }
 
 /// The discussions not settled on a part, in a few words for its row
@@ -63,10 +59,13 @@ fn discussion_row(d: &Discussion, parent: Option<&str>) -> RowData {
 /// components and their sections; under each part, the discussions on it.
 pub(crate) fn rows_of(plan: &Plan, discussions: &[Discussion]) -> Rows {
     let on = |subject: &Subject| discussions.iter().filter(|d| d.on.subject == *subject).collect::<Vec<_>>();
-    let part = |rows: &mut Vec<RowData>, row: RowData, subject: Subject| {
+    // A part's row says what its discussions wait on (`also`: those of what
+    // hangs off it, listed after: a component's relations').
+    let part = |rows: &mut Vec<RowData>, row: RowData, subject: Subject, also: &[&Discussion]| {
         let here = on(&subject);
         let key = row.key.clone();
-        let kind = match (waiting(&here), row.kind.is_empty()) {
+        let counted: Vec<&Discussion> = here.iter().chain(also).copied().collect();
+        let kind = match (waiting(&counted), row.kind.is_empty()) {
             (Some(words), true) => words,
             (Some(words), false) => format!("{} · {words}", row.kind),
             (None, _) => row.kind,
@@ -77,17 +76,18 @@ pub(crate) fn rows_of(plan: &Plan, discussions: &[Discussion]) -> Rows {
     let mut rows: Vec<RowData> = on(&Subject::Plan { plan: plan.id.clone() }).into_iter().map(|d| discussion_row(d, None)).collect();
     for i in &plan.items {
         let row = RowData { key: format!("item:{}", i.id), label: i.title.clone(), kind: i.state.name().to_owned(), parent: i.parent.as_ref().map(|p| format!("item:{p}")), more: 0 };
-        part(&mut rows, row, Subject::PlanItem { plan: plan.id.clone(), item: i.id.0.clone() });
+        part(&mut rows, row, Subject::PlanItem { plan: plan.id.clone(), item: i.id.0.clone() }, &[]);
     }
     for c in &plan.components {
         let key = format!("component:{}", c.id);
-        part(&mut rows, RowData { key: key.clone(), label: c.name.clone(), kind: c.type_name.clone(), parent: None, more: 0 }, Subject::PlanComponent { plan: plan.id.clone(), id: c.id.clone() });
+        // Its relations' discussions (those from it), under it, and counted on it.
+        let related: Vec<&Discussion> = discussions.iter().filter(|d| matches!(&d.on.subject, Subject::PlanRelation { source, .. } if *source == c.id)).collect();
+        part(&mut rows, RowData { key: key.clone(), label: c.name.clone(), kind: c.type_name.clone(), parent: None, more: 0 }, Subject::PlanComponent { plan: plan.id.clone(), id: c.id.clone() }, &related);
         for s in harness_contracts::CARD_SECTIONS {
             let row = RowData { key: format!("section:{}:{s}", c.id), label: titled(s), kind: String::new(), parent: Some(key.clone()), more: 0 };
-            part(&mut rows, row, Subject::PlanSection { plan: plan.id.clone(), id: c.id.clone(), section: s.to_owned() });
+            part(&mut rows, row, Subject::PlanSection { plan: plan.id.clone(), id: c.id.clone(), section: s.to_owned() }, &[]);
         }
-        // Its relations' discussions (those from it), under it.
-        rows.extend(discussions.iter().filter(|d| matches!(&d.on.subject, Subject::PlanRelation { source, .. } if *source == c.id)).map(|d| discussion_row(d, Some(&key))));
+        rows.extend(related.into_iter().map(|d| discussion_row(d, Some(&key))));
     }
     Rows { rows, dropped: Vec::new(), cut: None }
 }

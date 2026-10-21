@@ -62,7 +62,7 @@ pub fn message(ui: &mut egui::Ui, markdown: &mut CommonMarkCache, m: &Message<'_
             CommonMarkViewer::new().show(ui, markdown, m.text);
         } else {
             let text = RichText::new(m.text).size(look.text_body).color(colors().text_strong);
-            ui.label(if m.by == "user" { text.strong() } else { text });
+            ui.label(if m.by == harness_contracts::USER { text.strong() } else { text });
         }
     }
     for line in &m.under {
@@ -72,7 +72,7 @@ pub fn message(ui: &mut egui::Ui, markdown: &mut CommonMarkCache, m: &Message<'_
 
 /// What's said in a discussion, as a message: an answer (what it changed
 /// under it), a settling, a reopening said so.
-pub fn said(s: &harness_contracts::Said) -> Message<'_> {
+pub fn said<'a>(d: &'a harness_contracts::Discussion, s: &'a harness_contracts::Said) -> Message<'a> {
     use harness_contracts::SaidKind;
     let tone = match s.kind {
         SaidKind::Message => None,
@@ -81,7 +81,17 @@ pub fn said(s: &harness_contracts::Said) -> Message<'_> {
         SaidKind::Reopened => Some(colors().warn),
     };
     let what = (s.kind != SaidKind::Message).then(|| s.kind.words());
-    Message { by: &s.by, at_ms: Some(s.at_ms), what, text: &s.text, markdown: s.by != "user", tone, under: s.changed.iter().map(|c| format!("changed {}", c.what)).collect() }
+    Message { by: d.name_of(&s.by), at_ms: Some(s.at_ms), what, text: &s.text, markdown: s.by != harness_contracts::USER, tone, under: s.changed.iter().map(|c| format!("changed {}", c.what)).collect() }
+}
+
+/// Whose move it is in a discussion, in a few words ("waiting on you",
+/// "waiting on lead", "settled"), and whether it's yours.
+pub fn whose(d: &harness_contracts::Discussion) -> (String, bool) {
+    match d.whose_move() {
+        harness_contracts::Move::User => ("waiting on you".to_owned(), true),
+        harness_contracts::Move::Agent(slot) => (format!("waiting on {}", d.name_of(&slot)), false),
+        harness_contracts::Move::Nobody => ("settled".to_owned(), false),
+    }
 }
 
 /// Where a discussion stands, in a word, and its colour.
@@ -103,7 +113,7 @@ pub fn heading(ui: &mut egui::Ui, d: &harness_contracts::Discussion) {
         if d.kind == harness_contracts::DiscussionKind::ChangeRequest {
             ui.label(RichText::new("change request").size(look.text_small).color(colors().special));
         }
-        ui.label(RichText::new(format!("{} · asks {}", d.id, who(&d.asked))).size(look.text_small).color(colors().muted));
+        ui.label(RichText::new(format!("{} · asks {}", d.id, d.to_user(&d.asked))).size(look.text_small).color(colors().muted));
     });
 }
 
@@ -160,7 +170,10 @@ impl TypingBox {
         if sent.is_some() {
             output.surrender_focus();
         }
-        Typed { rect: output.rect, sent, clicked: output.clicked() || output.gained_focus(), names_tag: output.changed() && names_tag(&self.text, before) }
+        // Typed at its end (the name's put there): a `#` typed amid what's
+        // written is just a `#`.
+        let at_end = egui::TextEdit::load_state(ui.ctx(), output.id).and_then(|s| s.cursor.char_range()).is_none_or(|r| r.primary.index == self.text.chars().count());
+        Typed { rect: output.rect, sent, clicked: output.clicked() || output.gained_focus(), names_tag: output.changed() && at_end && names_tag(&self.text, before) }
     }
 }
 

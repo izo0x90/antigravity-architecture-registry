@@ -158,8 +158,10 @@ pub struct FsPlans {
     /// One writer at a time within this process (the server is the writer).
     write: Mutex<()>,
     held: Mutex<Held>,
-    /// The comments plans' files held were moved (`move_comments`: once).
-    moved: std::sync::atomic::AtomicBool,
+    /// Where the comments plans' files hold go (`move_comments`, set
+    /// once): those there then, and any a file brings in later, as it's
+    /// read.
+    mover: std::sync::OnceLock<Mover>,
 }
 
 #[derive(Default)]
@@ -178,7 +180,7 @@ impl FsPlans {
         let dir = nah.join("plans");
         std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
         ensure_nah_gitignore(&nah)?;
-        let plans = Self { dir, write: Mutex::new(()), held: Mutex::new(Held::default()), moved: Default::default() };
+        let plans = Self { dir, write: Mutex::new(()), held: Mutex::new(Held::default()), mover: std::sync::OnceLock::new() };
         let files: Vec<PathBuf> = std::fs::read_dir(&plans.dir).map_err(|e| io(&plans.dir, e))?.map(|e| e.map(|e| e.path()).map_err(|e| io(&plans.dir, e))).collect::<Result<_, _>>()?;
         plans.changed(&files)?;
         Ok(plans)
@@ -205,7 +207,8 @@ impl FsPlans {
     /// The comments plans' files hold, to `mover`: each plan's file
     /// written without them once they've gone (one that isn't a plan, as
     /// it is: they wait in it). One that fails stays as it is.
-    fn move_waiting(&self, mover: &Mover) -> Result<(), ServiceError> {
+    fn move_waiting(&self) -> Result<(), ServiceError> {
+        let Some(mover) = self.mover.get() else { return Ok(()) };
         let waiting: Vec<(PlanId, Vec<serde_json::Value>)> = self.held.lock().map_err(ServiceError::poisoned)?.waiting.iter().map(|(id, c)| (id.clone(), c.clone())).collect();
         for (id, comments) in waiting {
             if let Err(e) = mover(&id, &comments) {
@@ -319,14 +322,16 @@ impl PlanRepository for FsPlans {
             };
             changed.push(id);
         }
+        // Comments a file brought in (a branch checked out): moved now.
+        self.move_waiting()?;
         Ok(changed)
     }
 
     fn move_comments(&self, mover: Mover) -> Result<(), ServiceError> {
-        if self.moved.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            return Err(ServiceError::InvalidOp("plans' comments were moved already".into()));
+        if self.mover.set(mover).is_err() {
+            return Err(ServiceError::InvalidOp("plans' comments go somewhere already".into()));
         }
-        self.move_waiting(&mover)
+        self.move_waiting()
     }
 
     fn comments_waiting(&self, id: &PlanId) -> bool {

@@ -67,6 +67,9 @@ async fn agents_read_start_reply_and_answer_discussions_and_the_slot_asked_is_to
     assert!(!error && said.contains("Said in d1 (it's open still)"), "{said}");
     let (error, said) = lead.tool("discussion_answer", json!({ "id": "d1", "text": "A race on the port." })).await;
     assert!(!error && said.contains("Answered d1"), "{said}");
+    // What's said is searched (FFF): each line, by discussion and message.
+    let (_, found) = lead.tool("discussions", json!({ "find": "race port" })).await;
+    assert!(found.contains("d1 message 3 line 1: A race on the port."), "{found}");
     let (status, _) = http(addr, "POST", "/api/discussions/d1/reopen", Some(r#"{"text":"Which port?"}"#)).await;
     assert_eq!(status, 200);
     until("the lead told it was reopened", || told().iter().any(|t| t.contains("the user reopened it:\n\nWhich port?"))).await;
@@ -75,8 +78,11 @@ async fn agents_read_start_reply_and_answer_discussions_and_the_slot_asked_is_to
     assert!(listed.starts_with("Waiting on you:\n- d1"), "{listed}");
 
     // A change request on the item, answered naming it; only the user settles.
-    let (error, _) = lead.tool("discuss", json!({ "on": "plan p item i1", "kind": "change_request", "text": "Mark it decided?" })).await;
-    assert!(!error);
+    // (An agent can't ask itself.)
+    let (error, said) = lead.tool("discuss", json!({ "on": "plan p item i1", "kind": "change_request", "text": "Mark it decided?" })).await;
+    assert!(error && said.contains("can't ask yourself"), "{said}");
+    let (status, body) = http(addr, "POST", "/api/discussions", Some(&json!({ "subject": item, "kind": "change_request", "text": "Mark it decided?" }).to_string())).await;
+    assert_eq!(status, 200, "{body}");
     let (error, said) = lead.tool("discussion_answer", json!({ "id": "d3", "text": "No change." })).await;
     assert!(error && said.contains("name what you changed"), "{said}");
     let (error, said) = lead.tool("discussion_answer", json!({ "id": "d3", "text": "Done.", "changed": ["plan p item i1"] })).await;
@@ -106,8 +112,11 @@ async fn a_sub_slot_asks_the_lead_only_the_lead_answers_and_the_asker_is_told() 
         assert_eq!(status, 200, "{body}");
         sub_ids.push(SlotId::new(id));
     }
-    let (status, body) = http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"fake","name":"Helper"}"#)).await;
-    assert!(status != 200 && body.contains("a slot is named \\\"Helper\\\" already"), "no two slots share a name: {status} {body}");
+    // Two may share a name: asked by it, which is asked (by its id).
+    let (status, body) = http(addr, "POST", "/api/slots", Some(r#"{"instanceId":"fake","name":"helper"}"#)).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = http(addr, "POST", "/api/discussions", Some(&json!({ "subject": { "kind": "plan", "plan": "p" }, "text": "x", "asked": "helper" }).to_string())).await;
+    assert!(status == 400 && body.contains("several are named so"), "{body}");
     // Nor is one named as the user is (only the user settles: `by` "user").
     for name in ["user", "You"] {
         let (status, body) = http(addr, "POST", "/api/slots", Some(&json!({ "instanceId": "fake", "name": name }).to_string())).await;
@@ -136,7 +145,7 @@ async fn a_sub_slot_asks_the_lead_only_the_lead_answers_and_the_asker_is_told() 
     // Another slot's chat: the helper can't start one on it, nor read one on it.
     let (error, said) = helper.tool("discuss", json!({ "on": "chat lead turn 1", "text": "?" })).await;
     assert!(error && said.contains("can't read"), "{said}");
-    let (error, said) = lead.tool("discuss", json!({ "on": "chat lead turn 1", "text": "Mine?" })).await;
+    let (error, said) = lead.tool("discuss", json!({ "on": "chat lead turn 1", "text": "Mine?", "ask": "user" })).await;
     assert!(!error, "{said}");
     for tool in ["discussion_read", "discussion_reply"] {
         let (error, said) = helper.tool(tool, json!({ "id": "d2", "text": "x" })).await;
@@ -148,6 +157,17 @@ async fn a_sub_slot_asks_the_lead_only_the_lead_answers_and_the_asker_is_told() 
     assert!(!error, "{said}");
     let told = || slots.read(&sub_ids[0], 50).unwrap().messages.into_iter().filter_map(|(_, text)| text.strip_prefix("echo: ").map(str::to_owned)).collect::<Vec<_>>();
     until("the helper told the answer", || told().iter().any(|t| t.contains("Discussion d1 on plan p: lead answered it:\n\nYes, done: see #notes"))).await;
+    // Asked by the user, the helper sees it waiting on it (by its slot, not its name).
+    let (status, body) = http(addr, "POST", "/api/discussions", Some(&json!({ "subject": { "kind": "plan", "plan": "p" }, "text": "Your view?", "asked": sub_ids[0].as_str() }).to_string())).await;
+    assert_eq!(status, 200, "{body}");
+    let asked_helper = parse(&body)["id"].as_str().unwrap().to_owned();
+    let (_, listed) = helper.tool("discussions", json!({})).await;
+    assert!(listed.starts_with(&format!("Waiting on you:\n- {asked_helper}")) && listed.contains("asks helper"), "{listed}");
+    // A slot not in it (and no slots.message) can't say something in it: that would prompt the helper.
+    let other_thread = slots.get(&sub_ids[1]).unwrap().current_thread().cloned().unwrap();
+    let mut other = Mcp::as_session(addr, &other_thread).await;
+    let (error, said) = other.tool("discussion_reply", json!({ "id": asked_helper, "text": "hi" })).await;
+    assert!(error && said.contains("slots.message"), "{said}");
     let answer = told().into_iter().find(|t| t.contains("lead answered it")).unwrap();
     assert!(answer.contains("(not handed on: it's a chat this slot can't read)") && !answer.contains("Is p done?\n"), "the tag names the lead's chat, not what it says: {answer}");
 }

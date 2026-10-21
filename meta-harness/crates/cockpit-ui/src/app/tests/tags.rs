@@ -147,6 +147,9 @@ fn next_and_previous_go_through_the_tag_stepped_last_and_a_tag_on_lines_is_on_ea
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x2", "slow", &[lines("t1", 1, 1019, 1021), lines("t1", 1, 1010, 1010)]) });
     not_typing(&ctx, &mut app);
     frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    let slow = bars(&output, crate::theme::colors().tag(2));
+    assert!(slow.iter().any(|bar| bar.top() < drawn_rects(&output, "line 1019")[0].center().y && drawn_rects(&output, "line 1021")[0].center().y < bar.bottom()), "lines' bar: beside all of them");
     // On a line among the tagged lines: their tag's.
     keys(&ctx, &mut app, "kkk");
     assert_eq!(cursor(&app).as_deref(), Some("1020"));

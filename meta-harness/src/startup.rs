@@ -331,6 +331,9 @@ pub fn things(arch: &ArchitectureService, running_log: u64) -> Result<Arc<nah_th
 pub fn discussions(arch: &Arc<ArchitectureService>, state: &Arc<nah_state::StateDb>, hub: &Arc<EventHub>, things: &Arc<nah_things::Things>, slots: &Arc<harness_core::SlotManager>) -> Result<Arc<nah_discussions::Discussions>, StartError> {
     let discussions = nah_discussions::Discussions::open(state.clone(), hub.clone(), things.clone(), &arch_service::state_dir(arch.root())?.join("discussions")).map_err(|e| e.to_string())?;
     things.register(discussions.clone());
+    // The agents in a discussion: by their slots' ids, named as they are.
+    let named = Arc::downgrade(slots);
+    discussions.name_with(Box::new(move |id| named.upgrade()?.get(&harness_contracts::SlotId::new(id)).map(|s| s.name)));
     let weak = Arc::downgrade(&discussions);
     arch.approvals_ask(Box::new(move |plan, id| {
         let Some(discussions) = weak.upgrade() else { return Some("the discussions are closed: approvals wait for them".into()) };

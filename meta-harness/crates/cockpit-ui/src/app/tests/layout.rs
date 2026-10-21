@@ -225,13 +225,22 @@ fn typing_in_the_quick_look_stays_there_over_a_chat_or_a_discussion() {
             let on = harness_contracts::Subject::Plan { plan: PlanId::new("p").unwrap() };
             told(&app, harness_contracts::ClientEvent::DiscussionUpdated { discussion: crate::discussions::tests::discussion(1, on, harness_contracts::DiscussionStatus::Open) });
             frame(&ctx, &mut app, vec![]);
-            let _ = app.desk.view_mut(BufferKind::Discussion).show_target(&crate::nav::Target::Discussion(harness_contracts::DiscussionId::new("d1")));
+            app.desk.view_mut(BufferKind::Discussion).show_target(&crate::nav::Target::Discussion(harness_contracts::DiscussionId::new("d1"))).unwrap();
         }
-        // The panel's own box has the keyboard first.
+        // The panel's own box has the keyboard first: what's typed goes in it.
         app.input_mode = InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) };
         frame(&ctx, &mut app, vec![]);
-        assert_eq!(app.input_mode, InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) }, "{kind:?}: its box has the keyboard");
+        frame(&ctx, &mut app, key("ok"));
+        let in_box = |app: &CockpitApp| match kind {
+            BufferKind::Chat => app.desk.chat().ui.input.text.clone(),
+            _ => app.desk.typed::<crate::discussion::DiscussionView>(BufferKind::Discussion).writing.text.clone(),
+        };
+        assert_eq!(in_box(&app), "ok", "{kind:?}: its box has the keyboard");
         frame(&ctx, &mut app, press(egui::Key::Escape, false));
+        match kind {
+            BufferKind::Chat => app.desk.chat_mut().ui.input.text.clear(),
+            _ => app.desk.typed_mut::<crate::discussion::DiscussionView>(BufferKind::Discussion).writing.text.clear(),
+        }
         frame(&ctx, &mut app, key("t"));
         frame(&ctx, &mut app, vec![]);
         frame(&ctx, &mut app, key("hello"));

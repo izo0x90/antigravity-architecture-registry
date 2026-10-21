@@ -369,7 +369,7 @@ async fn a_turns_tool_output_is_folded_the_same_in_every_read_unless_read_in_ful
     assert_eq!(status, 200, "{body}");
     let mut lead = Mcp::lead(addr).await;
     let mut said = String::new();
-    for _ in 0..50 {
+    for _ in 0..200 {
         let (error, out) = lead.tool("tag", json!({ "tag": "turns", "subject": "chat helper turn 1" })).await;
         said = out;
         if !error {
@@ -390,7 +390,7 @@ async fn a_turns_tool_output_is_folded_the_same_in_every_read_unless_read_in_ful
     let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"and #turns"}"#)).await;
     assert_eq!(status, 200, "{body}");
     let mut given = String::new();
-    for _ in 0..50 {
+    for _ in 0..200 {
         let (_, out) = lead.tool("slot_read", json!({ "slot": "helper" })).await;
         given = out;
         if given.contains("echo: and #turns") {
@@ -398,6 +398,7 @@ async fn a_turns_tool_output_is_folded_the_same_in_every_read_unless_read_in_ful
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    assert!(given.contains("echo: and #turns"), "the prompt came back: {given}");
     assert!(given.contains(folded) && !given.contains("tool line one"), "{given}");
 }
 

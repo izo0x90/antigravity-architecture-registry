@@ -259,14 +259,10 @@ impl Subject {
     /// parts) is about the same component, or the whole plan. What a change
     /// request's answer changed must touch what it's about.
     pub fn touches(&self, other: &Subject) -> bool {
-        let component = |s: &Subject| match s {
-            Self::PlanComponent { plan, id } | Self::PlanSection { plan, id, .. } => Some(vec![(plan.clone(), id.clone())]),
-            Self::PlanRelation { plan, source, target, .. } => Some(vec![(plan.clone(), source.clone()), (plan.clone(), target.clone())]),
-            _ => None,
-        };
-        if let (Some(a), Some(b)) = (component(self), component(other))
-            && a.iter().any(|x| b.contains(x))
-        {
+        // The plan's components it's about (a relation: both its ends), read
+        // in place (it's asked of every note, every frame).
+        let (a, b) = (plan_ends(self), plan_ends(other));
+        if a.iter().flatten().any(|x| b.iter().flatten().any(|y| x == y)) {
             return true;
         }
         self.contains(other) || other.contains(self)
@@ -289,7 +285,8 @@ impl Subject {
     /// lines: the command they're in; a command: what was typed; a
     /// component: where it was).
     pub fn same_thing(&self, other: &Subject) -> bool {
-        self.bare() == other.bare()
+        // (Of another kind: not it, without copying either.)
+        std::mem::discriminant(self) == std::mem::discriminant(other) && self.bare() == other.bare()
     }
 
     /// Whether it may be `other` moved (lines of the same file, of the same
@@ -331,6 +328,15 @@ impl Subject {
             (Self::PlanComponent { plan, id }, Self::PlanSection { plan: p, id: i, .. }) => plan == p && id == i,
             _ => self.same_thing(other),
         }
+    }
+}
+
+/// The plan's components a subject is about (a relation: both its ends).
+fn plan_ends(s: &Subject) -> [Option<(&arch_graph::PlanId, &arch_graph::ComponentId)>; 2] {
+    match s {
+        Subject::PlanComponent { plan, id } | Subject::PlanSection { plan, id, .. } => [Some((plan, id)), None],
+        Subject::PlanRelation { plan, source, target, .. } => [Some((plan, source)), Some((plan, target))],
+        _ => [None, None],
     }
 }
 

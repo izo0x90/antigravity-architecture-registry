@@ -7,6 +7,9 @@
 
 use std::sync::Arc;
 
+/// Who the cockpit's changes are by: the user.
+use harness_contracts::USER;
+
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -59,8 +62,6 @@ async fn read(_: Needs<can::ViewRead>, State(state): State<TagsState>, Path(tag)
     blocking(&state.tags, move |t| t.read(&tag)).await.map(Json)
 }
 
-/// Who the cockpit's changes are by: the user.
-const USER: &str = "user";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

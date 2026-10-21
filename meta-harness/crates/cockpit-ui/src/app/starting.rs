@@ -36,17 +36,18 @@ impl CockpitApp {
                 .importance(MINOR)
                 .when(when(picking == Some("discuss.start") && next.is_some())),
         ];
-        if !self.desk.discussions_here.is_empty() {
-            let all = self.desk.shared.discussions.get();
-            let choices = self.desk.discussions_here.iter().filter_map(|id| all.get(id)).map(|d| Choice::new(d.id.as_str(), format!("{} {}: {}", d.id, d.kind.words(), crate::tags::first_line(d.asking()))).detail(Some(d.status.words().to_owned()))).collect();
-            out.push(Action::new("discuss.open", "Open which discussion?", "Those on the mark picked, waiting on you first", S::DiscussOpen).param(Param::Choice(choices)).group(Group::GoTo).importance(MINOR));
-        }
+        // The discussions on what you're on (or on the mark picked): one opened.
+        let here_ids: Vec<harness_contracts::DiscussionId> = if self.desk.discussions_here.is_empty() { self.notes_here(here).discussions.into_iter().map(|d| d.id).collect() } else { self.desk.discussions_here.clone() };
+        let all = self.desk.shared.discussions.get();
+        let choices: Vec<Choice> = here_ids.iter().filter_map(|id| all.get(id)).map(|d| Choice::new(d.id.as_str(), format!("{} {}: {}", d.id, d.kind.words(), crate::tags::first_line(d.asking()))).detail(Some(crate::conversation::whose(d).0))).collect();
+        let available = !choices.is_empty();
+        out.push(Action::new("discuss.open", "Open a discussion here", "One of those on what you're on, waiting on you first", S::DiscussOpen).param(Param::Choice(choices)).group(Group::GoTo).importance(MINOR).when(when(available)));
         if let Some(d) = &self.desk.discussing {
             let lead = harness_contracts::LEAD;
             let choices = self.slots_to_ask().into_iter().map(|(name, role)| Choice::new(name.clone(), name.clone()).detail(Some(if name == lead { "the lead (asked unless another is picked)".to_owned() } else { role }))).collect();
             out.push(Action::new("discuss.ask", format!("Who answers {} on {}?", d.kind.words(), d.words), "An agent slot: the lead, unless another is picked", S::DiscussAsk).param(Param::Choice(choices)).group(Group::Act).importance(MINOR));
             let asked = d.asked.as_ref().map(|a| format!(", asking {a}")).unwrap_or_default();
-            out.push(Action::new("discuss.write", format!("{} on {}{asked}", crate::spec::capitalized(d.kind.words()), d.words), "What it asks (# names a tag)", S::DiscussWrite).param(Param::Writing { hint: "what you ask".into(), start: String::new() }).group(Group::Act).importance(MINOR));
+            out.push(Action::new("discuss.write", format!("{} on {}{asked}", crate::spec::capitalized(d.kind.words()), d.words), "What it asks (# names a tag)", S::DiscussWrite).param(Param::Writing { hint: "what you ask".into(), start: d.text.clone() }).group(Group::Act).importance(MINOR));
         }
         out
     }
@@ -80,7 +81,7 @@ impl CockpitApp {
                     self.note = Some(format!("{kind:?} isn't a kind of discussion: a question or a change request."));
                     return;
                 };
-                self.desk.discussing = Some(crate::app::desk::Discussing { on: thing.subject, words: thing.words, kind, asked: None });
+                self.desk.discussing = Some(crate::app::desk::Discussing { on: thing.subject, words: thing.words, kind, asked: None, text: String::new() });
                 // Who's asked, when there's another slot than the lead to ask.
                 let next = if self.slots_to_ask().len() > 1 { "discuss.ask" } else { "discuss.write" };
                 self.run_by_id(next, None, ctx);
@@ -96,11 +97,14 @@ impl CockpitApp {
                 self.run_by_id("discuss.write", None, ctx);
             }
             (ShellCommand::DiscussWrite, Some(text)) => {
-                let Some(crate::app::desk::Discussing { on: subject, kind, asked, .. }) = self.desk.discussing.take() else { return };
+                let Some(mut sending) = self.desk.discussing.take() else { return };
                 if text.trim().is_empty() {
                     self.note = Some("A discussion asks something: nothing was started.".into());
                     return;
                 }
+                sending.text = text.trim().to_owned();
+                let (subject, kind, asked) = (sending.on.clone(), sending.kind, sending.asked.clone());
+                self.desk.sending = Some(sending);
                 let started = self.desk.started.clone();
                 self.desk.net.discussion_start(&subject, kind, text.trim(), asked.as_deref(), ctx.clone(), move |r| {
                     if let Ok(mut s) = started.lock() {
@@ -119,10 +123,18 @@ impl CockpitApp {
         for answer in started {
             match answer {
                 Ok(d) => {
+                    self.desk.sending = None;
                     let jump = self.jump_here();
                     self.land(None, &Target::Discussion(d.id), jump, ctx);
                 }
-                Err(e) => self.note = Some(format!("The discussion wasn't started: {}", e.message)),
+                // Not started: what was written comes back, to send again.
+                Err(e) => {
+                    self.note = Some(format!("The discussion wasn't started: {}", e.message));
+                    if let Some(sending) = self.desk.sending.take() {
+                        self.desk.discussing = Some(sending);
+                        self.run_by_id("discuss.write", None, ctx);
+                    }
+                }
             }
         }
     }

@@ -282,7 +282,7 @@ mod terminals {
         let dir = tempfile::tempdir().unwrap();
         let on = Named { subject: Subject::TerminalLines { terminal: TerminalId::new("t1"), shell: 1, first: 3, last: 4, command: None }, what: "terminal t1 lines 3-4".into() };
         let kept = |file: &str| Kept { file: file.into(), start: 10, len: None, lines: None };
-        let discussion = |n: u64, status| Stored { id: DiscussionId::new(format!("d{n}")), on: on.clone(), kept: Some(kept(&format!("tagged-{n}.log"))), kind: DiscussionKind::Question, by: "user".into(), asked: "lead".into(), status, said: Vec::new(), from: None };
+        let discussion = |n: u64, status| Stored { id: DiscussionId::new(format!("d{n}")), on: on.clone(), kept: Some(kept(&format!("tagged-{n}.log"))), kind: DiscussionKind::Question, by: "user".into(), asked: "lead".into(), status, said: Vec::new(), names: Default::default(), from: None };
         let change = |action| Change { by: "user".into(), action, detail: "d on it".into() };
         {
             let db = StateDb::open(dir.path(), &settings()).unwrap();
@@ -297,6 +297,17 @@ mod terminals {
         }
         let db = StateDb::open(dir.path(), &settings()).unwrap();
         assert_eq!(db.number().unwrap(), 3, "a number given (one deleted too) isn't given again, after a restart too");
+        // One whole, as written: what's said, what an answer changed, its agents' names, where it came from.
+        let mut whole = discussion(5, DiscussionStatus::Answered);
+        whole.said = vec![
+            nah_discussions::StoredSaid { by: "user".into(), at_ms: 1, kind: harness_contracts::SaidKind::Message, text: kept("said-5-0.log"), changed: Vec::new() },
+            nah_discussions::StoredSaid { by: "sub-1a2b".into(), at_ms: 2, kind: harness_contracts::SaidKind::Answer, text: kept("said-5-1.log"), changed: vec![on.clone()] },
+        ];
+        (whole.asked, whole.from) = ("sub-1a2b".into(), Some("plan p comment c1".into()));
+        whole.names.insert("sub-1a2b".into(), "reviewer".into());
+        db.put(&whole, None).unwrap();
+        assert_eq!(db.discussions().unwrap().into_iter().find(|d| d.id.as_str() == "d5"), Some(whole), "read back whole");
+        db.remove(&discussion(5, DiscussionStatus::Answered), &change("deleted")).unwrap();
         db.put(&discussion(4, DiscussionStatus::Open), None).unwrap();
         db.transaction(|tx| tx.execute("INSERT INTO discussions (id, json) VALUES ('d9', '{\"id\":\"d9\",\"on\":{\"subject\":{\"kind\":\"later\"}},\"kept\":{\"file\":\"tagged-9.log\",\"start\":0}}')", []).map(|_| ()).map_err(crate::failed)).unwrap();
         let read: Vec<(String, DiscussionStatus)> = db.discussions().unwrap().into_iter().map(|d| (d.id.to_string(), d.status)).collect();

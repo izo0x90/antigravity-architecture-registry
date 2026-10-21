@@ -112,7 +112,7 @@ fn held(root: &Path) -> Option<Value> {
 }
 
 #[test]
-fn comments_a_plans_file_holds_go_to_the_discussions_once_as_the_server_starts_and_hold_approvals_till_then() {
+fn comments_a_plans_file_holds_go_to_the_discussions_as_its_read_and_hold_approvals_till_then() {
     let (_dir, root, s) = setup();
     let old = json!([
         { "id": "c1", "anchor": { "on": "component", "id": "rust:sample::validate" }, "author": { "kind": "user", "name": "izo" }, "text": "Pure?", "at": "2026-10-07T00:51:37Z" },
@@ -133,7 +133,7 @@ fn comments_a_plans_file_holds_go_to_the_discussions_once_as_the_server_starts_a
     s.move_comments_to(mover(&moved, &refuse)).unwrap();
     assert_eq!(held(&root), Some(old.clone()));
     assert!(s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user()).is_err());
-    assert!(s.move_comments_to(mover(&moved, &refuse)).is_err(), "once, as the server starts");
+    assert!(s.move_comments_to(mover(&moved, &refuse)).is_err(), "they go to one place, set once");
     drop(s);
     // The next start moves them: the file without them, the rest as it was.
     *refuse.lock().unwrap() = false;
@@ -142,12 +142,13 @@ fn comments_a_plans_file_holds_go_to_the_discussions_once_as_the_server_starts_a
     assert_eq!(*moved.lock().unwrap(), [("r".to_owned(), vec!["c1".to_owned(), "c2".to_owned()])]);
     assert_eq!(held(&root), None, "the file is written without them");
     assert_eq!(s.plan(&pid()).unwrap().components.iter().filter(|c| c.name == "validate").count(), 1, "the rest of the plan as it was");
-    // A file that comes with comments later (checked out, say): read, not
-    // moved (only a start moves them); they hold approvals till then.
+    // A file that comes with comments later (checked out, say): moved as
+    // it's read; they hold nothing after.
     with_comments(&root, json!([{ "id": "c9", "anchor": { "on": "plan" }, "author": { "kind": "user", "name": "izo" }, "text": "Later.", "at": "2026-10-08T00:00:00Z" }]));
     s.refresh(&[file(&root)]).unwrap();
-    assert_eq!(moved.lock().unwrap().len(), 1, "not moved as it's read");
-    assert!(s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user()).unwrap_err().to_string().contains("holds comments"));
+    assert_eq!(moved.lock().unwrap().last(), Some(&("r".to_owned(), vec!["c9".to_owned()])), "moved as it's read");
+    assert_eq!(held(&root), None, "the file is written without them");
+    assert!(s.approve(&pid(), &id("sample::validate"), Stage::ArchApproved, &user()).err().is_none_or(|e| !e.to_string().contains("holds comments")));
 }
 
 #[test]

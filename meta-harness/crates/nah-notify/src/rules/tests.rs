@@ -216,6 +216,7 @@ fn a_discussion_waits_on_the_user_while_its_their_move_and_is_done_once_it_isnt(
             asked: asked.into(),
             status,
             said,
+            names: Default::default(),
         },
     };
     let none = BTreeMap::new();

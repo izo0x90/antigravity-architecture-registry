@@ -48,6 +48,10 @@ impl Slot {
 /// The lead slot's role (and its id).
 pub const LEAD: &str = "lead";
 
+/// Who the user is in what's kept of who did what (a tag, a discussion):
+/// no slot is named so.
+pub const USER: &str = "user";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlotSession {

@@ -127,10 +127,13 @@ impl Chats {
     }
 
     /// A noted turn as the session has it now (by its id when known, else
-    /// its number), and its items, in order.
+    /// its number; an id the session doesn't know, its turns replayed
+    /// with new ones after a reload: by its number), and its items, in
+    /// order.
     fn turn(&self, (native, n, id): TurnAt<'_>) -> Option<(Turn, Vec<TurnItem>)> {
         let (turns, items) = self.running(native)?;
-        let turn = turns.into_iter().find(|t| if id.is_empty() { t.ordinal == n } else { t.id.as_str() == id })?;
+        let known = !id.is_empty() && turns.iter().any(|t| t.id.as_str() == id);
+        let turn = turns.into_iter().find(|t| if known { t.id.as_str() == id } else { t.ordinal == n })?;
         let mut of: Vec<TurnItem> = items.into_iter().filter(|i| i.turn_id == turn.id).collect();
         of.sort_by_key(|i| i.ordinal);
         Some((turn, of))

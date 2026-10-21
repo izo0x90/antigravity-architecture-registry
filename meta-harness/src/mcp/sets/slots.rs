@@ -118,7 +118,7 @@ impl Slots {
 
     /// A sub-slot by id or name.
     fn find(&self, which: &str) -> Result<Slot, ServiceError> {
-        self.slots.named(which).ok_or_else(|| ServiceError::NotFound(format!("slot {which:?} (slot_list shows them)")))
+        self.slots.named(which).ok_or_else(|| ServiceError::NotFound(format!("slot {which:?}, or several named so: name it by its id (slot_list shows them)")))
     }
 
     /// A sub-slot the lead may act on: not itself, not a queue worker.

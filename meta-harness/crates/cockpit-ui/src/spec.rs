@@ -342,7 +342,7 @@ impl SpecState {
                         ui.set_width(ui.available_width());
                         crate::conversation::heading(ui, d);
                         for said in &d.said {
-                            crate::conversation::message(ui, markdown, &crate::conversation::said(said));
+                            crate::conversation::message(ui, markdown, &crate::conversation::said(d, said));
                         }
                     });
                 }
@@ -848,7 +848,7 @@ fn render_thread(ui: &mut egui::Ui, c: &Discussion, point: Option<&DiscussionId>
                 if i == 0 {
                     crate::conversation::heading(ui, c);
                 }
-                crate::conversation::message(ui, markdown, &crate::conversation::said(said));
+                crate::conversation::message(ui, markdown, &crate::conversation::said(c, said));
             });
         }
     });

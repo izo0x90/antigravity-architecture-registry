@@ -157,7 +157,7 @@ fn discussion_news(d: &harness_contracts::Discussion, world: &dyn World, open: &
         return changes;
     }
     let last = d.said.last();
-    let who = harness_contracts::by_to_user;
+    let who = |by: &str| d.to_user(by).to_owned();
     let title = match (d.status, last) {
         (harness_contracts::DiscussionStatus::Answered, Some(said)) => format!("{} answered {} on {}: settle or reopen it", who(&said.by), d.id, d.on.what),
         (_, Some(said)) if d.said.len() > 1 => format!("{} said something back in {} on {}", who(&said.by), d.id, d.on.what),

@@ -12,7 +12,7 @@ use arch_graph::tree::TreeConfig;
 use arch_service::ServiceError;
 use harness_contracts::{Discussion, DiscussionId, DiscussionKind, DiscussionStatus, Move, Subject, when};
 use nah_access::Capability;
-use nah_discussions::{DiscussionError, USER};
+use nah_discussions::DiscussionError;
 use serde_json::{Value, json};
 
 use super::reach::{NOT_YOURS, Reach};
@@ -42,9 +42,9 @@ const LISTED_MOST: usize = 100;
 
 /// A discussion in a line.
 fn line(d: &Discussion) -> String {
-    let asked = if d.asked == USER { "asks the user".to_owned() } else { format!("asks {}", d.asked) };
+    let asked = format!("asks {}", d.to_agent(&d.asked));
     let asking: String = d.asking().lines().next().unwrap_or_default().chars().take(100).collect();
-    format!("{} · {} on {} ({}, {asked}) by {}: {asking}", d.id, d.kind.words(), d.on.what, d.status.words(), harness_contracts::by_to_agent(&d.by))
+    format!("{} · {} on {} ({}, {asked}) by {}: {asking}", d.id, d.kind.words(), d.on.what, d.status.words(), d.to_agent(&d.by))
 }
 
 /// The most of what a discussion is on that's read, to show its start.
@@ -70,6 +70,7 @@ impl Discussions {
                 json!({ "type": "object", "properties": {
                     "plan": { "type": "string", "description": "Only those on this plan's parts" },
                     "on": { "type": "string", "description": format!("Only those on this thing (or in it, or it's in). {thing}") },
+                    "find": { "type": "string", "description": "Search what's said in them instead (every word, any order): each line found, by discussion and message" },
                     "all": { "type": "boolean", "description": "Settled ones too" }
                 } }),
             ),
@@ -121,13 +122,34 @@ impl ToolSet for Discussions {
         let id = text("id").map(DiscussionId::new).ok_or_else(|| ServiceError::InvalidOp("`id` (the discussion, e.g. d3) is needed".into()));
         let (discussions, things, slots) = (self.discussions.clone(), self.things.clone(), self.slots.clone());
         let reach = Reach::of(&self.slots, &self.access, &self.discussions, caller);
-        // Who an agent's writing is by: its slot's name; whose move: its slot.
-        let (by, me) = (caller.label.clone(), caller.slot.as_ref().map(|s| s.to_string()));
+        // Who an agent's writing is by, and whose move is its: its slot (by
+        // its id; an agent NAH didn't start, its label).
+        let by = caller.slot.as_ref().map_or_else(|| caller.label.clone(), |s| s.to_string());
+        let me = Some(by.clone());
         let mine = move |d: &Discussion| matches!(d.whose_move(), Move::Agent(slot) if Some(&slot) == me.as_ref());
         // Owners say where things are and what they say, and discussions
         // are kept in the state database: off the async threads.
         let blocking = |f: Box<dyn FnOnce() -> Result<String, ServiceError> + Send>| async move { tokio::task::spawn_blocking(f).await.map_err(|e| ServiceError::InvalidOp(e.to_string()))? };
         match name {
+            "discussions" if text("find").is_some() => {
+                let find = text("find").unwrap_or_default();
+                blocking(Box::new(move || {
+                    let (found, partial) = discussions.find(&find, LISTED_MOST * 4);
+                    let mut out = String::new();
+                    for f in found {
+                        // Only in those it may read (one on another slot's chat, not).
+                        let Ok(d) = discussions.get(&f.discussion) else { continue };
+                        if reach.reaches(&d.on.subject) {
+                            let _ = writeln!(out, "{} message {} line {}: {}", f.discussion, f.said + 1, f.line, f.text);
+                        }
+                    }
+                    if partial {
+                        out.push_str("(more not searched in time: narrow what you look for)\n");
+                    }
+                    Ok(if out.is_empty() { format!("Nothing said in a discussion has {find:?}.") } else { out.trim_end().to_owned() })
+                }))
+                .await
+            }
             "discussions" => {
                 let (plan, on, all) = (text("plan"), text("on"), args["all"].as_bool().unwrap_or(false));
                 blocking(Box::new(move || {
@@ -166,8 +188,8 @@ impl ToolSet for Discussions {
                         return Err(ServiceError::Forbidden(format!("{} is on {NOT_YOURS}", d.id)));
                     }
                     let whose = match d.whose_move() {
-                        Move::Agent(slot) if mine(&d) => format!("yours ({slot} is asked)"),
-                        Move::Agent(slot) => format!("{slot}'s (asked)"),
+                        Move::Agent(slot) if mine(&d) => format!("yours ({} is asked)", d.name_of(&slot)),
+                        Move::Agent(slot) => format!("{}'s (asked)", d.name_of(&slot)),
                         Move::User => "the user's".to_owned(),
                         Move::Nobody => "no one's (settled)".to_owned(),
                     };
@@ -200,10 +222,9 @@ impl ToolSet for Discussions {
             "discuss" => {
                 let on = text("on").ok_or_else(|| ServiceError::InvalidOp("`on` (what it's on, by its name) is needed".into()))?;
                 let body = text("text").unwrap_or_default();
-                let kind = match text("kind").as_deref() {
-                    None | Some("question") => DiscussionKind::Question,
-                    Some("change_request") => DiscussionKind::ChangeRequest,
-                    Some(other) => return Err(ServiceError::InvalidOp(format!("{other:?} isn't a kind: question or change_request"))),
+                let kind = match text("kind") {
+                    None => DiscussionKind::Question,
+                    Some(kind) => serde_json::from_value::<DiscussionKind>(Value::String(kind.clone())).map_err(|_| ServiceError::InvalidOp(format!("{kind:?} isn't a kind: question or change_request")))?,
                 };
                 let ask = text("ask");
                 blocking(Box::new(move || {
@@ -215,9 +236,16 @@ impl ToolSet for Discussions {
                     // Asking another slot is messaging it: the lead, or the
                     // user, any agent may ask; any other slot, only one that
                     // may message slots.
-                    let lead = slots.get(&slots.lead()).map(|s| s.name).unwrap_or_else(|| nah_discussions::LEAD.to_owned());
-                    if asked != lead && asked != nah_discussions::USER && !reach.access.allows(&reach.principal, nah_access::Capability::SlotsMessage) {
+                    let lead = slots.lead().to_string();
+                    let may = |c| reach.access.allows(&reach.principal, c);
+                    if asked == nah_discussions::USER && !may(nah_access::Capability::UserNotify) {
+                        return Err(ServiceError::Forbidden("asking the user tells them, which this session can't (user.notify)".into()));
+                    }
+                    if asked != lead && asked != nah_discussions::USER && !may(nah_access::Capability::SlotsMessage) {
                         return Err(ServiceError::Forbidden(format!("asking {asked} is messaging it, which this session can't (slots.message): ask the lead")));
+                    }
+                    if !crate::discussing::may_read(&reach.slots, &reach.access, &reach.discussions, &asked, &subject) {
+                        return Err(ServiceError::Forbidden(format!("{asked} can't read that (another slot's chat): ask one that can")));
                     }
                     let d = discussions.start(&subject, kind, &body, &by, Some(&asked)).map_err(refused)?;
                     Ok(format!("Started {}. discussion_read {} shows it; you're told when something's said in it.", line(&d), d.id))
@@ -232,6 +260,11 @@ impl ToolSet for Discussions {
                     let d = discussions.get(&id).map_err(refused)?;
                     if !reach.reaches(&d.on.subject) {
                         return Err(ServiceError::Forbidden(format!("{} is on {NOT_YOURS}", d.id)));
+                    }
+                    // Saying something in it tells its agents: one not in it
+                    // (asked, or who started it) may only if it may message slots.
+                    if !answering && d.asked != by && d.by != by && !reach.access.allows(&reach.principal, nah_access::Capability::SlotsMessage) {
+                        return Err(ServiceError::Forbidden(format!("saying something in {} tells the agents in it, which this session can't (slots.message): only the one asked or the one that started it may", d.id)));
                     }
                     let d = if answering { discussions.answer(&id, &body, &changed, &by) } else { discussions.reply(&id, &body, &by) }.map_err(refused)?;
                     Ok(if answering { format!("Answered {}: the user settles it or reopens it.", d.id) } else { format!("Said in {} (it's {} still).", d.id, d.status.words()) })

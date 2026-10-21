@@ -103,6 +103,9 @@ struct Starting {
 
 async fn start(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Json(body): Json<Starting>) -> Result<Json<Discussion>, Refused> {
     let asked = crate::discussing::asked(&state.slots, body.asked.as_deref(), USER).map_err(|e| Refused(DiscussionError::Invalid(e)))?;
+    if !crate::discussing::may_read(&state.slots, &state.gate.access, &state.discussions, &asked, &body.subject) {
+        return Err(Refused(DiscussionError::Invalid(format!("{asked} can't read that (another slot's chat): ask one that can"))));
+    }
     blocking(&state.discussions, move |d| d.start(&body.subject, body.kind, &body.text, USER, Some(&asked))).await.map(Json)
 }
 

@@ -370,6 +370,13 @@ fn one_is_started_asking_the_slot_picked_with_a_tag_named_in_it_and_escape_leave
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     let line = harness_contracts::Subject::CodeLines { path: file, first: 1, last: 1, snapshot: String::new() };
     assert_eq!(bodies(&app, "POST /api/discussions"), [serde_json::json!({ "subject": line, "kind": "question", "text": "see #flaky now", "asked": "reviewer" })]);
+    // Not started (the server refused): what was written is there to send again.
+    assert!(app.desk.net.answer("POST /api/discussions", 400, &serde_json::json!({ "error": "it's gone" })));
+    frame(&ctx, &mut app, vec![]);
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(app.palette.picking() == Some("discuss.write") && drawn.contains("see #flaky now") && app.note.as_deref().is_some_and(|n| n.contains("it's gone")), "{drawn}");
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
+    frame(&ctx, &mut app, vec![]);
     // Let go of halfway: nothing left to run.
     keys(&ctx, &mut app, "C");
     keys(&ctx, &mut app, "change");
@@ -379,4 +386,34 @@ fn one_is_started_asking_the_slot_picked_with_a_tag_named_in_it_and_escape_leave
     frame(&ctx, &mut app, vec![]);
     assert!(!app.palette.is_open() && app.desk.discussing.is_none(), "let go of: gone");
     assert!(!app.palette_actions().iter().any(|b| b.action.id == "discuss.write" || b.action.id == "discuss.ask"));
+}
+
+/// One an agent asks you: you say your answer, then settle it (no answer
+/// of an agent's comes first); the discussions on what you're on open by
+/// their action as by their mark.
+#[test]
+fn one_asked_of_you_is_settled_once_youve_answered_and_those_here_open_by_their_action() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![super::terminal::with_commands(1000, vec![super::terminal::command(1, 1003, Some(1008), "make")])]);
+    let on = harness_contracts::Subject::TerminalCommand { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, command: 1, typed: String::new() };
+    let mut d = crate::discussions::tests::discussion(1, on, harness_contracts::DiscussionStatus::Open);
+    (d.by, d.asked) = ("lead".into(), "user".into());
+    d.said[0].by = "lead".into();
+    told_discussion(&app, d);
+    super::terminal::not_typing(&ctx, &mut app);
+    app.run_move(BufferKind::Terminal, Move::Motion(Motion::Line(1005)), None, &ctx);
+    frame(&ctx, &mut app, vec![]);
+    // Its action, where you are: one there, so which is asked, then it opens.
+    let offered = app.palette_actions().into_iter().find(|b| b.action.id == "discuss.open").map(|b| b.action.when);
+    assert_eq!(offered, Some(crate::actions::When::Always), "offered on what has one");
+    app.run_by_id("discuss.open", None, &ctx);
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.quick_look.as_ref().map(|q| q.kind()), Some(BufferKind::Discussion));
+    // Asked of you: Settle is there while it's open.
+    let drawn = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(drawn.contains("waiting on you") && drawn.contains("asks you"), "{drawn}");
+    bodies(&app, "");
+    keys(&ctx, &mut app, "a");
+    assert_eq!(bodies(&app, "POST /api/discussions/d1/settle"), [serde_json::json!({})], "settled from the cockpit");
 }

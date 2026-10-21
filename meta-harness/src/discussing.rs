@@ -12,14 +12,29 @@ use harness_core::{EventHub, SlotManager};
 use nah_discussions::{Discussions, USER};
 
 /// Who's asked, from what was named (a slot's id or name; none: the lead;
-/// `user`: the user, asked by an agent): a slot's name (what a discussion
-/// says who's asked by), or `user`.
+/// `user`: the user, asked by an agent): a slot's id, or `user`.
 pub fn asked(slots: &SlotManager, named: Option<&str>, by: &str) -> Result<String, String> {
     let named = named.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(nah_discussions::LEAD);
     if named == USER {
         return if by == USER { Err("you can't ask yourself: ask an agent slot (or none: the lead)".into()) } else { Ok(USER.to_owned()) };
     }
-    slots.named(named).map(|s| s.name).ok_or_else(|| format!("there's no agent slot {named:?} to ask (none: the lead)"))
+    let slot = slots.named(named).ok_or_else(|| format!("there's no agent slot {named:?} to ask, or several are named so (name it by its id; none: the lead)"))?;
+    if slot.id.as_str() == by {
+        return Err("you can't ask yourself: ask the user, or another slot".into());
+    }
+    Ok(slot.id.to_string())
+}
+
+/// Whether the one asked (`user`, or a slot's id) may read `subject` (a
+/// slot asked about another's chat could never answer).
+pub(crate) fn may_read(slots: &Arc<SlotManager>, access: &Arc<nah_access::Access>, discussions: &Arc<Discussions>, asked: &str, subject: &harness_contracts::Subject) -> bool {
+    if asked == USER {
+        return true;
+    }
+    match slots.get(&harness_contracts::SlotId::new(asked)) {
+        Some(slot) => crate::mcp::sets::reach::Reach::of_slot(slots, access, discussions, &slot).reaches(subject),
+        None => false,
+    }
 }
 
 /// What an agent in it is told of what was said (`at`: which of its
@@ -42,7 +57,7 @@ fn news(d: &Discussion, at: usize, asked: bool) -> Option<String> {
         (true, DiscussionKind::Question) => "discussion_answer it, or discussion_reply to ask something back",
         (false, _) => "discussion_reply says something in it",
     };
-    Some(format!("Discussion {} on {}: {} {what}:\n\n{}\n\n(discussion_read {} reads it whole; {then}.)", d.id, d.on.what, harness_contracts::by_to_agent(&said.by), said.text, d.id))
+    Some(format!("Discussion {} on {}: {} {what}:\n\n{}\n\n(discussion_read {} reads it whole; {then}.)", d.id, d.on.what, d.to_agent(&said.by), said.text, d.id))
 }
 
 /// Tells the agents in `d` (the one asked, the one that started it; not
@@ -52,15 +67,15 @@ async fn tell(slots: &SlotManager, d: &Discussion, from: usize) {
     if d.by != d.asked {
         to.push((d.by.as_str(), false));
     }
-    for (name, asked) in to.into_iter().filter(|(name, _)| *name != USER) {
-        let Some(slot) = slots.named(name) else { continue };
+    for (id, asked) in to.into_iter().filter(|(id, _)| *id != USER) {
+        let Some(slot) = slots.get(&harness_contracts::SlotId::new(id)) else { continue };
         for at in from..d.said.len() {
             let said = &d.said[at];
-            if said.by == slot.name {
+            if said.by == slot.id.as_str() {
                 continue;
             }
             let Some(news) = news(d, at, asked) else { continue };
-            let from = format!("{} (discussion {})", harness_contracts::by_to_agent(&said.by), d.id);
+            let from = format!("{} (discussion {})", d.to_agent(&said.by), d.id);
             if let Err(e) = slots.tell(&slot.id, &from, news, said.by == USER).await {
                 tracing::warn!("{} couldn't be told of discussion {}: {e}", slot.name, d.id);
             }
@@ -119,6 +134,7 @@ mod tests {
             asked: LEAD.into(),
             status: DiscussionStatus::Open,
             said: vec![said(USER, SaidKind::Message, "Split it."), said("lead", SaidKind::Answer, "Split."), said(USER, SaidKind::Reopened, "Not yet.")],
+            names: Default::default(),
         };
         let first = news(&d, 0, true).unwrap();
         assert!(first.starts_with("Discussion d3 on plan p: the user asks you for a change:\n\nSplit it.") && first.contains("naming what you changed"), "{first}");

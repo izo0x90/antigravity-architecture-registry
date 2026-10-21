@@ -288,10 +288,17 @@ impl SlotManager {
         self.lock().slots.values().cloned().collect()
     }
 
-    /// The slot named `which`: by its id, or its name (no two share one).
+    /// The slot named `which`: by its id, or its name (none: no slot, or
+    /// several of that name: they're told apart by their ids).
     pub fn named(&self, which: &str) -> Option<Slot> {
         let all = self.list();
-        all.iter().find(|s| s.id.as_str() == which).or_else(|| all.iter().find(|s| s.name == which)).cloned()
+        if let Some(slot) = all.iter().find(|s| s.id.as_str() == which) {
+            return Some(slot.clone());
+        }
+        match all.iter().filter(|s| s.name == which).collect::<Vec<_>>().as_slice() {
+            [one] => Some((*one).clone()),
+            _ => None,
+        }
     }
 
     pub fn get(&self, id: &SlotId) -> Option<Slot> {
@@ -331,13 +338,9 @@ impl SlotManager {
         let id = SlotId::new(format!("{role}-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]));
         let name = match name.filter(|n| !n.trim().is_empty()) {
             // What the user does is signed "user": no agent passes for them.
-            Some(name) if ["user", "you"].iter().any(|u| name.trim().eq_ignore_ascii_case(u)) => {
+            // (Nor anything an agent reads as the user, or as no one.)
+            Some(name) if ["user", "you", "the user", "someone"].iter().any(|u| name.trim().eq_ignore_ascii_case(u)) => {
                 return Err(HarnessError::InvalidConfig { reason: format!("a slot can't be named {name:?}: that's the user") });
-            }
-            // A slot is named by its name in what's said (a discussion's
-            // asked, who said it): no two share one.
-            Some(name) if self.list().iter().any(|s| s.name.eq_ignore_ascii_case(name.trim())) => {
-                return Err(HarnessError::InvalidConfig { reason: format!("a slot is named {name:?} already") });
             }
             Some(name) => name,
             None => self.next_name(settings.instance.as_ref().map_or(role, |i| i.as_str())),

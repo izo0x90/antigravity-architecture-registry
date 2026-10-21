@@ -94,15 +94,20 @@ pub struct Discussion {
     pub kept: Option<Kept>,
     #[serde(default)]
     pub kind: DiscussionKind,
-    /// Who started it (`user`, or an agent's slot).
+    /// Who started it (`user`, or an agent's slot, by its id).
     pub by: String,
-    /// Who's asked to answer it: an agent slot (the lead unless another
-    /// was named), or `user` (an agent's question to the user).
+    /// Who's asked to answer it: an agent slot, by its id (the lead
+    /// unless another was named), or `user` (an agent's question to the
+    /// user).
     pub asked: String,
     #[serde(default)]
     pub status: DiscussionStatus,
     /// Its messages, oldest first (the first: what was asked).
     pub said: Vec<Said>,
+    /// The agents in it, their slots' ids to their names as they were
+    /// when they were in it (a slot closed since is still named).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub names: std::collections::BTreeMap<String, String>,
 }
 
 /// What a discussion is on says, as it is now (or as it was kept, once
@@ -136,13 +141,28 @@ impl Discussion {
     /// one asked has spoken last (asked something back), whoever started
     /// it; the user once it's answered; no one's once settled.
     pub fn whose_move(&self) -> Move {
-        let who = |name: &str| if name == "user" { Move::User } else { Move::Agent(name.to_owned()) };
+        let who = |name: &str| if name == crate::USER { Move::User } else { Move::Agent(name.to_owned()) };
         match self.status {
             DiscussionStatus::Open if self.said.len() > 1 && self.said.last().is_some_and(|s| s.by == self.asked) => who(&self.by),
             DiscussionStatus::Open => who(&self.asked),
             DiscussionStatus::Answered => Move::User,
             DiscussionStatus::Settled => Move::Nobody,
         }
+    }
+
+    /// Who `by` (a slot's id, or `user`) is, by name.
+    pub fn name_of<'a>(&'a self, by: &'a str) -> &'a str {
+        self.names.get(by).map_or(by, String::as_str)
+    }
+
+    /// Who `by` is, as an agent reads it ("the user", a slot's name).
+    pub fn to_agent<'a>(&'a self, by: &'a str) -> &'a str {
+        by_to_agent(self.name_of(by))
+    }
+
+    /// Who `by` is, as the user reads it ("you", a slot's name).
+    pub fn to_user<'a>(&'a self, by: &'a str) -> &'a str {
+        by_to_user(self.name_of(by))
     }
 
     /// What was asked: its first message's text.

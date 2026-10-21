@@ -99,7 +99,8 @@ fn changed(plan: &PlanId, change: &Change) -> Subject {
 /// One comment, as the discussion it becomes: its first message, its
 /// replies and its answer in the order said.
 fn brought(plan: &PlanId, c: Comment) -> Brought {
-    let from = format!("plan {plan} comment {}", c.id);
+    // Its id and when it was written: one of another branch with the same id is another.
+    let from = format!("plan {plan} comment {} of {}", c.id, c.at);
     let on = match c.anchor {
         Anchor::Plan => Subject::Plan { plan: plan.clone() },
         Anchor::Component { id } => Subject::PlanComponent { plan: plan.clone(), id },

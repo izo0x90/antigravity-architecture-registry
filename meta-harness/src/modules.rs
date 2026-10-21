@@ -321,8 +321,8 @@ impl AppState {
                     let reach = crate::mcp::sets::reach::Reach::of_slot(&slots, &access, &discussions, &slot);
                     tags.expand(text, &|s| reach.reaches(s))
                 }
-                // A slot gone meanwhile: nothing a chat says.
-                (Some(_), None) => tags.expand(text, &|s| !matches!(s, harness_contracts::Subject::ChatSession { .. } | harness_contracts::Subject::ChatTurn { .. } | harness_contracts::Subject::ChatMessage { .. })),
+                // A slot gone meanwhile: nothing it would be refused (named only).
+                (Some(_), None) => tags.expand(text, &|_| false),
             }
         }));
         Ok(Self {

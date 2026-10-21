@@ -430,6 +430,11 @@ fn a_place_in_a_terminal_follows_new_layouts_a_go_to_under_way_and_says_when_it_
     app.desk.view_mut(BufferKind::Terminal).restore(&place);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("1018"));
+    // A place without a line, in the same terminal: its live screen.
+    let live = app.desk.view(BufferKind::Terminal).kept_place();
+    app.desk.view_mut(BufferKind::Terminal).restore(&live);
+    assert_eq!(cursor(&app), None);
+    assert!(app.desk.terminal().status().is_empty(), "following the output");
     // A go-to under way (its lines not here yet): its place is where it's going.
     let target = crate::nav::Target::TerminalLines { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, first: 1012, last: 1012 };
     let harness_contracts::FromTerminal::Screen { mut update } = crate::terminal::tests::numbered(1008, 0) else { unreachable!() };
