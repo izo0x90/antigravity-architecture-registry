@@ -49,9 +49,9 @@ fn a_session_no_agent_slot_runs_says_so_and_nothing_moves() {
 #[test]
 fn a_typing_box_opened_takes_the_keyboard_and_a_reread_reads_the_file_again() {
     let (ctx, mut app) = full_app();
-    focus(&ctx, &mut app, BufferKind::Spec);
-    from_outside(&ctx, &mut app, r#"{"op":"run","id":"spec.comment"}"#).unwrap();
-    assert_eq!(app.input_mode, InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) }, "the comment box has the keyboard");
+    focus(&ctx, &mut app, BufferKind::Chat);
+    from_outside(&ctx, &mut app, r#"{"op":"run","id":"chat.insert"}"#).unwrap();
+    assert_eq!(app.input_mode, InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) }, "the chat's box has the keyboard");
     app.input_mode = InputMode::Normal;
     focus(&ctx, &mut app, BufferKind::Code);
     sent(&app);

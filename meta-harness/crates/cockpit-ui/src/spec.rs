@@ -7,9 +7,9 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use arch_graph::{ComponentDetail, ComponentId, Finding, PlanDiff, RelationKind, Report, Severity, Source};
-use egui::{Rect, RichText};
+use egui::RichText;
 use harness_contracts::changes::{Comparison, FileChanges, Hunk};
-use harness_contracts::{Discussion, DiscussionId, DiscussionKind, DiscussionStatus, Subject};
+use harness_contracts::{Discussion, DiscussionId, DiscussionStatus, Subject};
 
 use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY, Style, When};
 use crate::card::Section;
@@ -54,22 +54,6 @@ pub fn section_of(on: &Subject, id: &ComponentId) -> Option<Section> {
         Subject::Plan { .. } => Some(Section::Overview),
         _ => None,
     }
-}
-
-/// What the composer is writing.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Compose {
-    New(DiscussionKind),
-    Reply(DiscussionId),
-    Reopen(DiscussionId),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Composer {
-    pub purpose: Compose,
-    /// What a new discussion is on.
-    pub anchor: Option<Subject>,
-    pub section: Section,
 }
 
 enum Reply {
@@ -141,9 +125,6 @@ pub struct SpecState {
     /// the last review.
     pub discussions: Vec<Discussion>,
     pub diff: PlanDiff,
-    pub composer: Option<Composer>,
-    /// What's written in it.
-    pub writing: crate::conversation::TypingBox,
     /// What's said in its discussions, drawn (an agent's as markdown).
     markdown: egui_commonmark::CommonMarkCache,
     /// The review point `] c` is on.
@@ -166,8 +147,6 @@ pub struct SpecState {
     restore_item: Option<String>,
     /// Items drawn last frame, and where.
     spots: Vec<Spot>,
-    /// Where the comment box is, while it's typed in.
-    typing: Option<Rect>,
     inbox: Arc<Mutex<Vec<Reply>>>,
 }
 
@@ -192,8 +171,6 @@ impl Default for SpecState {
             author: String::new(),
             discussions: Vec::new(),
             diff: PlanDiff::default(),
-            composer: None,
-            writing: Default::default(),
             markdown: Default::default(),
             point: None,
             note: None,
@@ -206,7 +183,6 @@ impl Default for SpecState {
             restore_item: None,
             item: None,
             spots: Vec::new(),
-            typing: None,
             inbox: Arc::default(),
         }
     }
@@ -220,15 +196,14 @@ impl SpecState {
         }
     }
 
-    /// Moving to another component: the cursor, the review point and an
-    /// unsent composer belonged to the old one.
+    /// Moving to another component: the cursor and the review point
+    /// belonged to the old one.
     fn leave_component(&mut self) {
         self.changes.clear();
         self.changes_asked = None;
         self.cursor = 0;
         self.current = Section::Overview;
         self.point = None;
-        self.composer = None;
     }
 
     /// Its code's lines, from the index: the file and first and last line.
@@ -596,80 +571,22 @@ impl SpecState {
         self.discussions.iter().find(|c| c.id == id)
     }
 
-    fn start_composing(&mut self, purpose: Compose) {
-        let entry = self.entry();
-        let section = entry.as_ref().map_or(self.current, |e| e.section);
-        let plan = self.source.plan().cloned();
-        let anchor = match (&purpose, &self.target, plan, entry.map(|e| e.item)) {
-            (Compose::New(_), Some(target), Some(plan), Some(SpecItem::Relation { kind, other, outgoing })) => {
-                let (source, rel_target) = if outgoing { (target.clone(), other) } else { (other, target.clone()) };
-                Some(Subject::PlanRelation { plan, relation: kind, source, target: rel_target })
-            }
-            (Compose::New(_), Some(target), Some(plan), _) if section == Section::Overview => Some(Subject::PlanComponent { plan, id: target.clone() }),
-            (Compose::New(_), Some(target), Some(plan), _) => Some(Subject::PlanSection { plan, id: target.clone(), section: section.key().to_owned() }),
-            _ => None,
-        };
-        self.composer = Some(Composer { purpose, anchor, section });
-        self.writing = Default::default();
-        self.asks.push(Ask::Type);
-    }
-
     fn posted<T: Send + 'static>(&self) -> impl FnOnce(NetResult<T>) + Send + 'static {
         let inbox = self.inbox.clone();
         move |r: NetResult<T>| push(&inbox, Reply::Posted(r.map(|_| ()).map_err(String::from)))
-    }
-
-    /// Sends what the composer holds.
-    pub fn send_composer(&mut self, net: &NetClient, ctx: &egui::Context) {
-        let Some(composer) = self.composer.clone() else { return };
-        if self.writing.text.trim().is_empty() {
-            return;
-        }
-        let text = self.writing.take();
-        match composer.purpose {
-            Compose::New(kind) => {
-                let Some(on) = composer.anchor else { return };
-                net.discussion_start(&on, kind, &text, ctx.clone(), self.posted());
-            }
-            Compose::Reply(id) => net.discussion_act(&id, "reply", serde_json::json!({ "text": text }), ctx.clone(), self.posted()),
-            Compose::Reopen(id) => net.discussion_act(&id, "reopen", serde_json::json!({ "text": text }), ctx.clone(), self.posted()),
-        }
-        self.composer = None;
-    }
-
-    /// Settles an answered point.
-    fn accept(&mut self, id: &DiscussionId, net: &NetClient, ctx: &egui::Context) {
-        net.discussion_act(id, "settle", serde_json::json!({}), ctx.clone(), self.posted());
-    }
-
-    /// The answered point accept and reopen act on: the one under the
-    /// cursor, else the one `] c` is on, else the first answered one.
-    fn answered_point(&self) -> Option<DiscussionId> {
-        if let Some(c) = self.comment_here() {
-            return (c.status == DiscussionStatus::Answered).then(|| c.id.clone());
-        }
-        let answered: Vec<&Discussion> = self.open_points().into_iter().filter(|c| c.status == DiscussionStatus::Answered).collect();
-        self.point.clone().filter(|p| answered.iter().any(|c| &c.id == p)).or_else(|| answered.first().map(|c| c.id.clone()))
-    }
-
-    /// The discussion a reply goes to: the one under the cursor, else the
-    /// one `] c` is on.
-    fn reply_point(&self) -> Option<DiscussionId> {
-        let here = self.comment_here().map(|c| c.id.clone());
-        here.or_else(|| self.point.clone().filter(|p| self.comments_in(None).iter().any(|c| &c.id == p)))
     }
 
     fn code_location(&self) -> Option<(String, u32, u32)> {
         crate::buffer::code_of(&self.detail.as_ref()?.component)
     }
 
-    /// Draws it; its composer has the keyboard while `typing`.
-    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, typing: bool) {
+    /// Draws it.
+    pub(crate) fn draw(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>) {
         if self.item.is_some() {
             self.draw_item(ui);
             return;
         }
-        self.render_composer(ui, cx, typing);
+        let _ = cx;
         let Some(detail) = self.detail.clone() else {
             let msg = match (&self.target, &self.error) {
                 (_, Some(e)) => format!("Couldn't load it: {e}"),
@@ -914,44 +831,6 @@ impl SpecState {
         self.spots = spots.into_iter().filter(|s| s.rect.intersects(output.inner_rect)).collect();
     }
 
-    /// The review line under the toolbar: what changed since the review, and
-    /// the composer when writing a comment, reply or reason to reopen.
-    fn render_composer(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, typing: bool) {
-        self.typing = None;
-        let Some(composer) = self.composer.as_ref() else { return };
-        let what = match (&composer.purpose, &composer.anchor) {
-            (Compose::New(kind), Some(Subject::PlanRelation { relation, source, target, .. })) => {
-                let name = |id: &ComponentId| id.as_str().rsplit([':', '.']).next().unwrap_or(id.as_str()).to_owned();
-                let what = if *kind == DiscussionKind::ChangeRequest { "Change request" } else { "Question" };
-                format!("{what} on {} {} {}", name(source), relation.name(), name(target))
-            }
-            (Compose::New(DiscussionKind::ChangeRequest), _) => format!("Change request on {}", composer.section.title()),
-            (Compose::New(_), _) => format!("Question on {}", composer.section.title()),
-            (Compose::Reply(id), _) => format!("Reply to {id}"),
-            (Compose::Reopen(id), _) => format!("Why reopen {id}?"),
-        };
-        ui.label(RichText::new(what).size(crate::theme::look().text_body).color(colors().muted));
-        let typed = self.writing.draw(ui, egui::Id::new(("spec_composer", cx.at)), 2, "Write it here… (# names a tag)", typing);
-        if typed.clicked {
-            *cx.input_mode = crate::keymap::InputMode::Insert { at: cx.at };
-        }
-        if typed.names_tag {
-            self.asks.push(Ask::NameTag);
-        }
-        self.typing = typing.then_some(typed.rect);
-        if typed.sent.is_some() {
-            self.send_composer(cx.net, cx.ctx);
-            *cx.input_mode = crate::keymap::InputMode::Normal;
-        }
-    }
-
-    /// The composer gone: the keyboard isn't its any more (the next key is
-    /// a command's, not lost to a box no longer drawn).
-    fn close_composer(&mut self, cx: &mut RunCx<'_>) {
-        self.composer = None;
-        *cx.input_mode = crate::keymap::InputMode::Normal;
-        cx.ctx.memory_mut(|m| m.surrender_focus(egui::Id::new(("spec_composer", cx.at))));
-    }
 }
 
 /// Draws one cursor stop (`Entry`), its contents drawn by the closure given.
@@ -1004,8 +883,6 @@ fn push(inbox: &Arc<Mutex<Vec<Reply>>>, reply: Reply) {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum SpecCommand {
-    Send,
-    CancelCompose,
     /// Read the component's code again (it changed since it was read).
     Reread,
     NextSection,
@@ -1013,13 +890,8 @@ enum SpecCommand {
     /// Go to the section (its index in `Section::ALL`).
     Section,
     Pin,
-    Comment,
-    RequestChange,
     MarkReviewed,
     Point { forward: bool },
-    Reply,
-    Accept,
-    Reopen,
 }
 
 impl ActionProvider for SpecState {
@@ -1041,10 +913,6 @@ impl ActionProvider for SpecState {
             return out;
         }
         let mut out = self.moves();
-        if self.composer.is_some() {
-            out.push(f("spec.send", "Send what's written", "Starts the discussion, or adds to it", S::Send).importance(PRIMARY).typed(crate::keymap::Sent::Send).on_typing(Style::Button, "Send", Some(egui_phosphor::regular::PAPER_PLANE_RIGHT)));
-            out.push(f("spec.cancel", "Throw away what's being written", "Nothing is posted", S::CancelCompose).importance(PRIMARY).on_typing(Style::Button, "Cancel", None));
-        }
         out.extend([
             f("spec.next_section", "Next section", "The card's next part: what it is, what it holds, its relations, its code", S::NextSection).group(Group::Navigate),
             f("spec.prev_section", "Previous section", "The card's part before", S::PrevSection).group(Group::Navigate).importance(MINOR),
@@ -1057,13 +925,8 @@ impl ActionProvider for SpecState {
                     .importance(MINOR),
             );
         }
-        // On a comment, its own verbs lead; without a plan, commenting only says why not.
+        // On a discussion, opening it leads (Enter); starting one is the shell's (`C`).
         let on_comment = self.comment_here().is_some();
-        let comment_rank = if self.source.plan().is_none() { MINOR } else if on_comment { SECONDARY } else { PRIMARY };
-        if self.detail.is_some() {
-            out.push(f("spec.comment", "Ask about this item", "A discussion on it: a question, for the agent to answer", S::Comment).importance(comment_rank));
-            out.push(f("spec.request_change", "Ask for a change to this item", "A discussion on it: the agent's answer says what it changed", S::RequestChange).importance(comment_rank));
-        }
         if self.source.plan().is_some() {
             out.push(
                 f("spec.mark_reviewed", "Mark the plan reviewed (later changes are highlighted)", "From now on, what changes in the plan is marked as new", S::MarkReviewed)
@@ -1074,16 +937,6 @@ impl ActionProvider for SpecState {
             let points = if self.open_points().is_empty() { When::Unavailable } else { When::Always };
             out.push(f("spec.next_point", "Next discussion not settled", "The next question or change asked for on this card that isn't settled", S::Point { forward: true }).group(Group::Navigate).importance(if on_comment { SECONDARY } else { PRIMARY }).when(points).jump());
             out.push(f("spec.prev_point", "Previous discussion not settled", "The one before that isn't settled", S::Point { forward: false }).group(Group::Navigate).importance(MINOR).when(points).jump());
-            // On an open point, its controls are under it.
-            let on_open = self.comment_here().is_some_and(|c| c.status != DiscussionStatus::Settled);
-            let under = |a: Action, caption: &str| if on_open { a.on_item(Style::Button, caption, None) } else { a };
-            if self.reply_point().is_some() {
-                out.push(under(f("spec.reply", "Reply to this point", "Adds to its thread", S::Reply).importance(if on_comment { PRIMARY } else { SECONDARY }), "Reply"));
-            }
-            if self.answered_point().is_some() {
-                out.push(under(f("spec.accept", "Settle this point (accept its answer)", "Settled: it no longer holds the component's approval", S::Accept).importance(PRIMARY), "Settle"));
-                out.push(under(f("spec.reopen", "Reopen this point (say why)", "The answer didn't settle it: it's open again", S::Reopen).importance(SECONDARY), "Reopen"));
-            }
         }
         out.push(
             f("spec.section", "Go to a section", "Pick one of the card's parts", S::Section)
@@ -1100,10 +953,6 @@ impl ActionProvider for SpecState {
 
     fn run(&mut self, action: &Action, value: Option<String>, cx: &mut RunCx<'_>) {
         match action.command::<SpecCommand>() {
-            // Comments live in a plan.
-            Some(SpecCommand::Comment | SpecCommand::RequestChange) if self.source.plan().is_none() => *cx.note = Some("Discussions here are on a plan's parts: pick a plan in the graph first.".into()),
-            Some(SpecCommand::Comment) => self.start_composing(Compose::New(DiscussionKind::Question)),
-            Some(SpecCommand::RequestChange) => self.start_composing(Compose::New(DiscussionKind::ChangeRequest)),
             Some(SpecCommand::MarkReviewed) => {
                 if let Some(plan) = self.source.plan().cloned() {
                     cx.net.arch_mark_reviewed(&plan, &self.author, cx.ctx.clone(), self.posted());
@@ -1111,29 +960,6 @@ impl ActionProvider for SpecState {
             }
             Some(SpecCommand::Point { .. }) if self.open_points().is_empty() => *cx.note = Some("No discussions not settled on this component.".into()),
             Some(SpecCommand::Point { forward }) => self.step_point(*forward),
-            Some(SpecCommand::Reply) => match self.reply_point() {
-                Some(id) => {
-                    self.point = Some(id.clone());
-                    self.start_composing(Compose::Reply(id));
-                }
-                None => *cx.note = Some("Put the cursor on a discussion to reply to it.".into()),
-            },
-            Some(SpecCommand::Accept) => match self.answered_point() {
-                Some(id) => self.accept(&id, cx.net, cx.ctx),
-                None => *cx.note = Some("Only an answered point can be settled here.".into()),
-            },
-            Some(SpecCommand::Reopen) => match self.answered_point() {
-                Some(id) => {
-                    self.point = Some(id.clone());
-                    self.start_composing(Compose::Reopen(id));
-                }
-                None => *cx.note = Some("Only an answered point can be reopened.".into()),
-            },
-            Some(SpecCommand::CancelCompose) => self.close_composer(cx),
-            Some(SpecCommand::Send) => {
-                self.send_composer(cx.net, cx.ctx);
-                self.close_composer(cx);
-            }
             Some(SpecCommand::Reread) => self.asks.extend(self.code_location().map(|(file, _, _)| Ask::Reread(file))),
             Some(SpecCommand::NextSection) => self.step_section(1),
             Some(SpecCommand::PrevSection) => self.step_section(-1),
@@ -1215,15 +1041,6 @@ impl Navigable for SpecState {
 
     fn take_asks(&mut self) -> Vec<Ask> {
         std::mem::take(&mut self.asks)
-    }
-
-    /// Its typing box, while it's open (a tag's name put in it).
-    fn takes_typed(&self) -> bool {
-        self.composer.is_some()
-    }
-
-    fn typed_in(&mut self, text: &str) {
-        self.writing.put(text);
     }
 
     /// The types, the user, the review, the source (unless pinned), and
@@ -1344,13 +1161,14 @@ impl Navigable for SpecState {
             }
             SpecItem::Relation { .. } => Step::GoTo(GoTo::Spec),
             SpecItem::Source | SpecItem::Hunk(_) => Step::GoTo(GoTo::Code),
+            // A discussion: it opens (its own buffer, over the card).
             SpecItem::Comment(id) | SpecItem::Reply(id, _) => {
                 self.point = Some(id.clone());
-                self.start_composing(Compose::Reply(id));
+                self.asks.push(Ask::Show { target: Target::Discussion(id), in_: None });
                 Step::Done
             }
             SpecItem::Placeholder(_) => Step::GoTo(GoTo::Code),
-            SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_) => Step::Nothing("c comments on it, C asks for a change.".into()),
+            SpecItem::Step(_) | SpecItem::Invariant(_) | SpecItem::Finding(_) => Step::Nothing("C asks about it, or for a change to it.".into()),
         }
     }
 
@@ -1569,8 +1387,8 @@ pub(crate) struct SpecPlace {
 }
 
 impl crate::buffer::Buffer for SpecState {
-    fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
-        self.draw(ui, cx, drawing.typing);
+    fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, _drawing: &mut crate::buffer::Drawing<'_>) {
+        self.draw(ui, cx);
     }
 
     /// Fetches the target's detail (and its plan findings) when it changes.
@@ -1695,10 +1513,6 @@ impl crate::hosted::Hosted for SpecState {
         }
     }
 
-    fn typing_rect(&self) -> Option<Rect> {
-        self.typing
-    }
-
     /// What changed since the plan was reviewed (items that changed carry
     /// their own mark; this names the fields), and what went wrong.
     fn status(&self) -> Vec<Status> {
@@ -1761,8 +1575,7 @@ pub(crate) mod tests {
         let mut note = None;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let typing = *mode == crate::keymap::InputMode::Insert { at: crate::keymap::Host::Panel(slot) };
-                s.draw(ui, &mut RunCx { net: &net, ctx, input_mode: mode, at: crate::keymap::Host::Panel(slot), note: &mut note, asked: &mut None }, typing);
+                s.draw(ui, &mut RunCx { net: &net, ctx, input_mode: mode, at: crate::keymap::Host::Panel(slot), note: &mut note, asked: &mut None });
             });
         });
     }
@@ -1813,7 +1626,7 @@ pub(crate) mod tests {
         }
         assert_eq!(s.code_location(), Some(("src/a.rs".into(), 1, 1)), "planned components open their proposed file");
         let actions = s.actions();
-        for id in ["spec.next_section", "spec.prev_section", "spec.pin", "spec.comment"] {
+        for id in ["spec.next_section", "spec.prev_section", "spec.pin"] {
             assert!(actions.iter().any(|a| a.id == id), "{id}");
         }
     }
@@ -1840,15 +1653,14 @@ pub(crate) mod tests {
         assert_eq!(s.current, Section::Logic);
         s.motion(Motion::Down, 1);
         assert!(matches!(s.entry().unwrap().item, SpecItem::Comment(_)));
-        // On a comment: a accepts it, x reopens it, r (or Enter) replies.
+        // On a discussion: Enter opens it (its own buffer: it's replied to,
+        // settled, reopened there).
         let ids: Vec<String> = s.actions().into_iter().map(|a| a.id).collect();
-        for a in ["spec.reply", "spec.accept", "spec.reopen", "spec.comment", "spec.request_change", "spec.next_point", "spec.mark_reviewed", "spec.pin"] {
+        for a in ["spec.next_point", "spec.mark_reviewed", "spec.pin"] {
             assert!(ids.contains(&a.to_owned()), "{a}: {ids:?}");
         }
         assert_eq!(s.enter(), Step::Done);
-        assert_eq!(s.composer.as_ref().map(|c| c.purpose.clone()), Some(Compose::Reply(DiscussionId::new("d1"))));
-        assert_eq!(s.take_asks(), [Ask::Type], "the composer takes the keyboard");
-        s.composer = None;
+        assert_eq!(s.take_asks(), [Ask::Show { target: Target::Discussion(DiscussionId::new("d1")), in_: None }], "it opens");
         // Backspace goes up to the title; Enter on a title folds it.
         assert_eq!(s.leave(), Step::Done);
         assert_eq!(s.entry().unwrap().item, SpecItem::Header);
@@ -1856,15 +1668,14 @@ pub(crate) mod tests {
         assert!(s.folded.contains(&Section::Logic));
         assert!(!s.entries().iter().any(|e| matches!(e.item, SpecItem::Step(_))), "folded items are skipped");
         s.fold(Fold::OpenAll);
-        // Relations: Enter follows (to the other component's spec); c comments on the relation itself.
-        s.move_to(&Entry { section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: other.clone(), outgoing: true } }.key());
+        // Relations: Enter follows (to the other component's spec); the
+        // relation itself is a thing (a discussion, a tag on it).
+        let relation = Entry { section: Section::Relations, item: SpecItem::Relation { kind: RelationKind::Calls, other: other.clone(), outgoing: true } }.key();
+        s.move_to(&relation);
         assert_eq!(s.target().unwrap().component(), Some(&other));
         assert_eq!(s.enter(), Step::GoTo(GoTo::Spec));
-        let comment_action = s.actions().into_iter().find(|a| a.id == "spec.comment").unwrap();
-        let (ctx, net, mut mode, mut note) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
-        s.run(&comment_action, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None });
-        assert_eq!(s.composer.as_ref().unwrap().anchor, Some(Subject::PlanRelation { plan: PlanId::new("p").unwrap(), relation: RelationKind::Calls, source: id.clone(), target: other.clone() }));
-        s.composer = None;
+        assert_eq!(s.things(&relation).at.first().map(|t| t.subject.clone()), Some(Subject::PlanRelation { plan: PlanId::new("p").unwrap(), relation: RelationKind::Calls, source: id.clone(), target: other.clone() }));
+        let ctx = egui::Context::default();
         // Search finds items; hints label what's drawn.
         let found = crate::nav::rank_matches(&s.items(), "write");
         assert_eq!(s.items()[found[0]].key, "logic#Step(1)");
@@ -1947,40 +1758,22 @@ pub(crate) mod tests {
         s.step_point(true);
         assert_eq!(s.point.as_ref().map(|p| p.as_str()), Some("d1"), "wraps around");
 
-        // Review actions exist with a plan and a loaded component; C on a section starts a change request in insert mode.
+        // Review actions exist with a plan and a loaded component; it all renders.
         let mut d = detail(&id, &other);
         d.component.spec = None;
         d.outgoing.clear();
         s.detail = Some(d);
-        // Off the comments, accept and reopen act on the answered point.
         s.motion(Motion::First, 1);
         let actions = s.actions();
-        for a in ["spec.comment", "spec.request_change", "spec.mark_reviewed", "spec.next_point", "spec.accept", "spec.reopen"] {
+        for a in ["spec.mark_reviewed", "spec.next_point"] {
             assert!(actions.iter().any(|x| x.id == a), "{a}");
         }
         let ctx = egui::Context::default();
-        let net = NetClient::new("http://127.0.0.1:9");
         let mut mode = crate::keymap::InputMode::Normal;
-        s.step_section(2);
-        assert_eq!(s.current, Section::Logic);
-        let request = actions.iter().find(|a| a.id == "spec.request_change").unwrap().clone();
-        let mut note = None;
-        s.run(&request, None, &mut RunCx { net: &net, ctx: &ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(1), note: &mut note, asked: &mut None });
-        assert_eq!(s.take_asks(), [Ask::Type]);
-        assert_eq!(
-            s.composer,
-            Some(Composer { purpose: Compose::New(DiscussionKind::ChangeRequest), anchor: Some(on(&id, Some("logic"))), section: Section::Logic })
-        );
-        // It all renders: markers, threads with their buttons, the composer.
         s.loaded = Some((id.clone(), s.source.clone()));
-        mode = crate::keymap::InputMode::Insert { at: crate::keymap::Host::Panel(1) };
         for _ in 0..2 {
             frame(&mut s, &ctx, &mut mode, 1);
         }
-        assert!(s.composer.is_some(), "an empty composer isn't sent");
-        s.writing.text = "Steps 2 and 3 are one step.".into();
-        s.send_composer(&net, &ctx);
-        assert!(s.composer.is_none(), "sent");
     }
 
     /// Every text a frame draws, one per line.
@@ -1988,7 +1781,7 @@ pub(crate) mod tests {
         let (net, mut mode, mut note) = (NetClient::new("http://127.0.0.1:9"), crate::keymap::InputMode::Normal, None);
         let out = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                s.draw(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None }, false);
+                s.draw(ui, &mut RunCx { net: &net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note: &mut note, asked: &mut None });
             });
         });
         fn collect(shape: &egui::Shape, out: &mut String) {

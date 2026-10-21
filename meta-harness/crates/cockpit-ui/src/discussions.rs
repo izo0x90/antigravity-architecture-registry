@@ -38,6 +38,11 @@ impl Discussions {
         self.all.get(id)
     }
 
+    /// Every one, by id.
+    pub fn all(&self) -> impl Iterator<Item = &Discussion> {
+        self.all.values()
+    }
+
     /// The discussions on `subject`, on something in it or something it's
     /// in (`Subject::touches`), oldest first.
     pub fn on(&self, subject: &Subject) -> Vec<&Discussion> {

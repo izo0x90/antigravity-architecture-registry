@@ -222,10 +222,15 @@ async fn tagged_code_follows_the_saved_file_and_reads_as_it_was_once_changed_or_
     assert!(error && said.contains("isn't there"), "{said}");
     // Only the project's own files: not one outside it, however named.
     std::fs::write(root.parent().unwrap().join("outside.txt"), "secret\n").unwrap();
-    for outside in ["/etc/passwd line 1", "../outside.txt line 1", "src/../../outside.txt line 1"] {
+    for outside in ["/etc/passwd line 1", "../outside.txt line 1", "src/../../outside.txt line 1", "file ../outside.txt"] {
         let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "peek", "subject": outside })).await;
         assert!(error && said.contains("isn't a file of the project"), "{outside}: {said}");
     }
+    // A whole file (#12): all of it, as it is now.
+    let (error, said) = lead.tool("tag", serde_json::json!({ "tag": "whole", "subject": "file src/util.rs" })).await;
+    assert!(!error, "{said}");
+    let (_, read) = lead.tool("tag_read", serde_json::json!({ "tag": "whole" })).await;
+    assert!(read.contains("1. file src/util.rs (tagged by lead; as it is now):\n// one\n// two\npub fn helper() {}"), "{read}");
     // Code lasts: nothing of it was logged.
     assert!(state.tags.tags.find("here").unwrap().on.iter().all(|t| t.kept.is_none()));
     // Taken off everything: the snapshots kept for them go (but the last,

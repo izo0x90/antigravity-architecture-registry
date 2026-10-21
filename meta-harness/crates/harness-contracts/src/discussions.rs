@@ -105,6 +105,20 @@ pub struct Discussion {
     pub said: Vec<Said>,
 }
 
+/// What a discussion is on says, as it is now (or as it was kept, once
+/// it changed or went): its name, where it is, the start of it, how many
+/// lines it has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnNow {
+    pub what: String,
+    pub held: crate::tags::Held,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub lines: u64,
+}
+
 /// Whose move it is in a discussion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Move {

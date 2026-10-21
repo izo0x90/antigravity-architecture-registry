@@ -375,7 +375,7 @@ pub async fn spawn_app_with_hub(arch: Arc<ArchitectureService>, hub: Arc<EventHu
     things.forget_unused();
     let services = meta_harness::mcp::sets::Services { arch: arch.clone(), changes: changes.clone(), timeline: timeline.clone(), remote: remote.clone(), slots: slots.clone(), notify: notify.clone(), terminals: terminals.clone(), tags: tags.clone(), discussions: discussions.clone(), things: things.clone() };
     let mcp = McpServerState::new(Arc::new(McpService::new(services, access.clone())), meta_harness::startup::mcp_callers(&slots));
-    let state = AppState::new(meta_harness::modules::Parts { registry, sessions, slots, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state: db, tool_servers, remote, access, notify, changes, timeline, terminals, tags, discussions }).unwrap();
+    let state = AppState::new(meta_harness::modules::Parts { registry, sessions, slots, hub, mcp_state: mcp, arch, cockpit: meta_harness::cockpit::CockpitAuth::new(COCKPIT_TOKEN), queue, state: db, tool_servers, remote, access, notify, changes, timeline, terminals, tags, discussions, things }).unwrap();
     let app = create_router(&state.modules());
     let asked = state.server.shutdown.clone();
     tokio::spawn(async move { axum::serve(listener, app).with_graceful_shutdown(async move { asked.asked().await }).await.unwrap() });

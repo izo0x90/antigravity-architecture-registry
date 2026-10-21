@@ -27,13 +27,16 @@ pub struct QuickLook {
     pub over: BufferKind,
     /// The key that opened it, while it's still down, and since when.
     held: Option<(Chord, f64)>,
+    /// When it opened (a click that opened it doesn't close it as a click
+    /// outside).
+    pub opened: f64,
 }
 
 impl QuickLook {
     /// `buffer` over panel `panel` (showing `over`) at `now`, `before`
     /// used before it; by `key` if a key opened it (and is still down).
     pub fn open(buffer: BufferId, before: BufferId, panel: usize, over: BufferKind, key: Option<Chord>, now: f64) -> Self {
-        Self { buffer, before, panel, over, held: key.map(|k| (k, now)) }
+        Self { buffer, before, panel, over, held: key.map(|k| (k, now)), opened: now }
     }
 
     /// The kind of buffer it holds.

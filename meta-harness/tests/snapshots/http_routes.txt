@@ -35,6 +35,7 @@
 /api/discussions/d1/settle POST
 /api/discussions/d1/reopen POST
 /api/discussions/d1/change POST
+/api/discussions/d1/on GET,HEAD
 /api/notifications GET,HEAD
 /api/ui/shell GET,HEAD,PUT
 /api/server/shutdown POST

@@ -38,8 +38,8 @@ impl CockpitApp {
         // The gutter of notes, down the left of a view that draws things
         // notes can be on (always, so its content doesn't move as notes
         // come and go).
-        let gutter = self.desk.view(kind).draws_things().is_some().then(|| {
-            let gutter = egui::Rect::from_min_max(whole.min, egui::pos2(whole.left() + crate::app::notes::GUTTER_W, whole.bottom()));
+        let gutter = self.desk.view(kind).draws_things().is_some_and(|d| !d.in_place()).then(|| {
+            let gutter = egui::Rect::from_min_max(whole.min, egui::pos2(whole.left() + crate::app::notes::gutter_width(), whole.bottom()));
             whole.min.x = gutter.right();
             gutter
         });
@@ -72,9 +72,7 @@ impl CockpitApp {
             ui.painter().hline(whole.x_range(), content.bottom(), egui::Stroke::new(crate::theme::look().line_thin, colors().border));
             ui.allocate_rect(whole, egui::Sense::hover());
         }
-        if let Some(gutter) = gutter {
-            self.draw_notes_gutter(here, ui, gutter.intersect(egui::Rect::everything_above(content.bottom())), content);
-        }
+        self.draw_notes(here, ui, gutter.map(|g| g.intersect(egui::Rect::everything_above(content.bottom()))), content);
         self.pointer_on_content(kind, ui, content);
     }
 

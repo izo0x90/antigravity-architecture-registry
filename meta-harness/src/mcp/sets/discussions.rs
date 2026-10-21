@@ -71,7 +71,7 @@ impl Discussions {
     pub(crate) fn schemas(trees: &TreeConfig) -> Vec<ToolDef> {
         let _ = trees;
         let thing = format!(
-            "A thing, named as its owner names it: a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124`; a chat's `chat lead turn 3`, `chat lead turn 3 message 2`; code's `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` ({}), `plan <id> relation <source> <kind> <target>`, `plan <id> item <id>`; another discussion's `discussion d3`",
+            "A thing, named as its owner names it: a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124`; a chat's `chat lead` (all of it), `chat lead turn 3`, `chat lead turn 3 message 2`; code's `file src/a.rs`, `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` ({}), `plan <id> relation <source> <kind> <target>`, `plan <id> item <id>`; another discussion's `discussion d3`",
             harness_contracts::CARD_SECTIONS.join(", ")
         );
         let id = json!({ "type": "string", "description": "The discussion, e.g. d3" });

@@ -94,7 +94,7 @@ fn opened(changes: &[Change]) -> Vec<(String, NotificationKind, Option<String>, 
 
 fn with(notification: &Change) -> BTreeMap<NotificationId, Notification> {
     let Change::Open(n) = notification else { panic!("an open one") };
-    BTreeMap::from([(n.id.clone(), n.clone())])
+    BTreeMap::from([(n.id.clone(), (**n).clone())])
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn a_terminals_bell_end_and_long_commands_are_updates_about_it() {
     };
     let news = |news| derive(&ClientEvent::TerminalNews { terminal: terminal.clone(), news }, &world(), &BTreeMap::new());
     let one = |changes: Vec<Change>| match changes.as_slice() {
-        [Change::Open(n)] => n.clone(),
+        [Change::Open(n)] => (**n).clone(),
         other => panic!("one opened: {other:?}"),
     };
     let bell = one(news(TerminalNews::Bell));
@@ -200,4 +200,35 @@ fn a_terminals_bell_end_and_long_commands_are_updates_about_it() {
     assert_ne!(bell.id, done.id, "each its own");
     let open = BTreeMap::from([(bell.id.clone(), bell.clone())]);
     assert!(derive(&ClientEvent::TerminalNews { terminal: terminal.clone(), news: TerminalNews::Bell }, &world(), &open).is_empty(), "a bell while one is open: nothing new");
+}
+
+#[test]
+fn a_discussion_waits_on_the_user_while_its_their_move_and_is_done_once_it_isnt() {
+    use harness_contracts::{Discussion, DiscussionId, DiscussionKind, DiscussionStatus, Named, Said, SaidKind, Subject};
+    let said = |by: &str, kind, text: &str| Said { by: by.into(), at_ms: 0, kind, text: text.into(), changed: Vec::new() };
+    let d = |status, by: &str, asked: &str, said: Vec<Said>| ClientEvent::DiscussionUpdated {
+        discussion: Discussion {
+            id: DiscussionId::new("d3"),
+            on: Named { subject: Subject::Plan { plan: arch_graph::PlanId::new("p").unwrap() }, what: "plan p".into() },
+            kept: None,
+            kind: DiscussionKind::Question,
+            by: by.into(),
+            asked: asked.into(),
+            status,
+            said,
+        },
+    };
+    let none = BTreeMap::new();
+    assert!(derive(&d(DiscussionStatus::Open, "user", "lead", vec![said("user", SaidKind::Message, "Why?")]), &world(), &none).is_empty(), "the agent's move: nothing waits on the user");
+    let answered = derive(&d(DiscussionStatus::Answered, "user", "lead", vec![said("user", SaidKind::Message, "Why?"), said("lead", SaidKind::Answer, "Because.")]), &world(), &none);
+    assert_eq!(opened(&answered), [("disc:d3".to_owned(), NotificationKind::Discussion, None, "lead answered d3 on plan p: settle or reopen it".to_owned())]);
+    let Change::Open(n) = &answered[0] else { unreachable!() };
+    assert_eq!((n.level, n.discussion.as_ref().map(|d| d.as_str()), n.detail.as_deref()), (harness_contracts::Level::Waiting, Some("d3"), Some("Because.")));
+    let open = with(&answered[0]);
+    assert!(derive(&d(DiscussionStatus::Answered, "user", "lead", vec![said("user", SaidKind::Message, "Why?"), said("lead", SaidKind::Answer, "Because.")]), &world(), &open).is_empty(), "nothing new: the same one");
+    let settled = derive(&d(DiscussionStatus::Settled, "user", "lead", vec![said("lead", SaidKind::Answer, "Because."), said("user", SaidKind::Settled, "")]), &world(), &open);
+    assert_eq!(settled, [Change::End { id: NotificationId::new("disc:d3"), to: NotificationState::Done }]);
+    let asked = derive(&d(DiscussionStatus::Open, "lead", "user", vec![said("lead", SaidKind::Message, "Is this list complete?")]), &world(), &none);
+    assert_eq!(opened(&asked)[0].3, "lead asks you on plan p (d3)", "an agent's question to the user: {asked:?}");
+    assert_eq!(derive(&ClientEvent::DiscussionRemoved { discussion_id: DiscussionId::new("d3") }, &world(), &open), [Change::End { id: NotificationId::new("disc:d3"), to: NotificationState::Done }]);
 }

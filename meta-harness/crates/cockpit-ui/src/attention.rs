@@ -35,6 +35,7 @@ pub fn kind_word(kind: NotificationKind) -> &'static str {
         NotificationKind::ShellEnded => "shell ended",
         NotificationKind::CommandFinished => "command finished",
         NotificationKind::CommandFailed => "command failed",
+        NotificationKind::Discussion => "discussion",
     }
 }
 
@@ -85,7 +86,7 @@ mod tests {
     use harness_contracts::{ClientEvent, NotificationId, NotificationState};
 
     pub(crate) fn note(id: &str, kind: NotificationKind, slot: &str, at_ms: u64) -> Notification {
-        Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: Some(SlotId::new(slot)), thread: None, request: None, terminal: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
+        Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: Some(SlotId::new(slot)), thread: None, request: None, terminal: None, discussion: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
     }
 
     #[test]

@@ -51,6 +51,7 @@ impl CockpitApp {
             self.fetch_index_status(ctx);
         }
         self.take_events(ctx);
+        self.open_started(ctx);
         self.tick_away(ctx);
         self.link_views(ctx);
         self.take_asks(ctx);

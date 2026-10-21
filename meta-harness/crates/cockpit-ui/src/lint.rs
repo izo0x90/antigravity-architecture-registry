@@ -171,6 +171,7 @@ const CONTROLS_ALLOWED: &[(&str, &str, &str)] = &[
     ("code.rs", "Sense::click", "its text reads the pointer itself (the line, the name under it, the go-to modifier)"),
     ("terminal/draw.rs", "Sense::click_and_drag", "its grid reads the pointer itself (selecting, the keyboard's focus)"),
     ("request_card/draw.rs", "selectable_label(", "a form's fields are inputs, like a text box"),
+    ("app/notes.rs", "Sense::click", "the host's notes (a discussion's mark opens it, as a code line's mark goes to its component)"),
 ];
 
 /// Tagging is the shell's (plan rule 5): a buffer only says what its items

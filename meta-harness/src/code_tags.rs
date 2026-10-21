@@ -1,5 +1,5 @@
 //! The code as owner of things notes are on: a component (a symbol: the
-//! index follows it through edits) and lines of a file. Code lasts (git,
+//! index follows it through edits), lines of a file, and a whole file. Code lasts (git,
 //! the changes' snapshots): nothing of it is written to the logs.
 //!
 //! Lines are kept as they were at a snapshot of the files (taken when
@@ -149,7 +149,7 @@ fn snapshot_of(subject: &Subject) -> Option<&str> {
 
 impl nah_things::Resolve for Code {
     fn owns(&self, subject: &Subject) -> bool {
-        matches!(subject, Subject::Component { .. } | Subject::CodeLines { .. })
+        matches!(subject, Subject::Component { .. } | Subject::CodeLines { .. } | Subject::CodeFile { .. })
     }
 
     fn name(&self, subject: &Subject) -> String {
@@ -168,14 +168,19 @@ impl nah_things::Resolve for Code {
                 Now::At(f, l) => self.lines_text(path, f, l),
                 Now::Changed | Now::Gone => self.as_tagged(path, *first, *last, snapshot),
             },
+            Subject::CodeFile { path } => std::fs::read_to_string(self.file(path)?).ok(),
             _ => None,
         }
     }
 
-    /// `component <id>`, or `<path> line <n>` / `<path> lines <a>-<b>` (the
-    /// files as they are now).
+    /// `component <id>`, `<path> line <n>` / `<path> lines <a>-<b>` (the
+    /// files as they are now), or `file <path>`.
     fn named(&self, words: &str) -> Option<Result<Subject, String>> {
         let words = words.trim();
+        if let Some(path) = words.strip_prefix("file ") {
+            let path = path.trim();
+            return Some(if self.file(path).is_some() { Ok(Subject::CodeFile { path: path.to_owned() }) } else { Err(format!("{path} isn't a file of the project")) });
+        }
         if let Some(id) = words.strip_prefix("component ") {
             let id = ComponentId::new(id.split(" (").next().unwrap_or(id).trim());
             return Some(if self.component(&id).is_some() { Ok(Subject::Component { id, was: None }) } else { Err(format!("there's no component {id} in the code")) });
@@ -204,6 +209,7 @@ impl nah_things::Resolve for Code {
                 Now::At(f, l) => self.lines_text(path, l, l).is_some() && f <= l,
                 Now::Changed | Now::Gone => false,
             },
+            Subject::CodeFile { path } => self.file(path).is_some(),
             _ => false,
         }
     }

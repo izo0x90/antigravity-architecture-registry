@@ -45,26 +45,30 @@ impl ChatStreamState {
     /// The stream's items a subject is (a turn: all of its), when it's of
     /// this chat's session.
     pub(super) fn tagged_indexes(&self, subject: &Subject) -> Vec<usize> {
+        let places = self.tag_places();
+        if let Subject::ChatSession { session } = subject {
+            return places.iter().enumerate().filter(|(_, p)| p.as_ref().is_some_and(|(s, ..)| s == session)).map(|(i, _)| i).collect();
+        }
         let (session, turn, message) = match subject {
             Subject::ChatTurn { session, turn, .. } => (session, *turn, None),
             Subject::ChatMessage { session, turn, message, .. } => (session, *turn, Some(*message)),
             _ => return Vec::new(),
         };
-        let places = self.tag_places();
         places.iter().enumerate().filter(|(_, p)| p.as_ref().is_some_and(|(s, t, m)| s == session && *t == turn && (message.is_none() || *m == message))).map(|(i, _)| i).collect()
     }
 
-    /// At a message: it, then its turn (the unit: the message); at another
-    /// item (a tool call): its turn.
+    /// At a message: it, then its turn, then the whole session (the unit:
+    /// the message); at another item (a tool call): its turn, the session.
     pub(super) fn tag_things(&self, key: &str) -> Things {
         let Some(index) = key.split(':').next().and_then(|i| i.parse::<usize>().ok()) else { return Things::default() };
         let places = self.tag_places();
         let Some(Some((session, turn, message))) = places.get(index).cloned() else { return Things::default() };
         let known = harness_contracts::Known { chat: self.who(&session), ..harness_contracts::Known::default() };
         let turn_thing = Thing::named(Subject::ChatTurn { session: session.clone(), turn, turn_id: String::new() }, &known);
+        let whole = Thing::named(Subject::ChatSession { session: session.clone() }, &known);
         match message {
-            Some(m) => Things { at: vec![Thing::named(Subject::ChatMessage { session, turn, message: m, turn_id: String::new() }, &known), turn_thing], unit: 0 },
-            None => Things { at: vec![turn_thing], unit: 0 },
+            Some(m) => Things { at: vec![Thing::named(Subject::ChatMessage { session, turn, message: m, turn_id: String::new() }, &known), turn_thing, whole], unit: 0 },
+            None => Things { at: vec![turn_thing, whole], unit: 0 },
         }
     }
 

@@ -24,6 +24,9 @@ pub struct Notification {
     /// The terminal it's about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal: Option<crate::ids::TerminalId>,
+    /// The discussion it's about (one waiting on the user).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discussion: Option<crate::ids::DiscussionId>,
     pub title: String,
     pub detail: Option<String>,
     pub at_ms: u64,
@@ -63,12 +66,15 @@ pub enum NotificationKind {
     /// A long command in a terminal finished: well, or not.
     CommandFinished,
     CommandFailed,
+    /// A discussion waits on the user: answered (settle or reopen it), or
+    /// an agent asks them.
+    Discussion,
 }
 
 impl NotificationKind {
     pub fn level(self) -> Level {
         match self {
-            Self::Approval | Self::Question | Self::Link | Self::SignIn => Level::Waiting,
+            Self::Approval | Self::Question | Self::Link | Self::SignIn | Self::Discussion => Level::Waiting,
             Self::SessionCrashed | Self::TurnFailed | Self::TurnFinished | Self::Message | Self::ServerLost | Self::TerminalBell | Self::ShellEnded | Self::CommandFinished | Self::CommandFailed => Level::Update,
         }
     }
@@ -143,6 +149,11 @@ impl NotificationId {
         Self::new(format!("signin:{instance}:{time}"))
     }
 
+    /// A discussion waiting on the user (one at a time: its move comes and goes).
+    pub fn discussion(discussion: &crate::ids::DiscussionId) -> Self {
+        Self::new(format!("disc:{discussion}"))
+    }
+
     pub fn message(unique: &str) -> Self {
         Self::new(format!("msg:{unique}"))
     }
@@ -170,7 +181,7 @@ mod tests {
     use super::*;
 
     fn note(id: &str, kind: NotificationKind, at_ms: u64) -> Notification {
-        Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
+        Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, discussion: None, title: id.into(), detail: None, at_ms, state: NotificationState::Open }
     }
 
     #[test]

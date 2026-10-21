@@ -1,5 +1,6 @@
-//! The chats as owners of things notes are on: a turn of a session, a
-//! message of a turn (`Subject::ChatTurn`, `Subject::ChatMessage`), by the
+//! The chats as owners of things notes are on: a whole session, a turn of
+//! it, a message of a turn (`Subject::ChatSession`, `Subject::ChatTurn`,
+//! `Subject::ChatMessage`), by the
 //! harness's id for the session (it outlives our threads) and the turn's
 //! number. Named by the agent slot whose session it is (`chat lead turn 3
 //! message 2`; a session that isn't its slot's current one, with the start
@@ -212,15 +213,31 @@ fn turn_text(items: &[TurnItem]) -> String {
 
 impl nah_things::Resolve for Chats {
     fn owns(&self, subject: &Subject) -> bool {
-        matches!(subject, Subject::ChatTurn { .. } | Subject::ChatMessage { .. })
+        matches!(subject, Subject::ChatSession { .. } | Subject::ChatTurn { .. } | Subject::ChatMessage { .. })
     }
 
     fn name(&self, subject: &Subject) -> String {
-        let (Subject::ChatTurn { session, .. } | Subject::ChatMessage { session, .. }) = subject else { return String::new() };
+        let (Subject::ChatSession { session } | Subject::ChatTurn { session, .. } | Subject::ChatMessage { session, .. }) = subject else { return String::new() };
         subject.name(&harness_contracts::Known { chat: self.who(session), ..harness_contracts::Known::default() })
     }
 
     fn now(&self, subject: &Subject) -> Option<String> {
+        // A whole session: each turn, numbered.
+        if let Subject::ChatSession { session } = subject {
+            let (mut turns, items) = self.running(session)?;
+            turns.sort_by_key(|t| t.ordinal);
+            return Some(
+                turns
+                    .iter()
+                    .map(|turn| {
+                        let mut of: Vec<TurnItem> = items.iter().filter(|i| i.turn_id == turn.id).cloned().collect();
+                        of.sort_by_key(|i| i.ordinal);
+                        format!("turn {}\n{}", turn.ordinal, turn_text(&of))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
         let (_, items) = self.turn(turn_at(subject)?)?;
         match subject {
             Subject::ChatTurn { .. } => Some(turn_text(&items)),
@@ -233,11 +250,12 @@ impl nah_things::Resolve for Chats {
         }
     }
 
-    /// `chat <slot>[@<id's start>] turn <n>[ message <m>]` (no id: the
-    /// slot's session open now), or `chat session <id's start> turn …`.
+    /// `chat <slot>[@<id's start>][ turn <n>[ message <m>]]` (no id: the
+    /// slot's session open now; no turn: all of it), or `chat session
+    /// <id's start>…`.
     fn named(&self, words: &str) -> Option<Result<Subject, String>> {
         let rest = words.trim().strip_prefix("chat ")?;
-        let (who, what) = rest.split_once(" turn ")?;
+        let (who, what) = rest.split_once(" turn ").map_or((rest, None), |(who, what)| (who, Some(what)));
         Some((|| {
             let sessions = |slots: Vec<Slot>| slots.into_iter().flat_map(|s| s.sessions.into_iter().filter_map(|x| x.native_id)).collect::<Vec<_>>();
             let session = if let Some(start) = who.strip_prefix("session ") {
@@ -257,6 +275,7 @@ impl nah_things::Resolve for Chats {
                 }
                 .ok_or_else(|| format!("{slot_name} has no session {}", start.unwrap_or("open now")))?
             };
+            let Some(what) = what else { return Ok(Subject::ChatSession { session }) };
             let number = |n: &str| n.trim().parse::<u32>().map_err(|_| format!("{n:?} isn't a number"));
             Ok(match what.split_once(" message ") {
                 Some((turn, message)) => Subject::ChatMessage { session, turn: number(turn)?, message: number(message)?, turn_id: String::new() },
@@ -267,6 +286,9 @@ impl nah_things::Resolve for Chats {
 
     /// The turn's still in the session (its text isn't built to say so).
     fn there(&self, subject: &Subject) -> bool {
+        if let Subject::ChatSession { session } = subject {
+            return self.thread_of(session).is_some();
+        }
         turn_at(subject).is_some_and(|at| self.turn(at).is_some())
     }
 
@@ -346,12 +368,12 @@ impl nah_things::Resolve for Chats {
 
     /// A session is the harness's: what's noted in it is kept in the logs.
     fn lasts(&self, subject: &Subject) -> bool {
-        !matches!(subject, Subject::ChatTurn { .. } | Subject::ChatMessage { .. })
+        !matches!(subject, Subject::ChatSession { .. } | Subject::ChatTurn { .. } | Subject::ChatMessage { .. })
     }
 
-    /// A turn's tool calls say what they gave as detail.
+    /// A turn's tool calls (a session's) say what they gave as detail.
     fn detailed(&self, subject: &Subject) -> bool {
-        matches!(subject, Subject::ChatTurn { .. })
+        matches!(subject, Subject::ChatSession { .. } | Subject::ChatTurn { .. })
     }
 }
 

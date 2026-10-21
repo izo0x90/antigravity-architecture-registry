@@ -37,6 +37,7 @@ mod look;
 pub(crate) mod notes;
 mod outside;
 mod plan_items;
+mod starting;
 mod tagging;
 mod views;
 
@@ -51,7 +52,7 @@ pub use crate::kind::BufferKind;
 
 /// What an edit of a tag changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TagEditing {
+pub(crate) enum TagEditing {
     Rename,
     Recolour,
     Note,
@@ -119,6 +120,13 @@ enum ShellCommand {
     TagEditWhich(TagEditing),
     /// A plan's item's state (its value: open, decided, done, dropped).
     ItemState(arch_graph::PlanId, arch_graph::ItemId),
+    /// A discussion started on the thing at the cursor: what it is (its
+    /// value: question, change_request), then what it says.
+    Discuss,
+    /// Discussing: the next of the things at the cursor.
+    DiscussLevel,
+    /// What the discussion picked asks (its value).
+    DiscussWrite,
     Back,
     Forward,
     Keys,
@@ -293,6 +301,8 @@ pub struct CockpitApp {
     /// The marks in the gutter of notes as drawn (each host's), with what
     /// they say.
     note_marks: Vec<(crate::keymap::Host, egui::Rect, String)>,
+    /// What's noted, as the gutters draw it.
+    noted: notes::Noted,
     palette: crate::palette::Palette,
 
     // Top-bar status LEDs
@@ -360,6 +370,7 @@ impl CockpitApp {
             item_buttons: None,
             item_bars: Vec::new(),
             note_marks: Vec::new(),
+            noted: notes::Noted::default(),
             palette: crate::palette::Palette::default(),
 
             srv_led: ActivityLed::default(),

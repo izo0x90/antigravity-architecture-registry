@@ -106,6 +106,8 @@ pub enum Subject {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         typed: String,
     },
+    /// A chat session, all of it (the harness's session id).
+    ChatSession { session: NativeId },
     /// A turn of a chat (by its number in the session: the harness's
     /// session id, which outlives our threads): your message, the answer,
     /// its tool calls; and the turn's own id (kept when it's noted: the
@@ -138,6 +140,8 @@ pub enum Subject {
     /// snapshot (the changes' timeline; none yet: the files now, kept as
     /// one when it's tagged); kept where they are as the files change.
     CodeLines { path: String, first: u32, last: u32, #[serde(default)] snapshot: String },
+    /// A file of the project, all of it (as it is now).
+    CodeFile { path: String },
     /// A plan, as a whole.
     Plan { plan: arch_graph::PlanId },
     /// A component of a plan (its card).
@@ -224,7 +228,8 @@ impl Subject {
     /// Its name: the one name a thing has, wherever it's shown (the
     /// cockpit's picker, a tag, an agent's tools) and named back by
     /// (`terminal t1 lines 4-9 (of command 3)`, `src/a.rs line 12`, `chat
-    /// lead@4f2a91c0 turn 3 message 2`, `component rust:app::save`). What's in
+    /// lead@4f2a91c0 turn 3 message 2`, `component rust:app::save`, `file
+    /// src/a.rs`). What's in
     /// brackets says more; naming it back doesn't need it.
     pub fn name(&self, known: &Known) -> String {
         let terminal = |terminal: &TerminalId| match known.start {
@@ -235,10 +240,12 @@ impl Subject {
         match self {
             Self::TerminalLines { terminal: t, first, last, command, .. } => format!("{} {}{}", terminal(t), lines_words(first, last), command.map(|c| format!(" (of command {c})")).unwrap_or_default()),
             Self::TerminalCommand { terminal: t, command, typed, .. } => format!("{} command {command}{}", terminal(t), more(typed.lines().next().unwrap_or_default())),
+            Self::ChatSession { .. } => format!("chat {}", known.chat),
             Self::ChatTurn { turn, .. } => format!("chat {} turn {turn}", known.chat),
             Self::ChatMessage { turn, message, .. } => format!("chat {} turn {turn} message {message}", known.chat),
             Self::Component { id, .. } => format!("component {id}"),
             Self::CodeLines { path, first, last, .. } => format!("{path} {}", lines_words(first, last)),
+            Self::CodeFile { path } => format!("file {path}"),
             Self::Plan { plan } => format!("plan {plan}"),
             Self::PlanComponent { plan, id } => format!("plan {plan} component {id}"),
             Self::PlanSection { plan, id, section } => format!("plan {plan} component {id} section {section}"),
@@ -316,6 +323,9 @@ impl Subject {
             // Lines of a file: where they are now (one side's snapshot not
             // taken yet: the files now, as the other's are kept).
             (Self::CodeLines { path, first, last, snapshot }, Self::CodeLines { path: p, first: f, last: l, snapshot: s }) => path == p && first <= f && l <= last && (snapshot == s || snapshot.is_empty() || s.is_empty()),
+            // A file has its lines in it; a session, its turns and messages.
+            (Self::CodeFile { path }, Self::CodeLines { path: p, .. }) => path == p,
+            (Self::ChatSession { session }, Self::ChatTurn { session: s, .. } | Self::ChatMessage { session: s, .. }) => session == s,
             // A plan has its parts in it; a component, its sections.
             (Self::Plan { plan }, Self::PlanComponent { plan: p, .. } | Self::PlanSection { plan: p, .. } | Self::PlanRelation { plan: p, .. } | Self::PlanItem { plan: p, .. }) => plan == p,
             (Self::PlanComponent { plan, id }, Self::PlanSection { plan: p, id: i, .. }) => plan == p && id == i,
@@ -416,6 +426,13 @@ mod tests {
         let message = Subject::ChatMessage { session: NativeId::new("4f2a91c0aa"), turn: 3, message: 2, turn_id: "u7".into() };
         assert_eq!(message.name(&known(None)), "chat lead@4f2a91c0 turn 3 message 2");
         assert_eq!(chat_who(Some("lead"), &NativeId::new("4f2a91c0aa")), "lead@4f2a91c0");
+        // A whole session, a whole file: their parts in them.
+        let session = Subject::ChatSession { session: NativeId::new("4f2a91c0aa") };
+        assert_eq!(session.name(&known(None)), "chat lead@4f2a91c0");
+        assert!(session.contains(&message) && !Subject::ChatSession { session: NativeId::new("other") }.contains(&message));
+        let file = Subject::CodeFile { path: "src/a.rs".into() };
+        assert_eq!(file.name(&Known::default()), "file src/a.rs");
+        assert!(file.contains(&code) && file.touches(&code) && !Subject::CodeFile { path: "src/b.rs".into() }.contains(&code));
         for ok in ["flaky-build", "a_1", "X"] {
             assert!(tag_name_ok(ok), "{ok}");
         }

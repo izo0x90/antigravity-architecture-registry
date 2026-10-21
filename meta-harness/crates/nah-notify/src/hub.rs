@@ -223,7 +223,7 @@ impl NotifyHub {
         let next = match change {
             Change::Open(n) => match self.store.get(&n.id) {
                 Ok(Some(_)) => return None,
-                Ok(None) => n,
+                Ok(None) => *n,
                 Err(e) => {
                     tracing::warn!("notification {} couldn't be read: {e}", n.id);
                     return None;

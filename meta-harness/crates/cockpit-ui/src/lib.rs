@@ -11,6 +11,7 @@ pub mod panels;
 pub mod config;
 pub mod conversation;
 pub mod diff;
+pub mod discussion;
 pub mod discussions;
 pub mod feedback;
 pub mod graph;

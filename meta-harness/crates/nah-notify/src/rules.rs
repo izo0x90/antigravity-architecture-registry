@@ -38,9 +38,14 @@ pub trait World {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
     /// A new one (a repeat of one that exists, in any state, changes nothing).
-    Open(Notification),
+    Open(Box<Notification>),
     /// An open one ends.
     End { id: NotificationId, to: NotificationState },
+}
+
+/// A new one, as a change.
+fn opened(notification: Notification) -> Change {
+    Change::Open(Box::new(notification))
 }
 
 /// The longest detail kept (a turn's reply, say): the rest is in the chat.
@@ -68,6 +73,7 @@ fn new(id: NotificationId, kind: NotificationKind, slot: Option<&SlotRef>, threa
         thread: thread.cloned(),
         request: None,
         terminal: None,
+        discussion: None,
         title,
         detail,
         at_ms: world.now_ms(),
@@ -95,7 +101,7 @@ pub fn derive(event: &ClientEvent, world: &dyn World, open: &BTreeMap<Notificati
             let slot = world.slot_of(&request.thread_id);
             let mut n = new(id, kind, slot.as_ref(), Some(&request.thread_id), request.title.clone(), request.detail.clone(), world);
             n.request = Some(request.id.clone());
-            vec![Change::Open(n)]
+            vec![opened(n)]
         }
         ClientEvent::InstanceUpdated { snapshot } => {
             let prefix = sign_in_prefix(&snapshot.instance_id);
@@ -104,7 +110,7 @@ pub fn derive(event: &ClientEvent, world: &dyn World, open: &BTreeMap<Notificati
                 AuthStatus::SignedOut if mine.is_empty() && world.in_use(&snapshot.instance_id) => {
                     let id = NotificationId::sign_in(&snapshot.instance_id, world.sign_ins(&snapshot.instance_id) + 1);
                     let title = format!("{} needs signing in", snapshot.display_name);
-                    vec![Change::Open(new(id, NotificationKind::SignIn, None, None, title, None, world))]
+                    vec![opened(new(id, NotificationKind::SignIn, None, None, title, None, world))]
                 }
                 AuthStatus::SignedIn => mine.into_iter().map(|id| Change::End { id: id.clone(), to: NotificationState::Done }).collect(),
                 _ => Vec::new(),
@@ -121,21 +127,49 @@ pub fn derive(event: &ClientEvent, world: &dyn World, open: &BTreeMap<Notificati
             match turn.status {
                 TurnStatus::Failed => {
                     let detail = turn.failure.as_ref().map(|f| f.message.clone());
-                    vec![Change::Open(new(id, NotificationKind::TurnFailed, Some(&slot), Some(&turn.thread_id), format!("{}'s turn failed", slot.name), detail, world))]
+                    vec![opened(new(id, NotificationKind::TurnFailed, Some(&slot), Some(&turn.thread_id), format!("{}'s turn failed", slot.name), detail, world))]
                 }
                 TurnStatus::Completed => {
                     let title = if slot.lead && !world.queued(&turn.thread_id) { "The lead is idle".to_owned() } else { format!("{} finished a turn", slot.name) };
                     let detail = clip(&world.reply(&turn.thread_id, &turn.id));
-                    vec![Change::Open(new(id, NotificationKind::TurnFinished, Some(&slot), Some(&turn.thread_id), title, detail, world))]
+                    vec![opened(new(id, NotificationKind::TurnFinished, Some(&slot), Some(&turn.thread_id), title, detail, world))]
                 }
                 _ => Vec::new(),
             }
         }
         // A bell rung while one is open is the same news.
         ClientEvent::TerminalNews { news: TerminalNews::Bell, terminal } if open.values().any(|n| n.kind == NotificationKind::TerminalBell && n.terminal.as_ref() == Some(&terminal.id)) => Vec::new(),
-        ClientEvent::TerminalNews { terminal, news } => vec![Change::Open(terminal_news(terminal, *news, world))],
+        ClientEvent::TerminalNews { terminal, news } => vec![opened(terminal_news(terminal, *news, world))],
+        ClientEvent::DiscussionUpdated { discussion } => discussion_news(discussion, world, open),
+        ClientEvent::DiscussionRemoved { discussion_id } => {
+            let id = NotificationId::discussion(discussion_id);
+            open.contains_key(&id).then_some(Change::End { id, to: NotificationState::Done }).into_iter().collect()
+        }
         _ => Vec::new(),
     }
+}
+
+/// A discussion waiting on the user (answered: settle or reopen it; an
+/// agent asking them), as one notification while it does; done once it
+/// doesn't. The same one while nothing new is said.
+fn discussion_news(d: &harness_contracts::Discussion, world: &dyn World, open: &BTreeMap<NotificationId, Notification>) -> Vec<Change> {
+    let id = NotificationId::discussion(&d.id);
+    if d.whose_move() != harness_contracts::Move::User {
+        return open.contains_key(&id).then_some(Change::End { id, to: NotificationState::Done }).into_iter().collect();
+    }
+    let last = d.said.last();
+    let who = |by: &str| if by == "user" { "you".to_owned() } else { by.to_owned() };
+    let title = match (d.status, last) {
+        (harness_contracts::DiscussionStatus::Answered, Some(said)) => format!("{} answered {} on {}: settle or reopen it", who(&said.by), d.id, d.on.what),
+        _ => format!("{} asks you on {} ({})", who(&d.by), d.on.what, d.id),
+    };
+    let detail = last.and_then(|s| clip(&s.text));
+    if open.get(&id).is_some_and(|n| n.title == title && n.detail == detail) {
+        return Vec::new();
+    }
+    let mut n = new(id, NotificationKind::Discussion, None, None, title, detail, world);
+    n.discussion = Some(d.id.clone());
+    vec![opened(n)]
 }
 
 /// What a terminal's program or shell did, as a notification about it
@@ -171,7 +205,7 @@ pub fn took(ms: u64) -> String {
 fn crashed(thread: &ThreadId, why: &str, world: &dyn World) -> Vec<Change> {
     let Some(slot) = world.slot_of(thread) else { return Vec::new() };
     let title = format!("{}'s session stopped", slot.name);
-    vec![Change::Open(new(NotificationId::crash(thread), NotificationKind::SessionCrashed, Some(&slot), Some(thread), title, Some(format!("{why}; its next prompt resumes it")), world))]
+    vec![opened(new(NotificationId::crash(thread), NotificationKind::SessionCrashed, Some(&slot), Some(thread), title, Some(format!("{why}; its next prompt resumes it")), world))]
 }
 
 /// A server home links to stopped answering (the `time`th time).
@@ -185,6 +219,7 @@ pub fn server_lost(server: &str, reason: &str, time: u32, now_ms: u64) -> Notifi
         thread: None,
         request: None,
         terminal: None,
+        discussion: None,
         title: format!("{server} stopped answering"),
         detail: Some(format!("{reason}; home keeps trying")),
         at_ms: now_ms,

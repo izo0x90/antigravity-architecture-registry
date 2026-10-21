@@ -11,6 +11,7 @@ fn note(id: &str, kind: NotificationKind, slot: &str, request: Option<&str>, at_
         level: kind.level(),
         kind,
         terminal: None,
+        discussion: None,
         slot: Some(SlotId::new(slot)),
         thread: Some(ThreadId::new("t")),
         request: request.map(RequestId::new),

@@ -29,7 +29,7 @@ impl Reach {
             return true;
         }
         let session = match subject {
-            Subject::ChatTurn { session, .. } | Subject::ChatMessage { session, .. } => session,
+            Subject::ChatSession { session } | Subject::ChatTurn { session, .. } | Subject::ChatMessage { session, .. } => session,
             // A discussion as what it's on (one on a discussion, as that one).
             Subject::Discussion { id } => return self.discussions.get(id).is_ok_and(|d| d.on.subject != *subject && self.reaches(&d.on.subject)),
             _ => return true,

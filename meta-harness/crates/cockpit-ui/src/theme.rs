@@ -252,6 +252,11 @@ look! {
     /// wider), and this share of the screen's height.
     quick_look_width,
     quick_look_height,
+    /// The gutter of notes: a tag's bar this wide, bars this far apart,
+    /// a discussion's mark this big.
+    gutter_bar,
+    gutter_gap,
+    gutter_mark,
 }
 
 /// The built-in look (the `defaults_parse` test keeps it loadable).
@@ -376,7 +381,16 @@ pub fn caret_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
 /// A tag's mark where it's named: a solid tag in its colour (the outline
 /// one until the fonts are in, the first frame).
 pub fn tag_mark(ui: &egui::Ui, colour: Color32, size: f32) -> egui::RichText {
-    let solid_in = ui.fonts(|f| f.definitions().families.contains_key(&egui::FontFamily::Name(SOLID.into())));
+    // Whether the solid icons' font is in: found once for the context
+    // (fonts are set up at start), not looked for each time.
+    let found = egui::Id::new("solid_icons_in");
+    let solid_in = ui.ctx().data(|d| d.get_temp::<bool>(found)).unwrap_or(false) || {
+        let now = ui.fonts(|f| f.definitions().families.contains_key(&egui::FontFamily::Name(SOLID.into())));
+        if now {
+            ui.ctx().data_mut(|d| d.insert_temp(found, true));
+        }
+        now
+    };
     let mark = if solid_in { egui::RichText::new(egui_phosphor::fill::TAG).font(solid(size)) } else { egui::RichText::new(egui_phosphor::regular::TAG).size(size) };
     mark.color(colour)
 }
@@ -426,6 +440,15 @@ mod glyph_tests {
         ("diff.rs", include_str!("diff.rs")),
         ("agents.rs", include_str!("agents.rs")),
         ("touch.rs", include_str!("touch.rs")),
+        ("discussion.rs", include_str!("discussion.rs")),
+        ("conversation.rs", include_str!("conversation.rs")),
+        ("hosted.rs", include_str!("hosted.rs")),
+        ("card.rs", include_str!("card.rs")),
+        ("tag_list.rs", include_str!("tag_list.rs")),
+        ("tree/plan.rs", include_str!("tree/plan.rs")),
+        ("app/notes.rs", include_str!("app/notes.rs")),
+        ("app/starting.rs", include_str!("app/starting.rs")),
+        ("app/tagging.rs", include_str!("app/tagging.rs")),
         ("../config/default.toml", include_str!("../config/default.toml")),
     ];
 

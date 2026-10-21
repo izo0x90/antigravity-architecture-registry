@@ -191,7 +191,7 @@ fn f_labels_what_is_on_screen_in_every_view() {
     app.desk.graph_mut().set_tree(sample_tree());
     // Something in the inbox, to label.
     let kind = harness_contracts::NotificationKind::TurnFinished;
-    let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new("turn:1"), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, title: "done".into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
+    let notification = harness_contracts::Notification { id: harness_contracts::NotificationId::new("turn:1"), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, discussion: None, title: "done".into(), detail: None, at_ms: 0, state: harness_contracts::NotificationState::Open };
     app.desk.shared.agents.get_mut().apply(harness_contracts::ClientEvent::NotificationUpdated { notification });
     // A changed file, to label.
     use harness_contracts::changes::{ChangeList, ChangedFile, Comparison, FileStatus, Group};
@@ -211,6 +211,16 @@ fn f_labels_what_is_on_screen_in_every_view() {
             plan.items = vec![arch_graph::Item { id: arch_graph::ItemId("i1".into()), parent: None, title: "Decide".into(), text: String::new(), state: arch_graph::ItemState::Open }];
             assert!(app.desk.net.answer("GET /api/arch/plans/p", 200, &serde_json::to_value(plan).unwrap()));
             for _ in 0..3 {
+                frame(&ctx, &mut app, vec![]);
+            }
+        }
+        // A discussion: one shown.
+        if kind == BufferKind::Discussion {
+            let on = harness_contracts::Subject::Plan { plan: PlanId::new("p").unwrap() };
+            told(&app, harness_contracts::ClientEvent::DiscussionUpdated { discussion: crate::review::tests::discussion(1, on, harness_contracts::DiscussionStatus::Open) });
+            frame(&ctx, &mut app, vec![]);
+            let _ = app.desk.view_mut(kind).show_target(&Target::Discussion(harness_contracts::DiscussionId::new("d1")));
+            for _ in 0..2 {
                 frame(&ctx, &mut app, vec![]);
             }
         }
@@ -463,10 +473,10 @@ fn spec_keys_walk_items_and_review_them() {
     assert_eq!(app.desk.spec().current, crate::card::Section::Logic);
     keys(&ctx, &mut app, "j");
     assert_eq!(app.desk.spec().entry().unwrap().item, crate::spec::SpecItem::Step(0));
-    frame(&ctx, &mut app, key("c"));
+    // C: a discussion on the step, its kind picked first (the shell's, as anywhere).
+    frame(&ctx, &mut app, key("C"));
     frame(&ctx, &mut app, vec![]);
-    assert_eq!(app.input_mode, InputMode::Insert { at: Host::Panel(1) }, "c: the composer has the keyboard");
-    assert!(app.desk.spec().composer.is_some());
+    assert_eq!(app.palette.picking(), Some("discuss.start"));
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert_eq!(app.input_mode, InputMode::Normal);
 }

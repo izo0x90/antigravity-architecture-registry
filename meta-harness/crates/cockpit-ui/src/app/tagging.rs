@@ -20,20 +20,20 @@ use crate::tags::{TagAct, first_line, thing_name};
 
 impl CockpitApp {
     /// The things at the cursor where you are that a tag can be on.
-    fn things_here(&self, here: Here) -> Things {
+    pub(super) fn things_here(&self, here: Here) -> Things {
         let view = self.desk.view(here.kind);
         view.cursor_key().map(|key| view.things(&key)).unwrap_or_default()
     }
 
     /// Which of the things at the cursor tagging is on: the one picked in
     /// the tag picker open now, else the unit.
-    fn level(&self, things: &Things) -> usize {
+    pub(super) fn level(&self, things: &Things) -> usize {
         let picked = self.desk.tag_level.as_ref().filter(|(opening, _)| *opening == self.palette.opening());
         picked.and_then(|(_, subject)| things.at.iter().position(|t| t.subject.same_thing(subject))).unwrap_or(things.unit)
     }
 
     /// The thing tagging is on.
-    fn subject_here(&self, here: Here) -> Option<Subject> {
+    pub(super) fn subject_here(&self, here: Here) -> Option<Subject> {
         let things = self.things_here(here);
         things.picked(Some(self.level(&things))).map(|t| t.subject.clone())
     }
@@ -140,6 +140,12 @@ impl CockpitApp {
                 .when(when(self.desk.view(here.kind).takes_typed() && !tags.list().is_empty())),
         );
         // `g T` picked a tag on several things: which.
+        // An edit's tag picked (of several): its value asked for.
+        if let Some((edit, tag)) = self.desk.tag_editing.as_ref().and_then(|(edit, id)| Some((*edit, at.tags.iter().find(|t| t.id == *id)?))) {
+            let mut action = Self::edit_action(edit, tag);
+            action.id = "tag.edit.picked".into();
+            out.push(action);
+        }
         if let Some(tag) = self.desk.tag_picking.as_ref().and_then(|id| tags.get(id)) {
             let choices = tag.on.iter().map(|on| Choice::new(serde_json::to_string(&on.subject).unwrap_or_default(), thing_name(&on.what)).detail(Some(crate::tags::tagged_by(on)))).collect();
             out.push(Action::new("tag.goto.pick", format!("Go to which thing {} is on?", tag.name), "It's on several: pick one", S::TagGoToPick).param(Param::Choice(choices)).group(Group::GoTo));
@@ -209,15 +215,16 @@ impl CockpitApp {
                     self.note = Some("That tag is gone, or isn't here any more.".into());
                     return;
                 };
-                let action = Self::edit_action(*edit, &tag);
-                if action.param == Param::None {
+                if Self::edit_action(*edit, &tag).param == Param::None {
                     self.run_tag(&ShellCommand::TagEdit(*edit, tag.id), None, ctx);
                 } else {
-                    self.open_palette(Some(&crate::actions::Bound { action, origin: crate::actions::Origin::Shell, leader: None, keys: Vec::new(), gestures: Vec::new(), layer: crate::actions::Layer::On }));
+                    self.desk.tag_editing = Some((*edit, tag.id));
+                    self.run_by_id("tag.edit.picked", None, ctx);
                 }
             }
             (ShellCommand::TagEdit(edit, tag), _, value) => {
                 use TagEditing as E;
+                self.desk.tag_editing = None;
                 if self.desk.shared.tags.get().get(tag).is_none() {
                     self.note = Some("That tag is gone (deleted since).".into());
                     return;

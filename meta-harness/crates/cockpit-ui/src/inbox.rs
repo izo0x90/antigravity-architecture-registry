@@ -2,7 +2,8 @@
 //! notifications), one at a time. A view like the others: the cursor moves
 //! over its parts (what it says, its request, what the agent said last);
 //! on its request, the request's answers show under it (its actions, with
-//! their keys); Enter opens its chat. It shows in a panel, or in the quick look over
+//! their keys); Enter opens its chat (a discussion waiting on you: the
+//! discussion). It shows in a panel, or in the quick look over
 //! one. What it asks for beyond itself (the next item on another server,
 //! its chat, putting it away, an answer) it hands the shell as an ask.
 
@@ -140,12 +141,14 @@ impl InboxView {
     /// Opens what it's about: its agent's chat, or its terminal.
     fn open_chat(&mut self) -> Step {
         let Some(n) = self.shown.as_ref().map(|s| &s.notification) else { return Step::Nothing("Nothing needs you.".into()) };
-        let (target, in_) = match (&n.slot, &n.terminal) {
-            (Some(slot), _) => (Target::Agent { slot: Some(slot.clone()), thread: n.thread.clone() }, BufferKind::Chat),
-            (None, Some(terminal)) => (Target::Terminal(terminal.clone()), BufferKind::Terminal),
-            (None, None) => return Step::Nothing("It's from no agent's chat or terminal.".into()),
+        let (target, in_) = match (&n.slot, &n.terminal, &n.discussion) {
+            // A discussion: it opens where discussions open (over what you're on).
+            (_, _, Some(discussion)) => (Target::Discussion(discussion.clone()), None),
+            (Some(slot), _, None) => (Target::Agent { slot: Some(slot.clone()), thread: n.thread.clone() }, Some(BufferKind::Chat)),
+            (None, Some(terminal), None) => (Target::Terminal(terminal.clone()), Some(BufferKind::Terminal)),
+            (None, None, None) => return Step::Nothing("It's from no agent's chat, terminal or discussion.".into()),
         };
-        self.asks.push(Ask::Show { target, in_: Some(in_) });
+        self.asks.push(Ask::Show { target, in_ });
         Step::Done
     }
 
@@ -338,8 +341,12 @@ impl InboxView {
     /// an item's parts, and opening its chat from one.
     fn moves(&self) -> Vec<Action> {
         let mut out = crate::nav::list_moves();
-        let chat = self.parts().get(self.cursor).is_some() && self.shown.as_ref().is_some_and(|s| s.notification.slot.is_some());
-        out.push(Move::Enter.offer_if(chat, "Open its chat"));
+        let here = self.parts().get(self.cursor).is_some();
+        let n = self.shown.as_ref().map(|s| &s.notification);
+        out.push(match n {
+            Some(n) if n.discussion.is_some() => Move::Enter.offer_if(here, "Open the discussion"),
+            _ => Move::Enter.offer_if(here && n.is_some_and(|n| n.slot.is_some()), "Open its chat"),
+        });
         out
     }
 }
@@ -361,7 +368,9 @@ impl ActionProvider for InboxView {
         for answer in shown.request.iter().flat_map(crate::request_card::answers) {
             out.push(answer.place(act(&answer.id, &answer.label, "Answers the agent's request this way", Command::Answer(answer.option.clone())).importance(PRIMARY), here));
         }
-        if shown.notification.slot.is_some() {
+        if shown.notification.discussion.is_some() {
+            out.push(act("inbox.open_chat", "Open the discussion", "The discussion that waits on you", Command::OpenChat).importance(PRIMARY).header(Style::Button, "Open it", Some(icon::CHAT_CIRCLE_DOTS)));
+        } else if shown.notification.slot.is_some() {
             out.push(act("inbox.open_chat", "Open its chat", "The agent's chat this came from", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its chat", Some(icon::CHAT_TEARDROP_TEXT)));
         } else if shown.notification.terminal.is_some() {
             out.push(act("inbox.open_chat", "Open its terminal", "The terminal this came from", Command::OpenChat).importance(SECONDARY).header(Style::Button, "Open its terminal", Some(icon::TERMINAL_WINDOW)));

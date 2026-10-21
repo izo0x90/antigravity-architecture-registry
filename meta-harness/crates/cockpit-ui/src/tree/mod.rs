@@ -22,7 +22,7 @@ use egui::RichText;
 
 use crate::actions::{Action, ActionProvider, RunCx};
 use crate::feedback::FeedbackInspectorState;
-use crate::nav::{Fold, Item, Motion, Move, Navigable, Place, SearchEvent, Spot, Step, Target};
+use crate::nav::{Ask, Fold, Item, Motion, Move, Navigable, Place, SearchEvent, Spot, Step, Target};
 use crate::viewport::{Go, Show, Stop, Viewport};
 use crate::hosted::Status;
 use crate::net::NetClient;
@@ -78,6 +78,8 @@ pub struct TreeBuffer {
     row_h: f32,
     /// Rows drawn last frame, and where.
     spots: Vec<Spot>,
+    /// What it asked of the rest of the cockpit, not taken yet.
+    asks: Vec<Ask>,
 }
 
 const ROW_H: f32 = 20.0;
@@ -106,6 +108,7 @@ impl TreeBuffer {
             cursor: None,
             show: None,
             viewport: Viewport::default(),
+            asks: Vec::new(),
             clock: 0.0,
             pitch: 0.0,
             row_h: 0.0,
@@ -546,6 +549,10 @@ impl crate::nav::DrawsThings for TreeBuffer {
 }
 
 impl Navigable for TreeBuffer {
+    fn take_asks(&mut self) -> Vec<Ask> {
+        std::mem::take(&mut self.asks)
+    }
+
     /// What the buffers share, as its source reads it: its rows from
     /// scratch when that changed them (another source in use).
     fn share(&mut self, shared: &crate::shared::Shared) {
@@ -653,8 +660,15 @@ impl Navigable for TreeBuffer {
     fn enter(&mut self) -> Step {
         let Some(id) = self.cursor.clone() else { return Step::Nothing(format!("The {} is empty.", self.source.title().to_lowercase())) };
         // What its source opens there (a plan's item: its card).
-        if let Some((to, _)) = self.source.opens(&id) {
-            return Step::GoTo(to);
+        match self.source.opens(&id) {
+            Some((Some(to), _)) => return Step::GoTo(to),
+            Some((None, _)) => {
+                if let Some(target) = self.source.target(&id) {
+                    self.asks.push(Ask::Show { target, in_: None });
+                    return Step::Done;
+                }
+            }
+            None => {}
         }
         if self.unfold(&id) || self.go_in(&id) {
             return Step::Done;

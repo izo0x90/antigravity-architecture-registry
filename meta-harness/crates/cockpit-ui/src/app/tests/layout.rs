@@ -221,14 +221,13 @@ fn typing_in_the_quick_look_stays_there_over_a_chat_or_a_spec() {
     for kind in [BufferKind::Chat, BufferKind::Spec] {
         let (ctx, mut app) = full_app();
         focus(&ctx, &mut app, kind);
-        // The panel's own box has the keyboard first.
-        match kind {
-            BufferKind::Spec => drop(from_outside(&ctx, &mut app, r#"{"op":"run","id":"spec.comment"}"#).unwrap()),
-            _ => app.input_mode = InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) },
+        // The panel's own box (a chat's) has the keyboard first.
+        if kind == BufferKind::Chat {
+            app.input_mode = InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) };
+            frame(&ctx, &mut app, vec![]);
+            assert_eq!(app.input_mode, InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) }, "{kind:?}: its box has the keyboard");
+            frame(&ctx, &mut app, press(egui::Key::Escape, false));
         }
-        frame(&ctx, &mut app, vec![]);
-        assert_eq!(app.input_mode, InputMode::Insert { at: Host::Panel(app.desk.panels.focused()) }, "{kind:?}: its box has the keyboard");
-        frame(&ctx, &mut app, press(egui::Key::Escape, false));
         frame(&ctx, &mut app, key("t"));
         frame(&ctx, &mut app, vec![]);
         frame(&ctx, &mut app, key("hello"));
@@ -237,7 +236,7 @@ fn typing_in_the_quick_look_stays_there_over_a_chat_or_a_spec() {
         app.close_quick_look();
         let in_panel = match kind {
             BufferKind::Chat => app.desk.chat().ui.input.text.clone(),
-            _ => app.desk.spec().composer.as_ref().map(|_| app.desk.spec().writing.text.clone()).unwrap_or_default(),
+            _ => String::new(),
         };
         assert_eq!((in_look.as_str(), in_panel.as_str()), ("hello", ""), "over a {kind:?}: typing goes into the quick look, not the panel under it");
     }

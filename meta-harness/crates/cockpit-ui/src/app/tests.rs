@@ -62,6 +62,30 @@ fn drawn_rects(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
     out
 }
 
+/// Where text with `words` in it is drawn.
+fn drawn_containing(output: &egui::FullOutput, words: &str) -> Vec<egui::Rect> {
+    fn collect(shape: &egui::Shape, words: &str, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Text(t) if t.galley.text().contains(words) => out.push(egui::Rect::from_min_size(t.pos, t.galley.size())),
+            egui::Shape::Vec(list) => list.iter().for_each(|s| collect(s, words, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        collect(&clipped.shape, words, &mut out);
+    }
+    out
+}
+
+/// A click at `at` (a mouse: moved there, pressed, let go).
+fn click(ctx: &egui::Context, app: &mut CockpitApp, at: egui::Pos2) {
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    for events in [vec![egui::Event::PointerMoved(at)], vec![button(true)], vec![button(false)], vec![]] {
+        frame(ctx, app, events);
+    }
+}
+
 /// The bars painted in `colour` (the tag gutter's), top to bottom.
 fn bars(output: &egui::FullOutput, colour: egui::Color32) -> Vec<egui::Rect> {
     fn collect(shape: &egui::Shape, colour: egui::Color32, out: &mut Vec<egui::Rect>) {

@@ -150,11 +150,18 @@ impl TreeSource for PlanTree {
         true
     }
 
+    /// A discussion's row: the discussion; else the plan's part.
     fn target(&self, key: &str) -> Option<Target> {
+        if let Some(d) = self.discussion(key) {
+            return Some(Target::Discussion(d.id.clone()));
+        }
         Some(Target::Plan { plan: self.plan.clone()?, part: self.part(key)? })
     }
 
     fn key_of(&self, target: &Target) -> Option<String> {
+        if let Target::Discussion(id) = target {
+            return self.discussions.iter().any(|d| d.id == *id).then(|| format!("discussion:{id}"));
+        }
         let Target::Plan { plan, part } = target else { return None };
         if Some(plan) != self.plan.as_ref() {
             return None;
@@ -167,26 +174,19 @@ impl TreeSource for PlanTree {
         }
     }
 
-    /// An item: its card; a discussion: the card of what it's on.
-    fn opens(&self, key: &str) -> Option<(crate::nav::GoTo, String)> {
+    /// An item: its card; a discussion: the discussion.
+    fn opens(&self, key: &str) -> Option<(Option<crate::nav::GoTo>, String)> {
         if let Some(d) = self.discussion(key) {
-            return Some((crate::nav::GoTo::Spec, format!("Open the card {} is on", d.id)));
+            return Some((None, format!("Open {}", d.id)));
         }
         let item = key.strip_prefix("item:")?;
         let title = match &self.read {
             Some(Ok(plan)) => plan.item(&arch_graph::ItemId(item.to_owned())).map_or_else(|| item.to_owned(), |i| i.title.clone()),
             _ => item.to_owned(),
         };
-        Some((crate::nav::GoTo::Spec, format!("Open {title}'s card")))
+        Some((Some(crate::nav::GoTo::Spec), format!("Open {title}'s card")))
     }
 
-    /// A discussion's row is the discussion.
-    fn thing(&self, key: &str) -> Option<Subject> {
-        match self.discussion(key) {
-            Some(d) => Some(Subject::Discussion { id: d.id.clone() }),
-            None => self.target(key).and_then(|t| t.subject()),
-        }
-    }
 
     /// A discussion: what it's on; a section: its card; then the plan.
     fn holders(&self, key: &str) -> Vec<Subject> {

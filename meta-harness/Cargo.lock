@@ -3591,6 +3591,7 @@ dependencies = [
 name = "nah-notify"
 version = "0.1.0"
 dependencies = [
+ "arch-graph",
  "harness-contracts",
  "harness-core",
  "nah-notify",

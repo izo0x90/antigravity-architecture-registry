@@ -85,6 +85,7 @@ const ROUTES: &[&str] = &[
     "/api/discussions/d1/settle",
     "/api/discussions/d1/reopen",
     "/api/discussions/d1/change",
+    "/api/discussions/d1/on",
     "/api/notifications",
     "/api/ui/shell",
     "/api/server/shutdown",

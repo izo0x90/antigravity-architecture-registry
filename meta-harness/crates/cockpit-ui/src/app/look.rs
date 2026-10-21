@@ -129,7 +129,7 @@ impl CockpitApp {
     /// own controls on its header.
     pub(super) fn render_quick_look(&mut self, ctx: &egui::Context) {
         let Some(look) = &self.quick_look else { return };
-        let (panel, kind) = (look.panel, look.kind());
+        let (panel, kind, opened) = (look.panel, look.kind(), look.opened);
         let over = self.panel_rects.get(panel).copied().filter(|r| r.is_positive()).unwrap_or_else(|| ctx.content_rect());
         let screen = ctx.content_rect();
         let theme = crate::theme::look();
@@ -156,8 +156,9 @@ impl CockpitApp {
                 self.render_view(Here { at: Host::Look, kind }, ui, true);
             });
         });
-        // A click outside closes it (a peek's key closes it when let go).
-        if ctx.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p))) {
+        // A click outside closes it (a peek's key closes it when let go);
+        // not the click that opened it.
+        if ctx.input(|i| i.time > opened && i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p))) {
             self.close_quick_look();
         }
     }

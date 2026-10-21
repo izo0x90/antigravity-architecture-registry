@@ -430,6 +430,10 @@ impl Navigable for GraphState {
         }
     }
 
+    fn draws_things(&self) -> Option<&dyn crate::nav::DrawsThings> {
+        Some(self)
+    }
+
     /// The card under the cursor: its component.
     fn things(&self, key: &str) -> crate::nav::Things {
         match self.target().filter(|_| self.cursor_key().as_deref() == Some(key)) {
@@ -596,5 +600,22 @@ impl Navigable for GraphState {
             self.select(Some(key.to_owned()));
             self.show_card(key, Show::Middle);
         }
+    }
+}
+
+/// Its cards: a component's notes marked on its card (the smallest
+/// showing it), where it shows.
+impl crate::nav::DrawsThings for GraphState {
+    fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect> {
+        let harness_contracts::Subject::Component { id, .. } = subject else { return None };
+        self.on_screen()
+            .into_iter()
+            .filter(|c| c.component.as_ref() == Some(id))
+            .map(|c| self.to_screen(&c.rect))
+            .min_by(|a, b| a.area().total_cmp(&b.area()))
+    }
+
+    fn in_place(&self) -> bool {
+        true
     }
 }

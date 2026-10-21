@@ -49,12 +49,20 @@ pub struct Desk {
     pub shell_searches: BTreeMap<String, String>,
     /// The tag `g T` picked, while the palette asks which of its things.
     pub tag_picking: Option<harness_contracts::TagId>,
+    /// The tag an edit picked (of several there), while the palette asks
+    /// the edit's value.
+    pub(crate) tag_editing: Option<(super::TagEditing, harness_contracts::TagId)>,
     /// The tag stepped through last (`] t`): stepped through again, when
     /// the thing you're on has several.
     pub tag_stepping: Option<harness_contracts::TagId>,
     /// What tagging is on, picked in the palette's opening it was picked
     /// in (otherwise, and by default, the unit at the cursor).
     pub tag_level: Option<(u64, harness_contracts::Subject)>,
+    /// A discussion being started: on what, and what it is (its first
+    /// message is asked for next).
+    pub discussing: Option<(harness_contracts::Subject, String, harness_contracts::DiscussionKind)>,
+    /// Discussions started from here, as the server answered (each opens).
+    pub started: Arc<Mutex<Vec<NetResult<harness_contracts::Discussion>>>>,
     pub at_inbox: Arc<Mutex<Vec<NetResult<arch_graph::Component>>>>,
     /// Code indexing's status, as asked for.
     pub index_inbox: Arc<Mutex<Vec<NetResult<arch_graph::IndexStatus>>>>,
@@ -88,8 +96,11 @@ impl Desk {
             choosing: None,
             shell_searches: BTreeMap::new(),
             tag_picking: None,
+            tag_editing: None,
             tag_stepping: None,
             tag_level: None,
+            discussing: None,
+            started: Arc::default(),
             at_inbox: Arc::default(),
             index_inbox: Arc::default(),
             types_inbox: Arc::default(),

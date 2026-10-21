@@ -164,6 +164,10 @@ pub struct CodeViewerState {
     cursor_col: Option<usize>,
     /// Lines shown highlighted (e.g. the component opened from the graph).
     pub highlight: Option<(usize, usize)>,
+    /// Lines selected (dragged down their numbers: where it started, where
+    /// it is), what's noted there; and whether it's being dragged now.
+    pub selection: Option<(usize, usize)>,
+    selecting: bool,
     pub is_loading: bool,
     pub error_message: Option<String>,
     /// The fetched file's contents, with the path they're for.
@@ -229,6 +233,8 @@ impl Default for CodeViewerState {
             target_line: None,
             cursor_col: None,
             highlight: None,
+            selection: None,
+            selecting: false,
             is_loading: false,
             error_message: None,
             marks: BTreeMap::new(),
@@ -277,6 +283,7 @@ impl CodeViewerState {
             self.file_view = None;
             self.analysis = None;
             self.on_lines = OnLines::default();
+            self.selection = None;
         }
         self.changes_asked = None;
         self.current_file = path.to_string();
@@ -349,6 +356,11 @@ impl CodeViewerState {
         self.target_line = Some(self.unfolded_row_line(line));
         self.cursor_col = None;
         self.highlight = None;
+    }
+
+    /// The lines selected, first to last.
+    fn selected(&self) -> Option<(usize, usize)> {
+        self.selection.map(|(a, b)| (a.min(b), a.max(b)))
     }
 
     fn in_highlight(&self, line: usize) -> bool {
@@ -528,9 +540,11 @@ impl CodeViewerState {
     }
 
     /// The gutter's change marks on a line: a bar on an added or changed
-    /// line, and, while deleted lines are hidden, a notch where some were.
+    /// line, and, while deleted lines are hidden, a notch where some were;
+    /// at the gutter's right, by the code (the panel's notes are at its
+    /// left, the line numbers between: the two never mix).
     fn change_marks(&self, ui: &egui::Ui, line: usize, last: usize, row_height: f32) {
-        let at = ui.max_rect().left_top();
+        let at = ui.max_rect().right_top() - Vec2::new(3.0, 0.0);
         let bar = |color: egui::Color32, from: f32, h: f32| {
             ui.painter().rect_filled(Rect::from_min_size(at + Vec2::new(0.0, from), Vec2::new(3.0, h)), 0.0, color);
         };
@@ -557,7 +571,7 @@ impl CodeViewerState {
             ui.spacing_mut().item_spacing.x = 2.0;
             ui.allocate_ui_with_layout(Vec2::new(gutter_w, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.set_min_width(gutter_w);
-                let at = ui.max_rect().left_top();
+                let at = ui.max_rect().right_top() - Vec2::new(3.0, 0.0);
                 ui.painter().rect_filled(Rect::from_min_size(at, Vec2::new(3.0, row_height)), 0.0, colors().error);
                 ui.label(RichText::new("   −").monospace().size(size).color(colors().error));
             });
@@ -716,6 +730,11 @@ impl CodeViewerState {
             let mut opened = false;
             let mut go_to: Option<ComponentId> = None;
             let mut unfold: Option<usize> = None;
+            // Lines selected by dragging down their numbers: where it
+            // started, the line the pointer's on now.
+            let (mut drag_from, mut drag_to): (Option<usize>, Option<usize>) = (None, None);
+            let pointer = ui.input(|i| i.pointer.primary_down().then(|| i.pointer.interact_pos()).flatten());
+            let selected = self.selected();
             let rows = self.rows();
             // Rows are laid out only when visible: where to look is worked
             // out by the shared rules from the rows' pitch, and kept between
@@ -767,7 +786,16 @@ impl CodeViewerState {
                             ui.set_min_width(gutter_w);
                             self.change_marks(ui, line_no, last, row_height);
                             let color = if on_cursor || highlighted { colors().warn } else { colors().faint };
-                            ui.label(RichText::new(format!("{line_no:>4}")).monospace().size(crate::theme::look().text_body).color(color));
+                            let number = ui.add(egui::Label::new(RichText::new(format!("{line_no:>4}")).monospace().size(crate::theme::look().text_body).color(color)).sense(egui::Sense::click_and_drag()));
+                            if number.drag_started() {
+                                drag_from = Some(line_no);
+                            }
+                            if number.clicked() {
+                                put_cursor = Some(line_no);
+                            }
+                            if pointer.is_some_and(|p| number.rect.y_range().contains(p.y)) {
+                                drag_to = Some(line_no);
+                            }
                             for mark in self.marks.get(&line_no).into_iter().flatten() {
                                 let (icon, color, tip, id) = mark_look(mark);
                                 if ui.add(egui::Label::new(RichText::new(icon).size(crate::theme::look().text_body).color(color)).sense(egui::Sense::click())).on_hover_text(tip).clicked() {
@@ -776,7 +804,8 @@ impl CodeViewerState {
                             }
                         });
                         ui.separator();
-                        let background = if highlighted { Some(colors().warn_bg) } else if on_cursor { Some(colors().selection) } else { None };
+                        let in_selection = selected.is_some_and(|(a, b)| a <= line_no && line_no <= b);
+                        let background = if highlighted { Some(colors().warn_bg) } else if on_cursor || in_selection { Some(colors().selection) } else { None };
                         let job = self.coloured(idx, if highlighted { colors().warn } else { colors().text }, background);
                         let label = ui.add(egui::Label::new(job).sense(egui::Sense::click()));
                         drawn.push((line_no, label.rect.left_top()));
@@ -822,7 +851,21 @@ impl CodeViewerState {
                 self.name_clicked(id, false);
             }
             if let Some(line) = put_cursor {
+                self.selection = None;
                 self.move_cursor(line);
+            }
+            if let Some(from) = drag_from {
+                (self.selection, self.selecting) = (Some((from, from)), true);
+            }
+            if self.selecting {
+                match (pointer, drag_to, self.selection.as_mut()) {
+                    (Some(_), Some(to), Some((_, end))) if *end != to => {
+                        *end = to;
+                        self.move_cursor(to);
+                    }
+                    (Some(_), ..) => {}
+                    (None, ..) => self.selecting = false,
+                }
             }
             if opened {
                 *cx.asked = Some(("nav.enter".to_owned(), None));
@@ -1011,10 +1054,12 @@ impl crate::hosted::Hosted for CodeViewerState {
 }
 
 impl crate::nav::DrawsThings for CodeViewerState {
-    /// Lines of this file, or a definition in it, as much as is drawn.
+    /// Lines of this file, a definition in it, or all of it, as much as
+    /// is drawn.
     fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<Rect> {
         let (first, last) = match subject {
             harness_contracts::Subject::CodeLines { path, first, last, .. } if *path == self.current_file => (*first as usize, *last as usize),
+            harness_contracts::Subject::CodeFile { path } if *path == self.current_file => (1, self.lines.len()),
             harness_contracts::Subject::Component { id, .. } => self.defs.iter().find(|d| d.id == *id).map(|d| (d.start, d.end))?,
             _ => return None,
         };
@@ -1088,11 +1133,17 @@ impl Navigable for CodeViewerState {
             return Things::default();
         }
         let known = harness_contracts::Known::default();
+        let file = Thing::named(harness_contracts::Subject::CodeFile { path: self.current_file.clone() }, &known);
+        // Lines selected, the cursor in them: those lines, then the file.
+        if let Some((first, last)) = self.selected().filter(|(a, b)| (*a..=*b).contains(&(line as usize))) {
+            return Things { at: vec![Thing::named(harness_contracts::Subject::CodeLines { path: self.current_file.clone(), first: first as u32, last: last as u32, snapshot: String::new() }, &known), file], unit: 0 };
+        }
         let mut at = vec![Thing::named(harness_contracts::Subject::CodeLines { path: self.current_file.clone(), first: line, last: line, snapshot: String::new() }, &known)];
         let mut around: Vec<&Def> = self.defs.iter().filter(|d| d.start <= line as usize && line as usize <= d.end).collect();
         around.sort_by_key(|d| d.end - d.start);
         at.extend(around.iter().map(|d| Thing::named(harness_contracts::Subject::Component { id: d.id.clone(), was: None }, &known)));
         let unit = usize::from(at.len() > 1);
+        at.push(file);
         Things { at, unit }
     }
 

@@ -98,7 +98,7 @@ impl Palette {
     /// listing actions).
     pub fn picking(&self) -> Option<&str> {
         match &self.stage {
-            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Search { action, .. } if self.open => Some(&action.action.id),
+            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } if self.open => Some(&action.action.id),
             _ => None,
         }
     }
@@ -173,6 +173,9 @@ impl Palette {
         };
         let list_height = (screen.max.y - pos.y - 110.0).clamp(120.0, 360.0);
 
+        // Its keys are its own: egui moves the keyboard on Tab and the
+        // arrows unless the field has had it a pass already; not here.
+        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
         let step = ctx.input_mut(|i| keymap.list.step(i));
         let cycled = ctx.input_mut(|i| keymap.list.cycled(i));
         let (enter, escape) = ctx.input(|i| (keymap.list.picked(i), keymap.back.pressed(i)));
@@ -220,9 +223,6 @@ impl Palette {
                             Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => action.action.about.clone().unwrap_or_else(|| action.action.label.clone()),
                         };
                         ui.add(egui::Label::new(RichText::new(title).strong().size(crate::theme::look().text_label).color(colors().info)).truncate());
-                        if let Some(bound) = cycle {
-                            ui.add(egui::Label::new(RichText::new(format!("{}: {}", keymap.list.cycle_label(), bound.action.label)).size(crate::theme::look().text_small).color(colors().muted)).truncate());
-                        }
                         let hint = match &stage {
                             Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => match &action.action.param {
                                 Param::Text { hint, .. } | Param::Writing { hint, .. } | Param::Search { hint, .. } => hint.clone(),
@@ -236,14 +236,17 @@ impl Palette {
                             if typed.sent.is_some() {
                                 picked = Some(invocation(action, Some(self.writing.take())));
                             }
-                            let keys: Vec<String> = keymap.input.keys(&keymap.back, "goes back").into_iter().map(|(key, does)| format!("{key} {does}")).collect();
-                            ui.label(RichText::new(keys.join(" · ")).size(crate::theme::look().text_small).color(colors().muted));
                         }
                         let edit = if matches!(stage, Stage::Writing { .. }) {
                             None
                         } else {
-                            let edit = ui.add(egui::TextEdit::singleline(&mut self.filter).id(egui::Id::new("palette_field")).lock_focus(true).hint_text(hint).desired_width(f32::INFINITY));
-                            edit.request_focus();
+                            // The keyboard's, before it's drawn (the key of the pass
+                            // is typed in it), and only when it hasn't it.
+                            let id = egui::Id::new("palette_field");
+                            if ui.memory(|m| m.focused() != Some(id)) {
+                                ui.memory_mut(|m| m.request_focus(id));
+                            }
+                            let edit = ui.add(egui::TextEdit::singleline(&mut self.filter).id(id).lock_focus(true).hint_text(hint).desired_width(f32::INFINITY));
                             if std::mem::take(&mut self.caret_to_end) {
                                 crate::theme::caret_to_end(ui.ctx(), edit.id, &self.filter);
                             }
@@ -359,9 +362,22 @@ impl Palette {
                                 if enter && !self.filter.trim().is_empty() {
                                     picked = Some(invocation(action, Some(self.filter.trim().to_owned())));
                                 }
-                                ui.label(RichText::new(format!("{} submits · {} goes back", keymap.list.pick_label(), keymap.back.label())).size(crate::theme::look().text_small).color(colors().muted));
                             }
                         }
+                        // Its keys, on one line under it: what picks, what
+                        // moves, what the cycle key does now, what goes back.
+                        let mut keys: Vec<String> = match &stage {
+                            Stage::Writing { .. } => keymap.input.keys(&keymap.back, "goes back"),
+                            Stage::Text { .. } => vec![(keymap.list.pick_label(), "submits"), (keymap.back.label(), "goes back")],
+                            _ => keymap.list.keys(&keymap.back, "goes back"),
+                        }
+                        .into_iter()
+                        .map(|(key, does)| format!("{key} {does}"))
+                        .collect();
+                        if let Some(bound) = cycle {
+                            keys.insert(keys.len() - 1, format!("{}: {}", keymap.list.cycle_label(), bound.action.label));
+                        }
+                        ui.add(egui::Label::new(RichText::new(keys.join(" · ")).size(crate::theme::look().text_small).color(colors().muted)).wrap());
                         let used = ui.min_rect().height();
                         self.tallest = self.tallest.max(used);
                         if self.tallest > used {

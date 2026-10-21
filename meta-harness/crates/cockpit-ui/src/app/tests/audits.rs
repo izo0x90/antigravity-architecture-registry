@@ -22,12 +22,11 @@ fn what_the_audit_found_stays_fixed() {
     assert_eq!(app.desk.graph().place(), before);
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     assert_eq!(app.desk.graph().place(), before);
-    // c in the spec without a plan says why.
-    focus(&ctx, &mut app, BufferKind::Spec);
-    app.desk.spec_mut().source = Source::Code;
-    frame(&ctx, &mut app, key("c"));
-    assert!(app.note.as_deref().unwrap_or_default().contains("pick a plan in the graph"), "{:?}", app.note);
-    assert_eq!(app.input_mode, InputMode::Normal);
+    // C where there's nothing to discuss (an empty view) offers nothing.
+    focus(&ctx, &mut app, BufferKind::Discussion);
+    frame(&ctx, &mut app, key("C"));
+    assert!(!app.palette.is_open() && app.input_mode == InputMode::Normal, "nothing to discuss here");
+    assert!(app.note.as_deref().unwrap_or_default().contains("nothing here it applies to"), "{:?}", app.note);
     // z o on a card with nothing more under it says why too.
     focus(&ctx, &mut app, BufferKind::Graph);
     app.desk.graph_mut().set_tree(sample_tree());
@@ -64,23 +63,15 @@ fn what_the_final_audit_found_stays_fixed() {
     let step = ComponentId::new("rust:a::step");
     app.desk.spec_mut().discussions = vec![crate::review::tests::discussion(1, crate::review::tests::on(&step, Some("logic")), harness_contracts::DiscussionStatus::Open)];
     app.desk.spec_mut().step_point(true);
-    assert!(app.desk.spec().actions().iter().any(|a| a.id == "spec.reply"));
+    assert!(app.desk.spec().point.is_some());
     app.desk.spec_mut().show(ComponentId::new("rust:a::save"));
-    assert!(app.desk.spec().point.is_none() && !app.desk.spec().actions().iter().any(|a| a.id == "spec.reply"), "no replying to another component's point");
+    assert!(app.desk.spec().point.is_none(), "another component's point isn't this one's");
     // Back to a relation item.
     app.desk.spec_mut().show(step.clone());
     let relation = crate::spec::Entry { section: crate::card::Section::Relations, item: crate::spec::SpecItem::Relation { kind: RelationKind::Calls, other: ComponentId::new("rust:a::save"), outgoing: true } }.key();
     app.desk.spec_mut().detail = Some(crate::spec::tests::detail(&step, &ComponentId::new("rust:a::save")));
     app.desk.spec_mut().restore(&Place::of(&crate::spec::SpecPlace { component: Some(step.clone()), item: Some(relation.clone()), plan_item: None }));
     assert_eq!(app.desk.spec().cursor_key().as_deref(), Some(relation.as_str()));
-    // A second Escape throws a draft away.
-    app.desk.spec_mut().source = Source::Plan(PlanId::new("p").unwrap());
-    frame(&ctx, &mut app, key("c"));
-    frame(&ctx, &mut app, vec![]);
-    frame(&ctx, &mut app, press(egui::Key::Escape, false));
-    assert!(app.desk.spec().composer.is_some() && app.input_mode == InputMode::Normal, "the first leaves the field");
-    frame(&ctx, &mut app, press(egui::Key::Escape, false));
-    assert!(app.desk.spec().composer.is_none(), "the second discards it");
     // Go-tos are offered only where they lead, once the relations are known.
     focus(&ctx, &mut app, BufferKind::Graph);
     app.desk.graph_mut().select(Some("rust:a::save".into()));

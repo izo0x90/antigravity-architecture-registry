@@ -219,6 +219,8 @@ pub struct DiscussionsState {
     pub discussions: Arc<nah_discussions::Discussions>,
     /// Who can be asked.
     pub slots: Arc<SlotManager>,
+    /// What things say (what a discussion is on).
+    pub things: Arc<nah_things::Things>,
 }
 
 impl Module for DiscussionsState {
@@ -298,6 +300,7 @@ pub struct Parts {
     pub terminals: Option<Arc<crate::terminals::Terminals>>,
     pub tags: Arc<nah_tags::Tags>,
     pub discussions: Arc<nah_discussions::Discussions>,
+    pub things: Arc<nah_things::Things>,
 }
 
 impl AppState {
@@ -318,7 +321,7 @@ impl AppState {
             notify: NotifyState { gate: gate.clone(), notify: p.notify },
             terminals: p.terminals.map(|terminals| TerminalsState { gate: gate.clone(), stopping: stopping.clone(), terminals }),
             tags: TagsState { gate: gate.clone(), tags: p.tags },
-            discussions: DiscussionsState { gate: gate.clone(), discussions: p.discussions, slots: p.slots.clone() },
+            discussions: DiscussionsState { gate: gate.clone(), discussions: p.discussions, slots: p.slots.clone(), things: p.things },
             project: ProjectState { gate, arch: p.arch, queue: p.queue, sessions: p.sessions, slots: p.slots, mcp_state: p.mcp_state, changes: p.changes, timeline: p.timeline },
         })
     }

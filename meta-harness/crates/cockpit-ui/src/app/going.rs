@@ -156,6 +156,15 @@ impl CockpitApp {
     /// (none: the kind that can show it), as a go-to lands it (a
     /// component's code found first).
     pub(super) fn land(&mut self, kind: Option<BufferKind>, target: &Target, from: Jump, ctx: &egui::Context) {
+        // A discussion opens over what you're on (the quick look), unless a
+        // panel shows discussions.
+        if kind.is_none() && matches!(target, Target::Discussion(_)) && !self.desk.panels.kinds().contains(&BufferKind::Discussion) {
+            self.look_at(BufferId::new(BufferKind::Discussion, crate::quick_look::PANE), None, ctx);
+            if let Err(why) = self.desk.view_mut(BufferKind::Discussion).show_target(target) {
+                self.note = Some(why);
+            }
+            return;
+        }
         let Some(kind) = kind else { return self.show_where_shown(target, from) };
         match (kind, target) {
             (BufferKind::Code, Target::Component(id)) => self.open_component_code(id.clone(), None, from, ctx),

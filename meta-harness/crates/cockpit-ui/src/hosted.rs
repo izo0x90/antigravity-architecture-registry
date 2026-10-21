@@ -102,11 +102,19 @@ pub trait Hosted {
     }
 }
 
+/// What kind of note the panel's top line names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoteMark {
+    Tag,
+    Discussions,
+}
+
 /// The panel's top line: its bound actions' header buttons (`bound`: the
 /// panel's layer of where you are), the place for its busy mark, its title
-/// and status, the tags on what the cursor's on (each a solid tag in its
-/// colour, and its name); its settings on a row under.
-pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], tags: &[(String, egui::Color32)], cx: &mut RunCx<'_>) {
+/// and status, the notes on what the cursor's on (each tag a solid tag in
+/// its colour and its name; its discussions a speech bubble and a few
+/// words); its settings on a row under.
+pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], notes: &[(NoteMark, String, egui::Color32)], cx: &mut RunCx<'_>) {
     let look = crate::theme::look();
     let at_header = |style: Style| bound.iter().filter(move |b| b.action.control.as_ref().is_some_and(|c| c.at == At::Header && c.style == style));
     // One line that wraps (a narrow panel, a phone): nothing overlaps.
@@ -125,8 +133,11 @@ pub fn header(ui: &mut egui::Ui, panel: &dyn Hosted, bound: &[Bound], tags: &[(S
         for status in panel.status() {
             said(ui, &status, look.text_small, false);
         }
-        for (name, colour) in tags {
-            ui.label(crate::theme::tag_mark(ui, *colour, look.text_small));
+        for (mark, name, colour) in notes {
+            match mark {
+                NoteMark::Tag => ui.label(crate::theme::tag_mark(ui, *colour, look.text_small)),
+                NoteMark::Discussions => ui.label(RichText::new(egui_phosphor::fill::CHAT_CIRCLE).size(look.text_small).color(*colour)),
+            };
             ui.add(egui::Label::new(RichText::new(name).size(look.text_small).color(*colour)).truncate());
         }
     });

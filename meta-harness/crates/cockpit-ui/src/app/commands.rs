@@ -107,6 +107,7 @@ impl CockpitApp {
         ];
         out.extend(self.tag_actions(here));
         out.extend(self.item_actions(here));
+        out.extend(self.discuss_actions(here));
         // Each go-to's destination says whether it can show what the
         // cursor is on; the relational ones, whether its relations lead
         // anywhere.
@@ -361,6 +362,11 @@ impl CockpitApp {
     /// Runs an action (a switch's key flips it), or opens the palette at
     /// its parameter if it needs one.
     pub(super) fn run_bound(&mut self, bound: &Bound, count: Option<u32>, ctx: &egui::Context) {
+        // A picker for something that doesn't apply here isn't opened: why not is said.
+        if bound.action.param != Param::None && bound.action.when == When::Unavailable {
+            self.note = Some(format!("{}: nothing here it applies to.", bound.action.label));
+            return;
+        }
         match &bound.action.param {
             Param::None => self.invoke_counted(Invocation { action: bound.action.clone(), origin: bound.origin, value: None }, count, ctx),
             Param::Toggle { on } => self.invoke(Invocation { action: bound.action.clone(), origin: bound.origin, value: Some((!on).to_string()) }, ctx),
@@ -441,6 +447,7 @@ impl CockpitApp {
             ShellCommand::MarkSet => self.start_capture(Capture::MarkSet),
             ShellCommand::Tag | ShellCommand::Untag(_) | ShellCommand::TagGoTo | ShellCommand::TagGoToPick | ShellCommand::TagStep { .. } | ShellCommand::TagLevel | ShellCommand::TagEdit(..) | ShellCommand::TagEditWhich(_) | ShellCommand::TagInsert => self.run_tag(&command, value, ctx),
             ShellCommand::ItemState(plan, item) => self.set_item_state(&plan, &item, value, ctx),
+            ShellCommand::Discuss | ShellCommand::DiscussLevel | ShellCommand::DiscussWrite => self.run_discuss(&command, value, ctx),
             ShellCommand::MarkJump => self.start_capture(Capture::MarkJump),
             ShellCommand::Back | ShellCommand::Forward => {
                 let here = self.jump_here();

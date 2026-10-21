@@ -64,8 +64,9 @@ pub trait TreeSource {
     fn key_of(&self, target: &Target) -> Option<String>;
 
     /// Where going into row `key` goes instead of unfolding it (a plan's
-    /// item: its card), and how it's said; none: it unfolds.
-    fn opens(&self, _key: &str) -> Option<(crate::nav::GoTo, String)> {
+    /// item: its card; none: where its target is shown, a discussion's
+    /// buffer), and how it's said; none at all: it unfolds.
+    fn opens(&self, _key: &str) -> Option<(Option<crate::nav::GoTo>, String)> {
         None
     }
 

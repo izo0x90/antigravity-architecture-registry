@@ -93,7 +93,8 @@ fn every_key_comes_from_config_and_no_two_actions_in_a_view_share_one() {
     assert_eq!(keys_of("goto.graph"), ["g m"]);
     assert_eq!(keys_of("goto.uses"), ["g r"], "g r lists every use");
     assert_eq!(keys_of("goto.callers"), ["g R"]);
-    assert_eq!(keys_of("spec.reopen"), ["x"]);
+    assert_eq!(keys_of("discussion.reopen"), ["x"]);
+    assert_eq!(keys_of("discuss.start"), ["C"], "C starts a discussion, anywhere");
     for gone in ["spec.show_in_graph", "queue.show_in_graph", "code.reveal", "graph.back", "graph.search", "graph.hint"] {
         assert!(!config.keymap.bind.contains_key(gone), "{gone} is replaced");
     }
@@ -142,12 +143,12 @@ fn actions_rank_by_importance_and_apply_to_the_target() {
     app.config = UiConfig::with_overrides("[keymap.bar]\nshow = false\n").unwrap();
     let text = texts(&frame(&ctx, &mut app, vec![]));
     assert!(!text.contains("Enter Into step"));
-    // A spec item: the review verbs lead.
+    // A spec item: moving through the card leads.
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Spec);
     let bound = app.bound_actions();
     let ids: Vec<String> = app.bar_keys(&bound).into_iter().map(|b| b.action.id.clone()).collect();
-    assert!(ids[..4].contains(&"spec.comment".to_owned()), "{ids:?}");
+    assert!(ids.contains(&"nav.enter".to_owned()) && !ids.iter().any(|id| id.starts_with("spec.comment") || id.starts_with("spec.request")), "starting a discussion is the shell's (C): {ids:?}");
     assert!(!When::Named.holds(&app.situation()), "not a code line");
 }
 
@@ -191,7 +192,7 @@ fn question_mark_lists_this_views_keys_grouped_and_searchable() {
     assert!(app.key_sheet.is_some());
     let text = texts(&frame(&ctx, &mut app, vec![]));
     // A section per layer of where you are: this panel first.
-    for expected in ["Keys", "Spec", "Navigate", "Go to", "Act", "g d", "Go to its code", "Ask about this item", "J", "Next section"] {
+    for expected in ["Keys", "Spec", "Navigate", "Go to", "Act", "g d", "Go to its code", "Next discussion not settled", "J", "Next section"] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
     // Its panel's own and everywhere's follow (found by filtering).
@@ -345,15 +346,14 @@ fn enter_and_backspace_are_only_offered_where_they_act() {
     assert!(!has(&app, "nav.enter"), "queued, no findings");
     app.desk.queue_mut().move_to("2");
     assert!(has(&app, "nav.enter"));
-    // Spec: on a comment, reply leads the bar.
+    // Spec: on a discussion, opening it leads the bar.
     focus(&ctx, &mut app, BufferKind::Spec);
     let step = ComponentId::new("rust:a::step");
     app.desk.spec_mut().discussions = vec![crate::review::tests::discussion(1, crate::review::tests::on(&step, Some("logic")), harness_contracts::DiscussionStatus::Open)];
     app.desk.spec_mut().move_to(&crate::spec::Entry { section: crate::card::Section::Logic, item: crate::spec::SpecItem::Comment(harness_contracts::DiscussionId::new("d1")) }.key());
     let bound = app.bound_actions();
     let bar: Vec<String> = app.bar_keys(&bound).into_iter().map(|b| b.action.id.clone()).collect();
-    assert_eq!(bar.first().map(String::as_str), Some("spec.reply"), "{bar:?}");
-    assert!(!bar.contains(&"spec.comment".to_owned()) || bar.iter().position(|b| b == "spec.reply") < bar.iter().position(|b| b == "spec.comment"));
+    assert_eq!(bar.first().map(String::as_str), Some("nav.enter"), "{bar:?}");
 }
 
 #[test]

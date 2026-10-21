@@ -228,7 +228,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let queue = meta_harness::server::queue_runner(&arch, meta_harness::startup::queue_config(&arch)?, &hub);
     let cockpit_path = cockpit.launch_path();
     let streams = mcp_state.sessions.clone();
-    let app = AppState::new(Parts { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, notify, changes, timeline, terminals, tags, discussions })?;
+    let app = AppState::new(Parts { registry: instances, sessions, slots, hub, mcp_state, arch, cockpit, queue, state, tool_servers, remote, access, notify, changes, timeline, terminals, tags, discussions, things })?;
     let parts: Vec<&dyn meta_harness::modules::Module> = app.modules().into_iter().filter(|m| !(serve.no_cockpit && m.is_cockpit())).collect();
     let router = create_router(&parts);
     info!("MCP endpoint: {base_url}/api/mcp/sse; events: ws://{bound}/ws/events");

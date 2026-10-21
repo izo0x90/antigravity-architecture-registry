@@ -26,6 +26,7 @@ pub(crate) fn routes() -> Router<DiscussionsState> {
         .route("/api/discussions", get(list).post(start))
         .route("/api/discussions/on", post(on))
         .route("/api/discussions/{id}", get(read).delete(delete))
+        .route("/api/discussions/{id}/on", get(on_now))
         .route("/api/discussions/{id}/reply", post(reply))
         .route("/api/discussions/{id}/settle", post(settle))
         .route("/api/discussions/{id}/reopen", post(reopen))
@@ -68,6 +69,21 @@ struct On {
 async fn on(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>, Json(body): Json<On>) -> Result<Json<Vec<Discussion>>, Refused> {
     blocking(&state.discussions, move |d| Ok(d.on(&body.subject))).await.map(Json)
 }
+
+/// What the discussion is on says, as it is now (or as it was kept).
+async fn on_now(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>, Path(id): Path<String>) -> Result<Json<harness_contracts::OnNow>, Refused> {
+    let things = state.things.clone();
+    blocking(&state.discussions, move |d| {
+        let d = d.get(&DiscussionId::new(id))?;
+        let (held, text) = things.glimpse(&d.on.subject, d.kept.as_ref(), ON_NOW_MOST);
+        Ok(harness_contracts::OnNow { what: d.on.what, held, lines: text.as_ref().map_or(0, |(_, n)| *n), text: text.map(|(t, _)| t) })
+    })
+    .await
+    .map(Json)
+}
+
+/// How much of what a discussion's thing says the cockpit is given (about).
+const ON_NOW_MOST: usize = 4000;
 
 async fn read(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>, Path(id): Path<String>) -> Result<Json<Discussion>, Refused> {
     blocking(&state.discussions, move |d| d.get(&DiscussionId::new(id))).await.map(Json)

@@ -212,7 +212,7 @@ mod tests {
     fn a_late_client_gets_the_open_notifications_only() {
         let note = |id: &str, state| {
             let kind = harness_contracts::NotificationKind::Approval;
-            let notification = harness_contracts::Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, title: id.into(), detail: None, at_ms: 0, state };
+            let notification = harness_contracts::Notification { id: NotificationId::new(id), server: None, level: kind.level(), kind, slot: None, thread: None, request: None, terminal: None, discussion: None, title: id.into(), detail: None, at_ms: 0, state };
             ClientEvent::NotificationUpdated { notification }
         };
         let hub = EventHub::default();

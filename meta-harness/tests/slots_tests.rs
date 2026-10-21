@@ -327,6 +327,11 @@ async fn a_chats_message_and_turn_are_tagged_named_by_the_slot_and_kept() {
     // Named with its session (the start of its id: a slot has several).
     assert!(read.contains("1. chat helper@native-") && read.contains(" turn 1 message 1 (tagged by lead; as it is now):\necho: hello there"), "{read}");
     assert!(read.contains(" turn 1 (tagged by lead; as it is now):\necho: hello there"), "{read}");
+    // The whole session, by the slot's name alone: each turn, numbered (#11).
+    let (error, said) = lead.tool("tag", json!({ "tag": "whole", "subject": "chat helper" })).await;
+    assert!(!error, "{said}");
+    let (_, read) = lead.tool("tag_read", json!({ "tag": "whole" })).await;
+    assert!(read.contains("1. chat helper@native-") && read.contains(":\nturn 1\necho: hello there"), "{read}");
     // Kept in the logs: the tag holds where, never the text.
     let tag = state.tags.tags.find("greeting").unwrap();
     assert!(tag.on.iter().all(|t| t.kept.is_some()) && !serde_json::to_string(&tag).unwrap().contains("hello there"));

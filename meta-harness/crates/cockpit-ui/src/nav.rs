@@ -49,6 +49,8 @@ pub enum Target {
     /// A plan, or a part of it: shown where the plan is (its graph, a
     /// component's card).
     Plan { plan: arch_graph::PlanId, part: PlanPart },
+    /// A discussion (its buffer shows it).
+    Discussion(harness_contracts::DiscussionId),
 }
 
 /// Which of a plan's parts (`Target::Plan`).
@@ -138,6 +140,7 @@ impl Target {
             Self::Chat { turn, .. } => format!("turn {turn}"),
             // A plan's part: its one name (`Subject::name`).
             Self::Plan { .. } => self.subject().map(|s| s.name(&harness_contracts::Known::default())).unwrap_or_default(),
+            Self::Discussion(id) => format!("discussion {id}"),
         }
     }
 
@@ -147,15 +150,19 @@ impl Target {
         Some(match subject.clone() {
             Subject::TerminalLines { terminal, shell, first, last, .. } => Self::TerminalLines { terminal, shell, first, last },
             Subject::TerminalCommand { terminal, shell, command, .. } => Self::TerminalCommand { terminal, shell, command },
+            // A whole session: its start; a whole file: its top.
+            Subject::ChatSession { session } => Self::Chat { session, turn: 1, message: None },
             Subject::ChatTurn { session, turn, .. } => Self::Chat { session, turn, message: None },
             Subject::Component { id, .. } => Self::Component(id),
             Subject::CodeLines { path, first, last, .. } => Self::Span { file: path, start: first as usize, end: last as usize },
+            Subject::CodeFile { path } => Self::Span { file: path, start: 1, end: 1 },
             Subject::ChatMessage { session, turn, message, .. } => Self::Chat { session, turn, message: Some(message) },
             Subject::Plan { plan } => Self::Plan { plan, part: PlanPart::Whole },
             Subject::PlanComponent { plan, id } => Self::Plan { plan, part: PlanPart::Component(id) },
             Subject::PlanSection { plan, id, section } => Self::Plan { plan, part: PlanPart::Section(id, section) },
             Subject::PlanRelation { plan, relation, source, target } => Self::Plan { plan, part: PlanPart::Relation { kind: relation, source, target } },
             Subject::PlanItem { plan, item } => Self::Plan { plan, part: PlanPart::Item(item) },
+            Subject::Discussion { id } => Self::Discussion(id),
             _ => return None,
         })
     }
@@ -173,6 +180,7 @@ impl Target {
                 PlanPart::Relation { kind, source, target } => Subject::PlanRelation { plan, relation: kind, source, target },
                 PlanPart::Item(item) => Subject::PlanItem { plan, item },
             }),
+            Self::Discussion(id) => Some(Subject::Discussion { id }),
             _ => None,
         }
     }
@@ -182,7 +190,7 @@ impl Target {
         match self {
             Self::Component(id) | Self::Job { component: id } => Some(id),
             Self::Line { within, .. } => within.as_ref(),
-            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } | Self::Plan { .. } => None,
+            Self::Message { .. } | Self::Change { .. } | Self::Span { .. } | Self::Agent { .. } | Self::Notification(_) | Self::Terminal(_) | Self::TerminalLines { .. } | Self::TerminalCommand { .. } | Self::Chat { .. } | Self::Plan { .. } | Self::Discussion(_) => None,
         }
     }
 
@@ -753,6 +761,12 @@ pub trait DrawsThings {
     /// Where `subject` is drawn now, when it's drawn: all of it that
     /// shows (the host marks its notes beside it, in the gutter).
     fn drawn_at(&self, subject: &harness_contracts::Subject) -> Option<egui::Rect>;
+
+    /// Its things aren't rows (a graph's cards): their notes are marked on
+    /// each, at its top right corner, not in a gutter.
+    fn in_place(&self) -> bool {
+        false
+    }
 }
 
 impl Things {
@@ -824,7 +838,8 @@ pub trait Navigable {
 
     /// Where it draws things notes can be on (none: it draws none). Its
     /// host keeps a gutter of notes down its left when it does (always, so
-    /// its content doesn't move as notes come and go).
+    /// its content doesn't move as notes come and go), unless they're
+    /// marked in place (`DrawsThings::in_place`).
     fn draws_things(&self) -> Option<&dyn DrawsThings> {
         None
     }
