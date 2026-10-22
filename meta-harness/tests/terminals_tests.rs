@@ -197,9 +197,12 @@ async fn a_reader_is_sent_lines_as_they_scroll_off_and_asks_for_scrollback_and_s
     let text: Vec<String> = rows.iter().map(|r| r.iter().map(|run| run.text.as_str()).collect()).collect();
     assert_eq!(text, ["150", "151"]);
     // A line it saw half printed, finished and scrolled off in one frame:
-    // it has the whole of it.
-    // (One write finishes it and scrolls it off: one frame.)
-    reader.run("printf 'half'; sleep 0.5; printf ' and whole\\n%s\\n' $(seq 400 430)").await;
+    // it has the whole of it. (The half is seen, not assumed: the command
+    // waits for a key, silently, before one write finishes the line and
+    // scrolls it off.)
+    reader.run("printf 'half'; read -s x; printf ' and whole\\n%s\\n' $(seq 400 430)").await;
+    reader.until_shows("half").await;
+    reader.say(ToTerminal::Input { input: TerminalInput::Key { key: TermKey::Enter, mods: Mods::default() } }).await;
     reader.until_shows("430").await;
     let halves: Vec<&String> = reader.lines.values().filter(|l| l.starts_with("half")).collect();
     assert_eq!(halves, ["half and whole"], "{:?}", reader.lines);
