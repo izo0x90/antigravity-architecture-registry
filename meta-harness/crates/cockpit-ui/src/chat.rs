@@ -61,6 +61,11 @@ pub struct ChatStreamState {
     /// Where each item of the stream is as a tag names it, worked out once
     /// per change of the thread (its id, its activity count).
     tag_places: std::cell::RefCell<Option<things::Places>>,
+    /// The chats' unsent text as the server keeps it, read; the slot this
+    /// view took its draft for; the text it last reported.
+    unsent: crate::shared::Reader<crate::drafts::Drafts>,
+    unsent_for: Option<SlotId>,
+    unsent_said: String,
 }
 
 /// A chat view's own state: what's typed, where the cursor is, what was

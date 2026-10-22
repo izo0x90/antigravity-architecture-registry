@@ -397,6 +397,12 @@ impl Desk {
         self.typed_mut(BufferKind::Changes)
     }
 
+    /// The buffer `id`, by its type.
+    pub fn typed_at<T: Buffer>(&self, id: BufferId) -> &T {
+        let any: &dyn std::any::Any = self.buffer(id).expect("the buffer");
+        any.downcast_ref().expect("the buffer of its kind")
+    }
+
     /// Every buffer of `kind`, shown or hidden.
     pub fn all_of<T: Buffer>(&self, kind: BufferKind) -> Vec<&T> {
         self.buffers().filter(|(id, _)| id.kind == kind).filter_map(|(_, b)| (b as &dyn std::any::Any).downcast_ref()).collect()

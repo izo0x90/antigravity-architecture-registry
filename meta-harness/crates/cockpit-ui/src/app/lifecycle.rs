@@ -44,6 +44,8 @@ impl CockpitApp {
         if std::mem::take(&mut self.desk.net.reconnected) {
             self.desk.keeper.reconnected();
             self.desk.keeper.load(&self.desk.net, ctx);
+            self.desk.shared.drafts.get_mut().reconnected();
+            self.desk.shared.drafts.get_mut().load(&self.desk.net, ctx);
             // Back after a drop: what changed meanwhile wasn't heard.
             self.desk.each_buffer(|b| b.invalidate());
             self.desk.shared.review.invalidate();
@@ -89,6 +91,7 @@ impl CockpitApp {
     pub(super) fn open_desk(&mut self, ctx: &egui::Context) {
         self.desk.opened = true;
         self.desk.keeper.load(&self.desk.net, ctx);
+        self.desk.shared.drafts.get_mut().load(&self.desk.net, ctx);
         self.fetch_index_status(ctx);
         let types = self.desk.types_inbox.clone();
         self.desk.net.arch_types(ctx.clone(), move |r| {

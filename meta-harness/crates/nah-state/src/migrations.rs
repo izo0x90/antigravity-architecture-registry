@@ -55,6 +55,9 @@ const MIGRATIONS: &[(i64, &str)] = &[
         "ALTER TABLE held_reports ADD COLUMN to_slot TEXT NOT NULL DEFAULT 'lead';
      UPDATE held_reports SET from_slot = from_slot || ' (sub-slot)';",
     ),
+    // A chat's unsent text, by slot: its own row, not part of the layout
+    // (it outlives a layout reset).
+    (13, "CREATE TABLE drafts (slot TEXT PRIMARY KEY, text TEXT NOT NULL);"),
 ];
 
 /// The newest layout this NAH knows.

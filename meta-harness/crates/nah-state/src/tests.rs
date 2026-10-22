@@ -19,6 +19,14 @@ fn it_opens_empty_at_the_latest_layout_and_keeps_what_it_holds() {
     }
     let db = StateDb::open(dir.path(), &settings()).unwrap();
     assert_eq!(db.ui_state().unwrap(), Some(serde_json::json!({ "columns": 3 })));
+    // A chat's unsent text is its own row, by slot, not part of the layout.
+    assert!(db.drafts().unwrap().is_empty());
+    db.set_draft("lead", "to the lead").unwrap();
+    db.set_draft("sub-1", "to the reviewer").unwrap();
+    db.set_draft("lead", "to the lead, more").unwrap();
+    assert_eq!(db.drafts().unwrap(), [("lead".to_owned(), "to the lead, more".to_owned()), ("sub-1".to_owned(), "to the reviewer".to_owned())].into());
+    db.set_draft("sub-1", "").unwrap();
+    assert_eq!(db.drafts().unwrap().keys().collect::<Vec<_>>(), ["lead"], "emptied: gone");
     assert_eq!(db.feedback().unwrap(), [serde_json::json!({ "id": "a", "n": 2 }), serde_json::json!({ "id": "b" })], "in the order they came");
     assert_eq!(db.activity(10).unwrap()[0].action, "opened");
     let version: i64 = db.conn.lock().unwrap().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();

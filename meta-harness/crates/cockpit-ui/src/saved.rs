@@ -1,9 +1,15 @@
 //! The cockpit's state, kept by the server: the panels and the buffer in
 //! each, where every buffer is (the same places the jump list and marks
-//! hold) and what each keeps of its own (a card pinned, a chat's unsent
-//! text), which buffer of each kind was used last, the marks and the jump
-//! list. This structure is the one definition of what's kept; the server
-//! stores it as written.
+//! hold) and what each keeps of its own (a card pinned, how changes are
+//! laid out), which buffer of each kind was used last, the marks and the
+//! jump list. This structure is the one definition of what's kept; the
+//! server stores it as written. (A chat's unsent text is not here: it's
+//! its own record, `crate::drafts`.)
+//!
+//! Two versions: `VERSION` is the whole record's (older: nothing of it is
+//! read); each buffer kind's `saved_version` is what its place and kept
+//! blob are written in (older: that kind's buffers start new, the rest
+//! holds).
 //!
 //! Loaded once when the cockpit opens (nothing is saved before that, so a
 //! slow server can't have its state overwritten by defaults), then saved a
@@ -18,8 +24,9 @@ use crate::panels::{Panels, BufferId};
 use crate::nav::{Jump, JumpList, Place};
 use crate::net::{NetClient, NetResult};
 
-/// Bumped when a change to this structure can't read an older one (an older
-/// one is then left unread, and the cockpit opens as new).
+/// Bumped when a change to this structure itself (not a buffer kind's part
+/// of it) can't read an older one: an older one is then left unread, and
+/// the cockpit opens as new.
 pub const VERSION: u32 = 5;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -32,9 +39,13 @@ pub struct SavedUi {
     pub used: Vec<BufferId>,
     pub marks: BTreeMap<char, Jump>,
     pub jumps: JumpList,
-    /// What each buffer keeps of its own (a card pinned, a chat's unsent
-    /// text, how changes are laid out).
+    /// What each buffer keeps of its own (a card pinned, how changes are
+    /// laid out).
     pub kept: Vec<(BufferId, serde_json::Value)>,
+    /// The version each kind's places and kept blobs are written in (a kind
+    /// missing: 1, the first). A kind at another version is not read.
+    #[serde(default)]
+    pub versions: BTreeMap<crate::kind::BufferKind, u32>,
     /// The user lets agents drive the cockpit.
     #[serde(default)]
     pub agents: bool,
@@ -172,7 +183,7 @@ mod tests {
     use super::*;
 
     fn state(draft: &str) -> SavedUi {
-        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), kept: vec![(BufferId::new(crate::kind::BufferKind::Chat, 0), serde_json::Value::String(draft.into()))], used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), agents: false, comparison: Default::default(), item_buttons: None }
+        SavedUi { version: VERSION, panels: Panels::default(), views: Vec::new(), kept: vec![(BufferId::new(crate::kind::BufferKind::Spec, 0), serde_json::Value::String(draft.into()))], used: Vec::new(), marks: BTreeMap::new(), jumps: JumpList::default(), agents: false, comparison: Default::default(), item_buttons: None, versions: BTreeMap::new() }
     }
 
     fn arrive(keeper: &Keeper, value: Option<serde_json::Value>) {

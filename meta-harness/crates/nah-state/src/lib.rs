@@ -9,6 +9,7 @@
 //! Features keep their tables here, each behind its own store interface
 //! (the feature's crate defines the interface; this crate implements it).
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -122,6 +123,29 @@ impl StateDb {
         let text = serde_json::to_string(state).map_err(failed)?;
         self.transaction(|tx| {
             tx.execute("INSERT INTO ui_state (id, json) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET json = excluded.json", params![text]).map_err(failed)?;
+            Ok(())
+        })
+    }
+
+    // ---- the chats' unsent text ----
+
+    /// Each slot's unsent text, as the cockpit last saved it.
+    pub fn drafts(&self) -> Result<BTreeMap<String, String>, StateError> {
+        self.transaction(|tx| {
+            let mut rows = tx.prepare("SELECT slot, text FROM drafts").map_err(failed)?;
+            let found = rows.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(failed)?;
+            found.collect::<Result<_, _>>().map_err(failed)
+        })
+    }
+
+    /// Replaces slot `slot`'s unsent text (empty: there is none).
+    pub fn set_draft(&self, slot: &str, text: &str) -> Result<(), StateError> {
+        self.transaction(|tx| {
+            if text.is_empty() {
+                tx.execute("DELETE FROM drafts WHERE slot = ?1", params![slot]).map_err(failed)?;
+            } else {
+                tx.execute("INSERT INTO drafts (slot, text) VALUES (?1, ?2) ON CONFLICT (slot) DO UPDATE SET text = excluded.text", params![slot, text]).map_err(failed)?;
+            }
             Ok(())
         })
     }

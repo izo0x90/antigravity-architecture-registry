@@ -581,6 +581,16 @@ impl NetClient {
         self.call("PUT", "/api/ui/state", Some(state), ctx, on_done);
     }
 
+    /// Each slot's unsent chat text, as last saved.
+    pub fn drafts(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<std::collections::BTreeMap<String, String>>) + Send + 'static) {
+        self.call("GET", "/api/ui/drafts", None, ctx, on_done);
+    }
+
+    /// Saves a slot's unsent chat text (empty: none).
+    pub fn save_draft(&self, slot: &SlotId, text: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call("PUT", &format!("/api/ui/drafts/{slot}"), Some(serde_json::json!({ "text": text })), ctx, on_done);
+    }
+
     // ---- instances ----
 
     /// The harness's saved sessions in the project.

@@ -2,6 +2,8 @@
 /cockpit GET,HEAD
 /api/ui/config GET,HEAD
 /api/ui/state GET,HEAD,PUT
+/api/ui/drafts GET,HEAD
+/api/ui/drafts/s1 PUT
 /api/instances GET,HEAD
 /api/instances/fake/refresh POST
 /api/instances/fake/sessions GET,HEAD

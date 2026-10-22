@@ -149,6 +149,8 @@ pub struct Shared {
     pub tags: Held<crate::tags::Tags>,
     /// The server's discussions, each whole.
     pub discussions: Held<crate::discussions::Discussions>,
+    /// The chats' unsent text, by slot (its own record on the server).
+    pub drafts: Held<crate::drafts::Drafts>,
     /// The desk's server (`here`: home's own).
     pub server: String,
     /// Every server's open notifications, in the order they're gone through.

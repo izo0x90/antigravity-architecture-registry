@@ -5,7 +5,17 @@ use super::*;
 impl CockpitApp {
     /// The cockpit's state now, as it's saved.
     pub fn saved_ui(&self) -> SavedUi {
-        let buffers: Vec<BufferId> = self.desk.panels.buffers().iter().copied().chain(self.desk.panels.put_away()).collect();
+        // The panels' buffers, the one-only kinds', and the quick look's own.
+        let buffers: Vec<BufferId> = self
+            .desk
+            .panels
+            .buffers()
+            .iter()
+            .copied()
+            .chain(self.desk.panels.put_away())
+            .chain(BufferKind::ALL.iter().filter(|k| k.one_only()).map(|k| BufferId::new(*k, 0)))
+            .chain(BufferKind::ALL.iter().map(|k| BufferId::new(*k, crate::quick_look::PANE)))
+            .collect();
         let used = BufferKind::ALL.iter().filter(|k| !k.one_only()).map(|k| match &self.quick_look {
             Some(look) if look.kind() == *k => look.before,
             _ => self.desk.used_buffer(*k),
@@ -14,14 +24,8 @@ impl CockpitApp {
             version: crate::saved::VERSION,
             panels: self.desk.panels.clone(),
             views: buffers.iter().filter_map(|p| self.place_of(*p).map(|place| (*p, place))).collect(),
-            // The panels' buffers, the one-only kinds', and the quick look's own.
-            kept: buffers
-                .iter()
-                .copied()
-                .chain(BufferKind::ALL.iter().filter(|k| k.one_only()).map(|k| BufferId::new(*k, 0)))
-                .chain(BufferKind::ALL.iter().map(|k| BufferId::new(*k, crate::quick_look::PANE)))
-                .filter_map(|p| Some((p, self.desk.buffer(p)?.keep()?)))
-                .collect(),
+            kept: buffers.iter().filter_map(|p| Some((*p, self.desk.buffer(*p)?.keep()?))).collect(),
+            versions: BufferKind::ALL.iter().map(|k| (*k, k.saved_version())).collect(),
             used: used.collect(),
             marks: self.desk.marks.clone(),
             jumps: self.desk.jumps.clone(),
@@ -46,6 +50,11 @@ impl CockpitApp {
                 crate::saved::Event::Note(note) => self.note = Some(note),
             }
         }
+        // The chats' unsent text: its own record (the chat views report
+        // theirs as asks), saved a moment after each changed.
+        for note in self.desk.shared.drafts.get_mut().tick(now, after, &self.desk.net, ctx) {
+            self.note = Some(note);
+        }
     }
 
     /// Puts the saved state back: the panels, each buffer where it was and
@@ -58,13 +67,21 @@ impl CockpitApp {
         self.desk.remote.agents = saved.agents;
         self.desk.shared.changes.compare(saved.comparison.clone());
         self.item_buttons = saved.item_buttons;
-        for (buffer, kept) in &saved.kept {
+        // A kind saved in another version of itself starts new; the rest holds.
+        let current = |kind: BufferKind| saved.versions.get(&kind).copied().unwrap_or(1) == kind.saved_version();
+        let saved_kinds = saved.views.iter().map(|(b, _)| b.kind).chain(saved.kept.iter().map(|(b, _)| b.kind));
+        let stale: std::collections::BTreeSet<BufferKind> = saved_kinds.filter(|k| !current(*k)).collect();
+        if !stale.is_empty() {
+            let names: Vec<&str> = stale.iter().map(BufferKind::name).collect();
+            self.note = Some(format!("The saved layout's {} {} from another version of the cockpit: starting {} new.", names.join(", "), if names.len() == 1 { "buffer is" } else { "buffers are" }, if names.len() == 1 { "it" } else { "them" }));
+        }
+        for (buffer, kept) in saved.kept.iter().filter(|(b, _)| current(b.kind)) {
             self.desk.ensure(*buffer);
             if let Some(view) = self.desk.buffer_mut(*buffer) {
                 view.restore_kept(kept);
             }
         }
-        for (buffer, place) in &saved.views {
+        for (buffer, place) in saved.views.iter().filter(|(b, _)| current(b.kind)) {
             self.desk.ensure(*buffer);
             if let Some(view) = self.desk.buffer_mut(*buffer) {
                 view.restore(place);
@@ -72,7 +89,7 @@ impl CockpitApp {
         }
         self.desk.share();
         // Put back as saved: not started from another buffer's place.
-        self.desk.fresh.retain(|(buffer, _)| !saved.views.iter().any(|(p, _)| p == buffer));
+        self.desk.fresh.retain(|(buffer, _)| !saved.views.iter().any(|(p, _)| p == buffer && current(p.kind)));
         for buffer in &saved.used {
             self.desk.ensure(*buffer);
             self.desk.last_used.insert(buffer.kind, buffer.id);

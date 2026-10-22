@@ -163,8 +163,8 @@ fn the_pop_up_terminal_is_its_own_over_everything_and_its_key_hides_it() {
     assert_eq!(app.desk.view(BufferKind::Terminal).target(), Some(Target::Terminal(harness_contracts::TerminalId::new("t9"))));
     assert!(!sent(&app).contains(&"POST /api/terminals".to_owned()), "no new one");
     assert_eq!(app.input_mode, InputMode::Insert { at: Host::Look });
-    let kept = app.saved_ui().kept;
-    assert!(kept.iter().any(|(b, v)| *b == pop && v == "t9"), "its terminal is kept: {kept:?}");
+    let views = app.saved_ui().views;
+    assert!(views.iter().any(|(b, p)| *b == pop && p.read::<serde_json::Value>().is_some_and(|v| v["id"] == "t9")), "its terminal is in its place: {views:?}");
 }
 
 /// Out of typing, in the terminal, its cursor on the live screen's last line.

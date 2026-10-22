@@ -46,25 +46,45 @@ impl ChatStreamState {
     }
 }
 
+impl ChatStreamState {
+    /// Its slot's unsent text as the server saved it, taken when the box
+    /// is empty (once per slot shown, once the drafts are read).
+    fn take_unsent(&mut self) {
+        if self.unsent_for.as_ref() == Some(&self.ui.slot) {
+            return;
+        }
+        let Some(saved) = self.unsent.get().saved(&self.ui.slot).map(|s| s.map(str::to_owned)) else { return };
+        self.unsent_for = Some(self.ui.slot.clone());
+        if self.ui.input.text.is_empty()
+            && let Some(saved) = &saved
+        {
+            self.ui.input.text.clone_from(saved);
+        }
+        // Text already in the box (the view's own, or typed before the
+        // drafts were read) differs from what's saved: reported.
+        self.unsent_said = saved.unwrap_or_default();
+    }
+
+    /// What's in the box, when it changed since it was last reported
+    /// (typed, put in, or cleared by sending): to be saved for its slot.
+    fn report_unsent(&mut self) {
+        if self.unsent_for.as_ref() == Some(&self.ui.slot) && self.ui.input.text != self.unsent_said {
+            self.unsent_said = self.ui.input.text.clone();
+            self.asks.push(Ask::Draft { slot: self.ui.slot.clone(), text: self.unsent_said.clone() });
+        }
+    }
+}
+
 impl crate::buffer::Buffer for ChatStreamState {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
+        self.take_unsent();
         self.draw(ui, drawing.feedback, drawing.typing, cx);
+        self.report_unsent();
     }
 
     /// While it's on screen, its slot's updates are seen.
     fn tick(&mut self, _net: &crate::net::NetClient, ctx: &egui::Context) {
         self.seen_now(ctx.input(|i| i.time));
-    }
-
-    /// What's typed and not sent.
-    fn keep(&self) -> Option<serde_json::Value> {
-        (!self.ui.input.text.is_empty()).then(|| serde_json::Value::String(self.ui.input.text.clone()))
-    }
-
-    fn restore_kept(&mut self, kept: &serde_json::Value) {
-        if let Some(draft) = kept.as_str().filter(|_| self.ui.input.text.is_empty()) {
-            self.ui.input.text = draft.to_owned();
-        }
     }
 
     fn describe(&self) -> String {
@@ -96,6 +116,7 @@ impl Navigable for ChatStreamState {
     /// changed (the desk's timeline).
     fn share(&mut self, shared: &crate::shared::Shared) {
         self.agents.follow(&shared.agents);
+        self.unsent.follow(&shared.drafts);
         self.took();
         let (timeline, read) = shared.changes.timeline();
         if read != self.turn_files_read {

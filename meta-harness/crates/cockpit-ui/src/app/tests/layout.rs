@@ -10,14 +10,13 @@ fn the_layout_comes_back_as_it_was_saved() {
     keys(&ctx, &mut app, "mc");
     app.desk.panels = panels_of(&[BufferKind::Tree, BufferKind::Graph, BufferKind::Chat, BufferKind::Code], 2);
     app.desk.graph_mut().select(Some("rust:a::step".into()));
-    app.desk.chat_mut().ui.input.text = "half a thought".into();
     let saved = app.saved_ui();
     // Through the server (as JSON) into a cockpit that just opened.
     let json = serde_json::to_value(&saved).unwrap();
     let (_, mut fresh) = full_app();
     fresh.restore_saved(serde_json::from_value(json).unwrap());
     assert_eq!((fresh.desk.panels.kinds(), fresh.desk.panels.focused()), (saved.panels.kinds(), 2));
-    assert_eq!((fresh.desk.marks.clone(), fresh.desk.jumps.clone(), fresh.desk.chat().ui.input.text.as_str()), (saved.marks.clone(), saved.jumps.clone(), "half a thought"));
+    assert_eq!((fresh.desk.marks.clone(), fresh.desk.jumps.clone()), (saved.marks.clone(), saved.jumps.clone()));
     let graph_place = |s: &SavedUi| s.views.iter().find(|(p, _)| p.kind == BufferKind::Graph).map(|(_, p)| p.clone());
     assert_eq!(fresh.desk.graph().place(), graph_place(&saved).unwrap(), "the graph where it was, the same card selected");
     let code = fresh.saved_ui().views.into_iter().find(|(p, _)| p.kind == BufferKind::Code).and_then(|(_, place)| place.read::<crate::code::CodePlace>());
@@ -156,6 +155,8 @@ fn a_count_before_a_go_to_names_the_panel_it_opens_in() {
 #[test]
 fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     let (ctx, mut app) = full_app();
+    // The server has no drafts yet (read: the views report theirs from here on).
+    app.desk.shared.drafts.get_mut().arrived(Default::default());
     crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
     let mut sub = crate::chat::tests::lead(None);
     (sub.id, sub.role, sub.name) = (harness_contracts::SlotId::new("sub-1"), "sub".into(), "reviewer".into());
@@ -174,20 +175,54 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     assert_eq!(app.desk.chat().active_thread(), None, "the sub-slot runs no session");
     let ids: Vec<String> = app.desk.chat_mut().actions().into_iter().map(|a| a.id).collect();
     assert!(ids.contains(&"agent.close".to_owned()) && ids.contains(&"agent.pick".to_owned()), "{ids:?}");
+    // (A frame while it's the chat in use: what it asks is taken then.)
+    frame(&ctx, &mut app, vec![]);
     app.desk.panels.focus(0);
     frame(&ctx, &mut app, vec![]);
     assert_eq!((app.desk.chat().ui.slot.as_str(), app.desk.chat().ui.input.text.as_str(), app.desk.chat().active_thread().map(|t| t.to_string())), ("lead", "to the lead", Some("t".into())));
     assert!(!app.desk.chat().actions().iter().any(|a| a.id == "agent.close"), "the lead isn't closed");
-    // Saved and opened again: each view on its slot, with its draft.
+    // Each view's draft is to be saved for its slot (the server keeps them
+    // as their own record, not in the layout).
+    frame(&ctx, &mut app, vec![]);
+    let drafts = app.desk.shared.drafts.get();
+    assert_eq!((drafts.to_save(&harness_contracts::SlotId::new("lead")), drafts.to_save(&harness_contracts::SlotId::new("sub-1"))), (Some("to the lead"), Some("to the reviewer")));
+    drop(drafts);
     let saved = serde_json::to_value(app.saved_ui()).unwrap();
-    let (_, mut fresh) = full_app();
+    assert!(!saved.to_string().contains("to the lead"), "the draft isn't in the layout: {saved}");
+    // Saved and opened again: each view on its slot, and its slot's draft
+    // once the drafts are read.
+    let (ctx, mut fresh) = full_app();
     fresh.restore_saved(serde_json::from_value(saved).unwrap());
+    fresh.desk.shared.drafts.get_mut().arrived([(harness_contracts::SlotId::new("lead"), "to the lead".to_owned()), (harness_contracts::SlotId::new("sub-1"), "to the reviewer".to_owned())].into());
     let view = |app: &mut CockpitApp, buffer| {
         app.use_buffer(buffer);
-        (app.desk.chat_mut().ui.slot.to_string(), app.desk.chat_mut().ui.input.text.clone())
+        frame(&ctx, app, vec![]);
+        let chat: &crate::chat::ChatStreamState = app.desk.typed_at(buffer);
+        (chat.ui.slot.to_string(), chat.ui.input.text.clone())
     };
     assert_eq!(view(&mut fresh, second), ("sub-1".into(), "to the reviewer".into()));
     assert_eq!(view(&mut fresh, first), ("lead".into(), "to the lead".into()));
+}
+
+/// A buffer kind saved in another version of itself starts new; the rest
+/// of the layout (the other kinds, the panels, the marks) comes back.
+#[test]
+fn a_kind_saved_in_another_version_starts_new_and_the_rest_of_the_layout_holds() {
+    let (ctx, mut app) = full_app();
+    app.desk.terminal_mut().arrive(vec![super::terminal::with_commands(1000, vec![super::terminal::command(1, 1003, Some(1008), "make")])]);
+    let _ = app.desk.view_mut(BufferKind::Code).show_target(&Target::Span { file: "src/a.rs".into(), start: 3, end: 3 });
+    app.desk.marks.insert('a', crate::nav::Jump { kind: BufferKind::Code, panel: 0, place: app.desk.view(BufferKind::Code).place() });
+    frame(&ctx, &mut app, vec![]);
+    let mut saved = app.saved_ui();
+    assert_eq!(saved.versions.get(&BufferKind::Code), Some(&BufferKind::Code.saved_version()));
+    saved.versions.insert(BufferKind::Code, BufferKind::Code.saved_version() + 1);
+    let (ctx, mut fresh) = full_app();
+    fresh.restore_saved(saved);
+    frame(&ctx, &mut fresh, vec![]);
+    assert_eq!(fresh.desk.view(BufferKind::Terminal).place(), app.desk.view(BufferKind::Terminal).place(), "the terminal came back");
+    assert!(fresh.desk.marks.contains_key(&'a'), "the marks came back");
+    assert_ne!(fresh.desk.view(BufferKind::Code).place(), app.desk.view(BufferKind::Code).place(), "the code view started new");
+    assert!(fresh.note.as_deref().is_some_and(|n| n.contains("code") && n.contains("another version")), "{:?}", fresh.note);
 }
 
 #[test]

@@ -380,16 +380,6 @@ impl crate::buffer::Buffer for TerminalBuffer {
         self.popped = card;
     }
 
-    /// The terminal it shows (the pop-up's is its own across reloads).
-    fn keep(&self) -> Option<serde_json::Value> {
-        self.id.as_ref().map(|id| serde_json::Value::String(id.to_string()))
-    }
-
-    fn restore_kept(&mut self, kept: &serde_json::Value) {
-        if let Some(id) = kept.as_str() {
-            self.show(TerminalId::new(id));
-        }
-    }
 
     fn describe(&self) -> String {
         match self.info() {

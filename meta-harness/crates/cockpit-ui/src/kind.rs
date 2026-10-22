@@ -40,6 +40,15 @@ impl BufferKind {
     /// There is one of these (the queue, the inbox, the changes: the
     /// desk's comparison, the tags, the plan the desk reads); of the others,
     /// each panel can have its own.
+    /// The version of what this kind saves with the layout (its place and
+    /// what it keeps). Bumped when the kind can't read an older one: then
+    /// only this kind's buffers start new; the rest of the layout holds.
+    pub fn saved_version(self) -> u32 {
+        match self {
+            Self::Chat | Self::Code | Self::Graph | Self::Tree | Self::Spec | Self::Queue | Self::Inbox | Self::Changes | Self::Terminal | Self::Tags | Self::Plan | Self::Discussion => 1,
+        }
+    }
+
     pub fn one_only(&self) -> bool {
         matches!(self, Self::Queue | Self::Inbox | Self::Changes | Self::Tags | Self::Plan)
     }

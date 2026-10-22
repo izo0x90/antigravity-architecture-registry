@@ -13,6 +13,7 @@ pub mod conversation;
 pub mod diff;
 pub mod discussion;
 pub mod discussions;
+pub mod drafts;
 pub mod feedback;
 pub mod graph;
 pub mod inbox;

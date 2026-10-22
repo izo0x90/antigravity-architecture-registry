@@ -85,6 +85,8 @@ pub enum Ask {
     Trigger(char),
     /// Something shared changed where it's kept: read it again.
     Refresh(Refresh),
+    /// A chat's unsent text for its slot changed: saved (`crate::drafts`).
+    Draft { slot: harness_contracts::SlotId, text: String },
     /// The desk compares this from now on (what the changes show).
     Compare(harness_contracts::changes::Comparison),
     /// What waits on the user, across servers (the inbox's).

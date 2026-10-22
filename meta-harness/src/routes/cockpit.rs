@@ -3,9 +3,9 @@
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 
 use crate::modules::CockpitState;
@@ -16,6 +16,8 @@ pub(crate) fn routes() -> Router<CockpitState> {
     Router::new()
         .route("/api/ui/config", get(ui_config_handler))
         .route("/api/ui/state", get(get_ui_state).put(put_ui_state))
+        .route("/api/ui/drafts", get(get_drafts))
+        .route("/api/ui/drafts/{slot}", put(put_draft))
         .route("/api/ui/shell", get(get_ui_shell).put(put_ui_shell))
         .route("/cockpit", get(crate::cockpit::launch))
         .route("/ws/cockpit", get(crate::remote::socket))
@@ -38,6 +40,23 @@ async fn get_ui_state(_: Needs<can::ViewRead>, State(state): State<CockpitState>
 /// The cockpit saves its state (only the cockpit's user can).
 async fn put_ui_state(_: Needs<can::SessionsControl>, State(state): State<CockpitState>, Json(body): Json<serde_json::Value>) -> Result<StatusCode, StateFailed> {
     with_state(&state.state, move |db| db.set_ui_state(&body)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Each slot's unsent chat text, as the cockpit last saved it (its own
+/// record: a layout reset doesn't lose it).
+async fn get_drafts(_: Needs<can::ViewRead>, State(state): State<CockpitState>) -> Result<Json<std::collections::BTreeMap<String, String>>, StateFailed> {
+    Ok(Json(with_state(&state.state, |db| db.drafts()).await?))
+}
+
+#[derive(serde::Deserialize)]
+struct Draft {
+    text: String,
+}
+
+/// The cockpit saves a slot's unsent text (empty: none).
+async fn put_draft(_: Needs<can::SessionsControl>, State(state): State<CockpitState>, Path(slot): Path<String>, Json(body): Json<Draft>) -> Result<StatusCode, StateFailed> {
+    with_state(&state.state, move |db| db.set_draft(&slot, &body.text)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
