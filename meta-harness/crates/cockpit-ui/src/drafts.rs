@@ -79,8 +79,11 @@ impl Drafts {
                     notes.push(format!("Couldn't read the unsent chat text: {}", String::from(e)));
                 }
                 Reply::Saved(_, Ok(())) => {}
+                // Not saved: tried again after a moment.
                 Reply::Saved(slot, Err(e)) => {
-                    self.sent.remove(&slot);
+                    if let Some(text) = self.sent.remove(&slot) {
+                        self.pending.entry(slot).or_insert((text, time));
+                    }
                     notes.push(format!("Couldn't save the unsent chat text: {}", String::from(e)));
                 }
             }

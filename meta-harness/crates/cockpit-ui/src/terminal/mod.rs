@@ -254,8 +254,10 @@ impl TerminalBuffer {
         let link = self.link.get_or_insert_with(|| TermLink::open(net, &id, ctx));
         let polled = link.poll(ctx);
         if polled.lost {
-            // Closed, or fell behind: start again from the whole screen.
+            // Closed, or fell behind: start again from the whole screen (a
+            // question in flight is asked again on the new socket).
             self.drop_link();
+            self.asked_now = None;
             ctx.request_repaint();
             return;
         }
@@ -305,8 +307,15 @@ impl TerminalBuffer {
                 FromTerminal::LineNow { shell, first, last, now } => {
                     if self.asked_now == Some((shell, first, last)) {
                         self.known_now = true;
-                        if let (Some((now_first, now_last)), Some(Target::TerminalLines { first, last, .. })) = (now, &mut self.going_to) {
-                            (*first, *last) = (now_first, now_last);
+                        match (now, &mut self.going_to) {
+                            (Some((now_first, now_last)), Some(Target::TerminalLines { first, last, .. })) => (*first, *last) = (now_first, now_last),
+                            // Laid out anew too long ago to follow: not landed on
+                            // a line that may be another's.
+                            (None, _) => {
+                                self.going_to = None;
+                                self.said = Some("Its lines were laid out anew too long ago to follow: where they are now isn't known.".into());
+                            }
+                            _ => {}
                         }
                     }
                 }

@@ -47,7 +47,6 @@ impl CockpitApp {
             Ask::Trigger(c) => {
                 if let Some(pick) = self.triggered(c) {
                     self.open_palette(Some(&pick));
-                    super::keys::typed_away(ctx);
                 }
             }
             Ask::Draft { slot, text } => self.desk.shared.drafts.get_mut().changed(slot, text, ctx.input(|i| i.time)),
