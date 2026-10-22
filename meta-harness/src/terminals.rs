@@ -77,15 +77,11 @@ pub struct Terminals {
     /// new width, a shell started again or closed): the tags keep them
     /// where they are now. Told where they moved, off the async threads.
     moved: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
-    /// Tagged commands still running: what they print is told to the tags
-    /// as it's written (`Resolve::follow`), until they end.
-    followed: Mutex<Vec<Followed>>,
 }
 
 /// A command followed for the tags: what it printed is told up to line
 /// `next` (not written whole yet from there on).
 struct Followed {
-    terminal: TerminalId,
     shell: u64,
     command: u64,
     next: u64,
@@ -107,6 +103,9 @@ pub struct Open {
     /// The current start's own number, told to readers (unlike the
     /// generation, not the same again after the server restarts).
     start: AtomicU64,
+    /// Its commands followed for the tags (what each prints, told as it's
+    /// written, until it ends): its own, so no terminal waits on another's.
+    followed: Mutex<Vec<Followed>>,
 }
 
 impl Terminals {
@@ -115,7 +114,7 @@ impl Terminals {
     pub fn load(folder: PathBuf, hooks: PathBuf, hub: Arc<EventHub>, state: Arc<nah_state::StateDb>, settings: Settings) -> Result<Arc<Self>, nah_state::StateError> {
         let kept = state.terminals()?;
         let open = kept.into_iter().map(|t| (t.id.clone(), Arc::new(Open::new(t)))).collect();
-        let terminals = Arc::new(Self { folder, hooks, hub, state, open: Mutex::new(open), settings, moved: std::sync::OnceLock::new(), followed: Mutex::default() });
+        let terminals = Arc::new(Self { folder, hooks, hub, state, open: Mutex::new(open), settings, moved: std::sync::OnceLock::new() });
         for t in terminals.list() {
             terminals.hub.publish(ClientEvent::TerminalUpdated { terminal: t });
         }
@@ -228,15 +227,12 @@ impl Terminals {
     /// that ended (or went), their end told and let go; one no longer
     /// wanted (the tag's off it), let go.
     fn tell_followed(&self, open: &Arc<Open>) {
-        let mut followed = lock(&self.followed);
+        let mut followed = lock(&open.followed);
         if followed.is_empty() {
             return;
         }
-        let (id, started, ended) = (open.info().id, open.started(), open.ended());
+        let (started, ended) = (open.started(), open.ended());
         followed.retain_mut(|f| {
-            if f.terminal != id {
-                return true;
-            }
             let command = open.command(f.command).filter(|_| f.shell == started);
             let Some(command) = command else { return false };
             if let Some(written) = open.written(f.next, command.end) {
@@ -308,8 +304,7 @@ impl Terminals {
         // A new width lays its lines out anew: what's followed goes on from
         // where its line is now; tags are told.
         if new_width {
-            let id = open.info().id;
-            for f in lock(&self.followed).iter_mut().filter(|f| f.terminal == id) {
+            for f in lock(&open.followed).iter_mut() {
                 if let Some((now, _)) = open.lines_now(f.next, f.next) {
                     f.next = now;
                 }
@@ -321,7 +316,7 @@ impl Terminals {
 
 impl Open {
     fn new(info: Terminal) -> Self {
-        Self { info: Mutex::new(info), shell: Mutex::default(), changed: watch::channel(0).0, viewers: Mutex::default(), next_viewer: AtomicU64::new(1), generation: AtomicU64::new(0), start: AtomicU64::new(0) }
+        Self { info: Mutex::new(info), shell: Mutex::default(), changed: watch::channel(0).0, viewers: Mutex::default(), next_viewer: AtomicU64::new(1), generation: AtomicU64::new(0), start: AtomicU64::new(0), followed: Mutex::default() }
     }
 
     pub fn info(&self) -> Terminal {
@@ -538,7 +533,7 @@ impl nah_things::Resolve for Terminals {
         if !more(&format!("{}\n{}{}", in_words(&ran), lost_words(written.lost), written.text)) {
             return false;
         }
-        lock(&self.followed).push(Followed { terminal: terminal.clone(), shell: *shell, command: *command, next: written.next, more });
+        lock(&open.followed).push(Followed { shell: *shell, command: *command, next: written.next, more });
         // What it printed, or how it ended, since it was looked at.
         self.tell_followed(&open);
         true

@@ -92,6 +92,18 @@ pub trait Resolve: Send + Sync {
 /// longer wanted.
 pub type More = Box<dyn FnMut(&str) -> bool + Send>;
 
+/// A growing piece's follower, let go: its log is done growing.
+struct Done {
+    logs: Arc<Logs>,
+    file: String,
+}
+
+impl Drop for Done {
+    fn drop(&mut self) {
+        self.logs.done(&self.file);
+    }
+}
+
 /// Some lines of what a thing says, and how many it has in all.
 pub type Window = (Vec<String>, u64);
 
@@ -135,7 +147,7 @@ thread_local! {
 pub struct Things {
     owners: RwLock<Vec<Arc<dyn Resolve>>>,
     notes: RwLock<Vec<Weak<dyn Notes>>>,
-    logs: Logs,
+    logs: Arc<Logs>,
     /// Each growing thing's log file, and whether it's still written to
     /// (off once nothing points into it).
     growing: Mutex<BTreeMap<String, Arc<AtomicBool>>>,
@@ -172,7 +184,7 @@ impl Things {
     /// The things' logs in `logs`; a growing thing's kept up to
     /// `grown_most` bytes.
     pub fn open(logs: &Path, grown_most: u64) -> Arc<Self> {
-        Arc::new(Self { owners: RwLock::default(), notes: RwLock::default(), logs: Logs::open(logs, "tagged"), growing: Mutex::default(), grown_most, ready: AtomicBool::new(false) })
+        Arc::new(Self { owners: RwLock::default(), notes: RwLock::default(), logs: Arc::new(Logs::open(logs, "tagged")), growing: Mutex::default(), grown_most, ready: AtomicBool::new(false) })
     }
 
     /// An owner of things, from now on (the things noted named as it
@@ -428,15 +440,20 @@ impl Things {
     }
 
     fn log(&self, owner: &dyn Resolve, subject: &Subject, header: &str) -> Result<Kept, String> {
-        let (kept, mut file) = self.logs.grow(header).map_err(|e| e.to_string())?;
+        let (kept, writer) = self.logs.grow(header).map_err(|e| e.to_string())?;
         let on = Arc::new(AtomicBool::new(true));
         let (still, cut) = (on.clone(), Arc::new(AtomicBool::new(false)));
         let was_cut = cut.clone();
         let (most, mut written) = (self.grown_most, 0u64);
+        // Once the follower is let go (the command ended, or it's no longer
+        // wanted), what's held is written out and the writer let go.
+        let done = Done { logs: self.logs.clone(), file: kept.file.clone() };
         let more: More = Box::new(move |more| {
+            let _ = &done;
             if !still.load(Ordering::Relaxed) {
                 return false;
             }
+            let mut file = writer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             // Past the most a growing thing keeps: what fits, said, and no
             // longer followed.
             if written + more.len() as u64 > most {
@@ -454,6 +471,7 @@ impl Things {
             lock(&self.growing).insert(kept.file.clone(), on);
             return Ok(kept);
         }
+        // (The follower, let go: its file written out.)
         // Past the most already: what fit, kept.
         if was_cut.load(Ordering::Relaxed) {
             return Ok(kept);
