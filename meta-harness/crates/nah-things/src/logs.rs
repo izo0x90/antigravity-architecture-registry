@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -23,14 +23,11 @@ use harness_contracts::Kept;
 /// what it found (said to be partial).
 const SEARCH_BUDGET_MS: u64 = 2000;
 
-/// How much of a growing piece is held before it's written out (it's
-/// written out whenever it's read, too).
-const WRITE_BUFFER: usize = 64 << 10;
-
 /// Where a growing piece is written: its own lock, so one growing log
-/// never waits on another's write; what's written is held a while
-/// (`WRITE_BUFFER`) and written out when read, when full, and when done.
-pub type Writer = Arc<Mutex<BufWriter<File>>>;
+/// never waits on another's write. Each piece added is written through
+/// (the kernel holds it, nothing of ours does): a reader, a search, and
+/// the server started again all see it.
+pub type Writer = Arc<Mutex<File>>;
 
 pub struct Logs {
     dir: PathBuf,
@@ -38,7 +35,8 @@ pub struct Logs {
     state: Mutex<State>,
     /// The files as FFF lists them (once there are some).
     search: Mutex<Option<arch_search::RepoFiles>>,
-    /// The growing pieces' writers, by file (while they're written to).
+    /// The growing pieces' writers, by file (while they're written to:
+    /// let go when done, or when the file is removed).
     writers: Mutex<BTreeMap<String, Writer>>,
 }
 
@@ -178,7 +176,7 @@ impl Logs {
     /// where it is (to the file's end), and its writer to add to.
     pub fn grow(&self, header: &str) -> std::io::Result<(Kept, Writer)> {
         let (kept, file) = self.start(header)?;
-        let writer = Arc::new(Mutex::new(BufWriter::with_capacity(WRITE_BUFFER, file)));
+        let writer = Arc::new(Mutex::new(file));
         self.lock().growing.insert(kept.file.clone(), 0);
         self.writers().insert(kept.file.clone(), writer.clone());
         Ok((kept, writer))
@@ -188,37 +186,13 @@ impl Logs {
         self.writers.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// What's held for `file` written out (before it's read).
-    fn flush(&self, file: &str) -> std::io::Result<()> {
-        let writer = self.writers().get(file).cloned();
-        match writer {
-            Some(writer) => writer.lock().unwrap_or_else(std::sync::PoisonError::into_inner).flush(),
-            None => Ok(()),
-        }
-    }
-
-    /// Every growing piece written out (before the files are searched).
-    fn flush_all(&self) {
-        let writers: Vec<Writer> = self.writers().values().cloned().collect();
-        for writer in writers {
-            if let Err(e) = writer.lock().unwrap_or_else(std::sync::PoisonError::into_inner).flush() {
-                tracing::warn!("A growing log couldn't be written out: {e}");
-            }
-        }
-    }
-
     /// A growing piece is done growing (its command ended, or it's no
-    /// longer followed): written out, and its writer let go.
+    /// longer followed): its writer let go.
     pub fn done(&self, file: &str) {
-        if let Some(writer) = self.writers().remove(file)
-            && let Err(e) = writer.lock().unwrap_or_else(std::sync::PoisonError::into_inner).flush()
-        {
-            tracing::warn!("A growing log couldn't be written out: {e}");
-        }
+        self.writers().remove(file);
     }
 
     fn opened(&self, kept: &Kept) -> std::io::Result<impl Read> {
-        self.flush(&kept.file)?;
         let mut file = File::open(self.dir.join(&kept.file))?;
         file.seek(SeekFrom::Start(kept.start))?;
         Ok(file.take(kept.len.unwrap_or(u64::MAX)))
@@ -240,7 +214,6 @@ impl Logs {
         }
         let key = (kept.file.clone(), kept.start);
         let was = self.lock().counted.get(&key).copied().unwrap_or(Counted { read: 0, lines: 0, ended: true });
-        self.flush(&kept.file)?;
         let mut file = File::open(self.dir.join(&kept.file))?;
         file.seek(SeekFrom::Start(kept.start + was.read))?;
         let left = kept.len.map_or(u64::MAX, |len| len.saturating_sub(was.read));
@@ -293,7 +266,6 @@ impl Logs {
     /// is the piece's when it's among them.
     pub fn span(&self, kept: &Kept) -> std::io::Result<(u64, u64)> {
         let mut before = Vec::new();
-        self.flush(&kept.file)?;
         File::open(self.dir.join(&kept.file))?.take(kept.start).read_to_end(&mut before)?;
         Ok((before.iter().filter(|b| **b == b'\n').count() as u64 + 1, self.count(kept)?))
     }
@@ -349,7 +321,6 @@ impl Logs {
         if files.is_empty() || !self.dir.is_dir() {
             return (Vec::new(), false);
         }
-        self.flush_all();
         let mut search = self.search.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if search.is_none() {
             match arch_search::RepoFiles::scan(&self.dir, Box::new(|_| false)) {
@@ -429,10 +400,10 @@ mod tests {
         // A growing piece, read to its end as it grows (and counted on).
         let (growing, more) = logs.grow("slow · terminal t1 command 4").unwrap();
         more.lock().unwrap().write_all(b"1\n").unwrap();
-        assert_eq!(logs.count(&growing).unwrap(), 1, "held, and written out to be read");
+        assert_eq!(logs.count(&growing).unwrap(), 1);
         more.lock().unwrap().write_all(b"2\n3").unwrap();
         assert_eq!((logs.read(&growing).unwrap().as_str(), logs.count(&growing).unwrap()), ("1\n2\n3", 3));
-        assert_eq!(logs.search("3", &BTreeSet::from([growing.file.clone()]), 10).0.len(), 1, "written out to be searched");
+        assert_eq!(logs.search("3", &BTreeSet::from([growing.file.clone()]), 10).0.len(), 1);
         logs.done(&growing.file);
         assert_eq!(std::fs::read_to_string(dir.path().join(&growing.file)).unwrap(), "== slow · terminal t1 command 4\n1\n2\n3");
         // Only the server's user reads them.
