@@ -83,7 +83,7 @@ impl Reader {
                     self.sent_again.extend(lines.iter().map(|(_, row)| text(row)));
                     self.lines.extend(lines.iter().map(|(n, row)| (*n, text(row))));
                 }
-                FromTerminal::Found { .. } | FromTerminal::CommandOutput { .. } => {}
+                FromTerminal::Found { .. } | FromTerminal::CommandOutput { .. } | FromTerminal::LineNow { .. } => {}
             }
             return said;
         }
@@ -204,6 +204,65 @@ async fn a_reader_is_sent_lines_as_they_scroll_off_and_asks_for_scrollback_and_s
     let halves: Vec<&String> = reader.lines.values().filter(|l| l.starts_with("half")).collect();
     assert_eq!(halves, ["half and whole"], "{:?}", reader.lines);
     assert!(reader.sent_again.iter().any(|l| l == "half and whole"), "sent again as it went: {:?}", reader.sent_again);
+}
+
+/// A line is named by the start of the shell and its number then; after a
+/// new width lays the lines out anew, the server says where it is now
+/// (exactly, as it moves a tag's), and the reader doesn't work it out.
+#[tokio::test]
+async fn a_line_is_found_where_it_is_after_a_new_width() {
+    let (addr, _) = spawn_app().await;
+    let terminal = open(addr).await;
+    let mut reader = Reader::at(addr, &format!("/ws/terminals/{}", terminal.id)).await;
+    reader.next().await;
+    reader.say(ToTerminal::Size { size: TermSize { cols: 80, rows: 10 } }).await;
+    reader.run("for i in $(seq 1 40); do printf '%s %s\\n' $i 0123456789012345678901234567890123456789012345678901234567890123456789; done").await;
+    reader.until_shows("40 0123456789012345678901234567890123456789012345678901234567890123456789").await;
+    let shell = reader.last.as_ref().unwrap().shell;
+    reader.say(ToTerminal::Search { query: "20 0123".into() }).await;
+    let line = loop {
+        if let FromTerminal::Found { found, .. } = reader.next().await {
+            break found[0].line;
+        }
+    };
+    // Narrower: each 72-character line wraps to two; line 20 is numbered anew.
+    reader.say(ToTerminal::Size { size: TermSize { cols: 40, rows: 10 } }).await;
+    loop {
+        if let FromTerminal::Screen { update } = reader.next().await
+            && update.size.cols == 40
+        {
+            break;
+        }
+    }
+    reader.say(ToTerminal::LineNow { shell, first: line, last: line }).await;
+    let now = loop {
+        if let FromTerminal::LineNow { shell: s, first, now, .. } = reader.next().await
+            && (s, first) == (shell, line)
+        {
+            break now;
+        }
+    };
+    let (now_first, _) = now.expect("followed");
+    assert_ne!(now_first, line, "numbered anew");
+    reader.say(ToTerminal::Lines { from: now_first, count: 1 }).await;
+    let rows = loop {
+        if let FromTerminal::Lines { from, rows } = reader.next().await
+            && from == now_first
+        {
+            break rows;
+        }
+    };
+    assert!(text(&rows[0]).starts_with("20 0123"), "{:?}", text(&rows[0]));
+    // Another start of the shell: not followed.
+    reader.say(ToTerminal::LineNow { shell: shell + 1, first: line, last: line }).await;
+    let other = loop {
+        if let FromTerminal::LineNow { shell: s, now, .. } = reader.next().await
+            && s == shell + 1
+        {
+            break now;
+        }
+    };
+    assert_eq!(other, None);
 }
 
 #[tokio::test]

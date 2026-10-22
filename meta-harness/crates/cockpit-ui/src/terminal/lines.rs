@@ -49,9 +49,6 @@ pub(super) struct Lines {
     refused: Option<Range<u64>>,
     /// The commands the shell ran, in order (by number: by their lines too).
     commands: Vec<TerminalCommand>,
-    /// How far each new layout of this start of the shell moved the lines
-    /// (a line kept from before one moves as far).
-    relaid: Vec<i64>,
 }
 
 impl Lines {
@@ -67,12 +64,10 @@ impl Lines {
         };
         match took {
             Took::Relaid { by } => {
-                self.relaid.push(by);
                 self.stand_in = std::mem::take(&mut self.back).into_iter().filter_map(|(n, row)| Some((n.checked_add_signed(by)?, row))).collect();
                 self.forget();
             }
             Took::Restarted => {
-                self.relaid.clear();
                 self.stand_in.clear();
                 self.forget();
             }
@@ -237,16 +232,6 @@ impl Lines {
     /// Which start of its shell these lines are.
     pub(super) fn shell(&self) -> u64 {
         self.shell
-    }
-
-    /// How many times this start of the shell was laid out anew (as seen here).
-    pub(super) fn layouts(&self) -> usize {
-        self.relaid.len()
-    }
-
-    /// Line `line` as numbered after `layouts` layouts, numbered now.
-    pub(super) fn line_now(&self, line: u64, layouts: usize) -> u64 {
-        line.saturating_add_signed(self.relaid.iter().skip(layouts).sum())
     }
 
     /// Command `id` (in this start of the shell).

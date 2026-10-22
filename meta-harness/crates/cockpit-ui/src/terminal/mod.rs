@@ -92,6 +92,10 @@ pub struct TerminalBuffer {
     said: Option<String>,
     /// Lines or a command a go-to asked for, shown once its lines come.
     going_to: Option<Target>,
+    /// Where the lines asked for are now: asked of the server (the lines
+    /// as numbered then), and whether it has said.
+    asked_now: Option<(u64, u64, u64)>,
+    known_now: bool,
     /// A row's height, as last drawn.
     row_h: f32,
     /// Its panel had focus last frame, with a shell running (gaining it
@@ -125,11 +129,11 @@ pub struct TerminalBuffer {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TermPlace {
     id: Option<TerminalId>,
+    /// Its line: the start of the shell, and the line's number then (the
+    /// terminal's durable name for it, as a tag's; where it is now, after
+    /// new layouts, the server says).
     #[serde(default)]
     at: Option<(u64, u64)>,
-    /// How many new layouts its shell had had then (a line moves with each).
-    #[serde(default)]
-    layouts: usize,
 }
 
 impl TerminalBuffer {
@@ -169,7 +173,19 @@ impl TerminalBuffer {
         if self.lines.alternate() {
             return;
         }
-        self.going_to = None;
+        // Lines are numbered anew with each new width: where they are now,
+        // the server says (exactly, as it moves a tag's); asked once, waited for.
+        if let Target::TerminalLines { shell, first, last, .. } = target
+            && shell == &self.lines.shell()
+            && !self.known_now
+        {
+            if self.asked_now != Some((*shell, *first, *last)) {
+                self.asked_now = Some((*shell, *first, *last));
+                self.send(&ToTerminal::LineNow { shell: *shell, first: *first, last: *last });
+            }
+            return;
+        }
+        (self.going_to, self.asked_now, self.known_now) = (None, None, false);
         let (first, end) = (self.lines.first(), self.lines.end());
         match line.filter(|_| shell == self.lines.shell() && end > first) {
             // The cursor there (a move to where it already is moves nothing),
@@ -207,6 +223,7 @@ impl TerminalBuffer {
             self.lines = lines::Lines::default();
             self.view = view::View::default();
             (self.drawn, self.cursor, self.selection, self.copying, self.going_to) = (None, None, None, None, None);
+            (self.asked_now, self.known_now) = (None, false);
         }
     }
 
@@ -251,12 +268,17 @@ impl TerminalBuffer {
                     // search's lines were of the old lines.
                     lines::Took::Relaid { by } => {
                         self.view.shift(by);
-                        self.cursor = self.cursor.map(|c| c.saturating_add_signed(by));
                         (self.selection, self.found) = (None, None);
+                        // The cursor's line, where it is now: the server says.
+                        if let (Some(line), Some(id)) = (self.cursor.take(), self.id.clone()) {
+                            self.going_to = Some(Target::TerminalLines { terminal: id, shell: self.lines.shell(), first: line, last: line });
+                            (self.asked_now, self.known_now) = (None, false);
+                        }
                     }
                     lines::Took::Restarted => {
                         self.view.go_live();
                         (self.cursor, self.selection, self.found, self.drawn, self.copying) = (None, None, None, None, None);
+                        (self.asked_now, self.known_now) = (None, false);
                     }
                 },
                 FromTerminal::Lines { from, rows } => self.lines.arrived(from, rows),
@@ -276,6 +298,16 @@ impl TerminalBuffer {
                 FromTerminal::Found { query, found } => {
                     if self.found.as_ref().is_some_and(|(asked, _)| *asked == query) {
                         self.found = Some((query, found.into_iter().map(|f| (f.line, f.text)).collect()));
+                    }
+                }
+                // Where the lines asked for are now (none: as numbered then,
+                // and said to be gone if they are).
+                FromTerminal::LineNow { shell, first, last, now } => {
+                    if self.asked_now == Some((shell, first, last)) {
+                        self.known_now = true;
+                        if let (Some((now_first, now_last)), Some(Target::TerminalLines { first, last, .. })) = (now, &mut self.going_to) {
+                            (*first, *last) = (now_first, now_last);
+                        }
                     }
                 }
             }
@@ -462,11 +494,11 @@ impl Navigable for TerminalBuffer {
             (_, Some(line)) if shell != 0 => Some((shell, line)),
             _ => None,
         };
-        Place::of(&TermPlace { id: self.id.clone(), at, layouts: self.lines.layouts() })
+        Place::of(&TermPlace { id: self.id.clone(), at })
     }
 
     fn kept_place(&self) -> Place {
-        Place::of(&TermPlace { id: self.id.clone(), at: None, layouts: 0 })
+        Place::of(&TermPlace { id: self.id.clone(), at: None })
     }
 
     fn place_in_words(&self, place: &Place) -> String {
@@ -477,11 +509,11 @@ impl Navigable for TerminalBuffer {
         }
     }
 
-    /// The terminal; its line, when it had one (as a go-to lands there,
-    /// moved as far as the layouts since moved it); without one, its live
+    /// The terminal; its line, when it had one (as a go-to lands there:
+    /// where the server says the line is now); without one, its live
     /// screen. A terminal closed since: said.
     fn restore(&mut self, place: &Place) {
-        let Some(TermPlace { id: Some(id), at, layouts }) = place.read::<TermPlace>() else { return };
+        let Some(TermPlace { id: Some(id), at }) = place.read::<TermPlace>() else { return };
         let closed = {
             let terminals = self.terminals.get();
             terminals.known() && terminals.get(&id).is_none()
@@ -492,8 +524,6 @@ impl Navigable for TerminalBuffer {
         }
         match at {
             Some((shell, line)) => {
-                let here = self.id.as_ref() == Some(&id) && shell == self.lines.shell();
-                let line = if here { self.lines.line_now(line, layouts) } else { line };
                 if let Err(why) = self.show_target(&Target::TerminalLines { terminal: id, shell, first: line, last: line }) {
                     self.said = Some(why);
                 }
@@ -528,6 +558,7 @@ impl Navigable for TerminalBuffer {
         self.show(id.clone());
         if !matches!(target, Target::Terminal(_)) {
             self.going_to = Some(target.clone());
+            (self.asked_now, self.known_now) = (None, false);
             self.landing = true;
         }
         self.go_where_asked();

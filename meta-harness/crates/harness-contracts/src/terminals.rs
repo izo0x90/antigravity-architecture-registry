@@ -311,6 +311,9 @@ pub enum ToTerminal {
     Lines { from: u64, count: u32 },
     /// Where `query` is, newest first.
     Search { query: String },
+    /// Where lines `first..=last` of start `shell` of the shell are now
+    /// (laid out anew since, with a new width, they're numbered anew).
+    LineNow { shell: u64, first: u64, last: u64 },
     /// The output of a command (`TerminalCommand::id`) as text.
     CommandOutput { command: u64 },
 }
@@ -329,6 +332,9 @@ pub enum FromTerminal {
     /// rest are as the reader had them (`ReaderScreen::take`).
     ScrolledOff { lines: Vec<(u64, Row)> },
     Found { query: String, found: Vec<Found> },
+    /// Where the lines asked about are now (none: another start of the
+    /// shell, or laid out anew longer ago than is followed).
+    LineNow { shell: u64, first: u64, last: u64, now: Option<(u64, u64)> },
     /// A command's output as text (lines that wrapped joined; none: there's
     /// no such command now).
     CommandOutput { command: u64, text: Option<String> },

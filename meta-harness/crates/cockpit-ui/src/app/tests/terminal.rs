@@ -398,6 +398,9 @@ fn the_cursor_is_there_only_while_not_typing_from_the_programs_line_and_never_on
     let (place, kept) = (app.desk.view(BufferKind::Terminal).place(), app.desk.view(BufferKind::Terminal).kept_place());
     app.desk.view_mut(BufferKind::Terminal).motion(crate::nav::Motion::Last, 1);
     app.desk.view_mut(BufferKind::Terminal).restore(&place);
+    // (Where its line is now, the server says: here, where it was.)
+    answer_line_now(&mut app, None);
+    frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("1100"));
     app.desk.view_mut(BufferKind::Terminal).leave();
     app.desk.view_mut(BufferKind::Terminal).restore(&kept);
@@ -406,6 +409,7 @@ fn the_cursor_is_there_only_while_not_typing_from_the_programs_line_and_never_on
     app.desk.terminal_mut().arrive(vec![crate::terminal::tests::numbered(1200, 1150)]);
     frame(&ctx, &mut app, vec![]);
     app.desk.view_mut(BufferKind::Terminal).restore(&place);
+    answer_line_now(&mut app, None);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("1150"));
     assert!(app.note.as_deref().is_some_and(|n| n.contains("the nearest line")), "{:?}", app.note);
@@ -420,14 +424,20 @@ fn a_place_in_a_terminal_follows_new_layouts_a_go_to_under_way_and_says_when_it_
     not_typing(&ctx, &mut app);
     app.run_move(BufferKind::Terminal, Move::Motion(Motion::Line(1010)), None, &ctx);
     let place = app.desk.view(BufferKind::Terminal).place();
-    // Narrower: the lines are numbered anew (8 further on): the place's
-    // line is where its line is now.
+    // Narrower: the lines are numbered anew. The place names its line as
+    // it was (the shell's start, the number then); where it is now the
+    // server says (as it moves a tag's lines), and the cursor lands there.
     let harness_contracts::FromTerminal::Screen { mut update } = crate::terminal::tests::numbered(1008, 0) else { unreachable!() };
     update.size.cols = 60;
     app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Screen { update }]);
     frame(&ctx, &mut app, vec![]);
     app.desk.view_mut(BufferKind::Terminal).motion(crate::nav::Motion::Last, 1);
     app.desk.view_mut(BufferKind::Terminal).restore(&place);
+    frame(&ctx, &mut app, vec![]);
+    let asked = app.desk.terminal().sent().into_iter().filter(|s| matches!(s, ToTerminal::LineNow { shell: 1, first: 1010, last: 1010 })).count();
+    assert_eq!(asked, 2, "asked where line 1010 is now: for the cursor the new width moved, and for the place");
+    assert_eq!(cursor(&app), None, "not landed until the server says");
+    answer_line_now(&mut app, Some(8));
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("1018"));
     // A place without a line, in the same terminal: its live screen.
@@ -448,6 +458,8 @@ fn a_place_in_a_terminal_follows_new_layouts_a_go_to_under_way_and_says_when_it_
     update.size.cols = 60;
     app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::Screen { update }]);
     frame(&ctx, &mut app, vec![]);
+    answer_line_now(&mut app, None);
+    frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("1012"), "there once it leaves");
     // Its terminal closed since: said.
     let gone = app.desk.view(BufferKind::Terminal).place();
@@ -456,6 +468,15 @@ fn a_place_in_a_terminal_follows_new_layouts_a_go_to_under_way_and_says_when_it_
     app.desk.view_mut(BufferKind::Terminal).restore(&gone);
     frame(&ctx, &mut app, vec![]);
     assert!(app.note.as_deref().is_some_and(|n| n.contains("is closed")), "{:?}", app.note);
+}
+
+/// The server's answer to where the lines last asked about are now:
+/// `moved` further on (none: where they were).
+pub(super) fn answer_line_now(app: &mut CockpitApp, moved: Option<i64>) {
+    let asked = app.desk.terminal().sent().into_iter().filter_map(|s| if let ToTerminal::LineNow { shell, first, last } = s { Some((shell, first, last)) } else { None }).next_back();
+    let Some((shell, first, last)) = asked else { panic!("nothing asked") };
+    let now = moved.map(|by| (first.saturating_add_signed(by), last.saturating_add_signed(by))).or(Some((first, last)));
+    app.desk.terminal_mut().arrive(vec![harness_contracts::FromTerminal::LineNow { shell, first, last, now }]);
 }
 
 /// A screen from line `top` with the shell's `commands` on it.

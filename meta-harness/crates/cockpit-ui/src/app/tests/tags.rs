@@ -153,30 +153,38 @@ fn next_and_previous_go_through_the_tag_stepped_last_and_a_tag_on_lines_is_on_ea
     // On a line among the tagged lines: their tag's.
     keys(&ctx, &mut app, "kkk");
     assert_eq!(cursor(&app).as_deref(), Some("1020"));
+    // (Each landing on lines asks the server where they are now: here, where they were.)
     for (keys_, at) in [("]t", "1010"), ("]t", "1019"), ("[t", "1010"), ("[t", "1019")] {
         keys(&ctx, &mut app, keys_);
+        super::terminal::answer_line_now(&mut app, None);
         frame(&ctx, &mut app, vec![]);
         assert_eq!(cursor(&app).as_deref(), Some(at), "{keys_}");
     }
     // Each a jump: ctrl+o goes back through them, line by line; ctrl+i forward.
     for (key, at) in [(egui::Key::O, "1010"), (egui::Key::O, "1019"), (egui::Key::O, "1010"), (egui::Key::I, "1019")] {
         ctrl(&ctx, &mut app, key);
+        super::terminal::answer_line_now(&mut app, None);
         frame(&ctx, &mut app, vec![]);
         assert_eq!(cursor(&app).as_deref(), Some(at), "{key:?}");
     }
     for _ in 0..2 {
         ctrl(&ctx, &mut app, egui::Key::I);
     }
+    super::terminal::answer_line_now(&mut app, None);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("1019"));
     // On a line with both tags: the one stepped last (not the first by name).
     keys(&ctx, &mut app, "jj");
     assert_eq!(cursor(&app).as_deref(), Some("1021"));
     keys(&ctx, &mut app, "]t");
+    super::terminal::answer_line_now(&mut app, None);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("1010"), "slow's next, not flaky's");
     // Taken off, from a line among them: off the lines it's on.
-    keys(&ctx, &mut app, "]tj");
+    keys(&ctx, &mut app, "]t");
+    super::terminal::answer_line_now(&mut app, None);
+    frame(&ctx, &mut app, vec![]);
+    keys(&ctx, &mut app, "j");
     assert_eq!(cursor(&app).as_deref(), Some("1020"));
     bodies(&app, "");
     keys(&ctx, &mut app, ":");
@@ -274,6 +282,7 @@ fn a_go_to_a_tag_picks_the_tag_then_the_thing_lands_in_another_terminal_and_come
     assert_eq!(app.desk.terminal().target(), Some(Target::Terminal(harness_contracts::TerminalId::new("t1"))));
     app.desk.terminal_mut().arrive(vec![with_commands(1000, vec![])]);
     frame(&ctx, &mut app, vec![]);
+    super::terminal::answer_line_now(&mut app, None);
     frame(&ctx, &mut app, vec![]);
     assert_eq!(cursor(&app).as_deref(), Some("1023"));
     // A tag on a closed terminal's command: said, and nothing moves.
