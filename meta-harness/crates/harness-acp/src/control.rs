@@ -22,6 +22,8 @@ pub(crate) struct Opened {
     pub init: acp::InitializeResponse,
     /// The latest sign-in it reported (none yet: `None`).
     pub sign_in: watch::Receiver<Option<SignIn>>,
+    /// What it says outside the protocol, from now on.
+    pub said: crate::launch::Said,
 }
 
 pub(crate) async fn with_connection<T: Send + 'static>(
@@ -37,6 +39,7 @@ pub(crate) async fn with_connection<T: Send + 'static>(
         mcp_servers: Vec::new(),
     };
     let transport = launcher.launch(&config).await?;
+    let said = transport.said;
     let streams = ByteStreams::new(transport.writer, transport.reader);
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (sign_in_tx, sign_in) = watch::channel(None);
@@ -56,7 +59,7 @@ pub(crate) async fn with_connection<T: Send + 'static>(
         )
         .connect_with(streams, async move |cx: ConnectionTo<Agent>| {
             let init = cx.send_request(acp::InitializeRequest::new(ProtocolVersion::V1).client_capabilities(client)).block_task().await?;
-            let _ = tx.send(op(cx, Opened { init, sign_in }).await);
+            let _ = tx.send(op(cx, Opened { init, sign_in, said }).await);
             Ok(())
         })
         .await
@@ -167,7 +170,12 @@ pub async fn probe(launcher: &Arc<dyn AcpLauncher>, profile: &Arc<Profile>) -> R
             let wait = Duration::from_secs(profile_for.settings.sign_in.as_ref().map_or(0, |s| s.wait_s));
             let _ = tokio::time::timeout(wait, opened.sign_in.wait_for(Option::is_some)).await;
         }
-        let sign_in = opened.sign_in.borrow().clone();
+        // One that doesn't say: signed in when its login is kept where it keeps it.
+        let sign_in = opened.sign_in.borrow().clone().or_else(|| {
+            let kept = profile_for.settings.login.kept.as_ref()?;
+            let signed_in = profile_for.places.path(kept).is_file();
+            Some(SignIn { status: if signed_in { harness_contracts::AuthStatus::SignedIn } else { harness_contracts::AuthStatus::SignedOut }, account: None })
+        });
         let (auth_methods, logins) = auth_methods(&opened.init);
         let info = opened.init.agent_info.as_ref();
         Ok(AcpProbe {

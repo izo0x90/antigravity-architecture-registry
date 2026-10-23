@@ -42,7 +42,7 @@ fn config(mode: RuntimeMode) -> SessionConfig {
 }
 
 async fn open_with(agent: &MockAgent, profile: Arc<Profile>, config: SessionConfig) -> Box<dyn SessionRuntime> {
-    let adapter = AcpAdapter::new(InstanceId::new("mock"), profile, Arc::new(agent.clone()));
+    let adapter = AcpAdapter::new(InstanceId::new("mock"), profile, Arc::new(agent.clone()), Arc::new(|_| {}));
     adapter.open_session(config).await.expect("open session")
 }
 

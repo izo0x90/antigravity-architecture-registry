@@ -28,13 +28,18 @@ pub struct AcpAdapter {
     instance_id: InstanceId,
     profile: Arc<Profile>,
     launcher: Arc<dyn AcpLauncher>,
+    /// Told when a session finds it isn't signed in.
+    signed_out: crate::auth::AuthChanged,
 }
 
 impl AcpAdapter {
-    pub fn new(instance_id: InstanceId, profile: Arc<Profile>, launcher: Arc<dyn AcpLauncher>) -> Self {
-        Self { instance_id, profile, launcher }
+    pub fn new(instance_id: InstanceId, profile: Arc<Profile>, launcher: Arc<dyn AcpLauncher>, signed_out: crate::auth::AuthChanged) -> Self {
+        Self { instance_id, profile, launcher, signed_out }
     }
 }
+
+/// Why a session didn't open: the agent wants a login first.
+const NOT_SIGNED_IN: &str = "not signed in: authentication is needed first (sign in, then try again)";
 
 /// A tool server as the agent takes it: an SSE one as HTTP when the agent
 /// doesn't say it takes SSE.
@@ -247,6 +252,16 @@ impl ProviderAdapter for AcpAdapter {
         policy.cwd = Some(cwd.display().to_string());
         let config = SessionConfig { policy, ..config };
         let transport = self.launcher.launch(&config).await?;
+        // An agent that starts a login itself when it isn't signed in: its
+        // link, said while the session opens, means it isn't.
+        let pattern = self.profile.settings.login.on_session.then(|| self.profile.settings.login.link_pattern().ok()).flatten();
+        let said = transport.said;
+        let asks_login = async move {
+            match pattern {
+                Some(pattern) => crate::launch::says(said, pattern).await,
+                None => std::future::pending().await,
+            }
+        };
         let thread = Thread {
             id: config.thread_id.clone(),
             instance_id: self.instance_id.clone(),
@@ -278,7 +293,7 @@ impl ProviderAdapter for AcpAdapter {
         let agent = &init.agent_capabilities;
         let mcp: Vec<acp::McpServer> = config.mcp_servers.iter().map(|s| mcp_server(s, agent.mcp_capabilities.sse)).collect();
         let meta = self.profile.session_meta();
-        let (native_id, modes, config_options) = match &config.resume {
+        let opening = async { match &config.resume {
             // Prefer load: it replays the history into the stream.
             Some(id) if agent.load_session => {
                 let native = acp::SessionId::new(id.as_str().to_owned());
@@ -287,7 +302,7 @@ impl ProviderAdapter for AcpAdapter {
                     .block_task()
                     .await
                     .map_err(acp_error)?;
-                (native, loaded.modes, loaded.config_options)
+                Ok((native, loaded.modes, loaded.config_options))
             }
             Some(id) if agent.session_capabilities.resume.is_some() => {
                 let native = acp::SessionId::new(id.as_str().to_owned());
@@ -296,12 +311,19 @@ impl ProviderAdapter for AcpAdapter {
                     .block_task()
                     .await
                     .map_err(acp_error)?;
-                (native, resumed.modes, resumed.config_options)
+                Ok((native, resumed.modes, resumed.config_options))
             }
-            Some(_) => return Err(HarnessError::Unsupported { operation: "resuming sessions" }),
+            Some(_) => Err(HarnessError::Unsupported { operation: "resuming sessions" }),
             None => {
                 let created = cx.send_request(acp::NewSessionRequest::new(cwd).mcp_servers(mcp).meta(meta)).block_task().await.map_err(acp_error)?;
-                (created.session_id, created.modes, created.config_options)
+                Ok((created.session_id, created.modes, created.config_options))
+            }
+        } };
+        let (native_id, modes, config_options) = tokio::select! {
+            opened = opening => opened?,
+            Some(_) = asks_login => {
+                (self.signed_out)(Some(false));
+                return Err(HarnessError::Provider { reason: NOT_SIGNED_IN.into() });
             }
         };
 

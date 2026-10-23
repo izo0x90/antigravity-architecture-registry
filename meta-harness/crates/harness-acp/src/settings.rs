@@ -132,11 +132,30 @@ fn default_wait() -> u64 {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LoginSettings {
-    /// A pattern for the link its login command prints (the first match is
-    /// shown to open).
+    /// A pattern for the link its login prints (the first match is shown to
+    /// open): its login command's on its output, a login it runs itself on
+    /// its error output. Any `https://` link when not given.
     pub link: Option<String>,
     /// What the login page gives back to paste in, in words.
     pub expects: Option<String>,
+    /// How long a login it runs itself waits for the browser, in seconds.
+    pub within_s: Option<u64>,
+    /// How long a login it runs itself is given to say its link, in
+    /// seconds (30 when not given).
+    pub wait_s: Option<u64>,
+    /// Where it keeps its login (a template): there, it's signed in, for an
+    /// agent that doesn't say so itself.
+    pub kept: Option<String>,
+    /// Signed out, it starts a login itself when a session opens (and says
+    /// its link) instead of refusing: the opening is refused for it.
+    pub on_session: bool,
+}
+
+impl LoginSettings {
+    /// The pattern of its login's link.
+    pub fn link_pattern(&self) -> Result<regex::Regex, String> {
+        regex::Regex::new(self.link.as_deref().unwrap_or(r"https://\S+")).map_err(|e| format!("the login link pattern is wrong: {e}"))
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

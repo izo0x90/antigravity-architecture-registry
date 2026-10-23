@@ -49,6 +49,10 @@ pub struct MockSetup {
     pub signed_in: Option<(String, serde_json::Value)>,
     pub load_session: bool,
     pub sse: bool,
+    /// Its login runs itself as Antigravity's does: it prints a link on its
+    /// error output, waits for the browser's callback on a local port, and,
+    /// signed out, starts it when a session opens (and doesn't answer).
+    pub loopback_login: bool,
 }
 
 impl Default for MockSetup {
@@ -61,6 +65,7 @@ impl Default for MockSetup {
             signed_in: None,
             load_session: false,
             sse: false,
+            loopback_login: false,
         }
     }
 }
@@ -101,7 +106,7 @@ impl MockSetup {
         } else {
             acp::AuthMethod::Agent(acp::AuthMethodAgent::new("login", "Log in"))
         }];
-        Self { modes, declares, queues: settings.queueing.is_some(), auth_methods, signed_in, load_session: false, sse: true }
+        Self { modes, declares, queues: settings.queueing.is_some(), auth_methods, signed_in, load_session: false, sse: true, loopback_login: false }
     }
 }
 
@@ -151,6 +156,13 @@ pub struct MockAgent {
     said: Arc<Mutex<Vec<(bool, String)>>>,
     /// Messages steered in, not answered yet.
     steered: Arc<Mutex<Vec<String>>>,
+    /// Its loopback login went through (the browser's callback reached it).
+    pub signed_in: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The link a loopback login prints, its callback on `port`.
+pub fn loopback_link(port: u16) -> String {
+    format!("https://accounts.google.com/o/oauth2/auth?client_id=x&redirect_uri=http%3A%2F%2F127.0.0.1%3A{port}%2F&state=s")
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -159,7 +171,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl MockAgent {
     pub fn new(setup: MockSetup) -> Self {
-        Self { setup, seen: Arc::default(), hold: Arc::default(), in_flight: Arc::default(), running: Arc::default(), one_at_a_time: Arc::default(), said: Arc::default(), steered: Arc::default() }
+        Self { setup, seen: Arc::default(), hold: Arc::default(), in_flight: Arc::default(), running: Arc::default(), one_at_a_time: Arc::default(), said: Arc::default(), steered: Arc::default(), signed_in: Arc::default() }
     }
 
     pub fn seen(&self) -> Seen {
@@ -373,6 +385,9 @@ async fn tour(cx: &ConnectionTo<Client>, seen: &Arc<Mutex<Seen>>) -> agent_clien
 impl AcpLauncher for MockAgent {
     async fn launch(&self, _config: &SessionConfig) -> Result<AcpTransport> {
         let (client_side, agent_side) = tokio::io::duplex(256 * 1024);
+        // What it says outside the protocol (its error output).
+        let (says_to, said) = tokio::sync::broadcast::channel(crate::launch::SAID_HELD);
+        let (on_auth, on_new_says) = (self.clone(), says_to.clone());
         let (client_read, client_write) = tokio::io::split(client_side);
         let (agent_read, agent_write) = tokio::io::split(agent_side);
         let me = self.clone();
@@ -394,7 +409,43 @@ impl AcpLauncher for MockAgent {
                     agent_client_protocol::on_receive_request!(),
                 )
                 .on_receive_request(
+                    async move |_req: acp::AuthenticateRequest, responder, cx: ConnectionTo<Client>| {
+                        if !on_auth.setup.loopback_login {
+                            return responder.respond(acp::AuthenticateResponse::new());
+                        }
+                        // As Antigravity: a listener on a local port, its link said,
+                        // the browser's callback awaited.
+                        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|_| agent_client_protocol::Error::internal_error())?;
+                        let port = listener.local_addr().map_err(|_| agent_client_protocol::Error::internal_error())?.port();
+                        let _ = says_to.send(format!("Open the following link to authenticate the ACP server: {}", loopback_link(port)));
+                        let agent = on_auth.clone();
+                        cx.spawn(async move {
+                            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                            let Ok((mut stream, _)) = listener.accept().await else { return Ok(()) };
+                            let mut asked = [0u8; 1024];
+                            let n = stream.read(&mut asked).await.unwrap_or(0);
+                            let request = String::from_utf8_lossy(&asked[..n]).into_owned();
+                            let fine = request.starts_with("GET /?code=");
+                            let reply = if fine { "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok" } else { "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n" };
+                            let _ = stream.write_all(reply.as_bytes()).await;
+                            if fine {
+                                agent.signed_in.store(true, std::sync::atomic::Ordering::SeqCst);
+                                responder.respond(acp::AuthenticateResponse::new())
+                            } else {
+                                responder.respond_with_error(agent_client_protocol::Error::invalid_request().data("bad callback"))
+                            }
+                        })
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
                     async move |req: acp::NewSessionRequest, responder, _cx| {
+                        // Signed out, as Antigravity: its login starts, and no answer.
+                        if on_new.setup.loopback_login && !on_new.signed_in.load(std::sync::atomic::Ordering::SeqCst) {
+                            let _ = on_new_says.send(format!("Open the following link to authenticate the ACP server: {}", loopback_link(1)));
+                            std::mem::forget(responder);
+                            return Ok(());
+                        }
                         {
                             let mut seen = lock(&on_new.seen);
                             seen.session_meta = req.meta.clone();
@@ -461,6 +512,6 @@ impl AcpLauncher for MockAgent {
                 .connect_to(ByteStreams::new(agent_write.compat_write(), agent_read.compat()))
                 .await;
         });
-        Ok(AcpTransport { reader: Box::new(client_read.compat()), writer: Box::new(client_write.compat_write()), guard: Box::new(()) })
+        Ok(AcpTransport { reader: Box::new(client_read.compat()), writer: Box::new(client_write.compat_write()), guard: Box::new(()), said })
     }
 }

@@ -113,6 +113,8 @@ pub struct AuthChallenge {
     /// What `complete` takes, in words (the page's last URL, a code), when
     /// it takes anything.
     pub expects: Option<String>,
+    /// How long the login waits for it, in seconds (none: it doesn't say).
+    pub within_s: Option<u64>,
 }
 
 /// Opens sessions. Stateless apart from what the instance gave it.

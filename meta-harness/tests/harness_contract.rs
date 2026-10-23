@@ -57,7 +57,7 @@ impl Harness {
 
     async fn open(&self, mode: RuntimeMode) -> Box<dyn SessionRuntime> {
         let config = SessionConfig { thread_id: ThreadId::new("t"), policy: RuntimePolicy { runtime_mode: mode, ..RuntimePolicy::default() }, model: None, resume: None, mcp_servers: Vec::new() };
-        AcpAdapter::new(InstanceId::new(&self.name), self.profile.clone(), Arc::new(self.agent.clone())).open_session(config).await.unwrap_or_else(|e| panic!("{}: {e}", self.name))
+        AcpAdapter::new(InstanceId::new(&self.name), self.profile.clone(), Arc::new(self.agent.clone()), Arc::new(|_| {})).open_session(config).await.unwrap_or_else(|e| panic!("{}: {e}", self.name))
     }
 }
 

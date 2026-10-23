@@ -59,14 +59,13 @@ impl AcpInstance {
             Ok((launcher, launch)) => (launcher, launch, None),
             Err(why) => (Arc::new(Unavailable(why.clone())), None, Some(why)),
         };
-        let adapter = Arc::new(AcpAdapter::new(id.clone(), profile.clone(), launcher.clone()));
         let (snapshot, _) = watch::channel(ProviderSnapshot {
             instance_id: id.clone(),
             driver: harness.driver.clone(),
             display_name: harness.display_name.clone(),
             status: ProviderStatus::Starting,
             auth: AuthState { status: AuthStatus::Unknown, account: None, methods: Vec::new() },
-            capabilities: adapter.capabilities(),
+            capabilities: profile.capabilities(),
             models: Vec::new(),
             commands: Vec::new(),
             skills: Vec::new(),
@@ -90,13 +89,13 @@ impl AcpInstance {
                 });
             });
             Self {
+                adapter: Arc::new(AcpAdapter::new(id.clone(), profile.clone(), launcher.clone(), on_auth.clone())),
                 id,
                 auth: Arc::new(AcpAuthController::new(launcher.clone(), profile.clone(), launch, on_auth)),
                 sessions: Arc::new(AcpSessionCatalog::new(launcher.clone(), profile.clone())),
                 profile,
                 unavailable,
                 launcher,
-                adapter,
                 snapshot,
             }
         })

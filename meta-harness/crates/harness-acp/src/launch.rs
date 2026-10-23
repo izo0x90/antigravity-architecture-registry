@@ -16,6 +16,31 @@ pub struct AcpTransport {
     pub writer: Box<dyn AsyncWrite + Send + Unpin>,
     /// Dropped when the session closes (e.g. kills the child process).
     pub guard: Box<dyn Send + Sync>,
+    /// What the agent says outside the protocol (its error output), line by
+    /// line, while it runs: a login's link, say.
+    pub said: Said,
+}
+
+/// The lines an agent says outside the protocol, as they come.
+pub type Said = tokio::sync::broadcast::Receiver<String>;
+
+/// How many of an agent's lines are held for a reader that's behind.
+pub const SAID_HELD: usize = 256;
+
+/// Whether the agent says something `pattern` matches (the first match),
+/// waiting as long as it runs.
+pub async fn says(mut said: Said, pattern: regex::Regex) -> Option<String> {
+    loop {
+        match said.recv().await {
+            Ok(line) => {
+                if let Some(found) = pattern.find(&line) {
+                    return Some(found.as_str().to_owned());
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+        }
+    }
 }
 
 #[async_trait]
@@ -68,16 +93,19 @@ impl AcpLauncher for ProcessLauncher {
             return Err(HarnessError::Provider { reason: "agent process has no stdio pipes".into() });
         };
         let program = self.program.display().to_string();
+        let (said_to, said) = tokio::sync::broadcast::channel(SAID_HELD);
         tokio::spawn(async move {
             let mut lines = tokio::io::BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 tracing::debug!(target: "acp_agent_stderr", agent = %program, "{line}");
+                let _ = said_to.send(line);
             }
         });
         Ok(AcpTransport {
             reader: Box::new(stdout.compat()),
             writer: Box::new(stdin.compat_write()),
             guard: Box::new(ProcessTree { child, _temp: temp }),
+            said,
         })
     }
 }
