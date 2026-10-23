@@ -33,7 +33,7 @@ async fn the_driver_starts_the_installed_pack_and_opens_a_session_needs_the_pack
     assert!(launch.program.starts_with(&catalog.root.display().to_string()), "from the pack's own folder: {launch:?}");
     println!("launch: {} {}", launch.program, launch.args.join(" "));
     // The driver's own code: probe (ACP initialize), then a new session.
-    let driver = harness_acp::AcpDriver::new(root.to_path_buf());
+    let driver = harness_acp::AcpDriver::new(root.to_path_buf(), Default::default());
     let instance = driver.create(entry.profile.instance.clone(), driver.default_config(&entry)).await.unwrap();
     let started = std::time::Instant::now();
     tokio::time::timeout(Duration::from_secs(600), instance.refresh()).await.expect("initialize answered in time").unwrap();

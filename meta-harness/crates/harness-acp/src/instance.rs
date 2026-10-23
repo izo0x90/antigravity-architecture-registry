@@ -28,6 +28,8 @@ pub struct InstanceParts {
     pub profile: Arc<Profile>,
     /// How its agent is started, or why it can't be.
     pub launcher: std::result::Result<(Arc<dyn AcpLauncher>, Option<Launch>), String>,
+    /// The folder it keeps its home in for the project (none: its own).
+    pub home: Option<std::path::PathBuf>,
 }
 
 /// The launcher of an agent that can't be started: it says why.
@@ -54,7 +56,7 @@ pub struct AcpInstance {
 
 impl AcpInstance {
     pub fn create(parts: InstanceParts) -> Arc<Self> {
-        let InstanceParts { id, harness, profile, launcher } = parts;
+        let InstanceParts { id, harness, profile, launcher, home } = parts;
         let (launcher, launch, unavailable): (Arc<dyn AcpLauncher>, _, _) = match launcher {
             Ok((launcher, launch)) => (launcher, launch, None),
             Err(why) => (Arc::new(Unavailable(why.clone())), None, Some(why)),
@@ -73,6 +75,7 @@ impl AcpInstance {
             supports_plan_mode: profile.supports_plan_mode(),
             tool_servers: Vec::new(),
             problems: Vec::new(),
+            home: home.map(|dir| dir.display().to_string()),
         });
         Arc::new_cyclic(|me: &Weak<Self>| {
             let me = me.clone();

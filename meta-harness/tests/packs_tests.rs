@@ -80,7 +80,7 @@ fn the_shipped_harness_pack_gives_its_driver_a_launch_once_it_passes_its_check()
     let entry = harness_launches(&catalog).into_iter().find(|e| e.profile.instance.as_str() == "antigravity").unwrap();
     assert_eq!((entry.profile.driver.as_str(), entry.profile.display_name.as_str()), ("acp", "Antigravity"));
     harness_acp::AcpSettings::parse(&entry.profile.settings).expect("its settings are the ACP driver's");
-    let config = harness_acp::AcpDriver::new(dir.path().into()).default_config(&entry);
+    let config = harness_acp::AcpDriver::new(dir.path().into(), Default::default()).default_config(&entry);
     assert_eq!(config["launch"]["launch"]["program"], launch.program);
 
     // A version outside the pack's range: no launch; update fixes it.
@@ -136,7 +136,7 @@ fn on_the_developer_sandbox_the_launch_is_the_emulated_server() {
 
 #[tokio::test]
 async fn a_harness_without_a_launch_says_why_and_how_to_fix_it() {
-    let driver = harness_acp::AcpDriver::new(std::env::temp_dir());
+    let driver = harness_acp::AcpDriver::new(std::env::temp_dir(), Default::default());
     let none = HarnessLaunch::Unavailable { reason: "antigravity-acp isn't installed".into(), fix: Some("meta-harness pack install antigravity-acp".into()) };
     let profile = harness_contracts::HarnessProfile { instance: harness_contracts::InstanceId::new("antigravity"), driver: harness_contracts::DriverKind::new("acp"), display_name: "Antigravity".into(), settings: serde_json::Value::Null };
     let instance = driver.create(profile.instance.clone(), driver.default_config(&HarnessEntry { profile, launch: none })).await.unwrap();
@@ -147,6 +147,50 @@ async fn a_harness_without_a_launch_says_why_and_how_to_fix_it() {
     let config = harness_contracts::SessionConfig { thread_id: harness_contracts::ThreadId::new("t"), policy: Default::default(), model: None, resume: None, mcp_servers: Vec::new() };
     let err = instance.adapter().open_session(config).await.err().expect("no session without a launch").to_string();
     assert!(err.contains("isn't installed") && !err.contains("os error"), "{err}");
+}
+
+#[tokio::test]
+async fn a_harness_whose_home_the_project_keeps_is_started_with_it_there() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".nah")).unwrap();
+    std::fs::write(project.path().join(".nah/harnesses.toml"), "[home]\nantigravity = \"kept\"\nclaude-code = \"native\"\nother = \"homes/other\"\n").unwrap();
+    let homes = meta_harness::startup::harness_homes(project.path()).unwrap();
+    let kept = project.path().join(".nah/harness/antigravity");
+    assert_eq!(homes, [("antigravity".to_owned(), kept.clone()), ("other".to_owned(), project.path().join("homes/other"))].into(), "native is left to the harness");
+    // The shipped pack's settings; a launch that says what it was given.
+    let catalog = Catalog::load(&distribution(), &places(project.path())).unwrap();
+    let settings = serde_json::to_value(&catalog.get("antigravity-acp").unwrap().manifest.provides.as_ref().unwrap().settings).unwrap();
+    let said = project.path().join("env.txt");
+    let launch = harness_contracts::Launch { program: "/bin/sh".into(), args: vec!["-c".into(), format!("env > {}", said.display())], env: Vec::new(), env_remove: Vec::new() };
+    let profile = harness_contracts::HarnessProfile { instance: harness_contracts::InstanceId::new("antigravity"), driver: harness_contracts::DriverKind::new("acp"), display_name: "Antigravity".into(), settings };
+    let driver = harness_acp::AcpDriver::new(project.path().into(), homes);
+    let instance = driver.create(profile.instance.clone(), driver.default_config(&HarnessEntry { profile, launch: HarnessLaunch::Ready { launch } })).await.unwrap();
+    assert_eq!(instance.snapshot().borrow().home.as_deref(), Some(kept.display().to_string().as_str()));
+    // Made for the server's user only, and out of git.
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(&kept).unwrap().permissions().mode() & 0o777, 0o700);
+    assert!(std::fs::read_to_string(kept.join(".gitignore")).unwrap().lines().any(|l| l == "*"));
+    // Started with its pack's variables pointing there.
+    let _ = instance.refresh().await;
+    let env = std::fs::read_to_string(&said).unwrap();
+    assert!(env.lines().any(|l| l == format!("GEMINI_HOME={}", kept.display())), "{env}");
+    assert!(env.lines().any(|l| l == "AGY_ACP_FORCE_FILE_STORAGE=1"), "{env}");
+    // One whose pack doesn't say how its home moves isn't started elsewhere.
+    let profile = harness_contracts::HarnessProfile { instance: harness_contracts::InstanceId::new("other"), driver: harness_contracts::DriverKind::new("acp"), display_name: "Other".into(), settings: serde_json::Value::Null };
+    let launch = harness_contracts::Launch { program: "/bin/true".into(), args: Vec::new(), env: Vec::new(), env_remove: Vec::new() };
+    let other = driver.create(profile.instance.clone(), driver.default_config(&HarnessEntry { profile, launch: HarnessLaunch::Ready { launch } })).await.unwrap();
+    other.refresh().await.unwrap();
+    let status = other.snapshot().borrow().status.clone();
+    assert!(matches!(&status, harness_contracts::ProviderStatus::Unavailable { reason } if reason.contains("doesn't say how")), "{status:?}");
+}
+
+#[test]
+fn a_harness_home_setting_left_empty_is_refused() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".nah")).unwrap();
+    std::fs::write(project.path().join(".nah/harnesses.toml"), "[home]\nantigravity = \"\"\n").unwrap();
+    let err = meta_harness::startup::harness_homes(project.path()).unwrap_err().to_string();
+    assert!(err.contains("native, kept, or a folder"), "{err}");
 }
 
 #[test]

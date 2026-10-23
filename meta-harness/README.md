@@ -269,7 +269,8 @@ The settings (wrong or unknown ones stop the harness, saying why):
 | `session_meta` | added to every session we open |
 | `queueing`, `steering` | where its `initialize` answer says it queues prompts, and takes messages into the running turn (JSON pointers) |
 | `sign_in` | the notification that says who it's signed in as, and where in it the status, name, email, plan and organization are |
-| `login` | the link its login command prints, and what the page gives back to paste |
+| `login` | the link its login prints (`link`), what the page gives back to paste (`expects`), how long a login it runs itself waits for the browser (`within_s`) and is given to say its link (`wait_s`, 30), its login file where it can't say who it's signed in as (`kept`), and whether, signed out, it starts a login when a session opens (`on_session`: the session is refused, said as not signed in) |
+| `home` | the variables that move its home (login, settings, sessions) to a folder of the project's (`env`, `{kept}` the folder) |
 | `questions` | the suffix of a question's own "Other" box in its forms |
 | `dirs` | its folders (`{name}` in paths), each from a variable, else a default |
 | `skills` | where it finds skills, in its order, and how it names and orders them |
@@ -280,11 +281,20 @@ shipped harness pack runs the same contract tests against a mock of its
 agent made from its settings (`tests/harness_contract.rs`).
 
 Sessions, checks, logins and saved sessions run in the project. Signing in
-uses the agent's own login: Antigravity's opens a browser (paste the
-address of a page that fails to load); Claude Code's prints a link (open
-it, sign in, paste the code the page shows). Who it's signed in as shows
-beside its name. An API key in the server's environment isn't passed to
-Claude Code, so it uses the account.
+uses the agent's own login, run on the project's server and finished from
+any device (the browser, the cockpit's server and the project's server may
+be three machines): the cockpit shows the link to open. Claude Code's page
+shows a code to paste back. Antigravity's ends on a page that fails to
+load (it goes to `127.0.0.1` on the device): paste that page's address,
+within the time shown (5 minutes), and the server hands it to the
+waiting login. Antigravity opens no browser on the server's machine. Who
+it's signed in as shows beside its name. An API key in the server's
+environment isn't passed to Claude Code, so it uses the account.
+
+Where each harness keeps its home (login, settings, sessions) is the
+project's choice (`.nah/harnesses.toml`, below): its own folders, as when
+it runs by itself (the default), or a folder of the project's, made for
+the server's user only and never committed.
 
 While a turn runs, Enter queues the next message (the agent queues it, or
 the server sends it when the turn ends; it shows as QUEUED);
@@ -811,6 +821,7 @@ overrides them in its own `.nah/` folder:
 | `.nah/schema_dsl.toml` | extra shorthand type names for schemas |
 | `.nah/mcp.toml` | the project's tool servers, given to every harness's sessions |
 | `.nah/changes.toml` | `[timeline]`: how long snapshots and turns are kept (`keep_days`, 14) and a closed session's turns after it closed (`closed_session_days`, 1) |
+| `.nah/harnesses.toml` | `[home]`, by harness: `"native"` (its own folders; the default), `"kept"` (`.nah/harness/<harness>/`) or a folder (the project's when relative). Kept, it's started with its pack's `home` variables pointing there, and signs in there |
 | `.nah/terminals.toml` | `long_command_secs` (10): a command that ran this long is a notification when it finishes; `scrollback_lines` (10,000): lines each terminal keeps above its screen; `running_log_mb` (64): how much of a command a note keeps while it runs |
 | `.nah/access.toml` | what each agent role (lead, sub, worker, external) may do with NAH's tools. A role named here replaces the shipped one. It covers NAH's tools only; a slot's own harness tools follow its mode and your approvals |
 

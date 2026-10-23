@@ -21,7 +21,7 @@ async fn signed_out_it_says_so_offers_its_logins_and_shows_a_sign_in_link_needs_
     let home = tempfile::tempdir().unwrap();
     launch.env.push(("CLAUDE_CONFIG_DIR".into(), home.path().display().to_string()));
 
-    let driver = harness_acp::AcpDriver::new(root.to_path_buf());
+    let driver = harness_acp::AcpDriver::new(root.to_path_buf(), Default::default());
     let instance = driver.create(entry.profile.instance.clone(), driver.default_config(&entry)).await.unwrap();
     tokio::time::timeout(Duration::from_secs(120), instance.refresh()).await.expect("checked in time").unwrap();
     let snapshot = instance.snapshot().borrow().clone();

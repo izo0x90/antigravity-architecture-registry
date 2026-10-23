@@ -291,6 +291,7 @@ impl ProviderDriver for FakeDriver {
             supports_plan_mode: false,
             tool_servers: Vec::new(),
             problems: Vec::new(),
+            home: None,
         });
         Ok(Arc::new(FakeInstance { id, snapshot }))
     }

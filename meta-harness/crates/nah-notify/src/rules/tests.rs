@@ -78,6 +78,7 @@ fn instance(id: &str, status: AuthStatus) -> ClientEvent {
         supports_plan_mode: false,
         tool_servers: Vec::new(),
         problems: Vec::new(),
+        home: None,
     };
     ClientEvent::InstanceUpdated { snapshot }
 }

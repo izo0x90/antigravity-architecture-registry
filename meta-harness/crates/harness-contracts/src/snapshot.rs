@@ -30,6 +30,10 @@ pub struct ProviderSnapshot {
     /// in words.
     #[serde(default)]
     pub problems: Vec<String>,
+    /// The folder it keeps its home in (login, settings, sessions) for the
+    /// project; none: its own folders.
+    #[serde(default)]
+    pub home: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

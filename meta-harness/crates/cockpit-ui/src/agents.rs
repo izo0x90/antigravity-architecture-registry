@@ -418,6 +418,7 @@ mod tests {
             supports_plan_mode: false,
             tool_servers: Vec::new(),
             problems: Vec::new(),
+            home: None,
         }
     }
 

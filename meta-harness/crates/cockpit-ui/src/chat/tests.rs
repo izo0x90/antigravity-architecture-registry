@@ -163,6 +163,7 @@ fn its_skills_tool_servers_and_adding_to_the_running_turn_are_actions() {
         supports_plan_mode: false,
         tool_servers: Vec::new(),
         problems: Vec::new(),
+        home: None,
     };
     snapshot.capabilities.turns.active_steering = true;
     chat.apply(ClientEvent::InstanceUpdated { snapshot });

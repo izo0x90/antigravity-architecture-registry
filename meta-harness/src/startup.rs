@@ -14,8 +14,36 @@ pub type StartError = Box<dyn std::error::Error>;
 
 /// The drivers harness packs can name. Every ACP agent runs on the one
 /// ACP driver, configured by its pack.
-fn built_in_drivers(project: &std::path::Path) -> Vec<Arc<dyn ProviderDriver>> {
-    vec![Arc::new(harness_acp::AcpDriver::new(project.to_path_buf()))]
+fn built_in_drivers(project: &std::path::Path, homes: std::collections::BTreeMap<String, PathBuf>) -> Vec<Arc<dyn ProviderDriver>> {
+    vec![Arc::new(harness_acp::AcpDriver::new(project.to_path_buf(), homes))]
+}
+
+/// Where each harness keeps its home (login, settings, sessions), from
+/// `.nah/harnesses.toml`'s `[home]`: by harness, `"native"` (its own
+/// folders; the default), `"kept"` (`.nah/harness/<harness>/`), or a
+/// folder (of the project's when relative). Only those kept are listed.
+pub fn harness_homes(project: &std::path::Path) -> Result<std::collections::BTreeMap<String, PathBuf>, StartError> {
+    #[derive(serde::Deserialize, Default)]
+    #[serde(deny_unknown_fields)]
+    struct Settings {
+        #[serde(default)]
+        home: std::collections::BTreeMap<String, String>,
+    }
+    let settings: Settings = match std::fs::read_to_string(project.join(".nah/harnesses.toml")) {
+        Ok(text) => toml::from_str(&text).map_err(|e| format!(".nah/harnesses.toml: {e}"))?,
+        Err(_) => Settings::default(),
+    };
+    let mut homes = std::collections::BTreeMap::new();
+    for (harness, home) in settings.home {
+        let dir = match home.as_str() {
+            "native" => continue,
+            "kept" => project.join(".nah/harness").join(&harness),
+            "" => return Err(format!(".nah/harnesses.toml: {harness}'s home is empty: native, kept, or a folder").into()),
+            path => project.join(path),
+        };
+        homes.insert(harness, dir);
+    }
+    Ok(homes)
 }
 
 /// The repo worked on: `NAH_REPO_ROOT`, else the working directory.
@@ -153,7 +181,7 @@ pub fn follow_code(arch: &Arc<ArchitectureService>) {
 /// pack's once the pack passes its check, which can take a while emulated):
 /// set up in the background, so the server answers meanwhile.
 pub fn harnesses(project: &std::path::Path, hub: &Arc<EventHub>) -> Result<Arc<InstanceRegistry>, StartError> {
-    let instances = Arc::new(InstanceRegistry::new(built_in_drivers(project), hub.clone()));
+    let instances = Arc::new(InstanceRegistry::new(built_in_drivers(project, harness_homes(project)?), hub.clone()));
     let catalog = crate::packs::catalog(project)?;
     let configuring = instances.clone();
     tokio::spawn(async move {
