@@ -289,6 +289,12 @@ impl TypingBox {
     /// `typing` (its host says). Once sent, the keyboard is given back (the
     /// next key is a command's).
     pub fn draw(&mut self, ui: &mut egui::Ui, id: egui::Id, rows: usize, hint: &str, typing: bool) -> Typed {
+        // The box, and what's said under it, one under the other wherever
+        // it's laid out (a row of the chat's, say).
+        ui.vertical(|ui| self.draw_in(ui, id, rows, hint, typing)).inner
+    }
+
+    fn draw_in(&mut self, ui: &mut egui::Ui, id: egui::Id, rows: usize, hint: &str, typing: bool) -> Typed {
         let keys = crate::keymap::local();
         let before = self.text.chars().count();
         // Focused before it's drawn: the first key of the pass is its (the
