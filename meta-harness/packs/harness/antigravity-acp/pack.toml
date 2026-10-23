@@ -136,6 +136,8 @@ default = "{home}/.gemini"
 [provides.settings.login]
 link = 'https://accounts\.google\.com/\S+'
 within_s = 300
+# It shows its link 14 s after starting, emulated (on the sandbox).
+wait_s = 60
 kept = "{gemini}/antigravity-acp/acp_token.json"
 on_session = true
 

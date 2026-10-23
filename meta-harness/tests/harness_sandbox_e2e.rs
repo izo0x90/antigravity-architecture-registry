@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use harness_contracts::{HarnessLaunch, ProviderStatus, RuntimePolicy, SessionConfig, ThreadId};
+use harness_contracts::{AuthStatus, HarnessLaunch, ProviderStatus, RuntimePolicy, SessionConfig, ThreadId};
 use harness_core::ProviderDriver;
 
 /// The harness pack providing the antigravity instance, when it's
@@ -42,9 +42,29 @@ async fn the_driver_starts_the_installed_pack_and_opens_a_session_needs_the_pack
     assert_eq!(status, ProviderStatus::Ready, "ACP initialize through the driver");
     let config = SessionConfig { thread_id: ThreadId::new("e2e"), policy: RuntimePolicy::default(), model: None, resume: None, mcp_servers: Vec::new() };
     let started = std::time::Instant::now();
-    let session = tokio::time::timeout(Duration::from_secs(600), instance.adapter().open_session(config)).await.expect("a session in time").expect("a new session");
-    println!("session {} in {:?}", session.thread_id(), started.elapsed());
-    session.close().await.unwrap();
+    let opened = tokio::time::timeout(Duration::from_secs(600), instance.adapter().open_session(config)).await.expect("a session in time");
+    let signed_in = instance.snapshot().borrow().auth.status;
+    println!("signed in: {signed_in:?}");
+    if signed_in == AuthStatus::SignedIn {
+        let session = opened.expect("a new session");
+        println!("session {} in {:?}", session.thread_id(), started.elapsed());
+        return session.close().await.unwrap();
+    }
+    // Signed out: the session is refused as such (not left waiting on a
+    // login nobody sees), and its login shows its link, to be finished
+    // from any device, refusing a paste that isn't its callback.
+    let refused = opened.err().expect("no session signed out");
+    println!("refused in {:?}: {refused}", started.elapsed());
+    assert!(matches!(refused, harness_core::HarnessError::AuthRequired { .. }), "{refused}");
+    let auth = instance.auth().expect("it signs in");
+    let started = std::time::Instant::now();
+    let challenge = auth.begin("oauth-personal").await.unwrap();
+    let link = challenge.url.expect("its link");
+    println!("link in {:?}: {link}", started.elapsed());
+    assert!(link.starts_with("https://accounts.google.com/") && link.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A"), "{link}");
+    assert_eq!(challenge.within_s, Some(300));
+    let wrong = auth.complete("http://127.0.0.1:1/?code=x").await.unwrap_err();
+    assert!(matches!(wrong, harness_core::HarnessError::Refused { .. }), "{wrong}");
 }
 
 /// The body of `GET path` from the server at `port`.
