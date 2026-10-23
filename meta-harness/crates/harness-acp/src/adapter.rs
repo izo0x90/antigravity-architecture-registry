@@ -39,7 +39,7 @@ impl AcpAdapter {
 }
 
 /// Why a session didn't open: the agent wants a login first.
-const NOT_SIGNED_IN: &str = "not signed in: authentication is needed first (sign in, then try again)";
+const NOT_SIGNED_IN: &str = "not signed in: sign in, then try again";
 
 /// A tool server as the agent takes it: an SSE one as HTTP when the agent
 /// doesn't say it takes SSE.
@@ -323,7 +323,7 @@ impl ProviderAdapter for AcpAdapter {
             opened = opening => opened?,
             Some(_) = asks_login => {
                 (self.signed_out)(Some(false));
-                return Err(HarnessError::Provider { reason: NOT_SIGNED_IN.into() });
+                return Err(HarnessError::AuthRequired { reason: NOT_SIGNED_IN.into() });
             }
         };
 

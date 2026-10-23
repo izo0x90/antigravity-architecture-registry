@@ -25,7 +25,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self.0 {
             HarnessError::NotFound { .. } => StatusCode::NOT_FOUND,
-            HarnessError::InvalidConfig { .. } => StatusCode::BAD_REQUEST,
+            HarnessError::InvalidConfig { .. } | HarnessError::Refused { .. } => StatusCode::BAD_REQUEST,
             HarnessError::Unsupported { .. } => StatusCode::NOT_IMPLEMENTED,
             HarnessError::AuthRequired { .. } => StatusCode::UNAUTHORIZED,
             HarnessError::Provider { .. } | HarnessError::Io(_) => StatusCode::BAD_GATEWAY,

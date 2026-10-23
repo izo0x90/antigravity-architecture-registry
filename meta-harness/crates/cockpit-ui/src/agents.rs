@@ -72,10 +72,40 @@ enum Reply {
     Restart { slot: SlotId, resume: Option<NativeId>, result: NetResult<()> },
     Saved(SlotId, NetResult<Vec<SavedSession>>),
     AuthStarted(SlotId, NetResult<AuthChallenge>),
+    /// What was pasted back was taken (signed in), or why not.
+    AuthFinished(NetResult<()>),
     /// The tool servers every session gets; after a change, the slot whose
     /// session restarts with them.
     Tools { result: NetResult<ToolServers>, saved: Option<SlotId> },
     Done(SlotId, NetResult<()>),
+}
+
+/// A sign-in under way: what the server said to do, until when the login
+/// waits, and how the last paste went.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Login {
+    pub challenge: AuthChallenge,
+    /// When the login stops waiting (the frame clock), if it says.
+    pub until: Option<f64>,
+    /// The paste is being checked.
+    pub finishing: bool,
+    /// Why the last paste wasn't taken.
+    pub refused: Option<String>,
+    /// It stopped waiting: what's pasted now can't be taken (kept by
+    /// `tick`).
+    pub ran_out: bool,
+}
+
+impl Login {
+    fn new(challenge: AuthChallenge, now: f64) -> Self {
+        let until = challenge.within_s.map(|s| now + s as f64);
+        Self { challenge, until, finishing: false, refused: None, ran_out: false }
+    }
+
+    /// Seconds left before the login stops waiting (none: it doesn't say).
+    pub fn left(&self, now: f64) -> Option<f64> {
+        self.until.map(|until| (until - now).max(0.0))
+    }
 }
 
 type Mailbox = Arc<Mutex<Vec<Reply>>>;
@@ -105,7 +135,7 @@ pub struct Agents {
     tools: Option<ToolServers>,
     tools_asked: bool,
     /// A sign-in under way: the page to open and what to paste back.
-    login: Option<AuthChallenge>,
+    login: Option<Login>,
     /// The sub-slots made, how many, and the last one with the slot that asked.
     made: (u64, Option<(SlotId, SlotId)>),
     mailbox: Mailbox,
@@ -141,7 +171,7 @@ impl Agents {
         self.tools.as_ref()
     }
 
-    pub fn login(&self) -> Option<&AuthChallenge> {
+    pub fn login(&self) -> Option<&Login> {
         self.login.as_ref()
     }
 
@@ -256,8 +286,13 @@ impl Agents {
                 net.begin_auth(&instance, &method, ctx.clone(), move |r| post(&mailbox, Reply::AuthStarted(slot, r)));
             }
             Act::FinishSignIn { instance, answer } => {
-                net.complete_auth(&instance, &answer, ctx.clone(), done);
-                self.login = None;
+                // Kept until it's taken: a wrong paste can be tried again.
+                if let Some(login) = &mut self.login {
+                    login.finishing = true;
+                    login.refused = None;
+                }
+                let mailbox = self.mailbox.clone();
+                net.complete_auth(&instance, &answer, ctx.clone(), move |r| post(&mailbox, Reply::AuthFinished(r)));
             }
             Act::SignOut { instance } => net.logout(&instance, ctx.clone(), done),
             Act::StopSigningIn => self.login = None,
@@ -325,6 +360,16 @@ impl Agents {
             let mailbox = self.mailbox.clone();
             net.tool_servers(ctx.clone(), move |result| post(&mailbox, Reply::Tools { result, saved: None }));
         }
+        if let Some(login) = &mut self.login
+            && let Some(until) = login.until
+        {
+            let now = ctx.input(|i| i.time);
+            login.ran_out = now >= until;
+            if !login.ran_out {
+                // Its time left, shown to the second.
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            }
+        }
         let replies = std::mem::take(&mut *self.mailbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for reply in replies {
             match reply {
@@ -357,7 +402,15 @@ impl Agents {
                 Reply::AuthStarted(slot, Ok(challenge)) => {
                     self.errors.remove(&slot);
                     // Nothing to open or paste: it's done (the harness checks again).
-                    self.login = (challenge.url.is_some() || challenge.expects.is_some()).then_some(challenge);
+                    let now = ctx.input(|i| i.time);
+                    self.login = (challenge.url.is_some() || challenge.expects.is_some()).then(|| Login::new(challenge, now));
+                }
+                Reply::AuthFinished(Ok(())) => self.login = None,
+                Reply::AuthFinished(Err(e)) => {
+                    if let Some(login) = &mut self.login {
+                        login.finishing = false;
+                        login.refused = Some(e.into());
+                    }
                 }
                 Reply::Tools { result: Ok(tools), saved } => {
                     self.tools = Some(tools);
@@ -383,6 +436,16 @@ impl Agents {
     /// The tool servers, as if the server sent them.
     pub(crate) fn take_tools_for_test(&mut self, tools: ToolServers) {
         self.tools = Some(tools);
+    }
+
+    /// The server's answer to starting a sign-in, as if it came.
+    pub(crate) fn sign_in_began_for_test(&mut self, slot: SlotId, challenge: NetResult<AuthChallenge>) {
+        post(&self.mailbox, Reply::AuthStarted(slot, challenge));
+    }
+
+    /// The server's answer to what was pasted, as if it came.
+    pub(crate) fn sign_in_finished_for_test(&mut self, result: NetResult<()>) {
+        post(&self.mailbox, Reply::AuthFinished(result));
     }
 }
 

@@ -270,3 +270,91 @@ fn a_long_chat_moves_by_the_shared_rules() {
     chat.apply(item(40, ItemBody::AssistantMessage { content: vec![ContentBlock::Text { text: "a new answer".into() }], streaming: false }));
     assert!(draw(&mut chat, 3) > bottom, "and following it: a new message shows");
 }
+
+/// A harness that runs its own Google login, signed out, its home kept for
+/// the project.
+fn signed_out_harness() -> Fed {
+    let mut chat = conversation();
+    let snapshot = ProviderSnapshot {
+        instance_id: InstanceId::new("i"),
+        driver: harness_contracts::DriverKind::new("acp"),
+        display_name: "Antigravity".into(),
+        status: ProviderStatus::Ready,
+        auth: harness_contracts::AuthState {
+            status: harness_contracts::AuthStatus::SignedOut,
+            account: None,
+            methods: vec![harness_contracts::AuthMethod { id: "oauth-personal".into(), name: "Google".into(), description: None, kind: harness_contracts::AuthMethodKind::Agent }],
+        },
+        capabilities: Default::default(),
+        models: Vec::new(),
+        commands: Vec::new(),
+        skills: Vec::new(),
+        runtime_modes: Vec::new(),
+        supports_plan_mode: false,
+        tool_servers: Vec::new(),
+        problems: Vec::new(),
+        home: Some("/work/p/.nah/harness/i".into()),
+    };
+    chat.apply(ClientEvent::InstanceUpdated { snapshot });
+    chat
+}
+
+fn challenge(within_s: u64) -> crate::net::AuthChallenge {
+    crate::net::AuthChallenge {
+        url: Some("https://accounts.google.com/o/oauth2/auth?redirect_uri=http%3A%2F%2F127.0.0.1%3A4000%2F".into()),
+        instructions: "Open the link and sign in.".into(),
+        expects: Some("the address of the page that failed to load".into()),
+        within_s: Some(within_s),
+    }
+}
+
+/// The chat's buttons on its top line, by id.
+fn on_top(chat: &Fed) -> Vec<String> {
+    chat.actions().into_iter().filter(|a| a.control.as_ref().is_some_and(|c| c.at == crate::actions::At::Header)).map(|a| a.id).collect()
+}
+
+/// The server's answers reach the agents (as each frame).
+fn tick(chat: &mut Fed, ctx: &egui::Context) {
+    chat.shared.agents.get_mut().tick(&NetClient::new("http://127.0.0.1:9"), ctx);
+    chat.read();
+}
+
+#[test]
+fn signing_in_shows_the_link_the_time_left_and_a_paste_that_was_not_taken() {
+    let ctx = egui::Context::default();
+    let mut chat = signed_out_harness();
+    let status: Vec<String> = crate::hosted::Hosted::status(&chat.chat).into_iter().map(|s| format!("{} {}", s.text, s.detail.unwrap_or_default())).collect();
+    assert!(status.iter().any(|s| s.contains("Not signed in")), "{status:?}");
+    assert!(status.iter().any(|s| s.contains("/work/p/.nah/harness/i")), "where its home is: {status:?}");
+    assert!(on_top(&chat).contains(&"auth.login".to_owned()));
+
+    chat.shared.agents.get_mut().sign_in_began_for_test(SlotId::new(LEAD), Ok(challenge(300)));
+    tick(&mut chat, &ctx);
+    let login = chat.agents().login().cloned().expect("under way");
+    assert!(login.left(ctx.input(|i| i.time)).is_some_and(|left| left > 290.0), "{login:?}");
+    let top = on_top(&chat);
+    assert!(top.contains(&"auth.page".to_owned()) && top.contains(&"auth.complete".to_owned()) && !top.contains(&"auth.login".to_owned()), "{top:?}");
+
+    // A wrong paste: said, and the sign-in still waits for the right one.
+    chat.shared.agents.get_mut().sign_in_finished_for_test(Err(crate::net::NetError::other("that isn't the address of the page that failed to load")));
+    tick(&mut chat, &ctx);
+    let login = chat.agents().login().cloned().expect("still under way");
+    assert_eq!(login.refused.as_deref(), Some("that isn't the address of the page that failed to load"));
+    assert!(on_top(&chat).contains(&"auth.complete".to_owned()));
+
+    chat.shared.agents.get_mut().sign_in_finished_for_test(Ok(()));
+    tick(&mut chat, &ctx);
+    assert!(chat.agents().login().is_none(), "taken: signed in");
+}
+
+#[test]
+fn a_sign_in_that_stopped_waiting_offers_a_new_one_not_the_paste() {
+    let ctx = egui::Context::default();
+    let mut chat = signed_out_harness();
+    chat.shared.agents.get_mut().sign_in_began_for_test(SlotId::new(LEAD), Ok(challenge(0)));
+    tick(&mut chat, &ctx);
+    tick(&mut chat, &ctx);
+    assert!(chat.agents().login().is_some_and(|l| l.ran_out));
+    let top = on_top(&chat);
+    assert!(top.contains(&"auth.login".to_owned()) && !top.contains(&"auth.complete".to_owned()) && !top.contains(&"auth.page".to_owned()), "{top:?}");
+}

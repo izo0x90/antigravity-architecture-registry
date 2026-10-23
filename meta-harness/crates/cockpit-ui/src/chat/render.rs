@@ -99,11 +99,30 @@ impl ChatStreamState {
                 }
                 Some(login) => {
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(&login.instructions).size(look.text_label));
-                        if let Some(url) = &login.url {
+                        let said = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
+                            ui.label(RichText::new(text).size(look.text_label).color(color));
+                        };
+                        if login.ran_out {
+                            said(ui, &format!("{} The sign-in stopped waiting. Sign in again to get a new link.", icon::CLOCK), colors().error);
+                            return;
+                        }
+                        said(ui, &login.challenge.instructions, colors().text);
+                        if let Some(url) = &login.challenge.url {
                             // Its address, to copy when the page can't open here.
                             let mut shown = url.clone();
                             ui.add(egui::TextEdit::singleline(&mut shown).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+                        }
+                        if let Some(expects) = &login.challenge.expects {
+                            said(ui, &format!("Then paste {expects} with Finish signing in."), colors().muted);
+                        }
+                        if let Some(left) = login.left(ui.input(|i| i.time)) {
+                            let left = left.ceil() as u64;
+                            said(ui, &format!("{} {}:{:02} left", icon::TIMER, left / 60, left % 60), colors().muted);
+                        }
+                        if login.finishing {
+                            said(ui, "Checking what you pasted…", colors().muted);
+                        } else if let Some(why) = &login.refused {
+                            said(ui, &format!("{} Not taken: {why}", icon::X_CIRCLE), colors().error);
                         }
                     });
                 }
@@ -355,6 +374,14 @@ impl crate::hosted::Hosted for ChatStreamState {
             let detail = [account.email.clone(), account.organization.clone(), account.plan.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let status = Status::new(format!("{} {}", icon::USER_CIRCLE, account.label), Tone::Muted);
             out.push(if detail.is_empty() { status } else { status.detail(detail) });
+        }
+        match self.instance().map(|s| (s.auth.status, s.auth.methods.is_empty())) {
+            Some((harness_contracts::AuthStatus::SignedOut, false)) => out.push(Status::new(format!("{} Not signed in", icon::KEY), Tone::Warn)),
+            Some((harness_contracts::AuthStatus::SignedIn, _)) if self.instance().is_some_and(|s| s.auth.account.is_none()) => out.push(Status::new(format!("{} Signed in", icon::KEY), Tone::Muted)),
+            _ => {}
+        }
+        if let Some(home) = self.instance().and_then(|s| s.home.clone()) {
+            out.push(Status::new(icon::HOUSE, Tone::Muted).detail(format!("Its home (sign-in, settings, sessions) is kept for this project in {home}")));
         }
         if let Some(problems) = self.instance().map(|s| s.problems.clone()).filter(|p| !p.is_empty()) {
             out.push(Status::new(icon::WARNING, Tone::Warn).detail(problems.join("\n")));

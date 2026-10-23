@@ -239,10 +239,13 @@ impl ActionProvider for ChatStreamState {
         if let Some(s) = snapshot.filter(|s| !s.auth.methods.is_empty()) {
             let choices = s.auth.methods.iter().map(|m| Choice::new(&m.id, &m.name).detail(m.description.clone())).collect();
             let login = Action::new("auth.login", "Sign in", "Sign the harness in, the way it offers", C::Login).param(Param::Choice(choices));
-            out.push(if self.needs_login() && agents.login().is_none() { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
-            let hint = agents.login().and_then(|l| l.expects.clone()).unwrap_or_else(|| "what the sign-in page gave you".into());
-            let complete = Action::new("auth.complete", "Finish signing in", "The code the sign-in page gave you", C::CompleteLogin).param(Param::Text { hint, start: String::new() });
-            out.push(if agents.login().is_some_and(|l| l.expects.is_some()) { complete.header(Button, "Finish signing in", Some(icon::KEY)) } else { complete });
+            // Signing in again: when it isn't, or the last one stopped waiting.
+            let again = agents.login().is_none_or(|l| l.ran_out);
+            out.push(if again && (self.needs_login() || agents.login().is_some()) { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
+            let hint = agents.login().and_then(|l| l.challenge.expects.clone()).unwrap_or_else(|| "what the sign-in page gave you".into());
+            let complete = Action::new("auth.complete", "Finish signing in", "Paste what the sign-in page gave you", C::CompleteLogin).param(Param::Text { hint, start: String::new() });
+            let waiting = agents.login().is_some_and(|l| l.challenge.expects.is_some() && !l.ran_out && !l.finishing);
+            out.push(if waiting { complete.header(Button, "Finish signing in", Some(icon::KEY)) } else { complete });
             out.push(Action::new("auth.logout", "Sign out", "The harness forgets your sign-in on this machine", C::Logout));
         }
 
@@ -265,7 +268,7 @@ impl ActionProvider for ChatStreamState {
         // What the chat says on its own line, and its ways out.
         if agents.login().is_some() {
             out.push(Action::new("auth.cancel", "Stop signing in", "Nothing changes", C::CancelLogin).focused().importance(MINOR).header(Button, "Cancel sign-in", None));
-            if agents.login().is_some_and(|l| l.url.is_some()) {
+            if agents.login().is_some_and(|l| l.challenge.url.is_some() && !l.ran_out) {
                 out.push(Action::new("auth.page", "Open the sign-in page", "In a new tab", C::OpenLoginPage).focused().importance(crate::actions::PRIMARY).header(Button, "Open the sign-in page", Some(icon::ARROW_SQUARE_OUT)));
             }
         }
@@ -422,7 +425,7 @@ impl ActionProvider for ChatStreamState {
             ChatCommand::CancelLogin => self.act(Act::StopSigningIn),
             ChatCommand::OpenPage(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             ChatCommand::OpenLoginPage => {
-                let url = self.agents().login().and_then(|l| l.url.clone());
+                let url = self.agents().login().and_then(|l| l.challenge.url.clone());
                 if let Some(url) = url {
                     ctx.open_url(egui::OpenUrl::new_tab(url));
                 }

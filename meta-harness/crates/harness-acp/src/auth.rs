@@ -164,12 +164,12 @@ impl AcpAuthController {
     async fn finish_agent(&self, response: &str) -> Result<()> {
         let port = match &*lock(&self.running) {
             Some(Running::Agent { port, .. }) => *port,
-            _ => return Err(HarnessError::InvalidConfig { reason: "no sign-in is waiting: sign in again".into() }),
+            _ => return Err(HarnessError::Conflict { reason: "no sign-in is waiting: sign in again".into() }),
         };
         let port = port.ok_or_else(|| HarnessError::Provider { reason: "the login's link names no address to hand back to".into() })?;
         hand_back_callback(response, port).await?;
         let Some(Running::Agent { ended, .. }) = lock(&self.running).take() else {
-            return Err(HarnessError::Provider { reason: "the sign-in was started again meanwhile".into() });
+            return Err(HarnessError::Conflict { reason: "the sign-in was started again meanwhile".into() });
         };
         match tokio::time::timeout(END_WAIT, ended).await {
             Ok(Ok(Ok(()))) => Ok(()),
@@ -226,7 +226,7 @@ fn callback_port(link: &str) -> Option<u16> {
 /// for it, as the browser would have; only the port its login waits on.
 async fn hand_back_callback(response: &str, waits_on: u16) -> Result<()> {
     let url = response.trim();
-    let wrong = || HarnessError::InvalidConfig {
+    let wrong = || HarnessError::Refused {
         reason: format!("that isn't the address of the page that failed to load: it starts with http://localhost:{waits_on}/ or http://127.0.0.1:{waits_on}/"),
     };
     let rest = url.strip_prefix("http://127.0.0.1:").or_else(|| url.strip_prefix("http://localhost:")).ok_or_else(wrong)?;
@@ -237,7 +237,7 @@ async fn hand_back_callback(response: &str, waits_on: u16) -> Result<()> {
     let port = waits_on;
     let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
-        .map_err(|_| HarnessError::Provider { reason: "the login isn't waiting any more (its time ran out?): sign in again".into() })?;
+        .map_err(|_| HarnessError::Conflict { reason: "the sign-in isn't waiting any more (its time ran out?): sign in again".into() })?;
     stream.write_all(format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n").as_bytes()).await?;
     let mut reply = String::new();
     stream.read_to_string(&mut reply).await?;

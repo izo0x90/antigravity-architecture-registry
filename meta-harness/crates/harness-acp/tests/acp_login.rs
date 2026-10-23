@@ -70,7 +70,7 @@ async fn a_wrong_paste_is_refused_and_the_login_keeps_waiting() {
     let port = port_of(&link);
     for wrong in ["4/abc", "https://accounts.google.com/x", &format!("http://127.0.0.1:{}/?code=x", port.wrapping_add(1))] {
         let err = auth.complete(wrong).await.unwrap_err();
-        assert!(matches!(&err, HarnessError::InvalidConfig { reason } if reason.contains("isn't the address")), "{wrong}: {err}");
+        assert!(matches!(&err, HarnessError::Refused { reason } if reason.contains("isn't the address")), "{wrong}: {err}");
     }
     assert!(!agent.signed_in.load(std::sync::atomic::Ordering::SeqCst));
     // Still waiting: the right one goes through.

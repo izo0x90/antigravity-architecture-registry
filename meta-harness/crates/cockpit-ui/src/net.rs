@@ -64,6 +64,8 @@ pub struct AuthChallenge {
     pub url: Option<String>,
     pub instructions: String,
     pub expects: Option<String>,
+    /// How long the login waits for it, in seconds.
+    pub within_s: Option<u64>,
 }
 
 pub type NetResult<T> = Result<T, NetError>;
