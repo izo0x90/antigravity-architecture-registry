@@ -61,8 +61,6 @@ pub struct Palette {
     /// The list ranked for what's typed, kept until the text or the list
     /// changes (not ranked again every frame it's open).
     ranked: Ranked,
-    /// What the last writing sent links (its text is the action's value).
-    sent_links: Vec<harness_contracts::Link>,
     /// Opened for what's being written (a trigger's picker): left without
     /// a pick, what was typed in its field goes back after the trigger.
     gives_back: bool,
@@ -120,7 +118,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), sent_links: Vec::new(), gives_back: false, given_back: None }
+        Self { open: false, stage: Stage::Actions, filter: String::new(), selected: 0, scroll: false, ask: None, enter_waiting: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
     }
 }
 
@@ -201,9 +199,14 @@ impl Palette {
         self.enter(pick.clone(), false);
     }
 
-    /// It's open at an action's writing.
-    pub fn is_writing(&self) -> bool {
-        self.open && matches!(self.stage, Stage::Writing { .. })
+    /// It's open at an action's writing that takes links (`#`, `@`).
+    pub fn writes_links(&self) -> bool {
+        self.open && matches!(&self.stage, Stage::Writing { action, .. } if matches!(action.action.param, Param::Writing { links: true, .. }))
+    }
+
+    /// Its typing box as it is, while what's written takes links.
+    pub fn writing(&self) -> Option<&crate::conversation::TypingBox> {
+        self.writes_links().then_some(&self.writing)
     }
 
     /// Its typing box, while what's written is typed there (its links are
@@ -219,6 +222,8 @@ impl Palette {
 
     /// What was set aside comes back (with `text` put in after it).
     pub fn put_back(&mut self) -> Option<&mut crate::conversation::TypingBox> {
+        // (What it's back to was picked for: nothing to give back.)
+        self.gives_back = false;
         let (stage, writing) = self.held.take()?;
         (self.stage, self.writing, self.open) = (stage, writing, true);
         Some(&mut self.writing)
@@ -234,11 +239,6 @@ impl Palette {
     /// box it was opened from (once).
     pub fn take_given_back(&mut self) -> Option<String> {
         self.given_back.take()
-    }
-
-    /// What the last writing sent links.
-    pub fn take_sent_links(&mut self) -> Vec<harness_contracts::Link> {
-        std::mem::take(&mut self.sent_links)
     }
 
     /// Left without a pick: what was typed goes back to what's written (set
@@ -362,12 +362,17 @@ impl Palette {
                             let typed = self.writing.draw(ui, egui::Id::new("palette_writing"), 4, &hint, true);
                             // Sent by its key, or (a phone's keyboard may have none) its button.
                             let send = ui.button(format!("{} Send", egui_phosphor::regular::PAPER_PLANE_RIGHT)).clicked();
+                            let links = matches!(action.action.param, Param::Writing { links: true, .. });
                             if typed.sent.is_some() || (send && !self.writing.text.trim().is_empty()) {
                                 let written = self.writing.take();
-                                self.sent_links = written.links;
-                                picked = Some(invocation(action, Some(written.text)));
+                                // One that takes links: its message whole; else its text.
+                                let value = if links { serde_json::to_string(&written).unwrap_or_default() } else { written.text };
+                                picked = Some(invocation(action, Some(value)));
                             }
-                            self.trigger = typed.trigger.or(self.trigger);
+                            // A trigger only where links are taken.
+                            if links {
+                                self.trigger = typed.trigger.or(self.trigger);
+                            }
                         }
                         let edit = if matches!(stage, Stage::Writing { .. }) {
                             None
@@ -472,9 +477,9 @@ impl Palette {
                                             picked = Some(invocation(action, Some(choice.value.clone())));
                                         }
                                     }
-                                    // A space typed with nothing found (no name has one):
-                                    // what's typed is text, back where it's written.
-                                    if self.gives_back && found.is_empty() && !waiting && self.filter.ends_with(' ') {
+                                    // A space typed (no name a trigger picks has one): what's
+                                    // typed is text, back where it's written.
+                                    if self.gives_back && self.filter.ends_with(' ') {
                                         leave = true;
                                     }
                                     if found.is_empty() {
@@ -527,6 +532,7 @@ impl Palette {
             self.leave_giving_back();
         }
         if picked.is_some() && !cycling {
+            self.gives_back = false;
             self.close();
         }
         picked

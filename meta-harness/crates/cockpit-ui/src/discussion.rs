@@ -134,11 +134,7 @@ impl DiscussionView {
             Writing::Reopen => "reopen",
             Writing::Change => "change",
         };
-        let mut body = serde_json::json!({ "text": message.text });
-        if !message.links.is_empty() {
-            body["links"] = serde_json::json!(message.links);
-        }
-        net.discussion_act(&id, action, body, ctx.clone(), self.sent());
+        net.discussion_act(&id, action, serde_json::json!(message), ctx.clone(), self.sent());
         self.purpose = Writing::Reply;
     }
 
@@ -374,8 +370,8 @@ impl Navigable for DiscussionView {
         self.with(|d| Things { at: vec![crate::nav::Thing::named(harness_contracts::Subject::Discussion { id: d.id.clone() }, &known), crate::nav::Thing { subject: d.on.subject.clone(), words: d.on.what.clone() }], unit: 0 }).unwrap_or_default()
     }
 
-    fn takes_typed(&self) -> bool {
-        self.with(|_| ()).is_some()
+    fn typing(&self) -> Option<&crate::conversation::TypingBox> {
+        self.with(|_| ()).is_some().then_some(&self.writing)
     }
 
     fn typing_box(&mut self) -> Option<&mut crate::conversation::TypingBox> {

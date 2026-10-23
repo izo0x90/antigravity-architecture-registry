@@ -55,6 +55,7 @@ impl Include {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
+    #[serde(default)]
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
@@ -65,13 +66,20 @@ impl Message {
         Self { text: text.into(), links: Vec::new() }
     }
 
-    /// Its text trimmed, its links moved with it (one cut off: dropped).
+    /// Its text trimmed, its links moved with it (one cut off, or not a
+    /// span of it: dropped).
     pub fn trimmed(self) -> Self {
         let lead = self.text.chars().take_while(|c| c.is_whitespace()).count();
         let text = self.text.trim().to_owned();
         let len = text.chars().count();
-        let links = self.links.into_iter().filter_map(|l| (l.start >= lead && l.end - lead <= len).then(|| Link { start: l.start - lead, end: l.end - lead, ..l })).collect();
+        let links = self.links.into_iter().filter(|l| l.start < l.end && l.start >= lead && l.end - lead <= len).map(|l| Link { start: l.start - lead, end: l.end - lead, ..l }).collect();
         Self { text, links }
+    }
+
+    /// Only its links that are spans of its text (as a client may send any).
+    pub fn valid(self) -> Self {
+        let len = self.text.chars().count();
+        Self { links: self.links.into_iter().filter(|l| l.start < l.end && l.end <= len).collect(), ..self }
     }
 }
 

@@ -47,7 +47,7 @@ impl CockpitApp {
             let choices = self.slots_to_ask().into_iter().map(|(name, role)| Choice::new(name.clone(), name.clone()).detail(Some(if name == lead { "the lead (asked unless another is picked)".to_owned() } else { role }))).collect();
             out.push(Action::new("discuss.ask", format!("Who answers {} on {}?", d.kind.words(), d.words), "An agent slot: the lead, unless another is picked", S::DiscussAsk).param(Param::Choice(choices)).group(Group::Act).importance(MINOR));
             let asked = d.asked.as_ref().map(|a| format!(", asking {a}")).unwrap_or_default();
-            out.push(Action::new("discuss.write", format!("{} on {}{asked}", crate::spec::capitalized(d.kind.words()), d.words), "What it asks (# names a tag)", S::DiscussWrite).param(Param::Writing { hint: "what you ask".into(), start: d.text.clone() }).group(Group::Act).importance(MINOR));
+            out.push(Action::new("discuss.write", format!("{} on {}{asked}", crate::spec::capitalized(d.kind.words()), d.words), "What it asks (# links a tag, @ a file or a symbol)", S::DiscussWrite).param(Param::Writing { hint: "what you ask".into(), start: d.text.clone(), links: true }).group(Group::Act).importance(MINOR));
         }
         out
     }
@@ -102,7 +102,8 @@ impl CockpitApp {
                     self.note = Some("A discussion asks something: nothing was started.".into());
                     return;
                 }
-                sending.text = harness_contracts::Message { text: text.trim().to_owned(), links: self.palette.take_sent_links() };
+                // The writing's message (its text and links); from outside, its text.
+                sending.text = serde_json::from_str::<harness_contracts::Message>(&text).unwrap_or_else(|_| harness_contracts::Message::text(text.trim())).trimmed();
                 let (subject, kind, asked) = (sending.on.clone(), sending.kind, sending.asked.clone());
                 let message = sending.text.clone();
                 self.desk.sending = Some(sending);

@@ -309,9 +309,22 @@ impl AppState {
         let gate = Gate { cockpit: p.cockpit, access: p.access, tickets: Arc::default() };
         let home = crate::home::Home::start(p.state.clone(), p.hub.clone(), p.notify.clone(), true)?;
         let stopping = Shutdown::default();
-        // What a message links (a tag, a thing) is handed on with it.
-        let (tags, things) = (p.tags.clone(), p.things.clone());
-        p.slots.expand_prompts_with(Arc::new(move |text: &str, links: &[harness_contracts::Link]| things.attach(text, &crate::linking::attached(&tags, &things, links))));
+        // What a message links (a tag, a thing) is handed on with it, as
+        // far as the slot told may read it.
+        let (tags, things, slots, access, discussions) = (p.tags.clone(), p.things.clone(), Arc::downgrade(&p.slots), gate.access.clone(), p.discussions.clone());
+        p.slots.expand_prompts_with(Arc::new(move |text: &str, links: &[harness_contracts::Link], reader: Option<&harness_contracts::SlotId>| {
+            let attached = crate::linking::attached(&tags, &things, text, links);
+            let slot = reader.and_then(|id| slots.upgrade().and_then(|s| s.get(id).map(|slot| (s, slot))));
+            match (reader, slot) {
+                (None, _) => things.attach(text, &attached, &|_| true),
+                (Some(_), Some((slots, slot))) => {
+                    let reach = crate::mcp::sets::reach::Reach::of_slot(&slots, &access, &discussions, &slot);
+                    things.attach(text, &attached, &|s| reach.reaches(s))
+                }
+                // A slot gone meanwhile: nothing handed on (named only).
+                (Some(_), None) => things.attach(text, &attached, &|_| false),
+            }
+        }));
         Ok(Self {
             server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },
             home: HomeState { gate: gate.clone(), stopping: stopping.clone(), home },

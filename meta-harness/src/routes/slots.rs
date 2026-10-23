@@ -164,12 +164,11 @@ async fn switch(_: Needs<can::SessionsControl>, State(state): State<HarnessState
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct Prompt {
-    text: String,
-    /// What it links (`#tag`, `@thing`): handed on with it.
-    #[serde(default)]
-    links: Vec<harness_contracts::Link>,
+    /// Its text and what it links.
+    #[serde(flatten)]
+    message: harness_contracts::Message,
     /// Into the turn it's running (when its harness takes that), not after it.
     #[serde(default)]
     add_to_running: bool,
@@ -179,32 +178,28 @@ struct Prompt {
 #[serde(rename_all = "camelCase")]
 struct Prompted {
     turn_id: TurnId,
-/// one opened) first if it isn't running. What it links hands the agent
-/// what that is.
-    notes: Vec<String>,
 }
 
 #[derive(Serialize)]
 struct Checked {
-    /// What sending it would tell the user (linked whole, past the budget).
+    /// What sending it would tell the user (linked whole past the budget,
+    /// a link to what's gone, things only named).
     notes: Vec<String>,
 }
 
 /// What a message's links come to before it's sent: the same expansion a
-/// send does, its text dropped, what it would say kept.
+/// send does (its links only: what they come to doesn't hang on the text).
 async fn check_links(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Json(message): Json<harness_contracts::Message>) -> Json<Checked> {
-    Json(Checked { notes: state.slots.expanded(message).await.notes })
+    Json(Checked { notes: state.slots.expanded(message, None).await.notes })
 }
 
 /// The user's prompt to a slot: its current session is resumed (or a new
-/// one) first if it isn't running. What it links hands the agent what
-/// that is.
+/// one opened) first if it isn't running. What it links hands the agent
+/// what that is, as far as the slot may read it.
 async fn prompt(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(slot): Path<String>, Json(body): Json<Prompt>) -> ApiResult<Json<Prompted>> {
     let delivery = if body.add_to_running { Delivery::AddToRunning } else { Delivery::Queue };
-    let message = harness_contracts::Message { text: body.text, links: body.links };
-    let (sent, notes) = state.slots.send(&SlotId::new(slot), message, delivery, Origin::User, None).await?;
-    let turn_id = match sent {
+    let turn_id = match state.slots.send(&SlotId::new(slot), body.message, delivery, Origin::User, None).await? {
         Sent::Started { turn } | Sent::Replied { turn, .. } | Sent::StillWorking { turn } => turn,
     };
-    Ok(Json(Prompted { turn_id, notes }))
+    Ok(Json(Prompted { turn_id }))
 }

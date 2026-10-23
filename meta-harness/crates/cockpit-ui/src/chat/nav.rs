@@ -68,10 +68,9 @@ impl ChatStreamState {
     /// What's in the box, when it changed since it was last reported
     /// (typed, put in, or cleared by sending): to be saved for its slot.
     fn report_unsent(&mut self) {
-        let draft = self.ui.input.draft();
-        if self.unsent_for.as_ref() == Some(&self.ui.slot) && draft != self.unsent_said {
-            self.unsent_said = draft.clone();
-            self.asks.push(Ask::Draft { slot: self.ui.slot.clone(), draft });
+        if self.unsent_for.as_ref() == Some(&self.ui.slot) && !self.ui.input.holds(&self.unsent_said) {
+            self.unsent_said = self.ui.input.draft();
+            self.asks.push(Ask::Draft { slot: self.ui.slot.clone(), draft: self.unsent_said.clone() });
         }
     }
 }
@@ -100,8 +99,8 @@ impl crate::nav::DrawsThings for ChatStreamState {
 }
 
 impl Navigable for ChatStreamState {
-    fn takes_typed(&self) -> bool {
-        true
+    fn typing(&self) -> Option<&crate::conversation::TypingBox> {
+        Some(&self.ui.input)
     }
 
     fn typing_box(&mut self) -> Option<&mut crate::conversation::TypingBox> {

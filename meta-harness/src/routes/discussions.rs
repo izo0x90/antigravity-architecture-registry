@@ -90,15 +90,13 @@ async fn read(_: Needs<can::ViewRead>, State(state): State<DiscussionsState>, Pa
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Starting {
     subject: Subject,
     #[serde(default)]
     kind: DiscussionKind,
-    text: String,
-    /// What the text links.
-    #[serde(default)]
-    links: Vec<harness_contracts::Link>,
+    /// What it says, and what that links.
+    #[serde(flatten)]
+    message: Message,
     /// The agent slot asked, by its id or name (none: the lead).
     #[serde(default)]
     asked: Option<String>,
@@ -109,22 +107,19 @@ async fn start(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Js
     if !crate::discussing::may_read(&state.slots, &state.gate.access, &state.discussions, &asked, &body.subject) {
         return Err(Refused(DiscussionError::Invalid(format!("{asked} can't read that (another slot's chat): ask one that can"))));
     }
-    blocking(&state.discussions, move |d| d.start(&body.subject, body.kind, Message { text: body.text, links: body.links }, USER, Some(&asked))).await.map(Json)
+    blocking(&state.discussions, move |d| d.start(&body.subject, body.kind, body.message.valid(), USER, Some(&asked))).await.map(Json)
 }
 
+/// What's said (its text, possibly empty, and what it links).
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Saying {
-    #[serde(default)]
-    text: String,
-    /// What the text links.
-    #[serde(default)]
-    links: Vec<harness_contracts::Link>,
+    #[serde(flatten, default)]
+    message: Message,
 }
 
 impl From<Saying> for Message {
     fn from(said: Saying) -> Self {
-        Message { text: said.text, links: said.links }
+        said.message.valid()
     }
 }
 

@@ -206,16 +206,26 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     assert_eq!(view(&mut fresh, second), ("sub-1".into(), "to the reviewer".into()));
     assert_eq!(view(&mut fresh, first), ("lead".into(), "@a.rs to the lead".into()));
     let chat: &crate::chat::ChatStreamState = fresh.desk.typed_at(first);
-    assert_eq!(chat.ui.input.links().iter().map(|c| c.link.clone()).collect::<Vec<_>>(), [link], "its link too");
-    // Linked whole, it's checked before it's sent, and what it comes to is said under the box.
-    for at in [10.0, 10.5] {
-        frame_at(&ctx, &mut fresh, vec![], at);
-    }
+    assert_eq!(chat.ui.input.links().iter().map(|c| c.link.clone()).collect::<Vec<_>>(), std::slice::from_ref(&link), "its link too");
+    // Its links are checked before it's sent (once still a moment), and what
+    // they come to is said under the box.
+    let still = fresh.config.net.save_after_ms as f64 / 1000.0;
+    frame_at(&ctx, &mut fresh, vec![], 10.0);
     let asked = bodies(&fresh, "POST /api/links/check");
     assert_eq!(asked, [serde_json::json!({ "text": "@a.rs to the lead", "links": [{ "start": 0, "end": 5, "to": { "kind": "thing", "subject": { "kind": "code_file", "path": "a.rs" } }, "include": "whole" }] })]);
+    // Its link changed (a pointer now): not asked again at once; the answer
+    // about the link as it was is dropped; asked once it's still a moment.
+    let pointer = harness_contracts::Message { text: "@a.rs to the lead".into(), links: vec![harness_contracts::Link { include: harness_contracts::Include::Pointer, ..link.clone() }] };
+    fresh.desk.buffer_mut(first).and_then(|b| b.typing_box()).unwrap().restore(&pointer);
+    frame_at(&ctx, &mut fresh, vec![], 20.0);
+    assert!(bodies(&fresh, "POST /api/links/check").is_empty(), "not at once");
+    assert!(fresh.desk.net.answer("POST /api/links/check", 200, &serde_json::json!({ "notes": ["about the link as it was"] })));
+    frame_at(&ctx, &mut fresh, vec![], 20.0 + still);
+    assert!(!texts(&frame_at(&ctx, &mut fresh, vec![], 20.0 + still)).contains("as it was"), "an old answer: dropped");
+    assert_eq!(bodies(&fresh, "POST /api/links/check").len(), 1);
     assert!(fresh.desk.net.answer("POST /api/links/check", 200, &serde_json::json!({ "notes": ["file a.rs: too big to go in whole with the rest"] })));
-    frame_at(&ctx, &mut fresh, vec![], 10.6);
-    assert!(texts(&frame_at(&ctx, &mut fresh, vec![], 10.7)).contains("file a.rs: too big to go in whole"), "said before it's sent");
+    frame_at(&ctx, &mut fresh, vec![], 21.0 + still);
+    assert!(texts(&frame_at(&ctx, &mut fresh, vec![], 21.1 + still)).contains("file a.rs: too big to go in whole"), "said before it's sent");
 }
 
 /// A buffer kind saved in another version of itself starts new; the rest

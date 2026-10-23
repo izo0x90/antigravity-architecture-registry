@@ -78,9 +78,22 @@ fn refused(e: nah_tags::TagError) -> ServiceError {
 /// How many of a thing's lines `tag_read` shows of each, and of one
 /// asked for at most.
 const SHOWN_LINES: usize = 20;
-const READ_MOST: usize = 2000;
+pub(super) const READ_MOST: usize = 2000;
 /// How many lines `tag_find` gives at most.
 const FOUND_MOST: usize = 50;
+
+/// What one thing read by its lines shows (`read`: the lines from `from`,
+/// and how many it has), and what's said after them when there are
+/// more: the same for every read of one thing (`tag_read`, `thing_read`).
+pub(super) fn some_lines(what: &str, read: Option<(Vec<String>, u64)>, from: u64) -> Result<(String, String), ServiceError> {
+    let (shown, all) = read.ok_or_else(|| ServiceError::NotFound(format!("{what} is gone, and nothing was kept of it")))?;
+    if from > all.max(1) {
+        return Err(ServiceError::InvalidOp(format!("{what} has {all} lines")));
+    }
+    let to = (from + shown.len() as u64).saturating_sub(1).min(all);
+    let more = if to < all { format!("\n(lines {from}-{to} of {all}: `lines` gives others)") } else { String::new() };
+    Ok((shown.join("\n"), more))
+}
 
 /// `a-b` (1-based, both in), or `a`.
 pub(super) fn line_range(words: &str) -> Result<(usize, usize), ServiceError> {
@@ -142,14 +155,8 @@ impl ToolSet for Tags {
                         if !reach.reaches(&tagged.subject) {
                             return Err(ServiceError::Forbidden(format!("{} is {NOT_YOURS}", tagged.what)));
                         }
-                        let (shown, all) = read.ok_or_else(|| ServiceError::NotFound(format!("{} is gone, and nothing was kept of it", tagged.what)))?;
-                        if from as u64 > all {
-                            return Err(ServiceError::InvalidOp(format!("{} has {all} lines", tagged.what)));
-                        }
-                        let to = (to as u64).min(all);
-                        let shown = shown.join("\n");
+                        let (shown, more) = some_lines(&tagged.what, read, from as u64)?;
                         let shown = if full || lines.is_some() { shown } else { t.fold(&tagged.subject, &shown) };
-                        let more = if to < all { format!("\n(lines {from}-{to} of {all}: `lines` gives others)") } else { String::new() };
                         Ok(format!("{} ({}):\n{shown}{more}", tagged.what, held.words()))
                     }
                     None => {

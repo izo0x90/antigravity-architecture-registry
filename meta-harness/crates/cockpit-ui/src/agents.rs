@@ -67,8 +67,6 @@ pub enum Act {
 enum Reply {
     Opened(SlotId, NetResult<SlotOpened>),
     Sent(SlotId, NetResult<()>),
-    /// A prompt sent: what the user is told of its links.
-    Prompted(SlotId, NetResult<Vec<String>>),
     SlotMade(SlotId, NetResult<SlotId>),
     /// A session was ended to start again with new tool servers.
     Restart { slot: SlotId, resume: Option<NativeId>, result: NetResult<()> },
@@ -305,7 +303,7 @@ impl Agents {
         }
         let mailbox = self.mailbox.clone();
         let for_slot = slot.clone();
-        net.prompt_slot(&slot, &message, add_to_running, ctx.clone(), move |r| post(&mailbox, Reply::Prompted(for_slot, r)));
+        net.prompt_slot(&slot, &message, add_to_running, ctx.clone(), move |r| post(&mailbox, Reply::Sent(for_slot, r)));
     }
 
     /// Restarts `slot`'s session with the current tool servers (ACP takes
@@ -350,11 +348,9 @@ impl Agents {
                     self.queued.remove(&slot);
                     self.errors.insert(slot, e.into());
                 }
-                Reply::Sent(slot, Err(e)) | Reply::Prompted(slot, Err(e)) => {
+                Reply::Sent(slot, Err(e)) => {
                     self.errors.insert(slot, e.into());
                 }
-                // What the user is told of its links (linked whole, past the budget).
-                Reply::Prompted(_, Ok(notes)) if !notes.is_empty() => self.notice = Some(notes.join(" ")),
                 Reply::SlotMade(from, Ok(made)) => self.made = (self.made.0 + 1, Some((from, made))),
                 Reply::Restart { slot, resume, result: Ok(()) } => self.open(slot, net, ctx, resume),
                 Reply::Saved(_, Ok(sessions)) => self.saved = Some(sessions),
@@ -376,7 +372,7 @@ impl Agents {
                 Reply::Saved(slot, Err(e)) | Reply::AuthStarted(slot, Err(e)) | Reply::Done(slot, Err(e)) | Reply::SlotMade(slot, Err(e)) | Reply::Restart { slot, result: Err(e), .. } => {
                     self.errors.insert(slot, e.into());
                 }
-                Reply::Sent(_, Ok(())) | Reply::Done(_, Ok(())) | Reply::Prompted(_, Ok(_)) => {}
+                Reply::Sent(_, Ok(())) | Reply::Done(_, Ok(())) => {}
             }
         }
     }

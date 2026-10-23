@@ -84,10 +84,10 @@ async fn the_lead_sends_to_a_sub_slot_and_gets_its_answer() {
     let slots = &state.harness.slots;
     let sub = slots.create("sub", Some("helper".into()), fake(), Starter::Lead).await.unwrap();
     // Not running yet: sending opens its session first.
-    let sent = slots.send(&sub, "count the files".into(), Delivery::Queue, Origin::Lead, Some(Duration::from_secs(5))).await.unwrap().0;
+    let sent = slots.send(&sub, "count the files".into(), Delivery::Queue, Origin::Lead, Some(Duration::from_secs(5))).await.unwrap();
     let Sent::Replied { text, .. } = sent else { panic!("{sent:?}") };
     assert!(text.starts_with("echo: From the lead (lead):\n\ncount the files"), "marked as the lead's: {text}");
-    let sent = slots.send(&sub, "[hang] take your time".into(), Delivery::Queue, Origin::User, Some(Duration::from_millis(100))).await.unwrap().0;
+    let sent = slots.send(&sub, "[hang] take your time".into(), Delivery::Queue, Origin::User, Some(Duration::from_millis(100))).await.unwrap();
     assert!(matches!(sent, Sent::StillWorking { .. }), "{sent:?}");
     let mut report = slots.read(&sub, 10).unwrap();
     for _ in 0..50 {
@@ -190,7 +190,7 @@ async fn after_a_restart_slots_come_back_and_resume_on_first_use() {
     assert_eq!(slot.current, Some(opened.session.clone()));
     assert!(slot.current_thread().is_none(), "nothing runs until it's used");
     assert!(after.get(&worker).is_none(), "a queue's worker from the last run is gone");
-    let Sent::Replied { .. } = after.send(&sub, "hello again".into(), Delivery::Queue, Origin::User, Some(Duration::from_secs(5))).await.unwrap().0 else { panic!() };
+    let Sent::Replied { .. } = after.send(&sub, "hello again".into(), Delivery::Queue, Origin::User, Some(Duration::from_secs(5))).await.unwrap() else { panic!() };
     let resumed = after.get(&sub).unwrap();
     assert_eq!(resumed.current, Some(opened.session), "the same session, resumed");
     assert!(resumed.current_thread().is_some());

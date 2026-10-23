@@ -12,8 +12,6 @@ use super::reach::{NOT_YOURS, Reach};
 use super::schema::tool;
 use super::{ToolDef, ToolSet};
 
-/// How many lines a read gives at most.
-const READ_MOST: u64 = 2000;
 
 pub(crate) struct Things {
     pub(crate) things: Arc<nah_things::Things>,
@@ -49,7 +47,7 @@ impl ToolSet for Things {
         let words = args["thing"].as_str().ok_or_else(|| ServiceError::InvalidOp("`thing` (its name) is needed".into()))?.to_owned();
         let (from, to) = match args["lines"].as_str() {
             Some(range) => super::tags::line_range(range).map(|(a, b)| (a as u64, b as u64))?,
-            None => (1, READ_MOST),
+            None => (1, super::tags::READ_MOST as u64),
         };
         let reach = Reach::of(&self.slots, &self.access, &self.discussions, caller);
         let things = self.things.clone();
@@ -59,14 +57,9 @@ impl ToolSet for Things {
             if !reach.reaches(&subject) {
                 return Err(ServiceError::Forbidden(format!("{what} is {NOT_YOURS}")));
             }
-            let (_, read) = things.lines(&subject, None, from, to.min(from + READ_MOST - 1));
-            let (shown, all) = read.ok_or_else(|| ServiceError::NotFound(format!("{what} isn't there now")))?;
-            if from > all.max(1) {
-                return Err(ServiceError::InvalidOp(format!("{what} has {all} lines")));
-            }
-            let to = (from + shown.len() as u64).saturating_sub(1);
-            let more = if to < all { format!("\n(lines {from}-{to} of {all}: `lines` gives others)") } else { String::new() };
-            Ok(format!("{what}:\n{}{more}", shown.join("\n")))
+            let (_, read) = things.lines(&subject, None, from, to.min(from + super::tags::READ_MOST as u64 - 1));
+            let (shown, more) = super::tags::some_lines(&what, read, from)?;
+            Ok(format!("{what}:\n{shown}{more}"))
         })
         .await
         .map_err(|e| ServiceError::InvalidOp(e.to_string()))?

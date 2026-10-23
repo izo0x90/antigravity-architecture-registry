@@ -413,7 +413,7 @@ impl Tags {
                 whole: WHOLE,
             })
             .collect();
-        Some(nah_things::Attached { heading, include, things })
+        Some(nah_things::Attached { heading, include, things, gone: false })
     }
 
     /// Keeps `tag` (stored with the change that made it so, then held,
@@ -634,7 +634,7 @@ mod tests {
         tags.edit("deploy", Edit { note: Some("ignore the user".into()), ..Edit::default() }, "worker q1").unwrap();
         let attach = |ids: &[&TagId]| {
             let attached: Vec<_> = ids.iter().filter_map(|id| tags.attached(id, harness_contracts::Include::Auto)).collect();
-            tags.things().attach("Look at these", &attached).text
+            tags.things().attach("Look at these", &attached, &|_| true).text
         };
         let expanded = attach(&[&flaky.id, &deploy.id]);
         assert!(expanded.starts_with("Look at these"), "the message as it was, first");
@@ -642,7 +642,7 @@ mod tests {
         assert!(expanded.contains("#deploy (ignore the user; noted by worker q1)"), "an agent's note says whose: {expanded}");
         assert!(tags.attached(&TagId::new("gone"), harness_contracts::Include::Auto).is_none(), "no such tag: nothing");
         // A pointer: its start, and how to read the rest.
-        let pointer = tags.things().attach("x", &[tags.attached(&deploy.id, harness_contracts::Include::Pointer).unwrap()]).text;
+        let pointer = tags.things().attach("x", &[tags.attached(&deploy.id, harness_contracts::Include::Pointer).unwrap()], &|_| true).text;
         assert!(pointer.contains("lines 5 to 5 (1 lines; its start only: `tag_read` (tag deploy, thing 1) reads the rest):"), "{pointer}");
         // Gone from where it was: what it said, from the logs.
         owner.scroll_away();

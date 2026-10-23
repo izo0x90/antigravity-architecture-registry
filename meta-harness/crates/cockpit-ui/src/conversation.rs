@@ -177,6 +177,21 @@ impl TypingBox {
         self.links.push(Chip { link: harness_contracts::Link { start, end, to, include }, colour: colors().accent });
     }
 
+    /// Emptied: its text and its links.
+    pub fn clear(&mut self) {
+        (self.text, self.links) = (String::new(), Vec::new());
+    }
+
+    /// Whether it holds `draft` as it is (its text and links).
+    pub fn holds(&self, draft: &harness_contracts::Message) -> bool {
+        self.text == draft.text && self.links.len() == draft.links.len() && self.links.iter().zip(&draft.links).all(|(c, l)| c.link == *l)
+    }
+
+    /// A link the caret is in or just after (where it is once put in).
+    pub fn link_at_caret(&self) -> bool {
+        self.caret.is_some_and(|at| self.links.iter().any(|c| c.link.start < at && at <= c.link.end + 1))
+    }
+
     /// The links in it, in order.
     pub fn links(&self) -> &[Chip] {
         &self.links
@@ -184,7 +199,7 @@ impl TypingBox {
 
     /// Each link drawn in the colour `colour` gives it (the shell's: a
     /// tag's own).
-    pub fn colour_links(&mut self, colour: impl Fn(&harness_contracts::Linked) -> Color32) {
+    pub fn colour_links(&mut self, colour: &dyn Fn(&harness_contracts::Linked) -> Color32) {
         for chip in &mut self.links {
             chip.colour = colour(&chip.link.to);
         }
@@ -235,12 +250,16 @@ impl TypingBox {
 
     /// The links kept where they are through an edit (`before` was the
     /// text): one the edit reached into is dropped.
-    fn follow_edit(&mut self, before: &str) {
+    fn follow_edit(&mut self, before: &str, caret: Option<usize>) {
         if self.links.is_empty() || before == self.text {
             return;
         }
         let (old, new): (Vec<char>, Vec<char>) = (before.chars().collect(), self.text.chars().collect());
-        let same_start = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+        // Where the edit began: what's the same at the start, unless the
+        // caret (after it) says it began earlier (a character typed that
+        // repeats the one after it looks typed later than it was).
+        let grew = new.len().saturating_sub(old.len());
+        let same_start = old.iter().zip(&new).take_while(|(a, b)| a == b).count().min(caret.map_or(usize::MAX, |c| c.saturating_sub(grew)));
         let same_end = old[same_start..].iter().rev().zip(new[same_start..].iter().rev()).take_while(|(a, b)| a == b).count();
         let (old_end, moved) = (old.len() - same_end, new.len() as isize - old.len() as isize);
         self.links.retain_mut(|c| {
@@ -262,12 +281,13 @@ impl TypingBox {
         let font = egui::TextStyle::Body.resolve(ui.style());
         let plain = egui::TextFormat::simple(font.clone(), ui.visuals().text_color());
         let mut job = egui::text::LayoutJob { wrap: egui::text::TextWrapping { max_width: wrap, ..Default::default() }, ..Default::default() };
-        let byte = |chars: usize| text.char_indices().nth(chars).map_or(text.len(), |(b, _)| b);
+        // Every character's byte offset, once (the chips' spans are in characters).
+        let bytes: Vec<usize> = text.char_indices().map(|(b, _)| b).chain(std::iter::once(text.len())).collect();
         let mut at = 0;
-        let mut chips: Vec<&Chip> = self.links.iter().filter(|c| c.link.end <= text.chars().count()).collect();
+        let mut chips: Vec<&Chip> = self.links.iter().filter(|c| c.link.start < c.link.end && c.link.end < bytes.len()).collect();
         chips.sort_by_key(|c| c.link.start);
         for chip in chips {
-            let (start, end) = (byte(chip.link.start), byte(chip.link.end));
+            let (start, end) = (bytes[chip.link.start], bytes[chip.link.end]);
             if start < at {
                 continue;
             }
@@ -303,7 +323,7 @@ impl TypingBox {
             ui.memory_mut(|m| m.request_focus(id));
         }
         // The link at the caret, cycled by its key (before the box takes the key).
-        if typing && ui.memory(|m| m.has_focus(id)) && keys.input.link.shortcut().is_some_and(|s| ui.input_mut(|i| i.consume_shortcut(&s))) {
+        if typing && ui.memory(|m| m.has_focus(id)) && ui.input_mut(|i| keys.input.link.consume(i)) {
             self.cycle_link();
         }
         // Text put in: the caret after it before this frame's keys are typed
@@ -311,12 +331,16 @@ impl TypingBox {
         if std::mem::take(&mut self.caret_to_end) {
             caret_to_end(ui.ctx(), id, &self.text);
         }
-        let written = self.text.clone();
+        // (What it held, to follow its links through the edit: only when it has some.)
+        let written = (!self.links.is_empty()).then(|| self.text.clone());
         let chips = TypingBox { links: self.links.clone(), ..TypingBox::default() };
         let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| chips.laid_out(ui, text.as_str(), wrap);
         let output = ui.add(keys.text_box(&mut self.text).id(id).desired_rows(rows).desired_width(f32::INFINITY).hint_text(hint).layouter(&mut layouter));
-        self.follow_edit(&written);
-        self.caret = egui::TextEdit::load_state(ui.ctx(), output.id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index);
+        let caret_now = egui::TextEdit::load_state(ui.ctx(), output.id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index);
+        if let Some(written) = written {
+            self.follow_edit(&written, caret_now);
+        }
+        self.caret = caret_now;
         let sent = if typing && output.has_focus() { ui.input(|i| keys.input.sent(i)) } else { None };
         if sent.is_some() {
             output.surrender_focus();
@@ -369,11 +393,11 @@ mod tests {
         // Typed before it: it moves; after it: it stays.
         let before = b.text.clone();
         b.text.insert_str(2, "go ");
-        b.follow_edit(&before);
+        b.follow_edit(&before, None);
         assert_eq!((b.links()[0].link.start, b.links()[0].link.end), (9, 15));
         let before = b.text.clone();
         b.text.push_str("now");
-        b.follow_edit(&before);
+        b.follow_edit(&before, None);
         assert_eq!(b.links().len(), 1);
         // The caret in it (or just after it): cycled.
         b.caret = Some(16);
@@ -385,10 +409,25 @@ mod tests {
         let message = taken.take();
         assert_eq!((message.text.as_str(), message.links[0].start, message.links[0].end), ("go see #flaky now", 7, 13));
         assert!(taken.links().is_empty());
+        // Typed inside it, where the character repeats the one after: the
+        // caret says it's in it, so it goes.
+        let mut c = TypingBox::default();
+        c.put_link("#flaky", tag("x1"), Include::Auto);
+        let before = c.text.clone();
+        c.text.insert(5, 'y');
+        c.follow_edit(&before, Some(6));
+        assert!(c.links().is_empty(), "typed in it: {:?}", c.links());
+        // A # typed just before it: outside it, it moves on.
+        let mut d = TypingBox::default();
+        d.put_link("#flaky", tag("x1"), Include::Auto);
+        let before = d.text.clone();
+        d.text.insert(0, '#');
+        d.follow_edit(&before, Some(1));
+        assert_eq!((d.links()[0].link.start, d.links()[0].link.end), (1, 7));
         // A character taken out of it: the link goes (the text stays text).
         let before = b.text.clone();
         b.text.remove(12);
-        b.follow_edit(&before);
+        b.follow_edit(&before, None);
         assert!(b.links().is_empty());
     }
 

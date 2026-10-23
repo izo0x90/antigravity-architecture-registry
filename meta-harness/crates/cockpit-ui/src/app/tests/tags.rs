@@ -500,15 +500,23 @@ fn a_hash_typed_in_a_prompt_opens_the_tag_picker_and_puts_the_name_after_it() {
     // The caret after the name: what's typed next follows it.
     typed(&ctx, &mut app, ")");
     assert!(texts(&frame(&ctx, &mut app, vec![])).contains("fix #1 look at (#flaky )"), "in the box, as typed: {:?}", app.desk.chat().ui.input.text);
-    // Escape out of the picker: the # stays, and typing goes on.
+    // The link: whole (filled), by its key, the caret just after it.
+    let links = |app: &CockpitApp| app.desk.chat().ui.input.links().iter().map(|c| c.link.include).collect::<Vec<_>>();
+    frame(&ctx, &mut app, vec![egui::Event::Key { key: egui::Key::ArrowLeft, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+    frame(&ctx, &mut app, vec![egui::Event::Key { key: egui::Key::ArrowLeft, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+    ctrl(&ctx, &mut app, egui::Key::I);
+    assert_eq!(links(&app), [harness_contracts::Include::Whole], "ctrl+i at the link");
+    frame(&ctx, &mut app, vec![egui::Event::Key { key: egui::Key::End, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+    // Escape out of the picker after typing in it: what was typed stays after the #.
     typed(&ctx, &mut app, " #");
     assert!(app.palette.is_open());
+    typed(&ctx, &mut app, "zz");
     frame(&ctx, &mut app, press(egui::Key::Escape, false));
     frame(&ctx, &mut app, vec![]);
     assert!(!app.palette.is_open() && matches!(app.input_mode, InputMode::Insert { .. }), "back to typing");
     typed(&ctx, &mut app, "x");
     assert!(!app.palette.is_open(), "only a # just typed opens it");
-    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("fix #1 look at (#flaky ) #x"));
+    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("fix #1 look at (#flaky ) #zzx"), "{:?}", app.desk.chat().ui.input.text);
     // Mid-word, a # is just a #.
     typed(&ctx, &mut app, " issue#");
     assert!(!app.palette.is_open());

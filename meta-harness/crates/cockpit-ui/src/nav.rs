@@ -847,9 +847,10 @@ pub trait Navigable {
         None
     }
 
-    /// It has a box text is typed in (what's put there goes in it).
-    fn takes_typed(&self) -> bool {
-        false
+    /// Its box text is typed in, when it has one (what's picked for
+    /// what's written goes there: `typing_box`).
+    fn typing(&self) -> Option<&crate::conversation::TypingBox> {
+        None
     }
 
     /// Its typing box, where what's picked for what's written goes (a link

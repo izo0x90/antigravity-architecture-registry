@@ -47,7 +47,7 @@ impl CockpitApp {
         let (label, param) = match edit {
             E::Rename => (format!("Rename the tag {}", tag.name), Param::Text { hint: "a new name (letters, digits, - and _)".into(), start: tag.name.clone() }),
             E::Recolour => (format!("Give {} another colour", tag.name), Param::Choice((0..harness_contracts::TAG_COLOURS).map(|i| Choice::new(i.to_string(), theme.tag_name(i)).swatch(theme.tag(i)).current(tag.colour == i)).collect())),
-            E::Note => (format!("Write {}'s note", tag.name), Param::Writing { hint: "its note (as many lines as it takes)".into(), start: tag.note.as_str().into() }),
+            E::Note => (format!("Write {}'s note", tag.name), Param::Writing { hint: "its note (as many lines as it takes)".into(), start: tag.note.as_str().into(), links: false }),
             E::ClearNote => (format!("Clear {}'s note", tag.name), Param::None),
             E::Delete => (format!("Delete the tag {}", tag.name), Param::Choice(vec![Choice::new("yes", format!("Delete {} (from {})", tag.name, on_things(tag.count))), Choice::new("no", "Keep it")])),
         };
@@ -137,7 +137,7 @@ impl CockpitApp {
                 .param(Param::Search { hint: if tags.list().is_empty() { format!("no tags yet ({}: the # stays as typed)", self.config.keymap.back.label()) } else { "a tag's name".into() }, found: named, waiting: false })
                 .group(Group::Act)
                 .importance(MINOR)
-                .when(when(self.desk.view(here.kind).takes_typed() || self.palette.is_writing() || self.palette.holding())),
+                .when(when(self.writing_here(here))),
         );
         // `g T` picked a tag on several things: which.
         // An edit's tag picked (of several): its value asked for.

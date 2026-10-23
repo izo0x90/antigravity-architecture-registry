@@ -410,7 +410,8 @@ impl KeymapConfig {
     pub fn ctrl_keys(&self) -> std::collections::BTreeSet<String> {
         let bound = self.bind.values().flat_map(|b| b.keys.iter()).filter_map(|seq| seq.0.first());
         let lists = self.list.next.iter().chain(&self.list.prev).chain(&self.list.pick);
-        bound.chain(lists).filter_map(Chord::ctrl_key).collect()
+        let typing = std::iter::once(&self.input.link);
+        bound.chain(lists).chain(typing).filter_map(Chord::ctrl_key).collect()
     }
 
     pub fn group_label(&self, path: &[char]) -> Option<&str> {

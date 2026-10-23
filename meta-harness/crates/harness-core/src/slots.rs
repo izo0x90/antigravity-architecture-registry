@@ -192,10 +192,11 @@ pub struct SlotManager {
     expand: std::sync::OnceLock<Expand>,
 }
 
-/// A message as an agent is handed it: its text with what it links. Only
-/// the user's messages have links (agents' are plain text), so what's
-/// linked is handed whole: the user chose to show it.
-pub type Expand = Arc<dyn Fn(&str, &[harness_contracts::Link]) -> harness_contracts::Expanded + Send + Sync>;
+/// A message as an agent is handed it: its text with what it links, as
+/// far as the slot it's for (`reader`) may read it (none: no slot's,
+/// all of it: a check before sending). Only the user's messages have
+/// links (agents' are plain text).
+pub type Expand = Arc<dyn Fn(&str, &[harness_contracts::Link], Option<&SlotId>) -> harness_contracts::Expanded + Send + Sync>;
 
 fn store_error(reason: String) -> HarnessError {
     HarnessError::Store { reason }
@@ -557,25 +558,25 @@ impl SlotManager {
 
     /// `message` as an agent is handed it (off the async threads: what it
     /// links is read where it's kept). Without links, its text as it is.
-    pub async fn expanded(&self, message: Message) -> Expanded {
-        let Message { text, links } = message;
+    pub async fn expanded(&self, message: Message, reader: Option<SlotId>) -> Expanded {
+        let Message { text, links } = message.valid();
         let Some(expand) = self.expand.get().cloned().filter(|_| !links.is_empty()) else { return Expanded { text, notes: Vec::new() } };
         let written = text.clone();
-        tokio::task::spawn_blocking(move || expand(&text, &links)).await.unwrap_or(Expanded { text: written, notes: Vec::new() })
+        tokio::task::spawn_blocking(move || expand(&text, &links, reader.as_ref())).await.unwrap_or(Expanded { text: written, notes: Vec::new() })
     }
 
     /// Sends a message to a slot (as its user, or as the lead). With `wait`,
-    /// waits that long for the turn's answer. What it links the user's own
-    /// message hands whole; the lead's is plain text. Also: what the sender
-    /// is told of its links (linked whole past the budget).
-    pub async fn send(&self, to: &SlotId, message: Message, delivery: Delivery, from: Origin, wait: Option<Duration>) -> Result<(Sent, Vec<String>)> {
+    /// waits that long for the turn's answer. What the user's message
+    /// links goes with it, as far as `to` may read it (what that comes to
+    /// was said under the box before it was sent); the lead's is plain text.
+    pub async fn send(&self, to: &SlotId, message: Message, delivery: Delivery, from: Origin, wait: Option<Duration>) -> Result<Sent> {
         let thread = self.running_thread(to).await?;
         let session = self.sessions.get(&thread)?;
         let message = match &from {
             Origin::User => message,
             Origin::Lead => Message::text(message.text),
         };
-        let Expanded { text, notes } = self.expanded(message).await;
+        let text = self.expanded(message, Some(to.clone())).await.text;
         let text = match &from {
             Origin::User => text,
             Origin::Lead => format!("From the lead ({}):\n\n{text}", self.slot(&self.lead()).map(|s| s.name).unwrap_or_else(|_| LEAD.into())),
@@ -591,7 +592,7 @@ impl SlotManager {
             self.store.note(LEAD, "sent", &self.slot(to).map(|s| s.name).unwrap_or_default(), None);
         }
         let Some(wait) = wait else {
-            return Ok((Sent::Started { turn }, notes));
+            return Ok(Sent::Started { turn });
         };
         let mut items: Vec<TurnItem> = Vec::new();
         let ended = tokio::time::timeout(wait, async {
@@ -605,11 +606,10 @@ impl SlotManager {
             false
         })
         .await;
-        let sent = match ended {
+        Ok(match ended {
             Ok(true) => Sent::Replied { text: turn_reply(&items, &turn), turn },
             _ => Sent::StillWorking { turn },
-        };
-        Ok((sent, notes))
+        })
     }
 
     /// A sub-slot reports to the lead (`tell`).
@@ -625,7 +625,7 @@ impl SlotManager {
     /// work), else held, as it was told, until one of its sessions runs.
     pub async fn tell(&self, to: &SlotId, from: &str, message: Message) -> Result<Reported> {
         let slot = self.slot(to)?;
-        let text = self.expanded(message).await.text;
+        let text = self.expanded(message, Some(to.clone())).await.text;
         match slot.current_thread().and_then(|t| self.sessions.get(t).ok()) {
             Some(session) => {
                 let prompt = format!("From {from}:\n\n{text}");

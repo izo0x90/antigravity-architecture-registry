@@ -485,7 +485,7 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (status, _) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "plain #checked, not linked" }).to_string())).await;
     assert_eq!(status, 200);
     let plain = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("plain #checked"))).await;
-    assert!(!format!("{plain:?}").contains("What's linked above"), "{plain:?}");
+    assert!(!format!("{plain:?}").contains("tagged-line"), "not linked: nothing handed on: {plain:?}");
     // One thing linked as a pointer: its start, and the tool that reads the rest.
     let subject = json!({ "kind": "terminal_command", "terminal": terminal.id, "shell": reader.last.as_ref().unwrap().shell, "command": number });
     let link = json!({ "start": 0, "end": 4, "to": { "kind": "thing", "subject": subject }, "include": "pointer" });
@@ -497,6 +497,10 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let whole = json!({ "start": 0, "end": 4, "to": { "kind": "thing", "subject": subject }, "include": "whole" });
     let (status, body) = http(addr, "POST", "/api/links/check", Some(&json!({ "text": "this one", "links": [whole] }).to_string())).await;
     assert_eq!((status, body.as_str()), (200, r#"{"notes":[]}"#));
+    // A link to a tag deleted since: said before it's sent.
+    let gone = json!({ "start": 0, "end": 5, "to": { "kind": "tag", "tag": "no-such-tag" } });
+    let (_, body) = http(addr, "POST", "/api/links/check", Some(&json!({ "text": "#gone it", "links": [gone] }).to_string())).await;
+    assert!(body.contains("#gone: gone since it was linked"), "{body}");
     let (error, read) = lead.tool("thing_read", json!({ "thing": command })).await;
     assert!(!error && read.contains("tagged-line"), "{read}");
     // An agent's report to the lead is plain text: nothing in it is linked.
@@ -508,7 +512,7 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (err, text) = helper.tool("tell_lead", json!({ "text": "fixed #checked" })).await;
     assert!(!err, "{text}");
     let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("fixed #checked"))).await;
-    assert!(!format!("{echoed:?}").contains("What's linked above"), "{echoed:?}");
+    assert!(!format!("{echoed:?}").contains("tagged-line"), "an agent's text links nothing: {echoed:?}");
     // An agent with no key reads nothing, and changes nothing.
     let mut external = Mcp::connect(addr).await;
     let (error, said) = external.tool("tag_read", json!({ "tag": "checked" })).await;
