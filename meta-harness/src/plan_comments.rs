@@ -108,11 +108,11 @@ fn brought(plan: &PlanId, c: Comment) -> Brought {
         Anchor::Relation { kind, source, target } => Subject::PlanRelation { plan: plan.clone(), relation: kind, source, target },
     };
     let first = arch_graph::when::read(&c.at).unwrap_or(0);
-    let mut said = vec![Said { by: by(&c.author), at_ms: first, kind: SaidKind::Message, text: c.text, changed: Vec::new() }];
-    let mut later: Vec<Said> = c.replies.into_iter().map(|r| Said { by: by(&r.author), at_ms: arch_graph::when::read(&r.at).unwrap_or(first), kind: SaidKind::Message, text: r.text, changed: Vec::new() }).collect();
+    let mut said = vec![Said { by: by(&c.author), at_ms: first, kind: SaidKind::Message, text: c.text, links: Vec::new(), changed: Vec::new() }];
+    let mut later: Vec<Said> = c.replies.into_iter().map(|r| Said { by: by(&r.author), at_ms: arch_graph::when::read(&r.at).unwrap_or(first), kind: SaidKind::Message, text: r.text, links: Vec::new(), changed: Vec::new() }).collect();
     if let Some(a) = c.answer {
         let changed = a.changes.iter().map(|ch| changed(plan, ch)).map(|subject| Named { what: subject.name(&harness_contracts::Known::default()), subject }).collect();
-        later.push(Said { by: by(&a.author), at_ms: arch_graph::when::read(&a.at).unwrap_or(first), kind: SaidKind::Answer, text: a.text, changed });
+        later.push(Said { by: by(&a.author), at_ms: arch_graph::when::read(&a.at).unwrap_or(first), kind: SaidKind::Answer, text: a.text, links: Vec::new(), changed });
     }
     later.sort_by_key(|s| s.at_ms);
     said.extend(later);

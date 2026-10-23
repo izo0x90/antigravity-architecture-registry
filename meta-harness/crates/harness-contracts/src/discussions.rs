@@ -76,6 +76,9 @@ pub struct Said {
     #[serde(default)]
     pub kind: SaidKind,
     pub text: String,
+    /// What the text links (the user's: a tag, a thing).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<crate::Link>,
     /// An answer's: what it changed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed: Vec<Named>,

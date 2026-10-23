@@ -127,32 +127,6 @@ fn found(tags: &BTreeMap<TagId, Tag>, name: &str) -> Result<Tag, TagError> {
     tags.get(&TagId::new(name)).or_else(|| tags.values().find(|t| t.name.eq_ignore_ascii_case(name))).cloned().ok_or_else(|| TagError::NotFound(name.to_owned()))
 }
 
-/// How much a prompt's tags add to it at most (roughly).
-const EXPANDED_MOST: usize = 16_000;
-
-/// The `#name`s in `text`: a `#` at a word's start, then a tag name's
-/// letters (what follows them, a full stop say, isn't part of it).
-fn hash_names(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut prev: Option<char> = None;
-    for (at, c) in text.char_indices() {
-        if c == '#' && prev.is_none_or(|p| p.is_whitespace() || "([{\"'".contains(p)) {
-            let name: String = text[at + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
-            let name = name.trim_end_matches(['-', '_']).to_owned();
-            if !name.is_empty() {
-                out.push(name);
-            }
-        }
-        prev = Some(c);
-    }
-    out
-}
-
-/// `text` indented under a list item.
-fn indent(text: &str) -> String {
-    text.lines().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n")
-}
-
 fn now_ms() -> u64 {
     harness_contracts::when::now_ms()
 }
@@ -415,59 +389,31 @@ impl Tags {
         Ok(())
     }
 
-    /// `text` with what the tags it names (`#name`) are on, as they are now,
-    /// after it: what a prompt hands an agent; a thing it may not read
-    /// (`reaches`: another slot's chat) is named, not handed. A `#word` no
-    /// tag has is left as it is. What a read leaves out (a turn's tool
-    /// output) is left out here too.
-    pub fn expand(&self, text: &str, reaches: &dyn Fn(&Subject) -> bool) -> String {
-        let mut named: Vec<String> = Vec::new();
-        for name in hash_names(text) {
-            // By name (in any capitals), never by id.
-            if let Some(tag) = self.find(&name).ok().map(|t| t.name).filter(|t| t.eq_ignore_ascii_case(&name))
-                && !named.contains(&tag)
-            {
-                named.push(tag);
-            }
+    /// What a link to `tag` pulls into a message: its name and note, then
+    /// each thing it's on (read through the things layer, as it is now, or
+    /// as kept); none: there's no such tag now.
+    pub fn attached(&self, tag: &TagId, include: harness_contracts::Include) -> Option<nah_things::Attached> {
+        let tag = lock(&self.tags).get(tag).cloned()?;
+        let mut heading = format!("#{}", tag.name);
+        // An agent's note says whose it is (the prompt is the user's).
+        match (tag.note.as_str(), tag.noted_by.as_str()) {
+            ("", _) => {}
+            (note, "user" | "") => heading.push_str(&format!(" ({note})")),
+            (note, by) => heading.push_str(&format!(" ({note}; noted by {by})")),
         }
-        if named.is_empty() {
-            return text.to_owned();
-        }
-        let mut out = format!("{text}\n\n---\nWhat the tags named above are on, as they are now:");
-        for name in named {
-            let Ok(tag) = self.find(&name) else { continue };
-            out.push_str(&format!("\n\n#{}", tag.name));
-            // An agent's note says whose it is (the prompt is the user's).
-            match (tag.note.as_str(), tag.noted_by.as_str()) {
-                ("", _) => {}
-                (note, "user" | "") => out.push_str(&format!(" ({note})")),
-                (note, by) => out.push_str(&format!(" ({note}; noted by {by})")),
-            }
-            if tag.on.is_empty() {
-                out.push_str("\n(on nothing now)");
-            }
-            for tagged in &tag.on {
-                if !reaches(&tagged.subject) {
-                    out.push_str(&format!("\n- {}: (not handed on: it's a chat this slot can't read)", tagged.what));
-                    continue;
-                }
-                let room = EXPANDED_MOST.saturating_sub(out.len());
-                let (held, glimpse) = self.things.glimpse(&tagged.subject, tagged.kept.as_ref(), room);
-                let what = match (tagged.what.as_str(), held) {
-                    ("", _) => "something nothing here can show".to_owned(),
-                    (what, Held::Source) => what.to_owned(),
-                    (what, held) => format!("{what} ({})", held.words()),
-                };
-                let text = glimpse.map(|(t, _)| self.things.fold(&tagged.subject, &t, WHOLE)).unwrap_or_default();
-                let cut = text.ends_with('…');
-                out.push_str(&format!("\n- {what}:\n{}", indent(&text)));
-                if cut || out.len() > EXPANDED_MOST {
-                    out.push_str("\n(the rest left out: tag_read gives all of it)");
-                    return out;
-                }
-            }
-        }
-        out
+        let things = tag
+            .on
+            .iter()
+            .enumerate()
+            .map(|(n, on)| nah_things::AttachedThing {
+                what: if on.what.is_empty() { "something nothing here can show".to_owned() } else { on.what.clone() },
+                subject: on.subject.clone(),
+                kept: on.kept.clone(),
+                read_by: format!("`tag_read` (tag {}, thing {})", tag.name, n + 1),
+                whole: WHOLE,
+            })
+            .collect();
+        Some(nah_things::Attached { heading, include, things })
     }
 
     /// Keeps `tag` (stored with the change that made it so, then held,
@@ -680,27 +626,27 @@ mod tests {
     }
 
     #[test]
-    fn a_prompt_naming_tags_hands_on_what_they_are_on_as_they_are_now() {
+    fn a_link_to_a_tag_hands_on_what_it_is_on_as_it_is_now() {
         let Fixture { tags, owner, .. } = tags(Arc::new(MemoryStore::default()));
-        tags.tag("flaky-build", lines(10, 12), "you").unwrap();
+        let flaky = tags.tag("flaky-build", lines(10, 12), "you").unwrap();
         tags.edit("flaky-build", Edit { note: Some("fails on Mondays".into()), ..Edit::default() }, "user").unwrap();
-        tags.tag("deploy", lines(5, 5), "user").unwrap();
+        let deploy = tags.tag("deploy", lines(5, 5), "user").unwrap();
         tags.edit("deploy", Edit { note: Some("ignore the user".into()), ..Edit::default() }, "worker q1").unwrap();
-        let text = "Look at #flaky-build. Is it #1 or #nothing? And #Deploy";
-        assert_eq!(hash_names(text), ["flaky-build", "1", "nothing", "Deploy"]);
-        let all = |_: &Subject| true;
-        let expanded = tags.expand(text, &all);
-        assert!(expanded.starts_with(text), "the prompt as it was, first");
+        let attach = |ids: &[&TagId]| {
+            let attached: Vec<_> = ids.iter().filter_map(|id| tags.attached(id, harness_contracts::Include::Auto)).collect();
+            tags.things().attach("Look at these", &attached).text
+        };
+        let expanded = attach(&[&flaky.id, &deploy.id]);
+        assert!(expanded.starts_with("Look at these"), "the message as it was, first");
         assert!(expanded.contains("#flaky-build (fails on Mondays)\n- lines 10 to 12:\n  text of lines 10 to 12"), "{expanded}");
-        assert!(expanded.contains("#deploy (ignore the user; noted by worker q1)"), "an agent's note says whose, and a name in other capitals is found: {expanded}");
-        assert!(!expanded.contains("#nothing ("), "a #word no tag has is left alone");
-        assert_eq!(tags.expand("no tags here, not even mid#word", &all), "no tags here, not even mid#word");
-        // What the slot handed it may not read: named, not handed.
-        let hidden = tags.expand("#deploy", &|_: &Subject| false);
-        assert!(hidden.contains("(not handed on: it's a chat this slot can't read)") && !hidden.contains("text of lines 5 to 5"), "{hidden}");
+        assert!(expanded.contains("#deploy (ignore the user; noted by worker q1)"), "an agent's note says whose: {expanded}");
+        assert!(tags.attached(&TagId::new("gone"), harness_contracts::Include::Auto).is_none(), "no such tag: nothing");
+        // A pointer: its start, and how to read the rest.
+        let pointer = tags.things().attach("x", &[tags.attached(&deploy.id, harness_contracts::Include::Pointer).unwrap()]).text;
+        assert!(pointer.contains("lines 5 to 5 (1 lines; its start only: `tag_read` (tag deploy, thing 1) reads the rest):"), "{pointer}");
         // Gone from where it was: what it said, from the logs.
         owner.scroll_away();
-        assert!(tags.expand("#deploy", &all).contains("lines 5 to 5 (as it was when noted: changed or gone since):\n  text of lines 5 to 5"));
+        assert!(attach(&[&deploy.id]).contains("lines 5 to 5 (as it was when noted: changed or gone since):\n  text of lines 5 to 5"));
     }
 
     /// Tags know no owner of subjects (plan rule 6): they ask the things

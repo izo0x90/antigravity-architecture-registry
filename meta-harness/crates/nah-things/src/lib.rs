@@ -12,10 +12,12 @@
 //! the logs no note points into are removed, and moves reach every note.
 //! This crate knows no owner and no kind of note.
 
+mod attach;
 mod logs;
 #[cfg(feature = "testing")]
 pub mod testing;
 
+pub use attach::{ATTACHED_MOST, Attached, AttachedThing, SMALL_BYTES, SMALL_LINES};
 pub use logs::{FoundLine, Logs, matches};
 
 use std::cell::RefCell;

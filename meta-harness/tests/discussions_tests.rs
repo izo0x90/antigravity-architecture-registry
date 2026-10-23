@@ -169,5 +169,5 @@ async fn a_sub_slot_asks_the_lead_only_the_lead_answers_and_the_asker_is_told() 
     let (error, said) = other.tool("discussion_reply", json!({ "id": asked_helper, "text": "hi" })).await;
     assert!(error && said.contains("slots.message"), "{said}");
     let answer = told().into_iter().find(|t| t.contains("lead answered it")).unwrap();
-    assert!(answer.contains("(not handed on: it's a chat this slot can't read)") && !answer.contains("Is p done?\n"), "the tag names the lead's chat, not what it says: {answer}");
+    assert!(!answer.contains("What's linked above") && !answer.contains("Is p done?\n"), "an agent's text is plain: its #notes is text, nothing handed on: {answer}");
 }

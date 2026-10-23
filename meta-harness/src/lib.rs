@@ -5,6 +5,7 @@ pub mod discussing;
 pub mod cockpit;
 pub mod graph;
 pub mod home;
+pub mod linking;
 pub mod mcp;
 pub mod modules;
 pub mod packs;

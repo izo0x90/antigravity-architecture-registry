@@ -1404,6 +1404,25 @@ Rename a tag, give it another colour or a note, or delete it.
   ]
 }
 
+## thing_read
+Read a thing by its name, as it is now: what a link the user sent as a pointer names (its start was in the message), or any thing.
+{
+  "type": "object",
+  "properties": {
+    "thing": {
+      "type": "string",
+      "description": "Its name: a terminal's `terminal t1 command 3`, `terminal t1 lines 120-124` (`terminal_read` gives the numbers); a chat's `chat lead` (all of it), `chat lead turn 3`, `chat lead turn 3 message 2` (the slot's session open now; `chat lead@<id's start> …` another); code's `file src/a.rs`, `src/a.rs lines 10-12`, `component <id>`; a plan's `plan <id>`, `plan <id> component <id>`, `plan <id> component <id> section <name>` (overview, signature, logic, invariants, relations, code, changes, placeholders, findings), `plan <id> relation <source> <kind> <target>`, `plan <id> item <id>`; a discussion's `discussion d3`"
+    },
+    "lines": {
+      "type": "string",
+      "description": "Which of its lines, `a-b` (from 1)"
+    }
+  },
+  "required": [
+    "thing"
+  ]
+}
+
 ## discussions
 Discussions: a question or a change asked for, on a thing, and what's said in it. What's waiting on you comes first (open, asked of you), then the rest not settled; settled ones with `all`.
 {

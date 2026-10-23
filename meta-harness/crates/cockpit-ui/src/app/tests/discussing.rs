@@ -55,7 +55,7 @@ fn a_discussion_is_started_on_what_youre_on_opened_and_replied_to_settled_and_re
     // Answered: settled (a), then reopened with why (x).
     let mut answered = d.clone();
     answered.status = harness_contracts::DiscussionStatus::Answered;
-    answered.said.push(harness_contracts::Said { by: "lead".into(), at_ms: 9, kind: harness_contracts::SaidKind::Answer, text: "Split.".into(), changed: Vec::new() });
+    answered.said.push(harness_contracts::Said { by: "lead".into(), at_ms: 9, kind: harness_contracts::SaidKind::Answer, text: "Split.".into(), links: Vec::new(), changed: Vec::new() });
     told_discussion(&app, answered);
     frame(&ctx, &mut app, vec![]);
     keys(&ctx, &mut app, "a");
@@ -295,7 +295,7 @@ fn at_a_phones_width_a_tap_on_the_mark_opens_it_and_nothing_is_drawn_over_anythi
     app.desk.terminal_mut().arrive(vec![super::terminal::with_commands(1000, vec![super::terminal::command(1, 1003, Some(1008), "make")])]);
     let on = harness_contracts::Subject::TerminalCommand { terminal: harness_contracts::TerminalId::new("t1"), shell: 1, command: 1, typed: String::new() };
     let mut d = crate::discussions::tests::discussion(1, on, harness_contracts::DiscussionStatus::Answered);
-    d.said.push(harness_contracts::Said { by: "lead".into(), at_ms: 9, kind: harness_contracts::SaidKind::Answer, text: "It fails on the second step: the cache is stale, so the build reads the old lock file.".into(), changed: Vec::new() });
+    d.said.push(harness_contracts::Said { by: "lead".into(), at_ms: 9, kind: harness_contracts::SaidKind::Answer, text: "It fails on the second step: the cache is stale, so the build reads the old lock file.".into(), links: Vec::new(), changed: Vec::new() });
     told_discussion(&app, d);
     super::terminal::not_typing(&ctx, &mut app);
     let phone = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(390.0, 844.0));

@@ -84,10 +84,10 @@ async fn the_lead_sends_to_a_sub_slot_and_gets_its_answer() {
     let slots = &state.harness.slots;
     let sub = slots.create("sub", Some("helper".into()), fake(), Starter::Lead).await.unwrap();
     // Not running yet: sending opens its session first.
-    let sent = slots.send(&sub, "count the files".into(), Delivery::Queue, Origin::Lead, Some(Duration::from_secs(5))).await.unwrap();
+    let sent = slots.send(&sub, "count the files".into(), Delivery::Queue, Origin::Lead, Some(Duration::from_secs(5))).await.unwrap().0;
     let Sent::Replied { text, .. } = sent else { panic!("{sent:?}") };
     assert!(text.starts_with("echo: From the lead (lead):\n\ncount the files"), "marked as the lead's: {text}");
-    let sent = slots.send(&sub, "[hang] take your time".into(), Delivery::Queue, Origin::User, Some(Duration::from_millis(100))).await.unwrap();
+    let sent = slots.send(&sub, "[hang] take your time".into(), Delivery::Queue, Origin::User, Some(Duration::from_millis(100))).await.unwrap().0;
     assert!(matches!(sent, Sent::StillWorking { .. }), "{sent:?}");
     let mut report = slots.read(&sub, 10).unwrap();
     for _ in 0..50 {
@@ -122,7 +122,7 @@ async fn a_report_reaches_a_running_lead_or_waits_for_one() {
     assert!(heard, "{:?}", slots.read(&lead, 10).unwrap().messages);
     assert_eq!(slots.report(&sub, "and a fourth".into()).await.unwrap(), Reported::Delivered);
     // Any slot is told the same way: held for it alone until it runs.
-    assert_eq!(slots.tell(&sub, "the user (discussion d1)", "Why?".into(), true).await.unwrap(), Reported::Held, "no session of its own: held");
+    assert_eq!(slots.tell(&sub, "the user (discussion d1)", "Why?".into()).await.unwrap(), Reported::Held, "no session of its own: held");
     let opened = slots.open_session(&sub, Open::New { resume: None }).await.unwrap();
     assert_eq!(opened.delivered_reports, 1, "delivered as it opened");
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -190,7 +190,7 @@ async fn after_a_restart_slots_come_back_and_resume_on_first_use() {
     assert_eq!(slot.current, Some(opened.session.clone()));
     assert!(slot.current_thread().is_none(), "nothing runs until it's used");
     assert!(after.get(&worker).is_none(), "a queue's worker from the last run is gone");
-    let Sent::Replied { .. } = after.send(&sub, "hello again".into(), Delivery::Queue, Origin::User, Some(Duration::from_secs(5))).await.unwrap() else { panic!() };
+    let Sent::Replied { .. } = after.send(&sub, "hello again".into(), Delivery::Queue, Origin::User, Some(Duration::from_secs(5))).await.unwrap().0 else { panic!() };
     let resumed = after.get(&sub).unwrap();
     assert_eq!(resumed.current, Some(opened.session), "the same session, resumed");
     assert!(resumed.current_thread().is_some());
@@ -385,9 +385,12 @@ async fn a_turns_tool_output_is_folded_the_same_in_every_read_unless_read_in_ful
     assert!(read.contains(folded) && !read.contains("tool line one"), "one thing: {read}");
     let (_, read) = lead.tool("tag_read", json!({ "tag": "turns", "full": true })).await;
     assert!(read.contains("tool line one") && read.contains("tool line two") && !read.contains(folded), "in full: {read}");
-    // A prompt naming the tag: what it hands the agent is folded the same
+    // A prompt linking the tag: what it hands the agent is folded the same
     // (the fake agent says back what it was given).
-    let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(r#"{"text":"and #turns"}"#)).await;
+    let (_, tags) = common::http(addr, "GET", "/api/tags", None).await;
+    let id = serde_json::from_str::<serde_json::Value>(&tags).unwrap().as_array().unwrap().iter().find(|t| t["name"] == "turns").unwrap()["id"].as_str().unwrap().to_owned();
+    let prompt = json!({ "text": "and #turns", "links": [{ "start": 4, "end": 10, "to": { "kind": "tag", "tag": id } }] }).to_string();
+    let (status, body) = common::http(addr, "POST", &format!("/api/slots/{slot}/prompt"), Some(&prompt)).await;
     assert_eq!(status, 200, "{body}");
     let mut given = String::new();
     for _ in 0..200 {

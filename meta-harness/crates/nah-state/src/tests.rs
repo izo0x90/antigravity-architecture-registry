@@ -308,8 +308,8 @@ mod terminals {
         // One whole, as written: what's said, what an answer changed, its agents' names, where it came from.
         let mut whole = discussion(5, DiscussionStatus::Answered);
         whole.said = vec![
-            nah_discussions::StoredSaid { by: "user".into(), at_ms: 1, kind: harness_contracts::SaidKind::Message, text: kept("said-5-0.log"), changed: Vec::new() },
-            nah_discussions::StoredSaid { by: "sub-1a2b".into(), at_ms: 2, kind: harness_contracts::SaidKind::Answer, text: kept("said-5-1.log"), changed: vec![on.clone()] },
+            nah_discussions::StoredSaid { by: "user".into(), at_ms: 1, kind: harness_contracts::SaidKind::Message, text: kept("said-5-0.log"), links: Vec::new(), changed: Vec::new() },
+            nah_discussions::StoredSaid { by: "sub-1a2b".into(), at_ms: 2, kind: harness_contracts::SaidKind::Answer, text: kept("said-5-1.log"), links: Vec::new(), changed: vec![on.clone()] },
         ];
         (whole.asked, whole.from) = ("sub-1a2b".into(), Some("plan p comment c1".into()));
         whole.names.insert("sub-1a2b".into(), "reviewer".into());

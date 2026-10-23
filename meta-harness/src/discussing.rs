@@ -76,7 +76,9 @@ async fn tell(slots: &SlotManager, d: &Discussion, from: usize) {
             }
             let Some(news) = news(d, at, asked) else { continue };
             let from = format!("{} (discussion {})", d.to_agent(&said.by), d.id);
-            if let Err(e) = slots.tell(&slot.id, &from, news, said.by == USER).await {
+            // What the user's message links goes with it (an agent's is plain text).
+            let links = if said.by == USER { said.links.clone() } else { Vec::new() };
+            if let Err(e) = slots.tell(&slot.id, &from, harness_contracts::Message { text: news, links }).await {
                 tracing::warn!("{} couldn't be told of discussion {}: {e}", slot.name, d.id);
             }
         }
@@ -124,7 +126,7 @@ mod tests {
     #[test]
     fn the_slot_asked_reads_what_was_said_and_how_to_answer() {
         use harness_contracts::{DiscussionStatus, Named, Said, Subject};
-        let said = |by: &str, kind, text: &str| Said { by: by.into(), at_ms: 0, kind, text: text.into(), changed: Vec::new() };
+        let said = |by: &str, kind, text: &str| Said { by: by.into(), at_ms: 0, kind, text: text.into(), links: Vec::new(), changed: Vec::new() };
         let d = Discussion {
             id: DiscussionId::new("d3"),
             on: Named { subject: Subject::Plan { plan: arch_graph::PlanId::new("p").unwrap() }, what: "plan p".into() },

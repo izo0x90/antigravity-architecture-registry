@@ -67,7 +67,7 @@ pub(crate) mod tests {
             by: "user".into(),
             asked: "lead".into(),
             status,
-            said: vec![Said { by: "user".into(), at_ms: n, kind: SaidKind::Message, text: format!("point {n}"), changed: Vec::new() }],
+            said: vec![Said { by: "user".into(), at_ms: n, kind: SaidKind::Message, text: format!("point {n}"), links: Vec::new(), changed: Vec::new() }],
             names: Default::default(),
         }
     }

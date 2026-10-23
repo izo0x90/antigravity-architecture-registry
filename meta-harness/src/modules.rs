@@ -309,22 +309,9 @@ impl AppState {
         let gate = Gate { cockpit: p.cockpit, access: p.access, tickets: Arc::default() };
         let home = crate::home::Home::start(p.state.clone(), p.hub.clone(), p.notify.clone(), true)?;
         let stopping = Shutdown::default();
-        // Every prompt a slot is sent hands the agent what the tags it
-        // names (`#name`) are on: what an agent passes on, only what the
-        // slot told may read.
-        let (tags, slots, access, discussions) = (p.tags.clone(), Arc::downgrade(&p.slots), gate.access.clone(), p.discussions.clone());
-        p.slots.expand_prompts_with(Arc::new(move |text: &str, readable_by: Option<&harness_contracts::SlotId>| {
-            let slot = readable_by.and_then(|id| slots.upgrade().and_then(|s| s.get(id).map(|slot| (s, slot))));
-            match (readable_by, slot) {
-                (None, _) => tags.expand(text, &|_| true),
-                (Some(_), Some((slots, slot))) => {
-                    let reach = crate::mcp::sets::reach::Reach::of_slot(&slots, &access, &discussions, &slot);
-                    tags.expand(text, &|s| reach.reaches(s))
-                }
-                // A slot gone meanwhile: nothing it would be refused (named only).
-                (Some(_), None) => tags.expand(text, &|_| false),
-            }
-        }));
+        // What a message links (a tag, a thing) is handed on with it.
+        let (tags, things) = (p.tags.clone(), p.things.clone());
+        p.slots.expand_prompts_with(Arc::new(move |text: &str, links: &[harness_contracts::Link]| things.attach(text, &crate::linking::attached(&tags, &things, links))));
         Ok(Self {
             server: ServerState { gate: gate.clone(), shutdown: stopping.clone() },
             home: HomeState { gate: gate.clone(), stopping: stopping.clone(), home },

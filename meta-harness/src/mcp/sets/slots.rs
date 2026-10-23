@@ -197,7 +197,7 @@ impl ToolSet for Slots {
                 let slot = self.sub(&a.slot)?;
                 let delivery = if a.add_to_running { Delivery::AddToRunning } else { Delivery::Queue };
                 let wait = a.wait_secs.map(|s| Duration::from_secs(s.min(MAX_WAIT_SECS)));
-                Ok(match self.slots.send(&slot.id, a.text, delivery, Origin::Lead, wait).await.map_err(failed)? {
+                Ok(match self.slots.send(&slot.id, harness_contracts::Message::text(a.text), delivery, Origin::Lead, wait).await.map_err(failed)?.0 {
                     Sent::Started { .. } => format!("Sent to {}.\n\nNext: slot_read it later for its answer.", slot.name),
                     Sent::Replied { text, .. } => format!("{} answered:\n\n{text}", slot.name),
                     Sent::StillWorking { .. } => format!("{} is still working on it.\n\nNext: slot_read it later for its answer.", slot.name),

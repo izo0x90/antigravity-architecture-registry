@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use harness_contracts::{ClientEvent, Discussion, DiscussionId, DiscussionKind, DiscussionStatus, Kept, Named, Said, SaidKind, Subject};
+use harness_contracts::{ClientEvent, Discussion, DiscussionId, DiscussionKind, DiscussionStatus, Kept, Message, Named, Said, SaidKind, Subject};
 use harness_core::EventHub;
 use nah_things::{Logs, Notes, Things};
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,8 @@ pub struct StoredSaid {
     #[serde(default)]
     pub kind: SaidKind,
     pub text: Kept,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<harness_contracts::Link>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed: Vec<Named>,
 }
@@ -176,9 +178,9 @@ fn now_words() -> String {
     harness_contracts::when::now()
 }
 
-fn text(raw: &str, what: &str) -> Result<String, DiscussionError> {
-    let t = raw.trim();
-    if t.is_empty() { Err(DiscussionError::Invalid(format!("{what} needs some text"))) } else { Ok(t.to_owned()) }
+fn text(raw: impl Into<Message>, what: &str) -> Result<Message, DiscussionError> {
+    let t = raw.into().trimmed();
+    if t.text.is_empty() { Err(DiscussionError::Invalid(format!("{what} needs some text"))) } else { Ok(t) }
 }
 
 /// Whether question `d` can be made a change request while it's `at`.
@@ -197,8 +199,8 @@ fn asks_change(id: &DiscussionId, d: &Discussion, at: DiscussionStatus) -> Resul
 }
 
 /// A message to add (when: as it's added).
-fn said(by: &str, kind: SaidKind, text: String, changed: Vec<Named>) -> Said {
-    Said { by: by.to_owned(), at_ms: 0, kind, text, changed }
+fn said(by: &str, kind: SaidKind, message: Message, changed: Vec<Named>) -> Said {
+    Said { by: by.to_owned(), at_ms: 0, kind, text: message.text, links: message.links, changed }
 }
 
 /// A discussion's number (`d12`: 12), to order those started at once.
@@ -298,6 +300,7 @@ impl Discussions {
                     Ok(text) => text,
                     Err(e) => format!("(its text couldn't be read: {e})"),
                 },
+                links: s.links.clone(),
                 changed: s.changed.clone(),
             })
             .collect();
@@ -364,7 +367,7 @@ impl Discussions {
     /// Starts a discussion on `subject` (by `by`: the user, or an agent's
     /// slot): a question or a change request, asking `asked` (none: the
     /// lead). A thing its owner doesn't keep for good is kept in the logs.
-    pub fn start(&self, subject: &Subject, kind: DiscussionKind, body: &str, by: &str, asked: Option<&str>) -> Result<Discussion, DiscussionError> {
+    pub fn start(&self, subject: &Subject, kind: DiscussionKind, body: impl Into<Message>, by: &str, asked: Option<&str>) -> Result<Discussion, DiscussionError> {
         let body = text(body, "a discussion")?;
         let asked = asked.map(str::trim).filter(|a| !a.is_empty()).unwrap_or(LEAD).to_owned();
         // A change request's answer names what changed: an agent slot's.
@@ -382,7 +385,7 @@ impl Discussions {
             }
         };
         let on = Named { subject: noted.subject.clone(), what: noted.what.clone() };
-        let written = match self.write(&id, &on.what, by, SaidKind::Message, &body) {
+        let written = match self.write(&id, &on.what, by, SaidKind::Message, &body.text) {
             Ok(written) => written,
             Err(e) => {
                 self.things.let_go(&noted.kept.iter().collect::<Vec<_>>());
@@ -390,8 +393,8 @@ impl Discussions {
             }
         };
         let at_ms = now_ms();
-        let discussion = Discussion { id: id.clone(), on: on.clone(), kept: noted.kept.clone(), kind, by: by.to_owned(), asked: asked.clone(), status: DiscussionStatus::Open, said: vec![Said { by: by.to_owned(), at_ms, kind: SaidKind::Message, text: body, changed: Vec::new() }], names: self.names(&[by, &asked], &BTreeMap::new()) };
-        let stored = Stored { id: id.clone(), on, kept: noted.kept.clone(), kind, by: by.to_owned(), asked, status: DiscussionStatus::Open, said: vec![StoredSaid { by: by.to_owned(), at_ms, kind: SaidKind::Message, text: written.clone(), changed: Vec::new() }], names: discussion.names.clone(), from: None };
+        let discussion = Discussion { id: id.clone(), on: on.clone(), kept: noted.kept.clone(), kind, by: by.to_owned(), asked: asked.clone(), status: DiscussionStatus::Open, said: vec![Said { by: by.to_owned(), at_ms, kind: SaidKind::Message, text: body.text, links: body.links.clone(), changed: Vec::new() }], names: self.names(&[by, &asked], &BTreeMap::new()) };
+        let stored = Stored { id: id.clone(), on, kept: noted.kept.clone(), kind, by: by.to_owned(), asked, status: DiscussionStatus::Open, said: vec![StoredSaid { by: by.to_owned(), at_ms, kind: SaidKind::Message, text: written.clone(), links: body.links, changed: Vec::new() }], names: discussion.names.clone(), from: None };
         let mut held = lock(&self.held);
         let done = self.keep(&mut held, discussion, stored, &Change { by: by.to_owned(), action: "started", detail: format!("{} on {}", kind.words(), noted.what) });
         drop(held);
@@ -411,7 +414,7 @@ impl Discussions {
     /// As `add`, made a `kind` too (in the same step: what's told of it
     /// says what it is now).
     fn add_as(&self, id: &DiscussionId, said: Said, status: Option<DiscussionStatus>, kind_now: Option<DiscussionKind>, action: &'static str, check: &dyn Fn(&Discussion) -> Result<(), DiscussionError>) -> Result<Discussion, DiscussionError> {
-        let Said { by, kind, text: body, changed, .. } = said;
+        let Said { by, kind, text: body, links, changed, .. } = said;
         let what = {
             let held = lock(&self.held);
             let h = held.get(id).ok_or_else(|| DiscussionError::NotFound(id.to_string()))?;
@@ -433,8 +436,8 @@ impl Discussions {
         }
         let at_ms = now_ms();
         let (mut discussion, mut stored) = (h.discussion.clone(), h.stored.clone());
-        stored.said.push(StoredSaid { by: by.clone(), at_ms, kind, text: written.clone(), changed: changed.clone() });
-        discussion.said.push(Said { by: by.clone(), at_ms, kind, text: body, changed });
+        stored.said.push(StoredSaid { by: by.clone(), at_ms, kind, text: written.clone(), links: links.clone(), changed: changed.clone() });
+        discussion.said.push(Said { by: by.clone(), at_ms, kind, text: body, links, changed });
         if let Some(status) = status {
             discussion.status = status;
             stored.status = status;
@@ -454,7 +457,7 @@ impl Discussions {
 
     /// A message in discussion `id` (the user's, or an agent's): it stays
     /// where it stands.
-    pub fn reply(&self, id: &DiscussionId, body: &str, by: &str) -> Result<Discussion, DiscussionError> {
+    pub fn reply(&self, id: &DiscussionId, body: impl Into<Message>, by: &str) -> Result<Discussion, DiscussionError> {
         let body = text(body, "a reply")?;
         self.add(id, said(by, SaidKind::Message, body, Vec::new()), None, "said", &|d| {
             if d.status == DiscussionStatus::Settled { Err(DiscussionError::Invalid(format!("{id} is settled: the user reopens it first"))) } else { Ok(()) }
@@ -498,9 +501,9 @@ impl Discussions {
     /// The user settles discussion `id` once it's answered (a change
     /// request's answer named what changed), or one asked of them,
     /// saying something if they like.
-    pub fn settle(&self, id: &DiscussionId, body: &str, by: &str) -> Result<Discussion, DiscussionError> {
+    pub fn settle(&self, id: &DiscussionId, body: impl Into<Message>, by: &str) -> Result<Discussion, DiscussionError> {
         user_only(by, "settles a discussion: answer it instead")?;
-        self.add(id, said(by, SaidKind::Settled, body.trim().to_owned(), Vec::new()), Some(DiscussionStatus::Settled), "settled", &|d| match (d.kind, d.status) {
+        self.add(id, said(by, SaidKind::Settled, body.into().trimmed(), Vec::new()), Some(DiscussionStatus::Settled), "settled", &|d| match (d.kind, d.status) {
             (_, DiscussionStatus::Settled) => Err(DiscussionError::Invalid(format!("{id} is settled already"))),
             // Asked of the user: they settle it once they've said their answer.
             (_, DiscussionStatus::Open) if d.asked == USER => Ok(()),
@@ -511,7 +514,7 @@ impl Discussions {
     }
 
     /// The user reopens discussion `id`: why.
-    pub fn reopen(&self, id: &DiscussionId, why: &str, by: &str) -> Result<Discussion, DiscussionError> {
+    pub fn reopen(&self, id: &DiscussionId, why: impl Into<Message>, by: &str) -> Result<Discussion, DiscussionError> {
         user_only(by, "reopens a discussion")?;
         let why = text(why, "reopening it (why)")?;
         self.add(id, said(by, SaidKind::Reopened, why, Vec::new()), Some(DiscussionStatus::Open), "reopened", &|d| {
@@ -522,16 +525,17 @@ impl Discussions {
     /// The user makes discussion `id` a change request, in one step: one
     /// answered is open again with why (its answer named no change); one
     /// open is told so (why, or what's asked now).
-    pub fn ask_for_change(&self, id: &DiscussionId, why: &str, by: &str) -> Result<Discussion, DiscussionError> {
+    pub fn ask_for_change(&self, id: &DiscussionId, why: impl Into<Message>, by: &str) -> Result<Discussion, DiscussionError> {
         user_only(by, "makes a discussion a change request")?;
         let change = Some(DiscussionKind::ChangeRequest);
+        let why = why.into();
         if self.get(id)?.status == DiscussionStatus::Answered {
             let why = text(why, "making an answered discussion a change request (why)")?;
             return self.add_as(id, said(by, SaidKind::Reopened, why, Vec::new()), Some(DiscussionStatus::Open), change, "made a change request", &|d| asks_change(id, d, DiscussionStatus::Answered));
         }
-        let why = match why.trim() {
-            "" => "It's a change request now: answer it naming what you changed.".to_owned(),
-            why => why.to_owned(),
+        let why = match why.trimmed() {
+            why if why.text.is_empty() => Message::text("It's a change request now: answer it naming what you changed."),
+            why => why,
         };
         self.add_as(id, said(by, SaidKind::Message, why, Vec::new()), None, change, "made a change request", &|d| asks_change(id, d, DiscussionStatus::Open))
     }
@@ -569,7 +573,7 @@ impl Discussions {
             for said in &b.said {
                 let when = harness_contracts::when::written(said.at_ms);
                 match self.write_at(&id, &on.what, &said.by, said.kind, &said.text, &when) {
-                    Ok(text) => stored.said.push(StoredSaid { by: said.by.clone(), at_ms: said.at_ms, kind: said.kind, text, changed: said.changed.clone() }),
+                    Ok(text) => stored.said.push(StoredSaid { by: said.by.clone(), at_ms: said.at_ms, kind: said.kind, text, links: Vec::new(), changed: said.changed.clone() }),
                     Err(e) => {
                         undo(&made);
                         for s in &stored.said {
@@ -926,7 +930,7 @@ mod tests {
     fn discussions_brought_in_come_as_they_stood_and_never_twice() {
         let store = Arc::new(MemoryStore::default());
         let Fixture { discussions: d, dir: _dir, .. } = engine(store.clone());
-        let said = |by: &str, at_ms, kind, text: &str| Said { by: by.into(), at_ms, kind, text: text.into(), changed: Vec::new() };
+        let said = |by: &str, at_ms, kind, text: &str| Said { by: by.into(), at_ms, kind, text: text.into(), links: Vec::new(), changed: Vec::new() };
         let brought = |n: u32| Brought {
             from: format!("plan p comment c{n}"),
             on: component("a"),

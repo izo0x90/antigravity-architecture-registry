@@ -472,13 +472,30 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     assert!(error && said.contains("isn't on that"), "{said}");
     let (error, said) = lead.tool("tag_edit", json!({ "tag": "seen-it", "name": "checked", "note": "the echo works" })).await;
     assert!(!error && said.contains("checked") && said.contains("the echo works"), "{said}");
-    // A prompt naming the tag hands the agent what it's on, as it is now.
-    let (status, body) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "look at #checked." }).to_string())).await;
+    // A prompt linking the tag hands the agent what it's on, as it is now;
+    // the same words not linked are text.
+    let (_, tags) = http(addr, "GET", "/api/tags", None).await;
+    let checked = serde_json::from_str::<serde_json::Value>(&tags).unwrap().as_array().unwrap().iter().find(|t| t["name"] == "checked").unwrap()["id"].as_str().unwrap().to_owned();
+    let link = json!({ "start": 8, "end": 16, "to": { "kind": "tag", "tag": checked } });
+    let (status, body) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "look at #checked.", "links": [link] }).to_string())).await;
     assert_eq!(status, 200, "{body}");
-    let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("What the tags named above"))).await;
+    let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("What's linked above"))).await;
     let echoed = format!("{echoed:?}");
     assert!(echoed.contains("#checked (the echo works; noted by lead)") && echoed.contains("tagged-line"), "an agent's note says whose: {echoed}");
-    // So does a sub-slot's report to the lead: every prompt goes the one way.
+    let (status, _) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "plain #checked, not linked" }).to_string())).await;
+    assert_eq!(status, 200);
+    let plain = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("plain #checked"))).await;
+    assert!(!format!("{plain:?}").contains("What's linked above"), "{plain:?}");
+    // One thing linked as a pointer: its start, and the tool that reads the rest.
+    let subject = json!({ "kind": "terminal_command", "terminal": terminal.id, "shell": reader.last.as_ref().unwrap().shell, "command": number });
+    let link = json!({ "start": 0, "end": 4, "to": { "kind": "thing", "subject": subject }, "include": "pointer" });
+    let (status, body) = http(addr, "POST", "/api/slots/lead/prompt", Some(&json!({ "text": "this one", "links": [link] }).to_string())).await;
+    assert_eq!(status, 200, "{body}");
+    let pointed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("this one"))).await;
+    assert!(format!("{pointed:?}").contains("its start only: `thing_read`"), "{pointed:?}");
+    let (error, read) = lead.tool("thing_read", json!({ "thing": command })).await;
+    assert!(!error && read.contains("tagged-line"), "{read}");
+    // An agent's report to the lead is plain text: nothing in it is linked.
     let (err, text) = lead.tool("slot_start", json!({ "harness": "fake", "name": "helper" })).await;
     assert!(!err, "{text}");
     let sub = state.harness.slots.list().into_iter().find(|s| s.name == "helper").unwrap();
@@ -487,7 +504,7 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     let (err, text) = helper.tool("tell_lead", json!({ "text": "fixed #checked" })).await;
     assert!(!err, "{text}");
     let echoed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("fixed #checked"))).await;
-    assert!(format!("{echoed:?}").contains("What the tags named above"), "{echoed:?}");
+    assert!(!format!("{echoed:?}").contains("What's linked above"), "{echoed:?}");
     // An agent with no key reads nothing, and changes nothing.
     let mut external = Mcp::connect(addr).await;
     let (error, said) = external.tool("tag_read", json!({ "tag": "checked" })).await;

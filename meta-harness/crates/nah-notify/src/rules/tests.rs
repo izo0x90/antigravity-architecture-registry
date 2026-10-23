@@ -205,7 +205,7 @@ fn a_terminals_bell_end_and_long_commands_are_updates_about_it() {
 #[test]
 fn a_discussion_waits_on_the_user_while_its_their_move_and_is_done_once_it_isnt() {
     use harness_contracts::{Discussion, DiscussionId, DiscussionKind, DiscussionStatus, Named, Said, SaidKind, Subject};
-    let said = |by: &str, kind, text: &str| Said { by: by.into(), at_ms: 0, kind, text: text.into(), changed: Vec::new() };
+    let said = |by: &str, kind, text: &str| Said { by: by.into(), at_ms: 0, kind, text: text.into(), links: Vec::new(), changed: Vec::new() };
     let d = |status, by: &str, asked: &str, said: Vec<Said>| ClientEvent::DiscussionUpdated {
         discussion: Discussion {
             id: DiscussionId::new("d3"),

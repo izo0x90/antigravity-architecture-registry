@@ -83,7 +83,7 @@ const READ_MOST: usize = 2000;
 const FOUND_MOST: usize = 50;
 
 /// `a-b` (1-based, both in), or `a`.
-fn line_range(words: &str) -> Result<(usize, usize), ServiceError> {
+pub(super) fn line_range(words: &str) -> Result<(usize, usize), ServiceError> {
     let number = |n: &str| n.trim().parse::<usize>().map_err(|_| ServiceError::InvalidOp(format!("{n:?} isn't a line number")));
     let (from, to) = match words.split_once('-') {
         Some((a, b)) => (number(a)?, number(b)?),

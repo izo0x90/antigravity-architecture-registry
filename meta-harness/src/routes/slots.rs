@@ -166,6 +166,9 @@ async fn switch(_: Needs<can::SessionsControl>, State(state): State<HarnessState
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Prompt {
     text: String,
+    /// What it links (`#tag`, `@thing`): handed on with it.
+    #[serde(default)]
+    links: Vec<harness_contracts::Link>,
     /// Into the turn it's running (when its harness takes that), not after it.
     #[serde(default)]
     add_to_running: bool,
@@ -175,15 +178,20 @@ struct Prompt {
 #[serde(rename_all = "camelCase")]
 struct Prompted {
     turn_id: TurnId,
+/// one opened) first if it isn't running. What it links hands the agent
+/// what that is.
+    notes: Vec<String>,
 }
 
 /// The user's prompt to a slot: its current session is resumed (or a new
-/// one opened) first if it isn't running. The tags it names (`#name`) hand
-/// the agent what they're on.
+/// one) first if it isn't running. What it links hands the agent what
+/// that is.
 async fn prompt(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Path(slot): Path<String>, Json(body): Json<Prompt>) -> ApiResult<Json<Prompted>> {
     let delivery = if body.add_to_running { Delivery::AddToRunning } else { Delivery::Queue };
-    let turn_id = match state.slots.send(&SlotId::new(slot), body.text, delivery, Origin::User, None).await? {
+    let message = harness_contracts::Message { text: body.text, links: body.links };
+    let (sent, notes) = state.slots.send(&SlotId::new(slot), message, delivery, Origin::User, None).await?;
+    let turn_id = match sent {
         Sent::Started { turn } | Sent::Replied { turn, .. } | Sent::StillWorking { turn } => turn,
     };
-    Ok(Json(Prompted { turn_id }))
+    Ok(Json(Prompted { turn_id, notes }))
 }

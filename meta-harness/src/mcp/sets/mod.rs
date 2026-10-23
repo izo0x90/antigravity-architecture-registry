@@ -22,6 +22,7 @@ mod review;
 mod schema;
 mod slots;
 mod tags;
+mod things;
 mod terminals;
 
 /// A tool as agents see it, and the capability a caller needs to use it.
@@ -54,6 +55,7 @@ pub(crate) fn tool_defs(trees: &TreeConfig) -> Vec<ToolDef> {
         slots::Slots::schemas(trees),
         terminals::Terminals::schemas(trees),
         tags::Tags::schemas(trees),
+        things::Things::schemas(trees),
         discussions::Discussions::schemas(trees),
     ]
     .into_iter()
@@ -89,6 +91,7 @@ pub(crate) fn all(s: &Services, access: &Arc<nah_access::Access>) -> Vec<Box<dyn
         Box::new(slots::Slots { slots: s.slots.clone(), notify: s.notify.clone() }),
         Box::new(terminals::Terminals { terminals: s.terminals.clone() }),
         Box::new(tags::Tags { tags: s.tags.clone(), slots: s.slots.clone(), access: access.clone(), discussions: s.discussions.clone() }),
+        Box::new(things::Things { things: s.things.clone(), slots: s.slots.clone(), access: access.clone(), discussions: s.discussions.clone() }),
         Box::new(discussions::Discussions { discussions: s.discussions.clone(), things: s.things.clone(), slots: s.slots.clone(), access: access.clone() }),
     ]
 }

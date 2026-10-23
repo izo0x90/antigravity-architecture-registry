@@ -1642,7 +1642,7 @@ pub(crate) mod tests {
         s.detail = Some(detail(&id, &other));
         s.loaded = Some((id.clone(), s.source.clone()));
         let mut answered = discussion(1, on(&id, Some("logic")), DiscussionStatus::Answered);
-        answered.said.push(harness_contracts::Said { by: "user".into(), at_ms: 2, kind: harness_contracts::SaidKind::Message, text: "and?".into(), changed: Vec::new() });
+        answered.said.push(harness_contracts::Said { by: "user".into(), at_ms: 2, kind: harness_contracts::SaidKind::Message, text: "and?".into(), links: Vec::new(), changed: Vec::new() });
         s.discussions = vec![answered];
         let keys: Vec<String> = s.entries().iter().map(Entry::key).collect();
         let at = |k: &str| keys.iter().position(|x| x == k).unwrap_or_else(|| panic!("{k} in {keys:?}"));

@@ -14,7 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use harness_contracts::{Discussion, DiscussionId, DiscussionKind, Subject};
+use harness_contracts::{Discussion, DiscussionId, DiscussionKind, Subject, Message};
 use nah_discussions::{DiscussionError, Discussions, USER};
 use serde::Deserialize;
 
@@ -96,6 +96,9 @@ struct Starting {
     #[serde(default)]
     kind: DiscussionKind,
     text: String,
+    /// What the text links.
+    #[serde(default)]
+    links: Vec<harness_contracts::Link>,
     /// The agent slot asked, by its id or name (none: the lead).
     #[serde(default)]
     asked: Option<String>,
@@ -106,7 +109,7 @@ async fn start(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Js
     if !crate::discussing::may_read(&state.slots, &state.gate.access, &state.discussions, &asked, &body.subject) {
         return Err(Refused(DiscussionError::Invalid(format!("{asked} can't read that (another slot's chat): ask one that can"))));
     }
-    blocking(&state.discussions, move |d| d.start(&body.subject, body.kind, &body.text, USER, Some(&asked))).await.map(Json)
+    blocking(&state.discussions, move |d| d.start(&body.subject, body.kind, Message { text: body.text, links: body.links }, USER, Some(&asked))).await.map(Json)
 }
 
 #[derive(Deserialize)]
@@ -114,23 +117,32 @@ async fn start(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Js
 struct Saying {
     #[serde(default)]
     text: String,
+    /// What the text links.
+    #[serde(default)]
+    links: Vec<harness_contracts::Link>,
+}
+
+impl From<Saying> for Message {
+    fn from(said: Saying) -> Self {
+        Message { text: said.text, links: said.links }
+    }
 }
 
 async fn reply(_: Needs<can::Discuss>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
-    blocking(&state.discussions, move |d| d.reply(&DiscussionId::new(id), &body.text, USER)).await.map(Json)
+    blocking(&state.discussions, move |d| d.reply(&DiscussionId::new(id), body, USER)).await.map(Json)
 }
 
 async fn settle(_: Needs<can::PlansApprove>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
-    blocking(&state.discussions, move |d| d.settle(&DiscussionId::new(id), &body.text, USER)).await.map(Json)
+    blocking(&state.discussions, move |d| d.settle(&DiscussionId::new(id), body, USER)).await.map(Json)
 }
 
 async fn reopen(_: Needs<can::PlansApprove>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
-    blocking(&state.discussions, move |d| d.reopen(&DiscussionId::new(id), &body.text, USER)).await.map(Json)
+    blocking(&state.discussions, move |d| d.reopen(&DiscussionId::new(id), body, USER)).await.map(Json)
 }
 
 /// Made a change request (one answered: open again, `text` saying why).
 async fn change(_: Needs<can::PlansApprove>, State(state): State<DiscussionsState>, Path(id): Path<String>, Json(body): Json<Saying>) -> Result<Json<Discussion>, Refused> {
-    blocking(&state.discussions, move |d| d.ask_for_change(&DiscussionId::new(id), &body.text, USER)).await.map(Json)
+    blocking(&state.discussions, move |d| d.ask_for_change(&DiscussionId::new(id), body, USER)).await.map(Json)
 }
 
 async fn delete(_: Needs<can::PlansApprove>, State(state): State<DiscussionsState>, Path(id): Path<String>) -> Result<StatusCode, Refused> {
