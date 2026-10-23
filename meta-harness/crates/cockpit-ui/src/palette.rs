@@ -176,8 +176,7 @@ impl Palette {
             }
             Param::Writing { start, .. } => {
                 self.writing = Default::default();
-                // (A link's tag colour isn't known here: drawn in the accent.)
-                self.writing.restore(start, |_| colors().accent);
+                self.writing.restore(start);
                 Stage::Writing { action, from_list }
             }
             Param::Search { .. } => {
@@ -205,6 +204,12 @@ impl Palette {
     /// It's open at an action's writing.
     pub fn is_writing(&self) -> bool {
         self.open && matches!(self.stage, Stage::Writing { .. })
+    }
+
+    /// Its typing box, while what's written is typed there (its links are
+    /// the shell's to colour and check).
+    pub fn writing_box(&mut self) -> Option<&mut crate::conversation::TypingBox> {
+        (self.open && matches!(self.stage, Stage::Writing { .. })).then_some(&mut self.writing)
     }
 
     /// Something is being picked for what's written here (set aside).

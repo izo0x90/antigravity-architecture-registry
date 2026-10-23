@@ -62,6 +62,8 @@ pub struct Desk {
     pub shell_searches: BTreeMap<String, String>,
     /// What the `@` picker found for what was typed.
     pub finding: super::linking::Finding,
+    /// What each box's links come to, checked before it's sent.
+    pub checks: super::linking::Checks,
     /// The tag `g T` picked, while the palette asks which of its things.
     pub tag_picking: Option<harness_contracts::TagId>,
     /// The tag an edit picked (of several there), while the palette asks
@@ -116,6 +118,7 @@ impl Desk {
             choosing: None,
             shell_searches: BTreeMap::new(),
             finding: Default::default(),
+            checks: Default::default(),
             tag_picking: None,
             tag_editing: None,
             tag_stepping: None,
@@ -233,6 +236,13 @@ impl Desk {
     pub fn each_buffer(&mut self, mut f: impl FnMut(&mut dyn Buffer)) {
         for buffer in self.buffers.values_mut() {
             f(buffer.as_mut());
+        }
+    }
+
+    /// Every buffer, with its id.
+    pub fn each_buffer_by_id(&mut self, mut f: impl FnMut(BufferId, &mut dyn Buffer)) {
+        for (id, buffer) in &mut self.buffers {
+            f(*id, buffer.as_mut());
         }
     }
 

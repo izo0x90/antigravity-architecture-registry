@@ -54,7 +54,7 @@ impl CockpitApp {
                     super::keys::typed_away(ctx);
                 }
             }
-            Ask::Draft { slot, text } => self.desk.shared.drafts.get_mut().changed(slot, text, ctx.input(|i| i.time)),
+            Ask::Draft { slot, draft } => self.desk.shared.drafts.get_mut().changed(slot, draft, ctx.input(|i| i.time)),
             Ask::Refresh(crate::nav::Refresh::Review) => self.desk.shared.review.invalidate(),
             Ask::Refresh(crate::nav::Refresh::Changes) => self.desk.shared.changes.invalidate(),
             Ask::Compare(comparison) => self.desk.shared.changes.compare(comparison),

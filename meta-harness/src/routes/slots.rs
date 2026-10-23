@@ -26,6 +26,7 @@ pub(crate) fn routes() -> Router<HarnessState> {
         .route("/api/slots/{slot}/sessions/{session}", delete(close_session))
         .route("/api/slots/{slot}/current", post(switch))
         .route("/api/slots/{slot}/prompt", post(prompt))
+        .route("/api/links/check", post(check_links))
 }
 
 async fn list(_: Needs<can::ViewRead>, State(state): State<HarnessState>) -> Json<Vec<Slot>> {
@@ -181,6 +182,18 @@ struct Prompted {
 /// one opened) first if it isn't running. What it links hands the agent
 /// what that is.
     notes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct Checked {
+    /// What sending it would tell the user (linked whole, past the budget).
+    notes: Vec<String>,
+}
+
+/// What a message's links come to before it's sent: the same expansion a
+/// send does, its text dropped, what it would say kept.
+async fn check_links(_: Needs<can::SessionsControl>, State(state): State<HarnessState>, Json(message): Json<harness_contracts::Message>) -> Json<Checked> {
+    Json(Checked { notes: state.slots.expanded(message).await.notes })
 }
 
 /// The user's prompt to a slot: its current session is resumed (or a new

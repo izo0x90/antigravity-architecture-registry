@@ -60,6 +60,7 @@ impl CockpitApp {
         self.share_with_buffers();
         self.goto_tick(ctx);
         self.find_links(ctx);
+        self.tend_links(ctx);
         // The focused target's relations, so the bar and popup offer only
         // the go-tos that lead somewhere.
         if let Some(id) = self.desk.view(self.focused_kind()).target().and_then(|t| t.component().cloned()) {

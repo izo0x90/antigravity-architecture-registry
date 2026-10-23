@@ -53,14 +53,14 @@ impl ChatStreamState {
         if self.unsent_for.as_ref() == Some(&self.ui.slot) {
             return;
         }
-        let Some(saved) = self.unsent.get().saved(&self.ui.slot).map(|s| s.map(str::to_owned)) else { return };
+        let Some(saved) = self.unsent.get().saved(&self.ui.slot).map(|s| s.cloned()) else { return };
         self.unsent_for = Some(self.ui.slot.clone());
         if self.ui.input.text.is_empty()
             && let Some(saved) = &saved
         {
-            self.ui.input.text.clone_from(saved);
+            self.ui.input.restore(saved);
         }
-        // Text already in the box (the view's own, or typed before the
+        // What's already in the box (the view's own, or typed before the
         // drafts were read) differs from what's saved: reported.
         self.unsent_said = saved.unwrap_or_default();
     }
@@ -68,9 +68,10 @@ impl ChatStreamState {
     /// What's in the box, when it changed since it was last reported
     /// (typed, put in, or cleared by sending): to be saved for its slot.
     fn report_unsent(&mut self) {
-        if self.unsent_for.as_ref() == Some(&self.ui.slot) && self.ui.input.text != self.unsent_said {
-            self.unsent_said = self.ui.input.text.clone();
-            self.asks.push(Ask::Draft { slot: self.ui.slot.clone(), text: self.unsent_said.clone() });
+        let draft = self.ui.input.draft();
+        if self.unsent_for.as_ref() == Some(&self.ui.slot) && draft != self.unsent_said {
+            self.unsent_said = draft.clone();
+            self.asks.push(Ask::Draft { slot: self.ui.slot.clone(), draft });
         }
     }
 }

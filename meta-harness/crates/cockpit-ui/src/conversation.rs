@@ -127,6 +127,8 @@ pub struct TypingBox {
     links: Vec<Chip>,
     /// Where the caret was last drawn (characters from the start).
     caret: Option<usize>,
+    /// Said under it (what its links come to, before it's sent).
+    pub warning: Option<String>,
     /// Text was put in (not typed): the caret goes after it.
     caret_to_end: bool,
 }
@@ -166,18 +168,26 @@ impl TypingBox {
     /// `label` (`#flaky`, `@src/a.rs`) put after what's written as a link
     /// to `to` (a trigger it starts with that the box ends with is the
     /// link's first character), then a space; the caret after it.
-    pub fn put_link(&mut self, label: &str, to: harness_contracts::Linked, include: harness_contracts::Include, colour: Color32) {
+    pub fn put_link(&mut self, label: &str, to: harness_contracts::Linked, include: harness_contracts::Include) {
         let doubled = label.chars().next().is_some_and(|c| crate::trigger::is_trigger(c) && self.text.ends_with(c));
         let start = self.text.chars().count() - usize::from(doubled);
         self.put(label);
         let end = self.text.chars().count();
         self.text.push(' ');
-        self.links.push(Chip { link: harness_contracts::Link { start, end, to, include }, colour });
+        self.links.push(Chip { link: harness_contracts::Link { start, end, to, include }, colour: colors().accent });
     }
 
     /// The links in it, in order.
     pub fn links(&self) -> &[Chip] {
         &self.links
+    }
+
+    /// Each link drawn in the colour `colour` gives it (the shell's: a
+    /// tag's own).
+    pub fn colour_links(&mut self, colour: impl Fn(&harness_contracts::Linked) -> Color32) {
+        for chip in &mut self.links {
+            chip.colour = colour(&chip.link.to);
+        }
     }
 
     /// The link the caret is in or just after: whole, a pointer, or as it
@@ -199,6 +209,12 @@ impl TypingBox {
         std::mem::take(self).message()
     }
 
+    /// What's written as it is (untrimmed), and what it links: what's kept
+    /// of it unsent.
+    pub fn draft(&self) -> harness_contracts::Message {
+        harness_contracts::Message { text: self.text.clone(), links: self.links.iter().map(|c| c.link.clone()).collect() }
+    }
+
     /// What's written, trimmed, and what it links.
     pub fn message(&self) -> harness_contracts::Message {
         harness_contracts::Message { text: self.text.clone(), links: self.links.iter().map(|c| c.link.clone()).collect() }.trimmed()
@@ -209,11 +225,11 @@ impl TypingBox {
         *self = TypingBox { caret_to_end: true, ..kept };
     }
 
-    /// `message` written in it again (a send that failed, a start to
-    /// write on from), its links as they were.
-    pub fn restore(&mut self, message: &harness_contracts::Message, colour: impl Fn(&harness_contracts::Linked) -> Color32) {
+    /// `message` written in it again (a draft kept, a start to write on
+    /// from), its links as they were (coloured by the shell).
+    pub fn restore(&mut self, message: &harness_contracts::Message) {
         self.text.clone_from(&message.text);
-        self.links = message.links.iter().map(|l| Chip { link: l.clone(), colour: colour(&l.to) }).collect();
+        self.links = message.links.iter().map(|l| Chip { link: l.clone(), colour: colors().accent }).collect();
         self.caret_to_end = true;
     }
 
@@ -290,7 +306,7 @@ impl TypingBox {
             caret_to_end(ui.ctx(), id, &self.text);
         }
         let written = self.text.clone();
-        let chips = TypingBox { text: String::new(), links: self.links.clone(), caret: None, caret_to_end: false };
+        let chips = TypingBox { links: self.links.clone(), ..TypingBox::default() };
         let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| chips.laid_out(ui, text.as_str(), wrap);
         let output = ui.add(keys.text_box(&mut self.text).id(id).desired_rows(rows).desired_width(f32::INFINITY).hint_text(hint).layouter(&mut layouter));
         self.follow_edit(&written);
@@ -303,6 +319,10 @@ impl TypingBox {
         // what's written is just a character.
         let at_end = egui::TextEdit::load_state(ui.ctx(), output.id).and_then(|s| s.cursor.char_range()).is_none_or(|r| r.primary.index == self.text.chars().count());
         let trigger = (output.changed() && at_end).then(|| crate::trigger::typed(&self.text, before)).flatten();
+        // What its links come to, said before it's sent.
+        if let Some(warning) = &self.warning {
+            ui.label(RichText::new(warning).size(crate::theme::look().text_small).color(colors().warn));
+        }
         Typed { rect: output.rect, sent, clicked: output.clicked() || output.gained_focus(), trigger }
     }
 }
@@ -337,7 +357,7 @@ mod tests {
         use harness_contracts::{Include, Linked, TagId};
         let tag = |t: &str| Linked::Tag { tag: TagId::new(t) };
         let mut b = TypingBox { text: "  see #".into(), ..TypingBox::default() };
-        b.put_link("#flaky", tag("x1"), Include::Auto, Color32::RED);
+        b.put_link("#flaky", tag("x1"), Include::Auto);
         assert_eq!(b.text, "  see #flaky ");
         assert_eq!((b.links()[0].link.start, b.links()[0].link.end), (6, 12), "the # typed is its first character");
         // Typed before it: it moves; after it: it stays.

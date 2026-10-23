@@ -54,6 +54,7 @@ const ROUTES: &[&str] = &[
     "/api/ui/state",
     "/api/ui/drafts",
     "/api/ui/drafts/s1",
+    "/api/links/check",
     "/api/instances",
     "/api/instances/fake/refresh",
     "/api/instances/fake/sessions",

@@ -493,6 +493,10 @@ async fn a_terminals_lines_and_commands_are_tagged_by_the_user_and_by_agents_who
     assert_eq!(status, 200, "{body}");
     let pointed = event_until(&mut events, |e| matches!(e, harness_contracts::ClientEvent::Session { event: harness_contracts::AdapterEvent::ItemUpdated { item } } if format!("{:?}", item.body).contains("this one"))).await;
     assert!(format!("{pointed:?}").contains("its start only: `thing_read`"), "{pointed:?}");
+    // Checked before it's sent: what sending would say (small: nothing).
+    let whole = json!({ "start": 0, "end": 4, "to": { "kind": "thing", "subject": subject }, "include": "whole" });
+    let (status, body) = http(addr, "POST", "/api/links/check", Some(&json!({ "text": "this one", "links": [whole] }).to_string())).await;
+    assert_eq!((status, body.as_str()), (200, r#"{"notes":[]}"#));
     let (error, read) = lead.tool("thing_read", json!({ "thing": command })).await;
     assert!(!error && read.contains("tagged-line"), "{read}");
     // An agent's report to the lead is plain text: nothing in it is linked.

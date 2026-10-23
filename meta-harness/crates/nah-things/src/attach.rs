@@ -77,7 +77,7 @@ impl Things {
                         continue;
                     }
                     if a.include == Include::Whole {
-                        notes.push(format!("{}: too big to go in whole with the rest (past {} KB): sent as a pointer.", t.what, ATTACHED_MOST / 1000));
+                        notes.push(format!("{}: too big to go in whole with the rest (past {} KB): it goes as its start and how to read the rest.", t.what, ATTACHED_MOST / 1000));
                     }
                 }
                 let head = self.lines(&t.subject, t.kept.as_ref(), 1, POINTER_LINES).1.map(|(shown, _)| shown.join("\n")).unwrap_or_else(|| some_of(sample, 400));

@@ -58,6 +58,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
     // A chat's unsent text, by slot: its own row, not part of the layout
     // (it outlives a layout reset).
     (13, "CREATE TABLE drafts (slot TEXT PRIMARY KEY, text TEXT NOT NULL);"),
+    // A draft keeps what it links (a link is a span of its text).
+    (14, "ALTER TABLE drafts ADD COLUMN links TEXT NOT NULL DEFAULT '[]';"),
 ];
 
 /// The newest layout this NAH knows.

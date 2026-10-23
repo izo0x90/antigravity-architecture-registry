@@ -1,4 +1,4 @@
-//! The chats' unsent text, kept by the server as its own record, by slot:
+//! The chats' unsent messages (text and links), kept by the server as its own record, by slot:
 //! not part of the layout, so a layout reset (another version, another
 //! browser saving over it) doesn't lose what was typed. Read once when the
 //! desk opens; a chat view takes its slot's when it's empty; each slot's
@@ -7,24 +7,24 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use harness_contracts::SlotId;
+use harness_contracts::{Message, SlotId};
 
 use crate::net::{NetClient, NetResult};
 
 enum Reply {
-    Loaded(NetResult<BTreeMap<String, String>>),
+    Loaded(NetResult<BTreeMap<String, Message>>),
     Saved(SlotId, NetResult<()>),
 }
 
 #[derive(Default)]
 pub struct Drafts {
     /// Read from the server (none: not yet).
-    loaded: Option<BTreeMap<SlotId, String>>,
+    loaded: Option<BTreeMap<SlotId, Message>>,
     asked: bool,
     /// Each slot's text as last sent, and as it is now with when it last
     /// changed (sent once it's been still a moment).
-    sent: BTreeMap<SlotId, String>,
-    pending: BTreeMap<SlotId, (String, f64)>,
+    sent: BTreeMap<SlotId, Message>,
+    pending: BTreeMap<SlotId, (Message, f64)>,
     inbox: Arc<Mutex<Vec<Reply>>>,
 }
 
@@ -47,19 +47,20 @@ impl Drafts {
 
     /// What was saved for `slot` (none: not read yet; some none: nothing
     /// saved for it).
-    pub fn saved(&self, slot: &SlotId) -> Option<Option<&str>> {
-        Some(self.loaded.as_ref()?.get(slot).map(String::as_str))
+    pub fn saved(&self, slot: &SlotId) -> Option<Option<&Message>> {
+        Some(self.loaded.as_ref()?.get(slot))
     }
 
     /// A chat view's text for `slot` changed: saved once it's been still a
     /// moment (nothing is saved before what was saved is read).
-    pub fn changed(&mut self, slot: SlotId, text: String, time: f64) {
-        if self.loaded.is_none() || self.sent.get(&slot).map_or("", String::as_str) == text {
+    pub fn changed(&mut self, slot: SlotId, draft: Message, time: f64) {
+        let empty = Message::default();
+        if self.loaded.is_none() || self.sent.get(&slot).unwrap_or(&empty) == &draft {
             self.pending.remove(&slot);
             return;
         }
-        if self.pending.get(&slot).is_none_or(|(waiting, _)| *waiting != text) {
-            self.pending.insert(slot, (text, time));
+        if self.pending.get(&slot).is_none_or(|(waiting, _)| *waiting != draft) {
+            self.pending.insert(slot, (draft, time));
         }
     }
 
@@ -70,7 +71,7 @@ impl Drafts {
         for reply in std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
             match reply {
                 Reply::Loaded(Ok(found)) => {
-                    let found: BTreeMap<SlotId, String> = found.into_iter().map(|(slot, text)| (SlotId::new(&slot), text)).collect();
+                    let found: BTreeMap<SlotId, Message> = found.into_iter().map(|(slot, draft)| (SlotId::new(&slot), draft)).collect();
                     self.sent = found.clone();
                     self.loaded = Some(found);
                 }
@@ -81,8 +82,8 @@ impl Drafts {
                 Reply::Saved(_, Ok(())) => {}
                 // Not saved: tried again after a moment.
                 Reply::Saved(slot, Err(e)) => {
-                    if let Some(text) = self.sent.remove(&slot) {
-                        self.pending.entry(slot).or_insert((text, time));
+                    if let Some(draft) = self.sent.remove(&slot) {
+                        self.pending.entry(slot).or_insert((draft, time));
                     }
                     notes.push(format!("Couldn't save the unsent chat text: {}", String::from(e)));
                 }
@@ -90,10 +91,10 @@ impl Drafts {
         }
         let due: Vec<SlotId> = self.pending.iter().filter(|(_, (_, since))| time - since >= after).map(|(slot, _)| slot.clone()).collect();
         for slot in due {
-            let Some((text, _)) = self.pending.remove(&slot) else { continue };
-            self.sent.insert(slot.clone(), text.clone());
+            let Some((draft, _)) = self.pending.remove(&slot) else { continue };
+            self.sent.insert(slot.clone(), draft.clone());
             let (inbox, sent) = (self.inbox.clone(), slot.clone());
-            net.save_draft(&slot, &text, ctx.clone(), move |r| push(&inbox, Reply::Saved(sent, r)));
+            net.save_draft(&slot, &draft, ctx.clone(), move |r| push(&inbox, Reply::Saved(sent, r)));
         }
         if let Some(soonest) = self.pending.values().map(|(_, since)| after - (time - since)).reduce(f64::min) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(soonest.max(0.0)));
@@ -104,13 +105,13 @@ impl Drafts {
     /// What a slot's text is to be saved as (pending, else sent).
     #[cfg(test)]
     pub fn to_save(&self, slot: &SlotId) -> Option<&str> {
-        self.pending.get(slot).map(|(t, _)| t.as_str()).or_else(|| self.sent.get(slot).map(String::as_str))
+        self.pending.get(slot).map(|(d, _)| d.text.as_str()).or_else(|| self.sent.get(slot).map(|d| d.text.as_str()))
     }
 
     /// As if the server answered with `found` (tests).
     #[cfg(test)]
-    pub fn arrived(&mut self, found: BTreeMap<SlotId, String>) {
-        push(&self.inbox, Reply::Loaded(Ok(found.into_iter().map(|(s, t)| (s.to_string(), t)).collect())));
+    pub fn arrived(&mut self, found: BTreeMap<SlotId, Message>) {
+        push(&self.inbox, Reply::Loaded(Ok(found.into_iter().map(|(s, d)| (s.to_string(), d)).collect())));
     }
 }
 
@@ -133,9 +134,9 @@ mod tests {
         drafts.changed(lead.clone(), "typing".into(), 0.0);
         drafts.tick(0.6, 0.5, &net, &ctx);
         assert!(drafts.pending.is_empty() && drafts.sent.is_empty(), "not read yet: nothing saved over it");
-        drafts.arrived([(lead.clone(), "saved".to_owned())].into());
+        drafts.arrived([(lead.clone(), Message::text("saved"))].into());
         drafts.tick(1.0, 0.5, &net, &ctx);
-        assert_eq!(drafts.saved(&lead), Some(Some("saved")));
+        assert_eq!(drafts.saved(&lead), Some(Some(&Message::text("saved"))));
         assert_eq!(drafts.saved(&SlotId::new("sub-1")), Some(None), "read: nothing for it");
         // Unchanged: nothing to send. Changed: sent once it's been still a moment.
         drafts.changed(lead.clone(), "saved".into(), 1.0);
@@ -143,12 +144,13 @@ mod tests {
         drafts.changed(lead.clone(), "saved more".into(), 1.2);
         drafts.changed(lead.clone(), "saved more!".into(), 1.5);
         drafts.tick(1.6, 0.5, &net, &ctx);
-        assert_eq!(drafts.sent.get(&lead).map(String::as_str), Some("saved"), "still changing: not sent");
+        assert_eq!(drafts.to_save(&lead), Some("saved more!"), "still changing: not sent");
+        assert_eq!(drafts.sent.get(&lead).map(|d| d.text.as_str()), Some("saved"));
         drafts.tick(2.1, 0.5, &net, &ctx);
-        assert_eq!(drafts.sent.get(&lead).map(String::as_str), Some("saved more!"));
+        assert_eq!(drafts.sent.get(&lead).map(|d| d.text.as_str()), Some("saved more!"));
         // Emptied: saved as empty (the server drops it).
-        drafts.changed(lead.clone(), String::new(), 3.0);
+        drafts.changed(lead.clone(), Message::default(), 3.0);
         drafts.tick(3.6, 0.5, &net, &ctx);
-        assert_eq!(drafts.sent.get(&lead).map(String::as_str), Some(""));
+        assert_eq!(drafts.sent.get(&lead).map(|d| d.text.as_str()), Some(""));
     }
 }

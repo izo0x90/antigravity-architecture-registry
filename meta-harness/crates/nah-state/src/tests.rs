@@ -21,11 +21,13 @@ fn it_opens_empty_at_the_latest_layout_and_keeps_what_it_holds() {
     assert_eq!(db.ui_state().unwrap(), Some(serde_json::json!({ "columns": 3 })));
     // A chat's unsent text is its own row, by slot, not part of the layout.
     assert!(db.drafts().unwrap().is_empty());
-    db.set_draft("lead", "to the lead").unwrap();
-    db.set_draft("sub-1", "to the reviewer").unwrap();
-    db.set_draft("lead", "to the lead, more").unwrap();
-    assert_eq!(db.drafts().unwrap(), [("lead".to_owned(), "to the lead, more".to_owned()), ("sub-1".to_owned(), "to the reviewer".to_owned())].into());
-    db.set_draft("sub-1", "").unwrap();
+    let link = harness_contracts::Link { start: 0, end: 6, to: harness_contracts::Linked::Thing { subject: harness_contracts::Subject::CodeFile { path: "a.rs".into() } }, include: harness_contracts::Include::Whole };
+    let linked = harness_contracts::Message { text: "@a.rs to the lead, more".into(), links: vec![link] };
+    db.set_draft("lead", &"to the lead".into()).unwrap();
+    db.set_draft("sub-1", &"to the reviewer".into()).unwrap();
+    db.set_draft("lead", &linked).unwrap();
+    assert_eq!(db.drafts().unwrap(), [("lead".to_owned(), linked), ("sub-1".to_owned(), "to the reviewer".into())].into(), "with its links");
+    db.set_draft("sub-1", &"".into()).unwrap();
     assert_eq!(db.drafts().unwrap().keys().collect::<Vec<_>>(), ["lead"], "emptied: gone");
     assert_eq!(db.feedback().unwrap(), [serde_json::json!({ "id": "a", "n": 2 }), serde_json::json!({ "id": "b" })], "in the order they came");
     assert_eq!(db.activity(10).unwrap()[0].action, "opened");

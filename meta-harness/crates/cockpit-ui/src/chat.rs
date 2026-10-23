@@ -65,7 +65,7 @@ pub struct ChatStreamState {
     /// view took its draft for; the text it last reported.
     unsent: crate::shared::Reader<crate::drafts::Drafts>,
     unsent_for: Option<SlotId>,
-    unsent_said: String,
+    unsent_said: harness_contracts::Message,
 }
 
 /// A chat view's own state: what's typed, where the cursor is, what was

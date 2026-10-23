@@ -129,22 +129,30 @@ impl StateDb {
 
     // ---- the chats' unsent text ----
 
-    /// Each slot's unsent text, as the cockpit last saved it.
-    pub fn drafts(&self) -> Result<BTreeMap<String, String>, StateError> {
+    /// Each slot's unsent message (its text and links), as the cockpit
+    /// last saved it.
+    pub fn drafts(&self) -> Result<BTreeMap<String, harness_contracts::Message>, StateError> {
         self.transaction(|tx| {
-            let mut rows = tx.prepare("SELECT slot, text FROM drafts").map_err(failed)?;
-            let found = rows.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(failed)?;
-            found.collect::<Result<_, _>>().map_err(failed)
+            let mut rows = tx.prepare("SELECT slot, text, links FROM drafts").map_err(failed)?;
+            let found = rows.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))).map_err(failed)?;
+            found
+                .map(|row| {
+                    let (slot, text, links) = row.map_err(failed)?;
+                    // Links this build can't read: the text, unlinked.
+                    Ok((slot, harness_contracts::Message { text, links: serde_json::from_str(&links).unwrap_or_default() }))
+                })
+                .collect()
         })
     }
 
-    /// Replaces slot `slot`'s unsent text (empty: there is none).
-    pub fn set_draft(&self, slot: &str, text: &str) -> Result<(), StateError> {
+    /// Replaces slot `slot`'s unsent message (empty: there is none).
+    pub fn set_draft(&self, slot: &str, draft: &harness_contracts::Message) -> Result<(), StateError> {
+        let links = serde_json::to_string(&draft.links).map_err(failed)?;
         self.transaction(|tx| {
-            if text.is_empty() {
+            if draft.text.is_empty() {
                 tx.execute("DELETE FROM drafts WHERE slot = ?1", params![slot]).map_err(failed)?;
             } else {
-                tx.execute("INSERT INTO drafts (slot, text) VALUES (?1, ?2) ON CONFLICT (slot) DO UPDATE SET text = excluded.text", params![slot, text]).map_err(failed)?;
+                tx.execute("INSERT INTO drafts (slot, text, links) VALUES (?1, ?2, ?3) ON CONFLICT (slot) DO UPDATE SET text = excluded.text, links = excluded.links", params![slot, draft.text, links]).map_err(failed)?;
             }
             Ok(())
         })

@@ -193,7 +193,10 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
     // once the drafts are read.
     let (ctx, mut fresh) = full_app();
     fresh.restore_saved(serde_json::from_value(saved).unwrap());
-    fresh.desk.shared.drafts.get_mut().arrived([(harness_contracts::SlotId::new("lead"), "to the lead".to_owned()), (harness_contracts::SlotId::new("sub-1"), "to the reviewer".to_owned())].into());
+    // The lead's draft links a file: it comes back linked.
+    let link = harness_contracts::Link { start: 0, end: 5, to: harness_contracts::Linked::Thing { subject: harness_contracts::Subject::CodeFile { path: "a.rs".into() } }, include: harness_contracts::Include::Whole };
+    let linked = harness_contracts::Message { text: "@a.rs to the lead".into(), links: vec![link.clone()] };
+    fresh.desk.shared.drafts.get_mut().arrived([(harness_contracts::SlotId::new("lead"), linked), (harness_contracts::SlotId::new("sub-1"), "to the reviewer".into())].into());
     let view = |app: &mut CockpitApp, buffer| {
         app.use_buffer(buffer);
         frame(&ctx, app, vec![]);
@@ -201,7 +204,18 @@ fn each_chat_view_shows_its_own_slot_with_its_own_draft_and_both_come_back() {
         (chat.ui.slot.to_string(), chat.ui.input.text.clone())
     };
     assert_eq!(view(&mut fresh, second), ("sub-1".into(), "to the reviewer".into()));
-    assert_eq!(view(&mut fresh, first), ("lead".into(), "to the lead".into()));
+    assert_eq!(view(&mut fresh, first), ("lead".into(), "@a.rs to the lead".into()));
+    let chat: &crate::chat::ChatStreamState = fresh.desk.typed_at(first);
+    assert_eq!(chat.ui.input.links().iter().map(|c| c.link.clone()).collect::<Vec<_>>(), [link], "its link too");
+    // Linked whole, it's checked before it's sent, and what it comes to is said under the box.
+    for at in [10.0, 10.5] {
+        frame_at(&ctx, &mut fresh, vec![], at);
+    }
+    let asked = bodies(&fresh, "POST /api/links/check");
+    assert_eq!(asked, [serde_json::json!({ "text": "@a.rs to the lead", "links": [{ "start": 0, "end": 5, "to": { "kind": "thing", "subject": { "kind": "code_file", "path": "a.rs" } }, "include": "whole" }] })]);
+    assert!(fresh.desk.net.answer("POST /api/links/check", 200, &serde_json::json!({ "notes": ["file a.rs: too big to go in whole with the rest"] })));
+    frame_at(&ctx, &mut fresh, vec![], 10.6);
+    assert!(texts(&frame_at(&ctx, &mut fresh, vec![], 10.7)).contains("file a.rs: too big to go in whole"), "said before it's sent");
 }
 
 /// A buffer kind saved in another version of itself starts new; the rest

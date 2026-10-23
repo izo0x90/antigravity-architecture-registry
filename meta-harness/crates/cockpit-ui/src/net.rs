@@ -589,13 +589,21 @@ impl NetClient {
     }
 
     /// Each slot's unsent chat text, as last saved.
-    pub fn drafts(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<std::collections::BTreeMap<String, String>>) + Send + 'static) {
+    pub fn drafts(&self, ctx: egui::Context, on_done: impl FnOnce(NetResult<std::collections::BTreeMap<String, harness_contracts::Message>>) + Send + 'static) {
         self.call("GET", "/api/ui/drafts", None, ctx, on_done);
     }
 
     /// Saves a slot's unsent chat text (empty: none).
-    pub fn save_draft(&self, slot: &SlotId, text: &str, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
-        self.call("PUT", &format!("/api/ui/drafts/{slot}"), Some(serde_json::json!({ "text": text })), ctx, on_done);
+    pub fn save_draft(&self, slot: &SlotId, draft: &harness_contracts::Message, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
+        self.call("PUT", &format!("/api/ui/drafts/{slot}"), Some(serde_json::json!(draft)), ctx, on_done);
+    }
+
+    /// What a message's links come to before it's sent (what sending it
+    /// would say: linked whole, past the budget).
+    pub fn check_links(&self, message: &harness_contracts::Message, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<String>>) + Send + 'static) {
+        self.call::<serde_json::Value>("POST", "/api/links/check", Some(serde_json::json!(message)), ctx, move |r| {
+            on_done(r.map(|v| v["notes"].as_array().map(|n| n.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect()).unwrap_or_default()))
+        });
     }
 
     // ---- instances ----

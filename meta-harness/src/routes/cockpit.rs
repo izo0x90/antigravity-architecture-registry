@@ -45,18 +45,13 @@ async fn put_ui_state(_: Needs<can::SessionsControl>, State(state): State<Cockpi
 
 /// Each slot's unsent chat text, as the cockpit last saved it (its own
 /// record: a layout reset doesn't lose it).
-async fn get_drafts(_: Needs<can::ViewRead>, State(state): State<CockpitState>) -> Result<Json<std::collections::BTreeMap<String, String>>, StateFailed> {
+async fn get_drafts(_: Needs<can::ViewRead>, State(state): State<CockpitState>) -> Result<Json<std::collections::BTreeMap<String, harness_contracts::Message>>, StateFailed> {
     Ok(Json(with_state(&state.state, |db| db.drafts()).await?))
 }
 
-#[derive(serde::Deserialize)]
-struct Draft {
-    text: String,
-}
-
-/// The cockpit saves a slot's unsent text (empty: none).
-async fn put_draft(_: Needs<can::SessionsControl>, State(state): State<CockpitState>, Path(slot): Path<String>, Json(body): Json<Draft>) -> Result<StatusCode, StateFailed> {
-    with_state(&state.state, move |db| db.set_draft(&slot, &body.text)).await?;
+/// The cockpit saves a slot's unsent message (its text and links; empty: none).
+async fn put_draft(_: Needs<can::SessionsControl>, State(state): State<CockpitState>, Path(slot): Path<String>, Json(body): Json<harness_contracts::Message>) -> Result<StatusCode, StateFailed> {
+    with_state(&state.state, move |db| db.set_draft(&slot, &body)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

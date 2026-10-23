@@ -25,6 +25,63 @@ pub struct Finding {
     inbox: Answers,
 }
 
+/// How long a box's links are left still before they're checked.
+const CHECK_AFTER: f64 = 0.4;
+
+/// The server's answers: each box's key, the message checked, what it said.
+type Checked = std::sync::Arc<std::sync::Mutex<Vec<(String, harness_contracts::Message, Vec<String>)>>>;
+
+/// What each box's links come to, as the server said (a box with one
+/// linked whole): checked a moment after its last change.
+#[derive(Default)]
+pub struct Checks {
+    each: std::collections::BTreeMap<String, Check>,
+    inbox: Checked,
+}
+
+#[derive(Default)]
+struct Check {
+    /// The message last seen, when it last changed, whether it's asked.
+    message: harness_contracts::Message,
+    since: f64,
+    asked: bool,
+    notes: Vec<String>,
+}
+
+impl Checks {
+    /// What box `key`'s `message` comes to (none: nothing to say).
+    fn tend(&mut self, key: String, message: harness_contracts::Message, now: f64, net: &crate::net::NetClient, ctx: &egui::Context) -> Option<String> {
+        for (box_key, said, notes) in std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
+            if let Some(check) = self.each.get_mut(&box_key).filter(|c| c.message == said) {
+                check.notes = notes;
+            }
+        }
+        // Only what's linked whole can be too much.
+        if !message.links.iter().any(|l| l.include == Include::Whole) {
+            self.each.remove(&key);
+            return None;
+        }
+        let check = self.each.entry(key.clone()).or_default();
+        if check.message != message {
+            *check = Check { message, since: now, asked: false, notes: Vec::new() };
+        }
+        if !check.asked {
+            if now - check.since >= CHECK_AFTER {
+                check.asked = true;
+                let (inbox, said) = (self.inbox.clone(), check.message.clone());
+                net.check_links(&check.message, ctx.clone(), move |r| {
+                    if let (Ok(notes), Ok(mut i)) = (r, inbox.lock()) {
+                        i.push((key, said, notes));
+                    }
+                });
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(CHECK_AFTER));
+            }
+        }
+        (!check.notes.is_empty()).then(|| check.notes.join(" "))
+    }
+}
+
 /// `path:10-20` (or `path:10`): lines of a file.
 fn lines_of(query: &str) -> Option<(String, u32, u32)> {
     let (path, range) = query.trim().rsplit_once(':')?;
@@ -115,22 +172,54 @@ impl CockpitApp {
     /// Puts a link where text is being written: the palette's writing set
     /// aside, else the box of the view at `here`; back to writing there.
     pub(super) fn put_link(&mut self, here: Here, label: &str, to: Linked) {
-        // A tag's link in its colour; a thing's in the accent.
-        let colour = match &to {
-            Linked::Tag { tag } => self.desk.shared.tags.get().get(tag).map_or(crate::theme::colors().accent, |t| crate::theme::colors().tag(t.colour)),
-            Linked::Thing { .. } => crate::theme::colors().accent,
-        };
         if self.palette.holding() {
             if let Some(writing) = self.palette.put_back() {
-                writing.put_link(label, to, Include::Auto, colour);
+                writing.put_link(label, to, Include::Auto);
             }
             self.input_mode = InputMode::Palette;
             return;
         }
         if let Some(writing) = self.desk.view_mut(here.kind).typing_box() {
-            writing.put_link(label, to, Include::Auto, colour);
+            writing.put_link(label, to, Include::Auto);
         }
         self.input_mode = InputMode::Insert { at: here.at };
+    }
+
+    /// Every box being written in (the views', the palette's): its links in
+    /// their colours (a tag's own), and, when one is linked whole, what
+    /// they come to checked with the server before it's sent (a moment
+    /// after the last change), said under the box.
+    pub(super) fn tend_links(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        let colour = {
+            let tags = self.desk.shared.tags.get();
+            let colours: std::collections::BTreeMap<harness_contracts::TagId, egui::Color32> = tags.list().iter().map(|t| (t.id.clone(), crate::theme::colors().tag(t.colour))).collect();
+            move |to: &Linked| match to {
+                Linked::Tag { tag } => colours.get(tag).copied().unwrap_or(crate::theme::colors().accent),
+                Linked::Thing { .. } => crate::theme::colors().accent,
+            }
+        };
+        // Coloured, and what each holds read; then checked; then said.
+        let mut written: Vec<(String, harness_contracts::Message)> = Vec::new();
+        self.desk.each_buffer_by_id(|id, buffer| {
+            if let Some(writing) = buffer.typing_box() {
+                writing.colour_links(&colour);
+                written.push((format!("{id:?}"), writing.message()));
+            }
+        });
+        if let Some(writing) = self.palette.writing_box() {
+            writing.colour_links(&colour);
+            written.push(("palette".into(), writing.message()));
+        }
+        let warnings: std::collections::BTreeMap<String, Option<String>> = written.into_iter().map(|(key, message)| (key.clone(), self.desk.checks.tend(key, message, now, &self.desk.net, ctx))).collect();
+        self.desk.each_buffer_by_id(|id, buffer| {
+            if let Some(writing) = buffer.typing_box() {
+                writing.warning = warnings.get(&format!("{id:?}")).cloned().flatten();
+            }
+        });
+        if let Some(writing) = self.palette.writing_box() {
+            writing.warning = warnings.get("palette").cloned().flatten();
+        }
     }
 
     /// The `@` picker's pick: linked where it was opened from.
