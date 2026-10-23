@@ -277,10 +277,10 @@ async fn each_role_sees_and_may_use_only_its_tools() {
     // then the discussions'.
     let mut sub = reads.map(String::from).to_vec();
     sub.splice(10..10, ["tell_lead".into(), "tell_user".into()]);
-    sub.extend(["tag", "untag", "tag_edit", "discussions", "discussion_read", "discuss", "discussion_reply", "discussion_answer"].map(String::from));
+    sub.extend(["tag", "untag", "tag_edit", "thing_read", "discussions", "discussion_read", "discuss", "discussion_reply", "discussion_answer"].map(String::from));
     assert_eq!(names(&Principal::agent("sub")), sub, "a sub-slot reads, reports to the lead and the user, tags and discusses");
     let lead = names(&Principal::agent("lead"));
-    assert!(lead.len() == 41 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself and typing into terminals: {lead:?}");
+    assert!(lead.len() == 42 && !lead.contains(&"tell_lead".to_owned()), "the lead has every tool but reporting to itself and typing into terminals: {lead:?}");
     assert!(!lead.contains(&"terminal_type".to_owned()), "typing into the user's terminals is no role's unless granted");
     assert!(names(&Principal::Anonymous).is_empty());
 
