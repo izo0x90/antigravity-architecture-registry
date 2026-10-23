@@ -513,9 +513,16 @@ impl NetClient {
 
     /// A prompt to a slot (its session resumed or opened first if it isn't
     /// running); `add_to_running`: into the turn it's running.
-    pub fn prompt_slot(&self, slot: &SlotId, text: &str, add_to_running: bool, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
-        let json = serde_json::json!({ "text": text, "addToRunning": add_to_running });
-        self.call::<serde_json::Value>("POST", &format!("/api/slots/{slot}/prompt"), Some(json), ctx, move |r| on_done(r.map(|_| ())));
+    /// Sends a prompt (its text and links): what the user is told of its
+    /// links comes back (linked whole, past the budget).
+    pub fn prompt_slot(&self, slot: &SlotId, message: &harness_contracts::Message, add_to_running: bool, ctx: egui::Context, on_done: impl FnOnce(NetResult<Vec<String>>) + Send + 'static) {
+        let mut json = serde_json::json!({ "text": message.text, "addToRunning": add_to_running });
+        if !message.links.is_empty() {
+            json["links"] = serde_json::json!(message.links);
+        }
+        self.call::<serde_json::Value>("POST", &format!("/api/slots/{slot}/prompt"), Some(json), ctx, move |r| {
+            on_done(r.map(|v| v["notes"].as_array().map(|n| n.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect()).unwrap_or_default()))
+        });
     }
 
     pub fn close_slot_session(&self, slot: &SlotId, session: &SessionKey, ctx: egui::Context, on_done: impl FnOnce(NetResult<()>) + Send + 'static) {
@@ -882,8 +889,11 @@ impl NetClient {
 
     /// Starts a discussion on `on`: a question or a change request, asking
     /// `asked` (an agent slot's name; none: the lead).
-    pub fn discussion_start(&self, on: &harness_contracts::Subject, kind: harness_contracts::DiscussionKind, text: &str, asked: Option<&str>, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Discussion>) + Send + 'static) {
-        let mut body = serde_json::json!({ "subject": on, "kind": kind, "text": text });
+    pub fn discussion_start(&self, on: &harness_contracts::Subject, kind: harness_contracts::DiscussionKind, message: &harness_contracts::Message, asked: Option<&str>, ctx: egui::Context, on_done: impl FnOnce(NetResult<harness_contracts::Discussion>) + Send + 'static) {
+        let mut body = serde_json::json!({ "subject": on, "kind": kind, "text": message.text });
+        if !message.links.is_empty() {
+            body["links"] = serde_json::json!(message.links);
+        }
         if let Some(asked) = asked {
             body["asked"] = asked.into();
         }

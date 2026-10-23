@@ -117,12 +117,25 @@ pub fn heading(ui: &mut egui::Ui, d: &harness_contracts::Discussion) {
     });
 }
 
-/// The typing box: what's written in it, kept between frames.
+/// The typing box: what's written in it, kept between frames, and what
+/// it links (spans of it that pull a tag or a thing into the message):
+/// drawn as chips, kept where they are as the text is edited around them,
+/// dropped when the text in one is.
 #[derive(Default)]
 pub struct TypingBox {
     pub text: String,
+    links: Vec<Chip>,
+    /// Where the caret was last drawn (characters from the start).
+    caret: Option<usize>,
     /// Text was put in (not typed): the caret goes after it.
     caret_to_end: bool,
+}
+
+/// A link in the box, and the colour it's drawn in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chip {
+    pub link: harness_contracts::Link,
+    pub colour: Color32,
 }
 
 /// What came of a frame of the typing box.
@@ -150,9 +163,110 @@ impl TypingBox {
         self.caret_to_end = true;
     }
 
-    /// What's written, trimmed, taken out of the box.
-    pub fn take(&mut self) -> String {
-        std::mem::take(&mut self.text).trim().to_owned()
+    /// `label` (`#flaky`, `@src/a.rs`) put after what's written as a link
+    /// to `to` (a trigger it starts with that the box ends with is the
+    /// link's first character), then a space; the caret after it.
+    pub fn put_link(&mut self, label: &str, to: harness_contracts::Linked, include: harness_contracts::Include, colour: Color32) {
+        let doubled = label.chars().next().is_some_and(|c| crate::trigger::is_trigger(c) && self.text.ends_with(c));
+        let start = self.text.chars().count() - usize::from(doubled);
+        self.put(label);
+        let end = self.text.chars().count();
+        self.text.push(' ');
+        self.links.push(Chip { link: harness_contracts::Link { start, end, to, include }, colour });
+    }
+
+    /// The links in it, in order.
+    pub fn links(&self) -> &[Chip] {
+        &self.links
+    }
+
+    /// The link the caret is in or just after: whole, a pointer, or as it
+    /// fits, in turn. False: there's none there.
+    pub fn cycle_link(&mut self) -> bool {
+        let Some(at) = self.caret else { return false };
+        // In it, or just after it (where the caret is once it's put in).
+        match self.links.iter_mut().find(|c| c.link.start < at && at <= c.link.end + 1) {
+            Some(chip) => {
+                chip.link.include = chip.link.include.next();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// What's written, trimmed, and what it links, taken out of the box.
+    pub fn take(&mut self) -> harness_contracts::Message {
+        std::mem::take(self).message()
+    }
+
+    /// What's written, trimmed, and what it links.
+    pub fn message(&self) -> harness_contracts::Message {
+        harness_contracts::Message { text: self.text.clone(), links: self.links.iter().map(|c| c.link.clone()).collect() }.trimmed()
+    }
+
+    /// A box taken out before (a send that failed) put back as it was.
+    pub fn put_back(&mut self, kept: TypingBox) {
+        *self = TypingBox { caret_to_end: true, ..kept };
+    }
+
+    /// `message` written in it again (a send that failed, a start to
+    /// write on from), its links as they were.
+    pub fn restore(&mut self, message: &harness_contracts::Message, colour: impl Fn(&harness_contracts::Linked) -> Color32) {
+        self.text.clone_from(&message.text);
+        self.links = message.links.iter().map(|l| Chip { link: l.clone(), colour: colour(&l.to) }).collect();
+        self.caret_to_end = true;
+    }
+
+    /// The links kept where they are through an edit (`before` was the
+    /// text): one the edit reached into is dropped.
+    fn follow_edit(&mut self, before: &str) {
+        if self.links.is_empty() || before == self.text {
+            return;
+        }
+        let (old, new): (Vec<char>, Vec<char>) = (before.chars().collect(), self.text.chars().collect());
+        let same_start = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+        let same_end = old[same_start..].iter().rev().zip(new[same_start..].iter().rev()).take_while(|(a, b)| a == b).count();
+        let (old_end, moved) = (old.len() - same_end, new.len() as isize - old.len() as isize);
+        self.links.retain_mut(|c| {
+            if c.link.end <= same_start {
+                true
+            } else if c.link.start >= old_end {
+                c.link.start = c.link.start.saturating_add_signed(moved);
+                c.link.end = c.link.end.saturating_add_signed(moved);
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    /// The text laid out with its links as chips: as it fits in the
+    /// link's colour, whole on a fill of it, a pointer underlined.
+    fn laid_out(&self, ui: &egui::Ui, text: &str, wrap: f32) -> std::sync::Arc<egui::Galley> {
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let plain = egui::TextFormat::simple(font.clone(), ui.visuals().text_color());
+        let mut job = egui::text::LayoutJob { wrap: egui::text::TextWrapping { max_width: wrap, ..Default::default() }, ..Default::default() };
+        let byte = |chars: usize| text.char_indices().nth(chars).map_or(text.len(), |(b, _)| b);
+        let mut at = 0;
+        let mut chips: Vec<&Chip> = self.links.iter().filter(|c| c.link.end <= text.chars().count()).collect();
+        chips.sort_by_key(|c| c.link.start);
+        for chip in chips {
+            let (start, end) = (byte(chip.link.start), byte(chip.link.end));
+            if start < at {
+                continue;
+            }
+            job.append(&text[at..start], 0.0, plain.clone());
+            let mut format = egui::TextFormat::simple(font.clone(), chip.colour);
+            match chip.link.include {
+                harness_contracts::Include::Auto => {}
+                harness_contracts::Include::Whole => format.background = chip.colour.gamma_multiply(0.25),
+                harness_contracts::Include::Pointer => format.underline = egui::Stroke::new(crate::theme::look().line_thin, chip.colour),
+            }
+            job.append(&text[start..end], 0.0, format);
+            at = end;
+        }
+        job.append(&text[at..], 0.0, plain);
+        ui.fonts_mut(|f| f.layout_job(job))
     }
 
     /// Draws it (`rows` high, `hint` while empty); it has the keyboard while
@@ -166,10 +280,21 @@ impl TypingBox {
         if typing {
             ui.memory_mut(|m| m.request_focus(id));
         }
-        let output = ui.add(keys.text_box(&mut self.text).id(id).desired_rows(rows).desired_width(f32::INFINITY).hint_text(hint));
-        if std::mem::take(&mut self.caret_to_end) {
-            caret_to_end(ui.ctx(), output.id, &self.text);
+        // The link at the caret, cycled by its key (before the box takes the key).
+        if typing && ui.memory(|m| m.has_focus(id)) && keys.input.link.shortcut().is_some_and(|s| ui.input_mut(|i| i.consume_shortcut(&s))) {
+            self.cycle_link();
         }
+        // Text put in: the caret after it before this frame's keys are typed
+        // (they follow it).
+        if std::mem::take(&mut self.caret_to_end) {
+            caret_to_end(ui.ctx(), id, &self.text);
+        }
+        let written = self.text.clone();
+        let chips = TypingBox { text: String::new(), links: self.links.clone(), caret: None, caret_to_end: false };
+        let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| chips.laid_out(ui, text.as_str(), wrap);
+        let output = ui.add(keys.text_box(&mut self.text).id(id).desired_rows(rows).desired_width(f32::INFINITY).hint_text(hint).layouter(&mut layouter));
+        self.follow_edit(&written);
+        self.caret = egui::TextEdit::load_state(ui.ctx(), output.id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index);
         let sent = if typing && output.has_focus() { ui.input(|i| keys.input.sent(i)) } else { None };
         if sent.is_some() {
             output.surrender_focus();
@@ -199,8 +324,46 @@ mod tests {
         let mut b = TypingBox { text: "see #".into(), ..TypingBox::default() };
         b.put("#flaky ");
         assert_eq!(b.text, "see #flaky ", "the # typed isn't doubled");
-        assert_eq!(b.take(), "see #flaky");
+        assert_eq!(b.take().text, "see #flaky");
         assert!(b.text.is_empty());
+    }
+
+    /// A link is a span of what's written: put after a trigger (which it
+    /// starts with), kept where it is as the text is edited around it,
+    /// dropped when the text in it is, cycled at the caret, taken with
+    /// the text (trimmed, moved with it).
+    #[test]
+    fn a_link_is_kept_through_edits_around_it_and_dropped_by_one_in_it() {
+        use harness_contracts::{Include, Linked, TagId};
+        let tag = |t: &str| Linked::Tag { tag: TagId::new(t) };
+        let mut b = TypingBox { text: "  see #".into(), ..TypingBox::default() };
+        b.put_link("#flaky", tag("x1"), Include::Auto, Color32::RED);
+        assert_eq!(b.text, "  see #flaky ");
+        assert_eq!((b.links()[0].link.start, b.links()[0].link.end), (6, 12), "the # typed is its first character");
+        // Typed before it: it moves; after it: it stays.
+        let before = b.text.clone();
+        b.text.insert_str(2, "go ");
+        b.follow_edit(&before);
+        assert_eq!((b.links()[0].link.start, b.links()[0].link.end), (9, 15));
+        let before = b.text.clone();
+        b.text.push_str("now");
+        b.follow_edit(&before);
+        assert_eq!(b.links().len(), 1);
+        // The caret in it (or just after it): cycled.
+        b.caret = Some(16);
+        assert!(b.cycle_link() && b.links()[0].link.include == Include::Whole);
+        b.caret = Some(3);
+        assert!(!b.cycle_link(), "not in a link");
+        // Taken: trimmed, the link moved with the text.
+        let mut taken = TypingBox { text: b.text.clone(), links: b.links.clone(), ..TypingBox::default() };
+        let message = taken.take();
+        assert_eq!((message.text.as_str(), message.links[0].start, message.links[0].end), ("go see #flaky now", 7, 13));
+        assert!(taken.links().is_empty());
+        // A character taken out of it: the link goes (the text stays text).
+        let before = b.text.clone();
+        b.text.remove(12);
+        b.follow_edit(&before);
+        assert!(b.links().is_empty());
     }
 
     #[test]

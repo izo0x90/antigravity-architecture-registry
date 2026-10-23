@@ -44,9 +44,14 @@ impl CockpitApp {
                 self.input_mode = InputMode::Insert { at };
             }
             // The trigger's picker, where it applies (what it picks for is there).
+            // (Asked while the box was drawn this frame: the palette's field,
+            // drawn after it, would take the same typed text, the trigger
+            // too; it isn't typed anywhere else.)
             Ask::Trigger(c) => {
                 if let Some(pick) = self.triggered(c) {
                     self.open_palette(Some(&pick));
+                    self.palette.give_back_typing();
+                    super::keys::typed_away(ctx);
                 }
             }
             Ask::Draft { slot, text } => self.desk.shared.drafts.get_mut().changed(slot, text, ctx.input(|i| i.time)),

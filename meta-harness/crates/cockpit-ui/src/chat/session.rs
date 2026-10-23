@@ -13,15 +13,15 @@ impl ChatStreamState {
 
     /// A prompt to this view's slot (its session resumed, or opened, first
     /// if it isn't running).
-    pub(super) fn send_prompt(&mut self, text: String) {
-        self.act(Act::Prompt { text, add: false });
+    pub(super) fn send_prompt(&mut self, message: harness_contracts::Message) {
+        self.act(Act::Prompt { message, add: false });
     }
 
     /// Adds `text` to what the agent is doing, when it takes that and a
     /// turn runs; else sends it (queued behind the running turn).
-    pub(super) fn add_to_turn(&mut self, text: String) {
+    pub(super) fn add_to_turn(&mut self, message: harness_contracts::Message) {
         let add = self.steerable();
-        self.act(Act::Prompt { text, add });
+        self.act(Act::Prompt { message, add });
     }
 
     /// The harness takes more while a turn runs, and one does.

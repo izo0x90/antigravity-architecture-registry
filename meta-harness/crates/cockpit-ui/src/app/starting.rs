@@ -81,7 +81,7 @@ impl CockpitApp {
                     self.note = Some(format!("{kind:?} isn't a kind of discussion: a question or a change request."));
                     return;
                 };
-                self.desk.discussing = Some(crate::app::desk::Discussing { on: thing.subject, words: thing.words, kind, asked: None, text: String::new() });
+                self.desk.discussing = Some(crate::app::desk::Discussing { on: thing.subject, words: thing.words, kind, asked: None, text: Default::default() });
                 // Who's asked, when there's another slot than the lead to ask.
                 let next = if self.slots_to_ask().len() > 1 { "discuss.ask" } else { "discuss.write" };
                 self.run_by_id(next, None, ctx);
@@ -102,11 +102,12 @@ impl CockpitApp {
                     self.note = Some("A discussion asks something: nothing was started.".into());
                     return;
                 }
-                sending.text = text.trim().to_owned();
+                sending.text = harness_contracts::Message { text: text.trim().to_owned(), links: self.palette.take_sent_links() };
                 let (subject, kind, asked) = (sending.on.clone(), sending.kind, sending.asked.clone());
+                let message = sending.text.clone();
                 self.desk.sending = Some(sending);
                 let started = self.desk.started.clone();
-                self.desk.net.discussion_start(&subject, kind, text.trim(), asked.as_deref(), ctx.clone(), move |r| {
+                self.desk.net.discussion_start(&subject, kind, &message, asked.as_deref(), ctx.clone(), move |r| {
                     if let Ok(mut s) = started.lock() {
                         s.push(r);
                     }

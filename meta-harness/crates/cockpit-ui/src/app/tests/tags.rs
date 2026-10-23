@@ -482,9 +482,10 @@ fn a_hash_typed_in_a_prompt_opens_the_tag_picker_and_puts_the_name_after_it() {
         }
         frame(ctx, app, vec![]);
     };
-    // No tags yet: a # is a #.
+    // No tags yet: the picker says so; what's typed in it, with nothing
+    // found, goes back after the # (a space ends it).
     typed(&ctx, &mut app, "fix #");
-    assert!(!app.palette.is_open());
+    assert!(app.palette.is_open() && texts(&frame(&ctx, &mut app, vec![])).contains("no tags yet"), "the picker, saying there are none");
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x1", "flaky", &[ran("t1", 1, 1)]) });
     told(&app, harness_contracts::ClientEvent::TagUpdated { tag: tag_on("x2", "deploy", &[ran("t1", 1, 2)]) });
     typed(&ctx, &mut app, "1 look at (#");
@@ -498,7 +499,7 @@ fn a_hash_typed_in_a_prompt_opens_the_tag_picker_and_puts_the_name_after_it() {
     assert!(matches!(app.input_mode, InputMode::Insert { .. }), "typing on");
     // The caret after the name: what's typed next follows it.
     typed(&ctx, &mut app, ")");
-    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("fix #1 look at (#flaky )"), "in the box, as typed");
+    assert!(texts(&frame(&ctx, &mut app, vec![])).contains("fix #1 look at (#flaky )"), "in the box, as typed: {:?}", app.desk.chat().ui.input.text);
     // Escape out of the picker: the # stays, and typing goes on.
     typed(&ctx, &mut app, " #");
     assert!(app.palette.is_open());
@@ -821,4 +822,38 @@ fn in_the_code_lines_dragged_down_their_numbers_are_tagged() {
         frame_at(&ctx, &mut app, events, t);
     }
     assert_eq!((app.desk.code().selection, cursor(&app).as_deref()), (None, Some("3")));
+}
+
+/// `@` links a file (or a symbol, or lines) as `#` links a tag: the picker
+/// asks the code index, the pick is a link in the box (the text says its
+/// name), and the prompt sends it as a link; nothing typed is lost.
+#[test]
+fn an_at_typed_in_a_prompt_links_a_file_found_and_the_prompt_sends_the_link() {
+    let (ctx, mut app) = full_app();
+    crate::chat::tests::conversation_events().into_iter().for_each(|e| app.desk.shared.agents.get_mut().apply(e));
+    focus(&ctx, &mut app, BufferKind::Chat);
+    frame(&ctx, &mut app, key("i"));
+    let typed = |ctx: &egui::Context, app: &mut CockpitApp, text: &str| {
+        for c in text.chars() {
+            frame(ctx, app, vec![egui::Event::Text(c.to_string())]);
+        }
+        frame(ctx, app, vec![]);
+    };
+    typed(&ctx, &mut app, "read @");
+    assert_eq!(app.palette.picking(), Some("link.thing"), "the thing picker");
+    typed(&ctx, &mut app, "a.rs");
+    let asked: Vec<String> = sent(&app).into_iter().filter(|c| c.starts_with("GET /api/search?q=a.rs")).collect();
+    assert_eq!(asked.len(), 2, "files and symbols: {asked:?}");
+    let file = serde_json::json!({ "query": "a.rs", "kind": "files", "hits": [{ "kind": "files", "label": "src/a.rs", "detail": "", "file": "src/a.rs" }], "total": 1 });
+    assert!(app.desk.net.answer(&asked[0], 200, &file));
+    assert!(app.desk.net.answer(&asked[1], 200, &serde_json::json!({ "query": "a.rs", "kind": "symbols", "hits": [], "total": 0 })));
+    frame(&ctx, &mut app, vec![]);
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    frame(&ctx, &mut app, vec![]);
+    typed(&ctx, &mut app, "now");
+    assert_eq!(app.desk.chat().ui.input.text, "read @src/a.rs now");
+    bodies(&app, "");
+    frame(&ctx, &mut app, press(egui::Key::Enter, false));
+    let thing = serde_json::json!({ "kind": "thing", "subject": { "kind": "code_file", "path": "src/a.rs" } });
+    assert_eq!(bodies(&app, "POST /api/slots/lead/prompt"), [serde_json::json!({ "text": "read @src/a.rs now", "links": [{ "start": 5, "end": 14, "to": thing, "include": "auto" }], "addToRunning": false })]);
 }

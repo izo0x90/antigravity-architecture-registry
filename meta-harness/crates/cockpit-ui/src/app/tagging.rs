@@ -47,7 +47,7 @@ impl CockpitApp {
         let (label, param) = match edit {
             E::Rename => (format!("Rename the tag {}", tag.name), Param::Text { hint: "a new name (letters, digits, - and _)".into(), start: tag.name.clone() }),
             E::Recolour => (format!("Give {} another colour", tag.name), Param::Choice((0..harness_contracts::TAG_COLOURS).map(|i| Choice::new(i.to_string(), theme.tag_name(i)).swatch(theme.tag(i)).current(tag.colour == i)).collect())),
-            E::Note => (format!("Write {}'s note", tag.name), Param::Writing { hint: "its note (as many lines as it takes)".into(), start: tag.note.clone() }),
+            E::Note => (format!("Write {}'s note", tag.name), Param::Writing { hint: "its note (as many lines as it takes)".into(), start: tag.note.as_str().into() }),
             E::ClearNote => (format!("Clear {}'s note", tag.name), Param::None),
             E::Delete => (format!("Delete the tag {}", tag.name), Param::Choice(vec![Choice::new("yes", format!("Delete {} (from {})", tag.name, on_things(tag.count))), Choice::new("no", "Keep it")])),
         };
@@ -133,11 +133,11 @@ impl CockpitApp {
         // Where text is typed (a prompt): a tag's name, picked.
         let named: Vec<Choice> = if picking == Some("tag.insert") { self.tag_found("tag.insert").into_iter().filter(|c| tags.get(&TagId::new(&c.value)).is_some()).collect() } else { Vec::new() };
         out.push(
-            Action::new("tag.insert", "Name a tag", "Its name where you're typing (after a #, a prompt hands the agent what the tag is on)", S::TagInsert)
-                .param(Param::Search { hint: "a tag's name".into(), found: named, waiting: false })
+            Action::new("tag.insert", "Link a tag", "Where you're writing: the agent is handed what the tag is on", S::TagInsert)
+                .param(Param::Search { hint: if tags.list().is_empty() { format!("no tags yet ({}: the # stays as typed)", self.config.keymap.back.label()) } else { "a tag's name".into() }, found: named, waiting: false })
                 .group(Group::Act)
                 .importance(MINOR)
-                .when(when((self.desk.view(here.kind).takes_typed() || self.palette.is_writing() || self.palette.holding()) && !tags.list().is_empty())),
+                .when(when(self.desk.view(here.kind).takes_typed() || self.palette.is_writing() || self.palette.holding())),
         );
         // `g T` picked a tag on several things: which.
         // An edit's tag picked (of several): its value asked for.
@@ -205,15 +205,7 @@ impl CockpitApp {
                     return;
                 };
                 self.desk.shell_searches.remove("tag.insert");
-                // In what the palette's writing (it comes back), or where it was typed.
-                if self.palette.holding() {
-                    self.palette.put_back(Some(&format!("#{name} ")));
-                    self.input_mode = InputMode::Palette;
-                    return;
-                }
-                self.desk.view_mut(here.kind).typed_in(&format!("#{name} "));
-                // Back to typing where it was.
-                self.input_mode = InputMode::Insert { at: here.at };
+                self.put_link(here, &format!("#{name}"), harness_contracts::Linked::Tag { tag: TagId::new(&tag) });
             }
             (ShellCommand::TagEditWhich(edit), _, Some(tag)) => {
                 // The tag picked: its value asked for next (a note to clear: done).

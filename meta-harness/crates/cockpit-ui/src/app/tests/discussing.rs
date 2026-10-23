@@ -369,7 +369,9 @@ fn one_is_started_asking_the_slot_picked_with_a_tag_named_in_it_and_escape_leave
     bodies(&app, "");
     frame(&ctx, &mut app, press(egui::Key::Enter, false));
     let line = harness_contracts::Subject::CodeLines { path: file, first: 1, last: 1, snapshot: String::new() };
-    assert_eq!(bodies(&app, "POST /api/discussions"), [serde_json::json!({ "subject": line, "kind": "question", "text": "see #flaky now", "asked": "reviewer" })]);
+    // The tag picked is a link (its span, the tag), not words to find.
+    let link = serde_json::json!({ "start": 4, "end": 10, "to": { "kind": "tag", "tag": "x1" }, "include": "auto" });
+    assert_eq!(bodies(&app, "POST /api/discussions"), [serde_json::json!({ "subject": line, "kind": "question", "text": "see #flaky now", "links": [link], "asked": "reviewer" })]);
     // Not started (the server refused): what was written is there to send again.
     assert!(app.desk.net.answer("POST /api/discussions", 400, &serde_json::json!({ "error": "it's gone" })));
     frame(&ctx, &mut app, vec![]);

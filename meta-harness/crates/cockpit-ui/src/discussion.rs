@@ -62,7 +62,7 @@ pub struct DiscussionView {
     asked: Option<(DiscussionId, usize)>,
     /// What was last sent (and what for), until the server has it: not
     /// sent, it comes back to the box.
-    unsent: Option<(DiscussionId, String, Writing)>,
+    unsent: Option<(DiscussionId, crate::conversation::TypingBox, Writing)>,
     /// What's written in its box, and what for.
     pub writing: crate::conversation::TypingBox,
     pub purpose: Writing,
@@ -126,14 +126,19 @@ impl DiscussionView {
         if self.writing.text.trim().is_empty() {
             return;
         }
-        let text = self.writing.take();
-        self.unsent = Some((id.clone(), text.clone(), self.purpose));
+        let written = std::mem::take(&mut self.writing);
+        let message = written.message();
+        self.unsent = Some((id.clone(), written, self.purpose));
         let action = match self.purpose {
             Writing::Reply => "reply",
             Writing::Reopen => "reopen",
             Writing::Change => "change",
         };
-        net.discussion_act(&id, action, serde_json::json!({ "text": text }), ctx.clone(), self.sent());
+        let mut body = serde_json::json!({ "text": message.text });
+        if !message.links.is_empty() {
+            body["links"] = serde_json::json!(message.links);
+        }
+        net.discussion_act(&id, action, body, ctx.clone(), self.sent());
         self.purpose = Writing::Reply;
     }
 
@@ -245,9 +250,9 @@ impl crate::buffer::Buffer for DiscussionView {
                 Reply::Sent(Err(e)) => {
                     self.note = Some(e);
                     // (Only into the discussion it was written for, still shown.)
-                    if let Some((_, text, purpose)) = self.unsent.take().filter(|(id, ..)| self.id.as_ref() == Some(id) && self.writing.text.trim().is_empty()) {
+                    if let Some((_, written, purpose)) = self.unsent.take().filter(|(id, ..)| self.id.as_ref() == Some(id) && self.writing.text.trim().is_empty()) {
                         self.purpose = purpose;
-                        self.writing.put(&text);
+                        self.writing.put_back(written);
                     }
                 }
             }
@@ -373,8 +378,8 @@ impl Navigable for DiscussionView {
         self.with(|_| ()).is_some()
     }
 
-    fn typed_in(&mut self, text: &str) {
-        self.writing.put(text);
+    fn typing_box(&mut self) -> Option<&mut crate::conversation::TypingBox> {
+        self.with(|_| ()).is_some().then_some(&mut self.writing)
     }
 
     fn can_show(&self, target: &Target) -> bool {

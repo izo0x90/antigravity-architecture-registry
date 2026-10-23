@@ -103,9 +103,8 @@ impl Navigable for ChatStreamState {
         true
     }
 
-    /// After what's typed (a `#` just typed isn't doubled).
-    fn typed_in(&mut self, text: &str) {
-        self.ui.input.put(text);
+    fn typing_box(&mut self) -> Option<&mut crate::conversation::TypingBox> {
+        Some(&mut self.ui.input)
     }
 
     fn take_asks(&mut self) -> Vec<Ask> {

@@ -1,11 +1,12 @@
 //! Trigger characters: typed where a word starts in any typing box, each
 //! opens an action's picker for what follows it (`#`: a tag's name). The
 //! box reports the character; the shell opens the action it maps to with
-//! the box's text set aside; what's picked is put in after the character.
+//! the box's text set aside; what's picked is put in as a link (`#`: a tag;
+//! `@`: a file or a symbol).
 //! The table is the only place that says which character means what.
 
 /// Each trigger character and the action its picker is.
-pub const TRIGGERS: &[(char, &str)] = &[('#', "tag.insert")];
+pub const TRIGGERS: &[(char, &str)] = &[('#', "tag.insert"), ('@', "link.thing")];
 
 /// The action `c` opens, when it's a trigger.
 pub fn action_for(c: char) -> Option<&'static str> {

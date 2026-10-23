@@ -66,6 +66,7 @@ impl CockpitApp {
         // A trigger in what's written there: its picker, what it picks put after it.
         if let Some(pick) = self.palette.take_trigger().and_then(|c| self.triggered(c)) {
             self.palette.hold_for(&pick);
+            self.palette.give_back_typing();
         }
         if let Some(ask) = self.palette.take_search() {
             match ask.origin {
@@ -86,6 +87,14 @@ impl CockpitApp {
         // Closed without a pick: back to typing, when that's where it was;
         // a step-by-step start or edit left there is gone.
         if self.input_mode == InputMode::Palette && !self.palette.is_open() {
+            // A trigger's picker left: what was typed in it goes after the trigger.
+            if let Some(typed) = self.palette.take_given_back()
+                && let InputMode::Insert { at } = self.palette_from
+                && let Some(buffer) = self.buffer_at(at)
+                && let Some(writing) = self.desk.buffer_mut(buffer).and_then(|b| b.typing_box())
+            {
+                writing.put(&typed);
+            }
             (self.desk.discussing, self.desk.tag_editing) = (None, None);
             self.desk.discussions_here.clear();
             self.input_mode = match self.palette_from {

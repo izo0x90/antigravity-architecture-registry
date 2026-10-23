@@ -35,7 +35,7 @@ pub enum Act {
     Open { resume: Option<NativeId> },
     /// A prompt to the slot (its session opened first if it isn't
     /// running); `add`: into the turn it's running.
-    Prompt { text: String, add: bool },
+    Prompt { message: harness_contracts::Message, add: bool },
     /// An answer to an agent's request.
     Answer { thread: ThreadId, request: RequestId, response: RequestResponse },
     /// The harness's saved sessions, listed (to pick one).
@@ -67,6 +67,8 @@ pub enum Act {
 enum Reply {
     Opened(SlotId, NetResult<SlotOpened>),
     Sent(SlotId, NetResult<()>),
+    /// A prompt sent: what the user is told of its links.
+    Prompted(SlotId, NetResult<Vec<String>>),
     SlotMade(SlotId, NetResult<SlotId>),
     /// A session was ended to start again with new tool servers.
     Restart { slot: SlotId, resume: Option<NativeId>, result: NetResult<()> },
@@ -94,7 +96,7 @@ pub struct Agents {
     /// What went wrong, by slot.
     errors: BTreeMap<SlotId, String>,
     /// A prompt for a slot with no harness yet, sent once its first session opens.
-    queued: BTreeMap<SlotId, String>,
+    queued: BTreeMap<SlotId, harness_contracts::Message>,
     /// Something to tell the user once (a resume that opened fresh,
     /// reports delivered to the lead).
     notice: Option<String>,
@@ -220,7 +222,7 @@ impl Agents {
         let done = move |r: NetResult<()>| post(&mailbox, Reply::Done(for_slot, r));
         match act {
             Act::Open { resume } => self.open(slot, net, ctx, resume),
-            Act::Prompt { text, add } => self.prompt(slot, net, ctx, text, add),
+            Act::Prompt { message, add } => self.prompt(slot, net, ctx, message, add),
             Act::Answer { thread, request, response } => {
                 let mailbox = self.mailbox.clone();
                 let slot = self.store.slots.values().find(|s| s.current_thread() == Some(&thread)).map_or(slot, |s| s.id.clone());
@@ -294,16 +296,16 @@ impl Agents {
         net.open_slot_session(&slot, &body, ctx.clone(), move |r| post(&mailbox, Reply::Opened(for_slot, r)));
     }
 
-    fn prompt(&mut self, slot: SlotId, net: &NetClient, ctx: &egui::Context, text: String, add_to_running: bool) {
+    fn prompt(&mut self, slot: SlotId, net: &NetClient, ctx: &egui::Context, message: harness_contracts::Message, add_to_running: bool) {
         self.errors.remove(&slot);
         if self.store.slots.get(&slot).is_none_or(|s| s.instance_id.is_none()) {
-            self.queued.insert(slot.clone(), text);
+            self.queued.insert(slot.clone(), message);
             self.open(slot, net, ctx, None);
             return;
         }
         let mailbox = self.mailbox.clone();
         let for_slot = slot.clone();
-        net.prompt_slot(&slot, &text, add_to_running, ctx.clone(), move |r| post(&mailbox, Reply::Sent(for_slot, r)));
+        net.prompt_slot(&slot, &message, add_to_running, ctx.clone(), move |r| post(&mailbox, Reply::Prompted(for_slot, r)));
     }
 
     /// Restarts `slot`'s session with the current tool servers (ACP takes
@@ -339,8 +341,8 @@ impl Agents {
                     if !said.is_empty() {
                         self.notice = Some(said.join(" "));
                     }
-                    if let Some(text) = self.queued.remove(&slot) {
-                        self.prompt(slot, net, ctx, text, false);
+                    if let Some(message) = self.queued.remove(&slot) {
+                        self.prompt(slot, net, ctx, message, false);
                     }
                 }
                 Reply::Opened(slot, Err(e)) => {
@@ -348,9 +350,11 @@ impl Agents {
                     self.queued.remove(&slot);
                     self.errors.insert(slot, e.into());
                 }
-                Reply::Sent(slot, Err(e)) => {
+                Reply::Sent(slot, Err(e)) | Reply::Prompted(slot, Err(e)) => {
                     self.errors.insert(slot, e.into());
                 }
+                // What the user is told of its links (linked whole, past the budget).
+                Reply::Prompted(_, Ok(notes)) if !notes.is_empty() => self.notice = Some(notes.join(" ")),
                 Reply::SlotMade(from, Ok(made)) => self.made = (self.made.0 + 1, Some((from, made))),
                 Reply::Restart { slot, resume, result: Ok(()) } => self.open(slot, net, ctx, resume),
                 Reply::Saved(_, Ok(sessions)) => self.saved = Some(sessions),
@@ -372,7 +376,7 @@ impl Agents {
                 Reply::Saved(slot, Err(e)) | Reply::AuthStarted(slot, Err(e)) | Reply::Done(slot, Err(e)) | Reply::SlotMade(slot, Err(e)) | Reply::Restart { slot, result: Err(e), .. } => {
                     self.errors.insert(slot, e.into());
                 }
-                Reply::Sent(_, Ok(())) | Reply::Done(_, Ok(())) => {}
+                Reply::Sent(_, Ok(())) | Reply::Done(_, Ok(())) | Reply::Prompted(_, Ok(_)) => {}
             }
         }
     }
@@ -436,7 +440,7 @@ mod tests {
     fn a_prompt_with_no_harness_anywhere_says_so() {
         let mut agents = Agents::default();
         let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
-        agents.act(SlotId::new(LEAD), Act::Prompt { text: "hello".into(), add: false }, &net, &ctx);
+        agents.act(SlotId::new(LEAD), Act::Prompt { message: "hello".into(), add: false }, &net, &ctx);
         assert!(matches!(agents.lead_status(), SessionStatus::Failed(e) if e.contains("No harness instance")));
         assert_eq!(agents.error(&SlotId::new(LEAD)).map(String::as_str), Some("No harness instance is available yet."), "said in the lead's chat");
     }

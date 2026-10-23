@@ -505,9 +505,16 @@ all of them:
     who tagged it and when). Its rows carry the same edits as buttons,
     and delete (`Space t d`); Enter on a thing goes to it. Search finds
     things under folded tags.
-  - **In a prompt**, `#name` hands the agent what that tag is on, as it is
-    now, after your message (the chat shows what it got); typing `#` where
-    a word starts opens the tag picker and puts the name in.
+  - **Linking into a message** (the chat, a discussion, the palette's
+    writing): typing `#` where a word starts opens the tag picker, `@` the
+    code's files and symbols (`path:10-20`: those lines). What's picked is
+    a link, drawn in its colour: the agent is handed what it is, as it is
+    now, after your message (the chat shows what it got). Small things go
+    in whole, big ones as their start and how to read the rest
+    (`thing_read`); `ctrl+i` at a link makes it whole, a pointer, or as it
+    fits (filled, underlined, plain). Nothing else in the text is read:
+    `#include` typed or pasted is text. Left without a pick, what you
+    typed in the picker goes back after the `#` or `@`.
   - **What's kept:** a thing that doesn't last (a terminal's output, a
     chat's message or turn) is written to the tags' own logs when it's
     tagged (`.nah/state/tagged/`, a file per thing, the server's user's
@@ -546,8 +553,8 @@ all of them:
     is in the inbox, a notification each time it's your move anew.
   - **The agents in it:** it asks the lead unless another agent slot is
     named. The slot asked, and an agent that started it, are told what
-    others say (in their running session, else when one opens; a `#name`
-    in it hands on only what that slot may read). Only the slot asked
+    others say (in their running session, else when one opens; what your
+    message links goes with it; an agent's text links nothing). Only the slot asked
     answers (a change request's answer names what changed); once it asks
     something back, it's the move of whoever started it. An agent may ask
     you: say your answer, then settle it. Asking a slot other than the
@@ -845,7 +852,7 @@ away and rebuilt when the reader changes.
 | Slots | the lead's: `slot_list`, `slot_read`, `slot_start`, `slot_close`, `slot_send` (optionally waiting for the answer); a sub-slot's: `tell_lead` (the user sees it too); any slot's: `tell_user` |
 | Terminals | `terminals`, `terminal_read` (a screen, with scrollback, and the last ten commands; `numbered`: each row with its line's number; `command`: one command's whole output); `terminal_type` (text and keys) only for a role given `shell.drive`, which none has by default |
 | Discussions | `discussions` (what's waiting on you first; on a plan, or on a thing), `discussion_read` (one whole: what it's on now and as it was, everything said); `discuss` (a question or a change request on a thing by its name, asking the lead, the user, or, with `slots.message`, another slot), `discussion_reply`, `discussion_answer` (only by the slot asked; a change request's names what changed) for a role given `discuss`; the agents in a discussion are told what others say in it |
-| Tags | `tags` (each tag, how many things, its note), `tag_read` (what a tag is on: each thing's name, who tagged it, where it is and the start of what it says; one thing whole, by `lines`, or `full` with a chat turn's tool output), `tag_find` (search what tagged things say); `tag`, `untag` (a thing by its name: `terminal t1 command 3`, `terminal t1 lines 120-124`, `chat lead turn 3 message 2`, `chat lead` (the whole session), `src/a.rs lines 10-12`, `file src/a.rs`, `component <id>`) and `tag_edit` (rename, recolour, note, delete) for a role given `tags.edit` |
+| Tags | `tags` (each tag, how many things, its note), `tag_read` (what a tag is on: each thing's name, who tagged it, where it is and the start of what it says; one thing whole, by `lines`, or `full` with a chat turn's tool output), `tag_find` (search what tagged things say); `thing_read` (any thing by its name, as it is now: what a link sent as a pointer names); `tag`, `untag` (a thing by its name: `terminal t1 command 3`, `terminal t1 lines 120-124`, `chat lead turn 3 message 2`, `chat lead` (the whole session), `src/a.rs lines 10-12`, `file src/a.rs`, `component <id>`) and `tag_edit` (rename, recolour, note, delete) for a role given `tags.edit` |
 
 Every result ends with next steps, given in dependency order.
 
@@ -913,7 +920,7 @@ is approved, verified or built. It's saved in `.nah/plans/` like any plan.
 | `nah-timeline` | the timeline: a snapshot whenever a session's turn starts or ends (from the event stream), the windows between them and who was working, each turn's changes; kept in the state database, let go by policy |
 | `nah-terminal` | terminals: a shell in a pseudo-terminal (`portable-pty`) with its screen kept by an emulator (`alacritty_terminal`): what changed since a reader last looked, the scrollback and searching it, keys as the bytes a program expects, its title, bell, finished commands (bash and zsh marked by a start-up hook) and end. Knows nothing of the server or the cockpit |
 | `nah-discussions` | discussions: a question or a change asked for on any thing in the project, and the back-and-forth on it; only the user settles or reopens one, a change request's answer names what changed; kept in the state database (who, what, where, status) with the messages' text in `.nah/state/discussions/` (searched with FFF), told on the event stream; a plan's component isn't approved while one on it isn't settled; a discussion is a thing too |
-| `nah-tags` | tags: names given to things in the project (a terminal's lines and commands, a chat's messages and turns, code lines and components); kept in the state database (each change with who made it, never a thing's text), told on the event stream; `#name` in a prompt expanded; the things themselves are `nah-things`' |
+| `nah-tags` | tags: names given to things in the project (a terminal's lines and commands, a chat's messages and turns, code lines and components); kept in the state database (each change with who made it, never a thing's text), told on the event stream; a link to a tag gives its things; the things themselves (and rendering what a message links) are `nah-things`' |
 | `nah-things` | things in the project, one layer for every kind of note on them: their owners (`Resolve`, registered as each is made) name them (one name each, wherever it's shown), say what they say and where they are now; what doesn't last is written to the logs (`.nah/state/tagged/`, a file per thing; a running command followed up to `running_log_mb` in `.nah/terminals.toml`), read back in parts and searched with FFF |
 | `nah-state` | the project's state database (`.nah/state/state.sqlite`): what the server keeps across restarts that isn't the analysis. One server per project (a lock), explicit layouts, never thrown away |
 | `arch-store` | where the analysis is kept between runs (SQLite) |

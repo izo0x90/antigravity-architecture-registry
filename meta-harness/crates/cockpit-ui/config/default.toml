@@ -54,6 +54,7 @@ cycle = ["Tab"]
 send = ["Enter"]
 add = ["ctrl+Enter"]
 newline = "shift+Enter"     # a new line in the box
+link = "ctrl+i"             # the link at the caret: whole, a pointer, or as it fits
 # Leaving typing in a terminal, where Escape is the program's (vim's): each
 # a key sequence. The first key of one waits for the next; past the wait it
 # goes to the program after all (`ctrl+\` too, which would stop it).

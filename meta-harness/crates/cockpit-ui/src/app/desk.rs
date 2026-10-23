@@ -15,7 +15,7 @@ pub struct Discussing {
     pub asked: Option<String>,
     /// What it says, once written (kept until the server has it: not
     /// started, it's written again from there).
-    pub text: String,
+    pub text: harness_contracts::Message,
 }
 
 pub struct Desk {
@@ -60,6 +60,8 @@ pub struct Desk {
     pub choosing: Option<Choosing>,
     /// What's typed in each of the shell's searches (by its action's id).
     pub shell_searches: BTreeMap<String, String>,
+    /// What the `@` picker found for what was typed.
+    pub finding: super::linking::Finding,
     /// The tag `g T` picked, while the palette asks which of its things.
     pub tag_picking: Option<harness_contracts::TagId>,
     /// The tag an edit picked (of several there), while the palette asks
@@ -113,6 +115,7 @@ impl Desk {
             pending_goto: None,
             choosing: None,
             shell_searches: BTreeMap::new(),
+            finding: Default::default(),
             tag_picking: None,
             tag_editing: None,
             tag_stepping: None,

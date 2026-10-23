@@ -32,6 +32,7 @@ mod going;
 mod keeping;
 mod keys;
 mod layout;
+mod linking;
 mod lifecycle;
 mod look;
 pub(crate) mod notes;
@@ -114,6 +115,7 @@ enum ShellCommand {
     TagLevel,
     /// A tag's name (its value: its id) put where you're typing.
     TagInsert,
+    LinkThing,
     /// An edit of a tag (the one it was asked for): its value.
     TagEdit(TagEditing, harness_contracts::TagId),
     /// Which of the tags at the cursor an edit is of (its value: its id).

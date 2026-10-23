@@ -852,9 +852,11 @@ pub trait Navigable {
         false
     }
 
-    /// Text put where it's typed in (a tag's name, `#name `), after what's
-    /// typed (a `#` just typed not doubled), the caret after it.
-    fn typed_in(&mut self, _text: &str) {}
+    /// Its typing box, where what's picked for what's written goes (a link
+    /// to a tag or a thing).
+    fn typing_box(&mut self) -> Option<&mut crate::conversation::TypingBox> {
+        None
+    }
 
     /// The tag item `key` is a row of (a view of tags): the tag edits are
     /// its buttons.

@@ -89,6 +89,13 @@ pub struct InputKeys {
     /// key goes into the field after all.
     #[serde(default = "default_leave_wait")]
     pub leave_wait_ms: u64,
+    /// The link at the caret: whole, a pointer, or as it fits (in turn).
+    #[serde(default = "default_link")]
+    pub link: Chord,
+}
+
+fn default_link() -> Chord {
+    Chord::try_from("ctrl+i".to_owned()).expect("a built-in key")
 }
 
 fn default_leave() -> Vec<super::Sequence> {
@@ -102,7 +109,7 @@ fn default_leave_wait() -> u64 {
 impl Default for InputKeys {
     fn default() -> Self {
         let [newline] = <[Chord; 1]>::try_from(chords(&["shift+Enter"])).expect("one key");
-        Self { send: chords(&["Enter"]), add: chords(&["ctrl+Enter"]), newline, leave: default_leave(), leave_wait_ms: default_leave_wait() }
+        Self { send: chords(&["Enter"]), add: chords(&["ctrl+Enter"]), newline, leave: default_leave(), leave_wait_ms: default_leave_wait(), link: default_link() }
     }
 }
 
@@ -137,7 +144,7 @@ impl InputKeys {
     /// What a typing box's keys do (`leave`: what the way back out does),
     /// each key with its words.
     pub fn keys(&self, back: &Chord, leave: &'static str) -> Vec<(String, &'static str)> {
-        vec![(self.label(Sent::Send), "sends"), (self.newline.label(), "new line"), (back.label(), leave)]
+        vec![(self.label(Sent::Send), "sends"), (self.newline.label(), "new line"), (self.link.label(), "a link: whole, pointer, as it fits"), (back.label(), leave)]
     }
 
     /// What a field that takes every key says about its keys: how to leave.

@@ -138,14 +138,18 @@ impl CockpitApp {
         self.quick_look.as_ref().map_or_else(|| self.desk.panels.focused_kind(), |q| q.kind())
     }
 
+    /// The buffer `at` holds (the quick look's, or a panel's).
+    pub(super) fn buffer_at(&self, at: crate::keymap::Host) -> Option<BufferId> {
+        match (at, &self.quick_look) {
+            (crate::keymap::Host::Look, Some(look)) => Some(look.buffer),
+            (crate::keymap::Host::Panel(panel), _) if panel < self.desk.panels.len() => Some(self.desk.panels.buffer(panel)),
+            _ => None,
+        }
+    }
+
     /// What the field of the buffer `at` holds takes while typed in.
     pub(super) fn field_at(&self, at: crate::keymap::Host) -> crate::keymap::Field {
-        let buffer = match (at, &self.quick_look) {
-            (crate::keymap::Host::Look, Some(look)) => look.buffer,
-            (crate::keymap::Host::Panel(panel), _) if panel < self.desk.panels.len() => self.desk.panels.buffer(panel),
-            _ => return crate::keymap::Field::Text,
-        };
-        self.desk.buffer(buffer).map_or(crate::keymap::Field::Text, |b| b.field())
+        self.buffer_at(at).and_then(|b| self.desk.buffer(b)).map_or(crate::keymap::Field::Text, |b| b.field())
     }
 
     /// What holds the buffer of `kind` in use: the quick look, while it

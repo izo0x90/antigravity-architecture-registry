@@ -365,9 +365,9 @@ impl ActionProvider for ChatStreamState {
             }
             ChatCommand::ListMcp | ChatCommand::ListSkills => {}
             ChatCommand::AddToTurn => {
-                let text = std::mem::take(&mut self.ui.input.text).trim().to_owned();
-                if !text.is_empty() {
-                    self.add_to_turn(text);
+                let message = self.ui.input.take();
+                if !message.text.is_empty() {
+                    self.add_to_turn(message);
                 }
             }
             ChatCommand::AddMcp => {
@@ -396,13 +396,13 @@ impl ActionProvider for ChatStreamState {
             ChatCommand::HarnessCommand { name } => {
                 // Picked while typing its start: what was typed goes.
                 if self.ui.input.text.strip_prefix('/').is_some_and(|p| name.starts_with(p.trim())) {
-                    self.ui.input.text.clear();
+                    self.ui.input.take();
                 }
                 let text = match value {
                     Some(args) if !args.is_empty() => format!("/{name} {args}"),
                     _ => format!("/{name}"),
                 };
-                self.send_prompt(text);
+                self.send_prompt(text.into());
             }
             ChatCommand::Login => {
                 if let (Some(method), Some(instance)) = (value, self.active_instance()) {
@@ -428,9 +428,9 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             ChatCommand::Send => {
-                let text = std::mem::take(&mut self.ui.input.text).trim().to_owned();
-                if !text.is_empty() {
-                    self.send_prompt(text);
+                let message = self.ui.input.take();
+                if !message.text.is_empty() {
+                    self.send_prompt(message);
                 }
             }
             ChatCommand::DismissNotice => self.act(Act::PutNoticeAway),

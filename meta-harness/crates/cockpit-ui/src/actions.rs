@@ -28,7 +28,7 @@ pub enum Param {
     Text { hint: String, start: String },
     /// Writing of any length, in the typing box every conversation has
     /// (many lines: Enter sends, as the keymap says), starting as `start`.
-    Writing { hint: String, start: String },
+    Writing { hint: String, start: harness_contracts::Message },
     /// Typed text looked up as it's typed: the provider gets each query
     /// (`ActionProvider::search`) and lists what it found for it here.
     Search { hint: String, found: Vec<Choice>, waiting: bool },

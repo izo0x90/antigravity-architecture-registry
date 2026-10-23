@@ -10,7 +10,7 @@ pub(crate) fn text_input_focused(ctx: &egui::Context) -> bool {
 
 /// A key ran a command: what it typed isn't typed anywhere else this pass
 /// too (a typing box the command opens has the keys from the next on).
-fn typed_away(ctx: &egui::Context) {
+pub(super) fn typed_away(ctx: &egui::Context) {
     ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
 }
 
