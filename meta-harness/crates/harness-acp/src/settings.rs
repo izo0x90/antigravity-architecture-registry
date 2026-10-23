@@ -41,6 +41,9 @@ pub struct AcpSettings {
     pub questions: QuestionSettings,
     /// Its own folders, by name (usable as `{name}` in templates).
     pub dirs: BTreeMap<String, DirSetting>,
+    /// How its home (login, settings, sessions) is moved to a folder of the
+    /// project's, when the project keeps it.
+    pub home: Option<HomeSettings>,
     pub skills: Option<SkillSettings>,
     /// Its configuration files that list tool servers.
     pub tool_config: Vec<ToolConfigSetting>,
@@ -177,6 +180,21 @@ pub struct DirSetting {
     pub env: String,
     /// Its template when the variable isn't set.
     pub default: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HomeSettings {
+    /// The variables that move it, each a template where `{kept}` is the
+    /// folder it's kept in.
+    pub env: BTreeMap<String, String>,
+}
+
+impl HomeSettings {
+    /// The variables that keep it in `kept`.
+    pub fn env_for(&self, kept: &Path) -> Vec<(String, String)> {
+        self.env.iter().map(|(name, value)| (name.clone(), value.replace("{kept}", &kept.to_string_lossy()))).collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -72,7 +72,8 @@ fn the_shipped_harness_pack_gives_its_driver_a_launch_once_it_passes_its_check()
         other => panic!("{other:?}"),
     };
     assert_eq!(launch.program, dest.join("agy_acp_server.par").display().to_string());
-    assert!(launch.env.is_empty(), "the server finds its harness next to itself");
+    // The server finds its harness next to itself; its login opens no browser here.
+    assert_eq!(launch.env, [("BROWSER".to_owned(), "true".to_owned())]);
     assert!(run(&Command::Check(Some("antigravity-acp".into())), &catalog).unwrap().contains("ready (1.1.1)"));
     let which = run(&Command::Which("antigravity-acp".into()), &catalog).unwrap();
     assert!(which.contains(&launch.program) && which.contains("the pack, installed for linux-x86_64"), "{which}");
@@ -128,7 +129,8 @@ fn on_the_developer_sandbox_the_launch_is_the_emulated_server() {
     assert_eq!(launch.program, format!("{d}/qemu/usr/bin/qemu-x86_64"));
     assert_eq!(&launch.args[..5], ["-L".to_owned(), format!("{d}/sysroot"), "-E".to_owned(), format!("LD_LIBRARY_PATH={d}/sysroot/lib/x86_64-linux-gnu"), format!("{d}/libexec/agy_acp_server.par")]);
     assert!(launch.args[5].starts_with("--uid=") && launch.args[5].len() > "--uid=".len() && !launch.args[5].contains('{'), "the user filled in: {}", launch.args[5]);
-    assert!(launch.env.is_empty(), "the server finds the harness next to itself in libexec");
+    // The server finds the harness next to itself in libexec; its login opens no browser here.
+    assert_eq!(launch.env, [("BROWSER".to_owned(), "true".to_owned())]);
     assert!(run(&Command::List, &catalog).unwrap().contains("linux-arm64-16k (developer)"), "pack list names the developer platform");
 }
 

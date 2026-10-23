@@ -89,14 +89,18 @@ patch_archive = { file = "libexec/agy_acp_server.par", members = ["google3/third
 
 # QEMU, the sysroot, the server; --uid: started as root, the server would
 # otherwise drop to `nobody`, which can't read the user's ~/.gemini.
+# BROWSER as the pack's own launch (below).
 [install.launch]
 program = "{dest}/qemu/usr/bin/qemu-x86_64"
 args = ["-L", "{dest}/sysroot", "-E", "LD_LIBRARY_PATH={dest}/sysroot/lib/x86_64-linux-gnu", "{dest}/libexec/agy_acp_server.par", "--uid={user}"]
+env = { BROWSER = "true" }
 
 # The instance the cockpit drives, run by the ACP driver; the settings are
-# what Antigravity's server does its own way.
+# what Antigravity's server does its own way. BROWSER: its login opens no
+# browser on the server's machine (`true` succeeds, doing nothing); it
+# still prints the link, which the cockpit shows.
 [provides]
-launch = { program = "{dest}/agy_acp_server.par" }
+launch = { program = "{dest}/agy_acp_server.par", env = { BROWSER = "true" } }
 driver = "acp"
 instance = "antigravity"
 display_name = "Antigravity"
@@ -120,6 +124,25 @@ accept_for_session = "Also allows every later call like this in the thread."
 [provides.settings.questions]
 permission_tool_prefix = "interaction_"
 
+# Its home: everything it keeps (paths.py, 1.1.1).
+[provides.settings.dirs.gemini]
+env = "GEMINI_HOME"
+default = "{home}/.gemini"
+
+# Its Google logins print a link and wait 300 s for the browser's callback
+# on a local port; signed out, opening a session starts one (and doesn't
+# answer). Its login is a file in its home (with the file storage forced:
+# else, on macOS, the Keychain).
+[provides.settings.login]
+link = 'https://accounts\.google\.com/\S+'
+within_s = 300
+kept = "{gemini}/antigravity-acp/acp_token.json"
+on_session = true
+
+# Moved by GEMINI_HOME, its login kept as a file there too.
+[provides.settings.home]
+env = { GEMINI_HOME = "{kept}", AGY_ACP_FORCE_FILE_STORAGE = "1" }
+
 # Where it finds skills, in its order (the first of a name wins): a skill's
 # name is its frontmatter's, else its file's; `skill.md` in any case; a
 # folder's skills in URL-escaped order.
@@ -128,9 +151,9 @@ name = "file"
 file = "any_case"
 order = "escaped_path"
 roots = [
-    { path = "{home}/.gemini/config/skills", scope = "user" },
+    { path = "{gemini}/config/skills", scope = "user" },
     { path = "{project}/.gemini/skills", scope = "project" },
-    { path = "{home}/.gemini/antigravity-cli/skills", scope = "user" },
+    { path = "{gemini}/antigravity-cli/skills", scope = "user" },
     { path = "{project}/.agents/skills", scope = "project" },
     { path = "{project}/.agent/skills", scope = "project" },
 ]
