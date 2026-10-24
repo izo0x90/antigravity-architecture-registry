@@ -87,8 +87,9 @@ impl CockpitApp {
     fn draw_bar_keys(&self, ui: &mut egui::Ui, bound: &[Bound], narrow: bool, run: &mut Option<Bound>) {
         let said = |ui: &mut egui::Ui, text: String| ui.label(RichText::new(text).size(crate::theme::look().text_body).color(colors().muted));
         if self.input_mode == InputMode::Palette {
-            for keys in self.palette.keys_said() {
-                said(ui, keys.clone());
+            let actions = self.palette_actions();
+            for keys in self.palette.keys_said(&self.config.keymap, |origin, id| actions.iter().find(|b| b.origin == origin && b.action.id == id)) {
+                said(ui, keys);
             }
             return;
         }
@@ -166,8 +167,9 @@ impl CockpitApp {
     /// what holds you, the keys that run nothing themselves (the mode's it
     /// was opened from, the pointer's and fingers'), the leader's groups'
     /// names, and going to a line.
-    pub(in crate::app) fn sheet_of(&self, bound: Vec<Bound>) -> (Vec<crate::sheet::Offered>, crate::sheet::Sheet) {
-        use crate::sheet::{Inform, Informs, Offered, Sheet};
+    pub(in crate::app) fn sheet_of(&self, bound: Vec<Bound>) -> (Vec<crate::actions::Offered>, crate::sheet::Sheet) {
+        use crate::actions::Offered;
+        use crate::sheet::{Inform, Informs, Sheet};
         #[cfg(test)]
         self.listed.set(self.listed.get() + 1);
         let here = self.here();

@@ -240,10 +240,13 @@ mod tests {
         assert_eq!((search.rows_of(), labels(&search)), (Some("a"), vec!["alpha".to_owned(), "a.rs".to_owned()]), "whole, symbols then files");
         assert_eq!(next.1, "ab", "what was typed meanwhile, asked once it's back");
 
-        // An answer for a round gone is dropped (never shown); a failure is
-        // said, as nothing found.
-        search.answer(first.0, SearchKind::Files, found(&["late.rs"]));
+        // An answer for a round gone is dropped: it doesn't complete the
+        // round out (still the rows of `a` until its own answers are in);
+        // a failure is said, as nothing found.
+        search.answer(first.0, SearchKind::Symbols, found(&["late"]));
         search.answer(next.0, SearchKind::Files, found(&["ab.rs"]));
+        search.tend(0.35);
+        assert_eq!(search.rows_of(), Some("a"), "the late answer didn't count for this round");
         assert!(search.answer(next.0, SearchKind::Symbols, Err(crate::net::NetError::other("down"))).unwrap().contains("down"));
         search.tend(0.4);
         assert_eq!((search.rows_of(), labels(&search)), (Some("ab"), vec!["ab.rs".to_owned()]));
@@ -299,8 +302,10 @@ mod tests {
         search.drive("ab", &ctx, |k, q, reply| sent.push((k, q.to_owned(), reply)));
         search.clear();
         sent.drain(..).for_each(|(_, _, reply)| reply(found(&["late.rs"])));
-        search.drive("", &ctx, |_, _, _| panic!("nothing typed: nothing asked"));
-        assert_eq!((search.rows_of(), labels(&search).len()), (Some(""), 0), "what came for the round cleared is dropped");
+        // The same query again: what came for the round cleared doesn't
+        // answer it; it's asked afresh.
+        search.drive("ab", &ctx, |k, q, reply| sent.push((k, q.to_owned(), reply)));
+        assert_eq!((sent.len(), labels(&search).len()), (2, 0), "what came for the round cleared is dropped");
     }
 
     /// The last row listed of a kind says what wasn't listed, even when a

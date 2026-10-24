@@ -543,6 +543,25 @@ impl Bound {
     }
 }
 
+/// An action offered here, and whether it applies where you are (judged
+/// once, by the app, for every surface).
+pub struct Offered {
+    pub bound: Bound,
+    pub applies: bool,
+}
+
+impl Offered {
+    /// Asked to run: what's said instead, when it isn't. One that asks for
+    /// a value isn't asked for it where it doesn't apply; one that doesn't
+    /// runs (its view says why it can't, in its own words), as a switch
+    /// flips. (Its key, its control and the action list all ask this.)
+    pub fn refused(&self) -> Option<String> {
+        let action = &self.bound.action;
+        let asks = !matches!(action.param, Param::None | Param::Toggle { .. });
+        (asks && !self.applies).then(|| format!("{}: {}.", action.label, action.when.why_not()))
+    }
+}
+
 /// A request to run an action, with its parameter value if it takes one.
 #[derive(Clone, Debug)]
 pub struct Invocation {
@@ -717,6 +736,13 @@ pub fn list_open(ctx: &egui::Context, list: egui::Id) -> bool {
     egui::ComboBox::is_open(ctx, list)
 }
 
+/// Closes a setting's list of choices (the way back out, as configured).
+pub fn close_list(ctx: &egui::Context, list: egui::Id) {
+    if list_open(ctx, list) {
+        egui::Popup::close_all(ctx);
+    }
+}
+
 /// Narrowest a picker gets before its text is truncated.
 const PICKER_MIN_WIDTH: f32 = 90.0;
 
@@ -794,7 +820,9 @@ fn draw_control(ui: &mut egui::Ui, bound: &Bound, mode: &mut InputMode) -> Optio
             // (The combo box's own id: its salt made an id, in this ui.)
             let choosing = InputMode::Choosing { list: ui.make_persistent_id(egui::Id::new(combo_salt)) };
             let was = *mode;
-            if open && *mode != InputMode::Palette {
+            // (From where keys run the panel's actions, which would run
+            // beside it; typing, a capture or a menu keep theirs.)
+            if open && *mode == InputMode::Normal {
                 *mode = choosing;
             } else if !open && *mode == choosing {
                 // Closed: where its list was is let go (once, not each frame).

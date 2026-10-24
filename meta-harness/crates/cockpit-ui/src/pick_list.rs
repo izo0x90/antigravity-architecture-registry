@@ -379,12 +379,12 @@ mod tests {
         shown.frame(vec![], Some(Motion::Down), false);
         shown.frame(vec![], Some(Motion::Down), false);
         assert_eq!(shown.list.highlight(), 4, "Down crosses a heading");
-        shown.frame(vec![], Some(Motion::Up), false);
-        assert_eq!(shown.list.highlight(), 2, "and Up");
         // (A heading's title sits at the foot of its row: above it is its row.)
         let frame = shown.frame(vec![], None, false);
         shown.point(at(&frame, "row 3").unwrap() - egui::vec2(0.0, 8.0));
-        assert_eq!(shown.list.highlight(), 2, "the pointer on a heading moves nothing");
+        assert_eq!(shown.list.highlight(), 4, "the pointer on a heading moves nothing");
+        shown.frame(vec![], Some(Motion::Up), false);
+        assert_eq!(shown.list.highlight(), 2, "and Up crosses it");
         assert_eq!(shown.frame(vec![], None, true).picked, Some(2));
     }
 

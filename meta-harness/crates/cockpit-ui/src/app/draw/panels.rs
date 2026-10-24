@@ -42,15 +42,8 @@ impl CockpitApp {
     /// The palette overlay (opened by its key, or its control on the top
     /// bar).
     pub fn render_palette(&mut self, ctx: &egui::Context) {
-        // A search left (picked, gone back from, closed): its owner is told,
-        // so the next opens with nothing of it.
-        let opening = self.palette.opening();
-        if self.searched.as_ref().map(|(origin, id, at)| (*origin, id.as_str(), *at)) != self.palette.searching().map(|(origin, id)| (origin, id, opening)) {
-            let now = self.palette.searching().map(|(origin, id)| (origin, id.to_owned(), opening));
-            if let Some((origin, id, _)) = std::mem::replace(&mut self.searched, now) {
-                self.search_done(origin, &id);
-            }
-        }
+        // (Closed by something else this frame: a menu opened over it.)
+        self.tell_searches_left();
         // A view asked for an action's picker (e.g. Resume once sessions loaded).
         let requests: Vec<String> = BufferKind::ALL.into_iter().filter_map(|kind| self.desk.view_mut(kind).take_palette_request()).collect();
         // Closed and not asked for: nothing to list (what it lists isn't
@@ -59,10 +52,11 @@ impl CockpitApp {
             return;
         }
         let bound = self.palette_actions();
-        // (Only one that's offered there now: none of them, nothing opens.)
+        // Run as its key would (only one offered there now; refused, says
+        // why).
         for id in requests {
-            if let Some(action) = bound.iter().find(|b| b.action.id == id && b.action.when != crate::actions::When::Unavailable) {
-                self.open_palette(action);
+            if let Some(action) = bound.iter().find(|b| b.action.id == id) {
+                self.run_bound(action, None, ctx);
             }
         }
         let (offered, sheet) = self.sheet_of(bound);
@@ -96,26 +90,47 @@ impl CockpitApp {
             }
             self.invoke(invocation, ctx);
         }
-        // Closed without a pick: back to typing, when that's where it was;
-        // a step-by-step start or edit left there is gone.
+        // Closed without a pick: what it left goes.
         if self.input_mode == InputMode::Palette && !self.palette.is_open() {
-            // A trigger's picker left: what was typed in it goes after the trigger.
-            if let Some(typed) = self.palette.take_given_back()
-                && let InputMode::Insert { at } = self.palette_from
-                && let Some(buffer) = self.buffer_at(at)
-                && let Some(writing) = self.desk.buffer_mut(buffer).and_then(|b| b.typing_box())
-            {
-                writing.put(&typed);
+            self.palette_closed(ctx);
+        }
+        self.tell_searches_left();
+    }
+
+    /// The palette closed without a pick (its way back out, or another
+    /// opened over it): back to typing, when that's where it was; what was
+    /// typed in a trigger's picker goes after the trigger; a step-by-step
+    /// start or edit left there is gone.
+    pub(in crate::app) fn palette_closed(&mut self, ctx: &egui::Context) {
+        if let Some(typed) = self.palette.take_given_back()
+            && let InputMode::Insert { at } = self.palette_from
+            && let Some(buffer) = self.buffer_at(at)
+            && let Some(writing) = self.desk.buffer_mut(buffer).and_then(|b| b.typing_box())
+        {
+            writing.put(&typed);
+        }
+        (self.desk.discussing, self.desk.tag_editing) = (None, None);
+        self.desk.discussions_here.clear();
+        self.input_mode = match self.palette_from {
+            typing @ InputMode::Insert { .. } => typing,
+            _ => {
+                release_keyboard(ctx);
+                InputMode::Normal
             }
-            (self.desk.discussing, self.desk.tag_editing) = (None, None);
-            self.desk.discussions_here.clear();
-            self.input_mode = match self.palette_from {
-                typing @ InputMode::Insert { .. } => typing,
-                _ => {
-                    release_keyboard(ctx);
-                    InputMode::Normal
-                }
-            };
+        };
+    }
+
+    /// A search left (picked, gone back from, closed, or the list opened
+    /// afresh): its owner is told at once, so the next opens with nothing
+    /// of it and nothing more is asked for it (checked as the palette is
+    /// drawn, before and after).
+    fn tell_searches_left(&mut self) {
+        let opening = self.palette.opening();
+        if self.searched.as_ref().map(|(origin, id, at)| (*origin, id.as_str(), *at)) != self.palette.searching().map(|(origin, id)| (origin, id, opening)) {
+            let now = self.palette.searching().map(|(origin, id)| (origin, id.to_owned(), opening));
+            if let Some((origin, id, _)) = std::mem::replace(&mut self.searched, now) {
+                self.search_done(origin, &id);
+            }
         }
     }
 

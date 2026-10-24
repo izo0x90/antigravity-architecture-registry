@@ -9,7 +9,7 @@
 
 use std::borrow::Cow;
 
-use crate::actions::{Bound, Group, Layer, Param};
+use crate::actions::{Bound, Group, Layer, Offered};
 use crate::pick_list::{Row, RowKind};
 
 /// How far the action list reaches: what applies where you are, or
@@ -28,25 +28,6 @@ impl Reach {
             Self::Here => Self::Everything,
             Self::Everything => Self::Here,
         }
-    }
-}
-
-/// An action offered here, and whether it applies where you are (judged
-/// once, by the app, for every surface).
-pub struct Offered {
-    pub bound: Bound,
-    pub applies: bool,
-}
-
-impl Offered {
-    /// Asked to run: what's said instead, when it isn't. One that asks for
-    /// a value isn't asked for it where it doesn't apply; one that doesn't
-    /// runs (its view says why it can't, in its own words), as a switch
-    /// flips. (Its key, its control and the action list all ask this.)
-    pub fn refused(&self) -> Option<String> {
-        let action = &self.bound.action;
-        let asks = !matches!(action.param, Param::None | Param::Toggle { .. });
-        (asks && !self.applies).then(|| format!("{}: {}.", action.label, action.when.why_not()))
     }
 }
 
@@ -272,7 +253,7 @@ impl<'a> Listed<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::actions::{Action, Origin, PRIMARY, MINOR, When};
+    use crate::actions::{Action, Origin, Param, PRIMARY, MINOR, When};
 
     /// An action offered: its id (its label too), layer, leader path,
     /// whether it applies, and what it takes.

@@ -218,8 +218,9 @@ impl CockpitApp {
                 match at {
                     Some(at) => cache[at] = kept,
                     None => {
-                        // Where it was gathered lately (the hosts on screen).
-                        if cache.len() == KEPT_KEYS {
+                        // Where it was gathered lately: as many as there
+                        // are hosts on screen (the panels, the quick look).
+                        if cache.len() > self.desk.panels.len() {
                             cache.remove(0);
                         }
                         cache.push(kept);
@@ -319,14 +320,15 @@ impl CockpitApp {
         }
     }
 
-    /// Runs an action by id the way its key would (chips and toolbars).
+    /// Runs an action by id the way its key would (controls, chips): with
+    /// no value, as its key runs it (`run_bound`: refused where it doesn't
+    /// apply, a picker for its value); with one, at once.
     pub(super) fn run_by_id(&mut self, id: &str, value: Option<String>, ctx: &egui::Context) {
         let bound = self.palette_actions();
         if let Some(b) = bound.into_iter().find(|b| b.action.id == id) {
-            if value.is_none() && b.action.param != Param::None {
-                self.open_palette(&b);
-            } else {
-                self.invoke(Invocation { action: b.action, origin: b.origin, value }, ctx);
+            match value {
+                None => self.run_bound(&b, None, ctx),
+                value => self.invoke(Invocation { action: b.action, origin: b.origin, value }, ctx),
             }
         }
     }
@@ -355,7 +357,7 @@ impl CockpitApp {
     /// its parameter if it needs one (where it doesn't apply, why not is
     /// said instead, as the action list does).
     pub(super) fn run_bound(&mut self, bound: &Bound, count: Option<u32>, ctx: &egui::Context) {
-        let offered = crate::sheet::Offered { applies: self.applies(bound, self.here()), bound: bound.clone() };
+        let offered = crate::actions::Offered { applies: self.applies(bound, self.here()), bound: bound.clone() };
         if let Some(why) = offered.refused() {
             self.note = Some(why);
             return;

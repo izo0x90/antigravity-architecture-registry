@@ -35,7 +35,7 @@ fn a_row_that_cant_run_here_says_why_and_one_without_a_value_runs() {
     let (ctx, mut app) = full_app();
     focus(&ctx, &mut app, BufferKind::Spec);
     let (offered, _) = app.sheet_of(app.palette_actions());
-    let asks = |o: &&crate::sheet::Offered| !matches!(o.bound.action.param, Param::None | Param::Toggle { .. });
+    let asks = |o: &&crate::actions::Offered| !matches!(o.bound.action.param, Param::None | Param::Toggle { .. });
     let refused = offered.iter().find(|o| !o.applies && asks(o) && o.bound.leader.is_some()).expect("one that asks for a value and doesn't apply here");
     let why = refused.refused().expect("refused");
     let refused = refused.bound.clone();
@@ -103,18 +103,29 @@ fn back_from_a_value_is_the_list_as_it_was() {
     assert!(app.palette.is_open() && app.palette.picking().is_none() && text.contains("Every action and key"), "{text}");
 }
 
-/// The list and the key bar say the same keys, the switch included; the
-/// view's menu's name finds its actions.
+/// The list and the key bar say the same keys, the switch included, from
+/// the frame it opens and after the switch; the view's menu's name finds
+/// its actions.
 #[test]
 fn the_list_and_the_key_bar_say_one_line_and_a_menus_name_finds_its_actions() {
     let (ctx, mut app) = app_with_graph();
-    let text = open(&ctx, &mut app, ":");
-    let said = app.palette.keys_said().to_vec();
-    assert!(said.iter().any(|k| k == "Tab: everything") && said.iter().any(|k| k == "Enter picks"), "{said:?}");
-    assert!(text.contains(&said.join(" · ")), "under the list: {text}");
-    for keys in &said {
-        assert!(text.lines().any(|l| l == keys), "in the key bar: {keys}: {text}");
+    let said = |app: &CockpitApp| {
+        let actions = app.palette_actions();
+        app.palette.keys_said(&app.config.keymap, |origin, id| actions.iter().find(|b| b.origin == origin && b.action.id == id))
+    };
+    let opened = texts(&frame(&ctx, &mut app, key(":")));
+    let keys = said(&app);
+    assert!(keys.iter().any(|k| k == "Tab: everything") && keys.iter().any(|k| k == "Enter picks"), "{keys:?}");
+    for keys in &keys {
+        assert!(opened.lines().any(|l| l == keys), "in the key bar from the frame it opens: {keys}: {opened}");
     }
+    let tab = frame(&ctx, &mut app, press(egui::Key::Tab, false));
+    assert!(tab.viewport_output.values().any(|v| v.repaint_delay.is_zero()), "drawn again at once");
+    let switched = texts(&frame(&ctx, &mut app, vec![]));
+    let keys = said(&app);
+    assert!(keys.iter().any(|k| k == "Tab: what applies here") && switched.lines().any(|l| l == "Tab: what applies here"), "the key bar after the switch: {switched}");
+    let text = texts(&frame(&ctx, &mut app, vec![]));
+    assert!(text.contains(&keys.join(" · ")), "under the list: {text}");
     let text = everything(&ctx, &mut app, "graph actions");
     assert!(text.contains("Show the legend"), "the view's menu, by its name: {text}");
 }

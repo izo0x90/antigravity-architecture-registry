@@ -79,7 +79,7 @@ fn what_the_final_audit_found_stays_fixed() {
     app.desk.details.insert(crate::goto::tests::detail("rust:a::save", vec![], vec![call("rust:a::step", "rust:a::save", 0, 5)]), &source);
     let situation = app.situation();
     assert!(When::Reaches(GoTo::Callers).holds(&situation) && !When::Reaches(GoTo::Callees).holds(&situation));
-    // The queue's verbs are always in its key sheet, applying or not.
+    // The queue's verbs are always listed (`?`), applying or not.
     focus(&ctx, &mut app, BufferKind::Queue);
     app.desk.queue_mut().move_to("3");
     let approve = app.bound_actions().into_iter().find(|b| b.action.id == "queue.approve").expect("listed");

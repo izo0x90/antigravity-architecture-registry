@@ -53,13 +53,13 @@ impl BufferKind {
         matches!(self, Self::Queue | Self::Inbox | Self::Changes | Self::Tags | Self::Plan)
     }
 
-    /// Lowercase name used in action ids ("buffer.chat").
     /// Its name as words on screen say it ("Chat", "Tags").
     pub fn words(&self) -> String {
         let title = self.title();
         format!("{}{}", &title[..1], title[1..].to_lowercase())
     }
 
+    /// Lowercase name used in action ids ("buffer.chat").
     pub fn name(&self) -> &'static str {
         match self {
             Self::Chat => "chat",

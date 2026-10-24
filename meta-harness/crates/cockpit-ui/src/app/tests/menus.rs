@@ -135,3 +135,111 @@ fn the_which_key_menu_doesnt_move_once_shown() {
     }
     assert!(shown.len() >= 3 && shown.windows(2).all(|w| w[0] == w[1]), "the same place each frame: {shown:?}");
 }
+
+/// The top bar's Menus button opens the leader's own menu, at its top.
+#[test]
+fn the_menus_button_opens_the_leaders_own_menu() {
+    let (ctx, mut app) = app_with_graph();
+    frame(&ctx, &mut app, vec![]);
+    click_on(&ctx, &mut app, "Menus");
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!((app.input_mode, app.leader_path.clone(), app.palette.is_open()), (InputMode::Leader, Vec::new(), false));
+}
+
+/// A menu tapped while something else has the keys: each leaves as its
+/// way back out leaves it. A search being typed is given up (the cursor
+/// back where it was); the action list's half-done start is dropped.
+#[test]
+fn a_menu_tapped_ends_what_had_the_keys_its_own_way() {
+    let (ctx, mut app) = full_app();
+    focus(&ctx, &mut app, BufferKind::Code);
+    frame(&ctx, &mut app, vec![]);
+    let search = |ctx: &egui::Context, app: &mut CockpitApp| {
+        frame(ctx, app, key("/"));
+        for c in "step".chars() {
+            frame(ctx, app, key(&c.to_string()));
+        }
+    };
+    // Its own way back out first: where giving it up leaves the cursor.
+    search(&ctx, &mut app);
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
+    let before = app.desk.view(BufferKind::Code).cursor_key();
+    search(&ctx, &mut app);
+    assert!(matches!(app.capture, Some(Capture::Search(_))) && app.desk.view(BufferKind::Code).cursor_key() != before, "searching: the cursor on what it found");
+    app.open_menu(&[app.config.keymap.view_menu], &ctx);
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
+    frame(&ctx, &mut app, press(egui::Key::Escape, false));
+    assert!(app.capture.is_none() && app.input_mode == InputMode::Normal);
+    assert_eq!(app.desk.view(BufferKind::Code).cursor_key(), before, "given up: the cursor back where it was");
+
+    // The list open at a value: a menu over it drops what it held.
+    let find = app.palette_actions().into_iter().find(|b| b.action.id == "graph.find").unwrap();
+    app.open_palette(&find);
+    frame(&ctx, &mut app, vec![]);
+    app.open_menu(&[], &ctx);
+    assert!(!app.palette.is_open() && app.input_mode == InputMode::Leader);
+}
+
+/// A setting's list takes the keys only from where the panel's keys run;
+/// from a capture (a mark asked for), the capture keeps them.
+#[test]
+fn a_settings_list_takes_the_keys_only_from_where_the_panels_keys_run() {
+    let (ctx, mut app) = app_with_graph();
+    frame(&ctx, &mut app, key("m"));
+    assert!(matches!(app.capture, Some(Capture::MarkSet)), "{:?}", app.capture);
+    let mode = app.input_mode;
+    click_on(&ctx, &mut app, "calls");
+    frame(&ctx, &mut app, vec![]);
+    assert_eq!(app.input_mode, mode, "the capture keeps the keys");
+}
+
+/// Two panels of one kind are judged each on its own: the graph on a card
+/// offers the quick look; the one beside it, on nothing, doesn't.
+#[test]
+fn two_panels_of_one_kind_are_judged_each_on_its_own() {
+    let (ctx, mut app) = app_with_graph();
+    app.desk.panels = crate::panels::Panels::new(vec![BufferId::new(BufferKind::Graph, 0), BufferId::new(BufferKind::Graph, 1)], 0);
+    frame(&ctx, &mut app, vec![]);
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    let looks: Vec<egui::Rect> = drawn_rects(&output, "Quick look").into_iter().chain(drawn_containing(&output, "Quick look  Space q")).collect();
+    let in_panel = |i: usize| looks.iter().any(|r| app.panel_rects[i].contains(r.center()));
+    assert!(in_panel(0) && !in_panel(1), "only on the card's graph: {looks:?}");
+}
+
+/// The chat with no session yet: its banner says so, and its ways out
+/// are under it, drawn there by its host.
+#[test]
+fn the_chats_banner_has_its_buttons_under_it() {
+    let (ctx, mut app) = app_with_graph();
+    app.desk.panels = panels_of(&[BufferKind::Chat], 0);
+    frame(&ctx, &mut app, vec![]);
+    let output = frame(&ctx, &mut app, vec![]);
+    let banner = *drawn_containing(&output, "No session yet").first().or(drawn_containing(&output, "Waiting for the server").first()).expect("a banner");
+    let under = drawn_containing(&output, "New session").into_iter().filter(|r| r.top() > banner.bottom()).min_by(|a, b| a.top().total_cmp(&b.top()));
+    assert!(under.is_some_and(|r| r.top() - banner.bottom() < 60.0), "New session under {banner:?}: {under:?}: {}", texts(&output));
+}
+
+/// A finger held on the quick look's top line says what's there, and
+/// that's all: the view under it isn't touched.
+#[test]
+fn a_finger_held_on_the_quick_looks_top_line_reaches_nothing_under_it() {
+    let (ctx, mut app) = app_with_graph();
+    crate::graph::tests::with_detail(app.desk.graph_mut(), "rust:a::step", "src/a.rs", 10, 20);
+    app.desk.graph_mut().select(Some("rust:a::step".into()));
+    frame_at(&ctx, &mut app, vec![], 1.0);
+    peek_key(&ctx, &mut app, true, 1.0);
+    peek_key(&ctx, &mut app, false, 1.05);
+    let output = frame_at(&ctx, &mut app, vec![], 1.1);
+    let look = ctx.memory(|m| m.area_rect(egui::Id::new("quick_look"))).expect("open");
+    let at = drawn_containing(&output, "Spec actions").into_iter().find(|r| look.contains(r.center())).expect("the look's own menu button").center();
+    let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
+    let before = (app.desk.spec().cursor, app.desk.graph().selection.clone());
+    frame_at(&ctx, &mut app, vec![touch(egui::TouchPhase::Start)], 1.2);
+    frame_at(&ctx, &mut app, vec![], 1.9);
+    frame_at(&ctx, &mut app, vec![touch(egui::TouchPhase::End)], 2.0);
+    frame_at(&ctx, &mut app, vec![], 2.1);
+    assert!(!app.palette.is_open() && app.quick_look.is_some(), "no list opened over it");
+    assert_eq!((app.desk.spec().cursor, app.desk.graph().selection.clone()), before, "nothing under it moved");
+}

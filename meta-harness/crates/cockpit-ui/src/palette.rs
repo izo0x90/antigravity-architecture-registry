@@ -7,10 +7,10 @@
 
 use egui::{Frame, RichText, Stroke};
 
-use crate::actions::{Bound, Choice, Invocation, Origin, Param};
+use crate::actions::{Bound, Choice, Invocation, Offered, Origin, Param};
 use crate::keymap::KeymapConfig;
 use crate::pick_list::{Listing, every_row_picks};
-use crate::sheet::{Item, Listed, Offered, Reach, Sheet};
+use crate::sheet::{Item, Listed, Reach, Sheet};
 use crate::theme::colors;
 
 /// Where it is: the action list (as far as it reaches), or an action's
@@ -50,9 +50,6 @@ pub struct Palette {
     enter_waiting: bool,
     /// What it says (why a row picked can't run here), until the next key.
     said: Option<String>,
-    /// Its keys, as its line under it says them (and the key bar, while it
-    /// has the keys).
-    keys: Vec<String>,
     /// The query a search's rows were of last frame (they changed: the
     /// highlight starts again).
     rows_of: Option<String>,
@@ -132,7 +129,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions { reach: Reach::Here }, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, said: None, keys: Vec::new(), rows_of: None, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
+        Self { open: false, stage: Stage::Actions { reach: Reach::Here }, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, said: None, rows_of: None, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
     }
 }
 
@@ -175,9 +172,15 @@ impl Palette {
         self.enter(action.clone(), None);
     }
 
-    /// Its keys, as its line under it says them.
-    pub fn keys_said(&self) -> &[String] {
-        &self.keys
+    /// Its keys where it is, as its line under it says them (and the key
+    /// bar, while it has the keys): `find` gives an action by its origin
+    /// and id (what the cycle key changes a value to act on).
+    pub fn keys_said<'a>(&self, keymap: &KeymapConfig, find: impl Fn(Origin, &str) -> Option<&'a Bound>) -> Vec<String> {
+        let cycle = match &self.stage {
+            Stage::Choose { action, .. } | Stage::Text { action, .. } | Stage::Writing { action, .. } | Stage::Search { action, .. } => action.action.cycle.as_deref().and_then(|id| find(action.origin, id)),
+            Stage::Actions { .. } => None,
+        };
+        keys_said(&self.stage, cycle, self.enter_waiting, keymap)
     }
 
     pub fn close(&mut self) {
@@ -334,6 +337,9 @@ impl Palette {
         }
         if moved.is_some() || cycled || enter {
             self.said = None;
+            // What it says changes with it; the key bar, drawn before it,
+            // says it next frame, at once.
+            ctx.request_repaint();
         }
         let find = |origin: Origin, id: &str| offered.iter().map(|o| &o.bound).find(|b| b.origin == origin && b.action.id == id);
 
@@ -526,13 +532,14 @@ impl Palette {
                                 }
                             }
                         }
-                        // What it says (why a row picked can't run), then its
-                        // keys, on one line under it.
-                        if let Some(said) = &self.said {
-                            ui.add(egui::Label::new(RichText::new(said).size(crate::theme::look().text_body).color(colors().warn)).wrap());
-                        }
-                        self.keys = keys_said(&stage, cycle, self.enter_waiting, keymap);
-                        ui.add(egui::Label::new(RichText::new(self.keys.join(" · ")).size(crate::theme::look().text_small).color(colors().muted)).wrap());
+                        // Its keys, on one line under it; in their place, until
+                        // the next key, why a row picked can't run (the box
+                        // keeps its size).
+                        let line = match &self.said {
+                            Some(said) => RichText::new(said).size(crate::theme::look().text_small).color(colors().warn),
+                            None => RichText::new(keys_said(&stage, cycle, self.enter_waiting, keymap).join(" · ")).size(crate::theme::look().text_small).color(colors().muted),
+                        };
+                        ui.add(egui::Label::new(line).wrap());
                         let used = ui.min_rect().height();
                         self.tallest = self.tallest.max(used);
                         if self.tallest > used {

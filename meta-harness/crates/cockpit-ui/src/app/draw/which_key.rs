@@ -59,7 +59,7 @@ impl CockpitApp {
     /// The top bar's button for every menu: the leader's own (its root).
     pub(in crate::app) fn every_menu(&self) -> crate::hosted::GroupButton {
         let keys = self.config.keymap.leader.label();
-        crate::hosted::GroupButton { key: ' ', name: "Menus".into(), tip: format!("Menus ({keys})\nEvery menu, as the leader opens them"), keys, asks: (MENU.to_owned(), None) }
+        crate::hosted::GroupButton { key: ' ', name: "Menus".into(), tip: format!("Menus ({keys})\nEvery menu, as the leader opens them"), keys, asks: (MENU.to_owned(), Some(String::new())) }
     }
 
     /// The which-key menu, opened (the leader's key, or a group's button):
@@ -67,10 +67,16 @@ impl CockpitApp {
     /// typed, labels, a mark), then the menu is at its top, and `path` is
     /// gone into as its keys would.
     pub(in crate::app) fn open_menu(&mut self, path: &[char], ctx: &egui::Context) {
+        // Each leaves as its way back out leaves it (a search put back,
+        // the list's half-done start dropped).
         if self.palette.is_open() {
             self.palette.close();
+            self.palette_closed(ctx);
         }
-        self.capture = None;
+        if self.capture.is_some() {
+            self.on_capture(&[], true, ctx);
+            self.capture = None;
+        }
         (self.leader_path, self.input_mode) = (Vec::new(), InputMode::Leader);
         for key in path {
             self.leader_key(*key, ctx);

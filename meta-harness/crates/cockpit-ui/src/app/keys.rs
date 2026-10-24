@@ -57,10 +57,14 @@ impl CockpitApp {
         let leader_tapped = leader_released && self.leader_tap.release();
 
         match self.input_mode {
-            // A setting's list of choices reads its own keys; one gone without
-            // closing (its panel closed) gives them back.
+            // A setting's list of choices reads its own keys, and the way back
+            // out closes it (as the key bar says); one gone without closing
+            // (its panel closed) gives them back.
             InputMode::Choosing { list } => {
-                if !crate::actions::list_open(ctx, list) {
+                if back {
+                    crate::actions::close_list(ctx, list);
+                }
+                if back || !crate::actions::list_open(ctx, list) {
                     self.input_mode = InputMode::Normal;
                 }
             }

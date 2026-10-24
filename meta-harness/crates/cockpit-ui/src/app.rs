@@ -209,9 +209,6 @@ const MAX_COUNT: u32 = 999;
 /// aliases, in order (the view there gets the view menu's letters).
 type KeyedActions = (Here, Vec<(Origin, String, Vec<String>)>);
 
-/// How many places' keys are kept (the hosts on screen, and a few more).
-const KEPT_KEYS: usize = 8;
-
 /// The shell's action that opens a leader group's menu.
 const MENU: &str = "menu.open";
 
@@ -252,13 +249,13 @@ pub struct CockpitApp {
     frame_actions: std::cell::RefCell<Option<Vec<Bound>>>,
     /// Within a frame, each view's situation as worked out once (dropped
     /// with the actions).
-    frame_situations: std::cell::RefCell<Vec<(BufferKind, std::rc::Rc<crate::actions::Situation>)>>,
+    frame_situations: std::cell::RefCell<Vec<(BufferId, std::rc::Rc<crate::actions::Situation>)>>,
     /// Drawing a frame now.
     in_frame: std::cell::Cell<bool>,
-    /// How many times the actions were gathered (counted for the tests).
     /// The palette's search open last frame (its action's origin and id,
     /// and the palette's opening): once left, its owner is told.
     searched: Option<(Origin, String, u64)>,
+    /// How many times the actions were gathered (counted for the tests).
     #[cfg(test)]
     gathered: std::cell::Cell<usize>,
     /// How many times the action list's rows were built (counted for the

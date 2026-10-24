@@ -226,19 +226,19 @@ impl CockpitApp {
         }
     }
 
-    /// The view (and its panel) at `pos`: the quick look's, over its
-    /// panel; else the panel's. None over anything else.
-    fn view_at(&self, ctx: &egui::Context, pos: egui::Pos2) -> Option<(usize, BufferKind)> {
+    /// The view (what holds it, and its panel) at `pos`: the quick look's,
+    /// over its panel; else the panel's. None over anything else.
+    fn view_at(&self, ctx: &egui::Context, pos: egui::Pos2) -> Option<(Host, usize, BufferKind)> {
         if let Some(look) = &self.quick_look
             && ctx.memory(|m| m.area_rect(egui::Id::new("quick_look"))).is_some_and(|r| r.contains(pos))
         {
-            return (ctx.layer_id_at(pos).map(|l| l.id) == Some(egui::Id::new("quick_look"))).then_some((look.panel, look.kind()));
+            return (ctx.layer_id_at(pos).map(|l| l.id) == Some(egui::Id::new("quick_look"))).then_some((Host::Look, look.panel, look.kind()));
         }
         if ctx.layer_id_at(pos).is_some_and(|l| l.order != egui::Order::Background) {
             return None;
         }
         let panel = self.panel_rects.iter().position(|r| r.contains(pos))?;
-        Some((panel, self.desk.panels.kind(panel)))
+        Some((Host::Panel(panel), panel, self.desk.panels.kind(panel)))
     }
 
     fn on_gesture(&mut self, gesture: crate::touch::Gesture, ctx: &egui::Context) {
@@ -246,11 +246,12 @@ impl CockpitApp {
         let at = match gesture {
             Gesture::LongPress(p) | Gesture::Swipe { from: p, .. } => p,
         };
-        let Some((panel, kind)) = self.view_at(ctx, at) else { return };
-        // On a view's content, or a note's mark beside it (on its top line, a
-        // finger held on a button says what it does, and that's all).
+        let Some((host, panel, kind)) = self.view_at(ctx, at) else { return };
+        // On the content of the view it's on, or a note's mark beside it (on
+        // a top line, a finger held on a button says what it does, and
+        // that's all).
         let on_mark = self.note_marks.iter().any(|(_, mark, _)| mark.contains(at));
-        if !on_mark && !self.contents.iter().any(|(_, content)| content.contains(at)) {
+        if !on_mark && !self.contents.iter().any(|(h, content)| *h == host && content.contains(at)) {
             return;
         }
         if self.quick_look.is_none() && self.desk.panels.focused() != panel {

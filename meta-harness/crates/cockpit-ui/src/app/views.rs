@@ -42,14 +42,16 @@ impl CockpitApp {
     }
 
     /// The same, for the view of `kind` (where it is, focused or not):
-    /// worked out once a frame.
+    /// worked out once a frame for each buffer (two panels of one kind are
+    /// each judged on their own).
     pub fn situation_of(&self, kind: BufferKind) -> std::rc::Rc<Situation> {
-        if let Some((_, kept)) = self.frame_situations.borrow().iter().find(|(k, _)| *k == kind) {
+        let buffer = self.desk.in_use(kind);
+        if let Some((_, kept)) = self.frame_situations.borrow().iter().find(|(b, _)| *b == buffer) {
             return kept.clone();
         }
         let situation = std::rc::Rc::new(self.situation_now(kind));
         if self.in_frame.get() {
-            self.frame_situations.borrow_mut().push((kind, situation.clone()));
+            self.frame_situations.borrow_mut().push((buffer, situation.clone()));
         }
         situation
     }

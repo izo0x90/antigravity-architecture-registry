@@ -373,6 +373,8 @@ mod tests {
         f.typed(&mut g, "save");
         g.search_done("graph.find");
         f.hits("save", SearchKind::Symbols, vec![hit(SearchKind::Symbols, Some("rust:a::save"), "save", true, None)]);
+        f.hits("save", SearchKind::Files, Vec::new());
+        f.hits("save", SearchKind::Text, Vec::new());
         g.tend_find(&f.server, &f.ctx);
         assert!(g.find_choices().0.is_empty(), "the find starts afresh");
     }
