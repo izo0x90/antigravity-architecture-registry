@@ -11,7 +11,7 @@ use egui::{Color32, Frame, Pos2, Rect, RichText, Stroke, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use harness_contracts::{
     ConfigKind, McpServer, McpTransport, NativeId, OptionValue, ContentBlock, InstanceId, ItemBody, ItemStatus, ModelSelection, NoticeLevel, PlanBody,
-    PlanStep, ProviderSnapshot, ProviderStatus, RequestStatus, RuntimeMode, RuntimePolicy, SessionKey, Slot, SlotId, SlotStatus,
+    PlanStep, ProviderSnapshot, ProviderStatus, RuntimeMode, RuntimePolicy, SessionKey, Slot, SlotId, SlotStatus,
     StepStatus, SteerInput, ThreadId, ToolKind, TurnItem, TurnStatus, LEAD,
 };
 
@@ -86,6 +86,8 @@ pub struct ChatView {
     /// Messages and links drawn last frame (and this one's, as drawn).
     pub(crate) spots: Vec<Spot>,
     pub(crate) drawing: Vec<Spot>,
+    /// Each item of the stream as drawn this frame, in order (its stops).
+    pub(crate) item_rects: Vec<Rect>,
     /// Where the banners were drawn last frame (none: none showed).
     pub(crate) banners: Option<Rect>,
     /// How tall what's under the stream was last frame (the requests kept
@@ -107,8 +109,9 @@ impl Default for ChatView {
             link_pick: None,
             scrolling: Default::default(),
             spots: Vec::new(),
+            item_rects: Vec::new(),
             banners: None,
-            below: 105.0,
+            below: 0.0,
             drawing: Vec::new(),
             typing: None,
             sign_in_has_box: false,
@@ -213,18 +216,35 @@ impl ChatStreamState {
 
     /// The stream item (its index) of the request waiting on you here.
     pub(crate) fn pending_item(&self) -> Option<usize> {
-        self.pending_items().first().map(|(index, _)| *index)
+        self.pending().iter().find_map(|(index, _)| *index)
     }
 
-    /// Every request waiting on you, as the stream has them (its item's
-    /// place, the request), in order.
-    pub(crate) fn pending_items(&self) -> Vec<(usize, harness_contracts::RequestId)> {
-        let Some(thread) = self.thread() else { return Vec::new() };
-        let pending = |id: &harness_contracts::RequestId| thread.requests.iter().any(|r| r.id == *id && r.status == RequestStatus::Pending);
-        self.stream().iter().enumerate().filter_map(|(index, item)| match &item.body {
-            ItemBody::Request { request_id } if pending(request_id) => Some((index, request_id.clone())),
-            _ => None,
-        }).collect()
+    /// What waits on you: each request pending with no answer on its way,
+    /// with its item's place in the stream (none: its item isn't there
+    /// yet), in the stream's order (read in place; none waiting: nothing
+    /// read).
+    pub(crate) fn pending(&self) -> Vec<(Option<usize>, harness_contracts::RuntimeRequest)> {
+        let Some(view) = self.thread() else { return Vec::new() };
+        let agents = self.agents();
+        let waiting: Vec<&harness_contracts::RuntimeRequest> = view.requests.iter().filter(|r| agents.waits(r)).collect();
+        if waiting.is_empty() {
+            return Vec::new();
+        }
+        let mut at = std::collections::BTreeMap::new();
+        for (index, item) in view.turns.iter().flat_map(|t| view.items_of(&t.id)).enumerate() {
+            if let ItemBody::Request { request_id } = &item.body {
+                at.insert(request_id.clone(), index);
+            }
+        }
+        let mut out: Vec<(Option<usize>, harness_contracts::RuntimeRequest)> = waiting.into_iter().map(|r| (at.get(&r.id).copied(), r.clone())).collect();
+        out.sort_by_key(|(index, _)| index.unwrap_or(usize::MAX));
+        out
+    }
+
+    /// The item you're on: the cursor's, else (following the latest) what
+    /// waits on you first.
+    pub(crate) fn on_item(&self) -> Option<usize> {
+        self.ui.cursor.or_else(|| self.pending_item())
     }
 
     /// The slot this view shows.

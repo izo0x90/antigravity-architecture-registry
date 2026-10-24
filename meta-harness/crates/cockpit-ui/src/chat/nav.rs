@@ -199,7 +199,7 @@ impl Navigable for ChatStreamState {
 
     fn target(&self) -> Option<Target> {
         let index = self.ui.cursor?;
-        let item = self.stream().into_iter().nth(index)?;
+        let item = self.item_at(index)?;
         let links = links_of(&item);
         let link = self.ui.link_pick.and_then(|n| links.get(n).cloned()).or_else(|| links.first().cloned());
         Some(Target::Message { thread: self.active_thread().map(|t| t.to_string()), turn: Some(item.turn_id.to_string()), index, link })

@@ -37,6 +37,10 @@ pub(super) fn block_detail(block: &ContentBlock) -> String {
     }
 }
 
+/// The most of the chat's height what waits on you takes (it scrolls past
+/// that).
+const WAITING_SHARE: f32 = 0.4;
+
 impl ChatStreamState {
     pub(crate) fn draw(&mut self, ui: &mut egui::Ui, feedback: &mut FeedbackInspectorState, typing: bool, cx: &mut RunCx<'_>) {
         let host = cx.at.name();
@@ -45,21 +49,20 @@ impl ChatStreamState {
         ui.vertical(|ui| {
             let banners = self.render_banners(ui);
             self.render_plan(ui);
-            // The stream in what's left above what's under it (the
-            // requests waiting out of its sight, the typing box), as tall as
-            // that was last frame.
-            let scroll_height = (ui.available_height() - self.ui.below).max(50.0);
-            let shown: Vec<String> = self.ui.spots.iter().map(|s| s.key.clone()).collect();
+            // The stream in what's left above what's under it (what waits
+            // on you, the typing box), as tall as that was last frame.
+            let whole = ui.available_height();
+            let scroll_height = (whole - self.ui.below).max(50.0);
             self.ui.drawing.clear();
+            self.ui.item_rects.clear();
             let area = egui::ScrollArea::vertical().id_salt(("chat_stream", cx.at)).auto_shrink([false, false]).stick_to_bottom(self.ui.cursor.is_none()).max_height(scroll_height);
             // Where the shared rules say (following the latest, nothing's
             // asked: the newest stays in view); each frame's messages are
             // measured either way, for the first move from it.
             let area = self.ui.scrolling.area(area, ui.input(|i| i.time));
             let stream = area.show(ui, |ui| self.render_stream(ui));
-            // Each message's stop (its links aren't stops).
-            let messages: Vec<Rect> = self.ui.drawing.iter().filter(|s| !s.key.contains(':')).map(|s| s.rect).collect();
-            for rect in messages {
+            // Each item's stop, in the stream's order.
+            for rect in std::mem::take(&mut self.ui.item_rects) {
                 self.ui.scrolling.item(rect);
             }
             self.ui.scrolling.drawn(&stream);
@@ -73,13 +76,23 @@ impl ChatStreamState {
             feedback.register_inspectable(ui, &format!("{host}:chat:stream"), stream.inner_rect);
             let top = ui.cursor().top();
             ui.separator();
-            // Each request waiting that the stream didn't show last frame:
-            // its card here, in sight (a place of the chat's, as there).
-            for (index, request_id) in self.pending_items().into_iter().filter(|(index, _)| !shown.contains(&index.to_string())) {
-                if let Some(request) = self.thread().and_then(|t| t.request(&request_id).cloned()) {
-                    let rect = crate::request_card::render_request(ui, &request, &mut self.drafts);
-                    self.ui.spots.push(Spot { key: index.to_string(), rect });
-                }
+            // What waits on you, in one place, always in sight (the
+            // history marks where it was asked): each its card, a place of
+            // the chat's; at most a share of the chat's height, scrolling
+            // past that.
+            let pending = self.pending();
+            if !pending.is_empty() {
+                let most = (whole * WAITING_SHARE).max(80.0);
+                egui::ScrollArea::vertical().id_salt(("chat_waiting", cx.at)).max_height(most).min_scrolled_height(most).auto_shrink([false, true]).show(ui, |ui| {
+                    for (index, request) in &pending {
+                        let rect = self.item_frame(ui, *index, |chat, ui| {
+                            crate::request_card::render_request(ui, request, &mut chat.drafts);
+                        });
+                        if let Some(index) = index {
+                            self.ui.spots.push(Spot { key: index.to_string(), rect });
+                        }
+                    }
+                });
             }
             let start = ui.cursor().min;
             let w = ui.available_width();
@@ -94,6 +107,25 @@ impl ChatStreamState {
                 ctx.request_repaint();
             }
         });
+    }
+
+    /// An item as the chat draws it, in the stream or where what waits is
+    /// kept: in the column's width, filled while the cursor's on it
+    /// (`index`: its place in the stream). Where it was drawn.
+    fn item_frame(&mut self, ui: &mut egui::Ui, index: Option<usize>, draw: impl FnOnce(&mut Self, &mut egui::Ui)) -> Rect {
+        let on = index.is_some() && self.ui.cursor == index;
+        let fill = if on { colors().selection } else { Color32::TRANSPARENT };
+        let look = crate::theme::look();
+        Frame::NONE
+            .fill(fill)
+            .corner_radius(look.radius_s)
+            .inner_margin(crate::theme::margin2(look.space_xs, look.space_hair))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                draw(self, ui);
+            })
+            .response
+            .rect
     }
 
     /// The banners: what the chat says to you now (a notice, an error, a
@@ -248,27 +280,25 @@ impl ChatStreamState {
                 }
             });
             for item in view.items_of(&turn.id) {
-                let on = self.ui.cursor == Some(index);
-                let fill = if on { colors().selection } else { Color32::TRANSPARENT };
-                let shown = Frame::NONE.fill(fill).corner_radius(crate::theme::look().radius_s).inner_margin(crate::theme::margin2(crate::theme::look().space_xs, crate::theme::look().space_hair)).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    // Every item laid out in the column's width (its text
-                    // wraps there); what can't wrap (a table's row) scrolls
-                    // sideways in the item's own box, never widening the
-                    // column (dragging stays the chat's: the wheel or the
-                    // bar scrolls it).
-                    let width = ui.available_width();
-                    egui::ScrollArea::horizontal().id_salt(("chat_item", item.id.as_str())).auto_shrink([false, true]).scroll_source(egui::scroll_area::ScrollSource { drag: false, ..Default::default() }).show(ui, |ui| {
-                        ui.set_max_width(width);
-                        self.render_item(ui, &view, item, index);
-                    });
-                });
-                self.ui.drawing.push(Spot { key: index.to_string(), rect: shown.response.rect });
+                let rect = self.item_frame(ui, Some(index), |chat, ui| chat.render_item(ui, &view, item, index));
+                self.ui.item_rects.push(rect);
+                // A request waiting on you is a place where it's kept (its
+                // card); here, the line saying where it was asked.
+                let waiting = matches!(&item.body, ItemBody::Request { request_id } if view.request(request_id).is_some_and(|r| self.agents().waits(r)));
+                if !waiting {
+                    self.ui.drawing.push(Spot { key: index.to_string(), rect });
+                }
                 index += 1;
                 ui.add_space(crate::theme::look().space_xs);
             }
             ui.add(egui::Separator::default().spacing(8.0));
         }
+    }
+
+    /// The item at `index` in the stream (only it read out).
+    pub(super) fn item_at(&self, index: usize) -> Option<TurnItem> {
+        let view = self.thread()?;
+        view.turns.iter().flat_map(|t| view.items_of(&t.id)).nth(index).cloned()
     }
 
     /// Every item in the active thread, in the order shown.
@@ -357,9 +387,16 @@ impl ChatStreamState {
                 });
             }
             ItemBody::TodoList { steps, .. } => render_steps(ui, steps),
+            // Waiting on you: kept in sight under the stream (this says it
+            // was asked here); answered: what was asked, and the answer.
             ItemBody::Request { request_id } => {
                 if let Some(request) = view.request(request_id) {
-                    render_request(ui, request, &mut self.drafts);
+                    if self.agents().waits(request) {
+                        let line = format!("{} {} · waiting on you, below", icon::HOURGLASS_MEDIUM, request.title);
+                        ui.add(egui::Label::new(RichText::new(line).size(crate::theme::look().text_body).color(colors().warn)).truncate());
+                    } else {
+                        render_request(ui, request, &mut self.drafts);
+                    }
                 }
             }
             ItemBody::Subagent { subagent_id } => {

@@ -1,9 +1,9 @@
 //! A request's answers as actions, with their keys: the same in the chat
 //! and the inbox.
 
-use harness_contracts::{ApprovalDecision, RequestKind, RequestStatus, RuntimeRequest};
+use harness_contracts::{ApprovalDecision, RequestId, RequestKind, RequestStatus, RuntimeRequest};
 
-use crate::actions::{Action, Style, Tone};
+use crate::actions::{Action, Group, PRIMARY, Style, Tone};
 
 /// One way to answer a request, as an action offers it.
 #[derive(Clone, Debug, PartialEq)]
@@ -89,4 +89,36 @@ pub fn answers(request: &RuntimeRequest) -> Vec<Answer> {
             tone: tone(o.decision),
         })
         .collect()
+}
+
+/// Where a request's answers are offered: under it (you're on it), and
+/// whether they hold the keys (`y`, `d`…: one request's at a time).
+#[derive(Clone, Copy, Debug)]
+pub struct Offer {
+    pub here: bool,
+    pub keyed: bool,
+}
+
+/// Of several waiting, the one whose answers hold the keys: the one you're
+/// on (`on`), else the first.
+pub fn keyed<'a>(waiting: impl IntoIterator<Item = &'a RuntimeRequest>, on: Option<&RequestId>) -> Option<RequestId> {
+    let waiting: Vec<&RuntimeRequest> = waiting.into_iter().collect();
+    waiting.iter().find(|r| Some(&r.id) == on).or(waiting.first()).map(|r| r.id.clone())
+}
+
+/// A waiting request's actions, the same wherever it's answered (the chat,
+/// the inbox): opening its page, when it has one, and each answer, placed
+/// as `at` says. `page` and `answer` are the caller's commands for them (an
+/// answer by its option's id).
+pub fn offer<C: 'static>(request: &RuntimeRequest, at: Offer, page: impl FnOnce(String) -> C, answer: impl Fn(String) -> C) -> Vec<Action> {
+    let act = |id: &str, label: &str, detail: &str, command: C| Action::new(id, label, detail, command).focused().group(Group::Act);
+    let mut out = Vec::new();
+    if let Some(url) = self::page(request) {
+        out.push(place_page(act(&format!("request.{}.page", request.id), &format!("Open the page: {}", request.title), "The page the agent asks you to open, in a new tab", page(url)), at.here));
+    }
+    for one in answers(request) {
+        let one = if at.keyed { one } else { Answer { alias: None, ..one } };
+        out.push(one.place(act(&one.id, &one.label, "Answers the agent's request this way", answer(one.option.clone())).importance(PRIMARY), at.here));
+    }
+    out
 }

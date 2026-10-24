@@ -71,6 +71,9 @@ impl CockpitApp {
         let (buffer, net) = self.desk.view_with_net(kind);
         let mut cx = RunCx { net, ctx: &ctx, input_mode: &mut self.input_mode, at: here.at, note: &mut self.note, asked: &mut self.asked };
         ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
+            // What it draws stays in its place, however wide (never over
+            // its host's lines, or another panel).
+            ui.set_clip_rect(content.intersect(ui.clip_rect()));
             if !says.is_empty() {
                 crate::hosted::says(ui, &says);
                 ui.separator();

@@ -357,13 +357,10 @@ impl ActionProvider for InboxView {
             out.push(act("inbox.next", "Next", "The next item, in what waits on you", Command::Step(1)).importance(PRIMARY));
         }
         let Some(shown) = &self.shown else { return out };
-        // Under its request while you're on it.
+        // Under its request while you're on it (the one shown: its keys).
         let here = self.parts().get(self.cursor) == Some(&Part::Request);
-        if let Some((request, url)) = shown.request.as_ref().and_then(|r| crate::request_card::page(r).map(|u| (r, u))) {
-            out.push(crate::request_card::place_page(act(&format!("request.{}.page", request.id), &format!("Open the page: {}", request.title), "The page the agent asks you to open, in a new tab", Command::OpenPage(url)), here));
-        }
-        for answer in shown.request.iter().flat_map(crate::request_card::answers) {
-            out.push(answer.place(act(&answer.id, &answer.label, "Answers the agent's request this way", Command::Answer(answer.option.clone())).importance(PRIMARY), here));
+        if let Some(request) = &shown.request {
+            out.extend(crate::request_card::offer(request, crate::request_card::Offer { here, keyed: true }, Command::OpenPage, Command::Answer));
         }
         // Opening it and putting it away: under what it says while you're on it.
         let on_says = self.parts().get(self.cursor) == Some(&Part::Says);

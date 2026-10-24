@@ -69,6 +69,8 @@ pub enum Act {
 enum Reply {
     Opened(SlotId, NetResult<SlotOpened>),
     Sent(SlotId, NetResult<()>),
+    /// An answer to `request` was taken, or why not.
+    Answered { slot: SlotId, request: harness_contracts::RequestId, result: NetResult<()> },
     SlotMade(SlotId, NetResult<SlotId>),
     /// A session was ended to start again with new tool servers.
     Restart { slot: SlotId, resume: Option<NativeId>, result: NetResult<()> },
@@ -126,6 +128,9 @@ pub struct Agents {
     ends_put_away: BTreeSet<u64>,
     /// The sub-slots made, how many, and the last one with the slot that asked.
     made: (u64, Option<(SlotId, SlotId)>),
+    /// Requests answered here whose answer is on its way (no longer
+    /// waiting on you: another can't go to them meanwhile).
+    answering: BTreeSet<harness_contracts::RequestId>,
     mailbox: Mailbox,
 }
 
@@ -136,7 +141,19 @@ impl Agents {
 
     /// Takes a server event (the shell, for every one).
     pub fn apply(&mut self, event: ClientEvent) {
+        // Answered (as the server says): its answer arrived.
+        if let ClientEvent::Session { event: harness_contracts::AdapterEvent::RequestUpdated { request } } = &event
+            && request.status != harness_contracts::RequestStatus::Pending
+        {
+            self.answering.remove(&request.id);
+        }
         self.store.apply(event);
+    }
+
+    /// Whether `request` waits on you: pending, and no answer to it on its
+    /// way.
+    pub fn waits(&self, request: &harness_contracts::RuntimeRequest) -> bool {
+        request.status == harness_contracts::RequestStatus::Pending && !self.answering.contains(&request.id)
     }
 
     /// How `instance`'s last sign-in ended (the server's word), unless put
@@ -259,7 +276,8 @@ impl Agents {
             Act::Answer { thread, request, response } => {
                 let mailbox = self.mailbox.clone();
                 let slot = self.store.slots.values().find(|s| s.current_thread() == Some(&thread)).map_or(slot, |s| s.id.clone());
-                net.respond(&thread, &request, &response, ctx.clone(), move |r| post(&mailbox, Reply::Sent(slot, r)));
+                self.answering.insert(request.clone());
+                net.respond(&thread, &request.clone(), &response, ctx.clone(), move |result| post(&mailbox, Reply::Answered { slot, request, result }));
             }
             Act::ListSaved { instance } => {
                 self.saved = None;
@@ -400,6 +418,12 @@ impl Agents {
                     self.queued.remove(&slot);
                     self.errors.insert(slot, e.into());
                 }
+                // Not taken: it waits on you again, and why is said.
+                Reply::Answered { slot, request, result: Err(e) } => {
+                    self.answering.remove(&request);
+                    self.errors.insert(slot, e.into());
+                }
+                Reply::Answered { result: Ok(()), .. } => {}
                 Reply::Sent(slot, Err(e)) => {
                     self.errors.insert(slot, e.into());
                 }

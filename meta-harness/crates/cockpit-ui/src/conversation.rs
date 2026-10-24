@@ -59,7 +59,18 @@ pub fn message(ui: &mut egui::Ui, markdown: &mut CommonMarkCache, m: &Message<'_
     ui.label(RichText::new(head).size(look.text_small).color(m.tone.unwrap_or(colors().muted)));
     if !m.text.is_empty() {
         if m.markdown {
-            CommonMarkViewer::new().show(ui, markdown, m.text);
+            // Its words wrap in the width it's given; a table's rows can't,
+            // so each table scrolls sideways in a box of that width, never
+            // widening what holds it.
+            for (part, table) in tables_apart(m.text) {
+                if table {
+                    egui::ScrollArea::horizontal().id_salt(ui.next_auto_id()).auto_shrink([false, true]).show(ui, |ui| {
+                        CommonMarkViewer::new().show(ui, markdown, part);
+                    });
+                } else {
+                    CommonMarkViewer::new().show(ui, markdown, part);
+                }
+            }
         } else {
             let text = RichText::new(m.text).size(look.text_body).color(colors().text_strong);
             ui.label(if m.by == harness_contracts::USER { text.strong() } else { text });
@@ -68,6 +79,33 @@ pub fn message(ui: &mut egui::Ui, markdown: &mut CommonMarkCache, m: &Message<'_
     for line in &m.under {
         ui.label(RichText::new(line).size(look.text_small).monospace().color(colors().muted));
     }
+}
+
+/// Markdown cut around its tables (lines of cells, `| … |`, with a
+/// `|---|` line among them), in order: each part, and whether it's a table.
+fn tables_apart(text: &str) -> Vec<(&str, bool)> {
+    // Runs of lines that are rows of cells, or aren't, by where they are.
+    let mut runs: Vec<(usize, usize, bool)> = Vec::new();
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        let row = line.trim_start().starts_with('|');
+        match runs.last_mut() {
+            Some((_, end, rows)) if *rows == row => *end = at + line.len(),
+            _ => runs.push((at, at + line.len(), row)),
+        }
+        at += line.len();
+    }
+    // Rows are a table only with their `|---|` line; else they're text,
+    // joined with the text around them.
+    let mut parts: Vec<(usize, usize, bool)> = Vec::new();
+    for (from, to, rows) in runs {
+        let table = rows && text[from..to].lines().any(|l| l.contains("--"));
+        match parts.last_mut() {
+            Some((_, end, false)) if !table => *end = to,
+            _ => parts.push((from, to, table)),
+        }
+    }
+    parts.into_iter().map(|(from, to, table)| (&text[from..to], table)).filter(|(part, _)| !part.trim().is_empty()).collect()
 }
 
 /// What's said in a discussion, as a message: an answer (what it changed
@@ -368,6 +406,19 @@ pub fn caret_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A message's markdown cut around its tables: text, a table (its rows
+    /// with a `|---|` line), text; rows without that line stay text.
+    #[test]
+    fn tables_are_cut_apart_from_the_words_around_them() {
+        let text = "Here:\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nand after.\n| not | a table |\n";
+        let parts = tables_apart(text);
+        assert_eq!(parts.iter().map(|(_, t)| *t).collect::<Vec<_>>(), [false, true, false], "{parts:?}");
+        assert_eq!(parts[1].0, "| a | b |\n|---|---|\n| 1 | 2 |\n");
+        assert!(parts[2].0.contains("and after") && parts[2].0.contains("| not | a table |"));
+        assert_eq!(parts.iter().map(|(p, _)| *p).collect::<String>(), text, "nothing lost");
+        assert_eq!(tables_apart("just words"), [("just words", false)]);
+    }
 
     #[test]
     fn what_is_put_after_a_trigger_doesnt_double_it() {

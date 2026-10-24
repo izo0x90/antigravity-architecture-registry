@@ -3,6 +3,9 @@
 
 use super::super::*;
 
+/// The most characters of an action's words a key bar chip says.
+const BAR_WORDS: usize = 40;
+
 impl CockpitApp {
     /// A mark in words: its kind of buffer and where (as a buffer of that
     /// kind says its places).
@@ -101,7 +104,10 @@ impl CockpitApp {
         }
         for b in self.bar_keys(bound) {
             let keys = b.key_hint();
-            let text = RichText::new(format!("{keys} {}", b.action.label)).size(if narrow { crate::theme::look().text_title } else { crate::theme::look().text_body });
+            // Its words cut short (a request's title can be a whole command),
+            // so the bar keeps to its rows; whole on hover.
+            let label: String = if b.action.label.chars().count() > BAR_WORDS { format!("{}…", b.action.label.chars().take(BAR_WORDS - 1).collect::<String>()) } else { b.action.label.clone() };
+            let text = RichText::new(format!("{keys} {label}")).size(if narrow { crate::theme::look().text_title } else { crate::theme::look().text_body });
             let mut button = egui::Button::new(text).corner_radius(crate::theme::look().radius_m);
             if narrow {
                 button = button.min_size(egui::vec2(32.0, 32.0));

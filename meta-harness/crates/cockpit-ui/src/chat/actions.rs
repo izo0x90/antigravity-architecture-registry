@@ -260,20 +260,14 @@ impl ActionProvider for ChatStreamState {
         // `d`…) the one's you're on, else the first's, so several at once
         // are each answered and no key is two's.
         if let Some(view) = view {
-            let on = crate::hosted::Hosted::here(self).or_else(|| self.ui.cursor.map(|c| c.to_string()));
-            let pending = self.pending_items();
-            let keyed = pending.iter().find(|(index, _)| on.as_deref() == Some(index.to_string().as_str())).or(pending.first()).map(|(_, id)| id.clone());
-            for (index, request_id) in &pending {
-                let Some(request) = view.request(request_id) else { continue };
-                let here = on.as_deref() == Some(index.to_string().as_str());
-                if let Some(url) = crate::request_card::page(request) {
-                    out.push(crate::request_card::place_page(Action::new(format!("request.{}.page", request.id), format!("Open the page: {}", request.title), "The page the agent asks you to open, in a new tab", C::OpenPage(url)).focused(), here));
-                }
-                for answer in crate::request_card::answers(request) {
-                    let answer = if keyed.as_ref() == Some(request_id) { answer } else { crate::request_card::Answer { alias: None, ..answer } };
-                    let command = C::Answer { thread: view.thread.id.clone(), request: request.id.clone(), option: answer.option.clone() };
-                    out.push(answer.place(Action::new(answer.id.clone(), answer.label.clone(), "Answers the agent's request this way", command).focused(), here));
-                }
+            let pending = self.pending();
+            let on = self.on_item();
+            let on_request = pending.iter().find(|(index, _)| index.is_some() && *index == on).map(|(_, r)| r.id.clone());
+            let keyed = crate::request_card::keyed(pending.iter().map(|(_, r)| r), on_request.as_ref());
+            for (index, request) in &pending {
+                let at = crate::request_card::Offer { here: index.is_some() && *index == on, keyed: keyed.as_ref() == Some(&request.id) };
+                let answer = |option| C::Answer { thread: view.thread.id.clone(), request: request.id.clone(), option };
+                out.extend(crate::request_card::offer(request, at, C::OpenPage, answer));
             }
         }
         // Typed in: sending it (to the sign-in, while one waits for it).
