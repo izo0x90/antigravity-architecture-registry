@@ -263,7 +263,7 @@ fn a_long_chat_moves_by_the_shared_rules() {
 
 /// A harness that runs its own Google login, signed out, its home kept for
 /// the project; and the sign-in under way, as the server says it.
-fn signed_out_harness(waiting: Option<harness_contracts::SignInWaiting>) -> ProviderSnapshot {
+pub(crate) fn signed_out_harness(waiting: Option<harness_contracts::SignInWaiting>) -> ProviderSnapshot {
     let waiting = waiting.map(Box::new);
     ProviderSnapshot {
         status: ProviderStatus::Ready,
@@ -280,7 +280,7 @@ fn signed_out_harness(waiting: Option<harness_contracts::SignInWaiting>) -> Prov
 }
 
 /// A sign-in under way, `left_s` seconds from now (on this clock).
-fn waiting(id: u64, left_s: i64) -> harness_contracts::SignInWaiting {
+pub(crate) fn waiting(id: u64, left_s: i64) -> harness_contracts::SignInWaiting {
     harness_contracts::SignInWaiting {
         id,
         url: Some("https://accounts.google.com/o/oauth2/auth?redirect_uri=http%3A%2F%2F127.0.0.1%3A4000%2F".into()),
@@ -322,22 +322,16 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
     tick(&mut chat, &ctx, &net);
     let top = on_top(&chat);
     assert!(top.contains(&"auth.page".to_owned()) && top.contains(&"auth.copy".to_owned()) && top.contains(&"auth.cancel".to_owned()), "{top:?}");
-    let send = |chat: &Fed| chat.actions().into_iter().find(|a| a.id == "chat.send").unwrap().label;
-    assert_eq!(send(&chat), "Finish signing in", "the typing box takes it");
+    assert!(chat.actions().iter().any(|a| a.id == "auth.complete"), "finishing is offered while it waits");
 
     // Pasted: being checked, then refused while it still waits.
     chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::FinishSignIn { instance: InstanceId::new("i"), answer: "4/abc".into() }, &net, &ctx);
     chat.read();
-    // Still the sign-in's box; a second paste isn't sent while one is checked.
-    chat.ui.input.text = "again".into();
-    let (mut note, ctx2) = (None, egui::Context::default());
-    run_action(&mut chat, "chat.send", None, &net, &ctx2, &mut note);
-    assert!(std::mem::take(&mut chat.asks).is_empty(), "nothing sent while it's checked");
     assert_eq!(net.bodies.lock().unwrap().last().map(|(_, body)| body["id"].clone()), Some(serde_json::json!(7)), "the paste names its sign-in");
     assert!(net.answer("POST /api/instances/i/auth/complete", 400, &serde_json::json!({ "error": "that isn't the address" })));
     tick(&mut chat, &ctx, &net);
     assert!(chat.agents().pasted(&InstanceId::new("i"), 7).is_some_and(|p| p.refused.is_some() && !p.finishing));
-    assert_eq!(send(&chat), "Finish signing in", "it still waits: paste again");
+    assert!(chat.actions().iter().any(|a| a.id == "auth.complete"), "it still waits: paste again");
     assert!(chat.error().is_none());
 
     // A new sign-in meanwhile: a late answer about the old one doesn't touch it.
@@ -345,7 +339,7 @@ fn signing_in_shows_the_servers_sign_in_and_a_paste_that_was_not_taken() {
     chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(8, 300))) });
     assert!(net.answer("POST /api/instances/i/auth/complete", 200, &serde_json::Value::Null));
     tick(&mut chat, &ctx, &net);
-    assert_eq!(send(&chat), "Finish signing in", "the new one still waits");
+    assert!(chat.agents().waiting(&InstanceId::new("i")).is_some_and(|w| w.id == 8) && chat.agents().pasted(&InstanceId::new("i"), 8).is_none(), "the new one still waits, untouched");
 
     // Over on the server (taken, or ended): its answer is said as an error.
     chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::FinishSignIn { instance: InstanceId::new("i"), answer: "http://127.0.0.1:4000/?code=y".into() }, &net, &ctx);
@@ -385,68 +379,4 @@ fn a_sign_in_that_stopped_waiting_offers_a_new_one_and_says_how_it_ended() {
     chat.shared.agents.get_mut().act(SlotId::new(LEAD), Act::PutSignInEndAway { id: 5 }, &net, &ctx);
     chat.read();
     assert!(chat.sign_in_end_to_say().is_none() && !on_top(&chat).contains(&"auth.end.dismiss".to_owned()));
-}
-
-/// Runs the chat's action `id` (with `value`), as the palette or its key would.
-fn run_action(chat: &mut Fed, id: &str, value: Option<String>, net: &NetClient, ctx: &egui::Context, note: &mut Option<String>) {
-    let action = chat.actions().into_iter().find(|a| a.id == id).unwrap_or_else(|| panic!("{id} is offered"));
-    let (mut mode, mut asked) = (crate::keymap::InputMode::Normal, None);
-    let mut cx = RunCx { net, ctx, input_mode: &mut mode, at: crate::keymap::Host::Panel(0), note, asked: &mut asked };
-    chat.run(&action, value, &mut cx);
-    chat.read();
-}
-
-#[test]
-fn while_a_sign_in_waits_the_typing_box_is_its_and_its_link_is_copied_by_a_key() {
-    let (ctx, net) = (egui::Context::default(), NetClient::new("http://127.0.0.1:9"));
-    let mut chat = conversation();
-    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(7, 300))) });
-    let mut note = None;
-
-    // Copy link: its key, the whole link on the clipboard, said.
-    ctx.begin_pass(Default::default());
-    run_action(&mut chat, "auth.copy", None, &net, &ctx, &mut note);
-    let out = ctx.end_pass();
-    let copied: Vec<&String> = out.platform_output.commands.iter().filter_map(|c| if let egui::OutputCommand::CopyText(t) = c { Some(t) } else { None }).collect();
-    assert_eq!(copied, [&waiting(7, 300).url.unwrap()]);
-    assert_eq!(note.as_deref(), Some("Copied the sign-in link."));
-    let keymap = crate::config::UiConfig::with_overrides("").unwrap().keymap;
-    for (id, key) in [("auth.copy", "a y"), ("auth.page", "a p"), ("auth.cancel", "a x"), ("auth.complete", "a c"), ("auth.end.dismiss", "a d")] {
-        let wanted = crate::keymap::LeaderPath::try_from(key.to_owned()).unwrap();
-        assert_eq!(keymap.bind.get(id).and_then(|b| b.leader.clone()), Some(wanted), "{id} has its own key, not a numbered one");
-    }
-
-    // Typed and sent: it goes to the sign-in (named), never to the agent.
-    let send = chat.actions().into_iter().find(|a| a.id == "chat.send").unwrap();
-    assert_eq!(send.label, "Finish signing in", "the box's Send says where it goes");
-    chat.ui.input.text = "http://127.0.0.1:4000/?code=4/abc".into();
-    run_action(&mut chat, "chat.send", None, &net, &ctx, &mut note);
-    let asked = std::mem::take(&mut chat.asks);
-    assert!(matches!(asked.as_slice(), [crate::nav::Ask::Agents { act: Act::FinishSignIn { answer, .. }, .. }] if answer == "http://127.0.0.1:4000/?code=4/abc"), "{asked:?}");
-    assert!(chat.ui.input.text.is_empty());
-
-    // The sign-in over: the box is the chat's again.
-    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
-    assert_eq!(chat.actions().into_iter().find(|a| a.id == "chat.send").unwrap().label, "Send the prompt");
-    chat.ui.input.text = "hello".into();
-    run_action(&mut chat, "chat.send", None, &net, &ctx, &mut note);
-    let asked = std::mem::take(&mut chat.asks);
-    assert!(matches!(asked.as_slice(), [crate::nav::Ask::Agents { act: Act::Prompt { message, .. }, .. }] if message.text == "hello"), "{asked:?}");
-}
-
-#[test]
-fn what_was_typed_to_the_agent_is_set_aside_while_a_sign_in_has_the_box() {
-    let mut chat = conversation();
-    chat.ui.input.text = "a half-written message".into();
-    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(Some(waiting(7, 300))) });
-    chat.tend_sign_in_box();
-    assert!(chat.ui.input.text.is_empty(), "the box is the sign-in's, empty for it");
-    // What's pasted for it is never saved as a draft.
-    chat.ui.input.text = "http://127.0.0.1:4000/?code=4/abc".into();
-    chat.report_unsent();
-    assert!(!chat.asks.iter().any(|a| matches!(a, crate::nav::Ask::Draft { .. })), "{:?}", chat.asks);
-    // Over: the message comes back, the paste goes.
-    chat.apply(ClientEvent::InstanceUpdated { snapshot: signed_out_harness(None) });
-    chat.tend_sign_in_box();
-    assert_eq!(chat.ui.input.text, "a half-written message");
 }

@@ -297,8 +297,10 @@ Account: `Space a l` signs in, `Space a y` copies the link (to open it in
 another browser or on another device), `Space a p` opens it here,
 `Space a x` cancels, `Space a d` puts away how a failed one ended,
 `Space a o` signs out. While a sign-in waits, the chat's typing box is
-its: paste what the page gave back and send it (`Space a c` too); nothing
-typed then goes to the agent. Claude Code's page shows a code to
+its (what was being written to the agent is kept, and comes back after):
+paste what the page gave back and send it; `Space a c` (Finish signing
+in) sends what's pasted, or puts you in the box to paste. Nothing typed
+then goes to the agent, nor is saved. Claude Code's page shows a code to
 paste back. Antigravity's ends on a page that fails to load (it goes to
 `127.0.0.1` on the device): paste that page's address within the time
 shown (5 minutes), and the server hands it to the waiting login, only to

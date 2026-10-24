@@ -126,6 +126,9 @@ struct ProcessTree {
 /// when it's let go (a wrapper's own child too: a login command's).
 pub(crate) struct Group {
     pub(crate) child: tokio::process::Child,
+    /// Its group (its own pid), kept: once it's been waited for, the child
+    /// no longer says it, and what it started may still run.
+    id: Option<u32>,
 }
 
 impl Group {
@@ -133,14 +136,15 @@ impl Group {
         command.kill_on_drop(true);
         #[cfg(unix)]
         command.process_group(0);
-        Ok(Self { child: command.spawn()? })
+        let child = command.spawn()?;
+        Ok(Self { id: child.id(), child })
     }
 }
 
 impl Drop for Group {
     fn drop(&mut self) {
         #[cfg(unix)]
-        if let Some(pid) = self.child.id().and_then(|id| rustix::process::Pid::from_raw(id as i32)) {
+        if let Some(pid) = self.id.and_then(|id| rustix::process::Pid::from_raw(id as i32)) {
             let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
         }
     }

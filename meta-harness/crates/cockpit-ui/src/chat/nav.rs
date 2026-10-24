@@ -50,7 +50,7 @@ impl ChatStreamState {
     /// Its slot's unsent text as the server saved it, taken when the box
     /// is empty (once per slot shown, once the drafts are read).
     fn take_unsent(&mut self) {
-        if self.unsent_for.as_ref() == Some(&self.ui.slot) {
+        if self.unsent_for.as_ref() == Some(&self.ui.slot) || self.ui.sign_in_has_box {
             return;
         }
         let Some(saved) = self.unsent.get().saved(&self.ui.slot).map(|s| s.cloned()) else { return };
@@ -68,8 +68,8 @@ impl ChatStreamState {
     /// What's in the box, when it changed since it was last reported
     /// (typed, put in, or cleared by sending): to be saved for its slot.
     pub(super) fn report_unsent(&mut self) {
-        // The box is a sign-in's: what's saved stays what was set aside.
-        if self.ui.set_aside.is_some() {
+        // The box is a sign-in's: what's saved stays the slot's draft.
+        if self.ui.sign_in_has_box {
             return;
         }
         if self.unsent_for.as_ref() == Some(&self.ui.slot) && !self.ui.input.holds(&self.unsent_said) {
@@ -81,7 +81,7 @@ impl ChatStreamState {
 
 impl crate::buffer::Buffer for ChatStreamState {
     fn render(&mut self, ui: &mut egui::Ui, cx: &mut RunCx<'_>, drawing: &mut crate::buffer::Drawing<'_>) {
-        self.tend_sign_in_box();
+        self.tend_sign_in_box(cx.note);
         self.take_unsent();
         self.draw(ui, drawing.feedback, drawing.typing, cx);
         self.report_unsent();

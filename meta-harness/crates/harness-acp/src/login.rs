@@ -162,20 +162,39 @@ mod tests {
         assert!(err.contains("Invalid code"), "{err}");
     }
 
+    /// Whether process `pid` is still running (not gone, not a zombie).
+    #[cfg(target_os = "linux")]
+    fn alive(pid: i32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| !stat.contains(") Z "))
+    }
+
+    /// Waits (up to 5 s) for process `pid` to be gone.
+    #[cfg(target_os = "linux")]
+    async fn gone(pid: i32) -> bool {
+        for _ in 0..100 {
+            if !alive(pid) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        false
+    }
+
+    #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn what_a_login_command_started_goes_with_it() {
+    async fn what_a_login_command_started_goes_with_it_waiting_or_done() {
         // A wrapper starting the real login (as claude-agent-acp starts claude).
-        let dir = tempfile::tempdir().unwrap();
-        let pid_file = dir.path().join("pid");
-        let (launch, login) = sh(&format!("sleep 60 & echo $! > {}; echo 'visit https://x.example/a'; read code", pid_file.display()));
-        let started = LoginRun::start(&launch, &login, dir.path(), None, WAIT).await.unwrap();
-        assert!(started.link.is_some());
-        let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
-        let alive = |pid: i32| std::path::Path::new(&format!("/proc/{pid}")).exists() && !std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default().contains(") Z ");
-        assert!(alive(pid));
-        drop(started);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        assert!(!alive(pid), "the login's own child was stopped with it");
+        for (script, done) in [("echo 'visit https://x.example/a'; read code", false), ("exit 0", true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let pid_file = dir.path().join("pid");
+            let (launch, login) = sh(&format!("sleep 60 & echo $! > {}; {script}", pid_file.display()));
+            let started = LoginRun::start(&launch, &login, dir.path(), None, WAIT).await.unwrap();
+            assert_eq!(started.exited.is_some(), done, "{script}");
+            let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+            assert!(alive(pid));
+            drop(started);
+            assert!(gone(pid).await, "{script}: the login's own child was stopped with it");
+        }
     }
 
     #[tokio::test]

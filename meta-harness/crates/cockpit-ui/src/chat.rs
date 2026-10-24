@@ -88,10 +88,8 @@ pub struct ChatView {
     pub(crate) drawing: Vec<Spot>,
     /// Where its typing box is, while it's typed in.
     pub(crate) typing: Option<Rect>,
-    /// What was typed to the agent, set aside while the box is a sign-in's
-    /// (the box is empty for it; this comes back when it ends, and is what
-    /// stays saved meanwhile: a pasted code never is).
-    pub(crate) set_aside: Option<(SlotId, harness_contracts::Message)>,
+    /// A sign-in has the typing box (see `tend_sign_in_box`).
+    pub(crate) sign_in_has_box: bool,
 }
 
 impl Default for ChatView {
@@ -106,7 +104,7 @@ impl Default for ChatView {
             spots: Vec::new(),
             drawing: Vec::new(),
             typing: None,
-            set_aside: None,
+            sign_in_has_box: false,
         }
     }
 }
@@ -248,25 +246,48 @@ impl ChatStreamState {
         self.sign_in_now().filter(|n| n.waiting.expects.is_some() && n.waiting.url.is_some() && !n.ran_out)
     }
 
-    /// The box is the sign-in's: what was typed to the agent is set aside
-    /// (and comes back when it ends); what was typed for the sign-in goes.
-    fn tend_sign_in_box(&mut self) {
-        // Another slot shown meanwhile: its draft is as saved (nothing was
-        // reported while it was aside); it's that slot's to take back.
-        if self.ui.set_aside.as_ref().is_some_and(|(slot, _)| *slot != self.ui.slot) {
-            self.ui.set_aside = None;
-            // What's in the box was typed for the sign-in: not this slot's.
-            self.ui.input.take();
-        }
-        match (self.sign_in_box().is_some(), self.ui.set_aside.is_some()) {
-            (true, false) => self.ui.set_aside = Some((self.ui.slot.clone(), self.ui.input.take())),
-            (false, true) => {
-                self.ui.input.take();
-                if let Some((_, draft)) = self.ui.set_aside.take() {
-                    self.ui.input.restore(&draft);
+    /// Who has the typing box: a sign-in, while one waits for its answer.
+    /// Taking it, what's in it is the slot's saved draft (reported first),
+    /// and the box is emptied for the sign-in; giving it back, the box is
+    /// emptied and the saved draft taken again. Meanwhile nothing typed is
+    /// saved (a pasted code never is). Said, when it's taken from typing.
+    fn tend_sign_in_box(&mut self, note: &mut Option<String>) {
+        match (self.sign_in_box().is_some(), self.ui.sign_in_has_box) {
+            (true, false) => {
+                self.report_unsent();
+                if !self.ui.input.text.trim().is_empty() {
+                    *note = Some("A sign-in is waiting: the box is its now; what you were writing is kept and comes back after.".into());
                 }
+                self.ui.input = Default::default();
+                self.ui.sign_in_has_box = true;
+            }
+            (false, true) => {
+                self.ui.input = Default::default();
+                self.unsent_for = None;
+                self.ui.sign_in_has_box = false;
             }
             _ => {}
+        }
+    }
+
+    /// What's typed, sent: to the sign-in while it has the box (not while a
+    /// paste is checked: it stays, and that's said), else to the agent
+    /// (`add`: into the turn it's running). Every way of sending comes here.
+    fn send_typed(&mut self, add: bool, note: &mut Option<String>) {
+        if self.ui.input.text.trim().is_empty() {
+            return;
+        }
+        match (self.sign_in_box(), self.active_instance()) {
+            (Some(now), _) if now.pasted.as_ref().is_some_and(|p| p.finishing) => *note = Some("What you pasted is being checked: send again once it's answered.".into()),
+            (Some(_), Some(instance)) => {
+                let answer = self.ui.input.take().text;
+                self.act(Act::FinishSignIn { instance, answer });
+            }
+            (Some(_), None) => {}
+            (None, _) => {
+                let message = self.ui.input.take();
+                if add { self.add_to_turn(message) } else { self.send_prompt(message) }
+            }
         }
     }
 

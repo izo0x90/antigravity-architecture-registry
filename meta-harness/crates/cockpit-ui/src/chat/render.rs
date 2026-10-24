@@ -357,14 +357,8 @@ impl ChatStreamState {
             }
             // Its Send (and Add) are actions, under it while it's typed in.
             self.ui.typing = inserting.then_some(typed.rect);
-            let (enter, add) = (typed.sent.is_some(), typed.sent == Some(crate::keymap::Sent::Add));
-            if enter && !self.ui.input.text.trim().is_empty() {
-                let message = self.ui.input.take();
-                if add {
-                    self.add_to_turn(message);
-                } else {
-                    self.send_prompt(message);
-                }
+            if let Some(sent) = typed.sent {
+                self.send_typed(sent == crate::keymap::Sent::Add, cx.note);
             }
         });
     }

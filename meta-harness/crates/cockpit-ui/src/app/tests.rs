@@ -14,6 +14,7 @@ mod offers;
 mod moves;
 mod outside;
 mod plans;
+mod signing_in;
 mod split;
 mod tags;
 mod terminal;

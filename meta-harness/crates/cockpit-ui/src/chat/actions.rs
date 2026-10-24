@@ -249,10 +249,11 @@ impl ActionProvider for ChatStreamState {
             // waiting; not while one's being asked for.
             let again = now.as_ref().is_none_or(|n| n.ran_out) && !agents.signing_in(&s.instance_id);
             out.push(if again && (self.needs_login() || now.is_some() || self.sign_in_end_to_say().is_some()) { login.header(Setting, "Sign in", Some(icon::KEY)) } else { login });
-            let hint = now.as_ref().and_then(|n| n.waiting.expects.clone()).unwrap_or_else(|| "what the sign-in page gave you".into());
-            let complete = Action::new("auth.complete", "Finish signing in", "Paste what the sign-in page gave you", C::CompleteLogin).param(Param::Text { hint, start: String::new() });
-            // The typing box takes it while a sign-in waits (its Send says so).
-            out.push(complete);
+            // Finishing is the typing box's while a sign-in has it: this sends
+            // what's in it, or puts you in it to paste.
+            if self.sign_in_box().is_some() {
+                out.push(Action::new("auth.complete", "Finish signing in", "Sends what's pasted in the box to the sign-in; with nothing there, puts you in the box to paste", C::CompleteLogin).focused().importance(crate::actions::PRIMARY).header(Button, "Finish signing in", Some(icon::KEY)));
+            }
             out.push(Action::new("auth.logout", "Sign out", "The harness forgets your sign-in on this machine", C::Logout));
         }
 
@@ -272,7 +273,7 @@ impl ActionProvider for ChatStreamState {
         }
         // Typed in: sending it (to the sign-in, while one waits for it).
         out.push(match self.sign_in_box() {
-            Some(_) => Action::new("chat.send", "Finish signing in", "What's typed goes to the sign-in waiting for it, not the agent", C::Send).on_typing(Button, "Finish signing in", Some(icon::KEY)),
+            Some(_) => Action::new("chat.send", "Send to the sign-in", "What's typed goes to the sign-in waiting for it, not the agent", C::Send).on_typing(Button, "Send to the sign-in", Some(icon::KEY)),
             None => Action::new("chat.send", "Send the prompt", "To this slot's session (one opens if there's none); #name hands it what a tag is on", C::Send).on_typing(Button, "Send", Some(icon::PAPER_PLANE_RIGHT)),
         }.focused().importance(crate::actions::PRIMARY).typed(crate::keymap::Sent::Send));
         // What the chat says on its own line, and its ways out.
@@ -280,6 +281,7 @@ impl ActionProvider for ChatStreamState {
             out.push(Action::new("auth.cancel", "Stop signing in", "The sign-in stops waiting; nothing else changes", C::CancelLogin).focused().importance(MINOR).header(Button, "Cancel sign-in", None));
             if now.waiting.url.is_some() && !now.ran_out {
                 out.push(Action::new("auth.page", "Open the sign-in page", "In a new tab, here", C::OpenLoginPage).focused().importance(crate::actions::PRIMARY).header(Button, "Open the sign-in page", Some(icon::ARROW_SQUARE_OUT)));
+                // Not minor, unlike other copies: here it's one of the two ways to the page.
                 out.push(Action::new("auth.copy", "Copy the sign-in link", "To open it somewhere else: another browser, another device", C::CopyLoginLink).focused().header(Button, "Copy link", Some(icon::COPY)));
             }
         }
@@ -381,12 +383,7 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             ChatCommand::ListMcp | ChatCommand::ListSkills => {}
-            ChatCommand::AddToTurn => {
-                let message = self.ui.input.take();
-                if !message.text.is_empty() {
-                    self.add_to_turn(message);
-                }
-            }
+            ChatCommand::AddToTurn => self.send_typed(true, cx.note),
             ChatCommand::AddMcp => {
                 let text = value.unwrap_or_default();
                 let mut parts = text.split_whitespace();
@@ -427,8 +424,11 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             ChatCommand::CompleteLogin => {
-                if let (Some(answer), Some(instance)) = (value, self.active_instance()) {
-                    self.act(Act::FinishSignIn { instance, answer });
+                if self.ui.input.text.trim().is_empty() {
+                    *cx.input_mode = crate::keymap::InputMode::Insert { at: cx.at };
+                    *cx.note = Some("Paste what the page gave back here, and send it.".into());
+                } else {
+                    self.send_typed(false, cx.note);
                 }
             }
             ChatCommand::Logout => {
@@ -454,18 +454,7 @@ impl ActionProvider for ChatStreamState {
                     ctx.open_url(egui::OpenUrl::new_tab(url));
                 }
             }
-            ChatCommand::Send => {
-                let message = self.ui.input.take();
-                let instance = self.active_instance();
-                match (self.sign_in_box(), instance) {
-                    // The box is the sign-in's: what's typed is the answer, never
-                    // a message (and not twice while one is checked).
-                    (Some(now), Some(instance)) if !message.text.trim().is_empty() && !now.pasted.as_ref().is_some_and(|p| p.finishing) => self.act(Act::FinishSignIn { instance, answer: message.text }),
-                    (Some(_), _) => {}
-                    (None, _) if !message.text.is_empty() => self.send_prompt(message),
-                    (None, _) => {}
-                }
-            }
+            ChatCommand::Send => self.send_typed(false, cx.note),
             ChatCommand::DismissNotice => self.act(Act::PutNoticeAway),
             ChatCommand::PutSignInEndAway(id) => self.act(Act::PutSignInEndAway { id: *id }),
             ChatCommand::DismissError => self.act(Act::PutErrorAway),
