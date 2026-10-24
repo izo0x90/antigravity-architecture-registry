@@ -67,7 +67,6 @@ enum Reply {
     /// What opening a card adds (for the tree of that generation).
     Expanded(u64, Box<NetResult<arch_graph::tree::Expanded>>),
     Card(String, Source, Box<NetResult<ComponentDetail>>),
-    Found(u64, arch_search::SearchKind, Box<NetResult<arch_search::Found>>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -387,29 +386,23 @@ impl GraphState {
         }
     }
 
-    /// Asks the server for each kind (symbols, files, lines) at once, when
-    /// the search says a round is due.
-    fn send_find(&mut self, net: &NetClient, ctx: &egui::Context) {
-        let tended = self.find.search.tend(ctx.input(|i| i.time));
-        if let Some(note) = tended.note {
-            self.note = Some(note);
-        }
-        if let Some((round, query)) = tended.ask {
-            let limits = &self.ui.find;
-            use arch_search::SearchKind;
-            for &kind in self.find.search.kinds() {
-                let limit = match kind {
-                    SearchKind::Symbols => limits.symbols,
-                    SearchKind::Files => limits.files,
-                    SearchKind::Text => limits.text,
-                };
-                let inbox = self.inbox.clone();
-                let changed = self.comparison.as_ref().filter(|_| self.nav.only_changed);
-                net.search(&query, kind, &self.nav.source, limit, changed, ctx.clone(), move |r| push(&inbox, Reply::Found(round, kind, Box::new(r))));
-            }
-        }
-        if self.find.search.is_out() {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(crate::code_search::ROUND_LIMIT_S));
+    /// The find, while it's typed: its round asked (symbols, files, lines,
+    /// each to its limit; only in the files changed while only they show),
+    /// what came back taken.
+    pub(crate) fn tend_find(&mut self, net: &NetClient, ctx: &egui::Context) {
+        use arch_search::SearchKind;
+        let (limits, source) = (&self.ui.find, &self.nav.source);
+        let changed = self.comparison.as_ref().filter(|_| self.nav.only_changed);
+        let note = self.find.search.drive(&self.find.query, ctx, |kind, query, reply| {
+            let limit = match kind {
+                SearchKind::Symbols => limits.symbols,
+                SearchKind::Files => limits.files,
+                SearchKind::Text => limits.text,
+            };
+            net.search(query, kind, source, limit, changed, ctx.clone(), reply);
+        });
+        if note.is_some() {
+            self.note = note;
         }
     }
 
@@ -458,6 +451,10 @@ impl crate::buffer::Buffer for GraphState {
         self.draw(ui, drawing.feedback, drawing.leader_held, cx);
     }
 
+    fn tend_search(&mut self, net: &NetClient, ctx: &egui::Context) {
+        self.tend_find(net, ctx);
+    }
+
     /// Fetches what's missing or stale and applies replies. Call every frame.
     fn tick(&mut self, net: &NetClient, ctx: &egui::Context) {
         let replies = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
@@ -477,7 +474,6 @@ impl crate::buffer::Buffer for GraphState {
                     };
                     self.details.insert((key, source), detail);
                 }
-                Reply::Found(asked, kind, found) => self.found(asked, kind, *found),
                 Reply::Expanded(generation, change) => {
                     if generation != self.generation {
                         continue;
@@ -523,7 +519,7 @@ impl crate::buffer::Buffer for GraphState {
             net.graph_expand(&held, &card, 1, ctx.clone(), move |r| push(&inbox, Reply::Expanded(generation, Box::new(r))));
         }
         self.want_details(net, ctx);
-        self.send_find(net, ctx);
+        self.tend_find(net, ctx);
     }
 
 

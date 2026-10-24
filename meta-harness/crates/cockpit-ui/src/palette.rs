@@ -54,11 +54,8 @@ pub struct Palette {
     /// has the keys).
     keys: Vec<String>,
     /// The query a search's rows were of last frame (they changed: the
-    /// highlight starts again), and whether rows of what's typed have come
-    /// since this search opened (until then none are shown: rows of a query
-    /// from before it opened aren't this search's).
+    /// highlight starts again).
     rows_of: Option<String>,
-    answered: bool,
     /// The tallest it's been while open: it never gets shorter (going
     /// from a list to a text field, say), so nothing under it jumps.
     tallest: f32,
@@ -135,7 +132,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self { open: false, stage: Stage::Actions { reach: Reach::Here }, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, said: None, keys: Vec::new(), rows_of: None, answered: false, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
+        Self { open: false, stage: Stage::Actions { reach: Reach::Here }, filter: String::new(), list: Default::default(), ask: None, enter_waiting: false, said: None, keys: Vec::new(), rows_of: None, tallest: 0.0, opened: 0, caret_to_end: false, writing: Default::default(), trigger: None, held: None, ranked: Ranked::default(), gives_back: false, given_back: None }
     }
 }
 
@@ -155,10 +152,10 @@ impl Palette {
         self.opened
     }
 
-    /// What a search open now asks (its action's origin).
-    pub fn searching(&self) -> Option<Origin> {
+    /// The search open now: its action's origin and id.
+    pub fn searching(&self) -> Option<(Origin, &str)> {
         match &self.stage {
-            Stage::Search { action, .. } if self.open => Some(action.origin),
+            Stage::Search { action, .. } if self.open => Some((action.origin, action.action.id.as_str())),
             _ => None,
         }
     }
@@ -190,7 +187,7 @@ impl Palette {
     fn enter(&mut self, action: Bound, from: Option<Reach>) {
         self.filter.clear();
         self.list.reset();
-        (self.enter_waiting, self.rows_of, self.answered) = (false, None, false);
+        (self.enter_waiting, self.rows_of) = (false, None);
         let action = Box::new(action);
         self.stage = match &action.action.param {
             Param::Text { start, .. } => {
@@ -505,13 +502,12 @@ impl Palette {
                                     self.rows_of.clone_from(&of);
                                     self.list.reset();
                                 }
-                                self.answered |= of.as_deref() == Some(self.filter.as_str());
-                                let found = if self.answered { found } else { Vec::new() };
                                 // No rows: said of the query they're of (rows of an
                                 // earlier one stay, said as they were, until the
-                                // new ones come).
+                                // new ones come; a search opened has none: each is
+                                // cleared when its picker closes).
                                 let empty = match of.as_deref().map(str::trim) {
-                                    Some(query) if self.answered && !query.is_empty() => "Nothing found",
+                                    Some(query) if !query.is_empty() => "Nothing found",
                                     _ if self.filter.trim().is_empty() => "Type to search",
                                     _ => "Looking…",
                                 };

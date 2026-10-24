@@ -12,39 +12,51 @@ use crate::actions::{Action, Choice, Group, Param, When};
 /// How many of each kind of hit the `@` picker shows.
 const FOUND_EACH: usize = 12;
 
-/// The code index's answers: the round asked, the kind, what it said.
-type Answers = std::sync::Arc<std::sync::Mutex<Vec<(u64, arch_search::SearchKind, crate::net::NetResult<arch_search::Found>)>>>;
+/// The `@` picker's action.
+pub(in crate::app) const LINK_THING: &str = "link.thing";
+
+/// A row of the `@` picker, picked: what it links, and its name.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Picked {
+    subject: Subject,
+    label: String,
+}
 
 /// What the `@` picker finds for what's typed: the code index's symbols
 /// and files (searched as every code search is: `CodeSearch`), and the
 /// lines a query names (`path:10-20`).
 pub struct Finding {
     search: crate::code_search::CodeSearch,
-    inbox: Answers,
 }
 
 impl Default for Finding {
     fn default() -> Self {
-        Self { search: crate::code_search::CodeSearch::new(&[arch_search::SearchKind::Symbols, arch_search::SearchKind::Files]), inbox: Answers::default() }
+        Self { search: crate::code_search::CodeSearch::new(&[arch_search::SearchKind::Symbols, arch_search::SearchKind::Files]) }
     }
 }
 
 impl Finding {
     /// The picker's rows: the lines the query its rows are of names, then
-    /// what the code index found for it.
+    /// what the code index found for it; each what it links, named.
     fn rows(&self) -> Vec<Choice> {
-        let lines = self.search.rows_of().and_then(lines_of).map(|(path, first, last)| {
+        let picked = |subject: Subject, label: &str| serde_json::to_string(&Picked { subject, label: label.to_owned() }).ok();
+        let lines = self.search.rows_of().and_then(lines_of).and_then(|(path, first, last)| {
             let lines = Subject::CodeLines { path, first, last, snapshot: String::new() };
             let words = lines.name(&harness_contracts::Known::default());
-            Choice::new(serde_json::to_string(&lines).unwrap_or_default(), words).detail(Some("lines of a file".into())).glyph(egui_phosphor::regular::LIST_NUMBERS, crate::theme::colors().accent)
+            Some(Choice::new(picked(lines, &words)?, words).detail(Some("lines of a file".into())).glyph(egui_phosphor::regular::LIST_NUMBERS, crate::theme::colors().accent))
         });
         let subject = |kind: arch_search::SearchKind, hit: &arch_search::Hit| match kind {
             arch_search::SearchKind::Files => Some(Subject::CodeFile { path: hit.file.clone().unwrap_or_else(|| hit.label.clone()) }),
             arch_search::SearchKind::Symbols => Some(Subject::Component { id: arch_graph::ComponentId(hit.key.clone()?), was: None }),
             arch_search::SearchKind::Text => None,
         };
-        let found = self.search.rows(|_, kind, _, hit| subject(kind, hit).and_then(|s| serde_json::to_string(&s).ok()));
+        let found = self.search.rows(|kind, hit| picked(subject(kind, hit)?, &hit.label));
         lines.into_iter().chain(found).collect()
+    }
+
+    /// Its picker closed: what it looked for is done with.
+    pub fn clear(&mut self) {
+        self.search.clear();
     }
 }
 
@@ -145,13 +157,13 @@ impl CockpitApp {
     /// and the link at the caret made whole, a pointer, or as it fits (its
     /// key, or this on a phone).
     pub(super) fn link_actions(&self, here: Here) -> Vec<Action> {
-        let picking = self.palette.picking() == Some("link.thing");
+        let picking = self.palette.picking() == Some(LINK_THING);
         let (found, of) = if picking { (self.desk.finding.rows(), self.desk.finding.search.rows_of().map(str::to_owned)) } else { (Vec::new(), None) };
         let key = crate::keymap::local().input.link.label();
         let available = |yes: bool| if yes { When::Always } else { When::Unavailable };
         let at_link = self.palette.writing().map_or_else(|| self.desk.view(here.kind).typing().is_some_and(|b| b.link_at_caret()), |b| b.link_at_caret());
         vec![
-            Action::new("link.thing", "Link a file or a symbol", format!("Where you're writing: the agent is handed it (whole when small, else its start; {key} at the link changes that)"), ShellCommand::LinkThing)
+            Action::new(LINK_THING, "Link a file or a symbol", format!("Where you're writing: the agent is handed it (whole when small, else its start; {key} at the link changes that)"), ShellCommand::LinkThing)
                 .param(Param::Search { hint: "a file or a symbol (path:10-20: those lines)".into(), found, of })
                 .group(Group::Act)
                 .importance(crate::actions::MINOR)
@@ -173,39 +185,17 @@ impl CockpitApp {
     }
 
     /// Asks the code index for what the `@` picker's query finds (as every
-    /// code search does: `CodeSearch`); takes the answers.
+    /// code search does: `CodeSearch`), while it's open.
     pub(super) fn find_links(&mut self, ctx: &egui::Context) {
-        let answers: Vec<_> = std::mem::take(&mut *self.desk.finding.inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        // Closed: what it looked for is done with (what comes for it is
-        // dropped, unsaid).
-        if self.palette.picking() != Some("link.thing") {
-            self.desk.finding.search.clear();
+        if self.palette.picking() != Some(LINK_THING) {
             return;
         }
-        for (round, kind, answer) in answers {
-            if let Some(note) = self.desk.finding.search.answer(round, kind, answer) {
-                self.note = Some(note);
-            }
-        }
-        let query = self.desk.shell_searches.get("link.thing").map_or("", String::as_str);
-        self.desk.finding.search.typed(query);
-        let tended = self.desk.finding.search.tend(ctx.input(|i| i.time));
-        if let Some(note) = tended.note {
-            self.note = Some(note);
-        }
-        if let Some((round, query)) = tended.ask {
-            // The code as it is (a plan's components aren't things yet).
-            for &kind in self.desk.finding.search.kinds() {
-                let inbox = self.desk.finding.inbox.clone();
-                self.desk.net.search(&query, kind, &arch_graph::Source::Code, FOUND_EACH, None, ctx.clone(), move |r| {
-                    if let Ok(mut i) = inbox.lock() {
-                        i.push((round, kind, r));
-                    }
-                });
-            }
-        }
-        if self.desk.finding.search.is_out() {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(crate::code_search::ROUND_LIMIT_S));
+        let query = self.desk.shell_searches.get(LINK_THING).map_or("", String::as_str);
+        let net = &self.desk.net;
+        // The code as it is (a plan's components aren't things yet).
+        let note = self.desk.finding.search.drive(query, ctx, |kind, query, reply| net.search(query, kind, &arch_graph::Source::Code, FOUND_EACH, None, ctx.clone(), reply));
+        if note.is_some() {
+            self.note = note;
         }
     }
 
@@ -267,9 +257,7 @@ impl CockpitApp {
     /// The `@` picker's pick: linked where it was opened from.
     pub(super) fn run_link(&mut self, value: Option<String>) {
         let here = self.here();
-        let Some(subject) = value.and_then(|v| serde_json::from_str::<Subject>(&v).ok()) else { return };
-        let label = self.desk.finding.rows().iter().find(|c| serde_json::from_str::<Subject>(&c.value).ok().as_ref() == Some(&subject)).map_or_else(|| "something".to_owned(), |c| c.label.clone());
-        self.desk.shell_searches.remove("link.thing");
+        let Some(Picked { subject, label }) = value.and_then(|v| serde_json::from_str(&v).ok()) else { return };
         self.put_link(here, &format!("@{label}"), Linked::Thing { subject });
     }
 }

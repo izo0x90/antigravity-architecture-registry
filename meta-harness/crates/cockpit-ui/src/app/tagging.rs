@@ -188,7 +188,6 @@ impl CockpitApp {
                 }
             }
             (ShellCommand::Tag, Some(subject), Some(tag)) => {
-                self.desk.shell_searches.remove("tag.add");
                 self.ask_tags(TagAct::Tag { tag, subject }, ctx);
             }
             (ShellCommand::Untag(one), _, value) => {
@@ -204,7 +203,6 @@ impl CockpitApp {
                     self.note = Some("That tag is gone.".into());
                     return;
                 };
-                self.desk.shell_searches.remove("tag.insert");
                 self.put_link(here, &format!("#{name}"), harness_contracts::Linked::Tag { tag: TagId::new(&tag) });
             }
             (ShellCommand::TagEditWhich(edit), _, Some(tag)) => {

@@ -14,10 +14,9 @@ use arch_graph::tree::{ViewKind, Way};
 use arch_graph::Source;
 
 
-use arch_search::{Found, Hit, SearchKind};
+use arch_search::{Hit, SearchKind};
 
 use super::{GraphState, NavChange};
-use crate::net::NetResult;
 use crate::actions::{Action, ActionProvider, Choice, Group, MINOR, PRIMARY, Param, RunCx, SECONDARY};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -144,7 +143,13 @@ impl ActionProvider for GraphState {
 
     fn search(&mut self, action: &str, query: &str) {
         if action == "graph.find" {
-            self.find_query(query);
+            query.clone_into(&mut self.find.query);
+        }
+    }
+
+    fn search_done(&mut self, action: &str) {
+        if action == "graph.find" {
+            self.find = Find::default();
         }
     }
 }
@@ -214,45 +219,31 @@ impl GraphState {
 }
 
 /// The search being typed, and what came back for it (as every code
-/// search: `CodeSearch`).
+/// search: `CodeSearch`); gone once its picker closes.
 pub(crate) struct Find {
     pub(super) search: crate::code_search::CodeSearch,
+    pub(super) query: String,
 }
 
 impl Default for Find {
     fn default() -> Self {
-        Self { search: crate::code_search::CodeSearch::new(&SearchKind::ALL) }
+        Self { search: crate::code_search::CodeSearch::new(&SearchKind::ALL), query: String::new() }
     }
 }
 
 impl GraphState {
-    /// What's typed in the palette's search, as it changes.
-    pub(crate) fn find_query(&mut self, query: &str) {
-        self.find.search.typed(query);
-    }
-
-    pub(super) fn found(&mut self, asked: u64, kind: SearchKind, found: NetResult<Found>) {
-        if let Some(note) = self.find.search.answer(asked, kind, found) {
-            self.note = Some(note);
-        }
-    }
-
-    /// The palette's list (symbols, then files, then lines) and the query
-    /// it's of.
+    /// The palette's list (symbols, then files, then lines), each row the
+    /// hit it stands for, and the query it's of.
     pub(crate) fn find_choices(&self) -> (Vec<Choice>, Option<String>) {
-        let rows = self.find.search.rows(|round, kind, i, _| Some(format!("{round}:{}:{i}", kind.name())));
+        let rows = self.find.search.rows(|_, hit| serde_json::to_string(hit).ok());
         (rows, self.find.search.rows_of().map(str::to_owned))
     }
 
-    /// Goes to a picked result (`value` from `find_choices`).
+    /// Goes to a picked result (`value` from `find_choices`: its hit).
     pub(crate) fn pick_found(&mut self, value: &str) {
-        let mut parts = value.splitn(3, ':');
-        let (Some(round), Some(kind), Some(index)) = (parts.next(), parts.next(), parts.next()) else { return };
-        let (Ok(round), Some(kind), Ok(index)) = (round.parse(), SearchKind::from_name(kind), index.parse()) else { return };
-        let Some(hit) = self.find.search.hit(round, kind, index).cloned() else { return };
-        // Picked: what it looked for is done with.
-        self.find.search.clear();
-        self.go_to_hit(&hit);
+        if let Ok(hit) = serde_json::from_str::<Hit>(value) {
+            self.go_to_hit(&hit);
+        }
     }
 
     fn go_to_hit(&mut self, hit: &Hit) {
@@ -289,24 +280,50 @@ mod tests {
     use super::*;
     use crate::graph::tests::{sample_tree, showing};
     use crate::nav::Navigable;
+    use crate::net::NetClient;
+    use arch_search::Found;
 
     fn hit(kind: SearchKind, key: Option<&str>, label: &str, callable: bool, data: Option<&str>) -> Hit {
         Hit { kind, key: key.map(Into::into), label: label.into(), detail: "d".into(), file: Some("src/a.rs".into()), line: Some(3), callable, data: data.map(Into::into) }
     }
 
-    fn answer(g: &mut GraphState, round: u64, kind: SearchKind, hits: Vec<Hit>) {
-        g.found(round, kind, Ok(Found { total: hits.len(), hits, ..Found::default() }));
+    /// The graph's find, typed and driven as the palette does, answered
+    /// as the server would.
+    struct Finding {
+        server: NetClient,
+        ctx: egui::Context,
     }
 
-    /// "step" searched and answered (a symbol, a file, a line): its round.
-    fn search_step(g: &mut GraphState) -> u64 {
-        g.find_query("step");
-        let (round, _) = g.find.search.tend(0.0).ask.expect("the query goes out");
-        g.found(round, SearchKind::Text, Ok(Found { hits: vec![hit(SearchKind::Text, None, "// step by step", false, None)], total: 40, partial: true, ..Found::default() }));
-        answer(g, round, SearchKind::Files, vec![hit(SearchKind::Files, Some("rust:a"), "src/a.rs", false, None)]);
-        answer(g, round, SearchKind::Symbols, vec![hit(SearchKind::Symbols, Some("rust:a::step"), "step", true, None)]);
-        g.find.search.tend(0.1);
-        round
+    impl Finding {
+        fn new() -> Self {
+            Self { server: NetClient::new("http://test"), ctx: egui::Context::default() }
+        }
+
+        /// `query` typed in the find (its round sent, what came taken).
+        fn typed(&self, g: &mut GraphState, query: &str) {
+            g.search("graph.find", query);
+            g.tend_find(&self.server, &self.ctx);
+        }
+
+        /// The server's answer for `kind` to the latest round of `query`.
+        fn answer(&self, query: &str, kind: SearchKind, found: Found) {
+            let asked = format!("GET /api/search?q={}&kind={}&", urlencoding::encode(query), kind.name());
+            let call = self.server.sent.lock().unwrap().iter().rev().find(|c| c.starts_with(&asked)).cloned().unwrap_or_else(|| panic!("{asked}"));
+            assert!(self.server.answer(&call, 200, &serde_json::to_value(found).unwrap()), "{call} waits");
+        }
+
+        fn hits(&self, query: &str, kind: SearchKind, hits: Vec<Hit>) {
+            self.answer(query, kind, Found { total: hits.len(), hits, ..Found::default() });
+        }
+    }
+
+    /// "step" searched and answered (a symbol, a file, a line), taken.
+    fn search_step(g: &mut GraphState, f: &Finding) {
+        f.typed(g, "step");
+        f.answer("step", SearchKind::Text, Found { hits: vec![hit(SearchKind::Text, None, "// step by step", false, None)], total: 40, partial: true, ..Found::default() });
+        f.hits("step", SearchKind::Files, vec![hit(SearchKind::Files, Some("rust:a"), "src/a.rs", false, None)]);
+        f.hits("step", SearchKind::Symbols, vec![hit(SearchKind::Symbols, Some("rust:a::step"), "step", true, None)]);
+        g.tend_find(&f.server, &f.ctx);
     }
 
     fn value_of(g: &GraphState, label: &str) -> String {
@@ -315,75 +332,63 @@ mod tests {
 
     #[test]
     fn finding_lists_symbols_files_and_lines_and_picking_one_makes_it_the_root() {
-        let mut g = showing(sample_tree());
+        let (mut g, f) = (showing(sample_tree()), Finding::new());
         assert_eq!(g.nav.view, ViewKind::Calls);
-        g.find_query("step");
-        let (round, query) = g.find.search.tend(0.0).ask.expect("the query goes out");
-        assert_eq!((query.as_str(), g.find_choices()), ("step", (Vec::new(), None)), "nothing answered yet");
-        // A search cut at its limit or its time says so on its last hit.
-        g.found(round, SearchKind::Text, Ok(Found { hits: vec![hit(SearchKind::Text, None, "// step by step", false, None)], total: 40, partial: true, ..Found::default() }));
-        answer(&mut g, round, SearchKind::Files, vec![hit(SearchKind::Files, Some("rust:a"), "src/a.rs", false, None)]);
-        answer(&mut g, round, SearchKind::Symbols, vec![hit(SearchKind::Symbols, Some("rust:a::step"), "step", true, None)]);
-        g.find.search.tend(0.1);
+        f.typed(&mut g, "step");
+        assert_eq!(g.find_choices(), (Vec::new(), None), "nothing answered yet");
+        search_step(&mut g, &f);
         let (list, of) = g.find_choices();
         assert_eq!(of.as_deref(), Some("step"));
         assert_eq!(list.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["step", "src/a.rs", "// step by step"], "symbols, files, lines");
-        let line = g.find_choices().0.into_iter().find(|c| c.label == "// step by step").unwrap();
-        let said = line.detail.unwrap_or_default();
+        // A search cut at its limit or its time says so on its last hit.
+        let said = list[2].detail.clone().unwrap_or_default();
         assert!(said.contains("1 of 40 lines") && said.contains("time limit"), "{said}");
 
-        // A function, in the calls view: the root there; the search is
-        // done with.
+        // A function, in the calls view: the root there.
         g.command(crate::graph::actions::GraphCommand::Find, Some(value_of(&g, "step")));
         assert_eq!((g.nav.view, g.nav.root.as_deref()), (ViewKind::Calls, Some("rust:a::step")));
-        assert_eq!(g.find_choices(), (Vec::new(), None), "picked: nothing kept for the next find");
 
         // A file's module: the calls view can't show it, so the boxes do.
-        search_step(&mut g);
-        let file = value_of(&g, "src/a.rs");
-        g.command(crate::graph::actions::GraphCommand::Find, Some(file));
+        g.command(crate::graph::actions::GraphCommand::Find, Some(value_of(&g, "src/a.rs")));
         assert_eq!((g.nav.view, g.nav.root.as_deref()), (ViewKind::Contains, Some("rust:a")));
 
         // A line nothing in the graph stands for opens in the code.
-        search_step(&mut g);
         g.command(crate::graph::actions::GraphCommand::Find, Some(value_of(&g, "// step by step")));
         let shown = crate::nav::Ask::Show { target: crate::nav::Target::Span { file: "src/a.rs".into(), start: 3, end: 3 }, in_: Some(crate::kind::BufferKind::Code) };
         assert!(g.take_asks().contains(&shown), "it asks the code to show it");
 
-        // While the next is looked for, the rows of `step` stay; answers
-        // to it, late, are dropped.
-        let round = search_step(&mut g);
-        g.find_query("run");
-        let (next, _) = g.find.search.tend(0.2).ask.expect("the next query goes out");
-        answer(&mut g, round, SearchKind::Symbols, vec![hit(SearchKind::Symbols, Some("rust:a::late"), "late", true, None)]);
-        g.find.search.tend(0.3);
+        // While the next is looked for, the rows of `step` stay; a row
+        // picked from them goes where it stands for, whatever came since.
+        let step = value_of(&g, "step");
+        f.typed(&mut g, "run");
         let (list, of) = g.find_choices();
         assert_eq!((of.as_deref(), list.len()), (Some("step"), 3), "the rows of what was typed before, until the new ones are in");
         for kind in SearchKind::ALL {
-            answer(&mut g, next, kind, Vec::new());
+            f.hits("run", kind, Vec::new());
         }
-        g.find.search.tend(0.4);
+        g.tend_find(&f.server, &f.ctx);
         assert_eq!(g.find_choices(), (Vec::new(), Some("run".to_owned())));
-        // A pick from the rows shown a moment ago (the frame the next came)
-        // still goes; one from a search done with since does nothing.
-        let earlier = format!("{round}:symbols:0");
-        g.command(crate::graph::actions::GraphCommand::Find, Some(earlier.clone()));
-        assert_eq!(g.nav.root.as_deref(), Some("rust:a::step"));
-        g.navigate(NavChange::GoIn("rust:a".into()));
-        g.command(crate::graph::actions::GraphCommand::Find, Some(earlier));
-        assert_eq!(g.nav.root.as_deref(), Some("rust:a"));
+        g.command(crate::graph::actions::GraphCommand::Find, Some(step));
+        assert_eq!(g.nav.root.as_deref(), Some("rust:a::step"), "a row carries what it stands for");
+
+        // Its picker left: nothing kept for the next find; what comes for
+        // a round out then is dropped.
+        f.typed(&mut g, "save");
+        g.search_done("graph.find");
+        f.hits("save", SearchKind::Symbols, vec![hit(SearchKind::Symbols, Some("rust:a::save"), "save", true, None)]);
+        g.tend_find(&f.server, &f.ctx);
+        assert!(g.find_choices().0.is_empty(), "the find starts afresh");
     }
 
     #[test]
     fn a_data_type_found_from_the_data_flow_view_is_its_root_there() {
-        let mut g = showing(sample_tree());
+        let (mut g, f) = (showing(sample_tree()), Finding::new());
         g.command(crate::graph::actions::GraphCommand::SetView, Some("data_flow".into()));
-        g.find_query("Order");
-        let (round, _) = g.find.search.tend(0.0).ask.unwrap();
-        answer(&mut g, round, SearchKind::Symbols, vec![hit(SearchKind::Symbols, Some("rust:a::Order"), "Order", false, Some("type:Order"))]);
-        answer(&mut g, round, SearchKind::Files, Vec::new());
-        answer(&mut g, round, SearchKind::Text, Vec::new());
-        g.find.search.tend(0.1);
+        f.typed(&mut g, "Order");
+        f.hits("Order", SearchKind::Symbols, vec![hit(SearchKind::Symbols, Some("rust:a::Order"), "Order", false, Some("type:Order"))]);
+        f.hits("Order", SearchKind::Files, Vec::new());
+        f.hits("Order", SearchKind::Text, Vec::new());
+        g.tend_find(&f.server, &f.ctx);
         g.command(crate::graph::actions::GraphCommand::Find, Some(value_of(&g, "Order")));
         assert_eq!((g.nav.view, g.nav.root.as_deref()), (ViewKind::DataFlow, Some("type:Order")));
     }

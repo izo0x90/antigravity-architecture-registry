@@ -588,6 +588,10 @@ pub trait ActionProvider {
 
     /// What's typed for a `Param::Search` action, as it changes.
     fn search(&mut self, _action: &str, _query: &str) {}
+
+    /// The search of `action` was left (picked, gone back from, closed):
+    /// what it looked for is done with.
+    fn search_done(&mut self, _action: &str) {}
 }
 
 #[derive(Clone, Debug, PartialEq)]

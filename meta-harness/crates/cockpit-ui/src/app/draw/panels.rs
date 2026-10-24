@@ -41,6 +41,15 @@ impl CockpitApp {
     /// The palette overlay (opened by its key, or its control on the top
     /// bar).
     pub fn render_palette(&mut self, ctx: &egui::Context) {
+        // A search left (picked, gone back from, closed): its owner is told,
+        // so the next opens with nothing of it.
+        let opening = self.palette.opening();
+        if self.searched.as_ref().map(|(origin, id, at)| (*origin, id.as_str(), *at)) != self.palette.searching().map(|(origin, id)| (origin, id, opening)) {
+            let now = self.palette.searching().map(|(origin, id)| (origin, id.to_owned(), opening));
+            if let Some((origin, id, _)) = std::mem::replace(&mut self.searched, now) {
+                self.search_done(origin, &id);
+            }
+        }
         // A view asked for an action's picker (e.g. Resume once sessions loaded).
         let requests: Vec<String> = BufferKind::ALL.into_iter().filter_map(|kind| self.desk.view_mut(kind).take_palette_request()).collect();
         // Closed and not asked for: nothing to list (what it lists isn't
@@ -70,13 +79,13 @@ impl CockpitApp {
                 }
             }
         }
-        // A view searched from here is tended while its search is open,
-        // shown or not: what it asks and what comes back go in its tick.
-        if let Some(Origin::View(kind)) = self.palette.searching()
+        // A view searched from here and not drawn (not ticked): its search
+        // alone is tended while it's open.
+        if let Some((Origin::View(kind), _)) = self.palette.searching()
             && !self.desk.shown_now(kind)
         {
             let (buffer, net) = self.desk.view_with_net(kind);
-            buffer.tick(net, ctx);
+            buffer.tend_search(net, ctx);
         }
         if let Some(invocation) = picked {
             // Still open: the picker changed what it acts on (the cycle key).
@@ -106,6 +115,20 @@ impl CockpitApp {
                     InputMode::Normal
                 }
             };
+        }
+    }
+
+    /// The search of `action` was left: what it looked for is done with
+    /// (a view's, or the shell's).
+    fn search_done(&mut self, origin: Origin, action: &str) {
+        match origin {
+            Origin::View(kind) => self.desk.view_mut(kind).search_done(action),
+            Origin::Shell => {
+                self.desk.shell_searches.remove(action);
+                if action == crate::app::linking::LINK_THING {
+                    self.desk.finding.clear();
+                }
+            }
         }
     }
 }

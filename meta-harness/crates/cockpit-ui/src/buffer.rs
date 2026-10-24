@@ -59,6 +59,10 @@ pub trait Buffer: Navigable + ActionProvider + Hosted + Any {
     /// what it needs asked for.
     fn tick(&mut self, _net: &NetClient, _ctx: &egui::Context) {}
 
+    /// While its search is open in the palette and it isn't drawn (not
+    /// ticked): only the search tended.
+    fn tend_search(&mut self, _net: &NetClient, _ctx: &egui::Context) {}
+
     /// It was drawn last frame and isn't now (its panel went, another
     /// buffer is shown there, the desk was put away): what it holds open
     /// while it's drawn, it lets go of.

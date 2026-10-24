@@ -256,6 +256,9 @@ pub struct CockpitApp {
     /// Drawing a frame now.
     in_frame: std::cell::Cell<bool>,
     /// How many times the actions were gathered (counted for the tests).
+    /// The palette's search open last frame (its action's origin and id,
+    /// and the palette's opening): once left, its owner is told.
+    searched: Option<(Origin, String, u64)>,
     #[cfg(test)]
     gathered: std::cell::Cell<usize>,
     /// How many times the action list's rows were built (counted for the
@@ -365,6 +368,7 @@ impl CockpitApp {
             frame_actions: Default::default(),
             frame_situations: Default::default(),
             in_frame: Default::default(),
+            searched: None,
             #[cfg(test)]
             gathered: Default::default(),
             #[cfg(test)]
