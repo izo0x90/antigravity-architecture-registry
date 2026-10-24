@@ -58,6 +58,8 @@ pub enum Act {
     SignOut { instance: InstanceId },
     StopSigningIn { instance: InstanceId, id: u64 },
     PutNoticeAway,
+    /// A sign-in's end, read: off this device's chat.
+    PutSignInEndAway { id: u64 },
     PutErrorAway,
     /// The slot's updates were seen (its chat is on screen).
     Seen,
@@ -120,6 +122,8 @@ pub struct Agents {
     signing_in: BTreeSet<InstanceId>,
     /// The last paste to a sign-in under way.
     pasted: Option<Pasted>,
+    /// Sign-ins whose end was read and put away (here).
+    ends_put_away: BTreeSet<u64>,
     /// The sub-slots made, how many, and the last one with the slot that asked.
     made: (u64, Option<(SlotId, SlotId)>),
     mailbox: Mailbox,
@@ -135,9 +139,10 @@ impl Agents {
         self.store.apply(event);
     }
 
-    /// How `instance`'s last sign-in ended (the server's word).
+    /// How `instance`'s last sign-in ended (the server's word), unless put
+    /// away here.
     pub fn sign_in_ended(&self, instance: &InstanceId) -> Option<&harness_contracts::SignInEnded> {
-        self.store.instances.get(instance)?.auth.ended.as_deref()
+        self.store.instances.get(instance)?.auth.ended.as_deref().filter(|e| !self.ends_put_away.contains(&e.id))
     }
 
     pub fn opening(&self, slot: &SlotId) -> bool {
@@ -306,6 +311,9 @@ impl Agents {
                 net.cancel_auth(&instance, id, ctx.clone(), done);
             }
             Act::PutNoticeAway => self.notice = None,
+            Act::PutSignInEndAway { id } => {
+                self.ends_put_away.insert(id);
+            }
             Act::PutErrorAway => {
                 self.errors.remove(&slot);
             }

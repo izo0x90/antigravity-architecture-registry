@@ -28,11 +28,14 @@ impl AcpDriver {
 }
 
 /// Makes a harness's home folder when it isn't there yet, for the server's
-/// user only. One that's there is used as it is.
-fn make_home(dir: &Path) -> std::io::Result<()> {
-    // A link would take the login wherever it points.
-    if std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err(std::io::Error::other("it's a link: a home is a folder of its own"));
+/// user only. One that's there is used as it is. In the project, no folder
+/// on the way to it may be a link (it would take the login wherever it
+/// points: into git, say).
+fn make_home(project: &Path, dir: &Path) -> std::io::Result<()> {
+    let linked = |at: &Path| std::fs::symlink_metadata(at).is_ok_and(|m| m.file_type().is_symlink());
+    let mut on_the_way = dir.ancestors().take_while(|at| at.starts_with(project) && *at != project);
+    if linked(dir) || on_the_way.any(linked) {
+        return Err(std::io::Error::other("a link is on the way to it: a home is a folder of its own"));
     }
     if dir.exists() {
         return Ok(());
@@ -72,7 +75,10 @@ impl ProviderDriver for AcpDriver {
         let home = entry.home.clone();
         let mut launch = launch.and_then(|launch| settings.launch_with(launch, home.as_deref()));
         if let (Ok(_), Some(dir)) = (&launch, &home) {
-            let made = { let dir = dir.clone(); tokio::task::spawn_blocking(move || make_home(&dir)).await };
+            let made = {
+                let (project, dir) = (self.project.clone(), dir.clone());
+                tokio::task::spawn_blocking(move || make_home(&project, &dir)).await
+            };
             if let Err(why) = made.map_err(|e| e.to_string()).and_then(|r| r.map_err(|e| e.to_string())) {
                 launch = Err(format!("its home folder {}: {why}", dir.display()));
             }
@@ -98,7 +104,7 @@ mod tests {
     fn a_home_is_made_for_the_servers_user_and_never_through_a_link() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join(".nah/harness/antigravity");
-        make_home(&home).unwrap();
+        make_home(dir.path(), &home).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -106,7 +112,12 @@ mod tests {
             let linked = dir.path().join(".nah/harness/claude-code");
             std::fs::create_dir_all(dir.path().join("docs")).unwrap();
             std::os::unix::fs::symlink(dir.path().join("docs"), &linked).unwrap();
-            assert!(make_home(&linked).is_err(), "a login would land where the link points");
+            assert!(make_home(dir.path(), &linked).is_err(), "a login would land where the link points");
+            // A link above it, too.
+            let other = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(other.path().join(".nah")).unwrap();
+            std::os::unix::fs::symlink(dir.path().join("docs"), other.path().join(".nah/harness")).unwrap();
+            assert!(make_home(other.path(), &other.path().join(".nah/harness/antigravity")).is_err());
         }
     }
 }

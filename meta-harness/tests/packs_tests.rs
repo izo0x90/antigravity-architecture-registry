@@ -198,6 +198,20 @@ fn a_harness_setting_that_cant_be_used_stops_the_harnesses_saying_why() {
     }
 }
 
+#[test]
+fn a_home_reached_through_a_link_into_the_project_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let places = places(dir.path());
+    std::fs::create_dir_all(places.project.join(".nah")).unwrap();
+    let outside = dir.path().join("elsewhere");
+    std::os::unix::fs::symlink(&places.project, &outside).unwrap();
+    std::fs::write(places.project.join(".nah/harnesses.toml"), format!("[antigravity]\nhome = \"{}\"\n", outside.join("agent-home").display())).unwrap();
+    let catalog = Catalog::load(&distribution(), &places).unwrap();
+    for entry in harness_launches(&catalog) {
+        assert!(matches!(&entry.launch, HarnessLaunch::Unavailable { reason, .. } if reason.contains("is in the project")), "{:?}", entry.launch);
+    }
+}
+
 #[tokio::test]
 async fn a_harness_whose_pack_cant_move_its_home_isnt_started_elsewhere() {
     let project = tempfile::tempdir().unwrap();

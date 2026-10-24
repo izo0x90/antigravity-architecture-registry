@@ -96,7 +96,7 @@ impl ChatStreamState {
             });
         }
         let starting = instance.as_ref().is_some_and(|s| self.agents().signing_in(&s.instance_id));
-        if (self.needs_login() || now.is_some() || starting)
+        if (self.needs_login() || now.is_some() || starting || self.sign_in_end_to_say().is_some())
             && let Some(snapshot) = instance
         {
             let look = crate::theme::look();
@@ -140,6 +140,14 @@ impl ChatStreamState {
                 }
             });
         }
+    }
+
+    /// How its last sign-in ended, when that's worth saying (it ran out or
+    /// failed) and it isn't put away.
+    pub(super) fn sign_in_end_to_say(&self) -> Option<harness_contracts::SignInEnded> {
+        let instance = self.active_instance()?;
+        let ended = self.agents().sign_in_ended(&instance).cloned()?;
+        matches!(ended.how, harness_contracts::SignInEnd::RanOut | harness_contracts::SignInEnd::Failed { .. }).then_some(ended)
     }
 
     /// The harness offers sign-in and isn't signed in (a session refused
@@ -395,7 +403,7 @@ impl crate::hosted::Hosted for ChatStreamState {
             _ => {}
         }
         if let Some(home) = &s.home {
-            let whose = if home.kept { "kept for this project" } else { "its own" };
+            let whose = if home.kept { "set for this project" } else { "its own" };
             out.push(Status::new(icon::HOUSE, Tone::Muted).detail(format!("Its home (sign-in, settings, sessions), {whose}: {}", home.path)));
         }
         if !s.problems.is_empty() {

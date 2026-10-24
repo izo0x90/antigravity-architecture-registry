@@ -73,17 +73,29 @@ impl AcpInstance {
             let on_auth = Arc::new(move |event: AuthEvent| {
                 let Some(instance) = me.upgrade() else { return };
                 let signed_in = match event {
+                    // Ids only grow: what's said of an older sign-in than the
+                    // one shown, or one that has ended, is passed over.
                     AuthEvent::Waiting(waiting) => {
-                        return instance.snapshot.send_modify(|s| {
-                            s.auth.waiting = Some(Box::new(waiting));
-                            s.auth.ended = None;
+                        instance.snapshot.send_if_modified(|s| {
+                            let older = s.auth.waiting.as_ref().is_some_and(|w| w.id > waiting.id) || s.auth.ended.as_ref().is_some_and(|e| e.id >= waiting.id);
+                            if !older {
+                                s.auth.waiting = Some(Box::new(waiting));
+                                s.auth.ended = None;
+                            }
+                            !older
                         });
+                        return;
                     }
                     AuthEvent::Ended(ended) => {
-                        return instance.snapshot.send_modify(|s| {
-                            s.auth.waiting = None;
-                            s.auth.ended = Some(Box::new(ended));
+                        instance.snapshot.send_if_modified(|s| {
+                            let older = s.auth.waiting.as_ref().is_some_and(|w| w.id > ended.id) || s.auth.ended.as_ref().is_some_and(|e| e.id > ended.id);
+                            if !older {
+                                s.auth.waiting = None;
+                                s.auth.ended = Some(Box::new(ended));
+                            }
+                            !older
                         });
+                        return;
                     }
                     AuthEvent::Status(signed_in) => signed_in,
                 };

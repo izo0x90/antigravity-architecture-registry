@@ -58,8 +58,8 @@ impl ProviderSnapshot {
     }
 }
 
-/// A harness's home: the folder, and whether the project keeps it there
-/// (else it's the harness's own).
+/// A harness's home: the folder, and whether the project's settings put it
+/// there (else it's the harness's own).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessHome {

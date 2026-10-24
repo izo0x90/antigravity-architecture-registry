@@ -171,3 +171,34 @@ async fn what_a_real_agent_prints_on_its_error_output_reaches_the_driver() {
     let line = tokio::time::timeout(Duration::from_secs(5), transport.said.recv()).await.unwrap().unwrap();
     assert!(line.ends_with("https://accounts.google.com/x?y=1"), "{line}");
 }
+
+#[tokio::test]
+async fn a_sign_in_goes_on_when_the_request_that_began_it_goes_away() {
+    let agent = agent();
+    let (auth, said) = controller(&agent, antigravity());
+    // A reload, a dropped connection: the request is gone before the link.
+    let _ = tokio::time::timeout(Duration::from_millis(1), auth.begin("oauth-personal")).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(matches!(last(&said), Some(AuthEvent::Waiting(w)) if w.url.is_some()), "its link is shown all the same: {:?}", last(&said));
+}
+
+#[tokio::test]
+async fn a_login_command_taking_a_paste_is_stopped_by_cancel() {
+    let dir = tempfile::tempdir().unwrap();
+    let done = dir.path().join("signed-in");
+    // Prints its link, takes the code, and is slow to finish.
+    let launch = Launch { program: "sh".into(), args: vec!["-c".into(), format!("echo 'visit https://claude.ai/oauth?x=1'; read code; sleep 3; touch {}", done.display())], env: Vec::new(), env_remove: Vec::new() };
+    let said = Said::default();
+    let to = said.clone();
+    let auth = Arc::new(AcpAuthController::new(Arc::new(agent()), Arc::new(Profile::new(AcpSettings::default(), dir.path(), None)), Some(launch), Arc::new(move |e| to.lock().unwrap().push(e))));
+    auth.set_logins(vec![harness_acp::CommandLogin { method: "login".into(), args: Vec::new(), env: Vec::new() }]);
+    let waiting = auth.begin("login").await.unwrap().unwrap();
+    let pasting = { let auth = auth.clone(); tokio::spawn(async move { auth.complete(waiting.id, "the-code").await }) };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    auth.cancel(waiting.id).await.unwrap();
+    let answered = tokio::time::timeout(Duration::from_secs(2), pasting).await.expect("answered at once").unwrap();
+    assert!(matches!(answered, Err(HarnessError::Conflict { .. })), "{answered:?}");
+    assert_eq!(last(&said), Some(AuthEvent::Ended(SignInEnded { id: waiting.id, how: SignInEnd::Stopped })));
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(!done.exists(), "the login was stopped, not left to finish");
+}

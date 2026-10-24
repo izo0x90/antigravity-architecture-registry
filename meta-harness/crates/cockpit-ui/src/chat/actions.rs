@@ -39,6 +39,7 @@ enum ChatCommand {
     OpenPage(String),
     Send,
     DismissNotice,
+    PutSignInEndAway(u64),
     Retry,
     DismissError,
     Answer { thread: ThreadId, request: harness_contracts::RequestId, option: String },
@@ -274,6 +275,9 @@ impl ActionProvider for ChatStreamState {
                 out.push(Action::new("auth.page", "Open the sign-in page", "In a new tab", C::OpenLoginPage).focused().importance(crate::actions::PRIMARY).header(Button, "Open the sign-in page", Some(icon::ARROW_SQUARE_OUT)));
             }
         }
+        if let Some(ended) = self.sign_in_end_to_say().filter(|_| self.sign_in_now().is_none()) {
+            out.push(Action::new("auth.end.dismiss", "Put the sign-in's end away", "Off this chat", C::PutSignInEndAway(ended.id)).focused().importance(MINOR).header(Button, "Dismiss", None));
+        }
         if agents.notice().is_some() {
             out.push(Action::new("chat.dismiss", "Put the notice away", "Off the chat", C::DismissNotice).focused().importance(MINOR).header(Button, "Dismiss", None));
         }
@@ -443,6 +447,7 @@ impl ActionProvider for ChatStreamState {
                 }
             }
             ChatCommand::DismissNotice => self.act(Act::PutNoticeAway),
+            ChatCommand::PutSignInEndAway(id) => self.act(Act::PutSignInEndAway { id: *id }),
             ChatCommand::DismissError => self.act(Act::PutErrorAway),
             ChatCommand::Answer { thread, request, option } => {
                 if let Err(why) = self.answer(thread, request, option) {

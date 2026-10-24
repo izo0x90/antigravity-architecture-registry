@@ -14,7 +14,7 @@ regex = "1"
 serde = { version = "1.0", features = ["derive"] }
 futures = "0.3.34"
 serde_json = "1.0"
-tokio = { version = "1.53.1", features = ["sync", "process", "rt", "time", "io-util", "macros", "net"] }
+tokio = { version = "1.53.1", features = ["sync", "process", "rt", "time", "io-util", "macros", "net", "fs"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 tokio-util = { version = "0.7.19", features = ["compat"] }
 tracing = "0.1.44"

@@ -52,11 +52,14 @@ struct Callback {
 }
 
 enum Running {
-    /// Starting, its link not shown yet.
-    Starting,
+    /// Between steps, nothing held yet (starting, or a paste being taken up).
+    Pending,
     /// The agent's login: its callback once it's shown its link.
     Agent { task: tokio::task::JoinHandle<()>, callback: Option<Callback>, ended: Ended },
+    /// A login command, its link shown.
     Command(Box<LoginRun>),
+    /// A login command taking what was pasted.
+    Finishing(tokio::task::JoinHandle<()>),
 }
 
 /// The sign-in under way.
@@ -65,10 +68,18 @@ struct Under {
     running: Running,
 }
 
-/// The sign-in under way (one controller's), and where to say what happens to it.
+#[derive(Default)]
+struct State {
+    under: Option<Under>,
+    /// How the last one ended (what's said to a request about it).
+    last: Option<SignInEnded>,
+}
+
+/// The sign-in under way (one controller's), and where to say what happens
+/// to it: said while it's held, so what's said is in the order it happened.
 #[derive(Clone)]
 struct Slot {
-    under: Arc<Mutex<Option<Under>>>,
+    state: Arc<Mutex<State>>,
     on_change: AuthChanged,
 }
 
@@ -76,23 +87,34 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Stops a sign-in: the agent's login aborted (its process with it), a
-/// login command killed.
+/// Stops a sign-in: a task aborted (the agent's process, or a login
+/// command, with it), a login command killed.
 fn stop(running: Running) {
-    if let Running::Agent { task, .. } = running {
-        task.abort();
+    match running {
+        Running::Agent { task, .. } | Running::Finishing(task) => task.abort(),
+        Running::Pending | Running::Command(_) => {}
     }
 }
 
 impl Slot {
     fn current(&self) -> Option<u64> {
-        lock(&self.under).as_ref().map(|u| u.id)
+        lock(&self.state).under.as_ref().map(|u| u.id)
+    }
+
+    /// Starts sign-in `id`, stopping the one under way; says so.
+    fn start(&self, waiting: SignInWaiting) {
+        let mut state = lock(&self.state);
+        if let Some(replaced) = state.under.replace(Under { id: waiting.id, running: Running::Pending }) {
+            stop(replaced.running);
+            self.said(&mut state, replaced.id, SignInEnd::Stopped);
+        }
+        (self.on_change)(AuthEvent::Waiting(waiting));
     }
 
     /// Sign-in `id`, if it's still the one under way, now `running`.
     fn put(&self, id: u64, running: Running) -> std::result::Result<(), Running> {
-        let mut under = lock(&self.under);
-        match under.as_mut() {
+        let mut state = lock(&self.state);
+        match state.under.as_mut() {
             Some(at) if at.id == id => {
                 stop(std::mem::replace(&mut at.running, running));
                 Ok(())
@@ -101,25 +123,55 @@ impl Slot {
         }
     }
 
+    /// Sign-in `id`'s link, if it's still the one under way: shown.
+    fn show(&self, waiting: SignInWaiting, callback: Option<Callback>) -> bool {
+        let mut state = lock(&self.state);
+        let Some(at) = state.under.as_mut().filter(|u| u.id == waiting.id) else { return false };
+        if let (Running::Agent { callback: c, .. }, Some(callback)) = (&mut at.running, callback) {
+            *c = Some(callback);
+        }
+        (self.on_change)(AuthEvent::Waiting(waiting));
+        true
+    }
+
+    /// What's under way, if it's sign-in `id`, for `take` to change.
+    fn take<T>(&self, id: u64, take: impl FnOnce(&mut Running) -> T) -> Option<T> {
+        let mut state = lock(&self.state);
+        state.under.as_mut().filter(|u| u.id == id).map(|u| take(&mut u.running))
+    }
+
     /// Ends sign-in `id`, if it's still the one under way, saying how.
     fn end(&self, id: u64, how: SignInEnd) {
-        let taken = {
-            let mut under = lock(&self.under);
-            if under.as_ref().is_some_and(|u| u.id == id) { under.take() } else { None }
-        };
-        if let Some(taken) = taken {
-            stop(taken.running);
-            self.ended(id, how);
+        let mut state = lock(&self.state);
+        if state.under.as_ref().is_some_and(|u| u.id == id) {
+            if let Some(taken) = state.under.take() {
+                stop(taken.running);
+            }
+            self.said(&mut state, id, how);
         }
     }
 
-    /// Says how sign-in `id` ended (taken already).
-    fn ended(&self, id: u64, how: SignInEnd) {
+    fn said(&self, state: &mut State, id: u64, how: SignInEnd) {
         let signed_in = how == SignInEnd::SignedIn;
-        (self.on_change)(AuthEvent::Ended(SignInEnded { id, how }));
+        let ended = SignInEnded { id, how };
+        state.last = Some(ended.clone());
+        (self.on_change)(AuthEvent::Ended(ended));
         if signed_in {
             (self.on_change)(AuthEvent::Status(Some(true)));
         }
+    }
+
+    /// Why sign-in `id` isn't under way any more, for a request about it.
+    fn gone(&self, id: u64) -> HarnessError {
+        let state = lock(&self.state);
+        let reason = match state.last.as_ref().filter(|e| e.id == id).map(|e| &e.how) {
+            Some(SignInEnd::Failed { reason }) => return HarnessError::Provider { reason: format!("the sign-in failed: {reason}") },
+            Some(SignInEnd::RanOut) => "that sign-in's time ran out: sign in again",
+            Some(SignInEnd::SignedIn) => "that sign-in is done: it's signed in",
+            Some(SignInEnd::Stopped) => "that sign-in was stopped (cancelled, or a new one started): sign in again",
+            None => "that sign-in isn't under way any more (a new one started): sign in again",
+        };
+        HarnessError::Conflict { reason: reason.into() }
     }
 }
 
@@ -127,30 +179,33 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
-/// A sign-in's id: never one before it, a restart or a new instance included.
+/// A sign-in's id: never one before it, a restart or a new instance
+/// included, and a later one always larger.
 fn next_id() -> u64 {
     static NEXT: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(now_ms()));
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// What sign-in `id` being stopped says to whoever was waiting on it.
-fn stopped() -> HarnessError {
-    HarnessError::Conflict { reason: "that sign-in was stopped (cancelled, or a new one started): sign in again".into() }
-}
-
-pub struct AcpAuthController {
+/// What a sign-in's steps run with, held by tasks of their own: a request
+/// that goes away (a reload, a dropped connection) doesn't stop them.
+#[derive(Clone)]
+struct Steps {
     launcher: Arc<dyn AcpLauncher>,
     profile: Arc<Profile>,
     /// How the agent is started (its login commands are run the same way).
     launch: Option<Launch>,
+    slot: Slot,
+}
+
+pub struct AcpAuthController {
+    steps: Steps,
     /// Its login commands, from its last check.
     logins: Mutex<Vec<CommandLogin>>,
-    slot: Slot,
 }
 
 impl Drop for AcpAuthController {
     fn drop(&mut self) {
-        if let Some(under) = lock(&self.slot.under).take() {
+        if let Some(under) = lock(&self.steps.slot.state).under.take() {
             stop(under.running);
         }
     }
@@ -158,18 +213,20 @@ impl Drop for AcpAuthController {
 
 impl AcpAuthController {
     pub fn new(launcher: Arc<dyn AcpLauncher>, profile: Arc<Profile>, launch: Option<Launch>, on_change: AuthChanged) -> Self {
-        Self { launcher, profile, launch, logins: Mutex::default(), slot: Slot { under: Arc::default(), on_change } }
+        Self { steps: Steps { launcher, profile, launch, slot: Slot { state: Arc::default(), on_change } }, logins: Mutex::default() }
     }
 
     /// The agent's login commands, as its last check found them.
     pub fn set_logins(&self, logins: Vec<CommandLogin>) {
         *lock(&self.logins) = logins;
     }
+}
 
+impl Steps {
     async fn begin_command(&self, id: u64, until_ms: Option<u64>, login: CommandLogin) -> Result<Option<SignInWaiting>> {
         let fail = |reason: String| {
-            self.slot.end(id, SignInEnd::Failed { reason: reason.clone() });
-            Err(HarnessError::Provider { reason: format!("the sign-in failed: {reason}") })
+            self.slot.end(id, SignInEnd::Failed { reason });
+            Err(self.slot.gone(id))
         };
         let Some(launch) = &self.launch else { return fail("the agent can't be started to sign in".into()) };
         let settings = &self.profile.settings.login;
@@ -178,7 +235,7 @@ impl AcpAuthController {
             Err(err) => return fail(err.to_string()),
         };
         if self.slot.current() != Some(id) {
-            return Err(stopped());
+            return Err(self.slot.gone(id));
         }
         match (started.exited, started.link) {
             (Some(true), _) => {
@@ -196,24 +253,29 @@ impl AcpAuthController {
                     expects: Some(expects),
                     until_ms,
                 };
-                self.slot.put(id, Running::Command(Box::new(started.run))).map_err(|_| stopped())?;
-                (self.slot.on_change)(AuthEvent::Waiting(waiting.clone()));
+                self.slot.put(id, Running::Command(Box::new(started.run))).map_err(|_| self.slot.gone(id))?;
+                self.slot.show(waiting.clone(), None);
                 Ok(Some(waiting))
             }
         }
     }
 
-    /// A login the agent runs itself: held as sign-in `id` from its start
-    /// (a request that goes away doesn't lose it), and its link, once it
-    /// prints it, shown. It may finish at once (a key in its environment).
-    async fn begin_agent(&self, id: u64, until_ms: Option<u64>, method: &str) -> Result<Option<SignInWaiting>> {
+    /// A login the agent runs itself: held as sign-in `id`, and its link,
+    /// once it prints it, shown. It may finish at once (a key in its
+    /// environment).
+    async fn begin_agent(&self, id: u64, until_ms: Option<u64>, method: String) -> Result<Option<SignInWaiting>> {
         let settings = &self.profile.settings.login;
         let (launcher, profile, slot) = (self.launcher.clone(), self.profile.clone(), self.slot.clone());
-        let method = acp::AuthMethodId::new(method.to_owned());
+        let method = acp::AuthMethodId::new(method);
         let pattern = settings.link_pattern();
         let (link_to, link) = tokio::sync::oneshot::channel::<std::result::Result<SignInWaiting, String>>();
         let (ended_to, ended) = watch::channel(None);
+        // Held before it runs: it can't end before it's there to end.
+        let (go_to, go) = tokio::sync::oneshot::channel::<()>();
         let task = tokio::spawn(async move {
+            if go.await.is_err() {
+                return;
+            }
             let shown = slot.clone();
             let result = with_connection(&launcher, &profile, async move |cx, opened| {
                 // Its link, from what it says while it waits for the browser:
@@ -231,20 +293,7 @@ impl AcpAuthController {
                         expects: Some("the address of the page that failed to load".into()),
                         until_ms,
                     };
-                    let current = {
-                        let mut under = lock(&shown.under);
-                        match under.as_mut() {
-                            Some(Under { id: at, running: Running::Agent { callback: c, .. } }) if *at == id => {
-                                *c = Some(callback);
-                                true
-                            }
-                            _ => false,
-                        }
-                    };
-                    if current {
-                        (shown.on_change)(AuthEvent::Waiting(waiting.clone()));
-                    }
-                    let _ = link_to.send(Ok(waiting));
+                    let _ = link_to.send(if shown.show(waiting.clone(), Some(callback)) { Ok(waiting) } else { Err("stopped".into()) });
                 });
                 cx.send_request(acp::AuthenticateRequest::new(method)).block_task().await
             })
@@ -265,31 +314,28 @@ impl AcpAuthController {
         });
         if let Err(running) = self.slot.put(id, Running::Agent { task, callback: None, ended: ended.clone() }) {
             stop(running);
-            return Err(stopped());
+            return Err(self.slot.gone(id));
         }
+        let _ = go_to.send(());
         tokio::select! {
             found = link => match found {
                 Ok(Ok(waiting)) => Ok(Some(waiting)),
                 Ok(Err(why)) => {
-                    self.slot.end(id, SignInEnd::Failed { reason: why.clone() });
-                    Err(HarnessError::Provider { reason: format!("the sign-in failed: {why}") })
+                    self.slot.end(id, SignInEnd::Failed { reason: why });
+                    Err(self.slot.gone(id))
                 }
                 // It stopped saying anything before its link: as it ended.
                 Err(_) => match how_it_ended(ended, Duration::from_secs(5)).await {
                     Some(Ok(())) => Ok(None),
-                    Some(Err(why)) => Err(HarnessError::Provider { reason: format!("the sign-in failed: {why}") }),
-                    None if self.slot.current() == Some(id) => {
-                        let why = "it ended before it showed a link".to_owned();
-                        self.slot.end(id, SignInEnd::Failed { reason: why.clone() });
-                        Err(HarnessError::Provider { reason: format!("the sign-in failed: {why}") })
+                    _ => {
+                        self.slot.end(id, SignInEnd::Failed { reason: "it ended before it showed a link".into() });
+                        Err(self.slot.gone(id))
                     }
-                    None => Err(stopped()),
                 },
             },
             () = tokio::time::sleep(Duration::from_secs(settings.wait_s)) => {
-                let why = format!("it showed no link within {} seconds", settings.wait_s);
-                self.slot.end(id, SignInEnd::Failed { reason: why.clone() });
-                Err(HarnessError::Provider { reason: format!("the sign-in failed: {why}") })
+                self.slot.end(id, SignInEnd::Failed { reason: format!("it showed no link within {} seconds", settings.wait_s) });
+                Err(self.slot.gone(id))
             },
         }
     }
@@ -300,22 +346,47 @@ impl AcpAuthController {
     async fn finish_agent(&self, id: u64, callback: Option<Callback>, ended: Ended, response: &str) -> Result<()> {
         let callback = callback.ok_or_else(|| HarnessError::Conflict { reason: "the sign-in hasn't shown its link yet".into() })?;
         if let Err(why) = hand_back_callback(response, &callback).await? {
-            return Err(HarnessError::Conflict {
-                reason: match &*ended.borrow() {
-                    Some(Err(failed)) => format!("the sign-in ended ({failed}): sign in again"),
-                    _ => format!("the sign-in isn't waiting at its address any more ({why}): sign in again"),
-                },
+            return Err(match &*ended.borrow() {
+                Some(_) => self.slot.gone(id),
+                None => HarnessError::Conflict { reason: format!("the sign-in isn't waiting at its address any more ({why}): sign in again") },
             });
         }
         match how_it_ended(ended, FINISH_WAIT).await {
             Some(Ok(())) => Ok(()),
-            Some(Err(why)) => Err(HarnessError::Provider { reason: format!("the sign-in failed: {why}") }),
-            None if self.slot.current() == Some(id) => {
-                let why = format!("it didn't finish within {} seconds of the address", FINISH_WAIT.as_secs());
-                self.slot.end(id, SignInEnd::Failed { reason: why.clone() });
-                Err(HarnessError::Provider { reason: format!("the sign-in failed: {why}") })
+            Some(Err(_)) => Err(self.slot.gone(id)),
+            None => {
+                self.slot.end(id, SignInEnd::Failed { reason: format!("it didn't finish within {} seconds of the address", FINISH_WAIT.as_secs()) });
+                Err(self.slot.gone(id))
             }
-            None => Err(stopped()),
+        }
+    }
+
+    /// What was pasted, handed to login command `id` by a task of its own
+    /// (Cancel or a new sign-in stops it); how it ended.
+    async fn finish_command(&self, id: u64, run: Box<LoginRun>, response: String) -> Result<()> {
+        let (done_to, done) = tokio::sync::oneshot::channel();
+        let (go_to, go) = tokio::sync::oneshot::channel::<()>();
+        let slot = self.slot.clone();
+        let task = tokio::spawn(async move {
+            if go.await.is_err() {
+                return;
+            }
+            let result = run.finish(&response).await;
+            slot.end(id, match &result {
+                Ok(()) => SignInEnd::SignedIn,
+                Err(HarnessError::Provider { reason }) => SignInEnd::Failed { reason: reason.clone() },
+                Err(err) => SignInEnd::Failed { reason: err.to_string() },
+            });
+            let _ = done_to.send(result.is_ok());
+        });
+        if let Err(running) = self.slot.put(id, Running::Finishing(task)) {
+            stop(running);
+            return Err(self.slot.gone(id));
+        }
+        let _ = go_to.send(());
+        match done.await {
+            Ok(true) => Ok(()),
+            _ => Err(self.slot.gone(id)),
         }
     }
 }
@@ -329,89 +400,77 @@ async fn how_it_ended(mut ended: Ended, limit: Duration) -> Option<std::result::
     }
 }
 
-/// What `complete` acts on: the sign-in under way, as it is now.
-enum Finishing {
-    Agent { callback: Option<Callback>, ended: Ended },
-    Command(Box<LoginRun>),
-}
-
 #[async_trait]
 impl AuthController for AcpAuthController {
     async fn begin(&self, method_id: &str) -> Result<Option<SignInWaiting>> {
         let id = next_id();
-        let within_s = self.profile.settings.login.within_s;
+        let within_s = self.steps.profile.settings.login.within_s;
         let until_ms = within_s.map(|s| now_ms() + s * 1000);
         // A sign-in started again replaces the one under way.
-        let replaced = lock(&self.slot.under).replace(Under { id, running: Running::Starting });
-        if let Some(replaced) = replaced {
-            stop(replaced.running);
-            self.slot.ended(replaced.id, SignInEnd::Stopped);
-        }
-        let starting = SignInWaiting { id, url: None, instructions: "Starting the sign-in…".into(), expects: None, until_ms };
-        (self.slot.on_change)(AuthEvent::Waiting(starting));
+        self.steps.slot.start(SignInWaiting { id, url: None, instructions: "Starting the sign-in…".into(), expects: None, until_ms });
         // Its time, counted from now, the same for every kind: then it ends.
         if let Some(within_s) = within_s {
-            let slot = self.slot.clone();
+            let slot = self.steps.slot.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(within_s)).await;
                 slot.end(id, SignInEnd::RanOut);
             });
         }
         let login = lock(&self.logins).iter().find(|l| l.method == method_id).cloned();
-        match login {
-            Some(login) => self.begin_command(id, until_ms, login).await,
-            None => self.begin_agent(id, until_ms, method_id).await,
-        }
+        let (steps, method) = (self.steps.clone(), method_id.to_owned());
+        let started = tokio::spawn(async move {
+            match login {
+                Some(login) => steps.begin_command(id, until_ms, login).await,
+                None => steps.begin_agent(id, until_ms, method).await,
+            }
+        });
+        started.await.unwrap_or_else(|e| Err(HarnessError::Provider { reason: format!("the sign-in stopped: {e}") }))
     }
 
     async fn complete(&self, id: u64, response: &str) -> Result<()> {
-        let finishing = {
-            let mut under = lock(&self.slot.under);
-            match under.take() {
-                Some(Under { id: at, running }) if at != id => {
-                    *under = Some(Under { id: at, running });
-                    None
-                }
-                // A login command takes one answer.
-                Some(Under { running: Running::Command(run), .. }) => Some(Ok(Finishing::Command(run))),
-                Some(Under { running: Running::Starting, .. }) => {
-                    *under = Some(Under { id, running: Running::Starting });
-                    Some(Err(HarnessError::Conflict { reason: "the sign-in hasn't shown its link yet".into() }))
-                }
-                Some(Under { running: Running::Agent { task, callback, ended }, .. }) => {
-                    let finishing = Finishing::Agent { callback: callback.clone(), ended: ended.clone() };
-                    *under = Some(Under { id, running: Running::Agent { task, callback, ended } });
-                    Some(Ok(finishing))
-                }
-                None => None,
+        let slot = &self.steps.slot;
+        let finishing = slot.take(id, |running| match std::mem::replace(running, Running::Pending) {
+            // A login command takes one answer.
+            Running::Command(run) => Ok(Finishing::Command(run)),
+            Running::Agent { task, callback, ended } => {
+                let finishing = Finishing::Agent { callback: callback.clone(), ended: ended.clone() };
+                *running = Running::Agent { task, callback, ended };
+                Ok(finishing)
             }
-        };
-        match finishing {
-            None => Err(HarnessError::Conflict { reason: "that sign-in isn't under way any more (it ended, was cancelled, or a new one started): sign in again".into() }),
-            Some(Err(err)) => Err(err),
-            Some(Ok(Finishing::Command(run))) => {
-                let result = run.finish(response).await;
-                self.slot.ended(id, match &result {
-                    Ok(()) => SignInEnd::SignedIn,
-                    Err(HarnessError::Provider { reason }) => SignInEnd::Failed { reason: reason.clone() },
-                    Err(err) => SignInEnd::Failed { reason: err.to_string() },
-                });
-                result
+            other => {
+                *running = other;
+                Err(HarnessError::Conflict { reason: "the sign-in isn't ready for that yet: wait for its link".into() })
             }
-            Some(Ok(Finishing::Agent { callback, ended })) => self.finish_agent(id, callback, ended, response).await,
-        }
+        });
+        let steps = self.steps.clone();
+        let response = response.to_owned();
+        let finished = tokio::spawn(async move {
+            match finishing {
+                None => Err(steps.slot.gone(id)),
+                Some(Err(err)) => Err(err),
+                Some(Ok(Finishing::Command(run))) => steps.finish_command(id, run, response).await,
+                Some(Ok(Finishing::Agent { callback, ended })) => steps.finish_agent(id, callback, ended, &response).await,
+            }
+        });
+        finished.await.unwrap_or_else(|e| Err(HarnessError::Provider { reason: format!("the sign-in stopped: {e}") }))
     }
 
     async fn cancel(&self, id: u64) -> Result<()> {
-        self.slot.end(id, SignInEnd::Stopped);
+        self.steps.slot.end(id, SignInEnd::Stopped);
         Ok(())
     }
 
     async fn logout(&self) -> Result<()> {
-        with_connection(&self.launcher, &self.profile, async move |cx, _| cx.send_request(acp::LogoutRequest::new()).block_task().await.map(|_| ())).await?;
-        (self.slot.on_change)(AuthEvent::Status(Some(false)));
+        with_connection(&self.steps.launcher, &self.steps.profile, async move |cx, _| cx.send_request(acp::LogoutRequest::new()).block_task().await.map(|_| ())).await?;
+        (self.steps.slot.on_change)(AuthEvent::Status(Some(false)));
         Ok(())
     }
+}
+
+/// What `complete` acts on: the sign-in under way, as it is now.
+enum Finishing {
+    Agent { callback: Option<Callback>, ended: Ended },
+    Command(Box<LoginRun>),
 }
 
 /// Whether `url` is the loopback address of this machine, as a login's

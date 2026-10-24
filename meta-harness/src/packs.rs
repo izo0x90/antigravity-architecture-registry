@@ -42,7 +42,7 @@ struct OwnSettings {
     #[serde(default)]
     env_remove: Vec<String>,
     /// `native` (its own folders), `kept` (`.nah/harness/<instance>/`), or a
-    /// folder (the project's when relative).
+    /// folder of your own outside the project (`~/` your home folder).
     home: Option<String>,
 }
 
@@ -114,7 +114,19 @@ fn home_of(project: &Path, instance: &str, home: &str) -> Result<Option<PathBuf>
         }
         at
     });
-    if normal.starts_with(project) || project.starts_with(&normal) {
+    // As found on disk too: a link can lead into the project.
+    let real = |path: &Path| -> PathBuf {
+        let mut at = path.to_path_buf();
+        let mut rest = Vec::new();
+        while !at.exists() {
+            let Some(name) = at.file_name().map(|n| n.to_owned()) else { break };
+            rest.push(name);
+            at.pop();
+        }
+        rest.into_iter().rev().fold(at.canonicalize().unwrap_or(at), |at, name| at.join(name))
+    };
+    let (real_home, real_project) = (real(&normal), real(project));
+    if normal.starts_with(project) || project.starts_with(&normal) || real_home.starts_with(&real_project) || real_project.starts_with(&real_home) {
         return Err(format!("its home {} is in the project (or holds it): a home kept in the project is `kept` (.nah/harness/); a folder of your own is outside it", normal.display()));
     }
     Ok(Some(normal))
