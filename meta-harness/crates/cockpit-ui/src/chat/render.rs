@@ -45,8 +45,11 @@ impl ChatStreamState {
         ui.vertical(|ui| {
             let banners = self.render_banners(ui);
             self.render_plan(ui);
-
-            let scroll_height = (ui.available_height() - 105.0).max(50.0);
+            // The stream in what's left above what's under it (the
+            // requests waiting out of its sight, the typing box), as tall as
+            // that was last frame.
+            let scroll_height = (ui.available_height() - self.ui.below).max(50.0);
+            let shown: Vec<String> = self.ui.spots.iter().map(|s| s.key.clone()).collect();
             self.ui.drawing.clear();
             let area = egui::ScrollArea::vertical().id_salt(("chat_stream", cx.at)).auto_shrink([false, false]).stick_to_bottom(self.ui.cursor.is_none()).max_height(scroll_height);
             // Where the shared rules say (following the latest, nothing's
@@ -68,13 +71,28 @@ impl ChatStreamState {
             // ways out are under them).
             self.ui.banners = banners;
             feedback.register_inspectable(ui, &format!("{host}:chat:stream"), stream.inner_rect);
+            let top = ui.cursor().top();
             ui.separator();
-
+            // Each request waiting that the stream didn't show last frame:
+            // its card here, in sight (a place of the chat's, as there).
+            for (index, request_id) in self.pending_items().into_iter().filter(|(index, _)| !shown.contains(&index.to_string())) {
+                if let Some(request) = self.thread().and_then(|t| t.request(&request_id).cloned()) {
+                    let rect = crate::request_card::render_request(ui, &request, &mut self.drafts);
+                    self.ui.spots.push(Spot { key: index.to_string(), rect });
+                }
+            }
             let start = ui.cursor().min;
             let w = ui.available_width();
             self.render_input(ui, typing, cx);
             let input = Rect::from_min_size(Pos2::new(start.x, start.y), Vec2::new(w, (ui.cursor().min.y - start.y).max(40.0)));
             feedback.register_inspectable(ui, &format!("{host}:chat:input_bar"), input);
+            // What's under the stream changed height: the stream makes room
+            // for it in the next frame, at once.
+            let below = ui.cursor().top() - top + ui.spacing().item_spacing.y;
+            if (below - self.ui.below).abs() > 0.5 {
+                self.ui.below = below;
+                ctx.request_repaint();
+            }
         });
     }
 
@@ -234,7 +252,16 @@ impl ChatStreamState {
                 let fill = if on { colors().selection } else { Color32::TRANSPARENT };
                 let shown = Frame::NONE.fill(fill).corner_radius(crate::theme::look().radius_s).inner_margin(crate::theme::margin2(crate::theme::look().space_xs, crate::theme::look().space_hair)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    self.render_item(ui, &view, item, index);
+                    // Every item laid out in the column's width (its text
+                    // wraps there); what can't wrap (a table's row) scrolls
+                    // sideways in the item's own box, never widening the
+                    // column (dragging stays the chat's: the wheel or the
+                    // bar scrolls it).
+                    let width = ui.available_width();
+                    egui::ScrollArea::horizontal().id_salt(("chat_item", item.id.as_str())).auto_shrink([false, true]).scroll_source(egui::scroll_area::ScrollSource { drag: false, ..Default::default() }).show(ui, |ui| {
+                        ui.set_max_width(width);
+                        self.render_item(ui, &view, item, index);
+                    });
                 });
                 self.ui.drawing.push(Spot { key: index.to_string(), rect: shown.response.rect });
                 index += 1;

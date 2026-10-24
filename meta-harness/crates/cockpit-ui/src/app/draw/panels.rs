@@ -11,6 +11,10 @@ impl CockpitApp {
 
         let panel_id = format!("panel_{}", panel + 1);
         self.feedback.register_inspectable(ui, &panel_id, ui.available_rect_before_wrap());
+        // Nothing it holds paints outside it, however wide (over another
+        // panel); its views keep within it (the chat's items scroll
+        // sideways in a box of their own).
+        ui.set_clip_rect(ui.available_rect_before_wrap().intersect(ui.clip_rect()));
 
         Frame::NONE.fill(colors().bg).stroke(Stroke::new(crate::theme::look().line_thin, border_color)).corner_radius(crate::theme::look().radius_m).inner_margin(crate::theme::margin(crate::theme::look().space_m)).show(ui, |ui| {
             ui.set_width(ui.available_width());

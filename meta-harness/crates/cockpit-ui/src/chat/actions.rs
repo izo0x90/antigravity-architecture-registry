@@ -255,18 +255,25 @@ impl ActionProvider for ChatStreamState {
             out.push(Action::new("auth.logout", "Sign out", "The harness forgets your sign-in on this machine", C::Logout));
         }
 
-        // The pending request's answers (here: the inbox offers them too, with the same keys)
-        if let Some(view) = view
-            && let Some(request) = view.requests.iter().find(|r| r.status == RequestStatus::Pending)
-        {
-            // Under the request while you're on it.
-            let here = crate::hosted::Hosted::here(self).or_else(|| self.ui.cursor.map(|c| c.to_string())) == self.pending_item().map(|i| i.to_string());
-            if let Some(url) = crate::request_card::page(request) {
-                out.push(crate::request_card::place_page(Action::new(format!("request.{}.page", request.id), format!("Open the page: {}", request.title), "The page the agent asks you to open, in a new tab", C::OpenPage(url)).focused(), here));
-            }
-            for answer in crate::request_card::answers(request) {
-                let command = C::Answer { thread: view.thread.id.clone(), request: request.id.clone(), option: answer.option.clone() };
-                out.push(answer.place(Action::new(answer.id.clone(), answer.label.clone(), "Answers the agent's request this way", command).focused(), here));
+        // Each request waiting on you, answered (the inbox offers them too,
+        // with the same keys): under it while you're on it; its keys (`y`,
+        // `d`…) the one's you're on, else the first's, so several at once
+        // are each answered and no key is two's.
+        if let Some(view) = view {
+            let on = crate::hosted::Hosted::here(self).or_else(|| self.ui.cursor.map(|c| c.to_string()));
+            let pending = self.pending_items();
+            let keyed = pending.iter().find(|(index, _)| on.as_deref() == Some(index.to_string().as_str())).or(pending.first()).map(|(_, id)| id.clone());
+            for (index, request_id) in &pending {
+                let Some(request) = view.request(request_id) else { continue };
+                let here = on.as_deref() == Some(index.to_string().as_str());
+                if let Some(url) = crate::request_card::page(request) {
+                    out.push(crate::request_card::place_page(Action::new(format!("request.{}.page", request.id), format!("Open the page: {}", request.title), "The page the agent asks you to open, in a new tab", C::OpenPage(url)).focused(), here));
+                }
+                for answer in crate::request_card::answers(request) {
+                    let answer = if keyed.as_ref() == Some(request_id) { answer } else { crate::request_card::Answer { alias: None, ..answer } };
+                    let command = C::Answer { thread: view.thread.id.clone(), request: request.id.clone(), option: answer.option.clone() };
+                    out.push(answer.place(Action::new(answer.id.clone(), answer.label.clone(), "Answers the agent's request this way", command).focused(), here));
+                }
             }
         }
         // Typed in: sending it (to the sign-in, while one waits for it).

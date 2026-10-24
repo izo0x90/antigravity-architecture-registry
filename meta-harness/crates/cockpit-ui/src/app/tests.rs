@@ -8,6 +8,7 @@ mod discussing;
 mod audits;
 mod hand;
 mod bindings;
+mod chat_view;
 mod keys_snapshot;
 mod layout;
 mod links;

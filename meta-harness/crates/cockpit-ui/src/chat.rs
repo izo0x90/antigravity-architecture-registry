@@ -88,6 +88,9 @@ pub struct ChatView {
     pub(crate) drawing: Vec<Spot>,
     /// Where the banners were drawn last frame (none: none showed).
     pub(crate) banners: Option<Rect>,
+    /// How tall what's under the stream was last frame (the requests kept
+    /// in sight, the typing box): the stream leaves room for it.
+    pub(crate) below: f32,
     /// Where its typing box is, while it's typed in.
     pub(crate) typing: Option<Rect>,
     /// A sign-in has the typing box (see `tend_sign_in_box`).
@@ -105,6 +108,7 @@ impl Default for ChatView {
             scrolling: Default::default(),
             spots: Vec::new(),
             banners: None,
+            below: 105.0,
             drawing: Vec::new(),
             typing: None,
             sign_in_has_box: false,
@@ -209,8 +213,18 @@ impl ChatStreamState {
 
     /// The stream item (its index) of the request waiting on you here.
     pub(crate) fn pending_item(&self) -> Option<usize> {
-        let pending = self.thread()?.requests.iter().find(|r| r.status == RequestStatus::Pending)?.id.clone();
-        self.stream().iter().position(|i| matches!(&i.body, ItemBody::Request { request_id } if *request_id == pending))
+        self.pending_items().first().map(|(index, _)| *index)
+    }
+
+    /// Every request waiting on you, as the stream has them (its item's
+    /// place, the request), in order.
+    pub(crate) fn pending_items(&self) -> Vec<(usize, harness_contracts::RequestId)> {
+        let Some(thread) = self.thread() else { return Vec::new() };
+        let pending = |id: &harness_contracts::RequestId| thread.requests.iter().any(|r| r.id == *id && r.status == RequestStatus::Pending);
+        self.stream().iter().enumerate().filter_map(|(index, item)| match &item.body {
+            ItemBody::Request { request_id } if pending(request_id) => Some((index, request_id.clone())),
+            _ => None,
+        }).collect()
     }
 
     /// The slot this view shows.
